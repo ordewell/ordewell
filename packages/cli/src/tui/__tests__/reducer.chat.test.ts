@@ -1,0 +1,200 @@
+import { describe, it, expect } from 'vitest';
+import { initialState, reduce } from '../reducer';
+
+const typing = (text: string) => ({
+  ...initialState(),
+  editor: { ...initialState().editor, text, cursor: text.length },
+});
+
+describe('reduce — typing', () => {
+  it('routes printable keys into the editor', () => {
+    const { state } = reduce(initialState(), { type: 'key', key: { name: 'char', char: 'h' } });
+    expect(state.editor.text).toBe('h');
+  });
+
+  it('emits no effects for plain typing', () => {
+    const { effects } = reduce(initialState(), { type: 'key', key: { name: 'char', char: 'h' } });
+    expect(effects).toEqual([]);
+  });
+
+  it('a paste with newlines lands in the editor without submitting', () => {
+    const { state, effects } = reduce(typing('see: '), {
+      type: 'key',
+      key: { name: 'paste', text: 'line1\nline2' },
+    });
+    expect(effects).toEqual([]);
+    expect(state.editor.text).toBe('see: line1\nline2');
+    expect(state.messages).toEqual([]);
+  });
+});
+
+describe('reduce — submitting a goal', () => {
+  it('starts a planner conversation with the typed goal', () => {
+    const { effects } = reduce(typing('add a login page'), { type: 'key', key: { name: 'enter' } });
+    expect(effects).toEqual([{ type: 'startConversation', goal: 'add a login page' }]);
+  });
+
+  it('echoes the goal into the transcript and clears the input', () => {
+    const { state } = reduce(typing('add a login page'), { type: 'key', key: { name: 'enter' } });
+    expect(state.editor.text).toBe('');
+    expect(state.messages.at(-1)).toMatchObject({ role: 'user', content: 'add a login page' });
+  });
+
+  it('marks the session busy while the planner works', () => {
+    const { state } = reduce(typing('a goal'), { type: 'key', key: { name: 'enter' } });
+    expect(state.status).toBe('planning');
+  });
+
+  it('ignores an empty submit', () => {
+    const { state, effects } = reduce(initialState(), { type: 'key', key: { name: 'enter' } });
+    expect(effects).toEqual([]);
+    expect(state.messages).toEqual([]);
+  });
+
+  it('answers the planner instead of restarting once a conversation is open', () => {
+    const open = { ...typing('use bcrypt'), sessionId: 'session-1' };
+    const { effects } = reduce(open, { type: 'key', key: { name: 'enter' } });
+    expect(effects).toEqual([{ type: 'sendMessage', sessionId: 'session-1', message: 'use bcrypt' }]);
+  });
+});
+
+describe('reduce — multi-line input navigation', () => {
+  it('up moves cursor within multi-line input instead of scrolling transcript', () => {
+    const state = initialState({
+      editor: {
+        ...initialState().editor,
+        text: 'line1\nline2\nline3',
+        cursor: 12,
+      },
+    });
+    const { state: next } = reduce(state, { type: 'key', key: { name: 'up' } });
+    expect('cursor' in next).toBe(false);
+    expect(next.editor.cursor).toBeLessThan(12);
+    expect(next.scroll).toBe(0);
+  });
+
+  it('down moves cursor within multi-line input instead of scrolling transcript', () => {
+    const state = initialState({
+      editor: {
+        ...initialState().editor,
+        text: 'line1\nline2\nline3',
+        cursor: 0,
+      },
+    });
+    const { state: next } = reduce(state, { type: 'key', key: { name: 'down' } });
+    expect(next.editor.cursor).toBeGreaterThan(0);
+    expect(next.scroll).toBe(0);
+  });
+
+  it('shift-enter inserts newline in multi-line input', () => {
+    const { state } = reduce(typing('hello'), { type: 'key', key: { name: 'shift-enter' } });
+    expect(state.editor.text).toBe('hello\n');
+    expect(state.editor.cursor).toBe(6);
+  });
+
+  it('shift-enter in the middle of text inserts newline at cursor', () => {
+    const s = initialState({
+      editor: {
+        ...initialState().editor,
+        text: 'hello',
+        cursor: 2,
+      },
+    });
+    const { state } = reduce(s, { type: 'key', key: { name: 'shift-enter' } });
+    expect(state.editor.text).toBe('he\nllo');
+    expect(state.editor.cursor).toBe(3);
+  });
+
+  it('alt-enter also inserts a newline instead of submitting, for terminals that cannot report shift-enter', () => {
+    const { state } = reduce(typing('hello'), { type: 'key', key: { name: 'alt-enter' } });
+    expect(state.editor.text).toBe('hello\n');
+    expect(state.messages).toHaveLength(0);
+  });
+});
+
+describe('reduce — stale session results', () => {
+  it('drops a plannerMessage that arrives after /new has moved on to a fresh session', () => {
+    const afterNew = { ...initialState(), sessionId: 'session-2' };
+    const { state } = reduce(afterNew, {
+      type: 'plannerMessage',
+      content: 'stray follow-up from the old session',
+      sessionId: 'session-1',
+    });
+    expect(state.messages).toHaveLength(0);
+    expect(state).toBe(afterNew);
+  });
+
+  it('drops a planUpdated for a session that is no longer current', () => {
+    const afterNew = { ...initialState(), sessionId: 'session-2' };
+    const { state } = reduce(afterNew, {
+      type: 'planUpdated',
+      plan: { tasks: [{ id: 'a', title: 'stale' }] },
+      sessionId: 'session-1',
+    });
+    expect(state.tasks).toHaveLength(0);
+  });
+
+  it('still applies a planUpdated/plannerMessage carrying the current session id', () => {
+    const s = { ...initialState(), sessionId: 'session-2' };
+    const { state } = reduce(s, { type: 'plannerMessage', content: 'hi', sessionId: 'session-2' });
+    expect(state.messages.at(-1)).toMatchObject({ role: 'assistant', content: 'hi' });
+  });
+
+  it('applies an untagged result (no sessionId) as before, for call sites that do not scope it', () => {
+    const s = initialState();
+    const { state } = reduce(s, { type: 'plannerMessage', content: 'hi' });
+    expect(state.messages.at(-1)).toMatchObject({ content: 'hi' });
+  });
+});
+
+describe('reduce — scrolling the transcript', () => {
+  it('pageup scrolls back through the transcript', () => {
+    const { state } = reduce(initialState(), { type: 'key', key: { name: 'pageup' } });
+    expect(state.scroll).toBeGreaterThan(0);
+  });
+
+  it('pagedown scrolls forward and stops at the live tail', () => {
+    const back = reduce(initialState(), { type: 'key', key: { name: 'pageup' } }).state;
+    const forward = reduce(back, { type: 'key', key: { name: 'pagedown' } }).state;
+    expect(forward.scroll).toBe(0);
+    expect(reduce(forward, { type: 'key', key: { name: 'pagedown' } }).state.scroll).toBe(0);
+  });
+
+  it('a new message snaps the view back to the tail', () => {
+    const scrolled = { ...initialState(), scroll: 12 };
+    const { state } = reduce(scrolled, { type: 'notice', message: 'done' });
+    expect(state.scroll).toBe(0);
+  });
+
+  it('leaves the plan pane selection alone', () => {
+    const s = { ...initialState(), focus: 'plan' as const };
+    const { state } = reduce(s, { type: 'key', key: { name: 'pageup' } });
+    expect(state.scroll).toBe(0);
+  });
+
+  it('the mouse wheel scrolls back and forward by a small notch', () => {
+    const back = reduce(initialState(), { type: 'key', key: { name: 'scrollup' } }).state;
+    expect(back.scroll).toBe(3);
+    const forward = reduce(back, { type: 'key', key: { name: 'scrolldown' } }).state;
+    expect(forward.scroll).toBe(0);
+  });
+
+  it('up/down recall chat history instead of scrolling the transcript when the draft is single-line', () => {
+    const state = initialState({
+      editor: {
+        ...initialState().editor,
+        history: ['previous message'],
+        historyIndex: 1,
+      },
+    });
+
+    const back = reduce(state, { type: 'key', key: { name: 'up' } }).state;
+    expect(back.scroll).toBe(0);
+    expect(back.editor.text).toBe('previous message');
+
+    const forward = reduce(back, { type: 'key', key: { name: 'down' } }).state;
+    expect(forward.scroll).toBe(0);
+    expect(forward.editor.text).toBe('');
+  });
+
+});

@@ -1,0 +1,7 @@
+{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thr-codex-1","turnId":"turn-1"}}
+{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thr-codex-1","turnId":"turn-1","completedAtMs":1,"item":{"id":"item_r0","type":"reasoning","summary":[],"content":[]}}}
+{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thr-codex-1","turnId":"turn-1","completedAtMs":1,"item":{"id":"item_r1","type":"reasoning","summary":[{"type":"summary_text","text":"Checking how the planner is wired."}],"content":[]}}}
+{"jsonrpc":"2.0","method":"item/started","params":{"threadId":"thr-codex-1","turnId":"turn-1","item":{"id":"item_c1","type":"commandExecution","command":["rg","-n","createAiService"],"cwd":"/repo","status":"inProgress"}}}
+{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thr-codex-1","turnId":"turn-1","completedAtMs":2,"item":{"id":"item_c1","type":"commandExecution","command":["rg","-n","createAiService"],"cwd":"/repo","exitCode":0,"aggregatedOutput":"src/services/AiService.ts:137:export function createAiService"}}}
+{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thr-codex-1","turnId":"turn-1","completedAtMs":3,"item":{"id":"item_m1","type":"agentMessage","text":"The factory is in src/services/AiService.ts. Which surface should I start from?"}}}
+{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thr-codex-1","turn":{"id":"turn-1","status":"completed","items":[]}}}

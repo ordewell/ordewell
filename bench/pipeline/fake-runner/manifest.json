@@ -1,0 +1,23 @@
+{
+  "name": "fake-runner",
+  "displayName": "Fake Runner",
+  "description": "Deterministic fake agent for end-to-end pipeline testing. No LLM, no API key.",
+  "version": "0.1.0",
+  "runner": {
+    "command": "bash",
+    "argsTemplate": ["{{prompt}}"],
+    "promptInArgs": true
+  },
+  "features": {
+    "modelSelection": false,
+    "thinkingEffort": false,
+    "planMode": false,
+    "planModeFlag": ""
+  },
+  "modelDiscovery": {
+    "method": "hardcoded",
+    "fallbackModels": [
+      { "modelId": "fake", "modelLabel": "Fake" }
+    ]
+  }
+}

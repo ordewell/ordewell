@@ -1,0 +1,285 @@
+{
+  "name": "ordewell",
+  "displayName": "Ordewell",
+  "description": "LLM-powered task orchestration with codebase research, Claude Code & OpenCode",
+  "version": "0.4.2",
+  "private": true,
+  "publisher": "ordewell",
+  "license": "Apache-2.0",
+  "author": "Alessandro Costanzo Ciano",
+  "homepage": "https://ordewell.ai",
+  "bugs": {
+    "url": "https://github.com/ordewell/ordewell/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ordewell/ordewell.git",
+    "directory": "packages/vscode"
+  },
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#15161A",
+    "theme": "dark"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "orchestration",
+    "coding agent",
+    "claude code",
+    "opencode",
+    "codex",
+    "planner"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "tsup && vite build && node scripts/verify-bundle.mjs",
+    "watch": "tsup --watch",
+    "lint": "eslint src --ext .ts,.tsx",
+    "test": "vitest run",
+    "test:integration": "tsup --config tsup.integration.config.ts && node dist-test/runTest.js",
+    "package": "vsce package --no-dependencies",
+    "typecheck": "tsc --noEmit"
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ordewell",
+          "title": "Ordewell",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "ordewell": [
+        {
+          "id": "ordewellChatView",
+          "name": "Ordewell",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "ordewell.focusChat",
+        "title": "Ordewell: Focus Chat"
+      },
+      {
+        "command": "ordewell.configureApiKey",
+        "title": "Ordewell: Configure API Key"
+      },
+      {
+        "command": "ordewell.toggleRunner",
+        "title": "Ordewell: Toggle Runner (Claude Code / OpenCode)"
+      },
+      {
+        "command": "ordewell.addTask",
+        "title": "Ordewell: Add Task"
+      },
+      {
+        "command": "ordewell.removeTask",
+        "title": "Ordewell: Remove Task"
+      },
+      {
+        "command": "ordewell.markTaskComplete",
+        "title": "Ordewell: Mark Task Complete"
+      },
+      {
+        "command": "ordewell.markTaskIncomplete",
+        "title": "Ordewell: Mark Task Not Done"
+      },
+      {
+        "command": "ordewell.forceStartTask",
+        "title": "Ordewell: Force Start Task"
+      },
+      {
+        "command": "ordewell.skipTask",
+        "title": "Ordewell: Skip Task"
+      },
+      {
+        "command": "ordewell.retryTask",
+        "title": "Ordewell: Retry Task"
+      },
+      {
+        "command": "ordewell.cancelTask",
+        "title": "Ordewell: Cancel Task"
+      },
+      {
+        "command": "ordewell.approvePlan",
+        "title": "Ordewell: Approve Plan"
+      },
+      {
+        "command": "ordewell.regeneratePlan",
+        "title": "Ordewell: Regenerate Plan"
+      },
+      {
+        "command": "ordewell.saveSession",
+        "title": "Ordewell: Save Session"
+      },
+      {
+        "command": "ordewell.loadSession",
+        "title": "Ordewell: Load Session",
+        "icon": "$(history)"
+      },
+      {
+        "command": "ordewell.clearPlan",
+        "title": "Ordewell: Clear All Tasks"
+      },
+      {
+        "command": "ordewell.exportPlan",
+        "title": "Ordewell: Export Plan to File",
+        "icon": "$(save-as)"
+      },
+      {
+        "command": "ordewell.newSession",
+        "title": "Ordewell: New Session",
+        "icon": "$(add)"
+      },
+      {
+        "command": "ordewell.configureModelAllowlist",
+        "title": "Ordewell: Configure Model Allowlist"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "ordewell.loadSession",
+          "when": "view == ordewellChatView",
+          "group": "navigation"
+        },
+        {
+          "command": "ordewell.newSession",
+          "when": "view == ordewellChatView",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Ordewell",
+      "properties": {
+        "ordewell.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Google Gemini API key (or set GEMINI_API_KEY env var)"
+        },
+        "ordewell.openAiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenRouter / OpenAI API key (or set OPENROUTER_API_KEY env var)"
+        },
+        "ordewell.aiProvider": {
+          "type": "string",
+          "default": "",
+          "enum": [
+            "",
+            "google",
+            "openrouter",
+            "openai_compatible",
+            "claude-code",
+            "codex",
+            "opencode"
+          ],
+          "enumDescriptions": [
+            "Auto-detect from the API keys you have set",
+            "Google Gemini API",
+            "OpenRouter API",
+            "A custom OpenAI-compatible endpoint",
+            "Plan with the Claude Code CLI — no API key, uses your subscription",
+            "Plan with the Codex CLI — no API key, uses your subscription",
+            "Plan with the OpenCode CLI — no API key, uses your subscription"
+          ],
+          "description": "AI provider — auto-detected from keys if left blank. The last three plan with a coding agent already installed on this machine, so no API key is needed."
+        },
+        "ordewell.plannerThinkingEffort": {
+          "type": "string",
+          "default": "",
+          "description": "Thinking effort for a coding-agent planner (e.g. low, medium, high) — pick from the agent's own model variants"
+        },
+        "ordewell.orchestratorModel": {
+          "type": "string",
+          "default": "",
+          "description": "Main planning model (required — type /model set to configure)"
+        },
+        "ordewell.geminiModel": {
+          "type": "string",
+          "default": "",
+          "description": "Gemini planning model (discovered automatically if empty)"
+        },
+        "ordewell.claudeCode.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Claude Code as a runner (legacy — use enabledRunners instead)"
+        },
+        "ordewell.opencode.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable OpenCode as a runner (legacy — use enabledRunners instead)"
+        },
+        "ordewell.codex.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Codex as a runner (legacy — use enabledRunners instead)"
+        },
+        "ordewell.enabledRunners": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Enabled runner IDs (e.g. [\"claude-code\", \"opencode\"]). Leave unset to use legacy claudeCode/opencode toggles."
+        },
+        "ordewell.maxParallelSessions": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 5,
+          "description": "Max concurrent AI task terminals"
+        },
+        "ordewell.researchEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run codebase research before planning"
+        },
+        "ordewell.autonomousMode": {
+          "type": "boolean",
+          "default": true,
+          "description": "Default new plans to each runner's most autonomous permission mode (off → safe mode). Toggle via the /auto slash command."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "@ordewell/core": "^0.4.0",
+    "uuid": "^11.1.1"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/node": "^25.9.1",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@types/uuid": "^10.0.0",
+    "@types/vscode": "^1.90.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "@vscode/test-electron": "^2.4.0",
+    "jsdom": "^25.0.1",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.9.3",
+    "vite": "^5.4.0",
+    "vitest": "^2.1.0"
+  }
+}

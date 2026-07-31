@@ -1,0 +1,554 @@
+/**
+ * Tiered classification for the planner's `bash` tool.
+ *
+ * The planner is a read-only researcher: it never edits files, and the runners
+ * do the real work. But research legitimately means running things — querying a
+ * cloud control plane (`az`, `gh`), reproducing a failure (`npm test`), or
+ * shaping output (`jq`). The old allowlist refused all of that, so the model's
+ * only escape was to guess.
+ *
+ * Three tiers replace the flat allowlist:
+ *
+ *   auto    read-only inspection — runs with no prompt (the historical list)
+ *   ask     anything else that is not obviously destructive — one approval,
+ *           remembered for the rest of the session at `scope` granularity
+ *   refuse  writes, privilege escalation, and anything that would smuggle
+ *           arbitrary code past this classifier — never runs, never prompts
+ *
+ * `refuse` is deliberately not promptable. A planner that can `rm` is a planner
+ * that can silently break the workspace it was asked to reason about, and the
+ * architecture already says mutation belongs to the runners.
+ *
+ * Classification walks every segment of the command line (pipes, `&&`, `;`, and
+ * command substitution) rather than matching substrings against the raw string.
+ * The old substring denylist both over-matched (`ls docs/removed` tripped `rm`)
+ * and under-matched (`$(rm -rf /)` was invisible once chaining was allowed).
+ *
+ * The lexer is dialect-aware, because the interpreter that will actually run
+ * the command decides what the tokens are, and getting that wrong is not a
+ * cosmetic error here — it is the difference between classifying what runs and
+ * classifying something else. See {@link Dialect}.
+ */
+
+import type { ShellDialect } from './researchShell';
+
+export const AUTO_COMMANDS = [
+  'ls', 'tree', 'git', 'wc', 'du', 'df', 'file', 'head', 'tail', 'cat', 'sort', 'uniq',
+  'echo', 'printf', 'date', 'stat', 'basename', 'dirname', 'realpath', 'pwd',
+  'which', 'type', 'env', 'uname', 'whoami', 'cut', 'nl', 'rg', 'grep', 'find', 'jq', 'yq',
+];
+
+export const GIT_READONLY_SUBCOMMANDS = [
+  'log', 'status', 'diff', 'show', 'ls-files', 'ls-remote', 'ls-tree', 'branch', 'tag',
+  'rev-parse', 'rev-list', 'describe', 'blame', 'grep', 'shortlog', 'whatchanged', 'cat-file',
+];
+
+/**
+ * Never runs, with or without approval.
+ *
+ * The `cmd.exe` builtins at the end matter as much as the POSIX names above
+ * them. `del`, `rd`, `move`, and friends mutate exactly what `rm` and `mv` do,
+ * and on Windows they are what a model reaches for — so without them the whole
+ * refusal tier was bypassable on that platform by writing the command the way
+ * the platform spells it. Listed unconditionally rather than per-platform: a
+ * POSIX box has no `del` to refuse, so the extra names cost nothing there.
+ */
+export const REFUSED_COMMANDS = [
+  'rm', 'rmdir', 'unlink', 'shred', 'truncate', 'dd', 'mkfs', 'fdisk', 'parted',
+  'mv', 'cp', 'install', 'ln', 'chmod', 'chown', 'chgrp', 'chattr',
+  'mount', 'umount', 'sudo', 'doas', 'su', 'passwd',
+  'kill', 'killall', 'pkill', 'shutdown', 'reboot', 'halt', 'poweroff',
+  'systemctl', 'service', 'crontab', 'tee', 'dput', 'mkdir', 'touch',
+  // Windows: destructive cmd.exe builtins and their utility equivalents.
+  'del', 'erase', 'rd', 'md', 'move', 'copy', 'xcopy', 'robocopy', 'ren', 'rename',
+  'mklink', 'attrib', 'icacls', 'cacls', 'takeown', 'format', 'diskpart',
+  'taskkill', 'tskill', 'reg', 'regedit', 'sc', 'net', 'runas', 'schtasks',
+];
+
+/** Destructive or outward-facing subcommands of otherwise-permitted multiplexers. */
+const REFUSED_SUBCOMMANDS: Record<string, string[]> = {
+  git: ['push', 'reset', 'clean', 'checkout', 'switch', 'restore', 'rebase', 'merge', 'commit',
+    'am', 'apply', 'cherry-pick', 'revert', 'stash', 'gc', 'prune', 'filter-branch',
+    'update-ref', 'remote', 'config', 'init', 'clone', 'fetch', 'pull', 'submodule'],
+  npm: ['publish', 'unpublish', 'deprecate', 'owner', 'access', 'token', 'login', 'logout'],
+  yarn: ['publish', 'npm'],
+  pnpm: ['publish'],
+  docker: ['push', 'rm', 'rmi', 'kill', 'stop', 'prune', 'system'],
+  kubectl: ['delete', 'apply', 'create', 'patch', 'replace', 'edit', 'drain', 'cordon', 'scale'],
+  gh: ['release', 'secret', 'auth'],
+  az: ['login', 'logout'],
+  terraform: ['apply', 'destroy'],
+};
+
+/** Binaries that execute whatever they are handed — refused when given inline code or fed from a pipe. */
+const INTERPRETERS = ['sh', 'bash', 'zsh', 'fish', 'dash', 'ksh', 'csh', 'tcsh', 'pwsh', 'powershell',
+  'python', 'python2', 'python3', 'node', 'deno', 'bun', 'ruby', 'perl', 'php', 'eval', 'exec', 'xargs',
+  // Windows interpreters. `cmd /c "…"` is the platform's spelling of `sh -c`.
+  'cmd', 'wscript', 'cscript', 'mshta', 'rundll32', 'regsvr32'];
+
+/**
+ * Flags that hand an interpreter code to run. Compared case-insensitively:
+ * cmd.exe and PowerShell both accept their switches in any casing, so a
+ * case-sensitive list refused `-Command` and waved `-command` through.
+ */
+const INLINE_CODE_FLAGS = ['-c', '-e', '--eval', '--command', '-Command', '--exec', '/c', '/k', '/r'];
+
+function isInlineCodeFlag(arg: string): boolean {
+  const lower = arg.toLowerCase();
+  return INLINE_CODE_FLAGS.some((f) => f.toLowerCase() === lower);
+}
+
+/** Multiplexers whose first non-flag argument is meaningful enough to scope a grant. */
+const MULTIPLEXERS = ['git', 'npm', 'yarn', 'pnpm', 'npx', 'cargo', 'go', 'dotnet', 'docker', 'podman',
+  'kubectl', 'helm', 'az', 'aws', 'gcloud', 'gh', 'glab', 'terraform', 'make', 'mvn', 'gradle',
+  'composer', 'pip', 'pip3', 'poetry', 'uv', 'bundle', 'rake', 'swift', 'flutter', 'dart'];
+
+/**
+ * What the interpreter that will run this command treats as syntax.
+ *
+ * `BaseFileSystem.execBashImpl` runs the command through `shell: true`, which
+ * means `/bin/sh` on POSIX and `cmd.exe` on Windows — two different languages.
+ * Lexing cmd.exe input with POSIX rules is not a near-miss, it inverts specific
+ * answers: `\` is an escape in sh and an ordinary path separator in cmd, so
+ * `rg pattern C:\repo\src` tokenized to `C:reposrc`, which then failed
+ * containment against the very workspace it named. And `'` is a quote in sh and
+ * a literal character in cmd, so `echo it's & del x` hid the `del` inside what
+ * the lexer believed was a quoted string.
+ *
+ * Only the four rules that actually diverge are modeled. Constructs cmd.exe
+ * lacks (`$(…)`, backticks) are still recognized on Windows: over-splitting
+ * costs a needless approval prompt, under-splitting costs the gate.
+ */
+export interface Dialect {
+  /** The character that escapes the next one outside quotes. */
+  escape: string;
+  /**
+   * Whether {@link escape} still escapes inside a double-quoted run.
+   *
+   * POSIX `\` does; cmd.exe `^` does not. Getting this wrong is not cosmetic:
+   * with `^` honoured inside quotes, `echo "a^"& del b` lexed as one `echo`
+   * segment — the escape swallowed the closing quote, so the `&` looked quoted
+   * and the `del` cmd.exe would actually run became an argument nobody
+   * classified.
+   */
+  escapeInQuotes: boolean;
+  /** Characters that open a quoted run. */
+  quotes: string[];
+  /** Matches a variable reference the interpreter will expand. */
+  expansion: RegExp;
+  /** Executable extensions stripped before a binary is matched against the tiers. */
+  strippedExtensions: string[];
+}
+
+const POSIX_DIALECT: Dialect = {
+  escape: '\\',
+  escapeInQuotes: true,
+  quotes: ["'", '"'],
+  expansion: /^\$[A-Za-z_{]/,
+  strippedExtensions: [],
+};
+
+const CMD_DIALECT: Dialect = {
+  escape: '^',
+  escapeInQuotes: false,
+  quotes: ['"'],
+  // `%VAR%` and delayed-expansion `!VAR!`.
+  expansion: /^[%!][A-Za-z_]/,
+  // Without this, `del.exe` and `C:\bin\del.exe` both missed the refusal list.
+  strippedExtensions: ['.exe', '.cmd', '.bat', '.com', '.ps1', '.msc'],
+};
+
+function dialectFor(dialect: ShellDialect | undefined): Dialect {
+  const resolved = dialect ?? (process.platform === 'win32' ? 'cmd' : 'posix');
+  return resolved === 'cmd' ? CMD_DIALECT : POSIX_DIALECT;
+}
+
+/**
+ * Options threaded through classification.
+ *
+ * `dialect` is keyed to the interpreter rather than the OS on purpose: a Windows
+ * host that has Git Bash runs the planner's commands in a POSIX shell (see
+ * {@link resolveResearchShell}), and classifying those under cmd.exe rules
+ * would be the same mismatch in the other direction. Callers pass the dialect of
+ * the shell they are actually going to use; omitting it falls back to the host
+ * default.
+ */
+export interface CommandPolicyOptions {
+  dialect?: ShellDialect;
+}
+
+export type CommandTier = 'auto' | 'ask' | 'refuse';
+
+export interface CommandClassification {
+  tier: CommandTier;
+  /** What a grant covers, for `ask`. Derived from the non-auto segments only. */
+  scope: string;
+  /** Populated for `refuse`: why, in a sentence the model can act on. */
+  reason?: string;
+}
+
+interface Segment {
+  binary: string;
+  args: string[];
+  /** True when this segment consumes another command's output (`… | seg`). */
+  piped: boolean;
+  /**
+   * A token contains a `$var` the shell will expand. Tracked at lex time
+   * because only the lexer knows a `$` inside single quotes is literal.
+   */
+  expandable: boolean;
+}
+
+interface Lexed {
+  segments: Segment[];
+  /** An unquoted `>`/`>>` writes a file. */
+  redirect: boolean;
+  /** An unquoted `<(…)`/`>(…)` spawns a process this classifier never tokenizes. */
+  processSubstitution: boolean;
+  /** Lexing ran off the end inside a quote or a substitution — nothing here is trustworthy. */
+  unbalanced: boolean;
+}
+
+/** Index of the `)` closing the `(` at `open`, or -1. */
+function matchParen(s: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < s.length; i++) {
+    if (s[i] === '(') depth++;
+    else if (s[i] === ')' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/**
+ * Tokenize one command line the way a shell would: quotes and backslashes are
+ * consumed, and only *unquoted* metacharacters are operators.
+ *
+ * This is the whole difference between the classifier seeing what will run and
+ * seeing the raw string. Splitting on a bare `/[|;&]/` made `rg "error|warn"`
+ * two segments (so the planner's commonest search asked for approval, scoped to
+ * the nonsense binary `warn"`), while leaving quotes on argument tokens hid
+ * `cat "/etc/passwd"` from the path-confinement check entirely.
+ *
+ * Substitution bodies are lifted out into `nested` and classified as their own
+ * command lines, so `$(rm -rf /)` cannot hide inside an `echo`.
+ */
+function lex(command: string, nested: string[], dialect: Dialect): Lexed {
+  const segments: Segment[] = [];
+  let redirect = false;
+  let processSubstitution = false;
+  let unbalanced = false;
+
+  let tokens: string[] = [];
+  let expandable = false;
+  let current = '';
+  let started = false;
+  let piped = false;
+  let quote = '';
+
+  const endToken = () => {
+    if (started) tokens.push(current);
+    current = '';
+    started = false;
+  };
+  const endSegment = (nextPiped: boolean) => {
+    endToken();
+    if (tokens.length > 0) segments.push({ ...toSegment(tokens, piped, dialect), expandable });
+    tokens = [];
+    expandable = false;
+    piped = nextPiped;
+  };
+
+  let i = 0;
+  while (i < command.length) {
+    const c = command[i];
+
+    // A single-quoted run is literal end to end — no escapes, no expansion.
+    // Only POSIX has one; `CMD_DIALECT.quotes` omits `'` so this never fires
+    // there, and an apostrophe stays an ordinary character.
+    if (quote === "'") {
+      if (c === "'") { quote = ''; i++; continue; }
+      current += c; started = true; i++; continue;
+    }
+
+    // `quote` is '' or '"' here — the single-quote run returned above.
+    if (c === dialect.escape && (quote === '' || dialect.escapeInQuotes)) {
+      const next = command[i + 1];
+      if (next !== undefined) { current += next; started = true; }
+      i += 2; continue;
+    }
+
+    // Substitutions expand inside double quotes too, so these precede the
+    // double-quote passthrough below.
+    if (c === '$' && command[i + 1] === '(') {
+      const close = matchParen(command, i + 1);
+      if (close < 0) { unbalanced = true; break; }
+      nested.push(command.slice(i + 2, close));
+      started = true;
+      i = close + 1; continue;
+    }
+    if (c === '`') {
+      const close = command.indexOf('`', i + 1);
+      if (close < 0) { unbalanced = true; break; }
+      nested.push(command.slice(i + 1, close));
+      started = true;
+      i = close + 1; continue;
+    }
+    if (dialect.expansion.test(command.slice(i, i + 2))) {
+      expandable = true;
+      current += c; started = true; i++; continue;
+    }
+
+    if (quote === '"') {
+      if (c === '"') { quote = ''; started = true; i++; continue; }
+      current += c; started = true; i++; continue;
+    }
+
+    if (dialect.quotes.includes(c)) { quote = c; started = true; i++; continue; }
+
+    if (c === '<' || c === '>') {
+      if (command[i + 1] === '(') { processSubstitution = true; i += 2; continue; }
+      if (c === '>') redirect = true;
+      endToken();
+      i += command[i + 1] === c ? 2 : 1;
+      continue;
+    }
+
+    // Subshell grouping is not part of any token: `(rm -rf /)` must lex to `rm`.
+    if (c === '(' || c === ')') { endToken(); i++; continue; }
+
+    if (c === '|') {
+      const double = command[i + 1] === '|';
+      endSegment(!double);
+      i += double ? 2 : 1;
+      continue;
+    }
+    if (c === '&' || c === ';' || c === '\n') {
+      endSegment(false);
+      i += command[i + 1] === c ? 2 : 1;
+      continue;
+    }
+
+    if (/\s/.test(c)) { endToken(); i++; continue; }
+
+    current += c; started = true; i++;
+  }
+
+  if (quote !== '') unbalanced = true;
+  endSegment(false);
+
+  return { segments, redirect, processSubstitution, unbalanced };
+}
+
+/**
+ * The name a segment's binary is matched against the tiers under.
+ *
+ * `path.basename` alone is not enough: Node's POSIX `path` does not split on
+ * `\`, so `C:\Windows\System32\del.exe` came back whole and matched nothing in
+ * `REFUSED_COMMANDS`. Both separators are stripped regardless of host, and the
+ * dialect decides whether an executable extension comes off too.
+ */
+function binaryName(token: string, dialect: Dialect): string {
+  const base = token.split(/[/\\]/).pop() ?? '';
+  // `dot > 0`, not `>= 0`: `lastIndexOf` returns -1 for a name with no dot, and
+  // `slice(-1)` would then make the last character look like the extension.
+  const dot = base.lastIndexOf('.');
+  if (dot <= 0) return base;
+  return dialect.strippedExtensions.includes(base.slice(dot).toLowerCase()) ? base.slice(0, dot) : base;
+}
+
+function toSegment(tokens: string[], piped: boolean, dialect: Dialect): Segment {
+  const rest = [...tokens];
+  // `FOO=bar cmd` — assignments precede the binary.
+  while (rest.length > 0 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[0])) rest.shift();
+  return { binary: rest.length > 0 ? binaryName(rest[0], dialect) : '', args: rest.slice(1), piped, expandable: false };
+}
+
+/** Lex a command line and every substitution body nested inside it. */
+function lexAll(command: string, dialect: Dialect): Lexed {
+  const queue: string[] = [];
+  const top = lex(command, queue, dialect);
+  const all: Lexed = { ...top, segments: top.segments.filter((s) => s.binary) };
+
+  // Bounded: a pathological `$($($(…)))` must not spin here.
+  for (let depth = 0; depth < 32 && queue.length > 0; depth++) {
+    const inner = lex(queue.shift()!, queue, dialect);
+    all.segments.push(...inner.segments.filter((s) => s.binary));
+    all.redirect ||= inner.redirect;
+    all.processSubstitution ||= inner.processSubstitution;
+    all.unbalanced ||= inner.unbalanced;
+  }
+  return all;
+}
+
+/**
+ * Path-shaped arguments, in every spelling a host might use.
+ *
+ * The Windows forms are not cosmetic. `pathLikeArgs` feeds
+ * `BaseFileSystem.authorizeCommandPaths`, so an argument this function fails to
+ * recognize is one the workspace-confinement prompt never sees. With only the
+ * POSIX forms, `cat C:\Users\me\.ssh\id_rsa` matched nothing and ran
+ * unprompted — ADR-0008's escape gate silently absent on that platform rather
+ * than merely weaker.
+ */
+function looksLikePath(arg: string): boolean {
+  if (arg.startsWith('--') && arg.includes('=')) return looksLikePath(arg.slice(arg.indexOf('=') + 1));
+  return arg.startsWith('/')
+    || arg.startsWith('~')
+    || arg.startsWith('../')
+    || arg === '..'
+    || arg.startsWith('./')
+    // Windows: drive-absolute (`C:\x`, `C:/x`), drive-relative (`C:x`), UNC
+    // (`\\server\share`), and root-relative (`\x`).
+    || /^[A-Za-z]:/.test(arg)
+    || arg.startsWith('\\')
+    || arg.startsWith('..\\')
+    || arg.startsWith('.\\');
+}
+
+/**
+ * Every path-shaped argument across every segment (including inside `$(…)`),
+ * for the workspace-confinement check `bash()` runs before an `auto`-tier
+ * command reaches the shell. `auto` classification only ever looked at the
+ * binary — `cat`, `find`, `rg` and friends are auto because *reading* is
+ * read-only, but their arguments can still point anywhere on disk, which is
+ * exactly the escape path confinement closes for `readFile`/`glob`/`grep`.
+ */
+export function pathLikeArgs(command: string, opts: CommandPolicyOptions = {}): string[] {
+  const dialect = dialectFor(opts.dialect);
+  return lexAll(command, dialect).segments.flatMap((seg) => seg.args.flatMap((a) => {
+    // `--flag=value` is excluded by the leading-dash filter but its value can
+    // still name an external path, so split it and check the value.
+    if (a.startsWith('--') && a.includes('=')) {
+      const v = a.slice(a.indexOf('=') + 1);
+      return looksLikePath(v) ? [v] : [];
+    }
+    return (!a.startsWith('-') && looksLikePath(a)) ? [a] : [];
+  }));
+}
+
+function scopeFor(seg: Segment): string {
+  if (!MULTIPLEXERS.includes(seg.binary)) return seg.binary;
+  const sub = seg.args.find((a) => !a.startsWith('-'));
+  return sub ? `${seg.binary} ${sub}` : seg.binary;
+}
+
+function isAuto(seg: Segment): boolean {
+  if (!AUTO_COMMANDS.includes(seg.binary)) return false;
+  // `x=/etc/passwd; cat $x` gives `cat` the lone argument `$x`, which
+  // `pathLikeArgs`/`looksLikePath` cannot see is a path at all — the shell
+  // resolves it to whatever the variable holds. An auto-tier command whose
+  // arguments are not fully visible at classification time is exactly the
+  // confinement escape this file exists to close, so treat any variable
+  // reference as disqualifying the fast path rather than trying to resolve it.
+  if (seg.expandable) return false;
+  if (seg.binary !== 'git') return true;
+  const sub = seg.args.find((a) => !a.startsWith('-'));
+  return sub !== undefined && GIT_READONLY_SUBCOMMANDS.includes(sub);
+}
+
+function refusalFor(seg: Segment): string | undefined {
+  if (REFUSED_COMMANDS.includes(seg.binary)) {
+    return `"${seg.binary}" modifies state. You are a read-only planner — describe the change as a task instead, and the runner executing the plan will make it.`;
+  }
+  // `eval`/`exec` exist only to run a string as a command — the whole point of
+  // this classifier is to inspect those strings, so they are never promptable.
+  if (seg.binary === 'eval' || seg.binary === 'exec') {
+    return `"${seg.binary}" runs a string as a command, which this classifier cannot inspect. Use the read-only research tools, or describe it as a task.`;
+  }
+  const subs = REFUSED_SUBCOMMANDS[seg.binary];
+  if (subs) {
+    const sub = seg.args.find((a) => !a.startsWith('-'));
+    if (sub && subs.includes(sub)) {
+      return `"${seg.binary} ${sub}" changes state or reaches outward. You are a read-only planner — put it in the plan and let the runner do it.`;
+    }
+  }
+  // `git branch`/`git tag` are read-only subcommands, but their delete/move
+  // flag forms mutate refs. The readonly-subcommand allowlist only inspects
+  // the first non-flag argument, so these have to be caught here.
+  if (seg.binary === 'git') {
+    const sub = seg.args.find((a) => !a.startsWith('-'));
+    if (sub === 'branch' || sub === 'tag') {
+      if (seg.args.some((a) => ['-D', '-d', '-m', '-M', '--delete', '--move'].includes(a))) {
+        return `"git ${sub}" with a delete/move flag mutates refs. You are a read-only planner — describe the change as a task instead.`;
+      }
+    }
+  }
+  // `find` is auto because listing is read-only, but `-exec`/`-delete` make it
+  // run an arbitrary inner command — the exact bypass this classifier exists
+  // to close. Refuse rather than prompt: the inner command is unauditable.
+  if (seg.binary === 'find') {
+    const flag = seg.args.find((a) => ['-exec', '-execdir', '-ok', '-okdir', '-delete'].includes(a));
+    if (flag) {
+      return `find with "${flag}" runs an inner command this classifier cannot inspect. Use the read-only research tools on find's output, or describe the change as a task.`;
+    }
+  }
+  // `sed -i`/`awk -i inplace` rewrite files in place — mutation, not research.
+  if (seg.binary === 'sed' && seg.args.some((a) => a === '-i' || a === '--in-place' || /^-i./.test(a))) {
+    return `"sed -i" edits files in place. You are a read-only planner — describe the change as a task instead.`;
+  }
+  if (seg.binary === 'awk' && seg.args.some((a) => a === 'inplace')) {
+    return `"awk -i inplace" edits files in place. You are a read-only planner — describe the change as a task instead.`;
+  }
+  if (INTERPRETERS.includes(seg.binary)) {
+    if (seg.piped) {
+      return `Piping into "${seg.binary}" would run code this classifier cannot inspect. Run the producing command on its own and read its output.`;
+    }
+    if (seg.args.some(isInlineCodeFlag)) {
+      return `Inline code via "${seg.binary} ${seg.args.find(isInlineCodeFlag)}" is not available to the planner. Use the read-only research tools, or describe it as a task.`;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Classify one command line. Output redirection is refused outright: a planner
+ * that writes files has stopped being a planner.
+ */
+export function classifyCommand(command: string, opts: CommandPolicyOptions = {}): CommandClassification {
+  const trimmed = command.trim();
+  if (!trimmed) return { tier: 'refuse', scope: '', reason: 'Empty command.' };
+
+  const dialect = dialectFor(opts.dialect);
+  const { segments, redirect, processSubstitution, unbalanced } = lexAll(trimmed, dialect);
+
+  if (unbalanced) {
+    return {
+      tier: 'refuse',
+      scope: '',
+      reason: 'Unterminated quote or command substitution — this classifier cannot tell what would actually run. Rewrite the command with balanced quotes.',
+    };
+  }
+
+  // Process substitution `<(…)`/`>(…)` spawns a process this classifier never
+  // tokenizes — `cat <(rm -rf /)` would otherwise run `rm` with no prompt.
+  if (processSubstitution) {
+    return {
+      tier: 'refuse',
+      scope: '',
+      reason: 'Process substitution runs another command this classifier cannot inspect. Run the command on its own and read its output, or describe it as a task.',
+    };
+  }
+
+  if (redirect) {
+    return {
+      tier: 'refuse',
+      scope: '',
+      reason: 'Output redirection writes files. You are a read-only planner — read the output instead, or describe the write as a task.',
+    };
+  }
+
+  if (segments.length === 0) return { tier: 'refuse', scope: '', reason: 'No command found.' };
+
+  for (const seg of segments) {
+    const reason = refusalFor(seg);
+    if (reason) return { tier: 'refuse', scope: '', reason };
+  }
+
+  const nonAuto = segments.filter((s) => !isAuto(s));
+  if (nonAuto.length === 0) return { tier: 'auto', scope: '' };
+
+  // A grant covers only the parts that actually needed one, so
+  // `az group list | head` is remembered as `az group`, not the whole line.
+  const scope = [...new Set(nonAuto.map(scopeFor))].sort().join(' + ');
+  return { tier: 'ask', scope };
+}

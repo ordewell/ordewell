@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","session_id":"sess-claude-3","cwd":"/repo","permissionMode":"plan"}
+{"type":"control_request","request_id":"req_01","request":{"subtype":"can_use_tool","tool_name":"Write","input":{"file_path":"/repo/.ordewell/plan.draft.json","content":"{}"}}}
+{"type":"assistant","session_id":"sess-claude-3","message":{"id":"msg_01","role":"assistant","content":[{"type":"text","text":"I can't write files, so here is the outline instead: one slice for the parser, one for the surface."}]}}
+{"type":"result","subtype":"success","session_id":"sess-claude-3","is_error":false,"result":"I can't write files, so here is the outline instead: one slice for the parser, one for the surface."}

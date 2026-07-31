@@ -1,0 +1,60 @@
+{
+  "name": "@ordewell/cli",
+  "version": "0.4.0",
+  "description": "Ordewell CLI and TUI — plan, run and verify coding-agent tasks from the terminal.",
+  "license": "Apache-2.0",
+  "author": "Alessandro Costanzo Ciano",
+  "homepage": "https://ordewell.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ordewell/ordewell.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/ordewell/ordewell/issues"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "orchestration",
+    "coding-agent",
+    "claude-code",
+    "opencode",
+    "codex",
+    "tui",
+    "cli"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "./dist/main.js",
+  "bin": {
+    "ordewell": "./dist/main.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup src/main.ts --format cjs --clean --external ws --external @ordewell/core",
+    "prepublishOnly": "npm run build",
+    "lint": "eslint src --ext .ts",
+    "watch": "tsup src/main.ts --watch",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ordewell/core": "^0.4.0",
+    "@ordewell/web": "^0.4.0",
+    "string-width": "^7.2.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.3.0",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,15 @@
+# Everything is excluded by default except what's listed after the `!` lines.
+# The extension bundle (dist/) is self-contained — @ordewell/core and all deps
+# are bundled by tsup — so node_modules must NOT ship.
+#
+# vsce keeps any file matched by a `!` rule regardless of where the rule sits,
+# so a trailing `**/*.map` cannot claw back what `!dist/**` already included —
+# that is how a 4.2 MB sourcemap shipped in every install. The include globs
+# therefore have to be narrow enough to leave maps out in the first place.
+**
+!dist/extension.js
+!dist/webviews/**
+!media/**
+!package.json
+!README.md
+!LICENSE

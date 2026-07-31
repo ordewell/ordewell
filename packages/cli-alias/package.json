@@ -1,0 +1,44 @@
+{
+  "name": "ordewell",
+  "version": "0.4.0",
+  "description": "Ordewell — turn one goal into an ordered plan of coding-agent tasks. Installs the Ordewell CLI and TUI.",
+  "license": "Apache-2.0",
+  "author": "Alessandro Costanzo Ciano",
+  "homepage": "https://ordewell.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ordewell/ordewell.git",
+    "directory": "packages/cli-alias"
+  },
+  "bugs": {
+    "url": "https://github.com/ordewell/ordewell/issues"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "orchestration",
+    "coding-agent",
+    "claude-code",
+    "opencode",
+    "codex",
+    "tui",
+    "cli"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "ordewell": "./bin/ordewell.js"
+  },
+  "files": [
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@ordewell/cli": "0.4.0"
+  }
+}

@@ -1,0 +1,2 @@
+{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thr-codex-1","turnId":"turn-2","completedAtMs":1,"item":{"id":"item_m2","type":"agentMessage","text":"{{PLAN}}"}}}
+{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thr-codex-1","turn":{"id":"turn-2","status":"completed","items":[]}}}

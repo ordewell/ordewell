@@ -1,0 +1,92 @@
+{
+  "name": "@ordewell/core",
+  "version": "0.4.1",
+  "description": "Ordewell core — planner, orchestrator, runners and verification engine.",
+  "license": "Apache-2.0",
+  "author": "Alessandro Costanzo Ciano",
+  "homepage": "https://ordewell.ai",
+  "bugs": {
+    "url": "https://github.com/ordewell/ordewell/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ordewell/ordewell.git",
+    "directory": "packages/core"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "orchestration",
+    "coding-agent",
+    "planner"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./parsing": {
+      "types": "./dist/parsing.d.ts",
+      "import": "./dist/parsing.mjs",
+      "require": "./dist/parsing.js"
+    },
+    "./plan-utils": {
+      "types": "./dist/plan-utils.d.ts",
+      "import": "./dist/plan-utils.mjs",
+      "require": "./dist/plan-utils.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.mjs",
+      "require": "./dist/testing.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "parsing": [
+        "./dist/parsing.d.ts"
+      ],
+      "plan-utils": [
+        "./dist/plan-utils.d.ts"
+      ],
+      "testing": [
+        "./dist/testing.d.ts"
+      ]
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts src/parsing.ts src/testing.ts src/plan-utils.ts --dts --sourcemap --format cjs,esm --clean --tsconfig tsconfig.json",
+    "prepublishOnly": "npm run build",
+    "watch": "tsup src/index.ts --watch --sourcemap",
+    "test": "vitest run",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "openai": "^4.104.0",
+    "uuid": "^11.1.1"
+  },
+  "devDependencies": {
+    "@types/uuid": "^10.0.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.0"
+  }
+}

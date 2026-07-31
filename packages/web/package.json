@@ -1,0 +1,51 @@
+{
+  "name": "@ordewell/web",
+  "version": "0.4.0",
+  "description": "Ordewell local API server — the daemon the Ordewell CLI and TUI talk to.",
+  "license": "Apache-2.0",
+  "author": "Alessandro Costanzo Ciano",
+  "homepage": "https://ordewell.ai",
+  "bugs": {
+    "url": "https://github.com/ordewell/ordewell/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ordewell/ordewell.git",
+    "directory": "packages/web"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "./dist/server/main.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup server/main.ts --format cjs --clean --external hono --external @hono/node-server --external ws --external @ordewell/core --tsconfig tsconfig.json",
+    "prepublishOnly": "npm run build",
+    "lint": "eslint server --ext .ts",
+    "build:server": "tsup server/main.ts --format cjs --clean --external hono --external @hono/node-server --external ws --external @ordewell/core --tsconfig tsconfig.json",
+    "dev": "tsup server/main.ts --format cjs --clean --external hono --external @hono/node-server --external ws --external @ordewell/core --tsconfig tsconfig.json --watch",
+    "serve": "node dist/server/main.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ordewell/core": "^0.4.0",
+    "hono": "^4.6.0",
+    "@hono/node-server": "^1.13.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "@types/ws": "^8.5.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.0"
+  }
+}

@@ -1,0 +1,5 @@
+{"jsonrpc":"2.0","id":9101,"method":"currentTime/read","params":{}}
+{"jsonrpc":"2.0","id":9102,"method":"item/tool/requestUserInput","params":{"itemId":"item_q1","questions":[{"id":"q1","prompt":"Which test framework?"}]}}
+{"jsonrpc":"2.0","id":9103,"method":"item/permissions/requestApproval","params":{"itemId":"item_p1","requested":{"filesystem":{"write":["/repo"]}}}}
+{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thr-codex-1","turnId":"turn-4","completedAtMs":1,"item":{"id":"item_m4","type":"agentMessage","text":"I have no user to ask, so here is what I can tell from the repository."}}}
+{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thr-codex-1","turn":{"id":"turn-4","status":"completed","items":[]}}}

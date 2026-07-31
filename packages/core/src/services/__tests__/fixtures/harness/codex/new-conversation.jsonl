@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thr-codex-1","sessionId":"sess-codex-1","cwd":"/repo","status":"idle","turns":[],"cliVersion":"0.0.0","createdAt":0,"updatedAt":0,"ephemeral":false,"modelProvider":"openai","preview":""},"model":"gpt-5.6-sol","modelProvider":"openai","sandbox":{"mode":"read-only"},"approvalPolicy":"never","approvalsReviewer":"cli","cwd":"/repo"}}

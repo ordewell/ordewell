@@ -1,0 +1,44 @@
+{
+  "private": true,
+  "name": "ordewell-monorepo",
+  "version": "0.4.0",
+  "description": "Turn one goal into an ordered plan of coding-agent tasks, then execute and verify it.",
+  "license": "Apache-2.0",
+  "author": "Alessandro Costanzo Ciano",
+  "homepage": "https://ordewell.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ordewell/ordewell.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ordewell/ordewell/issues"
+  },
+  "workspaces": [
+    "packages/core",
+    "packages/vscode",
+    "packages/cli",
+    "packages/web"
+  ],
+  "scripts": {
+    "build": "npm run build -w packages/core && npm run build -w packages/vscode && npm run build -w packages/cli && npm run build -w packages/web",
+    "build:core": "npm run build -w packages/core",
+    "build:vscode": "npm run build -w packages/vscode",
+    "build:cli": "npm run build -w packages/cli",
+    "watch": "npm run watch -w packages/core",
+    "lint": "eslint . --ext .ts,.tsx",
+    "package": "npm run package -w packages/vscode",
+    "typecheck": "npm run typecheck -ws --if-present",
+    "test": "npm run test -ws --if-present",
+    "build:web": "npm run build -w packages/web",
+    "start": "node packages/cli/dist/main.js tui"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "@typescript-eslint/eslint-plugin": "^8.64.0",
+    "@typescript-eslint/parser": "^8.64.0",
+    "@vscode/vsce": "^3.9.2",
+    "eslint": "^8.57.1",
+    "tsup": "^8.3.0",
+    "typescript": "^5.9.3"
+  }
+}

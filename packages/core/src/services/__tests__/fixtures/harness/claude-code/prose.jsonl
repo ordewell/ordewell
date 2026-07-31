@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","session_id":"sess-claude-1","cwd":"/repo","tools":["Read","Grep","Glob","Bash"],"permissionMode":"plan"}
+{"type":"assistant","session_id":"sess-claude-1","message":{"id":"msg_01","role":"assistant","content":[{"type":"text","text":"Before I plan this: should the cache be in-process or Redis?"}]}}
+{"type":"result","subtype":"success","session_id":"sess-claude-1","is_error":false,"num_turns":1,"result":"Before I plan this: should the cache be in-process or Redis?"}

@@ -1,0 +1,2 @@
+{"jsonrpc":"2.0","method":"configWarning","params":{"summary":"Codex's Linux sandbox uses bubblewrap and needs access to create user namespaces.","details":null}}
+{"jsonrpc":"2.0","id":1,"result":{"userAgent":{"name":"codex","version":"0.0.0"}}}

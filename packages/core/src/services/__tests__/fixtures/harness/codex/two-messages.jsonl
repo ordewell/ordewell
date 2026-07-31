@@ -1,0 +1,4 @@
+{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thr-codex-1","turnId":"turn-5"}}
+{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thr-codex-1","turnId":"turn-5","completedAtMs":1,"item":{"id":"item_m5","type":"agentMessage","phase":"commentary","text":"I am reading the pricing module."}}}
+{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thr-codex-1","turnId":"turn-5","completedAtMs":2,"item":{"id":"item_m6","type":"agentMessage","phase":"final_answer","text":"applyDiscount has no tests. Shall I plan them?"}}}
+{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thr-codex-1","turn":{"id":"turn-5","status":"completed","items":[]}}}

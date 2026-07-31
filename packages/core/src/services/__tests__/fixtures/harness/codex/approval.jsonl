@@ -1,0 +1,3 @@
+{"jsonrpc":"2.0","id":9001,"method":"item/fileChange/requestApproval","params":{"threadId":"thr-codex-1","turnId":"turn-3","itemId":"item_f1","changes":{"/repo/notes.md":{"add":{"content":"notes"}}}}}
+{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thr-codex-1","turnId":"turn-3","completedAtMs":1,"item":{"id":"item_m3","type":"agentMessage","text":"I can't change files while planning; here is the outline instead."}}}
+{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thr-codex-1","turn":{"id":"turn-3","status":"completed","items":[]}}}

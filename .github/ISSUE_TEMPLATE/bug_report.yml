@@ -1,0 +1,84 @@
+name: Bug report
+description: Something behaves differently from how it's documented
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The fields below are the ones we almost always
+        have to ask for, so filling them in up front usually saves a round trip.
+
+        **Security issue?** Don't file it here — see
+        [SECURITY.md](https://github.com/ordewell/ordewell/blob/main/SECURITY.md).
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+      placeholder: |
+        I ran `ordewell plan --goal "..."` and expected a plan.
+        Instead it exited with ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ordewell setup
+        2. ordewell plan --goal "..."
+        3. ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Which surface
+      multiple: true
+      options:
+        - CLI
+        - TUI
+        - VS Code extension
+        - API server (ordewell web)
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Ordewell version
+      description: "`ordewell --version`, or the extension version in VS Code."
+      placeholder: "0.4.0"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS and Node version
+      description: "`node --version`, and your OS. On Windows, say whether you're in WSL."
+      placeholder: "macOS 15.2, Node 22.11.0"
+    validations:
+      required: true
+
+  - type: input
+    id: runner
+    attributes:
+      label: Runner and planner
+      description: Which coding agent was executing, and what was planning.
+      placeholder: "Runner: claude-code. Planner: opencode / deepseek-v4-flash"
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: |
+        Paste the error, or the daemon log at `~/.config/ordewell/server.log`.
+        This is rendered as a code block, so no backticks needed.
+
+        **Redact your API keys before pasting.**
+      render: shell

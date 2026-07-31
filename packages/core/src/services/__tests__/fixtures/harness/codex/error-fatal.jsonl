@@ -1,0 +1,2 @@
+{"jsonrpc":"2.0","method":"error","params":{"threadId":"thr-codex-1","turnId":"turn-6","willRetry":false,"error":{"message":"You have hit your usage limit. Try again after 09:00."}}}
+{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thr-codex-1","turn":{"id":"turn-6","status":"failed","error":{"message":"You have hit your usage limit. Try again after 09:00."},"items":[]}}}

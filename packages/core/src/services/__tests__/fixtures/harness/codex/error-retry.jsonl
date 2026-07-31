@@ -1,0 +1,3 @@
+{"jsonrpc":"2.0","method":"error","params":{"threadId":"thr-codex-1","turnId":"turn-7","willRetry":true,"error":{"message":"stream disconnected, retrying"}}}
+{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thr-codex-1","turnId":"turn-7","completedAtMs":1,"item":{"id":"item_m7","type":"agentMessage","text":"Recovered. Which module should I plan for?"}}}
+{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thr-codex-1","turn":{"id":"turn-7","status":"completed","items":[]}}}

@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+# A new push to a PR makes the in-flight run obsolete; don't pay for it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Linux only, deliberately.
+  #
+  # Ordewell supports macOS and Windows (ADR-0010) and it would be better to
+  # prove that here than to assert it in the README. The blocker is npm's
+  # optional-dependency handling: a lockfile resolved on Linux records only the
+  # Linux binaries for rollup and esbuild, so `npm ci` on a macOS or Windows
+  # runner fails at the first build with "Cannot find module
+  # @rollup/rollup-darwin-arm64". `npm install --package-lock-only` does not fix
+  # it — it resolves against the host platform too.
+  #
+  # Adding the matrix therefore means either committing a lockfile built to
+  # carry every platform's binaries, or dropping to `npm install` off-Linux and
+  # giving up reproducible dependency resolution there. Both are real changes
+  # that deserve their own review, so the matrix is not here yet.
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (core first — cli, web and vscode compile against its dist/)
+        run: npm run build:core
+
+      - name: Planner conversation loop — offline e2e (mock model, no API key)
+        run: |
+          node bench/live/mock-provider.mjs &
+          MOCK_PID=$!
+          trap 'kill $MOCK_PID 2>/dev/null' EXIT
+          # Wait for the mock provider to bind its port rather than a fixed sleep,
+          # which raced on loaded runners and orphaned the mock on drive failure.
+          for i in $(seq 1 50); do
+            if node -e "require('net').connect(3799).on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"; then break; fi
+            sleep 0.2
+          done
+          node bench/live/drive-conversation.mjs
+
+      - name: Build (vscode, cli & web)
+        run: npm run build -w packages/vscode -w packages/cli -w packages/web --if-present
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Package VS Code Extension
+        run: npm run package -w packages/vscode
+
+      - name: Upload .vsix
+        uses: actions/upload-artifact@v4
+        with:
+          name: ordewell-vsix
+          path: packages/vscode/*.vsix
+          if-no-files-found: error

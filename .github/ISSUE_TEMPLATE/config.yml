@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/ordewell/ordewell/security/advisories/new
+    about: Report privately. Please do not open a public issue for a security problem.
+  - name: Question or idea
+    url: https://github.com/ordewell/ordewell/discussions
+    about: For usage questions and open-ended discussion.

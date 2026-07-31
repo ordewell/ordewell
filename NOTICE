@@ -1,0 +1,48 @@
+Ordewell
+Copyright 2026 Alessandro Costanzo Ciano and the Ordewell contributors
+
+This product includes software developed by Alessandro Costanzo Ciano and the
+Ordewell contributors, licensed under the Apache License, Version 2.0. See the
+LICENSE file for the full terms, and AUTHORS.md for who contributed.
+
+--------------------------------------------------------------------------------
+TRADEMARKS AND BRAND ASSETS
+--------------------------------------------------------------------------------
+
+The Apache License grants rights to the *software*. It does not grant rights to
+the project's identity, and Section 6 of that License explicitly withholds them.
+
+The name "Ordewell", the Ordewell wordmark, and the Ordewell logos — including
+the image files distributed in `assets/readme/` and `packages/vscode/media/` —
+are not licensed under Apache-2.0 and remain the property of Alessandro
+Costanzo Ciano.
+
+You may:
+
+  - Use the name and logos to refer to this project accurately, including in
+    articles, talks, comparisons, and package listings.
+  - Redistribute the project unmodified, brand assets included.
+
+You may not, without written permission:
+
+  - Use the name or logos for a modified or derivative distribution in a way
+    that suggests it is the official Ordewell, or that it is endorsed by or
+    affiliated with this project.
+  - Use them as, or as part of, your own product name, company name, domain
+    name, or logo.
+
+If you fork and rebrand, replace the assets in `assets/readme/` and
+`packages/vscode/media/`. If you are unsure whether a use is fine, ask —
+the answer is usually yes.
+
+--------------------------------------------------------------------------------
+THIRD-PARTY ATTRIBUTION
+--------------------------------------------------------------------------------
+
+The deep-interview planning workflows (`grill-me`, PRD drafting, TDD task
+augmentation, and review mode) are adapted from Matt Pocock's skills
+(https://github.com/mattpocock/skills), licensed MIT, and rebuilt as prompt
+blocks inside Ordewell's planner and runner prompts.
+
+Runtime dependencies carry their own licences; see the `node_modules` tree of
+an installed copy, or each package's entry on npm.

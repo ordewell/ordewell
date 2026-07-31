@@ -1,0 +1,45 @@
+name: Feature request
+description: Suggest a capability Ordewell doesn't have
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before writing: the [ADRs](https://github.com/ordewell/ordewell/tree/main/docs/adr)
+        record decisions that were made deliberately, including options that
+        were considered and rejected. If your idea touches one, saying why the
+        trade-off should change is far more persuasive than the idea alone.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you hitting
+      description: Describe the situation, not the solution. What are you trying to do that Ordewell makes hard?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you've tried or considered
+      description: Workarounds, other tools, or approaches you rejected and why.
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Which surface would this affect
+      multiple: true
+      options:
+        - CLI
+        - TUI
+        - VS Code extension
+        - API server
+        - Core / planner
+        - Not sure
