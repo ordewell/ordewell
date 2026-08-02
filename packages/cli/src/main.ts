@@ -3,6 +3,7 @@ import { loadEnvFile } from './utils/env';
 import { printHelp } from './help';
 import { describeConnectionRefused, isConnectionRefused, resolvePort } from './daemonClient';
 import { COMMANDS } from './commands/registry';
+import { cliVersion } from './version';
 
 async function main(): Promise<void> {
   loadEnvFile();
@@ -13,6 +14,10 @@ async function main(): Promise<void> {
   const command = argv[0] ?? (process.stdin.isTTY ? 'tui' : '--help');
   if (command === '--help' || command === '-h') {
     printHelp();
+    return;
+  }
+  if (command === '--version' || command === '-v' || command === 'version') {
+    console.log(cliVersion());
     return;
   }
   const handler = COMMANDS[command];

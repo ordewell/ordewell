@@ -59,6 +59,7 @@ Other:
   ordewell setup                  Interactive first-run setup wizard
   ordewell plugins list|install|remove|create   Manage runner plugins
   ordewell --help               Show this help
+  ordewell --version            Print the installed version (alias: version, -v)
 
 TUI options:
   --workspace /path   Workspace directory (default: cwd)
