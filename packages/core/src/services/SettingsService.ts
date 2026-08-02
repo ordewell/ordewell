@@ -10,6 +10,11 @@ export interface UserSettings {
   verification: { enabled: boolean };
   researchSubagents: { enabled: boolean };
   modelAllowlist?: Record<string, string[]>;
+  /**
+   * Runners the user picked for planning. Absent — not empty — is what falls
+   * back to the environment's defaults; `[]` is a deliberate "none of them".
+   */
+  enabledRunners?: string[];
 }
 
 const DEFAULTS: UserSettings = {
@@ -148,6 +153,16 @@ export class SettingsService {
     this.persist();
   }
 
+  getEnabledRunners(): string[] | undefined {
+    return this.getAll().enabledRunners;
+  }
+
+  setEnabledRunners(ids: string[]): void {
+    this.getAll();
+    this.cache!.enabledRunners = [...ids];
+    this.persist();
+  }
+
   private load(): UserSettings {
     try {
       if (fs.existsSync(this.filePath)) {
@@ -164,6 +179,9 @@ export class SettingsService {
         };
         if (raw.modelAllowlist !== undefined) {
           settings.modelAllowlist = raw.modelAllowlist;
+        }
+        if (Array.isArray(raw.enabledRunners)) {
+          settings.enabledRunners = raw.enabledRunners.map(String);
         }
         return settings;
       }

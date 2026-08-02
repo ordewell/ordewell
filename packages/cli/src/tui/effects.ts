@@ -348,6 +348,17 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       dispatch({ type: 'notice', message: `${effect.runner} ${effect.enabled ? 'enabled' : 'disabled'}.` });
       return;
 
+    case 'setRunners': {
+      // One at a time: each request rewrites the same stored list, so firing
+      // them together would have the last write drop the others.
+      for (const change of effect.changes) {
+        await api.setRunnerEnabled(change.runner, change.enabled);
+      }
+      await loadRunners(deps);
+      dispatch({ type: 'notice', message: effect.message });
+      return;
+    }
+
     case 'setAutonomous':
       deps.setEnvVar('ORDEWELL_AUTONOMOUS_MODE', String(effect.enabled));
       dispatch({ type: 'notice', message: `Autonomous mode ${effect.enabled ? 'on' : 'off'}.` });

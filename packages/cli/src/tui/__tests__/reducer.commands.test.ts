@@ -100,9 +100,17 @@ describe('runners and autonomy', () => {
     ]);
   });
 
-  it('/runners with no argument opens the runner toggle picker', () => {
-    const { state } = run('/runners', { runners: [{ id: 'opencode', name: 'OpenCode', enabled: true }] });
-    expect(state.overlay).toMatchObject({ kind: 'picker', picker: { action: { kind: 'toggle-runner' } } });
+  it('/runners with no argument opens a multi-select seeded with the enabled ones', () => {
+    const { state } = run('/runners', {
+      runners: [
+        { id: 'opencode', name: 'OpenCode', enabled: true },
+        { id: 'codex', name: 'Codex', enabled: false },
+      ],
+    });
+    expect(state.overlay).toMatchObject({
+      kind: 'picker',
+      picker: { action: { kind: 'set-runners' }, multi: true, chosen: ['opencode'] },
+    });
   });
 
   it('/auto off leaves autonomous mode', () => {

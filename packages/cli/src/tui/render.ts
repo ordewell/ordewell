@@ -662,20 +662,23 @@ function renderPicker(picker: PickerState, rows: number, cols: number): string[]
     const mark = picker.multi
       ? (picker.chosen.includes(item.id) ? style.green('[✓]') : style.grey('[ ]'))
       : item.selected
-        ? style.green('● ')
-        : '  ';
+        ? style.green('●')
+        : ' ';
+    // Spaced off the caret on purpose: `❯●` reads as one smudged glyph.
     const caret = active ? style.cyan('❯') : ' ';
     const label = truncate(item.label, Math.max(1, cols - 12));
     const detail = item.detail ? style.grey(` — ${item.detail}`) : '';
     // An unavailable row (a coding agent whose CLI is missing) is greyed whole
     // rather than hidden, so the reason in `detail` stays legible.
     const line = item.disabled
-      ? `${caret}${mark} ${style.grey(label)}${detail}`
-      : `${caret}${mark} ${active ? style.bold(label) : label}${detail}`;
+      ? `${caret} ${mark} ${style.grey(label)}${detail}`
+      : `${caret} ${mark} ${active ? style.bold(label) : label}${detail}`;
     body.push(truncate(line, cols - 2));
   }
 
-  body.push('', style.grey(picker.footer ?? (picker.multi ? 'space toggles · enter confirms · esc cancels' : 'enter selects · esc cancels · type to filter')));
+  body.push('', style.grey(picker.multi
+    ? 'space toggles · enter confirms · esc cancels · type to filter'
+    : 'enter selects · esc cancels · type to filter'));
   return frame(picker.title, body, rows, cols);
 }
 

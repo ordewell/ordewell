@@ -525,6 +525,21 @@ describe('skills and settings', () => {
     expect(types(h.actions)).toContain('runnersLoaded');
   });
 
+  it('applies a confirmed runner set as one batch, reloading and reporting once', async () => {
+    const h = harness();
+    await runEffect({
+      type: 'setRunners',
+      changes: [
+        { runner: 'claude-code', enabled: false },
+        { runner: 'opencode', enabled: true },
+      ],
+      message: 'Runners enabled: OpenCode.',
+    }, h.deps);
+    expect(h.api.setRunnerEnabled.mock.calls).toEqual([['claude-code', false], ['opencode', true]]);
+    expect(types(h.actions).filter((t) => t === 'runnersLoaded')).toHaveLength(1);
+    expect(h.actions).toContainEqual({ type: 'notice', message: 'Runners enabled: OpenCode.' });
+  });
+
   it('persists autonomous mode', async () => {
     const h = harness();
     await runEffect({ type: 'setAutonomous', enabled: false }, h.deps);

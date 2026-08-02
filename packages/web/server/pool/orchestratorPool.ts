@@ -43,7 +43,6 @@ export class OrchestratorPool {
   private registry: CoreRunnerRegistry = (() => { const r = new RunnerRegistry(); r.loadUserPlugins(); return r; })();
   private modelResolver = new ModelResolver(this.registry, new WebConfig());
   private runnerInstallation = new RunnerInstallation(this.registry);
-  private enabledRunnerOverride: RunnerId[] | undefined;
   private cachedProviderLists: Record<string, string[]> | undefined;
   private settingsService = new SettingsService();
   private sharedRunner?: ITerminalRunner;
@@ -108,7 +107,7 @@ export class OrchestratorPool {
 
   private createSessionFor(sessionId: string, workspace: string, modelOverride?: string): Session {
     const config = new WebConfig({
-      enabledRunners: this.enabledRunnerOverride,
+      enabledRunners: this.enabledRunnerOverride(),
       modelOverride,
       providerModelLists: this.cachedProviderLists,
     });
@@ -129,19 +128,31 @@ export class OrchestratorPool {
     });
   }
 
+  /**
+   * The user's runner choice, or undefined when they have never made one —
+   * which is what lets `WebConfig` fall back to the environment's defaults.
+   * Read per call rather than cached: the settings file is shared with the
+   * VS Code extension host, and `getAll()` already invalidates on mtime.
+   */
+  private enabledRunnerOverride(): string[] | undefined {
+    return this.settingsService.getEnabledRunners();
+  }
+
+  /**
+   * Persisted, not held in memory: the daemon dies with the TUI, and a
+   * process-local override meant every reopen silently reinstated the
+   * environment's defaults over what the user had chosen.
+   */
   setRunnerEnabled(id: string, enabled: boolean): void {
-    if (this.enabledRunnerOverride === undefined) {
-      this.enabledRunnerOverride = new WebConfig().enabledRunners;
-    }
-    if (enabled && !this.enabledRunnerOverride.includes(id)) {
-      this.enabledRunnerOverride.push(id);
-    } else if (!enabled) {
-      this.enabledRunnerOverride = this.enabledRunnerOverride.filter(r => r !== id);
-    }
+    const current = this.enabledRunnerOverride() ?? new WebConfig().enabledRunners;
+    const next = enabled
+      ? (current.includes(id) ? current : [...current, id])
+      : current.filter((r) => r !== id);
+    this.settingsService.setEnabledRunners(next);
   }
 
   getSettings() {
-    const config = new WebConfig({ enabledRunners: this.enabledRunnerOverride });
+    const config = new WebConfig({ enabledRunners: this.enabledRunnerOverride() });
     const userSettings = this.settingsService.getAll();
     return {
       orchestratorModel: config.orchestratorModel,
@@ -288,7 +299,7 @@ export class OrchestratorPool {
   }
 
   getRunnerState(): { enabledRunners: RunnerId[]; orchestratorModel: string } {
-    const config = new WebConfig({ enabledRunners: this.enabledRunnerOverride });
+    const config = new WebConfig({ enabledRunners: this.enabledRunnerOverride() });
     return { enabledRunners: config.enabledRunners, orchestratorModel: config.orchestratorModel };
   }
 
@@ -298,7 +309,7 @@ export class OrchestratorPool {
    * runner can't be spawned.
    */
   async getInstalledRunners(): Promise<{ id: string; name: string; enabled: boolean }[]> {
-    const config = new WebConfig({ enabledRunners: this.enabledRunnerOverride });
+    const config = new WebConfig({ enabledRunners: this.enabledRunnerOverride() });
     const enabled = new Set(config.enabledRunners);
     const plugins = this.registry.list();
     const installedIds = new Set(

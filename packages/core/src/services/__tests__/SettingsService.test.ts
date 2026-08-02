@@ -214,4 +214,20 @@ describe('SettingsService', () => {
       expect(s2.getModelAllowlist('nonexistent')).toBeUndefined();
     });
   });
+
+  describe('enabledRunners', () => {
+    it('is undefined until the user chooses, so hosts can fall back to their defaults', () => {
+      expect(service.getEnabledRunners()).toBeUndefined();
+    });
+
+    it('survives a new service reading the same file', () => {
+      service.setEnabledRunners(['claude-code', 'opencode']);
+      expect(new SettingsService(tempFile).getEnabledRunners()).toEqual(['claude-code', 'opencode']);
+    });
+
+    it('keeps an empty choice distinct from never having chosen', () => {
+      service.setEnabledRunners([]);
+      expect(new SettingsService(tempFile).getEnabledRunners()).toEqual([]);
+    });
+  });
 });

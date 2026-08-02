@@ -104,14 +104,64 @@ describe('picker selection', () => {
     });
   });
 
-  it('toggling a runner flips it and leaves the picker open', () => {
-    const state = withPicker(
-      { action: { kind: 'toggle-runner' }, items: [{ id: 'opencode', label: 'OpenCode', selected: true }] },
-      { runners: [{ id: 'opencode', name: 'OpenCode', enabled: true }] },
-    );
-    const { state: next, effects } = press(state, 'enter');
-    expect(effects).toEqual([{ type: 'setRunnerEnabled', runner: 'opencode', enabled: false }]);
-    expect(next.overlay).not.toBeNull();
+  describe('runner multi-select', () => {
+    const runnerPicker = (over: Partial<PickerState> = {}) =>
+      withPicker(
+        {
+          action: { kind: 'set-runners' },
+          multi: true,
+          items: [
+            { id: 'claude-code', label: 'Claude Code' },
+            { id: 'opencode', label: 'OpenCode' },
+          ],
+          chosen: ['claude-code'],
+          ...over,
+        },
+        {
+          runners: [
+            { id: 'claude-code', name: 'Claude Code', enabled: true },
+            { id: 'opencode', name: 'OpenCode', enabled: false },
+          ],
+        },
+      );
+
+    it('space toggles membership without applying anything', () => {
+      const { state, effects } = press(runnerPicker({ index: 1 }), 'char', ' ');
+      expect(effects).toEqual([]);
+      expect(pickerOf(state).chosen).toEqual(['claude-code', 'opencode']);
+    });
+
+    it('enter applies only the runners whose state changed, then closes', () => {
+      const { state, effects } = press(runnerPicker({ chosen: ['opencode'] }), 'enter');
+      expect(effects).toEqual([{
+        type: 'setRunners',
+        changes: [
+          { runner: 'claude-code', enabled: false },
+          { runner: 'opencode', enabled: true },
+        ],
+        message: 'Runners enabled: OpenCode.',
+      }]);
+      expect(state.overlay).toBeNull();
+    });
+
+    it('enter with nothing changed applies nothing', () => {
+      expect(press(runnerPicker(), 'enter').effects).toEqual([]);
+    });
+
+    it('enter can disable every runner', () => {
+      const { effects } = press(runnerPicker({ chosen: [] }), 'enter');
+      expect(effects).toMatchObject([{
+        type: 'setRunners',
+        changes: [{ runner: 'claude-code', enabled: false }],
+      }]);
+    });
+
+    it('escape discards the toggles', () => {
+      const toggled = press(runnerPicker({ index: 1 }), 'char', ' ').state;
+      const { state, effects } = press(toggled, 'escape');
+      expect(effects).toEqual([]);
+      expect(state.overlay).toBeNull();
+    });
   });
 });
 

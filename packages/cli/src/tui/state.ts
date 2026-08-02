@@ -106,7 +106,7 @@ export type PickerAction =
   | { kind: 'set-key' }
   | { kind: 'load-session' }
   | { kind: 'delete-session' }
-  | { kind: 'toggle-runner' }
+  | { kind: 'set-runners' }
   | { kind: 'choose-allowlist-runner' }
   | { kind: 'set-allowlist'; runner: string }
   | { kind: 'set-task-runner'; taskId: string }
@@ -121,16 +121,10 @@ export interface PickerState {
   items: PickerItem[];
   filter: string;
   index: number;
-  /** Multi-select pickers (the model allowlist) confirm on enter instead of picking. */
+  /** Multi-select pickers toggle with space and confirm the whole set on enter. */
   multi: boolean;
   chosen: string[];
   action: PickerAction;
-  /**
-   * Overrides the default key-hint footer. Needed when the picker's verbs
-   * differ from pick-and-close — the runner toggle applies on enter and esc
-   * merely closes, so "esc cancels" would promise an undo that doesn't exist.
-   */
-  footer?: string;
 }
 
 /** A planner approval prompt awaiting a yes/no. Mirrors the daemon's SessionMessage. */

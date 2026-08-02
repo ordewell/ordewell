@@ -24,6 +24,8 @@ export type Effect =
   | { type: 'setApiKey'; provider: string; key: string }
   | { type: 'setAllowlist'; runner: string; modelIds: string[] }
   | { type: 'setRunnerEnabled'; runner: string; enabled: boolean }
+  /** The runner picker's whole confirmed set, so one visit reports one result. */
+  | { type: 'setRunners'; changes: { runner: string; enabled: boolean }[]; message: string }
   | { type: 'setAutonomous'; enabled: boolean }
   | { type: 'loadModels' }
   | { type: 'loadSessions' }
@@ -533,6 +535,9 @@ function pickerItemsFor(state: TuiState, action: PickerState['action']): PickerI
       detail: [m.provider, m.pricing].filter(Boolean).join(' · ') || undefined,
     }));
   }
+  if (action.kind === 'set-runners') {
+    return state.runners.map((runner) => ({ id: runner.id, label: runner.name }));
+  }
   if (action.kind === 'set-task-runner') {
     const task = state.tasks.find((candidate) => candidate.id === action.taskId);
     if (!task) return [];
@@ -930,8 +935,22 @@ function choose(state: TuiState, picker: PickerState, item: PickerItem | undefin
   if (picker.action.kind === 'set-allowlist') {
     return step(closed, [{ type: 'setAllowlist', runner: picker.action.runner, modelIds: picker.chosen }]);
   }
-  // Both multi-select pickers commit `chosen` on enter, so they resolve before
-  // the "nothing highlighted" guard: clearing every dependency is a real edit.
+  // Multi-select pickers commit `chosen` on enter, so they resolve before the
+  // "nothing highlighted" guard: clearing every dependency is a real edit.
+  if (picker.action.kind === 'set-runners') {
+    const changes = state.runners
+      .filter((runner) => runner.enabled !== picker.chosen.includes(runner.id))
+      .map((runner) => ({ runner: runner.id, enabled: !runner.enabled }));
+    if (changes.length === 0) return step(closed);
+    const names = state.runners.filter((r) => picker.chosen.includes(r.id)).map((r) => r.name);
+    return step(closed, [{
+      type: 'setRunners',
+      changes,
+      message: names.length > 0
+        ? `Runners enabled: ${names.join(', ')}.`
+        : 'No runners enabled — the planner has nothing to assign work to.',
+    }]);
+  }
   if (picker.action.kind === 'set-task-deps') {
     const taskId = picker.action.taskId;
     const task = state.tasks.find((candidate) => candidate.id === taskId);
@@ -977,15 +996,6 @@ function choose(state: TuiState, picker: PickerState, item: PickerItem | undefin
       return step(closed, [{ type: 'deleteSession', sessionId: item.id }]);
     case 'set-key':
       return step({ ...state, overlay: keyPrompt(item.id as AiProvider) });
-    case 'toggle-runner': {
-      // Stays open so several runners can be flipped in one visit.
-      const enabled = !(state.runners.find((r) => r.id === item.id)?.enabled ?? item.selected ?? false);
-      const items = picker.items.map((i) => (i.id === item.id ? { ...i, selected: enabled, detail: enabled ? 'enabled' : 'disabled' } : i));
-      return step(
-        { ...state, overlay: { kind: 'picker', picker: { ...picker, items } } },
-        [{ type: 'setRunnerEnabled', runner: item.id, enabled }],
-      );
-    }
     case 'choose-allowlist-runner': {
       const action = { kind: 'set-allowlist' as const, runner: item.id };
       const items = pickerItemsFor(state, action);
@@ -1001,7 +1011,7 @@ function choose(state: TuiState, picker: PickerState, item: PickerItem | undefin
           kind: 'picker',
           picker: {
             title: `Models allowed for ${item.label}`,
-            hint: 'space toggles · enter confirms · empty selection lifts the restriction',
+            hint: 'An empty selection lifts the restriction.',
             items,
             filter: '',
             index: 0,
@@ -1439,17 +1449,14 @@ function runners(state: TuiState, args: string[]): Step {
     return step(state, [{ type: 'setRunnerEnabled', runner, enabled }]);
   }
 
-  const items: PickerItem[] = state.runners.map((r) => ({
-    id: r.id,
-    label: r.name,
-    detail: r.enabled ? 'enabled' : 'disabled',
-    selected: r.enabled,
-  }));
+  const action = { kind: 'set-runners' as const };
+  const items = pickerItemsFor(state, action);
   return step({ ...state, overlay: {
     kind: 'picker',
-    picker: picker('Toggle runner', items, { kind: 'toggle-runner' }, {
-      hint: 'Changes apply immediately.',
-      footer: 'enter toggles · esc closes · type to filter',
+    picker: picker('Runners', items, action, {
+      hint: 'Enabled runners are the ones the planner may assign work to.',
+      multi: true,
+      chosen: state.runners.filter((r) => r.enabled).map((r) => r.id),
     }),
   } });
 }
@@ -1507,7 +1514,7 @@ function openTaskDepsPicker(state: TuiState, task: TaskView): Step {
     overlay: {
       kind: 'picker',
       picker: picker(`Depends on · #${task.order} ${task.title}`, items, action, {
-        hint: 'Only tasks earlier in the plan can be dependencies. Space toggles, enter saves.',
+        hint: 'Only tasks earlier in the plan can be dependencies.',
         multi: true,
         chosen: task.dependencies.filter((id) => items.some((i) => i.id === id)),
       }),
