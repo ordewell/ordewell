@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
+## [0.4.2] — 2026-08-02
+
+### Fixed
+
+- **The runner selection survives a restart.** Enabled runners were held only in
+  the daemon's memory, so closing and reopening Ordewell threw the choice away
+  and silently reinstated the environment's defaults. They now persist to the
+  same `settings.json` the model allowlist uses.
+
+### Changed
+
+- **One key convention for every multi-select in the TUI.** `/runners` is now a
+  multi-select like `/allowlist` and `/task-deps`: space toggles, enter confirms
+  the whole set, escape discards. It previously applied each toggle immediately
+  on enter, with escape merely closing. Single-select pickers (`/planner`,
+  `/model`, per-task assignment, sessions, keys) still confirm on enter.
+- The selection mark in a picker is spaced off the cursor arrow, which rendered
+  as one smudged glyph at most terminal font sizes.
+
 ## [0.4.0] — 2026-07-31
 
 First public release.
@@ -37,4 +56,5 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
+[0.4.2]: https://github.com/ordewell/ordewell/releases/tag/v0.4.2
 [0.4.0]: https://github.com/ordewell/ordewell/releases/tag/v0.4.0
