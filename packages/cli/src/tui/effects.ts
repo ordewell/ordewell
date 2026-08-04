@@ -65,6 +65,8 @@ export interface EffectDeps {
   reviveDaemon(): Promise<boolean>;
   /** Opens a real OS terminal attached to a task's tmux window, if it has one. */
   openTerminal(sessionId: string, taskId: string): Promise<{ ok: boolean; message: string }>;
+  /** Hands the mouse to the app (wheel events) or back to the terminal (drag-select). */
+  setMouseCapture(enabled: boolean): void;
   exit(): void;
 }
 
@@ -364,6 +366,13 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       dispatch({ type: 'notice', message: `Autonomous mode ${effect.enabled ? 'on' : 'off'}.` });
       return;
 
+    case 'setMouseCapture':
+      // The reducer already said which trade this is; persisting it only makes
+      // the choice survive the next launch.
+      deps.setMouseCapture(effect.enabled);
+      deps.setEnvVar('ORDEWELL_TUI_MOUSE', String(effect.enabled));
+      return;
+
     case 'loadModels':
       await loadModels(deps);
       return;
@@ -450,6 +459,12 @@ async function withExecutionStream(
  * REST call is in flight, and the reply is either a question or a plan.
  */
 async function converse(deps: EffectDeps, sessionId: string, call: () => Promise<any>): Promise<void> {
+  // What the socket already delivered for this turn. The plan the REST call
+  // returns carries the same reply as its last assistant entry, so without this
+  // the turn is spoken twice — see `alreadySpoken`, which catches the remaining
+  // case of two subscriptions to one channel during a run.
+  let streamed: string | null = null;
+
   const stream = deps.api.streamPlanning(sessionId, (event) => {
     if (event?.type === 'approval_request') {
       deps.dispatch({
@@ -490,6 +505,11 @@ async function converse(deps: EffectDeps, sessionId: string, call: () => Promise
       });
       return;
     }
+    if (event?.type === 'planner_message') {
+      streamed = String(event.content ?? '');
+      deps.dispatch({ type: 'plannerMessage', content: streamed, sessionId });
+      return;
+    }
     if (event?.type === 'plan_thinking' && event.text) {
       deps.dispatch({ type: 'plannerThinking', text: event.text, sessionId });
     }
@@ -500,7 +520,9 @@ async function converse(deps: EffectDeps, sessionId: string, call: () => Promise
     deps.dispatch({ type: 'planUpdated', plan, sessionId });
 
     const question = lastAssistantMessage(plan);
-    if (question) deps.dispatch({ type: 'plannerMessage', content: question, sessionId });
+    if (question && question !== streamed) {
+      deps.dispatch({ type: 'plannerMessage', content: question, sessionId });
+    }
   } finally {
     stream.close();
   }

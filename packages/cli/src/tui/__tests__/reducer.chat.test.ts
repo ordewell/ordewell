@@ -147,6 +147,44 @@ describe('reduce — stale session results', () => {
   });
 });
 
+describe('reduce — one planner turn, two delivery paths', () => {
+  const spoken = (content: string) =>
+    reduce({ ...initialState(), sessionId: 's1' }, { type: 'plannerMessage', content, sessionId: 's1' }).state;
+
+  it('speaks a turn that arrives over the socket and again in the REST reply only once', () => {
+    const first = spoken('Tasks updated:\n- #3 added');
+    const { state } = reduce(first, {
+      type: 'plannerMessage',
+      content: 'Tasks updated:\n- #3 added',
+      sessionId: 's1',
+    });
+    expect(state.messages.filter((m) => m.role === 'assistant')).toHaveLength(1);
+  });
+
+  it('still settles the busy status on the duplicate, since it is the same turn ending', () => {
+    const busy = { ...spoken('Which database?'), status: 'planning' as const, busyLabel: 'reading files', thinkingLine: 'hmm' };
+    const { state } = reduce(busy, { type: 'plannerMessage', content: 'Which database?', sessionId: 's1' });
+    expect(state.status).toBe('idle');
+    expect(state.busyLabel).toBe('');
+    expect(state.thinkingLine).toBe('');
+  });
+
+  it('speaks an identical reply again once the user has said something in between', () => {
+    const asked = spoken('Which database?');
+    const replied = reduce(asked, { type: 'key', key: { name: 'paste', text: 'postgres' } }).state;
+    const sent = reduce(replied, { type: 'key', key: { name: 'enter' } }).state;
+    const { state } = reduce(sent, { type: 'plannerMessage', content: 'Which database?', sessionId: 's1' });
+    expect(state.messages.filter((m) => m.role === 'assistant')).toHaveLength(2);
+  });
+
+  it('does not confuse a research line landing between the two copies for a new turn', () => {
+    const asked = spoken('Which database?');
+    const researched = reduce(asked, { type: 'researchStep', summary: 'read package.json', sessionId: 's1' }).state;
+    const { state } = reduce(researched, { type: 'plannerMessage', content: 'Which database?', sessionId: 's1' });
+    expect(state.messages.filter((m) => m.role === 'assistant')).toHaveLength(1);
+  });
+});
+
 describe('reduce — scrolling the transcript', () => {
   it('pageup scrolls back through the transcript', () => {
     const { state } = reduce(initialState(), { type: 'key', key: { name: 'pageup' } });

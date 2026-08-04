@@ -446,6 +446,15 @@ describe('plan pane', () => {
     expect(scrolled.planScroll).toBe(0);
   });
 
+  it('pageup/pagedown scroll the collapsed plan pane, the keyboard route now that the wheel is opt-in', () => {
+    const state = initialState({ sessionId: 's1', tasks, focus: 'plan', planScroll: 0 });
+    const down = press(state, 'pagedown').state;
+    expect(down.planScroll).toBeGreaterThan(0);
+    expect(down.selectedTask).toBe(0);
+    const up = press(down, 'pageup').state;
+    expect(up.planScroll).toBe(0);
+  });
+
   it('arrow key up resets planScroll', () => {
     const state = initialState({ sessionId: 's1', tasks, focus: 'plan', planScroll: 9 });
     const moved = press(state, 'up').state;

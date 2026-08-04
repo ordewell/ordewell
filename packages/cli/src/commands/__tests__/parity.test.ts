@@ -17,6 +17,7 @@ const TUI_ONLY: Record<string, string> = {
   save: 'plans are persisted server-side as they change; there is nothing to flush',
   load: '`ordewell sessions load <id>`',
   delete: '`ordewell sessions delete <id>`',
+  mouse: 'it configures the full-screen terminal, which only the TUI holds (ORDEWELL_TUI_MOUSE persists it)',
 };
 
 /** CLI-only commands: a daemon, a wizard or a catalog has no slash equivalent. */

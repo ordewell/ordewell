@@ -348,16 +348,58 @@ describe('resolveArgs — Codex manifest', () => {
     ]);
   });
 
-  it('interactive task: no exec subcommand, same model/effort/sandbox flags', () => {
+  it('interactive task: no exec subcommand, approvals off, same model/effort/sandbox flags', () => {
     const result = resolveArgs(CODEX_MANIFEST, {
       prompt: 'do it', mode: 'agent', model: 'gpt-5.6-terra', thinkingEffort: 'ultra', headless: false,
     });
     expect(result.args).toEqual([
+      '-a', 'never',
       '-m', 'gpt-5.6-terra',
       '-c', 'model_reasoning_effort=ultra',
       '--sandbox', 'workspace-write',
       'do it',
     ]);
+  });
+
+  // Regression (tmux TUI): an unattended interactive run is still autonomous.
+  // Resolving `exec` here streamed CLI output into a window meant to show the
+  // TUI; `-a never` and the pre-trusted workspace are what `exec` gave for free.
+  it('an autonomous interactive session launches the TUI, not exec', () => {
+    const result = resolveArgs(CODEX_MANIFEST, {
+      prompt: 'do it', mode: 'agent', model: 'gpt-5.6-sol', headless: true, interactive: true, cwd: '/w/s',
+    });
+    expect(result.args).toEqual([
+      '-a', 'never',
+      '-c', 'projects."/w/s".trust_level="trusted"',
+      '-m', 'gpt-5.6-sol',
+      '--sandbox', 'workspace-write',
+      'do it',
+    ]);
+  });
+
+  // `codex exec` has no -a flag and never asks about directory trust, so both
+  // interactive-only entries must stay out of the piped shape.
+  it('the piped shape gets neither the approval flag nor the trust override', () => {
+    const result = resolveArgs(CODEX_MANIFEST, {
+      prompt: 'do it', mode: 'agent', headless: true, interactive: false, cwd: '/w/s',
+    });
+    expect(result.args).not.toContain('-a');
+    expect(result.args.join(' ')).not.toContain('trust_level');
+  });
+
+  // A dangling `-c` with no value would make codex reject the invocation.
+  it('drops the whole trust pair when no cwd is known', () => {
+    const result = resolveArgs(CODEX_MANIFEST, {
+      prompt: 'do it', mode: 'agent', headless: true, interactive: true,
+    });
+    expect(result.args).toEqual(['-a', 'never', '--sandbox', 'workspace-write', 'do it']);
+  });
+
+  it('quotes a workspace path with spaces as a single TOML-keyed argument', () => {
+    const result = resolveArgs(CODEX_MANIFEST, {
+      prompt: 'do it', mode: 'agent', headless: true, interactive: true, cwd: '/w/my repo',
+    });
+    expect(result.args).toContain('projects."/w/my repo".trust_level="trusted"');
   });
 
   it('plan mode maps to the read-only sandbox', () => {

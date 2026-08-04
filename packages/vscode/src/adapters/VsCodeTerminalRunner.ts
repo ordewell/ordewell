@@ -22,7 +22,7 @@ function toCrlf(text: string): string {
  * marker. Owning the child means the output exists by construction.
  */
 export class VsCodeTerminalRunner extends HeadlessRunner {
-  protected override readonly defaultHeadless = false;
+  protected override readonly defaultInteractive = true;
 
   private terminals = new Map<string, vscode.Terminal>();
 

@@ -18,6 +18,17 @@ enum Block {
   IfInteractive,
   IfHeadlessSession,
   IfInteractiveVariant,
+  IfProjectTrust,
+}
+
+/**
+ * The session *shape*, which is not the same question as autonomy: a tmux
+ * window runs a fully autonomous task on a real TTY. Callers that predate the
+ * split (and every existing test) only set `headless`, so it still decides
+ * when nothing else does.
+ */
+function isInteractive(ctx: ResolveContext): boolean {
+  return ctx.interactive ?? !ctx.headless;
 }
 
 export function resolveArgs(manifest: RunnerPluginManifest, ctx: ResolveContext): RunnerInvocation {
@@ -92,6 +103,7 @@ function parseBlockOpen(raw: string): Block | null {
     case '{{if interactive}}': return Block.IfInteractive;
     case '{{if headlessSession}}': return Block.IfHeadlessSession;
     case '{{if interactiveVariant}}': return Block.IfInteractiveVariant;
+    case '{{if projectTrust}}': return Block.IfProjectTrust;
     default: return null;
   }
 }
@@ -107,17 +119,21 @@ function shouldIncludeBlock(block: Block, ctx: ResolveContext): boolean {
     case Block.IfHeadless: return !!ctx.headless && ctx.mode !== 'plan';
     // `--variant` is a headless-only flag: it exists on `opencode run` but not
     // on the interactive TUI, which exits immediately if handed an unknown flag.
-    case Block.IfVariant: return !!ctx.thinkingEffort && !!ctx.headless;
+    case Block.IfVariant: return !!ctx.thinkingEffort && !isInteractive(ctx);
     // Session-shape blocks: unlike IfHeadless (a permission-flag gate with a
     // plan-mode carve-out), these pick the CLI invocation shape — e.g.
     // opencode's `run` subcommand vs its interactive TUI — so no mode carve-out.
-    case Block.IfInteractive: return !ctx.headless;
-    case Block.IfHeadlessSession: return !!ctx.headless;
+    case Block.IfInteractive: return isInteractive(ctx);
+    case Block.IfHeadlessSession: return !isInteractive(ctx);
     // Interactive counterpart of IfVariant, for runners whose TUI has no
     // variant flag and must receive the variant via env config instead.
     // Requires a provider-prefixed model: the config pins variant per model.
     case Block.IfInteractiveVariant:
-      return !!ctx.thinkingEffort && !!ctx.model?.includes('/') && !ctx.headless;
+      return !!ctx.thinkingEffort && !!ctx.model?.includes('/') && isInteractive(ctx);
+    // Guards the flag/value pair that pre-trusts the workspace directory. The
+    // condition, not the token, is what keeps a bare `-c` out of the args when
+    // there is no cwd to name.
+    case Block.IfProjectTrust: return isInteractive(ctx) && !!ctx.cwd;
     default: return true;
   }
 }
@@ -148,6 +164,21 @@ function resolveToken(token: string, manifest: RunnerPluginManifest, ctx: Resolv
   if (token === '{{model}}') return ctx.model || '';
   if (token === '{{thinkingEffort}}') return ctx.thinkingEffort || '';
   if (token === '{{mode}}') return ctx.mode || 'build';
+
+  /**
+   * Codex's TUI opens with a blocking "do you trust this directory?" menu the
+   * first time it runs anywhere it has not been trusted before — every sandbox
+   * mode, and a positional prompt does not skip it. An orchestrated task has
+   * nobody to answer it, so the run would sit on the menu forever. `codex exec`
+   * never asks, so pre-trusting the workspace is what keeps the interactive
+   * shape behaving like the headless one it replaces. Emitted as ONE argv entry
+   * (the `-c` before it is a literal template token), so a workspace path with
+   * spaces in it survives.
+   */
+  if (token === '{{projectTrust}}') {
+    if (!ctx.cwd) return '';
+    return `projects.${JSON.stringify(ctx.cwd)}.trust_level="trusted"`;
+  }
 
   if (token === '{{feature:thinking}}') {
     return manifest.features.thinkingFlag || '';

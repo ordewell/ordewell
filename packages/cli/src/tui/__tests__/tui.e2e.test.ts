@@ -147,6 +147,7 @@ function harness() {
         newSessionId: () => `session-${++sessionCounter}`,
         setEnvVar: (key, value) => { envWrites[key] = value; },
         openTerminal: async () => ({ ok: true, message: 'Opened terminal.' }),
+        setMouseCapture: (enabled) => terminal?.setMouse(enabled),
         // The fake daemon never refuses a connection, so this is never reached.
         reviveDaemon: async () => true,
         exit: () => { onExit(); terminal?.close(); },

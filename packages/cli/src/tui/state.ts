@@ -204,6 +204,12 @@ export interface TuiState {
   configuredProviders: string[];
   allowlist: Record<string, string[]>;
   autonomous: boolean;
+  /**
+   * Whether the terminal's mouse is captured for wheel scrolling. Off by
+   * default: capturing it disables the terminal's own drag-select, and copying
+   * text out of the transcript is worth more than the wheel. See terminal.ts.
+   */
+  mouseCapture: boolean;
   workspace: string;
   overlay: Overlay | null;
   /**
@@ -260,6 +266,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     configuredProviders: [],
     allowlist: {},
     autonomous: true,
+    mouseCapture: false,
     workspace: process.cwd(),
     overlay: null,
     pendingApprovals: [],

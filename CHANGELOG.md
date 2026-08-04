@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
+## [0.4.4] — 2026-08-04
+
+### Fixed
+
+- **TUI text is selectable and copyable again.** The TUI captured the terminal's
+  mouse to read wheel events, and an app that captures the mouse takes
+  drag-to-select with it — Shift+drag is not the universal escape hatch it is
+  claimed to be (Terminal.app wants Fn, iTerm2 Option, tmux swallows it first).
+  Copying a task prompt or an error out of the transcript matters more than a
+  three-line wheel notch, so the mouse is left to the terminal by default and
+  the wheel is opt-in via `/mouse on` (persisted as `ORDEWELL_TUI_MOUSE`).
+  `pgup`/`pgdn` now scroll the plan pane as well as the transcript, and
+  alternate scroll is disabled while the TUI is up so an uncaptured wheel cannot
+  arrive as arrow keys and quietly replace the draft with a history entry.
+- **The planner no longer says the same thing twice in chat.** One turn reaches
+  the TUI over the session socket *and* as the last assistant entry of the plan
+  the REST call returns, and while a run is live there are two subscriptions to
+  that one channel — so a turn taken during execution was transcribed twice. The
+  socket is now the live path, the REST reply is only a fallback for a turn it
+  did not carry, and a repeat of the newest turn is dropped rather than appended.
+- **Codex and OpenCode tasks open their real TUI in tmux.** Opening a task's
+  terminal showed `codex exec` / `opencode run` log lines scrolling past instead
+  of the agent's interface, which is the whole point of running tasks in a tmux
+  window — you could watch, but not steer. One `headless` flag was deciding two
+  unrelated things: whether the run is unattended (so the agent must never stop
+  to ask permission) and whether it gets a terminal. A tmux window is both at
+  once, so those are now separate axes and the tmux transport asks for the
+  interactive shape. Claude Code, which had no non-interactive branch in its
+  invocation, is unaffected.
+- **Codex no longer stalls on its own approval and directory-trust prompts.**
+  Both are questions `codex exec` never asks and its TUI asks by default — an
+  orchestrated task has nobody to answer them, so it would sit on a menu
+  forever. The interactive invocation now carries `-a never` and pre-trusts the
+  task's workspace directory, matching what `exec` did implicitly.
+- **VS Code tasks keep their permission-skipping flags.** The extension's
+  terminal was treated as "not headless" and so lost them, meaning a task could
+  block on a permission prompt in a tab nobody was watching.
+
 ## [0.4.3] — 2026-08-02
 
 ### Added
@@ -65,6 +103,7 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
+[0.4.4]: https://github.com/ordewell/ordewell/releases/tag/v0.4.4
 [0.4.3]: https://github.com/ordewell/ordewell/releases/tag/v0.4.3
 [0.4.2]: https://github.com/ordewell/ordewell/releases/tag/v0.4.2
 [0.4.0]: https://github.com/ordewell/ordewell/releases/tag/v0.4.0

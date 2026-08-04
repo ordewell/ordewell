@@ -131,6 +131,25 @@ describe('runners and autonomy', () => {
     );
     expect(again.effects).toEqual([{ type: 'setAutonomous', enabled: true }]);
   });
+
+  it('/mouse on trades text selection for wheel scrolling, and says so', () => {
+    const { state, effects } = run('/mouse on');
+    expect(effects).toEqual([{ type: 'setMouseCapture', enabled: true }]);
+    expect(state.mouseCapture).toBe(true);
+    expect(state.messages.at(-1)!.content).toContain('no longer selects text');
+  });
+
+  it('a bare /mouse flips it back, so selection is one keystroke away again', () => {
+    const { state, effects } = run('/mouse', { mouseCapture: true });
+    expect(effects).toEqual([{ type: 'setMouseCapture', enabled: false }]);
+    expect(state.mouseCapture).toBe(false);
+  });
+
+  it('/mouse rejects an argument that is neither on nor off', () => {
+    const { state, effects } = run('/mouse sometimes');
+    expect(effects).toEqual([]);
+    expect(state.messages.at(-1)).toMatchObject({ role: 'error' });
+  });
 });
 
 describe('sessions', () => {

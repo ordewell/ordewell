@@ -31,9 +31,12 @@ export async function handleTui(subArgs: string[]): Promise<void> {
   // Mirror BaseConfig.autonomousMode so the badge starts truthful when
   // ORDEWELL_AUTONOMOUS_MODE is already set in the environment or .env.
   const autoMode = process.env.ORDEWELL_AUTONOMOUS_MODE;
+  // Opt-in, and remembered across launches once opted in — see terminal.ts for
+  // why capturing the mouse is not the default.
+  const mouseCapture = process.env.ORDEWELL_TUI_MOUSE === 'true' || process.env.ORDEWELL_TUI_MOUSE === '1';
 
   const app = createApp({
-    initial: { workspace, autonomous: autoMode !== 'false' && autoMode !== '0' },
+    initial: { workspace, autonomous: autoMode !== 'false' && autoMode !== '0', mouseCapture },
     draw: (frame) => terminal?.draw(frame),
     perform: (effect) =>
       runEffect(effect, {
@@ -48,6 +51,7 @@ export async function handleTui(subArgs: string[]): Promise<void> {
           process.env[key] = value;
         },
         openTerminal: (sessionId, taskId) => openTaskTerminal(port, sessionId, taskId),
+        setMouseCapture: (enabled) => terminal?.setMouse(enabled),
         reviveDaemon: async () => {
           // `quiet`, because this runs with the full-screen frame on the
           // terminal — the usual "Starting daemon..." lines would be painted
@@ -63,6 +67,7 @@ export async function handleTui(subArgs: string[]): Promise<void> {
   });
 
   terminal = openTerminal({
+    mouse: mouseCapture,
     onKey: (key) => app.dispatch({ type: 'key', key }),
     onResize: (rows, cols) => app.dispatch({ type: 'resize', rows, cols }),
   });

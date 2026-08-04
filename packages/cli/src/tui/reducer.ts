@@ -27,6 +27,7 @@ export type Effect =
   /** The runner picker's whole confirmed set, so one visit reports one result. */
   | { type: 'setRunners'; changes: { runner: string; enabled: boolean }[]; message: string }
   | { type: 'setAutonomous'; enabled: boolean }
+  | { type: 'setMouseCapture'; enabled: boolean }
   | { type: 'loadModels' }
   | { type: 'loadSessions' }
   | { type: 'loadSession'; sessionId: string }
@@ -107,6 +108,21 @@ function restoredMessages(history: ConversationMessage[]): ChatMessage[] {
 }
 
 const isPendingResearch = (m: ChatMessage): boolean => m.role === 'research' && !m.research?.outcome;
+
+/**
+ * Whether this is the planner's newest turn arriving a second time.
+ *
+ * One turn can reach the TUI twice: the daemon broadcasts `planner_message` on
+ * the session socket *and* leaves it as the last assistant entry in the plan it
+ * returns, and while a run is live there are two subscriptions to that one
+ * channel (planning and execution). Only a repeat of the newest turn counts —
+ * scoped to "nothing has been said since" so a planner legitimately repeating
+ * itself on a later turn still gets its line.
+ */
+function alreadySpoken(messages: ChatMessage[], content: string): boolean {
+  const last = findLastIndex(messages, (m) => m.role === 'assistant' || m.role === 'user');
+  return last >= 0 && messages[last].role === 'assistant' && messages[last].content === content;
+}
 
 /**
  * A parallel tool round opens several calls at once. The spinner names the
@@ -210,9 +226,14 @@ export function reduce(state: TuiState, action: Action): Step {
       });
     }
 
-    case 'plannerMessage':
+    case 'plannerMessage': {
       if (stale(state, action.sessionId)) return step(state);
-      return step({ ...say(state, 'assistant', action.content), status: 'idle', busyLabel: '', thinkingLine: '' });
+      const settled: TuiState = { ...state, status: 'idle', busyLabel: '', thinkingLine: '' };
+      // Already on screen: the same turn reached us over both the session
+      // socket and the REST reply (see `converse`), so only the status settles.
+      if (alreadySpoken(state.messages, action.content)) return step(settled);
+      return step(say(settled, 'assistant', action.content));
+    }
 
     case 'researchStep': {
       if (stale(state, action.sessionId)) return step(state);
@@ -624,7 +645,7 @@ function handleKey(state: TuiState, key: Key): Step {
     const scroll = key.name === 'pageup' ? state.scroll + page : Math.max(0, state.scroll - page);
     return step({ ...state, scroll });
   }
-  // Only the mouse wheel (scrollup/scrolldown) scrolls the transcript. Up/down
+  // pageup/pagedown above and the wheel here scroll the transcript. Up/down
   // always go to the editor: single-line drafts get history recall, multi-line
   // drafts get cursor movement between wrapped lines.
   const multilineEditor = state.editor.text.includes('\n');
@@ -680,9 +701,8 @@ export function markAction(task: { status: string }): TaskAction {
 }
 
 function handlePlanKey(state: TuiState, key: Key): Step {
-  // While a task is expanded, every key edits its prompt instead of moving
-  // the list cursor — otherwise a wheel scroll (which the terminal delivers
-  // as plain up/down, see terminal.ts) would collapse it mid-scroll.
+  // While a task is expanded, every key edits its prompt instead of moving the
+  // list cursor — otherwise up/down would collapse it out from under the caret.
   const editingTask = state.expandedTaskId
     ? state.tasks.find((t) => t.id === state.expandedTaskId)
     : undefined;
@@ -701,11 +721,16 @@ function handlePlanKey(state: TuiState, key: Key): Step {
     });
   }
 
-  if (key.name === 'scrollup') {
-    return step({ ...state, planScroll: Math.max(0, state.planScroll - 3) });
+  // pageup/pagedown are the keyboard equivalent of the wheel here, and with the
+  // mouse uncaptured by default (see terminal.ts) they are the only way to reach
+  // a plan taller than the pane without dragging the selection through it.
+  if (key.name === 'scrollup' || key.name === 'pageup') {
+    const notch = key.name === 'pageup' ? 10 : 3;
+    return step({ ...state, planScroll: Math.max(0, state.planScroll - notch) });
   }
-  if (key.name === 'scrolldown') {
-    return step({ ...state, planScroll: Math.min(planScrollBound(state), state.planScroll + 3) });
+  if (key.name === 'scrolldown' || key.name === 'pagedown') {
+    const notch = key.name === 'pagedown' ? 10 : 3;
+    return step({ ...state, planScroll: Math.min(planScrollBound(state), state.planScroll + notch) });
   }
 
   const task = state.tasks[state.selectedTask];
@@ -1111,6 +1136,8 @@ function runCommand(state: TuiState, { name, args }: ParsedCommand): Step {
       return runners(state, args);
     case 'auto':
       return setAutonomous(state, args[0]);
+    case 'mouse':
+      return setMouseCapture(state, args[0]);
 
     case 'sessions':
       return step(
@@ -1467,6 +1494,24 @@ function setAutonomous(state: TuiState, arg: string | undefined): Step {
   // Updated here, not from the effect: nothing round-trips this setting back
   // (it lives in .env), and a stale flag would freeze the toggle and the badge.
   return step({ ...state, autonomous: enabled }, [{ type: 'setAutonomous', enabled }]);
+}
+
+/**
+ * The two are mutually exclusive at the terminal level, so the notice names
+ * what the user just gave up rather than only what they gained — a wheel that
+ * scrolls and text that no longer selects is otherwise a mystery.
+ */
+function setMouseCapture(state: TuiState, arg: string | undefined): Step {
+  const enabled = resolveToggle(arg, state.mouseCapture);
+  if (enabled === null) return fail(state, 'Usage: /mouse [on|off]');
+  const noted = say(
+    { ...state, mouseCapture: enabled },
+    'system',
+    enabled
+      ? 'Mouse capture on — the wheel scrolls, but dragging no longer selects text.'
+      : 'Mouse capture off — drag to select and copy; scroll with pgup/pgdn.',
+  );
+  return step(noted, [{ type: 'setMouseCapture', enabled }]);
 }
 
 function openTaskRunnerPicker(state: TuiState, task: TaskView): Step {

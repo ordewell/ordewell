@@ -264,7 +264,14 @@ export class TmuxRunner extends AbstractRunner<TmuxSession> {
       thinkingEffort: opts.thinkingEffort,
       modelVariants: opts.modelVariants,
       mode: opts.mode,
+      // A tmux window is a real TTY the user can attach to (ADR-0007), so the
+      // runner's own TUI is the point — `interactive`. It is still an
+      // unattended run, so autonomy stays on: the two are separate axes, and
+      // conflating them is what made Codex tasks stream `codex exec` output
+      // into a window that was supposed to show its TUI.
       headless: opts.headless ?? true,
+      interactive: true,
+      cwd: opts.cwd,
       registry: opts.registry!,
     });
 

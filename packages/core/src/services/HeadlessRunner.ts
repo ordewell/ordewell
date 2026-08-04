@@ -114,8 +114,14 @@ export class HeadlessRunner extends AbstractRunner<HeadlessSession> {
   private resolvePath: () => Promise<string>;
   private launchDeps: LaunchDeps;
 
-  /** Session shape when the caller names none; the VS Code runner overrides it to interactive. */
-  protected readonly defaultHeadless: boolean = true;
+  /**
+   * Session shape: a piped subprocess is not a terminal, so runners get their
+   * non-interactive subcommand. The VS Code runner owns a pseudoterminal and
+   * overrides this to true. Autonomy is a separate axis (see `ResolveContext`)
+   * and stays on either way — no surface has a human answering permission
+   * prompts on the orchestrator's behalf.
+   */
+  protected readonly defaultInteractive: boolean = false;
 
   constructor(deps: HeadlessRunnerDeps = {}) {
     super();
@@ -131,7 +137,7 @@ export class HeadlessRunner extends AbstractRunner<HeadlessSession> {
 
   /** Everything up to, but not including, spawning — so a surface that owns its own child reaches the same decisions. */
   protected async prepareLaunch(opts: RunnerSpawnOptions): Promise<PreparedLaunch> {
-    const headless = opts.headless ?? this.defaultHeadless;
+    const interactive = this.defaultInteractive;
 
     const invocation = buildRunnerInvocation({
       runner: opts.runner,
@@ -140,15 +146,17 @@ export class HeadlessRunner extends AbstractRunner<HeadlessSession> {
       thinkingEffort: opts.thinkingEffort,
       modelVariants: opts.modelVariants,
       mode: opts.mode,
-      headless,
+      headless: opts.headless ?? true,
+      interactive,
+      cwd: opts.cwd,
       registry: opts.registry!,
     });
 
-    // Manifest `requiresTty` means "needs one even headless"; an interactive
+    // Manifest `requiresTty` means "needs one even when piped"; an interactive
     // session is the agent's TUI, so it needs one without declaring it. Both
     // gated on `script`, which does not exist on Windows.
     const manifest = opts.registry?.get(opts.runner)?.manifest;
-    const pty = (manifest?.runner.requiresTty === true || !headless) && this.hasScriptCmd();
+    const pty = (manifest?.runner.requiresTty === true || interactive) && this.hasScriptCmd();
 
     // Same PATH treatment as model discovery: the runner binary must resolve
     // wherever the user installed it, even under a GUI-minimal PATH.

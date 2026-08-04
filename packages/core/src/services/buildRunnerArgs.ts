@@ -14,6 +14,8 @@ export function buildRunnerInvocation(opts: {
   modelVariants?: string[];
   mode?: RunnerMode;
   headless?: boolean;
+  interactive?: boolean;
+  cwd?: string;
   registry: RunnerRegistry;
 }): RunnerInvocation {
   const entry = opts.registry.get(opts.runner);
@@ -30,5 +32,7 @@ export function buildRunnerInvocation(opts: {
     modelVariants: opts.modelVariants,
     mode: opts.mode ?? 'build',
     headless: opts.headless,
+    interactive: opts.interactive,
+    cwd: opts.cwd,
   });
 }

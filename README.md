@@ -229,8 +229,14 @@ For VS Code, open the folder and press `F5` to launch the Extension Development 
 | Skills | `/grill-me`, `/tdd`, `/prd`, `/review`, `/verify`, `/research-subagents` |
 | Models | `/model`, `/key`, `/allowlist`, `/runners`, `/auto`, `/refresh` |
 | Sessions | `/sessions`, `/new`, `/save`, `/load`, `/delete` — a loaded session is adopted by the server, so its plan stays executable |
+| System | `/help`, `/mouse`, `/quit` |
 
 API keys typed into `/key` are masked on screen and written to your `.env`.
+
+Text is selectable and copyable with the mouse, as in any other program: Ordewell
+does not capture the terminal's mouse. Scroll with `pgup`/`pgdn`. If you would
+rather have wheel scrolling and can live without drag-to-select, `/mouse on`
+swaps the trade (and remembers it via `ORDEWELL_TUI_MOUSE` in your `.env`).
 
 </details>
 

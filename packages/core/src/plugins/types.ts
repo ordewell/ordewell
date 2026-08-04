@@ -127,8 +127,22 @@ export interface ResolveContext {
   /** All variant ids the assigned model offers — lets {{opencodeVariantConfig}} disable the non-chosen ones. */
   modelVariants?: string[];
   mode: string;
-  /** When true, resolve {{if headless}} blocks and the {{feature:headless}} token. */
+  /**
+   * Autonomy axis: when true, resolve {{if headless}} blocks and the
+   * {{feature:headless}} token so the agent never stops to ask for permission.
+   * True for every orchestrated task run — nobody is watching the terminal on
+   * Ordewell's behalf — independently of the session *shape* below.
+   */
   headless?: boolean;
+  /**
+   * Session-shape axis: true when the runner is launched onto a real TTY the
+   * user can attach to (a tmux window, a VS Code pseudoterminal), so the
+   * runner's own TUI should come up rather than its non-interactive
+   * subcommand. Defaults to `!headless` for callers that predate the split.
+   */
+  interactive?: boolean;
+  /** The task's working directory — needed by runners whose autonomy flags name a path. */
+  cwd?: string;
 }
 
 export interface RunnerInvocation {

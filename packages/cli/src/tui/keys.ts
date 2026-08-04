@@ -69,7 +69,8 @@ const ESCAPES: Record<string, string> = {
   '\x1b\n': 'alt-enter',
 };
 
-// Decode SGR wheel reports (see terminal.ts for why mouse tracking is on).
+// Decode SGR wheel reports. Only arrive while mouse capture is on, which is
+// opt-in — see terminal.ts for why.
 const MOUSE_WHEEL_UP = 64;
 const MOUSE_WHEEL_DOWN = 65;
 // eslint-disable-next-line no-control-regex

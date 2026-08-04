@@ -90,6 +90,47 @@ describe('TmuxRunner', () => {
     expect(args[7]).toContain('ORDEWELL_TMUX_EXIT');
   });
 
+  /**
+   * Regression: a tmux window is a real TTY, so the runner's own TUI is the
+   * whole point of ADR-0007 — but the transport used to declare itself headless
+   * and got the non-interactive subcommand instead (Codex streamed `codex exec`
+   * output into the window). Autonomy is the other axis and must stay on: the
+   * window is unattended, so permission-skipping flags still belong.
+   */
+  it('launches the interactive shape while keeping autonomy flags on', async () => {
+    const m = manifest({
+      runner: {
+        command: 'test-cli',
+        argsTemplate: [
+          '{{if headlessSession}}', 'exec', '{{/if}}',
+          '{{if interactive}}', '--tui', '{{/if}}',
+          '{{if headless}}', '--yes', '{{/if}}',
+          '{{prompt}}',
+        ],
+        promptInArgs: true,
+      },
+      features: { modelSelection: false, thinkingEffort: false, planMode: false, planModeFlag: '', headlessFlag: '--yes' },
+    });
+    const runner = makeRunner();
+    await runner.spawn({ ...baseOpts(m), mode: 'build' });
+
+    const shellCmd = tmuxCalls().find(([, args]) => args[0] === 'new-window')![1][7];
+    expect(shellCmd).toContain(`'test-cli' '--tui' '--yes' 'do the thing'`);
+    expect(shellCmd).not.toContain('exec"');
+    expect(shellCmd).not.toContain(`'exec'`);
+  });
+
+  it('passes the task cwd through to arg resolution, not just to the window', async () => {
+    const m = manifest({
+      runner: { command: 'test-cli', argsTemplate: ['{{if projectTrust}}', '-c', '{{projectTrust}}', '{{/if}}', '{{prompt}}'], promptInArgs: true },
+    });
+    const runner = makeRunner();
+    await runner.spawn(baseOpts(m));
+
+    const shellCmd = tmuxCalls().find(([, args]) => args[0] === 'new-window')![1][7];
+    expect(shellCmd).toContain(`'-c' 'projects."/workspace".trust_level="trusted"'`);
+  });
+
   it('starts piping the window output into a per-session log file', async () => {
     const runner = makeRunner();
     const session = await runner.spawn(baseOpts(manifest()));

@@ -132,9 +132,10 @@ function renderFooter(state: TuiState, cols: number): string[] {
         ? ['type to edit prompt', 'pgup/pgdn scroll', 'alt-enter newline', 'enter save', 'esc cancel']
         : [
             'enter expand', 'R runner', 'o model', 'e effort', 'M mode', 'D deps', 'f start',
-            'E run plan', 'c cancel', markHint, 's skip', 'a add', 'd remove', 't terminal', 'tab chat',
+            'E run plan', 'c cancel', markHint, 's skip', 'a add', 'd remove', 't terminal',
+            'pgup/pgdn scroll', 'tab chat',
           ]
-      : ['/help', 'tab plan', 'alt-enter newline', 'ctrl-c quit'];
+      : ['/help', 'tab plan', 'alt-enter newline', 'pgup/pgdn scroll', 'ctrl-c quit'];
   return packHints(hints, cols);
 }
 

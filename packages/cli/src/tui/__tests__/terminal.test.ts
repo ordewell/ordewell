@@ -22,7 +22,7 @@ class FakeOutput extends EventEmitter {
 }
 
 describe('openTerminal', () => {
-  it('enables SGR mouse tracking on open so wheel scroll is distinguishable from arrow keys, and pops it on close', () => {
+  it('leaves the mouse to the terminal by default, so drag-select and copy still work', () => {
     const input = new FakeInput();
     const output = new FakeOutput();
     const terminal = openTerminal({
@@ -32,11 +32,40 @@ describe('openTerminal', () => {
       onResize: vi.fn(),
     });
 
+    expect(output.writes.join('')).not.toContain('\x1b[?1000h');
+    // Alternate scroll off, or the wheel would arrive as arrow keys and browse
+    // the input history; saved and restored so the shell keeps its own setting.
+    expect(output.writes.join('')).toContain('\x1b[?1007s');
+    expect(output.writes.join('')).toContain('\x1b[?1007l');
+    terminal.close();
+    expect(output.writes.join('')).toContain('\x1b[?1007r');
+  });
+
+  it('captures the mouse when asked, and hands it back on request and on close', () => {
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const terminal = openTerminal({
+      input: input as unknown as NodeJS.ReadStream,
+      output: output as unknown as NodeJS.WriteStream,
+      mouse: true,
+      onKey: vi.fn(),
+      onResize: vi.fn(),
+    });
+
     expect(output.writes.join('')).toContain('\x1b[?1000h');
     expect(output.writes.join('')).toContain('\x1b[?1006h');
-    terminal.close();
+
+    output.writes.length = 0;
+    terminal.setMouse(true);
+    expect(output.writes).toEqual([]);
+
+    terminal.setMouse(false);
     expect(output.writes.join('')).toContain('\x1b[?1000l');
     expect(output.writes.join('')).toContain('\x1b[?1006l');
+
+    output.writes.length = 0;
+    terminal.close();
+    expect(output.writes.join('')).toContain('\x1b[?1000l');
   });
 
   it('pushes the Kitty keyboard disambiguation flag on open and pops it on close, so Shift+Enter is distinguishable from Enter', () => {

@@ -8,15 +8,24 @@ export const CODEX_MANIFEST: RunnerPluginManifest = {
 
   runner: {
     command: 'codex',
-    // Headless surfaces (CLI/web) use the non-interactive `exec` subcommand
-    // (`--skip-git-repo-check`: task workspaces aren't always git repos, and
-    // exec hard-fails outside one by default); interactive surfaces (VS Code
-    // terminal) launch the TUI with the prompt as its positional argument.
-    // Reasoning effort has no dedicated flag — it travels as a `-c` config
-    // override (see {{feature:reasoningEffortConfig}}). Both `exec` and the
-    // TUI accept `-m`, `-c`, and `--sandbox`.
+    // Headless surfaces (a piped subprocess) use the non-interactive `exec`
+    // subcommand (`--skip-git-repo-check`: task workspaces aren't always git
+    // repos, and exec hard-fails outside one by default); interactive surfaces
+    // (a tmux window, the VS Code terminal) launch the TUI with the prompt as
+    // its positional argument. Reasoning effort has no dedicated flag — it
+    // travels as a `-c` config override (see {{feature:reasoningEffortConfig}}).
+    // Both `exec` and the TUI accept `-m`, `-c`, and `--sandbox`.
+    //
+    // The two interactive-only entries restore what `exec` gives implicitly and
+    // the TUI does not: `exec` is non-interactive, so it can neither ask for
+    // command approval nor ask whether the directory is trusted. The TUI asks
+    // for both by default, and an orchestrated task has nobody to answer —
+    // without these it stalls on a menu instead of working. `-a` does not exist
+    // on `exec`, hence the shape gate rather than a `{{if headless}}` one.
     argsTemplate: [
       '{{if headlessSession}}', 'exec', '--skip-git-repo-check', '{{/if}}',
+      '{{if interactive}}', '-a', 'never', '{{/if}}',
+      '{{if projectTrust}}', '-c', '{{projectTrust}}', '{{/if}}',
       '{{if model}}', '-m', '{{model}}', '{{/if}}',
       '{{if thinking}}', '{{feature:reasoningEffortConfig}}', '{{/if}}',
       '--sandbox', '{{feature:permissionModeVal}}',
@@ -31,9 +40,9 @@ export const CODEX_MANIFEST: RunnerPluginManifest = {
     planMode: true,
     planModeFlag: '--sandbox',
     permissionModeValues: {
-      // Map mode IDs to --sandbox CLI values. `codex exec` is non-interactive
-      // and has no approval flag, so the sandbox axis is the whole permission
-      // story for headless runs.
+      // Map mode IDs to --sandbox CLI values. Approvals are off on both shapes
+      // (implicitly under `exec`, via `-a never` in the TUI), so the sandbox
+      // axis is the whole permission story for a Codex task.
       'agent': 'workspace-write',
       'plan': 'read-only',
       'fullAccess': 'danger-full-access',

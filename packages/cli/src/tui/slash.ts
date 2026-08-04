@@ -67,6 +67,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
 
   // System
   { name: 'help', usage: '/help', description: 'Show available commands', category: 'system' },
+  { name: 'mouse', usage: '/mouse [on|off]', description: 'Wheel scrolling instead of drag-to-select text', category: 'system' },
   { name: 'quit', usage: '/quit', description: 'Exit the TUI', category: 'system' },
 ];
 

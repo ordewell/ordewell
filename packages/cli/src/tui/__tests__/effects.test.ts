@@ -44,6 +44,7 @@ function harness(api: Partial<OrdewellApi> = {}) {
     newSessionId: () => 'session-new',
     setEnvVar: (key, value) => { env[key] = value; },
     openTerminal: vi.fn().mockResolvedValue({ ok: true, message: 'Opened a terminal for this task.' }),
+    setMouseCapture: vi.fn(),
     reviveDaemon: vi.fn().mockResolvedValue(true),
     exit,
   };
@@ -146,6 +147,57 @@ describe('planning', () => {
     await runEffect({ type: 'startConversation', goal: 'x' }, h.deps);
 
     expect(h.actions).toContainEqual({ type: 'plannerMessage', content: 'Which database?', sessionId: 'session-new' });
+  });
+
+  it('speaks a reply the socket already delivered once, not twice with the REST copy', async () => {
+    // The daemon broadcasts the turn and also leaves it as the plan's last
+    // assistant entry; the reply is the same one thing either way.
+    let onEvent: (e: any) => void = () => {};
+    const h = harness({
+      streamPlanning: vi.fn().mockImplementation((_id: string, cb: (e: any) => void) => {
+        onEvent = cb;
+        return { close: vi.fn() };
+      }),
+      sendConversationMessage: vi.fn().mockImplementation(async () => {
+        onEvent({ type: 'planner_message', content: 'Tasks updated:\n- #3 added' });
+        return {
+          tasks: [],
+          conversationHistory: [
+            { role: 'user', content: 'add a hardening task' },
+            { role: 'assistant', content: 'Tasks updated:\n- #3 added' },
+          ],
+        };
+      }),
+    });
+
+    await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'add a hardening task' }, h.deps);
+
+    const spoken = h.actions.filter((a) => a.type === 'plannerMessage');
+    expect(spoken).toEqual([{ type: 'plannerMessage', content: 'Tasks updated:\n- #3 added', sessionId: 's1' }]);
+  });
+
+  it('falls back to the REST reply when the socket delivered a different turn', async () => {
+    let onEvent: (e: any) => void = () => {};
+    const h = harness({
+      streamPlanning: vi.fn().mockImplementation((_id: string, cb: (e: any) => void) => {
+        onEvent = cb;
+        return { close: vi.fn() };
+      }),
+      sendConversationMessage: vi.fn().mockImplementation(async () => {
+        onEvent({ type: 'planner_message', content: 'Looking into it.' });
+        return {
+          tasks: [],
+          conversationHistory: [{ role: 'assistant', content: 'Which database?' }],
+        };
+      }),
+    });
+
+    await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'x' }, h.deps);
+
+    expect(h.actions.filter((a) => a.type === 'plannerMessage')).toEqual([
+      { type: 'plannerMessage', content: 'Looking into it.', sessionId: 's1' },
+      { type: 'plannerMessage', content: 'Which database?', sessionId: 's1' },
+    ]);
   });
 
   it('notes a silent approval decision instead of leaving it invisible', async () => {
