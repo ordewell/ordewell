@@ -52,7 +52,18 @@ That's it. First run asks for a planner and a runner, set from inside
 (`/planner`, `/runners`, `/key`) — no restart, no API key required up front.
 
 `npx ordewell` works the same without a global install; the package also
-ships scoped as `@ordewell/cli`. Building from source:
+ships scoped as `@ordewell/cli`.
+
+For VS Code instead, install the extension — it carries its own core, so
+there is nothing to install from npm:
+
+```bash
+code --install-extension ordewell.ordewell
+```
+
+Or search **Ordewell** in the Extensions view.
+
+Building from source:
 `git clone https://github.com/ordewell/ordewell.git && cd ordewell && npm install && npm run build && npm link -w packages/cli`
 — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -220,7 +231,7 @@ ordewell web --daemon  # the local API server, in the background
 
 `ordewell web` starts the HTTP + WebSocket API on `127.0.0.1:3742` that the CLI and TUI are clients of — every other command starts it for you on demand. It serves JSON, not a web page; there is no browser dashboard yet.
 
-For VS Code, open the folder and press `F5` to launch the Extension Development Host.
+For VS Code, install the extension and open the Ordewell panel — see Quick Start.
 
 | Area | Commands |
 | --- | --- |
