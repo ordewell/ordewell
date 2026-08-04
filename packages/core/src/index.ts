@@ -106,8 +106,8 @@ export {
   researchShellWarning,
 } from './services/researchShell';
 export type { ResearchShell, ResearchShellDeps, ShellDialect } from './services/researchShell';
-export { tmuxSessionName, tmuxSocketName, tmuxWindowName, hasTmux } from './utils/tmux';
-export type { ProbeFn } from './utils/tmux';
+export { tmuxSessionName, tmuxSocketName, tmuxWindowName, hasTmux, clipboardCopyCommand } from './utils/tmux';
+export type { ProbeFn, HasBinFn } from './utils/tmux';
 export { RunnerRegistry } from './plugins/RunnerRegistry';
 export { FsPluginStore } from './plugins/FsPluginStore';
 export { resolveArgs } from './plugins/resolveArgs';

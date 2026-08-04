@@ -62,13 +62,15 @@ describe('TmuxRunner', () => {
     });
   }
 
-  function makeRunner(overrides: Partial<{ pollIntervalMs: number }> = {}) {
+  function makeRunner(overrides: Partial<{ pollIntervalMs: number; clipboardCommand: () => string | null }> = {}) {
     return new TmuxRunner({
       port: 3742,
       execFileImpl: execFileImpl as unknown as ExecFileFn,
       resolvePath: async () => '/augmented/bin:/usr/bin',
       logDir,
       pollIntervalMs: overrides.pollIntervalMs ?? 100,
+      // Pinned rather than probed — the default sniffs the host for xclip/pbcopy.
+      clipboardCommand: overrides.clipboardCommand ?? (() => 'xclip -selection clipboard'),
     });
   }
 
@@ -333,6 +335,50 @@ describe('TmuxRunner', () => {
         'copy-mode-vi:PageUp', 'copy-mode-vi:PageDown',
       ]),
     );
+  });
+
+  it('routes a mouse selection to the system clipboard, since `mouse on` costs native drag-select', async () => {
+    const runner = makeRunner();
+    await runner.ensureSession();
+
+    const verbs = tmuxCalls();
+    expect(verbs.some(([, a]) => a[0] === 'set-option' && a.includes('set-clipboard') && a.includes('on'))).toBe(true);
+    // `copy-command` is what puts the binary behind the *default* copy bindings
+    // too — double-click, triple-click, `Enter`, `y`.
+    expect(verbs.some(([, a]) => a[0] === 'set-option' && a.includes('copy-command') && a.includes('xclip -selection clipboard'))).toBe(true);
+    const dragEnds = verbs.filter(([, a]) => a[3] === 'MouseDragEnd1Pane');
+    expect(dragEnds.map(([, a]) => a[2])).toEqual(['copy-mode', 'copy-mode-vi']);
+    for (const [, a] of dragEnds) {
+      expect(a.slice(4)).toEqual(['send-keys', '-X', 'copy-pipe-and-cancel', 'xclip -selection clipboard']);
+    }
+  });
+
+  it('still binds drag-to-copy when no clipboard binary exists, leaving OSC 52 to carry it', async () => {
+    const runner = makeRunner({ clipboardCommand: () => null });
+    await runner.ensureSession();
+
+    const verbs = tmuxCalls();
+    expect(verbs.some(([, a]) => a.includes('copy-command'))).toBe(false);
+    const dragEnds = verbs.filter(([, a]) => a[3] === 'MouseDragEnd1Pane');
+    expect(dragEnds).toHaveLength(2);
+    for (const [, a] of dragEnds) {
+      expect(a.slice(4)).toEqual(['send-keys', '-X', 'copy-pipe-and-cancel']);
+    }
+  });
+
+  // `copy-command` only exists from tmux 3.2; an older tmux erroring on it must
+  // not cost the session the bindings that follow.
+  it('keeps configuring the session when one comfort is unsupported by this tmux', async () => {
+    execFileImpl.mockImplementation(async (_cmd: string, args: string[]) => {
+      if (args.includes('copy-command')) throw new Error('unknown option: copy-command');
+      return { stdout: '', stderr: '' };
+    });
+    const runner = makeRunner();
+    await runner.ensureSession();
+
+    const verbs = tmuxCalls();
+    expect(verbs.some(([, a]) => a[0] === 'bind-key' && a[1] === '-n' && a[2] === 'PageUp')).toBe(true);
+    expect(verbs.some(([, a]) => a[3] === 'MouseDragEnd1Pane')).toBe(true);
   });
 
   it('sets history-limit before any window is created, so the scrollback depth applies', async () => {

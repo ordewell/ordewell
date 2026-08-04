@@ -238,6 +238,12 @@ does not capture the terminal's mouse. Scroll with `pgup`/`pgdn`. If you would
 rather have wheel scrolling and can live without drag-to-select, `/mouse on`
 swaps the trade (and remembers it via `ORDEWELL_TUI_MOUSE` in your `.env`).
 
+A task's own terminal is a tmux window, where tmux does hold the mouse so the
+wheel scrolls its scrollback. Selecting there still copies to your system
+clipboard: drag to select and release to copy, or double/triple-click for a word
+or a line. Install `wl-copy`, `xclip` or `xsel` on Linux if you have none of them
+— without one, copying falls back to an OSC 52 escape that some terminals ignore.
+
 </details>
 
 <details>

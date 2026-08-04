@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
+## [Unreleased]
+
+### Fixed
+
+- **Text in a task's tmux terminal is selectable and copyable.** The runner
+  session sets `mouse on` for wheel scrolling, which hands mouse events to tmux
+  and so takes the emulator's own drag-select with it — and tmux's replacement
+  selection lands in a paste buffer no other application can read, so copying a
+  stack trace out of a task's terminal was impossible. Drag-release now copies
+  and leaves copy mode, piped through a detected clipboard binary (`wl-copy`,
+  `xclip`, `xsel`, `pbcopy`, `clip.exe`) that also backs the default
+  double-click, triple-click, `Enter` and `y` copy paths; `set-clipboard on`
+  carries the cases no local binary can, such as viewing over SSH. Each option
+  is applied independently, so an older tmux without `copy-command` (pre-3.2)
+  no longer loses the scrollback bindings that followed it.
+
 ## [0.4.4] — 2026-08-04
 
 ### Fixed

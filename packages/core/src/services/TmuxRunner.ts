@@ -8,7 +8,7 @@ import { buildRunnerInvocation } from './buildRunnerArgs';
 import { AbstractTerminalSession, AbstractRunner } from './AbstractRunner';
 import { augmentedPath } from '../utils/shellPath';
 import { posixShellQuote, stripAnsi } from '../utils/shell';
-import { tmuxSessionName, tmuxSocketName, tmuxWindowName } from '../utils/tmux';
+import { clipboardCopyCommand, tmuxSessionName, tmuxSocketName, tmuxWindowName } from '../utils/tmux';
 
 const EXIT_RE = /<<<ORDEWELL_TMUX_EXIT:(\d+)>>>/;
 
@@ -27,6 +27,7 @@ export interface TmuxRunnerDeps {
   resolvePath?: () => Promise<string>;
   pollIntervalMs?: number;
   logDir?: string;
+  clipboardCommand?: () => string | null;
 }
 
 class TmuxSession extends AbstractTerminalSession {
@@ -152,6 +153,7 @@ export class TmuxRunner extends AbstractRunner<TmuxSession> {
   private resolvePath: () => Promise<string>;
   private pollIntervalMs: number;
   private logDir: string;
+  private clipboardCommand: () => string | null;
   /** Retries get a freshly named window so a failed attempt's output stays inspectable. */
   private attempts = new Map<string, number>();
   private ready: Promise<void> | null = null;
@@ -164,6 +166,7 @@ export class TmuxRunner extends AbstractRunner<TmuxSession> {
     this.resolvePath = deps.resolvePath ?? augmentedPath;
     this.pollIntervalMs = deps.pollIntervalMs ?? 500;
     this.logDir = deps.logDir ?? tmpdir();
+    this.clipboardCommand = deps.clipboardCommand ?? (() => clipboardCopyCommand());
   }
 
   /**
@@ -197,34 +200,49 @@ export class TmuxRunner extends AbstractRunner<TmuxSession> {
   }
 
   /**
-   * Makes an attached runner terminal scrollable with the mouse wheel and
-   * Page Up/Down. A fresh tmux session ships with `mouse off`, a 2000-line
-   * scrollback, and no PageUp binding — none of which lets a user page back
-   * through a finished task's output, which is the whole point of opening its
-   * window. Scoping is harmless: the daemon owns a private socket
-   * (`tmuxSocketName`), so these server-wide options touch nothing but its
-   * own session. Best-effort so an ancient or stripped tmux cannot stop tasks
-   * from spawning — the session still works without the scroll comforts.
+   * Gives an attached runner terminal wheel/PageUp scrolling over a deep
+   * scrollback, and a mouse selection that reaches the system clipboard — none
+   * of which a default tmux session does. Server-wide scoping is harmless: the
+   * daemon owns a private socket (`tmuxSocketName`).
+   *
+   * `mouse on` is what costs the emulator's own drag-select, so tmux must hand
+   * the selection back out itself: via a clipboard binary when there is one,
+   * and via OSC 52 (`set-clipboard`) for what that cannot cover, such as
+   * viewing over SSH. Naming the binary on the binding as well as in
+   * `copy-command` keeps drag-to-copy working on tmux older than 3.2, which has
+   * no `copy-command`.
    */
   private async configureScrolling(): Promise<void> {
-    try {
+    const clip = this.clipboardCommand();
+    const copySelection = clip ? ['copy-pipe-and-cancel', clip] : ['copy-pipe-and-cancel'];
+
+    const commands: string[][] = [
       // `history-limit` only governs windows created after it is set, so it
       // must run before any `new-window` — once, here at session creation.
-      await this.tmux(['set-option', '-g', 'history-limit', '100000']);
-      // Wheel-aware copy mode: with `mouse on`, wheel-up enters copy mode and
-      // scrolls the pane's scrollback instead of going to the inner app.
-      await this.tmux(['set-option', '-g', 'mouse', 'on']);
-      // PageUp enters copy mode scrolled up one page; without a root binding it
-      // is delivered to the inner app and never reaches tmux's scrollback.
-      await this.tmux(['bind-key', '-n', 'PageUp', 'copy-mode', '-u']);
-      // PageUp/PageDown then page through the scrollback inside copy mode, in
-      // both key tables so the bindings hold regardless of `mode-keys`.
-      await this.tmux(['bind-key', '-T', 'copy-mode', 'PageUp', 'send-keys', '-X', 'page-up']);
-      await this.tmux(['bind-key', '-T', 'copy-mode', 'PageDown', 'send-keys', '-X', 'page-down']);
-      await this.tmux(['bind-key', '-T', 'copy-mode-vi', 'PageUp', 'send-keys', '-X', 'page-up']);
-      await this.tmux(['bind-key', '-T', 'copy-mode-vi', 'PageDown', 'send-keys', '-X', 'page-down']);
-    } catch {
-      /* scroll comforts unavailable — session still usable */
+      ['set-option', '-g', 'history-limit', '100000'],
+      ['set-option', '-g', 'mouse', 'on'],
+      ['set-option', '-g', 'set-clipboard', 'on'],
+      ...(clip ? [['set-option', '-g', 'copy-command', clip]] : []),
+      ['bind-key', '-T', 'copy-mode', 'MouseDragEnd1Pane', 'send-keys', '-X', ...copySelection],
+      ['bind-key', '-T', 'copy-mode-vi', 'MouseDragEnd1Pane', 'send-keys', '-X', ...copySelection],
+      // Root-table PageUp; otherwise the key goes to the inner app and never
+      // reaches tmux's scrollback. Both mode tables, so `mode-keys` can't
+      // decide whether paging works.
+      ['bind-key', '-n', 'PageUp', 'copy-mode', '-u'],
+      ['bind-key', '-T', 'copy-mode', 'PageUp', 'send-keys', '-X', 'page-up'],
+      ['bind-key', '-T', 'copy-mode', 'PageDown', 'send-keys', '-X', 'page-down'],
+      ['bind-key', '-T', 'copy-mode-vi', 'PageUp', 'send-keys', '-X', 'page-up'],
+      ['bind-key', '-T', 'copy-mode-vi', 'PageDown', 'send-keys', '-X', 'page-down'],
+    ];
+
+    // Individually best-effort: an option this tmux is too old to know must
+    // not take the rest of the setup — or task spawning — down with it.
+    for (const args of commands) {
+      try {
+        await this.tmux(args);
+      } catch {
+        /* comfort unavailable; session still usable */
+      }
     }
   }
 
