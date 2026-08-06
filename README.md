@@ -22,11 +22,7 @@
 </p>
 
 <p align="center">
-  <video src="assets/readme/hero-plan-to-run.mp4" width="900" controls loop muted playsinline
-         poster="assets/readme/tui-plan-pane.png"
-         aria-label="Ordewell's terminal UI: a goal is typed, the planner reads the repo and refuses a write, it asks whether the limiter should reuse the existing Redis client, then commits a seven-task plan — each task showing its runner, model, thinking effort and mode — and executes it to 7/7 complete.">
-    <img src="assets/readme/hero-plan-to-run.gif" width="900" alt="Ordewell's terminal UI: a goal is typed, the planner reads the repo and refuses a write, it asks whether the limiter should reuse the existing Redis client, then commits a seven-task plan — each task showing its runner, model, thinking effort and mode — and executes it to 7/7 complete.">
-  </video>
+  <img src="assets/readme/hero-plan-to-run.gif" width="900" alt="Ordewell's terminal UI: a goal is typed, the planner reads the repo and refuses a write, it asks whether the limiter should reuse the existing Redis client, then commits a seven-task plan — each task showing its runner, model, thinking effort and mode — and executes it to 7/7 complete.">
 </p>
 
 ---
