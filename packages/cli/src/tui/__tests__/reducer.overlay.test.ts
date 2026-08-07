@@ -311,6 +311,22 @@ describe('plan pane', () => {
   ];
   const planned = initialState({ sessionId: 's1', tasks, focus: 'plan' });
 
+  /**
+   * A plan taller than the pane. Scrolling is clamped to the lines that
+   * actually exist, so a two-task plan in a full-height terminal has nothing to
+   * scroll and every notch is correctly a no-op.
+   */
+  const tallPlan = (over: Partial<TuiState> = {}): TuiState => initialState({
+    sessionId: 's1',
+    focus: 'plan',
+    rows: 24,
+    cols: 80,
+    tasks: Array.from({ length: 30 }, (_, i) => ({
+      id: `t${i}`, order: i + 1, title: `Task ${i + 1}`, type: 'ai' as const, status: 'pending', dependencies: [],
+    })),
+    ...over,
+  });
+
   it('tab moves focus between the chat and the plan', () => {
     const toPlan = press(initialState({ tasks }), 'tab').state;
     expect(toPlan.focus).toBe('plan');
@@ -359,12 +375,12 @@ describe('plan pane', () => {
   });
 
   it('scrollup in plan pane does NOT collapse the expanded task', () => {
-    const expanded = press(planned, 'enter').state;
-    expect(expanded.expandedTaskId).toBe('a');
+    const expanded = press(tallPlan(), 'enter').state;
+    expect(expanded.expandedTaskId).toBe('t0');
     const scrolledDown = press(expanded, 'scrolldown').state;
     const scrolled = press(scrolledDown, 'scrollup').state;
-    expect(scrolled.expandedTaskId).toBe('a');
-    expect(scrolled.planScroll).toBeLessThan(scrolledDown.planScroll);
+    expect(scrolled.expandedTaskId).toBe('t0');
+    expect(scrolled.planScroll!).toBeLessThan(scrolledDown.planScroll!);
   });
 
   it('shift-enter in the task editor inserts a newline without committing', () => {
@@ -420,45 +436,46 @@ describe('plan pane', () => {
   });
 
   it('pageup/pagedown scroll the plan pane while a task is expanded', () => {
-    const expanded = press(planned, 'enter').state;
+    const expanded = press(tallPlan(), 'enter').state;
     const paged = press(expanded, 'pagedown').state;
-    expect(paged.expandedTaskId).toBe('a');
-    expect(paged.planScroll).toBeGreaterThan(0);
+    expect(paged.expandedTaskId).toBe('t0');
+    expect(paged.planScroll!).toBeGreaterThan(0);
     const back = press(paged, 'pageup').state;
-    expect(back.planScroll).toBeLessThan(paged.planScroll);
+    expect(back.planScroll!).toBeLessThan(paged.planScroll!);
   });
 
   it('scrolldown in plan pane increments planScroll', () => {
-    const state = initialState({ sessionId: 's1', tasks, focus: 'plan', planScroll: 3 });
-    const scrolled = press(state, 'scrolldown').state;
+    const scrolled = press(tallPlan({ planScroll: 3 }), 'scrolldown').state;
     expect(scrolled.planScroll).toBe(6);
   });
 
   it('scrollup in plan pane decrements planScroll', () => {
-    const state = initialState({ sessionId: 's1', tasks, focus: 'plan', planScroll: 6 });
-    const scrolled = press(state, 'scrollup').state;
+    const scrolled = press(tallPlan({ planScroll: 6 }), 'scrollup').state;
     expect(scrolled.planScroll).toBe(3);
   });
 
   it('scrollup in plan pane stops at 0', () => {
-    const state = initialState({ sessionId: 's1', tasks, focus: 'plan', planScroll: 2 });
-    const scrolled = press(state, 'scrollup').state;
+    const scrolled = press(tallPlan({ planScroll: 2 }), 'scrollup').state;
     expect(scrolled.planScroll).toBe(0);
   });
 
   it('pageup/pagedown scroll the collapsed plan pane, the keyboard route now that the wheel is opt-in', () => {
-    const state = initialState({ sessionId: 's1', tasks, focus: 'plan', planScroll: 0 });
-    const down = press(state, 'pagedown').state;
-    expect(down.planScroll).toBeGreaterThan(0);
+    const down = press(tallPlan({ planScroll: 0 }), 'pagedown').state;
+    expect(down.planScroll!).toBeGreaterThan(0);
     expect(down.selectedTask).toBe(0);
     const up = press(down, 'pageup').state;
     expect(up.planScroll).toBe(0);
   });
 
-  it('arrow key up resets planScroll', () => {
-    const state = initialState({ sessionId: 's1', tasks, focus: 'plan', planScroll: 9 });
-    const moved = press(state, 'up').state;
-    expect(moved.planScroll).toBe(0);
+  it('a plan shorter than the pane has nothing to scroll, so every notch is a no-op', () => {
+    const short = initialState({ sessionId: 's1', tasks, focus: 'plan', rows: 24, cols: 80 });
+    expect(press(short, 'pagedown').state.planScroll).toBe(0);
+    expect(press(short, 'scrolldown').state.planScroll).toBe(0);
+  });
+
+  it('arrow key up hands the pane back to follow mode', () => {
+    const moved = press(tallPlan({ planScroll: 9, selectedTask: 5 }), 'up').state;
+    expect(moved.planScroll).toBeNull();
   });
 
   it('o opens a runner-compatible model picker for the selected task', () => {

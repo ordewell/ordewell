@@ -1,12 +1,11 @@
-import { wrapLines } from './ansi';
 import type { TuiState } from './state';
 
 /**
  * Where the TUI's panes are and how wide the things inside them are.
  *
  * The reducer and the renderer both need these numbers — the renderer to paint,
- * the reducer to move a caret through wrapped text and to bound the plan
- * scroll — and for a while they each carried their own copy. The copies drifted:
+ * the reducer to move a caret through wrapped text — and for a while they each
+ * carried their own copy. The copies drifted:
  * the reducer wrapped an expanded task's prompt at the full terminal width while
  * the renderer wrapped it inside the plan pane, so `up` moved the caret to a
  * position computed for a line twice as wide as the one on screen.
@@ -26,23 +25,17 @@ const PANE_INDENT = 4;
 /** Prompt glyph, plus one column for the caret the frame paints itself. */
 const CHAT_PROMPT_COLS = 2;
 
-/**
- * Upper bound of the rows one collapsed task occupies: two title lines, the
- * runner/model line, and the effort line.
- */
-const COLLAPSED_TASK_ROWS = 4;
-
-/**
- * Everything an expanded task adds around its prompt: the status line, the
- * Prompt label, a dependencies block, and the shortcut hint.
- */
-const EXPANDED_TASK_CHROME_ROWS = 6;
-
 /** The plan pane appears once there is a plan, and only if it would not crowd the chat. */
 export function planPaneWidth(state: TuiState): number {
   if (state.tasks.length === 0) return 0;
   const wanted = Math.min(PLAN_MAX_COLS, Math.floor(state.cols * 0.46));
   return wanted >= PLAN_MIN_COLS && state.cols - wanted > PLAN_MIN_COLS ? wanted : 0;
+}
+
+/** What the chat pane gets: the terminal, less the plan pane and the divider between them. */
+export function chatPaneWidth(state: TuiState): number {
+  const plan = planPaneWidth(state);
+  return plan === 0 ? state.cols : state.cols - plan - 1;
 }
 
 /** Text width inside a labelled block of the plan pane, given that pane's width. */
@@ -64,18 +57,4 @@ export function taskEditorRoom(state: TuiState): number {
  */
 export function chatEditorRoom(cols: number, active: boolean): number {
   return Math.max(1, cols - CHAT_PROMPT_COLS - (active ? 1 : 0));
-}
-
-/**
- * How far the plan pane may be scrolled back. An upper bound, deliberately: the
- * renderer clamps to the real overflow once the lines exist, so being generous
- * costs nothing while being short is a defect — the previous fixed estimate of
- * four rows per task stopped the wheel partway through a long expanded prompt.
- */
-export function planScrollBound(state: TuiState): number {
-  let rows = state.tasks.length * COLLAPSED_TASK_ROWS;
-  if (state.taskEditor) {
-    rows += EXPANDED_TASK_CHROME_ROWS + wrapLines(state.taskEditor.text, taskEditorRoom(state)).length;
-  }
-  return Math.max(0, rows - 1);
 }

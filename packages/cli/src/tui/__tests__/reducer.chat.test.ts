@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { initialState, reduce } from '../reducer';
+import { render } from '../render';
+import type { ChatMessage, TuiState } from '../state';
 
 const typing = (text: string) => ({
   ...initialState(),
@@ -199,13 +201,23 @@ describe('reduce — one planner turn, two delivery paths', () => {
 });
 
 describe('reduce — scrolling the transcript', () => {
+  /** A transcript several screens deep, so there is room to page through. */
+  const longTranscript = (): TuiState => initialState({
+    messages: Array.from({ length: 40 }, (_, i) => ({ role: 'user' as const, content: `m${i}`, timestamp: '' })),
+  });
+
   it('pageup scrolls back through the transcript', () => {
-    const { state } = reduce(initialState(), { type: 'key', key: { name: 'pageup' } });
+    const { state } = reduce(longTranscript(), { type: 'key', key: { name: 'pageup' } });
     expect(state.scroll).toBeGreaterThan(0);
   });
 
+  it('a transcript shorter than the pane has nothing to scroll, so pageup is a no-op', () => {
+    const { state } = reduce(initialState(), { type: 'key', key: { name: 'pageup' } });
+    expect(state.scroll).toBe(0);
+  });
+
   it('pagedown scrolls forward and stops at the live tail', () => {
-    const back = reduce(initialState(), { type: 'key', key: { name: 'pageup' } }).state;
+    const back = reduce(longTranscript(), { type: 'key', key: { name: 'pageup' } }).state;
     const forward = reduce(back, { type: 'key', key: { name: 'pagedown' } }).state;
     expect(forward.scroll).toBe(0);
     expect(reduce(forward, { type: 'key', key: { name: 'pagedown' } }).state.scroll).toBe(0);
@@ -224,10 +236,36 @@ describe('reduce — scrolling the transcript', () => {
   });
 
   it('the mouse wheel scrolls back and forward by a small notch', () => {
-    const back = reduce(initialState(), { type: 'key', key: { name: 'scrollup' } }).state;
+    const long = initialState({
+      messages: Array.from({ length: 40 }, (_, i) => ({ role: 'user' as const, content: `m${i}`, timestamp: '' })),
+    });
+    const back = reduce(long, { type: 'key', key: { name: 'scrollup' } }).state;
     expect(back.scroll).toBe(3);
     const forward = reduce(back, { type: 'key', key: { name: 'scrolldown' } }).state;
     expect(forward.scroll).toBe(0);
+  });
+
+  /**
+   * The transcript is taller than the pane by a couple of lines, so there is
+   * something to scroll — but far less than twenty notches' worth.
+   */
+  const shortTranscript = (): TuiState => {
+    const messages: ChatMessage[] = ['one', 'two', 'three'].map((content) => ({
+      role: 'user' as const, content, timestamp: '',
+    }));
+    return initialState({ rows: 10, cols: 40, messages });
+  };
+
+  const frame = (state: TuiState): string => render(state).join('\n');
+
+  it('a wheel-down after twenty wheel-ups moves the view on the very first notch', () => {
+    let state = shortTranscript();
+    for (let i = 0; i < 20; i++) state = reduce(state, { type: 'key', key: { name: 'scrollup' } }).state;
+
+    const back = frame(state);
+    const forward = reduce(state, { type: 'key', key: { name: 'scrolldown' } }).state;
+
+    expect(frame(forward)).not.toBe(back);
   });
 
   it('up/down recall chat history instead of scrolling the transcript when the draft is single-line', () => {

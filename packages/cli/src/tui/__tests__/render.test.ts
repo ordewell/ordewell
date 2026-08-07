@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { chatBodyLines, render } from '../render';
+import { render } from '../render';
+import { chatBodyLines } from '../layout';
 import { stripAnsi, style, width } from '../ansi';
 import { initialState, type ChatMessage, type TaskView, type TuiState } from '../state';
 
@@ -545,10 +546,18 @@ describe('plan pane scrolling', () => {
     expect(out).toContain('Task number 5');
   });
 
-  it('planScroll stacks with auto-scroll', () => {
-    const out = text({ rows: 15, cols: 80, tasks: manyTasks(30), focus: 'plan', selectedTask: 20, planScroll: 4 });
-    expect(out).not.toContain('Task number 1');
-    expect(out).toContain('Task number 21');
+  it('scrolls above the selected task once the user has taken the viewport over', () => {
+    // The delta-on-top-of-the-anchor model this replaces could only ever scroll
+    // *down* from the selection, so the first task was unreachable while a task
+    // far down the plan was selected.
+    const out = text({ rows: 15, cols: 80, tasks: manyTasks(30), focus: 'plan', selectedTask: 29, planScroll: 0 });
+    expect(out).toContain('Task number 1');
+    expect(out).not.toContain('Task number 30');
+  });
+
+  it('follows the selection again once planScroll goes back to null', () => {
+    const out = text({ rows: 15, cols: 80, tasks: manyTasks(30), focus: 'plan', selectedTask: 29, planScroll: null });
+    expect(out).toContain('Task number 30');
   });
 });
 

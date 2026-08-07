@@ -127,6 +127,25 @@ export interface PickerState {
   action: PickerAction;
 }
 
+/**
+ * The rows a picker currently offers. Lives with `PickerState` rather than in
+ * the reducer: the renderer needs the same list to paint and to keep the
+ * highlight on screen, and importing it from the reducer pointed the render
+ * layer back at the layer that drives it.
+ */
+export function visibleItems(picker: PickerState): PickerItem[] {
+  const filter = picker.filter.trim().toLowerCase();
+  if (!filter) return picker.items;
+  // `detail` carries the provider name, so typing e.g. "openrouter" narrows to
+  // that provider's models alongside id/label matches.
+  return picker.items.filter(
+    (i) =>
+      i.id.toLowerCase().includes(filter) ||
+      i.label.toLowerCase().includes(filter) ||
+      (i.detail ?? '').toLowerCase().includes(filter),
+  );
+}
+
 /** A planner approval prompt awaiting a yes/no. Mirrors the daemon's SessionMessage. */
 export interface ApprovalRequestView {
   id: string;
@@ -176,8 +195,16 @@ export interface TuiState {
   taskEditor: EditorState | null;
   /** Lines the transcript is scrolled back from its tail; 0 follows live output. */
   scroll: number;
-  /** Manual scroll offset for the plan pane; 0 means the viewport follows the selected task. Increased by scrolldown, decreased by scrollup. Reset to 0 when the user moves the selection with keyboard arrows. */
-  planScroll: number;
+  /**
+   * The plan pane's viewport, as an absolute line offset — or `null` for the
+   * default, which is to follow the selected task. A delta layered on top of
+   * that auto-anchor (what this used to be) could never scroll *above* the
+   * anchor, so with a task selected far down the plan the first task was
+   * unreachable without dragging the selection through it. The first manual
+   * scroll seeds the offset from the anchor so the view does not jump; moving
+   * the selection with the arrows hands the pane back to follow mode.
+   */
+  planScroll: number | null;
   skills: Skills;
   runners: RunnerView[];
   sessions: SessionView[];
@@ -252,7 +279,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     expandedTaskId: null,
     taskEditor: null,
     scroll: 0,
-    planScroll: 0,
+    planScroll: null,
     skills: noSkills(),
     runners: [],
     sessions: [],

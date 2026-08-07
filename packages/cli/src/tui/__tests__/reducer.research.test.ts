@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { initialState, reduce, type Action } from '../reducer';
-import { researchLine } from '../render';
+import { researchLine } from '../layout';
 import type { ChatMessage, TuiState } from '../state';
 
 const send = (state: TuiState, action: Action) => reduce(state, action).state;

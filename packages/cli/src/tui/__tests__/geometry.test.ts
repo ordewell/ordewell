@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { initialState, reduce, type Step } from '../reducer';
 import { render } from '../render';
-import { chatEditorRoom, planScrollBound, planPaneWidth, taskEditorRoom } from '../geometry';
+import { chatEditorRoom, chatPaneWidth, planPaneWidth, taskEditorRoom } from '../geometry';
 import { cursorPosition } from '../editor';
 import { width } from '../ansi';
 import type { TaskView, TuiState } from '../state';
@@ -52,17 +52,16 @@ describe('pane geometry', () => {
     expect(taskEditorRoom(state)).toBe(1);
   });
 
-  it('lets the wheel scroll past the rows a long expanded prompt occupies', () => {
-    const collapsed = taskState();
-    let state = press(collapsed, 'enter').state;
+  it('splits the terminal between the two panes and the divider between them', () => {
+    const state = taskState();
 
-    // Four rows per task — the old fixed estimate — saturated partway through a
-    // prompt that wraps further than that on its own.
-    const oldEstimate = collapsed.tasks.length * 4 - 1;
-    expect(planScrollBound(state)).toBeGreaterThan(oldEstimate);
+    expect(chatPaneWidth(state)).toBe(state.cols - planPaneWidth(state) - 1);
+  });
 
-    for (let i = 0; i < 20; i++) state = press(state, 'scrolldown').state;
-    expect(state.planScroll).toBeGreaterThan(oldEstimate);
+  it('gives the chat the whole terminal when the plan pane is suppressed', () => {
+    const state = taskState({ cols: 20 });
+
+    expect(chatPaneWidth(state)).toBe(20);
   });
 
   it('reserves the caret column only while the chat editor has focus', () => {
@@ -127,7 +126,7 @@ describe('task editor caret, through the rendered frame', () => {
     for (let i = 0; i < 10; i++) state = press(state, 'scrollup').state;
     state = press(state, 'down').state;
 
-    expect(state.planScroll).toBe(0);
+    expect(state.planScroll).toBeNull();
     expect(selectedRow(state)).toBeGreaterThanOrEqual(0);
   });
 

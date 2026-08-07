@@ -501,16 +501,27 @@ per-task model check). A second copy of the loop would be a second answer to
 "can this runner spawn this id".
 *Avoid:* reading `modelsByRunner` at a call site.
 
-**Pane geometry** (`tui/geometry.ts`) — the one owner of how wide the panes are
-and how tall the plan is: `planPaneWidth`, `paneTextRoom`, `taskEditorRoom`,
-`chatEditorRoom`, `planScrollBound`. Both the reducer and the renderer ask it.
-They used to each carry a copy and the copies drifted — the reducer wrapped an
-expanded task's prompt at the terminal width while the renderer wrapped it
-inside the plan pane, so `up` moved the caret to a position computed for a line
-twice as wide as the one on screen. `planScrollBound` is deliberately an *upper*
-bound: the renderer clamps to the true overflow once the lines exist, so being
-generous costs nothing and being short is the defect.
-*Avoid:* recomputing `cols - 4` or estimating rows-per-task at a call site.
+**Pane geometry** (`tui/geometry.ts`) — the one owner of how wide the panes are:
+`planPaneWidth`, `chatPaneWidth`, `paneTextRoom`, `taskEditorRoom`,
+`chatEditorRoom`. Both the reducer and the renderer ask it. They used to each
+carry a copy and the copies drifted — the reducer wrapped an expanded task's
+prompt at the terminal width while the renderer wrapped it inside the plan pane,
+so `up` moved the caret to a position computed for a line twice as wide as the
+one on screen.
+*Avoid:* recomputing `cols - 4` at a call site.
+
+**Pane layout** (`tui/layout.ts`) — the same idea one level up: the one owner of
+what each pane's content *is*, and therefore how far it scrolls. `bodyRows`,
+`chatLayout`/`chatScrollMax`, `planLayout`/`planScrollExtent`, `helpLayout`.
+`render.ts` paints, fits and joins what comes back; the reducer imports only the
+bounds, and clamps every offset where it is written. The bug that produced this
+seam was a dead zone, not a lost keystroke: the offsets grew unbounded (chat) or
+against a deliberate over-estimate (plan) while the renderer clamped to the real
+content, so every notch back the other way was swallowed until the counter fell
+under the bound. `planScroll` is an **absolute** offset with `null` meaning
+"follow the selection" — as a delta on top of the auto-anchor it could never
+scroll *above* the selected task.
+*Avoid:* estimating rows-per-task, or clamping a scroll offset only at paint time.
 
 **Effect** (TUI) — a description of work the TUI wants done (`setModel`,
 `taskAction`, `loadSessions`), returned by the reducer and executed by

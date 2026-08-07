@@ -2,10 +2,11 @@ import { ALL_PROVIDERS, CLI_PROVIDERS, PROVIDER_PRIORITY, runnerForProvider, typ
 import { dependencyCandidates, dependentsOf } from '@ordewell/core/plan-utils';
 import { stripTabs } from './ansi';
 import { applyKey, commit, emptyEditor, type EditorState } from './editor';
-import { chatEditorRoom, planScrollBound, taskEditorRoom } from './geometry';
+import { chatEditorRoom, taskEditorRoom } from './geometry';
+import { bodyRows, chatScrollMax, helpScrollMax, planScrollExtent } from './layout';
 import { completions, findCommand, parseSlash, type ParsedCommand } from './slash';
 import {
-  initialState, SKILL_IDS,
+  initialState, SKILL_IDS, visibleItems,
   type ChatMessage, type MessageRole, type ModeView, type ModelView, type PickerItem, type PickerState,
   type ApprovalRequestView, type RunnerView, type SessionView, type SkillId, type TaskView, type TuiState,
 } from './state';
@@ -365,8 +366,19 @@ export function reduce(state: TuiState, action: Action): Step {
     case 'notice':
       return step(say(state, 'system', action.message));
 
-    case 'resize':
-      return step({ ...state, rows: action.rows, cols: action.cols });
+    case 'resize': {
+      // A grown pane can leave both offsets pointing past the end of content
+      // that now fits; re-clamping here keeps "the offset is always reachable"
+      // true for the keys handled next, not just for the ones handled last.
+      const resized = { ...state, rows: action.rows, cols: action.cols };
+      return step({
+        ...resized,
+        scroll: clamp(resized.scroll, chatScrollMax(resized)),
+        planScroll: resized.planScroll === null
+          ? null
+          : clamp(resized.planScroll, planScrollExtent(resized).maxScroll),
+      });
+    }
 
     // Whether there is anything to animate is the app loop's call (it owns the
     // timer); a tick that arrives simply advances the frame.
@@ -629,6 +641,58 @@ function pickerItemsFor(state: TuiState, action: PickerState['action']): PickerI
   return [];
 }
 
+// ── Scrolling ────────────────────────────────────────────────────────────────
+//
+// Wheel, page keys and the help sheet's arrows all move one of three offsets,
+// and each one is clamped here — where it is written — against the pane's real
+// extent as `layout.ts` measures it.
+//
+// Clamping only in the renderer is what made the panes read as frozen: the
+// offset kept growing past the end of the content while the view stayed put, so
+// every notch back the other way was absorbed silently until the counter fell
+// under the bound again. An offset that can never exceed what is scrollable has
+// no dead zone in either direction.
+
+const WHEEL_NOTCH = 3;
+
+/** One page, less a line of overlap so the reader keeps their place across the jump. */
+function pageNotch(viewport: number): number {
+  return Math.max(1, viewport - 1);
+}
+
+/**
+ * Lines a scroll key moves, positive being *back* through the content, or
+ * `null` when it is not a scroll key. The viewport is measured only for the
+ * page keys — every other keystroke in the chat pane comes through here on its
+ * way to the editor.
+ */
+function scrollDelta(key: Key, state: TuiState): number | null {
+  if (key.name === 'scrollup') return WHEEL_NOTCH;
+  if (key.name === 'scrolldown') return -WHEEL_NOTCH;
+  if (key.name === 'pageup') return pageNotch(bodyRows(state));
+  if (key.name === 'pagedown') return -pageNotch(bodyRows(state));
+  return null;
+}
+
+function clamp(value: number, max: number): number {
+  return Math.max(0, Math.min(max, value));
+}
+
+function scrollChat(state: TuiState, delta: number): Step {
+  return step({ ...state, scroll: clamp(state.scroll + delta, chatScrollMax(state)) });
+}
+
+/**
+ * The plan pane's offset is absolute, so the first manual notch takes over from
+ * follow mode exactly where the view already is — otherwise the pane would jump
+ * to the top of the plan the moment the user touched the wheel.
+ */
+function scrollPlan(state: TuiState, delta: number): Step {
+  const { followOffset, maxScroll } = planScrollExtent(state);
+  const from = state.planScroll ?? followOffset;
+  return step({ ...state, planScroll: clamp(from - delta, maxScroll) });
+}
+
 /**
  * Key routing, outermost first: global quit keys, then whatever overlay is
  * open, then the focused pane. Only the chat pane feeds the line editor, so
@@ -659,21 +723,13 @@ function handleKey(state: TuiState, key: Key): Step {
 
   if (key.name === 'enter') return submit(state);
   if (key.name === 'escape') return step({ ...state, editor: { ...state.editor, text: '', cursor: 0 } });
-  if (key.name === 'pageup' || key.name === 'pagedown') {
-    const page = Math.max(1, state.rows - 6);
-    const scroll = key.name === 'pageup' ? state.scroll + page : Math.max(0, state.scroll - page);
-    return step({ ...state, scroll });
-  }
-  // pageup/pagedown above and the wheel here scroll the transcript. Up/down
-  // always go to the editor: single-line drafts get history recall, multi-line
-  // drafts get cursor movement between wrapped lines.
+  // Page keys and the wheel scroll the transcript. Up/down always go to the
+  // editor: single-line drafts get history recall, multi-line drafts get cursor
+  // movement between wrapped lines.
+  const scroll = scrollDelta(key, state);
+  if (scroll !== null) return scrollChat(state, scroll);
+
   const multilineEditor = state.editor.text.includes('\n');
-  if (key.name === 'scrollup' || key.name === 'scrolldown') {
-    const notch = 3;
-    const backward = key.name === 'scrollup';
-    const scroll = backward ? state.scroll + notch : Math.max(0, state.scroll - notch);
-    return step({ ...state, scroll });
-  }
   // Keys only reach the editor while it has focus, which is exactly when the
   // renderer reserves the caret column.
   const room = chatEditorRoom(state.cols, true);
@@ -728,29 +784,25 @@ function handlePlanKey(state: TuiState, key: Key): Step {
   if (editingTask && state.taskEditor) return handleTaskEditKey(state, editingTask, state.taskEditor, key);
 
   if (key.name === 'escape') return step({ ...state, focus: 'chat' });
+  // Moving the selection hands the viewport back to follow mode: the user is
+  // navigating the list again, so the pane should chase the cursor.
   if (key.name === 'up') {
-    return step({ ...state, selectedTask: Math.max(0, state.selectedTask - 1), expandedTaskId: null, planScroll: 0 });
+    return step({ ...state, selectedTask: Math.max(0, state.selectedTask - 1), expandedTaskId: null, planScroll: null });
   }
   if (key.name === 'down') {
     return step({
       ...state,
       selectedTask: Math.min(state.tasks.length - 1, state.selectedTask + 1),
       expandedTaskId: null,
-      planScroll: 0,
+      planScroll: null,
     });
   }
 
   // pageup/pagedown are the keyboard equivalent of the wheel here, and with the
   // mouse uncaptured by default (see terminal.ts) they are the only way to reach
   // a plan taller than the pane without dragging the selection through it.
-  if (key.name === 'scrollup' || key.name === 'pageup') {
-    const notch = key.name === 'pageup' ? 10 : 3;
-    return step({ ...state, planScroll: Math.max(0, state.planScroll - notch) });
-  }
-  if (key.name === 'scrolldown' || key.name === 'pagedown') {
-    const notch = key.name === 'pagedown' ? 10 : 3;
-    return step({ ...state, planScroll: Math.min(planScrollBound(state), state.planScroll + notch) });
-  }
+  const scroll = scrollDelta(key, state);
+  if (scroll !== null) return scrollPlan(state, scroll);
 
   const task = state.tasks[state.selectedTask];
   if (!task) return step(state);
@@ -791,14 +843,8 @@ function handleTaskEditKey(state: TuiState, task: TaskView, editor: EditorState,
   if (key.name === 'escape') return step({ ...state, expandedTaskId: null, taskEditor: null });
   // A real SGR mouse report (see terminal.ts) still scrolls the pane rather
   // than the text, same as when nothing is expanded.
-  if (key.name === 'scrollup' || key.name === 'pageup') {
-    const notch = key.name === 'pageup' ? 10 : 3;
-    return step({ ...state, planScroll: Math.max(0, state.planScroll - notch) });
-  }
-  if (key.name === 'scrolldown' || key.name === 'pagedown') {
-    const notch = key.name === 'pagedown' ? 10 : 3;
-    return step({ ...state, planScroll: Math.min(planScrollBound(state), state.planScroll + notch) });
-  }
+  const scroll = scrollDelta(key, state);
+  if (scroll !== null) return scrollPlan(state, scroll);
   return step({ ...state, taskEditor: applyKey(editor, key, taskEditorRoom(state)) });
 }
 
@@ -889,19 +935,24 @@ function handleConfirmKey(
   return step(closed);
 }
 
-/** The sheet is taller than most terminals, so it scrolls; anything else closes it. */
+/**
+ * The sheet is taller than most terminals, so it scrolls; anything else closes
+ * it. The offsets here run the other way to the panes' — the sheet is
+ * top-anchored, so a positive delta moves *down* it.
+ */
 function handleHelpKey(state: TuiState, scroll: number, key: Key): Step {
+  const page = pageNotch(bodyRows(state));
   const move: Record<string, number> = {
     down: 1,
     up: -1,
-    pagedown: 10,
-    pageup: -10,
-    scrolldown: 3,
-    scrollup: -3,
+    pagedown: page,
+    pageup: -page,
+    scrolldown: WHEEL_NOTCH,
+    scrollup: -WHEEL_NOTCH,
   };
   const delta = move[key.name];
   if (delta === undefined) return step({ ...state, overlay: null });
-  return step({ ...state, overlay: { kind: 'help', scroll: Math.max(0, scroll + delta) } });
+  return step({ ...state, overlay: { kind: 'help', scroll: clamp(scroll + delta, helpScrollMax(state)) } });
 }
 
 function handlePromptKey(
@@ -934,19 +985,6 @@ function editText(value: string, key: Key): string {
   if (key.name === 'backspace') return value.slice(0, -1);
   if (key.name === 'ctrl-u') return '';
   return value;
-}
-
-export function visibleItems(picker: PickerState): PickerItem[] {
-  const filter = picker.filter.trim().toLowerCase();
-  if (!filter) return picker.items;
-  // `detail` carries the provider name, so typing e.g. "openrouter" narrows to
-  // that provider's models alongside id/label matches.
-  return picker.items.filter(
-    (i) =>
-      i.id.toLowerCase().includes(filter) ||
-      i.label.toLowerCase().includes(filter) ||
-      (i.detail ?? '').toLowerCase().includes(filter),
-  );
 }
 
 function handlePickerKey(state: TuiState, picker: PickerState, key: Key): Step {

@@ -68,6 +68,30 @@ describe('openTerminal', () => {
     expect(output.writes.join('')).toContain('\x1b[?1000l');
   });
 
+  it('keeps the mouse captured across a resize and a redraw', () => {
+    // Both write to the tty while tracking is on — the resize clears the
+    // screen, every draw brackets itself with autowrap off/on — and neither
+    // touches a DEC private mode that would drop 1000/1006. Pinned rather than
+    // re-asserted defensively: a spurious re-enable on every draw would be
+    // bytes down the wire for a mode that was never lost.
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const terminal = openTerminal({
+      input: input as unknown as NodeJS.ReadStream,
+      output: output as unknown as NodeJS.WriteStream,
+      mouse: true,
+      onKey: vi.fn(),
+      onResize: vi.fn(),
+    });
+
+    output.writes.length = 0;
+    output.emit('resize');
+    terminal.draw(['a frame']);
+
+    expect(output.writes.join('')).not.toContain('\x1b[?1000l');
+    expect(output.writes.join('')).not.toContain('\x1b[?1006l');
+  });
+
   it('pushes the Kitty keyboard disambiguation flag on open and pops it on close, so Shift+Enter is distinguishable from Enter', () => {
     const input = new FakeInput();
     const output = new FakeOutput();
