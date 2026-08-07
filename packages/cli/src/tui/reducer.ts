@@ -1,5 +1,6 @@
 import { ALL_PROVIDERS, CLI_PROVIDERS, PROVIDER_PRIORITY, runnerForProvider, type AiProvider, type ConversationMessage, type ResearchStepOutcome } from '@ordewell/core';
 import { dependencyCandidates, dependentsOf } from '@ordewell/core/plan-utils';
+import { stripTabs } from './ansi';
 import { applyKey, commit, emptyEditor, type EditorState } from './editor';
 import { chatEditorRoom, planScrollBound, taskEditorRoom } from './geometry';
 import { completions, findCommand, parseSlash, type ParsedCommand } from './slash';
@@ -36,6 +37,7 @@ export type Effect =
   | { type: 'closeSession'; sessionId: string }
   | { type: 'execute'; sessionId: string }
   | { type: 'stopExecution'; sessionId: string }
+  | { type: 'cancelPlanning'; sessionId: string }
   | { type: 'processQueued'; sessionId: string }
   /** `watch` asks the runtime to hold the execution stream open for this action — see `taskActionEffect`. */
   | { type: 'taskAction'; sessionId: string; taskId: string; action: TaskAction; watch?: boolean }
@@ -87,7 +89,10 @@ function step(state: TuiState, effects: Effect[] = []): Step {
 }
 
 function say(state: TuiState, role: MessageRole, content: string, research?: ChatMessage['research']): TuiState {
-  const message: ChatMessage = { role, content, timestamp: new Date().toISOString(), ...(research ? { research } : {}) };
+  // The daemon, not just the keyboard, can hand us a literal tab (a planner
+  // turn, a research summary) — see `stripTabs` for why one left in breaks
+  // the frame just as a pasted one would.
+  const message: ChatMessage = { role, content: stripTabs(content), timestamp: new Date().toISOString(), ...(research ? { research } : {}) };
   // A new turn snaps a scrolled-back transcript to the tail — following the
   // conversation beats preserving the reading position.
   return { ...state, messages: [...state.messages, message], scroll: 0 };
@@ -102,7 +107,7 @@ function say(state: TuiState, role: MessageRole, content: string, research?: Cha
 function restoredMessages(history: ConversationMessage[]): ChatMessage[] {
   return history.map((entry) => ({
     role: entry.kind === 'plan_generated' ? 'system' : entry.kind === 'system' ? 'system' : entry.role,
-    content: entry.kind === 'plan_generated' ? 'Plan generated.' : entry.content,
+    content: stripTabs(entry.kind === 'plan_generated' ? 'Plan generated.' : entry.content),
     timestamp: entry.timestamp,
   }));
 }
@@ -143,15 +148,19 @@ function settleResearchStep(
   messages: ChatMessage[],
   action: Extract<Action, { type: 'researchStepDone' }>,
 ): ChatMessage[] {
+  // The stored entry's content already went through `say`, so the no-id
+  // fallback match has to compare against the same sanitized form or a
+  // summary carrying a tab would never settle.
+  const summary = stripTabs(action.summary);
   const index = findLastIndex(messages, (m) =>
     isPendingResearch(m) &&
-    (action.toolCallId ? m.research?.toolCallId === action.toolCallId : m.content === action.summary));
+    (action.toolCallId ? m.research?.toolCallId === action.toolCallId : m.content === summary));
   if (index < 0) return messages;
 
   const next = [...messages];
   next[index] = {
     ...next[index],
-    research: { ...next[index].research, outcome: action.outcome, result: action.result },
+    research: { ...next[index].research, outcome: action.outcome, result: stripTabs(action.result) },
   };
   return next;
 }
@@ -229,18 +238,23 @@ export function reduce(state: TuiState, action: Action): Step {
     case 'plannerMessage': {
       if (stale(state, action.sessionId)) return step(state);
       const settled: TuiState = { ...state, status: 'idle', busyLabel: '', thinkingLine: '' };
+      // Sanitized before the comparison, not just before storage — `say`
+      // stores the sanitized form, so matching against the raw turn would
+      // never dedup a repeat that carries a tab.
+      const content = stripTabs(action.content);
       // Already on screen: the same turn reached us over both the session
       // socket and the REST reply (see `converse`), so only the status settles.
-      if (alreadySpoken(state.messages, action.content)) return step(settled);
-      return step(say(settled, 'assistant', action.content));
+      if (alreadySpoken(state.messages, content)) return step(settled);
+      return step(say(settled, 'assistant', content));
     }
 
     case 'researchStep': {
       if (stale(state, action.sessionId)) return step(state);
+      const summary = stripTabs(action.summary);
       // A transcript entry, not just a spinner label: overwriting the label was
       // why a parallel round collapsed to whichever call finished last.
-      const spoken = say(state, 'research', action.summary, { toolCallId: action.toolCallId });
-      return step({ ...spoken, busyLabel: researchLabel(spoken.messages, action.summary) });
+      const spoken = say(state, 'research', summary, { toolCallId: action.toolCallId });
+      return step({ ...spoken, busyLabel: researchLabel(spoken.messages, summary) });
     }
 
     case 'researchStepDone': {
@@ -628,6 +642,11 @@ function handleKey(state: TuiState, key: Key): Step {
   if (key.name === 'ctrl-l') return step({ ...state, messages: [] });
 
   if (state.overlay) return handleOverlayKey(state, state.overlay, key);
+  // A first ESC stops the planner rather than doing whatever ESC does today —
+  // that behavior is still one ESC away, once the turn is no longer in flight.
+  if (key.name === 'escape' && (state.status === 'planning' || state.status === 'researching') && state.sessionId) {
+    return step(state, [{ type: 'cancelPlanning', sessionId: state.sessionId }]);
+  }
   if (key.name === 'tab' && state.focus === 'chat') {
     const matches = completions(state.editor.text);
     if (matches.length > 0) {
@@ -1120,7 +1139,15 @@ function runCommand(state: TuiState, { name, args }: ParsedCommand): Step {
         step({ ...state, planApproved: true }, [{ type: 'execute', sessionId }]),
       );
     case 'stop':
-      return withSession(state, (sessionId) => step(state, [{ type: 'stopExecution', sessionId }]));
+      // Whichever is actually in flight — a planning turn and a task run never
+      // overlap, so this is never ambiguous about which one to halt.
+      return withSession(state, (sessionId) =>
+        step(state, [
+          state.status === 'planning' || state.status === 'researching'
+            ? { type: 'cancelPlanning', sessionId }
+            : { type: 'stopExecution', sessionId },
+        ]),
+      );
 
     case 'model':
       return setModel(state, args);
