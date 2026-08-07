@@ -39,7 +39,11 @@ broadcasts (there is no separate `onRefresh` callback for a surface to wire).
 Mutation is an internal seam — every structural plan mutation *and every
 settled conversation turn* (plan commit, task-ops apply, planner message) runs
 one `mutatePlan` ritual (store op → persist → broadcast), so forgetting the
-persist step is impossible. Planner turns settle through one path
+persist step is impossible. Direct (non-planner) edits go one step further
+through `editPlan`, which adds the reschedule they owe an armed scheduler:
+nothing else wakes one after a hand edit, because a direct edit never queues,
+so a task the edit unblocked would sit ready and never start. Planner turns
+settle through one path
 (`settleTurn`): the first turn and every later turn get the same task-ops
 validation and bounded corrective retries. PlanStore is the single source of truth for task
 state; `LegacyPlanState.tasks` is populated only at persist time. The old
@@ -251,6 +255,25 @@ Dependencies naming tasks that no longer exist are dropped, not rejected: the
 caller is a picker over the current plan, so a stale id means the plan moved on.
 Because the derive lives here, both surfaces' add flows can send only what the
 user actually typed — the TUI sends just a title.
+
+**Direct edit vs planner edit** — the same task change is governed differently
+depending on who asks. The planner path (`applyTaskOps`) refuses to modify or
+remove a task that is `in_progress` or `completed`: the model does not get to
+reach into work that is running or already finished. The direct path — the TUI's
+`a`/`d` keys, the webview's task card, `PUT`/`DELETE /tasks/:taskId` — is the
+user editing their own plan, so it allows both, and pays what that costs:
+removing a running task cancels its runner first (`releaseTask` → `cancelTask`,
+which bumps the verifier generation before the process dies), because a plan
+that simply dropped the task could never reach the tmux session again and the
+orchestrator went on counting it as active — one of the ways "Execution is
+running" became permanent. Removing a `completed` task drops it from the
+completed set, which is safe because `removeTaskFromPlan` detaches the
+dependents in the same op; `PlanStore.remove` additionally releases any
+dependent parked at `blocked`, whose status `isBlocked` reads on its own and
+which nothing else would ever unblock.
+*Avoid:* adding a second copy of a rule to one side. A hand-set dependency list
+is validated by `canSetDependencies` in `updateTask` — the one guard the
+pickers, the API and the planner all read.
 
 **Webview modals are host modals** — `window.confirm`/`alert`/`prompt` are inert
 in a VS Code webview: it is sandboxed without `allow-modals`, so Chromium ignores

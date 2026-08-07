@@ -840,6 +840,29 @@ describe('merge-on-reload', () => {
       expect(orchestrator.storeInstance.allTasks.length).toBe(2);
     });
 
+    // The edited plan is a snapshot, and a task that started after it was taken
+    // reads as 'pending' in it. Adopting that status would hand the same work to
+    // the scheduler a second time while the first runner is still going.
+    it('keeps a live task in_progress, its session tracked and the review approved', () => {
+      const orchestrator = makeOrchestrator();
+      orchestrator.loadPlan([
+        createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it' }),
+      ]);
+
+      internals(orchestrator).running = true;
+      internals(orchestrator).reviewApproved = true;
+      internals(orchestrator).activeTaskSessions.set('t1', 's1');
+
+      orchestrator.reconcilePlan([
+        createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it', status: 'pending' }),
+        createTask({ id: 't2', order: 2, title: 'Task 2', prompt: 'do also' }),
+      ], ['claude-code']);
+
+      expect(orchestrator.storeInstance.get('t1')!.status).toBe('in_progress');
+      expect(orchestrator.activeSessionMap.get('t1')).toBe('s1');
+      expect(orchestrator.isReviewApproved).toBe(true);
+    });
+
     it('logs a warning when running task status changed in new plan', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const orchestrator = makeOrchestrator();

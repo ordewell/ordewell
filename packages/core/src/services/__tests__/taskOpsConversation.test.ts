@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createTask, type LegacyPlanState } from '../../models/Task';
+import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import * as sessionStore from '../../utils/sessionStore';
 import { FakeTerminalSession, makeSession, testWorkspace } from './sessionTestKit';
 import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
@@ -253,6 +253,49 @@ describe('task_ops conversation turns', () => {
     const last = plan.conversationHistory![plan.conversationHistory!.length - 1];
     expect(last.content).toMatch(/queued your change/i);
     expect(last.content).toContain('(1 queued)');
+  });
+
+  // The queued edit drains through the planner, and the plan snapshot it works
+  // from predates the spawn — so it hands back the live task as 'pending'.
+  // Committing that would drop the runner and offer the same work again.
+  it('keeps the live task running and the review approved when a queued edit lands', async () => {
+    const spawned: string[] = [];
+    const session = makeSession({
+      runner: recordingRunner(spawned),
+      planner: {
+        modifyDuringExecution: vi.fn(async ({ pendingTasks }: { pendingTasks: Task[] }) => ({
+          message: 'renamed',
+          pendingTasks: pendingTasks.map((t) => ({
+            ...t,
+            // The snapshot the planner echoes back predates the spawn of 'b'.
+            status: t.id === 'b' ? ('pending' as const) : t.status,
+            title: t.id === 'c' ? 'Sign off with the team' : t.title,
+          })),
+        })),
+      },
+      aiService: {
+        startConversation: vi.fn(),
+        continueConversation: vi.fn().mockResolvedValue({
+          kind: 'task_ops',
+          ops: [{ op: 'update', taskId: '#3', changes: { title: 'Sign off with the team' } }],
+          text: '', researchLog: [],
+        }),
+        hasActiveConversation: () => true,
+        reset: vi.fn(),
+      },
+    });
+    session.loadPlan(pausedRunPlan(), 'build it', testWorkspace, { persist: false });
+    await session.executePlan(); // spawns #2 and leaves it running
+    await session.continueConversation('rename the sign-off step');
+    expect(session.queuedCount).toBe(1);
+
+    await session.processQueuedMessages();
+
+    expect(session.getTask('c')!.title).toBe('Sign off with the team');
+    expect(session.getTask('b')!.status).toBe('in_progress');
+    expect(session.hasLiveWork).toBe(true);
+    expect(session.isReviewApproved).toBe(true);
+    expect(spawned).toEqual(['b']); // the live runner, not a second copy of it
   });
 
   it('re-ticks an armed-but-idle scheduler so an added task with satisfied deps fans out', async () => {

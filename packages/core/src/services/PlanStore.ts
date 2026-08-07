@@ -109,6 +109,11 @@ export class PlanStore {
 
   remove(taskId: string): void {
     if (!this._taskMap.has(taskId)) return;
+    // `removeTaskFromPlan` detaches the dependency, but a dependent parked at
+    // 'blocked' would keep that status with nothing left to release it —
+    // `isBlocked` reads the status on its own, so the scheduler would skip the
+    // task forever.
+    this.unblockDependents(taskId);
     this._planTasks = removeTaskFromPlan(this._planTasks, taskId);
     this.rebuild();
     this.pruneTerminalSets();
@@ -173,13 +178,13 @@ export class PlanStore {
 
     const mergedId = merged.id;
     const userIds = new Set([taskIdA, taskIdB]);
+    // Deduped: a task that depended on both merged halves would otherwise list
+    // the survivor twice.
     const sanitized = this._planTasks
       .filter(t => !userIds.has(t.id))
       .map(t => ({
         ...t,
-        dependencies: t.dependencies.map(depId =>
-          depId === taskIdA || depId === taskIdB ? mergedId : depId
-        ),
+        dependencies: [...new Set(t.dependencies.map(depId => (userIds.has(depId) ? mergedId : depId)))],
       }));
 
     this._planTasks = renumberTasks([...sanitized, merged]);
@@ -194,11 +199,16 @@ export class PlanStore {
     if (!original) throw new Error(`Task ${taskId} not found`);
     if (!newTaskSpecs.length) throw new Error('Must provide at least one new task spec');
 
-    const newTasks = newTaskSpecs.map((spec, i) =>
-      createTask({
+    // Part 0 inherits the original's dependencies; every later part chains onto
+    // the id of the part actually created before it. Deriving the chain from the
+    // specs' own ids left a spec-less caller depending on a placeholder id that
+    // matched nothing in the plan.
+    const finalized: Task[] = [];
+    newTaskSpecs.forEach((spec, i) => {
+      finalized.push(createTask({
         ...spec,
         order: original.order + i,
-        dependencies: i === 0 ? [...original.dependencies] : [newTaskSpecs[0].id ?? `split-${taskId}-0`],
+        dependencies: i === 0 ? [...original.dependencies] : [finalized[i - 1].id],
         type: spec.type ?? original.type,
         assignedRunner: spec.assignedRunner ?? original.assignedRunner,
         assignedModel: spec.assignedModel ?? original.assignedModel,
@@ -206,19 +216,7 @@ export class PlanStore {
         autonomy: spec.autonomy ?? original.autonomy,
         sliceType: spec.sliceType ?? original.sliceType,
         userStoriesCovered: spec.userStoriesCovered ?? original.userStoriesCovered,
-      })
-    );
-
-    const newTaskIds = new Map<number, string>();
-    newTasks.forEach((t, i) => newTaskIds.set(i, t.id));
-
-    const finalized = newTasks.map((t) => {
-      const deps = t.dependencies.map(depId => {
-        const idx = newTaskSpecs.findIndex(s => (s.id ?? '') === depId);
-        if (idx >= 0) return newTaskIds.get(idx) ?? depId;
-        return depId;
-      });
-      return { ...t, dependencies: deps };
+      }));
     });
 
     const tailId = finalized[finalized.length - 1].id;

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Hono } from 'hono';
+import { PlanEditError } from '@ordewell/core';
 import type { OrchestratorPool } from '../../pool/orchestratorPool';
 
 describe('task editing routes', () => {
@@ -154,6 +155,58 @@ describe('task editing routes', () => {
       session.removeTask.mockReturnValue(null);
 
       expect((await app.request('/api/plans/s1/tasks/t1', { method: 'DELETE' })).status).toBe(404);
+    });
+
+    // The removal cancels a live runner first, so it can throw. An unhandled
+    // throw here answered with no body at all, which every surface read as the
+    // delete having silently done nothing.
+    it('404s when the session is gone rather than throwing out of the route', async () => {
+      session.removeTask.mockRejectedValue(new Error('Session not found'));
+
+      const res = await app.request('/api/plans/s1/tasks/t1', { method: 'DELETE' });
+
+      expect(res.status).toBe(404);
+      expect((await res.json() as { error: string }).error).toBe('Session not found');
+    });
+
+    it('reports a refused removal as a client error, with the reason', async () => {
+      session.removeTask.mockRejectedValue(new PlanEditError('"Build" cannot be removed'));
+
+      const res = await app.request('/api/plans/s1/tasks/t1', { method: 'DELETE' });
+
+      expect(res.status).toBe(400);
+      expect((await res.json() as { error: string }).error).toMatch(/cannot be removed/);
+    });
+  });
+
+  // A refusal and a fault are different answers. Collapsing them into 500 left
+  // the TUI and VS Code with nothing to show but "Internal error".
+  describe('refusals are told apart from faults', () => {
+    it('reports a refused field patch as a client error', async () => {
+      session.updateTask.mockRejectedValue(new PlanEditError('Unknown dependency "ghost"'));
+
+      const res = await put({ prompt: 'x' });
+
+      expect(res.status).toBe(400);
+      expect((await res.json() as { error: string }).error).toMatch(/Unknown dependency/);
+    });
+
+    it('reports a refused add as a client error', async () => {
+      session.addTask.mockRejectedValue(new PlanEditError('Task needs a title'));
+
+      const res = await post({ prompt: 'x' });
+
+      expect(res.status).toBe(400);
+      expect((await res.json() as { error: string }).error).toMatch(/needs a title/);
+    });
+
+    it('still reports a genuine fault as a fault', async () => {
+      session.updateTask.mockRejectedValue(new Error('disk on fire'));
+
+      const res = await put({ prompt: 'x' });
+
+      expect(res.status).toBe(500);
+      expect((await res.json() as { error: string }).error).toBe('disk on fire');
     });
   });
 });

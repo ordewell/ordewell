@@ -1,5 +1,20 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
+import { PlanEditError } from '@ordewell/core';
 import { OrchestratorPool } from '../pool/orchestratorPool';
+
+/**
+ * The three answers a task edit can have. A refusal is the request being wrong
+ * (400), a missing session is 404, and only a real fault is 500 — collapsing
+ * all three into 404/500 gave the TUI and VS Code nothing to show but "Internal
+ * error", which reads as the edit having silently done nothing.
+ */
+function editFailure(c: Context, err: unknown) {
+  const e = err as Error;
+  if (e.message === 'Session not found') return c.json({ error: e.message }, 404);
+  if (e instanceof PlanEditError) return c.json({ error: e.message }, 400);
+  console.error('[plans] task edit failed:', err);
+  return c.json({ error: e.message || 'Internal error' }, 500);
+}
 
 export function plansRoute(pool: OrchestratorPool) {
   const router = new Hono();
@@ -106,7 +121,7 @@ export function plansRoute(pool: OrchestratorPool) {
       if (hasRunner) result = await session.setTaskRunner(taskId, assignedRunner);
       if (hasDeps) {
         try {
-          result = session.setTaskDependencies(taskId, dependencies.map(String));
+          result = await session.setTaskDependencies(taskId, dependencies.map(String));
         } catch (err) {
           // A rejected dependency edit is the client's mistake, not a fault.
           return c.json({ error: (err as Error).message }, 400);
@@ -114,19 +129,23 @@ export function plansRoute(pool: OrchestratorPool) {
       }
       // An empty patch still reaches updateTask — that is how a caller asks
       // whether the task exists at all.
-      if (Object.keys(rest).length > 0 || (!hasRunner && !hasDeps)) result = session.updateTask(taskId, rest);
+      if (Object.keys(rest).length > 0 || (!hasRunner && !hasDeps)) result = await session.updateTask(taskId, rest);
 
       if (!result) return c.json({ error: 'Task not found' }, 404);
       return c.json({ ok: true });
     } catch (err) {
-      return c.json({ error: err instanceof Error ? (err as Error).message : 'Internal error' }, 500);
+      return editFailure(c, err);
     }
   });
 
-  router.delete('/:sessionId/tasks/:taskId', (c) => {
-    const result = pool.session(c.req.param('sessionId')).removeTask(c.req.param('taskId'));
-    if (!result) return c.json({ error: 'Task not found' }, 404);
-    return c.json({ ok: true });
+  router.delete('/:sessionId/tasks/:taskId', async (c) => {
+    try {
+      const result = await pool.session(c.req.param('sessionId')).removeTask(c.req.param('taskId'));
+      if (!result) return c.json({ error: 'Task not found' }, 404);
+      return c.json({ ok: true });
+    } catch (err) {
+      return editFailure(c, err);
+    }
   });
 
   router.post('/:sessionId/tasks', async (c) => {
@@ -136,7 +155,7 @@ export function plansRoute(pool: OrchestratorPool) {
       if (!result) return c.json({ error: 'Session not found' }, 404);
       return c.json({ ok: true });
     } catch (err) {
-      return c.json({ error: err instanceof Error ? (err as Error).message : 'Internal error' }, 500);
+      return editFailure(c, err);
     }
   });
 

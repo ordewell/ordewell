@@ -202,7 +202,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         if (confirm !== 'Remove') return;
       }
 
-      deps.session.removeTask(removeId);
+      await deps.session.removeTask(removeId);
       const plan = deps.getCurrentPlan();
       plan.lastUpdated = new Date().toISOString();
       if (plan.tasks.length === 0) {

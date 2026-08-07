@@ -57,7 +57,7 @@ export { mapAgentTool, normalizeAgentArgs } from './services/harness/agentTools'
 export type { MappedTool } from './services/harness/agentTools';
 export { applyTaskOps, parseTaskOpsJson, textHasTaskOps, canMergeTasks, canSplitTask, canSetDependencies, dependencyCandidates, dependentsOf } from './services/TaskOps';
 export type { TaskOp, ApplyTaskOpsResult, TaskRef } from './services/TaskOps';
-export { Session, sessionRuntimeSettings } from './services/createSession';
+export { Session, PlanEditError, sessionRuntimeSettings } from './services/createSession';
 export type { SessionDeps, SessionRuntimeSettings, SessionPlanner } from './services/createSession';
 export type {
   SessionMessage,

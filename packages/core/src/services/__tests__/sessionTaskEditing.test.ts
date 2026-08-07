@@ -1,8 +1,56 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createTask, type LegacyPlanState } from '../../models/Task';
-import { makeSession, testWorkspace } from './sessionTestKit';
+import { FakeTerminalSession, makeSession, testWorkspace } from './sessionTestKit';
 import { PlanStore } from '../PlanStore';
 import type { ModelResolver } from '../ModelResolver';
+import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
+
+/** One AI task, so a removal leaves the scheduler with nothing else to spawn. */
+function soloPlan(): LegacyPlanState {
+  return {
+    tasks: [createTask({ id: 'only', order: 1, title: 'Only', prompt: 'do it', assignedRunner: 'claude-code' })],
+    generatedAt: new Date().toISOString(),
+    status: 'approved',
+    runners: ['claude-code'],
+    lastUpdated: new Date().toISOString(),
+  };
+}
+
+/**
+ * A plan the scheduler has already run into a pause: the first task completed,
+ * the second is the user's to do, the third waits on it. Nothing is live, but
+ * the scheduler stays armed so completing the user task fans the third out.
+ */
+function pausedOnUserTask(): LegacyPlanState {
+  return {
+    tasks: [
+      createTask({ id: 'a', order: 1, title: 'Setup', prompt: 'setup', status: 'completed', assignedRunner: 'claude-code' }),
+      createTask({ id: 'b', order: 2, title: 'Sign off', type: 'user', dependencies: ['a'], assignedRunner: 'claude-code' }),
+      createTask({ id: 'c', order: 3, title: 'Ship', prompt: 'ship', dependencies: ['b'], assignedRunner: 'claude-code' }),
+    ],
+    generatedAt: new Date().toISOString(),
+    status: 'approved',
+    runners: ['claude-code'],
+    lastUpdated: new Date().toISOString(),
+  };
+}
+
+/** A runner double that records what it spawned and what it was told to stop. */
+function recordingRunner(): ITerminalRunner & { spawned: string[]; stopped: string[] } {
+  const spawned: string[] = [];
+  const stopped: string[] = [];
+  return {
+    spawn: vi.fn(async ({ taskId }: { taskId: string }) => {
+      spawned.push(taskId);
+      return new FakeTerminalSession(`s-${taskId}`, taskId);
+    }),
+    stop: vi.fn((sessionId: string) => { stopped.push(sessionId); }),
+    stopAll: vi.fn(),
+    activeCount: 0,
+    spawned,
+    stopped,
+  } as unknown as ITerminalRunner & { spawned: string[]; stopped: string[] };
+}
 
 function planWith(runners: string[] = ['claude-code']): LegacyPlanState {
   return {
@@ -94,6 +142,22 @@ describe('Session.addTask', () => {
     expect(state!.tasks.find((t) => t.title === 'Sign off')!.assignedModel).toBeUndefined();
     expect(resolver.modelsForRunners).not.toHaveBeenCalled();
   });
+
+  // Nothing wakes an armed-but-paused scheduler after a hand edit unless the
+  // edit does it: a direct edit never queues, so the queue-drain path never runs.
+  it('starts an added task whose dependencies are already complete', async () => {
+    const runner = recordingRunner();
+    const session = makeSession({ runner, modelResolver: resolverFor(CLAUDE_CATALOG) });
+    session.loadPlan(pausedOnUserTask(), 'goal', testWorkspace, { persist: false });
+    await session.executePlan();
+    expect(runner.spawned).toEqual([]);
+
+    const state = await session.addTask({ title: 'Docs', prompt: 'write docs', dependencies: ['a'] });
+
+    const added = state!.tasks.find((t) => t.title === 'Docs')!;
+    expect(runner.spawned).toEqual([added.id]);
+    expect(session.getTask(added.id)!.status).toBe('in_progress');
+  });
 });
 
 describe('Session.removeTask', () => {
@@ -113,15 +177,49 @@ describe('Session.removeTask', () => {
   it('cancels a live runner before dropping the task that owns it', async () => {
     const runner = recordingRunner();
     const session = makeSession({ runner, modelResolver: resolverFor(CLAUDE_CATALOG) });
+    session.loadPlan(soloPlan(), 'goal', testWorkspace, { persist: false });
+    await session.executePlan();
+    expect(runner.spawned).toEqual(['only']);
+
+    await session.removeTask('only');
+
+    expect(runner.stopped).toEqual(['s-only']);
+    expect(session.hasLiveWork).toBe(false);
+    expect(session.planTasks).toEqual([]);
+  });
+
+  // The scheduler stays armed after the removal, and nothing but this re-tick
+  // wakes it — a direct edit never queues, so the queue-drain path never runs.
+  it('fans the dependents out once their blocker is removed', async () => {
+    const runner = recordingRunner();
+    const session = makeSession({ runner, modelResolver: resolverFor(CLAUDE_CATALOG) });
     session.loadPlan(planWith(), 'goal', testWorkspace, { persist: false });
     await session.executePlan();
-    expect(runner.spawned).toEqual(['t1']);
 
     await session.removeTask('t1');
 
-    expect(runner.stopped).toEqual(['s-t1']);
-    expect(session.hasLiveWork).toBe(false);
-    expect(session.planTasks.map((t) => t.id)).toEqual(['t2']);
+    expect(runner.spawned).toEqual(['t1', 't2']);
+  });
+
+  // Deleting one's own finished task is allowed — the plan belongs to the user.
+  // What must not happen is the rest of the plan losing its way afterwards: the
+  // completed id leaves the completed set, so anything still pointing at it
+  // would never satisfy its dependency check again.
+  it('leaves the dependents of a removed completed task schedulable', async () => {
+    const runner = recordingRunner();
+    const session = makeSession({ runner, modelResolver: resolverFor(CLAUDE_CATALOG) });
+    session.loadPlan(pausedOnUserTask(), 'goal', testWorkspace, { persist: false });
+    await session.executePlan();
+
+    await session.removeTask('a');
+
+    expect(session.planTasks.map((t) => t.id)).toEqual(['b', 'c']);
+    expect(session.getTask('b')!.dependencies).toEqual([]);
+    expect(session.getTask('b')!.status).toBe('pending');
+
+    // Still schedulable: the run is armed, so finishing the user task fans out.
+    await session.markTaskComplete('b');
+    expect(runner.spawned).toEqual(['c']);
   });
 });
 
@@ -130,26 +228,36 @@ describe('Session.setTaskDependencies', () => {
     const session = makeSession({ modelResolver: resolverFor(CLAUDE_CATALOG) });
     session.loadPlan(planWith(), 'goal', testWorkspace, { persist: false });
 
-    const state = session.setTaskDependencies('t2', []);
+    const state = await session.setTaskDependencies('t2', []);
 
     expect(state!.tasks.find((t) => t.id === 't2')!.dependencies).toEqual([]);
   });
 
-  it('refuses a dependency that comes after the task, saying why', () => {
+  it('refuses a dependency that comes after the task, saying why', async () => {
     const session = makeSession({ modelResolver: resolverFor(CLAUDE_CATALOG) });
     session.loadPlan(planWith(), 'goal', testWorkspace, { persist: false });
 
-    expect(() => session.setTaskDependencies('t1', ['t2'])).toThrow(/comes after it/);
+    await expect(session.setTaskDependencies('t1', ['t2'])).rejects.toThrow(/comes after it/);
     expect(session.planState!.tasks.find((t) => t.id === 't1')!.dependencies).toEqual([]);
   });
 
   // Position is not something a user sets any more, so the refusal must not
   // point at a control that no longer exists.
-  it('does not tell the user to move the task instead', () => {
+  it('does not tell the user to move the task instead', async () => {
     const session = makeSession({ modelResolver: resolverFor(CLAUDE_CATALOG) });
     session.loadPlan(planWith(), 'goal', testWorkspace, { persist: false });
 
-    expect(() => session.setTaskDependencies('t1', ['t2'])).not.toThrow(/reorder|move it/i);
+    await expect(session.setTaskDependencies('t1', ['t2'])).rejects.not.toThrow(/reorder|move it/i);
+  });
+
+  // A dependency list arriving as a plain field patch must meet the same rule —
+  // otherwise the picker's guard is bypassed by anything that patches fields.
+  it('applies the same guard when dependencies arrive as a field patch', async () => {
+    const session = makeSession({ modelResolver: resolverFor(CLAUDE_CATALOG) });
+    session.loadPlan(planWith(), 'goal', testWorkspace, { persist: false });
+
+    await expect(session.updateTask('t1', { dependencies: ['t2'] })).rejects.toThrow(/comes after it/);
+    await expect(session.updateTask('t2', { dependencies: ['ghost'] })).rejects.toThrow(/Unknown dependency/);
   });
 });
 

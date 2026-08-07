@@ -736,7 +736,7 @@ describe('session id stability (persist seam)', () => {
 
   // The mutation seam aborts before sync/persist/broadcast when the store op
   // reports failure — a failed update must leave no trace.
-  it('aborts the mutation seam when the store op fails: nothing persisted or broadcast', () => {
+  it('aborts the mutation seam when the store op fails: nothing persisted or broadcast', async () => {
     const broadcast = vi.fn();
     const session = makeSession({ broadcast });
     session.loadPlan(smallPlan(), 'Test', '/repo');
@@ -744,7 +744,7 @@ describe('session id stability (persist seam)', () => {
     spy.mockClear();
     broadcast.mockClear();
 
-    const result = session.updateTask('no-such-task', { title: 'x' });
+    const result = await session.updateTask('no-such-task', { title: 'x' });
 
     expect(result).toBeNull();
     expect(spy).not.toHaveBeenCalled();
@@ -768,7 +768,7 @@ describe('session id stability (persist seam)', () => {
     });
     await session.startPlanning('clear goal', ['claude-code']);
 
-    const updated = session.updateTask('c1', { title: 'Renamed' });
+    const updated = await session.updateTask('c1', { title: 'Renamed' });
     expect(updated?.tasks.find((t) => t.id === 'c1')?.title).toBe('Renamed');
 
     const after = await session.addTask({ title: 'Extra', prompt: 'z' });

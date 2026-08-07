@@ -113,6 +113,20 @@ describe('PlanStore execution log', () => {
       expect(store.isAnyFailed()).toBe(false);
     });
 
+    // `removeTaskFromPlan` detaches the dependency, but a 'blocked' status
+    // outlives it — and `isBlocked` reads that status alone, so the dependent
+    // would be skipped by the scheduler forever with nothing left to unblock it.
+    it('remove() releases a dependent that was blocked on the removed task', () => {
+      const t1 = createTask({ id: 't1', title: 'Task 1', status: 'failed' });
+      const t2 = createTask({ id: 't2', title: 'Task 2', dependencies: ['t1'], status: 'blocked' });
+      store.load([t1, t2], ['claude-code']);
+
+      store.remove('t1');
+
+      expect(store.get('t2')!.status).toBe('pending');
+      expect(store.get('t2')!.dependencies).toEqual([]);
+    });
+
     it('merge() drops both original ids from the terminal sets', () => {
       const t1 = createTask({ id: 't1', title: 'Task 1' });
       const t2 = createTask({ id: 't2', title: 'Task 2' });
@@ -125,6 +139,51 @@ describe('PlanStore execution log', () => {
       expect(store.isCompleted('t1')).toBe(false);
       expect(store.isFailed('t2')).toBe(false);
     });
+  });
+});
+
+describe('PlanStore.merge', () => {
+  it('rewires the dependents onto the survivor, leaving no dependency dangling', () => {
+    const store = new PlanStore();
+    store.load([
+      createTask({ id: 't1', title: 'Task 1' }),
+      createTask({ id: 't2', title: 'Task 2', dependencies: ['t1'] }),
+      createTask({ id: 't3', title: 'Task 3', dependencies: ['t1', 't2'] }),
+    ], ['claude-code']);
+
+    const merged = store.merge('t1', 't2');
+
+    expect(store.get('t3')!.dependencies).toEqual([merged.id]);
+    expect(merged.dependencies).toEqual([]);
+
+    const ids = new Set(store.allTasks.map((t) => t.id));
+    const dangling = store.allTasks.flatMap((t) => t.dependencies).filter((d) => !ids.has(d));
+    expect(dangling).toEqual([]);
+  });
+});
+
+describe('PlanStore.split', () => {
+  // Deriving the chain from the specs' own ids left every later part depending
+  // on a placeholder id that matched nothing in the plan.
+  it('chains each part onto the previous one, leaving no dependency dangling', () => {
+    const store = new PlanStore();
+    store.load([
+      createTask({ id: 't1', title: 'Task 1' }),
+      createTask({ id: 't2', title: 'Task 2', dependencies: ['t1'] }),
+      createTask({ id: 't3', title: 'Task 3', dependencies: ['t2'] }),
+    ], ['claude-code']);
+
+    const parts = store.split('t2', [{ title: 'Part A' }, { title: 'Part B' }, { title: 'Part C' }]);
+
+    expect(parts[0].dependencies).toEqual(['t1']);
+    expect(parts[1].dependencies).toEqual([parts[0].id]);
+    expect(parts[2].dependencies).toEqual([parts[1].id]);
+    // The task that depended on the original now waits on the tail part.
+    expect(store.get('t3')!.dependencies).toEqual([parts[2].id]);
+
+    const ids = new Set(store.allTasks.map((t) => t.id));
+    const dangling = store.allTasks.flatMap((t) => t.dependencies).filter((d) => !ids.has(d));
+    expect(dangling).toEqual([]);
   });
 });
 

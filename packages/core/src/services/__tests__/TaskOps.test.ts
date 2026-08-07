@@ -78,12 +78,28 @@ describe('applyTaskOps', () => {
     expect(res.errors[0]).toContain('unknown dependencies');
   });
 
-  it('refuses to touch running or completed tasks', () => {
+  // The planner never gets to reach into a task that is running or already
+  // finished — the user's own delete of a finished task is allowed, but that is
+  // a decision they make on the direct path, not one the model may take here.
+  it('refuses to modify or remove a running or completed task', () => {
     const plan = samplePlan();
     plan[0].status = 'in_progress';
     plan[1].status = 'completed';
-    expect(applyTaskOps(plan, [{ op: 'update', taskId: 'a', changes: { title: 'x' } }], ['claude-code']).ok).toBe(false);
-    expect(applyTaskOps(plan, [{ op: 'remove', taskId: 'b' }], ['claude-code']).ok).toBe(false);
+    for (const [op, taskId, why] of [
+      ['update', 'a', /running/],
+      ['remove', 'a', /running/],
+      ['update', 'b', /completed/],
+      ['remove', 'b', /completed/],
+    ] as const) {
+      const res = applyTaskOps(
+        plan,
+        [op === 'update' ? { op, taskId, changes: { title: 'x' } } : { op, taskId }],
+        ['claude-code'],
+      );
+      expect(res.ok).toBe(false);
+      expect(res.errors[0]).toMatch(why);
+      expect(res.tasks).toBe(plan);
+    }
   });
 
   it('is atomic: a later invalid op rolls back earlier valid ones', () => {

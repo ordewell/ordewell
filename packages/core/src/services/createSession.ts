@@ -32,6 +32,20 @@ import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import { runnerModesFrom, type RunnerModeInfo } from './ModeResolver';
 
 /**
+ * A direct (non-planner) plan edit the session refused. Distinct from a plain
+ * Error so a surface can tell "you asked for something invalid" from "something
+ * broke" and say which — the HTTP routes used to collapse both into 404/500,
+ * which read to the TUI and VS Code as the edit silently doing nothing. Carries
+ * no status code: core is transport-agnostic, the route maps it.
+ */
+export class PlanEditError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PlanEditError';
+  }
+}
+
+/**
  * Options for plan generation. Progress is not overridable: every planner
  * progress event is translated to a SessionMessage inside the Session and
  * emitted through the broadcast seam, so all surfaces consume one union.
@@ -969,8 +983,34 @@ export class Session {
     return this.plan;
   }
 
-  updateTask(taskId: string, changes: Partial<Task>): LegacyPlanState | null {
-    return this.mutatePlan(
+  /**
+   * The direct-edit seam: {@link mutatePlan} plus the reschedule every
+   * structural edit owes an armed scheduler. Nothing else wakes one after a
+   * hand edit — the queue-drain path never runs, because a direct edit never
+   * queues — so a task the edit just unblocked would sit ready and never
+   * start. `tick()` no-ops while the scheduler is idle, so this costs nothing
+   * during plain planning. The planner-driven path re-ticks in
+   * {@link settleTurn} instead; it must not tick twice.
+   */
+  private async editPlan(op: () => boolean, notify?: () => void): Promise<LegacyPlanState | null> {
+    const plan = this.mutatePlan(op, notify);
+    if (!plan) return null;
+    await this.orchestrator.tick();
+    return plan;
+  }
+
+  /**
+   * Patch one task's fields. A hand-set dependency list is the one patch that
+   * can leave the plan unschedulable, so it goes through the same
+   * {@link canSetDependencies} guard the planner's pickers use rather than a
+   * second copy of the rule — and throws, so the surface can say why.
+   */
+  async updateTask(taskId: string, changes: Partial<Task>): Promise<LegacyPlanState | null> {
+    if (changes.dependencies) {
+      const check = canSetDependencies(this.store.planTasks, taskId, changes.dependencies);
+      if (!check.ok) throw new PlanEditError(check.error ?? 'Those dependencies are not valid');
+    }
+    return this.editPlan(
       () => Boolean(this.store.update(taskId, changes)),
       () => this.broadcast({ type: 'task_updated', taskId, changes: changes as Record<string, unknown> }),
     );
@@ -981,8 +1021,7 @@ export class Session {
    * because a runner change is never a single-field edit: the task's model,
    * thinking effort and mode are all scoped to its runner, so they are
    * re-derived from the new runner's catalog (see {@link retargetTaskRunner}).
-   * That needs discovery, which is async — hence a method of its own rather
-   * than a branch inside the sync `updateTask`.
+   * That needs discovery, which is why it is not a branch inside `updateTask`.
    *
    * The runner is also admitted into `plan.runners` — see {@link admitRunner}.
    */
@@ -998,7 +1037,7 @@ export class Session {
     const changes = retargetTaskRunner(task, runner, this.allowedCatalog(catalog, runner));
     if (Object.keys(changes).length === 0) return this.plan;
 
-    return this.mutatePlan(() => {
+    return this.editPlan(() => {
       if (!this.store.update(taskId, changes)) return false;
       this.admitRunner(runner, catalog.models);
       return true;
@@ -1057,17 +1096,13 @@ export class Session {
   }
 
   /**
-   * Replace one task's dependency list. Separate from {@link updateTask}
-   * because a hand-edited graph is the one task edit that can leave a plan
-   * unschedulable: `canSetDependencies` is the guard, and it lives behind this
-   * one method so the API and both surfaces' pickers reject the same edits
-   * rather than each carrying a copy of the rule. Throws so a surface can say
-   * why the edit was refused.
+   * Replace one task's dependency list — the named entry point the surfaces'
+   * dependency pickers call. The guard itself lives in {@link updateTask}, so
+   * a dependency list arriving as a plain field patch is rejected by the same
+   * rule instead of slipping past it.
    */
-  setTaskDependencies(taskId: string, dependencies: string[]): LegacyPlanState | null {
+  async setTaskDependencies(taskId: string, dependencies: string[]): Promise<LegacyPlanState | null> {
     if (!this.plan) return null;
-    const check = canSetDependencies(this.store.planTasks, taskId, dependencies);
-    if (!check.ok) throw new Error(check.error ?? 'Those dependencies are not valid');
     return this.updateTask(taskId, { dependencies });
   }
 
@@ -1075,8 +1110,17 @@ export class Session {
     await this.markTaskComplete(taskId);
   }
 
-  removeTask(taskId: string): LegacyPlanState | null {
-    return this.mutatePlan(() => (this.store.remove(taskId), true));
+  /**
+   * Delete one task. A running task is cancelled first: the plan can drop it
+   * either way, but nothing can reach its runner afterwards — the tmux session
+   * outlives the plan and the orchestrator keeps counting it as active. The
+   * planner-driven path refuses instead (see {@link applyTaskOps}); a user
+   * deleting their own task means it.
+   */
+  async removeTask(taskId: string): Promise<LegacyPlanState | null> {
+    if (!this.plan || !this.store.get(taskId)) return null;
+    await this.orchestrator.releaseTask(taskId);
+    return this.editPlan(() => (this.store.remove(taskId), true));
   }
 
   /**
@@ -1098,23 +1142,23 @@ export class Session {
     const dependencies = (draft.dependencies ?? []).filter((id) => this.store.get(id));
     const catalog = draft.type === 'user' ? null : await this.catalogFor(runner);
 
-    return this.mutatePlan(() => {
+    return this.editPlan(() => {
       this.store.add({ ...draft, ...(catalog ? runnerAssignment(this.allowedCatalog(catalog, runner), draft) : {}), assignedRunner: runner, dependencies });
       if (catalog) this.admitRunner(runner, catalog.models);
       return true;
     });
   }
 
-  mergeTasks(taskIdA: string, taskIdB: string): LegacyPlanState | null {
-    return this.mutatePlan(() => (this.store.merge(taskIdA, taskIdB), true));
+  async mergeTasks(taskIdA: string, taskIdB: string): Promise<LegacyPlanState | null> {
+    return this.editPlan(() => (this.store.merge(taskIdA, taskIdB), true));
   }
 
-  mergeMultipleTasks(taskIds: string[]): LegacyPlanState | null {
-    return this.mutatePlan(() => (this.store.mergeMultiple(taskIds), true));
+  async mergeMultipleTasks(taskIds: string[]): Promise<LegacyPlanState | null> {
+    return this.editPlan(() => (this.store.mergeMultiple(taskIds), true));
   }
 
-  splitTask(taskId: string, newTasks: Partial<Task>[]): LegacyPlanState | null {
-    return this.mutatePlan(() => (this.store.split(taskId, newTasks), true));
+  async splitTask(taskId: string, newTasks: Partial<Task>[]): Promise<LegacyPlanState | null> {
+    return this.editPlan(() => (this.store.split(taskId, newTasks), true));
   }
 
   /**

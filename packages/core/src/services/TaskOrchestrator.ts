@@ -175,20 +175,33 @@ export class TaskOrchestrator {
     this.onHold.clear();
   }
 
+  /**
+   * Adopt an edited plan without letting go of the run in progress. Everything
+   * the scheduler owns — live sessions, holds, retry counts, the verifier and
+   * the review approval — survives, because `loadPlan` clears all of it and a
+   * mid-run edit is not a new run. Only the tasks change.
+   *
+   * The ids with live sessions are defended: one dropped from the edited plan is
+   * carried over (its verdict still has to land somewhere), and one whose status
+   * the snapshot predates is put back to `in_progress` — adopting the snapshot's
+   * "pending" would offer the scheduler work a runner is already doing.
+   */
   reconcilePlan(newTasks: Task[], planRunners: RunnerId[] = ['claude-code']): void {
+    const adopted = [...newTasks];
     for (const taskId of this.activeTaskSessions.keys()) {
       const task = this.store.get(taskId);
       if (!task) continue;
 
-      const inNewPlan = newTasks.find((t) => t.id === taskId);
-      if (!inNewPlan) {
-        newTasks.push({ ...task });
-      } else if (inNewPlan.status !== 'in_progress') {
-        console.warn(`[TaskOrchestrator] Running task "${task.title}" status changed to "${inNewPlan.status}" in modified plan, using orchestrator truth`);
+      const at = adopted.findIndex((t) => t.id === taskId);
+      if (at < 0) {
+        adopted.push({ ...task });
+      } else if (adopted[at].status !== 'in_progress') {
+        console.warn(`[TaskOrchestrator] Running task "${task.title}" status changed to "${adopted[at].status}" in modified plan, using orchestrator truth`);
+        adopted[at] = { ...adopted[at], status: 'in_progress' };
       }
     }
 
-    this.store.load(newTasks, planRunners);
+    this.store.load(adopted, planRunners);
     this.planStatus = 'running';
   }
 
@@ -331,6 +344,22 @@ export class TaskOrchestrator {
     this.onHold.add(taskId);
     this.emit('onTaskChanged');
     await this.tick();
+  }
+
+  /**
+   * Let go of a task that is leaving the plan. A live runner is cancelled
+   * through {@link cancelTask} so the verifier generation is bumped before the
+   * process dies; a spawn still in flight is dropped from `startingTaskIds`,
+   * which is what makes {@link startTask} kill the session it is about to
+   * receive. The id's remaining bookkeeping goes too — a hold or retry count
+   * kept for a task that no longer exists would be inherited by nothing and
+   * leaves `isRunning` reading true forever.
+   */
+  async releaseTask(taskId: string): Promise<void> {
+    this.startingTaskIds.delete(taskId);
+    if (this.activeTaskSessions.has(taskId)) await this.cancelTask(taskId);
+    this.onHold.delete(taskId);
+    this.retryCounts.delete(taskId);
   }
 
   async markTaskComplete(taskId: string): Promise<void> {

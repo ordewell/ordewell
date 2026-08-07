@@ -640,13 +640,13 @@ function setupChatListener(context: vscode.ExtensionContext): void {
                 const task = findTask(currentPlan, ctx.taskId);
                 if (task) { task.taskMode = edit.mode; persistState(persistDeps()); }
               } else if (edit.kind === 'prompt') {
-                session.updateTask(ctx.taskId, { prompt: edit.prompt, description: edit.prompt || undefined });
+                await session.updateTask(ctx.taskId, { prompt: edit.prompt, description: edit.prompt || undefined });
                 chatProvider.showPlan(currentPlan);
                 persistState(persistDeps());
                 saveCurrentSession(persistDeps());
               } else if (edit.kind === 'dependencies') {
                 try {
-                  session.setTaskDependencies(ctx.taskId, edit.dependencies);
+                  await session.setTaskDependencies(ctx.taskId, edit.dependencies);
                 } catch (err) {
                   vscode.window.showWarningMessage(err instanceof Error ? err.message : String(err));
                 }
@@ -661,7 +661,7 @@ function setupChatListener(context: vscode.ExtensionContext): void {
                   removalPrompt(currentPlan.tasks, ctx.taskId), { modal: true }, 'Remove',
                 );
                 if (confirm !== 'Remove') break;
-                session.removeTask(ctx.taskId);
+                await session.removeTask(ctx.taskId);
                 if (session.planState) currentPlan = session.planState;
                 if (session.planTasks.length === 0) {
                   chatProvider.setState('empty');
