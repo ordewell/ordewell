@@ -1,4 +1,4 @@
-import { style } from './ansi';
+import { style, truncate, width } from './ansi';
 import { createKeyDecoder, type Key } from './keys';
 
 const ALT_SCREEN_ON = '\x1b[?1049h';
@@ -31,8 +31,16 @@ const MOUSE_TRACKING_OFF = '\x1b[?1000l\x1b[?1006l';
 const ALT_SCROLL_SAVE = '\x1b[?1007s';
 const ALT_SCROLL_OFF = '\x1b[?1007l';
 const ALT_SCROLL_RESTORE = '\x1b[?1007r';
-const HOME = '\x1b[H';
 const CLEAR = '\x1b[2J';
+// DECAWM. Off for the duration of a draw so a row `render()` measured as
+// exactly `cols` wide, but that the real terminal renders wider (an emoji, ZWJ
+// sequence or CJK cluster it counts differently than `width()` does), gets
+// clipped at the margin instead of wrapping and pushing every row below it
+// down by one line — that shove, not a transient glitch, is what breaks the
+// pane divider on paste. Bracketed per draw, not left off for the session, so
+// nothing else writing to this tty (a shelled-out task terminal) inherits it.
+const AUTOWRAP_OFF = '\x1b[?7l';
+const AUTOWRAP_ON = '\x1b[?7h';
 
 export interface TerminalOptions {
   input?: NodeJS.ReadStream;
@@ -49,6 +57,16 @@ export interface Terminal {
   /** Trade drag-select for wheel scrolling, or take it back. */
   setMouse(enabled: boolean): void;
   close(): void;
+}
+
+/**
+ * Last-resort clamp: `render()` already sizes every row to `cols` via
+ * `width()`, but that is the same measurement the real terminal might
+ * disagree with. One clamp here, rather than one at every render call site,
+ * catches whatever `width()` still under-measured before it reaches the tty.
+ */
+function clampToCols(line: string, cols: number): string {
+  return width(line) > cols ? truncate(line, cols) : line;
 }
 
 /**
@@ -78,8 +96,9 @@ export function openTerminal(options: TerminalOptions): Terminal {
     for (const key of decode(chunk)) options.onKey(key);
   };
   const onResize = () => {
-    // A shrink leaves glyphs beyond the new frame that home-and-overwrite
-    // never touches; start the next draw from a clean screen.
+    // A shrink leaves glyphs beyond the new frame that row-anchored erase
+    // never touches (it only erases within each row the new frame writes);
+    // start the next draw from a clean screen.
     output.write(CLEAR);
     const { rows, cols } = size();
     options.onResize(rows, cols);
@@ -98,9 +117,17 @@ export function openTerminal(options: TerminalOptions): Terminal {
     size,
     draw(frame) {
       if (closed) return;
-      // Home-and-overwrite rather than clear-and-redraw: clearing first makes
-      // the whole screen flicker on every keystroke.
-      output.write(HOME + frame.join('\n'));
+      // Row-anchored rather than home-and-blit: each row is positioned
+      // absolutely and erased to end of line, so a row that renders wider
+      // than measured only misplaces itself instead of shoving every row
+      // below it down by one line. Still not clear-and-redraw — that makes
+      // the whole screen flicker on every keystroke — each row is erased,
+      // not the frame.
+      const { cols } = size();
+      const rows = frame
+        .map((line, i) => `\x1b[${i + 1};1H${clampToCols(line, cols)}\x1b[K`)
+        .join('');
+      output.write(AUTOWRAP_OFF + rows + AUTOWRAP_ON);
     },
     setMouse(enabled) {
       if (closed || enabled === mouse) return;
@@ -114,8 +141,11 @@ export function openTerminal(options: TerminalOptions): Terminal {
       output.off('resize', onResize);
       if (input.isTTY) input.setRawMode(false);
       input.pause();
+      // AUTOWRAP_ON here too, not just after each draw: a signal can land
+      // between the AUTOWRAP_OFF and AUTOWRAP_ON of an in-flight draw if the
+      // frame is large enough to split across OS writes.
       output.write(
-        MOUSE_TRACKING_OFF + ALT_SCROLL_RESTORE + KITTY_KEYBOARD_OFF + PASTE_MODE_OFF + SHOW_CURSOR + ALT_SCREEN_OFF,
+        MOUSE_TRACKING_OFF + ALT_SCROLL_RESTORE + KITTY_KEYBOARD_OFF + PASTE_MODE_OFF + AUTOWRAP_ON + SHOW_CURSOR + ALT_SCREEN_OFF,
       );
     },
   };
