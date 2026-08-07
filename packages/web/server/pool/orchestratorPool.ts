@@ -40,6 +40,8 @@ export interface OrchestratorPoolDeps {
 export class OrchestratorPool {
   private sessions = new Map<string, Session>();
   private clients = new Map<string, Set<WebSocket>>();
+  /** The in-flight planning turn's abort controller, one per session — see `cancelPlanning`. */
+  private planningAborts = new Map<string, AbortController>();
   private registry: CoreRunnerRegistry = (() => { const r = new RunnerRegistry(); r.loadUserPlugins(); return r; })();
   private modelResolver = new ModelResolver(this.registry, new WebConfig());
   private runnerInstallation = new RunnerInstallation(this.registry);
@@ -332,8 +334,14 @@ export class OrchestratorPool {
     // the session is in this map. Registering only on return made the first
     // approval of every session unanswerable until its 5-minute timeout.
     this.sessions.set(sessionId, session);
-    const plan = await session.generatePlan(goal, runners);
-    return migratePlanState(plan);
+    const controller = new AbortController();
+    this.planningAborts.set(sessionId, controller);
+    try {
+      const plan = await session.generatePlan(goal, runners, { signal: controller.signal });
+      return migratePlanState(plan);
+    } finally {
+      this.clearPlanningAbort(sessionId, controller);
+    }
   }
 
   /**
@@ -347,13 +355,45 @@ export class OrchestratorPool {
     // See generatePlan: must be registered before the blocking call so a
     // mid-research approval is answerable rather than 404ing until timeout.
     this.sessions.set(sessionId, session);
-    const plan = await session.startPlanning(goal, runners);
-    return plan;
+    const controller = new AbortController();
+    this.planningAborts.set(sessionId, controller);
+    try {
+      return await session.startPlanning(goal, runners, { signal: controller.signal });
+    } finally {
+      this.clearPlanningAbort(sessionId, controller);
+    }
   }
 
   /** Continue the planner dialogue with the user's reply. */
   async continuePlanning(sessionId: string, message: string): Promise<LegacyPlanState> {
-    return this.session(sessionId).continueConversation(message);
+    const controller = new AbortController();
+    this.planningAborts.set(sessionId, controller);
+    try {
+      return await this.session(sessionId).continueConversation(message, { signal: controller.signal });
+    } finally {
+      this.clearPlanningAbort(sessionId, controller);
+    }
+  }
+
+  /**
+   * Abort the planning turn in flight for a session, if any. Answers whether
+   * there was one to cancel — the route reports that rather than 404ing a
+   * session that simply is not planning right now.
+   */
+  cancelPlanning(sessionId: string): boolean {
+    const controller = this.planningAborts.get(sessionId);
+    if (!controller) return false;
+    controller.abort();
+    return true;
+  }
+
+  /**
+   * Only clears the map entry if it still holds the controller this turn
+   * created — a later turn may already have installed its own by the time
+   * this one's `finally` runs (a fresh request racing a slow abort).
+   */
+  private clearPlanningAbort(sessionId: string, controller: AbortController): void {
+    if (this.planningAborts.get(sessionId) === controller) this.planningAborts.delete(sessionId);
   }
 
   /**

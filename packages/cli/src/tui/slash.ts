@@ -22,7 +22,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   // start planning, and an alias for it only shadowed `/planner` on completion.
   { name: 'approve', usage: '/approve', description: 'Approve the drafted plan', category: 'planning' },
   { name: 'run', usage: '/run', description: 'Execute the approved plan', category: 'planning' },
-  { name: 'stop', usage: '/stop', description: 'Stop the running execution', category: 'planning' },
+  { name: 'stop', usage: '/stop', description: 'Stop the planner or the running execution, whichever is active', category: 'planning' },
 
   // Tasks
   { name: 'add-task', usage: '/add-task <title>', description: 'Add a task to the current plan', category: 'tasks' },

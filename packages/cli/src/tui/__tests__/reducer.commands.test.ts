@@ -222,6 +222,12 @@ describe('execution', () => {
   it('/stop halts the run', () => {
     expect(run('/stop', planned).effects).toEqual([{ type: 'stopExecution', sessionId: 'session-1' }]);
   });
+
+  it('/stop cancels the planner instead, while a planning turn is in flight', () => {
+    expect(run('/stop', { ...planned, status: 'planning' }).effects).toEqual([
+      { type: 'cancelPlanning', sessionId: 'session-1' },
+    ]);
+  });
 });
 
 describe('task control', () => {

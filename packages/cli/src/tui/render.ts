@@ -126,16 +126,25 @@ function renderFooter(state: TuiState, cols: number): string[] {
   // `m` toggles, so the hint has to name the direction it will actually go for
   // the selected task — a fixed 'm done' on a finished task reads as a no-op.
   const markHint = state.tasks[state.selectedTask]?.status === 'completed' ? 'm undone' : 'm done';
+  // A planning turn in flight owns ESC ahead of whatever the pane would
+  // otherwise bind it to — the hint has to say so or the key isn't discoverable.
+  const planning = state.status === 'planning' || state.status === 'researching';
+  const escHint = planning ? 'esc stop planning' : null;
   const hints =
     state.focus === 'plan'
       ? state.expandedTaskId
         ? ['type to edit prompt', 'pgup/pgdn scroll', 'alt-enter newline', 'enter save', 'esc cancel']
         : [
+            ...(escHint ? [escHint] : []),
             'enter expand', 'R runner', 'o model', 'e effort', 'M mode', 'D deps', 'f start',
             'E run plan', 'c cancel', markHint, 's skip', 'a add', 'd remove', 't terminal',
             'pgup/pgdn scroll', 'tab chat',
           ]
-      : ['/help', 'tab plan', 'alt-enter newline', 'pgup/pgdn scroll', 'ctrl-c quit'];
+      : [
+          '/help', 'tab plan', 'alt-enter newline', 'pgup/pgdn scroll',
+          ...(escHint ? [escHint] : []),
+          'ctrl-c quit',
+        ];
   return packHints(hints, cols);
 }
 

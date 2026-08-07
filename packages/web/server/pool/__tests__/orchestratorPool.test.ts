@@ -164,3 +164,50 @@ describe('OrchestratorPool session registration ordering', () => {
     await call;
   });
 });
+
+describe('OrchestratorPool.cancelPlanning', () => {
+  let workspace: string;
+  let pool: OrchestratorPool;
+
+  beforeEach(() => {
+    workspace = mkdtempSync(join(tmpdir(), 'ordewell-pool-'));
+    pool = new OrchestratorPool();
+  });
+
+  afterEach(() => {
+    pool.destroyAll();
+    rmSync(workspace, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('aborts the signal passed into the in-flight planning turn', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    let resolvePlan!: (v: LegacyPlanState) => void;
+    const deferred = new Promise<LegacyPlanState>((resolve) => { resolvePlan = resolve; });
+    vi.spyOn(Session.prototype, 'startPlanning').mockImplementation(async (_goal, _runners, options) => {
+      capturedSignal = options?.signal;
+      return deferred;
+    });
+
+    const call = pool.startPlanning('session-abort', 'Add a widget', ['claude-code'], workspace);
+    await Promise.resolve();
+
+    expect(pool.cancelPlanning('session-abort')).toBe(true);
+    expect(capturedSignal?.aborted).toBe(true);
+
+    resolvePlan(savedPlan());
+    await call;
+  });
+
+  it('is a no-op when nothing is planning for that session', () => {
+    expect(pool.cancelPlanning('nobody-home')).toBe(false);
+  });
+
+  it('clears the controller once the turn settles, so a later cancel finds nothing to abort', async () => {
+    vi.spyOn(Session.prototype, 'startPlanning').mockResolvedValue(savedPlan());
+
+    await pool.startPlanning('session-settled', 'Add a widget', ['claude-code'], workspace);
+
+    expect(pool.cancelPlanning('session-settled')).toBe(false);
+  });
+});

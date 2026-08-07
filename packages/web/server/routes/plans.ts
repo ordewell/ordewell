@@ -43,6 +43,14 @@ export function plansRoute(pool: OrchestratorPool) {
     return c.json({ status: 'stopped' });
   });
 
+  // Distinct from the stop route above, which halts *execution* (running
+  // tasks). This aborts a planning turn in flight — a harmless no-op, not a
+  // 404, when the session simply isn't planning right now.
+  router.post('/:sessionId/planning/stop', (c) => {
+    const cancelled = pool.cancelPlanning(c.req.param('sessionId'));
+    return c.json({ cancelled });
+  });
+
   router.post('/:sessionId/tasks/:taskId/complete', async (c) => {
     try {
       await pool.session(c.req.param('sessionId')).markTaskComplete(c.req.param('taskId'));

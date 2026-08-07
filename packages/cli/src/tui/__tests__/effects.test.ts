@@ -13,6 +13,7 @@ function harness(api: Partial<OrdewellApi> = {}) {
       sendConversationMessage: vi.fn().mockResolvedValue({ tasks: [] }),
       executePlan: vi.fn().mockResolvedValue({ status: 'started' }),
       stopExecution: vi.fn().mockResolvedValue({ status: 'stopped' }),
+      cancelPlanning: vi.fn().mockResolvedValue({ cancelled: true }),
       processQueued: vi.fn().mockResolvedValue({ ok: true }),
       taskControl: vi.fn().mockResolvedValue({ ok: true }),
       markTaskComplete: vi.fn().mockResolvedValue({ ok: true }),
@@ -416,6 +417,19 @@ describe('execution', () => {
     const h = harness();
     await runEffect({ type: 'stopExecution', sessionId: 's1' }, h.deps);
     expect(h.api.stopExecution).toHaveBeenCalledWith('s1');
+  });
+
+  it('cancels a planning turn', async () => {
+    const h = harness();
+    await runEffect({ type: 'cancelPlanning', sessionId: 's1' }, h.deps);
+    expect(h.api.cancelPlanning).toHaveBeenCalledWith('s1');
+    expect(h.actions).toContainEqual({ type: 'notice', message: 'Planning stopped.' });
+  });
+
+  it('says nothing when there was no planning turn to cancel', async () => {
+    const h = harness({ cancelPlanning: vi.fn().mockResolvedValue({ cancelled: false }) });
+    await runEffect({ type: 'cancelPlanning', sessionId: 's1' }, h.deps);
+    expect(h.actions).toEqual([]);
   });
 });
 

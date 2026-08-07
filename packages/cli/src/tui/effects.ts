@@ -12,6 +12,7 @@ export interface OrdewellApi {
   sendConversationMessage(sessionId: string, message: string): Promise<any>;
   executePlan(sessionId: string): Promise<{ status: string }>;
   stopExecution(sessionId: string): Promise<{ status: string }>;
+  cancelPlanning(sessionId: string): Promise<{ cancelled: boolean }>;
   processQueued(sessionId: string): Promise<{ ok: boolean }>;
   taskControl(sessionId: string, taskId: string, action: 'force-start' | 'retry' | 'cancel'): Promise<{ ok: boolean }>;
   markTaskComplete(sessionId: string, taskId: string): Promise<{ ok: boolean }>;
@@ -209,6 +210,15 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       await api.stopExecution(effect.sessionId);
       dispatch({ type: 'notice', message: 'Execution stopped.' });
       return;
+
+    case 'cancelPlanning': {
+      const { cancelled } = await api.cancelPlanning(effect.sessionId);
+      // Nothing to cancel — the turn already settled (a race with the daemon,
+      // not a stale request), and its own planner_message/planUpdated already
+      // carries whatever feedback there is.
+      if (cancelled) dispatch({ type: 'notice', message: 'Planning stopped.' });
+      return;
+    }
 
     case 'processQueued':
       await api.processQueued(effect.sessionId);
