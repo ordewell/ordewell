@@ -1,7 +1,21 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createTask, type LegacyPlanState } from '../../models/Task';
 import * as sessionStore from '../../utils/sessionStore';
-import { makeSession, testWorkspace } from './sessionTestKit';
+import { FakeTerminalSession, makeSession, testWorkspace } from './sessionTestKit';
+import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
+
+/** A runner double that records the order tasks were spawned in. */
+function recordingRunner(spawned: string[]): ITerminalRunner {
+  return {
+    spawn: vi.fn(async ({ taskId }: { taskId: string }) => {
+      spawned.push(taskId);
+      return new FakeTerminalSession(`s-${taskId}`, taskId);
+    }),
+    stop: vi.fn(),
+    stopAll: vi.fn(),
+    activeCount: 0,
+  } as unknown as ITerminalRunner;
+}
 
 function planWithTasks(): LegacyPlanState {
   return {
@@ -16,6 +30,30 @@ function planWithTasks(): LegacyPlanState {
     conversationHistory: [
       { role: 'user', content: 'build it', timestamp: '2026-01-01T00:00:00Z' },
       { role: 'assistant', content: 'Plan generated with 2 tasks.', timestamp: '2026-01-01T00:00:01Z', kind: 'plan_generated' },
+    ],
+  };
+}
+
+/**
+ * A plan the scheduler has already run into a pause: one completed AI task, one
+ * AI task the user cancelled (on hold) and one pending `user` task. Nothing is
+ * live, but `tick()` keeps the scheduler armed so the user task can still fan
+ * its dependents out.
+ */
+function pausedRunPlan(): LegacyPlanState {
+  return {
+    tasks: [
+      createTask({ id: 'a', order: 1, title: 'Setup', prompt: 'p', status: 'completed', assignedRunner: 'claude-code' }),
+      createTask({ id: 'b', order: 2, title: 'Build', prompt: 'p', dependencies: ['a'], assignedRunner: 'claude-code' }),
+      createTask({ id: 'c', order: 3, title: 'Sign off', type: 'user', dependencies: ['a'], assignedRunner: 'claude-code' }),
+    ],
+    generatedAt: new Date().toISOString(),
+    status: 'approved',
+    runners: ['claude-code'],
+    lastUpdated: new Date().toISOString(),
+    conversationHistory: [
+      { role: 'user', content: 'build it', timestamp: '2026-01-01T00:00:00Z' },
+      { role: 'assistant', content: 'Plan generated with 3 tasks.', timestamp: '2026-01-01T00:00:01Z', kind: 'plan_generated' },
     ],
   };
 }
@@ -163,28 +201,153 @@ describe('task_ops conversation turns', () => {
     expect(last.content).toBe('sorry, which task?');
   });
 
-  it('queues structural changes while executing and answers with a queue notice', async () => {
+  it('applies edits immediately when the scheduler is armed but no runner is live', async () => {
     const session = makeSession({
       aiService: {
         startConversation: vi.fn(),
         continueConversation: vi.fn().mockResolvedValue({
           kind: 'task_ops',
-          ops: [{ op: 'remove', taskId: '#1' }],
+          ops: [{ op: 'update', taskId: '#3', changes: { title: 'Sign off with the team' } }],
           text: '', researchLog: [],
         }),
         hasActiveConversation: () => true,
         reset: vi.fn(),
       },
     });
-    session.loadPlan(planWithTasks(), 'g', testWorkspace, { persist: false });
-    Object.defineProperty((session as unknown as { orchestrator: unknown }).orchestrator, 'isRunning', { get: () => true });
+    session.loadPlan(pausedRunPlan(), 'build it', testWorkspace, { persist: false });
+    await session.executePlan();
+    await session.cancelTask('b');
 
-    const plan = await session.continueConversation('drop the setup task');
+    // The scheduler is still armed — that is what used to make the edit queue.
+    expect(session.isExecuting).toBe(true);
 
-    expect(session.planTasks).toHaveLength(2); // nothing applied live
-    expect(session.getQueuedMessages().map((m) => m.text)).toEqual(['drop the setup task']);
+    const plan = await session.continueConversation('rename the sign-off step');
+
+    expect(session.planTasks.find((t) => t.id === 'c')!.title).toBe('Sign off with the team');
+    expect(session.queuedCount).toBe(0);
     const last = plan.conversationHistory![plan.conversationHistory!.length - 1];
-    expect(last.content).toMatch(/queued/i);
+    expect(last.content).not.toMatch(/queued/i);
+  });
+
+  it('still queues an edit while a task session is genuinely live', async () => {
+    const session = makeSession({
+      aiService: {
+        startConversation: vi.fn(),
+        continueConversation: vi.fn().mockResolvedValue({
+          kind: 'task_ops',
+          ops: [{ op: 'update', taskId: '#3', changes: { title: 'Sign off with the team' } }],
+          text: '', researchLog: [],
+        }),
+        hasActiveConversation: () => true,
+        reset: vi.fn(),
+      },
+    });
+    session.loadPlan(pausedRunPlan(), 'build it', testWorkspace, { persist: false });
+    await session.executePlan(); // spawns #2 and leaves it running
+
+    const plan = await session.continueConversation('rename the sign-off step');
+
+    expect(session.planTasks.find((t) => t.id === 'c')!.title).toBe('Sign off'); // nothing applied live
+    expect(session.getQueuedMessages().map((m) => m.text)).toEqual(['rename the sign-off step']);
+    expect(session.queuedCount).toBe(1);
+    const last = plan.conversationHistory![plan.conversationHistory!.length - 1];
+    expect(last.content).toMatch(/queued your change/i);
+    expect(last.content).toContain('(1 queued)');
+  });
+
+  it('re-ticks an armed-but-idle scheduler so an added task with satisfied deps fans out', async () => {
+    const spawned: string[] = [];
+    const session = makeSession({
+      runner: recordingRunner(spawned),
+      aiService: {
+        startConversation: vi.fn(),
+        continueConversation: vi.fn().mockResolvedValue({
+          kind: 'task_ops',
+          ops: [{ op: 'add', task: { title: 'Docs', description: 'write docs', prompt: 'write the docs', dependencies: ['a'] } }],
+          text: '', researchLog: [],
+        }),
+        hasActiveConversation: () => true,
+        reset: vi.fn(),
+      },
+    });
+    session.loadPlan(pausedRunPlan(), 'build it', testWorkspace, { persist: false });
+    await session.executePlan();
+    await session.cancelTask('b');
+
+    await session.continueConversation('add a docs task after setup');
+
+    const added = session.planTasks.find((t) => t.title === 'Docs')!;
+    expect(spawned).toContain(added.id);
+  });
+
+  // Only Retry / Force Start / Run release a hold. An edit landing under an
+  // armed scheduler must adopt the new tasks without also re-arming everything
+  // the user pulled out of the schedule.
+  it('leaves a cancelled task on hold when an edit lands under an armed scheduler', async () => {
+    const spawned: string[] = [];
+    const session = makeSession({
+      runner: recordingRunner(spawned),
+      aiService: {
+        startConversation: vi.fn(),
+        continueConversation: vi.fn().mockResolvedValue({
+          kind: 'task_ops',
+          ops: [{ op: 'update', taskId: '#3', changes: { title: 'Sign off with the team' } }],
+          text: '', researchLog: [],
+        }),
+        hasActiveConversation: () => true,
+        reset: vi.fn(),
+      },
+    });
+    session.loadPlan(pausedRunPlan(), 'build it', testWorkspace, { persist: false });
+    await session.executePlan();
+    await session.cancelTask('b');
+
+    await session.continueConversation('rename the sign-off step');
+
+    expect(spawned).toEqual(['b']); // the one pre-cancel spawn, not a second
+  });
+
+  it('does not promise the planner a queue when no runner is live', async () => {
+    const continueConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'two left', researchLog: [] });
+    const session = makeSession({
+      runner: recordingRunner([]),
+      aiService: {
+        startConversation: vi.fn(),
+        continueConversation,
+        hasActiveConversation: () => true,
+        reset: vi.fn(),
+      },
+    });
+    session.loadPlan(pausedRunPlan(), 'build it', testWorkspace, { persist: false });
+    await session.executePlan();
+    await session.cancelTask('b');
+
+    await session.continueConversation('what is left?');
+
+    const outgoing = String(continueConversation.mock.calls[0][0]);
+    expect(outgoing).not.toMatch(/Execution is RUNNING/);
+    expect(outgoing).not.toMatch(/queued/i);
+  });
+
+  it('names the locked in_progress tasks while a runner is live', async () => {
+    const continueConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'ok', researchLog: [] });
+    const session = makeSession({
+      runner: recordingRunner([]),
+      aiService: {
+        startConversation: vi.fn(),
+        continueConversation,
+        hasActiveConversation: () => true,
+        reset: vi.fn(),
+      },
+    });
+    session.loadPlan(pausedRunPlan(), 'build it', testWorkspace, { persist: false });
+    await session.executePlan();
+
+    await session.continueConversation('what is left?');
+
+    const outgoing = String(continueConversation.mock.calls[0][0]);
+    expect(outgoing).toMatch(/Execution is RUNNING — these tasks are locked: #2/);
+    expect(outgoing).toMatch(/queued/i);
   });
 
   it('injects the current plan context into the outgoing message but not the transcript', async () => {

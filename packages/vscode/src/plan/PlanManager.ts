@@ -343,13 +343,15 @@ export async function handleSendMessage(
   const hasDialogue = (plan.conversationHistory?.length ?? 0) > 0;
 
   // Unified loop (post-plan chat included): the model decides per turn whether
-  // to reply, emit targeted task edits, or re-plan. During execution the
+  // to reply, emit targeted task edits, or re-plan. While a runner is live the
   // Session answers questions live and queues structural edits for the next
   // batch boundary. handleStartPlanning remains only for a truly fresh session.
   if (deps.session.isExecuting || plan.tasks.length > 0 || hasDialogue || deps.session.isConversationActive) {
     ensureSessionPlan(deps);
     await handleContinueConversation(text, deps);
-    if (deps.session.isExecuting) deps.chatProvider.showQueueStatus(deps.session.queuedCount);
+    // Only a live runner can queue an edit — an armed-but-idle scheduler applies
+    // it, so the badge would announce a queue that never forms.
+    if (deps.session.hasLiveWork) deps.chatProvider.showQueueStatus(deps.session.queuedCount);
   } else {
     await handleStartPlanning(text, deps, pendingRunners);
   }

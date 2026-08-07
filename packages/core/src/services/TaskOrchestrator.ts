@@ -123,6 +123,15 @@ export class TaskOrchestrator {
   get isRunning(): boolean {
     return this.running || this.startingTaskIds.size > 0 || this.activeTaskSessions.size > 0;
   }
+  /**
+   * A runner is executing *right now*. Narrower than {@link isRunning}, which
+   * also covers the armed-but-idle scheduler `tick()` deliberately leaves
+   * behind when a plan is paused on a user task, a checkpoint or a hold —
+   * nothing is executing then, so nothing is reading the plan mid-mutation.
+   */
+  get hasLiveWork(): boolean {
+    return this.activeTaskSessions.size > 0 || this.startingTaskIds.size > 0;
+  }
   get isReviewApproved(): boolean { return this.reviewApproved; }
   get status(): 'approved' | 'running' | 'completed' { return this.planStatus; }
   get activeTaskIds(): string[] { return [...this.activeTaskSessions.keys()]; }

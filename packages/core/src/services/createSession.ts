@@ -407,6 +407,8 @@ export class Session {
   get currentGoal(): string { return this.goal; }
   get isPlanning(): boolean { return !this.orchestrator.isRunning; }
   get isExecuting(): boolean { return this.orchestrator.isRunning; }
+  /** See {@link TaskOrchestrator.hasLiveWork} — a spawned runner, not merely an armed scheduler. */
+  get hasLiveWork(): boolean { return this.orchestrator.hasLiveWork; }
   get status(): 'approved' | 'running' | 'completed' { return this.orchestrator.status; }
   get sessionConfig(): IConfig { return this.config; }
 
@@ -546,7 +548,10 @@ export class Session {
 
     // Structural changes while tasks execute are queued, never applied live —
     // the orchestrator must not have the plan mutated under a running batch.
-    if ((turn.kind === 'task_ops' || turn.kind === 'plan') && this.isExecuting) {
+    // The gate is live runners, not an armed scheduler: a run paused on a user
+    // task keeps `isExecuting` true with nothing reading the plan, and queueing
+    // there parks the edit behind a batch boundary that will never arrive.
+    if ((turn.kind === 'task_ops' || turn.kind === 'plan') && this.hasLiveWork) {
       this.queueMessage(userMessage);
       this.plan.queuedMessages = this.getQueuedMessages();
       turn = {
@@ -598,7 +603,15 @@ export class Session {
       onExhausted: ({ reply, errors }) => invalidOps(errors, reply.researchLog),
     });
 
-    if ('plan' in settled) return settled.plan;
+    if ('plan' in settled) {
+      // A landed edit can make work ready under a scheduler that is armed but
+      // idle-paused (waiting on a user task or a hold), and nothing else will
+      // wake it — the queue-drain path never runs, because nothing queued.
+      // `tick()` no-ops when the scheduler is not armed, so this costs nothing
+      // during plain planning.
+      await this.orchestrator.tick();
+      return settled.plan;
+    }
     return this.applyConversationTurn(settled.turn);
   }
 
@@ -614,9 +627,12 @@ export class Session {
     const lines = this.store.planTasks.map((t) =>
       `#${t.order} id=${t.id} "${t.title}" [${t.status}] runner:${t.assignedRunner}${t.assignedModel ? ` model:${t.assignedModel.modelId}` : ''} deps:[${t.dependencies.map((d) => orderOf.get(d) ?? d).join(', ')}]`,
     );
-    const running = this.store.planTasks.filter((t) => t.status === 'in_progress');
-    const execNote = this.isExecuting
-      ? `\nExecution is RUNNING${running.length ? ` — these tasks are locked: ${running.map((t) => `#${t.order}`).join(', ')}` : ''}. Any task edits you emit will be queued and applied between batches.`
+    // Gated on live runners, not on `isExecuting`: a paused-but-armed run takes
+    // edits immediately, so promising a queue there is a lie the model plans
+    // around (it stops emitting ops and asks the user to wait).
+    const locked = this.store.planTasks.filter((t) => t.status === 'in_progress');
+    const execNote = this.hasLiveWork
+      ? `\nExecution is RUNNING${locked.length ? ` — these tasks are locked: ${locked.map((t) => `#${t.order}`).join(', ')}` : ''}. Any task edits you emit will be queued and applied between batches.`
       : '';
     // Compact model availability so any task edit (add/merge/split/update) can
     // assign a valid runner + model without scrolling back to the system prompt.
@@ -664,8 +680,16 @@ export class Session {
         this.plan!.researchLog = [...(this.plan!.researchLog ?? []), ...turn.researchLog];
         const allowlist = this.settingsFn().modelAllowlist ?? this.currentAllowlist;
         const coerced = coerceAssignments(result.tasks, allowlist, this.plan!.runners, this.modelsCache);
-        this.orchestrator.loadPlan(coerced, this.plan!.runners);
-        this.store.resetForRun();
+        // An armed scheduler owns run state the edit is not allowed to wipe:
+        // `loadPlan` clears the on-hold set and the review approval, so a task
+        // the user cancelled would be re-armed and re-spawned by the re-tick
+        // that follows. `reconcilePlan` is the mid-run adoption.
+        if (this.orchestrator.isRunning) {
+          this.orchestrator.reconcilePlan(coerced, this.plan!.runners);
+        } else {
+          this.orchestrator.loadPlan(coerced, this.plan!.runners);
+          this.store.resetForRun();
+        }
         this.appendTranscript('assistant', content, now);
         return true;
       },
