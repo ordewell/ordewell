@@ -101,10 +101,27 @@ describe('Session.removeTask', () => {
     const session = makeSession({ modelResolver: resolverFor(CLAUDE_CATALOG) });
     session.loadPlan(planWith(), 'goal', testWorkspace, { persist: false });
 
-    const state = session.removeTask('t1');
+    const state = await session.removeTask('t1');
 
     expect(state!.tasks.map((t) => t.id)).toEqual(['t2']);
     expect(state!.tasks[0].dependencies).toEqual([]);
+  });
+
+  // A plan that drops a running task can no longer reach the runner it spawned:
+  // the tmux session keeps going and the orchestrator's entry for it is never
+  // cleared, which is one of the ways "Execution is running" became permanent.
+  it('cancels a live runner before dropping the task that owns it', async () => {
+    const runner = recordingRunner();
+    const session = makeSession({ runner, modelResolver: resolverFor(CLAUDE_CATALOG) });
+    session.loadPlan(planWith(), 'goal', testWorkspace, { persist: false });
+    await session.executePlan();
+    expect(runner.spawned).toEqual(['t1']);
+
+    await session.removeTask('t1');
+
+    expect(runner.stopped).toEqual(['s-t1']);
+    expect(session.hasLiveWork).toBe(false);
+    expect(session.planTasks.map((t) => t.id)).toEqual(['t2']);
   });
 });
 

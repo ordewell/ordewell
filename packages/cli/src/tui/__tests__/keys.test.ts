@@ -193,10 +193,15 @@ describe('createKeyDecoder — bracketed paste', () => {
     ]);
   });
 
-  it('normalizes CRLF and lone CR to newlines and drops other control characters', () => {
+  it('normalizes CRLF and lone CR to newlines, drops other control characters, and turns a tab into a space', () => {
     const decode = createKeyDecoder();
     const keys = decode(`${START}a\r\nb\rc\x07d\te${END}`);
-    expect(keys[0].text).toBe('a\nb\ncd\te');
+    // The tab is replaced, not dropped like \x07: a dropped tab would glue
+    // 'd' and 'e' into one word. A real terminal expands a tab to its next
+    // stop and shoves every column after it sideways — the bug this closes —
+    // so it must never reach the editor buffer intact.
+    expect(keys[0].text).toBe('a\nb\ncd e');
+    expect(keys[0].text).not.toContain('\t');
   });
 
   it('handles shift-enter mixed with normal keys before a bracketed paste', () => {

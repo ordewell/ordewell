@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { stripAnsi, width, truncate, pad, style, wrap } from '../ansi';
+import { stripAnsi, stripTabs, width, truncate, pad, style, wrap } from '../ansi';
 
 describe('stripAnsi', () => {
   it('removes colour codes', () => {
@@ -41,6 +41,18 @@ describe('truncate', () => {
 
   it('drops the text entirely when there is no room', () => {
     expect(truncate('abc', 0)).toBe('');
+  });
+});
+
+describe('stripTabs', () => {
+  it('replaces a tab with a single space', () => {
+    expect(stripTabs('a\tb')).toBe('a b');
+  });
+
+  it('is why a tab would otherwise be measured as free width', () => {
+    // string-width's own documented behaviour, and the reason a literal tab
+    // slipping past `stripTabs` renders wider than any layout math believes.
+    expect(width('\t')).toBe(0);
   });
 });
 

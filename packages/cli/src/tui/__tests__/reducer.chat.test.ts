@@ -145,6 +145,19 @@ describe('reduce — stale session results', () => {
     const { state } = reduce(s, { type: 'plannerMessage', content: 'hi' });
     expect(state.messages.at(-1)).toMatchObject({ content: 'hi' });
   });
+
+  it('turns a tab in a planner turn into a space, the same as a pasted one', () => {
+    const s = initialState();
+    const { state } = reduce(s, { type: 'plannerMessage', content: 'columns:\tname\tage' });
+    expect(state.messages.at(-1)).toMatchObject({ content: 'columns: name age' });
+  });
+
+  it('still dedups a repeated turn that carries a tab', () => {
+    const s = { ...initialState(), sessionId: 's1' };
+    const once = reduce(s, { type: 'plannerMessage', content: 'a\tb', sessionId: 's1' }).state;
+    const { state } = reduce(once, { type: 'plannerMessage', content: 'a\tb', sessionId: 's1' });
+    expect(state.messages.filter((m) => m.role === 'assistant')).toHaveLength(1);
+  });
 });
 
 describe('reduce — one planner turn, two delivery paths', () => {

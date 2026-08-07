@@ -43,6 +43,24 @@ describe('frame geometry', () => {
     expect(new Set(dividerColumns)).toEqual(new Set([53]));
   });
 
+  it('keeps the pane divider aligned and every row within `cols` for emoji, a ZWJ sequence, CJK text and a tab', () => {
+    // A tab reaching this far would be a bug of its own (see keys.test.ts /
+    // reducer tests for where it is meant to be stopped) — this only pins
+    // that render() itself stays self-consistent if one ever does.
+    const out = screen({
+      cols: 100,
+      tasks,
+      messages: [
+        { role: 'assistant', content: 'Emoji ✅ and a family \u{1F468}‍\u{1F469}‍\u{1F467}‍\u{1F466} plus 日本語 and a\ttab.', timestamp: '' },
+      ],
+    });
+    const dividerColumns = out
+      .filter((line) => stripAnsi(line).includes('│'))
+      .map((line) => width(line.slice(0, line.indexOf('│'))));
+    expect(new Set(dividerColumns)).toEqual(new Set([53]));
+    for (const line of out) expect(width(line)).toBeLessThanOrEqual(100);
+  });
+
   it('still renders in a cramped terminal', () => {
     expect(() => render(initialState({ rows: 6, cols: 20, tasks }))).not.toThrow();
     expect(render(initialState({ rows: 6, cols: 20, tasks }))).toHaveLength(6);
