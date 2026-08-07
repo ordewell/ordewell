@@ -165,8 +165,21 @@ function harness() {
   app.start();
 
   const type = (text: string) => input.emit('data', text);
+  // A draw is now row-anchored (`terminal.ts`): each row is its own
+  // `ESC[<row>;1H<content>ESC[K` rather than one HOME-and-join blit, so
+  // reassembling "the screen" means picking each row's content out by its own
+  // position code and re-joining in row order.
+  // eslint-disable-next-line no-control-regex
+  const ROW = /\x1b\[(\d+);1H([\s\S]*?)\x1b\[K/g;
   const frames = () =>
-    output.writes.filter((w) => w.startsWith('\x1b[H')).map((w) => stripAnsi(w));
+    output.writes
+      .filter((w) => w.includes('\x1b[?7l'))
+      .map((w) => {
+        const rows = new Map<number, string>();
+        for (const m of w.matchAll(ROW)) rows.set(Number(m[1]), stripAnsi(m[2]));
+        const lastRow = Math.max(0, ...rows.keys());
+        return Array.from({ length: lastRow }, (_, i) => rows.get(i + 1) ?? '').join('\n');
+      });
   const screen = () => frames().at(-1) ?? '';
   // The transcript column only, unwrapped: everything left of the plan-pane
   // divider, with the pane's line wrapping collapsed back to single spaces.
@@ -505,7 +518,7 @@ describe('TUI end to end', () => {
 
     await vi.waitFor(() => expect(h.frames().length).toBeGreaterThan(framesBefore));
     const lastFrame = h.frames().at(-1)!;
-    expect(lastFrame.replace('\x1b[H', '').split('\n')).toHaveLength(30);
+    expect(lastFrame.split('\n')).toHaveLength(30);
     // The shrink/grow is preceded by a full clear so stale glyphs cannot linger.
     expect(h.output.writes).toContain('\x1b[2J');
   });
