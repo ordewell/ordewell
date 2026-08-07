@@ -58,4 +58,13 @@ describe('ESC while planning', () => {
     expect(effects).toEqual([]);
     expect(state.focus).toBe('chat');
   });
+
+  it('ctrl-c keeps quitting/backing-out meaning during an in-flight turn — it is not cancelPlanning', () => {
+    const base = initialState({ status: 'planning', sessionId: 'session-1' });
+    const state = { ...base, editor: { ...base.editor, text: 'unsent draft', cursor: 12 } };
+    const { state: next, effects } = reduce(state, { type: 'key', key: { name: 'ctrl-c' } });
+
+    expect(effects).toEqual([]);
+    expect(next.editor.text).toBe('');
+  });
 });

@@ -223,6 +223,21 @@ describe('Session.removeTask', () => {
   });
 });
 
+describe('Session.updateTask on a completed task', () => {
+  // The AI's task_ops path refuses this (see TaskOps.test.ts, "refuses to
+  // modify or remove a running or completed task"); the user's own hand edit
+  // is a different call and must not carry that same refusal — the plan
+  // belongs to the user, editing their own record of a finished step included.
+  it('is allowed — the user, not the planner, is the caller', async () => {
+    const session = makeSession({ modelResolver: resolverFor(CLAUDE_CATALOG) });
+    session.loadPlan(pausedOnUserTask(), 'goal', testWorkspace, { persist: false });
+
+    const state = await session.updateTask('a', { title: 'Setup (renamed)' });
+
+    expect(state!.tasks.find((t) => t.id === 'a')!.title).toBe('Setup (renamed)');
+  });
+});
+
 describe('Session.setTaskDependencies', () => {
   it('replaces the list', async () => {
     const session = makeSession({ modelResolver: resolverFor(CLAUDE_CATALOG) });

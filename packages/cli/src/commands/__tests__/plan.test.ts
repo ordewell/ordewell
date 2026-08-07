@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import http from 'http';
 import { ApiClient } from '../../apiClient';
 
@@ -59,7 +59,23 @@ async function planServer(routes: Record<string, unknown>, hits: string[]) {
   });
 }
 
-beforeEach(() => { savedSessions.length = 0; });
+const PLANNER_ENV_KEYS = ['AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'ORDEWELL_PLANNER_EFFORT'];
+let savedPlannerEnv: Record<string, string | undefined>;
+
+beforeEach(() => {
+  savedSessions.length = 0;
+  // handlePlan forwards these unconditionally; a value inherited from the
+  // host shell would make forwardPlannerEnv fire an extra, untested request.
+  savedPlannerEnv = Object.fromEntries(PLANNER_ENV_KEYS.map((k) => [k, process.env[k]]));
+  for (const k of PLANNER_ENV_KEYS) delete process.env[k];
+});
+
+afterEach(() => {
+  for (const k of PLANNER_ENV_KEYS) {
+    if (savedPlannerEnv[k] === undefined) delete process.env[k];
+    else process.env[k] = savedPlannerEnv[k];
+  }
+});
 
 describe('handlePlan', () => {
   it('uses the conversational endpoint by default', async () => {
