@@ -32,6 +32,32 @@ export function truncate(text: string, max: number): string {
   return out + '…';
 }
 
+/**
+ * A literal tab expands to the next hardware tab stop on the real terminal
+ * but `string-width` counts it as zero columns (verified: `stringWidth('\t')
+ * === 0`), so any row that still has one in it is wider on screen than every
+ * layout calculation in this package believes. Replaced with a single space
+ * rather than expanded to a tab stop's width — transcript text has no columns
+ * of its own to keep aligned, so there is nothing a stop-aware expansion would
+ * preserve that a single space does not.
+ */
+export function stripTabs(text: string): string {
+  return text.replace(/\t/g, ' ');
+}
+
+/**
+ * A literal tab expands to the next hardware tab stop on the real terminal
+ * but `string-width` counts it as zero columns (verified: `stringWidth('\t')
+ * === 0`), so any row that still has one in it is wider on screen than every
+ * layout calculation in this package believes. Replaced with a single space
+ * rather than expanded to a tab stop's width — transcript text has no columns
+ * of its own to keep aligned, so there is nothing a stop-aware expansion would
+ * preserve that a single space does not.
+ */
+export function stripTabs(text: string): string {
+  return text.replace(/\t/g, ' ');
+}
+
 export function pad(text: string, target: number): string {
   const current = width(text);
   if (current > target) return truncate(text, target);
