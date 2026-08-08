@@ -6,6 +6,9 @@ export interface Key {
   char?: string;
   /** Only set for `name: 'paste'` — a whole bracketed paste, line endings normalized. */
   text?: string;
+  /** Only set for wheel keys — the 1-based cell the pointer was over. */
+  col?: number;
+  row?: number;
 }
 
 const CONTROL: Record<string, string> = {
@@ -71,20 +74,55 @@ const ESCAPES: Record<string, string> = {
   '\x1b\n': 'alt-enter',
 };
 
-// Decode SGR wheel reports. Only arrive while mouse capture is on, which is
-// opt-in — see terminal.ts for why.
-const MOUSE_WHEEL_UP = 64;
-const MOUSE_WHEEL_DOWN = 65;
+// Decode wheel reports. Only arrive while mouse capture is on — see terminal.ts.
+//
+// A button byte is a bit field, not an enum: 64 marks the wheel, the low two
+// bits pick the direction, and shift (4), alt (8), ctrl (16) and the motion
+// flag (32) ride on top. Comparing the whole number against 64/65 therefore
+// dropped every Shift/Alt/Ctrl+wheel notch and every report a terminal chose to
+// tag as motion — masking is what makes the wheel work regardless of which
+// modifiers happen to be held.
+const WHEEL_FLAG = 64;
+const BUTTON_MASK = 0b11;
+const MOUSE_MODIFIERS = 4 | 8 | 16 | 32;
+
+function wheelKey(button: number, col: number, row: number): Key {
+  if ((button & WHEEL_FLAG) === 0) return { name: 'unknown' };
+  switch (button & ~MOUSE_MODIFIERS & (WHEEL_FLAG | BUTTON_MASK)) {
+    case WHEEL_FLAG: return { name: 'scrollup', col, row };
+    case WHEEL_FLAG | 1: return { name: 'scrolldown', col, row };
+    // 66/67 are the horizontal wheel. Nothing here scrolls sideways, so they
+    // are dropped on purpose rather than falling through to `unknown`, which
+    // the overlays treat as "some key" and would use to close themselves.
+    default: return { name: 'wheelignored' };
+  }
+}
+
+// The three encodings a terminal might use, in the order they are worth
+// trying: SGR (1006) is what terminal.ts asks for, urxvt (1015) is what some
+// builds answer with instead, and X10 is the unnegotiated fallback every
+// terminal understands — tmux forwards it verbatim when 1006 is not honored.
 // eslint-disable-next-line no-control-regex
-const SGR_MOUSE = /^\x1b\[<(\d+);\d+;\d+[Mm]$/;
+const SGR_MOUSE = /^\x1b\[<(\d+);(\d+);(\d+)[Mm]$/;
+// eslint-disable-next-line no-control-regex
+const URXVT_MOUSE = /^\x1b\[(\d+);(\d+);(\d+)M$/;
+const X10_PREFIX = '\x1b[M';
+/** X10 packs button, column and row as single bytes biased by 32. */
+const X10_BIAS = 32;
 
 function decodeMouse(seq: string): Key | undefined {
-  const match = SGR_MOUSE.exec(seq);
-  if (!match) return undefined;
-  const button = Number(match[1]);
-  if (button === MOUSE_WHEEL_UP) return { name: 'scrollup' };
-  if (button === MOUSE_WHEEL_DOWN) return { name: 'scrolldown' };
-  return { name: 'unknown' };
+  const sgr = SGR_MOUSE.exec(seq);
+  if (sgr) return wheelKey(Number(sgr[1]), Number(sgr[2]), Number(sgr[3]));
+
+  const urxvt = URXVT_MOUSE.exec(seq);
+  if (urxvt) return wheelKey(Number(urxvt[1]) - X10_BIAS, Number(urxvt[2]), Number(urxvt[3]));
+
+  if (seq.startsWith(X10_PREFIX) && seq.length === X10_PREFIX.length + 3) {
+    const bytes = [0, 1, 2].map((n) => seq.charCodeAt(X10_PREFIX.length + n) - X10_BIAS);
+    return wheelKey(bytes[0], bytes[1], bytes[2]);
+  }
+
+  return undefined;
 }
 
 /**
@@ -99,7 +137,10 @@ export function decodeKey(seq: string): Key {
   const control = CONTROL[seq];
   if (control) return { name: control };
 
-  if (seq.startsWith('\x1b[<')) return decodeMouse(seq) ?? { name: 'unknown' };
+  if (seq.startsWith('\x1b[')) {
+    const mouse = decodeMouse(seq);
+    if (mouse) return mouse;
+  }
 
   if (seq.startsWith('\x1b')) return { name: 'unknown' };
 
@@ -130,10 +171,12 @@ function pasteKey(raw: string): Key {
  */
 export function createKeyDecoder(): (chunk: string) => Key[] {
   let paste: string | null = null;
+  let pending = '';
 
   return (chunk) => {
     const keys: Key[] = [];
-    let rest = chunk;
+    let rest = pending + chunk;
+    pending = '';
 
     while (rest.length > 0) {
       if (paste !== null) {
@@ -151,7 +194,9 @@ export function createKeyDecoder(): (chunk: string) => Key[] {
 
       const start = rest.indexOf(PASTE_START);
       if (start === -1) {
-        keys.push(...splitKeys(rest));
+        const split = splitPending(rest);
+        keys.push(...split.keys);
+        pending = split.pending;
         return keys;
       }
       if (start > 0) keys.push(...splitKeys(rest.slice(0, start)));
@@ -163,12 +208,63 @@ export function createKeyDecoder(): (chunk: string) => Key[] {
   };
 }
 
+/** Meta-letter, Meta-Backspace and Meta-Enter are two-byte sequences. */
+const TWO_BYTE_META = new Set(['b', 'd', 'f', '\x7f', '\b', '\r', '\n']);
+
+/** Parameter and intermediate bytes of a CSI, everything before its final byte. */
+// eslint-disable-next-line no-control-regex
+const CSI_BODY = /[\x20-\x3f]/;
+const CSI_FINAL = /[@-~]/;
+
 /**
- * Split one raw stdin chunk into keys. A chunk can hold several keystrokes — a
- * fast typist, a held arrow key, or a paste — and an escape sequence must stay
- * whole or its letters would be typed into the input as `[A`.
+ * How far a partial sequence is worth waiting for. A lone ESC the user pressed
+ * looks exactly like the start of one, so an unbounded wait would swallow the
+ * escape key until the next keystroke arrived to flush it.
  */
-export function splitKeys(chunk: string): Key[] {
+const MAX_PENDING = 32;
+
+/** Sentinel from `sequenceEnd`: the chunk ran out mid-sequence. */
+const INCOMPLETE = -1;
+
+function csiEnd(chars: string[], start: number, from: number): number {
+  let end = from;
+  while (end < chars.length && !CSI_FINAL.test(chars[end])) {
+    // A byte outside the parameter range cannot belong to this sequence, so
+    // there is no final byte coming: stop here rather than wait for one.
+    if (!CSI_BODY.test(chars[end])) return end;
+    end += 1;
+  }
+  if (end >= chars.length) return end - start >= MAX_PENDING ? end : INCOMPLETE;
+  return end + 1;
+}
+
+/**
+ * Where the escape sequence starting at `i` ends, or `INCOMPLETE` when the
+ * chunk stops partway through one. CSI/SS3 sequences run until a final byte in
+ * the @–~ range; anything else after ESC is a lone escape key.
+ */
+function sequenceEnd(chars: string[], i: number): number {
+  const next = chars[i + 1];
+  if (next === undefined) return i + 1;
+
+  if (next === '[' && chars[i + 2] === 'M') {
+    // The one CSI whose length is not delimited: `M` is its final byte, and
+    // the three coordinate bytes after it are data, not keystrokes. Ending
+    // the sequence at `M` typed them into the editor instead.
+    return i + X10_PREFIX.length + 3 <= chars.length ? i + X10_PREFIX.length + 3 : INCOMPLETE;
+  }
+  if (next === '[' || next === 'O') return csiEnd(chars, i, i + 2);
+  if (TWO_BYTE_META.has(next)) return i + 2;
+  // Some terminals encode Alt+Arrow as ESC followed by a normal arrow.
+  if (next === '\x1b' && (chars[i + 2] === '[' || chars[i + 2] === 'O')) return csiEnd(chars, i, i + 3);
+  return i + 1;
+}
+
+/**
+ * The shared scan behind both `splitKeys` and the stateful decoder: keys, plus
+ * whatever trailing bytes are the start of a sequence the chunk cut short.
+ */
+function splitPending(chunk: string): { keys: Key[]; pending: string } {
   const keys: Key[] = [];
   const chars = [...chunk];
   let i = 0;
@@ -180,36 +276,26 @@ export function splitKeys(chunk: string): Key[] {
       continue;
     }
 
-    // CSI/SS3 sequences run until a final byte in the @–~ range; anything else
-    // after ESC is a lone escape key.
-    let end = i + 1;
-    if (chars[end] === '[' || chars[end] === 'O') {
-      end += 1;
-      while (end < chars.length && !/[@-~]/.test(chars[end])) end += 1;
-      end += 1;
-    } else if (
-      chars[end] === 'b' ||
-      chars[end] === 'd' ||
-      chars[end] === 'f' ||
-      chars[end] === '\x7f' ||
-      chars[end] === '\b' ||
-      chars[end] === '\r' ||
-      chars[end] === '\n'
-    ) {
-      // Meta-letter, Meta-Backspace and Meta-Enter are two-byte sequences.
-      end += 1;
-    } else if (
-      chars[end] === '\x1b' &&
-      (chars[end + 1] === '[' || chars[end + 1] === 'O')
-    ) {
-      // Some terminals encode Alt+Arrow as ESC followed by a normal arrow.
-      end += 2;
-      while (end < chars.length && !/[@-~]/.test(chars[end])) end += 1;
-      end += 1;
-    }
+    const end = sequenceEnd(chars, i);
+    if (end === INCOMPLETE) return { keys, pending: chars.slice(i).join('') };
     keys.push(decodeKey(chars.slice(i, end).join('')));
     i = end;
   }
 
+  return { keys, pending: '' };
+}
+
+/**
+ * Split one raw stdin chunk into keys. A chunk can hold several keystrokes — a
+ * fast typist, a held arrow key, or a paste — and an escape sequence must stay
+ * whole or its letters would be typed into the input as `[A`.
+ *
+ * Stateless, so a chunk that ends mid-sequence has no next chunk to wait for:
+ * the truncated tail is decoded now, which makes it `unknown` rather than
+ * letters in the editor. `createKeyDecoder` is the one that can wait.
+ */
+export function splitKeys(chunk: string): Key[] {
+  const { keys, pending } = splitPending(chunk);
+  if (pending) keys.push(decodeKey(pending));
   return keys;
 }

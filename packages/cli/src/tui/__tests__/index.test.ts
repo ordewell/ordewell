@@ -17,8 +17,10 @@ const daemonClient = vi.hoisted(() => ({
 const fakeTerminal = vi.hoisted(() => {
   const state = {
     onKey: undefined as ((key: Key) => void) | undefined,
+    mouse: undefined as boolean | undefined,
     draw: vi.fn(),
     close: vi.fn(),
+    reset: vi.fn(),
   };
   return state;
 });
@@ -27,16 +29,23 @@ vi.mock('../../daemonClient', () => daemonClient);
 vi.mock('../../utils/env', () => ({ findEnvFile: vi.fn(() => '/ws/.env'), writeEnvVar: vi.fn() }));
 vi.mock('../terminalLauncher', () => ({ openTaskTerminal: vi.fn() }));
 vi.mock('../terminal', () => ({
-  openTerminal: vi.fn((options: { onKey(key: Key): void }) => {
+  openTerminal: vi.fn((options: { onKey(key: Key): void; mouse?: boolean }) => {
     fakeTerminal.onKey = options.onKey;
-    return { size: () => ({ rows: 24, cols: 80 }), draw: fakeTerminal.draw, close: fakeTerminal.close };
+    fakeTerminal.mouse = options.mouse;
+    return {
+      size: () => ({ rows: 24, cols: 80 }),
+      draw: fakeTerminal.draw,
+      close: fakeTerminal.close,
+      reset: fakeTerminal.reset,
+      setMouse: vi.fn(),
+    };
   }),
 }));
 
 import { handleTui } from '../index';
 
-type SignalName = 'SIGINT' | 'SIGTERM' | 'SIGHUP' | 'uncaughtException';
-const SIGNALS: SignalName[] = ['SIGINT', 'SIGTERM', 'SIGHUP', 'uncaughtException'];
+type SignalName = 'SIGINT' | 'SIGTERM' | 'SIGHUP' | 'SIGCONT' | 'uncaughtException';
+const SIGNALS: SignalName[] = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGCONT', 'uncaughtException'];
 
 // Signal names are widened to `never` at the call because `process.listeners`
 // overloads on the built-in event union; take the listener type from the call
@@ -115,6 +124,33 @@ describe('handleTui', () => {
     const frame = (fakeTerminal.draw.mock.calls.at(-1)![0] as string[]).join('\n');
     expect(frame).toContain('○ auto');
     vi.unstubAllEnvs();
+  });
+
+  it('captures the mouse by default, so the wheel works without anyone opting in', async () => {
+    void handleTui([]);
+
+    await vi.waitFor(() => expect(fakeTerminal.draw).toHaveBeenCalled());
+    expect(fakeTerminal.mouse).toBe(true);
+  });
+
+  it.each(['false', '0'])('leaves the mouse alone when ORDEWELL_TUI_MOUSE=%s says so', async (value) => {
+    vi.stubEnv('ORDEWELL_TUI_MOUSE', value);
+    void handleTui([]);
+
+    await vi.waitFor(() => expect(fakeTerminal.draw).toHaveBeenCalled());
+    expect(fakeTerminal.mouse).toBe(false);
+    vi.unstubAllEnvs();
+  });
+
+  it('rebuilds the terminal and repaints on SIGCONT, after a Ctrl-Z hands it back bare', async () => {
+    void handleTui([]);
+    await vi.waitFor(() => expect(fakeTerminal.draw).toHaveBeenCalled());
+
+    fakeTerminal.draw.mockClear();
+    process.emit('SIGCONT');
+
+    await vi.waitFor(() => expect(fakeTerminal.reset).toHaveBeenCalled());
+    expect(fakeTerminal.draw).toHaveBeenCalled();
   });
 
   it('ctrl-c tears down: terminal restored, owned daemon stopped, process exits 0', async () => {

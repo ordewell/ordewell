@@ -2,12 +2,12 @@ import { ALL_PROVIDERS, CLI_PROVIDERS, PROVIDER_PRIORITY, runnerForProvider, typ
 import { dependencyCandidates, dependentsOf } from '@ordewell/core/plan-utils';
 import { stripTabs } from './ansi';
 import { applyKey, commit, emptyEditor, type EditorState } from './editor';
-import { chatEditorRoom, taskEditorRoom } from './geometry';
+import { chatEditorRoom, chatPaneWidth, planPaneWidth, taskEditorRoom } from './geometry';
 import { bodyRows, chatScrollMax, helpScrollMax, planScrollExtent } from './layout';
 import { completions, findCommand, parseSlash, type ParsedCommand } from './slash';
 import {
   initialState, SKILL_IDS, visibleItems,
-  type ChatMessage, type MessageRole, type ModeView, type ModelView, type PickerItem, type PickerState,
+  type ChatMessage, type Focus, type MessageRole, type ModeView, type ModelView, type PickerItem, type PickerState,
   type ApprovalRequestView, type RunnerView, type SessionView, type SkillId, type TaskView, type TuiState,
 } from './state';
 import { assignedModelFor, effortsForTask, modelsForRunner, modelsForTask, modesForTask, runnerAccepts } from './taskAssignment';
@@ -682,6 +682,32 @@ function scrollDelta(key: Key, state: TuiState): number | null {
   return null;
 }
 
+const isWheel = (key: Key): boolean => key.name === 'scrollup' || key.name === 'scrolldown';
+
+/**
+ * The pane a wheel notch belongs to: the one the pointer is over, falling back
+ * to the focused one when there is no plan pane or the report carried no
+ * coordinates.
+ *
+ * Focus-based routing is what made one pane read as frozen — hovering the task
+ * list while typing in the chat scrolled the chat, so the list under the
+ * pointer never moved. The keyboard's page keys keep following focus, because
+ * the keyboard has no pointer to ask.
+ *
+ * The divider counts as the plan side: a one-column dead strip between two
+ * scrollable panes is a bug the user would experience as the wheel randomly
+ * failing.
+ */
+function wheelPane(state: TuiState, key: Key): Focus {
+  if (key.col === undefined || planPaneWidth(state) === 0) return state.focus;
+  return key.col <= chatPaneWidth(state) ? 'chat' : 'plan';
+}
+
+function scrollPointed(state: TuiState, key: Key): Step {
+  const delta = key.name === 'scrollup' ? WHEEL_NOTCH : -WHEEL_NOTCH;
+  return wheelPane(state, key) === 'plan' ? scrollPlan(state, delta) : scrollChat(state, delta);
+}
+
 function clamp(value: number, max: number): number {
   return Math.max(0, Math.min(max, value));
 }
@@ -741,6 +767,9 @@ function handleKey(state: TuiState, key: Key): Step {
     return stopPlanning(state, state.sessionId);
   }
   if (state.overlay) return handleOverlayKey(state, state.overlay, key);
+  // Above the focus split, because a wheel notch is aimed, not focused.
+  if (isWheel(key)) return scrollPointed(state, key);
+  if (key.name === 'wheelignored') return step(state);
   if (key.name === 'tab' && state.focus === 'chat') {
     const matches = completions(state.editor.text);
     if (matches.length > 0) {
@@ -828,9 +857,8 @@ function handlePlanKey(state: TuiState, key: Key): Step {
     });
   }
 
-  // pageup/pagedown are the keyboard equivalent of the wheel here, and with the
-  // mouse uncaptured by default (see terminal.ts) they are the only way to reach
-  // a plan taller than the pane without dragging the selection through it.
+  // pageup/pagedown only — a wheel notch is routed by the pointer well above
+  // this, and never reaches the focused pane's handler.
   const scroll = scrollDelta(key, state);
   if (scroll !== null) return scrollPlan(state, scroll);
 
@@ -871,8 +899,8 @@ function handlePlanKey(state: TuiState, key: Key): Step {
 function handleTaskEditKey(state: TuiState, task: TaskView, editor: EditorState, key: Key): Step {
   if (key.name === 'enter') return commitTaskEdit(state, task, editor);
   if (key.name === 'escape') return step({ ...state, expandedTaskId: null, taskEditor: null });
-  // A real SGR mouse report (see terminal.ts) still scrolls the pane rather
-  // than the text, same as when nothing is expanded.
+  // The page keys still scroll the pane rather than move through the text,
+  // same as when nothing is expanded.
   const scroll = scrollDelta(key, state);
   if (scroll !== null) return scrollPlan(state, scroll);
   return step({ ...state, taskEditor: applyKey(editor, key, taskEditorRoom(state)) });
@@ -942,6 +970,14 @@ function handleApprovalKey(
 
 function handleOverlayKey(state: TuiState, overlay: NonNullable<TuiState['overlay']>, key: Key): Step {
   if (overlay.kind === 'help') return handleHelpKey(state, overlay.scroll ?? 0, key);
+  // A sideways notch is not a keystroke, and every overlay below reads an
+  // unhandled key as a cue to close or to hold still.
+  if (key.name === 'wheelignored') return step(state);
+  // The pickers turn a notch into selection movement, which is what scrolls
+  // their list. Everything else here floats over the panes with nothing of its
+  // own to scroll, so the notch belongs to the pane underneath rather than in
+  // the bin — an approval prompt used to freeze both panes solid.
+  if (isWheel(key) && overlay.kind !== 'picker') return scrollPointed(state, key);
   if (overlay.kind === 'approval') return handleApprovalKey(state, overlay, key);
   if (overlay.kind === 'confirm') return handleConfirmKey(state, overlay, key);
   if (key.name === 'escape') return step({ ...state, overlay: null });
@@ -1021,8 +1057,10 @@ function handlePickerKey(state: TuiState, picker: PickerState, key: Key): Step {
   const items = visibleItems(picker);
   const reopen = (next: PickerState): Step => step({ ...state, overlay: { kind: 'picker', picker: next } });
 
-  if (key.name === 'up') return reopen({ ...picker, index: Math.max(0, picker.index - 1) });
-  if (key.name === 'down') return reopen({ ...picker, index: Math.min(items.length - 1, picker.index + 1) });
+  if (key.name === 'up' || key.name === 'scrollup') return reopen({ ...picker, index: Math.max(0, picker.index - 1) });
+  if (key.name === 'down' || key.name === 'scrolldown') {
+    return reopen({ ...picker, index: Math.min(items.length - 1, picker.index + 1) });
+  }
 
   // Space toggles membership in a multi-select; elsewhere it is filter text.
   if (picker.multi && key.name === 'char' && key.char === ' ') {

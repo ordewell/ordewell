@@ -523,6 +523,36 @@ describe('TUI end to end', () => {
     expect(h.output.writes).toContain('\x1b[2J');
   });
 
+  it('a wheel report split across two stdin chunks scrolls the transcript and types nothing', async () => {
+    // The whole path from raw bytes to a moved viewport: a fast wheel is
+    // exactly when stdin hands the report over in two pieces, and the tail used
+    // to arrive as `;5M` in the input line.
+    const h = harness();
+    await settle();
+    for (let i = 0; i < 40; i++) h.app.dispatch({ type: 'notice', message: `line ${i}` });
+    await settle();
+    expect(h.app.getState().scroll).toBe(0);
+
+    h.type('\x1b[<64;10');
+    h.type(';5M');
+
+    await vi.waitFor(() => expect(h.app.getState().scroll).toBe(3));
+    expect(h.app.getState().editor.text).toBe('');
+  });
+
+  it('a Ctrl+wheel report in the X10 encoding scrolls just as well', async () => {
+    const h = harness();
+    await settle();
+    for (let i = 0; i < 40; i++) h.app.dispatch({ type: 'notice', message: `line ${i}` });
+    await settle();
+
+    // Button 80: the wheel's 64 with ctrl's 16 on top, biased by 32 for X10.
+    h.type(`\x1b[M${String.fromCharCode(80 + 32)}\x30\x25`);
+
+    await vi.waitFor(() => expect(h.app.getState().scroll).toBe(3));
+    expect(h.app.getState().editor.text).toBe('');
+  });
+
   it('ctrl-c exits and restores the terminal', async () => {
     const h = harness();
     await settle();

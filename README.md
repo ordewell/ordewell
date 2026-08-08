@@ -244,10 +244,12 @@ For VS Code, install the extension and open the Ordewell panel — see Quick Sta
 
 API keys typed into `/key` are masked on screen and written to your `.env`.
 
-Text is selectable and copyable with the mouse, as in any other program: Ordewell
-does not capture the terminal's mouse. Scroll with `pgup`/`pgdn`. If you would
-rather have wheel scrolling and can live without drag-to-select, `/mouse on`
-swaps the trade (and remembers it via `ORDEWELL_TUI_MOUSE` in your `.env`).
+The mouse wheel scrolls whichever pane the pointer is over — transcript or plan
+— regardless of which one has keyboard focus, and `pgup`/`pgdn` scroll the
+focused one. Capturing the mouse for the wheel is what disables the terminal's
+own drag-to-select, so `/mouse off` hands it back when you need to copy text out
+(remembered via `ORDEWELL_TUI_MOUSE` in your `.env`, and `ORDEWELL_TUI_MOUSE=false`
+in the environment turns it off everywhere).
 
 A task's own terminal is a tmux window, where tmux does hold the mouse so the
 wheel scrolls its scrollback. Selecting there still copies to your system

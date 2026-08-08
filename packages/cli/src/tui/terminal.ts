@@ -15,12 +15,16 @@ const PASTE_MODE_OFF = '\x1b[?2004l';
 const KITTY_KEYBOARD_ON = '\x1b[>1u';
 const KITTY_KEYBOARD_OFF = '\x1b[<u';
 // Normal tracking (1000) reports button/wheel events; SGR encoding (1006) is
-// the format keys.ts's decodeMouse expects. Off by default, and that is the
-// whole point: an app that captures the mouse takes drag-select with it, and
-// Shift+drag is not the universal escape hatch it is often claimed to be
-// (Terminal.app wants Fn, iTerm2 Option, tmux swallows it first). Copying text
-// out of the transcript matters more here than a three-line wheel notch, so the
-// wheel is opt-in via `/mouse on`.
+// the format keys.ts's decodeMouse prefers, though it decodes the X10 and urxvt
+// forms a terminal may answer with instead.
+//
+// On by default. It was opt-in for a while, on the grounds that capturing the
+// mouse takes the terminal's own drag-select with it and Shift+drag is not the
+// universal escape hatch it is claimed to be (Terminal.app wants Fn, iTerm2
+// Option, tmux swallows it first). What sank that was where the opt-in lived:
+// `ORDEWELL_TUI_MOUSE` in the workspace `.env`, so the wheel came back dead in
+// every other project and read as the TUI randomly ignoring the mouse. `/mouse
+// off` is the escape hatch for a session where selecting text matters more.
 const MOUSE_TRACKING_ON = '\x1b[?1000h\x1b[?1006h';
 const MOUSE_TRACKING_OFF = '\x1b[?1000l\x1b[?1006l';
 // Alternate scroll (1007) makes the terminal fake arrow keys for the wheel
@@ -45,7 +49,7 @@ const AUTOWRAP_ON = '\x1b[?7h';
 export interface TerminalOptions {
   input?: NodeJS.ReadStream;
   output?: NodeJS.WriteStream;
-  /** Capture the mouse for wheel scrolling, at the cost of drag-select. Off unless asked for. */
+  /** Capture the mouse for wheel scrolling, at the cost of drag-select. On unless refused. */
   mouse?: boolean;
   onKey(key: Key): void;
   onResize(rows: number, cols: number): void;
@@ -56,6 +60,12 @@ export interface Terminal {
   draw(frame: string[]): void;
   /** Trade drag-select for wheel scrolling, or take it back. */
   setMouse(enabled: boolean): void;
+  /**
+   * Re-establish every mode this app owns. For resuming after Ctrl-Z, where the
+   * shell got the terminal back and handed over a plain one — nothing above
+   * this file needs to know which escapes that involves. Caller redraws after.
+   */
+  reset(): void;
   close(): void;
 }
 
@@ -86,10 +96,16 @@ export function openTerminal(options: TerminalOptions): Terminal {
 
   let mouse = options.mouse === true;
 
-  output.write(
+  /**
+   * Every mode the app owns, in one string. Written at open and again by
+   * `reset()`; all of it is idempotent, so re-sending it costs a few bytes and
+   * settles whatever a tmux reattach or a Ctrl-Z left behind.
+   */
+  const modes = (): string =>
     ALT_SCREEN_ON + HIDE_CURSOR + PASTE_MODE_ON + KITTY_KEYBOARD_ON +
-    ALT_SCROLL_SAVE + ALT_SCROLL_OFF + (mouse ? MOUSE_TRACKING_ON : '') + CLEAR,
-  );
+    ALT_SCROLL_SAVE + ALT_SCROLL_OFF + (mouse ? MOUSE_TRACKING_ON : '');
+
+  output.write(modes() + CLEAR);
 
   const decode = createKeyDecoder();
   const onData = (chunk: string) => {
@@ -99,7 +115,13 @@ export function openTerminal(options: TerminalOptions): Terminal {
     // A shrink leaves glyphs beyond the new frame that row-anchored erase
     // never touches (it only erases within each row the new frame writes);
     // start the next draw from a clean screen.
-    output.write(CLEAR);
+    //
+    // Tracking is re-armed alongside, because the events that resize us are the
+    // same ones that silently clear DEC private modes — a tmux detach and
+    // reattach above all. Re-enabling a mode that is already on costs nothing;
+    // believing we hold a mouse we lost costs the user their wheel until they
+    // toggle `/mouse` off and on again.
+    output.write(CLEAR + (mouse ? MOUSE_TRACKING_ON : ''));
     const { rows, cols } = size();
     options.onResize(rows, cols);
   };
@@ -133,6 +155,10 @@ export function openTerminal(options: TerminalOptions): Terminal {
       if (closed || enabled === mouse) return;
       mouse = enabled;
       output.write(enabled ? MOUSE_TRACKING_ON : MOUSE_TRACKING_OFF);
+    },
+    reset() {
+      if (closed) return;
+      output.write(modes() + CLEAR);
     },
     close() {
       if (closed) return;

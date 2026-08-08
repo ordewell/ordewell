@@ -45,9 +45,11 @@ export async function handleTui(subArgs: string[]): Promise<void> {
   // Mirror BaseConfig.autonomousMode so the badge starts truthful when
   // ORDEWELL_AUTONOMOUS_MODE is already set in the environment or .env.
   const autoMode = process.env.ORDEWELL_AUTONOMOUS_MODE;
-  // Opt-in, and remembered across launches once opted in — see terminal.ts for
-  // why capturing the mouse is not the default.
-  const mouseCapture = process.env.ORDEWELL_TUI_MOUSE === 'true' || process.env.ORDEWELL_TUI_MOUSE === '1';
+  // On unless explicitly refused. It used to be opt-in, but the opt-in was
+  // persisted per workspace (`.env`), so the wheel died again in every other
+  // project — a setting nobody can keep track of. `/mouse off` still hands the
+  // mouse back for drag-select, and this env var makes that stick.
+  const mouseCapture = process.env.ORDEWELL_TUI_MOUSE !== 'false' && process.env.ORDEWELL_TUI_MOUSE !== '0';
 
   const app = createApp({
     initial: { workspace, autonomous: autoMode !== 'false' && autoMode !== '0', mouseCapture },
@@ -106,6 +108,15 @@ export async function handleTui(subArgs: string[]): Promise<void> {
   process.on('SIGINT', () => shutdown(0));
   process.on('SIGTERM', () => shutdown(0));
   process.on('SIGHUP', () => shutdown(0));
+  // Ctrl-Z then `fg`: the shell had the terminal in between and handed back a
+  // plain one — main screen, cursor shown, none of our modes, and in particular
+  // no mouse tracking, which is why the wheel died until `/mouse` was toggled.
+  // `reset()` owns the escapes; this only has to ask for them and repaint.
+  process.on('SIGCONT', () => {
+    terminal?.reset();
+    const { rows: r, cols: c } = terminal?.size() ?? { rows: 24, cols: 80 };
+    app.dispatch({ type: 'resize', rows: r, cols: c });
+  });
   process.on('uncaughtException', (err) => {
     console.error(`Fatal: ${err.message}`);
     shutdown(1);

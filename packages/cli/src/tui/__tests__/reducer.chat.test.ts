@@ -287,3 +287,77 @@ describe('reduce — scrolling the transcript', () => {
   });
 
 });
+
+describe('reduce — the wheel scrolls the pane under the pointer', () => {
+  // 80 columns puts the plan pane at 36 wide, so the chat holds columns 1–43,
+  // the divider sits at 44, and the plan runs 45–80.
+  const CHAT_COLUMN = 10;
+  const PLAN_COLUMN = 60;
+
+  const bothPanes = (over: Partial<TuiState> = {}): TuiState => initialState({
+    rows: 24,
+    cols: 80,
+    messages: Array.from({ length: 40 }, (_, i) => ({ role: 'user' as const, content: `m${i}`, timestamp: '' })),
+    tasks: Array.from({ length: 30 }, (_, i) => ({
+      id: `t${i}`, order: i + 1, title: `Task ${i}`, type: 'ai' as const,
+      status: 'pending', dependencies: [], assignedRunner: 'claude-code',
+    })),
+    ...over,
+  });
+
+  const wheel = (state: TuiState, name: string, col: number) =>
+    reduce(state, { type: 'key', key: { name, col, row: 5 } }).state;
+
+  it('scrolls the plan when the pointer is over it, even though the chat has focus', () => {
+    const before = bothPanes({ focus: 'chat' });
+    const after = wheel(before, 'scrollup', PLAN_COLUMN);
+
+    expect(after.planScroll).not.toBe(before.planScroll);
+    expect(after.scroll).toBe(0);
+  });
+
+  it('scrolls the chat when the pointer is over it, even though the plan has focus', () => {
+    const after = wheel(bothPanes({ focus: 'plan' }), 'scrollup', CHAT_COLUMN);
+
+    expect(after.scroll).toBe(3);
+    expect(after.planScroll).toBeNull();
+  });
+
+  it('treats the divider column as the plan pane, so its edge is not a dead strip', () => {
+    const after = wheel(bothPanes({ focus: 'chat' }), 'scrollup', 44);
+
+    expect(after.planScroll).not.toBeNull();
+    expect(after.scroll).toBe(0);
+  });
+
+  it('falls back to the focused pane for a report carrying no coordinates', () => {
+    const after = reduce(bothPanes({ focus: 'plan' }), { type: 'key', key: { name: 'scrollup' } }).state;
+
+    expect(after.planScroll).not.toBeNull();
+    expect(after.scroll).toBe(0);
+  });
+
+  it('keeps pageup on the focused pane, wherever the pointer happens to rest', () => {
+    const after = reduce(bothPanes({ focus: 'plan' }), { type: 'key', key: { name: 'pageup' } }).state;
+
+    expect(after.planScroll).not.toBeNull();
+    expect(after.scroll).toBe(0);
+  });
+
+  it('routes by focus when there is no plan pane to point at', () => {
+    const noPlan = initialState({
+      rows: 24,
+      cols: 80,
+      messages: Array.from({ length: 40 }, (_, i) => ({ role: 'user' as const, content: `m${i}`, timestamp: '' })),
+    });
+
+    expect(wheel(noPlan, 'scrollup', PLAN_COLUMN).scroll).toBe(3);
+  });
+
+  it('ignores a sideways wheel notch instead of letting it reach the editor', () => {
+    const before = bothPanes({ focus: 'chat' });
+    const after = reduce(before, { type: 'key', key: { name: 'wheelignored', col: 10, row: 5 } }).state;
+
+    expect(after).toEqual(before);
+  });
+});

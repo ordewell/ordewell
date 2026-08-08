@@ -659,3 +659,85 @@ describe('global keys', () => {
     expect(s.editor.text).toBe('');
   });
 });
+
+describe('the wheel reaches past an overlay', () => {
+  /** Both panes with more content than fits, so either one has room to move. */
+  const behindOverlay = (overlay: TuiState['overlay'], over: Partial<TuiState> = {}): TuiState => initialState({
+    rows: 24,
+    cols: 80,
+    messages: Array.from({ length: 40 }, (_, i) => ({ role: 'user' as const, content: `m${i}`, timestamp: '' })),
+    tasks: Array.from({ length: 30 }, (_, i) => ({
+      id: `t${i}`, order: i + 1, title: `Task ${i}`, type: 'ai' as const,
+      status: 'pending', dependencies: [], assignedRunner: 'claude-code',
+    })),
+    overlay,
+    ...over,
+  });
+
+  const notch = (state: TuiState, col: number): TuiState =>
+    reduce(state, { type: 'key', key: { name: 'scrollup', col, row: 5 } }).state;
+
+  const APPROVAL: TuiState['overlay'] = {
+    kind: 'approval',
+    request: { id: 'a1', kind: 'shell_command', subject: 'npm test', scope: 'once' },
+  };
+  const CONFIRM: TuiState['overlay'] = {
+    kind: 'confirm', title: 'Remove?', message: 'Sure?', action: { kind: 'remove-task', taskId: 't1' },
+  };
+  const PROMPT: TuiState['overlay'] = {
+    kind: 'prompt', title: 'New task', value: 'draft', action: { kind: 'add-task' },
+  };
+
+  it.each([
+    ['an approval prompt', APPROVAL],
+    ['a confirm', CONFIRM],
+    ['an add-task prompt', PROMPT],
+  ])('scrolls the chat underneath %s rather than dropping the notch', (_label, overlay) => {
+    const before = behindOverlay(overlay);
+    const after = notch(before, 10);
+
+    expect(after.scroll).toBe(3);
+    // The overlay is still the user's to answer — scrolling is not an answer.
+    expect(after.overlay).toEqual(overlay);
+  });
+
+  it.each([
+    ['an approval prompt', APPROVAL],
+    ['a confirm', CONFIRM],
+    ['an add-task prompt', PROMPT],
+  ])('scrolls the plan underneath %s when the pointer is over it', (_label, overlay) => {
+    const after = notch(behindOverlay(overlay), 60);
+
+    expect(after.planScroll).not.toBeNull();
+    expect(after.scroll).toBe(0);
+  });
+
+  it('leaves an add-task draft untouched while the wheel turns', () => {
+    expect(notch(behindOverlay(PROMPT), 10).overlay).toEqual(PROMPT);
+  });
+
+  it('moves the picker highlight with the wheel instead of ignoring it', () => {
+    // A picker is a list, not a viewport: the notch moves the selection, which
+    // is the movement the user is after and what scrolls the list as a result.
+    let s = withPicker({});
+    s = reduce(s, { type: 'key', key: { name: 'scrolldown' } }).state;
+    expect(pickerOf(s).index).toBe(1);
+    s = reduce(s, { type: 'key', key: { name: 'scrollup' } }).state;
+    expect(pickerOf(s).index).toBe(0);
+  });
+
+  it('still scrolls the help sheet, which has content of its own', () => {
+    const s = behindOverlay({ kind: 'help', scroll: 0 });
+    const after = reduce(s, { type: 'key', key: { name: 'scrolldown' } }).state;
+
+    expect(after.overlay).toMatchObject({ kind: 'help' });
+    expect((after.overlay as { scroll: number }).scroll).toBeGreaterThan(0);
+  });
+
+  it('a sideways notch neither closes an overlay nor answers it', () => {
+    const before = behindOverlay(APPROVAL);
+    const after = reduce(before, { type: 'key', key: { name: 'wheelignored', col: 10, row: 5 } }).state;
+
+    expect(after).toEqual(before);
+  });
+});

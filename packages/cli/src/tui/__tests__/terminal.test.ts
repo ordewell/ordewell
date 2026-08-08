@@ -68,12 +68,91 @@ describe('openTerminal', () => {
     expect(output.writes.join('')).toContain('\x1b[?1000l');
   });
 
+  it('re-arms tracking on a resize, since a tmux reattach drops the mode without telling us', () => {
+    // The modes are DEC private state the terminal owns, and a detach/reattach,
+    // a Ctrl-Z/fg, or another process writing to the tty clears them while this
+    // app still believes it holds the mouse. Re-arming is idempotent, and a
+    // resize is the one event those disruptions reliably produce.
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    openTerminal({
+      input: input as unknown as NodeJS.ReadStream,
+      output: output as unknown as NodeJS.WriteStream,
+      mouse: true,
+      onKey: vi.fn(),
+      onResize: vi.fn(),
+    });
+
+    output.writes.length = 0;
+    output.emit('resize');
+
+    expect(output.writes.join('')).toContain('\x1b[?1000h');
+    expect(output.writes.join('')).toContain('\x1b[?1006h');
+  });
+
+  it('writes no tracking sequence on a resize while the mouse is the terminal\'s', () => {
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    openTerminal({
+      input: input as unknown as NodeJS.ReadStream,
+      output: output as unknown as NodeJS.WriteStream,
+      onKey: vi.fn(),
+      onResize: vi.fn(),
+    });
+
+    output.writes.length = 0;
+    output.emit('resize');
+
+    expect(output.writes.join('')).not.toContain('\x1b[?1000h');
+  });
+
+  it('reset() re-establishes every mode the app owns, so a suspended session resumes intact', () => {
+    // Ctrl-Z drops the process without any chance to tidy up, and the shell
+    // that gets the terminal back leaves it on the main screen with the cursor
+    // shown and none of our modes set. SIGCONT is the only notice we get.
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const terminal = openTerminal({
+      input: input as unknown as NodeJS.ReadStream,
+      output: output as unknown as NodeJS.WriteStream,
+      mouse: true,
+      onKey: vi.fn(),
+      onResize: vi.fn(),
+    });
+
+    output.writes.length = 0;
+    terminal.reset();
+    const written = output.writes.join('');
+
+    for (const mode of ['\x1b[?1049h', '\x1b[?25l', '\x1b[?2004h', '\x1b[>1u', '\x1b[?1007l', '\x1b[?1000h', '\x1b[?1006h']) {
+      expect(written).toContain(mode);
+    }
+  });
+
+  it('reset() leaves the mouse to the terminal when that is what the user chose', () => {
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const terminal = openTerminal({
+      input: input as unknown as NodeJS.ReadStream,
+      output: output as unknown as NodeJS.WriteStream,
+      mouse: true,
+      onKey: vi.fn(),
+      onResize: vi.fn(),
+    });
+
+    terminal.setMouse(false);
+    output.writes.length = 0;
+    terminal.reset();
+
+    expect(output.writes.join('')).not.toContain('\x1b[?1000h');
+    expect(output.writes.join('')).toContain('\x1b[?1049h');
+  });
+
   it('keeps the mouse captured across a resize and a redraw', () => {
     // Both write to the tty while tracking is on — the resize clears the
     // screen, every draw brackets itself with autowrap off/on — and neither
-    // touches a DEC private mode that would drop 1000/1006. Pinned rather than
-    // re-asserted defensively: a spurious re-enable on every draw would be
-    // bytes down the wire for a mode that was never lost.
+    // may turn 1000/1006 off. A draw does not re-arm them either: that would be
+    // bytes down the wire on every keystroke for a mode nothing has disturbed.
     const input = new FakeInput();
     const output = new FakeOutput();
     const terminal = openTerminal({

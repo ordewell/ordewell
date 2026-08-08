@@ -75,6 +75,55 @@ describe('decodeKey', () => {
   it('reports an SGR mouse click (not the wheel) as unknown', () => {
     expect(decodeKey('\x1b[<0;12;5M').name).toBe('unknown');
   });
+
+  // The modifier bits (shift 4, alt 8, ctrl 16) and the motion bit (32) ride on
+  // top of the wheel's own 64: a terminal that reports Ctrl+wheel as 80 is
+  // still reporting a wheel notch.
+  it.each([
+    ['\x1b[<68;12;5M', 'scrollup', 'shift'],
+    ['\x1b[<69;12;5M', 'scrolldown', 'shift'],
+    ['\x1b[<72;12;5M', 'scrollup', 'alt'],
+    ['\x1b[<73;12;5M', 'scrolldown', 'alt'],
+    ['\x1b[<80;12;5M', 'scrollup', 'ctrl'],
+    ['\x1b[<81;12;5M', 'scrolldown', 'ctrl'],
+    ['\x1b[<96;12;5M', 'scrollup', 'motion'],
+    ['\x1b[<97;12;5M', 'scrolldown', 'motion'],
+  ])('maps %j to %s despite the %s bit', (seq, name) => {
+    expect(decodeKey(seq).name).toBe(name);
+  });
+
+  // X10 / normal tracking: three raw bytes after `\x1b[M`, each offset by 32.
+  // Terminals fall back to it whenever 1006 is not honored, and tmux forwards
+  // it as-is.
+  it.each([
+    ['\x1b[M`\x30\x25', 'scrollup'],
+    ['\x1b[Ma\x30\x25', 'scrolldown'],
+  ])('maps X10 wheel report %j to %s', (seq, name) => {
+    expect(decodeKey(seq).name).toBe(name);
+  });
+
+  it('maps a urxvt-encoded wheel report, whose button is biased by 32', () => {
+    expect(decodeKey('\x1b[96;12;5M').name).toBe('scrollup');
+    expect(decodeKey('\x1b[97;12;5M').name).toBe('scrolldown');
+  });
+
+  it('drops a horizontal wheel notch without reporting it as an unknown key', () => {
+    // `unknown` is "some key the app does not know", which every overlay reads
+    // as a cue to close itself — a sideways nudge of the wheel must not do that.
+    expect(decodeKey('\x1b[<66;12;5M').name).not.toBe('unknown');
+    expect(decodeKey('\x1b[<66;12;5M').name).not.toBe('scrollup');
+    expect(decodeKey('\x1b[<67;12;5M').name).not.toBe('scrolldown');
+  });
+
+  // Which pane the pointer is over is the only thing that makes the wheel feel
+  // right when two panes are on screen, so the coordinates have to survive.
+  it('carries the 1-based column and row of an SGR report', () => {
+    expect(decodeKey('\x1b[<64;12;5M')).toEqual({ name: 'scrollup', col: 12, row: 5 });
+  });
+
+  it('carries the coordinates of an X10 report, each byte less its bias of 32', () => {
+    expect(decodeKey('\x1b[M`\x30\x25')).toEqual({ name: 'scrollup', col: 16, row: 5 });
+  });
 });
 
 describe('splitKeys', () => {
@@ -118,6 +167,12 @@ describe('splitKeys', () => {
 
   it('keeps an SGR mouse report together instead of splitting on its digits', () => {
     expect(splitKeys('\x1b[<64;12;5Mx').map((k) => k.name)).toEqual(['scrollup', 'char']);
+  });
+
+  it('swallows the three coordinate bytes of an X10 report instead of typing them', () => {
+    // `M` is a CSI final byte, so the generic scan ends the sequence there and
+    // the coordinates land in the line editor as `0%x`.
+    expect(splitKeys('\x1b[M`\x30\x25x').map((k) => k.name)).toEqual(['scrollup', 'char']);
   });
 
   it('handles shift-enter in SS3 form', () => {
@@ -216,5 +271,42 @@ describe('createKeyDecoder — bracketed paste', () => {
     const keys = decode(`${START}pasted${END}\x1bOMx`);
     expect(keys.map((k) => k.name)).toEqual(['paste', 'shift-enter', 'char']);
     expect(keys[0].text).toBe('pasted');
+  });
+});
+
+describe('createKeyDecoder — sequences split across stdin chunks', () => {
+  it('yields exactly one scroll key, and no typed characters, for a wheel report split in two', () => {
+    // Spinning the wheel fast is precisely when stdin hands over a half report:
+    // the tail used to arrive in the next chunk and be typed as `;5M`.
+    const decode = createKeyDecoder();
+    expect(decode('\x1b[<64;12')).toEqual([]);
+    expect(decode(';5M')).toEqual([{ name: 'scrollup', col: 12, row: 5 }]);
+  });
+
+  it('joins a split X10 report, whose payload runs past its final byte', () => {
+    const decode = createKeyDecoder();
+    expect(decode('\x1b[M`')).toEqual([]);
+    expect(decode('\x30\x25').map((k) => k.name)).toEqual(['scrollup']);
+  });
+
+  it('joins an arrow key split after the CSI introducer', () => {
+    const decode = createKeyDecoder();
+    expect(decode('\x1b[')).toEqual([]);
+    expect(decode('A').map((k) => k.name)).toEqual(['up']);
+  });
+
+  it('still reports a lone escape as the escape key', () => {
+    const decode = createKeyDecoder();
+    expect(decode('\x1b').map((k) => k.name)).toEqual(['escape']);
+  });
+
+  it('does not hold back an escape followed by ordinary text', () => {
+    const decode = createKeyDecoder();
+    expect(decode('\x1bx').map((k) => k.name)).toEqual(['escape', 'char']);
+  });
+
+  it('gives up on a runaway sequence rather than swallowing input forever', () => {
+    const decode = createKeyDecoder();
+    expect(decode(`\x1b[${'9'.repeat(40)}`).map((k) => k.name)).toEqual(['unknown']);
   });
 });
