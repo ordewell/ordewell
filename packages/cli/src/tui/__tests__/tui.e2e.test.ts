@@ -553,6 +553,70 @@ describe('TUI end to end', () => {
     expect(h.app.getState().editor.text).toBe('');
   });
 
+  it('routes a raw wheel report by the pointer column, chat or plan, all the way to a repainted frame', async () => {
+    // 80 cols: the plan pane lands at col 44 onward (geometry.ts), so col 10 is
+    // over the chat and col 60 is over the plan — real bytes, real column math.
+    const h = harness();
+    // Wait out the startup refresh: its completion notice resets `scroll` via
+    // `say()`, and racing it would flake the assertions below.
+    await vi.waitFor(() => expect(h.screen()).toContain('deepseek/deepseek-v4-flash'));
+    for (let i = 0; i < 40; i++) h.app.dispatch({ type: 'notice', message: `line ${i}` });
+    h.app.dispatch({
+      type: 'planUpdated',
+      plan: {
+        pendingTasks: Array.from({ length: 30 }, (_, i) => ({
+          id: `t${i}`, order: i + 1, title: `Task ${i}`, type: 'ai', status: 'pending', dependencies: [],
+        })),
+      },
+    });
+    await settle();
+    const before = h.screen();
+
+    h.type('\x1b[<64;10;5M');
+    await vi.waitFor(() => expect(h.app.getState().scroll).toBe(3));
+    expect(h.app.getState().planScroll ?? 0).toBe(0);
+    expect(h.screen()).not.toBe(before);
+
+    const afterChat = h.screen();
+    h.type('\x1b[<65;60;5M');
+    await vi.waitFor(() => expect(h.app.getState().planScroll).toBe(3));
+    expect(h.app.getState().scroll).toBe(3);
+    expect(h.screen()).not.toBe(afterChat);
+  });
+
+  it('the wheel still reaches the pane behind an overlay, and stops reaching it once the overlay closes', async () => {
+    const h = harness();
+    // Wait out the startup refresh: its completion notice resets `scroll` via
+    // `say()`, and racing it would flake the assertions below.
+    await vi.waitFor(() => expect(h.screen()).toContain('deepseek/deepseek-v4-flash'));
+    for (let i = 0; i < 40; i++) h.app.dispatch({ type: 'notice', message: `line ${i}` });
+    await settle();
+
+    h.app.dispatch({
+      type: 'approvalRequested',
+      request: { id: 'a1', kind: 'shell_command', subject: 'npm test', scope: 'once' },
+    });
+    await settle();
+    expect(h.screen()).toContain('npm test');
+    const withOverlay = h.screen();
+
+    h.type('\x1b[<64;10;5M');
+    await vi.waitFor(() => expect(h.app.getState().scroll).toBe(3));
+    // The overlay is still up, and still the user's to answer.
+    expect(h.app.getState().overlay).toMatchObject({ kind: 'approval' });
+    expect(h.screen()).toContain('npm test');
+    expect(h.screen()).not.toBe(withOverlay);
+
+    h.app.dispatch({ type: 'approvalSettled', approvalId: 'a1' });
+    await settle();
+    expect(h.app.getState().overlay).toBeNull();
+    const noOverlay = h.screen();
+
+    h.type('\x1b[<64;10;5M');
+    await vi.waitFor(() => expect(h.app.getState().scroll).toBe(6));
+    expect(h.screen()).not.toBe(noOverlay);
+  });
+
   it('ctrl-c exits and restores the terminal', async () => {
     const h = harness();
     await settle();
