@@ -102,6 +102,36 @@ describe('classifyCommand', () => {
       expect(classifyCommand('echo hi >> log').tier).toBe('refuse');
     });
 
+    it('refuses a redirect target that only looks like /dev/null', () => {
+      expect(classifyCommand('echo hi > /dev/null/../file').tier).toBe('refuse');
+    });
+
+    it('refuses a redirect hidden behind &&', () => {
+      expect(classifyCommand('git status && echo hi > out.txt').tier).toBe('refuse');
+    });
+
+    it('does not misread a quoted literal as a redirect', () => {
+      expect(classifyCommand("echo '> /dev/null'").tier).toBe('auto');
+    });
+  });
+
+  describe('redirects that write nothing are not refused', () => {
+    it.each([
+      ['git status', 'git status 2>/dev/null'],
+      ['git status', 'git status >/dev/null 2>&1'],
+      ['git status', 'git status &>/dev/null'],
+      ['git status', 'git status 2>&1'],
+    ])('%s stays the same tier with the redirect appended: %s', (bare, withRedirect) => {
+      const expected = classifyCommand(bare);
+      const actual = classifyCommand(withRedirect);
+      expect(actual.tier).toBe(expected.tier);
+      expect(actual.reason).toBeUndefined();
+    });
+
+    it('allows a cd guarded by 2>/dev/null chained with &&, a real session case', () => {
+      expect(classifyCommand('cd /tmp 2>/dev/null && git status').tier).not.toBe('refuse');
+    });
+
     it('sees destructive commands hidden inside command substitution', () => {
       expect(classifyCommand('echo $(rm -rf /)').tier).toBe('refuse');
       expect(classifyCommand('echo `chmod 777 /etc`').tier).toBe('refuse');

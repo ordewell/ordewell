@@ -199,14 +199,38 @@ interface Segment {
   expandable: boolean;
 }
 
+/** An output redirect whose target is not provably a no-op (`/dev/null`, an fd duplication). */
+interface UnsafeRedirect {
+  /** The operator as written, fd prefix included: `>`, `2>`, `>>`, `&>`. */
+  operator: string;
+  /** The target text as the shell would see it, or `''` if the redirect had none. */
+  target: string;
+}
+
 interface Lexed {
   segments: Segment[];
-  /** An unquoted `>`/`>>` writes a file. */
-  redirect: boolean;
+  /** Set for the first output redirect that isn't `/dev/null` or an fd duplication. */
+  unsafeRedirect?: UnsafeRedirect;
   /** An unquoted `<(…)`/`>(…)` spawns a process this classifier never tokenizes. */
   processSubstitution: boolean;
   /** Lexing ran off the end inside a quote or a substitution — nothing here is trustworthy. */
   unbalanced: boolean;
+}
+
+/**
+ * Whether a redirect target resolves to `/dev/null` — the one write target that
+ * writes nothing. Resolved by segment, not by substring match: `/dev/null/../x`
+ * must not slip through as a no-op just because it starts with the right prefix.
+ */
+function isDevNullTarget(target: string): boolean {
+  if (!target.startsWith('/')) return false;
+  const resolved: string[] = [];
+  for (const seg of target.split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') resolved.pop();
+    else resolved.push(seg);
+  }
+  return `/${resolved.join('/')}` === '/dev/null';
 }
 
 /** Index of the `)` closing the `(` at `open`, or -1. */
@@ -234,7 +258,7 @@ function matchParen(s: string, open: number): number {
  */
 function lex(command: string, nested: string[], dialect: Dialect): Lexed {
   const segments: Segment[] = [];
-  let redirect = false;
+  let unsafeRedirect: UnsafeRedirect | undefined;
   let processSubstitution = false;
   let unbalanced = false;
 
@@ -245,7 +269,25 @@ function lex(command: string, nested: string[], dialect: Dialect): Lexed {
   let piped = false;
   let quote = '';
 
-  const endToken = () => {
+  // Set while lexing the text after a write-redirect operator, so that text is
+  // captured as the redirect's target instead of pushed onto the segment as an
+  // ordinary argument.
+  let redirectTargetMode = false;
+  let redirectOperator = '';
+
+  const endToken = (hardBoundary = true) => {
+    if (redirectTargetMode) {
+      // Whitespace right after the operator (`2> /dev/null`) is not the end of
+      // the target — keep waiting rather than concluding there is none.
+      if (!started && !hardBoundary) return;
+      if (!unsafeRedirect && !isDevNullTarget(current)) {
+        unsafeRedirect = { operator: redirectOperator, target: current };
+      }
+      redirectTargetMode = false;
+      current = '';
+      started = false;
+      return;
+    }
     if (started) tokens.push(current);
     current = '';
     started = false;
@@ -307,9 +349,44 @@ function lex(command: string, nested: string[], dialect: Dialect): Lexed {
 
     if (c === '<' || c === '>') {
       if (command[i + 1] === '(') { processSubstitution = true; i += 2; continue; }
-      if (c === '>') redirect = true;
+
+      // `2>err.log`: the fd is glued to the operator with no space, so it
+      // accumulated in `current` as a plain-looking token — pull it back out
+      // rather than let it fall through to `endToken` as a spurious argument.
+      let fd = '';
+      if (started && /^[0-9]+$/.test(current)) {
+        fd = current;
+        current = '';
+        started = false;
+      } else {
+        endToken();
+      }
+
+      const doubled = command[i + 1] === c;
+      const opLen = doubled ? 2 : 1;
+
+      if (c === '>') {
+        // `2>&1` / `>&2`: duplicates a stream, writes no file — safe.
+        const dup = /^&([0-9]+)(?![0-9])/.exec(command.slice(i + opLen));
+        if (dup) {
+          i += opLen + dup[0].length;
+          continue;
+        }
+        redirectTargetMode = true;
+        redirectOperator = fd + c.repeat(opLen);
+      }
+      i += opLen;
+      continue;
+    }
+
+    // `&>file` / `&>>file`: bash shorthand for redirecting stdout+stderr to a
+    // file. Must be checked before the `&`-as-operator branch below.
+    if (c === '&' && command[i + 1] === '>') {
       endToken();
-      i += command[i + 1] === c ? 2 : 1;
+      const doubled = command[i + 2] === '>';
+      redirectTargetMode = true;
+      redirectOperator = doubled ? '&>>' : '&>';
+      i += doubled ? 3 : 2;
       continue;
     }
 
@@ -328,7 +405,7 @@ function lex(command: string, nested: string[], dialect: Dialect): Lexed {
       continue;
     }
 
-    if (/\s/.test(c)) { endToken(); i++; continue; }
+    if (/\s/.test(c)) { endToken(false); i++; continue; }
 
     current += c; started = true; i++;
   }
@@ -336,7 +413,7 @@ function lex(command: string, nested: string[], dialect: Dialect): Lexed {
   if (quote !== '') unbalanced = true;
   endSegment(false);
 
-  return { segments, redirect, processSubstitution, unbalanced };
+  return { segments, unsafeRedirect, processSubstitution, unbalanced };
 }
 
 /**
@@ -373,7 +450,7 @@ function lexAll(command: string, dialect: Dialect): Lexed {
   for (let depth = 0; depth < 32 && queue.length > 0; depth++) {
     const inner = lex(queue.shift()!, queue, dialect);
     all.segments.push(...inner.segments.filter((s) => s.binary));
-    all.redirect ||= inner.redirect;
+    all.unsafeRedirect ??= inner.unsafeRedirect;
     all.processSubstitution ||= inner.processSubstitution;
     all.unbalanced ||= inner.unbalanced;
   }
@@ -468,8 +545,9 @@ function refusalFor(seg: Segment): string | undefined {
   if (seg.binary === 'git') {
     const sub = seg.args.find((a) => !a.startsWith('-'));
     if (sub === 'branch' || sub === 'tag') {
-      if (seg.args.some((a) => ['-D', '-d', '-m', '-M', '--delete', '--move'].includes(a))) {
-        return `"git ${sub}" with a delete/move flag mutates refs. You are a read-only planner — describe the change as a task instead.`;
+      const flag = seg.args.find((a) => ['-D', '-d', '-m', '-M', '--delete', '--move'].includes(a));
+      if (flag) {
+        return `"git ${sub} ${flag}" mutates refs. You are a read-only planner — describe the change as a task instead.`;
       }
     }
   }
@@ -483,8 +561,11 @@ function refusalFor(seg: Segment): string | undefined {
     }
   }
   // `sed -i`/`awk -i inplace` rewrite files in place — mutation, not research.
-  if (seg.binary === 'sed' && seg.args.some((a) => a === '-i' || a === '--in-place' || /^-i./.test(a))) {
-    return `"sed -i" edits files in place. You are a read-only planner — describe the change as a task instead.`;
+  const sedInPlace = seg.binary === 'sed'
+    ? seg.args.find((a) => a === '-i' || a === '--in-place' || /^-i./.test(a))
+    : undefined;
+  if (sedInPlace) {
+    return `"sed ${sedInPlace}" edits files in place. You are a read-only planner — describe the change as a task instead.`;
   }
   if (seg.binary === 'awk' && seg.args.some((a) => a === 'inplace')) {
     return `"awk -i inplace" edits files in place. You are a read-only planner — describe the change as a task instead.`;
@@ -501,15 +582,16 @@ function refusalFor(seg: Segment): string | undefined {
 }
 
 /**
- * Classify one command line. Output redirection is refused outright: a planner
- * that writes files has stopped being a planner.
+ * Classify one command line. Output redirection is refused outright unless the
+ * target provably writes nothing — `/dev/null`, or an fd duplication like
+ * `2>&1` — since a planner that writes files has stopped being a planner.
  */
 export function classifyCommand(command: string, opts: CommandPolicyOptions = {}): CommandClassification {
   const trimmed = command.trim();
   if (!trimmed) return { tier: 'refuse', scope: '', reason: 'Empty command.' };
 
   const dialect = dialectFor(opts.dialect);
-  const { segments, redirect, processSubstitution, unbalanced } = lexAll(trimmed, dialect);
+  const { segments, unsafeRedirect, processSubstitution, unbalanced } = lexAll(trimmed, dialect);
 
   if (unbalanced) {
     return {
@@ -529,11 +611,14 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
     };
   }
 
-  if (redirect) {
+  if (unsafeRedirect) {
+    const written = unsafeRedirect.target
+      ? `"${unsafeRedirect.operator} ${unsafeRedirect.target}"`
+      : `"${unsafeRedirect.operator}"`;
     return {
       tier: 'refuse',
       scope: '',
-      reason: 'Output redirection writes files. You are a read-only planner — read the output instead, or describe the write as a task.',
+      reason: `${written} writes to a file. You are a read-only planner — read the output instead, or describe the write as a task.`,
     };
   }
 
