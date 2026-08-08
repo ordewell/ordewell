@@ -199,7 +199,12 @@ function renderOverlay(state: TuiState, rows: number, cols: number): string[] {
         style.grey(`Approving also allows ${request.scope} for the rest of this session.`),
         ...(queued > 0 ? [style.grey(`${queued} more waiting.`)] : []),
         '',
-        style.grey('y or enter allows · n or esc denies'),
+        // ESC is not "deny" while a turn is in flight — it kills the turn and
+        // takes this prompt with it. Offering it as the deny key there would
+        // teach the wrong thing about the most destructive key on the sheet.
+        style.grey(state.status === 'planning' || state.status === 'researching'
+          ? 'y or enter allows · n denies · esc stops planning'
+          : 'y or enter allows · n or esc denies'),
       ],
       rows,
       cols,

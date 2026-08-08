@@ -426,6 +426,30 @@ export class Session {
   get status(): 'approved' | 'running' | 'completed' { return this.orchestrator.status; }
   get sessionConfig(): IConfig { return this.config; }
 
+  /**
+   * Deny every parked approval as soon as a planning turn is aborted, for the
+   * same reason `beginFreshPlan` does it: a prompt raised by a turn nobody is
+   * waiting on has no one left to serve, and denying it unblocks the research
+   * loop instead of stranding it. Without this the request sat out its
+   * five-minute timeout and the loop then carried on as if nothing had
+   * happened — the abort was real, but invisible until long after the user
+   * pressed stop.
+   *
+   * The listener is returned as a disposer rather than left attached: callers
+   * own the signal and may reuse it, and a leaked listener would deny the
+   * *next* turn's prompts the moment that stale signal aborted.
+   */
+  private denyApprovalsOnAbort(signal: AbortSignal | undefined): () => void {
+    if (!signal) return () => {};
+    if (signal.aborted) {
+      this.approvals.clear();
+      return () => {};
+    }
+    const onAbort = () => this.approvals.clear();
+    signal.addEventListener('abort', onAbort);
+    return () => signal.removeEventListener('abort', onAbort);
+  }
+
   async startExecution(): Promise<void> {
     if (!this.plan || !this.store.planTasks.length) throw new Error('No plan to execute');
     this.store.clearLog();
@@ -454,19 +478,25 @@ export class Session {
     const { modelAllowlist } = settings;
     const modes = plannerModesFrom(settings, this.config.autonomousMode);
 
-    const plan = await this.planner.generate({
-      goal,
-      runners: chosenRunners,
-      modelsByRunner,
-      runnerModes,
-      autonomousDefault: this.config.autonomousMode,
-      fs: this.fsAdapter,
-      fetcher: this.fetcher,
-      onProgress: (p) => this.translateProgress(p),
-      signal: options?.signal,
-      perRunnerAllowlist: modelAllowlist,
-      modes,
-    });
+    const releaseAbort = this.denyApprovalsOnAbort(options?.signal);
+    let plan: LegacyPlanState;
+    try {
+      plan = await this.planner.generate({
+        goal,
+        runners: chosenRunners,
+        modelsByRunner,
+        runnerModes,
+        autonomousDefault: this.config.autonomousMode,
+        fs: this.fsAdapter,
+        fetcher: this.fetcher,
+        onProgress: (p) => this.translateProgress(p),
+        signal: options?.signal,
+        perRunnerAllowlist: modelAllowlist,
+        modes,
+      });
+    } finally {
+      releaseAbort();
+    }
 
     this.plan = plan;
     this.orchestrator.loadPlan(plan.tasks, plan.runners);
@@ -508,24 +538,29 @@ export class Session {
       conversationHistory: [{ role: 'user', content: goal, timestamp: now }],
     };
 
-    const turn = await this.aiService.startConversation({
-      goal,
-      runners: chosenRunners,
-      modelsByRunner: filteredModels,
-      runnerModes,
-      autonomousDefault: this.config.autonomousMode,
-      grillMeEnabled: grillMeEnabled ?? false,
-      prdEnabled: prdEnabled ?? false,
-      reviewEnabled: reviewEnabled ?? false,
-      verificationEnabled: verificationEnabled ?? false,
-      researchSubagentsEnabled: researchSubagentsEnabled ?? false,
-      fs: this.fsAdapter,
-      fetcher: this.fetcher,
-      onProgress: (p) => this.translateProgress(p),
-      signal: options?.signal,
-    });
+    const releaseAbort = this.denyApprovalsOnAbort(options?.signal);
+    try {
+      const turn = await this.aiService.startConversation({
+        goal,
+        runners: chosenRunners,
+        modelsByRunner: filteredModels,
+        runnerModes,
+        autonomousDefault: this.config.autonomousMode,
+        grillMeEnabled: grillMeEnabled ?? false,
+        prdEnabled: prdEnabled ?? false,
+        reviewEnabled: reviewEnabled ?? false,
+        verificationEnabled: verificationEnabled ?? false,
+        researchSubagentsEnabled: researchSubagentsEnabled ?? false,
+        fs: this.fsAdapter,
+        fetcher: this.fetcher,
+        onProgress: (p) => this.translateProgress(p),
+        signal: options?.signal,
+      });
 
-    return this.settleTurn(turn, options);
+      return await this.settleTurn(turn, options);
+    } finally {
+      releaseAbort();
+    }
   }
 
   /**
@@ -552,30 +587,35 @@ export class Session {
     // opening message.
     const aiService = this.aiService;
     const canContinueLive = aiService.hasActiveConversation() && (aiService.conversationMatchesConfig?.() ?? true);
-    let turn = canContinueLive
-      ? await aiService.continueConversation(
-          outgoing,
-          (p) => this.translateProgress(p),
-          options?.signal,
-        )
-      : await this.resumeConversation(outgoing, priorHistory, options);
+    const releaseAbort = this.denyApprovalsOnAbort(options?.signal);
+    try {
+      let turn = canContinueLive
+        ? await aiService.continueConversation(
+            outgoing,
+            (p) => this.translateProgress(p),
+            options?.signal,
+          )
+        : await this.resumeConversation(outgoing, priorHistory, options);
 
-    // Structural changes while tasks execute are queued, never applied live —
-    // the orchestrator must not have the plan mutated under a running batch.
-    // The gate is live runners, not an armed scheduler: a run paused on a user
-    // task keeps `isExecuting` true with nothing reading the plan, and queueing
-    // there parks the edit behind a batch boundary that will never arrive.
-    if ((turn.kind === 'task_ops' || turn.kind === 'plan') && this.hasLiveWork) {
-      this.queueMessage(userMessage);
-      this.plan.queuedMessages = this.getQueuedMessages();
-      turn = {
-        kind: 'message',
-        text: `Execution is running, so I queued your change — it will be applied between task batches (${this.queuedCount} queued).`,
-        researchLog: turn.researchLog,
-      };
+      // Structural changes while tasks execute are queued, never applied live —
+      // the orchestrator must not have the plan mutated under a running batch.
+      // The gate is live runners, not an armed scheduler: a run paused on a user
+      // task keeps `isExecuting` true with nothing reading the plan, and queueing
+      // there parks the edit behind a batch boundary that will never arrive.
+      if ((turn.kind === 'task_ops' || turn.kind === 'plan') && this.hasLiveWork) {
+        this.queueMessage(userMessage);
+        this.plan.queuedMessages = this.getQueuedMessages();
+        turn = {
+          kind: 'message',
+          text: `Execution is running, so I queued your change — it will be applied between task batches (${this.queuedCount} queued).`,
+          researchLog: turn.researchLog,
+        };
+      }
+
+      return await this.settleTurn(turn, options);
+    } finally {
+      releaseAbort();
     }
-
-    return this.settleTurn(turn, options);
   }
 
   /**

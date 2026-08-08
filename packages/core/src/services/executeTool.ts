@@ -34,12 +34,22 @@ function grepOptions(args: Record<string, unknown>): GrepOptions {
   };
 }
 
+/**
+ * Short, non-alarming answer for a call the turn was stopped before running.
+ * The call still needs *an* answer — a dangling tool_call leaves the provider's
+ * message history invalid for whatever the user does next.
+ */
+export const STOPPED_TOOL_RESULT =
+  'Stopped by the user — this call was not executed, and no further tool calls will run this turn.';
+
 export async function executeTool(
   name: string,
   args: Record<string, unknown>,
   fs: IFileSystem,
   fetcher?: IWebFetcher,
+  signal?: AbortSignal,
 ): Promise<ToolOutcome> {
+  if (signal?.aborted) return { success: false, output: STOPPED_TOOL_RESULT, truncated: false };
   switch (name) {
     case 'read_file': {
       const offset = num(args.offset);
@@ -55,7 +65,7 @@ export async function executeTool(
     case 'grep': return fs.grep(String(args.pattern ?? ''), grepOptions(args));
     case 'find_symbol': return fs.findSymbol(String(args.symbol ?? ''), { language: str(args.language), path: str(args.path) });
     case 'list_dir': return fs.listDir(String(args.path ?? ''), num(args.depth));
-    case 'bash': return fs.bash(String(args.command ?? ''));
+    case 'bash': return fs.bash(String(args.command ?? ''), signal);
     case 'fetch': {
       if (!fetcher) return { success: false, output: 'Web fetching is not available in this environment.', truncated: false };
       const url = String(args.url ?? '');

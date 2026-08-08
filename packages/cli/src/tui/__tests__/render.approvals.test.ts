@@ -35,6 +35,12 @@ describe('approval overlay rendering', () => {
     expect(out).toMatch(/(n|esc).*den(y|ies)/i);
   });
 
+  it('says esc stops the whole turn while one is in flight, because that is what it now does', () => {
+    const out = screenWith(SHELL, { status: 'researching', sessionId: 's1' });
+    expect(out).toMatch(/esc stops planning/i);
+    expect(out).toMatch(/n den(y|ies)/i);
+  });
+
   it('labels a path request as leaving the workspace', () => {
     const out = screenWith({ id: 'ap-2', kind: 'external_path', subject: '/tmp/dump/a.log', scope: '/tmp/dump/*' });
     expect(out).toContain('/tmp/dump/a.log');

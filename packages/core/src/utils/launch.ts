@@ -183,6 +183,40 @@ function hasLineBreak(parts: string[]): boolean {
   return parts.some((part) => /[\r\n]/.test(part));
 }
 
+/**
+ * Thrown when `command` cannot be resolved to a real file. Kept distinguishable
+ * from `WorkspaceNotFoundError` (utils/workspace) even though both a missing
+ * cwd and a missing binary surface as the same `spawn` ENOENT to Node — the two
+ * are checked, and named, separately so the failure names the actual cause.
+ */
+export class ExecutableNotFoundError extends Error {
+  constructor(readonly command: string, readonly searchedPath: string) {
+    super(`Could not find "${command}" on PATH.\n\nSearched: ${searchedPath || '(empty PATH)'}`);
+    this.name = 'ExecutableNotFoundError';
+  }
+}
+
+function isResolvableOnPosixPath(command: string, PATH: string, exists: (candidate: string) => boolean): boolean {
+  if (command.includes('/')) return exists(command);
+  return PATH.split(path.delimiter).map((d) => d.trim()).filter(Boolean).some((dir) => exists(path.join(dir, command)));
+}
+
+/**
+ * Whether `command` actually resolves to a file, given the plan
+ * {@link planDirectLaunch} produced for it and the PATH it was resolved
+ * against.
+ *
+ * POSIX is deliberately identity in `planDirectLaunch` (execvp does its own
+ * PATH search), so the search is repeated here instead. Windows already did
+ * the search inside `planDirectLaunch` — signalled by the returned file
+ * differing from the bare command name it was given; an unresolved command
+ * comes back unchanged.
+ */
+export function isExecutableResolved(command: string, plan: LaunchPlan, PATH: string, deps: LaunchDeps = {}): boolean {
+  if ((deps.platform ?? process.platform) === 'win32') return plan.file !== command;
+  return isResolvableOnPosixPath(command, PATH, deps.exists ?? defaultExists);
+}
+
 function defaultExists(candidate: string): boolean {
   try {
     return fsSync.statSync(candidate).isFile();

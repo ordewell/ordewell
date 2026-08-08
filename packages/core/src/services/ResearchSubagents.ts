@@ -82,7 +82,7 @@ function nonPromptingFs(fs: IFileSystem): IFileSystem {
     grep: (pattern, opts) => (withinWorkspace(opts?.path) ? fs.grep(pattern, opts) : Promise.resolve(outsideRefusal(opts!.path!))),
     findSymbol: (symbol, opts) => (withinWorkspace(opts?.path) ? fs.findSymbol(symbol, opts) : Promise.resolve(outsideRefusal(opts!.path!))),
     listDir: (p, depth) => (withinWorkspace(p) ? fs.listDir(p, depth) : Promise.resolve(outsideRefusal(p))),
-    bash: async (command) => {
+    bash: async (command, signal) => {
       // Same dialect the wrapped filesystem will execute under — a subagent
       // must not classify under different rules than the parent.
       const dialect = resolveResearchShell().dialect;
@@ -99,7 +99,7 @@ function nonPromptingFs(fs: IFileSystem): IFileSystem {
       // workspace, and a subagent can never prompt to approve one.
       const escaping = pathLikeArgs(command, { dialect }).find((p) => !withinWorkspace(p));
       if (escaping) return outsideRefusal(escaping);
-      return fs.bash(command);
+      return fs.bash(command, signal);
     },
   };
 }
@@ -126,7 +126,10 @@ async function runLoop(prompt: string, deps: SubagentDeps): Promise<string> {
       if (tc.name === 'read_file' && !('maxBytes' in args) && !('limit' in args)) args.limit = 2000;
       const toolArgs = JSON.stringify(tc.args);
       deps.onProgress?.({ type: 'tool_call', tool: tc.name, toolArgs, toolCallId: tc.id });
-      const res = await executeTool(tc.name, args, fs);
+      // Signal-aware per call, not just per round: a subagent round routinely
+      // carries several calls, and a stop that only lands between rounds still
+      // waits out every one of them.
+      const res = await executeTool(tc.name, args, fs, undefined, deps.signal);
       const output = res.output.length > SUBAGENT_LIMITS.toolOutputMaxChars
         ? res.output.slice(0, SUBAGENT_LIMITS.toolOutputMaxChars) + `\n[... truncated to ${SUBAGENT_LIMITS.toolOutputMaxChars} chars, total ${res.output.length}]`
         : res.output;

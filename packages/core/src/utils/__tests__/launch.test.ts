@@ -3,6 +3,8 @@ import {
   planDirectLaunch,
   planShellLaunch,
   windowsCommandLine,
+  isExecutableResolved,
+  ExecutableNotFoundError,
   CommandLineTooLongError,
   EmbeddedNewlineError,
   CMD_EXE_MAX_COMMAND_LINE,
@@ -348,5 +350,54 @@ describe('planShellLaunch', () => {
     const plan = await planShellLaunch('claude', ['-p', 'go'], win(['C:\\tools\\claude.exe']));
     expect(plan.file).toBe('C:\\tools\\claude.exe');
     expect(plan.args).toEqual(['-p', 'go']);
+  });
+});
+
+describe('isExecutableResolved', () => {
+  const PATH = '/usr/local/bin:/usr/bin';
+
+  it('is true on POSIX when the command exists in a PATH directory', async () => {
+    const plan = await planDirectLaunch('claude', ['-p'], { platform: 'linux' });
+    const resolved = isExecutableResolved('claude', plan, PATH, {
+      platform: 'linux',
+      exists: (candidate) => candidate === '/usr/local/bin/claude',
+    });
+    expect(resolved).toBe(true);
+  });
+
+  it('is false on POSIX when the command is on no PATH directory', async () => {
+    const plan = await planDirectLaunch('claude', ['-p'], { platform: 'linux' });
+    const resolved = isExecutableResolved('claude', plan, PATH, {
+      platform: 'linux',
+      exists: () => false,
+    });
+    expect(resolved).toBe(false);
+  });
+
+  it('checks the path directly on POSIX when the command already names one', async () => {
+    const plan = await planDirectLaunch('./bin/claude', [], { platform: 'linux' });
+    const resolved = isExecutableResolved('./bin/claude', plan, PATH, {
+      platform: 'linux',
+      exists: (candidate) => candidate === './bin/claude',
+    });
+    expect(resolved).toBe(true);
+  });
+
+  it('is true on Windows when planDirectLaunch resolved the command to a real file', async () => {
+    const plan = await planDirectLaunch('claude', ['-p', 'go'], win(['C:\\tools\\claude.exe']));
+    expect(isExecutableResolved('claude', plan, PATH, { platform: 'win32' })).toBe(true);
+  });
+
+  it('is false on Windows when planDirectLaunch handed the bare command back unresolved', async () => {
+    const plan = await planDirectLaunch('nosuchcli', ['-x'], win([]));
+    expect(isExecutableResolved('nosuchcli', plan, PATH, { platform: 'win32' })).toBe(false);
+  });
+});
+
+describe('ExecutableNotFoundError', () => {
+  it('names the command and the PATH it searched', () => {
+    const err = new ExecutableNotFoundError('opencode', '/usr/local/bin:/usr/bin');
+    expect(err.message).toContain('opencode');
+    expect(err.message).toContain('/usr/local/bin:/usr/bin');
   });
 });

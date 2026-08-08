@@ -46,6 +46,22 @@ describe('ESC while planning', () => {
     expect(state.overlay).toBeNull(); // confirm's own escape handling: cancels
   });
 
+  it('stops the planner from an open approval prompt instead of denying one tool call', () => {
+    const request = { id: 'ap-1', kind: 'shell_command' as const, subject: 'npm test', scope: 'npm test' };
+    const { state, effects } = press({
+      status: 'planning',
+      sessionId: 'session-1',
+      overlay: { kind: 'approval', request },
+      pendingApprovals: [{ id: 'ap-2', kind: 'shell_command', subject: 'npm run build', scope: 'npm run build' }],
+    });
+
+    // One denial would just hand the planner its next tool call — the user
+    // pressing ESC wants the turn dead, so the whole queue goes with it.
+    expect(effects).toEqual([{ type: 'cancelPlanning', sessionId: 'session-1' }]);
+    expect(state.overlay).toBeNull();
+    expect(state.pendingApprovals).toEqual([]);
+  });
+
   it('a second ESC after planning has settled clears the chat draft as before', () => {
     const { state, effects } = press({ status: 'idle', sessionId: 'session-1' }, 'left in the box');
 

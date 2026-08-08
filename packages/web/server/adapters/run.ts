@@ -32,7 +32,7 @@ export const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 export function run(
   file: string,
   args: string[],
-  opts: { cwd?: string; timeout: number; shell?: boolean; env?: NodeJS.ProcessEnv },
+  opts: { cwd?: string; timeout: number; shell?: boolean; env?: NodeJS.ProcessEnv; signal?: AbortSignal },
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
     try {
@@ -43,6 +43,12 @@ export function run(
         encoding: 'utf8',
         shell: opts.shell,
         env: opts.env,
+        // Node kills the child when this aborts, and calls back with an
+        // ABORT_ERR — which lands on the `code: 1` branch below, i.e. a
+        // failed tool call, exactly like any other command that did not
+        // finish. Stopping the planner must not leave a research `bash`
+        // running out its own timeout on the server.
+        signal: opts.signal,
       }, (err, stdout, stderr) => {
         const code = err && typeof (err as { code?: unknown }).code === 'number' ? (err as { code: number }).code : err ? 1 : 0;
         resolve({ stdout: stdout ?? '', stderr: stderr ?? '', code });

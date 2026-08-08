@@ -81,6 +81,20 @@ describe('handleTui', () => {
     error.mockRestore();
   });
 
+  it('refuses to start for a workspace that does not exist, naming the path and both remedies', async () => {
+    const missing = '/definitely/does/not/exist/ordewell-workspace';
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    exitSpy.mockImplementation((() => { throw new Error('exit'); }) as never);
+
+    await expect(handleTui(['--workspace', missing])).rejects.toThrow('exit');
+
+    expect(error).toHaveBeenCalledWith(expect.stringContaining(missing));
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('--workspace'));
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(daemonClient.ensureDaemonOwned).not.toHaveBeenCalled();
+    error.mockRestore();
+  });
+
   it('boots the daemon, opens the terminal, and paints the first frame', async () => {
     void handleTui([]);
 

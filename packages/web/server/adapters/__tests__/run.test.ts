@@ -122,3 +122,34 @@ describe('run — failure modes never reject the promise', () => {
     expect(r.stdout.length).toBe(MAX_OUTPUT_BYTES);
   });
 });
+/**
+ * Stopping the planner has to reach the child, not merely stop waiting on it.
+ * A research `bash` call can be a full test run; letting it serve out its own
+ * 60-second timeout after the user pressed stop is the difference between the
+ * abort being real and the abort being cosmetic.
+ */
+describe('run — an aborted planning turn kills the child', () => {
+  it('resolves as soon as the signal aborts instead of waiting out the timeout', async () => {
+    const controller = new AbortController();
+    const started = Date.now();
+
+    const running = run('node', ['-e', 'setTimeout(() => {}, 60_000)'], {
+      timeout: 60_000,
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 50);
+    const r = await running;
+
+    expect(Date.now() - started).toBeLessThan(TIMEOUT);
+    expect(r.code).not.toBe(0);
+  });
+
+  it('does not spawn at all when the signal is already aborted', async () => {
+    const r = await run('node', ['-e', "console.log('should not run')"], {
+      timeout: TIMEOUT,
+      signal: AbortSignal.abort(),
+    });
+
+    expect(r.stdout).not.toContain('should not run');
+  });
+});

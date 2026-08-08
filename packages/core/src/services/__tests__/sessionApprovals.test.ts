@@ -244,6 +244,83 @@ describe('Session approval flow', () => {
     expect(approvalRequests(messages)).toHaveLength(0);
   });
 
+  /**
+   * The stop path, from the user's side: they pressed ESC while an approval
+   * prompt was on screen. Nothing else denies the parked request, so without a
+   * listener on the planning signal the turn sits out the five-minute timeout
+   * and then carries on researching — which is exactly what "ESC did nothing"
+   * looked like in practice.
+   */
+  describe('aborting a planning turn parked on an approval', () => {
+    function sessionParkedOnApproval() {
+      const messages: SessionMessage[] = [];
+      const fsAdapter = new ProbeFileSystem();
+      const controller = new AbortController();
+      const bash: { outcome?: ToolOutcome } = {};
+
+      const session = makeSession({
+        fsAdapter,
+        broadcast: (msg) => { messages.push(msg); },
+        aiService: {
+          hasActiveConversation: () => true,
+          startConversation: async ({ signal }) => {
+            bash.outcome = await fsAdapter.bash('npm test');
+            return {
+              kind: 'message' as const,
+              text: signal?.aborted ? 'Stopped.' : 'Ran the suite.',
+              researchLog: [],
+            };
+          },
+        },
+      });
+
+      return { session, fsAdapter, messages, controller, bash };
+    }
+
+    it('denies the request the moment the abort fires, rather than waiting out the timeout', async () => {
+      const { session, messages, controller, bash } = sessionParkedOnApproval();
+
+      const planning = session.startPlanning('goal', ['claude-code'], { signal: controller.signal });
+      await vi.waitFor(() => expect(approvalRequests(messages)).toHaveLength(1));
+
+      controller.abort();
+      await planning;
+
+      expect(bash.outcome?.success).toBe(false);
+      expect(bash.outcome?.output).toContain('not approved');
+      expect(session.outstandingApprovals()).toEqual([]);
+    });
+
+    it('lands the stopped turn as a message, so the transcript shows where research ended', async () => {
+      const { session, messages, controller } = sessionParkedOnApproval();
+
+      const planning = session.startPlanning('goal', ['claude-code'], { signal: controller.signal });
+      await vi.waitFor(() => expect(approvalRequests(messages)).toHaveLength(1));
+      controller.abort();
+      const plan = await planning;
+
+      expect(plan.conversationHistory?.at(-1)).toMatchObject({ role: 'assistant', content: 'Stopped.' });
+    });
+
+    it('drops the listener when the turn settles, so a reused signal cannot deny the next turn', async () => {
+      const { session, fsAdapter, messages, controller } = sessionParkedOnApproval();
+
+      const planning = session.startPlanning('goal', ['claude-code'], { signal: controller.signal });
+      await vi.waitFor(() => expect(approvalRequests(messages)).toHaveLength(1));
+      session.resolveApproval(approvalRequests(messages)[0].id, true);
+      await planning;
+
+      // The turn is over; this prompt belongs to whatever comes next.
+      const orphan = fsAdapter.readFile('/tmp/dump/a.log');
+      await vi.waitFor(() => expect(approvalRequests(messages)).toHaveLength(2));
+      controller.abort();
+
+      expect(await Promise.race([orphan, Promise.resolve('still-blocked')])).toBe('still-blocked');
+      session.resolveApproval(approvalRequests(messages)[1].id, false);
+      await orphan;
+    });
+  });
+
   // A silent decision (pre-approved, remembered, or the operator's mode floor)
   // previously had no broadcast at all — indistinguishable, on every surface,
   // from the model never having needed approval in the first place.

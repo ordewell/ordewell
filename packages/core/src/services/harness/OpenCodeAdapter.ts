@@ -1,6 +1,7 @@
 import type { ChildProcess } from 'child_process';
 import { augmentedPath, withPath } from '../../utils/shellPath';
-import { planDirectLaunch } from '../../utils/launch';
+import { planDirectLaunch, isExecutableResolved, ExecutableNotFoundError } from '../../utils/launch';
+import { assertWorkspaceExists } from '../../utils/workspace';
 import { killTree } from '../../utils/processTree';
 import type { AgentAdapter, AgentEvent, AgentProcessDeps, AgentStartOptions } from './AgentAdapter';
 
@@ -95,6 +96,10 @@ export class OpenCodeAdapter implements AgentAdapter {
 
   async start(opts: AgentStartOptions): Promise<void> {
     this.opts = opts;
+    // Checked before anything else: a workspace deleted out from under a
+    // stale `process.cwd()` otherwise surfaces as `spawn`'s ENOENT, which
+    // reads as a missing `opencode` binary rather than a missing directory.
+    assertWorkspaceExists(opts.cwd, { isDirectory: this.deps.isDirectory });
     const resolvePath = this.deps.resolvePath ?? augmentedPath;
     const PATH = await resolvePath();
 
@@ -104,6 +109,9 @@ export class OpenCodeAdapter implements AgentAdapter {
       platform: this.deps.platform,
       resolvePath,
     });
+    if (!isExecutableResolved('opencode', launch, PATH, { platform: this.deps.platform, exists: this.deps.exists })) {
+      throw new ExecutableNotFoundError('opencode', PATH);
+    }
     this.process = this.deps.spawn(launch.file, launch.args, {
       env: withPath(process.env, PATH),
       stdio: ['pipe', 'pipe', 'pipe'],

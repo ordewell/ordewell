@@ -31,6 +31,15 @@ describe('researchStep', () => {
     expect(s.busyLabel).toBe('grep foo (+2 more)');
   });
 
+  it('flips the status to researching so the footer stops claiming it is planning', () => {
+    expect(send(planning(), call('grep auth', 't1')).status).toBe('researching');
+  });
+
+  it('leaves an executing run alone — research steps belong to the planner', () => {
+    const executing: TuiState = { ...initialState(), status: 'executing' };
+    expect(send(executing, call('grep auth', 't1')).status).toBe('executing');
+  });
+
   it('ignores steps from a session that /new has replaced', () => {
     const s = send({ ...planning(), sessionId: 's2' }, { type: 'researchStep', summary: 'grep old', sessionId: 's1' });
 
@@ -80,6 +89,17 @@ describe('researchStepDone', () => {
 
     const settled = send(s, done('read_file b.ts', { toolCallId: 't2' }));
     expect(settled.busyLabel).toBe('');
+  });
+
+  it('hands the status back to planning once the round is over and the model is thinking again', () => {
+    const s = drive(planning(), [
+      call('read_file a.ts', 't1'),
+      call('read_file b.ts', 't2'),
+      done('read_file a.ts', { toolCallId: 't1' }),
+    ]);
+    expect(s.status).toBe('researching');
+
+    expect(send(s, done('read_file b.ts', { toolCallId: 't2' })).status).toBe('planning');
   });
 
   it('leaves the transcript alone when nothing matches', () => {

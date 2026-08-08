@@ -13,6 +13,7 @@ import {
   researchToolsPath,
   withPath,
   SEARCH_EXCLUSIONS,
+  STOPPED_TOOL_RESULT,
   type GrepOptions,
   type ReadFileOpts,
   type ToolOutcome,
@@ -28,7 +29,7 @@ interface ExecResult { stdout: string; stderr: string; code: number | null }
 function run(
   file: string,
   args: string[],
-  opts: { cwd?: string; timeout: number; shell?: boolean | string; env?: NodeJS.ProcessEnv },
+  opts: { cwd?: string; timeout: number; shell?: boolean | string; env?: NodeJS.ProcessEnv; signal?: AbortSignal },
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
     // Node hands only ENOENT/EAGAIN/EMFILE/ENFILE from spawn(2) to the
@@ -44,6 +45,11 @@ function run(
         encoding: 'utf8',
         shell: opts.shell,
         env: opts.env,
+        // Node kills the child when this aborts and calls back with an
+        // ABORT_ERR, which lands on the `code: 1` branch below — a failed
+        // tool call, like any command that did not finish. Stopping the
+        // planner must not leave a research `bash` running to term.
+        signal: opts.signal,
       }, (err, stdout, stderr) => {
         const code = err && typeof (err as { code?: unknown }).code === 'number' ? (err as { code: number }).code : err ? 1 : 0;
         resolve({ stdout: stdout ?? '', stderr: stderr ?? '', code });
@@ -250,17 +256,21 @@ export class VsCodeFileSystem extends BaseFileSystem {
     }
   }
 
-  protected async execBashImpl(command: string): Promise<ToolOutcome> {
+  protected async execBashImpl(command: string, signal?: AbortSignal): Promise<ToolOutcome> {
     // `file: null` means "host default", i.e. the `shell: true` this always
     // did — unchanged on POSIX. A resolved file is the POSIX shell found on a
     // Windows box, invoked explicitly so the command runs in the dialect
     // `BaseFileSystem` classified it under.
     const { file, args } = this.researchShell;
     const result = file === null
-      ? await run(command, [], { cwd: this.getWorkspaceRoot(), timeout: BASH_TIMEOUT_MS, shell: true })
-      : await run(file, [...args, command], { cwd: this.getWorkspaceRoot(), timeout: BASH_TIMEOUT_MS });
+      ? await run(command, [], { cwd: this.getWorkspaceRoot(), timeout: BASH_TIMEOUT_MS, shell: true, signal })
+      : await run(file, [...args, command], { cwd: this.getWorkspaceRoot(), timeout: BASH_TIMEOUT_MS, signal });
     const out = (result.stdout || '').trim();
     const err = (result.stderr || '').trim();
+
+    // A stopped turn reports as a stop, not as a mysterious non-zero exit: the
+    // child was killed on purpose and there is nothing here to diagnose.
+    if (signal?.aborted) return { success: false, output: STOPPED_TOOL_RESULT, truncated: false };
 
     if (result.code !== 0) {
       const detail = err || out || `exited with code ${result.code}`;

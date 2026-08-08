@@ -2,6 +2,7 @@ export * from './models/Task';
 export * from './models/Session';
 export * from './interfaces/IFileSystem';
 export { BaseFileSystem } from './services/BaseFileSystem';
+export { STOPPED_TOOL_RESULT } from './services/executeTool';
 export { classifyCommand, AUTO_COMMANDS, GIT_READONLY_SUBCOMMANDS, REFUSED_COMMANDS } from './services/commandPolicy';
 export type { CommandTier, CommandClassification } from './services/commandPolicy';
 export { resolveWithin, grantScopeFor } from './services/pathScope';
@@ -92,10 +93,14 @@ export {
   windowsCommandLine,
   CommandLineTooLongError,
   EmbeddedNewlineError,
+  ExecutableNotFoundError,
+  isExecutableResolved,
   CMD_EXE_MAX_COMMAND_LINE,
   WINDOWS_MAX_COMMAND_LINE,
 } from './utils/launch';
 export type { LaunchPlan, LaunchDeps } from './utils/launch';
+export { assertWorkspaceExists, WorkspaceNotFoundError } from './utils/workspace';
+export type { WorkspaceCheckDeps } from './utils/workspace';
 export { killTree } from './utils/processTree';
 export type { KillTreeDeps } from './utils/processTree';
 export { augmentedPath, clearAugmentedPathCache, withPath, wellKnownBinDirs } from './utils/shellPath';

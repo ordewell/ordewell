@@ -103,6 +103,8 @@ export class CliAgentAiService implements IAiService {
       fetch: deps.fetch ?? globalThis.fetch,
       resolvePath: deps.resolvePath,
       platform: deps.platform,
+      isDirectory: deps.isDirectory,
+      exists: deps.exists,
     };
     this.makeAdapter = deps.createAdapter ?? defaultAdapter;
     this.workspaceRoot = deps.workspaceRoot ?? (() => process.cwd());

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Hono } from 'hono';
+import { WorkspaceNotFoundError } from '@ordewell/core';
 
 import type { OrchestratorPool } from '../../pool/orchestratorPool';
 
@@ -64,6 +65,27 @@ describe('POST /:sessionId/generate', () => {
     expect(res.status).toBe(500);
     const body = (await res.json()) as { error: string };
     expect(body.error).toContain('requested runners');
+  });
+
+  // A missing workspace is a readable 400, not a 500 with a stack — the
+  // client (TUI, VS Code, web) shows the message directly.
+  it('reports a missing workspace as a 400 with a readable message, not a 500', async () => {
+    const badWorkspacePool = fakePool({
+      generatePlan: vi.fn().mockRejectedValue(new WorkspaceNotFoundError('/nope')),
+    });
+    const { plansRoute: plansRouteForBadWs } = await import('../../routes/plans');
+    const app2 = new Hono();
+    app2.route('/api/plans', plansRouteForBadWs(badWorkspacePool));
+
+    const res = await app2.request('/api/plans/s1/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ goal: 'test goal', runners: ['opencode'] }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain('/nope');
   });
 
   it('accepts runners from query param ?runners= comma-separated', async () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { BaseAiService, type ResearchChat, type ResearchTurn, type ToolResult, type ConversationTurnContext, type ToolCall } from '../BaseAiService';
 import type { IFileSystem } from '../../interfaces/IFileSystem';
 import type { ResearchProgress } from '../../models/Task';
@@ -30,8 +30,8 @@ class TestService extends BaseAiService {
   reset(): void {}
   ensureInit(): void {}
   protected async streamPlanText(): Promise<string> { return ''; }
-  runTurn(ctx: ConversationTurnContext, onProgress: (p: ResearchProgress) => void = () => {}) {
-    return this.runConversationTurn(ctx, 'go', onProgress);
+  runTurn(ctx: ConversationTurnContext, onProgress: (p: ResearchProgress) => void = () => {}, signal?: AbortSignal) {
+    return this.runConversationTurn(ctx, 'go', onProgress, signal);
   }
 }
 
@@ -182,5 +182,63 @@ describe('tool rounds — progress reporting', () => {
 
     expect(events.filter((e) => e.type === 'tool_call')).toHaveLength(3);
     expect(events.filter((e) => e.type === 'tool_result')).toHaveLength(3);
+  });
+});
+
+/**
+ * Stopping the planner has to reach the tool call itself. Noticing the abort
+ * only between rounds meant a `sleep 600` or a wide subagent sweep ran to
+ * completion after the user pressed stop, and the loop carried on from there.
+ */
+describe('tool rounds — an abort reaches the call in flight', () => {
+  it('hands the signal to a long-running bash so the child can be killed', async () => {
+    const controller = new AbortController();
+    let seen: AbortSignal | undefined;
+    const fs = fakeFileSystem({
+      bash: (_cmd, signal) => new Promise((resolve) => {
+        seen = signal;
+        signal?.addEventListener('abort', () =>
+          resolve({ success: false, output: 'Command stopped.', truncated: false }));
+      }),
+    });
+    const chat = new ScriptedChat([
+      toolTurn([{ name: 'bash', args: { command: 'sleep 600' }, id: '1' }]),
+      proseTurn('stopped'),
+    ]);
+
+    const running = new TestService(fakeConfig()).runTurn(ctxFor(chat, fs), () => {}, controller.signal);
+    await vi.waitFor(() => expect(seen).toBeDefined());
+    controller.abort();
+
+    expect((await running).kind).toBe('message');
+    expect(seen!.aborted).toBe(true);
+  });
+
+  it('does not start the rest of a round once the abort has landed', async () => {
+    const controller = new AbortController();
+    const ran: string[] = [];
+    const fs = fakeFileSystem({
+      bash: async (cmd) => {
+        ran.push(cmd);
+        controller.abort();
+        return { success: true, output: 'ok', truncated: false };
+      },
+    });
+    const chat = new ScriptedChat([
+      toolTurn([
+        { name: 'bash', args: { command: 'first' }, id: '1' },
+        { name: 'bash', args: { command: 'second' }, id: '2' },
+      ]),
+      proseTurn('stopped'),
+    ]);
+
+    await new TestService(fakeConfig()).runTurn(ctxFor(chat, fs), () => {}, controller.signal);
+
+    expect(ran).toEqual(['first']);
+    // The skipped call still gets an answer: a dangling tool_call would make
+    // the API history invalid for whatever the user does next.
+    const [first, second] = chat.toolResultsSent[0];
+    expect(first.output).toBe('ok');
+    expect(second.output).toMatch(/stopped/i);
   });
 });

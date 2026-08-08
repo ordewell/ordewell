@@ -49,7 +49,7 @@ export abstract class BaseFileSystem implements IFileSystem {
   protected abstract globImpl(pattern: string, absRoot: string, headLimit: number): Promise<ToolOutcome>;
   protected abstract grepImpl(pattern: string, absRoot: string, opts: GrepOptions): Promise<ToolOutcome>;
   protected abstract listDirImpl(absPath: string, depth: number): Promise<ToolOutcome>;
-  protected abstract execBashImpl(command: string): Promise<ToolOutcome>;
+  protected abstract execBashImpl(command: string, signal?: AbortSignal): Promise<ToolOutcome>;
 
   /**
    * Resolve `p` and confirm the planner may touch it. In-workspace paths pass
@@ -211,7 +211,7 @@ export abstract class BaseFileSystem implements IFileSystem {
    * anything else asks once and is remembered, and writes are refused outright
    * because a planner that mutates the workspace has stopped being a planner.
    */
-  async bash(command: string): Promise<ToolOutcome> {
+  async bash(command: string, signal?: AbortSignal): Promise<ToolOutcome> {
     const { tier, scope, reason } = classifyCommand(command, { dialect: this.researchShell.dialect });
 
     if (tier === 'refuse') {
@@ -237,7 +237,7 @@ export abstract class BaseFileSystem implements IFileSystem {
       }
     }
 
-    const outcome = await this.execBashImpl(command);
+    const outcome = await this.execBashImpl(command, signal);
     if (outcome.success) return outcome;
 
     // A command that failed under cmd.exe most likely failed because the tool

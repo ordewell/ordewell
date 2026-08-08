@@ -20,6 +20,7 @@ import {
   type RunnerModeInfo,
   runnerModesFrom,
   PROVIDER_PRIORITY,
+  assertWorkspaceExists,
 } from '@ordewell/core';
 import { WebConfig } from '../adapters/WebConfig';
 import { scanWorkspaces as scanWorkspacesImpl } from '../utils/workspaceScanner';
@@ -108,6 +109,10 @@ export class OrchestratorPool {
   }
 
   private createSessionFor(sessionId: string, workspace: string, modelOverride?: string): Session {
+    // Rejected here rather than left to the planner: a non-existent workspace
+    // otherwise reaches the harness adapter's `spawn` as an ENOENT that reads
+    // as a missing agent binary, not a missing directory.
+    assertWorkspaceExists(workspace);
     const config = new WebConfig({
       enabledRunners: this.enabledRunnerOverride(),
       modelOverride,

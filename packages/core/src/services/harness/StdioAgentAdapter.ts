@@ -1,6 +1,7 @@
 import type { ChildProcess } from 'child_process';
 import { augmentedPath, withPath } from '../../utils/shellPath';
-import { planDirectLaunch } from '../../utils/launch';
+import { planDirectLaunch, isExecutableResolved, ExecutableNotFoundError } from '../../utils/launch';
+import { assertWorkspaceExists } from '../../utils/workspace';
 import { killTree } from '../../utils/processTree';
 import { LineBuffer, type AgentAdapter, type AgentEvent, type AgentProcessDeps, type AgentStartOptions } from './AgentAdapter';
 
@@ -79,6 +80,10 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
   protected async handshake(_opts: AgentStartOptions): Promise<void> {}
 
   async start(opts: AgentStartOptions): Promise<void> {
+    // Checked before anything else: a workspace deleted out from under a
+    // stale `process.cwd()` otherwise surfaces as `spawn`'s ENOENT, which
+    // reads as a missing agent binary rather than a missing directory.
+    assertWorkspaceExists(opts.cwd, { isDirectory: this.deps.isDirectory });
     this.processEnded = new Promise<void>((resolve) => { this.markEnded = resolve; });
     const spec = this.spawnSpec(opts);
     const resolvePath = this.deps.resolvePath ?? augmentedPath;
@@ -95,6 +100,9 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
       platform: this.deps.platform,
       resolvePath,
     });
+    if (!isExecutableResolved(spec.command, launch, PATH, { platform: this.deps.platform, exists: this.deps.exists })) {
+      throw new ExecutableNotFoundError(spec.command, PATH);
+    }
     this.process = this.deps.spawn(launch.file, launch.args, {
       env: this.spawnEnv,
       stdio: ['pipe', 'pipe', 'pipe'],

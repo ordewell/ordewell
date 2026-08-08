@@ -1,3 +1,4 @@
+import { assertWorkspaceExists } from '@ordewell/core';
 import { ApiClient, ensureDaemonOwned, resolvePort, stopDaemon } from '../daemonClient';
 import { flag } from '../utils';
 import { findEnvFile, writeEnvVar } from '../utils/env';
@@ -18,6 +19,19 @@ export async function handleTui(subArgs: string[]): Promise<void> {
   }
 
   const workspace = flag(subArgs, '--workspace') || process.cwd();
+  try {
+    assertWorkspaceExists(workspace);
+  } catch {
+    // A shell whose own cwd was deleted still reports the stale path here —
+    // `process.cwd()` returns a string, not a live handle — so this is the
+    // one place that catches it before it turns into a pile of unrelated
+    // ENOENTs from every tool the TUI tries to use.
+    console.error(
+      `Workspace "${workspace}" does not exist.\n\n` +
+      `cd into a directory that exists, or pass --workspace <path> naming one that does.`,
+    );
+    process.exit(1);
+  }
   const { port, owned: ownedAtLaunch } = await ensureDaemonOwned(resolvePort(subArgs), { detached: false });
   // Not const: a daemon we did not start can die and be replaced by one we
   // did, and only the one we started may be stopped on the way out.

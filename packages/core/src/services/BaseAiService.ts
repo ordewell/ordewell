@@ -242,7 +242,7 @@ export abstract class BaseAiService {
       parallelIndexes.length > 1
         ? mapWithConcurrency(parallelIndexes, TOOL_ROUND_CONCURRENCY, async (i) => {
           onProgress({ type: 'tool_call', tool: toolCalls[i].name, toolArgs: JSON.stringify(toolCalls[i].args), toolCallId: toolCalls[i].id });
-          precomputed.set(i, await executeTool(toolCalls[i].name, normalizedArgs[i], fs, fetcher));
+          precomputed.set(i, await executeTool(toolCalls[i].name, normalizedArgs[i], fs, fetcher, signal));
         })
         : Promise.resolve(),
     ]);
@@ -253,7 +253,12 @@ export abstract class BaseAiService {
       const preResult = precomputed.get(index);
       if (!preResult) onProgress({ type: 'tool_call', tool: tc.name, toolArgs: JSON.stringify(tc.args), toolCallId: tc.id });
 
-      const toolResult = preResult ?? await executeTool(tc.name, toolArgs, fs, fetcher);
+      // The serial tail of the round is where a stop actually lands: `bash`,
+      // `fetch` and `web_search` run one after another and can each sit on an
+      // approval prompt, so by the time the user hits ESC there are usually
+      // calls here that have not started. `executeTool` answers those without
+      // running them, the same way the budget-exhaustion path above does.
+      const toolResult = preResult ?? await executeTool(tc.name, toolArgs, fs, fetcher, signal);
 
       const MAX_RESPONSE_CHARS = 50000;
       const truncatedResponse = toolResult.success && (toolResult.truncated || toolResult.output.length > MAX_RESPONSE_CHARS);

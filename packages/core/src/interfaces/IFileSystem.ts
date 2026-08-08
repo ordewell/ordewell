@@ -66,7 +66,13 @@ export interface IFileSystem {
   glob(pattern: string, opts?: GlobOptions): Promise<ToolOutcome>;
   grep(pattern: string, opts?: GrepOptions): Promise<ToolOutcome>;
   listDir(path: string, depth?: number): Promise<ToolOutcome>;
-  bash(command: string): Promise<ToolOutcome>;
+  /**
+   * `signal` stops the planning turn this command belongs to: adapters kill
+   * the spawned child rather than let it run out its own timeout. The other
+   * tools here are short enough that the loop's between-call abort check is
+   * indistinguishable from cancelling them mid-flight; a `bash` call is not.
+   */
+  bash(command: string, signal?: AbortSignal): Promise<ToolOutcome>;
   /** Definition-first lookup for one symbol. See `symbolPatterns.ts`. */
   findSymbol(symbol: string, opts?: FindSymbolOptions): Promise<ToolOutcome>;
   getWorkspaceRoot(): string;

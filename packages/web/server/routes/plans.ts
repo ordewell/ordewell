@@ -1,5 +1,5 @@
 import { Hono, type Context } from 'hono';
-import { PlanEditError } from '@ordewell/core';
+import { PlanEditError, WorkspaceNotFoundError } from '@ordewell/core';
 import { OrchestratorPool } from '../pool/orchestratorPool';
 
 /**
@@ -33,6 +33,7 @@ export function plansRoute(pool: OrchestratorPool) {
       const { models, modelsByRunner } = await pool.getProviderModels();
       return c.json({ plan, models, modelsByRunner });
     } catch (err) {
+      if (err instanceof WorkspaceNotFoundError) return c.json({ error: err.message }, 400);
       // Log before returning: the message alone travels to the client, so an
       // unexpected throw in here (a research tool crashing the whole turn, say)
       // left no stack anywhere — server.log showed nothing and the CLI showed
@@ -210,6 +211,7 @@ export function plansRoute(pool: OrchestratorPool) {
       const plan = await pool.startPlanning(c.req.param('sessionId'), goal, runnerList, ws, model);
       return c.json({ plan });
     } catch (err) {
+      if (err instanceof WorkspaceNotFoundError) return c.json({ error: err.message }, 400);
       return c.json({ error: err instanceof Error ? (err as Error).message : 'Planning failed' }, 500);
     }
   });

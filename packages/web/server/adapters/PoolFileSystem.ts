@@ -9,6 +9,7 @@ import {
   researchToolsPath,
   withPath,
   SEARCH_EXCLUSIONS,
+  STOPPED_TOOL_RESULT,
   type GrepOptions,
   type ReadFileOpts,
   type ToolOutcome,
@@ -211,7 +212,7 @@ export class PoolFileSystem extends BaseFileSystem {
     }
   }
 
-  protected async execBashImpl(command: string): Promise<ToolOutcome> {
+  protected async execBashImpl(command: string, signal?: AbortSignal): Promise<ToolOutcome> {
     // `shell: true` is required now that approved commands may legitimately
     // contain pipes; the tier classifier in core (not string filtering here)
     // is what decides whether this command was allowed to reach the shell.
@@ -221,10 +222,14 @@ export class PoolFileSystem extends BaseFileSystem {
     // runs in the dialect `BaseFileSystem` classified it under.
     const { file, args } = this.researchShell;
     const result = file === null
-      ? await run(command, [], { cwd: this.workspaceRoot, timeout: BASH_TIMEOUT_MS, shell: true })
-      : await run(file, [...args, command], { cwd: this.workspaceRoot, timeout: BASH_TIMEOUT_MS });
+      ? await run(command, [], { cwd: this.workspaceRoot, timeout: BASH_TIMEOUT_MS, shell: true, signal })
+      : await run(file, [...args, command], { cwd: this.workspaceRoot, timeout: BASH_TIMEOUT_MS, signal });
     const out = (result.stdout || '').trim();
     const err = (result.stderr || '').trim();
+
+    // A stopped turn reports as a stop, not as a mysterious non-zero exit: the
+    // child was killed on purpose and there is nothing here to diagnose.
+    if (signal?.aborted) return { success: false, output: STOPPED_TOOL_RESULT, truncated: false };
 
     if (result.code !== 0) {
       const detail = err || out || `exited with code ${result.code}`;

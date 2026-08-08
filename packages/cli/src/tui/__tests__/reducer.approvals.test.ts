@@ -61,10 +61,19 @@ describe('approval overlay', () => {
     expect(effects).toContainEqual({ type: 'respondApproval', sessionId: 's1', approvalId: 'ap-1', granted: false });
   });
 
-  it('denies on escape, so dismissing is never consent', () => {
-    const { effects } = press(withPending(), 'escape');
+  it('denies on escape once no turn is in flight, so dismissing is never consent', () => {
+    // A prompt outliving its turn (answered elsewhere, or the turn already
+    // settled) still gets the plain deny — there is nothing left to stop.
+    const { effects } = press({ ...withPending(), status: 'idle' }, 'escape');
 
     expect(effects).toContainEqual({ type: 'respondApproval', sessionId: 's1', approvalId: 'ap-1', granted: false });
+  });
+
+  it('escape stops the whole turn while one is in flight, rather than denying one call', () => {
+    const { state, effects } = press(withPending(), 'escape');
+
+    expect(effects).toEqual([{ type: 'cancelPlanning', sessionId: 's1' }]);
+    expect(state.overlay).toBeNull();
   });
 
   it('ignores keys that mean neither yes nor no rather than guessing', () => {

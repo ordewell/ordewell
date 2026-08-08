@@ -259,6 +259,52 @@ describe('runResearchAgent', () => {
     expect(touched).toEqual([]);
     expect(result.output).toMatch(/abort/i);
   });
+
+  // The between-rounds check is not enough: a subagent's round can hold half a
+  // dozen calls, and stopping the planner must not wait for all of them.
+  it('stops part-way through a round rather than finishing every call in it', async () => {
+    const ac = new AbortController();
+    const { fs, touched } = fakeFs();
+    const stopOnFirst = fs.bash;
+    fs.bash = async (command: string) => {
+      ac.abort();
+      return stopOnFirst(command);
+    };
+    const chat = scriptedChat([
+      {
+        text: '',
+        toolCalls: [
+          { name: 'bash', args: { command: 'ls' }, id: 't1' },
+          { name: 'glob', args: { pattern: '*' }, id: 't2' },
+        ],
+        hasToolCalls: true,
+      },
+      textTurn('digest'),
+    ]);
+
+    await runResearchAgent('brief', { createChat: () => chat, fs, signal: ac.signal });
+
+    expect(touched).toEqual(['bash']);
+  });
+
+  it('hands the signal to bash so a long command can be killed rather than waited out', async () => {
+    const ac = new AbortController();
+    let seen: AbortSignal | undefined;
+    const { fs } = fakeFs();
+    fs.bash = (_command: string, signal?: AbortSignal) => new Promise((resolve) => {
+      seen = signal;
+      signal?.addEventListener('abort', () => resolve({ success: false, output: 'stopped', truncated: false }));
+    });
+    // Auto-tier, so the non-prompting wrapper lets it through to `fs.bash`.
+    const chat = scriptedChat([toolTurn('bash', { command: 'find . -name "*.ts"' }), textTurn('digest')]);
+
+    const running = runResearchAgent('brief', { createChat: () => chat, fs, signal: ac.signal });
+    await vi.waitFor(() => expect(seen).toBeDefined());
+    ac.abort();
+    await running;
+
+    expect(seen!.aborted).toBe(true);
+  });
 });
 
 describe('mapWithConcurrency', () => {

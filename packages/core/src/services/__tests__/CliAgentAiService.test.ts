@@ -33,6 +33,10 @@ function service(
       // Pinned, not inherited: Codex's sandbox probe is Linux-only, and these
       // assertions must hold on whatever host runs the suite.
       platform: 'linux',
+      // These tests exercise the fake process boundary, not the real
+      // filesystem — the workspace and the agent binary are both fictional.
+      isDirectory: () => true,
+      exists: () => true,
     },
   );
   return { svc, spawned, config };
@@ -567,7 +571,7 @@ describe('CliAgentAiService — OpenCode', () => {
 
     const svc = new CliAgentAiService(
       fakeConfig({ aiProvider: 'opencode', enabledRunners: ['opencode'] }),
-      { spawn, fetch: fetchImpl, resolvePath: async () => '/usr/bin', workspaceRoot: () => '/repo' },
+      { spawn, fetch: fetchImpl, resolvePath: async () => '/usr/bin', workspaceRoot: () => '/repo', isDirectory: () => true, exists: () => true },
     );
     return { svc, spawned };
   }
@@ -662,7 +666,7 @@ describe('CliAgentAiService — OpenCode', () => {
 
     const svc = new CliAgentAiService(
       fakeConfig({ aiProvider: 'opencode', orchestratorModel: 'anthropic/claude-sonnet-4' }),
-      { spawn, fetch: fetchImpl, resolvePath: async () => '/usr/bin', workspaceRoot: () => '/repo' },
+      { spawn, fetch: fetchImpl, resolvePath: async () => '/usr/bin', workspaceRoot: () => '/repo', isDirectory: () => true, exists: () => true },
     );
     await svc.startConversation(request({ runners: ['opencode'] }));
 

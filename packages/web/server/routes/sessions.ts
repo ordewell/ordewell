@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { OrchestratorPool, getSessionList, removeSession } from '../pool/orchestratorPool';
-import { loadSessionPlanState } from '@ordewell/core';
+import { loadSessionPlanState, WorkspaceNotFoundError } from '@ordewell/core';
 
 export function sessionsRoute(pool: OrchestratorPool) {
   const router = new Hono();
@@ -38,6 +38,7 @@ export function sessionsRoute(pool: OrchestratorPool) {
       const plan = pool.adoptSavedSession(id, ws);
       return c.json({ ok: true, plan, goal: pool.getGoal(id) });
     } catch (err: any) {
+      if (err instanceof WorkspaceNotFoundError) return c.json({ error: err.message }, 400);
       const status = err?.message === 'Session not found' ? 404 : 500;
       return c.json({ error: err?.message ?? 'Failed to load session' }, status as any);
     }

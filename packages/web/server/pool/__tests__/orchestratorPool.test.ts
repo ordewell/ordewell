@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, readdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { listSessions, saveSession, Session, type LegacyPlanState } from '@ordewell/core';
+import { listSessions, saveSession, Session, WorkspaceNotFoundError, type LegacyPlanState } from '@ordewell/core';
 import { OrchestratorPool } from '../orchestratorPool';
 
 function savedPlan(over: Partial<LegacyPlanState> = {}): LegacyPlanState {
@@ -110,6 +110,44 @@ describe('OrchestratorPool.adoptSavedSession', () => {
     pool.adoptSavedSession(meta.id, workspace);
 
     expect(pool.session(meta.id)).toBe(live);
+  });
+});
+
+// A workspace that does not exist on disk (a shell's stale cwd, a typo'd
+// --workspace) must be refused before it ever reaches a harness adapter's
+// `spawn` — there it surfaces as an ENOENT that reads as a missing agent
+// binary rather than a missing directory.
+describe('OrchestratorPool workspace validation', () => {
+  let pool: OrchestratorPool;
+  const missing = '/definitely/does/not/exist/ordewell-workspace';
+
+  beforeEach(() => {
+    pool = new OrchestratorPool();
+  });
+
+  afterEach(() => {
+    pool.destroyAll();
+  });
+
+  it('rejects generatePlan for a workspace that does not exist', async () => {
+    await expect(
+      pool.generatePlan('session-missing-ws', 'Add a widget', ['claude-code'], missing),
+    ).rejects.toThrow(WorkspaceNotFoundError);
+    expect(pool.hasSession('session-missing-ws')).toBe(false);
+  });
+
+  it('rejects startPlanning for a workspace that does not exist', async () => {
+    await expect(
+      pool.startPlanning('session-missing-ws-2', 'Add a widget', ['claude-code'], missing),
+    ).rejects.toThrow(WorkspaceNotFoundError);
+    expect(pool.hasSession('session-missing-ws-2')).toBe(false);
+  });
+
+  it('names the missing path in the error', async () => {
+    const err = await pool
+      .generatePlan('session-missing-ws-3', 'Add a widget', ['claude-code'], missing)
+      .catch((e) => e);
+    expect(err.message).toContain(missing);
   });
 });
 

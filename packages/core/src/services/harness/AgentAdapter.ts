@@ -88,6 +88,10 @@ export interface AgentProcessDeps {
   resolvePath?: () => Promise<string>;
   /** Host platform. Defaults to the real one; injected so OS-specific behavior is testable anywhere. */
   platform?: NodeJS.Platform;
+  /** True when `workspace` names an existing directory. Defaults to a real filesystem check. */
+  isDirectory?: (workspace: string) => boolean;
+  /** True when `candidate` names an existing, spawnable file. Defaults to a real filesystem check. */
+  exists?: (candidate: string) => boolean;
 }
 
 /** Builds the adapter for one runner id, or null when that runner cannot plan. */

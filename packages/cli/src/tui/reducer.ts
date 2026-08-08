@@ -255,16 +255,24 @@ export function reduce(state: TuiState, action: Action): Step {
       // A transcript entry, not just a spinner label: overwriting the label was
       // why a parallel round collapsed to whichever call finished last.
       const spoken = say(state, 'research', summary, { toolCallId: action.toolCallId });
-      return step({ ...spoken, busyLabel: researchLabel(spoken.messages, summary) });
+      // The footer said "Planning…" through the whole research phase, which is
+      // where a turn spends most of its time. `researching` is the same
+      // in-flight state as far as ESC is concerned — only the label differs.
+      const status = state.status === 'planning' ? 'researching' : state.status;
+      return step({ ...spoken, status, busyLabel: researchLabel(spoken.messages, summary) });
     }
 
     case 'researchStepDone': {
       if (stale(state, action.sessionId)) return step(state);
       const messages = settleResearchStep(state.messages, action);
       const pending = messages.filter(isPendingResearch);
+      // Round over, model thinking again — back to the planning label until the
+      // next tool call, or until the turn settles the status to idle.
+      const status = pending.length === 0 && state.status === 'researching' ? 'planning' : state.status;
       return step({
         ...state,
         messages,
+        status,
         busyLabel: pending.length > 0 ? researchLabel(messages, pending[pending.length - 1].content) : '',
       });
     }
@@ -693,6 +701,22 @@ function scrollPlan(state: TuiState, delta: number): Step {
   return step({ ...state, planScroll: clamp(from - delta, maxScroll) });
 }
 
+/** A planner turn the user can still call off — research rounds included. */
+const plannerInFlight = (state: TuiState): boolean =>
+  state.status === 'planning' || state.status === 'researching';
+
+/**
+ * Call off the turn. An approval prompt on screen goes with it, queue and all:
+ * the daemon denies every outstanding request as it aborts, so leaving the
+ * modal up would ask the user to answer for a turn that no longer exists.
+ */
+function stopPlanning(state: TuiState, sessionId: string): Step {
+  const dismissed = state.overlay?.kind === 'approval'
+    ? { ...state, overlay: null, pendingApprovals: [] }
+    : state;
+  return step(dismissed, [{ type: 'cancelPlanning', sessionId }]);
+}
+
 /**
  * Key routing, outermost first: global quit keys, then whatever overlay is
  * open, then the focused pane. Only the chat pane feeds the line editor, so
@@ -705,12 +729,18 @@ function handleKey(state: TuiState, key: Key): Step {
   }
   if (key.name === 'ctrl-l') return step({ ...state, messages: [] });
 
-  if (state.overlay) return handleOverlayKey(state, state.overlay, key);
   // A first ESC stops the planner rather than doing whatever ESC does today —
   // that behavior is still one ESC away, once the turn is no longer in flight.
-  if (key.name === 'escape' && (state.status === 'planning' || state.status === 'researching') && state.sessionId) {
-    return step(state, [{ type: 'cancelPlanning', sessionId: state.sessionId }]);
+  // This sits *above* overlay routing for the approval prompt only: ESC there
+  // would otherwise deny one tool call, which the planner answers by issuing
+  // the next one. A user pressing ESC mid-research wants the turn dead, not a
+  // single refusal. Every other overlay (help, pickers, confirm, task editor)
+  // keeps its own ESC — those are things the user opened and can close.
+  if (key.name === 'escape' && plannerInFlight(state) && state.sessionId
+      && (!state.overlay || state.overlay.kind === 'approval')) {
+    return stopPlanning(state, state.sessionId);
   }
+  if (state.overlay) return handleOverlayKey(state, state.overlay, key);
   if (key.name === 'tab' && state.focus === 'chat') {
     const matches = completions(state.editor.text);
     if (matches.length > 0) {
