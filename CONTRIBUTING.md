@@ -84,22 +84,28 @@ bench/       Offline dev harnesses. Zero dependencies, pure Node.
 docs/adr/    Architecture decisions, including the ones that were rejected.
 ```
 
-## Releasing to npm
+## Releasing
 
-Four packages ship, and the order is a dependency order — each one's `dependencies`
-must already resolve on the registry when it lands:
+Releases are driven by a version tag. Bump every package to the same version
+(`cli-alias` pins `@ordewell/cli` exactly), update the CHANGELOG, commit as
+`release: X.Y.Z`, then:
 
 ```bash
-npm publish -w packages/core
-npm publish -w packages/web
-npm publish -w packages/cli
-(cd packages/cli-alias && npm publish)   # not a workspace — see Layout
+git tag v0.4.6 && git push origin v0.4.6
 ```
 
-`prepublishOnly` rebuilds each package first, so `dist/` can never be stale.
-`packages/vscode` is `private: true` and is skipped. Versions on npm are
-immutable — `npm publish --dry-run` first, and keep all four versions in lockstep
-(`cli-alias` pins `@ordewell/cli` exactly).
+The tag triggers `.github/workflows/release.yml`, which verifies the tag
+matches every `package.json`, builds and tests, then:
+
+- **npm**: publishes in dependency order — `core`, `web`, `cli`, then
+  `cli-alias` (not a workspace — see Layout) — each one's `dependencies` must
+  already resolve on the registry when it lands.
+- **VS Code**: packages and uploads the extension to the Marketplace.
+
+Secrets required: `NPM_TOKEN` (npm publish access) and `VSCE_PAT` (Marketplace
+scope). `prepublishOnly` rebuilds each npm package first, so `dist/` can never
+be stale. Versions on npm are immutable — bump carefully, and keep all
+versions in lockstep.
 
 ## House style
 
