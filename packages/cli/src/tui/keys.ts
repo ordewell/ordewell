@@ -6,7 +6,10 @@ export interface Key {
   char?: string;
   /** Only set for `name: 'paste'` — a whole bracketed paste, line endings normalized. */
   text?: string;
-  /** Only set for wheel keys — the 1-based cell the pointer was over. */
+  /**
+   * Only set for the mouse keys — `scrollup`/`scrolldown`, `mousedown`,
+   * `mousedrag` and `mouseup` — as the 1-based cell the pointer was over.
+   */
   col?: number;
   row?: number;
 }
@@ -74,7 +77,8 @@ const ESCAPES: Record<string, string> = {
   '\x1b\n': 'alt-enter',
 };
 
-// Decode wheel reports. Only arrive while mouse capture is on — see terminal.ts.
+// Decode mouse reports — the wheel, and the press/drag/release a selection is
+// made of. Only arrive while mouse capture is on — see terminal.ts.
 //
 // A button byte is a bit field, not an enum: 64 marks the wheel, the low two
 // bits pick the direction, and shift (4), alt (8), ctrl (16) and the motion
@@ -84,7 +88,28 @@ const ESCAPES: Record<string, string> = {
 // modifiers happen to be held.
 const WHEEL_FLAG = 64;
 const BUTTON_MASK = 0b11;
-const MOUSE_MODIFIERS = 4 | 8 | 16 | 32;
+const MOTION_FLAG = 32;
+const MOUSE_MODIFIERS = 4 | 8 | 16 | MOTION_FLAG;
+
+// Which button is being reported lives in the low two bits. SGR names the
+// button on release too and marks the release itself with a lowercase final
+// byte; X10 and urxvt have no such byte, and spend the fourth button code on
+// "something was let go" instead — so a release there cannot say which.
+const LEFT_BUTTON = 0;
+const X10_RELEASE = 0b11;
+
+/**
+ * One decoded report, whichever encoding it arrived in. `released` is what only
+ * SGR can tell us up front; the other two encodings say it through the button
+ * code instead. Middle and right are left as `unknown` — the same thing every
+ * non-wheel report used to be — since nothing above this reads them yet.
+ */
+function mouseKey(button: number, col: number, row: number, released = false): Key {
+  if ((button & WHEEL_FLAG) !== 0) return wheelKey(button, col, row);
+  if (released || (button & BUTTON_MASK) === X10_RELEASE) return { name: 'mouseup', col, row };
+  if ((button & BUTTON_MASK) !== LEFT_BUTTON) return { name: 'unknown' };
+  return { name: (button & MOTION_FLAG) !== 0 ? 'mousedrag' : 'mousedown', col, row };
+}
 
 function wheelKey(button: number, col: number, row: number): Key {
   if ((button & WHEEL_FLAG) === 0) return { name: 'unknown' };
@@ -103,7 +128,7 @@ function wheelKey(button: number, col: number, row: number): Key {
 // builds answer with instead, and X10 is the unnegotiated fallback every
 // terminal understands — tmux forwards it verbatim when 1006 is not honored.
 // eslint-disable-next-line no-control-regex
-const SGR_MOUSE = /^\x1b\[<(\d+);(\d+);(\d+)[Mm]$/;
+const SGR_MOUSE = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/;
 // eslint-disable-next-line no-control-regex
 const URXVT_MOUSE = /^\x1b\[(\d+);(\d+);(\d+)M$/;
 const X10_PREFIX = '\x1b[M';
@@ -112,14 +137,14 @@ const X10_BIAS = 32;
 
 function decodeMouse(seq: string): Key | undefined {
   const sgr = SGR_MOUSE.exec(seq);
-  if (sgr) return wheelKey(Number(sgr[1]), Number(sgr[2]), Number(sgr[3]));
+  if (sgr) return mouseKey(Number(sgr[1]), Number(sgr[2]), Number(sgr[3]), sgr[4] === 'm');
 
   const urxvt = URXVT_MOUSE.exec(seq);
-  if (urxvt) return wheelKey(Number(urxvt[1]) - X10_BIAS, Number(urxvt[2]), Number(urxvt[3]));
+  if (urxvt) return mouseKey(Number(urxvt[1]) - X10_BIAS, Number(urxvt[2]), Number(urxvt[3]));
 
   if (seq.startsWith(X10_PREFIX) && seq.length === X10_PREFIX.length + 3) {
     const bytes = [0, 1, 2].map((n) => seq.charCodeAt(X10_PREFIX.length + n) - X10_BIAS);
-    return wheelKey(bytes[0], bytes[1], bytes[2]);
+    return mouseKey(bytes[0], bytes[1], bytes[2]);
   }
 
   return undefined;

@@ -1,7 +1,9 @@
-import { ALL_PROVIDERS, isCliProvider, type AiProvider, type ConversationMessage } from '@ordewell/core';
+import { execSync } from 'child_process';
+import { ALL_PROVIDERS, clipboardCopyCommand, isCliProvider, type AiProvider, type ConversationMessage, type HasBinFn, type PlannerModelRecall } from '@ordewell/core';
 import { summarizeToolCall } from '@ordewell/core/plan-utils';
 import { describeConnectionRefused, isConnectionRefused } from '../daemonClient';
 import { normalizeCatalog } from '../catalog';
+import { describePlannerSwitch } from '../plannerModelSwitch';
 import type { Action, Effect } from './reducer';
 import type { SessionView } from './state';
 import type { WsEvent } from '../apiClient';
@@ -68,6 +70,16 @@ export interface EffectDeps {
   openTerminal(sessionId: string, taskId: string): Promise<{ ok: boolean; message: string }>;
   /** Hands the mouse to the app (wheel events) or back to the terminal (drag-select). */
   setMouseCapture(enabled: boolean): void;
+  /**
+   * Which binaries this host has — `clipboardCopyCommand`'s feature probe.
+   * Injected only so a test can drive both the found and the missing branch;
+   * the runtime leaves it out and takes core's `which`/`where` default.
+   */
+  hasBin?: HasBinFn;
+  /** Runs `command` with `text` on its stdin. Injected for the same reason. */
+  pipeToClipboard?(command: string, text: string): void;
+  /** Writes raw bytes to the terminal — the OSC 52 fallback's only route out. */
+  writeTerminal(data: string): void;
   exit(): void;
 }
 
@@ -171,13 +183,26 @@ function explain(message: string): string {
  *
  * The reverse order looks harmless and is not: `.env` is the disk, and a
  * refused connection left it holding a choice that neither the daemon nor the
- * on-screen state ever saw. Switching the planner to a coding agent clears
- * `ORCHESTRATOR_MODEL` and `ORDEWELL_PLANNER_EFFORT` in the same breath, so the
- * failed half-write persisted a planner with no model — and the next daemon
+ * on-screen state ever saw. A planner switch writes `ORCHESTRATOR_MODEL` and
+ * `ORDEWELL_PLANNER_EFFORT` in the same breath as `AI_PROVIDER` — whatever the
+ * daemon resolved them to — so a failed half-write would have persisted a
+ * provider with a model from the backend it just left, and the next daemon
  * started from that file, silently, with the TUI still showing the old planner.
  */
 function persistAfterDaemon(deps: EffectDeps, env: Record<string, string>): void {
   for (const [key, value] of Object.entries(env)) deps.setEnvVar(key, value);
+}
+
+/** Names which of the three model outcomes a planner switch landed on — one line, into the chat pane. */
+function plannerModelNotice(recall: PlannerModelRecall): string {
+  switch (recall.source) {
+    case 'remembered':
+      return `Restored ${recall.model}.`;
+    case 'catalog-default':
+      return `Using its default model, ${recall.model} — pick another with /model.`;
+    case 'none':
+      return 'Pick a model with /model.';
+  }
 }
 
 async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
@@ -300,22 +325,23 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       if (!meta) throw new Error(`Unknown planner: ${effect.provider}`);
       // Pushed to the live daemon and written to .env, like every other
       // provider setting. The daemon builds a fresh config per session, so the
-      // switch lands on the next plan without a restart.
+      // switch lands on the next plan without a restart. Only the provider is
+      // ours to send — the daemon resolves what its model and effort should
+      // become (remembered for it, that backend's catalog default, or
+      // nothing) and this consumes whatever comes back.
       const env: Record<string, string> = { AI_PROVIDER: effect.provider };
-      // An effort is a variant of a specific model. Dropping the model without
-      // the effort leaves the next agent receiving a level it never declared.
-      if (effect.clearModel) {
-        env.ORCHESTRATOR_MODEL = '';
-        env.ORDEWELL_PLANNER_EFFORT = '';
-      }
-      await api.updateSettings({ env });
-      persistAfterDaemon(deps, env);
-      dispatch({ type: 'settingsLoaded', settings: { aiProvider: effect.provider, ...(effect.clearModel ? { orchestratorModel: '', plannerThinkingEffort: '' } : {}) } });
+      const settings = await api.updateSettings({ env });
+      const recall = describePlannerSwitch(settings, effect.provider as AiProvider);
+      persistAfterDaemon(deps, { ...env, ORCHESTRATOR_MODEL: recall.model, ORDEWELL_PLANNER_EFFORT: recall.effort });
+      dispatch({
+        type: 'settingsLoaded',
+        settings: { aiProvider: effect.provider, orchestratorModel: recall.model, plannerThinkingEffort: recall.effort },
+      });
       dispatch({
         type: 'notice',
-        message: isCliProvider(effect.provider as AiProvider)
-          ? `Planning with ${meta.label} — no API key needed.${effect.clearModel ? ` Using its default model; pick another with /model.` : ''}`
-          : `Planner set to ${meta.label}.${effect.clearModel ? ' Pick a model with /model.' : ''}`,
+        message: `${isCliProvider(effect.provider as AiProvider)
+          ? `Planning with ${meta.label} — no API key needed.`
+          : `Planner set to ${meta.label}.`} ${plannerModelNotice(recall)}`,
       });
       await loadModels(deps);
       return;
@@ -383,6 +409,10 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       deps.setEnvVar('ORDEWELL_TUI_MOUSE', String(effect.enabled));
       return;
 
+    case 'copyText':
+      copySelection(deps, effect.text);
+      return;
+
     case 'loadModels':
       await loadModels(deps);
       return;
@@ -432,6 +462,49 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       deps.exit();
       return;
   }
+}
+
+// ── Clipboard ────────────────────────────────────────────────────────────────
+
+const pipeToClipboardDefault = (command: string, text: string): void => {
+  execSync(command, { input: text, stdio: ['pipe', 'ignore', 'ignore'] });
+};
+
+/**
+ * The terminal's own "put this on the clipboard": ESC ] 52 ; c ; <base64> BEL.
+ * Only reached when the host has no clipboard binary — plenty of emulators
+ * (VTE before 0.76, xterm without `allowWindowOps`) drop it on the floor, which
+ * is why `clipboardCopyCommand` is tried first.
+ */
+function osc52(text: string): string {
+  return `\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x07`;
+}
+
+/**
+ * A released selection, onto the clipboard. Synchronous and never throwing: a
+ * missing `xclip`, or one that cannot open the display, falls through to the
+ * terminal route rather than reporting a copy that did not happen.
+ */
+function copySelection(deps: EffectDeps, text: string): void {
+  if (!text) return;
+  const lines = text.split('\n').length;
+  const command = clipboardCopyCommand(deps.hasBin);
+
+  if (command) {
+    try {
+      (deps.pipeToClipboard ?? pipeToClipboardDefault)(command, text);
+      deps.dispatch({ type: 'notice', message: `Copied ${lines} ${lines === 1 ? 'line' : 'lines'}.` });
+      return;
+    } catch {
+      // fall through to OSC 52
+    }
+  }
+
+  deps.writeTerminal(osc52(text));
+  deps.dispatch({
+    type: 'notice',
+    message: `Copied ${lines} ${lines === 1 ? 'line' : 'lines'} through the terminal — no clipboard tool here (pbcopy, xclip, xsel or wl-copy), so it only lands if your terminal supports OSC 52.`,
+  });
 }
 
 // ── Shared steps ─────────────────────────────────────────────────────────────

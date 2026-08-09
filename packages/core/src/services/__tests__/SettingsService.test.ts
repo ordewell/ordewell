@@ -215,6 +215,62 @@ describe('SettingsService', () => {
     });
   });
 
+  describe('plannerModels', () => {
+    it('getPlannerModel returns undefined for a planner never used', () => {
+      expect(service.getPlannerModel('claude-code')).toBeUndefined();
+    });
+
+    it('setPlannerModel persists one entry per planner backend', () => {
+      service.setPlannerModel('claude-code', { model: 'claude-haiku-4-5', effort: 'low' });
+      service.setPlannerModel('openrouter', { model: 'z-ai/glm-4.6' });
+      expect(service.getPlannerModel('claude-code')).toEqual({ model: 'claude-haiku-4-5', effort: 'low' });
+      const raw = JSON.parse(fs.readFileSync(tempFile, 'utf-8'));
+      expect(raw.plannerModels).toEqual({
+        'claude-code': { model: 'claude-haiku-4-5', effort: 'low' },
+        openrouter: { model: 'z-ai/glm-4.6' },
+      });
+    });
+
+    it('clearing the last entry collapses plannerModels back to absent', () => {
+      service.setPlannerModel('claude-code', { model: 'claude-haiku-4-5' });
+      service.setPlannerModel('claude-code', undefined);
+      expect(service.getPlannerModel('claude-code')).toBeUndefined();
+      expect(JSON.parse(fs.readFileSync(tempFile, 'utf-8')).plannerModels).toBeUndefined();
+    });
+
+    it('load drops entries whose model is not a real id and keeps the rest', () => {
+      fs.writeFileSync(tempFile, JSON.stringify({
+        plannerModels: {
+          codex: { model: '  ' },
+          opencode: { model: 'zen/glm-4.6', effort: 'high' },
+          gemini: ['nonsense'],
+        },
+      }));
+      const s2 = new SettingsService(tempFile);
+      expect(s2.getPlannerModel('codex')).toBeUndefined();
+      expect(s2.getPlannerModel('gemini')).toBeUndefined();
+      expect(s2.getPlannerModel('opencode')).toEqual({ model: 'zen/glm-4.6', effort: 'high' });
+    });
+
+    it('is absent — never an empty object — when nothing has been recorded', () => {
+      service.setGrillMe(true);
+      expect(JSON.parse(fs.readFileSync(tempFile, 'utf-8'))).not.toHaveProperty('plannerModels');
+    });
+
+    it('a plannerModels of the wrong shape does not throw and does not wipe the rest of the file', () => {
+      fs.writeFileSync(tempFile, JSON.stringify({
+        grillMe: { enabled: true },
+        modelAllowlist: { 'claude-code': ['claude-b'] },
+        plannerModels: 'not even an object',
+      }));
+      const s2 = new SettingsService(tempFile);
+      expect(() => s2.getAll()).not.toThrow();
+      expect(s2.getPlannerModel('claude-code')).toBeUndefined();
+      expect(s2.getGrillMe()).toBe(true);
+      expect(s2.getModelAllowlist('claude-code')).toEqual(['claude-b']);
+    });
+  });
+
   describe('enabledRunners', () => {
     it('is undefined until the user chooses, so hosts can fall back to their defaults', () => {
       expect(service.getEnabledRunners()).toBeUndefined();

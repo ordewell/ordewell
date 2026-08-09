@@ -78,3 +78,13 @@ describe('completions', () => {
     expect(completions('/model set gpt')).toEqual([]);
   });
 });
+
+describe('/mouse', () => {
+  // The sheet is where the trade is discoverable, and the trade changed:
+  // capture no longer costs the user their selection, it moves it into the app.
+  it('describes capture as pane selection rather than as losing selection', () => {
+    const description = findCommand('mouse')!.description;
+    expect(description).toMatch(/pane/i);
+    expect(description).toMatch(/select/i);
+  });
+});

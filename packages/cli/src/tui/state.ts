@@ -174,6 +174,24 @@ export type ConfirmAction =
 
 export type Focus = 'chat' | 'plan';
 
+/** One terminal cell, 1-based in both axes — the way a mouse report names it. */
+export interface Cell {
+  col: number;
+  row: number;
+}
+
+/**
+ * A drag in progress, or the range it left behind. `pane` is decided by where
+ * the button went down and never moves after that: both panes are painted on
+ * the same physical rows, so a range allowed to span the divider would splice
+ * the neighbour's text into every copied line.
+ */
+export interface Selection {
+  anchor: Cell;
+  head: Cell;
+  pane: Focus;
+}
+
 export interface TuiState {
   editor: EditorState;
   messages: ChatMessage[];
@@ -237,6 +255,13 @@ export interface TuiState {
    * transcript matters more than the wheel. See terminal.ts.
    */
   mouseCapture: boolean;
+  /**
+   * The cells the user is dragging over, or `null` when nothing is selected.
+   * Lives only for the drag: release both copies the text and clears this,
+   * because `Cell`s name screen rows, not content, and the copy notice appends
+   * a chat message that reflows the transcript underneath a standing highlight.
+   */
+  selection: Selection | null;
   workspace: string;
   overlay: Overlay | null;
   /**
@@ -294,6 +319,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     allowlist: {},
     autonomous: true,
     mouseCapture: true,
+    selection: null,
     workspace: process.cwd(),
     overlay: null,
     pendingApprovals: [],

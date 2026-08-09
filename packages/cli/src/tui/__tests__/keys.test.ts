@@ -72,8 +72,44 @@ describe('decodeKey', () => {
     expect(decodeKey(seq).name).toBe(name);
   });
 
-  it('reports an SGR mouse click (not the wheel) as unknown', () => {
-    expect(decodeKey('\x1b[<0;12;5M').name).toBe('unknown');
+  it('reads an SGR left press as mousedown at the cell under the pointer', () => {
+    expect(decodeKey('\x1b[<0;12;5M')).toEqual({ name: 'mousedown', col: 12, row: 5 });
+  });
+
+  // The only thing separating a press from a release in SGR is the final byte,
+  // and the button field is identical in both — read the `M`/`m` or the release
+  // arrives as a second mousedown.
+  it('splits an SGR press from a release on the final byte alone', () => {
+    expect(decodeKey('\x1b[<0;12;5m')).toEqual({ name: 'mouseup', col: 12, row: 5 });
+  });
+
+  it.each([
+    ['\x1b[<1;12;5M', 'middle'],
+    ['\x1b[<2;12;5M', 'right'],
+    ['\x1b[<33;12;5M', 'middle in motion'],
+    ['\x1b[<34;12;5M', 'right in motion'],
+  ])('leaves %j, a %s press, unhandled rather than reading it as the left button', (seq) => {
+    expect(decodeKey(seq).name).toBe('unknown');
+  });
+
+  // 32 is the motion bit terminal.ts's 1002 buys: with the left button down it
+  // marks the cells the pointer is dragged across, which is the selection.
+  it('reads a held left button in motion as mousedrag', () => {
+    expect(decodeKey('\x1b[<32;14;7M')).toEqual({ name: 'mousedrag', col: 14, row: 7 });
+  });
+
+  // Shift (4), Alt (8) and Ctrl (16) sit in the same byte as the button, so a
+  // modifier held while dragging must not read as some other button.
+  it.each([
+    ['\x1b[<4;12;5M', 'mousedown', 'shift'],
+    ['\x1b[<8;12;5M', 'mousedown', 'alt'],
+    ['\x1b[<16;12;5M', 'mousedown', 'ctrl'],
+    ['\x1b[<36;12;5M', 'mousedrag', 'shift'],
+    ['\x1b[<40;12;5M', 'mousedrag', 'alt'],
+    ['\x1b[<48;12;5M', 'mousedrag', 'ctrl'],
+    ['\x1b[<20;12;5m', 'mouseup', 'ctrl+shift'],
+  ])('maps %j to %s with the %s modifier held', (seq, name) => {
+    expect(decodeKey(seq)).toEqual({ name, col: 12, row: 5 });
   });
 
   // The modifier bits (shift 4, alt 8, ctrl 16) and the motion bit (32) ride on
@@ -102,9 +138,30 @@ describe('decodeKey', () => {
     expect(decodeKey(seq).name).toBe(name);
   });
 
+  // X10 button bytes, less their bias of 32: 0 is the left button, 32 is that
+  // button in motion, and 3 is a release — the encoding has no way to say which
+  // button was let go, so every release reads the same.
+  it.each([
+    ['\x1b[M \x2c\x25', 'mousedown'],
+    ['\x1b[M@\x2c\x25', 'mousedrag'],
+    ['\x1b[M#\x2c\x25', 'mouseup'],
+  ])('maps X10 report %j to %s', (seq, name) => {
+    expect(decodeKey(seq)).toEqual({ name, col: 12, row: 5 });
+  });
+
   it('maps a urxvt-encoded wheel report, whose button is biased by 32', () => {
     expect(decodeKey('\x1b[96;12;5M').name).toBe('scrollup');
     expect(decodeKey('\x1b[97;12;5M').name).toBe('scrolldown');
+  });
+
+  // urxvt is X10's button byte written out as a decimal parameter, bias and
+  // release code included, but always terminated by an uppercase `M`.
+  it.each([
+    ['\x1b[32;12;5M', 'mousedown'],
+    ['\x1b[64;12;5M', 'mousedrag'],
+    ['\x1b[35;12;5M', 'mouseup'],
+  ])('maps urxvt report %j to %s', (seq, name) => {
+    expect(decodeKey(seq)).toEqual({ name, col: 12, row: 5 });
   });
 
   it('drops a horizontal wheel notch without reporting it as an unknown key', () => {
@@ -173,6 +230,17 @@ describe('splitKeys', () => {
     // `M` is a CSI final byte, so the generic scan ends the sequence there and
     // the coordinates land in the line editor as `0%x`.
     expect(splitKeys('\x1b[M`\x30\x25x').map((k) => k.name)).toEqual(['scrollup', 'char']);
+  });
+
+  it('keeps a whole drag together — a press, the motion reports, then the release', () => {
+    // A drag arrives as one burst per stdin chunk, and the release ends it with
+    // a lowercase final byte the CSI scan has to accept like any other.
+    expect(splitKeys('\x1b[<0;3;1M\x1b[<32;4;1M\x1b[<32;5;1M\x1b[<0;5;1m').map((k) => k.name))
+      .toEqual(['mousedown', 'mousedrag', 'mousedrag', 'mouseup']);
+  });
+
+  it('separates a mouse release from the text after it', () => {
+    expect(splitKeys('\x1b[<0;5;1mx').map((k) => k.name)).toEqual(['mouseup', 'char']);
   });
 
   it('handles shift-enter in SS3 form', () => {

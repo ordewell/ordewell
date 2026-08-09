@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
+## [Unreleased]
+
+### Added
+
+- **The planner model survives a planner switch.** Switching back to a planner
+  restores the model (and thinking effort) last used with it instead of forcing
+  a re-pick; with nothing remembered it falls back to the first model in that
+  planner's catalog, and the model is left unset only when no models have been
+  discovered. The memory lives in the same `settings.json` as `modelAllowlist`,
+  so the TUI, the CLI and the VS Code extension all share it.
+
 ## [0.4.5] — 2026-08-04
 
 ### Fixed

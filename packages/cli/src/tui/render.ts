@@ -1,10 +1,10 @@
-import { pad, style, truncate, width, wrap } from './ansi';
+import { pad, stripAnsi, style, truncate, width, wrap } from './ansi';
 import { cursorInLines } from './editor';
 import { completions } from './slash';
 import {
   bodyRows, chatInputWrap, chatLayout, footerHints, helpLayout, packHints, planLayout, planOffset,
 } from './layout';
-import { chatEditorRoom, chatPaneWidth, planPaneWidth } from './geometry';
+import { chatEditorRoom, chatPaneWidth, paneColumns, planPaneWidth } from './geometry';
 import { SKILL_IDS, visibleItems, type PickerState, type TuiState } from './state';
 
 /**
@@ -32,7 +32,133 @@ export function render(state: TuiState): string[] {
   ];
 
   // Chrome is dropped from the top down in a terminal too short to hold it.
-  return lines.slice(Math.max(0, lines.length - rows)).map((l) => pad(l, cols));
+  const frame = lines.slice(Math.max(0, lines.length - rows)).map((l) => pad(l, cols));
+  return highlightSelection(frame, state);
+}
+
+// ── Selection ────────────────────────────────────────────────────────────────
+
+/**
+ * One painted row of a selection: the frame row it covers and the inclusive,
+ * 1-based screen columns of it that are selected.
+ */
+interface SelectionSpan {
+  row: number;
+  from: number;
+  to: number;
+}
+
+/**
+ * The selection as painted rows. Both ends are inclusive, and every row between
+ * the first and the last takes the *whole* of its pane — never the whole
+ * terminal, which is the splice this exists to prevent.
+ */
+function selectionSpans(state: TuiState): SelectionSpan[] {
+  const { selection } = state;
+  if (!selection) return [];
+  const { anchor, head } = selection;
+  const forwards = anchor.row < head.row || (anchor.row === head.row && anchor.col <= head.col);
+  const [start, end] = forwards ? [anchor, head] : [head, anchor];
+  const { first, last } = paneColumns(state, selection.pane);
+
+  const spans: SelectionSpan[] = [];
+  for (let row = start.row; row <= end.row; row++) {
+    spans.push({
+      row,
+      from: row === start.row ? start.col : first,
+      to: row === end.row ? end.col : last,
+    });
+  }
+  return spans;
+}
+
+/**
+ * A rendered row as one entry per screen column. A double-width glyph owns the
+ * first of the two columns it covers and leaves the second empty, so slicing
+ * this array by column can never cut a cluster in half or shift what follows.
+ * Paint is dropped: this is the text under the columns, not how it looks.
+ */
+function cells(line: string): string[] {
+  const out: string[] = [];
+  for (const char of stripAnsi(line)) {
+    out.push(char);
+    for (let i = 1; i < Math.max(1, width(char)); i++) out.push('');
+  }
+  return out;
+}
+
+// Inverse video on, and off *without* a reset. `style.inverse` closes with
+// SGR 0, which would drop whatever colour the row had open around the
+// selection; SGR 27 clears only the inverse bit and leaves the rest standing.
+const INVERSE_ON = '\x1b[7m';
+const INVERSE_OFF = '\x1b[27m';
+// Capturing, so `split` hands back the escapes along with the text between
+// them — the row is walked once rather than re-scanned per character.
+// eslint-disable-next-line no-control-regex
+const SGR_SPLIT = /(\x1b\[[0-9;]*m)/;
+
+/**
+ * One row with `from`..`to` (inclusive, 1-based) inverted.
+ *
+ * Only SGR sequences are added, and `width()` measures a row with those
+ * stripped — so the row's measured width, and with it the pane divider's
+ * column, comes out exactly as it went in. That matters more here than it
+ * looks: a row that measures wider than `cols` is what `clampToCols` chops and
+ * what AUTOWRAP_OFF exists to stop from shoving every row below it down one
+ * line (see terminal.ts).
+ *
+ * Inverse is re-asserted after any escape already in the row, because a `\x1b[0m`
+ * the row closes its own colour with would otherwise end the highlight early.
+ */
+function invertCells(line: string, from: number, to: number): string {
+  let out = '';
+  let col = 1;
+  let inside = false;
+
+  for (const piece of line.split(SGR_SPLIT)) {
+    if (SGR_SPLIT.test(piece)) {
+      out += piece + (inside ? INVERSE_ON : '');
+      continue;
+    }
+    for (const char of piece) {
+      if (inside && col > to) {
+        out += INVERSE_OFF;
+        inside = false;
+      } else if (!inside && col >= from && col <= to) {
+        out += INVERSE_ON;
+        inside = true;
+      }
+      out += char;
+      col += Math.max(1, width(char));
+    }
+  }
+
+  return inside ? out + INVERSE_OFF : out;
+}
+
+/** The frame with the selected cells inverted. Untouched when nothing is selected. */
+function highlightSelection(frame: string[], state: TuiState): string[] {
+  if (!state.selection || !style.enabled) return frame;
+  const painted = [...frame];
+  for (const { row, from, to } of selectionSpans(state)) {
+    const line = painted[row - 1];
+    if (line !== undefined) painted[row - 1] = invertCells(line, from, to);
+  }
+  return painted;
+}
+
+/**
+ * The selected text, ready for the clipboard: each row clipped to its pane's
+ * columns, paint stripped, and the padding every frame row is filled out with
+ * trimmed off the end. Empty when nothing is selected.
+ */
+export function selectedText(state: TuiState): string {
+  const spans = selectionSpans(state);
+  if (spans.length === 0) return '';
+  const frame = render(state);
+  return spans
+    .map(({ row, from, to }) => cells(frame[row - 1] ?? '').slice(from - 1, to).join('').replace(/\s+$/, ''))
+    .join('\n');
 }
 
 /** Exactly `rows` lines. Chat sticks to the bottom; panels fill downwards. */

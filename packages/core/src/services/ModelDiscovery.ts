@@ -923,4 +923,9 @@ export class ModelDiscovery {
   clear(): void {
     this.cache.clear();
   }
+
+  /** Whatever `discover()` has already cached for `runner` — never triggers discovery. */
+  getCached(runner: string): DiscoveredModel[] | undefined {
+    return this.cache.get(runner);
+  }
 }

@@ -130,6 +130,7 @@ function harness() {
   const queue = new ConversationQueue();
   const envWrites: Record<string, string> = {};
   const onExit = vi.fn();
+  const clipboard: string[] = [];
   let sessionCounter = 0;
 
   // eslint-disable-next-line prefer-const
@@ -148,6 +149,11 @@ function harness() {
         setEnvVar: (key, value) => { envWrites[key] = value; },
         openTerminal: async () => ({ ok: true, message: 'Opened terminal.' }),
         setMouseCapture: (enabled) => terminal?.setMouse(enabled),
+        // A real `xclip` would put test fixtures on the developer's clipboard;
+        // the probe and the pipe are the only two steps that have to be faked.
+        hasBin: () => true,
+        pipeToClipboard: (_command, text) => { clipboard.push(text); },
+        writeTerminal: (data) => output.write(data),
         // The fake daemon never refuses a connection, so this is never reached.
         reviveDaemon: async () => true,
         exit: () => { onExit(); terminal?.close(); },
@@ -190,7 +196,7 @@ function harness() {
       .join(' ')
       .replace(/\s+/g, ' ');
 
-  return { app, input, output, daemon, envWrites, onExit, type, frames, screen, transcript };
+  return { app, input, output, daemon, envWrites, onExit, clipboard, type, frames, screen, transcript };
 }
 
 const settle = () => vi.waitFor(() => expect(true).toBe(true));
@@ -615,6 +621,65 @@ describe('TUI end to end', () => {
     h.type('\x1b[<64;10;5M');
     await vi.waitFor(() => expect(h.app.getState().scroll).toBe(6));
     expect(h.screen()).not.toBe(noOverlay);
+  });
+
+  it('drags a selection out of the chat pane and copies it, with no plan text spliced in', async () => {
+    const h = harness();
+    h.type('Build the login flow');
+    h.type('\r');
+    await vi.waitFor(() => expect(h.screen()).toContain('Add the login route'));
+
+    // Drag from the row the reply is actually painted on — the chat pane is
+    // bottom-anchored, so which row that is depends on how much was said.
+    const replyRow = h.screen().split('\n').findIndex((line) => line.includes('Plan drafted')) + 1;
+    expect(replyRow).toBeGreaterThan(0);
+
+    // SGR press, motion and release (button 0, motion sets bit 32, lowercase
+    // `m` is the release) — the bytes a terminal actually sends for a drag.
+    h.type(`\x1b[<0;3;${replyRow}M`);
+    h.type(`\x1b[<32;30;${replyRow + 3}M`);
+    h.type(`\x1b[<0;30;${replyRow + 3}m`);
+
+    await vi.waitFor(() => expect(h.clipboard).toHaveLength(1));
+    const copied = h.clipboard[0];
+
+    expect(copied).toContain('Plan drafted');
+    // The task titles live in the pane on the other side of the divider.
+    expect(copied).not.toContain('Add the login route');
+    expect(copied).not.toContain('│');
+    // Four rows dragged over, four lines copied.
+    expect(copied.split('\n')).toHaveLength(4);
+    // The copy notice reflows the transcript, so the highlight is dropped rather
+    // than left standing over text it no longer matches.
+    expect(h.app.getState().selection).toBeNull();
+  });
+
+  it('drags a selection out of the plan pane and copies it, with no chat text spliced in', async () => {
+    const h = harness();
+    h.type('Build the login flow');
+    h.type('\r');
+    await vi.waitFor(() => expect(h.screen()).toContain('Add the login route'));
+
+    // 80 cols: the plan pane owns columns 45-80 (geometry.ts). Drag from the
+    // row the first task title is actually painted on.
+    const taskRow = h.screen().split('\n').findIndex((line) => line.includes('Add the login route')) + 1;
+    expect(taskRow).toBeGreaterThan(0);
+
+    h.type(`\x1b[<0;50;${taskRow}M`);
+    h.type(`\x1b[<32;70;${taskRow + 1}M`);
+    h.type(`\x1b[<0;70;${taskRow + 1}m`);
+
+    await vi.waitFor(() => expect(h.clipboard).toHaveLength(1));
+    const copied = h.clipboard[0];
+
+    expect(copied).toContain('Add the login route');
+    // The chat transcript lives on the other side of the divider.
+    expect(copied).not.toContain('Plan drafted');
+    expect(copied).not.toContain('│');
+    // Two rows dragged over, two lines copied.
+    expect(copied.split('\n')).toHaveLength(2);
+    // Same drop-on-copy rule applies regardless of which pane the drag started in.
+    expect(h.app.getState().selection).toBeNull();
   });
 
   it('ctrl-c exits and restores the terminal', async () => {

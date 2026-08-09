@@ -21,6 +21,10 @@ import {
   runnerModesFrom,
   PROVIDER_PRIORITY,
   assertWorkspaceExists,
+  runnerForProvider,
+  PlannerModelMemory,
+  type AiProvider,
+  type PlannerModelCandidate,
 } from '@ordewell/core';
 import { WebConfig } from '../adapters/WebConfig';
 import { scanWorkspaces as scanWorkspacesImpl } from '../utils/workspaceScanner';
@@ -36,6 +40,12 @@ export interface OrchestratorPoolDeps {
    * Left undefined, behavior is unchanged from before this existed.
    */
   runner?: ITerminalRunner;
+  /**
+   * Overrides the pool's own `ModelResolver`. Left undefined, behavior is
+   * unchanged; tests inject one built with fake exec/fetch impls so a
+   * planner-switch catalog lookup can be seeded without spawning real CLIs.
+   */
+  modelResolver?: ModelResolver;
 }
 
 export class OrchestratorPool {
@@ -44,14 +54,16 @@ export class OrchestratorPool {
   /** The in-flight planning turn's abort controller, one per session — see `cancelPlanning`. */
   private planningAborts = new Map<string, AbortController>();
   private registry: CoreRunnerRegistry = (() => { const r = new RunnerRegistry(); r.loadUserPlugins(); return r; })();
-  private modelResolver = new ModelResolver(this.registry, new WebConfig());
+  private modelResolver: ModelResolver;
   private runnerInstallation = new RunnerInstallation(this.registry);
   private cachedProviderLists: Record<string, string[]> | undefined;
   private settingsService = new SettingsService();
+  private plannerModelMemory = new PlannerModelMemory(this.settingsService);
   private sharedRunner?: ITerminalRunner;
 
   constructor(deps: OrchestratorPoolDeps = {}) {
     this.sharedRunner = deps.runner;
+    this.modelResolver = deps.modelResolver ?? new ModelResolver(this.registry, new WebConfig());
   }
 
   subscribe(sessionId: string, ws: WebSocket): void {
@@ -178,10 +190,53 @@ export class OrchestratorPool {
       verification: userSettings.verification,
       researchSubagents: userSettings.researchSubagents,
       modelAllowlist: userSettings.modelAllowlist,
+      // The model remembered per planner backend (this task), so a surface can
+      // render what's remembered without a second round-trip.
+      plannerModels: userSettings.plannerModels,
     };
   }
 
+  /**
+   * The catalog `PlannerModelMemory.recall` should judge `provider`'s
+   * remembered model against — a harness planner's own runner catalog, or the
+   * cross-provider picker list for a vendor (ADR-0009), same split as
+   * `plannerModelItems` in the TUI reducer. Read from whatever the resolver
+   * has already cached so this stays synchronous; a cold cache degrades to an
+   * empty catalog rather than kicking off discovery mid-settings-write.
+   */
+  private plannerCatalogFor(provider: AiProvider): PlannerModelCandidate[] {
+    const runner = runnerForProvider(provider);
+    if (runner) {
+      return this.modelResolver.getCachedRunnerModels(runner).map((m) => ({ id: m.modelId, variants: m.variants }));
+    }
+    return this.modelResolver.getCachedPickerOptions().map((o) => ({ id: o.id }));
+  }
+
   updateSettings(changes: Record<string, unknown>) {
+    // Read before any of this call's changes land, so a switch is judged
+    // against what was actually in effect a moment ago.
+    const providerBefore = new WebConfig({
+      enabledRunners: this.enabledRunnerOverride(),
+      providerModelLists: this.cachedProviderLists,
+    }).aiProvider;
+
+    const envChanges = changes.env && typeof changes.env === 'object' && !Array.isArray(changes.env)
+      ? (changes.env as Record<string, unknown>)
+      : undefined;
+    const incomingAiProvider = typeof envChanges?.AI_PROVIDER === 'string' ? envChanges.AI_PROVIDER : undefined;
+    // The name the client sent wins over re-deriving it from `config.aiProvider`
+    // later: for a vendor pick that resolution reads the model id, and a switch
+    // may have just cleared it — model-based resolution would misfire on the
+    // very call meant to establish the new provider.
+    const switchedToProvider: AiProvider | undefined =
+      incomingAiProvider && incomingAiProvider !== providerBefore ? (incomingAiProvider as AiProvider) : undefined;
+    // Read the incoming provider's catalog now, before the env-touched refresh
+    // below clears the resolver's cache — recall must judge the memory against
+    // what was already discovered, not force a fresh (async) discovery here.
+    const switchRecall = switchedToProvider
+      ? this.plannerModelMemory.recall(switchedToProvider, this.plannerCatalogFor(switchedToProvider))
+      : undefined;
+
     if (typeof changes.orchestratorModel === 'string') {
       process.env.ORCHESTRATOR_MODEL = changes.orchestratorModel;
     }
@@ -206,13 +261,19 @@ export class OrchestratorPool {
     if (changes.researchSubagents && typeof (changes.researchSubagents as Record<string, unknown>).enabled === 'boolean') {
       this.settingsService.setResearchSubagents((changes.researchSubagents as Record<string, unknown>).enabled as boolean);
     }
-    if (changes.env && typeof changes.env === 'object' && !Array.isArray(changes.env)) {
-      const env = changes.env as Record<string, string>;
+    if (envChanges) {
       let touched = false;
-      for (const [key, value] of Object.entries(env)) {
+      for (const [key, value] of Object.entries(envChanges)) {
         if (typeof value === 'string' && /^[A-Z_]+$/.test(key)) {
           process.env[key] = value;
-          touched = true;
+          // These three pick a planner and its model/effort — none of them
+          // are a provider credential or endpoint, so none of them change
+          // what a catalog contains. Invalidating on them would wipe the
+          // very cache `plannerCatalogFor` reads synchronously below, right
+          // before the next call's switch needs it.
+          if (key !== 'AI_PROVIDER' && key !== 'ORCHESTRATOR_MODEL' && key !== 'ORDEWELL_PLANNER_EFFORT') {
+            touched = true;
+          }
         }
       }
       // A new/changed provider key or base URL must re-probe the catalog;
@@ -222,6 +283,18 @@ export class OrchestratorPool {
         this.modelResolver.refreshRunnerModels();
       }
     }
+
+    // A planner switch resolves through memory rather than whatever the
+    // client's env carried for the model/effort — an older client still sends
+    // a blind `ORCHESTRATOR_MODEL: ''` clear here, and even a current one
+    // should land on the model this provider was last using, not nothing.
+    // Applied after the env loop above so it overrides that clear rather than
+    // being overwritten by it.
+    if (switchRecall) {
+      process.env.ORCHESTRATOR_MODEL = switchRecall.model;
+      process.env.ORDEWELL_PLANNER_EFFORT = switchRecall.effort;
+    }
+
     if (changes.modelAllowlist && typeof changes.modelAllowlist === 'object') {
       const allowlist = changes.modelAllowlist as Record<string, unknown>;
       for (const [runner, ids] of Object.entries(allowlist)) {
@@ -232,6 +305,29 @@ export class OrchestratorPool {
         }
       }
     }
+
+    // An explicit model/effort pick is remembered against whichever provider
+    // is in effect: the one this same call just switched to, or — resolved
+    // fresh, now that ORCHESTRATOR_MODEL reflects this call's changes —
+    // today's, so a vendor pick keys correctly off its model id. The pick
+    // arrives either as a top-level field (a vendor model, `ordewell model
+    // set`) or through env (`ordewell planner-effort`, the TUI's effort
+    // picker send ORDEWELL_PLANNER_EFFORT this way) — both are a real pick,
+    // never the switch's own env, which always carries AI_PROVIDER too.
+    const envCarriesModelOrEffort = envChanges?.AI_PROVIDER === undefined &&
+      (typeof envChanges?.ORCHESTRATOR_MODEL === 'string' || typeof envChanges?.ORDEWELL_PLANNER_EFFORT === 'string');
+    if (typeof changes.orchestratorModel === 'string' || typeof changes.plannerThinkingEffort === 'string' || envCarriesModelOrEffort) {
+      const rememberProvider = switchedToProvider ?? new WebConfig({
+        enabledRunners: this.enabledRunnerOverride(),
+        providerModelLists: this.cachedProviderLists,
+      }).aiProvider;
+      this.plannerModelMemory.remember(
+        rememberProvider,
+        process.env.ORCHESTRATOR_MODEL || '',
+        process.env.ORDEWELL_PLANNER_EFFORT || '',
+      );
+    }
+
     return this.getSettings();
   }
 

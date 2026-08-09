@@ -132,17 +132,24 @@ describe('runners and autonomy', () => {
     expect(again.effects).toEqual([{ type: 'setAutonomous', enabled: true }]);
   });
 
-  it('/mouse on trades text selection for wheel scrolling, and says so', () => {
+  // Capture used to cost the user drag-select outright; now the app does the
+  // selecting itself, one pane at a time, so the notice must not still say the
+  // trade is text selection.
+  it('/mouse on takes the wheel and the selection, and says both', () => {
     const { state, effects } = run('/mouse on');
     expect(effects).toEqual([{ type: 'setMouseCapture', enabled: true }]);
     expect(state.mouseCapture).toBe(true);
-    expect(state.messages.at(-1)!.content).toContain('no longer selects text');
+    const said = state.messages.at(-1)!.content;
+    expect(said).toContain('wheel');
+    expect(said).toMatch(/selects?/);
+    expect(said).not.toContain('no longer selects text');
   });
 
-  it('a bare /mouse flips it back, so selection is one keystroke away again', () => {
+  it('a bare /mouse hands the mouse back to the terminal', () => {
     const { state, effects } = run('/mouse', { mouseCapture: true });
     expect(effects).toEqual([{ type: 'setMouseCapture', enabled: false }]);
     expect(state.mouseCapture).toBe(false);
+    expect(state.messages.at(-1)!.content).toContain("terminal's own");
   });
 
   it('/mouse rejects an argument that is neither on nor off', () => {

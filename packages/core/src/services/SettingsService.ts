@@ -10,6 +10,8 @@ export interface UserSettings {
   verification: { enabled: boolean };
   researchSubagents: { enabled: boolean };
   modelAllowlist?: Record<string, string[]>;
+  /** Last model (and its thinking effort) the user chose for each planner backend, keyed by AiProvider id. */
+  plannerModels?: Record<string, { model: string; effort?: string }>;
   /**
    * Runners the user picked for planning. Absent — not empty — is what falls
    * back to the environment's defaults; `[]` is a deliberate "none of them".
@@ -40,6 +42,26 @@ export function getSettingsPath(): string {
   const override = process.env.ORDEWELL_SETTINGS_PATH;
   if (override && override.trim()) return override.trim();
   return path.join(os.homedir(), '.config', 'ordewell', 'settings.json');
+}
+
+/**
+ * A remembered planner model is spawned verbatim by whichever agent becomes the
+ * planner, so a hand-edited or older file is read entry by entry rather than
+ * trusted: an entry without a real id would restore a planner that cannot start.
+ * An unusable *effort* only loses the level, never the model that carried it.
+ */
+function readPlannerModels(raw: unknown): Record<string, { model: string; effort?: string }> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: Record<string, { model: string; effort?: string }> = {};
+  for (const [provider, entry] of Object.entries(raw as Record<string, unknown>)) {
+    if (!entry || typeof entry !== 'object') continue;
+    const { model, effort } = entry as { model?: unknown; effort?: unknown };
+    if (typeof model !== 'string' || !model.trim()) continue;
+    out[provider] = typeof effort === 'string' && effort.trim()
+      ? { model, effort }
+      : { model };
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 export class SettingsService {
@@ -153,6 +175,30 @@ export class SettingsService {
     this.persist();
   }
 
+  getPlannerModel(provider: string): { model: string; effort?: string } | undefined {
+    return this.getAll().plannerModels?.[provider];
+  }
+
+  setPlannerModel(provider: string, entry: { model: string; effort?: string } | undefined): void {
+    this.getAll();
+    if (entry === undefined) {
+      if (this.cache!.plannerModels) {
+        delete this.cache!.plannerModels[provider];
+        if (Object.keys(this.cache!.plannerModels).length === 0) {
+          this.cache!.plannerModels = undefined;
+        }
+      }
+    } else {
+      if (!this.cache!.plannerModels) {
+        this.cache!.plannerModels = {};
+      }
+      this.cache!.plannerModels[provider] = entry.effort
+        ? { model: entry.model, effort: entry.effort }
+        : { model: entry.model };
+    }
+    this.persist();
+  }
+
   getEnabledRunners(): string[] | undefined {
     return this.getAll().enabledRunners;
   }
@@ -179,6 +225,10 @@ export class SettingsService {
         };
         if (raw.modelAllowlist !== undefined) {
           settings.modelAllowlist = raw.modelAllowlist;
+        }
+        const plannerModels = readPlannerModels(raw.plannerModels);
+        if (plannerModels) {
+          settings.plannerModels = plannerModels;
         }
         if (Array.isArray(raw.enabledRunners)) {
           settings.enabledRunners = raw.enabledRunners.map(String);

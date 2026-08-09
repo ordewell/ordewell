@@ -19,21 +19,29 @@ export function fail(...lines: string[]): never {
   process.exit(1);
 }
 
+/** Writes each key straight to `.env` and `process.env` — no daemon round-trip. */
+export function writeEnv(env: Record<string, string>): void {
+  const envFile = findEnvFile();
+  for (const [key, value] of Object.entries(env)) {
+    writeEnvVar(envFile, key, value);
+    process.env[key] = value;
+  }
+}
+
 /**
- * Push env-backed settings to the daemon, and only then to `.env`.
+ * Push env-backed settings to the daemon, and only then to `.env`. Returns the
+ * daemon's response so a caller can read back values it resolved rather than
+ * chose — a planner switch's remembered/default model, in particular.
  *
  * The reverse order looks harmless and is not — the TUI's `persistAfterDaemon`
  * documents why, and the CLI has the same exposure: `.env` is the disk, and a
  * refused connection would leave it holding a choice neither the daemon nor the
  * user's next command ever saw. The next daemon then starts from that file.
  */
-export async function persistEnv(api: ApiClient, env: Record<string, string>): Promise<void> {
-  await api.updateSettings({ env });
-  const envFile = findEnvFile();
-  for (const [key, value] of Object.entries(env)) {
-    writeEnvVar(envFile, key, value);
-    process.env[key] = value;
-  }
+export async function persistEnv(api: ApiClient, env: Record<string, string>): Promise<Record<string, unknown>> {
+  const settings = await api.updateSettings({ env });
+  writeEnv(env);
+  return settings;
 }
 
 /**

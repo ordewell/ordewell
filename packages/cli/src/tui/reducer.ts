@@ -2,13 +2,15 @@ import { ALL_PROVIDERS, CLI_PROVIDERS, PROVIDER_PRIORITY, runnerForProvider, typ
 import { dependencyCandidates, dependentsOf } from '@ordewell/core/plan-utils';
 import { stripTabs } from './ansi';
 import { applyKey, commit, emptyEditor, type EditorState } from './editor';
-import { chatEditorRoom, chatPaneWidth, planPaneWidth, taskEditorRoom } from './geometry';
+import { chatEditorRoom, chatPaneWidth, paneColumns, planPaneWidth, taskEditorRoom } from './geometry';
 import { bodyRows, chatScrollMax, helpScrollMax, planScrollExtent } from './layout';
+import { selectedText } from './render';
 import { completions, findCommand, parseSlash, type ParsedCommand } from './slash';
 import {
   initialState, SKILL_IDS, visibleItems,
-  type ChatMessage, type Focus, type MessageRole, type ModeView, type ModelView, type PickerItem, type PickerState,
-  type ApprovalRequestView, type RunnerView, type SessionView, type SkillId, type TaskView, type TuiState,
+  type ApprovalRequestView, type Cell, type ChatMessage, type Focus, type MessageRole, type ModeView,
+  type ModelView, type PickerItem, type PickerState, type RunnerView, type Selection, type SessionView,
+  type SkillId, type TaskView, type TuiState,
 } from './state';
 import { assignedModelFor, effortsForTask, modelsForRunner, modelsForTask, modesForTask, runnerAccepts } from './taskAssignment';
 import type { Key } from './keys';
@@ -21,7 +23,7 @@ export type Effect =
   | { type: 'sendMessage'; sessionId: string; message: string }
   | { type: 'command'; name: string; action: 'on' | 'off' }
   | { type: 'setModel'; modelId: string }
-  | { type: 'setPlanner'; provider: string; clearModel?: boolean }
+  | { type: 'setPlanner'; provider: string }
   | { type: 'setPlannerEffort'; effort: string }
   | { type: 'setApiKey'; provider: string; key: string }
   | { type: 'setAllowlist'; runner: string; modelIds: string[] }
@@ -30,6 +32,8 @@ export type Effect =
   | { type: 'setRunners'; changes: { runner: string; enabled: boolean }[]; message: string }
   | { type: 'setAutonomous'; enabled: boolean }
   | { type: 'setMouseCapture'; enabled: boolean }
+  /** A finished selection, already clipped to its pane and stripped of paint. */
+  | { type: 'copyText'; text: string }
   | { type: 'loadModels' }
   | { type: 'loadSessions' }
   | { type: 'loadSession'; sessionId: string }
@@ -378,7 +382,11 @@ export function reduce(state: TuiState, action: Action): Step {
       // A grown pane can leave both offsets pointing past the end of content
       // that now fits; re-clamping here keeps "the offset is always reachable"
       // true for the keys handled next, not just for the ones handled last.
-      const resized = { ...state, rows: action.rows, cols: action.cols };
+      // The selection goes rather than moves: it names screen cells, and a
+      // resize both re-wraps what is under them and shifts the divider — so a
+      // span anchored where the plan pane used to begin would end up straddling
+      // the new one, which is exactly the splice pinning a pane prevents.
+      const resized = { ...state, rows: action.rows, cols: action.cols, selection: null };
       return step({
         ...resized,
         scroll: clamp(resized.scroll, chatScrollMax(resized)),
@@ -685,9 +693,9 @@ function scrollDelta(key: Key, state: TuiState): number | null {
 const isWheel = (key: Key): boolean => key.name === 'scrollup' || key.name === 'scrolldown';
 
 /**
- * The pane a wheel notch belongs to: the one the pointer is over, falling back
- * to the focused one when there is no plan pane or the report carried no
- * coordinates.
+ * The pane a mouse report belongs to — a wheel notch or the press that starts a
+ * drag: the one the pointer is over, falling back to the focused one when there
+ * is no plan pane or the report carried no coordinates.
  *
  * Focus-based routing is what made one pane read as frozen — hovering the task
  * list while typing in the chat scrolled the chat, so the list under the
@@ -696,16 +704,67 @@ const isWheel = (key: Key): boolean => key.name === 'scrollup' || key.name === '
  *
  * The divider counts as the plan side: a one-column dead strip between two
  * scrollable panes is a bug the user would experience as the wheel randomly
- * failing.
+ * failing, and a press landing on it as a selection that refuses to start.
  */
-function wheelPane(state: TuiState, key: Key): Focus {
+function pointerPane(state: TuiState, key: Key): Focus {
   if (key.col === undefined || planPaneWidth(state) === 0) return state.focus;
   return key.col <= chatPaneWidth(state) ? 'chat' : 'plan';
 }
 
 function scrollPointed(state: TuiState, key: Key): Step {
   const delta = key.name === 'scrollup' ? WHEEL_NOTCH : -WHEEL_NOTCH;
-  return wheelPane(state, key) === 'plan' ? scrollPlan(state, delta) : scrollChat(state, delta);
+  return pointerPane(state, key) === 'plan' ? scrollPlan(state, delta) : scrollChat(state, delta);
+}
+
+// ── Selection ────────────────────────────────────────────────────────────────
+
+const isMouseSelect = (key: Key): boolean =>
+  key.name === 'mousedown' || key.name === 'mousedrag' || key.name === 'mouseup';
+
+/**
+ * Where a mouse report lands *within a pane*: the reported cell, with its
+ * column pulled back inside that pane's span. This is what stops a drag that
+ * wandered across the divider from selecting the neighbour — it extends down
+ * the origin pane instead, which is the only way a copied line can be one
+ * pane's text rather than a splice of both.
+ */
+function selectionCell(state: TuiState, pane: Focus, key: Key): Cell {
+  const { first, last } = paneColumns(state, pane);
+  return {
+    col: clampRange(key.col ?? first, first, last),
+    row: clampRange(key.row ?? 1, 1, state.rows),
+  };
+}
+
+function clampRange(value: number, low: number, high: number): number {
+  return Math.max(low, Math.min(high, value));
+}
+
+/** Whether the drag never left the cell it started in — a click, not a range. */
+const isClick = (selection: Selection): boolean =>
+  selection.anchor.col === selection.head.col && selection.anchor.row === selection.head.row;
+
+function handleMouseSelect(state: TuiState, key: Key): Step {
+  if (key.name === 'mousedown') {
+    // The pane is decided once, here, and carried for the whole drag —
+    // `pointerPane` is the same aim the wheel uses, divider fallback included.
+    const pane = pointerPane(state, key);
+    const cell = selectionCell(state, pane, key);
+    return step({ ...state, selection: { anchor: cell, head: cell, pane } });
+  }
+
+  const { selection } = state;
+  // A drag or release with nothing anchored is a report from before this app
+  // owned the mouse (a tmux reattach mid-drag), not the tail of a selection.
+  if (!selection) return step(state);
+
+  const moved = { ...selection, head: selectionCell(state, selection.pane, key) };
+  if (key.name === 'mousedrag') return step({ ...state, selection: moved });
+
+  // A click with no movement is how the user dismisses a selection; treating it
+  // as a zero-width range would leave the old highlight up and copy nothing.
+  if (isClick(moved)) return step({ ...state, selection: null });
+  return step({ ...state, selection: null }, [{ type: 'copyText', text: selectedText({ ...state, selection: moved }) }]);
 }
 
 function clamp(value: number, max: number): number {
@@ -767,8 +826,11 @@ function handleKey(state: TuiState, key: Key): Step {
     return stopPlanning(state, state.sessionId);
   }
   if (state.overlay) return handleOverlayKey(state, state.overlay, key);
-  // Above the focus split, because a wheel notch is aimed, not focused.
+  // Above the focus split, because a wheel notch is aimed, not focused. A drag
+  // is aimed too, and for the same reason it never reaches the line editor or
+  // the plan pane's letter shortcuts below.
   if (isWheel(key)) return scrollPointed(state, key);
+  if (isMouseSelect(key)) return handleMouseSelect(state, key);
   if (key.name === 'wheelignored') return step(state);
   if (key.name === 'tab' && state.focus === 'chat') {
     const matches = completions(state.editor.text);
@@ -1127,16 +1189,11 @@ function choose(state: TuiState, picker: PickerState, item: PickerItem | undefin
     case 'set-model':
       return step(closed, [{ type: 'setModel', modelId: item.id }]);
 
-    case 'set-planner': {
-      // A model id from the old backend is meaningless to the new one — an
-      // OpenRouter slug handed to Claude Code, or the reverse. Clearing it
-      // falls back to that backend's default rather than failing the turn.
-      const runner = runnerForProvider(item.id as AiProvider);
-      const stillValid = runner
-        ? state.models.some((m) => m.id === state.orchestratorModel && m.runners?.includes(runner))
-        : state.orchestratorModels.some((m) => m.id === state.orchestratorModel);
-      return step(closed, [{ type: 'setPlanner', provider: item.id, clearModel: !stillValid }]);
-    }
+    case 'set-planner':
+      // The daemon decides what the new backend's model should become — its
+      // own remembered choice, that backend's catalog default, or nothing —
+      // and the effect that runs this consumes whatever it returns.
+      return step(closed, [{ type: 'setPlanner', provider: item.id }]);
     case 'set-planner-effort':
       return step(closed, [{ type: 'setPlannerEffort', effort: item.id === DEFAULT_EFFORT ? '' : item.id }]);
 
@@ -1630,19 +1687,25 @@ function setAutonomous(state: TuiState, arg: string | undefined): Step {
 }
 
 /**
- * The two are mutually exclusive at the terminal level, so the notice names
- * what the user just gave up rather than only what they gained — a wheel that
- * scrolls and text that no longer selects is otherwise a mystery.
+ * Capture no longer costs the user their selection — the app does the selecting
+ * itself now, and confines it to one pane so a copied line cannot be a splice
+ * of chat and plan. What `off` still buys is the *terminal's* own selection,
+ * which spans both panes and is the only one that can reach a scrollback the
+ * alt screen has already scrolled away. The notice names both, because a
+ * command whose only stated effect is one the user cannot see is a mystery.
  */
 function setMouseCapture(state: TuiState, arg: string | undefined): Step {
   const enabled = resolveToggle(arg, state.mouseCapture);
   if (enabled === null) return fail(state, 'Usage: /mouse [on|off]');
   const noted = say(
-    { ...state, mouseCapture: enabled },
+    // A selection made under capture is meaningless once the terminal owns the
+    // mouse again, and its highlight would sit on screen with nothing able to
+    // move it.
+    { ...state, mouseCapture: enabled, selection: null },
     'system',
     enabled
-      ? 'Mouse capture on — the wheel scrolls, but dragging no longer selects text.'
-      : 'Mouse capture off — drag to select and copy; scroll with pgup/pgdn.',
+      ? 'Mouse capture on — the wheel scrolls, and dragging selects within one pane and copies on release.'
+      : "Mouse capture off — the terminal's own drag-select is back, across both panes; scroll with pgup/pgdn.",
   );
   return step(noted, [{ type: 'setMouseCapture', enabled }]);
 }

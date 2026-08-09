@@ -68,6 +68,9 @@ export async function handleTui(subArgs: string[]): Promise<void> {
         },
         openTerminal: (sessionId, taskId) => openTaskTerminal(port, sessionId, taskId),
         setMouseCapture: (enabled) => terminal?.setMouse(enabled),
+        // The alt screen is up with the cursor hidden, so an OSC 52 write shows
+        // nothing — the terminal reads it and answers by taking the clipboard.
+        writeTerminal: (data) => process.stdout.write(data),
         reviveDaemon: async () => {
           // `quiet`, because this runs with the full-screen frame on the
           // terminal — the usual "Starting daemon..." lines would be painted

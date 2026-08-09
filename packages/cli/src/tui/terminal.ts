@@ -14,9 +14,12 @@ const PASTE_MODE_OFF = '\x1b[?2004l';
 // the CSI-u form keys.ts decodes; others just ignore the unrecognized CSI.
 const KITTY_KEYBOARD_ON = '\x1b[>1u';
 const KITTY_KEYBOARD_OFF = '\x1b[<u';
-// Normal tracking (1000) reports button/wheel events; SGR encoding (1006) is
-// the format keys.ts's decodeMouse prefers, though it decodes the X10 and urxvt
-// forms a terminal may answer with instead.
+// Normal tracking (1000) reports button/wheel events; button-event tracking
+// (1002) adds motion reports, but only while a button is held — which is what a
+// drag is, and the reason 1003 (any-motion) is not used: it would put an event
+// on stdin for every cell the pointer crosses, held or not. SGR encoding (1006)
+// is the format keys.ts's decodeMouse prefers, though it decodes the X10 and
+// urxvt forms a terminal may answer with instead.
 //
 // On by default. It was opt-in for a while, on the grounds that capturing the
 // mouse takes the terminal's own drag-select with it and Shift+drag is not the
@@ -25,8 +28,8 @@ const KITTY_KEYBOARD_OFF = '\x1b[<u';
 // `ORDEWELL_TUI_MOUSE` in the workspace `.env`, so the wheel came back dead in
 // every other project and read as the TUI randomly ignoring the mouse. `/mouse
 // off` is the escape hatch for a session where selecting text matters more.
-const MOUSE_TRACKING_ON = '\x1b[?1000h\x1b[?1006h';
-const MOUSE_TRACKING_OFF = '\x1b[?1000l\x1b[?1006l';
+const MOUSE_TRACKING_ON = '\x1b[?1000h\x1b[?1002h\x1b[?1006h';
+const MOUSE_TRACKING_OFF = '\x1b[?1000l\x1b[?1002l\x1b[?1006l';
 // Alternate scroll (1007) makes the terminal fake arrow keys for the wheel
 // while the alt screen is up. With the mouse uncaptured that would land on the
 // line editor, so a scroll would silently replace the draft with a history

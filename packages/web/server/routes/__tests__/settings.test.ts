@@ -26,6 +26,7 @@ function settingsState(overrides: Partial<SettingsState> = {}): SettingsState {
     verification: { enabled: false },
     researchSubagents: { enabled: false },
     modelAllowlist: undefined,
+    plannerModels: undefined,
     ...overrides,
   };
 }

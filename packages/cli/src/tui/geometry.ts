@@ -1,4 +1,4 @@
-import type { TuiState } from './state';
+import type { Focus, TuiState } from './state';
 
 /**
  * Where the TUI's panes are and how wide the things inside them are.
@@ -36,6 +36,23 @@ export function planPaneWidth(state: TuiState): number {
 export function chatPaneWidth(state: TuiState): number {
   const plan = planPaneWidth(state);
   return plan === 0 ? state.cols : state.cols - plan - 1;
+}
+
+/**
+ * The screen columns a pane owns, 1-based and inclusive — what a pointer has to
+ * be inside to be "in" that pane, and the span a selection is clipped to.
+ *
+ * The divider sits between the two and belongs to neither, so a drag pinned to
+ * the plan starts at the first column *after* it. With no plan pane the chat
+ * has the whole terminal, and so does a `'plan'` asked for anyway — there is no
+ * second pane to hand back a span for, and an empty one would silently copy
+ * nothing.
+ */
+export function paneColumns(state: TuiState, pane: Focus): { first: number; last: number } {
+  const plan = planPaneWidth(state);
+  if (plan === 0) return { first: 1, last: state.cols };
+  const chat = chatPaneWidth(state);
+  return pane === 'chat' ? { first: 1, last: chat } : { first: chat + 2, last: state.cols };
 }
 
 /** Text width inside a labelled block of the plan pane, given that pane's width. */

@@ -106,7 +106,7 @@ const CATALOG = {
 };
 
 describe('ordewell planner', () => {
-  it('clears the planner model and its effort when the new backend cannot serve it', async () => {
+  it('sends only the provider — the daemon resolves the model, not the client', async () => {
     const d = await fakeDaemon({
       settings: { orchestratorModel: 'deepseek/deepseek-v4-flash', aiProvider: 'openrouter' },
       models: CATALOG,
@@ -115,25 +115,59 @@ describe('ordewell planner', () => {
     const { stdout } = await capture(() => handlePlanner(['claude-code'], new ApiClient(d.port)));
 
     const patch = d.sent.find((r) => r.method === 'PATCH')!;
-    expect(patch.body.env).toEqual({
-      AI_PROVIDER: 'claude-code',
-      ORCHESTRATOR_MODEL: '',
-      ORDEWELL_PLANNER_EFFORT: '',
-    });
+    expect(patch.body.env).toEqual({ AI_PROVIDER: 'claude-code' });
     expect(stdout).toContain('no API key needed');
     d.close();
   });
 
-  it('keeps a planner model the new backend does serve', async () => {
+  it('writes the daemon-returned model to .env, not an empty string', async () => {
+    // The fake daemon's PATCH handler just merges the request body into its
+    // settings and echoes them back, so presetting orchestratorModel here
+    // stands in for "the daemon already resolved the switch to this model" —
+    // the resolution itself is task 2's daemon-side memory, tested there.
     const d = await fakeDaemon({
-      settings: { orchestratorModel: 'sonnet', aiProvider: 'codex' },
+      settings: {
+        orchestratorModel: 'sonnet',
+        plannerThinkingEffort: 'high',
+        aiProvider: 'openrouter',
+        plannerModels: { 'claude-code': { model: 'sonnet', effort: 'high' } },
+      },
       models: CATALOG,
     });
     const { handlePlanner } = await import('../planner');
-    await capture(() => handlePlanner(['claude-code'], new ApiClient(d.port)));
+    const { stdout } = await capture(() => handlePlanner(['claude-code'], new ApiClient(d.port)));
 
-    const patch = d.sent.find((r) => r.method === 'PATCH')!;
-    expect(patch.body.env).toEqual({ AI_PROVIDER: 'claude-code' });
+    const { readFileSync } = await import('fs');
+    const { findEnvFile } = await import('../../utils/env');
+    const env = readFileSync(findEnvFile(), 'utf8');
+    expect(env).toContain('ORCHESTRATOR_MODEL=sonnet');
+    expect(env).toContain('ORDEWELL_PLANNER_EFFORT=high');
+    expect(stdout).toContain('Restored its planner model: sonnet.');
+    d.close();
+  });
+
+  it('says so and points at `ordewell model set` when the daemon fell back to a catalog default', async () => {
+    const d = await fakeDaemon({
+      settings: { orchestratorModel: 'sonnet', aiProvider: 'openrouter', plannerModels: {} },
+      models: CATALOG,
+    });
+    const { handlePlanner } = await import('../planner');
+    const { stdout } = await capture(() => handlePlanner(['claude-code'], new ApiClient(d.port)));
+
+    expect(stdout).toContain('Using sonnet, its default model');
+    expect(stdout).toContain('ordewell model set');
+    d.close();
+  });
+
+  it('keeps the "pick a model" guidance when the daemon resolved nothing', async () => {
+    const d = await fakeDaemon({
+      settings: { orchestratorModel: '', aiProvider: 'openrouter' },
+      models: CATALOG,
+    });
+    const { handlePlanner } = await import('../planner');
+    const { stdout } = await capture(() => handlePlanner(['claude-code'], new ApiClient(d.port)));
+
+    expect(stdout).toContain('Pick a model with `ordewell model set <id>`');
     d.close();
   });
 

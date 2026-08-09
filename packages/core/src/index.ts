@@ -125,4 +125,11 @@ export * from './utils/sessionStore';
 export { extractPrdBlock, savePrdMarkdown, sanitizeSlug } from './utils/prdStore';
 export type { PrdBlock } from './utils/prdStore';
 export { SettingsService, getSettingsPath, type UserSettings } from './services/SettingsService';
+export {
+  PlannerModelMemory,
+  type PlannerModelChoice,
+  type PlannerModelCandidate,
+  type PlannerModelRecall,
+  type PlannerModelStore,
+} from './services/PlannerModelMemory';
 export { type PlannerRuntimeToggles } from './services/plannerModes';

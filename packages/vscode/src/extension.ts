@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { Session, RunnerRegistry, ModelResolver, RunnerInstallation, SettingsService, sessionRuntimeSettings, createEmptyPlan, LegacyPlanState, getProviderMeta, isCliProvider, CLI_PROVIDERS, runnerForProvider, PROVIDER_LABEL, PROVIDER_SHORT_LABEL, PROVIDER_PRIORITY, type AiProvider } from '@ordewell/core';
+import { Session, RunnerRegistry, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, sessionRuntimeSettings, createEmptyPlan, LegacyPlanState, getProviderMeta, isCliProvider, CLI_PROVIDERS, runnerForProvider, PROVIDER_LABEL, PROVIDER_SHORT_LABEL, PROVIDER_PRIORITY, type AiProvider } from '@ordewell/core';
 import { ChatViewProvider, type PlannerBackend } from './providers/ChatViewProvider';
 import { VsCodeConfig } from './adapters/VsCodeConfig';
 import { VsCodeFileSystem } from './adapters/VsCodeFileSystem';
@@ -10,6 +10,7 @@ import { registerCommands } from './commands/CommandRegistry';
 import { handleSlashCommand } from './commands/SlashParser';
 import { handleStartPlanning, handleContinueConversation, handleModifyPlan, handleApprovePlan, handleSendMessage, handleSystemCommand, handleSessionMessage, findTask, handleMergePlan, handleSplitPlan } from './plan/PlanManager';
 import { classifyTaskEdit, parseTaskDraft, removalPrompt } from './plan/taskEdit';
+import { recallPlannerModel } from './plan/PlannerModelSwitch';
 import { saveCurrentSession, restoreState, persistState } from './state/StatePersistence';
 
 let chatProvider: ChatViewProvider;
@@ -23,6 +24,7 @@ let secretStore: SecretStore;
 let notifications: VsCodeNotification;
 let terminalRunner: VsCodeTerminalRunner;
 let settingsService: SettingsService;
+let plannerModelMemory: PlannerModelMemory;
 let currentPlan: LegacyPlanState = createEmptyPlan();
 let currentGoal: string = '';
 let isGeneratingPlan = false;
@@ -80,17 +82,15 @@ async function applyPlanner(provider: AiProvider): Promise<void> {
   if (!getProviderMeta(provider)) return;
   await config.update('aiProvider', provider);
   // A model id from the old backend is meaningless to the new one — an
-  // OpenRouter slug handed to Claude Code, or the reverse. Clearing it falls
-  // back to that backend's default rather than failing the turn.
+  // OpenRouter slug handed to Claude Code, or the reverse. `recallPlannerModel`
+  // restores what the user last picked *for this provider*, falling back to
+  // the catalog default, or blank when discovery has nothing yet.
   const runner = runnerForProvider(provider);
-  const current = config.rawOrchestratorModel;
-  const stillValid = !current || (runner
-    ? ((await modelResolver.modelsForRunners([runner]))[runner] ?? []).some((m) => m.modelId === current)
-    : (await modelResolver.pickerOptions()).some((o) => o.id === current));
-  if (!stillValid) {
-    await config.update('orchestratorModel', '');
-    await config.update('plannerThinkingEffort', '');
-  }
+  const harnessModels = runner ? ((await modelResolver.modelsForRunners([runner]))[runner] ?? []) : undefined;
+  const vendorOptions = runner ? undefined : await modelResolver.pickerOptions();
+  const { model, effort } = recallPlannerModel(plannerModelMemory, provider, harnessModels, vendorOptions);
+  await config.update('orchestratorModel', model);
+  await config.update('plannerThinkingEffort', effort);
   sendModelConfig();
   await sendPlannerState();
   chatProvider.setSkillToggles(settingsService.getGrillMe(), settingsService.getTdd(), settingsService.getPrd(), settingsService.getReview(), settingsService.getVerification(), settingsService.getResearchSubagents(), unavailableSkills());
@@ -133,6 +133,7 @@ export async function activate(context: vscode.ExtensionContext) {
     notifications = new VsCodeNotification();
     terminalRunner = new VsCodeTerminalRunner();
     settingsService = new SettingsService();
+    plannerModelMemory = new PlannerModelMemory(settingsService);
     modelResolver = new ModelResolver(pluginRegistry, config);
     chatProvider = new ChatViewProvider(context.extensionUri);
     session = new Session({
@@ -710,6 +711,7 @@ function setupChatListener(context: vscode.ExtensionContext): void {
               discoverOrchestratorModelOptions,
               pickModelWithProvider,
               updateConfig: async (key: string, value: unknown) => config.update(key, value),
+              recordPlannerModel: (model: string, effort?: string) => plannerModelMemory.remember(config.aiProvider, model, effort),
               log,
             };
             await handleSlashCommand(text, slashDeps);
@@ -744,6 +746,7 @@ function setupChatListener(context: vscode.ExtensionContext): void {
       case 'setPlannerModel': {
         await config.update('orchestratorModel', msg.modelId);
         await config.update('plannerThinkingEffort', msg.effort ?? '');
+        plannerModelMemory.remember(config.aiProvider, msg.modelId, msg.effort);
         sendModelConfig();
         await sendPlannerState();
         break;

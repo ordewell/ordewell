@@ -2,7 +2,7 @@ import { describe, it, expect, vi, type Mock } from 'vitest';
 import { ConversationQueue, runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import type { Action, Effect } from '../reducer';
 
-function harness(api: Partial<OrdewellApi> = {}) {
+function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {}) {
   const actions: Action[] = [];
   const env: Record<string, string> = {};
   const exit = vi.fn();
@@ -46,8 +46,14 @@ function harness(api: Partial<OrdewellApi> = {}) {
     setEnvVar: (key, value) => { env[key] = value; },
     openTerminal: vi.fn().mockResolvedValue({ ok: true, message: 'Opened a terminal for this task.' }),
     setMouseCapture: vi.fn(),
+    // Never the real probe or the real clipboard: the defaults would put test
+    // fixtures on the developer's actual clipboard.
+    hasBin: () => true,
+    pipeToClipboard: vi.fn(),
+    writeTerminal: vi.fn(),
     reviveDaemon: vi.fn().mockResolvedValue(true),
     exit,
+    ...over,
   };
 
   return { deps, actions, env, exit, api: deps.api as Record<string, any> };
@@ -540,6 +546,64 @@ describe('task control', () => {
   });
 });
 
+/**
+ * The daemon resolves what a planner switch's model and effort should become
+ * (task 2) — the client only sends the provider and consumes what comes back.
+ */
+describe('planner switch', () => {
+  it('shows the restored model in state without a further refresh', async () => {
+    const h = harness({
+      updateSettings: vi.fn().mockResolvedValue({
+        orchestratorModel: 'sonnet',
+        plannerThinkingEffort: 'high',
+        plannerModels: { 'claude-code': { model: 'sonnet', effort: 'high' } },
+      }),
+    });
+
+    await runEffect({ type: 'setPlanner', provider: 'claude-code' }, h.deps);
+
+    expect(h.actions).toContainEqual({
+      type: 'settingsLoaded',
+      settings: { aiProvider: 'claude-code', orchestratorModel: 'sonnet', plannerThinkingEffort: 'high' },
+    });
+  });
+
+  it('says which model it restored, when the daemon remembered one', async () => {
+    const h = harness({
+      updateSettings: vi.fn().mockResolvedValue({
+        orchestratorModel: 'sonnet',
+        plannerModels: { 'claude-code': { model: 'sonnet' } },
+      }),
+    });
+
+    await runEffect({ type: 'setPlanner', provider: 'claude-code' }, h.deps);
+
+    const notice = h.actions.find((a) => a.type === 'notice') as any;
+    expect(notice.message).toContain('Restored sonnet.');
+  });
+
+  it('names the catalog default and points at /model when nothing was remembered', async () => {
+    const h = harness({
+      updateSettings: vi.fn().mockResolvedValue({ orchestratorModel: 'sonnet', plannerModels: {} }),
+    });
+
+    await runEffect({ type: 'setPlanner', provider: 'claude-code' }, h.deps);
+
+    const notice = h.actions.find((a) => a.type === 'notice') as any;
+    expect(notice.message).toContain('default model, sonnet');
+    expect(notice.message).toContain('/model');
+  });
+
+  it('keeps the "pick a model" guidance when the daemon resolved nothing', async () => {
+    const h = harness({ updateSettings: vi.fn().mockResolvedValue({ orchestratorModel: '' }) });
+
+    await runEffect({ type: 'setPlanner', provider: 'claude-code' }, h.deps);
+
+    const notice = h.actions.find((a) => a.type === 'notice') as any;
+    expect(notice.message).toContain('Pick a model with /model.');
+  });
+});
+
 describe('skills and settings', () => {
   it('sends a skill toggle and mirrors the settings that come back', async () => {
     const h = harness();
@@ -775,7 +839,7 @@ describe('a daemon that went away mid-session', () => {
       .mockResolvedValue({});
     const h = harness({ updateSettings });
 
-    await runEffect({ type: 'setPlanner', provider: 'claude-code', clearModel: true }, h.deps);
+    await runEffect({ type: 'setPlanner', provider: 'claude-code' }, h.deps);
 
     expect(h.deps.reviveDaemon).toHaveBeenCalledTimes(1);
     expect(updateSettings).toHaveBeenCalledTimes(2);
@@ -863,7 +927,7 @@ describe('settings persistence ordering', () => {
   it('leaves .env untouched when the daemon rejects the change', async () => {
     const h = harness({ updateSettings: vi.fn().mockRejectedValue(new Error('bad request')) });
 
-    await runEffect({ type: 'setPlanner', provider: 'claude-code', clearModel: true }, h.deps);
+    await runEffect({ type: 'setPlanner', provider: 'claude-code' }, h.deps);
 
     expect(h.env).toEqual({});
     expect(types(h.actions)).toContain('failed');
@@ -879,15 +943,29 @@ describe('settings persistence ordering', () => {
     expect(h.env[key]).toBeUndefined();
   });
 
-  it('persists every key of an accepted planner switch, including the cleared ones', async () => {
-    const h = harness();
+  it('persists every key of an accepted planner switch, including a daemon that resolved nothing', async () => {
+    const h = harness({ updateSettings: vi.fn().mockResolvedValue({}) });
 
-    await runEffect({ type: 'setPlanner', provider: 'claude-code', clearModel: true }, h.deps);
+    await runEffect({ type: 'setPlanner', provider: 'claude-code' }, h.deps);
 
     expect(h.env).toEqual({
       AI_PROVIDER: 'claude-code',
       ORCHESTRATOR_MODEL: '',
       ORDEWELL_PLANNER_EFFORT: '',
+    });
+  });
+
+  it('persists the model and effort the daemon resolved, not an empty clear', async () => {
+    const h = harness({
+      updateSettings: vi.fn().mockResolvedValue({ orchestratorModel: 'sonnet', plannerThinkingEffort: 'high' }),
+    });
+
+    await runEffect({ type: 'setPlanner', provider: 'claude-code' }, h.deps);
+
+    expect(h.env).toEqual({
+      AI_PROVIDER: 'claude-code',
+      ORCHESTRATOR_MODEL: 'sonnet',
+      ORDEWELL_PLANNER_EFFORT: 'high',
     });
   });
 });
@@ -926,5 +1004,52 @@ describe('runner modes', () => {
 
     const loaded = h.actions.find((a) => a.type === 'modelsLoaded') as Extract<Action, { type: 'modelsLoaded' }>;
     expect(loaded.modesByRunner).toEqual({});
+  });
+});
+
+describe('copying a selection', () => {
+  it('pipes the text into the host clipboard command and says so', async () => {
+    const pipeToClipboard = vi.fn();
+    const h = harness({}, { pipeToClipboard });
+    await runEffect({ type: 'copyText', text: 'one\ntwo' }, h.deps);
+
+    expect(pipeToClipboard).toHaveBeenCalledWith(expect.any(String), 'one\ntwo');
+    expect(messageOf(h.actions, 'notice')).toContain('2 lines');
+  });
+
+  it('hands the text to the terminal as OSC 52 when the host has no clipboard tool', async () => {
+    const pipeToClipboard = vi.fn();
+    const writeTerminal = vi.fn();
+    const h = harness({}, { hasBin: () => false, pipeToClipboard, writeTerminal });
+    await runEffect({ type: 'copyText', text: 'hello' }, h.deps);
+
+    expect(pipeToClipboard).not.toHaveBeenCalled();
+    // ESC ] 52 ; c ; <base64> BEL — the terminal's own "put this on the clipboard".
+    expect(writeTerminal).toHaveBeenCalledWith(`\x1b]52;c;${Buffer.from('hello').toString('base64')}\x07`);
+    expect(messageOf(h.actions, 'notice')).toMatch(/clipboard/i);
+  });
+
+  it('says nothing and touches nothing when the selection was empty', async () => {
+    const pipeToClipboard = vi.fn();
+    const writeTerminal = vi.fn();
+    const h = harness({}, { pipeToClipboard, writeTerminal });
+    await runEffect({ type: 'copyText', text: '' }, h.deps);
+
+    expect(pipeToClipboard).not.toHaveBeenCalled();
+    expect(writeTerminal).not.toHaveBeenCalled();
+    expect(h.actions).toEqual([]);
+  });
+
+  // A missing xclip throws out of the pipe; the user gets the terminal route
+  // rather than an error turn saying the copy failed.
+  it('falls back to OSC 52 when the clipboard command itself fails', async () => {
+    const writeTerminal = vi.fn();
+    const h = harness({}, {
+      pipeToClipboard: vi.fn(() => { throw new Error('xclip: unable to open display'); }),
+      writeTerminal,
+    });
+    await runEffect({ type: 'copyText', text: 'hi' }, h.deps);
+
+    expect(writeTerminal).toHaveBeenCalledWith(`\x1b]52;c;${Buffer.from('hi').toString('base64')}\x07`);
   });
 });

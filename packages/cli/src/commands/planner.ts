@@ -5,11 +5,12 @@ import {
   isCliProvider,
   runnerForProvider,
   type AiProvider,
+  type PlannerModelRecall,
 } from '@ordewell/core';
 import type { ApiClient } from '../daemonClient';
 import { positionals } from '../utils';
-import { connect, fail, fetchCatalog, persistEnv } from './shared';
-import type { Catalog } from '../catalog';
+import { connect, fail, fetchCatalog, persistEnv, writeEnv } from './shared';
+import { describePlannerSwitch } from '../plannerModelSwitch';
 
 const KNOWN_PROVIDERS = Object.keys(ALL_PROVIDERS);
 
@@ -33,47 +34,36 @@ export async function handlePlanner(subArgs: string[], injectedApi?: ApiClient):
     fail(`Unknown planner: ${provider}`, 'Run `ordewell planner` with no arguments to see the list.');
   }
 
-  const settings = await api.getSettings();
-  const current = typeof settings.orchestratorModel === 'string' ? settings.orchestratorModel : '';
-  const catalog = await fetchCatalog(api);
-
-  const env: Record<string, string> = { AI_PROVIDER: provider };
-  // A model id from the old backend is meaningless to the new one — an
-  // OpenRouter slug handed to Claude Code, or the reverse. Clearing falls back
-  // to the new backend's own default rather than failing the first plan. The
-  // effort goes with it: an effort is a variant of a specific model, so
-  // dropping the model alone leaves the agent receiving a level it never
-  // declared. Unproven means cleared, deliberately: a stale id fails at spawn,
-  // while a needless clear only costs the user re-picking a model.
-  if (current && !stillServes(catalog, provider as AiProvider, current)) {
-    env.ORCHESTRATOR_MODEL = '';
-    env.ORDEWELL_PLANNER_EFFORT = '';
-  }
-
-  await persistEnv(api, env);
+  // The daemon owns the model decision now: remember what this provider was
+  // last using, its catalog default, or nothing. Only the provider is ours to
+  // send — see PlannerModelMemory.
+  const settings = await persistEnv(api, { AI_PROVIDER: provider });
+  const recall = describePlannerSwitch(settings, provider as AiProvider);
+  writeEnv({ ORCHESTRATOR_MODEL: recall.model, ORDEWELL_PLANNER_EFFORT: recall.effort });
 
   const meta = ALL_PROVIDERS[provider as AiProvider];
-  const cleared = env.ORCHESTRATOR_MODEL === '';
+  const catalog = await fetchCatalog(api);
   console.log(
     isCliProvider(provider as AiProvider)
       ? `Planning with ${meta.label} — no API key needed, it uses that agent's own subscription.`
       : `Planner set to ${meta.label}.`,
   );
-  if (cleared) {
-    console.log(`  ${current} is not one of its models, so the planner model was cleared.`);
-    console.log('  Pick one with `ordewell model set <id>`, or leave it on the default.');
-  }
+  console.log(plannerModelLine(recall));
   if (!isCliProvider(provider as AiProvider) && !catalog.providers.includes(provider)) {
     console.log(`  No ${meta.apiKeyEnvVar} configured yet — set one with \`ordewell key set ${provider} <key>\`.`);
   }
 }
 
-/** Whether `modelId` is servable by `provider`'s backend, per the catalog we have. */
-function stillServes(catalog: Catalog, provider: AiProvider, modelId: string): boolean {
-  const runner = runnerForProvider(provider);
-  return runner
-    ? catalog.models.some((m) => m.id === modelId && m.runners?.includes(runner))
-    : catalog.orchestratorModels.some((m) => m.id === modelId);
+/** Names which of the three model outcomes a switch landed on. */
+function plannerModelLine(recall: PlannerModelRecall): string {
+  switch (recall.source) {
+    case 'remembered':
+      return `  Restored its planner model: ${recall.model}.`;
+    case 'catalog-default':
+      return `  Using ${recall.model}, its default model — pick another with \`ordewell model set <id>\`.`;
+    case 'none':
+      return '  Pick a model with `ordewell model set <id>`, or leave it on the default.';
+  }
 }
 
 async function showPlanners(api: ApiClient): Promise<void> {

@@ -84,26 +84,16 @@ describe('/planner', () => {
     expect(state.overlay).toBeNull();
   });
 
-  it('clears a planner model the new backend cannot run', () => {
-    // An OpenRouter slug means nothing to Claude Code; carrying it over would
-    // fail the first turn instead of falling back to the agent's default.
+  it('leaves the model decision to the daemon, whatever the old backend served', () => {
+    // The daemon resolves the new backend's model (remembered, catalog
+    // default, or nothing) — the reducer no longer guesses at it client-side.
     const opened = run('/planner', {
       ...installedAll,
       orchestratorModel: 'deepseek/deepseek-v4-flash',
       models: [{ id: 'sonnet', label: 'Sonnet', provider: 'anthropic', runners: ['claude-code'] }],
     }).state;
 
-    expect(pick(opened, 'claude-code').effects[0]).toMatchObject({ provider: 'claude-code', clearModel: true });
-  });
-
-  it('keeps a planner model the new backend does offer', () => {
-    const opened = run('/planner', {
-      ...installedAll,
-      orchestratorModel: 'sonnet',
-      models: [{ id: 'sonnet', label: 'Sonnet', provider: 'anthropic', runners: ['claude-code'] }],
-    }).state;
-
-    expect(pick(opened, 'claude-code').effects[0]).toMatchObject({ provider: 'claude-code', clearModel: false });
+    expect(pick(opened, 'claude-code').effects[0]).toEqual({ type: 'setPlanner', provider: 'claude-code' });
   });
 
   it('/planner <id> sets it without opening the picker', () => {

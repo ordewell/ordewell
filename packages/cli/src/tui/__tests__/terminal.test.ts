@@ -68,6 +68,31 @@ describe('openTerminal', () => {
     expect(output.writes.join('')).toContain('\x1b[?1000l');
   });
 
+  it('asks for button-event tracking too, so a held button reports the motion a drag is made of', () => {
+    // 1002, not 1003: motion only while a button is down. Any-motion tracking
+    // would put an event on stdin for every pixel the pointer crosses.
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const terminal = openTerminal({
+      input: input as unknown as NodeJS.ReadStream,
+      output: output as unknown as NodeJS.WriteStream,
+      mouse: true,
+      onKey: vi.fn(),
+      onResize: vi.fn(),
+    });
+
+    expect(output.writes.join('')).toContain('\x1b[?1002h');
+    expect(output.writes.join('')).not.toContain('\x1b[?1003h');
+
+    output.writes.length = 0;
+    terminal.setMouse(false);
+    expect(output.writes.join('')).toContain('\x1b[?1002l');
+
+    output.writes.length = 0;
+    terminal.close();
+    expect(output.writes.join('')).toContain('\x1b[?1002l');
+  });
+
   it('re-arms tracking on a resize, since a tmux reattach drops the mode without telling us', () => {
     // The modes are DEC private state the terminal owns, and a detach/reattach,
     // a Ctrl-Z/fg, or another process writing to the tty clears them while this
@@ -87,6 +112,7 @@ describe('openTerminal', () => {
     output.emit('resize');
 
     expect(output.writes.join('')).toContain('\x1b[?1000h');
+    expect(output.writes.join('')).toContain('\x1b[?1002h');
     expect(output.writes.join('')).toContain('\x1b[?1006h');
   });
 
@@ -124,7 +150,7 @@ describe('openTerminal', () => {
     terminal.reset();
     const written = output.writes.join('');
 
-    for (const mode of ['\x1b[?1049h', '\x1b[?25l', '\x1b[?2004h', '\x1b[>1u', '\x1b[?1007l', '\x1b[?1000h', '\x1b[?1006h']) {
+    for (const mode of ['\x1b[?1049h', '\x1b[?25l', '\x1b[?2004h', '\x1b[>1u', '\x1b[?1007l', '\x1b[?1000h', '\x1b[?1002h', '\x1b[?1006h']) {
       expect(written).toContain(mode);
     }
   });

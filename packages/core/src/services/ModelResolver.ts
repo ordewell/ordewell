@@ -85,6 +85,19 @@ export class ModelResolver {
     this.discovery.clear();
   }
 
+  /**
+   * Synchronous reads of whatever the last `modelsForRunners`/`pickerOptions`
+   * call already cached — never trigger discovery or a fetch. For callers
+   * (e.g. a settings write) that need a catalog without going async.
+   */
+  getCachedRunnerModels(runner: string): DiscoveredModel[] {
+    return this.discovery.getCached(runner) ?? [];
+  }
+
+  getCachedPickerOptions(): OrchestratorOption[] {
+    return this.cachedPickerOptions ?? [];
+  }
+
   invalidate(): void {
     this.discovery.clear();
     this.cachedPickerOptions = null;

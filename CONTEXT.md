@@ -347,7 +347,7 @@ what gives the surfaces' icon/label switches their exhaustiveness checking.
 
 **runnerId / runnerLabel** — the runner whose catalog listed a model, stamped once at `ModelDiscovery.discover` (the only place that knows both the output and the agent that produced it). Model pickers group on the pair — `OpenCode · openrouter`, `Claude Code · anthropic` — so the header names the agent that runs the model and the backend that serves it. `runnerProvider` alone answered neither question in a flat cross-runner list.
 
-**Planner model & effort** — the harness planner's own model and thinking effort (ADR-0009, stories 7–9), distinct from the per-task assignments the plan carries. Stored as `orchestratorModel` + `plannerThinkingEffort`; the candidates are the *runner's* `DiscoveredModel[]` and the selected model's own `variants`, never a fixed low/medium/high the agent may not declare. One control per surface: VS Code's planner bar (backend pills + model/effort selector), the TUI's `/planner`, `/model`, `/planner-effort`. Switching backend clears a model the new one cannot run, and clearing a model always clears its effort — an effort is a variant of a specific model, and one that outlives its model reaches the agent as a level it never offered.
+**Planner model & effort** — the harness planner's own model and thinking effort (ADR-0009, stories 7–9), distinct from the per-task assignments the plan carries. Stored as `orchestratorModel` + `plannerThinkingEffort`; the candidates are the *runner's* `DiscoveredModel[]` and the selected model's own `variants`, never a fixed low/medium/high the agent may not declare. One control per surface: VS Code's planner bar (backend pills + model/effort selector), the TUI's `/planner`, `/model`, `/planner-effort`. Each backend's last pick is remembered per AiProvider under the settings file's `plannerModels` key — the same file as `modelAllowlist`, so the TUI, CLI and VS Code extension share one memory. Switching back to a backend restores the model (and effort, when that model still declares the variant) it remembers; with nothing remembered it falls back to the first model in that backend's catalog, and only a catalog that discovers no models leaves the planner model unset. Clearing a model always clears its effort — an effort is a variant of a specific model, and one that outlives its model reaches the agent as a level it never offered.
 
 **ModelAllowlistResolver** — the deep module owning the planner-visibility allowlist policy: narrowing what `modelsByRunner` the planner sees in its prompt (the nudge) and rewriting any emitted `assignedModel.modelId` outside the allowlist to `allowlist[0]` for that runner, wiping the paired `thinkingEffort` (the coerce). `coerceAssignments` also clamps each `thinkingEffort` to a variant the assigned model actually offers (per the discovered catalog, when passed): invalid efforts snap to the nearest rung of the known effort ladder (`clampThinkingEffort`), or to undefined — the runner default — when no mapping exists. Symmetric to `ModeResolver` — both own a planner policy paired with a post-parse fix. Reads its state from `SettingsService` (`UserSettings.modelAllowlist`, keyed by `RunnerId`, id-level not variant-level). The restriction is advice to the planner only: the per-task dropdown stays full (manual override is sovereign), `loadPlan` is untouched, and the orchestrator never consults it. A set allowlist is a hard bound on what the planner sees: allowlisted ids not covered by discovery are synthesized into the prompt list rather than falling back to the full discovered list (which would leak non-allowlisted models to the planner).
 *Avoid:* "model filter", "model restriction service" — and do not collapse into `ModelResolver`; the discovery/routing module stays unaware of the policy, the same way `ModeResolver` stays separate from `ModelResolver`.
@@ -548,10 +548,12 @@ full-screen app with a half-restored terminal.
 **Settings write order** — the daemon accepts a settings change *before*
 `.env` records it (`persistAfterDaemon`). The reverse looks harmless and is
 not: `.env` is the disk, and a failed call left it holding a choice neither the
-daemon nor the screen ever saw. Switching the planner clears
-`ORCHESTRATOR_MODEL` and `ORDEWELL_PLANNER_EFFORT` in the same breath, so one
-refused connection persisted a planner with no model — and the next daemon
-started from that file, silently, with the TUI still showing the old planner.
+daemon nor the screen ever saw. A planner switch writes `AI_PROVIDER` with
+`ORCHESTRATOR_MODEL` and `ORDEWELL_PLANNER_EFFORT` set to whatever the daemon
+resolved — the backend's remembered model, its catalog default, or nothing — so
+one refused connection would have persisted a provider paired with the model of
+the backend it just left, and the next daemon started from that file, silently,
+with the TUI still showing the old planner.
 *Avoid:* `setEnvVar` before an `await api.*` in an effect.
 
 **Adopt** (a session) — register a session persisted in `.ordewell/sessions/`

@@ -656,3 +656,60 @@ describe('chat body memo', () => {
     expect(chatBodyLines(messages, 40)).not.toBe(at80);
   });
 });
+
+describe('selection highlight', () => {
+  // The rest of this file paints with colour off for legible assertions; the
+  // highlight is an escape sequence, so it only exists with colour on.
+  const painted = (over: Partial<TuiState>): string[] => {
+    style.enabled = true;
+    try {
+      return render(initialState({ rows: 24, cols: 80, ...over }));
+    } finally {
+      style.enabled = false;
+    }
+  };
+
+  const chatty: Partial<TuiState> = {
+    tasks,
+    messages: Array.from({ length: 30 }, (_, i): ChatMessage => ({
+      role: 'user', content: `chat row ${i} with enough text to fill the pane`, timestamp: '',
+    })),
+  };
+
+  const INVERSE_ON = '\x1b[7m';
+
+  it('paints the selected cells in inverse video', () => {
+    const out = painted({ ...chatty, selection: { anchor: { col: 3, row: 7 }, head: { col: 12, row: 7 }, pane: 'chat' } });
+
+    expect(out[6]).toContain(INVERSE_ON);
+    // Only the selected row is touched.
+    expect(out[5]).not.toContain(INVERSE_ON);
+    expect(out[7]).not.toContain(INVERSE_ON);
+  });
+
+  it('leaves every row exactly `cols` wide, so the divider cannot shift', () => {
+    const plain = painted(chatty);
+    const highlighted = painted({
+      ...chatty,
+      selection: { anchor: { col: 3, row: 6 }, head: { col: 40, row: 9 }, pane: 'chat' },
+    });
+
+    for (const line of highlighted) expect(width(line)).toBe(80);
+    // Same glyphs underneath — the highlight adds paint, never columns.
+    expect(highlighted.map(stripAnsi)).toEqual(plain.map(stripAnsi));
+  });
+
+  it('never paints past the pane the drag started in', () => {
+    const out = painted({
+      ...chatty,
+      selection: { anchor: { col: 3, row: 6 }, head: { col: 43, row: 9 }, pane: 'chat' },
+    });
+
+    // Column 44 is the divider; nothing from it rightwards may be inverted.
+    for (const line of out) {
+      const at = line.indexOf(INVERSE_ON);
+      if (at === -1) continue;
+      expect(width(stripAnsi(line.slice(0, at)))).toBeLessThan(43);
+    }
+  });
+});
