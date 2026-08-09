@@ -8,6 +8,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.4.6] — 2026-08-09
+
 ### Added
 
 - **The planner model survives a planner switch.** Switching back to a planner
