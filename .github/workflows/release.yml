@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# A release tag moves the version on every package from local to the registry —
+# no cancel-in-progress here: a second push is a different release.
+
+jobs:
+  npm-publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.x
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - name: Verify tag matches package versions
+        run: node .github/workflows/verify-release-tag.mjs "${{ github.ref_name }}"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build & test
+        run: |
+          npm run build
+          npm run typecheck
+          npm test
+
+      # npm reads the token from .npmrc; setup-node writes it from NODE_AUTH_TOKEN.
+      - name: Publish npm packages (dependency order)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm publish -w packages/core
+          npm publish -w packages/web
+          npm publish -w packages/cli
+          cd packages/cli-alias && npm publish
+
+  vscode-publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      - name: Verify tag matches package versions
+        run: node .github/workflows/verify-release-tag.mjs "${{ github.ref_name }}"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Package VS Code Extension
+        run: npm run package -w packages/vscode
+
+      - name: Publish to Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx vsce publish --packagePath packages/vscode/*.vsix
