@@ -8,6 +8,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.4.7] — 2026-08-10
+
+No functional changes. Re-releases 0.4.6, whose npm and VS Code Marketplace
+publishes never completed after being pushed as a tag — both registries
+reject re-publishing a version number they already have on file.
+
 ## [0.4.6] — 2026-08-09
 
 ### Added
