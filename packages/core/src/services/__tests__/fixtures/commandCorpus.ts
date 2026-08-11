@@ -613,36 +613,6 @@ export const CORPUS: CorpusEntry[] = [
  */
 export const KNOWN_GAPS: KnownGap[] = [
   // -------------------------------------------------------------------------
-  // Two flags on the version-control multiplexer that were proven by execution
-  // to run arbitrary programs. Guarded on their own in ticket 08 so the first
-  // release closes them; subsumed by the per-binary flag allowlist in 11.
-  // -------------------------------------------------------------------------
-  {
-    command: 'git --exec-path=/tmp/evil ls-remote origin',
-    actual: { tier: 'auto' },
-    ticket: '08',
-    describes: 'The helper-program-path flag makes the tool load its subcommands from an attacker-named directory; a fabricated helper was confirmed to execute during an ordinary remote listing.',
-  },
-  {
-    command: 'git --exec-path /tmp/evil status',
-    actual: { tier: 'ask' },
-    ticket: '08',
-    describes: 'The separated spelling of the same flag, which additionally displaces the read-only subcommand from the position the classifier inspects.',
-  },
-  {
-    command: 'git grep -O /tmp/evil.sh pattern',
-    actual: { tier: 'auto' },
-    ticket: '08',
-    describes: 'The pager-opening flag runs the named program on the search results; confirmed by execution during an ordinary search.',
-  },
-  {
-    command: 'git grep --open-files-in-pager=/tmp/evil.sh TODO',
-    actual: { tier: 'auto' },
-    ticket: '08',
-    describes: 'The joined-with-equals spelling of the pager flag, which a substring guard on the separated form would miss.',
-  },
-
-  // -------------------------------------------------------------------------
   // A permitted binary is permitted with any flags at all. Permitted binaries
   // keep their own ability to execute helper programs and write files, so the
   // permitted tier has to become a per-binary set of known read-only flags

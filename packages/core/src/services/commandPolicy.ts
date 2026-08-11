@@ -799,6 +799,27 @@ function refusalFor(seg: Segment): string | undefined {
         return `"git ${sub} ${flag}" mutates refs. You are a read-only planner — describe the change as a task instead.`;
       }
     }
+    // Interim guards for the two execution flags on `git` proven by running
+    // them: `--exec-path` redirects where git looks for its helper programs
+    // (a fabricated helper ran during an ordinary remote listing), and
+    // `grep`'s pager flag runs an arbitrary program on search results. Both
+    // spellings — separated and `=`-joined — are covered.
+    //
+    // TODO(ticket 11): superseded by the per-binary flag allowlist. Delete
+    // this block when that lands; it will refuse both flags on the strength
+    // of being unrecognised, with no git-specific carve-out needed.
+    const execPathFlag = seg.args.find((a) => a === '--exec-path' || a.startsWith('--exec-path='));
+    if (execPathFlag) {
+      return `"git ${execPathFlag}" redirects where git looks for its helper programs, and can make it run an arbitrary one. Use the read-only research tools, or describe the change as a task.`;
+    }
+    if (sub === 'grep') {
+      const pagerFlag = seg.args.find((a) => a === '-O'
+        || a === '--open-files-in-pager'
+        || a.startsWith('--open-files-in-pager='));
+      if (pagerFlag) {
+        return `"git grep ${pagerFlag}" opens the results in an arbitrary named program. Use the read-only research tools, or describe the change as a task.`;
+      }
+    }
   }
   // `find` is auto because listing is read-only, but `-exec`/`-delete` make it
   // run an arbitrary inner command — the exact bypass this classifier exists
