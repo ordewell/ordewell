@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { Hono } from 'hono';
@@ -50,6 +50,7 @@ describe('POST /:sessionId/planning/stop', () => {
 describe('POST /:sessionId/converse/start then /planning/stop — real daemon wiring', () => {
   it('aborts the signal a live planning turn is actually waiting on', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'ordewell-planstop-'));
+    mkdirSync(join(workspace, '.git'));
     const pool = new OrchestratorPool();
     const { plansRoute } = await import('../../routes/plans');
     const app = new Hono();

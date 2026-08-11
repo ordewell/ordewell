@@ -21,6 +21,7 @@ import {
   runnerModesFrom,
   PROVIDER_PRIORITY,
   assertWorkspaceExists,
+  assertWorkspaceIsProject,
   runnerForProvider,
   PlannerModelMemory,
   admitSettingsEnv,
@@ -127,6 +128,10 @@ export class OrchestratorPool {
     // otherwise reaches the harness adapter's `spawn` as an ENOENT that reads
     // as a missing agent binary, not a missing directory.
     assertWorkspaceExists(workspace);
+    // Rejected here too: without a project marker, the filesystem root or an
+    // arbitrary system directory becomes the confinement boundary for every
+    // read, search and permitted command the planner runs.
+    assertWorkspaceIsProject(workspace);
     const config = new WebConfig({
       enabledRunners: this.enabledRunnerOverride(),
       modelOverride,

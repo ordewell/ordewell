@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, readdirSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { listSessions, saveSession, Session, WorkspaceNotFoundError, type LegacyPlanState } from '@ordewell/core';
@@ -30,6 +30,7 @@ describe('OrchestratorPool.adoptSavedSession', () => {
 
   beforeEach(() => {
     workspace = mkdtempSync(join(tmpdir(), 'ordewell-pool-'));
+    mkdirSync(join(workspace, '.git'));
     pool = new OrchestratorPool();
   });
 
@@ -165,6 +166,7 @@ describe('OrchestratorPool session registration ordering', () => {
 
   beforeEach(() => {
     workspace = mkdtempSync(join(tmpdir(), 'ordewell-pool-'));
+    mkdirSync(join(workspace, '.git'));
     pool = new OrchestratorPool();
   });
 
@@ -209,6 +211,7 @@ describe('OrchestratorPool.cancelPlanning', () => {
 
   beforeEach(() => {
     workspace = mkdtempSync(join(tmpdir(), 'ordewell-pool-'));
+    mkdirSync(join(workspace, '.git'));
     pool = new OrchestratorPool();
   });
 

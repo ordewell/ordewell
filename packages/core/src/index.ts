@@ -107,8 +107,8 @@ export {
   WINDOWS_MAX_COMMAND_LINE,
 } from './utils/launch';
 export type { LaunchPlan, LaunchDeps } from './utils/launch';
-export { assertWorkspaceExists, WorkspaceNotFoundError } from './utils/workspace';
-export type { WorkspaceCheckDeps } from './utils/workspace';
+export { assertWorkspaceExists, WorkspaceNotFoundError, assertWorkspaceIsProject, WorkspaceNotAProjectError } from './utils/workspace';
+export type { WorkspaceCheckDeps, WorkspaceProjectCheckDeps } from './utils/workspace';
 export {
   daemonTokenPath,
   mintDaemonToken,
