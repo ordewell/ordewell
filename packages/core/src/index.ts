@@ -148,6 +148,7 @@ export type { RunnerPluginManifest, RunnerInvocation, PluginEntry, ResolveContex
 export * from './utils/fsHelpers';
 export * from './utils/stateStore';
 export * from './utils/sessionStore';
+export { mintSessionId } from './utils/sessionId';
 export { extractPrdBlock, savePrdMarkdown, sanitizeSlug } from './utils/prdStore';
 export type { PrdBlock } from './utils/prdStore';
 export { SettingsService, getSettingsPath, type UserSettings } from './services/SettingsService';

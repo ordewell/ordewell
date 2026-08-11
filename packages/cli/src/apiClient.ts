@@ -1,7 +1,7 @@
 import http from 'http';
 import WebSocket from 'ws';
 import { DEFAULT_PORT } from './daemon';
-import { bearerHeaderValue, readDaemonToken, tokenSubprotocols } from '@ordewell/core';
+import { bearerHeaderValue, readDaemonToken, tokenSubprotocols, mintSessionId } from '@ordewell/core';
 import type { SerializedPlan, DiscoveredModel, SessionMessage } from '@ordewell/core';
 
 const DEFAULT_HTTP_TIMEOUT_MS = 15 * 60 * 1000;
@@ -134,7 +134,7 @@ export class ApiClient {
     goal: string,
     runners?: string[],
     workspace?: string,
-    sessionId: string = `session-${Date.now()}`,
+    sessionId: string = mintSessionId(),
   ): Promise<PlanResult> {
     const res = await this.httpRequest<Partial<PlanResult> & ErrorResponse>('POST', `/api/plans/${sessionId}/generate`, {
       goal,

@@ -4,6 +4,7 @@ import { ensureDaemon, ApiClient, resolvePort } from '../daemonClient';
 import { createApprovalHandler } from '../approvals';
 import { formatStepLine, isTransient } from './researchLog';
 import type { SerializedPlan, SerializedTask, DiscoveredModel } from '@ordewell/core';
+import { mintSessionId } from '@ordewell/core';
 import type { WsEvent } from '../apiClient';
 
 function planTasks(plan: SerializedPlan): SerializedTask[] {
@@ -167,7 +168,7 @@ export async function handlePlan(
 
   console.error(`Generating plan for: "${goal}"...`);
 
-  const sessionId = `session-${Date.now()}`;
+  const sessionId = mintSessionId();
   const isTty = !!process.stderr.isTTY;
   let lastLineLength = 0;
 

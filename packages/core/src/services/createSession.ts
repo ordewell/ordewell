@@ -22,6 +22,7 @@ import {
   type SessionBroadcaster,
 } from './SessionMessage';
 import { saveSession } from '../utils/sessionStore';
+import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
 import { type ConversationMessage, type DiscoveredModel, type LegacyPlanState, type PlanState, type Task, type TaskSnapshot, type RunnerId, type ResearchProgress } from '../models/Task';
 import type { AiProvider, IConfig } from '../interfaces/IConfig';
@@ -115,15 +116,6 @@ export interface SessionDeps {
   aiService?: IAiService;
   /** Plan-generation seam. Defaults to a Planner over the session's aiService. */
   planner?: SessionPlanner;
-}
-
-// Session ids are timestamp-based; two mints inside the same millisecond
-// (e.g. reset() right after construction) must still differ or they'd share
-// one persisted session file.
-let lastMintedAt = 0;
-function mintSessionId(): string {
-  lastMintedAt = Math.max(Date.now(), lastMintedAt + 1);
-  return `session-${lastMintedAt}`;
 }
 
 /**

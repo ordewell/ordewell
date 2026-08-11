@@ -1,4 +1,4 @@
-import { assertWorkspaceExists } from '@ordewell/core';
+import { assertWorkspaceExists, mintSessionId } from '@ordewell/core';
 import { ApiClient, ensureDaemonOwned, resolvePort, stopDaemon } from '../daemonClient';
 import { flag } from '../utils';
 import { findEnvFile, writeEnvVar } from '../utils/env';
@@ -61,7 +61,7 @@ export async function handleTui(subArgs: string[]): Promise<void> {
         conversationQueue,
         port,
         dispatch: (action) => app.dispatch(action),
-        newSessionId: () => `session-${Date.now()}`,
+        newSessionId: () => mintSessionId(),
         setEnvVar: (key, value) => {
           writeEnvVar(findEnvFile(), key, value);
           process.env[key] = value;

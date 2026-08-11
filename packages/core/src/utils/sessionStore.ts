@@ -5,6 +5,7 @@ import { migratePlanState } from '../models/Task';
 import type { SessionMeta, SessionData } from '../models/Session';
 import { defaultLogger, type ILogger } from '../interfaces/ILogger';
 import { getStateDir, ensureDir } from './fsHelpers';
+import { mintSessionId } from './sessionId';
 
 const SESSIONS_SUBDIR = 'sessions';
 
@@ -41,7 +42,7 @@ export function saveSession(plan: LegacyPlanState, goal: string, baseDir?: strin
   const now = new Date().toISOString();
 
   const meta: SessionMeta = {
-    id: id || `session-${Date.now()}`,
+    id: id || mintSessionId(),
     goal: goal || '(untitled)',
     runners: plan.runners,
     taskCount: plan.tasks.flatMap((t) => [t, ...(((t as unknown) as { subtasks?: unknown[] }).subtasks || [])]).length,

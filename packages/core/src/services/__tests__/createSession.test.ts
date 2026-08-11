@@ -676,7 +676,7 @@ describe('session id stability (persist seam)', () => {
     spy.mockClear();
 
     const id = session.sessionId;
-    expect(id).toMatch(/^session-\d+$/);
+    expect(id).toMatch(/^session-[0-9a-f]+$/);
 
     session.loadPlan(smallPlan(), 'Test', '/repo');
     await session.addTask({ title: 'One', prompt: 'a' });
