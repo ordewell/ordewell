@@ -4,7 +4,7 @@ import type { LegacyPlanState, PlanState } from '../models/Task';
 import { migratePlanState } from '../models/Task';
 import type { SessionMeta, SessionData } from '../models/Session';
 import { defaultLogger, type ILogger } from '../interfaces/ILogger';
-import { getStateDir, ensureDir } from './fsHelpers';
+import { getStateDir, ensureDir, ensureStateDirIgnored } from './fsHelpers';
 import { mintSessionId } from './sessionId';
 
 const SESSIONS_SUBDIR = 'sessions';
@@ -38,6 +38,7 @@ function sessionFilename(session: SessionMeta): string {
 export function saveSession(plan: LegacyPlanState, goal: string, baseDir?: string, id?: string): SessionMeta {
   const sessionsDir = getSessionsDir(baseDir);
   ensureDir(sessionsDir);
+  ensureStateDirIgnored(baseDir);
 
   const now = new Date().toISOString();
 

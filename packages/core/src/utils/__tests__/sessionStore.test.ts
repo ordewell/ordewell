@@ -46,6 +46,62 @@ describe('sessionStore', () => {
     });
   });
 
+  describe('state-directory ignore file', () => {
+    /** Every path under `dir`, relative and sorted, with its contents. */
+    function tree(dir: string): Record<string, string> {
+      const out: Record<string, string> = {};
+      const walk = (abs: string, rel: string): void => {
+        for (const entry of fs.readdirSync(abs, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+          const childAbs = path.join(abs, entry.name);
+          const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+          if (entry.isDirectory()) walk(childAbs, childRel);
+          else out[childRel] = fs.readFileSync(childAbs, 'utf-8');
+        }
+      };
+      walk(dir, '');
+      return out;
+    }
+
+    function planFixture() {
+      const plan = createEmptyPlan();
+      plan.runners = ['claude-code'];
+      plan.tasks = [];
+      plan.generatedAt = new Date().toISOString();
+      return plan;
+    }
+
+    it('writes a match-everything ignore file inside the state directory on first save', () => {
+      saveSession(planFixture(), 'Goal', tmpDir);
+
+      expect(fs.readFileSync(path.join(tmpDir, '.ordewell', '.gitignore'), 'utf-8')).toBe('*\n');
+    });
+
+    it('creates and modifies nothing outside the state directory', () => {
+      fs.writeFileSync(path.join(tmpDir, '.gitignore'), 'node_modules/\ndist/\n');
+      fs.writeFileSync(path.join(tmpDir, 'README.md'), 'hello');
+
+      saveSession(planFixture(), 'Goal', tmpDir);
+
+      const after = tree(tmpDir);
+      const outside = Object.keys(after).filter((p) => !p.startsWith('.ordewell/'));
+      expect(outside.sort()).toEqual(['.gitignore', 'README.md']);
+      expect(after['.gitignore']).toBe('node_modules/\ndist/\n');
+      expect(after['README.md']).toBe('hello');
+    });
+
+    it('is idempotent and never overwrites a customised ignore file', () => {
+      saveSession(planFixture(), 'First', tmpDir);
+
+      const ignorePath = path.join(tmpDir, '.ordewell', '.gitignore');
+      fs.writeFileSync(ignorePath, '# mine: commit the plans, ignore the rest\nsessions/\n');
+
+      saveSession(planFixture(), 'Second', tmpDir);
+      saveSession(planFixture(), 'Third', tmpDir);
+
+      expect(fs.readFileSync(ignorePath, 'utf-8')).toBe('# mine: commit the plans, ignore the rest\nsessions/\n');
+    });
+  });
+
   describe('listSessions', () => {
     it('rejects old sessions with scalar runner at meta level', () => {
       const sessionsDir = path.join(tmpDir, '.ordewell', 'sessions');
