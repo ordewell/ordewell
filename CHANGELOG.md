@@ -8,17 +8,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
-### Changed
+## [0.4.8] — 2026-08-11
 
-- **Plugin installation is stricter.** `ordewell plugins install` now clones
-  through an argument vector rather than a shell command line, and accepts only
-  ordinary `https://` repository URLs on a known set of forges (`github.com`,
-  `gitlab.com`, `bitbucket.org`, `codeberg.org`). Manifest names must be a plain
-  single segment, the install destination is checked to be inside the plugins
-  directory before anything is copied, and the built-in runner names
-  (`claude-code`, `codex`, `opencode`) are reserved so a user plugin cannot take
-  one over. The same rules apply to the local-directory install route and to
-  callers of the exported install functions, not only to the CLI.
+Hardening release across the daemon and command-handling paths. No API
+changes. Upgrading is recommended for all users. Per this project's security
+policy, fixes ship forward and are not backported to 0.4.6 or 0.4.7.
 
 ## [0.4.7] — 2026-08-10
 
