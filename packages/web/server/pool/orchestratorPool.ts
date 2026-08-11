@@ -23,6 +23,8 @@ import {
   assertWorkspaceExists,
   runnerForProvider,
   PlannerModelMemory,
+  admitSettingsEnv,
+  PROVIDER_CREDENTIAL_ENV,
   type AiProvider,
   type PlannerModelCandidate,
 } from '@ordewell/core';
@@ -220,9 +222,16 @@ export class OrchestratorPool {
       providerModelLists: this.cachedProviderLists,
     }).aiProvider;
 
-    const envChanges = changes.env && typeof changes.env === 'object' && !Array.isArray(changes.env)
+    // Only allowlisted keys reach `process.env`, and everything else comes back
+    // to the caller by name — the daemon's environment is inherited by every
+    // runner it spawns, so this write is the whole of `admitSettingsEnv`'s
+    // reason to exist. All downstream reads below use `envChanges`, which is
+    // the admitted subset, never the raw body.
+    const rawEnv = changes.env && typeof changes.env === 'object' && !Array.isArray(changes.env)
       ? (changes.env as Record<string, unknown>)
       : undefined;
+    const admission = rawEnv ? admitSettingsEnv(rawEnv) : undefined;
+    const envChanges = admission ? admission.accepted : undefined;
     const incomingAiProvider = typeof envChanges?.AI_PROVIDER === 'string' ? envChanges.AI_PROVIDER : undefined;
     // The name the client sent wins over re-deriving it from `config.aiProvider`
     // later: for a vendor pick that resolution reads the model id, and a switch
@@ -264,17 +273,12 @@ export class OrchestratorPool {
     if (envChanges) {
       let touched = false;
       for (const [key, value] of Object.entries(envChanges)) {
-        if (typeof value === 'string' && /^[A-Z_]+$/.test(key)) {
-          process.env[key] = value;
-          // These three pick a planner and its model/effort — none of them
-          // are a provider credential or endpoint, so none of them change
-          // what a catalog contains. Invalidating on them would wipe the
-          // very cache `plannerCatalogFor` reads synchronously below, right
-          // before the next call's switch needs it.
-          if (key !== 'AI_PROVIDER' && key !== 'ORCHESTRATOR_MODEL' && key !== 'ORDEWELL_PLANNER_EFFORT') {
-            touched = true;
-          }
-        }
+        process.env[key] = value;
+        // Only a credential or endpoint change touches what a catalog
+        // contains. A planner, model or effort pick does not, and invalidating
+        // on one would wipe the very cache `plannerCatalogFor` reads
+        // synchronously below, right before the next call's switch needs it.
+        if (PROVIDER_CREDENTIAL_ENV.has(key)) touched = true;
       }
       // A new/changed provider key or base URL must re-probe the catalog;
       // without this the picker keeps serving the pre-key cache until restart.
@@ -328,7 +332,13 @@ export class OrchestratorPool {
       );
     }
 
-    return this.getSettings();
+    // Refused keys are named back rather than dropped: a client that sent one
+    // wrote it to `.env` on the strength of this response, and would otherwise
+    // reinstate the refusal as the next daemon's startup environment.
+    const rejectedEnvKeys = admission?.rejected ?? [];
+    const settings: ReturnType<OrchestratorPool['getSettings']> & { rejectedEnvKeys?: string[] } = this.getSettings();
+    if (rejectedEnvKeys.length > 0) settings.rejectedEnvKeys = rejectedEnvKeys;
+    return settings;
   }
 
   setOrchestratorModel(model: string): string {

@@ -41,6 +41,14 @@ export { resolveProvider, fetchAllProviderModels, collectProviderCredentials, to
 export type { ProviderModelLists, FetchAllProviderModelsOptions, AllProviderModels, OrchestratorOption, ProviderModelsResult, ProviderCredentialSource } from './services/ProviderRouting';
 export { ALL_PROVIDERS, getProviderMeta, prefixModelId, stripModelPrefix, resolveProviderFromPrefix, isOpenAiProvider, isCliProvider, runnerForProvider, providerForRunner, configuredProviders, PROVIDER_LABEL, PROVIDER_SHORT_LABEL, PROVIDER_PRIORITY, PROVIDER_DETECT_PRIORITY, CLI_PROVIDERS } from './services/ProviderRegistry';
 export type { ProviderRegistration } from './services/ProviderRegistry';
+export {
+  admitSettingsEnv,
+  SETTINGS_ENV_ALLOWLIST,
+  PROVIDER_CREDENTIAL_ENV,
+  SETTINGS_ENV_REFUSED,
+  ORDEWELL_SETTABLE_ENV,
+} from './services/settingsEnvAllowlist';
+export type { EnvAdmission } from './services/settingsEnvAllowlist';
 export { ORCHESTRATOR_SHORTCUTS, resolveModelShortcut, knownModelId } from './services/ModelShortcuts';
 export type { ModelShortcut } from './services/ModelShortcuts';
 export { createAiService } from './services/AiService';
