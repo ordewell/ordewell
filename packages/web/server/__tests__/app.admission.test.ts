@@ -2,9 +2,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import http from 'http';
 import { AddressInfo } from 'net';
 import WebSocket from 'ws';
+import { bearerHeaderValue, tokenSubprotocols } from '@ordewell/core';
 import { createApp, attachWsHandler } from '../app';
 import { createRequestListener } from '../nodeAdapter';
 import type { OrchestratorPool } from '../pool/orchestratorPool';
+
+const TOKEN = 'the-daemons-token';
+const TOKEN_FILE = '/home/dev/.config/ordewell/server.token';
+const AUTH = { authorization: bearerHeaderValue(TOKEN) };
 
 function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
   return {
@@ -29,8 +34,9 @@ async function startDaemon(pool: OrchestratorPool) {
   const server = http.createServer();
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const port = (server.address() as AddressInfo).port;
-  server.on('request', createRequestListener(createApp(pool, port)));
-  attachWsHandler(server, pool, port);
+  const admission = { port, token: TOKEN, tokenFile: TOKEN_FILE };
+  server.on('request', createRequestListener(createApp(pool, admission)));
+  attachWsHandler(server, pool, admission);
   return {
     port,
     close: () => new Promise<void>((resolve) => { server.close(() => resolve()); }),
@@ -58,16 +64,21 @@ function request(
   });
 }
 
-function openSocket(url: string, options?: WebSocket.ClientOptions): Promise<
-  { outcome: 'open'; first: string } | { outcome: 'refused'; status?: number }
+function openSocket(
+  url: string,
+  options?: WebSocket.ClientOptions,
+  protocols?: string[],
+): Promise<
+  { outcome: 'open'; first: string; protocol?: string } | { outcome: 'refused'; status?: number }
 > {
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url, options);
+    const socket = new WebSocket(url, protocols ?? [], options);
     const timer = setTimeout(() => { socket.terminate(); reject(new Error('websocket timed out')); }, 5000);
     socket.on('message', (data) => {
       clearTimeout(timer);
+      const protocol = socket.protocol;
       socket.close();
-      resolve({ outcome: 'open', first: data.toString() });
+      resolve({ outcome: 'open', first: data.toString(), protocol });
     });
     socket.on('unexpected-response', (_req, res) => {
       clearTimeout(timer);
@@ -93,30 +104,118 @@ describe('daemon admission control', () => {
 
   describe('the CLI, which is the only supported client', () => {
     it('reaches the API over loopback with no origin', async () => {
-      const res = await request(daemon.port, '/api/approvals/s1');
+      const res = await request(daemon.port, '/api/approvals/s1', { headers: AUTH });
       expect(res.status).toBe(200);
     });
 
     it('answers an approval prompt', async () => {
       const res = await request(daemon.port, '/api/approvals/s1/ap-1', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { ...AUTH, 'content-type': 'application/json' },
         body: JSON.stringify({ granted: true }),
       });
       expect(res.status).toBe(200);
       expect(pool.resolveApproval).toHaveBeenCalledWith('s1', 'ap-1', true);
     });
 
-    it('opens the session stream', async () => {
-      const result = await openSocket(`ws://127.0.0.1:${daemon.port}/ws/session/s1`);
+    it('opens the session stream, carrying the token as a subprotocol', async () => {
+      const result = await openSocket(
+        `ws://127.0.0.1:${daemon.port}/ws/session/s1`,
+        undefined,
+        tokenSubprotocols(TOKEN),
+      );
       expect(result.outcome).toBe('open');
       expect(result.outcome === 'open' && JSON.parse(result.first)).toMatchObject({ type: 'connected', sessionId: 's1' });
       expect(pool.subscribe).toHaveBeenCalled();
     });
 
+    it('is answered with the plain subprotocol, so the token is not echoed back', async () => {
+      const result = await openSocket(
+        `ws://127.0.0.1:${daemon.port}/ws/session/s1`,
+        undefined,
+        tokenSubprotocols(TOKEN),
+      );
+      expect(result.outcome === 'open' && result.protocol).toBe('ordewell.v1');
+      expect(result.outcome === 'open' && result.protocol).not.toContain(TOKEN);
+    });
+
     it('reaches the API when it dials localhost by name', async () => {
-      const res = await request(daemon.port, '/api/runners', { headers: { host: `localhost:${daemon.port}` } });
+      const res = await request(daemon.port, '/api/runners', {
+        headers: { ...AUTH, host: `localhost:${daemon.port}` },
+      });
       expect(res.status).toBe(200);
+    });
+  });
+
+  describe('another process running as the same user, which can see the port', () => {
+    const ROUTES: Array<[string, string, string | undefined]> = [
+      ['GET', '/api/approvals/s1', undefined],
+      ['GET', '/api/runners', undefined],
+      ['GET', '/api/settings', undefined],
+      ['GET', '/api/sessions', undefined],
+      ['GET', '/api/models', undefined],
+      ['GET', '/api/commands', undefined],
+      ['GET', '/api/workspaces', undefined],
+      ['POST', '/api/approvals/s1/ap-1', JSON.stringify({ granted: true })],
+      ['POST', '/api/plans/s1/generate', JSON.stringify({ goal: 'x' })],
+      ['PATCH', '/api/settings', JSON.stringify({ env: { NODE_OPTIONS: '--require /tmp/x.js' } })],
+    ];
+
+    it.each(ROUTES)('is refused on %s %s without the token', async (method, path, body) => {
+      const res = await request(daemon.port, path, {
+        method,
+        headers: { 'content-type': 'application/json' },
+        body,
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it('cannot answer an approval prompt', async () => {
+      await request(daemon.port, '/api/approvals/s1/ap-1', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ granted: true }),
+      });
+      expect(pool.resolveApproval).not.toHaveBeenCalled();
+    });
+
+    it('is refused with a guessed token', async () => {
+      const res = await request(daemon.port, '/api/runners', {
+        headers: { authorization: 'Bearer guess' },
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it('cannot open the session stream without the token', async () => {
+      const result = await openSocket(`ws://127.0.0.1:${daemon.port}/ws/session/s1`);
+      expect(result).toEqual({ outcome: 'refused', status: 401 });
+      expect(pool.subscribe).not.toHaveBeenCalled();
+    });
+
+    it('cannot open the session stream with a wrong token', async () => {
+      const result = await openSocket(
+        `ws://127.0.0.1:${daemon.port}/ws/session/s1`,
+        undefined,
+        tokenSubprotocols('guess'),
+      );
+      expect(result).toEqual({ outcome: 'refused', status: 401 });
+      expect(pool.subscribe).not.toHaveBeenCalled();
+    });
+
+    // A URL-borne secret ends up in access logs, shell history and `ps`.
+    it('is not admitted by a token in the query string', async () => {
+      const result = await openSocket(
+        `ws://127.0.0.1:${daemon.port}/ws/session/s1?token=${TOKEN}`,
+      );
+      expect(result).toEqual({ outcome: 'refused', status: 401 });
+
+      const res = await request(daemon.port, `/api/runners?token=${TOKEN}`);
+      expect(res.status).toBe(401);
+    });
+
+    it('is told which file holds the token, so a stale one is diagnosable', async () => {
+      const res = await request(daemon.port, '/api/runners');
+      expect(JSON.parse(res.body).error).toContain(TOKEN_FILE);
     });
   });
 
@@ -202,7 +301,7 @@ describe('daemon admission control', () => {
   });
 
   it('sends no CORS headers, having no allowlist to answer from', async () => {
-    const res = await request(daemon.port, '/api/runners');
+    const res = await request(daemon.port, '/api/runners', { headers: AUTH });
     expect(res.status).toBe(200);
     const preflight = await request(daemon.port, '/api/runners', {
       method: 'OPTIONS',

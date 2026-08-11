@@ -1,6 +1,7 @@
 import http from 'http';
 import WebSocket from 'ws';
 import { DEFAULT_PORT } from './daemon';
+import { bearerHeaderValue, readDaemonToken, tokenSubprotocols } from '@ordewell/core';
 import type { SerializedPlan, DiscoveredModel, SessionMessage } from '@ordewell/core';
 
 const DEFAULT_HTTP_TIMEOUT_MS = 15 * 60 * 1000;
@@ -72,6 +73,15 @@ export class ApiClient {
     this.port = port || DEFAULT_PORT;
   }
 
+  /**
+   * Read at call time rather than at construction: a daemon restarted mid-run
+   * mints a new token, and a client built before that restart must pick it up.
+   * A missing file is not an error here — the daemon's own 401 names the path.
+   */
+  private token(): string | undefined {
+    return readDaemonToken(this.port);
+  }
+
   private httpRequest<T = unknown>(
     method: string,
     urlPath: string,
@@ -80,12 +90,16 @@ export class ApiClient {
     return new Promise((resolve, reject) => {
       const url = new URL(urlPath, `http://127.0.0.1:${this.port}`);
       const configuredTimeout = Number.parseInt(process.env.ORDEWELL_HTTP_TIMEOUT_MS || '', 10);
+      const token = this.token();
       const options: http.RequestOptions = {
         hostname: url.hostname,
         port: url.port,
         path: url.pathname + url.search,
         method,
-        headers: body ? { 'Content-Type': 'application/json' } : {},
+        headers: {
+          ...(body ? { 'Content-Type': 'application/json' } : {}),
+          ...(token ? { Authorization: bearerHeaderValue(token) } : {}),
+        },
         // Planner research on a real repository regularly exceeds two minutes.
         // The benchmark harness uses the same 15-minute default explicitly;
         // keep the env override for callers that need a tighter/looser bound.
@@ -368,14 +382,47 @@ export class ApiClient {
     return res.data;
   }
 
+  /**
+   * The one place a session socket is built, so the token travels on both
+   * stream paths. It rides as a subprotocol rather than a query parameter, so
+   * it never reaches an access log.
+   */
+  private openSessionSocket(sessionId: string): WebSocket {
+    const token = this.token();
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${this.port}/ws/session/${sessionId}`,
+      token ? tokenSubprotocols(token) : undefined,
+    );
+
+    // Left to itself `ws` reports a refused upgrade as "Unexpected server
+    // response: 401", discarding the body — which is where the daemon names the
+    // token file. Read it and raise that instead, keeping ws's own error-then-
+    // close ordering so callers see no change in shape.
+    socket.on('unexpected-response', (_req, res) => {
+      let body = '';
+      res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+      res.on('end', () => {
+        let reason = '';
+        try {
+          reason = (JSON.parse(body) as ErrorResponse).error ?? '';
+        } catch {
+          reason = body.trim();
+        }
+        socket.emit('error', new Error(reason || `Unexpected server response: ${res.statusCode}`));
+        socket.emit('close', res.statusCode ?? 1006, Buffer.from(''));
+      });
+    });
+
+    return socket;
+  }
+
   streamExecution(
     sessionId: string,
     onEvent: (event: WsEvent) => void,
     onReady?: (error?: Error) => void,
   ): Promise<void> {
     return new Promise((resolve, reject) => {
-      const wsUrl = `ws://127.0.0.1:${this.port}/ws/session/${sessionId}`;
-      const socket = new WebSocket(wsUrl);
+      const socket = this.openSessionSocket(sessionId);
 
       let resolved = false;
       let opened = false;
@@ -438,8 +485,7 @@ export class ApiClient {
    * completion signal, not a terminal WS message like execution has.
    */
   streamPlanning(sessionId: string, onEvent: (event: WsEvent) => void): { close: () => void } {
-    const wsUrl = `ws://127.0.0.1:${this.port}/ws/session/${sessionId}`;
-    const socket = new WebSocket(wsUrl);
+    const socket = this.openSessionSocket(sessionId);
     socket.on('message', (data: Buffer) => {
       try {
         onEvent(JSON.parse(data.toString()));

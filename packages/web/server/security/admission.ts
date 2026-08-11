@@ -6,6 +6,8 @@
  * up validating nothing while the HTTP routes had a CORS allowlist.
  */
 
+import { extractPresentedToken, tokensMatch } from '@ordewell/core';
+
 /** `localhost` is included because clients dial it by name; the daemon binds loopback only. */
 const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
 
@@ -13,6 +15,18 @@ export interface AdmissionHeaders {
   /** `null`/`undefined` mean absent. An empty string still counts as present. */
   origin?: string | null;
   host?: string | null;
+  /** `Authorization: Bearer <token>` — how the token travels on HTTP routes. */
+  authorization?: string | null;
+  /** `Sec-WebSocket-Protocol` — how it travels on the upgrade, so it stays out of logs. */
+  secWebSocketProtocol?: string | null;
+}
+
+/** What this daemon is: which port it bound, and which token it minted. */
+export interface AdmissionContext {
+  port: number;
+  token: string;
+  /** Named in a token rejection, so a stale token is diagnosable rather than a bare failure. */
+  tokenFile: string;
 }
 
 export type AdmissionDecision =
@@ -21,7 +35,10 @@ export type AdmissionDecision =
 
 const ADMIT: AdmissionDecision = { admit: true };
 
-export function decideAdmission(headers: AdmissionHeaders, port: number): AdmissionDecision {
+export function decideAdmission(
+  headers: AdmissionHeaders,
+  context: AdmissionContext,
+): AdmissionDecision {
   if (headers.origin !== undefined && headers.origin !== null) {
     return {
       admit: false,
@@ -30,11 +47,22 @@ export function decideAdmission(headers: AdmissionHeaders, port: number): Admiss
     };
   }
 
-  if (!isOwnLoopbackAuthority(headers.host, port)) {
+  if (!isOwnLoopbackAuthority(headers.host, context.port)) {
     return {
       admit: false,
       status: 403,
-      reason: `Refused: the Host header must name loopback (localhost, 127.0.0.1 or [::1]) at port ${port}.`,
+      reason: `Refused: the Host header must name loopback (localhost, 127.0.0.1 or [::1]) at port ${context.port}.`,
+    };
+  }
+
+  if (!tokensMatch(extractPresentedToken(headers), context.token)) {
+    return {
+      admit: false,
+      status: 401,
+      reason:
+        'Unauthenticated: this request did not present the daemon\'s bearer token. '
+        + `Ordewell clients read it from ${context.tokenFile}; if that file is stale, `
+        + 'restart the daemon (`ordewell web --daemon`) to mint a fresh one.',
     };
   }
 

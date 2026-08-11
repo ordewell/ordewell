@@ -3,7 +3,7 @@ import { createApp, attachWsHandler } from './app';
 import { createRequestListener } from './nodeAdapter';
 import { OrchestratorPool } from './pool/orchestratorPool';
 import { createServer } from 'http';
-import { hasTmux, TmuxRunner } from '@ordewell/core';
+import { clearDaemonToken, hasTmux, mintDaemonToken, TmuxRunner } from '@ordewell/core';
 
 const args = process.argv.slice(2);
 let port = 3742;
@@ -26,8 +26,13 @@ if (tmuxRunner) {
   });
 }
 
+// Minted before the socket is listening, so no request can arrive before there
+// is a token to check it against.
+const { token, file: tokenFile } = mintDaemonToken(port);
+const admission = { port, token, tokenFile };
+
 const pool = new OrchestratorPool({ runner: tmuxRunner });
-const app = createApp(pool, port);
+const app = createApp(pool, admission);
 
 // Warm the model caches at startup (same as the VS Code extension's activation
 // refresh): runner model discovery + provider routing lists, so the first
@@ -40,13 +45,14 @@ app.get('/', (c) => c.json({ message: 'Ordewell API', docs: '/api/workspaces' })
 
 const server = createServer(createRequestListener(app));
 
-attachWsHandler(server, pool, port);
+attachWsHandler(server, pool, admission);
 
 server.listen(port, '127.0.0.1', () => {
   console.error(`[web] Ordewell API server: http://localhost:${port}`);
 });
 
 async function shutdown(): Promise<void> {
+  clearDaemonToken(port);
   pool.destroyAll();
   // The one cleanup guarantee against leaked tmux processes: killing the
   // shared session takes every window (and whatever's running in it) with it.

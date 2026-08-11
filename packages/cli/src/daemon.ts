@@ -3,6 +3,7 @@ import { existsSync, writeFileSync, readFileSync, unlinkSync, mkdirSync, openSyn
 import { homedir } from 'os';
 import { dirname, join, resolve } from 'path';
 import http from 'http';
+import { bearerHeaderValue, clearDaemonToken, readDaemonToken } from '@ordewell/core';
 
 export const DEFAULT_PORT = 3742;
 const CONFIG_DIR = join(homedir(), '.config', 'ordewell');
@@ -14,9 +15,13 @@ function pidFileFor(port: number): string {
   return port === DEFAULT_PORT ? LEGACY_PID_FILE : join(CONFIG_DIR, `server-${port}.pid`);
 }
 
-function httpGet(url: string, timeoutMs: number = 2000): Promise<{ status: number; data: string }> {
+function httpGet(
+  url: string,
+  timeoutMs: number = 2000,
+  headers: Record<string, string> = {},
+): Promise<{ status: number; data: string }> {
   return new Promise((resolve, reject) => {
-    const req = http.get(url, { timeout: timeoutMs }, (res) => {
+    const req = http.get(url, { timeout: timeoutMs, headers }, (res) => {
       let data = '';
       res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
       res.on('end', () => resolve({ status: res.statusCode || 0, data }));
@@ -50,9 +55,17 @@ function getWebServerPath(): string {
 }
 
 export async function isDaemonRunning(port: number = DEFAULT_PORT): Promise<boolean> {
+  const token = readDaemonToken(port);
   try {
-    const res = await httpGet(`http://127.0.0.1:${port}/api/workspaces`);
-    return res.status === 200;
+    const res = await httpGet(
+      `http://127.0.0.1:${port}/api/workspaces`,
+      2000,
+      token ? { Authorization: bearerHeaderValue(token) } : {},
+    );
+    // 401 still means a daemon owns this port. Reporting it as absent would
+    // send `startDaemon` to spawn a second one that cannot bind; reporting it
+    // as present lets the next real request answer with the token-file message.
+    return res.status === 200 || res.status === 401;
   } catch {
     return false;
   }
@@ -123,6 +136,7 @@ export async function stopDaemon(port: number = DEFAULT_PORT): Promise<boolean> 
     const pid = parseInt(pidStr, 10);
     if (!pid || isNaN(pid)) {
       unlinkSync(pidFile);
+      clearDaemonToken(port);
       return false;
     }
     process.kill(pid, 'SIGTERM');
@@ -132,6 +146,9 @@ export async function stopDaemon(port: number = DEFAULT_PORT): Promise<boolean> 
   } catch (err) {
     if ((err as Error & { code?: string }).code === 'ESRCH') {
       try { unlinkSync(pidFile); } catch { /* empty */ }
+      // A daemon killed outright never ran its own shutdown, so its token file
+      // may still be sitting there looking usable.
+      clearDaemonToken(port);
       console.log('Server was not running (stale PID removed).');
       return true;
     }

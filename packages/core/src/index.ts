@@ -109,6 +109,19 @@ export {
 export type { LaunchPlan, LaunchDeps } from './utils/launch';
 export { assertWorkspaceExists, WorkspaceNotFoundError } from './utils/workspace';
 export type { WorkspaceCheckDeps } from './utils/workspace';
+export {
+  daemonTokenPath,
+  mintDaemonToken,
+  readDaemonToken,
+  clearDaemonToken,
+  bearerHeaderValue,
+  tokenSubprotocols,
+  extractPresentedToken,
+  tokensMatch,
+  DAEMON_SUBPROTOCOL,
+  DAEMON_TOKEN_SUBPROTOCOL_PREFIX,
+} from './utils/daemonToken';
+export type { TokenCarriers } from './utils/daemonToken';
 export { killTree } from './utils/processTree';
 export type { KillTreeDeps } from './utils/processTree';
 export { augmentedPath, clearAugmentedPathCache, withPath, wellKnownBinDirs } from './utils/shellPath';
