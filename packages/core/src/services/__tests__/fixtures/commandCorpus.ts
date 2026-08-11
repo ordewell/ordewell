@@ -213,8 +213,13 @@ const PIPELINES_AND_QUOTING: CorpusEntry[] = [
 
 const PROMPTED: CorpusEntry[] = [
   { command: 'npm test', tier: 'ask', scope: 'npm test' },
+  // The script runner scopes per script. These three are the sharpest of the
+  // grant collisions: the scripts are defined in the workspace's own manifest,
+  // so on an untrusted repository the attacker wrote them, and approving a test
+  // run is the most reasonable approval a developer is ever asked for.
   { command: 'npm run build', tier: 'ask', scope: 'npm run build' },
   { command: 'npm run test:unit', tier: 'ask', scope: 'npm run test:unit' },
+  { command: 'npm run postinstall', tier: 'ask', scope: 'npm run postinstall' },
   { command: 'npm view react version', tier: 'ask', scope: 'npm view react' },
   { command: 'pnpm run lint', tier: 'ask', scope: 'pnpm run lint' },
   { command: 'yarn run test', tier: 'ask', scope: 'yarn run test' },
@@ -235,18 +240,25 @@ const PROMPTED: CorpusEntry[] = [
   { command: 'pip list', tier: 'ask', scope: 'pip list' },
   { command: 'pip install requests', tier: 'ask', scope: 'pip install requests' },
   { command: 'uv pip list', tier: 'ask', scope: 'uv pip list' },
+  // A nested multiplexer spends its first leading argument reaching the inner
+  // multiplexer, which is why the cap is two rather than one: at one, every
+  // verb under `uv pip` would have shared a grant. The cap is where the scope
+  // stops, so the package name does not reach it — recorded rather than raised,
+  // since the verb is what decides whether the command installs anything.
+  { command: 'uv pip install requests', tier: 'ask', scope: 'uv pip install' },
   { command: 'bundle exec rspec', tier: 'ask', scope: 'bundle exec rspec' },
   { command: 'rake -T', tier: 'ask', scope: 'rake' },
   { command: 'flutter doctor', tier: 'ask', scope: 'flutter doctor' },
   { command: 'dart analyze', tier: 'ask', scope: 'dart analyze' },
   { command: 'helm list', tier: 'ask', scope: 'helm list' },
   { command: 'terraform plan', tier: 'ask', scope: 'terraform plan' },
-  // The three confirmed grant collisions: a read verb and its destructive
-  // sibling must not share one grant.
+  // The cloud and object-store halves of the confirmed grant collisions: a read
+  // verb and its destructive sibling must not share one grant.
   { command: 'az group list', tier: 'ask', scope: 'az group list' },
   { command: 'az group delete --name rg1', tier: 'ask', scope: 'az group delete' },
   { command: 'aws s3 ls', tier: 'ask', scope: 'aws s3 ls' },
   { command: 'aws s3 rm s3://bucket/key', tier: 'ask', scope: 'aws s3 rm' },
+  { command: 'aws s3 cp s3://bucket/key .', tier: 'ask', scope: 'aws s3 cp' },
   { command: 'gh pr list --state open', tier: 'ask', scope: 'gh pr list' },
   { command: 'gh pr view 12', tier: 'ask', scope: 'gh pr view' },
   { command: 'gh api /repos/o/r', tier: 'ask', scope: 'gh api /repos/o/r' },
@@ -257,14 +269,25 @@ const PROMPTED: CorpusEntry[] = [
   // are one stable grant, not a new prompt per limit.
   { command: 'docker logs -n 5 web', tier: 'ask', scope: 'docker logs' },
   { command: 'docker logs -n 100 web', tier: 'ask', scope: 'docker logs' },
+  { command: 'docker logs --tail 200 web', tier: 'ask', scope: 'docker logs' },
   { command: 'curl https://api.example.com/health', tier: 'ask', scope: 'curl' },
   { command: 'ps aux', tier: 'ask', scope: 'ps' },
   { command: "sed 's/a/b/' file.ts", tier: 'ask', scope: 'sed' },
   { command: "awk '{print $1}' file.txt", tier: 'ask', scope: 'awk' },
   // Read-only against the repository, but it reaches the network — around the
-  // web fetcher's per-origin approval and its request-forgery guard.
+  // web fetcher's per-origin approval and its request-forgery guard. It prompts
+  // rather than running silently, and the destination is in the scope, so no
+  // approval of one remote carries to another.
   { command: 'git ls-remote origin', tier: 'ask', scope: 'git ls-remote origin' },
   { command: 'git ls-remote https://github.com/o/r', tier: 'ask', scope: 'git ls-remote https://github.com/o/r' },
+  { command: 'git ls-remote https://attacker.example/r', tier: 'ask', scope: 'git ls-remote https://attacker.example/r' },
+  // The residual of stopping at the first flag, recorded rather than hidden: a
+  // leading flag empties the lead, so this one spelling scopes to the
+  // subcommand alone and a grant for it would cover any destination. It is the
+  // same trade the log-limit rows above buy stability with. Narrowing it means
+  // walking flags to find the operands, which is what `scopeFor` deliberately
+  // does not do — see its note.
+  { command: 'git ls-remote --heads origin', tier: 'ask', scope: 'git ls-remote' },
   // With no residual command this prints the whole process environment,
   // provider credentials included, into the research log.
   { command: 'env', tier: 'ask', scope: 'env' },
@@ -512,7 +535,7 @@ const WRAPPERS: CorpusEntry[] = [
   { command: 'nohup git status', tier: 'auto' },
   { command: 'timeout 5 rg --files', tier: 'auto' },
   { command: 'timeout 60 pytest -q', tier: 'ask', scope: 'pytest' },
-  { command: 'nice -n 5 az group list', tier: 'ask', scope: 'az group' },
+  { command: 'nice -n 5 az group list', tier: 'ask', scope: 'az group list' },
   // The wrappers with nothing left to run are classified on their own name.
   // `env` prints the whole process environment, credentials included.
   { command: 'nice', tier: 'ask', scope: 'nice' },
@@ -729,144 +752,9 @@ export const CORPUS: CorpusEntry[] = [
  * before the fixes land — not to make any of these acceptable. Each classifier
  * change deletes its own entries, and the corpus then asserts the correct tier
  * directly.
+ *
+ * Empty: every gap the corpus was written against has been closed, so each row
+ * above now asserts the intended answer with nothing standing in for it. A new
+ * entry here means a newly found divergence, not a leftover.
  */
-export const KNOWN_GAPS: KnownGap[] = [
-  // -------------------------------------------------------------------------
-  // Grant scope is the multiplexer name plus its first non-flag argument,
-  // which collapses distinct operations onto one grant: approving a read
-  // authorises the matching write. Scope becomes the binary plus the leading
-  // non-flag arguments before the first flag, capped at two.
-  // -------------------------------------------------------------------------
-  {
-    command: 'npm run build',
-    actual: { tier: 'ask', scope: 'npm run' },
-    ticket: '12',
-    describes: 'The sharpest collision. Every script in the workspace manifest shares one grant, the scripts are attacker-authored on an untrusted repository, and approving a test run is the most reasonable approval a developer is ever asked for.',
-  },
-  {
-    command: 'npm run test:unit',
-    actual: { tier: 'ask', scope: 'npm run' },
-    ticket: '12',
-    describes: 'The same grant as every other script, so approving this authorises all of them.',
-  },
-  {
-    command: 'npm view react version',
-    actual: { tier: 'ask', scope: 'npm view' },
-    ticket: '12',
-    describes: 'Registry lookups collapse onto one grant regardless of which package is being fetched.',
-  },
-  {
-    command: 'pnpm run lint',
-    actual: { tier: 'ask', scope: 'pnpm run' },
-    ticket: '12',
-    describes: 'The script-runner collision reaches every package manager that has one.',
-  },
-  {
-    command: 'yarn run test',
-    actual: { tier: 'ask', scope: 'yarn run' },
-    ticket: '12',
-    describes: 'The same script-runner collision on the third package manager, so the fix has to come from the scope rule rather than from a per-binary special case.',
-  },
-  {
-    command: 'go test ./...',
-    actual: { tier: 'ask', scope: 'go test' },
-    ticket: '12',
-    describes: 'The package selector is part of what is being approved, so it belongs in the scope.',
-  },
-  {
-    command: 'go build ./cmd/app',
-    actual: { tier: 'ask', scope: 'go build' },
-    ticket: '12',
-    describes: 'Approving a build of one package should not authorise building another.',
-  },
-  {
-    command: 'mvn -q test',
-    actual: { tier: 'ask', scope: 'mvn test' },
-    ticket: '12',
-    describes: 'A consequence of stopping at the first flag rather than a collision fixed: a leading flag empties the scope, so this grant widens to the whole binary. Accepted deliberately — keeping flag values out of the scope is what makes a log-style invocation one stable grant instead of a prompt per limit value.',
-  },
-  {
-    command: 'pip install requests',
-    actual: { tier: 'ask', scope: 'pip install' },
-    ticket: '12',
-    describes: 'Approving the installation of one package authorises installing any other, and an installed package runs its own build steps.',
-  },
-  {
-    command: 'uv pip list',
-    actual: { tier: 'ask', scope: 'uv pip' },
-    ticket: '12',
-    describes: 'A nested multiplexer needs two leading arguments before the verb is visible, which is why the cap is two rather than one.',
-  },
-  {
-    command: 'bundle exec rspec',
-    actual: { tier: 'ask', scope: 'bundle exec' },
-    ticket: '12',
-    describes: 'The generic execution verb means one grant covers running any program the bundle can reach.',
-  },
-  {
-    command: 'az group list',
-    actual: { tier: 'ask', scope: 'az group' },
-    ticket: '12',
-    describes: 'The confirmed cloud-CLI collision: listing a resource group and deleting one share a grant, so approving the read authorises the delete.',
-  },
-  {
-    command: 'az group delete --name rg1',
-    actual: { tier: 'ask', scope: 'az group' },
-    ticket: '12',
-    describes: 'The destructive half of that collision — it must not be satisfiable by the approval given for the listing.',
-  },
-  {
-    command: 'aws s3 ls',
-    actual: { tier: 'ask', scope: 'aws s3' },
-    ticket: '12',
-    describes: 'The confirmed object-store collision: every verb against the bucket shares one grant.',
-  },
-  {
-    command: 'aws s3 rm s3://bucket/key',
-    actual: { tier: 'ask', scope: 'aws s3' },
-    ticket: '12',
-    describes: 'The destructive half of the object-store collision.',
-  },
-  {
-    command: 'gh pr list --state open',
-    actual: { tier: 'ask', scope: 'gh pr' },
-    ticket: '12',
-    describes: 'Every pull-request verb, read and write alike, shares one grant.',
-  },
-  {
-    command: 'gh pr view 12',
-    actual: { tier: 'ask', scope: 'gh pr' },
-    ticket: '12',
-    describes: 'The same grant as any other pull-request verb.',
-  },
-  {
-    command: 'gh api /repos/o/r',
-    actual: { tier: 'ask', scope: 'gh api' },
-    ticket: '12',
-    describes: 'The raw API verb collapses every endpoint onto one grant, so the path has to reach the scope.',
-  },
-  {
-    command: 'kubectl get pods',
-    actual: { tier: 'ask', scope: 'kubectl get' },
-    ticket: '12',
-    describes: 'The resource kind is what makes the read meaningful, and one grant currently spans all of them.',
-  },
-  {
-    command: 'az group list | head -5',
-    actual: { tier: 'ask', scope: 'az group' },
-    ticket: '12',
-    describes: 'The scope is derived from the non-permitted stages, so the pipeline form must narrow with the bare form rather than lagging behind it.',
-  },
-  {
-    command: 'git ls-remote origin',
-    actual: { tier: 'auto', scope: '' },
-    ticket: '12',
-    describes: 'Read-only against the repository but it reaches the network, routing around the web fetcher\'s per-origin approval and its request-forgery guard. It prompts once scope distinguishes destinations — prompting before that would let one approval authorise any destination.',
-  },
-  {
-    command: 'git ls-remote https://github.com/o/r',
-    actual: { tier: 'auto', scope: '' },
-    ticket: '12',
-    describes: 'The same subcommand naming a destination directly, which is the case the destination-scoped grant has to keep separate from any other remote.',
-  },
-];
+export const KNOWN_GAPS: KnownGap[] = [];

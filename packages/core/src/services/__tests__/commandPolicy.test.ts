@@ -60,9 +60,9 @@ describe('classifyCommand', () => {
     it.each([
       ['npm test', 'npm test'],
       ['pytest -q', 'pytest'],
-      ['az group list', 'az group'],
-      ['gh pr list --state open', 'gh pr'],
-      ['kubectl get pods', 'kubectl get'],
+      ['az group list', 'az group list'],
+      ['gh pr list --state open', 'gh pr list'],
+      ['kubectl get pods', 'kubectl get pods'],
       ['docker ps', 'docker ps'],
       ['curl https://api.example.com/health', 'curl'],
     ])('%s asks, scoped to %s', (cmd, scope) => {
@@ -72,7 +72,7 @@ describe('classifyCommand', () => {
     });
 
     it('scopes a grant to the non-auto stages only, so auto stages do not widen it', () => {
-      expect(classifyCommand('az group list | head -5').scope).toBe('az group');
+      expect(classifyCommand('az group list | head -5').scope).toBe('az group list');
     });
 
     it('collapses duplicate stages into one scope', () => {
@@ -393,7 +393,7 @@ describe('wrappers are classified by the command they run', () => {
   // approval of `timeout` would authorise anything else wrapped in it.
   it('scopes a wrapped grant to what actually runs, not to the wrapper', () => {
     expect(classifyCommand('timeout 30 npm test').scope).toBe('npm test');
-    expect(classifyCommand('nice -n 5 az group list').scope).toBe('az group');
+    expect(classifyCommand('nice -n 5 az group list').scope).toBe('az group list');
   });
 
   it('names the wrapped command in the refusal, and says the wrapper was seen through', () => {
@@ -632,6 +632,100 @@ describe('a multiplexer subcommand is found after its global flags, not before t
     expect(tier).toBe('refuse');
     expect(reason).toContain('git push');
     expect(classifyCommand('git -C packages/core remote -v').tier).toBe('refuse');
+  });
+});
+
+/**
+ * A developer who approves one command has approved that command, not a family
+ * of them. Scope was the binary plus its first non-flag argument, which
+ * collapsed distinct operations onto one grant: three collisions were confirmed
+ * by probing, and the script-runner one is the sharpest, because the scripts
+ * live in the workspace's own manifest and are attacker-authored on an
+ * untrusted repository.
+ *
+ * The rule that replaces it is the binary plus the leading non-flag arguments
+ * before the first flag, capped at two. Both halves earn their place below: the
+ * cap is what makes a nested multiplexer's verb visible, and stopping at the
+ * first flag is what keeps a flag's *value* out of the scope.
+ */
+describe('a grant covers the command that was approved, not its family', () => {
+  // Two scopes differing is the whole assertion: `scopeMatches` in
+  // ApprovalPolicy is exact for remembered grants, so distinct scopes cannot
+  // satisfy each other.
+  const scopeOf = (cmd: string) => classifyCommand(cmd).scope;
+
+  it('scopes the package manager per script, so one script does not authorise another', () => {
+    expect(scopeOf('npm run test')).toBe('npm run test');
+    expect(scopeOf('npm run postinstall')).toBe('npm run postinstall');
+    expect(scopeOf('npm run test')).not.toBe(scopeOf('npm run postinstall'));
+  });
+
+  it('reaches every package manager that has a script runner', () => {
+    expect(scopeOf('pnpm run lint')).toBe('pnpm run lint');
+    expect(scopeOf('yarn run test')).toBe('yarn run test');
+    expect(scopeOf('yarn run test')).not.toBe(scopeOf('yarn run release'));
+  });
+
+  it('scopes the cloud CLI per verb, so a read does not authorise a delete', () => {
+    expect(scopeOf('az group list')).toBe('az group list');
+    expect(scopeOf('az group delete --name rg1')).toBe('az group delete');
+    expect(scopeOf('az group list')).not.toBe(scopeOf('az group delete --name rg1'));
+  });
+
+  it('scopes the object-store CLI per verb too', () => {
+    expect(scopeOf('aws s3 ls')).toBe('aws s3 ls');
+    expect(scopeOf('aws s3 rm s3://bucket/key')).toBe('aws s3 rm');
+    expect(scopeOf('aws s3 ls')).not.toBe(scopeOf('aws s3 rm s3://bucket/key'));
+  });
+
+  // Stopping at the first flag is what buys this. A scope that carried flag
+  // values would prompt again for every limit the model picks, and a policy
+  // that prompts constantly is one developers approve blind.
+  it('produces one stable scope for a log-style invocation whatever the limit', () => {
+    for (const limit of ['1', '5', '100', '5000']) {
+      expect(scopeOf(`docker logs -n ${limit} web`)).toBe('docker logs');
+    }
+    expect(scopeOf('docker logs --tail 200 web')).toBe('docker logs');
+  });
+
+  // One before the verb, one for the verb: `uv pip list` is why the cap is two.
+  it('carries two leading arguments, so a nested multiplexer still reaches its verb', () => {
+    expect(scopeOf('uv pip list')).toBe('uv pip list');
+    expect(scopeOf('bundle exec rspec')).toBe('bundle exec rspec');
+    expect(scopeOf('npm view react version')).toBe('npm view react');
+  });
+
+  it('leaves a non-multiplexer scoped to its binary', () => {
+    expect(scopeOf('pytest -q')).toBe('pytest');
+    expect(scopeOf('curl https://api.example.com/health')).toBe('curl');
+  });
+});
+
+/**
+ * Read-only against the repository, but it contacts whatever host the remote
+ * resolves to — around the web fetcher's per-origin approval and its
+ * request-forgery guard. It could only move from permitted to prompted once the
+ * scope carried the destination: under the old scope, one approval of the
+ * workspace's own remote would have authorised a listing against any host.
+ */
+describe('the remote-listing subcommand prompts, scoped to where it reaches', () => {
+  it('no longer runs unprompted', () => {
+    expect(classifyCommand('git ls-remote origin').tier).toBe('ask');
+    expect(classifyCommand('git ls-remote https://github.com/o/r').tier).toBe('ask');
+  });
+
+  it('does not let an approval for one destination cover another', () => {
+    const origin = classifyCommand('git ls-remote origin').scope;
+    const attacker = classifyCommand('git ls-remote https://attacker.example/r').scope;
+    expect(origin).toBe('git ls-remote origin');
+    expect(attacker).toBe('git ls-remote https://attacker.example/r');
+    expect(origin).not.toBe(attacker);
+  });
+
+  it('keeps the rest of the read-only version-control surface unprompted', () => {
+    for (const cmd of ['git ls-files', 'git ls-tree HEAD', 'git log --oneline -5', 'git status']) {
+      expect(classifyCommand(cmd).tier).toBe('auto');
+    }
   });
 });
 

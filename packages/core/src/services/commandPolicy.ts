@@ -441,8 +441,21 @@ const FLAG_POLICY: Record<string, FlagSpec> = {
   },
 };
 
+/**
+ * `ls-remote` is deliberately absent, and it is the one entry here that is
+ * read-only against the repository. It reaches the network: it contacts
+ * whatever host the named remote or URL resolves to, which routes around the
+ * web fetcher's per-origin approval and its request-forgery guard. So it
+ * prompts rather than running silently.
+ *
+ * Prompting only became the right answer once {@link scopeFor} widened. Under
+ * the old scope it would have been remembered as `git ls-remote`, so one
+ * approval of the workspace's own remote would have authorised a listing
+ * against any host at all — which is the same hole with an approval dialog in
+ * front of it. The scope now carries the destination.
+ */
 export const GIT_READONLY_SUBCOMMANDS = [
-  'log', 'status', 'diff', 'show', 'ls-files', 'ls-remote', 'ls-tree', 'branch', 'tag',
+  'log', 'status', 'diff', 'show', 'ls-files', 'ls-tree', 'branch', 'tag',
   'rev-parse', 'rev-list', 'describe', 'blame', 'grep', 'shortlog', 'whatchanged', 'cat-file',
 ];
 
@@ -501,7 +514,7 @@ function isInlineCodeFlag(arg: string): boolean {
   return INLINE_CODE_FLAGS.some((f) => f.toLowerCase() === lower);
 }
 
-/** Multiplexers whose first non-flag argument is meaningful enough to scope a grant. */
+/** Binaries whose leading arguments name the operation, and so belong in a grant's scope. */
 const MULTIPLEXERS = ['git', 'npm', 'yarn', 'pnpm', 'npx', 'cargo', 'go', 'dotnet', 'docker', 'podman',
   'kubectl', 'helm', 'az', 'aws', 'gcloud', 'gh', 'glab', 'terraform', 'make', 'mvn', 'gradle',
   'composer', 'pip', 'pip3', 'poetry', 'uv', 'bundle', 'rake', 'swift', 'flutter', 'dart'];
@@ -1264,10 +1277,53 @@ function subcommandOf(seg: Segment): string | undefined {
   return seg.args.find((a) => !a.startsWith('-'));
 }
 
+/**
+ * How many leading arguments a scope carries past the binary.
+ *
+ * Two rather than one because multiplexers nest: `uv pip list` needs both
+ * before the verb is even visible, and one would have scoped it to the inner
+ * multiplexer with every verb sharing that grant.
+ */
+const SCOPE_LEAD_ARGS = 2;
+
+/**
+ * What a remembered approval covers.
+ *
+ * Scope used to be the binary plus its *first* non-flag argument, which
+ * collapsed distinct operations onto one grant — approving a read authorised
+ * the matching write. Three of those were confirmed by probing:
+ *
+ *   - `npm run <script>` scoped to `npm run`, so approving the project's test
+ *     script pre-authorised every other script in the workspace manifest. This
+ *     is the sharpest of the three: on an untrusted repository the attacker
+ *     wrote those scripts, and approving a test run is the single most
+ *     reasonable approval a developer is ever asked for.
+ *   - `az group list` and `az group delete` shared `az group`.
+ *   - `aws s3 ls` and `aws s3 rm` shared `aws s3`.
+ *
+ * So the scope takes the leading non-flag arguments, capped at
+ * {@link SCOPE_LEAD_ARGS}. Walking stops at the **first flag**, which is what
+ * keeps flag values out of the scope: `docker logs -n 5 web` and
+ * `docker logs -n 100 web` are one stable grant rather than a fresh prompt per
+ * limit. The cost of stopping there is that a leading flag empties the lead
+ * entirely — `mvn -q test` scopes to `mvn` — and that is accepted deliberately,
+ * because a scope that varies with a flag value is a scope that prompts forever.
+ *
+ * Positional rather than flag-aware on purpose. {@link subcommandOf} walks the
+ * declared flag sets to find a subcommand, and that is right for deciding a
+ * tier; here it would mean the scope depends on how completely a binary's flags
+ * happen to be declared, so the same command line could widen its own grant as
+ * the flag tables change.
+ */
 function scopeFor(seg: Segment): string {
   if (!MULTIPLEXERS.includes(seg.binary)) return seg.binary;
-  const sub = subcommandOf(seg);
-  return sub ? `${seg.binary} ${sub}` : seg.binary;
+  const lead: string[] = [];
+  for (const arg of seg.args) {
+    if (arg.startsWith('-')) break;
+    lead.push(arg);
+    if (lead.length === SCOPE_LEAD_ARGS) break;
+  }
+  return [seg.binary, ...lead].join(' ');
 }
 
 function isAuto(seg: Segment): boolean {
