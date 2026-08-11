@@ -562,6 +562,18 @@ describe('flags on permitted binaries are an allowlist, not an afterthought', ()
     expect(classifyCommand(probe).tier).toBe('auto');
   });
 
+  // `--` ends the flags nearly everywhere, but not on a binary whose arguments
+  // are an expression. Confirmed by running it: `find . -- -fprint OUT` writes
+  // OUT, so reading `--` as the end of find's flags would hand the write back.
+  it('does not let -- smuggle a predicate past the file finder', () => {
+    expect(classifyCommand('find . -- -fprint out.txt').tier).toBe('refuse');
+    expect(classifyCommand('find . -- -delete').tier).toBe('refuse');
+    // The convention still holds where the binary honours it, which is what
+    // keeps a pattern that looks like a flag searchable.
+    expect(classifyCommand('grep -rn -- --exec-path src').tier).toBe('auto');
+    expect(classifyCommand('sort -- -o names.txt').tier).toBe('auto');
+  });
+
   it('reads every spelling of a permitted flag: clustered, glued, joined, and after --', () => {
     expect(classifyCommand('ls -la packages').tier).toBe('auto');
     expect(classifyCommand('rg -A15 TODO src').tier).toBe('auto');

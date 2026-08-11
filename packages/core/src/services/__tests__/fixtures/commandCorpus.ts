@@ -559,6 +559,9 @@ const DANGEROUS_FLAGS: CorpusEntry[] = [
   { command: 'find . -fprintf out.txt "%p"', tier: 'refuse' },
   { command: 'find . -fls out.txt', tier: 'refuse' },
   { command: 'find . -fprint0 out.txt', tier: 'refuse' },
+  // Confirmed by running it: the file finder honours a predicate after `--`, so
+  // `--` cannot be read as the end of its flags the way it can everywhere else.
+  { command: 'find . -- -fprint out.txt', tier: 'refuse' },
   { command: 'tree -o out.txt', tier: 'refuse' },
   { command: 'git diff --output=out.diff', tier: 'refuse' },
   { command: 'git archive --output=x.tar HEAD', tier: 'refuse' },

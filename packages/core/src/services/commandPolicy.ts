@@ -111,6 +111,15 @@ interface FlagSpec {
    * section marker, and there is nothing to police behind it.
    */
   freeform?: boolean;
+  /**
+   * `--` does not end the flags here, because the arguments are an expression
+   * rather than options followed by operands — any token can still be a
+   * predicate. Confirmed by running it: `find . -- -fprint OUT` writes OUT, so
+   * treating `--` as the end of the flags would have handed back the write this
+   * allowlist exists to refuse. `--` itself is then unrecognised and refused,
+   * which costs nothing: it has no legitimate use on such a binary.
+   */
+  expressionArgs?: boolean;
 }
 
 /** Accepted on every binary; asking a tool what it does is read-only. */
@@ -387,7 +396,9 @@ const FLAG_POLICY: Record<string, FlagSpec> = {
   },
   find: {
     // No clustering: find spells its flags as single-dash words, so walking the
-    // characters of `-name` would read it as five short flags.
+    // characters of `-name` would read it as five short flags. And its arguments
+    // are an expression, so `--` does not end them.
+    expressionArgs: true,
     // Absent on purpose: `-exec`, `-execdir`, `-ok` and `-okdir` run an inner
     // command (also caught by the named guard below, which says so more
     // precisely), `-delete` removes files, and `-fprint`, `-fprint0`, `-fprintf`
@@ -1219,8 +1230,11 @@ function scanFlags(seg: Segment): FlagScan | undefined {
   let i = 0;
   while (i < seg.args.length) {
     const token = seg.args[i];
-    // `--` ends the flags; everything after it is an operand, however it is spelled.
-    if (token === '--') { operands.push(...seg.args.slice(i + 1)); break; }
+    // `--` ends the flags; everything after it is an operand, however it is
+    // spelled. Except where the arguments are an expression — see
+    // {@link FlagSpec.expressionArgs} — in which case `--` falls through to the
+    // matcher and is refused along with anything the caller hoped to hide there.
+    if (token === '--' && !spec.expressionArgs) { operands.push(...seg.args.slice(i + 1)); break; }
     if (!/^-./.test(token)) { operands.push(token); i++; continue; }
 
     const shape = matchFlag(spec, booleans, values, token);
