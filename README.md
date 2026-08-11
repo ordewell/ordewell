@@ -222,6 +222,10 @@ ordewell plugins install github:user/repo
 ordewell plugins list
 ```
 
+Remote plugin installs accept `https://` repositories on GitHub, GitLab,
+Bitbucket and Codeberg; anything else must be cloned yourself and installed from
+its local directory.
+
 **The other two front ends**
 
 ```bash

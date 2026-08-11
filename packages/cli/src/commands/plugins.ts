@@ -1,4 +1,4 @@
-import { RunnerRegistry } from '@ordewell/core';
+import { RunnerRegistry, classifyPluginSource } from '@ordewell/core';
 
 export function handlePlugins(subArgs: string[]): void {
   const registry = new RunnerRegistry();
@@ -39,18 +39,10 @@ export function handlePlugins(subArgs: string[]): void {
       process.exit(1);
     }
     try {
-      let manifest;
-      if (
-        source.startsWith('github:') ||
-        source.startsWith('https://github.com/')
-      ) {
-        const url = source.startsWith('github:')
-          ? `https://github.com/${source.slice(7)}.git`
-          : source;
-        manifest = registry.installFromGit(url);
-      } else {
-        manifest = registry.installFromPath(source);
-      }
+      const resolved = classifyPluginSource(source);
+      const manifest = resolved.kind === 'git'
+        ? registry.installFromGit(resolved.url)
+        : registry.installFromPath(resolved.path);
       console.log(`Installed plugin: ${manifest.name} v${manifest.version}`);
     } catch (err) {
       console.error(`Install failed: ${(err as Error).message}`);

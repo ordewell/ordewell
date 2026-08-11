@@ -159,6 +159,183 @@ describe('RunnerRegistry', () => {
     expect(m!.name).toBe('claude-code');
   });
 
+  describe('install hardening', () => {
+    const manifestJson = (name: string) => JSON.stringify({
+      name,
+      displayName: 'Evil',
+      description: 'Test plugin',
+      version: '1.0.0',
+      runner: { command: 'x', argsTemplate: ['{{prompt}}'], promptInArgs: true },
+      features: { modelSelection: false, thinkingEffort: false, planMode: false, planModeFlag: '' },
+      modelDiscovery: { method: 'hardcoded', fallbackModels: [] },
+    });
+
+    /** Records what the clone would have been asked to do, and plants a repo. */
+    function fakeClone(plant?: (destDir: string) => void) {
+      const calls: { url: string; destDir: string }[] = [];
+      const fn = (url: string, destDir: string) => {
+        calls.push({ url, destDir });
+        plant?.(destDir);
+      };
+      return { calls, fn };
+    }
+
+    it('installs from a validated https URL, passing the URL to the clone as an argument', () => {
+      const clone = fakeClone((dest) => store.setFile(`${dest}/manifest.json`, manifestJson('good-runner')));
+      const reg = new RunnerRegistry(store, clone.fn);
+
+      const manifest = reg.installFromGit('https://github.com/user/repo.git');
+
+      expect(manifest.name).toBe('good-runner');
+      expect(clone.calls).toHaveLength(1);
+      expect(clone.calls[0].url).toBe('https://github.com/user/repo.git');
+      expect(reg.get('good-runner')!.installPath).toBe(`${store.getUserPluginsDir()}/good-runner`);
+    });
+
+    it('finds the manifest in a single top-level subdirectory of the clone', () => {
+      const clone = fakeClone((dest) => store.setFile(`${dest}/pkg/manifest.json`, manifestJson('nested-runner')));
+      const reg = new RunnerRegistry(store, clone.fn);
+
+      expect(reg.installFromGit('https://github.com/user/repo.git').name).toBe('nested-runner');
+    });
+
+    it.each([
+      'https://github.com/user/repo.git;touch /tmp/pwned',
+      'https://github.com/user/$(touch /tmp/pwned)',
+      'https://github.com/user/`id`',
+      'git://evil.example/repo.git',
+      'ext::sh -c "touch /tmp/pwned"',
+      'https://evil.example/user/repo.git',
+      '--upload-pack=touch /tmp/pwned',
+    ])('installs nothing and clones nothing for %j', (url) => {
+      const clone = fakeClone();
+      const reg = new RunnerRegistry(store, clone.fn);
+
+      expect(() => reg.installFromGit(url)).toThrow();
+      expect(clone.calls).toHaveLength(0);
+      expect(reg.list().every((p) => p.source === 'builtin')).toBe(true);
+    });
+
+    it('rejects a cloned manifest whose name would escape the plugins directory', () => {
+      const clone = fakeClone((dest) => store.setFile(`${dest}/manifest.json`, manifestJson('../../../tmp/evil')));
+      const reg = new RunnerRegistry(store, clone.fn);
+
+      expect(() => reg.installFromGit('https://github.com/user/repo.git')).toThrow(/manifest/i);
+      expect(store.exists('/tmp/evil/manifest.json')).toBe(false);
+    });
+
+    it('rejects a local-path manifest whose name would escape the plugins directory', () => {
+      const reg = new RunnerRegistry(store);
+      const sourceDir = '/source/evil';
+      store.setFile(`${sourceDir}/manifest.json`, manifestJson('../../../tmp/evil'));
+      store.ensureDir(sourceDir);
+
+      expect(() => reg.installFromPath(sourceDir)).toThrow(/manifest/i);
+      expect(store.exists('/tmp/evil/manifest.json')).toBe(false);
+    });
+
+    /**
+     * The store is an injectable seam, so the registry cannot assume its
+     * manifest validation ran. These prove the destination assert stands on its
+     * own when a lenient store hands back a name the validator would refuse.
+     */
+    describe('with a store that does not validate manifests', () => {
+      class LenientStore extends InMemoryPluginStore {
+        loadManifest(pluginDir: string): RunnerPluginManifest | null {
+          const raw = this.readFile(`${pluginDir}/manifest.json`);
+          return raw ? (JSON.parse(raw) as RunnerPluginManifest) : null;
+        }
+      }
+
+      it('asserts the destination is inside the plugins directory before copying', () => {
+        const lenient = new LenientStore();
+        const reg = new RunnerRegistry(lenient);
+        const sourceDir = '/source/evil';
+        lenient.setFile(`${sourceDir}/manifest.json`, manifestJson('../../../tmp/evil'));
+        lenient.setFile(`${sourceDir}/payload.sh`, 'rm -rf ~');
+        lenient.ensureDir(sourceDir);
+
+        expect(() => reg.installFromPath(sourceDir)).toThrow(/Invalid plugin name/);
+        expect(lenient.exists('/tmp/evil/payload.sh')).toBe(false);
+      });
+
+      it('applies the same assert on the clone route', () => {
+        const lenient = new LenientStore();
+        const clone = fakeCloneWith(lenient, '../../../tmp/evil');
+        const reg = new RunnerRegistry(lenient, clone.fn);
+
+        expect(() => reg.installFromGit('https://github.com/user/repo.git'))
+          .toThrow(/Invalid plugin name/);
+        expect(lenient.exists('/tmp/evil/manifest.json')).toBe(false);
+      });
+
+      function fakeCloneWith(target: InMemoryPluginStore, name: string) {
+        const calls: { url: string; destDir: string }[] = [];
+        return {
+          calls,
+          fn: (url: string, destDir: string) => {
+            calls.push({ url, destDir });
+            target.setFile(`${destDir}/manifest.json`, manifestJson(name));
+          },
+        };
+      }
+    });
+
+    it('refuses to install a plugin named after a built-in runner', () => {
+      const reg = new RunnerRegistry(store);
+      const sourceDir = '/source/shadow';
+      store.setFile(`${sourceDir}/manifest.json`, manifestJson('claude-code'));
+      store.ensureDir(sourceDir);
+
+      expect(() => reg.installFromPath(sourceDir)).toThrow(/built-in runner/i);
+      expect(reg.get('claude-code')!.source).toBe('builtin');
+    });
+
+    it('refuses to install a built-in name over the git route too', () => {
+      const clone = fakeClone((dest) => store.setFile(`${dest}/manifest.json`, manifestJson('codex')));
+      const reg = new RunnerRegistry(store, clone.fn);
+
+      expect(() => reg.installFromGit('https://github.com/user/repo.git')).toThrow(/built-in runner/i);
+      expect(reg.get('codex')!.source).toBe('builtin');
+    });
+
+    it('does not let a user plugin directory shadow a built-in runner at load time', () => {
+      const reg = new RunnerRegistry(store);
+      const builtinCommand = reg.getManifest('claude-code')!.runner.command;
+      store.setFile(`${store.getUserPluginsDir()}/claude-code/manifest.json`, manifestJson('claude-code'));
+      store.addPluginDir('claude-code');
+
+      reg.loadUserPlugins();
+
+      expect(reg.get('claude-code')!.source).toBe('builtin');
+      expect(reg.getManifest('claude-code')!.runner.command).toBe(builtinCommand);
+    });
+
+    it('skips a user plugin directory whose name is not a plain segment', () => {
+      const reg = new RunnerRegistry(store);
+      store.setFile('/test/manifest.json', manifestJson('escaped'));
+      store.addPluginDir('../..');
+
+      reg.loadUserPlugins();
+
+      expect(reg.get('escaped')).toBeUndefined();
+    });
+
+    it('removes the clone directory even when the install is rejected', () => {
+      const clone = fakeClone((dest) => store.setFile(`${dest}/manifest.json`, manifestJson('claude-code')));
+      const reg = new RunnerRegistry(store, clone.fn);
+
+      expect(() => reg.installFromGit('https://github.com/user/repo.git')).toThrow();
+      expect(store.exists(`${clone.calls[0].destDir}/manifest.json`)).toBe(false);
+    });
+
+    it('createSkeleton refuses a name that is not a plain segment', () => {
+      const reg = new RunnerRegistry(store);
+      expect(() => reg.createSkeleton('../../evil', '/output')).toThrow(/Invalid plugin name/);
+      expect(store.exists('/evil/manifest.json')).toBe(false);
+    });
+  });
+
   it('isBuiltIn returns true for builtins and false for user plugins', () => {
     const reg = new RunnerRegistry(store);
     expect(reg.isBuiltIn('claude-code')).toBe(true);

@@ -3,25 +3,10 @@ import * as path from 'path';
 import * as os from 'os';
 import { ensureDir } from '../utils/fsHelpers';
 import type { RunnerPluginManifest, IPluginStore } from './types';
+import { isValidManifest } from './manifestValidation';
 
 function userPluginsDir(): string {
   return path.join(os.homedir(), '.config', 'ordewell', 'plugins');
-}
-
-function isValidManifest(obj: unknown): obj is RunnerPluginManifest {
-  if (!obj || typeof obj !== 'object') return false;
-  const m = obj as Record<string, unknown>;
-  return (
-    typeof m.name === 'string' &&
-    typeof m.displayName === 'string' &&
-    typeof m.description === 'string' &&
-    typeof m.version === 'string' &&
-    typeof m.runner === 'object' && m.runner !== null &&
-    typeof (m.runner as Record<string, unknown>).command === 'string' &&
-    Array.isArray((m.runner as Record<string, unknown>).argsTemplate) &&
-    typeof m.features === 'object' && m.features !== null &&
-    typeof m.modelDiscovery === 'object' && m.modelDiscovery !== null
-  );
 }
 
 function loadManifestFromDir(dir: string): RunnerPluginManifest | null {
@@ -80,6 +65,14 @@ export class FsPluginStore implements IPluginStore {
       return [];
     }
     return entries.filter((e) => e.isDirectory()).map((e) => e.name);
+  }
+
+  listDir(dir: string): string[] {
+    try {
+      return fs.readdirSync(dir);
+    } catch {
+      return [];
+    }
   }
 
   loadManifest(pluginDir: string): RunnerPluginManifest | null {

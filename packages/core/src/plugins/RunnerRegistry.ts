@@ -1,12 +1,15 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
+import { randomBytes } from 'crypto';
 import type { RunnerPluginManifest, PluginEntry, IPluginStore } from './types';
 import { FsPluginStore } from './FsPluginStore';
 import { CLAUDE_CODE_MANIFEST } from './builtin/claude-code.manifest';
 import { CODEX_MANIFEST } from './builtin/codex.manifest';
 import { OPENCODE_MANIFEST } from './builtin/opencode.manifest';
+import { assertPlainPluginName, isPlainPluginName, resolvePluginInstallDir } from './pluginNames';
+import { assertInstallablePluginUrl } from './pluginSource';
 import type { IConfig } from '../interfaces/IConfig';
 
 // Insertion order is picker order on every surface (registry.list() preserves it).
@@ -16,12 +19,35 @@ const BUILTIN_MANIFESTS: RunnerPluginManifest[] = [
   OPENCODE_MANIFEST,
 ];
 
+const RESERVED_RUNNER_NAMES = new Set(BUILTIN_MANIFESTS.map((m) => m.name.toLowerCase()));
+
+/** True when a name belongs to a built-in runner and is therefore not installable. */
+export function isReservedRunnerName(name: string): boolean {
+  return RESERVED_RUNNER_NAMES.has(name.toLowerCase());
+}
+
+/** Clone seam: takes a validated URL and a destination, or throws. */
+export type PluginCloneFn = (url: string, destDir: string) => void;
+
+function gitClone(url: string, destDir: string): void {
+  // Argument vector, not a shell string, so nothing in the URL is interpreted;
+  // `--` additionally stops git reading a dash-prefixed URL as a flag.
+  execFileSync('git', ['clone', '--depth', '1', '--', url, destDir], {
+    stdio: 'pipe',
+    timeout: 30000,
+    // A repository that demands credentials should fail, not hang on a prompt.
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+  });
+}
+
 export class RunnerRegistry {
   private plugins: Map<string, PluginEntry> = new Map();
   private store: IPluginStore;
+  private clone: PluginCloneFn;
 
-  constructor(store?: IPluginStore) {
+  constructor(store?: IPluginStore, clone?: PluginCloneFn) {
     this.store = store ?? new FsPluginStore();
+    this.clone = clone ?? gitClone;
     this.loadBuiltins();
   }
 
@@ -34,9 +60,17 @@ export class RunnerRegistry {
   loadUserPlugins(): void {
     const names = this.store.listUserPluginDirs();
     for (const name of names) {
-      const pluginDir = path.join(this.store.getUserPluginsDir(), name);
+      let pluginDir: string;
+      try {
+        pluginDir = resolvePluginInstallDir(this.store.getUserPluginsDir(), name);
+      } catch {
+        continue;
+      }
       const manifest = this.store.loadManifest(pluginDir);
-      if (!manifest) continue;
+      if (!manifest || !isPlainPluginName(manifest.name)) continue;
+      // Built-in names are reserved: a user plugin must never take over a
+      // built-in runner's spawn command and argument template.
+      if (isReservedRunnerName(manifest.name)) continue;
       this.plugins.set(manifest.name, {
         manifest,
         source: 'user',
@@ -82,58 +116,62 @@ export class RunnerRegistry {
       throw new Error(`No valid manifest.json found in: ${absPath}`);
     }
 
-    const destDir = path.join(this.store.getUserPluginsDir(), manifest.name);
-    this.store.ensureDir(destDir);
-    this.store.copyDir(absPath, destDir);
-
-    this.plugins.set(manifest.name, {
-      manifest,
-      source: 'user',
-      installPath: destDir,
-    });
-
-    return manifest;
+    return this.registerInstalled(manifest, absPath);
   }
 
   installFromGit(url: string): RunnerPluginManifest {
-    const repoName = url.split('/').pop()?.replace(/\.git$/, '') || 'plugin';
-    const tmpDir = path.join(os.tmpdir(), `ordewell-plugin-${Date.now()}`);
+    // Validated here rather than in the command-line front end, so callers of
+    // the exported install function get the same protection.
+    const validated = assertInstallablePluginUrl(url);
+    // Random rather than timestamped: on a shared /tmp a predictable name lets
+    // someone else own the directory the clone lands in.
+    const tmpDir = path.join(os.tmpdir(), `ordewell-plugin-${randomBytes(12).toString('hex')}`);
     this.store.ensureDir(tmpDir);
 
     try {
-      execSync(`git clone --depth 1 "${url}" "${tmpDir}"`, { stdio: 'pipe', timeout: 30000 });
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      throw new Error(`Failed to clone repository: ${message}`);
-    }
+      try {
+        this.clone(validated.toString(), tmpDir);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(`Failed to clone repository: ${message}`);
+      }
 
-    const contents = fsReaddirSync(tmpDir);
-    const hasManifest = contents.some((f) => f === 'manifest.json');
+      const contents = this.store.listDir(tmpDir);
+      const hasManifest = contents.some((f) => f === 'manifest.json');
 
-    if (!hasManifest && contents.length === 1 && this.store.dirExists(path.join(tmpDir, contents[0]))) {
-      const subDir = path.join(tmpDir, contents[0]);
-      return this.finishInstall(subDir, repoName, tmpDir);
-    }
+      let sourceDir = tmpDir;
+      if (!hasManifest) {
+        const onlyEntry = contents.length === 1 ? path.join(tmpDir, contents[0]) : undefined;
+        if (!onlyEntry || !this.store.dirExists(onlyEntry)) {
+          throw new Error(`No manifest.json found in repository: ${validated.toString()}`);
+        }
+        sourceDir = onlyEntry;
+      }
 
-    if (!hasManifest) {
+      const manifest = this.store.loadManifest(sourceDir);
+      if (!manifest) {
+        throw new Error('No valid manifest.json found in cloned repository');
+      }
+
+      return this.registerInstalled(manifest, sourceDir);
+    } finally {
       this.store.removeDir(tmpDir);
-      throw new Error(`No manifest.json found in repository: ${url}`);
     }
-
-    return this.finishInstall(tmpDir, repoName, tmpDir);
   }
 
-  private finishInstall(sourceDir: string, repoName: string, tmpDir: string): RunnerPluginManifest {
-    const manifest = this.store.loadManifest(sourceDir);
-    if (!manifest) {
-      this.store.removeDir(tmpDir);
-      throw new Error(`No valid manifest.json found in cloned repository`);
+  /**
+   * The single destination-building step both install routes share: the name is
+   * constrained to a plain segment and the resolved destination is asserted to
+   * be inside the plugins directory before anything is copied.
+   */
+  private registerInstalled(manifest: RunnerPluginManifest, sourceDir: string): RunnerPluginManifest {
+    if (isReservedRunnerName(manifest.name)) {
+      throw new Error(`Cannot install a plugin named after a built-in runner: ${manifest.name}`);
     }
 
-    const destDir = path.join(this.store.getUserPluginsDir(), manifest.name);
+    const destDir = resolvePluginInstallDir(this.store.getUserPluginsDir(), manifest.name);
     this.store.ensureDir(destDir);
     this.store.copyDir(sourceDir, destDir);
-    this.store.removeDir(tmpDir);
 
     this.plugins.set(manifest.name, {
       manifest,
@@ -159,6 +197,7 @@ export class RunnerRegistry {
   }
 
   createSkeleton(name: string, outputDir: string): string {
+    assertPlainPluginName(name);
     const dir = path.resolve(outputDir, name);
     this.store.ensureDir(dir);
 
@@ -211,14 +250,6 @@ echo "Running ${name} with prompt: $prompt"
     try { fsChmodSync(runSh, 0o755); } catch { /* ignore */ }
 
     return dir;
-  }
-}
-
-function fsReaddirSync(dir: string): string[] {
-  try {
-    return fs.readdirSync(dir);
-  } catch {
-    return [];
   }
 }
 

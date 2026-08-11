@@ -1,4 +1,5 @@
 import type { RunnerPluginManifest, IPluginStore } from '../types';
+import { isValidManifest } from '../manifestValidation';
 
 export class InMemoryPluginStore implements IPluginStore {
   private files = new Map<string, string>();
@@ -33,12 +34,25 @@ export class InMemoryPluginStore implements IPluginStore {
     return [...this.pluginDirs];
   }
 
+  listDir(dir: string): string[] {
+    const prefix = dir.endsWith('/') ? dir : `${dir}/`;
+    const names = new Set<string>();
+    for (const p of [...this.files.keys(), ...this.dirs]) {
+      if (!p.startsWith(prefix)) continue;
+      const rest = p.slice(prefix.length);
+      if (rest === '') continue;
+      names.add(rest.split('/')[0]);
+    }
+    return [...names];
+  }
+
   loadManifest(pluginDir: string): RunnerPluginManifest | null {
     const manifestPath = `${pluginDir}/manifest.json`;
     const raw = this.files.get(manifestPath);
     if (!raw) return null;
     try {
-      return JSON.parse(raw) as RunnerPluginManifest;
+      const parsed = JSON.parse(raw);
+      return isValidManifest(parsed) ? parsed : null;
     } catch {
       return null;
     }

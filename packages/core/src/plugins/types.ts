@@ -162,6 +162,8 @@ export interface IPluginStore {
   getUserPluginsDir(): string;
   /** List subdirectory names inside the user plugins directory. */
   listUserPluginDirs(): string[];
+  /** List entry names directly inside a directory. Returns [] when unreadable. */
+  listDir(dir: string): string[];
   /** Read and parse a manifest.json from pluginDir. Returns null on failure. */
   loadManifest(pluginDir: string): RunnerPluginManifest | null;
   /** Recursively copy sourceDir to destDir. */

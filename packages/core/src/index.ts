@@ -113,8 +113,13 @@ export {
 export type { ResearchShell, ResearchShellDeps, ShellDialect } from './services/researchShell';
 export { tmuxSessionName, tmuxSocketName, tmuxWindowName, hasTmux, clipboardCopyCommand } from './utils/tmux';
 export type { ProbeFn, HasBinFn } from './utils/tmux';
-export { RunnerRegistry } from './plugins/RunnerRegistry';
+export { RunnerRegistry, isReservedRunnerName } from './plugins/RunnerRegistry';
+export type { PluginCloneFn } from './plugins/RunnerRegistry';
 export { FsPluginStore } from './plugins/FsPluginStore';
+export { isValidManifest } from './plugins/manifestValidation';
+export { isPlainPluginName, assertPlainPluginName, resolvePluginInstallDir, PLUGIN_NAME_PATTERN } from './plugins/pluginNames';
+export { assertInstallablePluginUrl, classifyPluginSource, ALLOWED_PLUGIN_HOSTS } from './plugins/pluginSource';
+export type { PluginSource } from './plugins/pluginSource';
 export { resolveArgs } from './plugins/resolveArgs';
 export { CLAUDE_CODE_MANIFEST } from './plugins/builtin/claude-code.manifest';
 export { OPENCODE_MANIFEST } from './plugins/builtin/opencode.manifest';
