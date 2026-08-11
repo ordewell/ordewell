@@ -4,6 +4,7 @@ import { renderMarkdown } from './markdown';
 import { chatEditorRoom, chatPaneWidth, paneTextRoom, planPaneWidth } from './geometry';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
 import { isTaskRunning, type ChatMessage, type TaskView, type TuiState } from './state';
+import { modesForTask } from './taskAssignment';
 import { ALL_PROVIDERS, runnerForProvider, type AiProvider, type ResearchStepOutcome } from '@ordewell/core';
 
 /**
@@ -497,7 +498,15 @@ function taskLines(state: TuiState, task: TaskView, index: number, cols: number)
   const effort = task.type === 'ai'
     ? `effort: ${task.assignedModel?.thinkingEffort ?? 'default'}`
     : '';
-  const mode = task.type === 'ai' ? `mode: ${task.taskMode ?? 'default'}` : '';
+  // Autonomy is a manifest tag on the task's own mode, not a mode name — so this
+  // looks the tag up rather than string-matching a mode id (ADR-0001: no
+  // hardcoded mode names).
+  const modeInfo = task.type === 'ai'
+    ? modesForTask(state.modesByRunner, task).find((m) => m.id === task.taskMode)
+    : undefined;
+  const mode = task.type === 'ai'
+    ? `mode: ${task.taskMode ?? 'default'}${modeInfo?.autonomous ? style.yellow(' ⚡') : ''}`
+    : '';
   const runner = task.assignedRunner ?? '';
   const meta = [running ? 'working' : '', runner, model].filter(Boolean).join(' · ');
   if (meta) lines.push(style.grey(truncate(`    ${meta}`, cols)));
@@ -506,6 +515,9 @@ function taskLines(state: TuiState, task: TaskView, index: number, cols: number)
   let editorLine: number | undefined;
   if (expanded) {
     lines.push(style.grey(`    ${task.status.replace(/_/g, ' ')}`));
+    if (modeInfo?.autonomous) {
+      lines.push(...taskText('Autonomy', 'Runs without permission prompts. Toggle with /auto.', cols));
+    }
     // The prompt editor is seeded from prompt ?? description ?? title, so only
     // show the static description when it carries information the editor won't.
     const editableSeed = task.prompt ?? task.description ?? task.title;

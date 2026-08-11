@@ -49,6 +49,8 @@ export interface ModeView {
   id: string;
   label: string;
   description?: string;
+  /** Tagged `autonomous: true` on the manifest — runs without permission prompts. */
+  autonomous?: boolean;
 }
 
 export interface RunnerView {

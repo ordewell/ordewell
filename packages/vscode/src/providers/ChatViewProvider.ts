@@ -67,7 +67,7 @@ type ExtensionChatMessage =
   | { type: 'setConfiguredProviders'; providers: ApiProvider[] }
   | { type: 'setModelOptions'; modelOptions: { id: string; label: string; provider: string; apiProvider?: AiProvider; description?: string; pricing?: string }[] }
   | { type: 'setModelsByRunner'; modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>> }
-  | { type: 'setModesByRunner'; modesByRunner: Record<string, { id: string; label: string; description: string; cliValue?: string }[]> }
+  | { type: 'setModesByRunner'; modesByRunner: Record<string, { id: string; label: string; description: string; cliValue?: string; autonomous?: boolean }[]> }
   | { type: 'setModelConfig'; modelConfig: { orchestrator: string; orchestratorProvider?: string } }
   | { type: 'setPlannerBackends'; backends: PlannerBackend[]; provider: string; runner?: string; effort?: string }
   | { type: 'setModelApiMapping'; modelApiMapping: Record<string, ApiProvider[]> }
@@ -171,7 +171,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this._modelsByRunner = modelsByRunner;
     this.postMessage({ type: 'setModelsByRunner', modelsByRunner });
   }
-  setModesByRunner(modesByRunner: Record<string, { id: string; label: string; description: string; cliValue?: string }[]>): void {
+  setModesByRunner(modesByRunner: Record<string, { id: string; label: string; description: string; cliValue?: string; autonomous?: boolean }[]>): void {
     this._modesByRunner = modesByRunner;
     this.postMessage({ type: 'setModesByRunner', modesByRunner });
   }
@@ -210,7 +210,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private _modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>> = {};
-  private _modesByRunner: Record<string, { id: string; label: string; description: string; cliValue?: string }[]> = {};
+  private _modesByRunner: Record<string, { id: string; label: string; description: string; cliValue?: string; autonomous?: boolean }[]> = {};
   private _runnerList: { id: string; displayName: string }[] = [];
   private _enabledRunnerIds: string[] = [];
   private _modelConfig: { orchestrator: string; orchestratorProvider?: string } | null = null;

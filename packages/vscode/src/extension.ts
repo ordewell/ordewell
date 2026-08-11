@@ -333,10 +333,10 @@ async function doSendRunnerAndModels(): Promise<void> {
   chatProvider.setRunnerList(runnerList);
   chatProvider.setEnabledRunnerIds(enabled.filter((r) => installedIds.has(r)));
 
-  const modesByRunner: Record<string, { id: string; label: string; description: string; cliValue?: string }[]> = {};
+  const modesByRunner: Record<string, { id: string; label: string; description: string; cliValue?: string; autonomous?: boolean }[]> = {};
   for (const plugin of installedPlugins) {
     modesByRunner[plugin.manifest.name] = (plugin.manifest.modes ?? []).map((m) => ({
-      id: m.id, label: m.label, description: m.description, cliValue: m.cliValue,
+      id: m.id, label: m.label, description: m.description, cliValue: m.cliValue, autonomous: m.autonomous,
     }));
   }
   chatProvider.setModesByRunner(modesByRunner);
