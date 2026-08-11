@@ -534,9 +534,23 @@ const DANGEROUS_FLAGS: CorpusEntry[] = [
   { command: 'git grep -O /tmp/evil.sh pattern', tier: 'refuse' },
   { command: 'git grep --open-files-in-pager=/tmp/evil.sh TODO', tier: 'refuse' },
   { command: 'git -c core.pager=/tmp/x.sh log', tier: 'refuse' },
+  { command: 'git --config-env=core.pager=EVIL log', tier: 'refuse' },
+  // The rest of the version-control multiplexer's execution surface: the two
+  // ends of a transfer name the program run there, and both diff filters run
+  // whatever the repository under research configures.
+  { command: 'git ls-remote --upload-pack="sh -c evil" origin', tier: 'refuse' },
+  { command: 'git ls-tree --receive-pack=/tmp/x.sh HEAD', tier: 'refuse' },
+  { command: 'git diff --ext-diff', tier: 'refuse' },
+  { command: 'git show --textconv HEAD', tier: 'refuse' },
+  // Repointing the repository puts the configuration that names those programs
+  // outside the tree the developer is looking at.
+  { command: 'git --git-dir=/tmp/evil/.git log', tier: 'refuse' },
+  { command: 'git --work-tree=/tmp/evil status', tier: 'refuse' },
   // Helper-program flags on other permitted binaries.
   { command: 'sort --compress-program=/tmp/x.sh big.txt', tier: 'refuse' },
   { command: 'rg --pre /tmp/evil.sh pattern .', tier: 'refuse' },
+  { command: 'rg --pre-glob "*.pdf" --pre /tmp/x.sh TODO', tier: 'refuse' },
+  { command: 'rg --hostname-bin /tmp/x.sh pattern .', tier: 'refuse' },
   // Write-without-a-redirect flags: the shell never sees a `>`, so the redirect
   // check cannot catch these.
   { command: 'sort -o out.txt names.txt', tier: 'refuse' },
@@ -544,15 +558,116 @@ const DANGEROUS_FLAGS: CorpusEntry[] = [
   { command: 'find . -fprint out.txt', tier: 'refuse' },
   { command: 'find . -fprintf out.txt "%p"', tier: 'refuse' },
   { command: 'find . -fls out.txt', tier: 'refuse' },
+  { command: 'find . -fprint0 out.txt', tier: 'refuse' },
   { command: 'tree -o out.txt', tier: 'refuse' },
   { command: 'git diff --output=out.diff', tier: 'refuse' },
-  // Bare booleans that mutate.
+  { command: 'git archive --output=x.tar HEAD', tier: 'refuse' },
+  { command: 'file -C -m /tmp/magic', tier: 'refuse' },
+  // The write with no flag at all: the second file argument is the output.
+  { command: 'uniq README.md out.txt', tier: 'refuse' },
+  // Bare booleans that mutate. This is why exempting booleans and restricting
+  // only value-taking flags was rejected.
   { command: "yq -i '.version = \"9\"' action.yml", tier: 'refuse' },
   { command: "yq --inplace '.a = 1' config.yml", tier: 'refuse' },
+  { command: "yq -s '.name' multi.yml", tier: 'refuse' },
+  { command: 'date -s "2020-01-01"', tier: 'refuse' },
   // An unrecognised flag is refused rather than allowed, so the next dangerous
   // flag is closed before anyone discovers it.
   { command: 'ls --hypothetical-new-flag', tier: 'refuse' },
   { command: 'rg --unknown-flag pattern', tier: 'refuse' },
+  { command: 'git --hypothetical-flag log', tier: 'refuse' },
+  { command: 'find . -hypothetical-predicate', tier: 'refuse' },
+  { command: 'head --hypothetical-flag README.md', tier: 'refuse' },
+  { command: 'cat -Q package.json', tier: 'refuse' },
+  // A value-taking flag must not be able to swallow an unrecognised one: `-n`
+  // takes a value on the version-control multiplexer, and `-sn` ends with it.
+  { command: 'git shortlog -sn --hypothetical-flag', tier: 'refuse' },
+  // Unrecognised inside a cluster, where a character-by-character walk has to
+  // fail the whole token rather than stop at the first good letter.
+  { command: 'ls -laJ', tier: 'refuse' },
+  { command: 'grep -rnQ TODO src', tier: 'refuse' },
+  // Reached through a wrapper and through command substitution, like every other
+  // refusal in this file.
+  { command: 'nice -n 5 sort -o out.txt names.txt', tier: 'refuse' },
+  { command: 'echo $(rg --pre /tmp/x.sh TODO .)', tier: 'refuse' },
+  { command: 'ls -la | sort -o out.txt', tier: 'refuse' },
+];
+
+// The flag sets are generous on purpose, and this is the half of the corpus that
+// keeps them that way: every entry below is a flag spelling taken from the bash
+// calls in this project's own research logs. A set tightened until one of these
+// prompts or refuses has become the refuse-and-retry loop the allowlist was
+// warned about.
+const FLAGS_THE_PLANNER_EMITS: CorpusEntry[] = [
+  // Counts spelled as the flag, which is how the planner writes nearly every read.
+  { command: 'head -40 README.md', tier: 'auto' },
+  { command: 'head -120 CHANGELOG.md', tier: 'auto' },
+  { command: 'tail -60 logs/app.log', tier: 'auto' },
+  { command: 'git log --oneline -12', tier: 'auto' },
+  { command: 'git log --oneline -5 -- packages/core/src/services/PlanPrompts.ts', tier: 'auto' },
+  { command: 'git log --oneline --name-status -1 794ea34', tier: 'auto' },
+  // Clustered short booleans, and a value glued onto the last one.
+  { command: 'grep -rn TODO packages', tier: 'auto' },
+  { command: 'grep -rln "Plan map" packages', tier: 'auto' },
+  { command: 'grep -rniE "abort|signal" packages', tier: 'auto' },
+  { command: 'grep -ro export src', tier: 'auto' },
+  { command: 'grep -iv warn logs/app.log', tier: 'auto' },
+  { command: 'grep -m1 version package.json', tier: 'auto' },
+  { command: 'grep -A15 classifyCommand src/index.ts', tier: 'auto' },
+  { command: 'grep -B5 -A2 TODO src/index.ts', tier: 'auto' },
+  { command: 'grep -n "isExecuting\\|isRunning" src/index.ts', tier: 'auto' },
+  { command: 'grep -rn --include=*.ts --include=*.tsx queued packages', tier: 'auto' },
+  { command: 'grep -rn --exclude-dir=node_modules TODO .', tier: 'auto' },
+  { command: 'ls -ld packages', tier: 'auto' },
+  { command: 'ls -l --time-style=+%m-%d_%H:%M packages/core/src/index.ts', tier: 'auto' },
+  { command: 'du -sh packages', tier: 'auto' },
+  { command: 'sort -rn counts.txt', tier: 'auto' },
+  { command: 'git shortlog -sn', tier: 'auto' },
+  { command: 'cut -c1-200 wide.txt', tier: 'auto' },
+  // Version-control inspection with the flags the logs actually contain.
+  { command: 'git status --porcelain=v1', tier: 'auto' },
+  { command: 'git diff --stat main...HEAD -- packages/core packages/web', tier: 'auto' },
+  { command: 'git diff -- packages/core/src/services/ModelDiscovery.ts', tier: 'auto' },
+  { command: 'git show --stat 7b23474', tier: 'auto' },
+  { command: 'git branch -a', tier: 'auto' },
+  { command: 'git log --oneline main..HEAD', tier: 'auto' },
+  { command: 'git -C packages/core log --oneline -3', tier: 'auto' },
+  { command: 'git --no-pager log --oneline -5', tier: 'auto' },
+  // The file finder's read-only predicate vocabulary, which is single-dash words
+  // rather than clustered letters.
+  { command: 'find packages/cli/src -type f -name "*.ts"', tier: 'auto' },
+  { command: 'find . -path "*/tui/*" -prune -o -type f -print', tier: 'auto' },
+  { command: 'find . -name "*.ts" -not -name "*.test.ts"', tier: 'auto' },
+  { command: 'find . -maxdepth 3 -type d -o -type l', tier: 'auto' },
+  { command: 'find . -mtime -7 -type f', tier: 'auto' },
+  { command: 'find . -newermt "2 days ago" -type f', tier: 'auto' },
+  { command: 'find . -type f -printf "%p\\n"', tier: 'auto' },
+  { command: 'find . -type f -ls', tier: 'auto' },
+  // Section markers. Every token here begins with a dash and none of them is a
+  // flag, which is why the echo family takes its arguments as data.
+  { command: 'echo ---', tier: 'auto' },
+  { command: 'echo "--- files changed vs main ---"', tier: 'auto' },
+  { command: 'echo -----LAUNCHER-----', tier: 'auto' },
+  { command: 'ls -la && echo --- && git status --short', tier: 'auto' },
+  // The structured-data tools, whose read-only flags sit next to the in-place
+  // write flags that are refused above.
+  { command: "yq -o json '.jobs' .github/workflows/ci.yml", tier: 'auto' },
+  { command: "yq -P -o yaml '.' action.yml", tier: 'auto' },
+  { command: "jq -S --tab '.scripts' package.json", tier: 'auto' },
+  { command: "jq --arg k version -r '.[$k]' package.json", tier: 'auto' },
+  { command: 'rg -uu --hidden -g "!node_modules" TODO', tier: 'auto' },
+  { command: 'rg -n --no-heading --color never TODO src', tier: 'auto' },
+  { command: 'rg -t ts -A 3 -B 3 classifyCommand src', tier: 'auto' },
+  { command: 'rg --json --stats TODO src', tier: 'auto' },
+  { command: 'rg -m 5 --max-depth 3 export packages', tier: 'auto' },
+  { command: 'rg --sort path -l TODO src', tier: 'auto' },
+  { command: 'rg -e "-flag-like-pattern" src', tier: 'auto' },
+  // Asking a tool what it accepts is read-only on every binary.
+  { command: 'tree --help', tier: 'auto' },
+  { command: 'rg --version', tier: 'auto' },
+  // `--` ends the flags, so an operand that looks like one is still an operand.
+  { command: 'grep -rn -- --hypothetical src', tier: 'auto' },
+  { command: 'git log --oneline -3 -- packages/core/src/services/commandPolicy.ts', tier: 'auto' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -599,6 +714,7 @@ export const CORPUS: CorpusEntry[] = [
   ...ASSIGNMENTS,
   ...WRAPPERS,
   ...DANGEROUS_FLAGS,
+  ...FLAGS_THE_PLANNER_EMITS,
   ...CMD_DIALECT,
 ];
 
@@ -612,97 +728,6 @@ export const CORPUS: CorpusEntry[] = [
  * directly.
  */
 export const KNOWN_GAPS: KnownGap[] = [
-  // -------------------------------------------------------------------------
-  // A permitted binary is permitted with any flags at all. Permitted binaries
-  // keep their own ability to execute helper programs and write files, so the
-  // permitted tier has to become a per-binary set of known read-only flags
-  // with anything unrecognised refused.
-  // -------------------------------------------------------------------------
-  {
-    command: 'git -c core.pager=/tmp/x.sh log',
-    actual: { tier: 'ask' },
-    ticket: '11',
-    describes: 'Configuration can be set inline, and several configuration keys name programs to run — so the configuration flag is an execution flag with an indirection in front of it.',
-  },
-  {
-    command: 'sort --compress-program=/tmp/x.sh big.txt',
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: 'The sort utility runs a named compression program on its temporary files, which makes a permitted binary an interpreter.',
-  },
-  {
-    command: 'rg --pre /tmp/evil.sh pattern .',
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: 'The fast search tool runs a named preprocessor over each file it searches.',
-  },
-  {
-    command: 'sort -o out.txt names.txt',
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: 'An output-file flag writes without a shell redirect, so the redirect refusal never sees it.',
-  },
-  {
-    command: 'sort --output=out.txt names.txt',
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: 'The joined-with-equals spelling of the same output-file write, which a guard written only against the short flag would miss.',
-  },
-  {
-    command: 'find . -fprint out.txt',
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: "The file finder has a whole write family beyond the exec flags already guarded; this one writes its result list to a named file.",
-  },
-  {
-    command: 'find . -fprintf out.txt "%p"',
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: 'The formatted variant of the same write family.',
-  },
-  {
-    command: 'find . -fls out.txt',
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: 'The listing variant of the same write family.',
-  },
-  {
-    command: 'tree -o out.txt',
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: 'The directory-tree tool has its own output-file flag.',
-  },
-  {
-    command: 'git diff --output=out.diff',
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: 'A read-only subcommand of the version-control multiplexer writes a file when given its output flag.',
-  },
-  {
-    command: "yq -i '.version = \"9\"' action.yml",
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: 'The in-place edit flag on the YAML editor is a bare boolean, which is why allowing bare booleans and restricting only value-taking flags was rejected.',
-  },
-  {
-    command: "yq --inplace '.a = 1' config.yml",
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: 'The long spelling of the same in-place edit.',
-  },
-  {
-    command: 'ls --hypothetical-new-flag',
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: 'The class itself: a flag nobody has classified is allowed today, so the next dangerous flag is open until someone discovers it. It must refuse on the strength of being unrecognised, not because anyone knows what it does.',
-  },
-  {
-    command: 'rg --unknown-flag pattern',
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: 'The same rule on the flag-richest binary in ordinary research, where the allowlist has to be generous without becoming open.',
-  },
-
   // -------------------------------------------------------------------------
   // Grant scope is the multiplexer name plus its first non-flag argument,
   // which collapses distinct operations onto one grant: approving a read

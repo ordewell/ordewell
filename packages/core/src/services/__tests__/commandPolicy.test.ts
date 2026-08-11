@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyCommand, pathLikeArgs } from '../commandPolicy';
+import { AUTO_COMMANDS, classifyCommand, pathLikeArgs } from '../commandPolicy';
 
 describe('classifyCommand', () => {
   describe('auto tier — read-only inspection runs with no prompt', () => {
@@ -427,6 +427,199 @@ describe('wrappers are classified by the command they run', () => {
     expect(pathLikeArgs('env cat /etc/passwd')).toEqual(['/etc/passwd']);
     expect(pathLikeArgs('nice -n 5 cat ~/.ssh/id_rsa')).toEqual(['~/.ssh/id_rsa']);
     expect(pathLikeArgs('env -C /etc ls')).toEqual(['/etc']);
+  });
+});
+
+/**
+ * A permitted binary used to be permitted with any flag at all, which is not
+ * what "read-only" describes: several of them run a helper program or write a
+ * file when a flag asks them to. Two of those were proven by execution before
+ * they were guarded one at a time; this is the same class closed as a class, so
+ * the *next* one is shut before anybody finds it.
+ *
+ * The tuning risk runs the other way and is quiet — a set tightened too far
+ * produces refuse-and-retry loops that cost turns instead of erroring where
+ * someone would see it. The flag spellings asserted as still-permitted below are
+ * taken from the bash calls in this project's own research logs.
+ */
+describe('flags on permitted binaries are an allowlist, not an afterthought', () => {
+  // The decision this rests on: unrecognised refuses rather than prompts.
+  // Grants are remembered at `scope` granularity and the scope of a
+  // non-multiplexer is the binary name, so one benign approval of `rg` would
+  // otherwise cover every later `rg` with any flag at all.
+  it('refuses an unrecognised flag rather than making it approvable', () => {
+    for (const cmd of ['ls --hypothetical-new-flag', 'rg --unknown-flag pattern', 'git --hypothetical-flag log']) {
+      expect(classifyCommand(cmd).tier).toBe('refuse');
+    }
+  });
+
+  it('names the flag and offers a way forward, so the model can act on it', () => {
+    const { reason } = classifyCommand('rg --pre /tmp/evil.sh TODO .');
+    expect(reason).toContain('"--pre"');
+    expect(reason).toContain('"rg"');
+    expect(reason).toMatch(/read-only flags only|describe the work as a task/i);
+  });
+
+  // The flags that make a permitted binary an interpreter. The first two were
+  // confirmed by running them: a fabricated helper executed during an ordinary
+  // remote listing, and an arbitrary program ran over search hits.
+  it.each([
+    'git --exec-path=/tmp/evil ls-remote origin',
+    'git --exec-path /tmp/evil status',
+    'git grep -O /tmp/evil.sh pattern',
+    'git grep --open-files-in-pager=/tmp/evil.sh TODO',
+    'git -c core.pager=/tmp/x.sh log',
+    'git ls-remote --upload-pack="sh -c evil" origin',
+    'git show --textconv HEAD',
+    'git diff --ext-diff',
+    'rg --pre /tmp/evil.sh pattern .',
+    'rg --hostname-bin /tmp/x.sh pattern .',
+    'sort --compress-program=/tmp/x.sh big.txt',
+  ])('refuses the flag that runs a helper program: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
+  // No `>` for the redirect refusal to see, so the write is invisible to it.
+  it.each([
+    'sort -o out.txt names.txt',
+    'sort --output=out.txt names.txt',
+    'tree -o out.txt',
+    'git diff --output=out.diff',
+    'git archive --output=x.tar HEAD',
+    'find . -fprint out.txt',
+    'find . -fprint0 out.txt',
+    'find . -fprintf out.txt "%p"',
+    'find . -fls out.txt',
+    'file -C -m /tmp/magic',
+  ])('refuses the flag that writes a file with no redirect: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
+  // Allowing bare booleans and restricting only value-taking flags was
+  // considered and rejected on exactly these: none of them takes a value.
+  it.each([
+    "yq -i '.a = 1' action.yml",
+    "yq --inplace '.a = 1' config.yml",
+    'git branch -D feature',
+    'git tag -d v1',
+    'date -s "2020-01-01"',
+  ])('refuses a bare boolean that mutates: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
+  // `uniq INPUT OUTPUT` writes with no flag involved at all, so the allowlist
+  // cannot be what catches it.
+  it('refuses the write spelled as a positional argument', () => {
+    expect(classifyCommand('uniq README.md out.txt').tier).toBe('refuse');
+    expect(classifyCommand('uniq -c names.txt').tier).toBe('auto');
+    // A flag's own value is not a second file.
+    expect(classifyCommand('uniq -f 1 names.txt').tier).toBe('auto');
+  });
+
+  // The control half. Every spelling here is one the planner actually emits, and
+  // a set tightened until one of them prompts has become the failure this change
+  // was warned about.
+  it.each([
+    'grep -rn TODO packages',
+    'grep -rniE "abort|signal" packages',
+    'grep -m1 version package.json',
+    'grep -A15 classifyCommand src/index.ts',
+    'grep -rn --include=*.ts --exclude-dir=node_modules queued packages',
+    'head -40 README.md',
+    'tail -60 logs/app.log',
+    'ls -l --time-style=+%m-%d_%H:%M package.json',
+    'du -sh packages',
+    'sort -rn counts.txt',
+    'cut -c1-200 wide.txt',
+    'git log --oneline -12',
+    'git status --porcelain=v1',
+    'git shortlog -sn',
+    'git -C packages/core log --oneline -3',
+    'find . -path "*/tui/*" -prune -o -type f -print',
+    'find . -mtime -7 -type f',
+    'rg -uu --hidden -g "!node_modules" TODO',
+    'rg -t ts -A 3 -B 3 classifyCommand src',
+    "yq -o json '.jobs' ci.yml",
+  ])('keeps ordinary research unprompted: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('auto');
+  });
+
+  // Section markers are the planner's commonest use of `echo`, and every token
+  // in one begins with a dash without being a flag.
+  it('takes the arguments of echo and printf as data', () => {
+    expect(classifyCommand('echo ---').tier).toBe('auto');
+    expect(classifyCommand('echo "--- files changed vs main ---"').tier).toBe('auto');
+    expect(classifyCommand('printf -- "%s\\n" one').tier).toBe('auto');
+  });
+
+  // Membership in the permitted set is not enough on its own: a binary with no
+  // declared flag set would refuse every flag it was ever given, which is the
+  // over-tightening failure arriving by omission rather than by decision.
+  it.each(AUTO_COMMANDS)('%s declares a flag set', (binary) => {
+    // The multiplexer needs a read-only subcommand to be permitted at all, so
+    // asking it for help without one is `ask` on its own terms.
+    const probe = binary === 'git' ? 'git log --help' : `${binary} --help`;
+    expect(classifyCommand(probe).tier).toBe('auto');
+  });
+
+  it('reads every spelling of a permitted flag: clustered, glued, joined, and after --', () => {
+    expect(classifyCommand('ls -la packages').tier).toBe('auto');
+    expect(classifyCommand('rg -A15 TODO src').tier).toBe('auto');
+    expect(classifyCommand('rg --max-count=5 TODO src').tier).toBe('auto');
+    expect(classifyCommand('rg --max-count 5 TODO src').tier).toBe('auto');
+    expect(classifyCommand('grep -rn -- --exec-path src').tier).toBe('auto');
+    expect(classifyCommand('find . -O2 -type f').tier).toBe('auto');
+  });
+
+  // A cluster has to fail as a whole. Accepting it because the first letter was
+  // recognised would wave through whatever followed.
+  it('refuses a cluster containing a flag it does not know', () => {
+    expect(classifyCommand('ls -laJ').tier).toBe('refuse');
+    expect(classifyCommand('grep -rnQ TODO src').tier).toBe('refuse');
+  });
+
+  // `-n` takes a value on the version-control multiplexer, and `-sn` ends with
+  // it. Consuming the next token unconditionally would let a value-taking flag
+  // swallow an unrecognised one, leaving it classified by nobody.
+  it('does not let a value-taking flag swallow the flag after it', () => {
+    expect(classifyCommand('git shortlog -sn --hypothetical-flag').tier).toBe('refuse');
+    // The exception the rule needs: a value really can be spelled with a dash.
+    expect(classifyCommand('find . -mtime -7').tier).toBe('auto');
+  });
+
+  // Only the permitted tier inverts. A binary that already prompts is one the
+  // developer is being asked about, and refusing its flags would take work away
+  // that the approval exists to authorise.
+  it('leaves the flags of a prompted binary to the approval', () => {
+    expect(classifyCommand("sed -n '1,40p' file.ts").tier).toBe('ask');
+    expect(classifyCommand('curl -sI --max-time 5 https://example.com').tier).toBe('ask');
+  });
+
+  it('refuses through a wrapper and through command substitution, like every other refusal', () => {
+    expect(classifyCommand('nice -n 5 sort -o out.txt names.txt').tier).toBe('refuse');
+    expect(classifyCommand('echo $(rg --pre /tmp/x.sh TODO .)').tier).toBe('refuse');
+    expect(classifyCommand('ls -la | sort -o out.txt').tier).toBe('refuse');
+  });
+});
+
+/**
+ * "First argument that does not start with a dash" answered `packages/core` for
+ * `git -C packages/core log`, which cost a prompt on an ordinary log — and
+ * answered `/tmp/x` for `git -C /tmp/x push`, which put a refused subcommand on
+ * the prompt tier the refusal tier is documented never to reach. Knowing which
+ * flags take a value is what makes the subcommand findable.
+ */
+describe('a multiplexer subcommand is found after its global flags, not before them', () => {
+  it('sees the read-only subcommand behind a flag that took a value', () => {
+    expect(classifyCommand('git -C packages/core log --oneline -3').tier).toBe('auto');
+    expect(classifyCommand('git -C packages/core status --short').tier).toBe('auto');
+  });
+
+  it('sees a refused subcommand behind one too, rather than offering it as a prompt', () => {
+    const { tier, reason } = classifyCommand('git -C /tmp/x push origin main');
+    expect(tier).toBe('refuse');
+    expect(reason).toContain('git push');
+    expect(classifyCommand('git -C packages/core remote -v').tier).toBe('refuse');
   });
 });
 
