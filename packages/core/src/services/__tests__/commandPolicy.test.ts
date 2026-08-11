@@ -204,9 +204,9 @@ describe('classifyCommand', () => {
       expect(classifyCommand('python -m pytest').tier).toBe('ask');
     });
 
-    // `x=/etc/passwd; cat $x` is real, working shell: the assignment segment
-    // is dropped as noise (by design, for `FOO=bar cmd` env prefixes), and
-    // `cat`'s only argument is the literal string `$x` — `looksLikePath`
+    // `x=/etc/passwd; cat $x` is real, working shell: the assignment is its own
+    // segment, which runs no binary and so is not what the assignment refusal
+    // catches, and `cat`'s only argument is the literal string `$x` — `looksLikePath`
     // cannot know the shell will expand it to an absolute path. Without a
     // guard this classified as `auto`: an unprompted, unconfined file read.
     it('does not let a shell variable smuggle a path past auto-tier classification', () => {
@@ -241,9 +241,51 @@ describe('classifyCommand', () => {
     });
   });
 
-  it('ignores leading environment assignments when finding the binary', () => {
-    expect(classifyCommand('NODE_ENV=test npm test').tier).toBe('ask');
-    expect(classifyCommand('FOO=1 rm -rf x').tier).toBe('refuse');
+  // Leading assignments used to be shifted off as noise, so the segment
+  // classified as whatever harmless binary followed: `LD_PRELOAD=/tmp/evil.so
+  // ls` was `auto`. The variable is what decides what the binary does, and the
+  // value is not judgeable here, so any segment carrying one is refused — no
+  // name list, no value inspection, and no prompt, because a grant is
+  // remembered at scope granularity and the scope does not distinguish
+  // assignments.
+  describe('leading environment assignments', () => {
+    it('refuses an assignment in front of a permitted binary', () => {
+      expect(classifyCommand('LD_PRELOAD=/tmp/evil.so ls').tier).toBe('refuse');
+      expect(classifyCommand('GIT_SSH_COMMAND=/tmp/x.sh git ls-remote origin').tier).toBe('refuse');
+      expect(classifyCommand('PATH=/tmp/evil:$PATH git status').tier).toBe('refuse');
+    });
+
+    it('refuses the benign-looking assignment too, rather than prompting for it', () => {
+      expect(classifyCommand('NODE_ENV=test npm test').tier).toBe('refuse');
+    });
+
+    it('names the assignment and says to re-run without it, so the model can fix it in one turn', () => {
+      const { reason } = classifyCommand('LD_PRELOAD=/tmp/evil.so ls');
+      expect(reason).toContain('LD_PRELOAD=/tmp/evil.so');
+      expect(reason).toMatch(/without the assignment/i);
+    });
+
+    it('refuses an assignment nested inside command substitution', () => {
+      expect(classifyCommand('echo $(FOO=bar ls)').tier).toBe('refuse');
+      expect(classifyCommand('echo `FOO=bar ls`').tier).toBe('refuse');
+    });
+
+    // Answering with the assignment here would cost a wasted turn: the model
+    // would strip the prefix and be refused again on the binary.
+    it('answers about the binary when the prefixed command is refused on its own terms', () => {
+      const rm = classifyCommand('FOO=1 rm -rf x');
+      expect(rm.tier).toBe('refuse');
+      expect(rm.reason).toContain('"rm"');
+      const push = classifyCommand('FOO=1 git push origin main');
+      expect(push.tier).toBe('refuse');
+      expect(push.reason).toContain('git push');
+    });
+
+    // A bare assignment executes nothing, and refusing the segment it sits in
+    // would move `x=/etc/passwd; cat $x` off the prompt tier it belongs on.
+    it('leaves a segment that is only an assignment to the following command', () => {
+      expect(classifyCommand('x=/etc/passwd; cat $x').tier).toBe('ask');
+    });
   });
 
   it('refuses an empty command rather than shelling out to nothing', () => {

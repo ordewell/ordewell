@@ -190,6 +190,15 @@ export interface CommandClassification {
 interface Segment {
   binary: string;
   args: string[];
+  /**
+   * Leading `VAR=value` tokens, as written.
+   *
+   * Retained rather than discarded: the assignment is what decides what the
+   * binary does — `LD_PRELOAD` loads attacker code into it, `PATH` changes
+   * which executable is even reached — so classifying the binary alone answers
+   * the wrong question. See {@link refusalFor}.
+   */
+  assignments: string[];
   /** True when this segment consumes another command's output (`… | seg`). */
   piped: boolean;
   /**
@@ -435,9 +444,17 @@ function binaryName(token: string, dialect: Dialect): string {
 
 function toSegment(tokens: string[], piped: boolean, dialect: Dialect): Segment {
   const rest = [...tokens];
-  // `FOO=bar cmd` — assignments precede the binary.
-  while (rest.length > 0 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[0])) rest.shift();
-  return { binary: rest.length > 0 ? binaryName(rest[0], dialect) : '', args: rest.slice(1), piped, expandable: false };
+  const assignments: string[] = [];
+  // `FOO=bar cmd` — assignments precede the binary. Kept on the segment, not
+  // dropped: they are refused, and the message has to name the one it saw.
+  while (rest.length > 0 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[0])) assignments.push(rest.shift()!);
+  return {
+    binary: rest.length > 0 ? binaryName(rest[0], dialect) : '',
+    args: rest.slice(1),
+    assignments,
+    piped,
+    expandable: false,
+  };
 }
 
 /** Lex a command line and every substitution body nested inside it. */
@@ -577,6 +594,22 @@ function refusalFor(seg: Segment): string | undefined {
     if (seg.args.some(isInlineCodeFlag)) {
       return `Inline code via "${seg.binary} ${seg.args.find(isInlineCodeFlag)}" is not available to the planner. Use the read-only research tools, or describe it as a task.`;
     }
+  }
+  // Checked last, so a segment whose binary or subcommand is refused on its own
+  // terms still says so: `FOO=1 rm -rf x` is answered with `rm`, not with the
+  // assignment, and the model does not have to strip the prefix only to be
+  // refused a second time.
+  //
+  // Refused with no name list and no value inspection. A denylist of variable
+  // names cannot stay complete, and an allowlist does not help either, because
+  // the same name is benign or hostile depending on the value. Prompting was
+  // rejected because grants are remembered at `scope` granularity and the scope
+  // does not distinguish assignments, so one benign approval would cover a
+  // hostile variant. This is the same treatment `eval`, `exec` and process
+  // substitution already get: constructs whose effect this classifier cannot
+  // read are refused, not asked.
+  if (seg.assignments.length > 0) {
+    return `The environment assignment "${seg.assignments[0]}" decides what "${seg.binary}" actually does, and this classifier cannot judge the value. Re-run the command without the assignment.`;
   }
   return undefined;
 }

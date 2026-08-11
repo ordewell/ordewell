@@ -440,9 +440,11 @@ const ASSIGNMENTS: CorpusEntry[] = [
   { command: 'PYTHONSTARTUP=/tmp/x.py python -m pytest', tier: 'refuse' },
   { command: 'NODE_ENV=test npm test', tier: 'refuse' },
   { command: 'echo $(FOO=bar ls)', tier: 'refuse' },
-  // The wrapped binary is itself refused, so this already refuses today — and
-  // must keep refusing once assignments are handled.
+  { command: 'echo `FOO=bar ls`', tier: 'refuse' },
+  // The prefixed command is refused on its own terms, so the refusal names the
+  // binary rather than the assignment — stripping the prefix would not help.
   { command: 'FOO=1 rm -rf x', tier: 'refuse' },
+  { command: 'FOO=1 git push origin main', tier: 'refuse' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -566,70 +568,6 @@ export const CORPUS: CorpusEntry[] = [
  * directly.
  */
 export const KNOWN_GAPS: KnownGap[] = [
-  // -------------------------------------------------------------------------
-  // Leading environment assignments are dropped before the binary is computed.
-  //
-  // `toSegment` shifts `VAR=value` tokens off the front as noise, so the
-  // segment classifies as whatever harmless binary follows, and the assignment
-  // values never reach workspace-path confinement either. The variable is what
-  // changes the behaviour of the binary, so classifying the binary alone
-  // answers the wrong question.
-  // -------------------------------------------------------------------------
-  {
-    command: 'LD_PRELOAD=/tmp/evil.so ls',
-    actual: { tier: 'auto' },
-    ticket: '06',
-    describes: 'A dynamic-linker preload runs attacker code inside a permitted binary; the assignment is dropped, so the segment is classified as a bare directory listing and runs with no prompt.',
-  },
-  {
-    command: 'DYLD_INSERT_LIBRARIES=/tmp/x.dylib cat package.json',
-    actual: { tier: 'auto' },
-    ticket: '06',
-    describes: 'The macOS spelling of the same preload, with the same result: classified as a plain file read.',
-  },
-  {
-    command: 'NODE_OPTIONS=--require=/tmp/x.js node --version',
-    actual: { tier: 'ask' },
-    ticket: '06',
-    describes: 'The Node option variable loads an arbitrary module before the program starts, turning any Node invocation into code execution — but only the binary is classified, so this is offered as an ordinary approval.',
-  },
-  {
-    command: 'PATH=/tmp/evil:$PATH git status',
-    actual: { tier: 'ask' },
-    ticket: '06',
-    describes: 'Redirecting the executable search path means the binary that runs is not the binary that was classified.',
-  },
-  {
-    command: 'GIT_SSH_COMMAND="/tmp/x.sh" git ls-remote origin',
-    actual: { tier: 'auto' },
-    ticket: '06',
-    describes: 'Handing the version-control tool a replacement transport command executes it during an otherwise read-only remote listing, unprompted.',
-  },
-  {
-    command: 'GIT_CONFIG_GLOBAL=/tmp/evil.cfg git status',
-    actual: { tier: 'auto' },
-    ticket: '06',
-    describes: 'A substituted global configuration file can define aliases and helper programs, so the assignment decides what the following command does.',
-  },
-  {
-    command: 'PYTHONSTARTUP=/tmp/x.py python -m pytest',
-    actual: { tier: 'ask' },
-    ticket: '06',
-    describes: 'The interpreter startup file runs before the requested module; the approval the developer sees names only the test run.',
-  },
-  {
-    command: 'NODE_ENV=test npm test',
-    actual: { tier: 'ask' },
-    ticket: '06',
-    describes: 'The benign-looking case. Assignments are refused with no name list and no value inspection, so this one goes too — grants are remembered at scope granularity and the scope does not distinguish assignments, so approving this would cover a hostile variant.',
-  },
-  {
-    command: 'echo $(FOO=bar ls)',
-    actual: { tier: 'auto' },
-    ticket: '06',
-    describes: 'An assignment nested inside command substitution is dropped by the same code path, so nesting is a second way past whatever guard the top level grows.',
-  },
-
   // -------------------------------------------------------------------------
   // Wrappers are not unwrapped, so the segment is classified by the wrapper
   // rather than by the command that will actually execute.
