@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { createApp, attachWsHandler } from './app';
+import { createRequestListener } from './nodeAdapter';
 import { OrchestratorPool } from './pool/orchestratorPool';
 import { createServer } from 'http';
 import { hasTmux, TmuxRunner } from '@ordewell/core';
@@ -26,7 +27,7 @@ if (tmuxRunner) {
 }
 
 const pool = new OrchestratorPool({ runner: tmuxRunner });
-const app = createApp(pool);
+const app = createApp(pool, port);
 
 // Warm the model caches at startup (same as the VS Code extension's activation
 // refresh): runner model discovery + provider routing lists, so the first
@@ -37,49 +38,9 @@ pool.getProviderModels().catch((err) => {
 
 app.get('/', (c) => c.json({ message: 'Ordewell API', docs: '/api/workspaces' }));
 
-const server = createServer(async (req, res) => {
-  const bufs: Buffer[] = [];
-  for await (const chunk of req) bufs.push(chunk);
-  const body = bufs.length > 0 ? Buffer.concat(bufs).toString() : undefined;
+const server = createServer(createRequestListener(app));
 
-  const url = `http://${req.headers.host || 'localhost'}${req.url}`;
-  const headers = new Headers();
-  for (const [k, v] of Object.entries(req.headers)) {
-    if (v) {
-      if (Array.isArray(v)) v.forEach(vv => headers.append(k, vv));
-      else headers.set(k, v as string);
-    }
-  }
-  if (body && !headers.has('content-type')) headers.set('content-type', 'application/json');
-
-  const webReq = new Request(url, {
-    method: req.method || 'GET',
-    headers,
-    body: req.method !== 'GET' && req.method !== 'HEAD' ? body : undefined,
-  });
-
-  try {
-    const webRes = await app.fetch(webReq);
-    res.writeHead(webRes.status, Object.fromEntries(webRes.headers.entries()));
-    if (webRes.body) {
-      const reader = webRes.body.getReader();
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        res.write(value);
-      }
-    }
-    res.end();
-  } catch (err) {
-    if (!res.headersSent) {
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: err instanceof Error ? (err as Error).message : 'Internal server error' }));
-    }
-  }
-});
-
-attachWsHandler(server, pool);
+attachWsHandler(server, pool, port);
 
 server.listen(port, '127.0.0.1', () => {
   console.error(`[web] Ordewell API server: http://localhost:${port}`);
