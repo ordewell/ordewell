@@ -24,6 +24,10 @@
  * The old substring denylist both over-matched (`ls docs/removed` tripped `rm`)
  * and under-matched (`$(rm -rf /)` was invisible once chaining was allowed).
  *
+ * A segment is classified by the command that will actually execute, not by the
+ * name at the front of it: wrappers are unwrapped first, recursively, so
+ * `timeout 10 env nice rm -rf x` is an `rm`. See {@link WRAPPER_FAMILY}.
+ *
  * The lexer is dialect-aware, because the interpreter that will actually run
  * the command decides what the tokens are, and getting that wrong is not a
  * cosmetic error here — it is the difference between classifying what runs and
@@ -32,10 +36,16 @@
 
 import type { ShellDialect } from './researchShell';
 
+/**
+ * `env` is deliberately absent. Given a command it is a wrapper, classified by
+ * what it actually runs (see {@link WRAPPER_FAMILY}); given none it prints the
+ * whole process environment — provider credentials included — into the research
+ * log, which is a disclosure the developer should get to see coming.
+ */
 export const AUTO_COMMANDS = [
   'ls', 'tree', 'git', 'wc', 'du', 'df', 'file', 'head', 'tail', 'cat', 'sort', 'uniq',
   'echo', 'printf', 'date', 'stat', 'basename', 'dirname', 'realpath', 'pwd',
-  'which', 'type', 'env', 'uname', 'whoami', 'cut', 'nl', 'rg', 'grep', 'find', 'jq', 'yq',
+  'which', 'type', 'uname', 'whoami', 'cut', 'nl', 'rg', 'grep', 'find', 'jq', 'yq',
 ];
 
 export const GIT_READONLY_SUBCOMMANDS = [
@@ -102,6 +112,111 @@ function isInlineCodeFlag(arg: string): boolean {
 const MULTIPLEXERS = ['git', 'npm', 'yarn', 'pnpm', 'npx', 'cargo', 'go', 'dotnet', 'docker', 'podman',
   'kubectl', 'helm', 'az', 'aws', 'gcloud', 'gh', 'glab', 'terraform', 'make', 'mvn', 'gradle',
   'composer', 'pip', 'pip3', 'poetry', 'uv', 'bundle', 'rake', 'swift', 'flutter', 'dart'];
+
+/**
+ * How a wrapper's own arguments are skipped to reach the command it will run.
+ *
+ * Getting an arity wrong here does not merely mis-parse: the token after the
+ * flag is what gets classified, so a value-taking flag mistaken for a boolean
+ * makes its *value* look like the command and the real command look like an
+ * argument. That is why {@link scanWrapperArgs} refuses a flag it does not
+ * recognize instead of guessing at its arity.
+ */
+interface WrapperSpec {
+  /**
+   * Consume the following token as their value — unless it is already glued on
+   * (`-o0`, `-uPATH`) or spelled `--flag=value`, both of which are
+   * self-contained.
+   */
+  valueFlags?: string[];
+  /**
+   * Consume nothing. Long flags whose value is *optional*
+   * (`--block-signal[=SIG]`) belong here rather than in `valueFlags`: treating
+   * them as value-taking would swallow the wrapped command whenever the value
+   * is omitted, and the `--flag=value` spelling needs no declaration.
+   */
+  booleanFlags?: string[];
+  /** Boolean flags whose spelling is open-ended — `nice -10`. */
+  booleanPattern?: RegExp;
+  /**
+   * Take a whole command line as a string (`env -S 'rm -rf /'`). Refused for
+   * the same reason `sh -c` is: the string is not tokens this classifier lexed.
+   */
+  stringFlags?: string[];
+  /**
+   * Flags under which the wrapper executes nothing at all — `command -v rm`
+   * prints where `rm` lives without running it — so there is nothing to unwrap
+   * to and the wrapper is classified on its own name.
+   */
+  noExecFlags?: string[];
+  /** Non-flag arguments consumed before the command begins. `timeout`'s duration. */
+  positionals?: number;
+  /**
+   * `NAME=value` tokens are the wrapper's own arguments rather than the start
+   * of the command. Only `env`; they are carried onto the unwrapped segment so
+   * the assignment refusal answers for them.
+   */
+  acceptsAssignments?: boolean;
+}
+
+const HELP_FLAGS = ['--help', '--version'];
+
+/**
+ * Commands that exist to run another command.
+ *
+ * `env rm -rf build` is an `rm`, and classification only ever looks at a
+ * segment's first binary — so with `env` in the permitted set, four characters
+ * walked around the entire refusal list *and* the entire interpreter list, with
+ * no prompt at all.
+ *
+ * The other eight are here for a different reason, and extending to them is a
+ * deliberate departure from how the case was reported. None of them was
+ * permitted, so a wrapped `rm` fell through to `ask` — which is not "merely
+ * inconvenient but safe". The refusal tier is documented as never promptable,
+ * and a prefix that turns `rm -rf` into a prompt a developer can approve
+ * defeats the guarantee the tier exists to provide. Unwrapping all nine costs
+ * one declaration table over unwrapping `env` alone.
+ *
+ * Flag sets are drawn from what the tools actually accept, not from what they
+ * are commonly written with: `stdbuf -o0` and `ionice -c3` glue the value on,
+ * `nice -10` spells the adjustment as the flag, and `timeout` consumes a
+ * positional duration before the command starts.
+ */
+const WRAPPER_FAMILY: Record<string, WrapperSpec> = {
+  env: {
+    valueFlags: ['-u', '--unset', '-C', '--chdir'],
+    booleanFlags: ['-i', '--ignore-environment', '-0', '--null', '-v', '--debug',
+      // Optional-value flags: see WrapperSpec.booleanFlags.
+      '--block-signal', '--default-signal', '--ignore-signal', '--list-signal-handling',
+      ...HELP_FLAGS],
+    stringFlags: ['-S', '--split-string'],
+    acceptsAssignments: true,
+  },
+  nice: {
+    valueFlags: ['-n', '--adjustment'],
+    booleanFlags: HELP_FLAGS,
+    booleanPattern: /^-\d+$/,
+  },
+  timeout: {
+    valueFlags: ['-s', '--signal', '-k', '--kill-after'],
+    booleanFlags: ['--preserve-status', '--foreground', '-v', '--verbose', ...HELP_FLAGS],
+    positionals: 1,
+  },
+  nohup: { booleanFlags: HELP_FLAGS },
+  setsid: { booleanFlags: ['-c', '--ctty', '-f', '--fork', '-w', '--wait', '-h', '-V', ...HELP_FLAGS] },
+  stdbuf: {
+    valueFlags: ['-i', '--input', '-o', '--output', '-e', '--error'],
+    booleanFlags: HELP_FLAGS,
+  },
+  ionice: {
+    valueFlags: ['-c', '--class', '-n', '--classdata', '-p', '--pid', '-P', '--pgid', '-u', '--uid'],
+    booleanFlags: ['-t', '--ignore', '-h', '-V', ...HELP_FLAGS],
+  },
+  // The multi-call binary ships its own `rm`, `mv` and `sh`, so the refused
+  // name arrives as its first argument.
+  busybox: { booleanFlags: ['--list', '--install', ...HELP_FLAGS] },
+  command: { booleanFlags: ['-p'], noExecFlags: ['-v', '-V'] },
+};
 
 /**
  * What the interpreter that will run this command treats as syntax.
@@ -442,12 +557,15 @@ function binaryName(token: string, dialect: Dialect): string {
   return dialect.strippedExtensions.includes(base.slice(dot).toLowerCase()) ? base.slice(0, dot) : base;
 }
 
+/** A `NAME=value` token, in the one position a shell treats as an assignment. */
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
 function toSegment(tokens: string[], piped: boolean, dialect: Dialect): Segment {
   const rest = [...tokens];
   const assignments: string[] = [];
   // `FOO=bar cmd` — assignments precede the binary. Kept on the segment, not
   // dropped: they are refused, and the message has to name the one it saw.
-  while (rest.length > 0 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[0])) assignments.push(rest.shift()!);
+  while (rest.length > 0 && ASSIGNMENT.test(rest[0])) assignments.push(rest.shift()!);
   return {
     binary: rest.length > 0 ? binaryName(rest[0], dialect) : '',
     args: rest.slice(1),
@@ -455,6 +573,120 @@ function toSegment(tokens: string[], piped: boolean, dialect: Dialect): Segment 
     piped,
     expandable: false,
   };
+}
+
+/**
+ * Where a wrapper's own arguments end, or why they cannot be read.
+ *
+ * `no-exec` means the flags say the wrapper runs nothing, so there is no inner
+ * command to find.
+ */
+type WrapperScan =
+  | { kind: 'command'; tokens: string[]; assignments: string[] }
+  | { kind: 'no-exec' }
+  | { kind: 'refuse'; reason: string };
+
+/** The short flag in `list` that `token` glues its value onto, if any. */
+function joinedShortFlag(list: string[], token: string): string | undefined {
+  if (token.length <= 2) return undefined;
+  return list.find((f) => f.length === 2 && token.startsWith(f));
+}
+
+/**
+ * Walk a wrapper's arguments up to the command it will run.
+ *
+ * An unrecognized flag is refused rather than assumed to be a boolean. The
+ * alternative loses the whole point of the table: a flag that in fact takes a
+ * separate value would leave that value classified as the command and the
+ * refused binary sitting harmlessly in its argument list — a wrapped `rm` back
+ * on the prompt tier, which is exactly what unwrapping exists to prevent.
+ */
+function scanWrapperArgs(binary: string, spec: WrapperSpec, args: string[]): WrapperScan {
+  const valueFlags = spec.valueFlags ?? [];
+  const stringFlags = spec.stringFlags ?? [];
+  const assignments: string[] = [];
+  let positionals = spec.positionals ?? 0;
+  let i = 0;
+
+  while (i < args.length) {
+    const token = args[i];
+    // `--` ends the wrapper's options; whatever follows is the command.
+    if (token === '--') { i++; break; }
+
+    if (/^-./.test(token)) {
+      const eq = token.startsWith('--') ? token.indexOf('=') : -1;
+      const name = eq > 0 ? token.slice(0, eq) : token;
+      // `--flag=value` carries its value in the same token.
+      const selfContained = eq > 0;
+
+      if ((spec.noExecFlags ?? []).includes(name)) return { kind: 'no-exec' };
+      if (stringFlags.includes(name) || joinedShortFlag(stringFlags, token)) {
+        return {
+          kind: 'refuse',
+          reason: `"${binary} ${name}" splits a string into a command, which this classifier cannot inspect. Use the read-only research tools, or describe it as a task.`,
+        };
+      }
+      if ((spec.booleanFlags ?? []).includes(name) || spec.booleanPattern?.test(token)) { i++; continue; }
+      if (valueFlags.includes(name)) { i += selfContained ? 1 : 2; continue; }
+      if (joinedShortFlag(valueFlags, token)) { i++; continue; }
+      return {
+        kind: 'refuse',
+        reason: `"${token}" is not a flag this classifier knows on the wrapper "${binary}", so it cannot tell which command "${binary}" would actually run. Re-run without it.`,
+      };
+    }
+
+    if (spec.acceptsAssignments && ASSIGNMENT.test(token)) { assignments.push(token); i++; continue; }
+    if (positionals > 0) { positionals--; i++; continue; }
+    break;
+  }
+
+  return { kind: 'command', tokens: args.slice(i), assignments };
+}
+
+/** A segment reduced to the command that will actually execute. */
+interface Unwrapped {
+  seg: Segment;
+  /** Wrapper names peeled off, outermost first. Empty when nothing was wrapped. */
+  wrappers: string[];
+  /** Set when the wrapper's own arguments are what makes the segment refusable. */
+  reason?: string;
+}
+
+/**
+ * Peel wrappers until the segment names something that is not one.
+ *
+ * Recursive rather than one-shot because wrappers nest — `timeout 10 env nice
+ * rm -rf x` is an `rm` — and peeling a single layer would answer for `env`.
+ * Termination is structural: every peel consumes at least the wrapper's own
+ * binary token.
+ *
+ * `piped` and `expandable` carry through, so piping into a wrapped interpreter
+ * is still a pipe into an interpreter, and a wrapped command whose arguments
+ * are not fully visible still cannot take the silent fast path.
+ */
+function unwrap(seg: Segment, dialect: Dialect): Unwrapped {
+  const wrappers: string[] = [];
+  // Assignments accumulate across layers instead of staying on the layer that
+  // carried them: `env FOO=bar rm -rf x` has to reach `refusalFor` as an `rm`
+  // that carries an assignment, which is the shape ticket 06's refusal reads.
+  const assignments = [...seg.assignments];
+  let current: Segment = seg;
+
+  while (WRAPPER_FAMILY[current.binary]) {
+    const scan = scanWrapperArgs(current.binary, WRAPPER_FAMILY[current.binary], current.args);
+    if (scan.kind === 'refuse') return { seg: { ...current, assignments }, wrappers, reason: scan.reason };
+    // No residual command: the wrapper is the whole invocation (`env` on its
+    // own prints the environment), so it is classified under its own name.
+    if (scan.kind === 'no-exec' || scan.tokens.length === 0) break;
+
+    assignments.push(...scan.assignments);
+    wrappers.push(current.binary);
+    const inner = toSegment(scan.tokens, current.piped, dialect);
+    assignments.push(...inner.assignments);
+    current = { ...inner, assignments: [], expandable: current.expandable };
+  }
+
+  return { seg: { ...current, assignments }, wrappers };
 }
 
 /** Lex a command line and every substitution body nested inside it. */
@@ -615,6 +847,21 @@ function refusalFor(seg: Segment): string | undefined {
 }
 
 /**
+ * Say the wrapper was seen through, so the model does not spend a turn trying
+ * the next one. The refusal itself still names the wrapped command, per the same
+ * rule that makes `FOO=1 rm -rf x` answer about `rm`: the answer has to be the
+ * one the model can act on.
+ */
+function withWrapperNote(reason: string, wrappers: string[]): string {
+  if (wrappers.length === 0) return reason;
+  const quoted = wrappers.map((w) => `"${w}"`);
+  const names = quoted.length > 1
+    ? `${quoted.slice(0, -1).join(', ')} and ${quoted[quoted.length - 1]}`
+    : quoted[0];
+  return `${reason} Wrapping it in ${names} does not change what runs.`;
+}
+
+/**
  * Classify one command line. Output redirection is refused outright unless the
  * target provably writes nothing — `/dev/null`, or an fd duplication like
  * `2>&1` — since a planner that writes files has stopped being a planner.
@@ -657,12 +904,17 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
 
   if (segments.length === 0) return { tier: 'refuse', scope: '', reason: 'No command found.' };
 
-  for (const seg of segments) {
+  // Every segment is reduced to the command that will actually execute first,
+  // so `env`, `nice`, `timeout` and friends decide nothing about the answer.
+  const unwrapped = segments.map((seg) => unwrap(seg, dialect));
+
+  for (const { seg, wrappers, reason: wrapperReason } of unwrapped) {
+    if (wrapperReason) return { tier: 'refuse', scope: '', reason: wrapperReason };
     const reason = refusalFor(seg);
-    if (reason) return { tier: 'refuse', scope: '', reason };
+    if (reason) return { tier: 'refuse', scope: '', reason: withWrapperNote(reason, wrappers) };
   }
 
-  const nonAuto = segments.filter((s) => !isAuto(s));
+  const nonAuto = unwrapped.map((u) => u.seg).filter((s) => !isAuto(s));
   if (nonAuto.length === 0) return { tier: 'auto', scope: '' };
 
   // A grant covers only the parts that actually needed one, so
