@@ -2,6 +2,11 @@
 
 **Status:** accepted
 
+See also [ADR-0011](0011-sandboxing-the-planners-shell.md): the classifier
+below is a denylist over a real shell, not an OS-level sandbox for it. That
+ADR tracks giving the planner's shell the same kind of sandboxing Codex
+already requires for itself.
+
 Planner research was tightly boxed by a `bash` denylist (`BaseFileSystem`) that matched **substrings** against the raw command string: allowlisted binaries only, no pipes, no `&&`, and a forbidden-pattern list containing `rm`, `cp`, `kill`, `>`, `|`. It was simultaneously too strict and too loose.
 
 Too strict: `az`, `gh`, `npm test`, `pytest`, `kubectl`, `jq` — everything a planner might legitimately run to *diagnose before planning* — were refused outright, so the model's only recourse was to guess. Too loose in the other direction: `ls docs/removed` tripped `rm`, `git show HEAD:src/kill.ts` tripped `kill`, and substring matching cannot see `$(rm -rf /)` at all.

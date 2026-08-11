@@ -34,6 +34,22 @@ their own repositories. The parts most worth your attention:
   is `packages/core/src/services/commandPolicy.ts`.
 - **Command policy bypass.** Prompt content that gets a would-be-refused command
   classified as safe.
+
+  The classifier is a denylist over a real shell, not a substitute for an
+  OS-level sandbox: it decides which commands the planner's shell may run, but
+  it cannot make that shell incapable of harm, because every binary it permits
+  keeps its own ability to execute programs and write files. `git`, `find` and
+  `jq` are all Turing-complete enough to be misused by an argument the
+  classifier didn't anticipate. Widening the auto-run set or fixing a
+  classification gap therefore changes *which* commands are trusted, never
+  *whether* trust in the classifier is well-founded — that second question is
+  [ADR-0011](docs/adr/0011-sandboxing-the-planners-shell.md), and it is open.
+  Bypasses of the classifier remain in scope here and will be fixed as they're
+  found; documenting the limit is not a decision to stop fixing them. Don't
+  rely on this classifier as the only barrier between the planner and
+  untrusted content in a repository — a hostile `README.md` or commit message
+  the planner reads during research should not be assumed contained by it
+  alone.
 - **The local API server.** `@ordewell/web` binds `127.0.0.1` and is
   unauthenticated by design, on the assumption that local access is trusted.
   Anything that makes it reachable off-host, or that lets a web page in a
@@ -53,3 +69,13 @@ their own repositories. The parts most worth your attention:
   read-only envelope.
 - Vulnerabilities in dependencies with no exploitable path through Ordewell.
   Send a PR bumping the dependency instead.
+
+Task autonomy is a related but separate boundary, and it's a user setting, not
+a security control this policy governs. Some autonomy levels let a task run
+without per-step confirmation; the consent gate for that is plan review —
+approving a plan is the decision that authorizes what it goes on to do. Once a
+plan is approved, executing it is out of scope here for the same reason the
+bullet above is: a runner doing what an approved plan says is the product
+working, not a boundary failing. Report a way to get a plan approved, or
+autonomy granted, without the user actually doing so; don't report an approved
+plan's runner behaving as planned.
