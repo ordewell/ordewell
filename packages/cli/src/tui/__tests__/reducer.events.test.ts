@@ -80,6 +80,48 @@ describe('planUpdated', () => {
     expect(s.tasks).toEqual([]);
     expect(s.selectedTask).toBe(0);
   });
+
+  // Every string here was written by a model, so it gets the same treatment a
+  // planner turn does — see `sanitize`. The pane paints these on every frame.
+  it('sanitizes the text a model wrote, the same as it does a planner turn', () => {
+    const s = send(initialState(), {
+      type: 'planUpdated',
+      plan: {
+        tasks: [{
+          id: 'a',
+          order: 1,
+          title: 'Add\tthe login\x07 route\x1b[10C',
+          description: 'wires\x1b[2K it up',
+          prompt: 'line one\r\nline two\x07',
+          status: 'pending',
+          type: 'ai',
+          assignedRunner: 'claude\x07-code',
+          assignedModel: { modelId: 'x\x1b[0m', modelLabel: 'Opus\x07 5', thinkingEffort: 'high\x07' },
+        }],
+      },
+    });
+
+    expect(s.tasks[0]).toMatchObject({
+      title: 'Add the login route',
+      description: 'wires it up',
+      assignedRunner: 'claude-code',
+    });
+    // The prompt is edited in a multi-line editor, so its newlines survive.
+    expect(s.tasks[0].prompt).toBe('line one\nline two');
+    expect(s.tasks[0].assignedModel).toMatchObject({ modelLabel: 'Opus 5', thinkingEffort: 'high' });
+  });
+
+  // A newline in one of the pane's one-row fields is written into the middle of
+  // a row rather than wrapped, which moves the cursor down a line and shoves
+  // the rest of the frame with it.
+  it('flattens a newline out of the fields the pane paints on one row', () => {
+    const s = send(initialState(), {
+      type: 'planUpdated',
+      plan: { tasks: [{ id: 'a', order: 1, title: 'two\nlines', status: 'pending', type: 'ai', assignedRunner: 'a\nb' }] },
+    });
+    expect(s.tasks[0].title).toBe('two lines');
+    expect(s.tasks[0].assignedRunner).toBe('a b');
+  });
 });
 
 describe('planner conversation', () => {

@@ -160,6 +160,25 @@ describe('reduce — stale session results', () => {
     const { state } = reduce(once, { type: 'plannerMessage', content: 'a\tb', sessionId: 's1' });
     expect(state.messages.filter((m) => m.role === 'assistant')).toHaveLength(1);
   });
+
+  it('strips the terminal control codes a coding agent`s output carries', () => {
+    const s = initialState();
+    const { state } = reduce(s, {
+      type: 'plannerMessage',
+      content: 'build failed\x07 \x1b[2Kretry\r ok \x1b[10Cshifted \x1b]0;title\x07 \x1b[31mred',
+    });
+    expect(state.messages.at(-1)?.content).toBe('build failed retry\n ok shifted  red');
+  });
+
+  it('strips them from an error turn too — a failing runner is where they come from', () => {
+    const { state } = reduce(initialState(), { type: 'failed', message: 'exit 1\x07\x1b[1;31m' });
+    expect(state.messages.at(-1)).toMatchObject({ role: 'error', content: 'exit 1' });
+  });
+
+  it('strips them from streamed reasoning, which is repainted on every tick', () => {
+    const { state } = reduce(initialState(), { type: 'plannerThinking', text: 'weighing\x07 options\x1b[2J' });
+    expect(state.thinkingLine).toBe('weighing options');
+  });
 });
 
 describe('reduce — one planner turn, two delivery paths', () => {

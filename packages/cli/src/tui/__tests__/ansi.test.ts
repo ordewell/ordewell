@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { stripAnsi, stripTabs, width, truncate, pad, style, wrap } from '../ansi';
+import { paintOnly, sanitize, stripAnsi, width, truncate, pad, style, wrap } from '../ansi';
 
 describe('stripAnsi', () => {
   it('removes colour codes', () => {
@@ -44,15 +44,69 @@ describe('truncate', () => {
   });
 });
 
-describe('stripTabs', () => {
+describe('sanitize', () => {
   it('replaces a tab with a single space', () => {
-    expect(stripTabs('a\tb')).toBe('a b');
+    expect(sanitize('a\tb')).toBe('a b');
   });
 
   it('is why a tab would otherwise be measured as free width', () => {
     // string-width's own documented behaviour, and the reason a literal tab
-    // slipping past `stripTabs` renders wider than any layout math believes.
+    // slipping past `sanitize` renders wider than any layout math believes.
     expect(width('\t')).toBe(0);
+  });
+
+  it('drops the bell — the frame it lands in is repainted every 120ms', () => {
+    expect(sanitize('done\x07!')).toBe('done!');
+  });
+
+  it('drops a whole CSI sequence, not only its ESC', () => {
+    // Left as `[10Cmoved` it would read as text; left whole it shifts the rest
+    // of the row — the pane divider with it — ten columns right.
+    expect(sanitize('a\x1b[10Cb\x1b[2K\x1b[Hc')).toBe('abc');
+    expect(sanitize('\x1b[31mred\x1b[0m')).toBe('red');
+  });
+
+  it('drops an OSC string, terminated by BEL or ST, and an unterminated one', () => {
+    expect(sanitize('a\x1b]0;window title\x07b')).toBe('ab');
+    expect(sanitize('a\x1b]52;c;Zm9v\x1b\\b')).toBe('ab');
+    expect(sanitize('a\x1b]0;never ends')).toBe('a');
+  });
+
+  it('drops the two-character forms and a lone ESC', () => {
+    expect(sanitize('a\x1b(Bb\x1b=c\x1b')).toBe('abc');
+  });
+
+  it('drops C1 introducers, which an 8-bit terminal reads as escapes', () => {
+    expect(sanitize('a5Cb')).toBe('a5Cb');
+  });
+
+  it('normalizes carriage returns rather than gluing the halves together', () => {
+    expect(sanitize('50%\r100%')).toBe('50%\n100%');
+    expect(sanitize('one\r\ntwo')).toBe('one\ntwo');
+  });
+
+  it('keeps newlines — wrapping is built on them', () => {
+    expect(sanitize('one\ntwo')).toBe('one\ntwo');
+  });
+});
+
+describe('paintOnly', () => {
+  it('keeps colour and the escapes the pane divider is anchored with', () => {
+    expect(paintOnly('\x1b[90m│\x1b[0m')).toBe('\x1b[90m│\x1b[0m');
+    expect(paintOnly('a\x1b[K\x1b[54Gb')).toBe('a\x1b[K\x1b[54Gb');
+  });
+
+  it('drops every escape this app does not paint with', () => {
+    expect(paintOnly('a\x1b[10Cb\x1b]0;t\x07c\x1b(Bd')).toBe('abcd');
+  });
+
+  it('drops raw control characters, including the tab and newline `sanitize` keeps', () => {
+    expect(paintOnly('a\x07b\rc\td\ne')).toBe('abcde');
+  });
+
+  it('leaves a row with nothing to strip untouched', () => {
+    const line = 'plain text';
+    expect(paintOnly(line)).toBe(line);
   });
 });
 

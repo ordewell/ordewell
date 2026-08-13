@@ -308,6 +308,47 @@ describe('openTerminal', () => {
     terminal.close();
   });
 
+  it('never writes an escape it did not paint with, whatever reaches the frame', () => {
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const terminal = openTerminal({
+      input: input as unknown as NodeJS.ReadStream,
+      output: output as unknown as NodeJS.WriteStream,
+      onKey: vi.fn(),
+      onResize: vi.fn(),
+    });
+
+    output.writes.length = 0;
+    terminal.draw(['ring\x07 move\x1b[10C wipe\x1b[2J title\x1b]0;t\x07 back\r']);
+    const draw = output.writes.join('');
+
+    // The bell above all: a frame is repainted on every spinner tick, so one
+    // left in it rings the terminal eight times a second for a whole run.
+    expect(draw).not.toContain('\x07');
+    expect(draw).not.toContain('\x1b[10C');
+    expect(draw).not.toContain('\x1b[2J');
+    expect(draw).not.toContain('\x1b]0;');
+    expect(draw).not.toContain('\r');
+    expect(draw).toContain('ring move wipe title back');
+    terminal.close();
+  });
+
+  it('keeps the colour and the pane-divider anchor the frame does paint with', () => {
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const terminal = openTerminal({
+      input: input as unknown as NodeJS.ReadStream,
+      output: output as unknown as NodeJS.WriteStream,
+      onKey: vi.fn(),
+      onResize: vi.fn(),
+    });
+
+    output.writes.length = 0;
+    terminal.draw(['chat\x1b[K\x1b[44G\x1b[90m│\x1b[0mplan']);
+    expect(output.writes.join('')).toContain('chat\x1b[K\x1b[44G\x1b[90m│\x1b[0mplan');
+    terminal.close();
+  });
+
   it('ignores draws after close and restores the terminal only once', () => {
     const input = new FakeInput();
     const output = new FakeOutput();

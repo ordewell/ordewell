@@ -1,10 +1,91 @@
 import stringWidth from 'string-width';
 
+/**
+ * Any escape sequence, not just the colour ones this file writes. The
+ * alternatives are ordered longest-form first because `]`, `P`, `^`, `_` and
+ * `[` all also match the catch-all tail:
+ *
+ * - `ESC ] … BEL|ST` — OSC (window title, OSC 52 clipboard). An unterminated
+ *   one runs to the end of the text, which is what a real terminal does with it.
+ * - `ESC P|^|_ … ST` — DCS, PM and APC strings.
+ * - `ESC [ … final` — CSI: cursor moves, erases, colour.
+ * - anything else — two-character forms (`ESC ( B`, `ESC =`) and a lone ESC.
+ */
 // eslint-disable-next-line no-control-regex
-const ANSI = /\x1b\[[0-9;]*m/g;
+const ESCAPE = /\x1b(?:\][\s\S]*?(?:\x07|\x1b\\|$)|[P^_][\s\S]*?(?:\x1b\\|$)|\[[0-?]*[ -/]*[@-~]?|[ -/]*[0-~]?)/g;
+
+/** The same, capturing, so `split` hands the escapes back alongside the text. */
+const ESCAPE_SPLIT = new RegExp(`(${ESCAPE.source})`);
+
+/**
+ * Every C0 control except tab and newline, DEL, and the C1 block — which a
+ * terminal in an 8-bit mode reads as escape sequence introducers.
+ */
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
+
+/** As above but tab and newline too: neither has a meaning inside a painted row. */
+// eslint-disable-next-line no-control-regex
+const CONTROL_IN_ROW = /[\x00-\x1f\x7f-\x9f]/g;
+/** Untainted by `lastIndex`, so it can answer `paintOnly`'s fast path. */
+// eslint-disable-next-line no-control-regex
+const HAS_CONTROL = /[\x00-\x1f\x7f-\x9f]/;
+
+/** The escapes a painted frame is allowed to carry — see `paintOnly`. */
+// eslint-disable-next-line no-control-regex
+const PAINT_ESCAPE = /^\x1b\[[0-9;]*[mGK]$/;
 
 export function stripAnsi(text: string): string {
-  return text.replace(ANSI, '');
+  return text.replace(ESCAPE, '');
+}
+
+/**
+ * Text from anywhere but this package, made safe to lay out and paint.
+ *
+ * Everything the TUI shows that it did not write itself — a planner turn, a
+ * research result, a task title, a runner's error — reaches it as whatever the
+ * coding agent or model emitted, and that routinely carries terminal control
+ * codes: a BEL, a progress bar's carriage returns, an unclosed colour, the
+ * cursor moves and erases a spinner redraws itself with.
+ *
+ * Left in, none of it is text. `width()` measures it as zero columns because
+ * the terminal does not *print* it — it *acts* on it: `ESC [ 10 C` shifts the
+ * rest of the row (the pane divider with it) ten columns right, `ESC [ 2 K`
+ * wipes the row the plan pane was about to be painted on, a lone `ESC [ 31 m`
+ * bleeds red over every row below, and a BEL rings the terminal — once per
+ * frame, which during a run is every 120ms.
+ *
+ * So it is dropped at the door rather than fought with downstream: tabs and CR
+ * normalize (a tab is eight columns wide on screen and zero to `width()`),
+ * newlines survive because wrapping is built on them, and nothing else that
+ * isn't a printable character gets through.
+ */
+export function sanitize(text: string): string {
+  return text
+    .replace(ESCAPE, '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/\t/g, ' ')
+    .replace(CONTROL, '');
+}
+
+/**
+ * One painted row with everything but this package's own paint removed: the
+ * colour it wrote, and the two escapes the pane split is anchored with.
+ *
+ * `sanitize` is the fix; this is the belt. It sits at the one point every byte
+ * bound for the tty passes through, so a field that grows a new source of
+ * untrusted text later cannot ring the bell or move the cursor — it can only
+ * paint the wrong-looking row.
+ */
+export function paintOnly(line: string): string {
+  if (!HAS_CONTROL.test(line)) return line;
+  return line
+    .split(ESCAPE_SPLIT)
+    .map((piece) =>
+      piece.startsWith('\x1b')
+        ? (PAINT_ESCAPE.test(piece) ? piece : '')
+        : piece.replace(CONTROL_IN_ROW, ''))
+    .join('');
 }
 
 /**
@@ -30,19 +111,6 @@ export function truncate(text: string, max: number): string {
     used += w;
   }
   return out + '…';
-}
-
-/**
- * A literal tab expands to the next hardware tab stop on the real terminal
- * but `string-width` counts it as zero columns (verified: `stringWidth('\t')
- * === 0`), so any row that still has one in it is wider on screen than every
- * layout calculation in this package believes. Replaced with a single space
- * rather than expanded to a tab stop's width — transcript text has no columns
- * of its own to keep aligned, so there is nothing a stop-aware expansion would
- * preserve that a single space does not.
- */
-export function stripTabs(text: string): string {
-  return text.replace(/\t/g, ' ');
 }
 
 export function pad(text: string, target: number): string {

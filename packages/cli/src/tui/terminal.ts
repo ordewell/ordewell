@@ -1,4 +1,4 @@
-import { style, truncate, width } from './ansi';
+import { paintOnly, style, truncate, width } from './ansi';
 import { createKeyDecoder, type Key } from './keys';
 
 const ALT_SCREEN_ON = '\x1b[?1049h';
@@ -148,9 +148,17 @@ export function openTerminal(options: TerminalOptions): Terminal {
       // below it down by one line. Still not clear-and-redraw — that makes
       // the whole screen flicker on every keystroke — each row is erased,
       // not the frame.
+      //
+      // `paintOnly` runs on the way out for the same reason `clampToCols`
+      // does: it is the last point every byte bound for the tty passes
+      // through. Text the TUI did not write itself is sanitized where it
+      // arrives (see `sanitize`), but a field that grows a new source of it
+      // later must not be able to ring the bell on every spinner tick or move
+      // the cursor out from under the pane divider — from here on, the only
+      // escapes that reach the terminal are the ones this app painted.
       const { cols } = size();
       const rows = frame
-        .map((line, i) => `\x1b[${i + 1};1H${clampToCols(line, cols)}\x1b[K`)
+        .map((line, i) => `\x1b[${i + 1};1H${clampToCols(paintOnly(line), cols)}\x1b[K`)
         .join('');
       output.write(AUTOWRAP_OFF + rows + AUTOWRAP_ON);
     },

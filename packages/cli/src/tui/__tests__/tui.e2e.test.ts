@@ -171,12 +171,14 @@ function harness() {
   app.start();
 
   const type = (text: string) => input.emit('data', text);
-  // A draw is now row-anchored (`terminal.ts`): each row is its own
-  // `ESC[<row>;1H<content>ESC[K` rather than one HOME-and-join blit, so
-  // reassembling "the screen" means picking each row's content out by its own
-  // position code and re-joining in row order.
+  // A draw is row-anchored (`terminal.ts`): each row is its own
+  // `ESC[<row>;1H<content>` rather than one HOME-and-join blit, so reassembling
+  // "the screen" means picking each row's content out by its own position code
+  // and re-joining in row order. A row runs to the next position code — not to
+  // the first erase in it, since a body row carries one mid-row to anchor the
+  // pane divider (`render.ts`).
   // eslint-disable-next-line no-control-regex
-  const ROW = /\x1b\[(\d+);1H([\s\S]*?)\x1b\[K/g;
+  const ROW = /\x1b\[(\d+);1H([\s\S]*?)(?=\x1b\[\d+;1H|$)/g;
   const frames = () =>
     output.writes
       .filter((w) => w.includes('\x1b[?7l'))

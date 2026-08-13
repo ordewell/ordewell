@@ -1,4 +1,4 @@
-import { stripTabs } from './ansi';
+import { sanitize } from './ansi';
 
 export interface Key {
   name: string;
@@ -178,15 +178,12 @@ const PASTE_END = '\x1b[201~';
 /**
  * Everything between the bracketed-paste markers is data, never keystrokes —
  * that is the whole point of the mode: a pasted newline must not act as enter.
- * Line endings are normalized and remaining control characters dropped so a
- * malicious paste cannot smuggle escape sequences into the editor either. Tabs
- * are normalized rather than dropped with the rest — see `stripTabs` — since a
- * dropped tab still glues the words on either side of it together.
+ * It goes through the same door every other piece of text the TUI did not write
+ * itself does, so a paste cannot smuggle an escape sequence into the editor —
+ * see `sanitize`, which drops whole sequences rather than only their ESC.
  */
 function pasteKey(raw: string): Key {
-  // eslint-disable-next-line no-control-regex
-  const text = stripTabs(raw.replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, ''));
-  return { name: 'paste', text };
+  return { name: 'paste', text: sanitize(raw) };
 }
 
 /**

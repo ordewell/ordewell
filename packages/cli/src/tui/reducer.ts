@@ -1,6 +1,6 @@
 import { ALL_PROVIDERS, CLI_PROVIDERS, PROVIDER_PRIORITY, runnerForProvider, type AiProvider, type ConversationMessage, type ResearchStepOutcome } from '@ordewell/core';
 import { dependencyCandidates, dependentsOf } from '@ordewell/core/plan-utils';
-import { stripTabs } from './ansi';
+import { sanitize } from './ansi';
 import { applyKey, commit, emptyEditor, type EditorState } from './editor';
 import { chatEditorRoom, chatPaneWidth, paneColumns, planPaneWidth, taskEditorRoom } from './geometry';
 import { bodyRows, chatScrollMax, helpScrollMax, planScrollExtent } from './layout';
@@ -95,9 +95,9 @@ function step(state: TuiState, effects: Effect[] = []): Step {
 
 function say(state: TuiState, role: MessageRole, content: string, research?: ChatMessage['research']): TuiState {
   // The daemon, not just the keyboard, can hand us a literal tab (a planner
-  // turn, a research summary) — see `stripTabs` for why one left in breaks
+  // turn, a research summary) — see `sanitize` for why one left in breaks
   // the frame just as a pasted one would.
-  const message: ChatMessage = { role, content: stripTabs(content), timestamp: new Date().toISOString(), ...(research ? { research } : {}) };
+  const message: ChatMessage = { role, content: sanitize(content), timestamp: new Date().toISOString(), ...(research ? { research } : {}) };
   // A new turn snaps a scrolled-back transcript to the tail — following the
   // conversation beats preserving the reading position.
   return { ...state, messages: [...state.messages, message], scroll: 0 };
@@ -112,7 +112,7 @@ function say(state: TuiState, role: MessageRole, content: string, research?: Cha
 function restoredMessages(history: ConversationMessage[]): ChatMessage[] {
   return history.map((entry) => ({
     role: entry.kind === 'plan_generated' ? 'system' : entry.kind === 'system' ? 'system' : entry.role,
-    content: stripTabs(entry.kind === 'plan_generated' ? 'Plan generated.' : entry.content),
+    content: sanitize(entry.kind === 'plan_generated' ? 'Plan generated.' : entry.content),
     timestamp: entry.timestamp,
   }));
 }
@@ -156,7 +156,7 @@ function settleResearchStep(
   // The stored entry's content already went through `say`, so the no-id
   // fallback match has to compare against the same sanitized form or a
   // summary carrying a tab would never settle.
-  const summary = stripTabs(action.summary);
+  const summary = sanitize(action.summary);
   const index = findLastIndex(messages, (m) =>
     isPendingResearch(m) &&
     (action.toolCallId ? m.research?.toolCallId === action.toolCallId : m.content === summary));
@@ -165,7 +165,7 @@ function settleResearchStep(
   const next = [...messages];
   next[index] = {
     ...next[index],
-    research: { ...next[index].research, outcome: action.outcome, result: stripTabs(action.result) },
+    research: { ...next[index].research, outcome: action.outcome, result: sanitize(action.result) },
   };
   return next;
 }
@@ -246,7 +246,7 @@ export function reduce(state: TuiState, action: Action): Step {
       // Sanitized before the comparison, not just before storage — `say`
       // stores the sanitized form, so matching against the raw turn would
       // never dedup a repeat that carries a tab.
-      const content = stripTabs(action.content);
+      const content = sanitize(action.content);
       // Already on screen: the same turn reached us over both the session
       // socket and the REST reply (see `converse`), so only the status settles.
       if (alreadySpoken(state.messages, content)) return step(settled);
@@ -255,7 +255,7 @@ export function reduce(state: TuiState, action: Action): Step {
 
     case 'researchStep': {
       if (stale(state, action.sessionId)) return step(state);
-      const summary = stripTabs(action.summary);
+      const summary = sanitize(action.summary);
       // A transcript entry, not just a spinner label: overwriting the label was
       // why a parallel round collapsed to whichever call finished last.
       const spoken = say(state, 'research', summary, { toolCallId: action.toolCallId });
@@ -283,7 +283,10 @@ export function reduce(state: TuiState, action: Action): Step {
 
     case 'plannerThinking': {
       if (stale(state, action.sessionId)) return step(state);
-      return step({ ...state, thinkingLine: (state.thinkingLine + action.text).slice(-THINKING_TAIL) });
+      // The one piece of planner text that never becomes a transcript entry,
+      // and so never passes through `say` — it goes straight to the status row,
+      // which is repainted on every spinner tick.
+      return step({ ...state, thinkingLine: (state.thinkingLine + sanitize(action.text)).slice(-THINKING_TAIL) });
     }
 
     case 'taskStatus': {
@@ -406,6 +409,21 @@ export function reduce(state: TuiState, action: Action): Step {
 // ── Incoming data ────────────────────────────────────────────────────────────
 
 /**
+ * A plan's text, safe to lay out. Every field here was written by a model, so
+ * it gets the same treatment a planner turn does — see `sanitize`.
+ */
+const planText = (value: unknown, fallback = ''): string => sanitize(String(value ?? fallback));
+
+/**
+ * The same, for a field the pane paints on one row. A newline surviving into
+ * one of these would be written into the middle of a row rather than wrapped,
+ * which moves the terminal's cursor down a line and shoves the rest of the
+ * frame with it — the plan pane's meta rows are `truncate`d, not wrapped, so
+ * nothing downstream would split it.
+ */
+const planLabel = (value: unknown, fallback = ''): string => planText(value, fallback).replace(/\n+/g, ' ');
+
+/**
  * A plan reaches the TUI in two shapes. Live from the planner it is one flat
  * `tasks` array; persisted it is split in two — finished tasks in
  * `executionLog`, the rest in `pendingTasks` — so the two halves are rejoined
@@ -430,27 +448,27 @@ function normalizeTasks(plan: unknown): TaskView[] {
   return raw.map((t, i) => ({
     id: String(t.id ?? `task-${i + 1}`),
     order: typeof t.order === 'number' ? t.order : i + 1,
-    title: String(t.title ?? 'Untitled task'),
-    description: String(t.description ?? t.title ?? ''),
-    prompt: typeof t.prompt === 'string' ? t.prompt : undefined,
+    title: planLabel(t.title, 'Untitled task'),
+    description: planText(t.description ?? t.title),
+    prompt: typeof t.prompt === 'string' ? sanitize(t.prompt) : undefined,
     type: t.type === 'user' ? 'user' : 'ai',
-    status: String(t.status ?? 'pending'),
-    dependencies: Array.isArray(t.dependencies) ? t.dependencies.map(String) : [],
-    assignedRunner: typeof t.assignedRunner === 'string' ? t.assignedRunner : undefined,
-    taskMode: typeof t.taskMode === 'string' ? t.taskMode : undefined,
+    status: planLabel(t.status, 'pending'),
+    dependencies: Array.isArray(t.dependencies) ? t.dependencies.map((id: unknown) => planLabel(id)) : [],
+    assignedRunner: typeof t.assignedRunner === 'string' ? planLabel(t.assignedRunner) : undefined,
+    taskMode: typeof t.taskMode === 'string' ? planLabel(t.taskMode) : undefined,
     assignedModel:
       t.assignedModel && typeof t.assignedModel === 'object'
         ? {
-            modelId: String(t.assignedModel.modelId ?? ''),
-            modelLabel: String(t.assignedModel.modelLabel ?? t.assignedModel.modelId ?? ''),
+            modelId: planLabel(t.assignedModel.modelId),
+            modelLabel: planLabel(t.assignedModel.modelLabel ?? t.assignedModel.modelId),
             thinkingEffort:
               typeof t.assignedModel.thinkingEffort === 'string'
-                ? t.assignedModel.thinkingEffort
+                ? planLabel(t.assignedModel.thinkingEffort)
                 : typeof t.thinkingEffort === 'string'
-                  ? t.thinkingEffort
+                  ? planLabel(t.thinkingEffort)
                   : undefined,
             availableVariants: Array.isArray(t.assignedModel.availableVariants)
-              ? t.assignedModel.availableVariants.map(String)
+              ? t.assignedModel.availableVariants.map((variant: unknown) => planLabel(variant))
               : undefined,
           }
         : undefined,

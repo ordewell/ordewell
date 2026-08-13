@@ -3,6 +3,16 @@ import { render } from '../render';
 import { chatBodyLines } from '../layout';
 import { stripAnsi, style, width } from '../ansi';
 import { initialState, type ChatMessage, type TaskView, type TuiState } from '../state';
+import { reduce } from '../reducer';
+
+// Any escape sequence at all, and the two kinds a painted frame may carry:
+// colour, and the erase-plus-cursor-column the pane divider is anchored with.
+// eslint-disable-next-line no-control-regex
+const ANY_ESCAPE = /\x1b(?:\][\s\S]*?(?:\x07|\x1b\\|$)|\[[0-?]*[ -/]*[@-~]?|[ -/]*[0-~]?)/g;
+// eslint-disable-next-line no-control-regex
+const PAINT_ESCAPE = /^\x1b\[[0-9;]*[mGK]$/;
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHAR = /[\x00-\x1f\x7f-\x9f]/;
 
 beforeAll(() => {
   // Deterministic frames: colour codes would only make the assertions noisy.
@@ -62,9 +72,68 @@ describe('frame geometry', () => {
     for (const line of out) expect(width(line)).toBeLessThanOrEqual(100);
   });
 
+  it('anchors the divider to its column instead of trusting the chat side to end there', () => {
+    // `width()` is a guess at how many columns the terminal will spend on the
+    // chat side. The anchor is what makes a wrong guess cost a garbled chat row
+    // rather than a plan pane painted five columns into the transcript.
+    const body = screen({ cols: 100, tasks }).filter((line) => stripAnsi(line).includes('│'));
+    expect(body.length).toBeGreaterThan(0);
+    for (const line of body) expect(line).toContain('\x1b[K\x1b[54G');
+  });
+
+  it('lets no control character or foreign escape out of a planner turn into the frame', () => {
+    // What a coding agent's output actually carries: a bell, a spinner's
+    // erase-and-return, a cursor move, a window title. Left in, the bell rings
+    // on every spinner tick and the cursor move takes the divider with it.
+    const hostile = 'failed:\x07 \x1b[2Krestart\r shifted\x1b[10C \x1b]0;title\x07 \x1b[31mred';
+    const { messages } = reduce(initialState({ rows: 24, cols: 100, tasks }), {
+      type: 'plannerMessage', content: hostile,
+    }).state;
+
+    for (const line of screen({ cols: 100, tasks, messages })) {
+      for (const escape of line.match(ANY_ESCAPE) ?? []) expect(escape).toMatch(PAINT_ESCAPE);
+      expect(line.replace(ANY_ESCAPE, '')).not.toMatch(CONTROL_CHAR);
+    }
+  });
+
+  it('keeps the divider aligned when a task title arrives full of control codes', () => {
+    const { tasks: normalized } = reduce(initialState({ rows: 24, cols: 100 }), {
+      type: 'planUpdated',
+      plan: { tasks: [{ id: 'a', order: 1, title: 'Add\tthe\x07 login\x1b[9C route', status: 'pending', type: 'ai' }] },
+    }).state;
+
+    const out = screen({ cols: 100, tasks: normalized });
+    const dividers = out
+      .filter((line) => stripAnsi(line).includes('│'))
+      .map((line) => width(stripAnsi(line).slice(0, stripAnsi(line).indexOf('│'))));
+    expect(new Set(dividers)).toEqual(new Set([53]));
+    for (const line of out) expect(width(line)).toBeLessThanOrEqual(100);
+  });
+
   it('still renders in a cramped terminal', () => {
     expect(() => render(initialState({ rows: 6, cols: 20, tasks }))).not.toThrow();
     expect(render(initialState({ rows: 6, cols: 20, tasks }))).toHaveLength(6);
+  });
+
+  // Dragging a window edge is a stream of resizes, and every size in it gets a
+  // frame — including the ones on either side of the width where the plan pane
+  // appears, and the ones too small for it to be worth showing at all.
+  it('fills the terminal exactly, and overruns nothing, at every width', () => {
+    const hostile = 'ring\x07 \x1b[2Kmove\x1b[9C\r wide 日本語 ' + 'word '.repeat(60);
+    const planned = reduce(initialState({ rows: 24, cols: 80 }), {
+      type: 'planUpdated',
+      plan: { tasks: [{ id: 'a', order: 1, title: hostile, status: 'running', type: 'ai' }] },
+    }).state;
+    const state = reduce(planned, { type: 'plannerMessage', content: hostile }).state;
+
+    for (let cols = 1; cols <= 200; cols++) {
+      for (const rows of [1, 3, 8, 24, 60]) {
+        const resized = reduce(state, { type: 'resize', rows, cols }).state;
+        const frame = render(resized);
+        expect(frame).toHaveLength(rows);
+        for (const line of frame) expect(width(line)).toBeLessThanOrEqual(cols);
+      }
+    }
   });
 });
 

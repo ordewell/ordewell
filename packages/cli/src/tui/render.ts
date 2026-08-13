@@ -93,9 +93,12 @@ function cells(line: string): string[] {
 const INVERSE_ON = '\x1b[7m';
 const INVERSE_OFF = '\x1b[27m';
 // Capturing, so `split` hands back the escapes along with the text between
-// them — the row is walked once rather than re-scanned per character.
+// them — the row is walked once rather than re-scanned per character. Wider
+// than SGR because a body row also carries the divider's anchor.
 // eslint-disable-next-line no-control-regex
-const SGR_SPLIT = /(\x1b\[[0-9;]*m)/;
+const ESCAPE_SPLIT = /(\x1b\[[0-9;]*[A-Za-z])/;
+// eslint-disable-next-line no-control-regex
+const CURSOR_COLUMN = /^\x1b\[([0-9]*)G$/;
 
 /**
  * One row with `from`..`to` (inclusive, 1-based) inverted.
@@ -115,8 +118,13 @@ function invertCells(line: string, from: number, to: number): string {
   let col = 1;
   let inside = false;
 
-  for (const piece of line.split(SGR_SPLIT)) {
-    if (SGR_SPLIT.test(piece)) {
+  for (const piece of line.split(ESCAPE_SPLIT)) {
+    if (ESCAPE_SPLIT.test(piece)) {
+      // The divider's anchor decides where the next character lands, so the
+      // walk follows it — otherwise every column past the divider would be
+      // counted from wherever the chat side happened to end.
+      const jump = CURSOR_COLUMN.exec(piece);
+      if (jump) col = Number(jump[1] || '1');
       out += piece + (inside ? INVERSE_ON : '');
       continue;
     }
@@ -265,6 +273,29 @@ function renderFooter(state: TuiState, cols: number): string[] {
 
 // ── Body ─────────────────────────────────────────────────────────────────────
 
+// Erase to end of line, then put the cursor on an absolute column of the row it
+// is already on. Both are width-zero to `width()` — `stripAnsi` drops every
+// escape sequence, not only colour — so a row carrying them still measures, and
+// still slices for selection, exactly as the text alone would.
+const ERASE_TO_END = '\x1b[K';
+const atColumn = (col: number): string => `\x1b[${col}G`;
+
+/**
+ * The two panes and the divider between them.
+ *
+ * The divider is *anchored* to its column rather than assumed to land there.
+ * `width()` is this package's best guess at how many columns the terminal will
+ * spend on the chat side, and a guess is all it can be: an emoji, a ZWJ family,
+ * a flag or a CJK cluster the terminal measures differently is a guess that is
+ * wrong, and the divider — with the whole plan pane behind it — slides right by
+ * the difference. That is the pane splice this is here to make impossible.
+ *
+ * So the row says where the divider goes instead of counting on the chat side
+ * to end there: erase whatever the chat side left across the rest of the row,
+ * jump to the divider's column, paint from there. An over-running chat row is
+ * overwritten, an under-running one leaves no debris, and either way the plan
+ * pane starts on the column it owns.
+ */
 function renderBody(state: TuiState, rows: number, cols: number): string[] {
   const planCols = planPaneWidth(state);
   if (planCols === 0) return renderChat(state, rows, cols);
@@ -272,9 +303,10 @@ function renderBody(state: TuiState, rows: number, cols: number): string[] {
   const chatCols = chatPaneWidth(state);
   const chat = renderChat(state, rows, chatCols);
   const plan = renderPlan(state, rows, planCols);
+  const divider = `${ERASE_TO_END}${atColumn(chatCols + 1)}${style.grey('│')}`;
 
   return Array.from({ length: rows }, (_, i) =>
-    `${pad(chat[i] ?? '', chatCols)}${style.grey('│')}${pad(plan[i] ?? '', planCols)}`,
+    `${pad(chat[i] ?? '', chatCols)}${divider}${pad(plan[i] ?? '', planCols)}`,
   );
 }
 
