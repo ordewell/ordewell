@@ -229,10 +229,16 @@ rather than writing the field), so no surface owns a second copy of the clamp.
 `Session.setTaskDependencies`)** — a hand-edited dependency list is the one task
 edit that can leave a plan unschedulable, so like the runner it is not a field
 write. The rule is that dependencies point *backwards in display order*, the same
-invariant `applyTaskOps`' post-pass enforces (its sole enforcer — `order` itself
+invariant `applyTaskOps`' post-pass owns (its sole owner — `order` itself
 is not user-editable, since independent tasks fan out and position was never the
 schedule); with that, a cycle cannot be expressed and no cycle check is needed at
-the edit site.
+the edit site. On the planner path that post-pass *repairs* rather than refuses:
+a batch declares dependencies and `repairOrder` re-slots whatever the graph now
+demands, keeping unrelated tasks in their relative order and every running or
+completed task in the exact slot it already holds — a batch that could only be
+satisfied by shifting one of those is what gets refused, naming it. The `reorder`
+op therefore survives only as deliberate re-prioritising of *independent* tasks;
+nobody has to re-declare a whole plan to move one dependency.
 `dependencyCandidates` is what a picker offers (earlier tasks only; omit the id
 for a task that does not exist yet, since a new task lands last) and
 `canSetDependencies` is what the API refuses — one rule, two readings of it, so a
@@ -271,9 +277,56 @@ completed set, which is safe because `removeTaskFromPlan` detaches the
 dependents in the same op; `PlanStore.remove` additionally releases any
 dependent parked at `blocked`, whose status `isBlocked` reads on its own and
 which nothing else would ever unblock.
-*Avoid:* adding a second copy of a rule to one side. A hand-set dependency list
-is validated by `canSetDependencies` in `updateTask` — the one guard the
-pickers, the API and the planner all read.
+The asymmetry itself is expressed as one `actor` parameter (`'planner' |
+'direct'`) on **TaskEditValidator**'s single `validateTaskEdit`, not as two
+separate rule implementations — see below.
+*Avoid:* adding a second copy of a rule to one side. A hand-set dependency list,
+a type flip, and a model/mode assignment are all validated by
+`validateTaskEdit` — the one guard the pickers, the API and the planner all
+read, `canSetDependencies` included as one of the checks it runs.
+
+**TaskEditValidator** (`validateTaskEdit(actor, tasks, taskId, changes,
+catalog?)`) — the one checker behind both edit paths described above:
+`applyTaskOps` calls it with `actor: 'planner'`, `Session.updateTask` calls it
+with `actor: 'direct'`. Only the lock rule (no touching `in_progress` or
+`completed`) reads the actor; every other rule — a hand-set dependency list
+(`canSetDependencies`), coherence on an AI↔MAN `type` flip, and whether an
+`assignedModel`/`taskMode` is something the target runner actually offers —
+describes the *task*, not who is editing it, so both actors run the same
+check. A flip that is well-formed returns which fields the new type stripped
+of meaning (`TaskEditCheck.clear`) — `assignedModel`/`thinkingEffort`/
+`taskMode`/`autonomy` going to `user`, `userSteps` going to `ai` — named so the
+caller can force-clear them and say what was lost, rather than leaving stale
+values that describe a type the task no longer has. The `EditCatalog` a
+model/mode check runs against is deliberately the same discovered models and
+manifest modes the planner was already shown, in the per-turn catalog block
+and in a Task query catalog answer (below) — a refusal here can never name
+something invalid that the planner was never told about, or the reverse.
+*Avoid:* calling `coerceAssignments` from here — that function is the silent
+safety net for paths that never reach this validator (a plan committed under a
+now-stale catalog); this validator refuses instead of coercing, because a
+planner mid-edit has a repair loop to answer to and a coerced value it never
+asked for would drift the plan without telling either side.
+
+**Task query** (`{"taskQuery":{"tasks":[...],"fields"?:[...],"catalog"?:true}}`)
+— the planner's read channel, alongside the plan and `taskOps` envelopes
+`classifyPlannerReply` already recognizes (see ADR-0012). The per-turn plan
+block is short-fields-only by design (title, status, runner, model, mode,
+deps — never a task's `prompt`, `userSteps`, `verdict`, `outputSummary`, or
+`userStoriesCovered`), so a query is how the planner reads what the block
+leaves out before rewriting it, instead of fabricating content it never saw.
+`Session.drainTaskQueries` answers it — from live state, never persisted to
+`conversationHistory` — in its own loop *before* `repairLoop`, so a read never
+spends the corrective-retry budget a fumbled edit is owed, and *before* the
+live-execution queue gate, so a read still lands mid-run (it mutates nothing).
+Budgeted per user turn: three reads before every answer also nudges the model
+to land the turn, six before the loop stops answering and returns a message
+turn instead; a repeated identical query (`taskQuerySignature`) is treated as
+already at the soft cap. `catalog: true` needs no plan yet, so it is legal on
+the very first planning turn.
+*Avoid:* inlining full task bodies into the per-turn plan block to sidestep
+this — that is the token cost the channel exists to avoid paying on every
+turn regardless of whether the turn needs it.
 
 **Webview modals are host modals** — `window.confirm`/`alert`/`prompt` are inert
 in a VS Code webview: it is sandboxed without `allow-modals`, so Chromium ignores

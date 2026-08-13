@@ -36,7 +36,10 @@ describe('conversation resume after session load', () => {
     expect(startConversation).toHaveBeenCalledTimes(1);
     const req = startConversation.mock.calls[0][0];
     expect(req.goal).toBe('build me a parser');
-    expect(req.initialMessage).toBe('JSON and YAML');
+    // The always-on catalog block (models + task modes) precedes the raw
+    // message on every turn, including a resumed pre-plan interview.
+    expect(req.initialMessage).toContain('<available_models>');
+    expect(req.initialMessage.endsWith('JSON and YAML')).toBe(true);
     expect(req.priorHistory).toHaveLength(2);
     expect(req.priorHistory[1].content).toBe('Which file formats?');
   });

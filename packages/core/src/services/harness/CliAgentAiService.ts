@@ -23,6 +23,7 @@ import {
   generatePlanWithRepair,
   reEmitPlanPrompt,
   reEmitTaskOpsPrompt,
+  reEmitTaskQueryPrompt,
 } from '../PlanRepair';
 import { extractPrdBlock } from '../../utils/prdStore';
 import { runnerForProvider } from '../ProviderRegistry';
@@ -282,6 +283,11 @@ export class CliAgentAiService implements IAiService {
           case 'task_ops':
             return { kind: 'task_ops', ops: reply.ops, text: turn.text, researchLog };
 
+          // The read channel is a text envelope precisely so it reaches here
+          // too: a harness planner has no Ordewell tool loop to call into.
+          case 'task_query':
+            return { kind: 'task_query', query: reply.query, text: turn.text, researchLog };
+
           case 'plan':
             if (conversation.prdEnabled && !conversation.prdCaptured && !conversation.prdNudgeSent && !combined?.aborted) {
               conversation.prdNudgeSent = true;
@@ -304,6 +310,14 @@ export class CliAgentAiService implements IAiService {
             if (jsonRepairAttempts < MAX_JSON_REPAIRS && !combined?.aborted) {
               jsonRepairAttempts++;
               pending = reEmitTaskOpsPrompt(reply.error.message);
+              continue;
+            }
+            break;
+
+          case 'broken_task_query':
+            if (jsonRepairAttempts < MAX_JSON_REPAIRS && !combined?.aborted) {
+              jsonRepairAttempts++;
+              pending = reEmitTaskQueryPrompt(reply.error.message);
               continue;
             }
             break;

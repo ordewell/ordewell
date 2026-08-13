@@ -1,10 +1,11 @@
 import type { Task, RunnerId } from '../models/Task';
 import {
   PlanParseError, extractObjectsWithKey,
-  PLAN_ENVELOPE_KEY, TASK_OPS_ENVELOPE_KEY,
+  PLAN_ENVELOPE_KEY, TASK_OPS_ENVELOPE_KEY, TASK_QUERY_ENVELOPE_KEY,
 } from './JsonExtractor';
 import { parsePlanJson, looksLikePlanAttempt } from './PlanValidator';
 import { parseTaskOpsJson, textHasTaskOps, type TaskOp } from './TaskOps';
+import { parseTaskQueryJson, textHasTaskQuery, type TaskQuery } from './TaskQuery';
 import type { RunnerModeInfo } from './ModeResolver';
 
 /**
@@ -92,6 +93,11 @@ export function reEmitTaskOpsPrompt(detail: string): string {
   return `Your task edits could not be applied: ${detail}. Re-emit ONLY a corrected {"${TASK_OPS_ENVELOPE_KEY}":[...]} JSON object — no prose, no code fences — or reply in prose if you did not intend to edit tasks.`;
 }
 
+/** A read attempt was botched (unparseable or unknown selector): re-emit the query object. */
+export function reEmitTaskQueryPrompt(detail: string): string {
+  return `Your task-detail request could not be read: ${detail}. Re-emit ONLY a corrected {"${TASK_QUERY_ENVELOPE_KEY}":{"tasks":["<id or #order>"],"fields"?:[...],"catalog"?:true}} JSON object — no prose, no code fences — or reply in prose if you did not mean to look anything up.`;
+}
+
 /** Task ops parsed but failed semantic validation (cycles, unknown refs, locked tasks). */
 export function taskOpsRejectedPrompt(errors: string[]): string {
   return `Those task edits were rejected:\n- ${errors.join('\n- ')}\nRe-emit a corrected {"${TASK_OPS_ENVELOPE_KEY}":[...]} JSON object, or reply in prose if something is unclear.`;
@@ -116,10 +122,14 @@ export function modifyValidationFeedback(errors: string[]): string {
 export type PlannerReplyClassification =
   | { kind: 'plan'; tasks: Task[] }
   | { kind: 'task_ops'; ops: TaskOp[] }
+  /** A read: show me these tasks in full (and/or the whole catalog) before I edit anything. */
+  | { kind: 'task_query'; query: TaskQuery }
   /** Clearly attempted a plan (tasks-keyed object, or JSON cut off mid-stream) and botched it — worth a corrective retry. */
   | { kind: 'broken_plan'; error: PlanParseError }
   /** Clearly attempted an ops object and botched it — worth a corrective retry. */
   | { kind: 'broken_task_ops'; error: PlanParseError }
+  /** Clearly attempted a read and botched it — worth a corrective retry. */
+  | { kind: 'broken_task_query'; error: PlanParseError }
   | { kind: 'prose' };
 
 /**
@@ -148,6 +158,20 @@ export function classifyPlannerReply(
         extractObjectsWithKey(text, TASK_OPS_ENVELOPE_KEY).matches.length > 0
       ) {
         return { kind: 'broken_task_ops', error: err };
+      }
+    }
+  }
+
+  // Reads are checked before the plan key because a query's own body carries a
+  // "tasks" list — an unguarded plan check would read every query as a botched
+  // plan and spend a repair correcting a reply that was never wrong.
+  if (textHasTaskQuery(text)) {
+    try {
+      return { kind: 'task_query', query: parseTaskQueryJson(text) };
+    } catch (err) {
+      if (!(err instanceof PlanParseError)) throw err;
+      if (extractObjectsWithKey(text, TASK_QUERY_ENVELOPE_KEY).matches.length > 0) {
+        return { kind: 'broken_task_query', error: err };
       }
     }
   }

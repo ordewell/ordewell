@@ -3,6 +3,7 @@ import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import * as sessionStore from '../../utils/sessionStore';
 import { FakeTerminalSession, makeSession, testWorkspace } from './sessionTestKit';
 import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
+import type { ModelResolver } from '../ModelResolver';
 
 /** A runner double that records the order tasks were spawned in. */
 function recordingRunner(spawned: string[]): ITerminalRunner {
@@ -144,6 +145,43 @@ describe('task_ops conversation turns', () => {
     expect(String(continueConversation.mock.calls[1][0])).toMatch(/rejected/);
     expect(session.planTasks[0].title).toBe('Setup v2');
     expect(session.planTasks[0].dependencies).toEqual([]);
+  });
+
+  // The type-coherence rule (TaskOps.test.ts, "type coherence on AI <-> MAN
+  // flips") is a validation failure like any other: the planner never sees a
+  // hard error, only the corrective prompt, and self-corrects within budget.
+  it('feeds a type-coherence refusal back and applies the corrected retry', async () => {
+    const continueConversation = vi.fn()
+      .mockResolvedValueOnce({
+        kind: 'task_ops',
+        ops: [{ op: 'update', taskId: 'b', changes: { type: 'user' } }], // missing userSteps
+        text: '', researchLog: [],
+      })
+      .mockResolvedValueOnce({
+        kind: 'task_ops',
+        ops: [{
+          op: 'update', taskId: 'b',
+          changes: { type: 'user', userSteps: [{ order: 1, instruction: 'ship it', completed: false }] },
+        }],
+        text: '', researchLog: [],
+      });
+    const session = makeSession({
+      aiService: {
+        startConversation: vi.fn(),
+        continueConversation,
+        hasActiveConversation: () => true,
+        reset: vi.fn(),
+      },
+    });
+    session.loadPlan(planWithTasks(), 'g', testWorkspace, { persist: false });
+
+    await session.continueConversation('make the build step manual');
+
+    expect(continueConversation).toHaveBeenCalledTimes(2);
+    expect(String(continueConversation.mock.calls[1][0])).toMatch(/rejected/);
+    const build = session.planTasks.find((t) => t.id === 'b')!;
+    expect(build.type).toBe('user');
+    expect(build.userSteps).toHaveLength(1);
   });
 
   it('gives up after retries and surfaces the errors with the plan untouched', async () => {
@@ -298,6 +336,38 @@ describe('task_ops conversation turns', () => {
     expect(spawned).toEqual(['b']); // the live runner, not a second copy of it
   });
 
+  it('gives a planner-added task without an explicit model a valid, spawnable assignment', async () => {
+    const modelResolver = {
+      modelsForRunners: vi.fn().mockResolvedValue({
+        'claude-code': [{ modelId: 'claude-sonnet-4-5', modelLabel: 'Claude Sonnet 4.5', variants: [] }],
+      }),
+    } as unknown as Pick<ModelResolver, 'modelsForRunners'>;
+    const session = makeSession({
+      modelResolver,
+      aiService: {
+        startConversation: vi.fn().mockResolvedValue({ kind: 'message', text: 'ok, planning', researchLog: [] }),
+        continueConversation: vi.fn().mockResolvedValue({
+          kind: 'task_ops',
+          ops: [{ op: 'add', task: { title: 'Docs', description: 'write docs', prompt: 'write the docs', dependencies: ['a'] } }],
+          text: '', researchLog: [],
+        }),
+        hasActiveConversation: () => true,
+        reset: vi.fn(),
+      },
+    });
+    // Seeds modelsCache the way a live planning conversation would — loadPlan
+    // alone (a bare resume) never calls the model resolver.
+    await session.startPlanning('goal', ['claude-code']);
+    session.loadPlan(planWithTasks(), 'build it', testWorkspace, { persist: false });
+
+    await session.continueConversation('add a docs task after setup');
+
+    const added = session.planTasks.find((t) => t.title === 'Docs')!;
+    expect(added.assignedRunner).toBe('claude-code');
+    expect(added.assignedModel!.modelId).toBe('claude-sonnet-4-5');
+    expect(added.taskMode).toBeTruthy();
+  });
+
   it('re-ticks an armed-but-idle scheduler so an added task with satisfied deps fans out', async () => {
     const spawned: string[] = [];
     const session = makeSession({
@@ -391,6 +461,108 @@ describe('task_ops conversation turns', () => {
     const outgoing = String(continueConversation.mock.calls[0][0]);
     expect(outgoing).toMatch(/Execution is RUNNING — these tasks are locked: #2/);
     expect(outgoing).toMatch(/queued/i);
+  });
+
+  // Before batch handles, this needed two turns: add the prerequisite, wait
+  // for the plan to re-settle, then send a second edit naming its real id.
+  it('applies a compound add-and-depend edit — handle referenced by a later op — in a single turn', async () => {
+    const session = makeSession({
+      aiService: {
+        startConversation: vi.fn(),
+        continueConversation: vi.fn().mockResolvedValue({
+          kind: 'task_ops',
+          ops: [
+            { op: 'add', task: { title: 'Prereq', description: 'd', prompt: 'p' }, handle: 'h1' },
+            { op: 'add', task: { title: 'Followup', description: 'd', prompt: 'p', dependencies: ['h1'] } },
+          ],
+          text: '', researchLog: [],
+        }),
+        hasActiveConversation: () => true,
+        reset: vi.fn(),
+      },
+    });
+    session.loadPlan(planWithTasks(), 'build it', testWorkspace, { persist: false });
+
+    await session.continueConversation('add a prerequisite and a followup that depends on it');
+
+    const prereq = session.planTasks.find((t) => t.title === 'Prereq')!;
+    const followup = session.planTasks.find((t) => t.title === 'Followup')!;
+    expect(followup.dependencies).toEqual([prereq.id]);
+  });
+
+  // A rewire used to be refused with "move the dependency earlier", and the
+  // only cure was a reorder op listing every task in the plan.
+  it('lands a dependency rewire on its own, repairing the display order', async () => {
+    const plan = planWithTasks();
+    plan.tasks = [
+      createTask({ id: 'a', order: 1, title: 'Setup', prompt: 'p', assignedRunner: 'claude-code' }),
+      createTask({ id: 'b', order: 2, title: 'Build', prompt: 'p', assignedRunner: 'claude-code' }),
+      createTask({ id: 'c', order: 3, title: 'Docs', prompt: 'p', assignedRunner: 'claude-code' }),
+    ];
+    const session = makeSession({
+      aiService: {
+        startConversation: vi.fn(),
+        continueConversation: vi.fn().mockResolvedValue({
+          kind: 'task_ops',
+          ops: [{ op: 'update', taskId: '#1', changes: { dependencies: ['#3'] } }],
+          text: '', researchLog: [],
+        }),
+        hasActiveConversation: () => true,
+        reset: vi.fn(),
+      },
+    });
+    session.loadPlan(plan, 'build it', testWorkspace, { persist: false });
+
+    const settled = await session.continueConversation('Setup should wait for Docs');
+
+    expect(session.planTasks.map((t) => t.title)).toEqual(['Build', 'Docs', 'Setup']);
+    expect(session.planTasks.map((t) => t.order)).toEqual([1, 2, 3]);
+    expect(session.getTask('a')!.dependencies).toEqual(['c']);
+    const last = settled.conversationHistory![settled.conversationHistory!.length - 1];
+    expect(last.content).toContain('Reordered to keep dependencies first');
+  });
+
+  // The refusal reaches the planner as a corrective, not a hard failure — the
+  // same repair loop every other invalid op goes through (TaskOps.test.ts,
+  // "model and task-mode validity" covers the applier's own rule matrix).
+  it('refuses a hallucinated model and applies the corrected retry once the planner names a real one', async () => {
+    const continueConversation = vi.fn()
+      .mockResolvedValueOnce({
+        kind: 'task_ops',
+        ops: [{ op: 'update', taskId: 'a', changes: { assignedModel: { modelId: 'gpt-9-imaginary', modelLabel: 'GPT-9' } } }],
+        text: '', researchLog: [],
+      })
+      .mockResolvedValueOnce({
+        kind: 'task_ops',
+        ops: [{ op: 'update', taskId: 'a', changes: { assignedModel: { modelId: 'claude-haiku-4-5', modelLabel: 'Claude Haiku 4.5' } } }],
+        text: '', researchLog: [],
+      });
+    const modelResolver = {
+      modelsForRunners: vi.fn().mockResolvedValue({
+        'claude-code': [
+          { modelId: 'claude-sonnet-4-5', modelLabel: 'Claude Sonnet 4.5', variants: [] },
+          { modelId: 'claude-haiku-4-5', modelLabel: 'Claude Haiku 4.5', variants: [] },
+        ],
+      }),
+    } as unknown as Pick<ModelResolver, 'modelsForRunners'>;
+    const session = makeSession({
+      modelResolver,
+      aiService: {
+        startConversation: vi.fn().mockResolvedValue({ kind: 'message', text: 'ok, planning', researchLog: [] }),
+        continueConversation,
+        hasActiveConversation: () => true,
+        reset: vi.fn(),
+      },
+    });
+    await session.startPlanning('goal', ['claude-code']);
+    session.loadPlan(planWithTasks(), 'build it', testWorkspace, { persist: false });
+
+    await session.continueConversation('assign a stronger model to setup');
+
+    expect(continueConversation).toHaveBeenCalledTimes(2);
+    expect(String(continueConversation.mock.calls[1][0])).toMatch(/rejected/);
+    expect(String(continueConversation.mock.calls[1][0])).toContain('claude-code');
+    expect(session.planTasks.find((t) => t.id === 'a')!.assignedModel?.modelId).toBe('claude-haiku-4-5');
   });
 
   it('injects the current plan context into the outgoing message but not the transcript', async () => {
@@ -546,5 +718,108 @@ describe('requestSplit — planner-driven split', () => {
 
     await expect(session.requestSplit('b')).rejects.toThrow(/completed/i);
     expect(continueConversation).not.toHaveBeenCalled();
+  });
+});
+
+/** A plan where 'a' failed and dropped its dependent 'b' to 'blocked'. */
+function failedRunPlan(): LegacyPlanState {
+  return {
+    tasks: [
+      createTask({ id: 'a', order: 1, title: 'Setup', prompt: 'old prompt', status: 'failed', assignedRunner: 'claude-code' }),
+      createTask({ id: 'b', order: 2, title: 'Build', prompt: 'p', status: 'blocked', dependencies: ['a'], assignedRunner: 'claude-code' }),
+    ],
+    generatedAt: new Date().toISOString(),
+    status: 'approved',
+    runners: ['claude-code'],
+    lastUpdated: new Date().toISOString(),
+    conversationHistory: [
+      { role: 'user', content: 'build it', timestamp: '2026-01-01T00:00:00Z' },
+      { role: 'assistant', content: 'Plan generated with 2 tasks.', timestamp: '2026-01-01T00:00:01Z', kind: 'plan_generated' },
+    ],
+  };
+}
+
+describe('rearm — task_ops conversation turn', () => {
+  it('reaches the orchestrator during a live run without waking a cancelled/held task', async () => {
+    const spawned: string[] = [];
+    const session = makeSession({
+      runner: recordingRunner(spawned),
+      aiService: {
+        startConversation: vi.fn(),
+        continueConversation: vi.fn().mockResolvedValue({
+          kind: 'task_ops',
+          ops: [{ op: 'rearm', taskId: 'a' }],
+          text: '', researchLog: [],
+        }),
+        hasActiveConversation: () => true,
+        reset: vi.fn(),
+      },
+    });
+    session.loadPlan(pausedRunPlan(), 'build it', testWorkspace, { persist: false });
+    await session.executePlan();
+    await session.cancelTask('b');
+
+    await session.continueConversation('re-arm task a');
+
+    // The scheduler is still live, so the freshly re-armed 'a' is picked straight
+    // back up — but the cancelled 'b' stays held, not re-spawned alongside it.
+    expect(session.planTasks.find((t) => t.id === 'a')!.status).toBe('in_progress');
+    expect(spawned).toEqual(['b', 'a']);
+  });
+
+
+  it('re-arms a failed task with a corrected prompt and releases its blocked dependent', async () => {
+    const session = makeSession({
+      aiService: {
+        startConversation: vi.fn(),
+        continueConversation: vi.fn().mockResolvedValue({
+          kind: 'task_ops',
+          ops: [{ op: 'rearm', taskId: 'a', changes: { prompt: 'corrected prompt' } }],
+          text: '{"taskOps":[...]}',
+          researchLog: [],
+        }),
+        hasActiveConversation: () => true,
+        reset: vi.fn(),
+      },
+    });
+    session.loadPlan(failedRunPlan(), 'build it', testWorkspace, { persist: false });
+
+    const plan = await session.continueConversation('fix task a and try again');
+
+    const rearmed = session.planTasks.find((t) => t.id === 'a')!;
+    // resetForRun() flips every non-completed AI task to 'approved' as part of
+    // committing the edit — the task_ops path always re-arms into a runnable plan.
+    expect(rearmed.status).toBe('approved');
+    expect(rearmed.prompt).toBe('corrected prompt');
+    expect(rearmed.verdict).toBeUndefined();
+    expect(session.planTasks.find((t) => t.id === 'b')!.status).toBe('approved');
+    const last = plan.conversationHistory![plan.conversationHistory!.length - 1];
+    expect(last.content).toContain('Re-armed "Setup"');
+  });
+
+  it('refuses to re-arm a running task through the conversation loop, leaving the plan untouched', async () => {
+    const continueConversation = vi.fn().mockResolvedValue({
+      kind: 'task_ops',
+      ops: [{ op: 'rearm', taskId: 'a' }],
+      text: '{"taskOps":[...]}',
+      researchLog: [],
+    });
+    const session = makeSession({
+      aiService: {
+        startConversation: vi.fn(),
+        continueConversation,
+        hasActiveConversation: () => true,
+        reset: vi.fn(),
+      },
+    });
+    const plan = failedRunPlan();
+    plan.tasks[0].status = 'in_progress';
+    session.loadPlan(plan, 'build it', testWorkspace, { persist: false });
+
+    const result = await session.continueConversation('fix task a and try again');
+
+    expect(session.planTasks.find((t) => t.id === 'a')!.status).toBe('in_progress');
+    const last = result.conversationHistory![result.conversationHistory!.length - 1];
+    expect(last.content).toMatch(/running/i);
   });
 });

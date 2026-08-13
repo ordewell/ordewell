@@ -605,3 +605,79 @@ async function visibilitySuite() {
 }
 
 if (!REAL) await visibilitySuite();
+
+// ---------- task-query read channel: read-then-edit round trip ----------
+// Every earlier suite drives generation. This is the one that proves the
+// *read* channel (ADR-0012): a planner handed a plan it did not just generate
+// can ask to see a task's full prompt — the plan context block deliberately
+// omits it — get back exactly that detail, and land an edit derived from what
+// it read, all inside one continued conversation over the real Session loop.
+async function taskQuerySuite() {
+  const { Session, RunnerRegistry, ModelResolver, createTask } = core;
+  const failures = [];
+  const root = makeSandbox();
+  const registry = new RunnerRegistry();
+  const config = cfg('mock/task-query-editor');
+  const modelResolver = new ModelResolver(registry, config, { execImpl: () => Promise.reject(new Error('no CLI in harness')) });
+  const broadcasts = [];
+  const session = new Session({
+    config,
+    notifications: { info() {}, warn() {}, error() {}, async confirm() { return undefined; } },
+    runner: { async createSession() { throw new Error('not used'); }, stopAll() {} },
+    registry,
+    workspaceRoot: () => root,
+    fsAdapter: makeFs(root),
+    broadcast: (m) => broadcasts.push(m),
+    modelResolver,
+    settings: () => ({ tddEnabled: false, grillMeEnabled: false }),
+  });
+
+  // A plan handed to the session already assembled — not one it just
+  // generated — the same shape a reloaded session presents, so the read
+  // channel is exercised against a cold conversation, not a warm one that
+  // happens to still remember what it wrote.
+  const scaffolding = createTask({
+    id: 'aaaaaaaa-0000-4000-8000-000000000001', order: 1, title: 'Set up project scaffolding',
+    description: 'Scaffold the repo', prompt: 'Set up scaffolding.', assignedRunner: 'claude-code',
+  });
+  const parser = createTask({
+    id: 'bbbbbbbb-0000-4000-8000-000000000002', order: 2, title: 'Build parser',
+    description: 'Parser task', assignedRunner: 'claude-code', dependencies: [scaffolding.id],
+    // The marker lives only in the full prompt, which the per-turn plan
+    // context block never sends — so the mock model can only echo it back
+    // (in the taskOps edit that follows) if the taskQuery answer actually
+    // carried it over the wire.
+    prompt: 'Build the parser (MARKER-Q7F3K1). Read this before editing it.',
+  });
+  const plan = {
+    tasks: [scaffolding, parser],
+    generatedAt: new Date().toISOString(), status: 'draft', runners: ['claude-code'], lastUpdated: new Date().toISOString(),
+    conversationHistory: [
+      { role: 'user', content: 'Build a small parser library', timestamp: new Date().toISOString() },
+      { role: 'assistant', content: 'Plan generated with 2 tasks.', timestamp: new Date().toISOString(), kind: 'plan_generated' },
+    ],
+  };
+  session.loadPlan(plan, 'Build a small parser library', root, { persist: false });
+
+  console.log('\n=== task-query read channel: read #2\'s prompt, then edit from it ===');
+  const before = session.planTasks.find((t) => t.id === parser.id).description;
+  const updated = await session.continueConversation('Please double-check task 2 reflects its real prompt before we proceed.');
+  const task = updated.tasks.find((t) => t.id === parser.id);
+
+  assert(before === 'Parser task', 'starting description is the unedited fixture value', failures);
+  assert(!!task, 'task 2 still present after the round trip', failures);
+  assert(task?.description === 'read-confirmed:MARKER-Q7F3K1', `edit carries the marker read off the real prompt (got "${task?.description}")`, failures);
+  assert(broadcasts.some((m) => m.type === 'plan_generated'), 'plan re-broadcast once the edit landed', failures);
+  // The read itself must never appear as a spurious plan/broadcast event on
+  // its own — only the eventual applied edit does.
+  const planBroadcasts = broadcasts.filter((m) => m.type === 'plan_generated');
+  assert(planBroadcasts.length === 1, `exactly one plan_generated for the whole round trip (got ${planBroadcasts.length})`, failures);
+
+  if (failures.length) {
+    console.log(`${failures.length} TASK-QUERY FAILURE(S)`);
+    process.exit(1);
+  }
+  console.log('task-query round trip passed');
+}
+
+if (!REAL) await taskQuerySuite();

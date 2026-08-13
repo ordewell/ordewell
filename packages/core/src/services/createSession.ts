@@ -1,6 +1,8 @@
 import { createAiService, type IAiService, type ConversationTurn } from './AiService';
-import { applyTaskOps, canMergeTasks, canSetDependencies, canSplitTask } from './TaskOps';
+import { applyTaskOps, canMergeTasks, canSplitTask, UPDATABLE_FIELDS } from './TaskOps';
+import { validateTaskEdit, type EditCatalog } from './TaskEditValidator';
 import { repairLoop, taskOpsRejectedPrompt } from './PlanRepair';
+import { renderTaskQueryAnswer, taskQuerySignature, TASK_QUERY_ANSWER_OR_OPS, TASK_QUERY_REMINDER, type TaskQuery } from './TaskQuery';
 import { Planner } from './Planner';
 import { TaskOrchestrator } from './TaskOrchestrator';
 import type { OrchestratorObserver } from './TaskOrchestrator';
@@ -30,7 +32,43 @@ import type { IFileSystem } from '../interfaces/IFileSystem';
 import type { INotification } from '../interfaces/INotification';
 import type { ITerminalRunner } from '../interfaces/ITerminalRunner';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
-import { runnerModesFrom, type RunnerModeInfo } from './ModeResolver';
+import { runnerModesFrom, resolveDefaultMode, type RunnerModeInfo } from './ModeResolver';
+
+/**
+ * Per-runner model cap for the always-on catalog block. Generous enough that
+ * a typical single-agent catalog (dozens of models) is never truncated —
+ * only runners that aggregate hundreds of models (e.g. OpenRouter) hit it.
+ */
+const CATALOG_MODEL_CAP = 100;
+
+/**
+ * Reads a planner gets per user turn before every answer also carries an
+ * instruction to land the turn. Three covers the realistic shape of a read —
+ * look at a task, look at the catalog, look at a neighbour it now suspects —
+ * without letting a confused planner explore on the user's tokens forever.
+ */
+const MAX_TASK_QUERIES = 3;
+
+/**
+ * Reads answered per user turn, full stop. The soft limit above still answers,
+ * so without a hard stop a planner that ignores the instruction loops until
+ * something else breaks.
+ */
+const MAX_TASK_QUERIES_HARD = 6;
+
+/** Per-user-turn read state. Shared across the repair loop so retries don't reset it. */
+interface ReadBudget {
+  answered: number;
+  /** Query signatures already answered this turn — a repeat is a loop, not a read. */
+  seen: Set<string>;
+}
+
+function freshReadBudget(): ReadBudget {
+  return { answered: 0, seen: new Set() };
+}
+
+/** A turn with every read already drained — what the settle path actually commits. */
+type SettleableTurn = Exclude<ConversationTurn, { kind: 'task_query' }>;
 
 /**
  * A direct (non-planner) plan edit the session refused. Distinct from a plain
@@ -382,6 +420,22 @@ export class Session {
     return runnerModesFrom(this.registry, runners);
   }
 
+  /**
+   * The catalog a model/task-mode edit is checked against — the same
+   * discovered models and manifest modes the per-turn catalog block shows the
+   * planner, so a refusal here can never name something invalid that the
+   * planner was never told about. `modelsCache` is read live, not filtered by
+   * the allowlist here — {@link checkModelAndModeValidity} narrows by
+   * allowlist itself, the same way `coerceAssignments` does.
+   */
+  private editCatalog(): EditCatalog {
+    return {
+      modelsByRunner: this.modelsCache,
+      runnerModes: this.runnerModesFor(this.plan?.runners ?? []),
+      perRunnerAllowlist: this.settingsFn().modelAllowlist ?? this.currentAllowlist,
+    };
+  }
+
   get planState(): LegacyPlanState | null { return this.plan; }
 
   /**
@@ -567,8 +621,9 @@ export class Session {
     this.plan.researchLog = [...(this.plan.researchLog ?? []), { id: `up-${Date.now()}`, type: 'user_prompt', content: userMessage, timestamp: now }];
 
     // The persisted transcript keeps the raw user message; the model gets the
-    // current plan (tasks, statuses, edit protocol) alongside it.
-    const contextBlock = this.planContextBlock();
+    // live catalog (always) and the current plan (tasks, statuses, edit
+    // protocol — once tasks exist) alongside it.
+    const contextBlock = [this.catalogBlock(), this.planContextBlock()].filter(Boolean).join('\n\n');
     const outgoing = contextBlock ? `${contextBlock}\n\n${userMessage}` : userMessage;
 
     // A live conversation is only safe to continue in-place when it also
@@ -589,6 +644,13 @@ export class Session {
           )
         : await this.resumeConversation(outgoing, priorHistory, options);
 
+      // Reads settle before the execution gate below, so a query is answered
+      // on the spot even mid-run: it mutates nothing, and parking it behind a
+      // batch boundary would strand the planner waiting on detail it needs to
+      // write the very edit that gets queued.
+      const reads = freshReadBudget();
+      turn = await this.drainTaskQueries(turn, reads, options);
+
       // Structural changes while tasks execute are queued, never applied live —
       // the orchestrator must not have the plan mutated under a running batch.
       // The gate is live runners, not an armed scheduler: a run paused on a user
@@ -604,10 +666,77 @@ export class Session {
         };
       }
 
-      return await this.settleTurn(turn, options);
+      return await this.settleTurn(turn, options, reads);
     } finally {
       releaseAbort();
     }
+  }
+
+  /**
+   * Answer every read the planner emits until it says something else.
+   *
+   * The channel is a text envelope rather than a registered tool because the
+   * protocol has to be identical on both planner backends (ADR-0009): Ordewell
+   * owns a tool loop only in the API case, and a harness planner running as a
+   * coding-agent subprocess can only be reached this way.
+   *
+   * Draining here — outside {@link repairLoop} — is what keeps reads free of
+   * the repair budget. A planner that looks a task up and *then* fumbles its
+   * ops JSON still gets its two corrective retries; charging it for the read
+   * would cost it the chance to fix the edit.
+   */
+  private async drainTaskQueries(
+    turn: ConversationTurn,
+    reads: ReadBudget,
+    options?: GeneratePlanOptions,
+  ): Promise<SettleableTurn> {
+    const carried: ConversationTurn['researchLog'] = [];
+    let current = turn;
+    while (current.kind === 'task_query') {
+      carried.push(...current.researchLog);
+      if (reads.answered >= MAX_TASK_QUERIES_HARD
+        || !this.aiService.hasActiveConversation()
+        || options?.signal?.aborted) {
+        return {
+          kind: 'message',
+          text: 'The planner kept asking to read tasks instead of answering. Nothing was changed — ask again, or be more specific about the edit you want.',
+          researchLog: carried,
+        };
+      }
+      const signature = taskQuerySignature(current.query);
+      // Two reasons to stop being accommodating: the budget is spent, or the
+      // planner asked the identical question again — a loop, not a read.
+      const insist = reads.seen.has(signature) || reads.answered >= MAX_TASK_QUERIES;
+      reads.seen.add(signature);
+      reads.answered++;
+      const answer = this.taskQueryAnswer(current.query);
+      current = await this.aiService.continueConversation(
+        insist ? `${answer}\n\n${TASK_QUERY_ANSWER_OR_OPS}` : answer,
+        (p) => this.translateProgress(p),
+        options?.signal,
+      );
+    }
+    return carried.length > 0
+      ? { ...current, researchLog: [...carried, ...current.researchLog] }
+      : current;
+  }
+
+  /**
+   * Render one read out of live state. Never persisted to the transcript: the
+   * detail is context for the planner's next reply, and re-sending it on every
+   * later turn is exactly the cost this channel exists to avoid.
+   */
+  private taskQueryAnswer(query: TaskQuery): string {
+    const runners = this.plan?.runners ?? [];
+    const allowlist = this.settingsFn().modelAllowlist ?? this.currentAllowlist;
+    return renderTaskQueryAnswer(query, this.store.planTasks, {
+      runners,
+      // Allowlist-filtered like the always-on block: a read must not offer a
+      // model the planner is forbidden to assign.
+      models: filterModelsForPrompt(this.modelsCache, allowlist),
+      modes: this.runnerModesFor(runners),
+      autonomousDefault: this.config.autonomousMode,
+    });
   }
 
   /**
@@ -617,8 +746,8 @@ export class Session {
    * first turn (startPlanning) and every later turn route through here — one
    * path, not two.
    */
-  private async settleTurn(turn: ConversationTurn, options?: GeneratePlanOptions): Promise<LegacyPlanState> {
-    type Settled = { plan: LegacyPlanState } | { turn: Exclude<ConversationTurn, { kind: 'task_ops' }> };
+  private async settleTurn(turn: ConversationTurn, options?: GeneratePlanOptions, reads = freshReadBudget()): Promise<LegacyPlanState> {
+    type Settled = { plan: LegacyPlanState } | { turn: Exclude<SettleableTurn, { kind: 'task_ops' }> };
     const invalidOps = (errors: string[], researchLog: ConversationTurn['researchLog']): Settled => ({
       turn: {
         kind: 'message',
@@ -627,12 +756,16 @@ export class Session {
       },
     });
 
-    const settled = await repairLoop<ConversationTurn, Settled>({
-      first: () => turn,
-      resend: (corrective) => this.aiService.continueConversation(
-        corrective,
-        (p) => this.translateProgress(p),
-        options?.signal,
+    const settled = await repairLoop<SettleableTurn, Settled>({
+      first: () => this.drainTaskQueries(turn, reads, options),
+      resend: async (corrective) => this.drainTaskQueries(
+        await this.aiService.continueConversation(
+          corrective,
+          (p) => this.translateProgress(p),
+          options?.signal,
+        ),
+        reads,
+        options,
       ),
       interpret: (t) => {
         if (t.kind !== 'task_ops') return { done: { turn: t } };
@@ -662,6 +795,56 @@ export class Session {
   }
 
   /**
+   * The catalog the planner may actually draw from — model ids and task-mode
+   * ids, per selected runner — emitted on EVERY turn, before any plan exists
+   * or after. The system prompt shows this once at conversation start; a long
+   * grill-me interview or PRD negotiation outlives that single showing and the
+   * planner starts misquoting it, so this re-states it per turn instead.
+   *
+   * Built from the allowlist-filtered view (`filterModelsForPrompt`), the same
+   * one the system prompt used — a restricted allowlist stays a hard bound on
+   * every turn, not just the first. `this.modelsCache` itself is never
+   * filtered: `coerceAssignments` needs the full discovered catalog alongside
+   * the allowlist to resolve labels and clamp effort to real variants.
+   *
+   * Reads `this.plan.runners` live, so a runner admitted mid-session by a
+   * retarget (`admitRunner`) is filtered and shown like every other — there is
+   * no separate "originally selected" list to fall stale.
+   */
+  private catalogBlock(): string | null {
+    if (!this.plan) return null;
+    const allowlist = this.settingsFn().modelAllowlist ?? this.currentAllowlist;
+    const filteredModels = filterModelsForPrompt(this.modelsCache, allowlist);
+    const runnerModes = this.runnerModesFor(this.plan.runners);
+    const autonomousDefault = this.config.autonomousMode;
+
+    const modelLines = this.plan.runners.map((runner) => {
+      const models = filteredModels[runner] ?? [];
+      const capped = models.slice(0, CATALOG_MODEL_CAP);
+      const remainder = models.length - capped.length;
+      const ids = capped.map((m) => m.modelId).join(', ') || '(no models discovered)';
+      return `${runner}: ${ids}${remainder > 0 ? ` … +${remainder} more not shown` : ''}`;
+    });
+
+    const modeLines = this.plan.runners.map((runner) => {
+      const modes = runnerModes[runner] ?? [];
+      if (modes.length === 0) return `${runner}: (no modes declared)`;
+      const defaultId = resolveDefaultMode(modes, autonomousDefault);
+      const ids = modes.map((m) => `${m.id}${m.id === defaultId ? ' (default)' : ''}`).join(', ');
+      return `${runner}: ${ids}`;
+    });
+
+    return [
+      '<available_models>',
+      ...modelLines,
+      '</available_models>',
+      '<available_task_modes>',
+      ...modeLines,
+      '</available_task_modes>',
+    ].join('\n');
+  }
+
+  /**
    * The "you are here" block for post-plan chat: current tasks with stable
    * references, plus the task-ops protocol. Injected per turn (never
    * persisted) so the model always sees live statuses — including which tasks
@@ -670,9 +853,15 @@ export class Session {
   private planContextBlock(): string | null {
     if (!this.plan || this.store.planTasks.length === 0) return null;
     const orderOf = new Map(this.store.planTasks.map((t) => [t.id, `#${t.order}`]));
-    const lines = this.store.planTasks.map((t) =>
-      `#${t.order} id=${t.id} "${t.title}" [${t.status}] runner:${t.assignedRunner}${t.assignedModel ? ` model:${t.assignedModel.modelId}` : ''} deps:[${t.dependencies.map((d) => orderOf.get(d) ?? d).join(', ')}]`,
-    );
+    const lines = this.store.planTasks.map((t) => {
+      const isMan = t.type === 'user';
+      // A MAN task has no model or mode to run under — the field that means
+      // something there is how many steps the human still has to do.
+      const runFields = isMan
+        ? `steps:${t.userSteps?.length ?? 0}`
+        : `${t.assignedModel ? `model:${t.assignedModel.modelId} ` : ''}mode:${t.taskMode ?? 'build'} effort:${t.thinkingEffort ?? '-'}`;
+      return `#${t.order} id=${t.id} "${t.title}" [${t.status}] type:${isMan ? 'MAN' : 'AI'} runner:${t.assignedRunner} ${runFields} autonomy:${t.autonomy ?? '-'} slice:${t.sliceType ?? '-'} deps:[${t.dependencies.map((d) => orderOf.get(d) ?? d).join(', ')}]`;
+    });
     // Gated on live runners, not on `isExecuting`: a paused-but-armed run takes
     // edits immediately, so promising a queue there is a lie the model plans
     // around (it stops emitting ops and asks the user to wait).
@@ -680,43 +869,45 @@ export class Session {
     const execNote = this.hasLiveWork
       ? `\nExecution is RUNNING${locked.length ? ` — these tasks are locked: ${locked.map((t) => `#${t.order}`).join(', ')}` : ''}. Any task edits you emit will be queued and applied between batches.`
       : '';
-    // Compact model availability so any task edit (add/merge/split/update) can
-    // assign a valid runner + model without scrolling back to the system prompt.
-    const modelLines: string[] = [];
-    for (const runner of this.plan.runners) {
-      const models = this.modelsCache[runner] ?? [];
-      const ids = models.map((m) => m.modelId).join(', ');
-      modelLines.push(`${runner}: ${ids || '(no models discovered)'}`);
-    }
-    const modelBlock = modelLines.length > 0
-      ? ['<available_models>', ...modelLines, '</available_models>'].join('\n')
-      : '';
+    // Derived from the applier's own UPDATABLE_FIELDS so this prose can never
+    // undersell what applyTaskOps actually accepts.
+    const updateChanges = UPDATABLE_FIELDS
+      .map((f) => (f === 'dependencies' ? '"dependencies"?:["<id or #order>"]' : `"${f}"?`))
+      .join(',');
     return [
       '<current_plan>',
       ...lines,
       '</current_plan>',
-      modelBlock,
-      'The block above is the CURRENT task plan. Choose how to respond:',
+      'The block above is the CURRENT task plan — short fields only. Choose how to respond:',
       '- To answer a question or discuss, reply in plain prose (no JSON).',
+      // The reminder text is owned by TaskQuery beside the parser, so the
+      // protocol the planner reads and the one Ordewell accepts stay one thing.
+      TASK_QUERY_REMINDER,
       '- To modify specific tasks, reply with ONLY this JSON object:',
       '  {"taskOps": [',
-      '    {"op":"update","taskId":"<id or #order>","changes":{"title"?,"description"?,"prompt"?,"dependencies"?:["<id or #order>"],"assignedRunner"?,"assignedModel"?,"taskMode"?}},',
-      '    {"op":"add","task":{"title","description","prompt","dependencies":["<id or #order>"],"assignedRunner"?,"assignedModel"?}},',
+      `    {"op":"update","taskId":"<id or #order>","changes":{${updateChanges}}},`,
+      '    {"op":"add","task":{"title","description","prompt","dependencies":["<id or #order>"],"assignedRunner"?,"assignedModel"?},"handle"?:"<name>"},',
       '    {"op":"remove","taskId":"<id or #order>"},',
-      '    {"op":"reorder","taskIds":["<id or #order>", "... every task exactly once"]},',
-      '    {"op":"merge","taskIds":["<id or #order>", "..."],"merged":{"title","description","prompt"?,"assignedRunner"?,"assignedModel"?,...}},',
-      '    {"op":"split","taskId":"<id or #order>","parts":[{"title","description","prompt"?,"assignedRunner"?,"assignedModel"?,...}, ...]}',
+      '    {"op":"reorder","taskIds":["<id or #order>", "... every task exactly once"]},   // only to re-prioritise INDEPENDENT tasks',
+      '    {"op":"merge","taskIds":["<id or #order>", "..."],"merged":{"title","description","prompt"?,"assignedRunner"?,"assignedModel"?,...},"handle"?:"<name>"},',
+      '    {"op":"split","taskId":"<id or #order>","parts":[{"title","description","prompt"?,"assignedRunner"?,"assignedModel"?,...}, ...],"handle"?:"<name>"},',
+      `    {"op":"rearm","taskId":"<id or #order>","changes"?:{${updateChanges}}}`,
       '  ]}',
       '- For sweeping changes, you may instead emit a full {"tasks":[...]} plan JSON.',
+      'Every "<id or #order>" ref in a batch resolves against the plan shown above, before any op in the batch runs — an earlier remove/merge/split never shifts what a later "#N" means.',
+      'Give "add", "merge", or "split" a "handle" (any name you choose, unused elsewhere in this batch) to let a LATER op in the same batch reference the task it produces — for "split", the handle names its last part. A handle used before its defining op is rejected.',
       'When creating or changing tasks, set "assignedRunner" and "assignedModel" ({"modelId","modelLabel","thinkingEffort"?}) using only the runners and models listed in <available_models>.',
-      'Keep dependencies consistent: no cycles, no references to removed tasks, dependencies must come before dependents, and never touch running or completed tasks.' + execNote,
+      'Keep dependencies consistent: no cycles, no references to removed tasks, and never touch running or completed tasks — "rearm" is the one exception, below.',
+      'Just declare the dependencies you want — display order is repaired for you afterwards, so a rewire or a newly added prerequisite never needs a "reorder" op. Only a task that is running or completed cannot be shifted, so an edit that would need one to move is rejected.' + execNote,
+      'Flipping "type" between "ai" and "user" is a content change, not just a label: an update to "user" needs "userSteps" in the SAME op, and an update to "ai" needs "prompt" in the SAME op — the model/mode/effort/autonomy fields (flipping to "user") or the userSteps (flipping to "ai") are cleared automatically.',
+      '"rearm" puts a failed OR completed task back to pending — verdict and output summary are cleared, any dependents it had blocked are released, and it may carry field changes (e.g. a corrected "prompt") applied in the same op. A running task cannot be re-armed. Never rearm a task just to relabel it — only when it should actually run again.',
     ].filter(Boolean).join('\n');
   }
 
   /** Validate + commit a task_ops turn atomically. Returns the errors on rejection (plan untouched). */
   private applyTaskOpsTurn(turn: Extract<ConversationTurn, { kind: 'task_ops' }>): { plan: LegacyPlanState } | { errors: string[] } {
     if (!this.plan) throw new Error('No active plan state');
-    const result = applyTaskOps(this.store.planTasks, turn.ops, this.plan.runners);
+    const result = applyTaskOps(this.store.planTasks, turn.ops, this.plan.runners, this.editCatalog());
     if (!result.ok) return { errors: result.errors };
 
     const now = new Date().toISOString();
@@ -805,7 +996,7 @@ export class Session {
   }
 
   /** Commit a settled (non-task_ops) turn. Both branches run the mutatePlan ritual. */
-  private applyConversationTurn(turn: Exclude<ConversationTurn, { kind: 'task_ops' }>): LegacyPlanState {
+  private applyConversationTurn(turn: Exclude<SettleableTurn, { kind: 'task_ops' }>): LegacyPlanState {
     if (!this.plan) throw new Error('No active plan state');
     const now = new Date().toISOString();
 
@@ -1032,15 +1223,22 @@ export class Session {
   }
 
   /**
-   * Patch one task's fields. A hand-set dependency list is the one patch that
-   * can leave the plan unschedulable, so it goes through the same
-   * {@link canSetDependencies} guard the planner's pickers use rather than a
-   * second copy of the rule — and throws, so the surface can say why.
+   * Patch one task's fields. A hand-set dependency list, or a type flip
+   * between AI and MAN, are the patches that can leave a task incoherent
+   * (unschedulable, or carrying fields that mean nothing for its new type),
+   * so both go through the same {@link validateTaskEdit} guard the planner's
+   * task-ops applier uses (as the 'direct' actor, which skips the lock rule)
+   * rather than a second copy of the rules — and throws, so the surface can
+   * say why. Gated on the task existing so an edit to an unknown id still
+   * falls through to the no-op `store.update` below instead of throwing.
    */
   async updateTask(taskId: string, changes: Partial<Task>): Promise<LegacyPlanState | null> {
-    if (changes.dependencies) {
-      const check = canSetDependencies(this.store.planTasks, taskId, changes.dependencies);
-      if (!check.ok) throw new PlanEditError(check.error ?? 'Those dependencies are not valid');
+    if ((changes.dependencies || changes.type || changes.assignedModel || changes.taskMode) && this.store.get(taskId)) {
+      const check = validateTaskEdit('direct', this.store.planTasks, taskId, changes, this.editCatalog());
+      if (!check.ok) throw new PlanEditError(check.error ?? 'Those changes are not valid');
+      if (check.clear?.length) {
+        changes = { ...changes, ...Object.fromEntries(check.clear.map((f) => [f, undefined])) };
+      }
     }
     return this.editPlan(
       () => Boolean(this.store.update(taskId, changes)),

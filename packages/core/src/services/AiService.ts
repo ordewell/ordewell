@@ -47,15 +47,18 @@ export interface ConversationRequest {
 
 /**
  * One planner turn's outcome. The planner talks to the user (`message`),
- * commits a full plan (`plan`, a `{tasks:[...]}` JSON object), or emits
- * targeted task edits (`task_ops`, a `{taskOps:[...]}` JSON object). The
- * Session validates and applies task ops atomically; the AI service only
+ * commits a full plan (`plan`, a `{tasks:[...]}` JSON object), emits targeted
+ * task edits (`task_ops`, a `{taskOps:[...]}` JSON object), or asks to read
+ * task bodies and the full catalog before editing (`task_query`, a
+ * `{taskQuery:{...}}` JSON object). The Session validates and applies task ops
+ * atomically and answers queries out of its own state; the AI service only
  * parses them.
  */
 export type ConversationTurn =
   | { kind: 'message'; text: string; researchLog: ResearchLogEntry[] }
   | { kind: 'plan'; tasks: Task[]; text: string; researchLog: ResearchLogEntry[] }
-  | { kind: 'task_ops'; ops: import('./TaskOps').TaskOp[]; text: string; researchLog: ResearchLogEntry[] };
+  | { kind: 'task_ops'; ops: import('./TaskOps').TaskOp[]; text: string; researchLog: ResearchLogEntry[] }
+  | { kind: 'task_query'; query: import('./TaskQuery').TaskQuery; text: string; researchLog: ResearchLogEntry[] };
 
 export interface IAiService {
   /**

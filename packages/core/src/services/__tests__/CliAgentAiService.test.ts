@@ -155,6 +155,21 @@ describe('CliAgentAiService — Claude Code', () => {
     expect(svc.hasActiveConversation()).toBe(false);
   });
 
+  // The read channel is a text envelope precisely so it works here, where
+  // Ordewell owns no tool loop to register a tool on (ADR-0009).
+  it('hands a task-query read up as its own turn kind', async () => {
+    const query = JSON.stringify({ taskQuery: { tasks: ['#2'], catalog: true } });
+    const { svc } = service('claude-code', [fixture('claude-code', 'plan', { PLAN: query })]);
+    const turn = await svc.startConversation(request());
+
+    expect(turn.kind).toBe('task_query');
+    if (turn.kind !== 'task_query') throw new Error('expected a read');
+    expect(turn.query.tasks).toEqual(['#2']);
+    expect(turn.query.catalog).toBe(true);
+    // A read settles nothing, so the conversation stays open for the answer.
+    expect(svc.hasActiveConversation()).toBe(true);
+  });
+
   it('repairs a botched plan with a bounded corrective re-emit', async () => {
     const { svc, spawned } = service('claude-code', [
       fixture('claude-code', 'broken-plan'),

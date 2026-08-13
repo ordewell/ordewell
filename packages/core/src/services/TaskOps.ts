@@ -1,9 +1,11 @@
+import { v4 as uuidv4 } from 'uuid';
 import {
   Task, RunnerId, flattenTasks,
   addTaskToPlan, removeTaskFromPlan, updateTaskInPlan, renumberTasks,
   createTask,
 } from '../models/Task';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_OPS_ENVELOPE_KEY } from './JsonExtractor';
+import { validateTaskEdit, checkModelAndModeValidity, type EditCatalog } from './TaskEditValidator';
 
 /**
  * Targeted task edits emitted by the planner conversation (the 'task_ops'
@@ -12,15 +14,16 @@ import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings
  */
 export type TaskOp =
   | { op: 'update'; taskId: string; changes: Partial<Task> }
-  | { op: 'add'; task: Partial<Task> }
+  | { op: 'add'; task: Partial<Task>; handle?: string }
   | { op: 'remove'; taskId: string }
   | { op: 'reorder'; taskIds: string[] }
-  | { op: 'merge'; taskIds: string[]; merged: Partial<Task> }
-  | { op: 'split'; taskId: string; parts: Partial<Task>[] };
+  | { op: 'merge'; taskIds: string[]; merged: Partial<Task>; handle?: string }
+  | { op: 'split'; taskId: string; parts: Partial<Task>[]; handle?: string }
+  | { op: 'rearm'; taskId: string; changes?: Partial<Task> };
 
 /** Fields the planner may change on an existing task. Everything else (id, status, verdict…) is system-owned. */
-const UPDATABLE_FIELDS: (keyof Task)[] = [
-  'title', 'description', 'prompt', 'dependencies', 'assignedRunner', 'assignedModel', 'taskMode', 'thinkingEffort', 'type', 'userSteps', 'autonomy',
+export const UPDATABLE_FIELDS: (keyof Task)[] = [
+  'title', 'description', 'prompt', 'dependencies', 'assignedRunner', 'assignedModel', 'taskMode', 'thinkingEffort', 'type', 'userSteps', 'autonomy', 'sliceType',
 ];
 
 export function textHasTaskOps(text: string): boolean {
@@ -66,19 +69,67 @@ function parseTaskOpsObject(json: string, text: string): TaskOp[] {
   return ops as TaskOp[];
 }
 
-/** Resolve a task reference (id, "#3", or "3") against the current tasks. */
-function resolveRef(ref: unknown, tasks: Task[]): Task | undefined {
-  if (typeof ref !== 'string' && typeof ref !== 'number') return undefined;
+type RefResolution = { id: string } | { error: string };
+
+/**
+ * Resolve a task reference (id, "#3", "3", or a batch handle) to a task id.
+ *
+ * `#order` and title matches are pinned to `originalScope` — the plan as it
+ * stood before the batch began — so an earlier op's renumbering can never
+ * make a later op's "#4" land on a different task than the planner saw. A
+ * literal id has no such drift (ids are stable across mutations), so id
+ * matches check `liveScope` — the batch's current, mutated tasks — which is
+ * also how a later op reaches a task created earlier in the same batch
+ * without a handle (e.g. a split's own chained parts).
+ */
+function resolveRef(
+  ref: unknown,
+  originalScope: Task[],
+  liveScope: Task[],
+  handleOwner: Map<string, number>,
+  handleId: Map<string, string>,
+  opIndex: number,
+): RefResolution {
+  if (typeof ref !== 'string' && typeof ref !== 'number') return { error: `invalid reference "${String(ref)}"` };
   const s = String(ref).trim();
-  const byId = tasks.find((t) => t.id === s);
-  if (byId) return byId;
+
+  const ownerIdx = handleOwner.get(s);
+  if (ownerIdx !== undefined) {
+    if (ownerIdx >= opIndex) {
+      return { error: `handle "${s}" is defined later in this batch (op ${ownerIdx + 1}) and cannot be referenced yet` };
+    }
+    const id = handleId.get(s);
+    if (!id) return { error: `handle "${s}" was never resolved` };
+    return { id };
+  }
+
+  const byLiveId = liveScope.find((t) => t.id === s);
+  if (byLiveId) return { id: byLiveId.id };
   const orderStr = s.startsWith('#') ? s.slice(1) : s;
   if (/^\d+$/.test(orderStr)) {
     const order = Number(orderStr);
-    const byOrder = tasks.filter((t) => t.order === order);
-    if (byOrder.length === 1) return byOrder[0];
+    const byOrder = originalScope.filter((t) => t.order === order);
+    if (byOrder.length === 1) return { id: byOrder[0].id };
   }
-  return tasks.find((t) => t.title === s);
+  const byTitle = originalScope.find((t) => t.title === s);
+  if (byTitle) return { id: byTitle.id };
+  return { error: `task "${s}" not found` };
+}
+
+/** Whether `name` already denotes an existing task by id, `#order`, or title. */
+function refCollidesWithExisting(name: string, originalFlatAll: Task[]): boolean {
+  if (originalFlatAll.some((t) => t.id === name)) return true;
+  const orderStr = name.startsWith('#') ? name.slice(1) : name;
+  if (/^\d+$/.test(orderStr) && originalFlatAll.some((t) => t.order === Number(orderStr))) return true;
+  return originalFlatAll.some((t) => t.title === name);
+}
+
+function findInTasks(tasks: Task[], id: string): Task | undefined {
+  return flattenTasks(tasks).find((t) => t.id === id);
+}
+
+function findTopLevel(tasks: Task[], id: string): Task | undefined {
+  return tasks.find((t) => t.id === id);
 }
 
 function detectCycle(tasks: Task[]): string | null {
@@ -104,6 +155,74 @@ function detectCycle(tasks: Task[]): string | null {
   return null;
 }
 
+/** A task the repair may not reposition: execution has already reached it. */
+function isPinned(t: Task): boolean {
+  return t.status === 'in_progress' || t.status === 'completed';
+}
+
+/**
+ * Reorder top-level tasks so every dependency comes before its dependents,
+ * moving as little as possible: pinned tasks keep the exact slot they are in,
+ * and each free slot goes to the earliest-listed movable task whose
+ * dependencies are already placed — so tasks the graph does not constrain keep
+ * their relative order. Assumes an acyclic graph (the caller checks first).
+ */
+function repairOrder(tasks: Task[]): { tasks: Task[] } | { error: string } {
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  const placed = new Set<string>();
+  const movable = tasks.filter((t) => !isPinned(t));
+  const result: Task[] = [];
+  // Dependencies outside this list (a subtask id) constrain nothing here.
+  const blockerOf = (t: Task): Task | undefined => {
+    const id = t.dependencies.find((d) => byId.has(d) && !placed.has(d));
+    return id ? byId.get(id) : undefined;
+  };
+  const place = (t: Task) => { result.push(t); placed.add(t.id); };
+
+  for (const occupant of tasks) {
+    if (isPinned(occupant)) {
+      const blocker = blockerOf(occupant);
+      if (blocker) return { error: pinnedRefusal(blocker, occupant, 'before') };
+      place(occupant);
+      continue;
+    }
+    const next = movable.findIndex((t) => !blockerOf(t));
+    if (next < 0) {
+      // Nothing is schedulable and the graph is acyclic, so every movable task
+      // left waits — directly or through others — on a pinned task further down
+      // that would have to come up to free this slot.
+      const [stuck, pin] = trailToPin(movable[0], blockerOf);
+      return { error: pinnedRefusal(stuck, pin, 'after') };
+    }
+    place(movable.splice(next, 1)[0]);
+  }
+  return { tasks: result };
+}
+
+/** Walk the waiting-on chain from `task` down to the pinned task holding it up. */
+function trailToPin(task: Task, blockerOf: (t: Task) => Task | undefined): [Task, Task] {
+  let at = task;
+  for (;;) {
+    const blocker = blockerOf(at);
+    if (!blocker || isPinned(blocker)) return [at, blocker ?? at];
+    at = blocker;
+  }
+}
+
+/** `"B" #2→#1, "A" #1→#3` for every task the repair actually moved, or null. */
+function describeMoves(before: Task[], after: Task[]): string | null {
+  const wasAt = new Map(before.map((t, i) => [t.id, i + 1]));
+  const moved = after
+    .map((t, i) => ({ t, from: wasAt.get(t.id)!, to: i + 1 }))
+    .filter((m) => m.from !== m.to);
+  return moved.length ? moved.map((m) => `"${m.t.title}" #${m.from}→#${m.to}`).join(', ') : null;
+}
+
+function pinnedRefusal(other: Task, pin: Task, side: 'before' | 'after'): string {
+  const word = pin.status === 'in_progress' ? 'running' : 'completed';
+  return `"${other.title}" would have to run ${side} "${pin.title}", which is ${word} and cannot be moved`;
+}
+
 export interface ApplyTaskOpsResult {
   ok: boolean;
   tasks: Task[];
@@ -116,9 +235,10 @@ export interface ApplyTaskOpsResult {
  * Pre-flight check for a merge: would collapsing the selected tasks into one
  * (rewiring every dependent of any selected task to the survivor) keep the
  * dependency graph valid? Rejects locked tasks and merges whose rewiring would
- * introduce a cycle or an order-violating dependency. Consecutiveness in
- * display order is NOT checked here — that is a UI concern; this validates the
- * structural compatibility the issue calls out.
+ * introduce a cycle. Display order is NOT checked here — neither
+ * consecutiveness (a UI concern) nor a dependency the merge pulls out of order,
+ * which {@link applyTaskOps} repairs; refusing on order would make this
+ * pre-flight stricter than the applier it stands in for.
  */
 export function canMergeTasks(tasks: Task[], selectedIds: string[]): { ok: boolean; error?: string } {
   if (selectedIds.length < 2) return { ok: false, error: 'Select at least two tasks to merge' };
@@ -138,15 +258,6 @@ export function canMergeTasks(tasks: Task[], selectedIds: string[]): { ok: boole
   sim.push({ ...ordered[0], id: survivorId, title: '__merge_sim__', order: ordered[0].order, dependencies: unionDeps });
   const cycle = detectCycle(sim);
   if (cycle) return { ok: false, error: `Merging would create a dependency cycle involving "${cycle}"` };
-  const orderById = new Map(sim.map((t) => [t.id, t.order]));
-  for (const t of sim) {
-    for (const dep of t.dependencies) {
-      const depOrder = orderById.get(dep);
-      if (depOrder !== undefined && depOrder >= t.order) {
-        return { ok: false, error: 'Merging would break task ordering — a dependency of the merged set comes after it' };
-      }
-    }
-  }
   return { ok: true };
 }
 
@@ -218,18 +329,49 @@ export function canSplitTask(tasks: Task[], taskId: string): { ok: boolean; erro
  * completed tasks untouched), or nothing is returned and `errors` explains
  * why. The caller commits `tasks` on ok.
  */
-export function applyTaskOps(currentTasks: Task[], ops: TaskOp[], runners: RunnerId[]): ApplyTaskOpsResult {
+export function applyTaskOps(currentTasks: Task[], ops: TaskOp[], runners: RunnerId[], catalog?: EditCatalog): ApplyTaskOpsResult {
   let tasks: Task[] = JSON.parse(JSON.stringify(currentTasks));
   const errors: string[] = [];
   const summary: string[] = [];
 
-  const resolveDeps = (deps: unknown): { ids: string[]; bad: string[] } => {
+  // Frozen snapshot every ref resolves `#order`/title matches against, so an
+  // earlier op's renumbering can never shift what a later op's "#N" means.
+  const originalFlatAll = flattenTasks(currentTasks);
+
+  // Batch handles: planner-chosen names for a task an add/merge/split op is
+  // about to create, so a later op in the same batch can reference it before
+  // it has a real id. Pre-scanned up front — a bad handle refuses the whole
+  // batch before anything mutates.
+  const handleOwner = new Map<string, number>();
+  const handleId = new Map<string, string>();
+  for (const [i, op] of ops.entries()) {
+    const handle = (op as { handle?: unknown }).handle;
+    if (handle === undefined) continue;
+    if (typeof handle !== 'string' || !handle.trim()) {
+      errors.push(`op ${i + 1} (${op.op}): handle must be a non-empty string`);
+      continue;
+    }
+    if (handleOwner.has(handle)) {
+      errors.push(`op ${i + 1} (${op.op}): handle "${handle}" is already used earlier in this batch`);
+      continue;
+    }
+    if (refCollidesWithExisting(handle, originalFlatAll)) {
+      errors.push(`op ${i + 1} (${op.op}): handle "${handle}" collides with an existing task reference`);
+      continue;
+    }
+    handleOwner.set(handle, i);
+  }
+  if (errors.length) return { ok: false, tasks: currentTasks, errors, summary: [] };
+
+  const resolveDeps = (deps: unknown, opIndex: number): { ids: string[]; bad: string[] } => {
     const ids: string[] = [];
     const bad: string[] = [];
+    const liveFlat = flattenTasks(tasks);
     for (const d of Array.isArray(deps) ? deps : []) {
-      const t = resolveRef(d, flattenTasks(tasks));
-      if (t) ids.push(t.id);
-      else bad.push(String(d));
+      const r = resolveRef(d, originalFlatAll, liveFlat, handleOwner, handleId, opIndex);
+      if ('error' in r) { bad.push(`${String(d)} (${r.error})`); continue; }
+      if (!liveFlat.some((t) => t.id === r.id)) { bad.push(`${String(d)} (no longer exists in this batch)`); continue; }
+      ids.push(r.id);
     }
     return { ids, bad };
   };
@@ -238,48 +380,63 @@ export function applyTaskOps(currentTasks: Task[], ops: TaskOp[], runners: Runne
     const label = `op ${i + 1} (${op.op})`;
     switch (op.op) {
       case 'update': {
-        const target = resolveRef(op.taskId, flattenTasks(tasks));
-        if (!target) { errors.push(`${label}: task "${op.taskId}" not found`); break; }
-        if (target.status === 'in_progress') { errors.push(`${label}: "${target.title}" is running and cannot be modified`); break; }
-        if (target.status === 'completed') { errors.push(`${label}: "${target.title}" is completed and cannot be modified`); break; }
+        const ref = resolveRef(op.taskId, originalFlatAll, flattenTasks(tasks), handleOwner, handleId, i);
+        if ('error' in ref) { errors.push(`${label}: ${ref.error}`); break; }
+        const target = findInTasks(tasks, ref.id);
+        if (!target) { errors.push(`${label}: task "${op.taskId}" no longer exists in this batch (removed, merged, or split by an earlier op)`); break; }
         const changes: Partial<Task> = {};
         for (const key of UPDATABLE_FIELDS) {
           if (op.changes && key in op.changes) (changes as Record<string, unknown>)[key] = (op.changes as Record<string, unknown>)[key];
-        }
-        if ('dependencies' in changes) {
-          const { ids, bad } = resolveDeps(changes.dependencies);
-          if (bad.length) { errors.push(`${label}: unknown dependencies: ${bad.join(', ')}`); break; }
-          changes.dependencies = ids.filter((id) => id !== target.id);
         }
         if (changes.assignedRunner && !runners.includes(changes.assignedRunner)) {
           errors.push(`${label}: runner "${changes.assignedRunner}" is not in this plan's runner set [${runners.join(', ')}]`);
           break;
         }
+        // Dependency refs are still unresolved (e.g. "#3") at this point, so
+        // this check runs on everything but them; resolveDeps below handles
+        // dependency well-formedness once they're real ids.
+        const changesForCheck: Partial<Task> = { ...changes };
+        delete changesForCheck.dependencies;
+        const check = validateTaskEdit('planner', flattenTasks(tasks), target.id, changesForCheck, catalog);
+        if (!check.ok) { errors.push(`${label}: ${check.error}`); break; }
+        for (const field of check.clear ?? []) (changes as Record<string, unknown>)[field] = undefined;
+        if ('dependencies' in changes) {
+          const { ids, bad } = resolveDeps(changes.dependencies, i);
+          if (bad.length) { errors.push(`${label}: unknown dependencies: ${bad.join(', ')}`); break; }
+          changes.dependencies = ids.filter((id) => id !== target.id);
+        }
         if (Object.keys(changes).length === 0) { errors.push(`${label}: no valid changes provided`); break; }
         tasks = updateTaskInPlan(tasks, target.id, changes);
-        summary.push(`Updated "${target.title}" (${Object.keys(changes).join(', ')})`);
+        const clearedNote = check.clear?.length ? `; cleared ${check.clear.join(', ')}` : '';
+        summary.push(`Updated "${target.title}" (${Object.keys(changes).join(', ')})${clearedNote}`);
         break;
       }
       case 'add': {
         const spec = op.task ?? {};
         if (!spec.title) { errors.push(`${label}: new task needs a title`); break; }
-        const { ids, bad } = resolveDeps(spec.dependencies);
+        const { ids, bad } = resolveDeps(spec.dependencies, i);
         if (bad.length) { errors.push(`${label}: unknown dependencies: ${bad.join(', ')}`); break; }
         const runner = spec.assignedRunner && runners.includes(spec.assignedRunner) ? spec.assignedRunner : runners[0];
+        const validity = checkModelAndModeValidity(runner, spec.assignedModel, spec.taskMode, catalog);
+        if (!validity.ok) { errors.push(`${label}: ${validity.error}`); break; }
+        const newId = uuidv4();
         tasks = addTaskToPlan(tasks, {
           ...spec,
-          id: undefined,
+          id: newId,
           dependencies: ids,
           assignedRunner: runner,
           description: spec.description ?? spec.title,
           prompt: spec.prompt ?? spec.description ?? spec.title,
         });
+        if (op.handle) handleId.set(op.handle, newId);
         summary.push(`Added "${spec.title}"`);
         break;
       }
       case 'remove': {
-        const target = resolveRef(op.taskId, flattenTasks(tasks));
-        if (!target) { errors.push(`${label}: task "${op.taskId}" not found`); break; }
+        const ref = resolveRef(op.taskId, originalFlatAll, flattenTasks(tasks), handleOwner, handleId, i);
+        if ('error' in ref) { errors.push(`${label}: ${ref.error}`); break; }
+        const target = findInTasks(tasks, ref.id);
+        if (!target) { errors.push(`${label}: task "${op.taskId}" no longer exists in this batch (removed, merged, or split by an earlier op)`); break; }
         if (target.status === 'in_progress') { errors.push(`${label}: "${target.title}" is running and cannot be removed`); break; }
         if (target.status === 'completed') { errors.push(`${label}: "${target.title}" is completed and cannot be removed`); break; }
         tasks = removeTaskFromPlan(tasks, target.id);
@@ -287,7 +444,10 @@ export function applyTaskOps(currentTasks: Task[], ops: TaskOp[], runners: Runne
         break;
       }
       case 'reorder': {
-        const resolved = (op.taskIds ?? []).map((r) => resolveRef(r, tasks));
+        const refs = (op.taskIds ?? []).map((r) => resolveRef(r, currentTasks, tasks, handleOwner, handleId, i));
+        const badRef = refs.find((r): r is { error: string } => 'error' in r);
+        if (badRef) { errors.push(`${label}: ${badRef.error}`); break; }
+        const resolved = (refs as { id: string }[]).map((r) => findTopLevel(tasks, r.id));
         if (resolved.some((t) => !t)) { errors.push(`${label}: unknown task in reorder list`); break; }
         const orderIds = resolved.map((t) => t!.id);
         if (new Set(orderIds).size !== tasks.length) {
@@ -300,8 +460,11 @@ export function applyTaskOps(currentTasks: Task[], ops: TaskOp[], runners: Runne
         break;
       }
       case 'merge': {
-        const resolved = (op.taskIds ?? []).map((r) => resolveRef(r, tasks));
-        if (resolved.some((t) => !t)) { errors.push(`${label}: unknown task in merge list`); break; }
+        const refs = (op.taskIds ?? []).map((r) => resolveRef(r, currentTasks, tasks, handleOwner, handleId, i));
+        const badRef = refs.find((r): r is { error: string } => 'error' in r);
+        if (badRef) { errors.push(`${label}: ${badRef.error}`); break; }
+        const resolved = (refs as { id: string }[]).map((r) => findTopLevel(tasks, r.id));
+        if (resolved.some((t) => !t)) { errors.push(`${label}: unknown task in merge list (already removed, merged, or split by an earlier op)`); break; }
         const toMerge = resolved.map((t) => t!).sort((a, b) => a.order - b.order);
         if (toMerge.length < 2) { errors.push(`${label}: merge needs at least two tasks`); break; }
         const locked = toMerge.find((t) => t.status === 'in_progress' || t.status === 'completed');
@@ -311,7 +474,7 @@ export function applyTaskOps(currentTasks: Task[], ops: TaskOp[], runners: Runne
         }
         const idSet = new Set(toMerge.map((t) => t.id));
         const unionDepsRaw = [...new Set(toMerge.flatMap((t) => t.dependencies))].filter((d) => !idSet.has(d));
-        const { ids, bad } = resolveDeps(unionDepsRaw);
+        const { ids, bad } = resolveDeps(unionDepsRaw, i);
         if (bad.length) { errors.push(`${label}: unknown dependencies: ${bad.join(', ')}`); break; }
         const spec = op.merged ?? {};
         if (!spec.title) { errors.push(`${label}: merged task needs a title`); break; }
@@ -345,11 +508,14 @@ export function applyTaskOps(currentTasks: Task[], ops: TaskOp[], runners: Runne
         }
         if (!inserted) result.push(mergedTask);
         tasks = renumberTasks(result);
+        if (op.handle) handleId.set(op.handle, mergedId);
         summary.push(`Merged ${toMerge.length} tasks into "${spec.title}"`);
         break;
       }
       case 'split': {
-        const target = resolveRef(op.taskId, tasks);
+        const ref = resolveRef(op.taskId, currentTasks, tasks, handleOwner, handleId, i);
+        if ('error' in ref) { errors.push(`${label}: ${ref.error}`); break; }
+        const target = findTopLevel(tasks, ref.id);
         if (!target) { errors.push(`${label}: task "${op.taskId}" not found`); break; }
         if (target.status === 'in_progress') { errors.push(`${label}: "${target.title}" is running and cannot be split`); break; }
         if (target.status === 'completed') { errors.push(`${label}: "${target.title}" is completed and cannot be split`); break; }
@@ -358,15 +524,15 @@ export function applyTaskOps(currentTasks: Task[], ops: TaskOp[], runners: Runne
         const newTasks: Task[] = [];
         let prevId: string | undefined;
         let buildError = false;
-        for (let i = 0; i < parts.length; i++) {
-          const spec = parts[i];
-          if (!spec || !spec.title) { errors.push(`${label}: split part ${i + 1} needs a title`); buildError = true; break; }
+        for (let p = 0; p < parts.length; p++) {
+          const spec = parts[p];
+          if (!spec || !spec.title) { errors.push(`${label}: split part ${p + 1} needs a title`); buildError = true; break; }
           // Part 0 inherits the original's (external) dependencies, resolved
           // against the current plan. Later parts chain onto the previous part
           // — a sibling id created in this same op, so it needs no resolution.
           let deps: string[];
-          if (i === 0) {
-            const { ids, bad } = resolveDeps(target.dependencies);
+          if (p === 0) {
+            const { ids, bad } = resolveDeps(target.dependencies, i);
             if (bad.length) { errors.push(`${label}: split part 1 unknown dependencies: ${bad.join(', ')}`); buildError = true; break; }
             deps = ids;
           } else {
@@ -397,7 +563,50 @@ export function applyTaskOps(currentTasks: Task[], ops: TaskOp[], runners: Runne
           result.push({ ...t, dependencies: t.dependencies.map((d) => (d === target.id ? tailId : d)) });
         }
         tasks = renumberTasks(result);
+        if (op.handle) handleId.set(op.handle, tailId);
         summary.push(`Split "${target.title}" into ${newTasks.length} tasks`);
+        break;
+      }
+      case 'rearm': {
+        const ref = resolveRef(op.taskId, originalFlatAll, flattenTasks(tasks), handleOwner, handleId, i);
+        if ('error' in ref) { errors.push(`${label}: ${ref.error}`); break; }
+        const target = findInTasks(tasks, ref.id);
+        if (!target) { errors.push(`${label}: task "${op.taskId}" no longer exists in this batch (removed, merged, or split by an earlier op)`); break; }
+        if (target.status === 'in_progress') { errors.push(`${label}: "${target.title}" is running and cannot be re-armed`); break; }
+        const changes: Partial<Task> = {};
+        for (const key of UPDATABLE_FIELDS) {
+          if (op.changes && key in op.changes) (changes as Record<string, unknown>)[key] = (op.changes as Record<string, unknown>)[key];
+        }
+        if (changes.assignedRunner && !runners.includes(changes.assignedRunner)) {
+          errors.push(`${label}: runner "${changes.assignedRunner}" is not in this plan's runner set [${runners.join(', ')}]`);
+          break;
+        }
+        // Validated as a direct edit (not 'planner'): re-arming is the sanctioned
+        // exception to the planner lock — its whole point is to touch a task the
+        // lock would otherwise refuse. Well-formedness (type coherence, model/mode
+        // validity, dependency shape) still applies, same as every other edit.
+        const changesForCheck: Partial<Task> = { ...changes };
+        delete changesForCheck.dependencies;
+        const check = validateTaskEdit('direct', flattenTasks(tasks), target.id, changesForCheck, catalog);
+        if (!check.ok) { errors.push(`${label}: ${check.error}`); break; }
+        for (const field of check.clear ?? []) (changes as Record<string, unknown>)[field] = undefined;
+        if ('dependencies' in changes) {
+          const { ids, bad } = resolveDeps(changes.dependencies, i);
+          if (bad.length) { errors.push(`${label}: unknown dependencies: ${bad.join(', ')}`); break; }
+          changes.dependencies = ids.filter((id) => id !== target.id);
+        }
+        tasks = updateTaskInPlan(tasks, target.id, { ...changes, status: 'pending', verdict: undefined, outputSummary: undefined });
+        // Dependents parked at 'blocked' by this task's earlier failure have
+        // nothing else to release them — the scheduler reads `status` directly,
+        // not a live recomputation of the dependency graph.
+        for (const dep of flattenTasks(tasks)) {
+          if (dep.status === 'blocked' && dep.dependencies.includes(target.id)) {
+            tasks = updateTaskInPlan(tasks, dep.id, { status: 'pending' });
+          }
+        }
+        const clearedNote = check.clear?.length ? `; cleared ${check.clear.join(', ')}` : '';
+        const changedNote = Object.keys(changes).length ? ` (${Object.keys(changes).join(', ')})` : '';
+        summary.push(`Re-armed "${target.title}"${changedNote}${clearedNote}`);
         break;
       }
       default:
@@ -416,15 +625,17 @@ export function applyTaskOps(currentTasks: Task[], ops: TaskOp[], runners: Runne
     }
     const cycleAt = detectCycle(flat);
     if (cycleAt) errors.push(`Dependency cycle detected involving "${cycleAt}"`);
-    // Order must respect dependencies. This is the only enforcer of that
-    // invariant now that no surface can reposition a task by hand.
-    const orderById = new Map(tasks.map((t) => [t.id, t.order]));
-    for (const t of tasks) {
-      for (const dep of t.dependencies) {
-        const depOrder = orderById.get(dep);
-        if (depOrder !== undefined && depOrder >= t.order) {
-          errors.push(`"${t.title}" is ordered before its dependency; move the dependency earlier`);
-        }
+    // Display order is maintained, not demanded: whatever the batch produced,
+    // the plan comes back with dependencies ahead of their dependents. The
+    // planner never has to re-declare the whole order to move one task.
+    if (!errors.length) {
+      const repaired = repairOrder(tasks);
+      if ('error' in repaired) {
+        errors.push(repaired.error);
+      } else {
+        const moves = describeMoves(tasks, repaired.tasks);
+        if (moves) summary.push(`Reordered to keep dependencies first: ${moves}`);
+        tasks = renumberTasks(repaired.tasks);
       }
     }
   }

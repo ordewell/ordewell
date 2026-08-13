@@ -2,6 +2,8 @@
 export const PLAN_ENVELOPE_KEY = 'tasks';
 /** The envelope key a targeted-edits reply is keyed by: `{"taskOps":[...]}`. */
 export const TASK_OPS_ENVELOPE_KEY = 'taskOps';
+/** The envelope key a read-only detail request is keyed by: `{"taskQuery":{...}}`. */
+export const TASK_QUERY_ENVELOPE_KEY = 'taskQuery';
 
 /** Thrown when an LLM plan response cannot be parsed into a valid plan. Carries the raw text so callers can log it or retry. */
 export class PlanParseError extends Error {

@@ -276,6 +276,68 @@ describe('Session.setTaskDependencies', () => {
   });
 });
 
+describe('Session.updateTask — type coherence on AI <-> MAN flips', () => {
+  // The direct-edit path shares the planner's coherence rule (see
+  // TaskOps.test.ts, "type coherence on AI <-> MAN flips") rather than a
+  // second copy of it — a surface's task-card edit is refused the same way.
+  it('refuses a flip to MAN without user steps, and to AI without a prompt', async () => {
+    const session = makeSession({ modelResolver: resolverFor(CLAUDE_CATALOG) });
+    session.loadPlan(planWith(), 'goal', testWorkspace, { persist: false });
+
+    await expect(session.updateTask('t1', { type: 'user' })).rejects.toThrow(/user steps/i);
+
+    const plan = planWith();
+    plan.tasks[0].type = 'user';
+    plan.tasks[0].userSteps = [{ order: 1, instruction: 'do it', completed: false }];
+    const manSession = makeSession({ modelResolver: resolverFor(CLAUDE_CATALOG) });
+    manSession.loadPlan(plan, 'goal', testWorkspace, { persist: false });
+    await expect(manSession.updateTask('t1', { type: 'ai' })).rejects.toThrow(/prompt/i);
+  });
+
+  it('flips a task to MAN when user steps are supplied, clearing the AI-only fields', async () => {
+    const session = makeSession({ modelResolver: resolverFor(CLAUDE_CATALOG) });
+    session.loadPlan(planWith(), 'goal', testWorkspace, { persist: false });
+
+    const state = await session.updateTask('t1', {
+      type: 'user',
+      userSteps: [{ order: 1, instruction: 'flip the switch', completed: false }],
+    });
+
+    const updated = state!.tasks.find((t) => t.id === 't1')!;
+    expect(updated.type).toBe('user');
+    expect(updated.userSteps).toHaveLength(1);
+    expect(updated.taskMode).toBeUndefined();
+  });
+});
+
+describe('Session.updateTask — model and task-mode validity', () => {
+  // addTask populates modelsCache via catalogFor/admitRunner, giving the
+  // direct-edit path a real catalog to check against — the same rule the
+  // planner's task-ops applier enforces (TaskOps.test.ts, "model and
+  // task-mode validity"), applied to a surface's own field patch.
+  it('refuses a model the runner does not offer', async () => {
+    const session = makeSession({ modelResolver: resolverFor(CLAUDE_CATALOG) });
+    session.loadPlan(planWith(), 'goal', testWorkspace, { persist: false });
+    await session.addTask({ title: 'Docs', prompt: 'write docs' }); // seeds modelsCache
+
+    await expect(session.updateTask('t1', {
+      assignedModel: { modelId: 'gpt-9-imaginary', modelLabel: 'GPT-9' },
+    })).rejects.toThrow(/claude-code/);
+  });
+
+  it('accepts a model the runner offers', async () => {
+    const session = makeSession({ modelResolver: resolverFor(CLAUDE_CATALOG) });
+    session.loadPlan(planWith(), 'goal', testWorkspace, { persist: false });
+    await session.addTask({ title: 'Docs', prompt: 'write docs' });
+
+    const state = await session.updateTask('t1', {
+      assignedModel: { modelId: 'claude-haiku-4-5', modelLabel: 'Claude Haiku 4.5' },
+    });
+
+    expect(state!.tasks.find((t) => t.id === 't1')!.assignedModel?.modelId).toBe('claude-haiku-4-5');
+  });
+});
+
 describe('reordering is not part of the plan API', () => {
   // Independent tasks fan out, so a stored position never was the execution
   // order it looked like. Nothing may reintroduce a positional mutator.

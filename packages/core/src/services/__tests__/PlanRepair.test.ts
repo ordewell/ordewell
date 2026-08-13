@@ -136,6 +136,36 @@ describe('classifyPlannerReply', () => {
   it('treats plain conversation as prose', () => {
     expect(classifyPlannerReply('Which database do you want to use?', opts).kind).toBe('prose');
   });
+
+  it('classifies a taskQuery read as its own kind', () => {
+    const reply = classifyPlannerReply('{"taskQuery":{"tasks":["#3"]}}', opts);
+    expect(reply.kind).toBe('task_query');
+    if (reply.kind === 'task_query') expect(reply.query.tasks).toEqual(['#3']);
+  });
+
+  it('carries the field selector and the catalog flag through', () => {
+    const reply = classifyPlannerReply('{"taskQuery":{"tasks":["t1","#2"],"fields":["prompt"],"catalog":true}}', opts);
+    expect(reply.kind).toBe('task_query');
+    if (reply.kind !== 'task_query') return;
+    expect(reply.query.tasks).toEqual(['t1', '#2']);
+    expect(reply.query.fields).toEqual(['prompt']);
+    expect(reply.query.catalog).toBe(true);
+  });
+
+  it('accepts a catalog-only read, which names no task at all', () => {
+    const reply = classifyPlannerReply('{"taskQuery":{"catalog":true}}', opts);
+    expect(reply.kind).toBe('task_query');
+    if (reply.kind === 'task_query') expect(reply.query.tasks).toEqual([]);
+  });
+
+  it('flags a malformed read as broken_task_query', () => {
+    expect(classifyPlannerReply('{"taskQuery":{"fields":["nonesuch"]}}', opts).kind).toBe('broken_task_query');
+    expect(classifyPlannerReply('{"taskQuery":{}}', opts).kind).toBe('broken_task_query');
+  });
+
+  it('treats prose that merely mentions the read envelope as prose', () => {
+    expect(classifyPlannerReply('I can read a task with "taskQuery" if you want.', opts).kind).toBe('prose');
+  });
 });
 
 describe('generatePlanWithRepair truncation corrective', () => {

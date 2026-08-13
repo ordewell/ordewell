@@ -141,6 +141,32 @@ describe('runConversationTurn abort handling', () => {
   });
 });
 
+describe('runConversationTurn task-query reads', () => {
+  it('hands a read up as its own turn kind for the Session to answer', async () => {
+    const chat = new ScriptedChat([proseTurn('{"taskQuery":{"tasks":["#3"],"catalog":true}}')]);
+    const svc = new TestService(fakeConfig());
+    const turn = await svc.runTurn(makeCtx(chat), 'go');
+    expect(turn.kind).toBe('task_query');
+    if (turn.kind !== 'task_query') return;
+    expect(turn.query.tasks).toEqual(['#3']);
+    expect(turn.query.catalog).toBe(true);
+    // The read is settled by the Session, not by a second round here.
+    expect(chat.sent).toHaveLength(1);
+  });
+
+  it('retries a malformed read once, then hands up the corrected one', async () => {
+    const chat = new ScriptedChat([
+      proseTurn('{"taskQuery":{"fields":["nonesuch"]}}'),
+      proseTurn('{"taskQuery":{"tasks":["#1"]}}'),
+    ]);
+    const svc = new TestService(fakeConfig());
+    const turn = await svc.runTurn(makeCtx(chat), 'go');
+    expect(turn.kind).toBe('task_query');
+    expect(chat.sent).toHaveLength(2);
+    expect(chat.sent[1]).toContain('taskQuery');
+  });
+});
+
 describe('runConversationTurn JSON repair', () => {
   it('retries a malformed plan attempt and commits the corrected re-emit', async () => {
     // Balanced tasks-keyed JSON that fails validation (missing sliceType).

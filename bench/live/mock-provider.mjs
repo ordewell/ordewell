@@ -19,6 +19,8 @@
  *   mock/prd-flow      PRD preview → marker-wrapped PRD → outline → plan
  *   mock/empty-turn    returns an empty assistant turn after one tool call
  *   mock/visibility    one parallel round mixing allowed, refused and out-of-scope calls
+ *   mock/task-query-editor  reads a task's prompt via taskQuery, then edits it
+ *                       from what the answer actually contained
  *
  * Usage: node bench/live/mock-provider.mjs [--port 3799]
  */
@@ -109,6 +111,19 @@ function scriptTurn(model, messages) {
       };
     }
     return { content: 'Some lookups were not allowed. **Question**: how should I proceed?' };
+  }
+
+  if (persona === 'task-query-editor') {
+    // A scripted stand-in for "read before you edit": it never assumes what a
+    // task's prompt says, it asks (the taskQuery envelope), and only emits an
+    // edit once the answer — carrying a marker the plan context block never
+    // includes — has actually come back on a prior user turn.
+    const seen = messages.map((m) => String(m.content ?? '')).join('\n');
+    const marker = seen.match(/MARKER-[A-Z0-9]+/)?.[0];
+    if (!marker) {
+      return { content: JSON.stringify({ taskQuery: { tasks: ['#2'], fields: ['prompt'] } }) };
+    }
+    return { content: JSON.stringify({ taskOps: [{ op: 'update', taskId: '#2', changes: { description: `read-confirmed:${marker}` } }] }) };
   }
 
   if (persona === 'fenced-json') {

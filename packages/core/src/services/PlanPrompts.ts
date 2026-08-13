@@ -2,6 +2,7 @@ import { DiscoveredModel, RunnerId, type TaskSnapshot, type Task } from '../mode
 import type { LegacyPlanState } from '../models/Task';
 import { buildModeGuide, filteredBuildModes, type RunnerModeInfo } from './ModeResolver';
 import { DEFAULT_PLANNER_MODES, modesFor, type PlannerModes } from './plannerModes';
+import { TASK_QUERY_PROTOCOL } from './TaskQuery';
 
 export function buildResearchToolsPrompt(subagentsEnabled = false): string {
   const lines = [
@@ -321,6 +322,11 @@ function buildConversationBody(
     '',
     'TASK MODE:',
     modeGuide,
+    '',
+    // Shared by both variants on purpose: the read channel is a text envelope
+    // exactly so a harness planner, which Ordewell cannot hand tools to, speaks
+    // the same protocol as an API-backed one (ADR-0009).
+    ...TASK_QUERY_PROTOCOL,
     '',
     context ? `PROJECT CONTEXT:\n${context}\n` : '',
     `USER GOAL: ${goal}`,
@@ -721,6 +727,7 @@ export function buildMergePrompt(taskIds: string[], tasks: Task[]): string {
     'Set "assignedRunner" and "assignedModel" on the merged task — use one of the runners and models listed in <available_models> above. Prefer the strongest model if the merged work is complex.',
     'Reply with ONLY a taskOps JSON object using a single "merge" op:',
     `  {"taskOps":[{"op":"merge","taskIds":[${selected.map((t) => `"${t.id}"`).join(', ')}],"merged":{"title":"...","description":"...","prompt":"...","assignedRunner":"...","assignedModel":{"modelId":"...","modelLabel":"..."}}}]}`,
+    'If this merge needs a companion op in the same batch (e.g. an added task that should depend on the merge result), give the merge op a "handle" (any unused name) and reference it from the later op\'s taskId/dependencies.',
   ].join('\n');
 }
 
@@ -739,5 +746,6 @@ export function buildSplitPrompt(taskId: string, tasks: Task[]): string {
     'Set "assignedRunner" and "assignedModel" on each part — use the runners and models listed in <available_models> above. You may assign different models to different parts (e.g. a stronger model for a complex part, a faster one for a simple part).',
     'Reply with ONLY a taskOps JSON object using a single "split" op:',
     `  {"taskOps":[{"op":"split","taskId":"${task.id}","parts":[{"title":"...","description":"...","prompt":"...","assignedRunner":"...","assignedModel":{"modelId":"...","modelLabel":"..."}},...]}]}`,
+    'If this split needs a companion op in the same batch (e.g. another task that should depend on the last part), give the split op a "handle" (any unused name) — it names the last part — and reference it from the later op\'s taskId/dependencies.',
   ].join('\n');
 }

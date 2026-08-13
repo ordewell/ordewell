@@ -5,7 +5,7 @@ import { IFileSystem } from '../interfaces/IFileSystem';
 import { IWebFetcher } from '../interfaces/IWebFetcher';
 import { buildPlanWithResults } from './PlanPrompts';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
-import { generatePlanWithRepair, classifyPlannerReply, reEmitPlanPrompt, reEmitTaskOpsPrompt, truncatedPlanReEmitPrompt } from './PlanRepair';
+import { generatePlanWithRepair, classifyPlannerReply, reEmitPlanPrompt, reEmitTaskOpsPrompt, reEmitTaskQueryPrompt, truncatedPlanReEmitPrompt } from './PlanRepair';
 import { compactResearchResults, withProactiveCompaction } from './contextCompaction';
 import { extractPrdBlock } from '../utils/prdStore';
 import type { RunnerModeInfo } from './ModeResolver';
@@ -444,6 +444,11 @@ export abstract class BaseAiService {
         case 'task_ops':
           return { kind: 'task_ops', ops: reply.ops, text: turn.text, researchLog };
 
+        // A read is settled by the Session (it owns the plan and the catalog),
+        // so it leaves this loop the same way a plan or an edit does.
+        case 'task_query':
+          return { kind: 'task_query', query: reply.query, text: turn.text, researchLog };
+
         case 'plan':
           // PRD mode fail-safe: a cheap model that skips the PRD and jumps to
           // JSON would otherwise commit a plan with no PRD on record. Bounce
@@ -468,6 +473,14 @@ export abstract class BaseAiService {
           if (jsonRepairAttempts < MAX_JSON_REPAIRS && !signal?.aborted) {
             jsonRepairAttempts++;
             pending = reEmitTaskOpsPrompt(reply.error.message);
+            continue;
+          }
+          break;
+
+        case 'broken_task_query':
+          if (jsonRepairAttempts < MAX_JSON_REPAIRS && !signal?.aborted) {
+            jsonRepairAttempts++;
+            pending = reEmitTaskQueryPrompt(reply.error.message);
             continue;
           }
           break;

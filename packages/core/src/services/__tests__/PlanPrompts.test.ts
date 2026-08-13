@@ -328,6 +328,16 @@ describe('buildConversationSystemPrompt harness variant (ADR-0009)', () => {
     }
   });
 
+  it('teaches the task-query read protocol to both variants, so the channel is not API-only', () => {
+    for (const prompt of [variant(true), variant(false)]) {
+      expect(prompt).toContain('"taskQuery"');
+      expect(prompt).toContain('"catalog"');
+      expect(prompt).toContain('"fields"');
+      // The point of the channel: read the body before rewriting it.
+      expect(prompt).toMatch(/prompt|description/);
+    }
+  });
+
   it('carries every mode-toggle block, so no toggle works on one backend only', () => {
     const all = { grillMe: true, prd: true, review: true, verify: true };
     const harness = variant(true, all);
