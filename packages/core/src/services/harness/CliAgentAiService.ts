@@ -38,6 +38,15 @@ import { DEFAULT_PLANNER_MODES, type PlannerModes } from '../plannerModes';
 /** Corrective re-emits allowed for botched JSON, matching the API backend. */
 const MAX_JSON_REPAIRS = 2;
 
+/**
+ * How many times a turn that backgrounded a subagent may be asked to wait for
+ * it. Bounded like the repair loop and for the same reason: an agent that keeps
+ * deferring must cost a known number of turns, not an open-ended poll. Two,
+ * because the first ask can arrive while the subagent is genuinely still
+ * running, and one retry is what turns "not yet" into the report.
+ */
+const MAX_AGENT_WAITS = 2;
+
 /** Kept out of the reply text and the log; a long trace would drown both. */
 const LOG_MAX_CHARS = 10000;
 
@@ -64,6 +73,8 @@ interface HarnessTurn {
   /** The agent's own failure, verbatim. Present means the turn did not complete. */
   error?: string;
   aborted?: boolean;
+  /** Subagents the agent left running when it ended the turn. See {@link MAX_AGENT_WAITS}. */
+  backgroundAgents: number;
 }
 
 /**
@@ -232,6 +243,11 @@ export class CliAgentAiService implements IAiService {
     let pending = message;
     let emptyNudgeSent = false;
     let jsonRepairAttempts = 0;
+    let agentWaits = 0;
+    // Text from turns Ordewell continued past on the user's behalf. A wait is
+    // not a new user message, so the reply they read is the whole answer.
+    const carried: string[] = [];
+    const replyText = (text: string) => [...carried, text].filter((part) => part.trim()).join('\n\n');
 
     try {
       for (;;) {
@@ -240,7 +256,7 @@ export class CliAgentAiService implements IAiService {
 
         if (turn.aborted || combined?.aborted) {
           onProgress({ type: 'interrupted' });
-          return { kind: 'message', text: turn.text, researchLog };
+          return { kind: 'message', text: replyText(turn.text), researchLog };
         }
 
         // Fail visibly, per the repo's fail-safe contract: an agent that died,
@@ -271,6 +287,22 @@ export class CliAgentAiService implements IAiService {
           };
         }
 
+        // The agent ended its turn with subagents still running, so whatever
+        // they find is about to be said into a closed turn. Ask for it while a
+        // turn is still open — this is the whole recovery, and it is bounded.
+        if (turn.backgroundAgents > 0 && agentWaits < MAX_AGENT_WAITS && !combined?.aborted) {
+          agentWaits++;
+          carried.push(turn.text);
+          pending = [
+            `You ended your turn with ${turn.backgroundAgents} subagent(s) still running in the background.`,
+            'Ordewell hands the conversation back to the user when your turn ends, so anything you say after it never reaches them —',
+            'the results you promised to report would be lost.',
+            'Wait for those agents to finish NOW, in this reply, and do not end your turn until you have their results.',
+            'Then give the user your synthesis. In future replies, await your agents inside the turn rather than backgrounding them.',
+          ].join(' ');
+          continue;
+        }
+
         if (extractPrdBlock(turn.text)) conversation.prdCaptured = true;
 
         const reply = classifyPlannerReply(turn.text, {
@@ -281,12 +313,12 @@ export class CliAgentAiService implements IAiService {
 
         switch (reply.kind) {
           case 'task_ops':
-            return { kind: 'task_ops', ops: reply.ops, text: turn.text, researchLog };
+            return { kind: 'task_ops', ops: reply.ops, text: replyText(turn.text), researchLog };
 
           // The read channel is a text envelope precisely so it reaches here
           // too: a harness planner has no Ordewell tool loop to call into.
           case 'task_query':
-            return { kind: 'task_query', query: reply.query, text: turn.text, researchLog };
+            return { kind: 'task_query', query: reply.query, text: replyText(turn.text), researchLog };
 
           case 'plan':
             if (conversation.prdEnabled && !conversation.prdCaptured && !conversation.prdNudgeSent && !combined?.aborted) {
@@ -304,7 +336,7 @@ export class CliAgentAiService implements IAiService {
             // with the plan's own transcript rather than inheriting this
             // session's context.
             this.conversation = null;
-            return { kind: 'plan', tasks: reply.tasks, text: turn.text, researchLog };
+            return { kind: 'plan', tasks: reply.tasks, text: replyText(turn.text), researchLog };
 
           case 'broken_task_ops':
             if (jsonRepairAttempts < MAX_JSON_REPAIRS && !combined?.aborted) {
@@ -334,7 +366,7 @@ export class CliAgentAiService implements IAiService {
             break;
         }
 
-        return { kind: 'message', text: turn.text, researchLog };
+        return { kind: 'message', text: replyText(turn.text), researchLog };
       }
     } finally {
       this.activeAbort = null;
@@ -359,6 +391,7 @@ export class CliAgentAiService implements IAiService {
     let text = '';
     let error: string | undefined;
     let stepIndex = 0;
+    let backgroundAgents = 0;
 
     const truncate = (value: string) =>
       value.length > LOG_MAX_CHARS ? `${value.slice(0, LOG_MAX_CHARS)}\n[... truncated, total ${value.length} chars]` : value;
@@ -404,6 +437,10 @@ export class CliAgentAiService implements IAiService {
           settle(event.id, event.output, event.success, event.success ? 'success' : 'failure');
           return;
 
+        case 'background_agent':
+          backgroundAgents++;
+          return;
+
         case 'permission_request': {
           // Auto-denied, always (T1). The request is still announced so the
           // user can see the planner reached for something it may not have —
@@ -445,7 +482,7 @@ export class CliAgentAiService implements IAiService {
     // the session id rather than throwing into a dead stdin.
     if (error || signal?.aborted) { adapter.dispose(); this.adapter = null; }
 
-    return { text, researchLog, error, aborted: signal?.aborted };
+    return { text, researchLog, error, aborted: signal?.aborted, backgroundAgents };
   }
 
   // --- Process lifecycle ---

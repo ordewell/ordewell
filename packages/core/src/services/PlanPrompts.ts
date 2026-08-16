@@ -127,6 +127,7 @@ function researchPhaseBlock(harnessMode: boolean): string {
     ? [
       '- Explore the repository with your own tools until you understand its architecture',
       '- You are planning, not implementing: do NOT edit, create, or delete any file, and do not run commands that change the workspace',
+      '- If you delegate exploration to your own agents, WAIT for their results inside this reply. Do NOT launch them in the background or async and end your turn saying you will report back later: your turn ending is what hands the conversation back to the user, and anything you say after it never reaches them.',
     ]
     : [
       '- Use list_dir with depth=2-3 for a tree overview',

@@ -8,6 +8,29 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A Claude Code planner no longer answers as its own subagents.** Claude Code
+  replays a subagent's transcript on the planner's stream, parented to the tool
+  call that spawned it; read as the planner talking, an exploration agent's
+  commentary opened the reply — often an answer to a prompt the user never sent
+  — and its tool calls padded the research log. Subagent traffic is now dropped
+  at the adapter, leaving the spawning `Agent` call and its result as the
+  planner-level record.
+- **A harness planner no longer loses its own research.** Backgrounding an
+  exploration agent ended the turn on "I'll report back once they land", and
+  everything said afterwards — including the finished research — arrived with no
+  turn open and reached no one. The planner is now told to await its agents
+  inside the reply, and a turn that backgrounds one anyway is asked to wait for
+  the results while a turn is still open, at most twice.
+- **A closed turn's straggling work stays out of the next turn.** Tool activity
+  arriving after a turn ended — a backgrounded subagent finishing, a late read —
+  was held and replayed into the following turn, where it read as research done
+  for the user's new message. Only pre-first-turn startup warnings are held now.
+- **Planner messages no longer run together.** Each Claude Code message, and
+  each OpenCode text part, opens a paragraph after the first — as Codex's
+  already did — instead of being concatenated onto the previous sentence.
+
 ## [0.4.8] — 2026-08-11
 
 Hardening release across the daemon and command-handling paths. No API

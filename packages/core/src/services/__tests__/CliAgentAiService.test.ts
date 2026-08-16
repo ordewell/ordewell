@@ -143,6 +143,34 @@ describe('CliAgentAiService — Claude Code', () => {
     expect(events.filter((e) => e.type === 'thinking').map((e) => e.text).join('')).toContain('read the README');
   });
 
+  // Claude Code replays a subagent's whole transcript on the planner's own
+  // stream, parented to the tool call that spawned it. Read as the planner
+  // talking, an exploration agent's commentary became the first thing the user
+  // saw — an answer to a prompt they never sent.
+  it('keeps subagent transcripts out of the planner reply and the research log', async () => {
+    const { svc } = service('claude-code', [fixture('claude-code', 'subagent')]);
+    const { events, onProgress } = collector();
+    const turn = await svc.startConversation(request({ onProgress }));
+
+    expect(turn.text).not.toContain('Tool loaded');
+    expect(turn.text).toContain('explore the cache layer');
+    expect(turn.text).toContain('in-process or Redis');
+    expect(events.filter((e) => e.type === 'thinking')).toHaveLength(0);
+    // Only the spawning call is the planner's; the subagent's own Read is not.
+    const calls = events.filter((e) => e.type === 'tool_call');
+    expect(calls.map((c) => c.toolCallId)).toEqual(['toolu_agent']);
+    expect(turn.researchLog.flatMap((s) => ('toolCallId' in s ? [s.toolCallId] : []))).toEqual(['toolu_agent']);
+  });
+
+  it('opens a paragraph for each message after the first, instead of running them together', async () => {
+    const { svc } = service('claude-code', [fixture('claude-code', 'subagent')]);
+    const turn = await svc.startConversation(request());
+
+    expect(turn.text).toBe(
+      'I\'ll explore the cache layer in parallel.\n\nThat agent returned the answer: should the cache be in-process or Redis?',
+    );
+  });
+
   it('commits a plan emitted as text through the existing parser', async () => {
     const { svc } = service('claude-code', [fixture('claude-code', 'plan', { PLAN: planJson() })]);
     const turn = await svc.startConversation(request());
@@ -168,6 +196,68 @@ describe('CliAgentAiService — Claude Code', () => {
     expect(turn.query.catalog).toBe(true);
     // A read settles nothing, so the conversation stays open for the answer.
     expect(svc.hasActiveConversation()).toBe(true);
+  });
+
+  // Claude Code auto-backgrounds an `Agent` call and ends the turn on "I'll
+  // report back once they land". Its turn ending is what hands the conversation
+  // back to the user, so the report — the whole point of the research — arrives
+  // with no turn open and reaches nobody. The planner is asked to wait instead.
+  it('waits for a backgrounded agent instead of settling on "I\'ll report back"', async () => {
+    const { svc, spawned } = service('claude-code', [
+      fixture('claude-code', 'async-agent'),
+      fixture('claude-code', 'async-agent-report'),
+    ]);
+    const turn = await svc.startConversation(request());
+
+    expect(turn.text).toContain('KPI helpers live in lib/kpis.py');
+    const sent = spawned.processes[0].written;
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toContain('background');
+  });
+
+  // The wait is Ordewell's doing, not a new user message, so the reply the user
+  // reads must be the whole answer — what the planner said before delegating,
+  // and what it found. Returning only the last turn would trade one lost half
+  // of the conversation for the other.
+  it('keeps what the planner said before the wait, not just the report', async () => {
+    const { svc } = service('claude-code', [
+      fixture('claude-code', 'async-agent'),
+      fixture('claude-code', 'async-agent-report'),
+    ]);
+    const turn = await svc.startConversation(request());
+
+    expect(turn.text).toContain('explore the dashboard and the data layer');
+    expect(turn.text).toContain('KPI helpers live in lib/kpis.py');
+  });
+
+  // A planner that answers every wait by backgrounding another agent must cost
+  // a known number of turns, not an open-ended poll against a user who is
+  // watching a spinner.
+  it('gives up waiting after a bounded number of asks', async () => {
+    const deferring = fixture('claude-code', 'async-agent');
+    const { svc, spawned } = service('claude-code', [deferring, deferring, deferring, deferring]);
+    const turn = await svc.startConversation(request());
+
+    expect(turn.kind).toBe('message');
+    // One goal + two waits, then it stops asking.
+    expect(spawned.processes[0].written).toHaveLength(3);
+  });
+
+  // Work that lands after a turn closed — a backgrounded agent finishing, a
+  // straggling read — belongs to the turn that asked for it. Held and replayed
+  // into the next one, it reads as research the planner did for the user's new
+  // message, and the file it names has nothing to do with what they just asked.
+  it('does not replay a closed turn\'s tool activity into the next turn', async () => {
+    const { svc } = service('claude-code', [
+      fixture('claude-code', 'late-tools'),
+      fixture('claude-code', 'prose'),
+    ]);
+    await svc.startConversation(request());
+    const { events, onProgress } = collector();
+    const turn = await svc.continueConversation('Redis, please.', onProgress);
+
+    expect(turn.researchLog).toHaveLength(0);
+    expect(events.filter((e) => e.type === 'tool_call')).toHaveLength(0);
   });
 
   it('repairs a botched plan with a bounded corrective re-emit', async () => {
@@ -590,6 +680,27 @@ describe('CliAgentAiService — OpenCode', () => {
     );
     return { svc, spawned };
   }
+
+  // One OpenCode message can carry text on both sides of a tool call. Run
+  // together they read as one broken sentence ("…let me check.The factory is…"),
+  // the same way Claude Code's and Codex's did before each grew a separator.
+  it('opens a paragraph for a second text part instead of running them together', async () => {
+    const { svc } = openCodeService((url) => {
+      if (url.endsWith('/session')) return { id: 'ses_parts' };
+      return {
+        info: { id: 'msg_a' },
+        parts: [
+          { id: 'prt_1', messageID: 'msg_a', type: 'text', text: 'Let me check where the factory lives.' },
+          { id: 'prt_2', messageID: 'msg_a', type: 'tool', tool: 'grep', callID: 'call_1', state: { status: 'completed', input: { pattern: 'createAiService' }, output: 'AiService.ts:137' } },
+          { id: 'prt_3', messageID: 'msg_a', type: 'text', text: 'The factory is in AiService.ts. Ready to plan?' },
+        ],
+      };
+    });
+
+    const turn = await svc.startConversation(request({ runners: ['opencode'] }));
+
+    expect(turn.text).toBe('Let me check where the factory lives.\n\nThe factory is in AiService.ts. Ready to plan?');
+  });
 
   it('creates a session, sends the turn to the plan agent, and reports tool parts', async () => {
     const seen: { url: string; body?: unknown }[] = [];

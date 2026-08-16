@@ -49,12 +49,19 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
   /** Set for the duration of a turn. Outside one, events are buffered rather than dropped. */
   private turnEmit: ((event: AgentEvent) => void) | null = null;
   /**
-   * Events the agent produced between turns — in practice the startup warnings
-   * that arrive during the handshake. Dropping them hid the one diagnostic
-   * that explains a planner which cannot read the workspace, so they are held
-   * until a turn exists to show them in.
+   * Events the agent produced before its first turn — in practice the startup
+   * warnings that arrive during the handshake. Dropping them hid the one
+   * diagnostic that explains a planner which cannot read the workspace, so they
+   * are held until a turn exists to show them in.
+   *
+   * Only before the *first* turn. Once one has run, anything arriving outside a
+   * turn is that closed turn's straggling work — a backgrounded subagent
+   * finishing, a late read — and replaying it into the next turn presents it as
+   * research done for the user's new message.
    */
   private betweenTurns: AgentEvent[] = [];
+  /** Set once a turn has ended: after that, out-of-turn events are stale, not startup. */
+  private hadTurn = false;
   private disposed = false;
   /** Resolves when the process ends, so a handshake can lose the race instead of waiting out its timeout. */
   protected processEnded!: Promise<void>;
@@ -117,7 +124,7 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
     this.process.stdout?.on('data', (chunk: Buffer) => {
       this.stdout.push(chunk.toString(), (line) => this.handleLine(line, (event) => {
         if (this.turnEmit) this.turnEmit(event);
-        else if (!TURN_SCOPED_EVENTS.has(event.type) && this.betweenTurns.length < BETWEEN_TURN_EVENT_CAP) {
+        else if (!this.hadTurn && !TURN_SCOPED_EVENTS.has(event.type) && this.betweenTurns.length < BETWEEN_TURN_EVENT_CAP) {
           this.betweenTurns.push(event);
         }
       }));
@@ -148,6 +155,7 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
         if (settled) return;
         settled = true;
         this.turnEmit = null;
+        this.hadTurn = true;
         signal?.removeEventListener('abort', onAbort);
         this.process?.removeListener('exit', onExit);
         this.process?.removeListener('error', onExit);

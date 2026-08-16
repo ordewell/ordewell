@@ -318,6 +318,15 @@ describe('buildConversationSystemPrompt harness variant (ADR-0009)', () => {
     expect(harness).toMatch(/do NOT edit, create, or delete any file/i);
   });
 
+  // A harness planner that backgrounds its exploration agents ends its turn on
+  // "I'll report back once they land" — and the report, arriving after the turn
+  // closed, reaches no one. The API planner runs its own agents inside the turn
+  // and has nothing to be told.
+  it('tells the harness planner to await its own agents inside the turn', () => {
+    expect(variant(true)).toMatch(/WAIT for their results inside this reply/);
+    expect(variant(false)).not.toMatch(/WAIT for their results inside this reply/);
+  });
+
   it('keeps the plan schema, runner vocabulary and model catalog byte-identical', () => {
     const harness = variant(true);
     for (const shared of ['"tasks"', 'assignedRunner', 'assignedModel', 'sliceType', 'VERTICAL SLICE PLANNING', 'Sonnet', 'PROJECT CONTEXT HERE',

@@ -8,6 +8,15 @@ import { StdioAgentAdapter, type SpawnSpec } from './StdioAgentAdapter';
  */
 const DISALLOWED_TOOLS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'KillShell'];
 
+/**
+ * How Claude Code reports an `Agent` call it decided to run in the background.
+ * The tool *input* carries no flag — backgrounding is the CLI's own choice,
+ * announced only in the result — so this string is the sole signal. If a future
+ * release rewords it the planner is no more lossy than it was before, which is
+ * why nothing downstream treats its absence as "no agents are running".
+ */
+const ASYNC_LAUNCH_MARKER = 'Async agent launched successfully';
+
 interface ClaudeBlock {
   type: string;
   text?: string;
@@ -29,6 +38,8 @@ interface ClaudeLine {
   request_id?: string;
   request?: { subtype?: string; tool_name?: string; input?: Record<string, unknown> };
   message?: { content?: ClaudeBlock[] | string };
+  /** Non-null on every line produced inside a subagent the planner spawned. */
+  parent_tool_use_id?: string | null;
 }
 
 /** Tool results arrive as a string, or as a content-block array. Flatten both. */
@@ -56,6 +67,9 @@ function flattenContent(content: unknown): string {
 export class ClaudeCodeAdapter extends StdioAgentAdapter {
   readonly agentId = 'claude-code';
 
+  /** Whether this turn has already emitted reply text — see {@link handleLine}. */
+  private turnHasText = false;
+
   protected spawnSpec(opts: AgentStartOptions): SpawnSpec {
     const args = [
       '-p',
@@ -80,6 +94,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter {
   }
 
   protected turnPayload(message: string): string {
+    this.turnHasText = false;
     return `${JSON.stringify({
       type: 'user',
       message: { role: 'user', content: [{ type: 'text', text: message }] },
@@ -91,6 +106,14 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter {
     if (!msg) return;
 
     if (msg.session_id) this.sessionId = msg.session_id;
+
+    // Subagent traffic, replayed on the same stream with the spawning tool call
+    // named. It is not the planner talking: forwarded verbatim, a subagent's
+    // running commentary lands in the planner's own reply, and the user reads
+    // an answer addressed to a prompt they never sent. The parent's `Agent`
+    // call and its result are the planner-level record of that work, and they
+    // arrive unparented like every other tool call.
+    if (msg.parent_tool_use_id) return;
 
     switch (msg.type) {
       // The control channel: Claude asks whether a tool may run when its mode
@@ -117,8 +140,14 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter {
 
       case 'assistant':
         for (const block of Array.isArray(msg.message?.content) ? msg.message!.content as ClaudeBlock[] : []) {
-          if (block.type === 'text' && block.text) emit({ type: 'assistant_text', text: block.text });
-          else if (block.type === 'thinking' && block.thinking) emit({ type: 'thinking', text: block.thinking });
+          // A turn is several whole messages — narration between tool rounds,
+          // then the final answer — not a token stream. Concatenated raw they
+          // run together ("…in parallel.That agent returned…"), so each one
+          // after the first opens a paragraph.
+          if (block.type === 'text' && block.text) {
+            emit({ type: 'assistant_text', text: this.turnHasText ? `\n\n${block.text}` : block.text });
+            this.turnHasText = true;
+          } else if (block.type === 'thinking' && block.thinking) emit({ type: 'thinking', text: block.thinking });
           else if (block.type === 'tool_use' && block.name) {
             emit({ type: 'tool_call', id: block.id ?? block.name, name: block.name, args: block.input ?? {} });
           }
@@ -129,11 +158,15 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter {
         // The transport echoes tool results back as a synthetic user message.
         for (const block of Array.isArray(msg.message?.content) ? msg.message!.content as ClaudeBlock[] : []) {
           if (block.type !== 'tool_result') continue;
+          const output = flattenContent(block.content);
+          if (output.includes(ASYNC_LAUNCH_MARKER)) {
+            emit({ type: 'background_agent', id: block.tool_use_id ?? '' });
+          }
           emit({
             type: 'tool_result',
             id: block.tool_use_id ?? '',
             name: '',
-            output: flattenContent(block.content),
+            output,
             success: block.is_error !== true,
           });
         }

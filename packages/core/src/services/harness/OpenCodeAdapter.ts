@@ -91,6 +91,8 @@ export class OpenCodeAdapter implements AgentAdapter {
   private exited = false;
   private disposed = false;
   private opts: AgentStartOptions | null = null;
+  /** Whether this turn has already emitted reply text — see {@link emitPart}. */
+  private turnHasText = false;
 
   constructor(private deps: AgentProcessDeps) {}
 
@@ -169,6 +171,7 @@ export class OpenCodeAdapter implements AgentAdapter {
     }
 
     const seen = new Set<string>();
+    this.turnHasText = false;
     const streamAbort = new AbortController();
     let connected: () => void = () => {};
     const streamReady = new Promise<void>((resolve) => { connected = resolve; });
@@ -244,7 +247,10 @@ export class OpenCodeAdapter implements AgentAdapter {
     if (part.type === 'text' && part.text) {
       if (seen.has(`text:${id}`)) return;
       seen.add(`text:${id}`);
-      onEvent({ type: 'assistant_text', text: part.text });
+      // One message can carry text on both sides of a tool call. Concatenated
+      // raw they run together, so each part after the first opens a paragraph.
+      onEvent({ type: 'assistant_text', text: this.turnHasText ? `\n\n${part.text}` : part.text });
+      this.turnHasText = true;
       return;
     }
     if (part.type === 'reasoning' && part.text) {

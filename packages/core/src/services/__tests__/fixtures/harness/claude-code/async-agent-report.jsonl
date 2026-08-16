@@ -1,0 +1,2 @@
+{"type":"assistant","parent_tool_use_id":null,"session_id":"sess-claude-4","message":{"id":"msg_03","role":"assistant","content":[{"type":"text","text":"The exploration agent landed: the KPI helpers live in lib/kpis.py, and nothing there segments lost RFQs by item."}]}}
+{"type":"result","subtype":"success","session_id":"sess-claude-4","is_error":false,"result":"The exploration agent landed."}

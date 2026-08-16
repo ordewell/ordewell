@@ -31,6 +31,14 @@ export type AgentEvent =
    * is responsible for answering the agent so the turn does not hang.
    */
   | { type: 'permission_request'; id: string; name: string; detail: string }
+  /**
+   * The agent delegated work to a subagent it left running in the background,
+   * and may end its turn before that work reports. Ordewell's conversation is
+   * request/response: a turn that ends hands control back to the user, and
+   * anything the agent says afterwards arrives with no turn open and is lost.
+   * Naming the launch is what lets the service ask for the results in time.
+   */
+  | { type: 'background_agent'; id: string }
   /** The agent finished its turn and is waiting for the next user message. */
   | { type: 'turn_end' }
   /** The turn failed. Carries the agent's own words — never a Ordewell paraphrase. */
