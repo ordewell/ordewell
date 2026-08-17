@@ -8,6 +8,47 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.4.9] — 2026-08-17
+
+Completes the command-policy hardening started in 0.4.8. Three advisories
+publish alongside this release with full technical detail now that the fixes
+are shipped: [GHSA-r72g-cw5r-pxv2](https://github.com/ordewell/ordewell/security/advisories/GHSA-r72g-cw5r-pxv2)
+(command classifier bypass, high — fixed here, including the approval-scope
+collisions found in maintainer review), [GHSA-px4h-42r5-qvhf](https://github.com/ordewell/ordewell/security/advisories/GHSA-px4h-42r5-qvhf)
+(unauthenticated daemon attack chain, high — fixed in 0.4.8, disclosed here),
+and [GHSA-7898-43ch-jgqv](https://github.com/ordewell/ordewell/security/advisories/GHSA-7898-43ch-jgqv)
+(plugin install code execution, critical — fixed in 0.4.8, disclosed here).
+Full background: internal `spec-security-remediation.md`.
+
+### Fixed
+
+- **The permitted command tier is a per-binary flag allowlist, not a binary
+  denylist.** A binary that was previously permitted with any flag at all is
+  now only permitted with the flags it's declared read-only with; an
+  unrecognised flag is refused rather than allowed.
+- **Approval grants no longer collide across distinct operations.** Grant
+  scope was the multiplexer name plus its first non-flag argument, which
+  let approving one operation (`npm run test`, `az group list`, `aws s3 ls`)
+  silently authorise a different one (`npm run <other-script>`, `az group
+  delete`, `aws s3 rm`). Scope is now the binary plus up to two leading
+  non-flag arguments before the first flag.
+- **The daemon refuses to treat an arbitrary directory as a workspace.** A
+  workspace root now has to carry a project marker (`.ordewell` or a VCS
+  directory); without one, the filesystem root or any system directory could
+  become the confinement boundary for every read, search and permitted
+  command the planner runs.
+- **Session identifiers are unguessable.** Session ids were timestamp-based,
+  letting an attacker who knew roughly when planning started enumerate the
+  identifier space.
+- **Credentials are redacted from research output.** A planner that read a
+  configuration file during research previously put its credentials into the
+  provider payload, the persisted session file, and — since the session
+  directory lives inside the workspace with no ignore rule — a commit waiting
+  to happen. Redaction is now applied wherever a tool result is constructed.
+- **The plan surface marks which tasks run without permission prompts.** The
+  TUI and VS Code extension now surface a task's `autonomous: true` tag on
+  its mode.
+
 ## [0.4.8] — 2026-08-11
 
 Hardening release across the daemon and command-handling paths. No API
