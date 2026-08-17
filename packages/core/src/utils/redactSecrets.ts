@@ -211,12 +211,20 @@ export function redactSecrets(text: string): string {
   out = out.replace(NAMED_CREDENTIAL, (full, head: string, quote: string, raw: string) => {
     const { value, tail } = trimTrailingPunctuation(raw);
     if (value.length < 8) return full;
+    if (looksLikeCode(value) || value.startsWith('$')) return full;
+    // An unambiguous name (`password`, `secret`, `privateKey`, ...) means the
+    // value is claimed to *be* the secret, not a reference to one — so once it
+    // also carries a digit, it stops being the "settings-name pointing at
+    // another settings-name" shape the identifier bypass below exists for
+    // (`vscodeApiKeyKey: 'qwenApiKey'`), which never carries one.
+    if (UNAMBIGUOUS_CREDENTIAL_NAME.test(head) && /\d/.test(value)) {
+      return `${head}${quote}${marker('credential', value.length)}${quote}${tail}`;
+    }
     // A single camelCase word or a lowercase slug is a variable reference or a
     // setting name (`vscodeApiKeyKey: 'qwenApiKey'`), never key material — and
     // config-shaped code is full of both. The dotenv rule still catches the one
     // real case this gives up, `PASSWORD=correcthorse`.
     if (IDENTIFIER.test(value) || SLUG.test(value)) return full;
-    if (looksLikeCode(value) || value.startsWith('$')) return full;
     if (!UNAMBIGUOUS_CREDENTIAL_NAME.test(head) && !looksLikeKeyMaterial(value)) return full;
     return `${head}${quote}${marker('credential', value.length)}${quote}${tail}`;
   });

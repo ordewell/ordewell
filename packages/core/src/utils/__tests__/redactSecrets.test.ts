@@ -95,6 +95,27 @@ describe('redactSecrets — credential material', () => {
 
     expect(out).toMatch(/\[REDACTED credential: 20 chars\]/);
   });
+
+  // An unambiguous credential name — `password`, `secret`, `privateKey` — means
+  // the value itself is claimed to *be* the secret, not a reference to one. The
+  // identifier-shaped bypass exists for values like `cohereKey` (a setting
+  // naming another setting), which never carry a digit; a value that mixes
+  // letters and a digit is not that shape, so it should not get the benefit of
+  // the doubt just because it starts with a letter.
+  it('redacts a named credential whose value merely looks like an identifier', () => {
+    const out = redactSecrets('password: "TopSecretValue123"');
+
+    expect(out).not.toContain('TopSecretValue123');
+    expect(out).toContain('password: "[REDACTED credential');
+  });
+
+  it('redacts the same shape from a YAML-style config line, not only dotenv', () => {
+    const out = redactSecrets('  secret: mySecretPass99\n  name: app\n');
+
+    expect(out).not.toContain('mySecretPass99');
+    expect(out).toContain('secret: [REDACTED credential');
+    expect(out).toContain('name: app');
+  });
 });
 
 describe('redactSecrets — ordinary source code', () => {
