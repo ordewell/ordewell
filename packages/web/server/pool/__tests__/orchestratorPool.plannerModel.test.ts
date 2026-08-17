@@ -99,6 +99,12 @@ describe('OrchestratorPool.updateSettings — planner model memory', () => {
       savedEnv[key] = process.env[key];
     }
     process.env.ORDEWELL_SETTINGS_PATH = path.join(dir, 'settings.json');
+    // A shell that exports these (e.g. ORDEWELL_PLANNER_EFFORT=max) would leak
+    // into every pick and corrupt the effort expectations below — reset to a
+    // clean slate and let each test set what it means to assert.
+    delete process.env.AI_PROVIDER;
+    delete process.env.ORCHESTRATOR_MODEL;
+    delete process.env.ORDEWELL_PLANNER_EFFORT;
     resolver = await seededResolver();
     pool = new OrchestratorPool({ modelResolver: resolver });
   });

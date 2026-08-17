@@ -144,4 +144,58 @@ describe('WebConfig', () => {
       expect(config.aiProvider).toBe('google');
     });
   });
+
+  describe('aiProvider mid-session switch (no re-construction)', () => {
+    it('re-resolves when ORCHESTRATOR_MODEL crosses providers', () => {
+      setEnv('OPENROUTER_API_KEY', 'sk-or-test');
+      setEnv('GEMINI_API_KEY', 'sk-gem-test');
+      setEnv('ORCHESTRATOR_MODEL', 'openai/gpt-4o');
+
+      const config = new WebConfig({
+        providerModelLists: {
+          openrouter: ['openai/gpt-4o'],
+          google: ['gemini-2.5-pro'],
+          openai_compatible: [],
+        },
+      });
+
+      expect(config.aiProvider).toBe('openrouter');
+
+      setEnv('ORCHESTRATOR_MODEL', 'gemini-2.5-pro');
+
+      expect(config.aiProvider).toBe('google');
+    });
+
+    it('re-resolves when AI_PROVIDER switches between explicit CLI planners', () => {
+      setEnv('AI_PROVIDER', 'claude-code');
+
+      const config = new WebConfig();
+
+      expect(config.aiProvider).toBe('claude-code');
+
+      setEnv('AI_PROVIDER', 'opencode');
+
+      expect(config.aiProvider).toBe('opencode');
+    });
+
+    it('keeps apiKey in sync after a mid-session provider switch', () => {
+      setEnv('OPENROUTER_API_KEY', 'sk-or-test');
+      setEnv('GEMINI_API_KEY', 'sk-gem-test');
+      setEnv('ORCHESTRATOR_MODEL', 'openai/gpt-4o');
+
+      const config = new WebConfig({
+        providerModelLists: {
+          openrouter: ['openai/gpt-4o'],
+          google: ['gemini-2.5-pro'],
+          openai_compatible: [],
+        },
+      });
+
+      expect(config.apiKey).toBe('sk-or-test');
+
+      setEnv('ORCHESTRATOR_MODEL', 'gemini-2.5-pro');
+
+      expect(config.apiKey).toBe('sk-gem-test');
+    });
+  });
 });

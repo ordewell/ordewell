@@ -9,6 +9,8 @@ interface WebConfigOpts {
 
 export class WebConfig extends BaseConfig {
   private _provider: AiProvider | null = null;
+  private _providerCacheKey: string | null = null;
+  private _providerCacheLists: ProviderModelLists | undefined = undefined;
   private _enabledRunnersOverride: string[] | undefined;
   private _providerModelLists: ProviderModelLists | undefined;
   private _modelOverride: string | undefined;
@@ -30,28 +32,46 @@ export class WebConfig extends BaseConfig {
   }
 
   get aiProvider(): AiProvider {
-    if (this._provider) return this._provider;
+    // Memoized by cache key rather than forever: a session's WebConfig lives
+    // for the whole session, but /model and /planner switches mutate process.env
+    // mid-session, so a permanent cache would strand the transport on the old
+    // provider (mirrors the live-read behavior of `orchestratorModel` above).
+    const explicitEnv = process.env.AI_PROVIDER;
+    const model = this._modelOverride || process.env.ORCHESTRATOR_MODEL;
+    const cacheKey = `${explicitEnv ?? ''}|${model ?? ''}`;
+    if (
+      this._provider &&
+      this._providerCacheKey === cacheKey &&
+      this._providerCacheLists === this._providerModelLists
+    ) {
+      return this._provider;
+    }
 
     // An explicitly chosen harness planner (ADR-0009) wins over model-based
     // resolution: its model ids are the agent's own (`sonnet`, `gpt-5.6-sol`)
     // and can collide with a vendor catalog, which would silently route the
     // planner back to an API the user may not even have a key for.
-    const explicit = process.env.AI_PROVIDER as AiProvider | undefined;
+    const explicit = explicitEnv as AiProvider | undefined;
     if (explicit && isCliProvider(explicit)) {
       this._provider = explicit;
+      this._providerCacheKey = cacheKey;
+      this._providerCacheLists = this._providerModelLists;
       return this._provider;
     }
 
-    const model = this._modelOverride || process.env.ORCHESTRATOR_MODEL;
     if (model && this._providerModelLists) {
       const resolved = resolveProvider(model, this._providerModelLists);
       if (resolved) {
         this._provider = resolved;
+        this._providerCacheKey = cacheKey;
+        this._providerCacheLists = this._providerModelLists;
         return this._provider;
       }
     }
 
     this._provider = BaseConfig.detectProvider('openrouter');
+    this._providerCacheKey = cacheKey;
+    this._providerCacheLists = this._providerModelLists;
     return this._provider;
   }
 
