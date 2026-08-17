@@ -10,15 +10,26 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [0.4.9] — 2026-08-17
 
-Completes the command-policy hardening started in 0.4.8. Three advisories
+Completes the command-policy hardening started in 0.4.8. Four advisories
 publish alongside this release with full technical detail now that the fixes
-are shipped: [GHSA-r72g-cw5r-pxv2](https://github.com/ordewell/ordewell/security/advisories/GHSA-r72g-cw5r-pxv2)
-(command classifier bypass, high — fixed here, including the approval-scope
-collisions found in maintainer review), [GHSA-px4h-42r5-qvhf](https://github.com/ordewell/ordewell/security/advisories/GHSA-px4h-42r5-qvhf)
-(unauthenticated daemon attack chain, high — fixed in 0.4.8, disclosed here),
-and [GHSA-7898-43ch-jgqv](https://github.com/ordewell/ordewell/security/advisories/GHSA-7898-43ch-jgqv)
-(plugin install code execution, critical — fixed in 0.4.8, disclosed here).
-Full background: internal `spec-security-remediation.md`.
+are shipped:
+
+- [GHSA-r72g-cw5r-pxv2](https://github.com/ordewell/ordewell/security/advisories/GHSA-r72g-cw5r-pxv2)
+  — command classifier bypass, high. Fixed here, including the approval-scope
+  collisions found in maintainer review.
+- [GHSA-q8mp-gq5v-28w8](https://github.com/ordewell/ordewell/security/advisories/GHSA-q8mp-gq5v-28w8)
+  — credentials in researched files written to the session file and sent to
+  the model provider, medium. Fixed here.
+- [GHSA-px4h-42r5-qvhf](https://github.com/ordewell/ordewell/security/advisories/GHSA-px4h-42r5-qvhf)
+  — unauthenticated daemon attack chain, high. Fixed in 0.4.8, disclosed here.
+- [GHSA-7898-43ch-jgqv](https://github.com/ordewell/ordewell/security/advisories/GHSA-7898-43ch-jgqv)
+  — plugin install code execution, critical. Fixed in 0.4.8, disclosed here.
+
+**Upgrading does not undo a credential disclosure that already happened.** If
+planning sessions ran in a workspace where credentials were readable, read
+GHSA-q8mp-gq5v-28w8 — session files written before 0.4.9 may hold them in
+plaintext, and rotation rather than upgrading is the remedy for anything a
+provider or a commit already received.
 
 ### Fixed
 
@@ -26,6 +37,18 @@ Full background: internal `spec-security-remediation.md`.
   denylist.** A binary that was previously permitted with any flag at all is
   now only permitted with the flags it's declared read-only with; an
   unrecognised flag is refused rather than allowed.
+- **Bare positional ref-writes are refused.** `git branch <name>` and
+  `git tag <name>` create or move a ref with no flag involved, so the guard
+  covering the delete/move flag forms (`-d`, `-M`, `--delete`, ...) never saw
+  them and they classified as read-only. A positional ref name is now refused
+  unless `-l`/`--list` marks it as a filter pattern.
+- **Shell keywords and compound-command openers are refused.** The classifier
+  reads a segment's first token as the command to classify, so `{ ... }`,
+  `if ... then ... fi`, `for`, `while`, `time` and `export` sat in that
+  position while the command they introduce went unclassified — `if rm -rf
+  src; then :; fi` really did run `rm -rf src`. These are now refused
+  outright, and `source`/`.` join `eval`/`exec` rather than prompting, where
+  one approval would otherwise cover every other script sourced that session.
 - **Approval grants no longer collide across distinct operations.** Grant
   scope was the multiplexer name plus its first non-flag argument, which
   let approving one operation (`npm run test`, `az group list`, `aws s3 ls`)
@@ -44,15 +67,33 @@ Full background: internal `spec-security-remediation.md`.
   configuration file during research previously put its credentials into the
   provider payload, the persisted session file, and — since the session
   directory lives inside the workspace with no ignore rule — a commit waiting
-  to happen. Redaction is now applied wherever a tool result is constructed.
+  to happen. Redaction is now applied where a tool result is constructed, so
+  one application covers every sink downstream, and the state directory gets
+  a match-everything ignore file written inside it on first save. An
+  unambiguously named credential whose value looked like an identifier
+  (`password: "TopSecretValue123"`) initially slipped past the rule that
+  exists to leave setting names alone; the credential name now wins.
 - **The plan surface marks which tasks run without permission prompts.** The
   TUI and VS Code extension now surface a task's `autonomous: true` tag on
   its mode.
 
 ## [0.4.8] — 2026-08-11
 
-Hardening release across the daemon and command-handling paths. No API
-changes. Upgrading is recommended for all users. Per this project's security
+Hardening release across the daemon and command-handling paths. This entry was
+written deliberately neutral at the time, while the advisories were still
+private; the detail is now public in
+[GHSA-px4h-42r5-qvhf](https://github.com/ordewell/ordewell/security/advisories/GHSA-px4h-42r5-qvhf)
+(unauthenticated daemon attack chain — this is the release that breaks that
+chain) and
+[GHSA-7898-43ch-jgqv](https://github.com/ordewell/ordewell/security/advisories/GHSA-7898-43ch-jgqv)
+(plugin install code execution — fixed in full here). Note that 0.4.8 does
+*not* fix the command classifier bypass
+([GHSA-r72g-cw5r-pxv2](https://github.com/ordewell/ordewell/security/advisories/GHSA-r72g-cw5r-pxv2))
+or the credential disclosure
+([GHSA-q8mp-gq5v-28w8](https://github.com/ordewell/ordewell/security/advisories/GHSA-q8mp-gq5v-28w8));
+both need 0.4.9.
+
+No API changes. Upgrading is recommended for all users. Per this project's security
 policy, fixes ship forward and are not backported to 0.4.6 or 0.4.7.
 
 ## [0.4.7] — 2026-08-10
