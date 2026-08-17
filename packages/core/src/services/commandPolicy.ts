@@ -496,6 +496,16 @@ const REFUSED_SUBCOMMANDS: Record<string, string[]> = {
   terraform: ['apply', 'destroy'],
 };
 
+/**
+ * Shell reserved words and compound-command openers. `toSegment` takes the
+ * first token as `seg.binary` with no keyword awareness, so any of these
+ * leading a segment hides the command it introduces as an unrecognized
+ * argument instead of exposing it to classification. `(`/`)` are absent
+ * because the lexer already strips subshell grouping before tokenizing.
+ */
+const SHELL_KEYWORDS = ['{', '}', 'if', 'then', 'elif', 'else', 'fi', 'for', 'while', 'until',
+  'do', 'done', 'case', 'esac', 'select', 'function', 'time', 'export'];
+
 /** Binaries that execute whatever they are handed — refused when given inline code or fed from a pipe. */
 const INTERPRETERS = ['sh', 'bash', 'zsh', 'fish', 'dash', 'ksh', 'csh', 'tcsh', 'pwsh', 'powershell',
   'python', 'python2', 'python3', 'node', 'deno', 'bun', 'ruby', 'perl', 'php', 'eval', 'exec', 'xargs',
@@ -1349,6 +1359,23 @@ function refusalFor(seg: Segment): string | undefined {
   if (seg.binary === 'eval' || seg.binary === 'exec') {
     return `"${seg.binary}" runs a string as a command, which this classifier cannot inspect. Use the read-only research tools, or describe it as a task.`;
   }
+  // `source`/`.` run a file's contents as commands the same way `eval` runs a
+  // string — refused outright rather than left at `ask`, where an unclassified
+  // binary's grant scope collapses to the bare name and one approved script
+  // covers every other script sourced in the session.
+  if (seg.binary === 'source' || seg.binary === '.') {
+    return `"${seg.binary}" runs a file's contents as commands, which this classifier cannot inspect. Use the read-only research tools, or describe it as a task.`;
+  }
+  // A shell keyword or compound-command opener (`{`, `if`, `time`, `for`, ...)
+  // becomes `seg.binary` the same way an ordinary program name would, which
+  // leaves the command it actually introduces sitting as an unclassified
+  // argument — `if rm -rf src; then :; fi` really does run `rm -rf src`,
+  // because the clause's command list executes regardless of the condition.
+  // `(`/`)` are not in this list: subshell grouping is stripped at lex time,
+  // so `(rm -rf /)` already lexes straight to `rm`.
+  if (SHELL_KEYWORDS.includes(seg.binary)) {
+    return `"${seg.binary}" is a shell keyword or compound-command opener. This classifier only inspects the command that runs first, and a keyword hides the real one from it. Run the inner command directly, or describe it as a task.`;
+  }
   const subs = REFUSED_SUBCOMMANDS[seg.binary];
   if (subs) {
     const sub = subcommandOf(seg);
@@ -1365,6 +1392,17 @@ function refusalFor(seg: Segment): string | undefined {
       const flag = seg.args.find((a) => ['-D', '-d', '-m', '-M', '--delete', '--move'].includes(a));
       if (flag) {
         return `"git ${sub} ${flag}" mutates refs. You are a read-only planner — describe the change as a task instead.`;
+      }
+      // The flag forms above are not the only way to write a ref: a bare
+      // positional (`git branch foo`, `git tag v1`) creates or moves one with
+      // no flag involved at all, which the flag-only check above cannot see.
+      // `-l`/`--list` is the one shape where a positional is a filter pattern
+      // rather than a ref name, so it stays read-only.
+      const listing = seg.args.includes('-l') || seg.args.includes('--list');
+      const scan = scanFlags(seg);
+      const target = scan?.operands[1];
+      if (!listing && target) {
+        return `"git ${sub} ${target}" creates or moves a ref. You are a read-only planner — describe the change as a task instead.`;
       }
     }
   }

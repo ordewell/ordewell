@@ -195,6 +195,22 @@ describe('classifyCommand', () => {
       expect(classifyCommand('git branch -m old new').tier).toBe('refuse');
     });
 
+    // The flag forms above are not the only way to write a ref: a bare
+    // positional creates or moves one with no flag involved at all, and the
+    // readonly-subcommand allowlist cannot see it.
+    it('refuses a bare positional git branch/tag, which creates or moves a ref with no flag involved', () => {
+      expect(classifyCommand('git branch new-feature').tier).toBe('refuse');
+      expect(classifyCommand('git branch new-feature start-point').tier).toBe('refuse');
+      expect(classifyCommand('git tag v1.0.0').tier).toBe('refuse');
+      expect(classifyCommand('git tag -a v1.0.0 -m "release"').tier).toBe('refuse');
+    });
+
+    it('still allows listing branches/tags by name pattern, which is read-only', () => {
+      expect(classifyCommand('git branch --list "feature/*"').tier).toBe('auto');
+      expect(classifyCommand('git tag -l "v0.4.*"').tier).toBe('auto');
+      expect(classifyCommand('git branch --contains HEAD~5').tier).toBe('auto');
+    });
+
     it('refuses sed -i and awk -i inplace, which edit files in place', () => {
       expect(classifyCommand("sed -i 's/a/b/' file").tier).toBe('refuse');
       expect(classifyCommand('awk -i inplace program file').tier).toBe('refuse');
@@ -290,6 +306,40 @@ describe('classifyCommand', () => {
 
   it('refuses an empty command rather than shelling out to nothing', () => {
     expect(classifyCommand('   ').tier).toBe('refuse');
+  });
+});
+
+// A shell keyword or compound-command opener becomes `seg.binary` the same
+// way an ordinary program name would, so the real command it introduces sits
+// as an unclassified argument. `if rm -rf src; then :; fi` really does run
+// `rm -rf src` — the `if` clause's command list executes regardless of the
+// condition's truth value — so this is not a scope nuance, it is a refuse-tier
+// bypass.
+describe('shell keywords and compound-command openers are refused, not silently ask-tier', () => {
+  it.each([
+    '{ rm -rf src; }',
+    'if rm -rf src; then echo hi; fi',
+    'time rm -rf src',
+    'for f in *; do rm "$f"; done',
+    'while true; do rm -rf src; done',
+    'export FOO=bar',
+  ])('%s is refused', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
+  // `(...)` subshell grouping is already stripped at lex time — `(rm -rf /)`
+  // lexes straight to `rm` — so it is not part of this list.
+  it('still lexes subshell grouping straight through to the inner command', () => {
+    expect(classifyCommand('(rm -rf /)').tier).toBe('refuse');
+    expect(classifyCommand('(git log)').tier).toBe('auto');
+  });
+
+  // `source`/`.` run a file's contents as commands, the same way `eval` runs a
+  // string — unclassifiable, so refused outright rather than left at `ask`,
+  // where the grant scope collapses to the bare binary name and one approved
+  // script covers every other script sourced in the session.
+  it.each(['source ./script.sh', '. ./script.sh'])('%s is refused', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
   });
 });
 

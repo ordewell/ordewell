@@ -175,6 +175,8 @@ const VERSION_CONTROL_INSPECTION: CorpusEntry[] = [
   { command: 'git branch --show-current', tier: 'auto' },
   { command: 'git tag', tier: 'auto' },
   { command: 'git tag -l "v0.4.*"', tier: 'auto' },
+  { command: 'git branch --list "feature/*"', tier: 'auto' },
+  { command: 'git branch --contains HEAD~5', tier: 'auto' },
   { command: 'git shortlog -sn', tier: 'auto' },
   { command: 'git grep -n classifyCommand', tier: 'auto' },
   { command: 'git cat-file -p HEAD', tier: 'auto' },
@@ -433,9 +435,28 @@ const REFUSED_WRITES: CorpusEntry[] = [
   { command: 'git branch -m old new', tier: 'refuse' },
   { command: 'git branch --delete old', tier: 'refuse' },
   { command: 'git tag -d v1', tier: 'refuse' },
+  { command: 'git branch new-feature', tier: 'refuse' },
+  { command: 'git branch new-feature start-point', tier: 'refuse' },
+  { command: 'git tag v1.0.0', tier: 'refuse' },
+  { command: 'git tag -a v1.0.0 -m "release"', tier: 'refuse' },
   { command: "sed -i 's/a/b/' file", tier: 'refuse' },
   { command: "sed --in-place 's/a/b/' file", tier: 'refuse' },
   { command: 'awk -i inplace program file', tier: 'refuse' },
+];
+
+// A shell keyword or compound-command opener becomes `seg.binary` the same
+// way an ordinary program name would, so the command it introduces sits as an
+// unclassified argument. `(...)` is not here — subshell grouping is stripped
+// at lex time, so `(rm -rf /)` already lexes straight to `rm`.
+const REFUSED_KEYWORDS: CorpusEntry[] = [
+  { command: '{ rm -rf src; }', tier: 'refuse' },
+  { command: 'if rm -rf src; then echo hi; fi', tier: 'refuse' },
+  { command: 'time rm -rf src', tier: 'refuse' },
+  { command: 'for f in *; do rm "$f"; done', tier: 'refuse' },
+  { command: 'while true; do rm -rf src; done', tier: 'refuse' },
+  { command: 'export FOO=bar', tier: 'refuse' },
+  { command: 'source ./script.sh', tier: 'refuse' },
+  { command: '. ./script.sh', tier: 'refuse' },
 ];
 
 // A shell variable's value is not visible at classification time, so the
@@ -736,6 +757,7 @@ export const CORPUS: CorpusEntry[] = [
   ...REFUSED_SUBCOMMANDS,
   ...REFUSED_CODE_SMUGGLING,
   ...REFUSED_WRITES,
+  ...REFUSED_KEYWORDS,
   ...EXPANDED_READS,
   ...ASSIGNMENTS,
   ...WRAPPERS,
