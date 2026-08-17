@@ -2,7 +2,7 @@
   "name": "ordewell",
   "displayName": "Ordewell",
   "description": "LLM-powered task orchestration with codebase research, Claude Code & OpenCode",
-  "version": "0.4.9",
+  "version": "0.4.10",
   "private": true,
   "publisher": "ordewell",
   "license": "Apache-2.0",

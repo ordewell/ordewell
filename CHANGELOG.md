@@ -6,10 +6,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
-## [Unreleased]
+## [0.4.10] — 2026-08-17
+
+Planner and TUI fixes, and a read/edit channel that lets the planner work on
+the plan during a conversation instead of only regenerating it.
+
+### Added
+
+- **The planner can read and edit tasks mid-conversation.** A `task_query`
+  read channel and validated `task_ops` editing during an active session,
+  with batch reference semantics, an enriched plan/catalog context block,
+  AI↔MAN type coherence, model and task-mode validity checks, topological
+  dependency repair, and re-arming of failed or completed tasks that releases
+  their blocked dependents. The shared edit rules live in `TaskEditValidator`
+  so the `Session` and `TaskOps` seams cannot drift apart. See
+  [ADR-0012](docs/adr/0012-the-task-query-read-channel.md).
 
 ### Fixed
 
+- **Foreign control codes no longer reach the terminal.** Everything the TUI
+  shows that it did not write itself — a planner turn, a research result, a
+  task title, a runner's error — routinely carries terminal control codes, and
+  only literal tabs were being stripped. These are not text: `width()` measures
+  an escape as zero columns because the terminal acts on it rather than
+  printing it, so a cursor-forward shifted the pane divider and painted the
+  plan pane over the chat, an erase-in-line wiped the row beneath it, an
+  unclosed colour bled down the screen, and a BEL rang once per frame — every
+  120ms during a run. Whole sequences are now dropped rather than just their
+  ESC byte, across three paths that had no sanitizing at all: streamed planner
+  reasoning, every string in a normalized plan, and pastes.
+- **A failed planner turn no longer leaves a prompt with no reply.** The user
+  message was appended to the transcript and research log before the model was
+  called, so a turn that threw left both holding a message the session never
+  answered — replayed into the next turn, and shown against a plan on disk that
+  had neither. A failed turn now undoes exactly its own writes, while a
+  `task_ops` turn that persisted before throwing keeps its edits.
+- **`/model` and `/planner` switches take effect mid-session.** `WebConfig`
+  cached the resolved provider on first read and held it for the life of the
+  session, so a switch left the transport pinned to the original provider while
+  `apiKey` — which reads live — handed it a key belonging to someone else.
 - **A Claude Code planner no longer answers as its own subagents.** Claude Code
   replays a subagent's transcript on the planner's stream, parented to the tool
   call that spawned it; read as the planner talking, an exploration agent's

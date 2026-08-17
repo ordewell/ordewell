@@ -1,6 +1,6 @@
 {
   "name": "@ordewell/web",
-  "version": "0.4.9",
+  "version": "0.4.10",
   "description": "Ordewell local API server — the daemon the Ordewell CLI and TUI talk to.",
   "license": "Apache-2.0",
   "author": "Alessandro Costanzo Ciano",
