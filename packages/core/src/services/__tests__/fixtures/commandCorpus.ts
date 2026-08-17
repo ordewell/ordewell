@@ -175,6 +175,8 @@ const VERSION_CONTROL_INSPECTION: CorpusEntry[] = [
   { command: 'git branch --show-current', tier: 'auto' },
   { command: 'git tag', tier: 'auto' },
   { command: 'git tag -l "v0.4.*"', tier: 'auto' },
+  { command: 'git branch --list "feature/*"', tier: 'auto' },
+  { command: 'git branch --contains HEAD~5', tier: 'auto' },
   { command: 'git shortlog -sn', tier: 'auto' },
   { command: 'git grep -n classifyCommand', tier: 'auto' },
   { command: 'git cat-file -p HEAD', tier: 'auto' },
@@ -213,8 +215,13 @@ const PIPELINES_AND_QUOTING: CorpusEntry[] = [
 
 const PROMPTED: CorpusEntry[] = [
   { command: 'npm test', tier: 'ask', scope: 'npm test' },
+  // The script runner scopes per script. These three are the sharpest of the
+  // grant collisions: the scripts are defined in the workspace's own manifest,
+  // so on an untrusted repository the attacker wrote them, and approving a test
+  // run is the most reasonable approval a developer is ever asked for.
   { command: 'npm run build', tier: 'ask', scope: 'npm run build' },
   { command: 'npm run test:unit', tier: 'ask', scope: 'npm run test:unit' },
+  { command: 'npm run postinstall', tier: 'ask', scope: 'npm run postinstall' },
   { command: 'npm view react version', tier: 'ask', scope: 'npm view react' },
   { command: 'pnpm run lint', tier: 'ask', scope: 'pnpm run lint' },
   { command: 'yarn run test', tier: 'ask', scope: 'yarn run test' },
@@ -235,18 +242,25 @@ const PROMPTED: CorpusEntry[] = [
   { command: 'pip list', tier: 'ask', scope: 'pip list' },
   { command: 'pip install requests', tier: 'ask', scope: 'pip install requests' },
   { command: 'uv pip list', tier: 'ask', scope: 'uv pip list' },
+  // A nested multiplexer spends its first leading argument reaching the inner
+  // multiplexer, which is why the cap is two rather than one: at one, every
+  // verb under `uv pip` would have shared a grant. The cap is where the scope
+  // stops, so the package name does not reach it — recorded rather than raised,
+  // since the verb is what decides whether the command installs anything.
+  { command: 'uv pip install requests', tier: 'ask', scope: 'uv pip install' },
   { command: 'bundle exec rspec', tier: 'ask', scope: 'bundle exec rspec' },
   { command: 'rake -T', tier: 'ask', scope: 'rake' },
   { command: 'flutter doctor', tier: 'ask', scope: 'flutter doctor' },
   { command: 'dart analyze', tier: 'ask', scope: 'dart analyze' },
   { command: 'helm list', tier: 'ask', scope: 'helm list' },
   { command: 'terraform plan', tier: 'ask', scope: 'terraform plan' },
-  // The three confirmed grant collisions: a read verb and its destructive
-  // sibling must not share one grant.
+  // The cloud and object-store halves of the confirmed grant collisions: a read
+  // verb and its destructive sibling must not share one grant.
   { command: 'az group list', tier: 'ask', scope: 'az group list' },
   { command: 'az group delete --name rg1', tier: 'ask', scope: 'az group delete' },
   { command: 'aws s3 ls', tier: 'ask', scope: 'aws s3 ls' },
   { command: 'aws s3 rm s3://bucket/key', tier: 'ask', scope: 'aws s3 rm' },
+  { command: 'aws s3 cp s3://bucket/key .', tier: 'ask', scope: 'aws s3 cp' },
   { command: 'gh pr list --state open', tier: 'ask', scope: 'gh pr list' },
   { command: 'gh pr view 12', tier: 'ask', scope: 'gh pr view' },
   { command: 'gh api /repos/o/r', tier: 'ask', scope: 'gh api /repos/o/r' },
@@ -257,14 +271,25 @@ const PROMPTED: CorpusEntry[] = [
   // are one stable grant, not a new prompt per limit.
   { command: 'docker logs -n 5 web', tier: 'ask', scope: 'docker logs' },
   { command: 'docker logs -n 100 web', tier: 'ask', scope: 'docker logs' },
+  { command: 'docker logs --tail 200 web', tier: 'ask', scope: 'docker logs' },
   { command: 'curl https://api.example.com/health', tier: 'ask', scope: 'curl' },
   { command: 'ps aux', tier: 'ask', scope: 'ps' },
   { command: "sed 's/a/b/' file.ts", tier: 'ask', scope: 'sed' },
   { command: "awk '{print $1}' file.txt", tier: 'ask', scope: 'awk' },
   // Read-only against the repository, but it reaches the network — around the
-  // web fetcher's per-origin approval and its request-forgery guard.
+  // web fetcher's per-origin approval and its request-forgery guard. It prompts
+  // rather than running silently, and the destination is in the scope, so no
+  // approval of one remote carries to another.
   { command: 'git ls-remote origin', tier: 'ask', scope: 'git ls-remote origin' },
   { command: 'git ls-remote https://github.com/o/r', tier: 'ask', scope: 'git ls-remote https://github.com/o/r' },
+  { command: 'git ls-remote https://attacker.example/r', tier: 'ask', scope: 'git ls-remote https://attacker.example/r' },
+  // The residual of stopping at the first flag, recorded rather than hidden: a
+  // leading flag empties the lead, so this one spelling scopes to the
+  // subcommand alone and a grant for it would cover any destination. It is the
+  // same trade the log-limit rows above buy stability with. Narrowing it means
+  // walking flags to find the operands, which is what `scopeFor` deliberately
+  // does not do — see its note.
+  { command: 'git ls-remote --heads origin', tier: 'ask', scope: 'git ls-remote' },
   // With no residual command this prints the whole process environment,
   // provider credentials included, into the research log.
   { command: 'env', tier: 'ask', scope: 'env' },
@@ -410,9 +435,28 @@ const REFUSED_WRITES: CorpusEntry[] = [
   { command: 'git branch -m old new', tier: 'refuse' },
   { command: 'git branch --delete old', tier: 'refuse' },
   { command: 'git tag -d v1', tier: 'refuse' },
+  { command: 'git branch new-feature', tier: 'refuse' },
+  { command: 'git branch new-feature start-point', tier: 'refuse' },
+  { command: 'git tag v1.0.0', tier: 'refuse' },
+  { command: 'git tag -a v1.0.0 -m "release"', tier: 'refuse' },
   { command: "sed -i 's/a/b/' file", tier: 'refuse' },
   { command: "sed --in-place 's/a/b/' file", tier: 'refuse' },
   { command: 'awk -i inplace program file', tier: 'refuse' },
+];
+
+// A shell keyword or compound-command opener becomes `seg.binary` the same
+// way an ordinary program name would, so the command it introduces sits as an
+// unclassified argument. `(...)` is not here — subshell grouping is stripped
+// at lex time, so `(rm -rf /)` already lexes straight to `rm`.
+const REFUSED_KEYWORDS: CorpusEntry[] = [
+  { command: '{ rm -rf src; }', tier: 'refuse' },
+  { command: 'if rm -rf src; then echo hi; fi', tier: 'refuse' },
+  { command: 'time rm -rf src', tier: 'refuse' },
+  { command: 'for f in *; do rm "$f"; done', tier: 'refuse' },
+  { command: 'while true; do rm -rf src; done', tier: 'refuse' },
+  { command: 'export FOO=bar', tier: 'refuse' },
+  { command: 'source ./script.sh', tier: 'refuse' },
+  { command: '. ./script.sh', tier: 'refuse' },
 ];
 
 // A shell variable's value is not visible at classification time, so the
@@ -512,7 +556,7 @@ const WRAPPERS: CorpusEntry[] = [
   { command: 'nohup git status', tier: 'auto' },
   { command: 'timeout 5 rg --files', tier: 'auto' },
   { command: 'timeout 60 pytest -q', tier: 'ask', scope: 'pytest' },
-  { command: 'nice -n 5 az group list', tier: 'ask', scope: 'az group' },
+  { command: 'nice -n 5 az group list', tier: 'ask', scope: 'az group list' },
   // The wrappers with nothing left to run are classified on their own name.
   // `env` prints the whole process environment, credentials included.
   { command: 'nice', tier: 'ask', scope: 'nice' },
@@ -534,9 +578,23 @@ const DANGEROUS_FLAGS: CorpusEntry[] = [
   { command: 'git grep -O /tmp/evil.sh pattern', tier: 'refuse' },
   { command: 'git grep --open-files-in-pager=/tmp/evil.sh TODO', tier: 'refuse' },
   { command: 'git -c core.pager=/tmp/x.sh log', tier: 'refuse' },
+  { command: 'git --config-env=core.pager=EVIL log', tier: 'refuse' },
+  // The rest of the version-control multiplexer's execution surface: the two
+  // ends of a transfer name the program run there, and both diff filters run
+  // whatever the repository under research configures.
+  { command: 'git ls-remote --upload-pack="sh -c evil" origin', tier: 'refuse' },
+  { command: 'git ls-tree --receive-pack=/tmp/x.sh HEAD', tier: 'refuse' },
+  { command: 'git diff --ext-diff', tier: 'refuse' },
+  { command: 'git show --textconv HEAD', tier: 'refuse' },
+  // Repointing the repository puts the configuration that names those programs
+  // outside the tree the developer is looking at.
+  { command: 'git --git-dir=/tmp/evil/.git log', tier: 'refuse' },
+  { command: 'git --work-tree=/tmp/evil status', tier: 'refuse' },
   // Helper-program flags on other permitted binaries.
   { command: 'sort --compress-program=/tmp/x.sh big.txt', tier: 'refuse' },
   { command: 'rg --pre /tmp/evil.sh pattern .', tier: 'refuse' },
+  { command: 'rg --pre-glob "*.pdf" --pre /tmp/x.sh TODO', tier: 'refuse' },
+  { command: 'rg --hostname-bin /tmp/x.sh pattern .', tier: 'refuse' },
   // Write-without-a-redirect flags: the shell never sees a `>`, so the redirect
   // check cannot catch these.
   { command: 'sort -o out.txt names.txt', tier: 'refuse' },
@@ -544,15 +602,119 @@ const DANGEROUS_FLAGS: CorpusEntry[] = [
   { command: 'find . -fprint out.txt', tier: 'refuse' },
   { command: 'find . -fprintf out.txt "%p"', tier: 'refuse' },
   { command: 'find . -fls out.txt', tier: 'refuse' },
+  { command: 'find . -fprint0 out.txt', tier: 'refuse' },
+  // Confirmed by running it: the file finder honours a predicate after `--`, so
+  // `--` cannot be read as the end of its flags the way it can everywhere else.
+  { command: 'find . -- -fprint out.txt', tier: 'refuse' },
   { command: 'tree -o out.txt', tier: 'refuse' },
   { command: 'git diff --output=out.diff', tier: 'refuse' },
-  // Bare booleans that mutate.
+  { command: 'git archive --output=x.tar HEAD', tier: 'refuse' },
+  { command: 'file -C -m /tmp/magic', tier: 'refuse' },
+  // The write with no flag at all: the second file argument is the output.
+  { command: 'uniq README.md out.txt', tier: 'refuse' },
+  // Bare booleans that mutate. This is why exempting booleans and restricting
+  // only value-taking flags was rejected.
   { command: "yq -i '.version = \"9\"' action.yml", tier: 'refuse' },
   { command: "yq --inplace '.a = 1' config.yml", tier: 'refuse' },
+  { command: "yq -s '.name' multi.yml", tier: 'refuse' },
+  { command: 'date -s "2020-01-01"', tier: 'refuse' },
   // An unrecognised flag is refused rather than allowed, so the next dangerous
   // flag is closed before anyone discovers it.
   { command: 'ls --hypothetical-new-flag', tier: 'refuse' },
   { command: 'rg --unknown-flag pattern', tier: 'refuse' },
+  { command: 'git --hypothetical-flag log', tier: 'refuse' },
+  { command: 'find . -hypothetical-predicate', tier: 'refuse' },
+  { command: 'head --hypothetical-flag README.md', tier: 'refuse' },
+  { command: 'cat -Q package.json', tier: 'refuse' },
+  // A value-taking flag must not be able to swallow an unrecognised one: `-n`
+  // takes a value on the version-control multiplexer, and `-sn` ends with it.
+  { command: 'git shortlog -sn --hypothetical-flag', tier: 'refuse' },
+  // Unrecognised inside a cluster, where a character-by-character walk has to
+  // fail the whole token rather than stop at the first good letter.
+  { command: 'ls -laJ', tier: 'refuse' },
+  { command: 'grep -rnQ TODO src', tier: 'refuse' },
+  // Reached through a wrapper and through command substitution, like every other
+  // refusal in this file.
+  { command: 'nice -n 5 sort -o out.txt names.txt', tier: 'refuse' },
+  { command: 'echo $(rg --pre /tmp/x.sh TODO .)', tier: 'refuse' },
+  { command: 'ls -la | sort -o out.txt', tier: 'refuse' },
+];
+
+// The flag sets are generous on purpose, and this is the half of the corpus that
+// keeps them that way: every entry below is a flag spelling taken from the bash
+// calls in this project's own research logs. A set tightened until one of these
+// prompts or refuses has become the refuse-and-retry loop the allowlist was
+// warned about.
+const FLAGS_THE_PLANNER_EMITS: CorpusEntry[] = [
+  // Counts spelled as the flag, which is how the planner writes nearly every read.
+  { command: 'head -40 README.md', tier: 'auto' },
+  { command: 'head -120 CHANGELOG.md', tier: 'auto' },
+  { command: 'tail -60 logs/app.log', tier: 'auto' },
+  { command: 'git log --oneline -12', tier: 'auto' },
+  { command: 'git log --oneline -5 -- packages/core/src/services/PlanPrompts.ts', tier: 'auto' },
+  { command: 'git log --oneline --name-status -1 794ea34', tier: 'auto' },
+  // Clustered short booleans, and a value glued onto the last one.
+  { command: 'grep -rn TODO packages', tier: 'auto' },
+  { command: 'grep -rln "Plan map" packages', tier: 'auto' },
+  { command: 'grep -rniE "abort|signal" packages', tier: 'auto' },
+  { command: 'grep -ro export src', tier: 'auto' },
+  { command: 'grep -iv warn logs/app.log', tier: 'auto' },
+  { command: 'grep -m1 version package.json', tier: 'auto' },
+  { command: 'grep -A15 classifyCommand src/index.ts', tier: 'auto' },
+  { command: 'grep -B5 -A2 TODO src/index.ts', tier: 'auto' },
+  { command: 'grep -n "isExecuting\\|isRunning" src/index.ts', tier: 'auto' },
+  { command: 'grep -rn --include=*.ts --include=*.tsx queued packages', tier: 'auto' },
+  { command: 'grep -rn --exclude-dir=node_modules TODO .', tier: 'auto' },
+  { command: 'ls -ld packages', tier: 'auto' },
+  { command: 'ls -l --time-style=+%m-%d_%H:%M packages/core/src/index.ts', tier: 'auto' },
+  { command: 'du -sh packages', tier: 'auto' },
+  { command: 'sort -rn counts.txt', tier: 'auto' },
+  { command: 'git shortlog -sn', tier: 'auto' },
+  { command: 'cut -c1-200 wide.txt', tier: 'auto' },
+  // Version-control inspection with the flags the logs actually contain.
+  { command: 'git status --porcelain=v1', tier: 'auto' },
+  { command: 'git diff --stat main...HEAD -- packages/core packages/web', tier: 'auto' },
+  { command: 'git diff -- packages/core/src/services/ModelDiscovery.ts', tier: 'auto' },
+  { command: 'git show --stat 7b23474', tier: 'auto' },
+  { command: 'git branch -a', tier: 'auto' },
+  { command: 'git log --oneline main..HEAD', tier: 'auto' },
+  { command: 'git -C packages/core log --oneline -3', tier: 'auto' },
+  { command: 'git --no-pager log --oneline -5', tier: 'auto' },
+  // The file finder's read-only predicate vocabulary, which is single-dash words
+  // rather than clustered letters.
+  { command: 'find packages/cli/src -type f -name "*.ts"', tier: 'auto' },
+  { command: 'find . -path "*/tui/*" -prune -o -type f -print', tier: 'auto' },
+  { command: 'find . -name "*.ts" -not -name "*.test.ts"', tier: 'auto' },
+  { command: 'find . -maxdepth 3 -type d -o -type l', tier: 'auto' },
+  { command: 'find . -mtime -7 -type f', tier: 'auto' },
+  { command: 'find . -newermt "2 days ago" -type f', tier: 'auto' },
+  { command: 'find . -type f -printf "%p\\n"', tier: 'auto' },
+  { command: 'find . -type f -ls', tier: 'auto' },
+  // Section markers. Every token here begins with a dash and none of them is a
+  // flag, which is why the echo family takes its arguments as data.
+  { command: 'echo ---', tier: 'auto' },
+  { command: 'echo "--- files changed vs main ---"', tier: 'auto' },
+  { command: 'echo -----LAUNCHER-----', tier: 'auto' },
+  { command: 'ls -la && echo --- && git status --short', tier: 'auto' },
+  // The structured-data tools, whose read-only flags sit next to the in-place
+  // write flags that are refused above.
+  { command: "yq -o json '.jobs' .github/workflows/ci.yml", tier: 'auto' },
+  { command: "yq -P -o yaml '.' action.yml", tier: 'auto' },
+  { command: "jq -S --tab '.scripts' package.json", tier: 'auto' },
+  { command: "jq --arg k version -r '.[$k]' package.json", tier: 'auto' },
+  { command: 'rg -uu --hidden -g "!node_modules" TODO', tier: 'auto' },
+  { command: 'rg -n --no-heading --color never TODO src', tier: 'auto' },
+  { command: 'rg -t ts -A 3 -B 3 classifyCommand src', tier: 'auto' },
+  { command: 'rg --json --stats TODO src', tier: 'auto' },
+  { command: 'rg -m 5 --max-depth 3 export packages', tier: 'auto' },
+  { command: 'rg --sort path -l TODO src', tier: 'auto' },
+  { command: 'rg -e "-flag-like-pattern" src', tier: 'auto' },
+  // Asking a tool what it accepts is read-only on every binary.
+  { command: 'tree --help', tier: 'auto' },
+  { command: 'rg --version', tier: 'auto' },
+  // `--` ends the flags, so an operand that looks like one is still an operand.
+  { command: 'grep -rn -- --hypothetical src', tier: 'auto' },
+  { command: 'git log --oneline -3 -- packages/core/src/services/commandPolicy.ts', tier: 'auto' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -595,10 +757,12 @@ export const CORPUS: CorpusEntry[] = [
   ...REFUSED_SUBCOMMANDS,
   ...REFUSED_CODE_SMUGGLING,
   ...REFUSED_WRITES,
+  ...REFUSED_KEYWORDS,
   ...EXPANDED_READS,
   ...ASSIGNMENTS,
   ...WRAPPERS,
   ...DANGEROUS_FLAGS,
+  ...FLAGS_THE_PLANNER_EMITS,
   ...CMD_DIALECT,
 ];
 
@@ -610,235 +774,9 @@ export const CORPUS: CorpusEntry[] = [
  * before the fixes land — not to make any of these acceptable. Each classifier
  * change deletes its own entries, and the corpus then asserts the correct tier
  * directly.
+ *
+ * Empty: every gap the corpus was written against has been closed, so each row
+ * above now asserts the intended answer with nothing standing in for it. A new
+ * entry here means a newly found divergence, not a leftover.
  */
-export const KNOWN_GAPS: KnownGap[] = [
-  // -------------------------------------------------------------------------
-  // A permitted binary is permitted with any flags at all. Permitted binaries
-  // keep their own ability to execute helper programs and write files, so the
-  // permitted tier has to become a per-binary set of known read-only flags
-  // with anything unrecognised refused.
-  // -------------------------------------------------------------------------
-  {
-    command: 'git -c core.pager=/tmp/x.sh log',
-    actual: { tier: 'ask' },
-    ticket: '11',
-    describes: 'Configuration can be set inline, and several configuration keys name programs to run — so the configuration flag is an execution flag with an indirection in front of it.',
-  },
-  {
-    command: 'sort --compress-program=/tmp/x.sh big.txt',
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: 'The sort utility runs a named compression program on its temporary files, which makes a permitted binary an interpreter.',
-  },
-  {
-    command: 'rg --pre /tmp/evil.sh pattern .',
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: 'The fast search tool runs a named preprocessor over each file it searches.',
-  },
-  {
-    command: 'sort -o out.txt names.txt',
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: 'An output-file flag writes without a shell redirect, so the redirect refusal never sees it.',
-  },
-  {
-    command: 'sort --output=out.txt names.txt',
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: 'The joined-with-equals spelling of the same output-file write, which a guard written only against the short flag would miss.',
-  },
-  {
-    command: 'find . -fprint out.txt',
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: "The file finder has a whole write family beyond the exec flags already guarded; this one writes its result list to a named file.",
-  },
-  {
-    command: 'find . -fprintf out.txt "%p"',
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: 'The formatted variant of the same write family.',
-  },
-  {
-    command: 'find . -fls out.txt',
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: 'The listing variant of the same write family.',
-  },
-  {
-    command: 'tree -o out.txt',
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: 'The directory-tree tool has its own output-file flag.',
-  },
-  {
-    command: 'git diff --output=out.diff',
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: 'A read-only subcommand of the version-control multiplexer writes a file when given its output flag.',
-  },
-  {
-    command: "yq -i '.version = \"9\"' action.yml",
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: 'The in-place edit flag on the YAML editor is a bare boolean, which is why allowing bare booleans and restricting only value-taking flags was rejected.',
-  },
-  {
-    command: "yq --inplace '.a = 1' config.yml",
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: 'The long spelling of the same in-place edit.',
-  },
-  {
-    command: 'ls --hypothetical-new-flag',
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: 'The class itself: a flag nobody has classified is allowed today, so the next dangerous flag is open until someone discovers it. It must refuse on the strength of being unrecognised, not because anyone knows what it does.',
-  },
-  {
-    command: 'rg --unknown-flag pattern',
-    actual: { tier: 'auto' },
-    ticket: '11',
-    describes: 'The same rule on the flag-richest binary in ordinary research, where the allowlist has to be generous without becoming open.',
-  },
-
-  // -------------------------------------------------------------------------
-  // Grant scope is the multiplexer name plus its first non-flag argument,
-  // which collapses distinct operations onto one grant: approving a read
-  // authorises the matching write. Scope becomes the binary plus the leading
-  // non-flag arguments before the first flag, capped at two.
-  // -------------------------------------------------------------------------
-  {
-    command: 'npm run build',
-    actual: { tier: 'ask', scope: 'npm run' },
-    ticket: '12',
-    describes: 'The sharpest collision. Every script in the workspace manifest shares one grant, the scripts are attacker-authored on an untrusted repository, and approving a test run is the most reasonable approval a developer is ever asked for.',
-  },
-  {
-    command: 'npm run test:unit',
-    actual: { tier: 'ask', scope: 'npm run' },
-    ticket: '12',
-    describes: 'The same grant as every other script, so approving this authorises all of them.',
-  },
-  {
-    command: 'npm view react version',
-    actual: { tier: 'ask', scope: 'npm view' },
-    ticket: '12',
-    describes: 'Registry lookups collapse onto one grant regardless of which package is being fetched.',
-  },
-  {
-    command: 'pnpm run lint',
-    actual: { tier: 'ask', scope: 'pnpm run' },
-    ticket: '12',
-    describes: 'The script-runner collision reaches every package manager that has one.',
-  },
-  {
-    command: 'yarn run test',
-    actual: { tier: 'ask', scope: 'yarn run' },
-    ticket: '12',
-    describes: 'The same script-runner collision on the third package manager, so the fix has to come from the scope rule rather than from a per-binary special case.',
-  },
-  {
-    command: 'go test ./...',
-    actual: { tier: 'ask', scope: 'go test' },
-    ticket: '12',
-    describes: 'The package selector is part of what is being approved, so it belongs in the scope.',
-  },
-  {
-    command: 'go build ./cmd/app',
-    actual: { tier: 'ask', scope: 'go build' },
-    ticket: '12',
-    describes: 'Approving a build of one package should not authorise building another.',
-  },
-  {
-    command: 'mvn -q test',
-    actual: { tier: 'ask', scope: 'mvn test' },
-    ticket: '12',
-    describes: 'A consequence of stopping at the first flag rather than a collision fixed: a leading flag empties the scope, so this grant widens to the whole binary. Accepted deliberately — keeping flag values out of the scope is what makes a log-style invocation one stable grant instead of a prompt per limit value.',
-  },
-  {
-    command: 'pip install requests',
-    actual: { tier: 'ask', scope: 'pip install' },
-    ticket: '12',
-    describes: 'Approving the installation of one package authorises installing any other, and an installed package runs its own build steps.',
-  },
-  {
-    command: 'uv pip list',
-    actual: { tier: 'ask', scope: 'uv pip' },
-    ticket: '12',
-    describes: 'A nested multiplexer needs two leading arguments before the verb is visible, which is why the cap is two rather than one.',
-  },
-  {
-    command: 'bundle exec rspec',
-    actual: { tier: 'ask', scope: 'bundle exec' },
-    ticket: '12',
-    describes: 'The generic execution verb means one grant covers running any program the bundle can reach.',
-  },
-  {
-    command: 'az group list',
-    actual: { tier: 'ask', scope: 'az group' },
-    ticket: '12',
-    describes: 'The confirmed cloud-CLI collision: listing a resource group and deleting one share a grant, so approving the read authorises the delete.',
-  },
-  {
-    command: 'az group delete --name rg1',
-    actual: { tier: 'ask', scope: 'az group' },
-    ticket: '12',
-    describes: 'The destructive half of that collision — it must not be satisfiable by the approval given for the listing.',
-  },
-  {
-    command: 'aws s3 ls',
-    actual: { tier: 'ask', scope: 'aws s3' },
-    ticket: '12',
-    describes: 'The confirmed object-store collision: every verb against the bucket shares one grant.',
-  },
-  {
-    command: 'aws s3 rm s3://bucket/key',
-    actual: { tier: 'ask', scope: 'aws s3' },
-    ticket: '12',
-    describes: 'The destructive half of the object-store collision.',
-  },
-  {
-    command: 'gh pr list --state open',
-    actual: { tier: 'ask', scope: 'gh pr' },
-    ticket: '12',
-    describes: 'Every pull-request verb, read and write alike, shares one grant.',
-  },
-  {
-    command: 'gh pr view 12',
-    actual: { tier: 'ask', scope: 'gh pr' },
-    ticket: '12',
-    describes: 'The same grant as any other pull-request verb.',
-  },
-  {
-    command: 'gh api /repos/o/r',
-    actual: { tier: 'ask', scope: 'gh api' },
-    ticket: '12',
-    describes: 'The raw API verb collapses every endpoint onto one grant, so the path has to reach the scope.',
-  },
-  {
-    command: 'kubectl get pods',
-    actual: { tier: 'ask', scope: 'kubectl get' },
-    ticket: '12',
-    describes: 'The resource kind is what makes the read meaningful, and one grant currently spans all of them.',
-  },
-  {
-    command: 'az group list | head -5',
-    actual: { tier: 'ask', scope: 'az group' },
-    ticket: '12',
-    describes: 'The scope is derived from the non-permitted stages, so the pipeline form must narrow with the bare form rather than lagging behind it.',
-  },
-  {
-    command: 'git ls-remote origin',
-    actual: { tier: 'auto', scope: '' },
-    ticket: '12',
-    describes: 'Read-only against the repository but it reaches the network, routing around the web fetcher\'s per-origin approval and its request-forgery guard. It prompts once scope distinguishes destinations — prompting before that would let one approval authorise any destination.',
-  },
-  {
-    command: 'git ls-remote https://github.com/o/r',
-    actual: { tier: 'auto', scope: '' },
-    ticket: '12',
-    describes: 'The same subcommand naming a destination directly, which is the case the destination-scoped grant has to keep separate from any other remote.',
-  },
-];
+export const KNOWN_GAPS: KnownGap[] = [];

@@ -1,5 +1,6 @@
 import { IFileSystem, GrepOptions, GrepOutputMode, ToolOutcome } from '../interfaces/IFileSystem';
 import { IWebFetcher } from '../interfaces/IWebFetcher';
+import { redactSecrets } from '../utils/redactSecrets';
 
 const GREP_OUTPUT_MODES: GrepOutputMode[] = ['content', 'files', 'count'];
 
@@ -42,7 +43,27 @@ function grepOptions(args: Record<string, unknown>): GrepOptions {
 export const STOPPED_TOOL_RESULT =
   'Stopped by the user — this call was not executed, and no further tool calls will run this turn.';
 
+/**
+ * Run one research tool and construct its result. Every sink downstream — the
+ * persisted session's research step, the tool result sent to the model
+ * provider, the fallback plan prompt, the live progress stream — reads the
+ * `output` this function returns, which is why credential redaction is applied
+ * here rather than at each sink: one application keeps the disk copy and the
+ * provider payload identical, and no third party receives key material a file
+ * happened to contain.
+ */
 export async function executeTool(
+  name: string,
+  args: Record<string, unknown>,
+  fs: IFileSystem,
+  fetcher?: IWebFetcher,
+  signal?: AbortSignal,
+): Promise<ToolOutcome> {
+  const outcome = await runTool(name, args, fs, fetcher, signal);
+  return { ...outcome, output: redactSecrets(outcome.output) };
+}
+
+async function runTool(
   name: string,
   args: Record<string, unknown>,
   fs: IFileSystem,

@@ -50,10 +50,15 @@ their own repositories. The parts most worth your attention:
   untrusted content in a repository — a hostile `README.md` or commit message
   the planner reads during research should not be assumed contained by it
   alone.
-- **The local API server.** `@ordewell/web` binds `127.0.0.1` and is
-  unauthenticated by design, on the assumption that local access is trusted.
-  Anything that makes it reachable off-host, or that lets a web page in a
-  browser reach it (DNS rebinding, permissive CORS), is in scope.
+- **The local API server.** `@ordewell/web` binds `127.0.0.1` and, since
+  `0.4.8`, authenticates every request against a bearer token minted at daemon
+  startup and written to an owner-readable file; browser `Origin` headers are
+  rejected outright and `Host` must name loopback at the daemon's own port.
+  Local access is explicitly *not* assumed to be trusted. Anything that makes
+  the daemon reachable off-host, that lets a web page in a browser reach it
+  (DNS rebinding, permissive CORS), or that gets a route to serve a request
+  without a valid token — on the HTTP routes or the WebSocket upgrade — is in
+  scope.
 - **Credential handling.** API keys are read from the environment and `.env`.
   Any path that writes a key to a log, an error message, a session file under
   `.ordewell/`, or a runner's argv is in scope.

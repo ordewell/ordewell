@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyCommand, pathLikeArgs } from '../commandPolicy';
+import { AUTO_COMMANDS, classifyCommand, pathLikeArgs } from '../commandPolicy';
 
 describe('classifyCommand', () => {
   describe('auto tier — read-only inspection runs with no prompt', () => {
@@ -60,9 +60,9 @@ describe('classifyCommand', () => {
     it.each([
       ['npm test', 'npm test'],
       ['pytest -q', 'pytest'],
-      ['az group list', 'az group'],
-      ['gh pr list --state open', 'gh pr'],
-      ['kubectl get pods', 'kubectl get'],
+      ['az group list', 'az group list'],
+      ['gh pr list --state open', 'gh pr list'],
+      ['kubectl get pods', 'kubectl get pods'],
       ['docker ps', 'docker ps'],
       ['curl https://api.example.com/health', 'curl'],
     ])('%s asks, scoped to %s', (cmd, scope) => {
@@ -72,7 +72,7 @@ describe('classifyCommand', () => {
     });
 
     it('scopes a grant to the non-auto stages only, so auto stages do not widen it', () => {
-      expect(classifyCommand('az group list | head -5').scope).toBe('az group');
+      expect(classifyCommand('az group list | head -5').scope).toBe('az group list');
     });
 
     it('collapses duplicate stages into one scope', () => {
@@ -195,6 +195,22 @@ describe('classifyCommand', () => {
       expect(classifyCommand('git branch -m old new').tier).toBe('refuse');
     });
 
+    // The flag forms above are not the only way to write a ref: a bare
+    // positional creates or moves one with no flag involved at all, and the
+    // readonly-subcommand allowlist cannot see it.
+    it('refuses a bare positional git branch/tag, which creates or moves a ref with no flag involved', () => {
+      expect(classifyCommand('git branch new-feature').tier).toBe('refuse');
+      expect(classifyCommand('git branch new-feature start-point').tier).toBe('refuse');
+      expect(classifyCommand('git tag v1.0.0').tier).toBe('refuse');
+      expect(classifyCommand('git tag -a v1.0.0 -m "release"').tier).toBe('refuse');
+    });
+
+    it('still allows listing branches/tags by name pattern, which is read-only', () => {
+      expect(classifyCommand('git branch --list "feature/*"').tier).toBe('auto');
+      expect(classifyCommand('git tag -l "v0.4.*"').tier).toBe('auto');
+      expect(classifyCommand('git branch --contains HEAD~5').tier).toBe('auto');
+    });
+
     it('refuses sed -i and awk -i inplace, which edit files in place', () => {
       expect(classifyCommand("sed -i 's/a/b/' file").tier).toBe('refuse');
       expect(classifyCommand('awk -i inplace program file').tier).toBe('refuse');
@@ -290,6 +306,40 @@ describe('classifyCommand', () => {
 
   it('refuses an empty command rather than shelling out to nothing', () => {
     expect(classifyCommand('   ').tier).toBe('refuse');
+  });
+});
+
+// A shell keyword or compound-command opener becomes `seg.binary` the same
+// way an ordinary program name would, so the real command it introduces sits
+// as an unclassified argument. `if rm -rf src; then :; fi` really does run
+// `rm -rf src` — the `if` clause's command list executes regardless of the
+// condition's truth value — so this is not a scope nuance, it is a refuse-tier
+// bypass.
+describe('shell keywords and compound-command openers are refused, not silently ask-tier', () => {
+  it.each([
+    '{ rm -rf src; }',
+    'if rm -rf src; then echo hi; fi',
+    'time rm -rf src',
+    'for f in *; do rm "$f"; done',
+    'while true; do rm -rf src; done',
+    'export FOO=bar',
+  ])('%s is refused', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
+  // `(...)` subshell grouping is already stripped at lex time — `(rm -rf /)`
+  // lexes straight to `rm` — so it is not part of this list.
+  it('still lexes subshell grouping straight through to the inner command', () => {
+    expect(classifyCommand('(rm -rf /)').tier).toBe('refuse');
+    expect(classifyCommand('(git log)').tier).toBe('auto');
+  });
+
+  // `source`/`.` run a file's contents as commands, the same way `eval` runs a
+  // string — unclassifiable, so refused outright rather than left at `ask`,
+  // where the grant scope collapses to the bare binary name and one approved
+  // script covers every other script sourced in the session.
+  it.each(['source ./script.sh', '. ./script.sh'])('%s is refused', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
   });
 });
 
@@ -393,7 +443,7 @@ describe('wrappers are classified by the command they run', () => {
   // approval of `timeout` would authorise anything else wrapped in it.
   it('scopes a wrapped grant to what actually runs, not to the wrapper', () => {
     expect(classifyCommand('timeout 30 npm test').scope).toBe('npm test');
-    expect(classifyCommand('nice -n 5 az group list').scope).toBe('az group');
+    expect(classifyCommand('nice -n 5 az group list').scope).toBe('az group list');
   });
 
   it('names the wrapped command in the refusal, and says the wrapper was seen through', () => {
@@ -427,6 +477,305 @@ describe('wrappers are classified by the command they run', () => {
     expect(pathLikeArgs('env cat /etc/passwd')).toEqual(['/etc/passwd']);
     expect(pathLikeArgs('nice -n 5 cat ~/.ssh/id_rsa')).toEqual(['~/.ssh/id_rsa']);
     expect(pathLikeArgs('env -C /etc ls')).toEqual(['/etc']);
+  });
+});
+
+/**
+ * A permitted binary used to be permitted with any flag at all, which is not
+ * what "read-only" describes: several of them run a helper program or write a
+ * file when a flag asks them to. Two of those were proven by execution before
+ * they were guarded one at a time; this is the same class closed as a class, so
+ * the *next* one is shut before anybody finds it.
+ *
+ * The tuning risk runs the other way and is quiet — a set tightened too far
+ * produces refuse-and-retry loops that cost turns instead of erroring where
+ * someone would see it. The flag spellings asserted as still-permitted below are
+ * taken from the bash calls in this project's own research logs.
+ */
+describe('flags on permitted binaries are an allowlist, not an afterthought', () => {
+  // The decision this rests on: unrecognised refuses rather than prompts.
+  // Grants are remembered at `scope` granularity and the scope of a
+  // non-multiplexer is the binary name, so one benign approval of `rg` would
+  // otherwise cover every later `rg` with any flag at all.
+  it('refuses an unrecognised flag rather than making it approvable', () => {
+    for (const cmd of ['ls --hypothetical-new-flag', 'rg --unknown-flag pattern', 'git --hypothetical-flag log']) {
+      expect(classifyCommand(cmd).tier).toBe('refuse');
+    }
+  });
+
+  it('names the flag and offers a way forward, so the model can act on it', () => {
+    const { reason } = classifyCommand('rg --pre /tmp/evil.sh TODO .');
+    expect(reason).toContain('"--pre"');
+    expect(reason).toContain('"rg"');
+    expect(reason).toMatch(/read-only flags only|describe the work as a task/i);
+  });
+
+  // The flags that make a permitted binary an interpreter. The first two were
+  // confirmed by running them: a fabricated helper executed during an ordinary
+  // remote listing, and an arbitrary program ran over search hits.
+  it.each([
+    'git --exec-path=/tmp/evil ls-remote origin',
+    'git --exec-path /tmp/evil status',
+    'git grep -O /tmp/evil.sh pattern',
+    'git grep --open-files-in-pager=/tmp/evil.sh TODO',
+    'git -c core.pager=/tmp/x.sh log',
+    'git ls-remote --upload-pack="sh -c evil" origin',
+    'git show --textconv HEAD',
+    'git diff --ext-diff',
+    'rg --pre /tmp/evil.sh pattern .',
+    'rg --hostname-bin /tmp/x.sh pattern .',
+    'sort --compress-program=/tmp/x.sh big.txt',
+  ])('refuses the flag that runs a helper program: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
+  // No `>` for the redirect refusal to see, so the write is invisible to it.
+  it.each([
+    'sort -o out.txt names.txt',
+    'sort --output=out.txt names.txt',
+    'tree -o out.txt',
+    'git diff --output=out.diff',
+    'git archive --output=x.tar HEAD',
+    'find . -fprint out.txt',
+    'find . -fprint0 out.txt',
+    'find . -fprintf out.txt "%p"',
+    'find . -fls out.txt',
+    'file -C -m /tmp/magic',
+  ])('refuses the flag that writes a file with no redirect: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
+  // Allowing bare booleans and restricting only value-taking flags was
+  // considered and rejected on exactly these: none of them takes a value.
+  it.each([
+    "yq -i '.a = 1' action.yml",
+    "yq --inplace '.a = 1' config.yml",
+    'git branch -D feature',
+    'git tag -d v1',
+    'date -s "2020-01-01"',
+  ])('refuses a bare boolean that mutates: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
+  // `uniq INPUT OUTPUT` writes with no flag involved at all, so the allowlist
+  // cannot be what catches it.
+  it('refuses the write spelled as a positional argument', () => {
+    expect(classifyCommand('uniq README.md out.txt').tier).toBe('refuse');
+    expect(classifyCommand('uniq -c names.txt').tier).toBe('auto');
+    // A flag's own value is not a second file.
+    expect(classifyCommand('uniq -f 1 names.txt').tier).toBe('auto');
+  });
+
+  // The control half. Every spelling here is one the planner actually emits, and
+  // a set tightened until one of them prompts has become the failure this change
+  // was warned about.
+  it.each([
+    'grep -rn TODO packages',
+    'grep -rniE "abort|signal" packages',
+    'grep -m1 version package.json',
+    'grep -A15 classifyCommand src/index.ts',
+    'grep -rn --include=*.ts --exclude-dir=node_modules queued packages',
+    'head -40 README.md',
+    'tail -60 logs/app.log',
+    'ls -l --time-style=+%m-%d_%H:%M package.json',
+    'du -sh packages',
+    'sort -rn counts.txt',
+    'cut -c1-200 wide.txt',
+    'git log --oneline -12',
+    'git status --porcelain=v1',
+    'git shortlog -sn',
+    'git -C packages/core log --oneline -3',
+    'find . -path "*/tui/*" -prune -o -type f -print',
+    'find . -mtime -7 -type f',
+    'rg -uu --hidden -g "!node_modules" TODO',
+    'rg -t ts -A 3 -B 3 classifyCommand src',
+    "yq -o json '.jobs' ci.yml",
+  ])('keeps ordinary research unprompted: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('auto');
+  });
+
+  // Section markers are the planner's commonest use of `echo`, and every token
+  // in one begins with a dash without being a flag.
+  it('takes the arguments of echo and printf as data', () => {
+    expect(classifyCommand('echo ---').tier).toBe('auto');
+    expect(classifyCommand('echo "--- files changed vs main ---"').tier).toBe('auto');
+    expect(classifyCommand('printf -- "%s\\n" one').tier).toBe('auto');
+  });
+
+  // Membership in the permitted set is not enough on its own: a binary with no
+  // declared flag set would refuse every flag it was ever given, which is the
+  // over-tightening failure arriving by omission rather than by decision.
+  it.each(AUTO_COMMANDS)('%s declares a flag set', (binary) => {
+    // The multiplexer needs a read-only subcommand to be permitted at all, so
+    // asking it for help without one is `ask` on its own terms.
+    const probe = binary === 'git' ? 'git log --help' : `${binary} --help`;
+    expect(classifyCommand(probe).tier).toBe('auto');
+  });
+
+  // `--` ends the flags nearly everywhere, but not on a binary whose arguments
+  // are an expression. Confirmed by running it: `find . -- -fprint OUT` writes
+  // OUT, so reading `--` as the end of find's flags would hand the write back.
+  it('does not let -- smuggle a predicate past the file finder', () => {
+    expect(classifyCommand('find . -- -fprint out.txt').tier).toBe('refuse');
+    expect(classifyCommand('find . -- -delete').tier).toBe('refuse');
+    // The convention still holds where the binary honours it, which is what
+    // keeps a pattern that looks like a flag searchable.
+    expect(classifyCommand('grep -rn -- --exec-path src').tier).toBe('auto');
+    expect(classifyCommand('sort -- -o names.txt').tier).toBe('auto');
+  });
+
+  it('reads every spelling of a permitted flag: clustered, glued, joined, and after --', () => {
+    expect(classifyCommand('ls -la packages').tier).toBe('auto');
+    expect(classifyCommand('rg -A15 TODO src').tier).toBe('auto');
+    expect(classifyCommand('rg --max-count=5 TODO src').tier).toBe('auto');
+    expect(classifyCommand('rg --max-count 5 TODO src').tier).toBe('auto');
+    expect(classifyCommand('grep -rn -- --exec-path src').tier).toBe('auto');
+    expect(classifyCommand('find . -O2 -type f').tier).toBe('auto');
+  });
+
+  // A cluster has to fail as a whole. Accepting it because the first letter was
+  // recognised would wave through whatever followed.
+  it('refuses a cluster containing a flag it does not know', () => {
+    expect(classifyCommand('ls -laJ').tier).toBe('refuse');
+    expect(classifyCommand('grep -rnQ TODO src').tier).toBe('refuse');
+  });
+
+  // `-n` takes a value on the version-control multiplexer, and `-sn` ends with
+  // it. Consuming the next token unconditionally would let a value-taking flag
+  // swallow an unrecognised one, leaving it classified by nobody.
+  it('does not let a value-taking flag swallow the flag after it', () => {
+    expect(classifyCommand('git shortlog -sn --hypothetical-flag').tier).toBe('refuse');
+    // The exception the rule needs: a value really can be spelled with a dash.
+    expect(classifyCommand('find . -mtime -7').tier).toBe('auto');
+  });
+
+  // Only the permitted tier inverts. A binary that already prompts is one the
+  // developer is being asked about, and refusing its flags would take work away
+  // that the approval exists to authorise.
+  it('leaves the flags of a prompted binary to the approval', () => {
+    expect(classifyCommand("sed -n '1,40p' file.ts").tier).toBe('ask');
+    expect(classifyCommand('curl -sI --max-time 5 https://example.com').tier).toBe('ask');
+  });
+
+  it('refuses through a wrapper and through command substitution, like every other refusal', () => {
+    expect(classifyCommand('nice -n 5 sort -o out.txt names.txt').tier).toBe('refuse');
+    expect(classifyCommand('echo $(rg --pre /tmp/x.sh TODO .)').tier).toBe('refuse');
+    expect(classifyCommand('ls -la | sort -o out.txt').tier).toBe('refuse');
+  });
+});
+
+/**
+ * "First argument that does not start with a dash" answered `packages/core` for
+ * `git -C packages/core log`, which cost a prompt on an ordinary log — and
+ * answered `/tmp/x` for `git -C /tmp/x push`, which put a refused subcommand on
+ * the prompt tier the refusal tier is documented never to reach. Knowing which
+ * flags take a value is what makes the subcommand findable.
+ */
+describe('a multiplexer subcommand is found after its global flags, not before them', () => {
+  it('sees the read-only subcommand behind a flag that took a value', () => {
+    expect(classifyCommand('git -C packages/core log --oneline -3').tier).toBe('auto');
+    expect(classifyCommand('git -C packages/core status --short').tier).toBe('auto');
+  });
+
+  it('sees a refused subcommand behind one too, rather than offering it as a prompt', () => {
+    const { tier, reason } = classifyCommand('git -C /tmp/x push origin main');
+    expect(tier).toBe('refuse');
+    expect(reason).toContain('git push');
+    expect(classifyCommand('git -C packages/core remote -v').tier).toBe('refuse');
+  });
+});
+
+/**
+ * A developer who approves one command has approved that command, not a family
+ * of them. Scope was the binary plus its first non-flag argument, which
+ * collapsed distinct operations onto one grant: three collisions were confirmed
+ * by probing, and the script-runner one is the sharpest, because the scripts
+ * live in the workspace's own manifest and are attacker-authored on an
+ * untrusted repository.
+ *
+ * The rule that replaces it is the binary plus the leading non-flag arguments
+ * before the first flag, capped at two. Both halves earn their place below: the
+ * cap is what makes a nested multiplexer's verb visible, and stopping at the
+ * first flag is what keeps a flag's *value* out of the scope.
+ */
+describe('a grant covers the command that was approved, not its family', () => {
+  // Two scopes differing is the whole assertion: `scopeMatches` in
+  // ApprovalPolicy is exact for remembered grants, so distinct scopes cannot
+  // satisfy each other.
+  const scopeOf = (cmd: string) => classifyCommand(cmd).scope;
+
+  it('scopes the package manager per script, so one script does not authorise another', () => {
+    expect(scopeOf('npm run test')).toBe('npm run test');
+    expect(scopeOf('npm run postinstall')).toBe('npm run postinstall');
+    expect(scopeOf('npm run test')).not.toBe(scopeOf('npm run postinstall'));
+  });
+
+  it('reaches every package manager that has a script runner', () => {
+    expect(scopeOf('pnpm run lint')).toBe('pnpm run lint');
+    expect(scopeOf('yarn run test')).toBe('yarn run test');
+    expect(scopeOf('yarn run test')).not.toBe(scopeOf('yarn run release'));
+  });
+
+  it('scopes the cloud CLI per verb, so a read does not authorise a delete', () => {
+    expect(scopeOf('az group list')).toBe('az group list');
+    expect(scopeOf('az group delete --name rg1')).toBe('az group delete');
+    expect(scopeOf('az group list')).not.toBe(scopeOf('az group delete --name rg1'));
+  });
+
+  it('scopes the object-store CLI per verb too', () => {
+    expect(scopeOf('aws s3 ls')).toBe('aws s3 ls');
+    expect(scopeOf('aws s3 rm s3://bucket/key')).toBe('aws s3 rm');
+    expect(scopeOf('aws s3 ls')).not.toBe(scopeOf('aws s3 rm s3://bucket/key'));
+  });
+
+  // Stopping at the first flag is what buys this. A scope that carried flag
+  // values would prompt again for every limit the model picks, and a policy
+  // that prompts constantly is one developers approve blind.
+  it('produces one stable scope for a log-style invocation whatever the limit', () => {
+    for (const limit of ['1', '5', '100', '5000']) {
+      expect(scopeOf(`docker logs -n ${limit} web`)).toBe('docker logs');
+    }
+    expect(scopeOf('docker logs --tail 200 web')).toBe('docker logs');
+  });
+
+  // One before the verb, one for the verb: `uv pip list` is why the cap is two.
+  it('carries two leading arguments, so a nested multiplexer still reaches its verb', () => {
+    expect(scopeOf('uv pip list')).toBe('uv pip list');
+    expect(scopeOf('bundle exec rspec')).toBe('bundle exec rspec');
+    expect(scopeOf('npm view react version')).toBe('npm view react');
+  });
+
+  it('leaves a non-multiplexer scoped to its binary', () => {
+    expect(scopeOf('pytest -q')).toBe('pytest');
+    expect(scopeOf('curl https://api.example.com/health')).toBe('curl');
+  });
+});
+
+/**
+ * Read-only against the repository, but it contacts whatever host the remote
+ * resolves to — around the web fetcher's per-origin approval and its
+ * request-forgery guard. It could only move from permitted to prompted once the
+ * scope carried the destination: under the old scope, one approval of the
+ * workspace's own remote would have authorised a listing against any host.
+ */
+describe('the remote-listing subcommand prompts, scoped to where it reaches', () => {
+  it('no longer runs unprompted', () => {
+    expect(classifyCommand('git ls-remote origin').tier).toBe('ask');
+    expect(classifyCommand('git ls-remote https://github.com/o/r').tier).toBe('ask');
+  });
+
+  it('does not let an approval for one destination cover another', () => {
+    const origin = classifyCommand('git ls-remote origin').scope;
+    const attacker = classifyCommand('git ls-remote https://attacker.example/r').scope;
+    expect(origin).toBe('git ls-remote origin');
+    expect(attacker).toBe('git ls-remote https://attacker.example/r');
+    expect(origin).not.toBe(attacker);
+  });
+
+  it('keeps the rest of the read-only version-control surface unprompted', () => {
+    for (const cmd of ['git ls-files', 'git ls-tree HEAD', 'git log --oneline -5', 'git status']) {
+      expect(classifyCommand(cmd).tier).toBe('auto');
+    }
   });
 });
 

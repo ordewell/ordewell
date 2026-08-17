@@ -10,6 +10,8 @@ export interface RunnerMode {
   id: string;
   label: string;
   description: string;
+  /** Tagged `autonomous: true` on the manifest — runs without permission prompts. */
+  autonomous?: boolean;
 }
 
 export interface RunnerOption {
@@ -153,6 +155,10 @@ export default function TaskCard({ task, models, modes, runners, effectiveRunner
   const allStepsComplete = task.userSteps?.every((s) => completedSteps.has(s.order)) ?? false;
 
   const runnerAbbrev = effectiveRunner ? (RUNNER_ABBREV[effectiveRunner] ?? effectiveRunner.slice(0, 2).toUpperCase()) : null;
+  // Autonomy is a manifest tag on the task's own mode, not a mode name — so this
+  // looks the tag up rather than string-matching a mode id (ADR-0001: no
+  // hardcoded mode names).
+  const modeInfo = activeModes.find((m) => m.id === task.taskMode);
 
   const runnerOptions = runnerOptionsFor(runners, task.assignedRunner);
   const canEditDeps = !isExecuting && !!onDependenciesChange;
@@ -195,8 +201,10 @@ export default function TaskCard({ task, models, modes, runners, effectiveRunner
         )}
 
         {!isExecuting && task.taskMode && (
-          <span className="task-type-badge" style={{ background: 'rgba(210,153,29,0.15)', color: 'var(--orange)' }}>
-            {activeModes.find((m) => m.id === task.taskMode)?.label ?? task.taskMode}
+          <span className="task-type-badge" style={{ background: 'rgba(210,153,29,0.15)', color: 'var(--orange)' }}
+            title={modeInfo?.autonomous ? 'Runs without permission prompts — controlled by the "ordewell.autonomousMode" setting' : undefined}>
+            {modeInfo?.label ?? task.taskMode}
+            {modeInfo?.autonomous && ' ⚡'}
           </span>
         )}
 

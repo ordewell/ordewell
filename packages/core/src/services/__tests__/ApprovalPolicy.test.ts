@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ApprovalPolicy } from '../ApprovalPolicy';
 import { PendingApprovals } from '../PendingApprovals';
+import { classifyCommand } from '../commandPolicy';
 import type { ApprovalRequest } from '../../interfaces/IApproval';
 
 function req(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
@@ -20,6 +21,50 @@ describe('ApprovalPolicy', () => {
     expect(await policy.request(req({ subject: 'npm test' }))).toBe(true);
     expect(await policy.request(req({ subject: 'npm test -- --watch' }))).toBe(true);
     expect(ask).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The two halves of the grant boundary have to agree, so these run the real
+   * classifier into the real matcher rather than asserting scope strings on
+   * their own. The classifier can narrow a scope all it likes; if a remembered
+   * grant still matched the narrower one, nothing would have changed.
+   */
+  describe('a grant does not stretch to a command that scopes differently', () => {
+    const shell = (command: string): ApprovalRequest => ({
+      kind: 'shell_command',
+      subject: command,
+      scope: classifyCommand(command).scope,
+    });
+
+    it.each([
+      ['npm run test', 'npm run postinstall'],
+      ['az group list', 'az group delete --name rg1'],
+      ['aws s3 ls', 'aws s3 rm s3://bucket/key'],
+      ['git ls-remote origin', 'git ls-remote https://attacker.example/r'],
+    ])('approving %s does not authorise %s', async (approved, other) => {
+      const ask = vi.fn().mockResolvedValue(true);
+      const policy = new ApprovalPolicy({ ask });
+
+      expect(await policy.request(shell(approved))).toBe(true);
+      expect(await policy.request(shell(other))).toBe(true);
+      expect(ask).toHaveBeenCalledTimes(2);
+    });
+
+    // A session that outlives the change, or a pre-approved scope written
+    // against the old rule, must not carry the old grant onto the new one.
+    it.each([
+      ['npm run', 'npm run postinstall'],
+      ['az group', 'az group delete --name rg1'],
+      ['aws s3', 'aws s3 rm s3://bucket/key'],
+      ['git ls-remote', 'git ls-remote https://attacker.example/r'],
+    ])('a grant remembered as "%s" does not satisfy %s', async (coarse, command) => {
+      const ask = vi.fn().mockResolvedValue(false);
+      const policy = new ApprovalPolicy({ ask, preApproved: [coarse] });
+
+      expect(await policy.request({ kind: 'shell_command', subject: coarse, scope: coarse })).toBe(true);
+      expect(await policy.request(shell(command))).toBe(false);
+      expect(ask).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('remembers a denial too, so a retrying model burns a tool round instead of the user', async () => {

@@ -26,6 +26,7 @@ import {
   reEmitTaskQueryPrompt,
 } from '../PlanRepair';
 import { extractPrdBlock } from '../../utils/prdStore';
+import { redactSecrets } from '../../utils/redactSecrets';
 import { runnerForProvider } from '../ProviderRegistry';
 import { collectResearchContext } from '../ContextCollector';
 import type { AgentAdapter, AgentEvent, AgentProcessDeps, AgentStartOptions } from './AgentAdapter';
@@ -396,7 +397,13 @@ export class CliAgentAiService implements IAiService {
     const truncate = (value: string) =>
       value.length > LOG_MAX_CHARS ? `${value.slice(0, LOG_MAX_CHARS)}\n[... truncated, total ${value.length} chars]` : value;
 
-    const settle = (id: string, output: string, success: boolean, outcome: ResearchStep['outcome']) => {
+    const settle = (id: string, rawOutput: string, success: boolean, outcome: ResearchStep['outcome']) => {
+      // The other construction point for a research step (see `executeTool`).
+      // A harness agent runs its own tools against its own provider, so the
+      // provider half of the leak is already outside our reach — but the copy
+      // this step persists into the session file is ours, and it must not hold
+      // credentials in plaintext.
+      const output = redactSecrets(rawOutput);
       const call = pendingCalls.get(id);
       pendingCalls.delete(id);
       const step: ResearchStep = {
