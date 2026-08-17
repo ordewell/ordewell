@@ -616,8 +616,13 @@ export class Session {
   async continueConversation(userMessage: string, options?: GeneratePlanOptions): Promise<LegacyPlanState> {
     if (!this.plan) throw new Error('No planning conversation to continue');
     const priorHistory = this.plan.conversationHistory ?? [];
+    const priorResearchLog = this.plan.researchLog ?? [];
     const now = new Date().toISOString();
     this.appendTranscript('user', userMessage, now);
+    // The two appends above mutate `this.plan` directly (persist happens later,
+    // via settleTurn's mutatePlan) — snapshot the array this call created so the
+    // catch can roll back exactly its own writes, and nothing it did not write.
+    const historyAfterOwnAppend = this.plan.conversationHistory;
     this.plan.researchLog = [...(this.plan.researchLog ?? []), { id: `up-${Date.now()}`, type: 'user_prompt', content: userMessage, timestamp: now }];
 
     // The persisted transcript keeps the raw user message; the model gets the
@@ -667,6 +672,18 @@ export class Session {
       }
 
       return await this.settleTurn(turn, options, reads);
+    } catch (err) {
+      // If nothing persisted since this call's own append, the transcript and
+      // research log still hold the exact array this call created — undo both
+      // so a failed turn leaves session memory matching disk/UI. Every settle
+      // path reassigns conversationHistory before persisting, so the reference
+      // check alone separates "rolled back" from "already committed, don't
+      // erase it".
+      if (this.plan && this.plan.conversationHistory === historyAfterOwnAppend) {
+        this.plan.conversationHistory = priorHistory;
+        this.plan.researchLog = priorResearchLog;
+      }
+      throw err;
     } finally {
       releaseAbort();
     }
