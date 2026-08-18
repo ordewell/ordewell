@@ -149,7 +149,7 @@ export class ApiClient {
 
   /**
    * Open the ADR-0002 planner dialogue. Unlike `generatePlan`, this path honours
-   * the grill-me / PRD / review toggles, so the returned plan may be a question
+   * the grill-me / PRD / verify toggles, so the returned plan may be a question
    * (empty `tasks`, last word in `conversationHistory`) rather than a committed plan.
    */
   async startConversation(

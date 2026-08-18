@@ -39,7 +39,6 @@ describe('SettingsService', () => {
       grillMe: { enabled: false },
       tdd: { enabled: true },
       prd: { enabled: false },
-      review: { enabled: false },
       verification: { enabled: false },
       researchSubagents: { enabled: false },
     });
@@ -64,7 +63,6 @@ describe('SettingsService', () => {
       grillMe: { enabled: true },
       tdd: { enabled: false },
       prd: { enabled: false },
-      review: { enabled: false },
       verification: { enabled: false },
       researchSubagents: { enabled: false },
     });
@@ -104,29 +102,15 @@ describe('SettingsService', () => {
       grillMe: { enabled: true },
       tdd: { enabled: false },
       prd: { enabled: false },
-      review: { enabled: false },
       verification: { enabled: false },
       researchSubagents: { enabled: false },
     });
-  });
-
-  it('getReview returns the review enabled state', () => {
-    expect(service.getReview()).toBe(false);
-    service.setReview(true);
-    expect(service.getReview()).toBe(true);
   });
 
   it('getVerification returns the verification enabled state', () => {
     expect(service.getVerification()).toBe(false);
     service.setVerification(true);
     expect(service.getVerification()).toBe(true);
-  });
-
-  it('a legacy `verify` key still maps to review and never turns on verification', () => {
-    fs.writeFileSync(tempFile, JSON.stringify({ verify: { enabled: true } }));
-    const s2 = new SettingsService(tempFile);
-    expect(s2.getReview()).toBe(true);
-    expect(s2.getVerification()).toBe(false);
   });
 
   it('researchSubagents defaults to off and round-trips through disk', () => {

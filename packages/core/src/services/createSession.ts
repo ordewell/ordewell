@@ -101,7 +101,6 @@ export interface SessionRuntimeSettings {
   tddEnabled: boolean;
   grillMeEnabled: boolean;
   prdEnabled?: boolean;
-  reviewEnabled?: boolean;
   verificationEnabled?: boolean;
   researchSubagentsEnabled?: boolean;
   modelAllowlist?: Record<string, string[]>;
@@ -518,8 +517,9 @@ export class Session {
     this.modelsCache = modelsByRunner;
     const runnerModes = this.runnerModesFor(chosenRunners);
     // Every planner toggle, not the two this path used to remember: `modesFor`
-    // drops the ones a one-shot run cannot honour, so review — which only
-    // appends a task — stops being silently lost between here and the prompt.
+    // drops the ones a one-shot run cannot honour, so a structural toggle like
+    // verify — which only appends a task — stops being silently lost between
+    // here and the prompt.
     const settings = this.settingsFn();
     const { modelAllowlist } = settings;
     const modes = plannerModesFrom(settings, this.config.autonomousMode);
@@ -569,7 +569,7 @@ export class Session {
     const modelsByRunner = await this.modelResolver.modelsForRunners(chosenRunners);
     this.modelsCache = modelsByRunner;
     const runnerModes = this.runnerModesFor(chosenRunners);
-    const { grillMeEnabled, prdEnabled, reviewEnabled, verificationEnabled, researchSubagentsEnabled, modelAllowlist } = this.settingsFn();
+    const { grillMeEnabled, prdEnabled, verificationEnabled, researchSubagentsEnabled, modelAllowlist } = this.settingsFn();
     this.currentAllowlist = modelAllowlist ?? {};
     const filteredModels = filterModelsForPrompt(modelsByRunner, this.currentAllowlist);
 
@@ -594,7 +594,6 @@ export class Session {
         autonomousDefault: this.config.autonomousMode,
         grillMeEnabled: grillMeEnabled ?? false,
         prdEnabled: prdEnabled ?? false,
-        reviewEnabled: reviewEnabled ?? false,
         verificationEnabled: verificationEnabled ?? false,
         researchSubagentsEnabled: researchSubagentsEnabled ?? false,
         fs: this.fsAdapter,
@@ -973,7 +972,7 @@ export class Session {
     const modelsByRunner = await this.modelResolver.modelsForRunners(runners);
     this.modelsCache = modelsByRunner;
     const runnerModes = this.runnerModesFor(runners);
-    const { grillMeEnabled, prdEnabled, reviewEnabled, verificationEnabled, researchSubagentsEnabled, modelAllowlist } = this.settingsFn();
+    const { grillMeEnabled, prdEnabled, verificationEnabled, researchSubagentsEnabled, modelAllowlist } = this.settingsFn();
     this.currentAllowlist = modelAllowlist ?? {};
     const filteredModels = filterModelsForPrompt(modelsByRunner, this.currentAllowlist);
     const goal = this.goal || priorHistory.find((m) => m.role === 'user')?.content || userMessage;
@@ -986,7 +985,6 @@ export class Session {
       autonomousDefault: this.config.autonomousMode,
       grillMeEnabled: grillMeEnabled ?? false,
       prdEnabled: prdEnabled ?? false,
-      reviewEnabled: reviewEnabled ?? false,
       verificationEnabled: verificationEnabled ?? false,
       researchSubagentsEnabled: researchSubagentsEnabled ?? false,
       fs: this.fsAdapter,

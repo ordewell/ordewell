@@ -6,7 +6,6 @@ export interface UserSettings {
   grillMe: { enabled: boolean };
   tdd: { enabled: boolean };
   prd: { enabled: boolean };
-  review: { enabled: boolean };
   verification: { enabled: boolean };
   researchSubagents: { enabled: boolean };
   modelAllowlist?: Record<string, string[]>;
@@ -23,7 +22,6 @@ const DEFAULTS: UserSettings = {
   grillMe: { enabled: false },
   tdd: { enabled: true },
   prd: { enabled: false },
-  review: { enabled: false },
   verification: { enabled: false },
   researchSubagents: { enabled: false },
 };
@@ -123,16 +121,6 @@ export class SettingsService {
     this.persist();
   }
 
-  getReview(): boolean {
-    return this.getAll().review.enabled;
-  }
-
-  setReview(enabled: boolean): void {
-    this.getAll();
-    this.cache!.review.enabled = enabled;
-    this.persist();
-  }
-
   getVerification(): boolean {
     return this.getAll().verification.enabled;
   }
@@ -217,9 +205,6 @@ export class SettingsService {
           grillMe: { enabled: raw.grillMe?.enabled ?? DEFAULTS.grillMe.enabled },
           tdd: { enabled: raw.tdd?.enabled ?? DEFAULTS.tdd.enabled },
           prd: { enabled: raw.prd?.enabled ?? DEFAULTS.prd.enabled },
-          // `verify` is the legacy key for review mode; keep reading it so old settings files survive the rename.
-          // The evidence-based verification mode uses the distinct `verification` key to avoid colliding with it.
-          review: { enabled: raw.review?.enabled ?? raw.verify?.enabled ?? DEFAULTS.review.enabled },
           verification: { enabled: raw.verification?.enabled ?? DEFAULTS.verification.enabled },
           researchSubagents: { enabled: raw.researchSubagents?.enabled ?? DEFAULTS.researchSubagents.enabled },
         };
@@ -238,7 +223,7 @@ export class SettingsService {
     } catch {
       // corrupted file — use defaults
     }
-    return { ...DEFAULTS, grillMe: { ...DEFAULTS.grillMe }, tdd: { ...DEFAULTS.tdd }, prd: { ...DEFAULTS.prd }, review: { ...DEFAULTS.review }, verification: { ...DEFAULTS.verification }, researchSubagents: { ...DEFAULTS.researchSubagents } };
+    return { ...DEFAULTS, grillMe: { ...DEFAULTS.grillMe }, tdd: { ...DEFAULTS.tdd }, prd: { ...DEFAULTS.prd }, verification: { ...DEFAULTS.verification }, researchSubagents: { ...DEFAULTS.researchSubagents } };
   }
 
   private persist(): void {

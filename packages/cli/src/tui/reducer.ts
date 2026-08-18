@@ -486,7 +486,6 @@ function applySettings(state: TuiState, settings: Record<string, unknown>): TuiS
     'grill-me': settings.grillMe,
     tdd: settings.tdd,
     prd: settings.prd,
-    review: settings.review,
     verify: settings.verification,
     'research-subagents': settings.researchSubagents,
   };

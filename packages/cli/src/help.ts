@@ -9,7 +9,7 @@ an id.
 Planning:
   ordewell                        Full-screen terminal UI (everything the VS Code extension does)
   ordewell tui                    The same thing, named — for scripts and aliases
-  ordewell plan --goal "text"     Plan a goal conversationally (honours grill-me/PRD/review)
+  ordewell plan --goal "text"     Plan a goal conversationally (honours grill-me/PRD/verify)
   ordewell run                    Execute the last generated plan (streams status)
   ordewell approve                Sign off a plan paused for review, and continue it
   ordewell stop                   Stop execution of the last session (or --server)
@@ -50,7 +50,6 @@ Modes:
   ordewell grill-me [on|off]    Toggle Grill-Me challenge mode (or show status)
   ordewell tdd [on|off]         Toggle Test-Driven Development mode (or show status)
   ordewell prd [on|off]         Toggle PRD mode (planner writes a PRD before the plan)
-  ordewell review [on|off]    Toggle review mode — adds a final opinion-review task, human sign-off (or show status)
   ordewell verify [on|off]    Toggle verification mode — adds a final evidence-based task that runs the full suite (or show status)
   ordewell research-subagents [on|off]  Toggle parallel read-only research subagents during planning (or show status)
 

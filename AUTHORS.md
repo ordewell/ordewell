@@ -24,6 +24,6 @@ Thank you. Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Acknowledgements
 
-The deep-interview planning workflows — `grill-me`, PRD drafting, TDD task
-augmentation and review mode — are adapted from
+The deep-interview planning workflows — `grill-me`, PRD drafting, and TDD task
+augmentation — are adapted from
 [Matt Pocock's skills](https://github.com/mattpocock/skills) (MIT).

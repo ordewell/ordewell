@@ -22,7 +22,6 @@ function settingsState(overrides: Partial<SettingsState> = {}): SettingsState {
     grillMe: { enabled: false },
     tdd: { enabled: false },
     prd: { enabled: false },
-    review: { enabled: false },
     verification: { enabled: false },
     researchSubagents: { enabled: false },
     modelAllowlist: undefined,
@@ -60,7 +59,6 @@ describe('GET /api/settings', () => {
       grillMe: { enabled: false },
       tdd: { enabled: true },
       prd: { enabled: false },
-      review: { enabled: false },
       verification: { enabled: false },
       researchSubagents: { enabled: false },
     });

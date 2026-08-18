@@ -141,7 +141,6 @@ export class GeminiService extends BaseAiService implements IAiService {
       req.autonomousDefault ?? true,
       req.grillMeEnabled ?? false,
       req.prdEnabled ?? false,
-      req.reviewEnabled ?? false,
       req.verificationEnabled ?? false,
     );
 

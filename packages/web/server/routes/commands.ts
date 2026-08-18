@@ -10,7 +10,6 @@ const COMMANDS: CommandDescriptor[] = [
   { name: 'grill-me', description: 'Toggle Grill-Me challenge mode (on|off|status)' },
   { name: 'tdd', description: 'Toggle Test-Driven Development mode (on|off|status)' },
   { name: 'prd', description: 'Toggle PRD mode — planner writes a markdown PRD before the plan (on|off|status)' },
-  { name: 'review', description: 'Toggle review mode — adds a final opinion-review task (human sign-off) to the plan (on|off|status)' },
   { name: 'verify', description: 'Toggle verification mode — adds a final evidence-based verification task that runs the full suite (on|off|status)' },
   { name: 'research-subagents', description: 'Toggle parallel research subagents — the planner may fan out read-only research agents during planning (on|off|status)' },
 ];
@@ -23,8 +22,6 @@ export function commandsRoute(pool: OrchestratorPool) {
   });
 
   router.post('/:name', async (c) => {
-    // 'verify' was once a legacy alias for review mode; it now names the
-    // evidence-based verification mode, so no remap happens here.
     const name = c.req.param('name');
     const body = await c.req.json().catch(() => ({}));
     const args: Record<string, string> = body?.args || {};
@@ -60,16 +57,6 @@ export function commandsRoute(pool: OrchestratorPool) {
         pool.updateSettings({ prd: { enabled: true } });
       } else if (action === 'off') {
         pool.updateSettings({ prd: { enabled: false } });
-      }
-      return c.json({ ok: true, settings: pool.getSettings() });
-    }
-
-    if (name === 'review') {
-      const action = args.action || 'status';
-      if (action === 'on') {
-        pool.updateSettings({ review: { enabled: true } });
-      } else if (action === 'off') {
-        pool.updateSettings({ review: { enabled: false } });
       }
       return c.json({ ok: true, settings: pool.getSettings() });
     }

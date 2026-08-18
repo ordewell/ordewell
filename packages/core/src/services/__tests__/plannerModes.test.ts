@@ -1,16 +1,13 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { MODE_TOGGLES, DEFAULT_PLANNER_MODES, modesFor, plannerModesFrom, plannerRuntimeToggles, type PlannerModes } from '../plannerModes';
 import type { UserSettings } from '../SettingsService';
-import { buildPlanWithResults, buildResearchPrompt, buildConversationSystemPrompt } from '../PlanPrompts';
-import { makeSession, fakeConfig } from './sessionTestKit';
+import { buildPlanWithResults, buildResearchPrompt } from '../PlanPrompts';
 import { sessionRuntimeSettings } from '../createSession';
-import type { DiscoveredModel, RunnerId } from '../../models/Task';
 
 const all: PlannerModes = {
   autonomousDefault: true,
   grillMe: true,
   prd: true,
-  review: true,
   verification: true,
   researchSubagents: true,
 };
@@ -36,20 +33,18 @@ describe('mode toggle registry', () => {
     grillMe: { enabled: true },
     tdd: { enabled: true },
     prd: { enabled: false },
-    review: { enabled: true },
     verification: { enabled: false },
     researchSubagents: { enabled: true },
   };
 
   it('reads every toggle off the settings file, under its runtime name', () => {
-    // Both hosts hand-mapped `getReview()` to `reviewEnabled` and friends, so a
-    // toggle had three names — one on disk, one at runtime, one on screen — and
-    // nothing tied them together. This is the tie.
+    // Both hosts hand-mapped `getVerification()` to `verificationEnabled` and
+    // friends, so a toggle had three names — one on disk, one at runtime, one
+    // on screen — and nothing tied them together. This is the tie.
     expect(plannerRuntimeToggles(settings)).toEqual({
       grillMeEnabled: true,
       tddEnabled: true,
       prdEnabled: false,
-      reviewEnabled: true,
       verificationEnabled: false,
       researchSubagentsEnabled: true,
     });
@@ -79,7 +74,6 @@ describe('mode toggle registry', () => {
     expect(scoped.grillMe).toBe(false);
     expect(scoped.prd).toBe(false);
     // Structural: they only shape the emitted plan.
-    expect(scoped.review).toBe(true);
     expect(scoped.verification).toBe(true);
     expect(scoped.researchSubagents).toBe(true);
   });
@@ -93,56 +87,9 @@ describe('mode toggle registry', () => {
   });
 });
 
-describe('the whole one-shot chain', () => {
-  it('carries review from the settings file into the prompt the model receives', async () => {
-    // Session → Planner → IAiService → PlanPrompts, with only the transport
-    // faked. Each hop dropped review independently before; asserting on the
-    // final prompt is the only way to know all of them carry it.
-    let prompt = '';
-    const aiService = {
-      researchAndPlan: vi.fn(async (
-        goal: string,
-        runners: RunnerId[],
-        modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>>,
-        _fs: unknown,
-        _onProgress: unknown,
-        _fetcher: unknown,
-        runnerModes: undefined,
-        modes: PlannerModes,
-      ) => {
-        prompt = buildResearchPrompt(goal, '', modelsByRunner, runners, runnerModes, modes);
-        return { tasks: [], researchLog: [], researchResults: '' };
-      }),
-      hasActiveConversation: () => false,
-      reset: vi.fn(),
-    };
-
-    const session = makeSession({
-      config: fakeConfig({ researchEnabled: true }),
-      settings: () => ({ tddEnabled: false, grillMeEnabled: true, prdEnabled: true, reviewEnabled: true }),
-      aiService,
-    });
-
-    await session.generatePlan('add rate limiting', ['claude-code']);
-
-    expect(aiService.researchAndPlan).toHaveBeenCalledOnce();
-    expect(prompt).toContain('REVIEW MODE');
-    expect(prompt).not.toContain('INTERVIEW MODE');
-    expect(prompt).not.toContain('PRD MODE');
-  });
-});
-
 describe('one-shot planner prompt', () => {
   const oneShot = (over: Partial<PlannerModes>) =>
     buildPlanWithResults('goal', '', '', {}, ['claude-code'], undefined, { ...DEFAULT_PLANNER_MODES, ...over });
-
-  it('emits the review block, which it used to drop while the UI showed review ON', () => {
-    expect(oneShot({ review: true })).toContain('REVIEW MODE');
-  });
-
-  it('omits the review block when review is off', () => {
-    expect(oneShot({})).not.toContain('REVIEW MODE');
-  });
 
   it('still omits the two toggles that need a user to talk to', () => {
     const research = buildResearchPrompt('goal', '', {}, ['claude-code'], undefined, {
@@ -155,15 +102,5 @@ describe('one-shot planner prompt', () => {
     expect(research).not.toContain('INTERVIEW MODE');
     expect(research).not.toContain('PRD MODE');
     expect(oneShot({ grillMe: true, prd: true })).not.toContain('INTERVIEW MODE');
-  });
-
-  it('emits the same review text the conversation loop does', () => {
-    const conversational = buildConversationSystemPrompt(
-      'goal', '', {}, ['claude-code'], undefined, true, false, false, true, false,
-    );
-    const marker = 'Add a FINAL review task to the end of the plan (highest order number).';
-
-    expect(conversational).toContain(marker);
-    expect(oneShot({ review: true })).toContain(marker);
   });
 });

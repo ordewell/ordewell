@@ -18,7 +18,7 @@ const planned: Partial<TuiState> = {
 };
 
 describe('skills', () => {
-  it.each(['grill-me', 'tdd', 'prd', 'review', 'verify', 'research-subagents'])(
+  it.each(['grill-me', 'tdd', 'prd', 'verify', 'research-subagents'])(
     '/%s on turns the skill on through the daemon command API',
     (skill) => {
       expect(run(`/${skill} on`).effects).toEqual([{ type: 'command', name: skill, action: 'on' }]);

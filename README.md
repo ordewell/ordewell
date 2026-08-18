@@ -241,7 +241,7 @@ For VS Code, install the extension and open the Ordewell panel — see Quick Sta
 | --- | --- |
 | Planning | type a goal, `/approve`, `/run`, `/stop` |
 | Tasks | `/add-task`, `/remove-task`, `/complete`, `/uncomplete`, `/skip`, `/retry`, `/cancel`, `/force-start` |
-| Skills | `/grill-me`, `/tdd`, `/prd`, `/review`, `/verify`, `/research-subagents` |
+| Skills | `/grill-me`, `/tdd`, `/prd`, `/verify`, `/research-subagents` |
 | Models | `/model`, `/key`, `/allowlist`, `/runners`, `/auto`, `/refresh` |
 | Sessions | `/sessions`, `/new`, `/save`, `/load`, `/delete` — a loaded session is adopted by the server, so its plan stays executable |
 | System | `/help`, `/mouse`, `/quit` |
@@ -334,7 +334,7 @@ Every surface consumes one event union (`SessionMessage`) over one broadcast sea
 <details>
 <summary><strong>Acknowledgements</strong></summary>
 
-The deep-interview planning workflows — `grill-me`, PRD drafting, TDD task augmentation, and review mode — are adapted from [Matt Pocock's skills](https://github.com/mattpocock/skills) (MIT), rebuilt as prompt blocks inside Ordewell's planner and runner prompts. If you want those workflows in a plain coding-agent session rather than an orchestrated plan, his repo is the place to start.
+The deep-interview planning workflows — `grill-me`, PRD drafting, and TDD task augmentation — are adapted from [Matt Pocock's skills](https://github.com/mattpocock/skills) (MIT), rebuilt as prompt blocks inside Ordewell's planner and runner prompts. If you want those workflows in a plain coding-agent session rather than an orchestrated plan, his repo is the place to start.
 
 </details>
 

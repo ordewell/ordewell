@@ -7,7 +7,7 @@ import { DEFAULT_PLANNER_MODES, type PlannerModes } from '../plannerModes';
 const modes = (over: Partial<PlannerModes> = {}): PlannerModes => ({ ...DEFAULT_PLANNER_MODES, ...over });
 
 describe('buildConversationSystemPrompt grill-me (aligned with the original grill-me skill)', () => {
-  function prompt(grillMeEnabled: boolean, prdEnabled = false, reviewEnabled = false) {
+  function prompt(grillMeEnabled: boolean, prdEnabled = false, verificationEnabled = false) {
     return buildConversationSystemPrompt(
       'build a task planner',
       '',
@@ -17,7 +17,7 @@ describe('buildConversationSystemPrompt grill-me (aligned with the original gril
       true,
       grillMeEnabled,
       prdEnabled,
-      reviewEnabled,
+      verificationEnabled,
     );
   }
 
@@ -66,57 +66,8 @@ describe('buildConversationSystemPrompt grill-me (aligned with the original gril
   });
 });
 
-describe('buildConversationSystemPrompt review mode', () => {
-  function prompt(reviewEnabled: boolean) {
-    return buildConversationSystemPrompt(
-      'build a task planner',
-      '',
-      {},
-      ['claude-code'],
-      undefined,
-      true,
-      false,
-      false,
-      reviewEnabled,
-    );
-  }
-
-  it('adds a review task block when reviewEnabled is true', () => {
-    const p = prompt(true);
-    expect(p).toContain('REVIEW MODE:');
-    expect(p).toMatch(/Add a FINAL review task to the end of the plan/i);
-    expect(p).toMatch(/type "ai" and use the STRONGEST available model/i);
-    expect(p).toMatch(/dependencies on ALL other AI\/user tasks/i);
-  });
-
-  it('produces a structured review report instruction', () => {
-    const p = prompt(true);
-    expect(p).toMatch(/Review every completed task's outputs and verify the original goal was met/i);
-    expect(p).toMatch(/structured review report/i);
-    expect(p).toMatch(/PASS\/FAIL conclusion with evidence/i);
-  });
-
-  it('gates the review block with the toggle', () => {
-    const on = prompt(true);
-    const off = prompt(false);
-    expect(on).toContain('REVIEW MODE');
-    expect(off).not.toContain('REVIEW MODE');
-  });
-
-  it('reviews on two separately-reported axes: spec conformance and standards', () => {
-    const p = prompt(true);
-    expect(p).toContain('SPEC axis:');
-    expect(p).toContain('STANDARDS axis:');
-    expect(p).toMatch(/reported SEPARATELY so one cannot mask the other/i);
-    expect(p).toMatch(/scope creep/i);
-    expect(p).toMatch(/Quote the PRD line for each finding/i);
-    expect(p).toMatch(/always judgement calls, never hard failures/i);
-    expect(p).toMatch(/documented repo standards override the baseline/i);
-  });
-});
-
 describe('buildConversationSystemPrompt verification mode', () => {
-  function prompt(verificationEnabled: boolean, reviewEnabled = false) {
+  function prompt(verificationEnabled: boolean) {
     return buildConversationSystemPrompt(
       'build a task planner',
       '',
@@ -126,7 +77,6 @@ describe('buildConversationSystemPrompt verification mode', () => {
       true,
       false,
       false,
-      reviewEnabled,
       verificationEnabled,
     );
   }
@@ -165,12 +115,6 @@ describe('buildConversationSystemPrompt verification mode', () => {
     expect(off).not.toContain('VERIFICATION MODE');
   });
 
-  it('orders verification before review when both modes are active', () => {
-    const p = prompt(true, true);
-    expect(p).toContain('REVIEW MODE:');
-    expect(p).toMatch(/verification task immediately before the review task/i);
-    expect(p).toMatch(/review task keeps the highest order number and must list the verification task among its dependencies/i);
-  });
 });
 
 describe('buildResearchPrompt verification mode (one-shot path)', () => {
@@ -289,7 +233,7 @@ describe('research subagent prompts', () => {
 });
 
 describe('buildConversationSystemPrompt harness variant (ADR-0009)', () => {
-  function variant(harnessMode: boolean, toggles: { grillMe?: boolean; prd?: boolean; review?: boolean; verify?: boolean } = {}) {
+  function variant(harnessMode: boolean, toggles: { grillMe?: boolean; prd?: boolean; verify?: boolean } = {}) {
     return buildConversationSystemPrompt(
       'build a task planner',
       'PROJECT CONTEXT HERE',
@@ -299,7 +243,6 @@ describe('buildConversationSystemPrompt harness variant (ADR-0009)', () => {
       true,
       toggles.grillMe ?? false,
       toggles.prd ?? false,
-      toggles.review ?? false,
       toggles.verify ?? false,
       harnessMode,
     );
@@ -348,11 +291,11 @@ describe('buildConversationSystemPrompt harness variant (ADR-0009)', () => {
   });
 
   it('carries every mode-toggle block, so no toggle works on one backend only', () => {
-    const all = { grillMe: true, prd: true, review: true, verify: true };
+    const all = { grillMe: true, prd: true, verify: true };
     const harness = variant(true, all);
     const api = variant(false, all);
 
-    for (const block of ['INTERVIEW MODE — GRILL-ME:', 'PRD MODE:', 'REVIEW MODE:', 'VERIFICATION MODE:']) {
+    for (const block of ['INTERVIEW MODE — GRILL-ME:', 'PRD MODE:', 'VERIFICATION MODE:']) {
       expect(harness).toContain(block);
       expect(api).toContain(block);
     }

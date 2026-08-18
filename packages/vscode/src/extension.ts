@@ -93,7 +93,7 @@ async function applyPlanner(provider: AiProvider): Promise<void> {
   await config.update('plannerThinkingEffort', effort);
   sendModelConfig();
   await sendPlannerState();
-  chatProvider.setSkillToggles(settingsService.getGrillMe(), settingsService.getTdd(), settingsService.getPrd(), settingsService.getReview(), settingsService.getVerification(), settingsService.getResearchSubagents(), unavailableSkills());
+  chatProvider.setSkillToggles(settingsService.getGrillMe(), settingsService.getTdd(), settingsService.getPrd(), settingsService.getVerification(), settingsService.getResearchSubagents(), unavailableSkills());
   log(`Planner set to ${provider}`);
 }
 
@@ -524,7 +524,7 @@ function setupChatListener(context: vscode.ExtensionContext): void {
     switch (msg.type) {
       case 'ready': {
         chatProvider.resendAllState();
-        chatProvider.setSkillToggles(settingsService.getGrillMe(), settingsService.getTdd(), settingsService.getPrd(), settingsService.getReview(), settingsService.getVerification(), settingsService.getResearchSubagents(), unavailableSkills());
+        chatProvider.setSkillToggles(settingsService.getGrillMe(), settingsService.getTdd(), settingsService.getPrd(), settingsService.getVerification(), settingsService.getResearchSubagents(), unavailableSkills());
         // Activation-time discovery can catch a runner CLI cold (server spawn,
         // catalog fetch, auth store still loading) and cache a degraded model
         // list. Re-discover in the background whenever a webview (re)connects
@@ -733,10 +733,9 @@ function setupChatListener(context: vscode.ExtensionContext): void {
         if (msg.skillId === 'grill-me') settingsService.setGrillMe(msg.enabled);
         else if (msg.skillId === 'tdd') settingsService.setTdd(msg.enabled);
         else if (msg.skillId === 'prd') settingsService.setPrd(msg.enabled);
-        else if (msg.skillId === 'review') settingsService.setReview(msg.enabled);
         else if (msg.skillId === 'verify') settingsService.setVerification(msg.enabled);
         else if (msg.skillId === 'research-subagents') settingsService.setResearchSubagents(msg.enabled);
-        chatProvider.setSkillToggles(settingsService.getGrillMe(), settingsService.getTdd(), settingsService.getPrd(), settingsService.getReview(), settingsService.getVerification(), settingsService.getResearchSubagents(), unavailableSkills());
+        chatProvider.setSkillToggles(settingsService.getGrillMe(), settingsService.getTdd(), settingsService.getPrd(), settingsService.getVerification(), settingsService.getResearchSubagents(), unavailableSkills());
         break;
 
       case 'setPlanner':

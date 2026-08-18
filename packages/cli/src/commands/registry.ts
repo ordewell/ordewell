@@ -10,7 +10,6 @@ import { handleGrillMe } from './grillMe';
 import { handleTdd } from './tdd';
 import { handlePrd } from './prd';
 import { handleAllowlist } from './allowlist';
-import { handleReview } from './review';
 import { handleVerify } from './verify';
 import { handleResearchSubagents } from './researchSubagents';
 import { handleMarkComplete, handleSkip, handleUncomplete } from './mark-complete';
@@ -59,9 +58,6 @@ export const COMMANDS: Record<string, (args: string[]) => Promise<void> | void> 
   'grill-me': handleGrillMe,
   'tdd': handleTdd,
   'prd': handlePrd,
-  'review': handleReview,
-  // 'verify' was once a legacy alias for review; it now toggles the
-  // evidence-based verification mode.
   'verify': handleVerify,
   'research-subagents': handleResearchSubagents,
   'mark-complete': handleMarkComplete,

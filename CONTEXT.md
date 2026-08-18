@@ -150,7 +150,7 @@ prose, and after the user agrees writes the full markdown wrapped in
 *Avoid:* "PrdArtifact", "PRD status machine" — deleted; the PRD is a message
 plus a saved file, not a typed state.
 
-**Mode toggle (grill-me / PRD / TDD / review / verify / research-subagents)** — a
+**Mode toggle (grill-me / PRD / TDD / verify / research-subagents)** — a
 per-pool user setting whose *only* effect is a prompt block injected into the
 planner system prompt (`PlanPrompts.ts`) or into a runner task's prompt
 (`promptAugment.ts`). Skills live inside Ordewell as these injected prompt
@@ -165,15 +165,14 @@ key, its runtime key, and the **scopes** that honour it (`chat` / `one-shot` /
 modes)` clears what a path cannot honour, `plannerRuntimeToggles(settings)`
 reads the whole set off disk under the names a Session expects, and the
 planner-facing booleans travel as one `PlannerModes` value rather than a
-positional tail. A toggle's disk and runtime names (`review` / `reviewEnabled`)
+positional tail. A toggle's disk and runtime names (`verify` / `verificationEnabled`)
 therefore meet in one row. Its *display* name does not yet: the webview still
 hand-writes the labels and passes them as positional booleans
 (`setSkillToggles` in `extension.ts`), which is the next seam to fold in. Grill-me and PRD are `chat` only because
-both interview the user and the one-shot prompt states there is nobody to ask;
-review is structural (it only appends a task) and so applies to both. Before the
-scopes existed the one-shot planner silently dropped review while every surface
-still displayed it as ON, and nothing distinguished that from the two deliberate
-omissions.
+both interview the user and the one-shot prompt states there is nobody to ask.
+Before scopes existed, a toggle used to be silently dropped by the one-shot
+planner while every surface still displayed it as ON, and nothing distinguished
+that from a deliberate omission.
 *Avoid:* "skill file", "slash command" for these — those are runner-side
 concepts; in Ordewell a skill is a toggle plus its prompt block. Do not add a
 toggle as another boolean parameter, and do not hand-map its settings key to its
@@ -442,20 +441,6 @@ The verdict is owned *entirely* behind the VerdictEngine's interface; the
 orchestrator schedules on the outcome, it does not re-derive it.
 *Avoid:* "review result", "verification result" as separate concepts — they were
 two redundant shapes for the same fact and collapse into the Verdict.
-
-**Review mode** — the mode toggle that makes the planner append one final
-HITL review *task* (strongest model, depends on every other task) reviewing the
-finished work on two axes reported separately: **Spec** (conformance to the PRD
-when one exists — missing requirements, scope creep, wrongly-implemented items,
-each quoting the PRD) and **Standards** (documented repo standards plus a Fowler
-smell baseline — always judgement calls; repo docs override the baseline; skip
-what tooling enforces). This is an opinion review delivered as a plan task with
-human sign-off — distinct from VerdictEngine verification, which stays
-evidence-only (the per-task completion marker, with `exit_code` retained as
-diagnostic evidence) for every task including this one.
-*Avoid:* "verification mode", "verify mode" — renamed; verification means the
-VerdictEngine's evidence-only verdict, never this review. The settings key
-`verify` survives only as a legacy read/alias for `review`.
 
 **Mark complete** — the user action of force-completing any task regardless of
 runner state. Promotes the task to `status: 'completed'`, records a synthetic

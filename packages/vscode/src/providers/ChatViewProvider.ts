@@ -118,8 +118,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.postMessage({ type: 'setModels', models });
   }
   setRunners(runners: RunnerMeta[]): void { this.postMessage({ type: 'setRunners', runners }); }
-  setSkillToggles(grillMe: boolean, tdd: boolean, prd = false, review = false, verify = false, researchSubagents = false, unavailable: string[] = []): void {
-    this.postMessage({ type: 'setSkillToggles', toggles: { 'grill-me': grillMe, tdd, prd, review, verify, 'research-subagents': researchSubagents }, unavailable });
+  setSkillToggles(grillMe: boolean, tdd: boolean, prd = false, verify = false, researchSubagents = false, unavailable: string[] = []): void {
+    this.postMessage({ type: 'setSkillToggles', toggles: { 'grill-me': grillMe, tdd, prd, verify, 'research-subagents': researchSubagents }, unavailable });
   }
   /** A planner conversation message (ADR-0002) — rendered as an assistant chat bubble. */
   sendNewMessage(content: string, timestamp?: string): void {

@@ -77,14 +77,14 @@ export interface ModelView {
   runners?: string[];
 }
 
-/** The six planner skills the VS Code webview exposes as toggles. */
-export const SKILL_IDS = ['grill-me', 'tdd', 'prd', 'review', 'verify', 'research-subagents'] as const;
+/** The five planner skills the VS Code webview exposes as toggles. */
+export const SKILL_IDS = ['grill-me', 'tdd', 'prd', 'verify', 'research-subagents'] as const;
 export type SkillId = (typeof SKILL_IDS)[number];
 
 export type Skills = Record<SkillId, boolean>;
 
 export function noSkills(): Skills {
-  return { 'grill-me': false, tdd: false, prd: false, review: false, verify: false, 'research-subagents': false };
+  return { 'grill-me': false, tdd: false, prd: false, verify: false, 'research-subagents': false };
 }
 
 export interface PickerItem {

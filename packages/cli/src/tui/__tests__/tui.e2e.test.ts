@@ -342,7 +342,7 @@ describe('TUI end to end', () => {
     await vi.waitFor(() => expect(h.app.getState().status).toBe('idle'));
   });
 
-  it('review mode round-trips: sign-off request paints, /approve re-launches execution', async () => {
+  it('plan approval round-trips: sign-off request paints, /approve re-launches execution', async () => {
     const h = harness();
     h.type('Build the login flow');
     h.type('\r');

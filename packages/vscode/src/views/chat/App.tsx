@@ -85,7 +85,6 @@ export default function App() {
   const [grillMeEnabled, setGrillMeEnabled] = useState(false);
   const [tddEnabled, setTddEnabled] = useState(true);
   const [prdEnabled, setPrdEnabled] = useState(false);
-  const [reviewEnabled, setReviewEnabled] = useState(false);
   const [verifyEnabled, setVerifyEnabled] = useState(false);
   const [researchSubagentsEnabled, setResearchSubagentsEnabled] = useState(false);
   /** Toggles with no meaning for the current planner backend (ADR-0009) — hidden, not disabled. */
@@ -532,7 +531,6 @@ export default function App() {
             setGrillMeEnabled(msg.toggles['grill-me'] ?? false);
             setTddEnabled(msg.toggles.tdd ?? true);
             setPrdEnabled(msg.toggles.prd ?? false);
-            setReviewEnabled(msg.toggles.review ?? false);
             setVerifyEnabled(msg.toggles.verify ?? false);
             setResearchSubagentsEnabled(msg.toggles['research-subagents'] ?? false);
             setUnavailableSkills(msg.unavailable ?? []);
@@ -841,10 +839,6 @@ export default function App() {
       const next = !prdEnabled;
       setPrdEnabled(next);
       vscode.postMessage({ type: 'toggleSkill', skillId, enabled: next });
-    } else if (skillId === 'review') {
-      const next = !reviewEnabled;
-      setReviewEnabled(next);
-      vscode.postMessage({ type: 'toggleSkill', skillId, enabled: next });
     } else if (skillId === 'verify') {
       const next = !verifyEnabled;
       setVerifyEnabled(next);
@@ -854,7 +848,7 @@ export default function App() {
       setResearchSubagentsEnabled(next);
       vscode.postMessage({ type: 'toggleSkill', skillId, enabled: next });
     }
-  }, [grillMeEnabled, tddEnabled, prdEnabled, reviewEnabled, verifyEnabled, researchSubagentsEnabled]);
+  }, [grillMeEnabled, tddEnabled, prdEnabled, verifyEnabled, researchSubagentsEnabled]);
 
   const handleApproveCheckpoint = useCallback(() => {
     if (!checkpoint) return;
@@ -1187,10 +1181,6 @@ export default function App() {
         <button className={`skill-toggle-pill ${prdEnabled ? 'on' : 'off'}`}
           onClick={() => handleToggleSkill('prd')} title="PRD: the planner previews and writes a markdown PRD before the plan">
           <span className="skill-toggle-dot" /> PRD
-        </button>
-        <button className={`skill-toggle-pill ${reviewEnabled ? 'on' : 'off'}`}
-          onClick={() => handleToggleSkill('review')} title="Review (human sign-off): adds a final opinion-review task that judges all prior work against the PRD and repo standards">
-          <span className="skill-toggle-dot" /> Review
         </button>
         <button className={`skill-toggle-pill ${verifyEnabled ? 'on' : 'off'}`}
           onClick={() => handleToggleSkill('verify')} title="Verify (run tests): adds a final evidence-based task that runs the full suite, writes missing spec checks, and must exit green">

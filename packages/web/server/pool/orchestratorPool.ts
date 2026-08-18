@@ -193,7 +193,6 @@ export class OrchestratorPool {
       grillMe: userSettings.grillMe,
       tdd: userSettings.tdd,
       prd: userSettings.prd,
-      review: userSettings.review,
       verification: userSettings.verification,
       researchSubagents: userSettings.researchSubagents,
       modelAllowlist: userSettings.modelAllowlist,
@@ -265,9 +264,6 @@ export class OrchestratorPool {
     }
     if (changes.prd && typeof (changes.prd as Record<string, unknown>).enabled === 'boolean') {
       this.settingsService.setPrd((changes.prd as Record<string, unknown>).enabled as boolean);
-    }
-    if (changes.review && typeof (changes.review as Record<string, unknown>).enabled === 'boolean') {
-      this.settingsService.setReview((changes.review as Record<string, unknown>).enabled as boolean);
     }
     if (changes.verification && typeof (changes.verification as Record<string, unknown>).enabled === 'boolean') {
       this.settingsService.setVerification((changes.verification as Record<string, unknown>).enabled as boolean);

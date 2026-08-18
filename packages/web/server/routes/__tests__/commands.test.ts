@@ -8,7 +8,6 @@ function fakePool(initialSettings?: Record<string, unknown>): OrchestratorPool {
     grillMe: { enabled: false },
     tdd: { enabled: true },
     prd: { enabled: false },
-    review: { enabled: false },
     verification: { enabled: false },
   };
   const pool = {
@@ -45,14 +44,13 @@ describe('GET /api/commands', () => {
     }
   });
 
-  it('includes grill-me, tdd, prd, review, and verify commands', async () => {
+  it('includes grill-me, tdd, prd, and verify commands', async () => {
     const res = await app.request('/api/commands', { method: 'GET' });
     const body = (await res.json()) as { commands: Array<{ name: string }> };
     const names = body.commands.map((c: { name: string }) => c.name);
     expect(names).toContain('grill-me');
     expect(names).toContain('tdd');
     expect(names).toContain('prd');
-    expect(names).toContain('review');
     expect(names).toContain('verify');
   });
 });
@@ -108,22 +106,6 @@ describe('POST /api/commands/:name', () => {
     expect(body.settings.grillMe.enabled).toBe(false);
   });
 
-  it('enables review via command', async () => {
-    const res = await app.request('/api/commands/review', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ args: { action: 'on' } }),
-    });
-
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: boolean; settings: { review: { enabled: boolean } } };
-    expect(body.ok).toBe(true);
-    expect(body.settings.review.enabled).toBe(true);
-    expect(pool.updateSettings).toHaveBeenCalledWith({ review: { enabled: true } });
-  });
-
-  // 'verify' was once a legacy alias for review; it now toggles the
-  // evidence-based verification mode and must NOT touch the review setting.
   it('enables verification via the verify command', async () => {
     const res = await app.request('/api/commands/verify', {
       method: 'POST',
@@ -132,7 +114,6 @@ describe('POST /api/commands/:name', () => {
     });
     expect(res.status).toBe(200);
     expect(pool.updateSettings).toHaveBeenCalledWith({ verification: { enabled: true } });
-    expect(pool.updateSettings).not.toHaveBeenCalledWith({ review: { enabled: true } });
   });
 
   it('disables verification via the verify command', async () => {
@@ -143,19 +124,6 @@ describe('POST /api/commands/:name', () => {
     });
     expect(res.status).toBe(200);
     expect(pool.updateSettings).toHaveBeenCalledWith({ verification: { enabled: false } });
-  });
-
-  it('disables review via command', async () => {
-    const res = await app.request('/api/commands/review', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ args: { action: 'off' } }),
-    });
-
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { settings: { review: { enabled: boolean } } };
-    expect(body.settings.review.enabled).toBe(false);
-    expect(pool.updateSettings).toHaveBeenCalledWith({ review: { enabled: false } });
   });
 
   it('returns 404 for unknown command', async () => {

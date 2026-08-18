@@ -54,7 +54,6 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'grill-me', usage: '/grill-me [on|off]', description: 'Grill-Me challenge mode — the planner interrogates the goal', category: 'skills' },
   { name: 'tdd', usage: '/tdd [on|off]', description: 'Test-Driven Development mode', category: 'skills' },
   { name: 'prd', usage: '/prd [on|off]', description: 'PRD mode — write a PRD before the plan', category: 'skills' },
-  { name: 'review', usage: '/review [on|off]', description: 'Review mode — final opinion-review task with human sign-off', category: 'skills' },
   { name: 'verify', usage: '/verify [on|off]', description: 'Verification mode — final evidence-based task that runs the suite', category: 'skills' },
   { name: 'research-subagents', usage: '/research-subagents [on|off]', description: 'Parallel read-only research subagents during planning', category: 'skills' },
 

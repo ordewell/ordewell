@@ -77,18 +77,15 @@ function buildModeExamplesForRunners(runners: RunnerId[]): string {
 }
 
 /**
- * Verification mode (evidence-based, AFK) is the counterpart to review mode
- * (opinion-based, HITL): a final task whose verdict comes from running the
- * suite, closing the "every task passed but the feature is short" gap that
- * per-task exit codes cannot see.
+ * Verification mode (evidence-based, AFK): a final task whose verdict comes
+ * from running the suite, closing the "every task passed but the feature is
+ * short" gap that per-task exit codes cannot see.
  */
-function verificationModeBlock(reviewAlsoEnabled = false): string {
+function verificationModeBlock(): string {
   return [
     '',
     'VERIFICATION MODE:',
-    reviewAlsoEnabled
-      ? 'Add a FINAL verification task immediately before the review task. The review task keeps the highest order number and must list the verification task among its dependencies.'
-      : 'Add a FINAL verification task to the end of the plan (highest order number).',
+    'Add a FINAL verification task to the end of the plan (highest order number).',
     'This task closes the gap between "every task finished" and "the feature is correct": tasks executed in isolated sessions can each pass while the integrated feature is still short. Its outcome must come from commands and exit codes, never from judgement.',
     'This task must:',
     '- Have type "ai" and autonomy "AFK" — it needs no human input',
@@ -151,7 +148,6 @@ export function buildConversationSystemPrompt(
   autonomousDefault = true,
   grillMeEnabled = false,
   prdEnabled = false,
-  reviewEnabled = false,
   verificationEnabled = false,
   /** Harness planner (ADR-0009): the agent owns its own tools and research budget. */
   harnessMode = false,
@@ -188,40 +184,12 @@ export function buildConversationSystemPrompt(
     'Do NOT emit the full PRD before the user agrees to the preview. Do NOT emit task plan JSON before the PRD is agreed and the outline is confirmed.',
   ].join('\n') : '';
 
-  const reviewBlock = reviewEnabled ? reviewModeBlock() : '';
-  const verificationBlock = verificationEnabled ? verificationModeBlock(reviewEnabled) : '';
+  const verificationBlock = verificationEnabled ? verificationModeBlock() : '';
 
   return buildConversationBody(
     goal, context, modelsJson, runners, modeGuide, modeExamples, harnessMode,
-    grillMeBlock, prdBlock, reviewBlock, verificationBlock,
+    grillMeBlock, prdBlock, verificationBlock,
   );
-}
-
-/**
- * The review-mode instruction. Structural rather than conversational — it only
- * appends a task — so both the conversation loop and the one-shot planners emit
- * it; keeping one copy is what stopped them diverging.
- */
-function reviewModeBlock(): string {
-  return [
-    '',
-    'REVIEW MODE:',
-    'Add a FINAL review task to the end of the plan (highest order number).',
-    'This task must:',
-    '- Have type "ai" and use the STRONGEST available model',
-    '- Have dependencies on ALL other AI/user tasks in the plan',
-    '- Be assigned appropriately as HITL (human review) since the results need human sign-off',
-    '- Its prompt should instruct the agent to:',
-    '  * Review every completed task\'s outputs and verify the original goal was met',
-    '  * Check that each task delivers what its description promised',
-    '  * Review the work on two axes, reported SEPARATELY so one cannot mask the other:',
-    '    - SPEC axis: if a PRD exists for this plan (`.scratch/<slug>/PRD.md`), verify against it: (a) requirements asked for but missing or partial; (b) behaviour delivered that the PRD never asked for (scope creep); (c) requirements that look implemented but wrongly. Quote the PRD line for each finding. With no PRD, review against the original goal.',
-    '    - STANDARDS axis: check the diff against the repo\'s documented coding standards (CONTRIBUTING.md, CLAUDE.md, etc.) plus this smell baseline: Mysterious Name (rename), Duplicated Code (extract shared shape), Feature Envy (move method to the data), Data Clumps (bundle into a type), Primitive Obsession (give the concept a type), Repeated Switches (polymorphism or shared map), Shotgun Surgery (gather into one module), Divergent Change (split by reason to change), Speculative Generality (delete it), Message Chains (hide the walk), Middle Man (call the target direct), Refused Bequest (composition over inheritance). Smell findings are always judgement calls, never hard failures; documented repo standards override the baseline; skip anything tooling already enforces.',
-    '  * Produce a structured review report listing what was checked and whether each check passed',
-    '  * Flag any gaps, bugs, or incomplete work',
-    '  * Output a final PASS/FAIL conclusion with evidence (standards-axis judgement calls alone must not fail the verification)',
-    '- Use the same runner as the other tasks',
-  ].join('\n');
 }
 
 function buildConversationBody(
@@ -234,7 +202,6 @@ function buildConversationBody(
   harnessMode: boolean,
   grillMeBlock: string,
   prdBlock: string,
-  reviewBlock: string,
   verificationBlock: string,
 ): string {
   return [
@@ -249,7 +216,6 @@ function buildConversationBody(
     researchPhaseBlock(harnessMode),
     grillMeBlock,
     prdBlock,
-    reviewBlock,
     verificationBlock,
     '',
     'OUTLINE PHASE:',
@@ -438,7 +404,6 @@ function getPlanTemplate(): string {
     '',
     'TASK MODE:',
     '{{MODE_GUIDE}}',
-    '{{REVIEW_BLOCK}}',
     '{{VERIFICATION_BLOCK}}',
     '',
     'CONTEXT:',
@@ -493,7 +458,7 @@ function buildPlanPromptBase(
 ): string {
   // Scoping here, once, is what keeps a one-shot prompt honest: grill-me and
   // PRD interview the user, and this path has told the model there is nobody
-  // to ask. Review is structural, so it belongs.
+  // to ask. Verification is structural, so it belongs.
   const scoped = modesFor('one-shot', modes);
   const { autonomousDefault } = scoped;
   const template = getPlanTemplate();
@@ -516,8 +481,7 @@ function buildPlanPromptBase(
     .replace('{{RUNNER_CHOICES}}', runners.join('|'))
     .replace('{{RUNNER_INSTRUCTION}}', runnerInstruction(runners))
     .replace('{{MODE_GUIDE}}', modeGuide)
-    .replace('{{REVIEW_BLOCK}}', scoped.review ? `\n${reviewModeBlock()}\n` : '')
-    .replace('{{VERIFICATION_BLOCK}}', scoped.verification ? `\n${verificationModeBlock(scoped.review)}\n` : '')
+    .replace('{{VERIFICATION_BLOCK}}', scoped.verification ? `\n${verificationModeBlock()}\n` : '')
     .replace('{{MODE_EXAMPLES}}', modeExamples)
     .replace('{{CONTEXT}}', context || '(no additional context)')
     .replace('{{RESEARCH_RESULTS}}', researchResults ? `\n\nRESEARCH FINDINGS:\n${researchResults}` : '')

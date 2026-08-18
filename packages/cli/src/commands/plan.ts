@@ -226,7 +226,7 @@ export async function handlePlan(
         api.startConversation(sessionId, goal, runners, workspace),
       );
 
-      // Grill-me / PRD / review turns land here: the planner asked something
+      // Grill-me / PRD / verify turns land here: the planner asked something
       // instead of committing, so answer it and hand the reply back.
       while (!hasCommittedPlan(plan)) {
         console.log(`\n${lastPlannerMessage(plan)}\n`);

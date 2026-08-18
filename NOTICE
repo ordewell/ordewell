@@ -39,8 +39,8 @@ the answer is usually yes.
 THIRD-PARTY ATTRIBUTION
 --------------------------------------------------------------------------------
 
-The deep-interview planning workflows (`grill-me`, PRD drafting, TDD task
-augmentation, and review mode) are adapted from Matt Pocock's skills
+The deep-interview planning workflows (`grill-me`, PRD drafting, and TDD task
+augmentation) are adapted from Matt Pocock's skills
 (https://github.com/mattpocock/skills), licensed MIT, and rebuilt as prompt
 blocks inside Ordewell's planner and runner prompts. The MIT licence requires
 its notice to travel with derivative works, so it is reproduced in full here:

@@ -32,16 +32,15 @@ describe('model allowlist wiring', () => {
   });
 
   it('generatePlan carries every mode toggle the one-shot path honours', async () => {
-    // The defect: this path destructured verification and researchSubagents and
-    // forgot review, so `ordewell plan --no-chat` and the web plan endpoint
-    // planned without a review task while every surface showed review as ON.
+    // The defect: this path used to destructure only some of the toggles and
+    // forget others, so `ordewell plan --no-chat` and the web plan endpoint
+    // planned without a toggle's task while every surface showed it as ON.
     const planner = { generate: vi.fn().mockResolvedValue(smallPlan()) };
     const session = makeSession({
       settings: () => ({
         tddEnabled: false,
         grillMeEnabled: true,
         prdEnabled: true,
-        reviewEnabled: true,
         verificationEnabled: true,
         researchSubagentsEnabled: true,
       }),
@@ -52,7 +51,7 @@ describe('model allowlist wiring', () => {
 
     expect(planner.generate).toHaveBeenCalledWith(
       expect.objectContaining({
-        modes: expect.objectContaining({ review: true, verification: true, researchSubagents: true }),
+        modes: expect.objectContaining({ verification: true, researchSubagents: true }),
       }),
     );
   });

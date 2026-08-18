@@ -26,7 +26,6 @@ export interface ConversationRequest {
   autonomousDefault?: boolean;
   grillMeEnabled?: boolean;
   prdEnabled?: boolean;
-  reviewEnabled?: boolean;
   verificationEnabled?: boolean;
   /** Declare the spawn_research_agent tool to the planner (issue #34, default off). */
   researchSubagentsEnabled?: boolean;
