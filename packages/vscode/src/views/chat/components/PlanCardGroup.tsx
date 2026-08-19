@@ -17,6 +17,8 @@ interface PlanCardGroupProps {
   runnerLabels?: Record<string, string>;
   /** Tail of each running task's runner output, keyed by task id. */
   taskOutput?: Record<string, string>;
+  /** Advisory silence timestamp per task id; null/absent means not stalled. */
+  taskIdle?: Record<string, string | null>;
   onRunnerChange?: (taskId: string, runner: string) => void;
   onDependenciesChange?: (taskId: string, dependencies: string[]) => void;
   onAddTask?: (draft: TaskDraft) => void;
@@ -46,6 +48,7 @@ export default function PlanCardGroup({
   isExecuting,
   runnerLabels: _runnerLabels,
   taskOutput,
+  taskIdle,
   onRunnerChange,
   onDependenciesChange,
   onAddTask,
@@ -210,6 +213,7 @@ export default function PlanCardGroup({
                 taskOrderMap={taskOrderMap}
                 dependentCount={dependentCountMap.get(task.id) ?? 0}
                 output={taskOutput?.[task.id]}
+                idleSince={taskIdle?.[task.id] ?? null}
                 siblings={sorted}
                 onDependenciesChange={onDependenciesChange}
                 onRunnerChange={onRunnerChange}

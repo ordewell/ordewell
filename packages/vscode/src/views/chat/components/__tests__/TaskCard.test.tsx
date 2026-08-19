@@ -188,3 +188,57 @@ describe('TaskCard — runner output', () => {
     expect(document.querySelector('.task-output-peek')).toBeNull();
   });
 });
+
+describe('TaskCard — Stalled state', () => {
+  it('renders Stalled instead of Running when idleSince is set on an in_progress task', () => {
+    render(
+      <TaskCard
+        task={makeTask({ status: 'in_progress' })}
+        models={emptyModels}
+        isExecuting
+        idleSince="2026-08-18T00:00:00.000Z"
+      />,
+    );
+
+    expect(screen.getByText('Stalled')).toBeTruthy();
+    expect(screen.queryByText('Running')).toBeNull();
+    expect(document.querySelector('.task-status-dot.status-stalled')).toBeTruthy();
+  });
+
+  it('renders the normal Running state when idleSince is absent', () => {
+    render(
+      <TaskCard
+        task={makeTask({ status: 'in_progress' })}
+        models={emptyModels}
+        isExecuting
+      />,
+    );
+
+    expect(screen.getByText('Running')).toBeTruthy();
+    expect(screen.queryByText('Stalled')).toBeNull();
+  });
+
+  it('reverts to Running the moment idleSince clears', () => {
+    const { rerender } = render(
+      <TaskCard
+        task={makeTask({ status: 'in_progress' })}
+        models={emptyModels}
+        isExecuting
+        idleSince="2026-08-18T00:00:00.000Z"
+      />,
+    );
+    expect(screen.getByText('Stalled')).toBeTruthy();
+
+    rerender(
+      <TaskCard
+        task={makeTask({ status: 'in_progress' })}
+        models={emptyModels}
+        isExecuting
+        idleSince={null}
+      />,
+    );
+
+    expect(screen.getByText('Running')).toBeTruthy();
+    expect(screen.queryByText('Stalled')).toBeNull();
+  });
+});

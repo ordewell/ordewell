@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, type Mock } from 'vitest';
 import { ConversationQueue, runEffect, type EffectDeps, type OrdewellApi } from '../effects';
-import type { Action, Effect } from '../reducer';
+import { initialState, reduce, type Action } from '../reducer';
+import type { Effect } from '../reducer';
+import type { TuiState } from '../state';
 
 function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {}) {
   const actions: Action[] = [];
@@ -207,6 +209,91 @@ describe('planning', () => {
     ]);
   });
 
+  it('debounces plan_token deltas into a single plannerToken dispatch', async () => {
+    vi.useFakeTimers();
+    try {
+      let onEvent: (e: any) => void = () => {};
+      let resolveCall: () => void = () => {};
+      const gate = new Promise<void>((resolve) => { resolveCall = resolve; });
+      const h = harness({
+        streamPlanning: vi.fn().mockImplementation((_id: string, cb: (e: any) => void) => {
+          onEvent = cb;
+          return { close: vi.fn() };
+        }),
+        startConversation: vi.fn().mockImplementation(async () => {
+          onEvent({ type: 'plan_token', token: 'Hel' });
+          onEvent({ type: 'plan_token', token: 'lo' });
+          await gate;
+          return { tasks: [] };
+        }),
+      });
+
+      const pending = runEffect({ type: 'startConversation', goal: 'x' }, h.deps);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(h.actions.filter((a) => a.type === 'plannerToken')).toEqual([
+        { type: 'plannerToken', text: 'Hello', sessionId: 'session-new' },
+      ]);
+
+      resolveCall();
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('flushes a pending token burst before a research_step lands, preserving order', async () => {
+    let onEvent: (e: any) => void = () => {};
+    const h = harness({
+      streamPlanning: vi.fn().mockImplementation((_id: string, cb: (e: any) => void) => {
+        onEvent = cb;
+        return { close: vi.fn() };
+      }),
+      startConversation: vi.fn().mockImplementation(async () => {
+        onEvent({ type: 'plan_token', token: 'Check' });
+        onEvent({ type: 'plan_token', token: 'ing' });
+        onEvent({ type: 'research_step', tool: 'grep', args: '{"pattern":"auth"}' });
+        return { tasks: [] };
+      }),
+    });
+
+    await runEffect({ type: 'startConversation', goal: 'x' }, h.deps);
+
+    const relevant = h.actions.filter((a) => a.type === 'plannerToken' || a.type === 'researchStep');
+    expect(relevant.map((a) => a.type)).toEqual(['plannerToken', 'researchStep']);
+    expect(relevant[0]).toMatchObject({ type: 'plannerToken', text: 'Checking', sessionId: 'session-new' });
+  });
+
+  it('a full turn — token burst, a research step, another burst, then the final message — replays through the reducer in arrival order', async () => {
+    let onEvent: (e: any) => void = () => {};
+    const h = harness({
+      streamPlanning: vi.fn().mockImplementation((_id: string, cb: (e: any) => void) => {
+        onEvent = cb;
+        return { close: vi.fn() };
+      }),
+      startConversation: vi.fn().mockImplementation(async () => {
+        onEvent({ type: 'plan_token', token: 'Checking' });
+        onEvent({ type: 'plan_token', token: ' the auth module' });
+        onEvent({ type: 'research_step', tool: 'grep', args: '{"pattern":"auth"}', toolCallId: 'tc-1' });
+        onEvent({ type: 'research_step_done', toolCallId: 'tc-1', step: { tool: 'grep', args: '{"pattern":"auth"}', toolCallId: 'tc-1', outcome: 'ok', result: '3 matches' } });
+        onEvent({ type: 'plan_token', token: 'Found it.' });
+        onEvent({ type: 'planner_message', content: 'Found it in middleware/auth.ts.' });
+        return { tasks: [], conversationHistory: [] };
+      }),
+    });
+
+    await runEffect({ type: 'startConversation', goal: 'x' }, h.deps);
+
+    let state: TuiState = { ...initialState(), sessionId: 'session-new' };
+    for (const action of h.actions) {
+      ({ state } = reduce(state, action));
+    }
+
+    expect(state.messages.map((m) => m.role)).toEqual(['assistant', 'research', 'assistant']);
+    expect(state.messages[0]).toMatchObject({ content: 'Checking the auth module', streaming: true });
+    expect(state.messages[2]).toMatchObject({ content: 'Found it in middleware/auth.ts.' });
+    expect(state.messages[2].streaming).toBeFalsy();
+  });
+
   it('notes a silent approval decision instead of leaving it invisible', async () => {
     let onEvent: (e: any) => void = () => {};
     const h = harness({
@@ -302,7 +389,11 @@ describe('execution', () => {
 
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
-    expect(h.actions).toContainEqual({ type: 'tasksStatus', updates: { a: 'in_progress' }, sessionId: 's1' });
+    expect(h.actions).toContainEqual({
+      type: 'tasksStatus',
+      updates: { a: { status: 'in_progress', idleSince: null } },
+      sessionId: 's1',
+    });
   });
 
   it('starts the plan and follows the status stream', async () => {
@@ -332,7 +423,11 @@ describe('execution', () => {
     });
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
-    expect(h.actions).toContainEqual({ type: 'tasksStatus', updates: { a: 'completed', b: 'running' }, sessionId: 's1' });
+    expect(h.actions).toContainEqual({
+      type: 'tasksStatus',
+      updates: { a: { status: 'completed', idleSince: null }, b: { status: 'running', idleSince: null } },
+      sessionId: 's1',
+    });
   });
 
   it('drains a queued edit on queue_ready so dependents resume fanning out', async () => {
@@ -493,7 +588,11 @@ describe('task control', () => {
     await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'force-start', watch: true }, h.deps);
 
     expect(order).toEqual(['streamExecution', 'taskControl']);
-    expect(h.actions).toContainEqual({ type: 'tasksStatus', updates: { t1: 'in_progress' }, sessionId: 's1' });
+    expect(h.actions).toContainEqual({
+      type: 'tasksStatus',
+      updates: { t1: { status: 'in_progress', idleSince: null } },
+      sessionId: 's1',
+    });
   });
 
   it('leaves the stream alone for an action that spawns nothing', async () => {

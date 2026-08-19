@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { VerdictEngine } from '../VerdictEngine';
 import { composeAugmentedPrompt } from '../promptAugment';
 import { createTask, type Task } from '../../models/Task';
@@ -401,6 +401,94 @@ describe('VerdictEngine', () => {
 
       expect(verdicts).toHaveLength(1);
       expect(verdicts[0]).toBe('pass');
+    });
+  });
+
+  describe('idle detection', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('sets idleSince after 60s of no output on a running task', () => {
+      const engine = new VerdictEngine();
+      const idleEvents: { taskId: string; idleSince: string | null }[] = [];
+      engine.onIdleChange((taskId, idleSince) => idleEvents.push({ taskId, idleSince }));
+      const session = fakeSession();
+
+      engine.watch(buildTask(), session);
+      session.emit('working...');
+      expect(engine.getIdleSince('t1')).toBeNull();
+
+      vi.advanceTimersByTime(60_000);
+
+      expect(engine.getIdleSince('t1')).not.toBeNull();
+      expect(idleEvents).toHaveLength(1);
+      expect(idleEvents[0]).toEqual({ taskId: 't1', idleSince: engine.getIdleSince('t1') });
+    });
+
+    it('clears idleSince when output resumes', () => {
+      const engine = new VerdictEngine();
+      const idleEvents: (string | null)[] = [];
+      engine.onIdleChange((_id, idleSince) => idleEvents.push(idleSince));
+      const session = fakeSession();
+
+      engine.watch(buildTask(), session);
+      session.emit('working...');
+      vi.advanceTimersByTime(60_000);
+      expect(engine.getIdleSince('t1')).not.toBeNull();
+
+      session.emit('more output');
+
+      expect(engine.getIdleSince('t1')).toBeNull();
+      expect(idleEvents[idleEvents.length - 1]).toBeNull();
+    });
+
+    it('leaves no stale timer firing after a retry (clear) once idleSince was set', () => {
+      const engine = new VerdictEngine();
+      const idleEvents: (string | null)[] = [];
+      engine.onIdleChange((_id, idleSince) => idleEvents.push(idleSince));
+      const session = fakeSession();
+      const task = buildTask();
+
+      engine.watch(task, session);
+      session.emit('working...');
+      vi.advanceTimersByTime(60_000);
+      expect(engine.getIdleSince('t1')).not.toBeNull();
+
+      engine.clear(task); // simulates retry
+      expect(engine.getIdleSince('t1')).toBeNull();
+      idleEvents.length = 0; // drop the teardown transition recorded by clear()
+
+      vi.advanceTimersByTime(120_000); // well past another 60s window
+
+      expect(engine.getIdleSince('t1')).toBeNull();
+      expect(idleEvents).toHaveLength(0);
+    });
+
+    it('leaves no stale timer firing after a stop (reset) once idleSince was set', () => {
+      const engine = new VerdictEngine();
+      const idleEvents: (string | null)[] = [];
+      engine.onIdleChange((_id, idleSince) => idleEvents.push(idleSince));
+      const session = fakeSession();
+      const task = buildTask();
+
+      engine.watch(task, session);
+      session.emit('working...');
+      vi.advanceTimersByTime(60_000);
+      expect(engine.getIdleSince('t1')).not.toBeNull();
+
+      engine.reset(); // simulates stop
+      expect(engine.getIdleSince('t1')).toBeNull();
+      idleEvents.length = 0;
+
+      vi.advanceTimersByTime(120_000);
+
+      expect(engine.getIdleSince('t1')).toBeNull();
+      expect(idleEvents).toHaveLength(0);
     });
   });
 

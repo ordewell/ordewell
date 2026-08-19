@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createTask, type LegacyPlanState } from '../../models/Task';
 import * as sessionStore from '../../utils/sessionStore';
 import { makeSession, FakeTerminalSession } from './sessionTestKit';
@@ -982,5 +982,60 @@ describe('continueConversation — planner config drift mid-conversation', () =>
     await session.continueConversation('next');
 
     expect(continueConversation).toHaveBeenCalled();
+  });
+});
+
+describe('idleSince on the status_update broadcast', () => {
+  function onePlan(): LegacyPlanState {
+    return {
+      tasks: [createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it' })],
+      generatedAt: new Date().toISOString(),
+      status: 'approved',
+      runners: ['claude-code'],
+      lastUpdated: new Date().toISOString(),
+    };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('round-trips idleSince from the verifier through SerializedTaskStatus on status_update, and clears it on resume', async () => {
+    const fakeSession = new FakeTerminalSession('s1', 't1');
+    const runner = {
+      spawn: vi.fn().mockResolvedValue(fakeSession),
+      stop: vi.fn(),
+      stopAll: vi.fn(),
+      activeCount: 0,
+    } as unknown as ITerminalRunner;
+
+    const broadcast = vi.fn();
+    const session = makeSession({ broadcast, runner });
+    session.loadPlan(onePlan(), 'Test', '/repo');
+
+    vi.useFakeTimers();
+    await session.startExecution();
+    await session.approveReview();
+    fakeSession.emitOutput('working...');
+    broadcast.mockClear();
+
+    vi.advanceTimersByTime(60_000);
+
+    const idleUpdates = broadcast.mock.calls
+      .map((c: unknown[]) => c[0] as { type: string; tasks?: Array<{ id: string; idleSince?: string | null }> })
+      .filter((m) => m.type === 'status_update');
+    expect(idleUpdates.length).toBeGreaterThan(0);
+    const lastIdle = idleUpdates[idleUpdates.length - 1].tasks!.find((t) => t.id === 't1');
+    expect(lastIdle?.idleSince).toEqual(expect.any(String));
+
+    broadcast.mockClear();
+    fakeSession.emitOutput('more output');
+
+    const resumeUpdates = broadcast.mock.calls
+      .map((c: unknown[]) => c[0] as { type: string; tasks?: Array<{ id: string; idleSince?: string | null }> })
+      .filter((m) => m.type === 'status_update');
+    expect(resumeUpdates.length).toBeGreaterThan(0);
+    const lastResumed = resumeUpdates[resumeUpdates.length - 1].tasks!.find((t) => t.id === 't1');
+    expect(lastResumed?.idleSince).toBeNull();
   });
 });

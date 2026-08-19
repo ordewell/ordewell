@@ -3,6 +3,8 @@ import type { ITerminalSession } from '../interfaces/ITerminalRunner';
 
 export type VerdictListener = (taskId: string, verdict: Verdict, output: string) => void;
 export type CheckpointListener = (taskId: string, summary: string) => void;
+/** Fires on every idleSince transition (null→timestamp on silence, timestamp→null on resume/teardown). */
+export type IdleListener = (taskId: string, idleSince: string | null) => void;
 
 const CHECKPOINT_RE = /<<<ORDEWELL_CHECKPOINT:\s*(.*?)>>>/gs;
 
@@ -180,6 +182,9 @@ export function renderTerminalOutput(raw: string): string {
  *  recent, and re-flattening an unbounded buffer on every write is O(n²). */
 const MARKER_SCAN_TAIL = 16384;
 
+/** No output for this long marks a running task idle (advisory, UI-only). */
+const IDLE_TIMEOUT_MS = 60_000;
+
 export class VerdictEngine {
   private markerSeen = new Set<string>();
   private buffers = new Map<string, string>();
@@ -187,6 +192,7 @@ export class VerdictEngine {
   private pausedSessions = new Map<string, ITerminalSession>();
   private listeners: VerdictListener[] = [];
   private checkpointListeners: CheckpointListener[] = [];
+  private idleListeners: IdleListener[] = [];
   /**
    * Per-task generation counter. Incremented on every watch() and clear().
    * Stale callbacks (from a prior session whose generation doesn't match
@@ -194,6 +200,8 @@ export class VerdictEngine {
    * wrong session.
    */
   private generations = new Map<string, number>();
+  private idleTimers = new Map<string, NodeJS.Timeout>();
+  private idleSince = new Map<string, string | null>();
 
   onVerdict(listener: VerdictListener): void {
     this.listeners.push(listener);
@@ -201,6 +209,43 @@ export class VerdictEngine {
 
   onCheckpoint(listener: CheckpointListener): void {
     this.checkpointListeners.push(listener);
+  }
+
+  onIdleChange(listener: IdleListener): void {
+    this.idleListeners.push(listener);
+  }
+
+  /** Advisory silence timestamp for a task, or null if it isn't idle. */
+  getIdleSince(taskId: string): string | null {
+    return this.idleSince.get(taskId) ?? null;
+  }
+
+  /** Restart the silence timer on fresh output; broadcasts the null transition if it was idle. */
+  private touchIdle(taskId: string, gen: number): void {
+    const existing = this.idleTimers.get(taskId);
+    if (existing) clearTimeout(existing);
+    if (this.idleSince.get(taskId)) {
+      this.idleSince.set(taskId, null);
+      for (const l of this.idleListeners) l(taskId, null);
+    }
+    this.idleTimers.set(taskId, setTimeout(() => {
+      if (this.generations.get(taskId) !== gen) return;
+      const now = new Date().toISOString();
+      this.idleSince.set(taskId, now);
+      for (const l of this.idleListeners) l(taskId, now);
+    }, IDLE_TIMEOUT_MS));
+  }
+
+  /** Tear down idle tracking for a task; broadcasts the null transition if it was idle. */
+  private clearIdle(taskId: string): void {
+    const timer = this.idleTimers.get(taskId);
+    if (timer) clearTimeout(timer);
+    this.idleTimers.delete(taskId);
+    const wasIdle = this.idleSince.get(taskId);
+    this.idleSince.delete(taskId);
+    if (wasIdle) {
+      for (const l of this.idleListeners) l(taskId, null);
+    }
   }
 
   approveCheckpoint(taskId: string): void {
@@ -233,6 +278,7 @@ export class VerdictEngine {
     this.checkpointCounts.set(task.id, 0);
     session.onOutput((text: string) => {
       if (this.generations.get(task.id) !== gen) return;
+      this.touchIdle(task.id, gen);
       if (this.markerSeen.has(task.id)) return;
       const buf = (this.buffers.get(task.id) ?? '') + text;
       this.buffers.set(task.id, buf);
@@ -249,6 +295,7 @@ export class VerdictEngine {
         this.buffers.delete(task.id);
         this.checkpointCounts.delete(task.id);
         this.pausedSessions.delete(task.id);
+        this.clearIdle(task.id);
         this.generations.set(task.id, gen + 1);
         const verdict = this.decide(task, 0);
         for (const l of this.listeners) l(task.id, verdict, output);
@@ -276,6 +323,7 @@ export class VerdictEngine {
       this.buffers.delete(task.id);
       this.checkpointCounts.delete(task.id);
       this.pausedSessions.delete(task.id);
+      this.clearIdle(task.id);
       const verdict = this.decide(task, exitCode);
       for (const l of this.listeners) l(task.id, verdict, output);
     });
@@ -287,6 +335,7 @@ export class VerdictEngine {
     this.buffers.delete(task.id);
     this.checkpointCounts.delete(task.id);
     this.pausedSessions.delete(task.id);
+    this.clearIdle(task.id);
     this.generations.set(task.id, (this.generations.get(task.id) ?? 0) + 1);
     return {
       outcome: 'pass',
@@ -309,6 +358,7 @@ export class VerdictEngine {
     this.buffers.delete(task.id);
     this.checkpointCounts.delete(task.id);
     this.pausedSessions.delete(task.id);
+    this.clearIdle(task.id);
     this.generations.set(task.id, (this.generations.get(task.id) ?? 0) + 1);
   }
 
@@ -318,6 +368,9 @@ export class VerdictEngine {
     this.buffers.clear();
     this.checkpointCounts.clear();
     this.pausedSessions.clear();
+    for (const timer of this.idleTimers.values()) clearTimeout(timer);
+    this.idleTimers.clear();
+    this.idleSince.clear();
     this.generations.clear();
   }
 

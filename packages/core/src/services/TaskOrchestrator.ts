@@ -72,6 +72,14 @@ export class TaskOrchestrator {
       this.store.markAwaitingUser(taskId);
       this.emit('onCheckpoint', { taskId, taskTitle: task.title, summary });
     });
+    // idleSince is advisory UI state, not a store mutation — broadcast it
+    // through the same onTaskChanged seam without touching PlanStore.
+    this.verifier.onIdleChange(() => this.emit('onTaskChanged'));
+  }
+
+  /** Advisory silence timestamp for a task's live runner, or null if not idle. */
+  getIdleSince(taskId: string): string | null {
+    return this.verifier.getIdleSince(taskId);
   }
 
   get storeInstance(): PlanStore { return this.store; }

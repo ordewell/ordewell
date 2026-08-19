@@ -548,7 +548,34 @@ async function converse(deps: EffectDeps, sessionId: string, call: () => Promise
   // case of two subscriptions to one channel during a run.
   let streamed: string | null = null;
 
+  // Rapid plan_token deltas are coalesced into one dispatch instead of one per
+  // token — see layout.ts's array-identity memoization for the same reasoning.
+  // Flushed immediately whenever a different event type lands in the same
+  // callback, so dispatch order stays exactly chronological relative to those.
+  const TOKEN_DEBOUNCE_MS = 75;
+  let tokenBuffer = '';
+  let tokenTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const flushTokens = (): void => {
+    if (tokenTimer !== null) {
+      clearTimeout(tokenTimer);
+      tokenTimer = null;
+    }
+    if (!tokenBuffer) return;
+    const text = tokenBuffer;
+    tokenBuffer = '';
+    deps.dispatch({ type: 'plannerToken', text, sessionId });
+  };
+
   const stream = deps.api.streamPlanning(sessionId, (event) => {
+    if (event?.type === 'plan_token' && event.token) {
+      tokenBuffer += event.token;
+      if (tokenTimer === null) {
+        tokenTimer = setTimeout(flushTokens, TOKEN_DEBOUNCE_MS);
+      }
+      return;
+    }
+    flushTokens();
     if (event?.type === 'approval_request') {
       deps.dispatch({
         type: 'approvalRequested',
@@ -607,6 +634,7 @@ async function converse(deps: EffectDeps, sessionId: string, call: () => Promise
       deps.dispatch({ type: 'plannerMessage', content: question, sessionId });
     }
   } finally {
+    if (tokenTimer !== null) clearTimeout(tokenTimer);
     stream.close();
   }
 }
@@ -642,9 +670,9 @@ function lastAssistantMessage(plan: any): string | null {
 function onExecutionEvent(dispatch: (action: Action) => void, event: WsEvent, sessionId: string): void {
   switch (event?.type) {
     case 'status_update': {
-      const updates: Record<string, string> = {};
+      const updates: Record<string, { status: string; idleSince?: string | null }> = {};
       for (const task of event.tasks ?? []) {
-        updates[String(task.id)] = String(task.status);
+        updates[String(task.id)] = { status: String(task.status), idleSince: task.idleSince ?? null };
       }
       dispatch({ type: 'tasksStatus', updates, sessionId });
       return;

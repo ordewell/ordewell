@@ -317,7 +317,7 @@ export class Session {
       onTaskChanged: () => {
         if (!this.plan) return;
         const tasks = this.store.allTasks;
-        this.broadcast({ type: 'status_update', tasks: tasks.map(serializeTaskStatus) });
+        this.broadcast({ type: 'status_update', tasks: tasks.map((t) => serializeTaskStatus(t, this.orchestrator.getIdleSince(t.id))) });
       },
       onQueueReady: () => {
         this.broadcast({ type: 'queue_ready' });
@@ -335,7 +335,7 @@ export class Session {
       onTick: () => {
         if (!this.plan) return;
         const tasks = this.store.allTasks;
-        this.broadcast({ type: 'status_update', tasks: tasks.map(serializeTaskStatus) });
+        this.broadcast({ type: 'status_update', tasks: tasks.map((t) => serializeTaskStatus(t, this.orchestrator.getIdleSince(t.id))) });
       },
       onExecutionComplete: () => {
         if (!this.plan) return;

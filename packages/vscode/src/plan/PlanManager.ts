@@ -473,6 +473,9 @@ export function handleSessionMessage(
         : deps.session.status === 'completed'
           ? 'completed'
           : 'draft';
+      for (const task of msg.tasks) {
+        deps.chatProvider.sendTaskIdle(task.id, task.idleSince ?? null);
+      }
       deps.chatProvider.showPlan(plan);
       break;
     }

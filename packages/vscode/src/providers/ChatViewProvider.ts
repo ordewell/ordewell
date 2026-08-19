@@ -54,6 +54,7 @@ type ExtensionChatMessage =
   | { type: 'researchProgress'; step: ResearchProgress }
   | { type: 'executionStatus'; taskId: string; status: TaskStatus }
   | { type: 'taskOutput'; taskId: string; text: string }
+  | { type: 'taskIdle'; taskId: string; idleSince: string | null }
   | { type: 'queueStatus'; count: number }
   | { type: 'showError'; error: string }
   | { type: 'focusTask'; taskId: string }
@@ -114,6 +115,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   sendExecutionStatus(taskId: string, status: TaskStatus): void { this.postMessage({ type: 'executionStatus', taskId, status }); }
   /** Live runner output for one task; the webview keeps the tail and renders it in that task's card. */
   sendTaskOutput(taskId: string, text: string): void { this.postMessage({ type: 'taskOutput', taskId, text }); }
+  /** Advisory silence timestamp for one task; null clears the stalled indicator. */
+  sendTaskIdle(taskId: string, idleSince: string | null): void { this.postMessage({ type: 'taskIdle', taskId, idleSince }); }
   setModels(models: DiscoveredModel[]): void {
     this.postMessage({ type: 'setModels', models });
   }

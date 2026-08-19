@@ -63,13 +63,14 @@ export type Action =
   | { type: 'chatRestored'; history: ConversationMessage[]; sessionId?: string }
   | { type: 'planUpdated'; plan: unknown; sessionId?: string }
   | { type: 'plannerMessage'; content: string; sessionId?: string }
+  | { type: 'plannerToken'; text: string; sessionId?: string }
   | { type: 'researchStep'; summary: string; toolCallId?: string; sessionId?: string }
   | { type: 'researchStepDone'; summary: string; toolCallId?: string; outcome: ResearchStepOutcome; result: string; sessionId?: string }
   | { type: 'plannerThinking'; text: string; sessionId?: string }
   | { type: 'approvalRequested'; request: ApprovalRequestView; sessionId?: string }
   | { type: 'approvalSettled'; approvalId: string; sessionId?: string }
   | { type: 'taskStatus'; taskId: string; status: string; sessionId?: string }
-  | { type: 'tasksStatus'; updates: Record<string, string>; sessionId?: string }
+  | { type: 'tasksStatus'; updates: Record<string, { status: string; idleSince?: string | null }>; sessionId?: string }
   | { type: 'queueReady'; sessionId?: string }
   | { type: 'executionComplete'; summary?: { total: number; completed: number; failed: number }; stopped?: boolean; sessionId?: string }
   | { type: 'settingsLoaded'; settings: Record<string, unknown> }
@@ -93,11 +94,23 @@ function step(state: TuiState, effects: Effect[] = []): Step {
   return { state, effects };
 }
 
-function say(state: TuiState, role: MessageRole, content: string, research?: ChatMessage['research']): TuiState {
+function say(
+  state: TuiState,
+  role: MessageRole,
+  content: string,
+  research?: ChatMessage['research'],
+  extra?: Partial<Pick<ChatMessage, 'research' | 'streaming'>>,
+): TuiState {
   // The daemon, not just the keyboard, can hand us a literal tab (a planner
   // turn, a research summary) — see `sanitize` for why one left in breaks
   // the frame just as a pasted one would.
-  const message: ChatMessage = { role, content: sanitize(content), timestamp: new Date().toISOString(), ...(research ? { research } : {}) };
+  const message: ChatMessage = {
+    role,
+    content: sanitize(content),
+    timestamp: new Date().toISOString(),
+    ...(research ? { research } : {}),
+    ...extra,
+  };
   // A new turn snaps a scrolled-back transcript to the tail — following the
   // conversation beats preserving the reading position.
   return { ...state, messages: [...state.messages, message], scroll: 0 };
@@ -247,10 +260,30 @@ export function reduce(state: TuiState, action: Action): Step {
       // stores the sanitized form, so matching against the raw turn would
       // never dedup a repeat that carries a tab.
       const content = sanitize(action.content);
+      // A live `plan_token` stream left a partial bubble at the tail: settle it
+      // with the final text in place rather than appending a second entry.
+      const last = state.messages.at(-1);
+      if (last?.role === 'assistant' && last.streaming) {
+        const messages = [...state.messages];
+        messages[messages.length - 1] = { ...last, content, streaming: undefined };
+        return step({ ...settled, messages });
+      }
       // Already on screen: the same turn reached us over both the session
       // socket and the REST reply (see `converse`), so only the status settles.
       if (alreadySpoken(state.messages, content)) return step(settled);
       return step(say(settled, 'assistant', content));
+    }
+
+    case 'plannerToken': {
+      if (stale(state, action.sessionId)) return step(state);
+      const text = sanitize(action.text);
+      const last = state.messages.at(-1);
+      if (last?.role === 'assistant' && last.streaming) {
+        const messages = [...state.messages];
+        messages[messages.length - 1] = { ...last, content: last.content + text };
+        return step({ ...state, messages });
+      }
+      return step(say(state, 'assistant', text, undefined, { streaming: true }));
     }
 
     case 'researchStep': {
@@ -303,10 +336,12 @@ export function reduce(state: TuiState, action: Action): Step {
       const updates = action.updates;
       let changed = false;
       const tasks = state.tasks.map((t) => {
-        const status = updates[t.id];
-        if (status !== undefined && status !== t.status) {
+        const update = updates[t.id];
+        if (update === undefined) return t;
+        const idleSince = update.idleSince ?? null;
+        if (update.status !== t.status || idleSince !== (t.idleSince ?? null)) {
           changed = true;
-          return { ...t, status };
+          return { ...t, status: update.status, idleSince };
         }
         return t;
       });

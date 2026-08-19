@@ -30,6 +30,8 @@ interface TaskCardProps {
   isExecuting?: boolean;
   /** Tail of this task's live runner output, if any has arrived. */
   output?: string;
+  /** Advisory silence timestamp (VerdictEngine) — set while in_progress with no recent output. */
+  idleSince?: string | null;
   taskOrderMap?: Map<string, number>;
   dependentCount?: number;
   /** The task list this task belongs to — the dependency editor's candidate pool. */
@@ -57,20 +59,23 @@ const STATUS_CONFIG: Record<string, { label: string; cls: string }> = {
   pending: { label: 'To do', cls: 'status-pending' },
   approved: { label: 'To do', cls: 'status-pending' },
   awaiting_user: { label: 'Awaiting User', cls: 'status-blocked' },
+  stalled: { label: 'Stalled', cls: 'status-stalled' },
 };
 
 /** Minimal to-do / done indicator: empty ring → pulsing ring → filled check.
  *  The ring is a toggle: clicking an unfinished task marks it executed, clicking
  *  a done one takes it back to not-executed. */
-export function TaskCheck({ status, taskId, onMarkComplete, onMarkIncomplete }: { status: string; taskId?: string; onMarkComplete?: (taskId: string) => void; onMarkIncomplete?: (taskId: string) => void }) {
-  const state = status === 'completed' ? 'done' : status === 'in_progress' ? 'running' : 'todo';
+export function TaskCheck({ status, taskId, stalled, onMarkComplete, onMarkIncomplete }: { status: string; taskId?: string; stalled?: boolean; onMarkComplete?: (taskId: string) => void; onMarkIncomplete?: (taskId: string) => void }) {
+  const state = status === 'completed' ? 'done' : status === 'in_progress' ? (stalled ? 'stalled' : 'running') : 'todo';
   const toggle = state === 'done' ? onMarkIncomplete : onMarkComplete;
   const clickable = !!toggle && !!taskId;
   const title = state === 'done'
     ? (clickable ? 'Executed — click to mark not done' : 'Executed')
     : state === 'running'
       ? 'Running'
-      : (clickable ? 'Click to mark executed' : 'To do');
+      : state === 'stalled'
+        ? 'Stalled — no output recently'
+        : (clickable ? 'Click to mark executed' : 'To do');
   return (
     <span
       className={`task-check ${state} ${clickable ? 'clickable' : ''}`}
@@ -112,7 +117,7 @@ export function runnerOptionsFor(runners: RunnerOption[] | undefined, assignedRu
   return [...runners, { id: assignedRunner, displayName: assignedRunner }];
 }
 
-export default function TaskCard({ task, models, modes, runners, effectiveRunner, configuredProviders, modelApiMapping, isExecuting, output, taskOrderMap, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModeChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask }: TaskCardProps) {
+export default function TaskCard({ task, models, modes, runners, effectiveRunner, configuredProviders, modelApiMapping, isExecuting, output, idleSince, taskOrderMap, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModeChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask }: TaskCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<string | null>(null);
   const [editingDeps, setEditingDeps] = useState(false);
@@ -128,7 +133,10 @@ export default function TaskCard({ task, models, modes, runners, effectiveRunner
   }, [output, expanded]);
 
   const modelClass = task.assignedModel ? getModelClass(task.assignedModel.modelId) : '';
-  const status = STATUS_CONFIG[task.status] ?? STATUS_CONFIG.pending;
+  // Stalled overrides the spinning "Running" badge — same status, distinct
+  // visual, and reverts the instant idleSince clears on resumed output.
+  const isStalled = task.status === 'in_progress' && !!idleSince;
+  const status = isStalled ? STATUS_CONFIG.stalled : (STATUS_CONFIG[task.status] ?? STATUS_CONFIG.pending);
   const isUserTask = task.type === 'user';
   const activeModes = modes && modes.length > 0 ? modes : DEFAULT_MODES;
 
@@ -166,7 +174,7 @@ export default function TaskCard({ task, models, modes, runners, effectiveRunner
   return (
     <div className={`task-card task-${task.type} ${expanded ? 'expanded' : ''}`}>
       <div className="task-card-header" onClick={() => setExpanded(!expanded)}>
-        <TaskCheck status={task.status} taskId={task.id} onMarkComplete={onMarkComplete} onMarkIncomplete={onMarkIncomplete} />
+        <TaskCheck status={task.status} taskId={task.id} stalled={isStalled} onMarkComplete={onMarkComplete} onMarkIncomplete={onMarkIncomplete} />
         <span className="task-order">{task.order}</span>
         <span className={`task-type-badge ${task.type}`}>
           {isUserTask ? 'Manual' : 'AI'}

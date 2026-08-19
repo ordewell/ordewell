@@ -6,6 +6,8 @@ export type SerializedTaskStatus = {
   id: string;
   status: string;
   verdict: { outcome: 'pass' | 'fail'; reason: string; checks: Verdict['checks'] } | null;
+  /** Advisory silence timestamp from VerdictEngine — not part of task status semantics. */
+  idleSince?: string | null;
 };
 
 export type SerializedTask = {
@@ -102,13 +104,14 @@ export function serializeTask(t: Task): SerializedTask {
   };
 }
 
-export function serializeTaskStatus(t: Task): SerializedTaskStatus {
+export function serializeTaskStatus(t: Task, idleSince: string | null = null): SerializedTaskStatus {
   return {
     id: t.id,
     status: t.status,
     verdict: t.verdict
       ? { outcome: t.verdict.outcome, reason: t.verdict.reason, checks: t.verdict.checks || [] }
       : null,
+    idleSince,
   };
 }
 

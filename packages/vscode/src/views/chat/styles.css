@@ -2733,6 +2733,10 @@ body {
   background: var(--text-muted);
 }
 
+.task-status-dot.status-stalled {
+  background: var(--purple);
+}
+
 .task-status-badge {
   font-size: 10px;
   padding: 1px 6px;
@@ -2765,6 +2769,11 @@ body {
 .task-status-badge.status-pending {
   background: rgba(139, 148, 158, 0.1);
   color: var(--text-muted);
+}
+
+.task-status-badge.status-stalled {
+  background: var(--purple-subtle);
+  color: var(--purple);
 }
 
 /* ---- Execution Review ---- */
@@ -2809,6 +2818,12 @@ body {
 .task-check.running {
   border-color: var(--accent);
   animation: task-check-pulse 1.8s ease-in-out infinite;
+}
+
+/* No pulse: a stalled task is defined by the absence of fresh activity, so an
+   animated ring here would contradict the state it's signaling. */
+.task-check.stalled {
+  border-color: var(--purple);
 }
 
 .task-check.clickable {

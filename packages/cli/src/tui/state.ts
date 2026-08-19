@@ -21,6 +21,8 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
   research?: ResearchMeta;
+  /** Set on an assistant entry still being appended to by incoming `plan_token` deltas. */
+  streaming?: boolean;
 }
 
 export type RunStatus = 'idle' | 'planning' | 'researching' | 'executing';
@@ -33,6 +35,8 @@ export interface TaskView {
   prompt?: string;
   type: 'ai' | 'user';
   status: string;
+  /** Advisory silence timestamp from VerdictEngine — set while the task's runner has gone quiet. */
+  idleSince?: string | null;
   dependencies: string[];
   assignedRunner?: string;
   taskMode?: string;

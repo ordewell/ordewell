@@ -403,6 +403,9 @@ const STATUS_ICON: Record<string, string> = {
   pending: '·',
 };
 
+/** Static marker for a running task whose runner has gone quiet — distinct from both the busy spinner and the awaiting_user '?'. */
+const IDLE_ICON = '~';
+
 /**
  * The plan pane's content and the two offsets that matter: where the viewport
  * sits when it is following the selection, and the furthest it may be pushed.
@@ -470,8 +473,9 @@ function taskLines(state: TuiState, task: TaskView, index: number, cols: number)
   const selected = state.focus === 'plan' && index === state.selectedTask;
   const expanded = state.expandedTaskId === task.id;
   const running = isTaskRunning(task);
-  const paint = STATUS_MARK[task.status] ?? ((t: string) => t);
-  const rawIcon = running ? SPINNER[state.spinnerFrame % SPINNER.length] : (STATUS_ICON[task.status] ?? '·');
+  const idle = running && task.status === 'in_progress' && task.idleSince != null;
+  const paint = idle ? style.cyan : (STATUS_MARK[task.status] ?? ((t: string) => t));
+  const rawIcon = idle ? IDLE_ICON : running ? SPINNER[state.spinnerFrame % SPINNER.length] : (STATUS_ICON[task.status] ?? '·');
   const icon = paint(rawIcon);
   const kind = running
     ? style.yellow('RUN')

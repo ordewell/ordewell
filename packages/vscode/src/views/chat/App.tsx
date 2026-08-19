@@ -91,6 +91,8 @@ export default function App() {
   const [unavailableSkills, setUnavailableSkills] = useState<string[]>([]);
   const [checkpoint, setCheckpoint] = useState<{ taskId: string; taskTitle: string; summary: string; pausedAt: number } | null>(null);
   const [taskOutput, setTaskOutput] = useState<TaskOutputMap>({});
+  /** Advisory silence timestamp per task id, keyed like taskOutput; null/absent means not stalled. */
+  const [taskIdle, setTaskIdle] = useState<Record<string, string | null>>({});
   const [prefill, setPrefill] = useState<string | undefined>(undefined);
   /** Is the plan dock open? See planDock.ts for when this flips. */
   const [dockExpanded, setDockExpanded] = useState(false);
@@ -310,6 +312,10 @@ export default function App() {
 
         case 'taskOutput':
           setTaskOutput((prev) => appendTaskOutput(prev, msg.taskId, msg.text ?? ''));
+          break;
+
+        case 'taskIdle':
+          setTaskIdle((prev) => ({ ...prev, [msg.taskId]: msg.idleSince }));
           break;
 
         case 'researchProgress': {
@@ -1022,6 +1028,7 @@ export default function App() {
             modesByRunner={modesByRunner}
             isExecuting={isExecuting}
             taskOutput={taskOutput}
+            taskIdle={taskIdle}
             runnerLabels={runnerLabelMap}
             runners={runnerList}
             onRunnerChange={handleRunnerChange}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { initialState, reduce } from '../reducer';
+import { initialState, reduce, type Action } from '../reducer';
 import type { PickerItem, TuiState } from '../state';
 
 /**
@@ -225,5 +225,54 @@ describe('/planner-effort', () => {
   it('tracks the effort the daemon reports', () => {
     const { state } = reduce(initialState(), { type: 'settingsLoaded', settings: { plannerThinkingEffort: 'high' } });
     expect(state.plannerEffort).toBe('high');
+  });
+});
+
+describe('plannerToken', () => {
+  const send = (state: TuiState, action: Action) => reduce(state, action).state;
+  const s1 = { ...initialState(), sessionId: 's1' };
+
+  it('opens a new streaming assistant entry when the tail is not already one', () => {
+    const { state } = reduce(s1, { type: 'plannerToken', text: 'Look', sessionId: 's1' });
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0]).toMatchObject({ role: 'assistant', content: 'Look', streaming: true });
+  });
+
+  it('appends a second token onto the same streaming entry', () => {
+    const opened = send(s1, { type: 'plannerToken', text: 'Look', sessionId: 's1' });
+    const { state } = reduce(opened, { type: 'plannerToken', text: 'ing into it', sessionId: 's1' });
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0]).toMatchObject({ content: 'Looking into it', streaming: true });
+  });
+
+  it('a research step landing between two token bursts starts a fresh bubble after it', () => {
+    const first = send(s1, { type: 'plannerToken', text: 'Checking the auth module', sessionId: 's1' });
+    const researched = send(first, { type: 'researchStep', summary: 'read auth.ts', sessionId: 's1' });
+    const { state } = reduce(researched, { type: 'plannerToken', text: 'Found it.', sessionId: 's1' });
+
+    expect(state.messages.map((m) => m.role)).toEqual(['assistant', 'research', 'assistant']);
+    expect(state.messages[0]).toMatchObject({ content: 'Checking the auth module', streaming: true });
+    expect(state.messages[2]).toMatchObject({ content: 'Found it.', streaming: true });
+  });
+
+  it('plannerMessage settles a pending streaming entry in place instead of appending', () => {
+    const streamed = send(s1, { type: 'plannerToken', text: 'Looking into it', sessionId: 's1' });
+    const { state } = reduce(streamed, { type: 'plannerMessage', content: 'Looking into it.', sessionId: 's1' });
+
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0]).toMatchObject({ role: 'assistant', content: 'Looking into it.' });
+    expect(state.messages[0].streaming).toBeFalsy();
+  });
+
+  it('plannerMessage still appends when there is no pending streaming entry', () => {
+    const { state } = reduce(s1, { type: 'plannerMessage', content: 'Hello.', sessionId: 's1' });
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0]).toMatchObject({ role: 'assistant', content: 'Hello.' });
+    expect(state.messages[0].streaming).toBeFalsy();
+  });
+
+  it('ignores a token from a session that /new has replaced', () => {
+    const { state } = reduce({ ...s1, sessionId: 's2' }, { type: 'plannerToken', text: 'stray', sessionId: 's1' });
+    expect(state.messages).toHaveLength(0);
   });
 });
