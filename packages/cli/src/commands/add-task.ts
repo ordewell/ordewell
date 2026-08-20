@@ -4,15 +4,16 @@ import { ensureDaemon, ApiClient, resolvePort } from '../daemonClient';
 export async function handleAddTask(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
   const title = flag(subArgs, '--title');
   if (!title) {
-    console.error('Usage: ordewell add-task --title "..." [--description "..."] [--prompt "..."] [--type ai|user] [--depends-on <task-id> ...] [--session-id <id>]');
+    console.error('Usage: ordewell add-task --title "..." [--description "..."] [--prompt "..."] [--type ai|user] [--depends-on <task-id> ...] [--session-id <id>] [--workspace /path]');
     process.exit(1);
   }
 
   let sessionId = flag(subArgs, '--session-id');
   if (!sessionId) {
-    const last = readLastSession();
+    const workspace = flag(subArgs, '--workspace') || process.cwd();
+    const last = readLastSession(workspace);
     if (!last) {
-      console.error('No session specified. Use --session-id <id> or run `ordewell plan` first.');
+      console.error(`No session specified. Use --session-id <id> or run \`ordewell plan\` in ${workspace} first.`);
       process.exit(1);
     }
     sessionId = last.sessionId;

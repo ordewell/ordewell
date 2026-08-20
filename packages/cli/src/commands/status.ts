@@ -6,8 +6,7 @@ import { ensureDaemon, ApiClient, resolvePort, type SessionMeta } from '../daemo
 
 export async function handleStatus(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
   const sessionId = flag(subArgs, '--session-id');
-  const explicitWorkspace = flag(subArgs, '--workspace');
-  let workspace = explicitWorkspace || process.cwd();
+  const workspace = flag(subArgs, '--workspace') || process.cwd();
   const outputPath = flag(subArgs, '--output');
   // --output implies JSON: writing the human table to a file helps nobody.
   const asJson = hasFlag(subArgs, '--json') || Boolean(outputPath);
@@ -16,50 +15,27 @@ export async function handleStatus(subArgs: string[], injectedApi?: ApiClient): 
   const api = injectedApi || new ApiClient(port);
 
   if (sessionId) {
-    let session;
-    try {
-      session = await api.getSession(sessionId, workspace);
-    } catch (err) {
-      const last = readLastSession();
-      if (!explicitWorkspace && last?.workspace && last.workspace !== workspace) {
-        session = await api.getSession(sessionId, last.workspace);
-      } else {
-        throw err;
-      }
-    }
+    const session = await api.getSession(sessionId, workspace);
     if (asJson) {
       emitJson(session, outputPath);
       return;
     }
     printOneSession(sessionId, session.meta, session.plan);
   } else {
-    let sessions = await api.getSessions(workspace);
-    if (sessions.length === 0 && !explicitWorkspace) {
-      // The cwd has no sessions — fall back to the workspace of the last
-      // `ordewell plan` run so a plain `status` still finds it.
-      const last = readLastSession();
-      if (last?.workspace && last.workspace !== workspace) {
-        const fallback = await api.getSessions(last.workspace);
-        if (fallback.length > 0) {
-          workspace = last.workspace;
-          sessions = fallback;
-          console.log(`(no sessions in ${process.cwd()} — showing ${workspace})\n`);
-        }
-      }
-    }
+    const sessions = await api.getSessions(workspace);
     if (asJson) {
       emitJson(sessions, outputPath);
       return;
     }
     if (sessions.length === 0) {
-      console.log('No sessions found.');
+      console.log(`No sessions found in ${workspace}.`);
       return;
     }
     console.log(`${sessions.length} session(s):\n`);
     for (const s of sessions) {
       console.log(`  ${s.id.slice(-8)}  ${s.status.padEnd(10)}  ${s.taskCount} tasks  ${(s.runners || []).join(',').padEnd(12)}  ${s.goal.slice(0, 60)}`);
     }
-    const last = readLastSession();
+    const last = readLastSession(workspace);
     if (last) {
       console.log(`\n  Last active: ${last.sessionId.slice(-8)} ("${last.goal.slice(0, 50)}")`);
     }

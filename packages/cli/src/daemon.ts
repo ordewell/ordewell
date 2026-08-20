@@ -3,16 +3,26 @@ import { existsSync, writeFileSync, readFileSync, unlinkSync, mkdirSync, openSyn
 import { homedir } from 'os';
 import { dirname, join, resolve } from 'path';
 import http from 'http';
-import { bearerHeaderValue, clearDaemonToken, readDaemonToken } from '@ordewell/core';
+import { createServer } from 'net';
+import { bearerHeaderValue, clearDaemonToken, globalDataDir, readDaemonToken } from '@ordewell/core';
 
 export const DEFAULT_PORT = 3742;
-const CONFIG_DIR = join(homedir(), '.config', 'ordewell');
+const CONFIG_DIR = globalDataDir();
 const LEGACY_PID_FILE = join(CONFIG_DIR, 'server.pid');
+// Pre-`.ordewell` install: daemon tokens already moved to globalDataDir() via
+// daemonToken.ts, but a daemon spawned by old code before this upgrade wrote
+// its PID file here — `stopDaemon` falls back to it so that daemon is still
+// reachable to stop, rather than orphaned by a path it doesn't know moved.
+const OLD_CONFIG_DIR = join(homedir(), '.config', 'ordewell');
 
 // One PID file per port so a second daemon doesn't clobber the first one's
 // entry (and `stop --server --port N` kills the daemon the user meant).
 function pidFileFor(port: number): string {
   return port === DEFAULT_PORT ? LEGACY_PID_FILE : join(CONFIG_DIR, `server-${port}.pid`);
+}
+
+function oldPidFileFor(port: number): string {
+  return port === DEFAULT_PORT ? join(OLD_CONFIG_DIR, 'server.pid') : join(OLD_CONFIG_DIR, `server-${port}.pid`);
 }
 
 function httpGet(
@@ -99,7 +109,16 @@ export async function startDaemon(
   // outlives-this-invocation daemon.
   const detached = opts?.detached ?? true;
 
-  const child = spawn(process.execPath, [serverPath, '--port', String(port)], {
+  // Belt-and-braces for the not-detached case: process-group SIGHUP covers a
+  // closed terminal tab, but not a caller killed by PID directly (`kill -9`)
+  // or a multiplexer that doesn't relay the signal. `--watch-parent` has the
+  // daemon poll for that and self-terminate, so an owned daemon never
+  // outlives the CLI that spawned it and orphans don't accumulate.
+  const child = spawn(process.execPath, [
+    serverPath,
+    '--port', String(port),
+    ...(detached ? [] : ['--watch-parent', String(process.pid)]),
+  ], {
     detached,
     stdio: ['ignore', logFd, logFd],
     env: { ...process.env },
@@ -126,7 +145,8 @@ export async function startDaemon(
 }
 
 export async function stopDaemon(port: number = DEFAULT_PORT): Promise<boolean> {
-  const pidFile = pidFileFor(port);
+  let pidFile = pidFileFor(port);
+  if (!existsSync(pidFile) && existsSync(oldPidFileFor(port))) pidFile = oldPidFileFor(port);
   if (!existsSync(pidFile)) {
     console.error(`No server PID file found for port ${port}. Is the server running?`);
     return false;
@@ -206,6 +226,23 @@ export function describeConnectionRefused(port: number): string {
   return `No Ordewell server is listening on port ${port}. `
     + `It may have been stopped, or it may have crashed — check ${join(CONFIG_DIR, 'server.log')}. `
     + `Start one with \`ordewell web --daemon\`.`;
+}
+
+/**
+ * An OS-assigned free port, so a caller that wants a private daemon doesn't
+ * have to guess one that's actually unused.
+ */
+export function findFreePort(): Promise<number> {
+  return new Promise((resolvePromise, reject) => {
+    const srv = createServer();
+    srv.unref();
+    srv.on('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const address = srv.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      srv.close(() => resolvePromise(port));
+    });
+  });
 }
 
 /**

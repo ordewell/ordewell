@@ -18,21 +18,21 @@ afterEach(() => {
   process.chdir(origCwd);
   // cleanup
   try {
-    const file = path.join(os.tmpdir(), '.config', 'ordewell', '.env');
+    const file = path.join(os.tmpdir(), '.ordewell', '.env');
     if (fs.existsSync(file)) fs.unlinkSync(file);
   } catch { /* empty */ }
 });
 
 describe('findEnvFile', () => {
-  it('returns ~/.config/ordewell/.env', () => {
+  it('returns ~/.ordewell/.env', () => {
     const result = findEnvFile();
-    expect(result).toBe(path.join(os.tmpdir(), '.config', 'ordewell', '.env'));
+    expect(result).toBe(path.join(os.tmpdir(), '.ordewell', '.env'));
   });
 });
 
 describe('writeEnvVar', () => {
   it('creates a new env file with the variable', () => {
-    const file = path.join(os.tmpdir(), '.config', 'ordewell', '.env');
+    const file = path.join(os.tmpdir(), '.ordewell', '.env');
     writeEnvVar(file, 'TEST_KEY', 'test_value');
     expect(fs.existsSync(file)).toBe(true);
     const content = fs.readFileSync(file, 'utf8');
@@ -40,7 +40,7 @@ describe('writeEnvVar', () => {
   });
 
   it('updates existing env file', () => {
-    const file = path.join(os.tmpdir(), '.config', 'ordewell', '.env');
+    const file = path.join(os.tmpdir(), '.ordewell', '.env');
     writeEnvVar(file, 'KEY1', 'val1');
     writeEnvVar(file, 'KEY1', 'val2');
     const content = fs.readFileSync(file, 'utf8');
@@ -57,14 +57,14 @@ describe('loadEnvFile', () => {
   });
 
   it('populates process.env from the resolved .env file', () => {
-    const file = path.join(os.tmpdir(), '.config', 'ordewell', '.env');
+    const file = path.join(os.tmpdir(), '.ordewell', '.env');
     writeEnvVar(file, key, 'from-file');
     loadEnvFile();
     expect(process.env[key]).toBe('from-file');
   });
 
   it('does not override a var already set in the environment', () => {
-    const file = path.join(os.tmpdir(), '.config', 'ordewell', '.env');
+    const file = path.join(os.tmpdir(), '.ordewell', '.env');
     writeEnvVar(file, key, 'from-file');
     process.env[key] = 'from-shell';
     loadEnvFile();

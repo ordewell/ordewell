@@ -4,6 +4,7 @@ import type { Key } from '../keys';
 const daemonClient = vi.hoisted(() => ({
   ensureDaemonOwned: vi.fn(async () => ({ port: 4000, owned: true })),
   resolvePort: vi.fn(() => 4000),
+  findFreePort: vi.fn(async () => 4000),
   stopDaemon: vi.fn(async () => {}),
   ApiClient: vi.fn(function stub() {
     return {
@@ -113,6 +114,24 @@ describe('handleTui', () => {
     const frame = fakeTerminal.draw.mock.calls[0][0] as string[];
     expect(frame).toHaveLength(24);
     expect(frame.join('\n')).toContain('Ordewell');
+  });
+
+  it('picks a private free port by default, so two unflagged sessions never share a daemon', async () => {
+    void handleTui([]);
+
+    await vi.waitFor(() => expect(fakeTerminal.draw).toHaveBeenCalled());
+    expect(daemonClient.findFreePort).toHaveBeenCalled();
+    expect(daemonClient.resolvePort).not.toHaveBeenCalled();
+  });
+
+  it('drives the well-known daemon instead when --port is passed explicitly', async () => {
+    daemonClient.resolvePort.mockReturnValueOnce(3742);
+    void handleTui(['--port', '3742']);
+
+    await vi.waitFor(() => expect(fakeTerminal.draw).toHaveBeenCalled());
+    expect(daemonClient.resolvePort).toHaveBeenCalledWith(['--port', '3742']);
+    expect(daemonClient.findFreePort).not.toHaveBeenCalled();
+    expect(daemonClient.ensureDaemonOwned).toHaveBeenCalledWith(3742, { detached: false });
   });
 
   it('honours ORDEWELL_AUTONOMOUS_MODE=false from the environment', async () => {

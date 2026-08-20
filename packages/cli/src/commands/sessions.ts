@@ -25,7 +25,7 @@ export async function handleSessions(subArgs: string[], injectedApi?: ApiClient)
       console.log(`No sessions found in ${workspace}.`);
       return;
     }
-    const last = readLastSession();
+    const last = readLastSession(workspace);
     console.log(`${sessions.length} session(s) in ${workspace}:\n`);
     for (const s of sessions) {
       const marker = last?.sessionId === s.id ? '*' : ' ';

@@ -4,7 +4,7 @@ import { withResolvedTask } from './task-control';
 export async function handleRemoveTask(subArgs: string[], api?: ApiClient): Promise<void> {
   await withResolvedTask(
     subArgs,
-    'Usage: ordewell remove-task <task-id-or-order> [--session-id <id>]',
+    'Usage: ordewell remove-task <task-id-or-order> [--session-id <id>] [--workspace /path]',
     api,
     async (client, sessionId, taskId) => {
       try {

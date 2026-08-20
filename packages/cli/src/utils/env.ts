@@ -1,13 +1,13 @@
 import { writeFileSync, existsSync, mkdirSync, readFileSync } from 'fs';
 import { join, parse } from 'path';
-import { homedir } from 'os';
+import { globalDataDir } from '@ordewell/core';
 
 export function findEnvFile(): string {
-  return join(homedir(), '.config', 'ordewell', '.env');
+  return join(globalDataDir(), '.env');
 }
 
 /**
- * Populate process.env from ~/.config/ordewell/.env.
+ * Populate process.env from ~/.ordewell/.env.
  * Shell-exported vars always win — a var already set is left untouched — so this
  * only fills gaps left by setting a key/model in the TUI. No-op if the file doesn't exist.
  */

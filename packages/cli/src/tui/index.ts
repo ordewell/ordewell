@@ -1,5 +1,5 @@
 import { assertWorkspaceExists, createSkillsService, mintSessionId } from '@ordewell/core';
-import { ApiClient, ensureDaemonOwned, resolvePort, stopDaemon } from '../daemonClient';
+import { ApiClient, ensureDaemonOwned, findFreePort, resolvePort, stopDaemon } from '../daemonClient';
 import { flag } from '../utils';
 import { findEnvFile, writeEnvVar } from '../utils/env';
 import { createApp } from './app';
@@ -9,9 +9,11 @@ import { openTerminal } from './terminal';
 import { openTaskTerminal } from './terminalLauncher';
 
 /**
- * `ordewell tui` — the full-screen terminal client. It drives the same daemon
- * the VS Code extension and the web UI use, so a plan started here can be
- * picked up anywhere else.
+ * `ordewell tui` — the full-screen terminal client. By default each launch
+ * gets its own private daemon, so two terminals never share a session list.
+ * Pass `--port`/`ORDEWELL_PORT` to instead drive the well-known daemon the
+ * VS Code extension and the web UI use, so a plan started here can be picked
+ * up anywhere else.
  */
 export async function handleTui(subArgs: string[]): Promise<void> {
   if (!process.stdin.isTTY) {
@@ -37,7 +39,15 @@ export async function handleTui(subArgs: string[]): Promise<void> {
   // all read from the one registry in slash.ts (registerSkillCommands).
   registerSkillCommands(createSkillsService(workspace).listSkills());
 
-  const { port, owned: ownedAtLaunch } = await ensureDaemonOwned(resolvePort(subArgs), { detached: false });
+  // Two `tui` instances that both defaulted to DEFAULT_PORT would share one
+  // daemon's process-wide session map, so a task added in one shows up live
+  // in the other. Each unflagged launch instead gets its own daemon on a
+  // free port, private by construction; `--port`/`ORDEWELL_PORT` opts back
+  // into the shared daemon (e.g. to pick up a plan from the VS Code
+  // extension or the web UI).
+  const explicitPort = flag(subArgs, '--port') || process.env.ORDEWELL_PORT;
+  const targetPort = explicitPort ? resolvePort(subArgs) : await findFreePort();
+  const { port, owned: ownedAtLaunch } = await ensureDaemonOwned(targetPort, { detached: false });
   // Not const: a daemon we did not start can die and be replaced by one we
   // did, and only the one we started may be stopped on the way out.
   let owned = ownedAtLaunch;

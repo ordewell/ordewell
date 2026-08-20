@@ -13,6 +13,15 @@ if (portIdx !== -1 && args[portIdx + 1]) {
   port = parseInt(args[portIdx + 1], 10) || 3742;
 }
 
+// Set only for a daemon owned by one CLI invocation (e.g. `ordewell tui`),
+// which spawns it non-detached expecting it to die with the caller. A
+// closed terminal delivers SIGHUP to both via the shared process group, but
+// that misses a caller killed by PID directly or a multiplexer that doesn't
+// relay the signal — this poll is the fallback so an owned daemon never
+// outlives its CLI and orphans don't accumulate.
+const watchParentIdx = args.indexOf('--watch-parent');
+const watchParentPid = watchParentIdx !== -1 ? parseInt(args[watchParentIdx + 1], 10) : undefined;
+
 // Tasks run in a real tmux window (so `ordewell tui` can open a genuine
 // interactive terminal on them) whenever tmux is on the host; otherwise this
 // falls straight back to today's headless-per-session default (see
@@ -64,3 +73,14 @@ async function shutdown(): Promise<void> {
 process.on('SIGINT', () => { shutdown(); });
 process.on('SIGTERM', () => { shutdown(); });
 process.on('SIGHUP', () => { shutdown(); });
+
+if (watchParentPid) {
+  const parentCheck = setInterval(() => {
+    try {
+      process.kill(watchParentPid, 0);
+    } catch {
+      clearInterval(parentCheck);
+      shutdown();
+    }
+  }, 5000);
+}

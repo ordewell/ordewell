@@ -10,7 +10,8 @@ export async function handleStop(subArgs: string[]): Promise<void> {
 
   let sessionId = flag(subArgs, '--session-id');
   if (!sessionId) {
-    const last = readLastSession();
+    const workspace = flag(subArgs, '--workspace') || process.cwd();
+    const last = readLastSession(workspace);
     if (!last) {
       console.error('No session specified. Use --session-id <id> or --server to stop the server.');
       process.exit(1);

@@ -28,25 +28,37 @@ function copyDirSync(src: string, dest: string): void {
 let migrated = false;
 
 /**
- * One-time lift of a pre-`.ordewell` install's settings into the new location.
- * Runs only when the legacy `~/.config/ordewell/settings.json` exists and the
- * new dir does not, so a fresh install (or a machine already on the new layout)
- * is a no-op — never overwriting anything the user made after the move.
+ * One-time lift of a pre-`.ordewell` install's files into the new location.
+ * Each file/dir is checked independently — old exists, new doesn't — rather
+ * than gating the whole thing on "new dir doesn't exist yet". A machine that
+ * migrated `settings.json` under an earlier release already has `globalDataDir()`
+ * on disk, which would otherwise permanently skip lifting anything added to
+ * this list later (`.env` did exactly that: real API keys stranded in the old
+ * dir because the settings.json move had already made the new dir exist).
  */
 export function migrateOldConfigDir(): void {
   if (migrated) return;
   migrated = true;
 
   const oldDir = path.join(os.homedir(), '.config', 'ordewell');
-  const oldSettings = path.join(oldDir, 'settings.json');
-  if (!fs.existsSync(oldSettings) || fs.existsSync(globalDataDir())) return;
-
+  if (!fs.existsSync(oldDir)) return;
   const newDir = globalDataDir();
-  fs.mkdirSync(newDir, { recursive: true });
-  fs.copyFileSync(oldSettings, path.join(newDir, 'settings.json'));
+
+  const liftFile = (name: string): void => {
+    const oldFile = path.join(oldDir, name);
+    const newFile = path.join(newDir, name);
+    if (fs.existsSync(oldFile) && !fs.existsSync(newFile)) {
+      fs.mkdirSync(newDir, { recursive: true });
+      fs.copyFileSync(oldFile, newFile);
+    }
+  };
+
+  liftFile('settings.json');
+  liftFile('.env');
 
   const oldPlugins = path.join(oldDir, 'plugins');
-  if (fs.existsSync(oldPlugins)) {
-    copyDirSync(oldPlugins, path.join(newDir, 'plugins'));
+  const newPlugins = path.join(newDir, 'plugins');
+  if (fs.existsSync(oldPlugins) && !fs.existsSync(newPlugins)) {
+    copyDirSync(oldPlugins, newPlugins);
   }
 }

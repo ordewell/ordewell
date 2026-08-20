@@ -10,9 +10,10 @@ export function resolveSessionId(subArgs: string[]): string {
   const explicit = flag(subArgs, '--session-id');
   if (explicit) return explicit;
 
-  const last = readLastSession();
+  const workspace = flag(subArgs, '--workspace') || process.cwd();
+  const last = readLastSession(workspace);
   if (!last) {
-    console.error('No session specified. Use --session-id <id> or run `ordewell plan` first.');
+    console.error(`No session specified. Use --session-id <id> or run \`ordewell plan\` in ${workspace} first.`);
     process.exit(1);
   }
   console.error(`Using last session: ${last.sessionId} ("${last.goal}")`);

@@ -21,11 +21,12 @@ export async function withResolvedTask(
   injectedApi: ApiClient | undefined,
   run: (api: ApiClient, sessionId: string, taskId: string, plan: SerializedPlan) => Promise<void>,
 ): Promise<void> {
-  const last = readLastSession();
+  const workspace = flag(subArgs, '--workspace') || process.cwd();
   let sessionId = flag(subArgs, '--session-id');
   if (!sessionId) {
+    const last = readLastSession(workspace);
     if (!last) {
-      console.error('No session specified. Use --session-id <id> or run `ordewell plan` first.');
+      console.error(`No session specified. Use --session-id <id> or run \`ordewell plan\` in ${workspace} first.`);
       process.exit(1);
     }
     sessionId = last.sessionId;
@@ -39,24 +40,12 @@ export async function withResolvedTask(
 
   const api = injectedApi || new ApiClient(await ensureDaemon(resolvePort(subArgs)));
 
-  // Sessions are stored per workspace. The daemon's own cwd is rarely the right
-  // one, so fall back to the workspace `ordewell plan` last used.
-  const explicitWorkspace = flag(subArgs, '--workspace');
   let plan;
   try {
-    plan = (await api.getSession(sessionId, explicitWorkspace || process.cwd())).plan;
+    plan = (await api.getSession(sessionId, workspace)).plan;
   } catch (err) {
-    if (!explicitWorkspace && last?.workspace && last.workspace !== process.cwd()) {
-      try {
-        plan = (await api.getSession(sessionId, last.workspace)).plan;
-      } catch {
-        console.error(`Failed to load session: ${(err as Error).message}`);
-        process.exit(1);
-      }
-    } else {
-      console.error(`Failed to load session: ${(err as Error).message}`);
-      process.exit(1);
-    }
+    console.error(`Failed to load session: ${(err as Error).message}`);
+    process.exit(1);
   }
 
   const taskId = resolveTaskId(plan, identifier);
@@ -72,7 +61,7 @@ function makeHandler(action: Action, command: string = action) {
   return async function handle(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
     await withResolvedTask(
       subArgs,
-      `Usage: ordewell ${command} <task-id-or-order> [--session-id <id>]`,
+      `Usage: ordewell ${command} <task-id-or-order> [--session-id <id>] [--workspace /path]`,
       injectedApi,
       async (api, sessionId, taskId) => {
         try {
