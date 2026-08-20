@@ -63,6 +63,8 @@ type ExtensionChatMessage =
   // `unavailable` lists toggles that have no meaning for the current planner
   // backend — hidden rather than silently ignored (ADR-0009, T8).
   | { type: 'setSkillToggles'; toggles: Record<string, boolean>; unavailable?: string[] }
+  /** Discovered skills (global ~/.ordewell/skills/ + workspace .ordewell/skills/, workspace shadows global) for the /skill-name suggestion dropdown. */
+  | { type: 'setSkills'; skills: { name: string; description: string }[] }
   | { type: 'plannerInterrupted'; message: { role: string; content: string; timestamp: string } }
   | { type: 'researchStream'; steps: string[]; isActive: boolean }
   | { type: 'setConfiguredProviders'; providers: ApiProvider[] }
@@ -121,8 +123,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.postMessage({ type: 'setModels', models });
   }
   setRunners(runners: RunnerMeta[]): void { this.postMessage({ type: 'setRunners', runners }); }
-  setSkillToggles(grillMe: boolean, tdd: boolean, prd = false, verify = false, researchSubagents = false, unavailable: string[] = []): void {
-    this.postMessage({ type: 'setSkillToggles', toggles: { 'grill-me': grillMe, tdd, prd, verify, 'research-subagents': researchSubagents }, unavailable });
+  setSkillToggles(tdd: boolean, verify: boolean, unavailable: string[] = []): void {
+    this.postMessage({ type: 'setSkillToggles', toggles: { tdd, verify }, unavailable });
+  }
+  setSkills(skills: { name: string; description: string }[]): void {
+    this.postMessage({ type: 'setSkills', skills });
   }
   /** A planner conversation message (ADR-0002) — rendered as an assistant chat bubble. */
   sendNewMessage(content: string, timestamp?: string): void {

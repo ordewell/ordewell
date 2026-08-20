@@ -7,7 +7,7 @@ import { bodyRows, chatScrollMax, helpScrollMax, planScrollExtent } from './layo
 import { selectedText } from './render';
 import { completions, findCommand, parseSlash, type ParsedCommand } from './slash';
 import {
-  initialState, SKILL_IDS, visibleItems,
+  initialState, SKILL_IDS, planRows, selectedPlanRow, visibleItems,
   type ApprovalRequestView, type Cell, type ChatMessage, type Focus, type MessageRole, type ModeView,
   type ModelView, type PickerItem, type PickerState, type RunnerView, type Selection, type SessionView,
   type SkillId, type TaskView, type TuiState,
@@ -241,16 +241,20 @@ export function reduce(state: TuiState, action: Action): Step {
     case 'planUpdated': {
       if (stale(state, action.sessionId)) return step(state);
       const tasks = normalizeTasks(action.plan);
-      return step({
+      // A plan refresh can supersede the task whose prompt is open; the editor
+      // survives only while its task does. The cursor is clamped against the
+      // visible rows afterwards, so an expanded parent's subtasks count.
+      const expandedTaskId = tasks.some((task) => task.id === state.expandedTaskId) ? state.expandedTaskId : null;
+      const next: TuiState = {
         ...state,
         tasks,
         status: state.status === 'planning' || state.status === 'researching' ? 'idle' : state.status,
         busyLabel: '',
         thinkingLine: '',
-        selectedTask: Math.min(state.selectedTask, Math.max(0, tasks.length - 1)),
-        expandedTaskId: tasks.some((task) => task.id === state.expandedTaskId) ? state.expandedTaskId : null,
-        taskEditor: tasks.some((task) => task.id === state.expandedTaskId) ? state.taskEditor : null,
-      });
+        expandedTaskId,
+        taskEditor: expandedTaskId !== null ? state.taskEditor : null,
+      };
+      return step({ ...next, selectedTask: Math.min(state.selectedTask, Math.max(0, planRows(next).length - 1)) });
     }
 
     case 'plannerMessage': {
@@ -480,9 +484,14 @@ function normalizeTasks(plan: unknown): TaskView[] {
     ? [...byId.values()].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
     : ((source?.tasks ?? []) as Record<string, any>[]);
 
-  return raw.map((t, i) => ({
-    id: String(t.id ?? `task-${i + 1}`),
-    order: typeof t.order === 'number' ? t.order : i + 1,
+  return raw.map((t, i) => toTaskView(t, i));
+}
+
+/** One wire task as the pane's `TaskView`, recursing into sorted subtasks. */
+function toTaskView(t: Record<string, any>, index: number): TaskView {
+  return {
+    id: String(t.id ?? `task-${index + 1}`),
+    order: typeof t.order === 'number' ? t.order : index + 1,
     title: planLabel(t.title, 'Untitled task'),
     description: planText(t.description ?? t.title),
     prompt: typeof t.prompt === 'string' ? sanitize(t.prompt) : undefined,
@@ -507,7 +516,12 @@ function normalizeTasks(plan: unknown): TaskView[] {
               : undefined,
           }
         : undefined,
-  }));
+    subtasks: Array.isArray(t.subtasks)
+      ? [...t.subtasks]
+          .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+          .map((s, i) => toTaskView(s as Record<string, any>, i))
+      : undefined,
+  };
 }
 
 const enabledFlag = (value: unknown): boolean | undefined =>
@@ -518,11 +532,8 @@ const enabledFlag = (value: unknown): boolean | undefined =>
 function applySettings(state: TuiState, settings: Record<string, unknown>): TuiState {
   // The daemon names the verification skill `verification`; the TUI calls it `/verify`.
   const sources: Record<SkillId, unknown> = {
-    'grill-me': settings.grillMe,
     tdd: settings.tdd,
-    prd: settings.prd,
     verify: settings.verification,
-    'research-subagents': settings.researchSubagents,
   };
 
   const skills = { ...state.skills };
@@ -958,15 +969,16 @@ function handlePlanKey(state: TuiState, key: Key): Step {
 
   if (key.name === 'escape') return step({ ...state, focus: 'chat' });
   // Moving the selection hands the viewport back to follow mode: the user is
-  // navigating the list again, so the pane should chase the cursor.
+  // navigating the list again, so the pane should chase the cursor. The cursor
+  // walks the visible rows, subtasks included, and an expanded parent stays
+  // open so its rows do not vanish under the step.
   if (key.name === 'up') {
-    return step({ ...state, selectedTask: Math.max(0, state.selectedTask - 1), expandedTaskId: null, planScroll: null });
+    return step({ ...state, selectedTask: Math.max(0, state.selectedTask - 1), planScroll: null });
   }
   if (key.name === 'down') {
     return step({
       ...state,
-      selectedTask: Math.min(state.tasks.length - 1, state.selectedTask + 1),
-      expandedTaskId: null,
+      selectedTask: Math.min(planRows(state).length - 1, state.selectedTask + 1),
       planScroll: null,
     });
   }
@@ -976,8 +988,9 @@ function handlePlanKey(state: TuiState, key: Key): Step {
   const scroll = scrollDelta(key, state);
   if (scroll !== null) return scrollPlan(state, scroll);
 
-  const task = state.tasks[state.selectedTask];
-  if (!task) return step(state);
+  const row = selectedPlanRow(state);
+  if (!row) return step(state);
+  const task = row.task;
   if (key.name === 'enter' || key.name === 'right') {
     const text = task.prompt ?? task.description ?? task.title;
     return step({
@@ -1318,7 +1331,11 @@ function submit(state: TuiState): Step {
 
   const cleared: TuiState = { ...state, editor: commit(state.editor) };
   const command = parseSlash(text);
-  if (command) return runCommand(cleared, command);
+  // A skill-backed command is not dispatched here: it goes to the planner like
+  // any other message, literal /name and all, so the daemon's own skill
+  // interception (see resolveSkillInvocation) substitutes it before a
+  // coding-agent planner ever sees the token and tries to resolve it itself.
+  if (command && findCommand(command.name)?.source !== 'skill') return runCommand(cleared, command);
 
   const spoken = say(cleared, 'user', text);
   const effect: Effect = state.sessionId

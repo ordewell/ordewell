@@ -1,7 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import ChatInput from '../ChatInput';
+import ChatInput, { getLeadingSlashToken } from '../ChatInput';
 
 // jsdom has no layout engine; the suggestion list calls scrollIntoView on nav.
 (Element.prototype as never).scrollIntoView = vi.fn();
@@ -236,6 +236,69 @@ describe('ChatInput prefill', () => {
     const textarea = document.querySelector('textarea') as HTMLTextAreaElement;
     fireEvent.keyDown(textarea, { key: 'Enter' });
     expect(onSend).toHaveBeenCalledWith('retry task-3');
+  });
+});
+
+describe('discovered skill suggestions', () => {
+  const SKILLS = [
+    { name: 'grilling', description: 'Grill the plan' },
+    { name: 'to-spec', description: 'Tighten a spec' },
+  ];
+
+  it('typing /gri filters the suggestion list down to /grilling', () => {
+    renderInput({ skills: SKILLS });
+    type('/gri');
+    expect(screen.getByText('/grilling')).toBeTruthy();
+    expect(screen.queryByText('/to-spec')).toBeNull();
+  });
+
+  it('selecting a skill suggestion sends it as the raw /skill-name message', () => {
+    const { onSend } = renderInput({ skills: SKILLS });
+    type('/grill');
+    fireEvent.mouseDown(screen.getByText('/grilling'));
+    expect(onSend).toHaveBeenCalledWith('/grilling');
+  });
+});
+
+describe('getLeadingSlashToken', () => {
+  const KNOWN = new Set(['model', 'grilling']);
+
+  it('matches a known command name at the start of the text', () => {
+    expect(getLeadingSlashToken('/model set foo', KNOWN)).toBe('/model');
+  });
+
+  it('matches a known skill name with nothing else typed', () => {
+    expect(getLeadingSlashToken('/grilling', KNOWN)).toBe('/grilling');
+  });
+
+  it('returns null for an unrecognized leading token', () => {
+    expect(getLeadingSlashToken('/nope', KNOWN)).toBeNull();
+  });
+
+  it('returns null for plain text with no leading slash', () => {
+    expect(getLeadingSlashToken('hello world', KNOWN)).toBeNull();
+  });
+});
+
+describe('slash token highlight', () => {
+  it('renders a mark around a recognized command token', () => {
+    const { container } = renderInput({});
+    type('/model set foo');
+    const mark = container.querySelector('.chat-input-highlight-backdrop mark');
+    expect(mark?.textContent).toBe('/model');
+  });
+
+  it('renders a mark around a recognized skill token', () => {
+    const { container } = renderInput({ skills: [{ name: 'grilling', description: 'Grill' }] });
+    type('/grilling');
+    const mark = container.querySelector('.chat-input-highlight-backdrop mark');
+    expect(mark?.textContent).toBe('/grilling');
+  });
+
+  it('renders no mark for unrecognized input', () => {
+    const { container } = renderInput({});
+    type('/nope');
+    expect(container.querySelector('.chat-input-highlight-backdrop mark')).toBeNull();
   });
 });
 

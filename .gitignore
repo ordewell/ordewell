@@ -6,6 +6,9 @@ dist-test/
 out/
 *.vsix
 
+# Copied from @ordewell/core by scripts/copy-skills.mjs at build time — not source.
+packages/vscode/skills/
+
 # Downloaded VS Code build used by the extension integration tests (~320 MB)
 .vscode-test/
 

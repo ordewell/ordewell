@@ -7,7 +7,6 @@ import { buildPlanWithResults } from './PlanPrompts';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
 import { generatePlanWithRepair, classifyPlannerReply, reEmitPlanPrompt, reEmitTaskOpsPrompt, reEmitTaskQueryPrompt, truncatedPlanReEmitPrompt } from './PlanRepair';
 import { compactResearchResults, withProactiveCompaction } from './contextCompaction';
-import { extractPrdBlock } from '../utils/prdStore';
 import type { RunnerModeInfo } from './ModeResolver';
 import { collectResearchContext } from './ContextCollector';
 import { executeTool } from './executeTool';
@@ -73,19 +72,11 @@ export interface ConversationTurnContext {
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>;
   autonomousDefault?: boolean;
   fetcher?: IWebFetcher;
-  /** PRD toggle: a plan must not commit before a PRD block has appeared. */
-  prdEnabled?: boolean;
-  /** Set once any turn carries an ORDEWELL_PRD block; gates the missing-PRD nudge. */
-  prdCaptured?: boolean;
-  /** The missing-PRD corrective nudge is sent at most once per conversation. */
-  prdNudgeSent?: boolean;
 }
 
 export abstract class BaseAiService {
   protected conversation: { ctx: ConversationTurnContext; setProgress: (fn: (p: ResearchProgress) => void) => void } | null = null;
   protected activeAbort: AbortController | null = null;
-  /** researchSubagents toggle (issue #34): set per operation from the live settings snapshot; off means bit-for-bit sequential behavior. */
-  protected researchSubagentsEnabled = false;
 
   constructor(protected config: IConfig) {}
 
@@ -166,9 +157,6 @@ export abstract class BaseAiService {
     signal: AbortSignal | undefined,
     subagentId: string,
   ): Promise<{ success: boolean; output: string; truncated: boolean }> {
-    if (!this.researchSubagentsEnabled) {
-      return { success: false, output: 'spawn_research_agent is not available in this session. Continue researching sequentially with your other tools (read_file, glob, grep, list_dir, bash).', truncated: false };
-    }
     const prompt = typeof args.prompt === 'string' ? args.prompt.trim() : '';
     if (!prompt) {
       return { success: false, output: 'spawn_research_agent requires a non-empty "prompt" string: a self-contained task for the agent, including what its digest must report back.', truncated: false };
@@ -428,12 +416,9 @@ export abstract class BaseAiService {
         };
       }
 
-      if (extractPrdBlock(turn.text)) ctx.prdCaptured = true;
-
       // What did the model emit? PlanRepair owns the classification (envelope
       // keys, attempt-detection) and the corrective prompt texts; this loop
-      // only applies its policies: the repair budget, the abort guard, and
-      // the PRD gate.
+      // only applies its policies: the repair budget and the abort guard.
       const reply = classifyPlannerReply(turn.text, {
         runners: ctx.runners,
         runnerModes: ctx.runnerModes,
@@ -450,20 +435,6 @@ export abstract class BaseAiService {
           return { kind: 'task_query', query: reply.query, text: turn.text, researchLog };
 
         case 'plan':
-          // PRD mode fail-safe: a cheap model that skips the PRD and jumps to
-          // JSON would otherwise commit a plan with no PRD on record. Bounce
-          // once with a corrective message; if it still refuses, accept the
-          // plan rather than trap the user in a loop.
-          if (ctx.prdEnabled && !ctx.prdCaptured && !ctx.prdNudgeSent && !signal?.aborted) {
-            ctx.prdNudgeSent = true;
-            pending = [
-              'PRD mode is enabled but no PRD has been produced yet, so the plan was NOT committed.',
-              'In your next reply: first output the full markdown PRD wrapped EXACTLY in',
-              '<!-- ORDEWELL_PRD_START slug="<feature-slug>" --> and <!-- ORDEWELL_PRD_END -->,',
-              'then re-emit the exact same task plan JSON after the PRD block.',
-            ].join(' ');
-            continue;
-          }
           return { kind: 'plan', tasks: reply.tasks, text: turn.text, researchLog };
 
         // Botched attempts get a bounded corrective retry — otherwise the

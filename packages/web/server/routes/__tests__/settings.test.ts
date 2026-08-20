@@ -19,11 +19,8 @@ function settingsState(overrides: Partial<SettingsState> = {}): SettingsState {
     orchestratorModel: '',
     aiProvider: 'openrouter',
     plannerThinkingEffort: '',
-    grillMe: { enabled: false },
     tdd: { enabled: false },
-    prd: { enabled: false },
     verification: { enabled: false },
-    researchSubagents: { enabled: false },
     modelAllowlist: undefined,
     plannerModels: undefined,
     ...overrides,
@@ -56,11 +53,8 @@ describe('GET /api/settings', () => {
       // Who plans (ADR-0009) — the planner picker reads it from here.
       aiProvider: 'openrouter',
       plannerThinkingEffort: '',
-      grillMe: { enabled: false },
       tdd: { enabled: true },
-      prd: { enabled: false },
       verification: { enabled: false },
-      researchSubagents: { enabled: false },
     });
   });
 });
@@ -98,22 +92,22 @@ describe('PATCH /api/settings', () => {
     expect(pool.updateSettings).toHaveBeenCalledWith({ orchestratorModel: 'gemini-2.5-flash' });
   });
 
-  it('updates grillMe feature toggle', async () => {
+  it('updates verification feature toggle', async () => {
     vi.mocked(pool.updateSettings).mockReturnValue(settingsState({
-      grillMe: { enabled: true },
+      verification: { enabled: true },
       tdd: { enabled: true },
     }));
 
     const res = await app.request('/api/settings', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grillMe: { enabled: true } }),
+      body: JSON.stringify({ verification: { enabled: true } }),
     });
 
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { grillMe: { enabled: boolean } };
-    expect(body.grillMe).toEqual({ enabled: true });
-    expect(pool.updateSettings).toHaveBeenCalledWith({ grillMe: { enabled: true } });
+    const body = (await res.json()) as { verification: { enabled: boolean } };
+    expect(body.verification).toEqual({ enabled: true });
+    expect(pool.updateSettings).toHaveBeenCalledWith({ verification: { enabled: true } });
   });
 
   it('updates tdd feature toggle', async () => {

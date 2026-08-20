@@ -1,6 +1,7 @@
 import { writeFileSync } from 'fs';
 import { flag, hasFlag, readLastSession } from '../utils';
 import { iconFor } from '../utils/output';
+import { taskOrderLabel } from '@ordewell/core';
 import { ensureDaemon, ApiClient, resolvePort, type SessionMeta } from '../daemonClient';
 
 export async function handleStatus(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
@@ -105,6 +106,12 @@ function printOneSession(
     const icon = iconFor(t.status);
     const model = t.assignedModel ? ` (${t.assignedModel.modelLabel})` : '';
     const shortId = (t.id ?? '').slice(-8);
-    console.log(`  ${String(t.order).padStart(2)}. ${icon} [${shortId}] ${t.title}${model}`);
+    console.log(`  ${taskOrderLabel(t).padStart(2)}. ${icon} [${shortId}] ${t.title}${model}`);
+    for (const sub of t.subtasks || []) {
+      const subIcon = iconFor(sub.status);
+      const subModel = sub.assignedModel ? ` (${sub.assignedModel.modelLabel})` : '';
+      const subShortId = (sub.id ?? '').slice(-8);
+      console.log(`    ${taskOrderLabel(sub, t)}. ${subIcon} [${subShortId}] ${sub.title}${subModel}`);
+    }
   }
 }

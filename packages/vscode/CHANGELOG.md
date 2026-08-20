@@ -1,5 +1,11 @@
 # Change Log
 
+## [Unreleased]
+
+### Changed
+
+- **The `grill-me` skill is renamed to `grilling`**, invoked as `/grilling`.
+
 ## [0.4.2] — 2026-08-02
 
 ### Fixed

@@ -10,6 +10,8 @@ export interface SlashCommand {
   usage: string;
   description: string;
   category: SlashCategory;
+  /** Set on commands registered from a discovered skill, never on a built-in. */
+  source?: 'skill';
 }
 
 /**
@@ -51,11 +53,8 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'refresh', usage: '/refresh', description: 'Re-discover runners and model catalogs', category: 'models' },
 
   // Skills
-  { name: 'grill-me', usage: '/grill-me [on|off]', description: 'Grill-Me challenge mode — the planner interrogates the goal', category: 'skills' },
   { name: 'tdd', usage: '/tdd [on|off]', description: 'Test-Driven Development mode', category: 'skills' },
-  { name: 'prd', usage: '/prd [on|off]', description: 'PRD mode — write a PRD before the plan', category: 'skills' },
   { name: 'verify', usage: '/verify [on|off]', description: 'Verification mode — final evidence-based task that runs the suite', category: 'skills' },
-  { name: 'research-subagents', usage: '/research-subagents [on|off]', description: 'Parallel read-only research subagents during planning', category: 'skills' },
 
   // Sessions
   { name: 'sessions', usage: '/sessions', description: 'List saved sessions', category: 'session' },
@@ -72,6 +71,37 @@ export const SLASH_COMMANDS: SlashCommand[] = [
 
 const BY_NAME = new Map(SLASH_COMMANDS.map((c) => [c.name, c]));
 
+export interface SkillCommandSource {
+  name: string;
+  description: string;
+}
+
+/**
+ * Skill-backed commands discovered at startup (SkillsService), kept separate
+ * from `SLASH_COMMANDS` so the built-in list — and anything that renders it,
+ * like the help sheet — stays untouched by what a workspace happens to have
+ * under .ordewell/skills/.
+ */
+let skillCommands: SlashCommand[] = [];
+let skillByName = new Map<string, SlashCommand>();
+
+/** A name already taken by a built-in is dropped — the built-in always wins. */
+export function registerSkillCommands(skills: SkillCommandSource[]): void {
+  const map = new Map<string, SlashCommand>();
+  for (const skill of skills) {
+    if (BY_NAME.has(skill.name)) continue;
+    map.set(skill.name, {
+      name: skill.name,
+      usage: `/${skill.name}`,
+      description: skill.description,
+      category: 'skills',
+      source: 'skill',
+    });
+  }
+  skillByName = map;
+  skillCommands = [...map.values()];
+}
+
 /** `null` when the text is ordinary chat rather than a `/command`. */
 export function parseSlash(text: string): ParsedCommand | null {
   const trimmed = text.trim();
@@ -82,7 +112,8 @@ export function parseSlash(text: string): ParsedCommand | null {
 }
 
 export function findCommand(name: string): SlashCommand | undefined {
-  return BY_NAME.get(name.replace(/^\//, '').toLowerCase());
+  const key = name.replace(/^\//, '').toLowerCase();
+  return BY_NAME.get(key) ?? skillByName.get(key);
 }
 
 /**
@@ -94,5 +125,5 @@ export function completions(text: string): SlashCommand[] {
   const typed = text.slice(1);
   if (/\s/.test(typed)) return [];
   const prefix = typed.toLowerCase();
-  return SLASH_COMMANDS.filter((c) => c.name.startsWith(prefix));
+  return [...SLASH_COMMANDS, ...skillCommands].filter((c) => c.name.startsWith(prefix));
 }

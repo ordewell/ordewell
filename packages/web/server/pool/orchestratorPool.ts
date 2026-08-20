@@ -190,11 +190,8 @@ export class OrchestratorPool {
       // to render the current level; without it the picker shows "default"
       // for a planner that is running at "high".
       plannerThinkingEffort: config.plannerThinkingEffort ?? '',
-      grillMe: userSettings.grillMe,
       tdd: userSettings.tdd,
-      prd: userSettings.prd,
       verification: userSettings.verification,
-      researchSubagents: userSettings.researchSubagents,
       modelAllowlist: userSettings.modelAllowlist,
       // The model remembered per planner backend (this task), so a surface can
       // render what's remembered without a second round-trip.
@@ -256,20 +253,11 @@ export class OrchestratorPool {
     if (typeof changes.plannerThinkingEffort === 'string') {
       process.env.ORDEWELL_PLANNER_EFFORT = changes.plannerThinkingEffort;
     }
-    if (changes.grillMe && typeof (changes.grillMe as Record<string, unknown>).enabled === 'boolean') {
-      this.settingsService.setGrillMe((changes.grillMe as Record<string, unknown>).enabled as boolean);
-    }
     if (changes.tdd && typeof (changes.tdd as Record<string, unknown>).enabled === 'boolean') {
       this.settingsService.setTdd((changes.tdd as Record<string, unknown>).enabled as boolean);
     }
-    if (changes.prd && typeof (changes.prd as Record<string, unknown>).enabled === 'boolean') {
-      this.settingsService.setPrd((changes.prd as Record<string, unknown>).enabled as boolean);
-    }
     if (changes.verification && typeof (changes.verification as Record<string, unknown>).enabled === 'boolean') {
       this.settingsService.setVerification((changes.verification as Record<string, unknown>).enabled as boolean);
-    }
-    if (changes.researchSubagents && typeof (changes.researchSubagents as Record<string, unknown>).enabled === 'boolean') {
-      this.settingsService.setResearchSubagents((changes.researchSubagents as Record<string, unknown>).enabled as boolean);
     }
     if (envChanges) {
       let touched = false;

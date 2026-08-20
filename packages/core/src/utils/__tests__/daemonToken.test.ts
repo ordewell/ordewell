@@ -32,7 +32,7 @@ describe('the daemon token file', () => {
   });
 
   it('lands beside the per-port process-id file', () => {
-    expect(daemonTokenPath(3742)).toBe(path.join(home, '.config', 'ordewell', 'server-3742.token'));
+    expect(daemonTokenPath(3742)).toBe(path.join(home, '.ordewell', 'server-3742.token'));
   });
 
   it('is readable by its owner and nobody else', () => {

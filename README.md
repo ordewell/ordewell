@@ -201,7 +201,7 @@ Each pushes to the running server *before* writing `.env`, so the change lands o
 **Deep-interview planning with a PRD**
 
 ```bash
-ordewell grill-me on   # planner interrogates your goal before outlining (min. 3 probing questions)
+ordewell grilling on   # planner interrogates your goal before outlining (min. 3 probing questions)
 ordewell prd on        # planner previews, then writes a full PRD to .scratch/<slug>/PRD.md
 ordewell tdd on        # tasks are augmented with red-green-refactor instructions
 
@@ -241,7 +241,7 @@ For VS Code, install the extension and open the Ordewell panel — see Quick Sta
 | --- | --- |
 | Planning | type a goal, `/approve`, `/run`, `/stop` |
 | Tasks | `/add-task`, `/remove-task`, `/complete`, `/uncomplete`, `/skip`, `/retry`, `/cancel`, `/force-start` |
-| Skills | `/grill-me`, `/tdd`, `/prd`, `/verify`, `/research-subagents` |
+| Skills | `/grilling`, `/tdd`, `/prd`, `/verify` |
 | Models | `/model`, `/key`, `/allowlist`, `/runners`, `/auto`, `/refresh` |
 | Sessions | `/sessions`, `/new`, `/save`, `/load`, `/delete` — a loaded session is adopted by the server, so its plan stays executable |
 | System | `/help`, `/mouse`, `/quit` |
@@ -315,7 +315,7 @@ packages/
 │            TaskOrchestrator, VerdictEngine, ModelResolver, ModeResolver,
 │            RunnerRegistry + manifest template engine
 ├── cli/     ordewell: tui, plan, run, status, stop, web, models, setup,
-│            plugins, grill-me, prd, tdd — plus tui/, a pure state +
+│            plugins, grilling, prd, tdd — plus tui/, a pure state +
 │            renderer core behind a thin raw-mode terminal driver
 ├── vscode/  Extension + webview: streaming planner timeline, task cards,
 │            TTY capture via script(1)
@@ -334,7 +334,7 @@ Every surface consumes one event union (`SessionMessage`) over one broadcast sea
 <details>
 <summary><strong>Acknowledgements</strong></summary>
 
-The deep-interview planning workflows — `grill-me`, PRD drafting, and TDD task augmentation — are adapted from [Matt Pocock's skills](https://github.com/mattpocock/skills) (MIT), rebuilt as prompt blocks inside Ordewell's planner and runner prompts. If you want those workflows in a plain coding-agent session rather than an orchestrated plan, his repo is the place to start.
+The deep-interview planning workflows — `grilling`, PRD drafting, and TDD task augmentation — are adapted from [Matt Pocock's skills](https://github.com/mattpocock/skills) (MIT), rebuilt as prompt blocks inside Ordewell's planner and runner prompts. If you want those workflows in a plain coding-agent session rather than an orchestrated plan, his repo is the place to start.
 
 </details>
 

@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { promises as nodeFs } from 'fs';
 import {
-  Session, LegacyPlanState, createEmptyPlan, Task, flattenTasks,
+  Session, LegacyPlanState, createEmptyPlan, Task, flattenTasks, flattenTasksWithParents, taskOrderLabel,
   ModelResolver, RunnerRegistry, saveState, clearState,
   listSessions, loadSession,
   SettingsService,
@@ -44,6 +44,18 @@ export interface CommandDeps {
   persistState: () => void;
   saveCurrentSession: () => void;
   log: (msg: string) => void;
+}
+
+/**
+ * QuickPick items over every task in a plan, subtasks dotted under their parent
+ * — same `taskOrderLabel` the webview cards render, so the palette pickers and
+ * the rendered plan never disagree about what "2.1" means.
+ */
+export function orderLabelItems(plan: LegacyPlanState): { label: string; description: string }[] {
+  return flattenTasksWithParents(plan.tasks).map(({ task, parent }) => ({
+    label: `${taskOrderLabel(task, parent ?? undefined)}. ${task.title}`,
+    description: task.id,
+  }));
 }
 
 /**
@@ -180,10 +192,10 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
       let removeId: string | undefined = taskItem?.id;
       if (!removeId) {
         const plan = deps.getCurrentPlan();
-        const allTasks = flattenTasks(plan.tasks);
-        if (allTasks.length === 0) return;
+        const items = orderLabelItems(plan);
+        if (items.length === 0) return;
         const picked = await vscode.window.showQuickPick(
-          allTasks.map((t) => ({ label: `${t.order}. ${t.title}`, description: t.id })),
+          items,
           { placeHolder: 'Select task to remove' },
         );
         if (!picked) return;
@@ -218,14 +230,16 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
     vscode.commands.registerCommand('ordewell.markTaskComplete', async (taskId?: string) => {
       if (!taskId) {
         const plan = deps.getCurrentPlan();
-        const allTasks = flattenTasks(plan.tasks);
-        const completable = allTasks.filter((t) => t.status !== 'completed');
-        if (completable.length === 0) {
+        const items = orderLabelItems(plan).filter(({ description }) => {
+          const task = flattenTasks(plan.tasks).find((t) => t.id === description);
+          return task && task.status !== 'completed';
+        });
+        if (items.length === 0) {
           vscode.window.showInformationMessage('No tasks to mark complete.');
           return;
         }
         const picked = await vscode.window.showQuickPick(
-          completable.map((t) => ({ label: `${t.order}. ${t.title}`, description: t.id })),
+          items,
           { placeHolder: 'Select task to mark complete' },
         );
         if (!picked) return;
@@ -239,13 +253,16 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
     vscode.commands.registerCommand('ordewell.markTaskIncomplete', async (taskId?: string) => {
       if (!taskId) {
         const plan = deps.getCurrentPlan();
-        const completed = flattenTasks(plan.tasks).filter((t) => t.status === 'completed');
-        if (completed.length === 0) {
+        const items = orderLabelItems(plan).filter(({ description }) => {
+          const task = flattenTasks(plan.tasks).find((t) => t.id === description);
+          return task && task.status === 'completed';
+        });
+        if (items.length === 0) {
           vscode.window.showInformationMessage('No completed tasks to mark not done.');
           return;
         }
         const picked = await vscode.window.showQuickPick(
-          completed.map((t) => ({ label: `${t.order}. ${t.title}`, description: t.id })),
+          items,
           { placeHolder: 'Select task to mark not done' },
         );
         if (!picked) return;

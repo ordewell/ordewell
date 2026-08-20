@@ -206,7 +206,6 @@ export class OpenAiService extends BaseAiService implements IAiService {
   async startConversation(req: ConversationRequest): Promise<ConversationTurn> {
     this.ensureInit();
     const client = this.getClient();
-    this.researchSubagentsEnabled = req.researchSubagentsEnabled ?? false;
 
     const contextStr = await BaseAiService.collectResearchContext(req.fs, req.runners);
     const systemPrompt = buildConversationSystemPrompt(
@@ -216,15 +215,13 @@ export class OpenAiService extends BaseAiService implements IAiService {
       req.runners,
       req.runnerModes,
       req.autonomousDefault ?? true,
-      req.grillMeEnabled ?? false,
-      req.prdEnabled ?? false,
       req.verificationEnabled ?? false,
     );
 
     const userText = req.goal;
 
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-      { role: 'system', content: `${systemPrompt}\n\n${buildResearchToolsPrompt(this.researchSubagentsEnabled)}` },
+      { role: 'system', content: `${systemPrompt}\n\n${buildResearchToolsPrompt()}` },
     ];
     for (const m of req.priorHistory ?? []) {
       messages.push({ role: m.role, content: m.content });
@@ -235,7 +232,7 @@ export class OpenAiService extends BaseAiService implements IAiService {
       messages,
       client,
       this.requireModel('orchestratorModel', this.config.orchestratorModel),
-      toOpenAiTools(this.researchSubagentsEnabled),
+      toOpenAiTools(),
       (delta) => currentProgress({ type: 'thinking', text: delta }),
       (delta) => currentProgress({ type: 'plan_token', planToken: delta }),
     );
@@ -247,7 +244,6 @@ export class OpenAiService extends BaseAiService implements IAiService {
       runnerModes: req.runnerModes,
       autonomousDefault: req.autonomousDefault,
       fetcher: req.fetcher,
-      prdEnabled: req.prdEnabled ?? false,
     };
 
     this.conversation = {
@@ -280,14 +276,13 @@ export class OpenAiService extends BaseAiService implements IAiService {
   ): Promise<{ tasks: Task[]; researchLog: ResearchLogEntry[]; researchResults: string }> {
     this.ensureInit();
     const client = this.getClient();
-    const { autonomousDefault, researchSubagents: researchSubagentsEnabled } = modes;
-    this.researchSubagentsEnabled = researchSubagentsEnabled;
+    const { autonomousDefault } = modes;
 
     const contextStr = await BaseAiService.collectResearchContext(fs, runners);
     const systemPrompt = buildResearchPrompt(userDescription, contextStr, modelsByRunner, runners, runnerModes, modes);
 
     const userText = `User goal: ${userDescription}`;
-    const firstMessage = `${buildResearchToolsPrompt(researchSubagentsEnabled)}\n\nExplore the workspace to understand the codebase, then generate the plan.\n\n${userText}`;
+    const firstMessage = `${buildResearchToolsPrompt()}\n\nExplore the workspace to understand the codebase, then generate the plan.\n\n${userText}`;
 
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       { role: 'system', content: systemPrompt },
@@ -297,7 +292,7 @@ export class OpenAiService extends BaseAiService implements IAiService {
       messages,
       client,
       this.requireModel('orchestratorModel', this.config.orchestratorModel),
-      toOpenAiTools(researchSubagentsEnabled),
+      toOpenAiTools(),
       (delta) => onProgress({ type: 'thinking', text: delta }),
     );
 

@@ -12,7 +12,7 @@
  *   - a REAL model over OpenRouter (no assertions — prints the transcript
  *     and a behavioral report):
  *       OPENROUTER_API_KEY=sk-or-... node bench/live/drive-conversation.mjs \
- *         --real --model deepseek/deepseek-v4-flash --grill-me \
+ *         --real --model deepseek/deepseek-v4-flash --grilling \
  *         --goal "make this project better" \
  *         --replies "focus on code health::node:test please::confirm"
  *
@@ -35,9 +35,8 @@ function arg(name, fallback) {
   return i >= 0 ? process.argv[i + 1] : fallback;
 }
 const REAL = process.argv.includes('--real');
-const GRILL = process.argv.includes('--grill-me');
+const GRILLING = process.argv.includes('--grilling');
 const PRD = process.argv.includes('--prd');
-const SUBAGENTS = process.argv.includes('--subagents');
 const MODEL = arg('model', 'mock/interviewer');
 const GOAL = arg('goal', 'make this project better');
 const REPLIES = (arg('replies', '') || '').split('::').filter(Boolean);
@@ -154,7 +153,7 @@ const RUNNER_MODES = {
   ],
 };
 
-async function runConversation({ model, goal, grillMe, prd, replies, label }) {
+async function runConversation({ model, goal, grilling, prd, replies, label }) {
   const root = makeSandbox();
   const service = new OpenAiService(cfg(model));
   const trace = makeTrace();
@@ -170,9 +169,8 @@ async function runConversation({ model, goal, grillMe, prd, replies, label }) {
     modelsByRunner: MODELS_BY_RUNNER,
     runnerModes: RUNNER_MODES,
     autonomousDefault: true,
-    grillMeEnabled: grillMe,
+    grillingEnabled: grilling,
     prdEnabled: prd,
-    researchSubagentsEnabled: SUBAGENTS,
     fs: makeFs(root),
     onProgress: trace.onProgress,
   });
@@ -233,13 +231,13 @@ function assert(cond, msg, failures) {
 async function mockSuite() {
   const failures = [];
 
-  // 1. Grill-me interview: explores first, asks one question at a time with a
+  // 1. Grilling interview: explores first, asks one question at a time with a
   //    recommendation, transitions to outline, commits a fenced+trailing-comma plan.
   {
     const run = await runConversation({
-      label: 'grill-me interview (mock/interviewer)',
+      label: 'grilling interview (mock/interviewer)',
       model: 'mock/interviewer', goal: 'make this project better',
-      grillMe: true, prd: false,
+      grilling: true, prd: false,
       replies: ['focus on code health', 'node:test please', 'confirm'],
     });
     printRun(run);
@@ -253,25 +251,25 @@ async function mockSuite() {
     assert(run.trace.thinkingChars > 0, 'reasoning was streamed to the thinking channel', failures);
   }
 
-  // 2. Eager planner under grill-me: the gate bounces the instant commit ONCE;
+  // 2. Eager planner under grilling: the gate bounces the instant commit ONCE;
   //    when the model insists (this persona always re-emits the plan), the plan
   //    still commits — the model decides transitions, the gate never blocks.
   {
     const run = await runConversation({
-      label: 'eager planner ignores grill-me (mock/eager-planner)',
+      label: 'eager planner ignores grilling (mock/eager-planner)',
       model: 'mock/eager-planner', goal: 'make this project better',
-      grillMe: true, prd: false, replies: [],
+      grilling: true, prd: false, replies: [],
     });
     printRun(run);
     assert(run.turn.kind === 'plan', 'an insistently re-emitted valid plan commits after the one gate nudge', failures);
   }
 
-  // 3. Research → preamble + fenced JSON (non grill-me).
+  // 3. Research → preamble + fenced JSON (non grilling).
   {
     const run = await runConversation({
       label: 'research then fenced plan (mock/fenced-json)',
       model: 'mock/fenced-json', goal: 'add a test harness',
-      grillMe: false, prd: false, replies: [],
+      grilling: false, prd: false, replies: [],
     });
     printRun(run);
     assert(run.trace.events.filter((e) => e.t === 'tool_call').length === 2, 'two research tool calls executed', failures);
@@ -283,7 +281,7 @@ async function mockSuite() {
     const run = await runConversation({
       label: 'PRD preview, markers, plan (mock/prd-flow)',
       model: 'mock/prd-flow', goal: 'add a widget',
-      grillMe: false, prd: true,
+      grilling: false, prd: true,
       replies: ['I agree with the preview', 'confirm, generate the plan'],
     });
     printRun(run);
@@ -298,7 +296,7 @@ async function mockSuite() {
     const run = await runConversation({
       label: 'empty assistant turn (mock/empty-turn)',
       model: 'mock/empty-turn', goal: 'do something',
-      grillMe: false, prd: false, replies: [],
+      grilling: false, prd: false, replies: [],
     });
     printRun(run);
     assert(run.turn.kind === 'message', 'empty turn classified as message (no crash)', failures);
@@ -315,8 +313,8 @@ async function mockSuite() {
 
 async function realRun() {
   const run = await runConversation({
-    label: `REAL ${MODEL}${GRILL ? ' +grill-me' : ''}${PRD ? ' +prd' : ''}`,
-    model: MODEL, goal: GOAL, grillMe: GRILL, prd: PRD, replies: [...REPLIES],
+    label: `REAL ${MODEL}${GRILLING ? ' +grilling' : ''}${PRD ? ' +prd' : ''}`,
+    model: MODEL, goal: GOAL, grilling: GRILLING, prd: PRD, replies: [...REPLIES],
   });
   printRun(run);
   console.log('\nBehavioral report:');
@@ -324,9 +322,9 @@ async function realRun() {
   console.log(`  explored before answering: ${run.trace.events.some((e) => e.t === 'tool_call')}`);
   const questionTurns = run.transcript.filter((m) => m.who === 'planner' && m.text.includes('?')).length;
   console.log(`  planner turns containing a question: ${questionTurns}`);
-  if (GRILL) {
+  if (GRILLING) {
     const first = run.transcript.find((m) => m.who === 'planner');
-    console.log(`  grill-me first turn was a question (heuristic '?'): ${first ? first.text.includes('?') : 'n/a'}`);
+    console.log(`  grilling first turn was a question (heuristic '?'): ${first ? first.text.includes('?') : 'n/a'}`);
   }
   if (PRD) console.log(`  PRD extracted: ${run.prdBlock ? `yes (slug=${run.prdBlock.slug})` : 'no'}`);
 }
@@ -353,7 +351,7 @@ async function sessionSuite() {
     fsAdapter: makeFs(root),
     broadcast: (m) => broadcasts.push(m),
     modelResolver,
-    settings: () => ({ tddEnabled: true, grillMeEnabled: false, prdEnabled: true }),
+    settings: () => ({ tddEnabled: true, grillingEnabled: false, prdEnabled: true }),
   });
 
   console.log('\n=== full Session: PRD flow with save-to-disk ===');
@@ -417,7 +415,7 @@ async function approvalsSuite() {
       fsAdapter,
       broadcast: (m) => broadcasts.push(m),
       modelResolver: new core.ModelResolver(new core.RunnerRegistry(), config, { execImpl: () => Promise.reject(new Error('harness')) }),
-      settings: () => ({ tddEnabled: false, grillMeEnabled: false }),
+      settings: () => ({ tddEnabled: false, grillingEnabled: false }),
       ...configOverrides,
     });
     return { session, fsAdapter, broadcasts };
@@ -556,7 +554,7 @@ async function visibilitySuite() {
     fsAdapter: new SandboxFs(),
     broadcast,
     modelResolver: new ModelResolver(registry, config, { execImpl: () => Promise.reject(new Error('harness')) }),
-    settings: () => ({ tddEnabled: false, grillMeEnabled: false }),
+    settings: () => ({ tddEnabled: false, grillingEnabled: false }),
   });
 
   console.log('\n=== visibility: research stream reaches the surfaces intact ===');
@@ -629,7 +627,7 @@ async function taskQuerySuite() {
     fsAdapter: makeFs(root),
     broadcast: (m) => broadcasts.push(m),
     modelResolver,
-    settings: () => ({ tddEnabled: false, grillMeEnabled: false }),
+    settings: () => ({ tddEnabled: false, grillingEnabled: false }),
   });
 
   // A plan handed to the session already assembled — not one it just

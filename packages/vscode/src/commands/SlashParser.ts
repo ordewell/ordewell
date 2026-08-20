@@ -9,6 +9,23 @@ import type { ChatViewProvider, PlannerBackend } from '../providers/ChatViewProv
 import { configureModelAllowlist } from './configureModelAllowlist';
 import { resolveAutonomousQuickPickItems, applyAutonomousChoice } from '../SlashAutonomous';
 
+/**
+ * First-word names this parser recognizes as extension slash commands. Text
+ * starting with '/' whose first word is NOT in this set is a discovered skill
+ * (or unknown) invocation — the caller routes it to handleSendMessage instead,
+ * so Session's own /skill-name substitution (ADR: skill invocation
+ * interception) gets a chance to resolve it, rather than being swallowed here
+ * as "Unknown command".
+ */
+const KNOWN_SLASH_COMMAND_NAMES: ReadonlySet<string> = new Set([
+  'refresh', 'model', 'planner', 'planner-effort', 'key', 'sessions', 'allowlist', 'help', 'new', 'auto',
+]);
+
+export function isKnownSlashCommand(text: string): boolean {
+  const name = text.trim().slice(1).split(/\s+/)[0]?.toLowerCase();
+  return !!name && KNOWN_SLASH_COMMAND_NAMES.has(name);
+}
+
 export interface SlashDeps {
   config: { orchestratorModel: string; planningModel: string; enabledRunners: string[]; autonomousMode: boolean; apiKey: string; openAiBaseUrl: string; configuredProviders: ApiProvider[]; aiProvider: AiProvider; plannerThinkingEffort?: string };
   modelResolver: { pickerOptions(): Promise<{ id: string; label: string; provider: string; apiProvider?: AiProvider; description?: string; pricing?: string }[]>; refresh(): Promise<unknown>; invalidate(): void; refreshRunnerModels(): void; modelsForRunners(runners: string[]): Promise<Partial<Record<string, DiscoveredModel[]>>>; };

@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import { render } from '../render';
 import { chatBodyLines } from '../layout';
 import { stripAnsi, style, width } from '../ansi';
 import { initialState, type ChatMessage, type TaskView, type TuiState } from '../state';
 import { reduce } from '../reducer';
+import { registerSkillCommands } from '../slash';
 
 // Any escape sequence at all, and the two kinds a painted frame may carry:
 // colour, and the erase-plus-cursor-column the pane divider is anchored with.
@@ -139,8 +140,7 @@ describe('frame geometry', () => {
 
 describe('top bar', () => {
   it('marks which skills are on', () => {
-    const on = text({ skills: { ...initialState().skills, 'grill-me': true, tdd: true } });
-    expect(on).toContain('grill-me');
+    const on = text({ skills: { ...initialState().skills, tdd: true } });
     expect(on).toContain('tdd');
   });
 
@@ -411,8 +411,8 @@ describe('input line', () => {
 
   it('suggests commands while a slash command is being typed', () => {
     const s = initialState({ rows: 24, cols: 80 });
-    const out = render({ ...s, editor: { ...s.editor, text: '/gr', cursor: 3 } });
-    expect(out.join('\n')).toContain('grill-me');
+    const out = render({ ...s, editor: { ...s.editor, text: '/term', cursor: 5 } });
+    expect(out.join('\n')).toContain('terminal');
   });
 
   it('renders multi-line input on separate rows with continuation prompt', () => {
@@ -512,7 +512,7 @@ describe('overlays', () => {
 
   it('lists every command in the help sheet', () => {
     const out = text({ overlay: { kind: 'help' }, rows: 60 });
-    for (const name of ['/grill-me', '/allowlist', '/key', '/model', '/tdd', '/research-subagents']) {
+    for (const name of ['/verify', '/allowlist', '/key', '/model', '/tdd']) {
       expect(out).toContain(name);
     }
   });
@@ -588,6 +588,61 @@ describe('input cursor', () => {
       const s = initialState({ rows: 24, cols: 80, overlay: { kind: 'help' as const, scroll: 0 } });
       const out = render({ ...s, editor: { ...s.editor, text: 'abc', cursor: 1 } });
       expect(out[out.length - 2]).not.toContain('\x1b[7m');
+    });
+  });
+
+  describe('skill token colouring', () => {
+    afterEach(() => registerSkillCommands([]));
+
+    it('colours a matched skill command token', () => {
+      withColour(() => {
+        registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
+        const s = initialState({ rows: 24, cols: 80 });
+        const out = render({ ...s, editor: { ...s.editor, text: '/grilling ', cursor: 10 } });
+        expect(out[out.length - 2]).toContain(style.cyan('/grilling'));
+      });
+    });
+
+    it('does not colour an unmatched token', () => {
+      withColour(() => {
+        const s = initialState({ rows: 24, cols: 80 });
+        const out = render({ ...s, editor: { ...s.editor, text: '/foo', cursor: 0 } });
+        expect(out[out.length - 2]).not.toContain(style.cyan('/foo'));
+      });
+    });
+
+    it('does not colour a built-in command token', () => {
+      withColour(() => {
+        const s = initialState({ rows: 24, cols: 80 });
+        const out = render({ ...s, editor: { ...s.editor, text: '/help', cursor: 0 } });
+        expect(out[out.length - 2]).not.toContain(style.cyan('/help'));
+      });
+    });
+
+    it('does not colour a partial, unmatched skill token', () => {
+      withColour(() => {
+        registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
+        const s = initialState({ rows: 24, cols: 80 });
+        const out = render({ ...s, editor: { ...s.editor, text: '/gri', cursor: 0 } });
+        expect(out[out.length - 2]).not.toContain(style.cyan('/gri'));
+      });
+    });
+
+    it('keeps the caret column unchanged with and without colouring', () => {
+      registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
+      try {
+        const s = initialState({ rows: 24, cols: 80 });
+
+        style.enabled = false;
+        const plain = stripAnsi(render({ ...s, editor: { ...s.editor, text: '/grilling', cursor: 3 } })[24 - 2]);
+
+        style.enabled = true;
+        const coloured = stripAnsi(render({ ...s, editor: { ...s.editor, text: '/grilling', cursor: 3 } })[24 - 2]);
+
+        expect(coloured).toBe(plain);
+      } finally {
+        style.enabled = false;
+      }
     });
   });
 });

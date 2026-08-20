@@ -1,9 +1,10 @@
-import { assertWorkspaceExists, mintSessionId } from '@ordewell/core';
+import { assertWorkspaceExists, createSkillsService, mintSessionId } from '@ordewell/core';
 import { ApiClient, ensureDaemonOwned, resolvePort, stopDaemon } from '../daemonClient';
 import { flag } from '../utils';
 import { findEnvFile, writeEnvVar } from '../utils/env';
 import { createApp } from './app';
 import { ConversationQueue, runEffect, type OrdewellApi } from './effects';
+import { registerSkillCommands } from './slash';
 import { openTerminal } from './terminal';
 import { openTaskTerminal } from './terminalLauncher';
 
@@ -32,6 +33,10 @@ export async function handleTui(subArgs: string[]): Promise<void> {
     );
     process.exit(1);
   }
+  // Skills become slash commands for this run: completions, Tab, and dispatch
+  // all read from the one registry in slash.ts (registerSkillCommands).
+  registerSkillCommands(createSkillsService(workspace).listSkills());
+
   const { port, owned: ownedAtLaunch } = await ensureDaemonOwned(resolvePort(subArgs), { detached: false });
   // Not const: a daemon we did not start can die and be replaced by one we
   // did, and only the one we started may be stopped on the way out.

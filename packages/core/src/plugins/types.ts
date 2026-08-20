@@ -158,7 +158,7 @@ export interface RunnerInvocation {
  * testable without real I/O.
  */
 export interface IPluginStore {
-  /** Path to the user plugins directory (~/.config/ordewell/plugins/). */
+  /** Path to the user plugins directory (~/.ordewell/plugins/). */
   getUserPluginsDir(): string;
   /** List subdirectory names inside the user plugins directory. */
   listUserPluginDirs(): string[];

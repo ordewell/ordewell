@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
+## [Unreleased]
+
+### Changed
+
+- **The `grill-me` skill is renamed to `grilling`**, invoked as `/grilling`.
+  Its interview method is rewritten around a design-tree/frontier/rounds
+  structure instead of one-question-at-a-time.
+
+### Fixed
+
+- A stale `grill-me` seed left in `~/.ordewell/skills` by a build from before
+  the rename to `grilling` is now pruned on upgrade, so it stops lingering
+  in the skill list forever. Only untouched seeds are removed — anything a
+  user added or modified under that name is left alone.
+
 ## [0.4.10] — 2026-08-17
 
 Planner and TUI fixes, and a read/edit channel that lets the planner work on

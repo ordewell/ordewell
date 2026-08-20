@@ -6,12 +6,9 @@ import { handleWeb } from './web';
 import { handleModels } from './models';
 import { handleSetup } from './setup';
 import { handlePlugins } from './plugins';
-import { handleGrillMe } from './grillMe';
 import { handleTdd } from './tdd';
-import { handlePrd } from './prd';
 import { handleAllowlist } from './allowlist';
 import { handleVerify } from './verify';
-import { handleResearchSubagents } from './researchSubagents';
 import { handleMarkComplete, handleSkip, handleUncomplete } from './mark-complete';
 import { handleRunTask, handleForceStart, handleRetry, handleCancel } from './task-control';
 import { handleAddTask } from './add-task';
@@ -55,11 +52,8 @@ export const COMMANDS: Record<string, (args: string[]) => Promise<void> | void> 
   refresh: handleRefresh,
   setup: handleSetup,
   plugins: handlePlugins,
-  'grill-me': handleGrillMe,
   'tdd': handleTdd,
-  'prd': handlePrd,
   'verify': handleVerify,
-  'research-subagents': handleResearchSubagents,
   'mark-complete': handleMarkComplete,
   complete: handleMarkComplete,
   uncomplete: handleUncomplete,

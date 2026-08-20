@@ -144,20 +144,20 @@ describe('chat plan flow', () => {
     expect(pill?.textContent?.includes('Claude Code')).toBeTruthy();
   });
 
-  it('renders PRD skill pill and toggles it via postMessage', () => {
+  it('renders TDD skill pill and toggles it via postMessage', () => {
     const vscodeApi = (globalThis as unknown as { __vscodeApi: { postMessage: import('vitest').Mock } }).__vscodeApi;
     vscodeApi.postMessage.mockClear();
 
-    send({ type: 'setSkillToggles', toggles: { 'grill-me': false, tdd: true, prd: false } });
-    const prdButton = Array.from(document.querySelectorAll('.skill-toggle-pill')).find(
-      (b) => b.textContent?.includes('PRD'),
+    send({ type: 'setSkillToggles', toggles: { tdd: false, verify: false } });
+    const tddButton = Array.from(document.querySelectorAll('.skill-toggle-pill')).find(
+      (b) => b.textContent?.includes('TDD'),
     ) as HTMLButtonElement;
-    expect(prdButton).toBeTruthy();
-    expect(prdButton.classList.contains('off')).toBeTruthy();
+    expect(tddButton).toBeTruthy();
+    expect(tddButton.classList.contains('off')).toBeTruthy();
 
-    act(() => { fireEvent.click(prdButton); });
+    act(() => { fireEvent.click(tddButton); });
     expect(vscodeApi.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'toggleSkill', skillId: 'prd', enabled: true }),
+      expect.objectContaining({ type: 'toggleSkill', skillId: 'tdd', enabled: true }),
     );
   });
 
@@ -222,7 +222,7 @@ describe('chat plan flow', () => {
     expect(document.querySelector('.prd-answer-input')).toBeNull();
   });
 
-  it('renders a grill-me interview question in the planner bubble, not the user bubble', () => {
+  it('renders a grilling interview question in the planner bubble, not the user bubble', () => {
     const textarea = document.querySelector('.chat-input-row textarea') as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: 'build a login page' } });
     fireEvent.keyDown(textarea, { key: 'Enter' });

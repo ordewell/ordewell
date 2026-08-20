@@ -71,8 +71,16 @@ export {
   TASK_QUERY_FIELDS, TASK_QUERY_PROTOCOL, TASK_QUERY_REMINDER, TASK_QUERY_ANSWER_OR_OPS,
 } from './services/TaskQuery';
 export type { TaskQuery, TaskQueryField, TaskQueryCatalog } from './services/TaskQuery';
-export { Session, PlanEditError, sessionRuntimeSettings } from './services/createSession';
+export { Session, PlanEditError, sessionRuntimeSettings, resolveSkillInvocation } from './services/createSession';
 export type { SessionDeps, SessionRuntimeSettings, SessionPlanner } from './services/createSession';
+export {
+  SkillsService,
+  createSkillsService,
+  BUILTIN_SKILL_NAMES,
+  type SkillInfo,
+  type SkillMetadata,
+} from './services/SkillsService';
+export { globalDataDir, migrateOldConfigDir } from './utils/globalDataDir';
 export type {
   SessionMessage,
   SessionBroadcaster,

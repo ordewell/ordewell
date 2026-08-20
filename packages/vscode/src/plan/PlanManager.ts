@@ -38,7 +38,7 @@ export interface PlanManagerDeps {
   fsAdapter: VsCodeFileSystem;
   terminalRunner: VsCodeTerminalRunner;
   notifications: INotification;
-  settingsService: { getGrillMe(): boolean; getTdd(): boolean; getPrd(): boolean; };
+  settingsService: { getTdd(): boolean; };
   getCurrentPlan: () => LegacyPlanState;
   setCurrentPlan: (plan: LegacyPlanState) => void;
   getCurrentGoal: () => string;

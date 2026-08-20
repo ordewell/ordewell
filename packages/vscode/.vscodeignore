@@ -10,6 +10,7 @@
 !dist/extension.js
 !dist/webviews/**
 !media/**
+!skills/**
 !package.json
 !README.md
 !LICENSE

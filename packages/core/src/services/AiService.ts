@@ -24,11 +24,7 @@ export interface ConversationRequest {
   fetcher?: IWebFetcher;
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>;
   autonomousDefault?: boolean;
-  grillMeEnabled?: boolean;
-  prdEnabled?: boolean;
   verificationEnabled?: boolean;
-  /** Declare the spawn_research_agent tool to the planner (issue #34, default off). */
-  researchSubagentsEnabled?: boolean;
   signal?: AbortSignal;
   /**
    * Persisted dialogue to seed a resumed conversation (session reload). The

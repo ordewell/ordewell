@@ -39,6 +39,8 @@
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.4);
   --transition-fast: 120ms ease;
   --transition-normal: 180ms ease;
+  --slash-token-bg: var(--vscode-textPreformat-background, rgba(88, 166, 255, 0.16));
+  --slash-token-fg: var(--vscode-textLink-foreground, #58a6ff);
 }
 
 *, *::before, *::after {
@@ -2475,7 +2477,44 @@ body {
   width: 100%;
 }
 
+.chat-input-highlight-wrap {
+  position: relative;
+  display: flex;
+  flex: 1;
+}
+
+/*
+ * Mirrors the textarea's box exactly (font, padding, wrapping) and sits behind
+ * it — the textarea keeps a transparent background, so only the <mark>'s
+ * highlight color shows through, in register with the real (opaque) glyphs
+ * the textarea renders on top. A plain <textarea> can't color a substring on
+ * its own; this overlay is the standard workaround.
+ */
+.chat-input-highlight-backdrop {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+  padding: 9px 6px 9px 12px;
+  color: transparent;
+}
+
+.chat-input-highlight-backdrop mark {
+  background: var(--slash-token-bg);
+  color: transparent;
+  border-radius: 4px;
+  padding: 0 1px;
+  margin: 0 -1px;
+}
+
 .chat-input-inner textarea {
+  position: relative;
   flex: 1;
   background: transparent;
   color: var(--text-primary);
@@ -2494,6 +2533,10 @@ body {
 .chat-input-inner textarea::placeholder {
   color: var(--text-placeholder);
   font-size: 13px;
+}
+
+.slash-suggestion-item.skill .slash-suggestion-label {
+  color: var(--slash-token-fg);
 }
 
 .send-btn {

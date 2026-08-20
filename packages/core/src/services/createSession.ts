@@ -15,6 +15,7 @@ import { filterModelsForPrompt, coerceAssignments, effectiveAllowlist } from './
 import { retargetTaskRunner, runnerAssignment, type RunnerCatalog } from './TaskRetarget';
 import { plannerModesFrom, plannerRuntimeToggles } from './plannerModes';
 import type { UserSettings } from './SettingsService';
+import { SkillsService } from './SkillsService';
 import { buildMergePrompt, buildSplitPrompt } from './PlanPrompts';
 import {
   serializeTask,
@@ -99,10 +100,7 @@ export type SessionPlanner = Pick<Planner, 'generate' | 'modify' | 'modifyDuring
 /** Runtime prefs read live — may toggle between operations. */
 export interface SessionRuntimeSettings {
   tddEnabled: boolean;
-  grillMeEnabled: boolean;
-  prdEnabled?: boolean;
   verificationEnabled?: boolean;
-  researchSubagentsEnabled?: boolean;
   modelAllowlist?: Record<string, string[]>;
 }
 
@@ -118,10 +116,34 @@ export function sessionRuntimeSettings(settings: UserSettings): SessionRuntimeSe
 }
 
 /**
+ * Resolve a `/skill-name` invocation to the skill's markdown content. Pure and
+ * exported so surfaces and verification can drive substitution without a full
+ * Session. Plain text passes through unchanged; an unknown skill becomes a
+ * notice naming what IS available instead of a bare slash token that a runner
+ * would mis-resolve in its own skills directory.
+ */
+export function resolveSkillInvocation(
+  text: string,
+  skillsService: Pick<SkillsService, 'findSkill' | 'listSkills'>,
+): string {
+  const match = text.trim().match(/^\/([a-z][a-z0-9_-]*)$/im);
+  if (!match) return text;
+  const skillName = match[1].toLowerCase();
+  const skill = skillsService.findSkill(skillName);
+  if (!skill) {
+    const available = typeof skillsService.listSkills === 'function'
+      ? skillsService.listSkills().map((s) => s.name).join(', ')
+      : '';
+    return `Unknown skill: ${skillName}. Available skills: ${available}`;
+  }
+  return skill.content;
+}
+
+/**
  * Everything a delivery surface constructs to host a session. Structural config
  * (enabledRunners, orchestratorModel, providerModelLists) is snapshotted inside
  * `config` at construction and never re-read from the environment. Runtime
- * settings (tdd, grillMe) are read live via the `settings` callback so a toggle
+ * settings (tdd, verification) are read live via the `settings` callback so a toggle
  * between generate and execute takes effect.
  */
 export interface SessionDeps {
@@ -137,7 +159,7 @@ export interface SessionDeps {
   broadcast: SessionBroadcaster;
   /** Shared across sessions — sole producer of model catalogs and routing lists. */
   modelResolver: ModelResolver;
-  /** Live runtime settings (tdd, grillMe). Read at each operation that needs them. */
+  /** Live runtime settings (tdd, verification). Read at each operation that needs them. */
   settings: () => SessionRuntimeSettings;
   /**
    * Host-assigned session id. When set, every persist writes under this id so
@@ -153,6 +175,11 @@ export interface SessionDeps {
   aiService?: IAiService;
   /** Plan-generation seam. Defaults to a Planner over the session's aiService. */
   planner?: SessionPlanner;
+  /**
+   * Skill lookup for /skill-name interception. Defaults to a SkillsService
+   * over the session's workspace root.
+   */
+  skillsService?: SkillsService;
 }
 
 /**
@@ -195,6 +222,7 @@ export class Session {
   private unsubObserver: (() => void) | null = null;
   private readonly hostSessionId?: string;
   private currentSessionId: string;
+  private readonly skillsService: SkillsService;
 
   constructor(deps: SessionDeps) {
     this.config = deps.config;
@@ -214,6 +242,7 @@ export class Session {
     this.settingsFn = deps.settings;
     this.hostSessionId = deps.sessionId;
     this.currentSessionId = deps.sessionId ?? mintSessionId();
+    this.skillsService = deps.skillsService ?? new SkillsService(this.workspaceRootFn());
 
     // The approval chain, wired once per session: the filesystem asks the
     // policy, the policy asks the registry, the registry announces on the same
@@ -559,7 +588,7 @@ export class Session {
    */
   async startPlanning(goal: string, runners: RunnerId[], options?: GeneratePlanOptions): Promise<LegacyPlanState> {
     this.plan = null;
-    this.goal = goal;
+    this.goal = this.resolveSkillInvocation(goal);
     this.remintSessionId();
     this.beginFreshPlan();
     const enabled = this.config.enabledRunners;
@@ -569,7 +598,7 @@ export class Session {
     const modelsByRunner = await this.modelResolver.modelsForRunners(chosenRunners);
     this.modelsCache = modelsByRunner;
     const runnerModes = this.runnerModesFor(chosenRunners);
-    const { grillMeEnabled, prdEnabled, verificationEnabled, researchSubagentsEnabled, modelAllowlist } = this.settingsFn();
+    const { verificationEnabled, modelAllowlist } = this.settingsFn();
     this.currentAllowlist = modelAllowlist ?? {};
     const filteredModels = filterModelsForPrompt(modelsByRunner, this.currentAllowlist);
 
@@ -580,22 +609,19 @@ export class Session {
       status: 'draft',
       runners: chosenRunners,
       lastUpdated: now,
-      researchLog: [{ id: `up-${Date.now()}`, type: 'user_prompt', content: goal, timestamp: now }],
-      conversationHistory: [{ role: 'user', content: goal, timestamp: now }],
+      researchLog: [{ id: `up-${Date.now()}`, type: 'user_prompt', content: this.goal, timestamp: now }],
+      conversationHistory: [{ role: 'user', content: this.goal, timestamp: now }],
     };
 
     const releaseAbort = this.denyApprovalsOnAbort(options?.signal);
     try {
       const turn = await this.aiService.startConversation({
-        goal,
+        goal: this.goal,
         runners: chosenRunners,
         modelsByRunner: filteredModels,
         runnerModes,
         autonomousDefault: this.config.autonomousMode,
-        grillMeEnabled: grillMeEnabled ?? false,
-        prdEnabled: prdEnabled ?? false,
         verificationEnabled: verificationEnabled ?? false,
-        researchSubagentsEnabled: researchSubagentsEnabled ?? false,
         fs: this.fsAdapter,
         fetcher: this.fetcher,
         onProgress: (p) => this.translateProgress(p),
@@ -609,26 +635,27 @@ export class Session {
   }
 
   /**
-   * Every subsequent user reply in the planning conversation — grill-me
-   * answers, PRD accept/adjust, outline confirm. One branch, no phase ladder.
+   * Every subsequent user reply in the planning conversation — clarifying
+   * answers, outline confirm. One branch, no phase ladder.
    */
   async continueConversation(userMessage: string, options?: GeneratePlanOptions): Promise<LegacyPlanState> {
     if (!this.plan) throw new Error('No planning conversation to continue');
     const priorHistory = this.plan.conversationHistory ?? [];
     const priorResearchLog = this.plan.researchLog ?? [];
     const now = new Date().toISOString();
-    this.appendTranscript('user', userMessage, now);
+    const resolved = this.resolveSkillInvocation(userMessage);
+    this.appendTranscript('user', resolved, now);
     // The two appends above mutate `this.plan` directly (persist happens later,
     // via settleTurn's mutatePlan) — snapshot the array this call created so the
     // catch can roll back exactly its own writes, and nothing it did not write.
     const historyAfterOwnAppend = this.plan.conversationHistory;
-    this.plan.researchLog = [...(this.plan.researchLog ?? []), { id: `up-${Date.now()}`, type: 'user_prompt', content: userMessage, timestamp: now }];
+    this.plan.researchLog = [...(this.plan.researchLog ?? []), { id: `up-${Date.now()}`, type: 'user_prompt', content: resolved, timestamp: now }];
 
     // The persisted transcript keeps the raw user message; the model gets the
     // live catalog (always) and the current plan (tasks, statuses, edit
     // protocol — once tasks exist) alongside it.
     const contextBlock = [this.catalogBlock(), this.planContextBlock()].filter(Boolean).join('\n\n');
-    const outgoing = contextBlock ? `${contextBlock}\n\n${userMessage}` : userMessage;
+    const outgoing = contextBlock ? `${contextBlock}\n\n${resolved}` : resolved;
 
     // A live conversation is only safe to continue in-place when it also
     // matches the model/effort configured right now — a harness planner's
@@ -814,8 +841,8 @@ export class Session {
    * The catalog the planner may actually draw from — model ids and task-mode
    * ids, per selected runner — emitted on EVERY turn, before any plan exists
    * or after. The system prompt shows this once at conversation start; a long
-   * grill-me interview or PRD negotiation outlives that single showing and the
-   * planner starts misquoting it, so this re-states it per turn instead.
+   * clarifying conversation outlives that single showing and the planner
+   * starts misquoting it, so this re-states it per turn instead.
    *
    * Built from the allowlist-filtered view (`filterModelsForPrompt`), the same
    * one the system prompt used — a restricted allowlist stays a hard bound on
@@ -972,7 +999,7 @@ export class Session {
     const modelsByRunner = await this.modelResolver.modelsForRunners(runners);
     this.modelsCache = modelsByRunner;
     const runnerModes = this.runnerModesFor(runners);
-    const { grillMeEnabled, prdEnabled, verificationEnabled, researchSubagentsEnabled, modelAllowlist } = this.settingsFn();
+    const { verificationEnabled, modelAllowlist } = this.settingsFn();
     this.currentAllowlist = modelAllowlist ?? {};
     const filteredModels = filterModelsForPrompt(modelsByRunner, this.currentAllowlist);
     const goal = this.goal || priorHistory.find((m) => m.role === 'user')?.content || userMessage;
@@ -983,10 +1010,7 @@ export class Session {
       modelsByRunner: filteredModels,
       runnerModes,
       autonomousDefault: this.config.autonomousMode,
-      grillMeEnabled: grillMeEnabled ?? false,
-      prdEnabled: prdEnabled ?? false,
       verificationEnabled: verificationEnabled ?? false,
-      researchSubagentsEnabled: researchSubagentsEnabled ?? false,
       fs: this.fsAdapter,
       fetcher: this.fetcher,
       onProgress: (p) => this.translateProgress(p),
@@ -999,6 +1023,18 @@ export class Session {
   /** Whether the planner conversation is live (started and not yet committed to a plan). */
   get isConversationActive(): boolean {
     return this.aiService.hasActiveConversation();
+  }
+
+  /**
+   * Intercept a skill invocation (/skill-name) and substitute the skill's
+   * markdown content BEFORE the message reaches the planner. Prevents runners
+   * (Claude Code, OpenCode) from trying to resolve the skill in their own
+   * directory instead of .ordewell/skills/. An unknown skill is surfaced to
+   * the planner as a notice naming what IS available, rather than passing a
+   * bare /unknown through to be mis-resolved.
+   */
+  private resolveSkillInvocation(text: string): string {
+    return resolveSkillInvocation(text, this.skillsService);
   }
 
   /** Append one dialogue entry to the persisted transcript. Callers persist via the mutatePlan ritual. */

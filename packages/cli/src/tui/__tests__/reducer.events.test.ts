@@ -193,13 +193,11 @@ describe('loaded data', () => {
       type: 'settingsLoaded',
       settings: {
         orchestratorModel: 'x/y',
-        grillMe: { enabled: true },
         tdd: { enabled: false },
         verification: { enabled: true },
         modelAllowlist: { opencode: ['a/b'] },
       },
     });
-    expect(s.skills['grill-me']).toBe(true);
     expect(s.skills.tdd).toBe(false);
     // The daemon calls it `verification`; the TUI toggle is `/verify`.
     expect(s.skills.verify).toBe(true);

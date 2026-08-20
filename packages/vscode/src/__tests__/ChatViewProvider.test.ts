@@ -60,6 +60,18 @@ describe('ChatViewProvider.setModels', () => {
   });
 });
 
+describe('ChatViewProvider.setSkills', () => {
+  it('sends the discovered skill list to the webview', () => {
+    const { provider, posted } = providerWithCapture();
+    provider.setSkills([{ name: 'grilling', description: 'Grill a plan' }]);
+
+    expect(posted).toHaveLength(1);
+    const msg = posted[0] as { type: string; skills: { name: string; description: string }[] };
+    expect(msg.type).toBe('setSkills');
+    expect(msg.skills).toEqual([{ name: 'grilling', description: 'Grill a plan' }]);
+  });
+});
+
 describe('ChatViewProvider.resendAllState', () => {
   it('rebuilds flat models as DiscoveredModel[] preserving variants and all runner providers', () => {
     const { provider, posted } = providerWithCapture();

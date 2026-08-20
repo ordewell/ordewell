@@ -6,66 +6,6 @@ import { DEFAULT_PLANNER_MODES, type PlannerModes } from '../plannerModes';
 
 const modes = (over: Partial<PlannerModes> = {}): PlannerModes => ({ ...DEFAULT_PLANNER_MODES, ...over });
 
-describe('buildConversationSystemPrompt grill-me (aligned with the original grill-me skill)', () => {
-  function prompt(grillMeEnabled: boolean, prdEnabled = false, verificationEnabled = false) {
-    return buildConversationSystemPrompt(
-      'build a task planner',
-      '',
-      {},
-      ['claude-code'],
-      undefined,
-      true,
-      grillMeEnabled,
-      prdEnabled,
-      verificationEnabled,
-    );
-  }
-
-  it('instructs a relentless interview until shared understanding, walking the decision tree', () => {
-    const p = prompt(true);
-    expect(p).toMatch(/Interview the user relentlessly about every aspect of their goal until you reach a shared understanding/i);
-    expect(p).toMatch(/Walk down each branch of the design tree/i);
-    expect(p).toMatch(/resolving dependencies between decisions one-by-one/i);
-  });
-
-  it('asks one question at a time and proposes a recommended answer, like the original skill', () => {
-    const p = prompt(true);
-    expect(p).toMatch(/Ask one question at a time, waiting for the user's answer before continuing/i);
-    expect(p).toMatch(/propose your recommended answer/i);
-    expect(p).toMatch(/Asking multiple questions at once is bewildering/i);
-  });
-
-  it('prefers exploring the codebase over asking when a fact is answerable that way', () => {
-    const p = prompt(true);
-    expect(p).toMatch(/If a fact can be found by exploring the codebase, look it up instead of asking/i);
-  });
-
-  it('has no minimum-questions floor — the model decides when understanding is reached', () => {
-    const p = prompt(true);
-    expect(p).not.toMatch(/at least \d+ probing questions/i);
-    expect(p).not.toMatch(/explicitly justify why fewer questions are needed/i);
-  });
-
-  it('requires explicit user confirmation before transitioning to outline or JSON', () => {
-    const p = prompt(true);
-    expect(p).toMatch(/Only propose an outline after the user has answered enough questions/i);
-    expect(p).toMatch(/wait for explicit confirmation before emitting the task plan JSON/i);
-  });
-
-  it('uses no sentinel tokens for phase transitions', () => {
-    const p = prompt(true);
-    expect(p).not.toContain('<<ORDEWELL_QUESTION>>');
-    expect(p).not.toContain('READY_FOR_PRD');
-  });
-
-  it('gates the grill-me block with the toggle', () => {
-    const on = prompt(true);
-    const off = prompt(false);
-    expect(on).toContain('INTERVIEW MODE');
-    expect(off).not.toContain('INTERVIEW MODE');
-  });
-});
-
 describe('buildConversationSystemPrompt verification mode', () => {
   function prompt(verificationEnabled: boolean) {
     return buildConversationSystemPrompt(
@@ -75,8 +15,6 @@ describe('buildConversationSystemPrompt verification mode', () => {
       ['claude-code'],
       undefined,
       true,
-      false,
-      false,
       verificationEnabled,
     );
   }
@@ -140,42 +78,6 @@ describe('buildResearchPrompt verification mode (one-shot path)', () => {
   });
 });
 
-describe('buildConversationSystemPrompt PRD mode', () => {
-  function prompt(prdEnabled: boolean) {
-    return buildConversationSystemPrompt(
-      'build a task planner',
-      '',
-      {},
-      ['claude-code'],
-      undefined,
-      true,
-      false,
-      prdEnabled,
-      false,
-    );
-  }
-
-  it('applies seam economy to the previewed testing seams', () => {
-    const p = prompt(true);
-    expect(p).toMatch(/Prefer existing seams over new ones/i);
-    expect(p).toMatch(/the ideal number is one/i);
-  });
-
-  it('constrains PRD content: extensive user stories, decisions, no file paths', () => {
-    const p = prompt(true);
-    expect(p).toMatch(/As an <actor>, I want <feature>, so that <benefit>/i);
-    expect(p).toMatch(/do NOT include specific file paths or code snippets/i);
-    expect(p).toMatch(/snippet from a prototype that encodes a decision/i);
-  });
-
-  it('gates the PRD block with the toggle', () => {
-    const on = prompt(true);
-    const off = prompt(false);
-    expect(on).toContain('PRD MODE');
-    expect(off).not.toContain('PRD MODE');
-  });
-});
-
 describe('buildConversationSystemPrompt slice rules', () => {
   it('sizes slices to a fresh context window, prefactors first, and allows expand-contract for wide refactors', () => {
     const p = buildConversationSystemPrompt('goal', '', {}, ['claude-code']);
@@ -212,9 +114,8 @@ describe('buildResearchPrompt model catalog', () => {
 });
 
 describe('research subagent prompts', () => {
-  it('tools prompt mentions spawn_research_agent only when subagents are enabled', () => {
-    expect(buildResearchToolsPrompt()).not.toContain('spawn_research_agent');
-    const on = buildResearchToolsPrompt(true);
+  it('tools prompt always mentions spawn_research_agent', () => {
+    const on = buildResearchToolsPrompt();
     expect(on).toContain('spawn_research_agent');
     // Concurrency guidance (opencode-style): batch spawn calls in one reply.
     expect(on).toMatch(/concurrent/i);
@@ -233,7 +134,7 @@ describe('research subagent prompts', () => {
 });
 
 describe('buildConversationSystemPrompt harness variant (ADR-0009)', () => {
-  function variant(harnessMode: boolean, toggles: { grillMe?: boolean; prd?: boolean; verify?: boolean } = {}) {
+  function variant(harnessMode: boolean, toggles: { verify?: boolean } = {}) {
     return buildConversationSystemPrompt(
       'build a task planner',
       'PROJECT CONTEXT HERE',
@@ -241,8 +142,6 @@ describe('buildConversationSystemPrompt harness variant (ADR-0009)', () => {
       ['claude-code'],
       undefined,
       true,
-      toggles.grillMe ?? false,
-      toggles.prd ?? false,
       toggles.verify ?? false,
       harnessMode,
     );
@@ -290,15 +189,13 @@ describe('buildConversationSystemPrompt harness variant (ADR-0009)', () => {
     }
   });
 
-  it('carries every mode-toggle block, so no toggle works on one backend only', () => {
-    const all = { grillMe: true, prd: true, verify: true };
+  it('carries the verification mode block, so the toggle works on both backends', () => {
+    const all = { verify: true };
     const harness = variant(true, all);
     const api = variant(false, all);
 
-    for (const block of ['INTERVIEW MODE — GRILL-ME:', 'PRD MODE:', 'VERIFICATION MODE:']) {
-      expect(harness).toContain(block);
-      expect(api).toContain(block);
-    }
+    expect(harness).toContain('VERIFICATION MODE:');
+    expect(api).toContain('VERIFICATION MODE:');
     // The two variants differ only in the research-phase block.
     expect(harness.replace(/RESEARCH PHASE:[\s\S]*?\n\n/, '')).toEqual(api.replace(/RESEARCH PHASE:[\s\S]*?\n\n/, ''));
   });

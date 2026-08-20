@@ -1,11 +1,11 @@
 import { pad, style, truncate, width, wrap, wrapLines, type WrapLine } from './ansi';
 import { cursorInLines, type CursorPosition } from './editor';
 import { renderMarkdown } from './markdown';
-import { chatEditorRoom, chatPaneWidth, paneTextRoom, planPaneWidth } from './geometry';
+import { chatEditorRoom, chatPaneWidth, planPaneWidth } from './geometry';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
-import { isTaskRunning, type ChatMessage, type TaskView, type TuiState } from './state';
+import { isTaskRunning, planRows, selectedPlanRow, type ChatMessage, type PlanRow, type TuiState } from './state';
 import { modesForTask } from './taskAssignment';
-import { ALL_PROVIDERS, runnerForProvider, type AiProvider, type ResearchStepOutcome } from '@ordewell/core';
+import { ALL_PROVIDERS, runnerForProvider, taskOrderLabel, type AiProvider, type ResearchStepOutcome } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -46,7 +46,7 @@ export function chatInputWrap(state: TuiState): WrapLine[] | null {
 export function footerHints(state: TuiState): string[] {
   // `m` toggles, so the hint has to name the direction it will actually go for
   // the selected task — a fixed 'm done' on a finished task reads as a no-op.
-  const markHint = state.tasks[state.selectedTask]?.status === 'completed' ? 'm undone' : 'm done';
+  const markHint = selectedPlanRow(state)?.task.status === 'completed' ? 'm undone' : 'm done';
   // A planning turn in flight owns ESC ahead of whatever the pane would
   // otherwise bind it to — the hint has to say so or the key isn't discoverable.
   const planning = state.status === 'planning' || state.status === 'researching';
@@ -429,11 +429,11 @@ export function planLayout(state: TuiState, rows: number, cols: number): PlanLay
   // prompt, keeping only the task heading visible makes edits appear to do
   // nothing because the caret is below the viewport.
   let editorLine: number | undefined;
-  state.tasks.forEach((task, i) => {
+  planRows(state).forEach((row, i) => {
     const taskStart = lines.length;
     if (i === state.selectedTask) selectedLine = taskStart;
-    const renderedTask = taskLines(state, task, i, cols);
-    if (task.id === state.expandedTaskId && renderedTask.editorLine !== undefined) {
+    const renderedTask = taskLines(state, row, i, cols);
+    if (row.task.id === state.expandedTaskId && renderedTask.editorLine !== undefined) {
       editorLine = taskStart + renderedTask.editorLine;
     }
     lines.push(...renderedTask.lines);
@@ -469,7 +469,8 @@ interface TaskLines {
   editorLine?: number;
 }
 
-function taskLines(state: TuiState, task: TaskView, index: number, cols: number): TaskLines {
+function taskLines(state: TuiState, row: PlanRow, index: number, cols: number): TaskLines {
+  const { task, parent } = row;
   const selected = state.focus === 'plan' && index === state.selectedTask;
   const expanded = state.expandedTaskId === task.id;
   const running = isTaskRunning(task);
@@ -484,7 +485,11 @@ function taskLines(state: TuiState, task: TaskView, index: number, cols: number)
       : style.grey(' AI');
   const caret = selected ? style.cyan('❯') : ' ';
 
-  const head = `${caret} ${icon} ${String(task.order).padStart(2)} ${kind} `;
+  // A subtask row names itself by its dotted order ("2.1") and steps in under
+  // its parent; the top-level order number keeps its two-wide pad.
+  const orderLabel = parent ? taskOrderLabel(task, parent) : String(task.order).padStart(2);
+  const indent = parent ? '  ' : '';
+  const head = `${indent}${caret} ${icon} ${orderLabel} ${kind} `;
   const titleRoom = Math.max(1, cols - width(head));
   const wrappedTitle = wrap(task.title, titleRoom);
   const shownTitle = expanded ? wrappedTitle : wrappedTitle.slice(0, 2);
@@ -512,66 +517,67 @@ function taskLines(state: TuiState, task: TaskView, index: number, cols: number)
     ? `mode: ${task.taskMode ?? 'default'}${modeInfo?.autonomous ? style.yellow(' ⚡') : ''}`
     : '';
   const runner = task.assignedRunner ?? '';
+  const bodyPad = parent ? '      ' : '    ';
   const meta = [running ? 'working' : '', runner, model].filter(Boolean).join(' · ');
-  if (meta) lines.push(style.grey(truncate(`    ${meta}`, cols)));
-  if (effort || mode) lines.push(style.grey(truncate(`    ${[effort, mode].filter(Boolean).join(' · ')}`, cols)));
+  if (meta) lines.push(style.grey(truncate(`${bodyPad}${meta}`, cols)));
+  if (effort || mode) lines.push(style.grey(truncate(`${bodyPad}${[effort, mode].filter(Boolean).join(' · ')}`, cols)));
 
   let editorLine: number | undefined;
   if (expanded) {
-    lines.push(style.grey(`    ${task.status.replace(/_/g, ' ')}`));
+    lines.push(style.grey(`${bodyPad}${task.status.replace(/_/g, ' ')}`));
     if (modeInfo?.autonomous) {
-      lines.push(...taskText('Autonomy', 'Runs without permission prompts. Toggle with /auto.', cols));
+      lines.push(...taskText('Autonomy', 'Runs without permission prompts. Toggle with /auto.', cols, bodyPad));
     }
     // The prompt editor is seeded from prompt ?? description ?? title, so only
     // show the static description when it carries information the editor won't.
     const editableSeed = task.prompt ?? task.description ?? task.title;
     if (task.description && task.description !== task.title && task.description !== editableSeed) {
-      lines.push(...taskText('Description', task.description, cols));
+      lines.push(...taskText('Description', task.description, cols, bodyPad));
     }
     if (state.taskEditor) {
       // Wrap the prompt once and derive both the caret's line (for scroll
       // anchoring) and the painted rows from it — a second `cursorPosition`
       // call would re-wrap the whole prompt every frame.
-      const room = paneTextRoom(cols);
+      const room = Math.max(1, cols - width(bodyPad));
       const wrapped = wrapLines(state.taskEditor.text, room);
       const cp = cursorInLines(wrapped, state.taskEditor.cursor, state.taskEditor.text.length);
       editorLine = lines.length + 1 + cp.line;
-      lines.push(...taskPromptLines(wrapped, cp));
+      lines.push(...taskPromptLines(wrapped, cp, bodyPad));
     }
     if (task.dependencies.length > 0) {
       const orderById = new Map(state.tasks.map((candidate) => [candidate.id, candidate.order]));
       const dependencies = task.dependencies
         .map((id) => orderById.has(id) ? `#${orderById.get(id)}` : id)
         .join(', ');
-      lines.push(...taskText('Depends on', dependencies, cols));
+      lines.push(...taskText('Depends on', dependencies, cols, bodyPad));
     }
     // Two lines: the assignment keys plus the edit verbs no longer fit the plan
     // pane on one, and a truncated hint hides the keys it exists to teach. They
     // are named as what leaving the editor gets you, not as keys that work here
     // — while the prompt is open every letter types into it.
-    lines.push(style.grey('    enter save · esc cancel'));
-    lines.push(style.grey(truncate('    then R runner · o model · e effort · M mode · D deps', cols)));
+    lines.push(style.grey(`${bodyPad}enter save · esc cancel`));
+    lines.push(style.grey(truncate(`${bodyPad}then R runner · o model · e effort · M mode · D deps`, cols)));
   }
 
   return { lines, editorLine };
 }
 
-function taskText(label: string, text: string, cols: number): string[] {
-  const room = paneTextRoom(cols);
+function taskText(label: string, text: string, cols: number, pad = '    '): string[] {
+  const room = Math.max(1, cols - width(pad));
   return [
-    style.grey(`    ${label}`),
-    ...wrap(text, room).map((line) => `    ${line}`),
+    style.grey(`${pad}${label}`),
+    ...wrap(text, room).map((line) => `${pad}${line}`),
   ];
 }
 
 /** Paints an already-wrapped prompt with its caret. Indented to match taskText. */
-function taskPromptLines(wrapped: WrapLine[], cursor: CursorPosition): string[] {
+function taskPromptLines(wrapped: WrapLine[], cursor: CursorPosition, pad = '    '): string[] {
   return [
-    style.grey('    Prompt'),
+    style.grey(`${pad}Prompt`),
     ...wrapped.map(({ line }, i) => {
-      if (i !== cursor.line) return `    ${line}`;
+      if (i !== cursor.line) return `${pad}${line}`;
       const col = cursor.col;
-      return `    ${line.slice(0, col)}${style.inverse(line.slice(col, col + 1) || ' ')}${line.slice(col + 1)}`;
+      return `${pad}${line.slice(0, col)}${style.inverse(line.slice(col, col + 1) || ' ')}${line.slice(col + 1)}`;
     }),
   ];
 }

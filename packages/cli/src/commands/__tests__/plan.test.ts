@@ -44,6 +44,18 @@ async function capture(fn: () => Promise<void>): Promise<{ stdout: string; stder
 
 const RUNNERS = { runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }], headless: false, orchestratorModel: 'x' };
 const COMMITTED = { tasks: [{ id: 't1', order: 1, title: 'Do the thing', type: 'ai' }], runners: ['claude-code'] };
+const WITH_SUBTASKS = {
+  tasks: [
+    {
+      id: 't2', order: 2, title: 'Parent task', type: 'ai',
+      subtasks: [
+        { id: 't2a', order: 1, title: 'Sub step A', type: 'ai' },
+        { id: 't2b', order: 2, title: 'Sub step B', type: 'user' },
+      ],
+    },
+  ],
+  runners: ['claude-code'],
+};
 
 /** Serves /api/runners plus whatever plan payloads the test queues up. */
 async function planServer(routes: Record<string, unknown>, hits: string[]) {
@@ -102,6 +114,19 @@ describe('handlePlan', () => {
     expect(hits.some((h) => h.includes('/generate'))).toBe(true);
     expect(hits.some((h) => h.includes('/converse'))).toBe(false);
     expect(stdout).toContain('Do the thing');
+    srv.close();
+  });
+
+  it('renders subtasks as indented dotted-label lines', async () => {
+    const hits: string[] = [];
+    const srv = await planServer({ '/converse/start': { plan: WITH_SUBTASKS } }, hits);
+    const { handlePlan } = await import('../plan');
+    const { stdout } = await capture(() =>
+      handlePlan(['--goal', 'ship it', '--workspace', '/tmp'], { api: new ApiClient(srv.port) }),
+    );
+    expect(stdout).toContain(' 2. [ AI] Parent task');
+    expect(stdout).toContain('    2.1. [ AI] Sub step A');
+    expect(stdout).toContain('    2.2. [MAN] Sub step B');
     srv.close();
   });
 

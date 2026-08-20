@@ -20,7 +20,7 @@ describe('model allowlist wiring', () => {
   it('generatePlan passes perRunnerAllowlist to planner.generate', async () => {
     const planner = { generate: vi.fn().mockResolvedValue(smallPlan()) };
     const session = makeSession({
-      settings: () => ({ tddEnabled: false, grillMeEnabled: false, modelAllowlist: { 'claude-code': ['kimi-2.6'] } }),
+      settings: () => ({ tddEnabled: false, modelAllowlist: { 'claude-code': ['kimi-2.6'] } }),
       planner,
     });
 
@@ -39,10 +39,7 @@ describe('model allowlist wiring', () => {
     const session = makeSession({
       settings: () => ({
         tddEnabled: false,
-        grillMeEnabled: true,
-        prdEnabled: true,
         verificationEnabled: true,
-        researchSubagentsEnabled: true,
       }),
       planner,
     });
@@ -51,7 +48,7 @@ describe('model allowlist wiring', () => {
 
     expect(planner.generate).toHaveBeenCalledWith(
       expect.objectContaining({
-        modes: expect.objectContaining({ verification: true, researchSubagents: true }),
+        modes: expect.objectContaining({ verification: true }),
       }),
     );
   });
@@ -61,7 +58,6 @@ describe('model allowlist wiring', () => {
     const session = makeSession({
       settings: () => ({
         tddEnabled: false,
-        grillMeEnabled: false,
         modelAllowlist: { 'claude-code': ['kimi-2.6'] },
       }),
       aiService: {
@@ -89,7 +85,6 @@ describe('model allowlist wiring', () => {
   it('live semantic: a plan committed mid-conversation is coerced against the CURRENT allowlist', async () => {
     const mutableSettings = {
       tddEnabled: false,
-      grillMeEnabled: false,
       modelAllowlist: { 'claude-code': ['kimi-2.6'] } as Record<string, string[]>,
     };
     const startConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'hello', researchLog: [] });
@@ -137,7 +132,7 @@ describe('model allowlist wiring', () => {
   it('modifyPlan passes perRunnerAllowlist to planner.modify', async () => {
     const planner = { modify: vi.fn().mockResolvedValue({ tasks: [] }) };
     const session = makeSession({
-      settings: () => ({ tddEnabled: false, grillMeEnabled: false, modelAllowlist: { 'claude-code': ['kimi-2.6'] } }),
+      settings: () => ({ tddEnabled: false, modelAllowlist: { 'claude-code': ['kimi-2.6'] } }),
       planner,
     });
     session.loadPlan(smallPlan(), 'Test', '/repo');
@@ -152,7 +147,7 @@ describe('model allowlist wiring', () => {
   it('processQueuedMessages passes perRunnerAllowlist to planner.modifyDuringExecution', async () => {
     const planner = { modifyDuringExecution: vi.fn().mockResolvedValue({ pendingTasks: [], message: 'ok' }) };
     const session = makeSession({
-      settings: () => ({ tddEnabled: false, grillMeEnabled: false, modelAllowlist: { 'claude-code': ['kimi-2.6'] } }),
+      settings: () => ({ tddEnabled: false, modelAllowlist: { 'claude-code': ['kimi-2.6'] } }),
       planner,
     });
     session.loadPlan(smallPlan(), 'Test', '/repo');
@@ -484,7 +479,7 @@ describe('Session phase transitions', () => {
       ['forceStartTask', (s: Session) => s.forceStartTask('t1')],
     ])('%s carries the plan map and the completion marker', async (_name, start) => {
       const runner = spyRunner();
-      const session = makeSession({ runner, settings: () => ({ tddEnabled: true, grillMeEnabled: false }) });
+      const session = makeSession({ runner, settings: () => ({ tddEnabled: true }) });
       session.loadPlan(threeTaskPlan(), 'Test', '/repo');
 
       await start(session);
@@ -499,7 +494,7 @@ describe('Session phase transitions', () => {
     it('reads the TDD toggle at spawn time, not at the last full-run start', async () => {
       const runner = spyRunner();
       let tddEnabled = false;
-      const session = makeSession({ runner, settings: () => ({ tddEnabled, grillMeEnabled: false }) });
+      const session = makeSession({ runner, settings: () => ({ tddEnabled }) });
       session.loadPlan(threeTaskPlan(), 'Test', '/repo');
 
       tddEnabled = true;

@@ -438,6 +438,8 @@ export function migrateLegacyPlan(legacy: LegacyPlanState): PlanState {
   };
 }
 
+export { taskOrderLabel, resolveOrderLabel } from '../order-labels';
+
 export function createTask(overrides: Partial<Task> = {}): Task {
   return {
     id: overrides.id ?? uuidv4(),
@@ -475,6 +477,22 @@ export function createEmptyPlan(): LegacyPlanState {
 
 export function flattenTasks(tasks: Task[]): Task[] {
   return tasks.flatMap((t) => [t, ...flattenTasks(t.subtasks ?? [])]);
+}
+
+/** A flattened task with the parent it hangs under, null for a top-level task. */
+export interface TaskWithParent {
+  task: Task;
+  parent: Task | null;
+}
+
+export function flattenTasksWithParents(tasks: Task[]): TaskWithParent[] {
+  const rows: TaskWithParent[] = [];
+  const walk = (t: Task, parent: Task | null) => {
+    rows.push({ task: t, parent });
+    for (const sub of t.subtasks ?? []) walk(sub, t);
+  };
+  for (const t of tasks) walk(t, null);
+  return rows;
 }
 
 export function migrateTask(task: Record<string, unknown>): Task {

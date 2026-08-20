@@ -90,7 +90,7 @@ describe('Session.setTaskRunner', () => {
     };
     const session = makeSession({
       modelResolver: resolverFor(catalog),
-      settings: () => ({ tddEnabled: false, grillMeEnabled: false, modelAllowlist: { codex: ['gpt-5-mini'] } }),
+      settings: () => ({ tddEnabled: false, modelAllowlist: { codex: ['gpt-5-mini'] } }),
     });
     session.loadPlan(planWith(), 'goal', testWorkspace, { persist: false });
 
@@ -102,7 +102,7 @@ describe('Session.setTaskRunner', () => {
   it('ignores an allowlist that matches nothing the new runner offers', async () => {
     const session = makeSession({
       modelResolver: resolverFor(CODEX_CATALOG),
-      settings: () => ({ tddEnabled: false, grillMeEnabled: false, modelAllowlist: { codex: ['claude-sonnet-4-5'] } }),
+      settings: () => ({ tddEnabled: false, modelAllowlist: { codex: ['claude-sonnet-4-5'] } }),
     });
     session.loadPlan(planWith(), 'goal', testWorkspace, { persist: false });
 

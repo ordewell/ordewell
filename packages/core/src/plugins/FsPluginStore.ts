@@ -1,12 +1,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import { ensureDir } from '../utils/fsHelpers';
+import { globalDataDir } from '../utils/globalDataDir';
 import type { RunnerPluginManifest, IPluginStore } from './types';
 import { isValidManifest } from './manifestValidation';
 
 function userPluginsDir(): string {
-  return path.join(os.homedir(), '.config', 'ordewell', 'plugins');
+  return path.join(globalDataDir(), 'plugins');
 }
 
 function loadManifestFromDir(dir: string): RunnerPluginManifest | null {

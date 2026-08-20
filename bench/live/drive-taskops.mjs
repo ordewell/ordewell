@@ -47,7 +47,7 @@ const session = new Session({
   fsAdapter,
   broadcast: (m) => { events.push(m.type); if (m.type === 'planner_message') console.log(`\n[planner] ${m.content.slice(0, 400)}`); },
   modelResolver: { modelsForRunners: async () => ({}) },
-  settings: () => ({ tddEnabled: false, grillMeEnabled: false }),
+  settings: () => ({ tddEnabled: false, grillingEnabled: false }),
 });
 
 // Simulate a session loaded from disk: 3 tasks + prior dialogue, no live AI conversation.

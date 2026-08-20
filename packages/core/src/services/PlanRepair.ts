@@ -21,7 +21,7 @@ import type { RunnerModeInfo } from './ModeResolver';
  *   driver (it also runs the tool rounds) but delegates classification here.
  * - The corrective prompt texts live here, once.
  *
- * Policies stay at the call sites (PRD nudge, ops validation, abort guards) —
+ * Policies stay at the call sites (ops validation, abort guards) —
  * they are inputs to the loop, not part of it.
  */
 

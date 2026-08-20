@@ -1,4 +1,5 @@
 import type { Task } from '../models/Task';
+import { flattenTasks, flattenTasksWithParents, taskOrderLabel } from '../models/Task';
 
 const MAX_TAIL_CHARS = 500;
 const DEFAULT_PLAN_MAP_MAX_ENTRIES = 30;
@@ -77,7 +78,13 @@ function planMapStatus(task: Task, isCurrent: boolean): string {
   return 'next';
 }
 
-function pickWindow(sorted: Task[], currentIdx: number, max: number): { window: Task[]; omitted: number } {
+interface PlanMapRow {
+  task: Task;
+  parent: Task | null;
+  label: string;
+}
+
+function pickWindow(sorted: PlanMapRow[], currentIdx: number, max: number): { window: PlanMapRow[]; omitted: number } {
   if (sorted.length <= max) return { window: sorted, omitted: 0 };
   if (currentIdx < 0) return { window: sorted.slice(0, max), omitted: sorted.length - max };
   const lookBack = Math.min(currentIdx, Math.floor(max / 3));
@@ -88,24 +95,38 @@ function pickWindow(sorted: Task[], currentIdx: number, max: number): { window: 
   return { window, omitted: sorted.length - window.length };
 }
 
-export function renderPlanMap(allTasks: Task[], currentTaskId: string, opts?: { maxEntries?: number }): string {
-  if (allTasks.length < PLAN_MAP_MIN_TASKS) return '';
+/**
+ * Numbered task list for the model's context. `planTasks` is the nested task
+ * tree; subtasks render indented under their parent with the same dotted
+ * `taskOrderLabel` the other surfaces use, so an `N.M` the model echoes back
+ * matches what `resolveTaskId` accepts.
+ */
+export function renderPlanMap(planTasks: Task[], currentTaskId: string, opts?: { maxEntries?: number }): string {
+  const rows = flattenTasksWithParents(planTasks);
+  if (rows.length < PLAN_MAP_MIN_TASKS) return '';
 
-  const sorted = [...allTasks].sort((a, b) => a.order - b.order);
+  // Top-level tasks first in order, then each parent's subtasks under it.
+  const sorted = rows.map((r) => ({
+    ...r,
+    label: taskOrderLabel(r.task, r.parent ?? undefined),
+  })).sort((a, b) => {
+    const parentDiff = (a.parent?.order ?? -1) - (b.parent?.order ?? -1);
+    if (parentDiff !== 0) return parentDiff;
+    return a.task.order - b.task.order;
+  });
   const max = opts?.maxEntries ?? DEFAULT_PLAN_MAP_MAX_ENTRIES;
-  const currentIdx = sorted.findIndex((t) => t.id === currentTaskId);
+  const currentIdx = sorted.findIndex((r) => r.task.id === currentTaskId);
   const { window, omitted } = pickWindow(sorted, currentIdx, max);
 
-  const currentTask = sorted.find((t) => t.id === currentTaskId);
+  const currentTask = sorted.find((r) => r.task.id === currentTaskId)?.task;
 
-  const widthOrder = Math.max(2, String(sorted[sorted.length - 1]?.order ?? sorted.length).length);
-  const lines = window.map((t) => {
-    const isCurrent = t.id === currentTaskId;
-    const tag = planMapStatus(t, isCurrent);
-    const order = String(t.order).padStart(widthOrder, ' ');
+  const lines = window.map((row) => {
+    const isCurrent = row.task.id === currentTaskId;
+    const tag = planMapStatus(row.task, isCurrent);
+    const order = row.parent ? row.label : row.label.padStart(2, ' ');
     const arrow = isCurrent ? '   ← you are here' : '';
-    const runner = t.assignedRunner ? ` (${t.assignedRunner})` : '';
-    return `${order}. [${tag.padEnd(7, ' ')}] ${t.title}${runner}${arrow}`;
+    const runner = row.task.assignedRunner ? ` (${row.task.assignedRunner})` : '';
+    return `${order}. [${tag.padEnd(7, ' ')}] ${row.task.title}${runner}${arrow}`;
   });
 
   const footer = omitted > 0 ? `\n(${omitted} task${omitted === 1 ? '' : 's'} omitted from this view)` : '';
@@ -187,7 +208,8 @@ export function composeAugmentedPrompt(task: Task, allTasks: Task[], opts?: Comp
     if (map) blocks.push(map);
   }
 
-  const outputs = collectDirectDependencyOutputs(task, allTasks);
+  const flat = flattenTasks(allTasks);
+  const outputs = collectDirectDependencyOutputs(task, flat);
   if (outputs.length > 0) blocks.push(renderPriorOutputs(outputs));
 
   if (opts?.tddEnabled) {

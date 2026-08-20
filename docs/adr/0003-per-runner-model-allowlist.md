@@ -46,3 +46,11 @@ We decided to add a per-**RunnerId** model-id allowlist (stored on `UserSettings
 - CLI gains an `ai-ﬂow allowlist` subcommand (`set <runner> <id1,id2,…>` / `clear <runner>` / `show`), calling the existing `PATCH /settings` route. No new TTY picker dependency.
 - The web HTTP `PATCH /settings` route is the single persistence channel both surfaces call — no new `/api/commands` entry, since the allowlist isn't a toggle action like grill-me.
 - A future reader sees `ModelAllowlistResolver` separate from `ModelResolver`, `UserSettings.modelAllowlist` keyed by `RunnerId` not by `runnerProvider`, `loadPlan` untouched, and the orchestrator unaware — this ADR is the "why."
+
+## Update (2026-08-20) — grill-me renamed to grilling; no longer a toggle
+
+The `grill-me` toggle referenced above (S1-cache, E1) has since been removed
+from `UserSettings` entirely; the interview workflow is now the user-invoked
+`grilling` skill, not a mode toggle. The comparisons above describe the
+toggle-based mechanism as it existed when this ADR was written and are left
+as-is.

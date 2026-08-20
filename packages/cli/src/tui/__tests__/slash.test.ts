@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { parseSlash, SLASH_COMMANDS, findCommand, completions } from '../slash';
+import { describe, it, expect, afterEach } from 'vitest';
+import { parseSlash, SLASH_COMMANDS, findCommand, completions, registerSkillCommands } from '../slash';
 
 describe('parseSlash', () => {
   it('returns null for text that is not a slash command', () => {
@@ -25,7 +25,7 @@ describe('SLASH_COMMANDS', () => {
     'help', 'model', 'key', 'allowlist', 'refresh',
     'sessions', 'new', 'save', 'load', 'delete',
     'runners', 'auto',
-    'grill-me', 'tdd', 'prd', 'verify', 'research-subagents',
+    'tdd', 'verify',
     // No 'plan': typing the goal starts planning, so an alias would only
     // shadow /planner and /planner-effort on completion.
     'run', 'stop', 'approve',
@@ -75,6 +75,32 @@ describe('completions', () => {
 
   it('stops suggesting once the command is complete and args are being typed', () => {
     expect(completions('/model set gpt')).toEqual([]);
+  });
+});
+
+describe('registerSkillCommands', () => {
+  afterEach(() => registerSkillCommands([]));
+
+  it('adds a discovered skill to completions', () => {
+    registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
+    expect(completions('/gri').map((c) => c.name)).toContain('grilling');
+  });
+
+  it('marks a skill command as such, distinct from a built-in', () => {
+    registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
+    expect(findCommand('grilling')).toMatchObject({ source: 'skill', description: 'Grill the plan' });
+    expect(findCommand('help')?.source).toBeUndefined();
+  });
+
+  it('a skill name colliding with a built-in loses — the built-in still wins', () => {
+    registerSkillCommands([{ name: 'help', description: 'A skill pretending to be help' }]);
+    expect(findCommand('help')?.source).toBeUndefined();
+    expect(completions('/help').filter((c) => c.name === 'help')).toHaveLength(1);
+  });
+
+  it('does not leak into the built-in help listing', () => {
+    registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
+    expect(SLASH_COMMANDS.some((c) => c.name === 'grilling')).toBe(false);
   });
 });
 

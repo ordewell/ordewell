@@ -4,7 +4,7 @@ import { buildModeGuide, filteredBuildModes, type RunnerModeInfo } from './ModeR
 import { DEFAULT_PLANNER_MODES, modesFor, type PlannerModes } from './plannerModes';
 import { TASK_QUERY_PROTOCOL } from './TaskQuery';
 
-export function buildResearchToolsPrompt(subagentsEnabled = false): string {
+export function buildResearchToolsPrompt(): string {
   const lines = [
     'You have access to the following tools to explore the workspace:',
     '',
@@ -21,14 +21,10 @@ export function buildResearchToolsPrompt(subagentsEnabled = false): string {
     '- grep: for searching inside file contents',
     '',
     'When multiple independent tool calls are needed, batch them in a single response to save round-trips. For example, if you need to read README.md and AGENTS.md, call read_files with both paths at once.',
+    '',
+    'spawn_research_agent(prompt: string) - Launch a stateless read-only research agent that explores the workspace with its own tools and returns a digest. Use it to delegate an open-ended exploration thread — a subsystem to map, or a "how does X work here" question — whenever one emerges during research. To explore several independent areas, launch the agents CONCURRENTLY: put multiple spawn_research_agent calls in one reply and they run in parallel.',
+    'The agent sees nothing of this conversation, so its prompt must be self-contained: the area or question, the paths/symbols to start from, and exactly what the digest must report back. Do NOT use it on small or single-subsystem repos, or to read one known file — direct tools are faster there.',
   ];
-  if (subagentsEnabled) {
-    lines.push(
-      '',
-      'spawn_research_agent(prompt: string) - Launch a stateless read-only research agent that explores the workspace with its own tools and returns a digest. Use it to delegate an open-ended exploration thread — a subsystem to map, or a "how does X work here" question — whenever one emerges during research. To explore several independent areas, launch the agents CONCURRENTLY: put multiple spawn_research_agent calls in one reply and they run in parallel.',
-      'The agent sees nothing of this conversation, so its prompt must be self-contained: the area or question, the paths/symbols to start from, and exactly what the digest must report back. Do NOT use it on small or single-subsystem repos, or to read one known file — direct tools are faster there.',
-    );
-  }
   return lines.join('\n');
 }
 
@@ -146,8 +142,6 @@ export function buildConversationSystemPrompt(
   runners: RunnerId[],
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
   autonomousDefault = true,
-  grillMeEnabled = false,
-  prdEnabled = false,
   verificationEnabled = false,
   /** Harness planner (ADR-0009): the agent owns its own tools and research budget. */
   harnessMode = false,
@@ -162,33 +156,11 @@ export function buildConversationSystemPrompt(
       }).join(', ')
     : buildModeExamplesForRunners(runners);
 
-  const grillMeBlock = grillMeEnabled ? [
-    '',
-    'INTERVIEW MODE — GRILL-ME:',
-    'Interview the user relentlessly about every aspect of their goal until you reach a shared understanding. Walk down each branch of the design tree, resolving dependencies between decisions one-by-one.',
-    'Ask one question at a time, waiting for the user\'s answer before continuing. For each question, propose your recommended answer so they can confirm or correct it. Asking multiple questions at once is bewildering.',
-    'If a fact can be found by exploring the codebase, look it up instead of asking. The decisions, though, are the user\'s — put each one to them and wait.',
-    'Only propose an outline after the user has answered enough questions that you genuinely understand the goal. Then present the prose outline and wait for explicit confirmation before emitting the task plan JSON.',
-  ].join('\n') : '';
-
-  const prdBlock = prdEnabled ? [
-    '',
-    'PRD MODE: Before producing the outline, generate a PRD in two steps.',
-    'Step 1 — Propose a short prose preview containing: the problem statement, the proposed approach, the testing seams, and the main risks. Prefer existing seams over new ones; propose new seams at the highest point possible. The fewer seams across the codebase, the better — the ideal number is one. Propose a feature-slug for saving the PRD (e.g. `my-feature`). Ask the user whether they agree.',
-    'Step 2 — Only after the user explicitly agrees, write the full markdown PRD using the standard PRD format (problem, user stories, implementation decisions, testing seams, out of scope). The user may edit the proposed feature-slug before you write the PRD; use the agreed slug in the final output.',
-    'PRD content rules: user stories are an extensive numbered list, each "As an <actor>, I want <feature>, so that <benefit>". Record implementation decisions as decisions (modules, interfaces, schema changes, API contracts) — do NOT include specific file paths or code snippets; they go stale fast. Exception: a snippet from a prototype that encodes a decision more precisely than prose (state machine, reducer, schema, type shape) may be inlined, trimmed to the decision-rich parts.',
-    'When writing the full PRD, wrap it EXACTLY with these markers so the system can save it automatically:',
-    '<!-- ORDEWELL_PRD_START slug="<feature-slug>" -->',
-    '... full markdown PRD ...',
-    '<!-- ORDEWELL_PRD_END -->',
-    'Do NOT emit the full PRD before the user agrees to the preview. Do NOT emit task plan JSON before the PRD is agreed and the outline is confirmed.',
-  ].join('\n') : '';
-
   const verificationBlock = verificationEnabled ? verificationModeBlock() : '';
 
   return buildConversationBody(
     goal, context, modelsJson, runners, modeGuide, modeExamples, harnessMode,
-    grillMeBlock, prdBlock, verificationBlock,
+    verificationBlock,
   );
 }
 
@@ -200,8 +172,6 @@ function buildConversationBody(
   modeGuide: string,
   modeExamples: string,
   harnessMode: boolean,
-  grillMeBlock: string,
-  prdBlock: string,
   verificationBlock: string,
 ): string {
   return [
@@ -214,8 +184,6 @@ function buildConversationBody(
     '4. After the user confirms the outline, emit the final task plan as a JSON object with a "tasks" array.',
     '',
     researchPhaseBlock(harnessMode),
-    grillMeBlock,
-    prdBlock,
     verificationBlock,
     '',
     'OUTLINE PHASE:',
@@ -456,9 +424,6 @@ function buildPlanPromptBase(
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
   modes: PlannerModes = DEFAULT_PLANNER_MODES,
 ): string {
-  // Scoping here, once, is what keeps a one-shot prompt honest: grill-me and
-  // PRD interview the user, and this path has told the model there is nobody
-  // to ask. Verification is structural, so it belongs.
   const scoped = modesFor('one-shot', modes);
   const { autonomousDefault } = scoped;
   const template = getPlanTemplate();

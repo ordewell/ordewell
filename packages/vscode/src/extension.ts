@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { Session, RunnerRegistry, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, sessionRuntimeSettings, createEmptyPlan, LegacyPlanState, getProviderMeta, isCliProvider, CLI_PROVIDERS, runnerForProvider, PROVIDER_LABEL, PROVIDER_SHORT_LABEL, PROVIDER_PRIORITY, type AiProvider } from '@ordewell/core';
+import { Session, RunnerRegistry, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, sessionRuntimeSettings, createEmptyPlan, LegacyPlanState, getProviderMeta, CLI_PROVIDERS, runnerForProvider, PROVIDER_LABEL, PROVIDER_SHORT_LABEL, PROVIDER_PRIORITY, createSkillsService, type AiProvider } from '@ordewell/core';
 import { ChatViewProvider, type PlannerBackend } from './providers/ChatViewProvider';
 import { VsCodeConfig } from './adapters/VsCodeConfig';
 import { VsCodeFileSystem } from './adapters/VsCodeFileSystem';
@@ -7,7 +7,7 @@ import { SecretStore, type ApiProvider, type SecretKey } from './adapters/Secret
 import { VsCodeNotification } from './adapters/VsCodeNotification';
 import { VsCodeTerminalRunner } from './adapters/VsCodeTerminalRunner';
 import { registerCommands } from './commands/CommandRegistry';
-import { handleSlashCommand } from './commands/SlashParser';
+import { handleSlashCommand, isKnownSlashCommand } from './commands/SlashParser';
 import { handleStartPlanning, handleContinueConversation, handleModifyPlan, handleApprovePlan, handleSendMessage, handleSystemCommand, handleSessionMessage, findTask, handleMergePlan, handleSplitPlan } from './plan/PlanManager';
 import { classifyTaskEdit, parseTaskDraft, removalPrompt } from './plan/taskEdit';
 import { recallPlannerModel } from './plan/PlannerModelSwitch';
@@ -36,16 +36,6 @@ let pendingRunners: import('@ordewell/core').RunnerId[] | undefined;
 function log(msg: string): void {
   outputChannel.appendLine(`[${new Date().toISOString()}] ${msg}`);
   console.log(`[Ordewell] ${msg}`);
-}
-
-/**
- * Toggles that mean nothing for the current planner backend (ADR-0009, T8).
- * A harness planner owns its own subagent mechanism, so Ordewell's
- * `spawn_research_agent` has nothing to declare it to — the toggle is hidden
- * rather than left on screen doing nothing.
- */
-function unavailableSkills(): string[] {
-  return isCliProvider(config.aiProvider) ? ['research-subagents'] : [];
 }
 
 /**
@@ -93,8 +83,24 @@ async function applyPlanner(provider: AiProvider): Promise<void> {
   await config.update('plannerThinkingEffort', effort);
   sendModelConfig();
   await sendPlannerState();
-  chatProvider.setSkillToggles(settingsService.getGrillMe(), settingsService.getTdd(), settingsService.getPrd(), settingsService.getVerification(), settingsService.getResearchSubagents(), unavailableSkills());
+  chatProvider.setSkillToggles(settingsService.getTdd(), settingsService.getVerification(), []);
   log(`Planner set to ${provider}`);
+}
+
+/**
+ * Push the merged skill list (workspace .ordewell/skills/ shadows global
+ * ~/.ordewell/skills/) to the webview for the /skill-name suggestion dropdown.
+ * Re-read on every call rather than cached: SkillsService reads straight off
+ * disk and a fresh instance per call picks up whichever workspace folder is
+ * current after a folder add/remove.
+ */
+function sendSkills(): void {
+  try {
+    const skills = createSkillsService(fsAdapter.getWorkspaceRoot()).listSkills();
+    chatProvider.setSkills(skills.map((s) => ({ name: s.name, description: s.description })));
+  } catch (err) {
+    log(`Failed to list skills: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 async function sendPlannerState(): Promise<void> {
@@ -177,7 +183,10 @@ export async function activate(context: vscode.ExtensionContext) {
       log('Configuration changed, reset services');
     }));
 
+    context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => sendSkills()));
+
     await sendRunnerAndModels();
+    sendSkills();
     log('Ordewell extension activated — caches populated, models discovered');
     log('Ordewell extension activated successfully');
   } catch (err) {
@@ -524,7 +533,8 @@ function setupChatListener(context: vscode.ExtensionContext): void {
     switch (msg.type) {
       case 'ready': {
         chatProvider.resendAllState();
-        chatProvider.setSkillToggles(settingsService.getGrillMe(), settingsService.getTdd(), settingsService.getPrd(), settingsService.getVerification(), settingsService.getResearchSubagents(), unavailableSkills());
+        chatProvider.setSkillToggles(settingsService.getTdd(), settingsService.getVerification(), []);
+        sendSkills();
         // Activation-time discovery can catch a runner CLI cold (server spawn,
         // catalog fetch, auth store still loading) and cache a degraded model
         // list. Re-discover in the background whenever a webview (re)connects
@@ -676,7 +686,7 @@ function setupChatListener(context: vscode.ExtensionContext): void {
               break;
             }
           }
-        } else if (text.startsWith('/')) {
+        } else if (text.startsWith('/') && isKnownSlashCommand(text)) {
           try {
             const slashDeps = {
               config: {
@@ -730,12 +740,9 @@ function setupChatListener(context: vscode.ExtensionContext): void {
         break;
 
       case 'toggleSkill':
-        if (msg.skillId === 'grill-me') settingsService.setGrillMe(msg.enabled);
-        else if (msg.skillId === 'tdd') settingsService.setTdd(msg.enabled);
-        else if (msg.skillId === 'prd') settingsService.setPrd(msg.enabled);
+        if (msg.skillId === 'tdd') settingsService.setTdd(msg.enabled);
         else if (msg.skillId === 'verify') settingsService.setVerification(msg.enabled);
-        else if (msg.skillId === 'research-subagents') settingsService.setResearchSubagents(msg.enabled);
-        chatProvider.setSkillToggles(settingsService.getGrillMe(), settingsService.getTdd(), settingsService.getPrd(), settingsService.getVerification(), settingsService.getResearchSubagents(), unavailableSkills());
+        chatProvider.setSkillToggles(settingsService.getTdd(), settingsService.getVerification(), []);
         break;
 
       case 'setPlanner':

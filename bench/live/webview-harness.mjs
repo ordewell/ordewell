@@ -30,7 +30,7 @@ const DEMO_SCENARIO = [
   { type: 'setConfiguredProviders', providers: ['openrouter'] },
   { type: 'setRunnerList', runnerList: [{ id: 'claude-code', displayName: 'Claude Code' }] },
   { type: 'setEnabledRunnerIds', enabledRunnerIds: ['claude-code'] },
-  { type: 'setSkillToggles', toggles: { 'grill-me': true, tdd: true, prd: false } },
+  { type: 'setSkillToggles', toggles: { 'grilling': true, tdd: true, prd: false } },
   { user: 'make this project better' },
   { type: 'researchProgress', progress: { type: 'thinking', text: 'The goal is vague. Let me explore the workspace before asking anything. ' } },
   { type: 'researchProgress', progress: { type: 'thinking', text: 'I will list the directory tree first, then read the README.' } },

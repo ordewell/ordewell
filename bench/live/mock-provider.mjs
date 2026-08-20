@@ -9,11 +9,11 @@
  *   - plan JSON wrapped in ```json fences with a trailing comma
  *   - prose preamble before the JSON ("Here is the plan:")
  *   - questions asked as plain prose (no tags — the loop must not need them)
- *   - an eager persona that ignores grill-me and commits a plan immediately
+ *   - an eager persona that ignores grilling and commits a plan immediately
  *   - an empty-content turn (some cheap models return "" after tool use)
  *
  * Personas are selected by the requested `model` id:
- *   mock/interviewer   grill-me flow: explore → question → question → outline → fenced plan
+ *   mock/interviewer   grilling flow: explore → question → question → outline → fenced plan
  *   mock/eager-planner ignores interviewing and emits a plan on turn one
  *   mock/fenced-json   research (2 tools) → preamble + fenced JSON plan
  *   mock/prd-flow      PRD preview → marker-wrapped PRD → outline → plan
@@ -89,7 +89,7 @@ function scriptTurn(model, messages) {
   const s = shape(messages);
 
   if (persona === 'eager-planner') {
-    // Ignores the grill-me instructions entirely — commits a plan turn one.
+    // Ignores the grilling instructions entirely — commits a plan turn one.
     return { reasoning: 'The goal seems clear enough, skipping questions. ', content: FENCED_PLAN('Eagerly planned slice') };
   }
 
@@ -145,7 +145,7 @@ function scriptTurn(model, messages) {
     return { content: FENCED_PLAN('Add widget module') };
   }
 
-  // default: interviewer (grill-me flow)
+  // default: interviewer (grilling flow)
   if (s.users === 1 && s.toolRounds === 0) {
     return { reasoning: 'Vague goal. Explore the workspace before asking anything. ', ...toolCallTurn('list_dir', { path: '.', depth: 2 }) };
   }

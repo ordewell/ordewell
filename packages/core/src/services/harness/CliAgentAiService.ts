@@ -25,7 +25,6 @@ import {
   reEmitTaskOpsPrompt,
   reEmitTaskQueryPrompt,
 } from '../PlanRepair';
-import { extractPrdBlock } from '../../utils/prdStore';
 import { redactSecrets } from '../../utils/redactSecrets';
 import { runnerForProvider } from '../ProviderRegistry';
 import { collectResearchContext } from '../ContextCollector';
@@ -104,7 +103,7 @@ export class CliAgentAiService implements IAiService {
    * every session boundary — nothing from one goal may reach the next.
    */
   private lastNativeSessionId: string | null = null;
-  private conversation: { startOptions: AgentStartOptions; runners: RunnerId[]; runnerModes?: Record<RunnerId, RunnerModeInfo[]>; autonomousDefault?: boolean; prdEnabled: boolean; prdCaptured: boolean; prdNudgeSent: boolean } | null = null;
+  private conversation: { startOptions: AgentStartOptions; runners: RunnerId[]; runnerModes?: Record<RunnerId, RunnerModeInfo[]>; autonomousDefault?: boolean } | null = null;
   private activeAbort: AbortController | null = null;
 
   constructor(private config: IConfig, deps: CliAgentAiServiceDeps = {}) {
@@ -166,8 +165,6 @@ export class CliAgentAiService implements IAiService {
       req.runners,
       req.runnerModes,
       req.autonomousDefault ?? true,
-      req.grillMeEnabled ?? false,
-      req.prdEnabled ?? false,
       req.verificationEnabled ?? false,
       true,
     );
@@ -186,9 +183,6 @@ export class CliAgentAiService implements IAiService {
       runners: req.runners,
       runnerModes: req.runnerModes,
       autonomousDefault: req.autonomousDefault,
-      prdEnabled: req.prdEnabled ?? false,
-      prdCaptured: false,
-      prdNudgeSent: false,
     };
 
     // A reloaded session replays its transcript instead of re-running the
@@ -229,8 +223,8 @@ export class CliAgentAiService implements IAiService {
   /**
    * Drive one user message to a settled planner turn. Same shape as the API
    * backend's conversation loop minus the tool rounds — those belong to the
-   * agent now — and with the same three policies layered on top: the PRD gate,
-   * the empty-reply nudge, and a bounded corrective re-emit for botched JSON.
+   * agent now — and with the same two policies layered on top: the
+   * empty-reply nudge, and a bounded corrective re-emit for botched JSON.
    */
   private async runConversation(
     message: string,
@@ -303,8 +297,6 @@ export class CliAgentAiService implements IAiService {
           continue;
         }
 
-        if (extractPrdBlock(turn.text)) conversation.prdCaptured = true;
-
         const reply = classifyPlannerReply(turn.text, {
           runners: conversation.runners,
           runnerModes: conversation.runnerModes,
@@ -321,16 +313,6 @@ export class CliAgentAiService implements IAiService {
             return { kind: 'task_query', query: reply.query, text: replyText(turn.text), researchLog };
 
           case 'plan':
-            if (conversation.prdEnabled && !conversation.prdCaptured && !conversation.prdNudgeSent && !combined?.aborted) {
-              conversation.prdNudgeSent = true;
-              pending = [
-                'PRD mode is enabled but no PRD has been produced yet, so the plan was NOT committed.',
-                'In your next reply: first output the full markdown PRD wrapped EXACTLY in',
-                '<!-- ORDEWELL_PRD_START slug="<feature-slug>" --> and <!-- ORDEWELL_PRD_END -->,',
-                'then re-emit the exact same task plan JSON after the PRD block.',
-              ].join(' ');
-              continue;
-            }
             // A committed plan closes the conversation, matching the API
             // backend: post-plan chat re-enters through `startConversation`
             // with the plan's own transcript rather than inheriting this
@@ -553,9 +535,6 @@ export class CliAgentAiService implements IAiService {
       this.conversation = {
         startOptions,
         runners: [],
-        prdEnabled: false,
-        prdCaptured: false,
-        prdNudgeSent: false,
       };
       const turn = await this.runTurn(
         'Follow the instructions in your system prompt and produce the plan now.',

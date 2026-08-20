@@ -19,7 +19,7 @@ core stack:
 
 - `mock-provider.mjs` — a local OpenAI-compatible server simulating budget-model
   quirks (streamed reasoning, fenced JSON with trailing commas, prose preambles,
-  empty turns, grill-me-ignoring eagerness). Deterministic and offline.
+  empty turns, grilling-ignoring eagerness). Deterministic and offline.
 - `drive-conversation.mjs` — drives `OpenAiService`/`Session` through scripted
   scenarios with assertions (against the mock), or prints a behavioral report
   against a real model: `--real --model deepseek/deepseek-v4-flash` with

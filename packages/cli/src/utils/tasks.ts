@@ -1,3 +1,5 @@
+import { resolveOrderLabel } from '@ordewell/core';
+
 /** Every task in a plan, finished ones first, regardless of plan shape. */
 export function allTasksOf(plan: Record<string, unknown>): Array<import("@ordewell/core").Task> {
   const tasks = (plan?.pendingTasks || plan?.tasks || []) as Array<import("@ordewell/core").Task>;
@@ -8,6 +10,11 @@ export function allTasksOf(plan: Record<string, unknown>): Array<import("@ordewe
 /** Resolve a user-supplied identifier — order number, full task ID, or unique ID prefix. */
 export function resolveTaskId(plan: Record<string, unknown>, identifier: string): string | undefined {
   const allTasks = allTasksOf(plan);
+
+  if (identifier.includes('.')) {
+    const subtask = resolveOrderLabel(allTasks, identifier);
+    return subtask?.id;
+  }
 
   const order = parseInt(identifier, 10);
   if (!isNaN(order)) {

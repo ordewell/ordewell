@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createTask, createEmptyPlan, migrateLegacyPlan, migratePlanState } from '../Task';
+import { createTask, createEmptyPlan, migrateLegacyPlan, migratePlanState, taskOrderLabel, resolveOrderLabel, flattenTasksWithParents } from '../Task';
 import type { LegacyPlanState, PlanState, Message, TaskSnapshot } from '../Task';
 
 describe('LegacyPlanState conversation fields', () => {
@@ -76,6 +76,73 @@ describe('createTask', () => {
   it('allows setting userStoriesCovered on any task', () => {
     const task = createTask({ type: 'ai', userStoriesCovered: ['US-1', 'US-2'] });
     expect(task.userStoriesCovered).toEqual(['US-1', 'US-2']);
+  });
+});
+
+describe('taskOrderLabel', () => {
+  it('returns the task order alone when no parent is given', () => {
+    const task = createTask({ id: 't1', order: 2 });
+    expect(taskOrderLabel(task)).toBe('2');
+  });
+
+  it('returns parent.order.child.order when a parent is given', () => {
+    const parent = createTask({ id: 'p1', order: 2 });
+    const subtask = createTask({ id: 'c1', order: 1 });
+    expect(taskOrderLabel(subtask, parent)).toBe('2.1');
+  });
+});
+
+describe('resolveOrderLabel', () => {
+  it('round-trips a top-level label', () => {
+    const top = createTask({ id: 't1', order: 2 });
+    const tasks = [createTask({ id: 't0', order: 1 }), top];
+    expect(resolveOrderLabel(tasks, taskOrderLabel(top))).toBe(top);
+  });
+
+  it('round-trips a subtask label', () => {
+    const child = createTask({ id: 'c1', order: 1 });
+    const parent = createTask({ id: 'p1', order: 2, subtasks: [createTask({ id: 'c0', order: 0 }), child] });
+    const tasks = [parent, createTask({ id: 't0', order: 1 })];
+    expect(resolveOrderLabel(tasks, taskOrderLabel(child, parent))).toBe(child);
+  });
+
+  it('returns undefined for a non-existent top-level order', () => {
+    const tasks = [createTask({ id: 't1', order: 1 })];
+    expect(resolveOrderLabel(tasks, '2')).toBeUndefined();
+  });
+
+  it('returns undefined for a subtask under the wrong parent', () => {
+    const parent = createTask({ id: 'p1', order: 2, subtasks: [createTask({ id: 'c0', order: 0 })] });
+    const tasks = [createTask({ id: 't0', order: 1 }), parent];
+    expect(resolveOrderLabel(tasks, '2.1')).toBeUndefined();
+  });
+
+  it('returns undefined for non-numeric labels', () => {
+    const tasks = [createTask({ id: 't1', order: 1 })];
+    expect(resolveOrderLabel(tasks, 'abc')).toBeUndefined();
+    expect(resolveOrderLabel(tasks, '1.x')).toBeUndefined();
+    expect(resolveOrderLabel(tasks, '')).toBeUndefined();
+  });
+
+  it('returns undefined for labels with more than two dotted segments', () => {
+    const parent = createTask({ id: 'p1', order: 1, subtasks: [createTask({ id: 'c1', order: 1 })] });
+    const tasks = [parent];
+    expect(resolveOrderLabel(tasks, '1.1.1')).toBeUndefined();
+  });
+});
+
+describe('flattenTasksWithParents', () => {
+  it('flattens nested tasks with their parent linkage', () => {
+    const leaf = createTask({ id: 'leaf', order: 1 });
+    const child = createTask({ id: 'child', order: 1, subtasks: [leaf] });
+    const parent = createTask({ id: 'parent', order: 1, subtasks: [child] });
+    const solo = createTask({ id: 'solo', order: 2 });
+    const rows = flattenTasksWithParents([parent, solo]);
+    expect(rows.map((r) => r.task.id)).toEqual(['parent', 'child', 'leaf', 'solo']);
+    expect(rows[0].parent).toBeNull();
+    expect(rows[1].parent?.id).toBe('parent');
+    expect(rows[2].parent?.id).toBe('child');
+    expect(rows[3].parent).toBeNull();
   });
 });
 

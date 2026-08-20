@@ -1,12 +1,15 @@
 import React, { useState } from 'react';
 import ModelSelector, { getModelClass, providerLabel } from './ModelSelector';
-import { Task, DiscoveredModel, TaskModelAssignment } from '@ordewell/core';
+import { taskOrderLabel } from '@ordewell/core/order-labels';
+import type { Task, DiscoveredModel, TaskModelAssignment } from '@ordewell/core';
 import { TaskCheck } from './TaskCard';
 import { runnerOptionsFor } from './TaskCard';
 import type { RunnerMode, RunnerOption } from './TaskCard';
 
 interface SubTaskCardProps {
   task: Task;
+  /** The subtask's parent, used to build its dotted order label (e.g. "2.1"). */
+  parentTask?: Task;
   models: DiscoveredModel[];
   modes?: RunnerMode[];
   runners?: RunnerOption[];
@@ -48,7 +51,7 @@ const RUNNER_ABBREV: Record<string, string> = {
   'opencode': 'OC',
 };
 
-export default function SubTaskCard({ task, models, modes, runners, effectiveRunner, configuredProviders, modelApiMapping, isExecuting, onRunnerChange, onModelChange, onModeChange, onRemoveTask, onPromptChange, onRetry: _onRetry, onSkip, onCancel, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask }: SubTaskCardProps) {
+export default function SubTaskCard({ task, parentTask, models, modes, runners, effectiveRunner, configuredProviders, modelApiMapping, isExecuting, onRunnerChange, onModelChange, onModeChange, onRemoveTask, onPromptChange, onRetry: _onRetry, onSkip, onCancel, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask }: SubTaskCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<string | null>(null);
 
@@ -74,7 +77,7 @@ export default function SubTaskCard({ task, models, modes, runners, effectiveRun
     <div className={`subtask-card ${expanded ? 'expanded' : ''}`}>
       <div className="subtask-card-header" onClick={() => setExpanded(!expanded)}>
         <TaskCheck status={task.status} taskId={task.id} onMarkComplete={onMarkComplete} onMarkIncomplete={onMarkIncomplete} />
-        <span className="subtask-order">{task.order}.</span>
+        <span className="subtask-order">{taskOrderLabel(task, parentTask)}.</span>
         <span className={`task-type-badge small ${task.type}`}>
           {task.type === 'ai' ? 'AI' : 'Manual'}
         </span>

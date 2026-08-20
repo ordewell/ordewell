@@ -3,11 +3,13 @@
 // panel never renders. 0.4.0 shipped that way with require('uuid'). This runs
 // on every build, so the publish path cannot skip it.
 import { builtinModules } from 'node:module';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { BUILTIN_SKILL_NAMES } from '@ordewell/core';
 
-const BUNDLE = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'extension.js');
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const BUNDLE = join(ROOT, 'dist', 'extension.js');
 
 // Provided by the extension host, never bundled.
 const HOST_PROVIDED = new Set(['vscode']);
@@ -47,3 +49,22 @@ if (unresolvable.length > 0) {
 console.log(
   `verify-bundle: ok — ${specifiers.size} require(s), all builtins, host-provided or guarded.`,
 );
+
+// SKILL.md files are data, not code — tsup never bundles them, so
+// scripts/copy-skills.mjs must place them at packages/vscode/skills/ before
+// this runs. Missing ones here mean the .vsix ships with an empty
+// ~/.ordewell/skills seed after install.
+const missingSkills = BUILTIN_SKILL_NAMES.filter(
+  (name) => !existsSync(join(ROOT, 'skills', name, 'SKILL.md')),
+);
+
+if (missingSkills.length > 0) {
+  console.error(
+    `verify-bundle: ${missingSkills.length} built-in skill(s) missing from packages/vscode/skills:\n` +
+      missingSkills.map((name) => `  skills/${name}/SKILL.md`).join('\n') +
+      `\n\nRun scripts/copy-skills.mjs (part of the "build" script) before packaging.\n`,
+  );
+  process.exit(1);
+}
+
+console.log(`verify-bundle: ok — all ${BUILTIN_SKILL_NAMES.length} built-in skill(s) present.`);

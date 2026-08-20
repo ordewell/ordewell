@@ -82,13 +82,10 @@ export default function App() {
   const [modelDiscoveryErrors, setModelDiscoveryErrors] = useState<Record<string, string>>({});
   const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false);
   const [setupCollapsed, setSetupCollapsed] = useState(false);
-  const [grillMeEnabled, setGrillMeEnabled] = useState(false);
   const [tddEnabled, setTddEnabled] = useState(true);
-  const [prdEnabled, setPrdEnabled] = useState(false);
   const [verifyEnabled, setVerifyEnabled] = useState(false);
-  const [researchSubagentsEnabled, setResearchSubagentsEnabled] = useState(false);
-  /** Toggles with no meaning for the current planner backend (ADR-0009) — hidden, not disabled. */
-  const [unavailableSkills, setUnavailableSkills] = useState<string[]>([]);
+  /** Discovered skills (~/.ordewell/skills/ + .ordewell/skills/) for the /skill-name suggestion dropdown. */
+  const [skills, setSkills] = useState<{ name: string; description: string }[]>([]);
   const [checkpoint, setCheckpoint] = useState<{ taskId: string; taskTitle: string; summary: string; pausedAt: number } | null>(null);
   const [taskOutput, setTaskOutput] = useState<TaskOutputMap>({});
   /** Advisory silence timestamp per task id, keyed like taskOutput; null/absent means not stalled. */
@@ -534,13 +531,13 @@ export default function App() {
 
         case 'setSkillToggles':
           if (msg.toggles) {
-            setGrillMeEnabled(msg.toggles['grill-me'] ?? false);
             setTddEnabled(msg.toggles.tdd ?? true);
-            setPrdEnabled(msg.toggles.prd ?? false);
             setVerifyEnabled(msg.toggles.verify ?? false);
-            setResearchSubagentsEnabled(msg.toggles['research-subagents'] ?? false);
-            setUnavailableSkills(msg.unavailable ?? []);
           }
+          break;
+
+        case 'setSkills':
+          setSkills(msg.skills ?? []);
           break;
 
         case 'checkpoint':
@@ -833,28 +830,16 @@ export default function App() {
   }, [isExecuting, pushSystem]);
 
   const handleToggleSkill = useCallback((skillId: string) => {
-    if (skillId === 'grill-me') {
-      const next = !grillMeEnabled;
-      setGrillMeEnabled(next);
-      vscode.postMessage({ type: 'toggleSkill', skillId, enabled: next });
-    } else if (skillId === 'tdd') {
+    if (skillId === 'tdd') {
       const next = !tddEnabled;
       setTddEnabled(next);
-      vscode.postMessage({ type: 'toggleSkill', skillId, enabled: next });
-    } else if (skillId === 'prd') {
-      const next = !prdEnabled;
-      setPrdEnabled(next);
       vscode.postMessage({ type: 'toggleSkill', skillId, enabled: next });
     } else if (skillId === 'verify') {
       const next = !verifyEnabled;
       setVerifyEnabled(next);
       vscode.postMessage({ type: 'toggleSkill', skillId, enabled: next });
-    } else if (skillId === 'research-subagents') {
-      const next = !researchSubagentsEnabled;
-      setResearchSubagentsEnabled(next);
-      vscode.postMessage({ type: 'toggleSkill', skillId, enabled: next });
     }
-  }, [grillMeEnabled, tddEnabled, prdEnabled, verifyEnabled, researchSubagentsEnabled]);
+  }, [tddEnabled, verifyEnabled]);
 
   const handleApproveCheckpoint = useCallback(() => {
     if (!checkpoint) return;
@@ -1177,28 +1162,14 @@ export default function App() {
       </div>
 
       <div className="skill-bar">
-        <button className={`skill-toggle-pill ${grillMeEnabled ? 'on' : 'off'}`}
-          onClick={() => handleToggleSkill('grill-me')} title="Grill-Me: interview mode that challenges your plan">
-          <span className="skill-toggle-dot" /> Grill-Me
-        </button>
         <button className={`skill-toggle-pill ${tddEnabled ? 'on' : 'off'}`}
           onClick={() => handleToggleSkill('tdd')} title="TDD: test-driven development prompt augmentation">
           <span className="skill-toggle-dot" /> TDD
-        </button>
-        <button className={`skill-toggle-pill ${prdEnabled ? 'on' : 'off'}`}
-          onClick={() => handleToggleSkill('prd')} title="PRD: the planner previews and writes a markdown PRD before the plan">
-          <span className="skill-toggle-dot" /> PRD
         </button>
         <button className={`skill-toggle-pill ${verifyEnabled ? 'on' : 'off'}`}
           onClick={() => handleToggleSkill('verify')} title="Verify (run tests): adds a final evidence-based task that runs the full suite, writes missing spec checks, and must exit green">
           <span className="skill-toggle-dot" /> Verify
         </button>
-        {!unavailableSkills.includes('research-subagents') && (
-          <button className={`skill-toggle-pill ${researchSubagentsEnabled ? 'on' : 'off'}`}
-            onClick={() => handleToggleSkill('research-subagents')} title="Subagents: the planner may launch parallel read-only research agents during planning">
-            <span className="skill-toggle-dot" /> Subagents
-          </button>
-        )}
       </div>
 
       {showModelInfo && (
@@ -1318,6 +1289,7 @@ export default function App() {
         isProcessing={isGenerating}
         queueCount={queueCount}
         prefill={prefill}
+        skills={skills}
       />
     </div>
   );

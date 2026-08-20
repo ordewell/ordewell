@@ -13,13 +13,6 @@ const PLAN_JSON = JSON.stringify({
   }],
 });
 
-const PRD_BLOCK = [
-  '<!-- ORDEWELL_PRD_START slug="widget" -->',
-  '# Problem',
-  'We need a widget.',
-  '<!-- ORDEWELL_PRD_END -->',
-].join('\n');
-
 const fakeConfig = (): IConfig => makeFakeConfig({ maxParallelSessions: 1, openAiBaseUrl: '' });
 
 /** Scripted chat: pops one canned turn per send; records what it was sent. */
@@ -56,60 +49,20 @@ class TestService extends BaseAiService {
   }
 }
 
-function makeCtx(chat: ResearchChat, prdEnabled = false): ConversationTurnContext {
+function makeCtx(chat: ResearchChat): ConversationTurnContext {
   const fs = { readFile: async () => ({ success: true, output: '', truncated: false }) } as unknown as IFileSystem;
-  return { chat, fs, runners: ['claude-code'], prdEnabled };
+  return { chat, fs, runners: ['claude-code'] };
 }
 
 const proseTurn = (text: string): ResearchTurn => ({ text, toolCalls: [], hasToolCalls: false });
 
-describe('runConversationTurn PRD guard', () => {
+describe('runConversationTurn plan commit', () => {
   it('carries the raw text on committed plan turns', async () => {
     const chat = new ScriptedChat([proseTurn(`Here is the plan:\n${PLAN_JSON}`)]);
     const svc = new TestService(fakeConfig());
     const turn = await svc.runTurn(makeCtx(chat), 'go');
     expect(turn.kind).toBe('plan');
     if (turn.kind === 'plan') expect(turn.text).toContain('"tasks"');
-  });
-
-  it('bounces a PRD-less plan once in PRD mode, then commits the corrected turn', async () => {
-    const chat = new ScriptedChat([
-      proseTurn(PLAN_JSON),
-      proseTurn(`${PRD_BLOCK}\n${PLAN_JSON}`),
-    ]);
-    const svc = new TestService(fakeConfig());
-    const turn = await svc.runTurn(makeCtx(chat, true), 'confirm, generate the plan');
-    expect(turn.kind).toBe('plan');
-    if (turn.kind === 'plan') expect(turn.text).toContain('ORDEWELL_PRD_START');
-    expect(chat.sent).toHaveLength(2);
-    expect(chat.sent[1]).toContain('no PRD has been produced');
-  });
-
-  it('accepts the plan after one failed nudge instead of looping', async () => {
-    const chat = new ScriptedChat([proseTurn(PLAN_JSON), proseTurn(PLAN_JSON)]);
-    const svc = new TestService(fakeConfig());
-    const turn = await svc.runTurn(makeCtx(chat, true), 'go');
-    expect(turn.kind).toBe('plan');
-    expect(chat.sent).toHaveLength(2);
-  });
-
-  it('does not nudge when the PRD was already produced in an earlier turn', async () => {
-    const chat = new ScriptedChat([proseTurn(PRD_BLOCK), proseTurn(PLAN_JSON)]);
-    const svc = new TestService(fakeConfig());
-    const ctx = makeCtx(chat, true);
-    const first = await svc.runTurn(ctx, 'add a widget');
-    expect(first.kind).toBe('message');
-    const second = await svc.runTurn(ctx, 'confirm');
-    expect(second.kind).toBe('plan');
-    expect(chat.sent).toHaveLength(2);
-  });
-
-  it('never nudges when PRD mode is off', async () => {
-    const chat = new ScriptedChat([proseTurn(PLAN_JSON)]);
-    const svc = new TestService(fakeConfig());
-    const turn = await svc.runTurn(makeCtx(chat), 'go');
-    expect(turn.kind).toBe('plan');
-    expect(chat.sent).toHaveLength(1);
   });
 });
 
@@ -450,7 +403,6 @@ describe('spawn_research_agent interception', () => {
     tracker = { inFlight: 0, maxInFlight: 0 };
     reasoningCallbacks: Array<(delta: string) => void> = [];
     constructor(cfg: IConfig, private supported = true) { super(cfg); }
-    setSubagentsEnabled(on: boolean) { this.researchSubagentsEnabled = on; }
     protected createSubagentChat(onReasoning?: (delta: string) => void): ResearchChat | null {
       if (!this.supported) return null;
       this.subagentChatsCreated++;
@@ -465,7 +417,6 @@ describe('spawn_research_agent interception', () => {
       proseTurn('Synthesis. Question: proceed?'),
     ]);
     const svc = new SubagentTestService(fakeConfig());
-    svc.setSubagentsEnabled(true);
     const turn = await svc.runTurn(makeCtx(chat), 'go');
 
     expect(turn.kind).toBe('message');
@@ -482,7 +433,6 @@ describe('spawn_research_agent interception', () => {
       proseTurn('Synthesis.'),
     ]);
     const svc = new SubagentTestService(fakeConfig());
-    svc.setSubagentsEnabled(true);
     await svc.runTurn(makeCtx(chat), 'go');
 
     expect(svc.subagentChatsCreated).toBe(5); // all executed…
@@ -497,7 +447,6 @@ describe('spawn_research_agent interception', () => {
       proseTurn('Done.'),
     ]);
     const svc = new SubagentTestService(fakeConfig());
-    svc.setSubagentsEnabled(true);
     const turn = await svc.runTurn(makeCtx(chat), 'go');
 
     expect(turn.kind).toBe('message');
@@ -505,27 +454,12 @@ describe('spawn_research_agent interception', () => {
     expect(chat.toolResultsSent).toHaveLength(2);
   });
 
-  it('flag off: steers the model back to sequential research and never spawns', async () => {
-    const chat = new ScriptedChat([
-      spawnCalls(['explore core']),
-      proseTurn('Understood, continuing sequentially.'),
-    ]);
-    const svc = new SubagentTestService(fakeConfig());
-    // enabled defaults to false
-    const turn = await svc.runTurn(makeCtx(chat), 'go');
-
-    expect(turn.kind).toBe('message');
-    expect(svc.subagentChatsCreated).toBe(0);
-    expect(chat.toolResultsSent[0][0].output).toMatch(/not available/i);
-  });
-
-  it('provider without subagent support degrades to sequential even when enabled', async () => {
+  it('provider without subagent support degrades to sequential', async () => {
     const chat = new ScriptedChat([
       spawnCalls(['explore core']),
       proseTurn('Continuing sequentially.'),
     ]);
     const svc = new SubagentTestService(fakeConfig(), false); // createSubagentChat → null
-    svc.setSubagentsEnabled(true);
     const turn = await svc.runTurn(makeCtx(chat), 'go');
 
     expect(turn.kind).toBe('message');
@@ -541,7 +475,6 @@ describe('spawn_research_agent interception', () => {
       protected createSubagentChat(): ResearchChat | null { throw new Error('factory blew up'); }
     }
     const svc = new ThrowingService(fakeConfig());
-    svc.setSubagentsEnabled(true);
     const turn = await svc.runTurn(makeCtx(chat), 'go');
 
     expect(turn.kind).toBe('message');
@@ -555,7 +488,6 @@ describe('spawn_research_agent interception', () => {
       proseTurn('Synthesis.'),
     ]);
     const svc = new SubagentTestService(fakeConfig());
-    svc.setSubagentsEnabled(true);
     const events: import('../../models/Task').ResearchProgress[] = [];
     await svc.runTurn(makeCtx(chat), 'go', (p) => events.push(p));
 
@@ -576,7 +508,6 @@ describe('spawn_research_agent interception', () => {
       proseTurn('Synthesis.'),
     ]);
     const svc = new SubagentTestService(fakeConfig());
-    svc.setSubagentsEnabled(true);
     const events: import('../../models/Task').ResearchProgress[] = [];
     await svc.runTurn(makeCtx(chat), 'go', (p) => events.push(p));
 
@@ -595,7 +526,6 @@ describe('spawn_research_agent interception', () => {
       proseTurn('Okay.'),
     ]);
     const svc = new SubagentTestService(fakeConfig());
-    svc.setSubagentsEnabled(true);
     const turn = await svc.runTurn(makeCtx(chat), 'go');
 
     expect(turn.kind).toBe('message');

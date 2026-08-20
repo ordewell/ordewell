@@ -5,9 +5,7 @@ import type { OrchestratorPool } from '../../pool/orchestratorPool';
 function fakePool(initialSettings?: Record<string, unknown>): OrchestratorPool {
   let state = initialSettings ?? {
     orchestratorModel: '',
-    grillMe: { enabled: false },
     tdd: { enabled: true },
-    prd: { enabled: false },
     verification: { enabled: false },
   };
   const pool = {
@@ -44,13 +42,11 @@ describe('GET /api/commands', () => {
     }
   });
 
-  it('includes grill-me, tdd, prd, and verify commands', async () => {
+  it('includes tdd and verify commands', async () => {
     const res = await app.request('/api/commands', { method: 'GET' });
     const body = (await res.json()) as { commands: Array<{ name: string }> };
     const names = body.commands.map((c: { name: string }) => c.name);
-    expect(names).toContain('grill-me');
     expect(names).toContain('tdd');
-    expect(names).toContain('prd');
     expect(names).toContain('verify');
   });
 });
@@ -64,20 +60,6 @@ describe('POST /api/commands/:name', () => {
     const { commandsRoute } = await import('../../routes/commands');
     app = new Hono();
     app.route('/api/commands', commandsRoute(pool));
-  });
-
-  it('enables grill-me via command', async () => {
-    const res = await app.request('/api/commands/grill-me', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ args: { action: 'on' } }),
-    });
-
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: boolean; settings: { grillMe: { enabled: boolean } } };
-    expect(body.ok).toBe(true);
-    expect(body.settings.grillMe.enabled).toBe(true);
-    expect(pool.updateSettings).toHaveBeenCalledWith({ grillMe: { enabled: true } });
   });
 
   it('disables tdd via command', async () => {
@@ -94,16 +76,16 @@ describe('POST /api/commands/:name', () => {
   });
 
   it('returns current state when no action specified', async () => {
-    const res = await app.request('/api/commands/grill-me', {
+    const res = await app.request('/api/commands/tdd', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ args: {} }),
     });
 
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: boolean; settings: { grillMe: { enabled: boolean } } };
+    const body = (await res.json()) as { ok: boolean; settings: { tdd: { enabled: boolean } } };
     expect(body.ok).toBe(true);
-    expect(body.settings.grillMe.enabled).toBe(false);
+    expect(body.settings.tdd.enabled).toBe(true);
   });
 
   it('enables verification via the verify command', async () => {

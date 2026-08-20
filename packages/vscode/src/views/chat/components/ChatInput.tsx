@@ -11,8 +11,13 @@ interface SlashSuggestion {
   insertText: string;
   id?: string;
   provider?: string;
-  kind?: 'provider' | 'back' | 'hint' | 'model';
+  kind?: 'provider' | 'back' | 'hint' | 'model' | 'skill';
   providerId?: ApiProvider;
+}
+
+export interface SkillEntry {
+  name: string;
+  description: string;
 }
 
 interface ModelOption {
@@ -35,6 +40,8 @@ interface ChatInputProps {
   disabledReason?: string;
   queueCount?: number;
   prefill?: string;
+  /** Discovered skills (global ~/.ordewell/skills/ + workspace .ordewell/skills/) merged into the / suggestion dropdown. */
+  skills?: SkillEntry[];
 }
 
 const PROVIDER_LABELS: Record<ApiProvider, string> = {
@@ -112,6 +119,22 @@ function matchesSearch(s: SlashSuggestion, term: string): boolean {
   return s.label.toLowerCase().includes(term) || s.detail.toLowerCase().includes(term);
 }
 
+function toSkillSuggestion(skill: SkillEntry): SlashSuggestion {
+  return { label: `/${skill.name}`, detail: skill.description, insertText: `/${skill.name}`, kind: 'skill' };
+}
+
+/**
+ * The leading `/word` of `text`, if `word` (case-insensitive) is a recognized
+ * command or skill name — otherwise null. Used to highlight a matched
+ * invocation and to decide whether to render the highlight mark at all; a
+ * mistyped or unknown `/foo` gets no highlight.
+ */
+export function getLeadingSlashToken(text: string, knownNames: Set<string>): string | null {
+  const match = text.match(/^\/(\S+)/);
+  if (!match) return null;
+  return knownNames.has(match[1].toLowerCase()) ? match[0] : null;
+}
+
 export default function ChatInput({
   onSend,
   disabled,
@@ -123,9 +146,11 @@ export default function ChatInput({
   disabledReason,
   queueCount = 0,
   prefill,
+  skills = [],
 }: ChatInputProps) {
   const [text, setText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
   const [selectedIdx, setSelectedIdx] = useState(0);
   // The API provider chosen in step 1 of the two-step picker (null = step 1).
   const [pickerProvider, setPickerProvider] = useState<ApiProvider | null>(null);
@@ -187,8 +212,19 @@ export default function ChatInput({
       return list;
     }
 
-    return COMMAND_SUGGESTIONS.filter((s) => s.label.toLowerCase().startsWith(lower));
-  }, [text, isModelCommand, modelFilterTerm, modelOptions, configuredProviders, pickerProvider]);
+    const all = [...COMMAND_SUGGESTIONS, ...skills.map(toSkillSuggestion)];
+    return all.filter((s) => s.label.toLowerCase().startsWith(lower));
+  }, [text, isModelCommand, modelFilterTerm, modelOptions, configuredProviders, pickerProvider, skills]);
+
+  // Command names (without the leading slash) plus discovered skill names —
+  // the set the leading `/word` of the input is checked against to decide
+  // whether it gets highlighted as a recognized invocation.
+  const knownNames = useMemo(() => {
+    const names = COMMAND_SUGGESTIONS.map((s) => s.label.slice(1).split(' ')[0].toLowerCase());
+    return new Set([...names, ...skills.map((s) => s.name.toLowerCase())]);
+  }, [skills]);
+
+  const highlightedToken = useMemo(() => getLeadingSlashToken(text, knownNames), [text, knownNames]);
 
   // Special entries (provider picks, back, hints) render flat above the model
   // list; only actual model rows get grouped under their model-provider header.
@@ -229,6 +265,15 @@ export default function ChatInput({
     if (!el) return;
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+  };
+
+  // Keeps the highlight backdrop's scroll position glued to the textarea's own
+  // when the input grows past its max height and starts scrolling internally —
+  // otherwise the highlighted span would drift out from under the typed text.
+  const syncBackdropScroll = () => {
+    if (backdropRef.current && textareaRef.current) {
+      backdropRef.current.scrollTop = textareaRef.current.scrollTop;
+    }
   };
 
   useEffect(() => {
@@ -394,7 +439,7 @@ export default function ChatInput({
     return suggestions.map((s, i) => (
       <div
         key={s.label}
-        className={`slash-suggestion-item ${i === selectedIdx ? 'selected' : ''}`}
+        className={`slash-suggestion-item ${s.kind ?? ''} ${i === selectedIdx ? 'selected' : ''}`}
         onMouseEnter={() => { navigatedRef.current = true; setSelectedIdx(i); }}
         onMouseDown={(e) => {
           e.preventDefault();
@@ -434,15 +479,26 @@ export default function ChatInput({
       <div className="chat-input-wrapper">
         <div className="chat-input-inner">
           <div className="chat-input-row">
-            <textarea
-              ref={textareaRef}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={getPlaceholderText()}
-              disabled={disabled}
-              rows={1}
-            />
+            <div className="chat-input-highlight-wrap">
+              <div className="chat-input-highlight-backdrop" ref={backdropRef} aria-hidden="true">
+                {highlightedToken ? (
+                  <>
+                    <mark>{highlightedToken}</mark>
+                    {text.slice(highlightedToken.length)}
+                  </>
+                ) : text}
+              </div>
+              <textarea
+                ref={textareaRef}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={handleKeyDown}
+                onScroll={syncBackdropScroll}
+                placeholder={getPlaceholderText()}
+                disabled={disabled}
+                rows={1}
+              />
+            </div>
             <button
               className={`send-btn${isProcessing ? ' processing' : ''}`}
               onClick={isProcessing && onStop ? onStop : handleSubmit}

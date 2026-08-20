@@ -218,8 +218,8 @@ export function plansRoute(pool: OrchestratorPool) {
     }
   });
 
-  // One branch for every user reply — grill-me answers, PRD accept/adjust,
-  // outline confirm. The planner decides what happens next.
+  // One branch for every user reply — clarifying answers, outline confirm.
+  // The planner decides what happens next.
   router.post('/:sessionId/converse/message', async (c) => {
     try {
       const { message } = await c.req.json();

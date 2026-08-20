@@ -30,10 +30,9 @@ export interface ResearchToolSpec {
 export const SPAWN_RESEARCH_AGENT = 'spawn_research_agent';
 
 /**
- * Optional subagent tool (issue #34), opencode-style: one stateless read-only
- * research agent per call. Only declared when the researchSubagents toggle is
- * on AND the active service can build subagent chats. Kept out of
- * RESEARCH_TOOLS so the default projections stay bit-for-bit today's list.
+ * Subagent tool (issue #34), opencode-style: one stateless read-only research
+ * agent per call. Kept out of RESEARCH_TOOLS since it is projected in
+ * separately via withSpawn().
  */
 export const SPAWN_RESEARCH_AGENT_SPEC: ResearchToolSpec = {
   name: SPAWN_RESEARCH_AGENT,
@@ -147,8 +146,8 @@ export function subagentToolSpecs(): ResearchToolSpec[] {
   return RESEARCH_TOOLS.filter((t) => !SUBAGENT_EXCLUDED.has(t.name));
 }
 
-function withSpawn(includeSubagents: boolean): ResearchToolSpec[] {
-  return includeSubagents ? [...RESEARCH_TOOLS, SPAWN_RESEARCH_AGENT_SPEC] : RESEARCH_TOOLS;
+function withSpawn(): ResearchToolSpec[] {
+  return [...RESEARCH_TOOLS, SPAWN_RESEARCH_AGENT_SPEC];
 }
 
 function projectOpenAi(specs: ResearchToolSpec[]): OpenAI.Chat.Completions.ChatCompletionTool[] {
@@ -172,8 +171,8 @@ function projectOpenAi(specs: ResearchToolSpec[]): OpenAI.Chat.Completions.ChatC
 }
 
 /** Project the canonical tools into OpenAI's chat-completions tool format. */
-export function toOpenAiTools(includeSubagents = false): OpenAI.Chat.Completions.ChatCompletionTool[] {
-  return projectOpenAi(withSpawn(includeSubagents));
+export function toOpenAiTools(): OpenAI.Chat.Completions.ChatCompletionTool[] {
+  return projectOpenAi(withSpawn());
 }
 
 /** The subagent's own tool list in OpenAI format. */
@@ -189,8 +188,8 @@ const SCHEMA_TYPE: Record<ParamType, SchemaType> = {
 };
 
 /** Project the canonical tools into Gemini's function-declaration format. */
-export function toGeminiToolDeclarations(includeSubagents = false): FunctionDeclaration[] {
-  return withSpawn(includeSubagents).map((t) => {
+export function toGeminiToolDeclarations(): FunctionDeclaration[] {
+  return withSpawn().map((t) => {
     const properties: Record<string, Schema> = {};
     for (const [key, param] of Object.entries(t.properties)) {
       properties[key] = {

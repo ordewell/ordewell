@@ -4,7 +4,7 @@ import { RESEARCH_TOOLS, toOpenAiTools, toGeminiToolDeclarations, subagentToolSp
 
 describe('researchTools', () => {
   it('exposes the same tool set to both providers', () => {
-    const canonical = RESEARCH_TOOLS.map((t) => t.name).sort();
+    const canonical = [...RESEARCH_TOOLS.map((t) => t.name), SPAWN_RESEARCH_AGENT].sort();
     const openai = toOpenAiTools().map((t) => t.function.name).sort();
     const gemini = toGeminiToolDeclarations().map((t) => t.name).sort();
     expect(openai).toEqual(canonical);
@@ -21,15 +21,8 @@ describe('researchTools', () => {
     });
   });
 
-  it('omits spawn_research_agent unless explicitly enabled — flag off is today\'s exact tool list', () => {
-    expect(toOpenAiTools().map((t) => t.function.name)).not.toContain(SPAWN_RESEARCH_AGENT);
-    expect(toGeminiToolDeclarations().map((t) => t.name)).not.toContain(SPAWN_RESEARCH_AGENT);
-    expect(toOpenAiTools(true).map((t) => t.function.name)).toContain(SPAWN_RESEARCH_AGENT);
-    expect(toGeminiToolDeclarations(true).map((t) => t.name)).toContain(SPAWN_RESEARCH_AGENT);
-  });
-
   it('spawn tool takes a single self-contained prompt (opencode-style, one agent per call)', () => {
-    const spawn = toOpenAiTools(true).find((t) => t.function.name === SPAWN_RESEARCH_AGENT)!;
+    const spawn = toOpenAiTools().find((t) => t.function.name === SPAWN_RESEARCH_AGENT)!;
     expect(spawn.function.parameters).toMatchObject({
       type: 'object',
       properties: { prompt: { type: 'string' } },

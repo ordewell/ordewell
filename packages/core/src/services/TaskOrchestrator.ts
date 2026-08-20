@@ -1,4 +1,4 @@
-import { Task, TaskSnapshot, Verdict, QueuedMessage, RunnerId } from '../models/Task';
+import { Task, TaskSnapshot, Verdict, QueuedMessage, RunnerId, flattenTasksWithParents, taskOrderLabel } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
 import { INotification } from '../interfaces/INotification';
 import { ITerminalRunner } from '../interfaces/ITerminalRunner';
@@ -512,8 +512,10 @@ export class TaskOrchestrator {
     if (ready.length === 0 && this.activeTaskSessions.size === 0) {
       const remaining = this.store.allTasks.filter(t => t.status !== 'completed');
       console.log(`[TaskOrchestrator] tick(): no work. remaining=${remaining.length}, completed=${this.store.isAllComplete()}`);
-      for (const t of remaining) {
-        console.log(`  - ${t.order}. ${t.title} [${t.type}/${t.status}] prompt=${!!t.prompt}`);
+      const remainingById = new Map(remaining.map((t) => [t.id, t]));
+      for (const { task, parent } of flattenTasksWithParents(this.store.planTasks)) {
+        if (!remainingById.has(task.id)) continue;
+        console.log(`  - ${taskOrderLabel(task, parent ?? undefined)}. ${task.title} [${task.type}/${task.status}] prompt=${!!task.prompt}`);
       }
       if (this.store.isAllComplete()) {
         // Genuinely done — stop the loop so a fresh Execute click can start it again.
@@ -552,7 +554,7 @@ export class TaskOrchestrator {
     try {
       const cwd = this.workspaceRootFn();
       const runner = this.store.resolveTaskRunner(task);
-      const finalPrompt = composeAugmentedPrompt(task, this.store.allTasks, {
+      const finalPrompt = composeAugmentedPrompt(task, this.store.planTasks, {
         planMapEnabled: this.config.planMapEnabled,
         tddEnabled: this.tddEnabled(),
       });

@@ -13,8 +13,8 @@
 
 import { randomBytes, timingSafeEqual } from 'crypto';
 import { closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeSync } from 'fs';
-import { homedir } from 'os';
 import { join } from 'path';
+import { globalDataDir } from './globalDataDir';
 
 const BEARER_PREFIX = 'bearer ';
 
@@ -32,7 +32,7 @@ export const DAEMON_TOKEN_SUBPROTOCOL_PREFIX = 'ordewell.token.';
 export const DAEMON_SUBPROTOCOL = 'ordewell.v1';
 
 function configDir(): string {
-  return join(homedir(), '.config', 'ordewell');
+  return globalDataDir();
 }
 
 /**

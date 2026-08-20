@@ -150,15 +150,14 @@ prose, and after the user agrees writes the full markdown wrapped in
 *Avoid:* "PrdArtifact", "PRD status machine" — deleted; the PRD is a message
 plus a saved file, not a typed state.
 
-**Mode toggle (grill-me / PRD / TDD / verify / research-subagents)** — a
+**Mode toggle (grilling / PRD / TDD / verify)** — a
 per-pool user setting whose *only* effect is a prompt block injected into the
 planner system prompt (`PlanPrompts.ts`) or into a runner task's prompt
 (`promptAugment.ts`). Skills live inside Ordewell as these injected prompt
 blocks; Ordewell never ships, reads, or references runner-native skill
 mechanisms (`.claude/skills`, OpenCode plugins, etc.) to deliver them.
-(`research-subagents` additionally declares the `spawn_research_agent`
-research tool — see ADR-0005; default off, flag off is bit-for-bit the
-sequential planner.)
+Research subagents (the `spawn_research_agent` tool, see ADR-0005) are
+always-on for the planner — not a mode toggle.
 The set is data, in `plannerModes.ts`: each toggle carries its id, its settings
 key, its runtime key, and the **scopes** that honour it (`chat` / `one-shot` /
 `task`). Every field is load-bearing, not documentation — `modesFor(scope,
@@ -168,7 +167,7 @@ planner-facing booleans travel as one `PlannerModes` value rather than a
 positional tail. A toggle's disk and runtime names (`verify` / `verificationEnabled`)
 therefore meet in one row. Its *display* name does not yet: the webview still
 hand-writes the labels and passes them as positional booleans
-(`setSkillToggles` in `extension.ts`), which is the next seam to fold in. Grill-me and PRD are `chat` only because
+(`setSkillToggles` in `extension.ts`), which is the next seam to fold in. Grilling and PRD are `chat` only because
 both interview the user and the one-shot prompt states there is nobody to ask.
 Before scopes existed, a toggle used to be silently dropped by the one-shot
 planner while every surface still displayed it as ON, and nothing distinguished

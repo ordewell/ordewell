@@ -139,8 +139,6 @@ export class GeminiService extends BaseAiService implements IAiService {
       req.runners,
       req.runnerModes,
       req.autonomousDefault ?? true,
-      req.grillMeEnabled ?? false,
-      req.prdEnabled ?? false,
       req.verificationEnabled ?? false,
     );
 
@@ -186,7 +184,6 @@ export class GeminiService extends BaseAiService implements IAiService {
       runnerModes: req.runnerModes,
       autonomousDefault: req.autonomousDefault,
       fetcher: req.fetcher,
-      prdEnabled: req.prdEnabled ?? false,
     };
 
     this.conversation = { ctx, setProgress: (onProgress) => { currentProgress = onProgress; } };

@@ -7,6 +7,7 @@ import type { IAiService } from '../AiService';
 import type { INotification } from '../../interfaces/INotification';
 import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
 import type { IFileSystem } from '../../interfaces/IFileSystem';
+import type { SkillsService } from '../SkillsService';
 
 import { fakeConfig, FakeTerminalSession } from '../../testing';
 
@@ -44,6 +45,7 @@ export interface SessionOverrides {
   aiService?: Partial<IAiService>;
   planner?: Partial<SessionPlanner>;
   modelResolver?: Pick<ModelResolver, 'modelsForRunners'>;
+  skillsService?: Pick<SkillsService, 'findSkill'>;
 }
 
 /**
@@ -72,7 +74,7 @@ export function makeSession(overrides: SessionOverrides = {}): Session {
     fsAdapter: overrides.fsAdapter ?? fakeFs(),
     broadcast: overrides.broadcast ?? vi.fn(),
     modelResolver: (overrides.modelResolver ?? { modelsForRunners: vi.fn().mockResolvedValue({}) }) as ModelResolver,
-    settings: overrides.settings ?? (() => ({ tddEnabled: false, grillMeEnabled: false })),
+    settings: overrides.settings ?? (() => ({ tddEnabled: false })),
     sessionId: overrides.sessionId,
     // Session drops a live conversation via reset() on fresh-plan and
     // plan-adoption boundaries — default it so partial fakes don't explode.
@@ -80,5 +82,6 @@ export function makeSession(overrides: SessionOverrides = {}): Session {
       ? ({ reset: vi.fn(), ...overrides.aiService } as IAiService)
       : undefined,
     planner: overrides.planner as SessionPlanner | undefined,
+    skillsService: overrides.skillsService as SkillsService | undefined,
   });
 }

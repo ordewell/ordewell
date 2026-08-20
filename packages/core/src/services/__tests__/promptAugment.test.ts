@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createTask } from '../../models/Task';
+import { createTask, resolveOrderLabel } from '../../models/Task';
 import { augmentPromptWithPriorOutputs, composeAugmentedPrompt, renderPlanMap, summarizeOutput } from '../promptAugment';
 
 describe('summarizeOutput', () => {
@@ -166,6 +166,37 @@ describe('renderPlanMap', () => {
     expect(out).toContain('Task 20');
     expect(out).toContain('Task 16');
     expect(out).not.toContain('Task 15');
+  });
+
+  it('renders subtasks indented under their parent with dotted labels', () => {
+    const parent = createTask({
+      id: 'p1', order: 2, title: 'Parent',
+      subtasks: [
+        createTask({ id: 's1', order: 1, title: 'Sub one' }),
+        createTask({ id: 's2', order: 2, title: 'Sub two' }),
+      ],
+    });
+    const solo = createTask({ id: 'a', order: 1, title: 'Solo' });
+    const out = renderPlanMap([solo, parent], 'p1');
+    expect(out).toContain(' 1. [next   ] Solo');
+    expect(out).toContain(' 2. [NOW    ] Parent');
+    expect(out).toContain('2.1. [next   ] Sub one');
+    expect(out).toContain('2.2. [next   ] Sub two');
+    // Subtask rows step in two spaces under the parent's line.
+    const subLine = out.split('\n').find((l) => l.includes('Sub one'))!;
+    const parentLine = out.split('\n').find((l) => l.includes('Parent'))!;
+    expect(subLine.indexOf('Sub one')).toBeGreaterThan(parentLine.indexOf('Parent'));
+  });
+
+  it('labels a current subtask with its dotted label, matching resolveTaskId', () => {
+    const parent = createTask({
+      id: 'p1', order: 2, title: 'Parent',
+      subtasks: [createTask({ id: 's1', order: 1, title: 'Sub one' })],
+    });
+    const solo = createTask({ id: 'a', order: 1, title: 'Solo' });
+    const out = renderPlanMap([solo, parent], 's1');
+    expect(out).toMatch(/2\.1\. \[NOW\s*\] Sub one.*← you are here/);
+    expect(resolveOrderLabel([solo, parent], '2.1')?.id).toBe('s1');
   });
 });
 

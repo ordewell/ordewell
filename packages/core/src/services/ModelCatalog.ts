@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import * as os from "os";
+import { globalDataDir } from "../utils/globalDataDir";
 export interface CatalogModel {
   id: string;
   name: string;
@@ -22,6 +22,10 @@ const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 function storageKey(baseUrl: string): string {
   return `${CACHE_KEY}:${baseUrl}`;
+}
+
+function globalCacheDir(): string {
+  return globalDataDir();
 }
 
 export class ModelCatalog {
@@ -74,7 +78,7 @@ export class ModelCatalog {
     try {
       const url = (baseUrl || 'https://openrouter.ai/api/v1').replace(/\/+$/, '');
       const key = storageKey(url);
-      const cacheDir = path.join(os.homedir(), '.config', 'ordewell');
+      const cacheDir = globalCacheDir();
       const cacheFile = path.join(cacheDir, `${key.replace(/[:/]/g, '_')}.json`);
       if (fs.existsSync(cacheFile)) fs.rmSync(cacheFile);
     } catch { /* empty */ }
@@ -82,7 +86,7 @@ export class ModelCatalog {
 
   private static readCache(key: string): string | null {
     try {
-      const cacheDir = path.join(os.homedir(), '.config', 'ordewell');
+      const cacheDir = globalCacheDir();
       const cacheFile = path.join(cacheDir, `${key.replace(/[:/]/g, '_')}.json`);
       if (!fs.existsSync(cacheFile)) return null;
       const raw = fs.readFileSync(cacheFile, 'utf8');
@@ -96,7 +100,7 @@ export class ModelCatalog {
 
   private static writeCache(key: string, models: CatalogModel[]): void {
     try {
-      const cacheDir = path.join(os.homedir(), '.config', 'ordewell');
+      const cacheDir = globalCacheDir();
       fs.mkdirSync(cacheDir, { recursive: true });
       const cacheFile = path.join(cacheDir, `${key.replace(/[:/]/g, '_')}.json`);
       fs.writeFileSync(

@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { initialState, reduce, type Effect } from '../reducer';
+import { registerSkillCommands } from '../slash';
 import type { TaskView, TuiState } from '../state';
 
 function run(text: string, overrides: Partial<TuiState> = {}) {
@@ -18,7 +19,7 @@ const planned: Partial<TuiState> = {
 };
 
 describe('skills', () => {
-  it.each(['grill-me', 'tdd', 'prd', 'verify', 'research-subagents'])(
+  it.each(['tdd', 'verify'])(
     '/%s on turns the skill on through the daemon command API',
     (skill) => {
       expect(run(`/${skill} on`).effects).toEqual([{ type: 'command', name: skill, action: 'on' }]);
@@ -29,10 +30,10 @@ describe('skills', () => {
     expect(run('/tdd off').effects).toEqual([{ type: 'command', name: 'tdd', action: 'off' }]);
   });
 
-  it('a bare /grill-me toggles whatever is currently set', () => {
-    const on = { skills: { ...initialState().skills, 'grill-me': true } };
-    expect(run('/grill-me', on).effects).toEqual([{ type: 'command', name: 'grill-me', action: 'off' }]);
-    expect(run('/grill-me').effects).toEqual([{ type: 'command', name: 'grill-me', action: 'on' }]);
+  it('a bare /tdd toggles whatever is currently set', () => {
+    const on = { skills: { ...initialState().skills, tdd: true } };
+    expect(run('/tdd', on).effects).toEqual([{ type: 'command', name: 'tdd', action: 'off' }]);
+    expect(run('/tdd').effects).toEqual([{ type: 'command', name: 'tdd', action: 'on' }]);
   });
 });
 
@@ -299,6 +300,37 @@ describe('task control', () => {
       type: 'updateTask',
       changes: expect.objectContaining({ thinkingEffort: 'high' }),
     })]);
+  });
+});
+
+describe('skill commands', () => {
+  afterEach(() => registerSkillCommands([]));
+
+  it('Tab completes a registered skill prefix', () => {
+    registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
+    const base = initialState();
+    const state = { ...base, editor: { ...base.editor, text: '/gri', cursor: 4 } };
+    const { state: completed } = reduce(state, { type: 'key', key: { name: 'tab' } });
+    expect(completed.editor.text).toBe('/grilling ');
+  });
+
+  it('dispatches a skill command to the planner instead of reporting it unknown', () => {
+    registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
+    const { state, effects } = run('/grilling');
+    expect(effects).toEqual([{ type: 'startConversation', goal: '/grilling' }]);
+    expect(state.messages.at(-1)).toMatchObject({ role: 'user', content: '/grilling' });
+  });
+
+  it('sends a skill command to an existing session as a message, not a command', () => {
+    registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
+    expect(run('/grilling', planned).effects).toEqual([
+      { type: 'sendMessage', sessionId: 'session-1', message: '/grilling' },
+    ]);
+  });
+
+  it('a skill name colliding with a built-in still dispatches the built-in', () => {
+    registerSkillCommands([{ name: 'help', description: 'A skill pretending to be help' }]);
+    expect(run('/help').state.overlay).toEqual({ kind: 'help', scroll: 0 });
   });
 });
 

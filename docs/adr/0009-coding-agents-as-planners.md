@@ -115,9 +115,9 @@ model's behalf, which is precisely what a coding agent replaces.
   per-model `supportedReasoningEfforts`, OpenCode's `models`. The surfaces
   already render a model + variant picker. The cheap-planner thesis therefore
   survives on a subscription: plan with Haiku, execute with Opus.
-- **`research-subagents` is inert on this backend (T8).** The toggle declares
-  `spawn_research_agent`, a Ordewell-executed tool with no meaning when the agent
-  owns its own subagent mechanism. It is hidden rather than silently ignored.
+- **Research subagents are inert on this backend (T8).** `spawn_research_agent`
+  is a Ordewell-executed tool with no meaning when the agent owns its own
+  subagent mechanism. It is hidden rather than silently ignored.
 - **An unusable agent fails before the goal is typed (T9).** `RunnerInstallation`
   probes the binary and credentials; unusable agents appear greyed-out with the
   reason. A turn whose process dies surfaces the stderr tail as a visible chat

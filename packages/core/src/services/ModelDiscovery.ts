@@ -7,6 +7,7 @@ import { DiscoveredModel } from '../models/Task';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type { RunnerPluginManifest, DiscoveryCommand, ApiDiscoveryConfig, ApiAuthMethod } from '../plugins/types';
 import { augmentedPath, withPath } from '../utils/shellPath';
+import { globalDataDir } from '../utils/globalDataDir';
 import { planDirectLaunch } from '../utils/launch';
 import { killTree } from '../utils/processTree';
 
@@ -176,7 +177,7 @@ interface GeminiApiModel {
 }
 
 function geminiDiscoveryCacheKey(apiKey: string): { key: string; dir: string; file: string } {
-  const dir = path.join(osMod.homedir(), '.config', 'ordewell');
+  const dir = globalDataDir();
   const hash = apiKey.slice(-8);
   return {
     key: `gemini-models:${hash}`,

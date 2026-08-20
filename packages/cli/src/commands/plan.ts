@@ -4,7 +4,7 @@ import { ensureDaemon, ApiClient, resolvePort } from '../daemonClient';
 import { createApprovalHandler } from '../approvals';
 import { formatStepLine, isTransient } from './researchLog';
 import type { SerializedPlan, SerializedTask, DiscoveredModel } from '@ordewell/core';
-import { mintSessionId } from '@ordewell/core';
+import { mintSessionId, taskOrderLabel } from '@ordewell/core';
 import type { WsEvent } from '../apiClient';
 
 function planTasks(plan: SerializedPlan): SerializedTask[] {
@@ -86,22 +86,28 @@ function printPlan(plan: SerializedPlan, sessionId: string, runners: string[], m
   const aiCount = tasks.filter((t: SerializedTask) => t.type !== 'user').length;
   const manCount = tasks.filter((t: SerializedTask) => t.type === 'user').length;
 
+  const modelSuffix = (task: SerializedTask): string => {
+    if (!task.assignedModel) return '';
+    const found = models.find((m: DiscoveredModel) => m.modelId === task.assignedModel?.modelId);
+    const rp = found?.runnerProvider;
+    const label = rp ? rp.split('-').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : '';
+    return rp
+      ? ` (${task.assignedModel.modelLabel} · ${label})`
+      : ` (${task.assignedModel.modelLabel})`;
+  };
+
   console.log(`\nPlan: ${tasks.length} tasks (${aiCount} AI, ${manCount} Manual) — ${(plan.runners || runners).join(', ')}`);
   console.log(`Session: ${sessionId}\n`);
 
   for (const t of tasks) {
     const typeIcon = t.type === 'user' ? '[MAN]' : '[ AI]';
-    let model = '';
-    if (t.assignedModel) {
-      const found = models.find((m: DiscoveredModel) => m.modelId === t.assignedModel?.modelId);
-      const rp = found?.runnerProvider;
-      const label = rp ? rp.split('-').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : '';
-      model = rp
-        ? ` (${t.assignedModel.modelLabel} · ${label})`
-        : ` (${t.assignedModel.modelLabel})`;
-    }
     const deps = t.dependencies?.length ? ` ← ${t.dependencies.join(', ')}` : '';
-    console.log(`  ${String(t.order).padStart(2)}. ${typeIcon} ${t.title}${model}${deps}`);
+    console.log(`  ${taskOrderLabel(t).padStart(2)}. ${typeIcon} ${t.title}${modelSuffix(t)}${deps}`);
+    for (const sub of t.subtasks || []) {
+      const subTypeIcon = sub.type === 'user' ? '[MAN]' : '[ AI]';
+      const subDeps = sub.dependencies?.length ? ` ← ${sub.dependencies.join(', ')}` : '';
+      console.log(`    ${taskOrderLabel(sub, t)}. ${subTypeIcon} ${sub.title}${modelSuffix(sub)}${subDeps}`);
+    }
   }
 
   if (manCount > 0) {
@@ -226,7 +232,7 @@ export async function handlePlan(
         api.startConversation(sessionId, goal, runners, workspace),
       );
 
-      // Grill-me / PRD / verify turns land here: the planner asked something
+      // A clarifying turn lands here: the planner asked something
       // instead of committing, so answer it and hand the reply back.
       while (!hasCommittedPlan(plan)) {
         console.log(`\n${lastPlannerMessage(plan)}\n`);

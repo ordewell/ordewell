@@ -36,35 +36,28 @@ describe('SettingsService', () => {
 
   it('returns defaults when no settings file exists', () => {
     expect(service.getAll()).toEqual({
-      grillMe: { enabled: false },
       tdd: { enabled: true },
-      prd: { enabled: false },
       verification: { enabled: false },
-      researchSubagents: { enabled: false },
     });
   });
 
   it('creates the settings file on first write', () => {
     expect(fs.existsSync(tempFile)).toBe(false);
-    service.setGrillMe(true);
+    service.setTdd(false);
     expect(fs.existsSync(tempFile)).toBe(true);
     const raw = JSON.parse(fs.readFileSync(tempFile, 'utf-8'));
-    expect(raw.grillMe.enabled).toBe(true);
-    expect(raw.tdd.enabled).toBe(true);
+    expect(raw.tdd.enabled).toBe(false);
   });
 
   it('reads existing settings from file', () => {
     fs.writeFileSync(tempFile, JSON.stringify({
-      grillMe: { enabled: true },
       tdd: { enabled: false },
+      verification: { enabled: true },
     }));
     const s2 = new SettingsService(tempFile);
     expect(s2.getAll()).toEqual({
-      grillMe: { enabled: true },
       tdd: { enabled: false },
-      prd: { enabled: false },
-      verification: { enabled: false },
-      researchSubagents: { enabled: false },
+      verification: { enabled: true },
     });
   });
 
@@ -82,12 +75,6 @@ describe('SettingsService', () => {
     expect(service.getModelAllowlist('opencode')).toEqual(['b', 'c']);
   });
 
-  it('getGrillMe returns the grillMe enabled state', () => {
-    expect(service.getGrillMe()).toBe(false);
-    service.setGrillMe(true);
-    expect(service.getGrillMe()).toBe(true);
-  });
-
   it('getTdd returns the tdd enabled state', () => {
     expect(service.getTdd()).toBe(true);
     service.setTdd(false);
@@ -96,14 +83,11 @@ describe('SettingsService', () => {
 
   it('persists changes to disk', () => {
     service.setTdd(false);
-    service.setGrillMe(true);
+    service.setVerification(true);
     const raw = JSON.parse(fs.readFileSync(tempFile, 'utf-8'));
     expect(raw).toEqual({
-      grillMe: { enabled: true },
       tdd: { enabled: false },
-      prd: { enabled: false },
-      verification: { enabled: false },
-      researchSubagents: { enabled: false },
+      verification: { enabled: true },
     });
   });
 
@@ -113,19 +97,9 @@ describe('SettingsService', () => {
     expect(service.getVerification()).toBe(true);
   });
 
-  it('researchSubagents defaults to off and round-trips through disk', () => {
-    expect(service.getResearchSubagents()).toBe(false);
-    service.setResearchSubagents(true);
-    expect(service.getResearchSubagents()).toBe(true);
-    const s2 = new SettingsService(tempFile);
-    expect(s2.getResearchSubagents()).toBe(true);
-    const raw = JSON.parse(fs.readFileSync(tempFile, 'utf-8'));
-    expect(raw.researchSubagents).toEqual({ enabled: true });
-  });
-
-  it('getSettingsPath returns the path in the user config directory', () => {
+  it('getSettingsPath returns the path in the user data directory', () => {
     const p = getSettingsPath();
-    expect(p).toContain('.config');
+    expect(p).toContain('.ordewell');
     expect(p).toContain('ordewell');
     expect(p).toContain('settings.json');
   });
@@ -146,11 +120,11 @@ describe('SettingsService', () => {
       expect(getSettingsPath()).toBe('/tmp/lane-S/settings.json');
     });
 
-    it('falls back to the user config directory when unset or blank', () => {
+    it('falls back to the user data directory when unset or blank', () => {
       delete process.env.ORDEWELL_SETTINGS_PATH;
-      expect(getSettingsPath()).toContain('.config');
+      expect(getSettingsPath()).toContain('.ordewell');
       process.env.ORDEWELL_SETTINGS_PATH = '   ';
-      expect(getSettingsPath()).toContain('.config');
+      expect(getSettingsPath()).toContain('.ordewell');
     });
 
     it('two services on different paths do not see each other writes', () => {
@@ -159,10 +133,10 @@ describe('SettingsService', () => {
       try {
         const sa = new SettingsService(a.filePath);
         const sb = new SettingsService(b.filePath);
-        sa.setResearchSubagents(true);
-        sb.setResearchSubagents(false);
-        expect(sa.getResearchSubagents()).toBe(true);
-        expect(sb.getResearchSubagents()).toBe(false);
+        sa.setVerification(true);
+        sb.setVerification(false);
+        expect(sa.getVerification()).toBe(true);
+        expect(sb.getVerification()).toBe(false);
       } finally {
         cleanup(a.dir);
         cleanup(b.dir);
@@ -237,20 +211,20 @@ describe('SettingsService', () => {
     });
 
     it('is absent — never an empty object — when nothing has been recorded', () => {
-      service.setGrillMe(true);
+      service.setTdd(false);
       expect(JSON.parse(fs.readFileSync(tempFile, 'utf-8'))).not.toHaveProperty('plannerModels');
     });
 
     it('a plannerModels of the wrong shape does not throw and does not wipe the rest of the file', () => {
       fs.writeFileSync(tempFile, JSON.stringify({
-        grillMe: { enabled: true },
+        tdd: { enabled: false },
         modelAllowlist: { 'claude-code': ['claude-b'] },
         plannerModels: 'not even an object',
       }));
       const s2 = new SettingsService(tempFile);
       expect(() => s2.getAll()).not.toThrow();
       expect(s2.getPlannerModel('claude-code')).toBeUndefined();
-      expect(s2.getGrillMe()).toBe(true);
+      expect(s2.getTdd()).toBe(false);
       expect(s2.getModelAllowlist('claude-code')).toEqual(['claude-b']);
     });
   });

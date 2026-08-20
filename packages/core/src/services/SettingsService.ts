@@ -1,13 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
+import { globalDataDir, migrateOldConfigDir } from '../utils/globalDataDir';
 
 export interface UserSettings {
-  grillMe: { enabled: boolean };
   tdd: { enabled: boolean };
-  prd: { enabled: boolean };
   verification: { enabled: boolean };
-  researchSubagents: { enabled: boolean };
   modelAllowlist?: Record<string, string[]>;
   /** Last model (and its thinking effort) the user chose for each planner backend, keyed by AiProvider id. */
   plannerModels?: Record<string, { model: string; effort?: string }>;
@@ -19,11 +16,8 @@ export interface UserSettings {
 }
 
 const DEFAULTS: UserSettings = {
-  grillMe: { enabled: false },
   tdd: { enabled: true },
-  prd: { enabled: false },
   verification: { enabled: false },
-  researchSubagents: { enabled: false },
 };
 
 /**
@@ -31,15 +25,15 @@ const DEFAULTS: UserSettings = {
  * Ordewell processes on one machine can hold *different* settings at the same
  * time. Without it the file is a single shared mutable global: the benchmark
  * harness runs parallel lanes that each pin the mode toggles, and because
- * `getAll()` re-reads whenever the mtime moves, a lane needing
- * `researchSubagents: true` would silently plan with `false` the moment another
- * lane pinned its own — turning an A/B of that toggle into a comparison of one
- * condition against itself.
+ * `getAll()` re-reads whenever the mtime moves, a lane needing a toggle
+ * `true` would silently plan with `false` the moment another lane pinned its
+ * own — turning an A/B of that toggle into a comparison of one condition
+ * against itself.
  */
 export function getSettingsPath(): string {
   const override = process.env.ORDEWELL_SETTINGS_PATH;
   if (override && override.trim()) return override.trim();
-  return path.join(os.homedir(), '.config', 'ordewell', 'settings.json');
+  return path.join(globalDataDir(), 'settings.json');
 }
 
 /**
@@ -91,33 +85,13 @@ export class SettingsService {
     }
   }
 
-  getGrillMe(): boolean {
-    return this.getAll().grillMe.enabled;
-  }
-
   getTdd(): boolean {
     return this.getAll().tdd.enabled;
-  }
-
-  getPrd(): boolean {
-    return this.getAll().prd.enabled;
-  }
-
-  setGrillMe(enabled: boolean): void {
-    this.getAll();
-    this.cache!.grillMe.enabled = enabled;
-    this.persist();
   }
 
   setTdd(enabled: boolean): void {
     this.getAll();
     this.cache!.tdd.enabled = enabled;
-    this.persist();
-  }
-
-  setPrd(enabled: boolean): void {
-    this.getAll();
-    this.cache!.prd.enabled = enabled;
     this.persist();
   }
 
@@ -128,16 +102,6 @@ export class SettingsService {
   setVerification(enabled: boolean): void {
     this.getAll();
     this.cache!.verification.enabled = enabled;
-    this.persist();
-  }
-
-  getResearchSubagents(): boolean {
-    return this.getAll().researchSubagents.enabled;
-  }
-
-  setResearchSubagents(enabled: boolean): void {
-    this.getAll();
-    this.cache!.researchSubagents.enabled = enabled;
     this.persist();
   }
 
@@ -198,15 +162,15 @@ export class SettingsService {
   }
 
   private load(): UserSettings {
+    // A pre-`.ordewell` install keeps its toggles in the old config dir; lift
+    // them once before reading so the first read already sees the moved file.
+    migrateOldConfigDir();
     try {
       if (fs.existsSync(this.filePath)) {
         const raw = JSON.parse(fs.readFileSync(this.filePath, 'utf-8'));
         const settings: UserSettings = {
-          grillMe: { enabled: raw.grillMe?.enabled ?? DEFAULTS.grillMe.enabled },
           tdd: { enabled: raw.tdd?.enabled ?? DEFAULTS.tdd.enabled },
-          prd: { enabled: raw.prd?.enabled ?? DEFAULTS.prd.enabled },
           verification: { enabled: raw.verification?.enabled ?? DEFAULTS.verification.enabled },
-          researchSubagents: { enabled: raw.researchSubagents?.enabled ?? DEFAULTS.researchSubagents.enabled },
         };
         if (raw.modelAllowlist !== undefined) {
           settings.modelAllowlist = raw.modelAllowlist;
@@ -223,7 +187,7 @@ export class SettingsService {
     } catch {
       // corrupted file — use defaults
     }
-    return { ...DEFAULTS, grillMe: { ...DEFAULTS.grillMe }, tdd: { ...DEFAULTS.tdd }, prd: { ...DEFAULTS.prd }, verification: { ...DEFAULTS.verification }, researchSubagents: { ...DEFAULTS.researchSubagents } };
+    return { ...DEFAULTS, tdd: { ...DEFAULTS.tdd }, verification: { ...DEFAULTS.verification } };
   }
 
   private persist(): void {

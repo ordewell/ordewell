@@ -44,7 +44,7 @@
   "main": "./dist/extension.js",
   "scripts": {
     "vscode:prepublish": "npm run build",
-    "build": "tsup && vite build && node scripts/verify-bundle.mjs",
+    "build": "tsup && vite build && node scripts/copy-skills.mjs && node scripts/verify-bundle.mjs",
     "watch": "tsup --watch",
     "lint": "eslint src --ext .ts,.tsx",
     "test": "vitest run",

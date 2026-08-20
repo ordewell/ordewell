@@ -189,6 +189,34 @@ describe('TaskCard — runner output', () => {
   });
 });
 
+describe('TaskCard — subtask order labels', () => {
+  it('renders a dotted order label for subtasks, prefixed with the parent order', () => {
+    render(
+      <TaskCard
+        task={makeTask({
+          order: 2,
+          subtasks: [{
+            id: 's1',
+            order: 1,
+            title: 'Subtask one',
+            description: '',
+            type: 'ai',
+            status: 'pending',
+            dependencies: [],
+            subtasks: [],
+            assignedRunner: 'claude-code',
+            completionMarker: 'm2',
+            taskMode: 'build',
+          }],
+        })}
+        models={emptyModels}
+      />,
+    );
+    act(() => { fireEvent.click(screen.getByText('Test task')); });
+    expect(document.querySelector('.subtask-order')!.textContent).toBe('2.1.');
+  });
+});
+
 describe('TaskCard — Stalled state', () => {
   it('renders Stalled instead of Running when idleSince is set on an in_progress task', () => {
     render(

@@ -34,6 +34,19 @@ const SESSION = {
   plan: { pendingTasks: [{ id: 't1', order: 1, title: 'One', status: 'completed' }] },
 };
 
+const SESSION_WITH_SUBTASKS = {
+  meta: { id: 'session-1', goal: 'export me', runners: ['claude-code'], taskCount: 1, status: 'completed', createdAt: '', updatedAt: '' },
+  plan: {
+    pendingTasks: [{
+      id: 't1', order: 1, title: 'One', status: 'completed',
+      subtasks: [
+        { id: 't1a', order: 1, title: 'Nested', status: 'completed' },
+        { id: 't1b', order: 2, title: 'Second nested', status: 'pending' },
+      ],
+    }],
+  },
+};
+
 describe('handleStatus --output', () => {
   it('writes the session JSON to a file and implies --json', async () => {
     const srv = await startServer((_req, res) => {
@@ -61,6 +74,22 @@ describe('handleStatus --output', () => {
       handleStatus(['--session-id', 'session-1', '--json'], new ApiClient(srv.port)),
     );
     expect(JSON.parse(stdout)).toEqual(SESSION);
+    srv.close();
+  });
+
+  it('renders subtasks as indented dotted-label lines', async () => {
+    const srv = await startServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(SESSION_WITH_SUBTASKS));
+    });
+    const { handleStatus } = await import('../status');
+    const { stdout } = await capture(() =>
+      handleStatus(['--session-id', 'session-1'], new ApiClient(srv.port)),
+    );
+    expect(stdout).toContain('    1.1. ');
+    expect(stdout).toContain('Nested');
+    expect(stdout).toContain('    1.2. ');
+    expect(stdout).toContain('Second nested');
     srv.close();
   });
 });

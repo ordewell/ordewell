@@ -139,3 +139,14 @@ deepseek-v4-flash 1 → 4 question turns (~8 questions), qwen3.5-flash 1 → 3
 question turns, both ending with outline → confirmed commit. Without
 grill-me, both models now ask before choosing storage on "add persistence"
 and present options on vague goals instead of silently assuming.
+
+## Update (2026-08-20) — grill-me renamed to grilling; superseded by the skill system
+
+The `grill-me` mode toggle and its `GRILL-ME` prompt block described throughout
+this ADR no longer exist: the interview workflow moved from a hardcoded
+planner-mode toggle to a user-invoked skill (`packages/core/skills/grilling/`,
+substituted into the planner's message on `/grilling`) with no settings-surface
+toggle at all. The references to `grill-me`, `grillMeEnabled`, and the
+`GRILL-ME` block above describe the toggle-based mechanism as it existed at the
+time each entry was written and are left as-is; the current mechanism is the
+skills system, not a mode toggle.

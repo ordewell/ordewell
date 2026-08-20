@@ -1,15 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { MODE_TOGGLES, DEFAULT_PLANNER_MODES, modesFor, plannerModesFrom, plannerRuntimeToggles, type PlannerModes } from '../plannerModes';
 import type { UserSettings } from '../SettingsService';
-import { buildPlanWithResults, buildResearchPrompt } from '../PlanPrompts';
+import { buildResearchPrompt } from '../PlanPrompts';
 import { sessionRuntimeSettings } from '../createSession';
 
 const all: PlannerModes = {
   autonomousDefault: true,
-  grillMe: true,
-  prd: true,
   verification: true,
-  researchSubagents: true,
 };
 
 describe('mode toggle registry', () => {
@@ -30,11 +27,8 @@ describe('mode toggle registry', () => {
   });
 
   const settings: UserSettings = {
-    grillMe: { enabled: true },
     tdd: { enabled: true },
-    prd: { enabled: false },
     verification: { enabled: false },
-    researchSubagents: { enabled: true },
   };
 
   it('reads every toggle off the settings file, under its runtime name', () => {
@@ -42,11 +36,8 @@ describe('mode toggle registry', () => {
     // friends, so a toggle had three names — one on disk, one at runtime, one
     // on screen — and nothing tied them together. This is the tie.
     expect(plannerRuntimeToggles(settings)).toEqual({
-      grillMeEnabled: true,
       tddEnabled: true,
-      prdEnabled: false,
       verificationEnabled: false,
-      researchSubagentsEnabled: true,
     });
   });
 
@@ -67,15 +58,11 @@ describe('mode toggle registry', () => {
     expect(Object.keys(plannerRuntimeToggles(settings)).sort()).toEqual([...runtime].sort());
   });
 
-  it('drops the toggles a one-shot run cannot honour, and keeps the ones it can', () => {
-    const scoped = modesFor('one-shot', all);
-
-    // Both interview the user, and the one-shot prompt states there is nobody to ask.
-    expect(scoped.grillMe).toBe(false);
-    expect(scoped.prd).toBe(false);
-    // Structural: they only shape the emitted plan.
-    expect(scoped.verification).toBe(true);
-    expect(scoped.researchSubagents).toBe(true);
+  it('drops verification outside the scopes it is declared for', () => {
+    // `verify` is declared for `chat` and `one-shot` only — a `task` scope
+    // (a runner task's own prompt) must not inherit it.
+    expect(modesFor('task', all).verification).toBe(false);
+    expect(modesFor('one-shot', all).verification).toBe(true);
   });
 
   it('leaves the chat scope alone', () => {
@@ -88,19 +75,9 @@ describe('mode toggle registry', () => {
 });
 
 describe('one-shot planner prompt', () => {
-  const oneShot = (over: Partial<PlannerModes>) =>
-    buildPlanWithResults('goal', '', '', {}, ['claude-code'], undefined, { ...DEFAULT_PLANNER_MODES, ...over });
+  it('tells the model there is nobody to ask', () => {
+    const research = buildResearchPrompt('goal', '', {}, ['claude-code'], undefined, DEFAULT_PLANNER_MODES);
 
-  it('still omits the two toggles that need a user to talk to', () => {
-    const research = buildResearchPrompt('goal', '', {}, ['claude-code'], undefined, {
-      ...DEFAULT_PLANNER_MODES, grillMe: true, prd: true,
-    });
-
-    // The prompt tells the model there is nobody to ask; an interview block
-    // here would be an instruction it cannot follow.
     expect(research).toContain('ONE-SHOT run');
-    expect(research).not.toContain('INTERVIEW MODE');
-    expect(research).not.toContain('PRD MODE');
-    expect(oneShot({ grillMe: true, prd: true })).not.toContain('INTERVIEW MODE');
   });
 });

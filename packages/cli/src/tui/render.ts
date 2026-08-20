@@ -1,6 +1,6 @@
 import { pad, stripAnsi, style, truncate, width, wrap } from './ansi';
 import { cursorInLines } from './editor';
-import { completions } from './slash';
+import { completions, findCommand } from './slash';
 import {
   bodyRows, chatInputWrap, chatLayout, footerHints, helpLayout, packHints, planLayout, planOffset,
 } from './layout';
@@ -224,6 +224,36 @@ function renderStatus(state: TuiState, cols: number): string {
   return truncate(`${head}${style.grey(` · ${tail}`)}`, cols);
 }
 
+/** The leading `/word` of the input, up to the first space, or `''`. */
+const LEADING_TOKEN = /^\/\S*/;
+
+/**
+ * How many leading characters of the input are a `/skill-name` token that
+ * will be substituted with the skill's text — 0 when there is none. Only an
+ * exact match to a registered *skill* command counts; built-ins keep their
+ * existing styling, and a partial token typed mid-word is not yet a match.
+ */
+function skillTokenLength(text: string): number {
+  const match = LEADING_TOKEN.exec(text);
+  if (!match) return 0;
+  return findCommand(match[0])?.source === 'skill' ? match[0].length : 0;
+}
+
+/**
+ * `text` represents the slice of the full input starting at column `base`.
+ * The part of it that falls inside `[0, tokenEnd)` of the full input is
+ * painted; the rest passes through untouched. Splitting after slicing —
+ * rather than colouring the whole line up front — keeps every existing
+ * index (`col`, `line.slice(...)`) counting plain characters, so the caret
+ * math above is never asked to account for inserted escape codes.
+ */
+function paintRange(text: string, base: number, tokenEnd: number): string {
+  const localEnd = Math.max(0, Math.min(text.length, tokenEnd - base));
+  if (localEnd <= 0) return text;
+  if (localEnd >= text.length) return style.cyan(text);
+  return style.cyan(text.slice(0, localEnd)) + text.slice(localEnd);
+}
+
 function renderInput(state: TuiState, cols: number): string[] {
   const prompt = state.focus === 'plan' ? style.grey('❯ ') : style.cyan('❯ ');
   // The driver hides the hardware cursor, so the frame marks the caret itself —
@@ -232,12 +262,14 @@ function renderInput(state: TuiState, cols: number): string[] {
   const room = chatEditorRoom(cols, lines !== null);
   const { text, cursor } = state.editor;
   const continuation = ' '.repeat(width(prompt));
+  const tokenEnd = skillTokenLength(text);
 
   // A blurred editor never wraps — a literal \n here would push every
   // following row down one line, so newlines/tabs are squashed to one row.
   if (!lines) {
     const visible = text.replace(/\n/g, '¶').replace(/\t/g, ' ');
-    return [prompt + visible + suggest(state, room - width(visible))];
+    const painted = tokenEnd > 0 ? paintRange(visible, 0, tokenEnd) : visible;
+    return [prompt + painted + suggest(state, room - width(visible))];
   }
 
   // The caret is derived from the same wrapped lines rather than re-wrapping,
@@ -249,9 +281,15 @@ function renderInput(state: TuiState, cols: number): string[] {
     const prefix = i === 0 ? prompt : continuation;
     const line = raw.replace(/\t/g, ' ');
     const isCursorLine = i === lineIndex;
+    // Only the first line can start with the leading token, so later lines
+    // never paint — `tokenEnd` is a column offset into the whole input, and
+    // those lines start well past it.
+    const lineTokenEnd = i === 0 ? tokenEnd : 0;
     const rendered = isCursorLine
-      ? line.slice(0, col) + style.inverse(line.slice(col, col + 1) || ' ') + line.slice(col + 1)
-      : line;
+      ? paintRange(line.slice(0, col), 0, lineTokenEnd)
+        + style.inverse(line.slice(col, col + 1) || ' ')
+        + paintRange(line.slice(col + 1), col + 1, lineTokenEnd)
+      : paintRange(line, 0, lineTokenEnd);
     const used = width(line) + (isCursorLine && col >= line.length ? 1 : 0);
     const hint = i === rawLines.length - 1 ? suggest(state, room - used) : '';
     return prefix + rendered + hint;

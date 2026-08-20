@@ -48,7 +48,6 @@ describe('catalog block — always-on, allowlist-filtered', () => {
       },
       settings: () => ({
         tddEnabled: false,
-        grillMeEnabled: false,
         modelAllowlist: { 'claude-code': ['claude-sonnet-4'] },
       }),
     });

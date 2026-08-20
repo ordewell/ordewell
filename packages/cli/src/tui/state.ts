@@ -46,6 +46,8 @@ export interface TaskView {
     thinkingEffort?: string;
     availableVariants?: string[];
   };
+  /** Child tasks, recursively shaped the same way; absent until populated by `toTaskView`. */
+  subtasks?: TaskView[];
 }
 
 /** One mode a runner's manifest declares, as the mode picker offers it. */
@@ -81,14 +83,14 @@ export interface ModelView {
   runners?: string[];
 }
 
-/** The five planner skills the VS Code webview exposes as toggles. */
-export const SKILL_IDS = ['grill-me', 'tdd', 'prd', 'verify', 'research-subagents'] as const;
+/** The planner skills the VS Code webview exposes as toggles. */
+export const SKILL_IDS = ['tdd', 'verify'] as const;
 export type SkillId = (typeof SKILL_IDS)[number];
 
 export type Skills = Record<SkillId, boolean>;
 
 export function noSkills(): Skills {
-  return { 'grill-me': false, tdd: false, prd: false, verify: false, 'research-subagents': false };
+  return { tdd: false, verify: false };
 }
 
 export interface PickerItem {
@@ -211,7 +213,7 @@ export interface TuiState {
   tasks: TaskView[];
   planApproved: boolean;
   focus: Focus;
-  /** Index into `tasks` for the plan pane's cursor. */
+  /** Index into `planRows` (top-level tasks, plus an expanded task's subtasks) for the plan pane's cursor. */
   selectedTask: number;
   /** The selected task can expand in place to show its complete specification. */
   expandedTaskId: string | null;
@@ -293,6 +295,40 @@ export const isTaskRunning = (task: { status: string }): boolean =>
  * session into a run, and its icon still has to turn.
  */
 export const anyTaskRunning = (state: TuiState): boolean => state.tasks.some(isTaskRunning);
+
+/** One navigable row of the plan pane — a top-level task, or a subtask shown under an open parent. */
+export interface PlanRow {
+  task: TaskView;
+  parent: TaskView | null;
+}
+
+/**
+ * The plan pane's navigable rows in display order: each top-level task followed
+ * by its subtasks whenever the parent is open. `selectedTask` indexes this list,
+ * never `state.tasks` directly — the reducer and the renderer would otherwise
+ * each reinvent the flattening and drift apart.
+ *
+ * A parent stays open while one of its subtasks is itself expanded, or the row
+ * under the cursor (and its prompt editor) would vanish the moment enter opens
+ * it. Only one level nests: a subtask's own children are never shown.
+ */
+export function planRows(state: TuiState): PlanRow[] {
+  const rows: PlanRow[] = [];
+  for (const task of state.tasks) {
+    rows.push({ task, parent: null });
+    const subtasks = task.subtasks ?? [];
+    const open = state.expandedTaskId === task.id || subtasks.some((s) => s.id === state.expandedTaskId);
+    if (open) {
+      for (const subtask of subtasks) rows.push({ task: subtask, parent: task });
+    }
+  }
+  return rows;
+}
+
+/** The row the plan pane's cursor points at, or null for an empty plan. */
+export function selectedPlanRow(state: TuiState): PlanRow | null {
+  return planRows(state)[state.selectedTask] ?? null;
+}
 
 export function initialState(overrides: Partial<TuiState> = {}): TuiState {
   return {

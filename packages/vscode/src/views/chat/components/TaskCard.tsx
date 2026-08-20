@@ -408,7 +408,7 @@ export default function TaskCard({ task, models, modes, runners, effectiveRunner
           {sortedSubtasks.length > 0 && (
             <div className="subtasks">
               {sortedSubtasks.map((sub) => (
-                <SubTaskCard key={sub.id} task={sub} models={models}
+                <SubTaskCard key={sub.id} task={sub} parentTask={task} models={models}
                   modes={modes} runners={runners} effectiveRunner={effectiveRunner}
                   configuredProviders={configuredProviders} modelApiMapping={modelApiMapping}
                   isExecuting={isExecuting}

@@ -11,7 +11,7 @@ import type { UserSettings } from './SettingsService';
  */
 
 /** The id a surface shows and a user types. Deliberately not the settings key. */
-export type ModeToggleId = 'grill-me' | 'tdd' | 'prd' | 'verify' | 'research-subagents';
+export type ModeToggleId = 'tdd' | 'verify';
 
 /**
  * Where a toggle can take effect. `chat` is the conversation loop (ADR-0002),
@@ -29,11 +29,8 @@ type ToggleSettingsKey = {
 
 /** How the same toggle is named once a host has read it off disk. */
 export interface PlannerRuntimeToggles {
-  grillMeEnabled: boolean;
   tddEnabled: boolean;
-  prdEnabled: boolean;
   verificationEnabled: boolean;
-  researchSubagentsEnabled: boolean;
 }
 
 export interface ModeToggle {
@@ -46,12 +43,7 @@ export interface ModeToggle {
 }
 
 export const MODE_TOGGLES: readonly ModeToggle[] = [
-  // Both of these interview the user, and a one-shot run has nobody to ask —
-  // its prompt says so outright. Their absence there is a decision, not a gap.
-  { id: 'grill-me', settingsKey: 'grillMe', runtimeKey: 'grillMeEnabled', scopes: ['chat'] },
-  { id: 'prd', settingsKey: 'prd', runtimeKey: 'prdEnabled', scopes: ['chat'] },
   { id: 'verify', settingsKey: 'verification', runtimeKey: 'verificationEnabled', scopes: ['chat', 'one-shot'] },
-  { id: 'research-subagents', settingsKey: 'researchSubagents', runtimeKey: 'researchSubagentsEnabled', scopes: ['chat', 'one-shot'] },
   { id: 'tdd', settingsKey: 'tdd', runtimeKey: 'tddEnabled', scopes: ['task'] },
 ];
 
@@ -77,44 +69,29 @@ export function plannerRuntimeToggles(settings: UserSettings): PlannerRuntimeTog
  */
 export interface PlannerModes {
   autonomousDefault: boolean;
-  grillMe: boolean;
-  prd: boolean;
   verification: boolean;
-  researchSubagents: boolean;
 }
 
 export const DEFAULT_PLANNER_MODES: PlannerModes = {
   autonomousDefault: true,
-  grillMe: false,
-  prd: false,
   verification: false,
-  researchSubagents: false,
 };
 
 /** Read the toggles a planner cares about off whatever the settings callback returned. */
 export function plannerModesFrom(
   settings: {
-    grillMeEnabled?: boolean;
-    prdEnabled?: boolean;
     verificationEnabled?: boolean;
-    researchSubagentsEnabled?: boolean;
   },
   autonomousDefault: boolean,
 ): PlannerModes {
   return {
     autonomousDefault,
-    grillMe: settings.grillMeEnabled ?? false,
-    prd: settings.prdEnabled ?? false,
     verification: settings.verificationEnabled ?? false,
-    researchSubagents: settings.researchSubagentsEnabled ?? false,
   };
 }
 
 const MODE_FIELD: Record<ModeToggleId, keyof PlannerModes | null> = {
-  'grill-me': 'grillMe',
-  prd: 'prd',
   verify: 'verification',
-  'research-subagents': 'researchSubagents',
   tdd: null,
 };
 

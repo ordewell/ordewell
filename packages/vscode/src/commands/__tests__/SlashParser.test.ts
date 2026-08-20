@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { window } from '../../test/vscode.mock';
-import { handleSlashCommand, type SlashDeps } from '../SlashParser';
+import { handleSlashCommand, isKnownSlashCommand, type SlashDeps } from '../SlashParser';
 import type { DiscoveredModel } from '@ordewell/core';
 
 function harnessModel(modelId: string, variantIds: string[] = []): DiscoveredModel {
@@ -123,5 +123,18 @@ describe('/planner-effort records the effort against the current model', () => {
     await handleSlashCommand('/planner-effort high', deps);
 
     expect(recordPlannerModel).toHaveBeenCalledWith('claude-sonnet-4-5', 'high');
+  });
+});
+
+describe('isKnownSlashCommand', () => {
+  it('recognizes every extension slash command regardless of case', () => {
+    expect(isKnownSlashCommand('/model set foo')).toBe(true);
+    expect(isKnownSlashCommand('/PLANNER')).toBe(true);
+    expect(isKnownSlashCommand('/refresh')).toBe(true);
+  });
+
+  it('rejects a discovered-skill invocation so it falls through to the message path', () => {
+    expect(isKnownSlashCommand('/grilling')).toBe(false);
+    expect(isKnownSlashCommand('/to-spec')).toBe(false);
   });
 });
