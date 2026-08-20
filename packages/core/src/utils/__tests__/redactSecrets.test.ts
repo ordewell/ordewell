@@ -116,6 +116,29 @@ describe('redactSecrets — credential material', () => {
     expect(out).toContain('secret: [REDACTED credential');
     expect(out).toContain('name: app');
   });
+
+  // A long, plain-word value under an unambiguous name — no digit, no mixed
+  // case, no punctuation — is a real secret, not a reference. Length is the
+  // signal that separates it from a short settings-reference like `cohereKey`.
+  it('redacts a long no-digit value under an unambiguous name (name+length floor)', () => {
+    const leaked: Array<[string, string]> = [
+      ['password: "batterystaple"', 'batterystaple'],
+      ['secret: "correcthorsebatterystaple"', 'correcthorsebatterystaple'],
+    ];
+    for (const [input, secret] of leaked) {
+      const out = redactSecrets(input);
+      expect(out).not.toContain(secret);
+      expect(out).toContain('[REDACTED credential');
+    }
+  });
+
+  // But a short plain-word value under the same name is a settings-reference
+  // (`secretStoreKey: 'cohereKey'`), not key material — keep the length floor
+  // from rewriting config-shaped code.
+  it('does not rewrite a short no-digit value that is a settings reference', () => {
+    const input = "{ secretStoreKey: 'cohereKey' }";
+    expect(redactSecrets(input)).toBe(input);
+  });
 });
 
 describe('redactSecrets — ordinary source code', () => {

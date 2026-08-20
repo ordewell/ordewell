@@ -8,14 +8,54 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.4.11] — 2026-08-20
+
+Planner and skills rework, task-idle visibility, TUI/session isolation, and a
+targeted hardening of credential redaction in response to the 0.4.9 disclosure
+follow-up.
+
+### Added
+
+- **The `grill-me`/PRD toggles are replaced with a general skills system.**
+  Built-in `grilling` and `to-spec` skills (backed by `SkillsService` and a
+  global skills data dir) are now invoked via slash commands, across core,
+  CLI, VS Code and web.
+- **Running tasks now surface when they go idle.** An `idleSince` state —
+  tracked per task, emitted by the VerdictEngine and cleared when output
+  resumes — shows a static idle icon in the TUI and the VS Code chat view for
+  a task that is running but has produced nothing recently.
+
 ### Changed
 
-- **The `grill-me` skill is renamed to `grilling`**, invoked as `/grilling`.
-  Its interview method is rewritten around a design-tree/frontier/rounds
-  structure instead of one-question-at-a-time.
+- **Review mode is removed** from the planner prompts, settings service and
+  session management (and cleaned out of the VS Code extension and web server
+  routes). No tests reference it any longer.
+- **Concurrent TUI sessions are isolated.** `ordewell tui` now spawns its own
+  private daemon on a free port by default, so two terminals against the same
+  workspace no longer pull each other's tasks into view (shared-port handoff
+  for VS Code/web-UI is opt-in via `--port`/`ORDEWELL_PORT`), and that owned
+  daemon self-terminates if its spawning CLI dies with a signal it can't
+  deliver (e.g. `kill -9`).
+- **CLI session pointers and config migration are scoped and fixed.** The
+  machine-global `~/.config/ordewell/last-session.json` pointer is now
+  `<workspace>/.ordewell/last-session.json`, so a one-shot command can no
+  longer silently fall back to a session from an unrelated terminal.
+  `migrateOldConfigDir()` now lifts each file independently, so a real `.env`
+  with API keys stranded in `~/.config/ordewell` is no longer skipped once
+  `settings.json` had already migrated.
 
 ### Fixed
 
+- **A long, plain-word secret under an unambiguous credential name is now
+  redacted.** Research output where the value carries no digit, no mixed case
+  and no punctuation — a passphrase like `password: "correcthorsebatterystaple"`
+  or `secret: "batterystaple"` — previously leaked through the identifier
+  bypass. An unambiguous name (`password`, `secret`, `privateKey`,
+  `passphrase`, `credentials`) with a value ≥12 chars is now treated as key
+  material even without a digit. The length floor keeps short
+  settings-references (`secretStoreKey: 'cohereKey'`) from being rewritten, so
+  config-shaped code is still left intact — a deliberate, documented
+  false-negative trade-off for sub-floor no-digit values.
 - A stale `grill-me` seed left in `~/.ordewell/skills` by a build from before
   the rename to `grilling` is now pruned on upgrade, so it stops lingering
   in the skill list forever. Only untouched seeds are removed — anything a

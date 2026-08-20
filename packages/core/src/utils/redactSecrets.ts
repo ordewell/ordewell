@@ -217,7 +217,18 @@ export function redactSecrets(text: string): string {
     // also carries a digit, it stops being the "settings-name pointing at
     // another settings-name" shape the identifier bypass below exists for
     // (`vscodeApiKeyKey: 'qwenApiKey'`), which never carries one.
-    if (UNAMBIGUOUS_CREDENTIAL_NAME.test(head) && /\d/.test(value)) {
+    //
+    // A long-enough unambiguous value is treated as the secret even without a
+    // digit (a passphrase like `correcthorsebatterystaple` or a plain word
+    // like `batterystaple`), because the name alone already claims it is key
+    // material. The length floor keeps short settings-references — e.g.
+    // `secretStoreKey: 'cohereKey'` (9 chars) — from being rewritten, since a
+    // value that short is far more likely to be a reference than a real
+    // secret; the digit rule below still catches a short secret that carries
+    // one. This is a deliberate, documented false-negative trade-off for
+    // sub-floor no-digit values, chosen to preserve config-file integrity
+    // over maximal coverage.
+    if (UNAMBIGUOUS_CREDENTIAL_NAME.test(head) && (/\d/.test(value) || value.length >= 12)) {
       return `${head}${quote}${marker('credential', value.length)}${quote}${tail}`;
     }
     // A single camelCase word or a lowercase slug is a variable reference or a
