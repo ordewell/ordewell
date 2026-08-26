@@ -8,6 +8,42 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.4.12] — 2026-08-26
+
+TUI plan pane and VS Code chat-panel fixes, plus a live-resizing PTY for
+in-editor agent terminals.
+
+### Added
+
+- **The agent PTY resizes live.** `script` allocates its PTY at 0×0 off a
+  pipe, so a TUI reading its size via `ioctl` rendered as garbage until
+  something called `stty`. The wrapper now sets the tab's real size before
+  the agent starts and keeps a control channel (fd 3) open so later tab
+  resizes reach the PTY slave too.
+
+### Fixed
+
+- **The TUI plan pane can now reach subtask rows.** Enter on a task with
+  subtasks used to expand it and open its prompt editor in the same step,
+  which hijacked every following key — including up/down — into the text
+  draft. There was no key sequence that actually landed the cursor on a
+  3.1/3.2 row, so subtasks read as collapsed away even though the plan tree
+  had them. Enter now only reveals subtask rows on a parent's first press; a
+  second enter (or any row without subtasks) opens the editor as before, and
+  escape backs out of that browsing state one level at a time instead of
+  leaving the plan pane. Editing a subtask's prompt no longer has its
+  keystrokes swallowed as pane shortcuts, and a plan refresh no longer
+  silently collapses a subtask being edited.
+- **Task output in the VS Code chat panel no longer shows raw ANSI escapes.**
+  Runner output is PTY text full of colour/cursor codes meant for a real
+  terminal; the webview's `<pre>` rendered them as literal garbage. Escapes
+  and control bytes are now stripped per chunk, and CR-only redraws are
+  split onto separate lines instead of being jammed together.
+- **Checkpoint summaries are truncated to a single line.** Multi-line
+  reasoning could spill across the CLI notice and the extension's
+  `CheckpointPanel`; both now show only the first line, capped at 120
+  chars, with the full text still available via the panel's title tooltip.
+
 ## [0.4.11] — 2026-08-20
 
 Planner and skills rework, task-idle visibility, TUI/session isolation, and a
