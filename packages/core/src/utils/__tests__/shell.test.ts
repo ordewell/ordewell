@@ -60,4 +60,29 @@ describe('wrapWithPty', () => {
     const wrapped = wrapWithPty('run', [`it's`]);
     expect(wrapped.args[4]).toBe(`'run' 'it'\\''s'`);
   });
+
+  it('sizes the PTY before the command starts when given a size', () => {
+    const wrapped = wrapWithPty('codex', [], { size: { cols: 120, rows: 30 } });
+    expect(wrapped.args[4]).toBe(`stty cols 120 rows 30; 'codex'`);
+  });
+
+  it('keeps the stty setup ahead of the wrapped command', () => {
+    const wrapped = wrapWithPty('claude', ['go'], { size: { cols: 80, rows: 24 } });
+    expect(wrapped.args[4]).toBe(`stty cols 80 rows 24; 'claude' 'go'`);
+  });
+
+  // POSIX sends an asynchronous job's stdin to /dev/null, so the watcher must
+  // save the PTY on fd 4 and name it for stty, or the resize silently no-ops.
+  it('adds a resize watcher on fd 3 when a control channel is requested', () => {
+    const wrapped = wrapWithPty('opencode', [], { controlChannel: true });
+    expect(wrapped.args[4]).toContain('exec 4<&0; ( while read -r C R <&3; do stty cols "$C" rows "$R" <&4; done ) &');
+  });
+
+  it('combines the watcher and the initial size setup', () => {
+    const wrapped = wrapWithPty('opencode', [], { controlChannel: true, size: { cols: 100, rows: 40 } });
+    const inner = wrapped.args[4] as string;
+    expect(inner).toContain('exec 4<&0');
+    expect(inner).toContain('stty cols 100 rows 40;');
+    expect(inner.endsWith(`'opencode'`)).toBe(true);
+  });
 });

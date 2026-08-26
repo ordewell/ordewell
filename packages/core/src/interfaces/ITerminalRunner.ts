@@ -6,6 +6,12 @@ export interface ITerminalSession {
   kill(): void;
   getOutput(): string;
   write(text: string): void;
+  /**
+   * Optional transport-level control channel: PTY resize requests for a session
+   * whose runner renders a TUI. Absent on transports without a resizable PTY
+   * (a plain piped subprocess); surfaces must feature-detect before calling.
+   */
+  writeControl?(text: string): void;
 }
 
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';

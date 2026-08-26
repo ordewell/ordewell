@@ -1,9 +1,10 @@
 import { spawn as nodeSpawn, execSync, ChildProcess } from 'child_process';
+import type { Writable } from 'stream';
 import { ITerminalRunner, ITerminalSession } from '../interfaces/ITerminalRunner';
 import { buildRunnerInvocation } from './buildRunnerArgs';
 import { AbstractTerminalSession, AbstractRunner } from './AbstractRunner';
 import { augmentedPath, withPath } from '../utils/shellPath';
-import { stripAnsi, wrapWithPty } from '../utils/shell';
+import { stripAnsi, wrapWithPty, type PtyWrapOptions } from '../utils/shell';
 import { planDirectLaunch, type LaunchDeps, type LaunchPlan } from '../utils/launch';
 import { killTree } from '../utils/processTree';
 
@@ -12,7 +13,7 @@ export type SpawnFn = (
   args: string[],
   options: {
     env: NodeJS.ProcessEnv;
-    stdio: ['pipe', 'pipe', 'pipe'];
+    stdio: Array<'pipe' | 'ignore'>;
     cwd: string;
     /** Set by the Windows batch route, where `args` is already a quoted command line. */
     windowsVerbatimArguments?: boolean;
@@ -45,6 +46,7 @@ function defaultHasScriptCmd(): boolean {
 export class HeadlessSession extends AbstractTerminalSession {
   private process: ChildProcess | null = null;
   private outputBuffer = '';
+  private controlStream: Writable | null = null;
 
   constructor(id: string, taskId: string, private spawnImpl: SpawnFn) {
     super(id, taskId);
@@ -52,17 +54,29 @@ export class HeadlessSession extends AbstractTerminalSession {
 
   get isStarted(): boolean { return this.process !== null; }
 
-  start(launch: LaunchPlan, cwd: string, resolvedPath: string, env?: Record<string, string>): void {
+  start(launch: LaunchPlan, cwd: string, resolvedPath: string, env?: Record<string, string>, options?: { controlChannel?: boolean }): void {
     // Killed while the spawn was still in flight — starting now leaks an agent
     // nobody is watching.
     if (this.exited || this.process) return;
 
+    const stdio: Array<'pipe' | 'ignore'> = ['pipe', 'pipe', 'pipe'];
+    if (options?.controlChannel) stdio.push('pipe');
+
     this.process = this.spawnImpl(launch.file, launch.args, {
       env: withPath(process.env, resolvedPath, env),
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio,
       cwd,
       windowsVerbatimArguments: launch.verbatim,
     });
+
+    // A surface that opened the wrapper's control channel (PTY resizes) writes
+    // into this pipe. EPIPE after the child dies is not worth surfacing — the
+    // wrapper is gone, the resize is moot.
+    if (options?.controlChannel) {
+      // The extra pipe is a Duplex; only the writable half is used here.
+      this.controlStream = (this.process.stdio?.[3] as Writable | null) ?? null;
+      this.controlStream?.on('error', () => {});
+    }
 
     const onData = (data: Buffer) => {
       const raw = data.toString();
@@ -93,6 +107,13 @@ export class HeadlessSession extends AbstractTerminalSession {
   write(text: string): void {
     if (this.process?.stdin && !this.process.killed) {
       this.process.stdin.write(text);
+    }
+  }
+
+  /** PTY resize requests from a surface that owns the terminal rendering the wrapper. */
+  writeControl(text: string): void {
+    if (this.controlStream && !this.controlStream.destroyed) {
+      this.controlStream.write(text);
     }
   }
 }
@@ -136,7 +157,7 @@ export class HeadlessRunner extends AbstractRunner<HeadlessSession> {
   }
 
   /** Everything up to, but not including, spawning — so a surface that owns its own child reaches the same decisions. */
-  protected async prepareLaunch(opts: RunnerSpawnOptions): Promise<PreparedLaunch> {
+  protected async prepareLaunch(opts: RunnerSpawnOptions, ptyOptions?: PtyWrapOptions): Promise<PreparedLaunch> {
     const interactive = this.defaultInteractive;
 
     const invocation = buildRunnerInvocation({
@@ -163,7 +184,7 @@ export class HeadlessRunner extends AbstractRunner<HeadlessSession> {
     const resolvedPath = await this.resolvePath();
 
     const { command, args } = pty
-      ? wrapWithPty(invocation.command, invocation.args)
+      ? wrapWithPty(invocation.command, invocation.args, ptyOptions)
       : { command: invocation.command, args: invocation.args };
 
     return {

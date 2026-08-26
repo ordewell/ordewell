@@ -24,6 +24,13 @@ class FakeChildProcess extends EventEmitter {
   stdout = new EventEmitter();
   stderr = new EventEmitter();
   stdin = { write: vi.fn() };
+  /** fd 3: the PTY control channel, present when the spawn used a 4th pipe. */
+  stdio: Array<unknown> = [
+    this.stdin,
+    this.stdout,
+    this.stderr,
+    Object.assign(new EventEmitter(), { write: vi.fn(), destroyed: false }),
+  ];
   killed = false;
   exitCode: number | null = null;
   kill = vi.fn(() => { this.killed = true; return true; });
@@ -58,7 +65,7 @@ describe('VsCodeTerminalRunner', () => {
     await runner.spawn(spawnOpts);
     expect(spawnImpl).not.toHaveBeenCalled();
 
-    __terminals[0].pty.open({ columns: 100, rows: 40 });
+    await __terminals[0].pty.open({ columns: 100, rows: 40 });
     expect(spawnImpl).toHaveBeenCalledTimes(1);
   });
 
@@ -71,7 +78,7 @@ describe('VsCodeTerminalRunner', () => {
     const streamed: string[] = [];
     session.onOutput((text) => streamed.push(text));
 
-    __terminals[0].pty.open({ columns: 100, rows: 40 });
+    await __terminals[0].pty.open({ columns: 100, rows: 40 });
     child.stdout.emit('data', Buffer.from('<<<ORDEWELL_DONE_abc123>>>\n'));
 
     expect(session.getOutput()).toContain('<<<ORDEWELL_DONE_abc123>>>');
@@ -84,7 +91,7 @@ describe('VsCodeTerminalRunner', () => {
     const written: string[] = [];
     __terminals[0].pty.onDidWrite((data) => written.push(data));
 
-    __terminals[0].pty.open({ columns: 100, rows: 40 });
+    await __terminals[0].pty.open({ columns: 100, rows: 40 });
     child.stdout.emit('data', Buffer.from('line one\nline two\n'));
 
     expect(written.join('')).toBe('line one\r\nline two\r\n');
@@ -94,38 +101,77 @@ describe('VsCodeTerminalRunner', () => {
     const { runner, spawnImpl, spawnOpts } = makeRunner();
     await runner.spawn(spawnOpts);
 
-    __terminals[0].pty.open({ columns: 100, rows: 40 });
+    await __terminals[0].pty.open({ columns: 100, rows: 40 });
 
     const env = spawnImpl.mock.calls[0][2].env;
     expect(env.COLUMNS).toBe('100');
     expect(env.LINES).toBe('40');
   });
 
+  // A TUI that reads its size via ioctl (all of OpenCode, Claude Code, Codex)
+  // gets `script`'s 0x0 PTY unless stty sets the tab's real size on the slave.
+  it('sizes the PTY to the tab before the agent starts', async () => {
+    const { runner, spawnImpl, spawnOpts } = makeRunner({ hasScript: true });
+    await runner.spawn(spawnOpts);
+
+    await __terminals[0].pty.open({ columns: 120, rows: 40 });
+
+    const args = spawnImpl.mock.calls[0][1];
+    expect(args[4]).toContain('stty cols 120 rows 40');
+  });
+
   it('runs the interactive invocation under a PTY when script is available', async () => {
     const { runner, spawnImpl, spawnOpts } = makeRunner({ hasScript: true });
     await runner.spawn(spawnOpts);
 
-    __terminals[0].pty.open({ columns: 100, rows: 40 });
+    await __terminals[0].pty.open({ columns: 100, rows: 40 });
 
     const [command, args] = spawnImpl.mock.calls[0];
     expect(command).toBe('script');
-    expect(args).toEqual(['-q', '-e', '-f', '-c', `'test-cli' 'do the thing'`, '/dev/null']);
+    expect(args).toEqual(['-q', '-e', '-f', '-c',
+      'exec 4<&0; ( while read -r C R <&3; do stty cols "$C" rows "$R" <&4; done ) & stty cols 100 rows 40; \'test-cli\' \'do the thing\'',
+      '/dev/null']);
   });
 
   it('forwards terminal input to the child stdin', async () => {
     const { runner, child, spawnOpts } = makeRunner();
     await runner.spawn(spawnOpts);
-    __terminals[0].pty.open({ columns: 100, rows: 40 });
+    await __terminals[0].pty.open({ columns: 100, rows: 40 });
 
     __terminals[0].pty.handleInput?.('ORDEWELL_CONTINUE\r');
 
     expect(child.stdin.write).toHaveBeenCalledWith('ORDEWELL_CONTINUE\r');
   });
 
+  it('resizes the PTY when the terminal tab changes size', async () => {
+    const { runner, child, spawnOpts } = makeRunner({ hasScript: true });
+    await runner.spawn(spawnOpts);
+    await __terminals[0].pty.open({ columns: 100, rows: 40 });
+
+    const control = child.stdio[3] as { write: ReturnType<typeof vi.fn> };
+    expect(control.write).not.toHaveBeenCalled();
+
+    __terminals[0].pty.setDimensions?.({ columns: 80, rows: 24 });
+
+    expect(control.write).toHaveBeenCalledWith('80 24\n');
+  });
+
+  it('resize events before the session starts are dropped, not fatal', async () => {
+    const { runner, child, spawnOpts } = makeRunner({ hasScript: true });
+    const session = await runner.spawn(spawnOpts);
+
+    const control = child.stdio[3] as { write: ReturnType<typeof vi.fn> };
+    __terminals[0].pty.setDimensions?.({ columns: 80, rows: 24 });
+    expect(control.write).not.toHaveBeenCalled();
+
+    await __terminals[0].pty.open({ columns: 100, rows: 40 });
+    expect(session.writeControl).toBeDefined();
+  });
+
   it('kills the child when the user closes the terminal', async () => {
     const { runner, child, spawnOpts } = makeRunner();
     await runner.spawn(spawnOpts);
-    __terminals[0].pty.open({ columns: 100, rows: 40 });
+    await __terminals[0].pty.open({ columns: 100, rows: 40 });
 
     __terminals[0].pty.close();
 
@@ -139,7 +185,7 @@ describe('VsCodeTerminalRunner', () => {
     session.onExit((code) => exits.push(code));
 
     runner.stop(session.id);
-    __terminals[0].pty.open({ columns: 100, rows: 40 });
+    await __terminals[0].pty.open({ columns: 100, rows: 40 });
 
     expect(exits).toEqual([-1]);
     expect(spawnImpl).not.toHaveBeenCalled();
@@ -147,12 +193,47 @@ describe('VsCodeTerminalRunner', () => {
 
   it('starts the child anyway if the terminal is never rendered', async () => {
     vi.useFakeTimers();
-    const { runner, spawnImpl, spawnOpts } = makeRunner();
+    const { runner, spawnImpl, spawnOpts } = makeRunner({ hasScript: true });
     await runner.spawn(spawnOpts);
 
-    vi.advanceTimersByTime(3000);
+    await vi.advanceTimersByTimeAsync(3000);
 
     expect(spawnImpl).toHaveBeenCalledTimes(1);
+    // No tab ever opened, so the PTY falls back to a sane default size instead
+    // of `script`'s 0x0.
+    expect(spawnImpl.mock.calls[0][1][4]).toContain('stty cols 120 rows 30');
+  });
+
+  it('surfaces a start-time failure in the tab instead of hanging silently', async () => {
+    let probes = 0;
+    const child = new FakeChildProcess();
+    const spawnImpl = vi.fn().mockReturnValue(child);
+    const m = manifest();
+    const runner = new VsCodeTerminalRunner({
+      spawnImpl: spawnImpl as never,
+      hasScriptCmd: () => { probes++; if (probes > 1) throw new Error('script vanished'); return true; },
+      resolvePath: async () => '/augmented/bin',
+    });
+    const spawnOpts = {
+      taskId: 'task-1234-abcd',
+      runner: m.name,
+      prompt: 'do the thing',
+      cwd: '/workspace',
+      registry: { get: () => ({ manifest: m, source: 'builtin' }) } as unknown as RunnerRegistry,
+    };
+
+    const session = await runner.spawn(spawnOpts);
+    const written: string[] = [];
+    const closed: number[] = [];
+    __terminals[0].pty.onDidWrite((data) => written.push(data));
+    __terminals[0].pty.onDidClose?.((code) => closed.push(code));
+
+    await __terminals[0].pty.open({ columns: 100, rows: 40 });
+
+    expect(written.join('')).toContain('failed to start');
+    expect(closed).toEqual([1]);
+    expect(spawnImpl).not.toHaveBeenCalled();
+    expect((session as unknown as { isStarted: boolean }).isStarted).toBe(false);
   });
 
   it('leaves the terminal open on a non-zero exit so the failure stays readable', async () => {
@@ -162,7 +243,7 @@ describe('VsCodeTerminalRunner', () => {
     const written: string[] = [];
     __terminals[0].pty.onDidClose?.((code) => closed.push(code));
     __terminals[0].pty.onDidWrite((data) => written.push(data));
-    __terminals[0].pty.open({ columns: 100, rows: 40 });
+    await __terminals[0].pty.open({ columns: 100, rows: 40 });
 
     child.emit('close', 1);
 
@@ -195,7 +276,7 @@ describe('VsCodeTerminalRunner', () => {
     await runner.spawn(spawnOpts);
     const closed: number[] = [];
     __terminals[0].pty.onDidClose?.((code) => closed.push(code));
-    __terminals[0].pty.open({ columns: 100, rows: 40 });
+    await __terminals[0].pty.open({ columns: 100, rows: 40 });
 
     child.emit('close', 0);
 

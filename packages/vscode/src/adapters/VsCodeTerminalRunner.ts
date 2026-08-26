@@ -20,6 +20,13 @@ function toCrlf(text: string): string {
  * is a proposed API, unresolvable in a Marketplace-installed extension, so
  * output was always empty there and `VerdictEngine` never saw a completion
  * marker. Owning the child means the output exists by construction.
+ *
+ * The agent's PTY is `script`'s, allocated off a pipe, so its window size is
+ * whatever `stty` set before the agent started. That size comes from the tab's
+ * own dimensions at `open` — a TUI told it is 0x0 (the pipe default) renders as
+ * garbage. Later resizes flow through `script`'s control channel (fd 3): the
+ * wrapper's watcher calls `stty` on the PTY slave, which reflows the TUI just
+ * as a real terminal resize would.
  */
 export class VsCodeTerminalRunner extends HeadlessRunner {
   protected override readonly defaultInteractive = true;
@@ -30,7 +37,11 @@ export class VsCodeTerminalRunner extends HeadlessRunner {
     const shortId = opts.taskId.slice(0, 8);
     const id = `ordewell-${shortId}`;
     const session = this.createSession(id, opts.taskId);
-    const prepared = await this.prepareLaunch(opts);
+    // Resolve and validate now — an unknown runner or an unlaunchable command
+    // must hold the task (TaskOrchestrator.startTask) rather than throw from
+    // inside `open`, which nothing can catch.
+    await this.prepareLaunch(opts);
+
     const cwd = opts.cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
 
     const writeEmitter = new vscode.EventEmitter<string>();
@@ -40,16 +51,36 @@ export class VsCodeTerminalRunner extends HeadlessRunner {
     // allocates its PTY at 0x0 off a pipe, and a TUI reads COLUMNS/LINES as its
     // fallback. `session.start` is idempotent, so the timeout below is a
     // no-op once `open` has fired.
-    const start = (dimensions?: vscode.TerminalDimensions) => session.start(
-      prepared.launch,
-      cwd,
-      prepared.resolvedPath,
-      {
-        ...prepared.env,
-        COLUMNS: String(dimensions?.columns ?? DEFAULT_COLUMNS),
-        LINES: String(dimensions?.rows ?? DEFAULT_ROWS),
-      },
-    );
+    const start = async (dimensions?: vscode.TerminalDimensions) => {
+      try {
+        const cols = dimensions?.columns ?? DEFAULT_COLUMNS;
+        const rows = dimensions?.rows ?? DEFAULT_ROWS;
+        const prepared = await this.prepareLaunch(opts, {
+          size: { cols, rows },
+          // Only meaningful when script is present; wrapWithPty ignores it otherwise.
+          controlChannel: true,
+        });
+        session.start(
+          prepared.launch,
+          cwd,
+          prepared.resolvedPath,
+          {
+            ...prepared.env,
+            COLUMNS: String(cols),
+            LINES: String(rows),
+          },
+          prepared.pty ? { controlChannel: true } : undefined,
+        );
+      } catch (err) {
+        // The validation call above makes this unreachable for the usual
+        // failures (unknown runner, overlong command). A transient error must
+        // not leave the task hanging silently inside `open` — nothing can catch
+        // a rejection from there, so surface it and close the tab.
+        clearTimeout(fallback);
+        writeEmitter.fire(`\r\n\x1b[31m[ordewell] failed to start ${opts.runner}: ${(err as Error).message}\x1b[0m\r\n`);
+        closeEmitter.fire(1);
+      }
+    };
 
     session.onOutput((text) => writeEmitter.fire(toCrlf(text)));
     session.onExit((code) => {
@@ -66,6 +97,11 @@ export class VsCodeTerminalRunner extends HeadlessRunner {
         session.kill();
       },
       handleInput: (data) => session.write(data),
+      // Fired whenever the panel's rows/columns change (resize, font size, …).
+      // Forwarded to the wrapper's watcher, which runs `stty` on the PTY slave —
+      // that sends SIGWINCH to the agent's foreground group, so the TUI reflows
+      // exactly like a native terminal.
+      setDimensions: (d) => session.writeControl?.(`${d.columns} ${d.rows}\n`),
     };
 
     const terminal = vscode.window.createTerminal({

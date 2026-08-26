@@ -85,9 +85,10 @@ export const ViewColumn = { Active: -1, Beside: -2 } as const;
 export interface FakePseudoterminal {
   onDidWrite: (listener: (data: string) => void) => { dispose(): void };
   onDidClose?: (listener: (code: number) => void) => { dispose(): void };
-  open(dimensions?: { columns: number; rows: number }): void;
+  open(dimensions?: { columns: number; rows: number }): void | Promise<void>;
   close(): void;
   handleInput?(data: string): void;
+  setDimensions?(dimensions: { columns: number; rows: number }): void;
 }
 
 export interface FakeTerminal {
