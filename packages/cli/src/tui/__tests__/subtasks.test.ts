@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { initialState, reduce } from '../reducer';
-import { bodyRows, planLayout } from '../layout';
+import { bodyRows, footerHints, planLayout } from '../layout';
 import { planPaneWidth } from '../geometry';
 import { stripAnsi } from '../ansi';
 import type { TaskView, TuiState } from '../state';
@@ -100,6 +100,86 @@ describe('arrow-key navigation over subtask rows', () => {
     expect(expanded.expandedTaskId).toBe('s2');
     // The parent must stay open, or the subtask row (and its editor) vanish.
     expect(planLines(expanded).join('\n')).toContain('1.2  AI Second child');
+  });
+});
+
+describe('expanding a task with subtasks from a real key press', () => {
+  it('enter reveals subtask rows without opening the prompt editor', () => {
+    const expanded = press(state(), 'enter');
+    expect(expanded.expandedTaskId).toBe('p1');
+    expect(expanded.taskEditor).toBeNull();
+    expect(planLines(expanded).join('\n')).toContain('1.1  AI First child');
+  });
+
+  it('down then navigates the cursor onto the revealed subtask row', () => {
+    const expanded = press(state(), 'enter');
+    const onFirstChild = press(expanded, 'down');
+    expect(onFirstChild.selectedTask).toBe(1);
+    expect(onFirstChild.expandedTaskId).toBe('p1');
+    expect(onFirstChild.taskEditor).toBeNull();
+  });
+
+  it('a second enter on the still-selected parent opens its prompt editor', () => {
+    const expanded = press(state(), 'enter');
+    const edited = press(expanded, 'enter');
+    expect(edited.expandedTaskId).toBe('p1');
+    expect(edited.taskEditor?.text).toBe('Parent');
+  });
+
+  it('enter on a revealed subtask row opens that subtask\'s own prompt editor', () => {
+    const expanded = press(state(), 'enter');
+    const onFirstChild = press(expanded, 'down');
+    const edited = press(onFirstChild, 'enter');
+    expect(edited.expandedTaskId).toBe('s1');
+    expect(edited.taskEditor?.text).toBe('First child');
+  });
+
+  it('typing a character while editing a subtask\'s prompt types into the draft, not a shortcut', () => {
+    const editingSubtask = press(press(press(state(), 'enter'), 'down'), 'enter');
+    const typed = press(editingSubtask, 'char', 'c');
+    expect(typed.taskEditor?.text).toBe('First childc');
+    expect(typed.expandedTaskId).toBe('s1');
+  });
+
+  it('escape while browsing a parent\'s subtasks collapses it instead of leaving the plan pane', () => {
+    const expanded = press(state(), 'enter');
+    const collapsed = press(expanded, 'escape');
+    expect(collapsed.expandedTaskId).toBeNull();
+    expect(collapsed.focus).toBe('plan');
+  });
+
+  it('a leaf task with no subtasks still opens its editor on the first enter', () => {
+    const expanded = press(state(), 'down');
+    const edited = press(expanded, 'enter');
+    expect(edited.expandedTaskId).toBe('t2');
+    expect(edited.taskEditor?.text).toBe('Sibling');
+  });
+
+  it('the footer hints still say "enter expand" while browsing revealed subtasks, not "type to edit prompt"', () => {
+    const expanded = press(state(), 'enter');
+    expect(footerHints(expanded)).toContain('enter expand');
+    expect(footerHints(expanded)).not.toContain('type to edit prompt');
+  });
+});
+
+describe('a plan refresh while a subtask is expanded', () => {
+  it('does not reset expandedTaskId to null when the subtask still exists', () => {
+    const editingSubtask = press(press(press(state(), 'enter'), 'down'), 'enter');
+    const plan = {
+      tasks: [
+        {
+          id: 'p1', order: 1, title: 'Parent', description: 'Parent', status: 'pending', dependencies: [],
+          subtasks: [
+            { id: 's1', order: 1, title: 'First child', description: 'First child', status: 'pending', dependencies: [] },
+            { id: 's2', order: 2, title: 'Second child', description: 'Second child', status: 'pending', dependencies: [] },
+          ],
+        },
+        { id: 't2', order: 2, title: 'Sibling', description: 'Sibling', status: 'pending', dependencies: [] },
+      ],
+    };
+    const refreshed = reduce(editingSubtask, { type: 'planUpdated', plan }).state;
+    expect(refreshed.expandedTaskId).toBe('s1');
+    expect(refreshed.taskEditor).not.toBeNull();
   });
 });
 

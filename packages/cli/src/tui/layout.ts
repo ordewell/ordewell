@@ -53,7 +53,10 @@ export function footerHints(state: TuiState): string[] {
   const escHint = planning ? 'esc stop planning' : null;
 
   if (state.focus === 'plan') {
-    if (state.expandedTaskId) {
+    // `expandedTaskId` alone only means subtask rows are revealed — the editor
+    // hints belong to `taskEditor`, or a browsing parent would claim its keys
+    // type into a prompt draft that isn't actually open.
+    if (state.taskEditor) {
       return ['type to edit prompt', 'pgup/pgdn scroll', 'alt-enter newline', 'enter save', 'esc cancel'];
     }
     return [

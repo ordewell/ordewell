@@ -7,7 +7,7 @@ import { bodyRows, chatScrollMax, helpScrollMax, planScrollExtent } from './layo
 import { selectedText } from './render';
 import { completions, findCommand, parseSlash, type ParsedCommand } from './slash';
 import {
-  initialState, SKILL_IDS, planRows, selectedPlanRow, visibleItems,
+  findTask, initialState, SKILL_IDS, planRows, selectedPlanRow, visibleItems,
   type ApprovalRequestView, type Cell, type ChatMessage, type Focus, type MessageRole, type ModeView,
   type ModelView, type PickerItem, type PickerState, type RunnerView, type Selection, type SessionView,
   type SkillId, type TaskView, type TuiState,
@@ -244,7 +244,10 @@ export function reduce(state: TuiState, action: Action): Step {
       // A plan refresh can supersede the task whose prompt is open; the editor
       // survives only while its task does. The cursor is clamped against the
       // visible rows afterwards, so an expanded parent's subtasks count.
-      const expandedTaskId = tasks.some((task) => task.id === state.expandedTaskId) ? state.expandedTaskId : null;
+      // `findTask` walks subtasks too — the expanded id is a subtask's as often
+      // as a top-level task's.
+      const expandedTaskId =
+        state.expandedTaskId && findTask(tasks, state.expandedTaskId) ? state.expandedTaskId : null;
       const next: TuiState = {
         ...state,
         tasks,
@@ -960,14 +963,20 @@ export function markAction(task: { status: string }): TaskAction {
 }
 
 function handlePlanKey(state: TuiState, key: Key): Step {
-  // While a task is expanded, every key edits its prompt instead of moving the
-  // list cursor — otherwise up/down would collapse it out from under the caret.
-  const editingTask = state.expandedTaskId
-    ? state.tasks.find((t) => t.id === state.expandedTaskId)
-    : undefined;
+  // While a task's prompt editor is open, every key edits its draft instead of
+  // moving the list cursor — otherwise up/down would collapse it out from
+  // under the caret. `findTask` walks subtasks too: the editor opens on a
+  // subtask as often as a top-level task.
+  const editingTask = state.expandedTaskId ? findTask(state.tasks, state.expandedTaskId) : undefined;
   if (editingTask && state.taskEditor) return handleTaskEditKey(state, editingTask, state.taskEditor, key);
 
-  if (key.name === 'escape') return step({ ...state, focus: 'chat' });
+  // Expanded without an open editor: the cursor is browsing a parent's
+  // revealed subtask rows. Escape backs out of that one step at a time,
+  // rather than leaving the plan pane entirely.
+  if (key.name === 'escape') {
+    if (state.expandedTaskId) return step({ ...state, expandedTaskId: null, planScroll: null });
+    return step({ ...state, focus: 'chat' });
+  }
   // Moving the selection hands the viewport back to follow mode: the user is
   // navigating the list again, so the pane should chase the cursor. The cursor
   // walks the visible rows, subtasks included, and an expanded parent stays
@@ -992,6 +1001,14 @@ function handlePlanKey(state: TuiState, key: Key): Step {
   if (!row) return step(state);
   const task = row.task;
   if (key.name === 'enter' || key.name === 'right') {
+    // A parent's first enter only reveals its subtask rows — jumping straight
+    // to the editor would trap the cursor before it ever reaches them. Enter
+    // again on the still-selected parent, or on any row without subtasks,
+    // opens the editor as before.
+    const hasSubtasks = (task.subtasks?.length ?? 0) > 0;
+    if (hasSubtasks && state.expandedTaskId !== task.id) {
+      return step({ ...state, expandedTaskId: task.id, taskEditor: null, planScroll: null });
+    }
     const text = task.prompt ?? task.description ?? task.title;
     return step({
       ...state,

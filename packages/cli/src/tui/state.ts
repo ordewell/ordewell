@@ -330,6 +330,20 @@ export function selectedPlanRow(state: TuiState): PlanRow | null {
   return planRows(state)[state.selectedTask] ?? null;
 }
 
+/**
+ * Finds a task by id anywhere in the tree, subtasks included — `expandedTaskId`
+ * names a subtask as often as a top-level task, and a top-level-only lookup
+ * would treat every subtask as gone the moment one is expanded.
+ */
+export function findTask(tasks: TaskView[], id: string): TaskView | undefined {
+  for (const task of tasks) {
+    if (task.id === id) return task;
+    const found = findTask(task.subtasks ?? [], id);
+    if (found) return found;
+  }
+  return undefined;
+}
+
 export function initialState(overrides: Partial<TuiState> = {}): TuiState {
   return {
     editor: emptyEditor(),
