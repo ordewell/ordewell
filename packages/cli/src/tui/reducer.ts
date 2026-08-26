@@ -697,7 +697,7 @@ function pickerItemsFor(state: TuiState, action: PickerState['action']): PickerI
   if (action.kind === 'set-task-model') {
     const task = state.tasks.find((candidate) => candidate.id === action.taskId);
     if (!task) return [];
-    return modelsForTask(state.models, task).map((model) => ({
+    const items = modelsForTask(state.models, task).map((model) => ({
       id: model.id,
       label: model.label,
       detail: [
@@ -706,6 +706,11 @@ function pickerItemsFor(state: TuiState, action: PickerState['action']): PickerI
       ].filter(Boolean).join(' · '),
       selected: model.id === task.assignedModel?.modelId,
     }));
+    // An empty catalog means discovery hasn't landed for this runner (or
+    // failed) — a blank picker with no explanation reads as a broken command.
+    return items.length > 0
+      ? items
+      : [{ id: '', label: `No ${task.assignedRunner ?? 'runner'} models discovered yet`, detail: 'run /refresh', disabled: true }];
   }
   if (action.kind === 'set-task-effort') {
     const task = state.tasks.find((candidate) => candidate.id === action.taskId);

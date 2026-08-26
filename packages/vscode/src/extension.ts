@@ -307,10 +307,19 @@ async function doSendRunnerAndModels(): Promise<void> {
     await runnerInstallation.filterInstalled(allPlugins.map((p) => p.manifest.name)),
   );
 
+  // Discovery must cover every runner the UI lets the user pick for a task or
+  // as planner — the per-task runner dropdown and the planner backend pills
+  // both offer every *installed* runner, not just the "enabled" (auto-assign)
+  // subset. Scoping discovery to `enabled` alone left an installed-but-not-
+  // enabled runner's catalog empty, and the model picker's degraded-runner
+  // fallback (see PlanCardGroup) then silently substituted another runner's
+  // models — indistinguishable from that runner's own catalog to the user.
+  const discoverable = [...new Set([...enabled, ...installedIds])];
+
   const allModels: import('@ordewell/core').DiscoveredModel[] = [];
-  const byRunner = await modelResolver.modelsForRunners(enabled);
+  const byRunner = await modelResolver.modelsForRunners(discoverable);
   const degraded: string[] = [];
-  for (const r of enabled) {
+  for (const r of discoverable) {
     const models = byRunner[r] ?? [];
     for (const m of models) {
       if (!allModels.find((x) => x.modelId === m.modelId)) allModels.push(m);

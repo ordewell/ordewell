@@ -8,6 +8,23 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.4.13] — 2026-08-26
+
+### Fixed
+
+- **OpenCode (or any installed-but-not-"enabled" runner) no longer shows the
+  wrong models, or none at all.** Model discovery was scoped to
+  `enabledRunners` — a setting meant only to control which runners the
+  planner may auto-assign tasks to — but the per-task Runner dropdown and the
+  planner backend pills let you pick *any installed* runner regardless of
+  that setting. Picking one outside `enabledRunners` left its catalog
+  undiscovered: the VS Code extension's degraded-discovery fallback then
+  silently substituted another runner's models (typically Claude Code's),
+  and the TUI's task-model picker showed an unexplained empty list. Discovery
+  now covers every installed runner, and the TUI's picker explains an empty
+  catalog the way the planner's already did ("No `<runner>` models discovered
+  yet — run `/refresh`"). (#1)
+
 ## [0.4.12] — 2026-08-26
 
 TUI plan pane and VS Code chat-panel fixes, plus a live-resizing PTY for
