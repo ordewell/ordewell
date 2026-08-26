@@ -133,3 +133,13 @@ export function executionSummary(tasks: Task[]): { total: number; completed: num
     failed: tasks.filter((t) => t.status === 'failed').length,
   };
 }
+
+export const CHECKPOINT_TRUNCATE_LENGTH = 120;
+
+/** Truncate a checkpoint summary to a single line of at most CHECKPOINT_TRUNCATE_LENGTH chars. */
+export function truncateCheckpointSummary(summary: string): string {
+  // Take the first line only (checkpoint summaries often contain reasoning across lines)
+  const firstLine = summary.split('\n')[0].trim();
+  if (firstLine.length <= CHECKPOINT_TRUNCATE_LENGTH) return firstLine;
+  return firstLine.slice(0, CHECKPOINT_TRUNCATE_LENGTH - 1) + '…';
+}

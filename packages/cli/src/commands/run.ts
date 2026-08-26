@@ -1,6 +1,7 @@
 import { flag, readLastSession } from '../utils';
 import { iconFor } from '../utils/output';
 import { ensureDaemon, ApiClient, resolvePort, type TaskStatus } from '../daemonClient';
+import { truncateCheckpointSummary } from '@ordewell/core';
 
 /**
  * Resolve the session every execution command acts on: `--session-id`, else the
@@ -57,6 +58,9 @@ export async function followExecution(api: ApiClient, sessionId: string): Promis
     await api.streamExecution(sessionId, (event) => {
       if (event.type === 'task_started') {
         process.stderr.write(`[${event.order}/${event.title}] Started: ${event.runner} / ${event.modelId}\n`);
+      }
+      if (event.type === 'checkpoint') {
+        process.stderr.write(`· Checkpoint — ${event.taskTitle}: ${truncateCheckpointSummary(event.summary)}\n`);
       }
       if (event.type === 'status_update' && event.tasks) {
         printStatus(event.tasks as TaskStatus[]);

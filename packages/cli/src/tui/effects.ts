@@ -1,5 +1,5 @@
 import { execSync } from 'child_process';
-import { ALL_PROVIDERS, clipboardCopyCommand, isCliProvider, type AiProvider, type ConversationMessage, type HasBinFn, type PlannerModelRecall } from '@ordewell/core';
+import { ALL_PROVIDERS, clipboardCopyCommand, isCliProvider, truncateCheckpointSummary, type AiProvider, type ConversationMessage, type HasBinFn, type PlannerModelRecall } from '@ordewell/core';
 import { summarizeToolCall } from '@ordewell/core/plan-utils';
 import { describeConnectionRefused, isConnectionRefused } from '../daemonClient';
 import { normalizeCatalog } from '../catalog';
@@ -685,7 +685,7 @@ function onExecutionEvent(dispatch: (action: Action) => void, event: WsEvent, se
     // The extension shows these in its checkpoint panel; here they are
     // transcript lines, which is the TUI's equivalent surface.
     case 'checkpoint':
-      dispatch({ type: 'notice', message: `Checkpoint — ${event.taskTitle}: ${event.summary}` });
+      dispatch({ type: 'notice', message: `· Checkpoint — ${event.taskTitle}: ${truncateCheckpointSummary(event.summary)}` });
       return;
 
     case 'approval_decided':

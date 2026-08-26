@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { truncateCheckpointSummary } from '@ordewell/core/plan-utils';
 
 interface CheckpointPanelProps {
   taskTitle: string;
@@ -35,7 +36,9 @@ export default function CheckpointPanel({ taskTitle, summary, pausedAt, onApprov
         </span>
       </div>
       <div className="checkpoint-task">Task: {taskTitle}</div>
-      <div className="checkpoint-summary">{summary}</div>
+      <div className="checkpoint-summary" title={summary}>
+        {truncateCheckpointSummary(summary)}
+      </div>
 
       {!showRejectInput ? (
         <div className="checkpoint-actions">

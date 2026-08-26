@@ -458,7 +458,17 @@ describe('execution', () => {
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
     const notice = h.actions.find((a) => a.type === 'notice') as any;
-    expect(notice.message).toContain('Wrote the handler');
+    expect(notice.message).toBe('· Checkpoint — Add route: Wrote the handler');
+  });
+
+  it('truncates a long checkpoint summary to a single line', async () => {
+    const longSummary = 'Line one of reasoning.\nLine two with more details that goes on and on and on about the checkpoint reasoning from the agent.';
+    const h = withEvents({ type: 'checkpoint', taskId: 'a', taskTitle: 'Add route', summary: longSummary });
+    await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
+
+    const notice = h.actions.find((a) => a.type === 'notice') as any;
+    expect(notice.message).not.toContain('\n');
+    expect(notice.message).toContain('· Checkpoint — Add route:');
   });
 
   it('asks for sign-off when the plan needs review', async () => {
