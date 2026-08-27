@@ -18,12 +18,12 @@ packages/vscode/skills/
 
 # Agent tooling. `.claude/settings.local.json` records approved command lines
 # verbatim, inline environment variables included — it has held a live API key
-# before, so this must never be committed. AGENTS.md is deliberately NOT
-# ignored: the one in this repo is written for contributors and ships.
+# before, so this must never be committed. AGENTS.md and CLAUDE.md are
+# deliberately NOT ignored: both are written for contributors/new agents and
+# ship (CLAUDE.md is the Claude Code entry point).
 .claude/
 .opencode/
 .codegraph/
-CLAUDE.md
 
 # Reference repositories (cloned for comparison only)
 reference_projects/
