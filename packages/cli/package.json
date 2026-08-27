@@ -1,6 +1,6 @@
 {
   "name": "@ordewell/cli",
-  "version": "0.4.13",
+  "version": "0.4.14",
   "description": "Ordewell CLI and TUI — plan, run and verify coding-agent tasks from the terminal.",
   "license": "Apache-2.0",
   "author": "Alessandro Costanzo Ciano",

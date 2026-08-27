@@ -8,6 +8,35 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.4.14] — 2026-08-27
+
+### Fixed
+
+- **Changing a subtask's model, runner, effort or mode no longer shows an
+  empty picker.** Every per-task picker (`o`/`R`/`e`/`M`/`D` and their
+  `/task-*` slash commands) looked a task up with a flat `state.tasks.find`,
+  which only sees top-level tasks — a subtask lives nested under its parent's
+  `subtasks`. That silently produced the generic empty-picker fallback
+  ("Nothing to show yet…") for any subtask, and crashed a few command paths
+  outright. All of those lookups now use the existing recursive task-tree
+  search.
+- **A VS Code subtask assigned to a different runner than its parent now gets
+  its own runner's model catalog.** The per-task card passed its own
+  parent-scoped model and mode lists straight through to every subtask card,
+  so a subtask running on a different agent than its parent saw the wrong
+  agent's models (or none). Subtasks are now scoped to their own
+  `assignedRunner`.
+- **VS Code's per-task model dropdown re-discovers when opened**, the same
+  way the TUI's already did. Discovery only ran on activation, a config
+  change, or a webview reconnect, so a catalog left degraded by a cold runner
+  CLI at one of those moments never healed on its own — even after the CLI
+  was clearly working, an already-assigned task's dropdown stayed empty until
+  the window was reloaded.
+- **The planner's `/model` picker now shows which provider each model comes
+  from**, matching every other model picker in the TUI. It was the only one
+  that dropped this, so two same-named models from different providers (e.g.
+  OpenCode's own catalog vs. an OpenRouter-backed one) were indistinguishable.
+
 ## [0.4.13] — 2026-08-26
 
 ### Fixed
