@@ -209,3 +209,34 @@ describe('planUpdated with subtasks', () => {
     expect(s.selectedTask).toBe(1);
   });
 });
+
+describe('per-task pickers opened on a subtask row', () => {
+  // `state.tasks` only holds top-level tasks; a subtask lives inside its
+  // parent's `subtasks`. Looking it up with a flat `state.tasks.find(...)`
+  // instead of the recursive `findTask` silently "finds" nothing, and every
+  // picker built from that renders the generic empty-picker fallback ("Nothing
+  // to show yet…") instead of the subtask's actual options.
+  const runnerSubtask = task({ id: 's1', order: 1, title: 'First child', assignedRunner: 'opencode' });
+  const runnerParent = task({ id: 'p1', order: 1, title: 'Parent', subtasks: [runnerSubtask] });
+  const model = { id: 'opencode/x', label: 'X', provider: 'opencode', runners: ['opencode'] };
+
+  it('"o" lists the subtask\'s own discovered models, not the empty-picker fallback', () => {
+    const opened = press(state({ expandedTaskId: 'p1', selectedTask: 1, tasks: [runnerParent], models: [model] }), 'char', 'o');
+    expect(opened.overlay).toMatchObject({ kind: 'picker', picker: { action: { kind: 'set-task-model', taskId: 's1' } } });
+    const items = opened.overlay?.kind === 'picker' ? opened.overlay.picker.items : [];
+    expect(items.map((i) => i.id)).toEqual(['opencode/x']);
+  });
+
+  it('confirming a subtask model picker selection updates that subtask, not a no-op', () => {
+    const opened = press(state({ expandedTaskId: 'p1', selectedTask: 1, tasks: [runnerParent], models: [model] }), 'char', 'o');
+    const { effects } = reduce(opened, { type: 'key', key: { name: 'enter' } });
+    expect(effects).toEqual([expect.objectContaining({ type: 'updateTask', taskId: 's1' })]);
+  });
+
+  it('"R" (runner) and "e" (effort) pickers also resolve against the subtask, not the empty fallback', () => {
+    const runnerOpened = press(state({ expandedTaskId: 'p1', selectedTask: 1, tasks: [runnerParent], models: [model], runners: [{ id: 'opencode', name: 'OpenCode', enabled: true }] }), 'char', 'R');
+    expect(runnerOpened.overlay).toMatchObject({ kind: 'picker', picker: { action: { kind: 'set-task-runner', taskId: 's1' } } });
+    const runnerItems = runnerOpened.overlay?.kind === 'picker' ? runnerOpened.overlay.picker.items : [];
+    expect(runnerItems.length).toBeGreaterThan(0);
+  });
+});

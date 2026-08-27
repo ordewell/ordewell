@@ -143,6 +143,19 @@ describe('/model follows the planner backend', () => {
     expect(items(state).map((i) => i.id)).toEqual(['sonnet']);
   });
 
+  it('shows the model provider so same-runner models from different providers stay distinguishable', () => {
+    const { state } = run('/model', {
+      plannerProvider: 'opencode',
+      models: [
+        { id: 'opencode/claude-sonnet-4-6', label: 'Claude Sonnet 4.6', provider: 'opencode', runners: ['opencode'] },
+        { id: 'opencode-go/deepseek-v4-flash', label: 'DeepSeek V4 Flash', provider: 'opencode-go', runners: ['opencode'] },
+      ],
+    });
+
+    expect(items(state).find((i) => i.id === 'opencode/claude-sonnet-4-6')?.detail).toContain('opencode');
+    expect(items(state).find((i) => i.id === 'opencode-go/deepseek-v4-flash')?.detail).toContain('opencode-go');
+  });
+
   it('offers a vendor planner the cross-provider catalog', () => {
     const { state } = run('/model', {
       plannerProvider: 'openrouter',

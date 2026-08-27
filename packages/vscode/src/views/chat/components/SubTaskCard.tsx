@@ -19,6 +19,7 @@ interface SubTaskCardProps {
   isExecuting?: boolean;
   onRunnerChange?: (taskId: string, runner: string) => void;
   onModelChange?: (taskId: string, assignment: TaskModelAssignment) => void;
+  onModelsRefreshNeeded?: () => void;
   onModeChange?: (taskId: string, mode: string) => void;
   onRemoveTask?: (taskId: string) => void;
   onPromptChange?: (taskId: string, prompt: string) => void;
@@ -51,7 +52,7 @@ const RUNNER_ABBREV: Record<string, string> = {
   'opencode': 'OC',
 };
 
-export default function SubTaskCard({ task, parentTask, models, modes, runners, effectiveRunner, configuredProviders, modelApiMapping, isExecuting, onRunnerChange, onModelChange, onModeChange, onRemoveTask, onPromptChange, onRetry: _onRetry, onSkip, onCancel, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask }: SubTaskCardProps) {
+export default function SubTaskCard({ task, parentTask, models, modes, runners, effectiveRunner, configuredProviders, modelApiMapping, isExecuting, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onRemoveTask, onPromptChange, onRetry: _onRetry, onSkip, onCancel, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask }: SubTaskCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<string | null>(null);
 
@@ -156,7 +157,8 @@ export default function SubTaskCard({ task, parentTask, models, modes, runners, 
           {!isExecuting && task.type === 'ai' && models.length > 0 && onModelChange && (
             <ModelSelector models={models} currentModel={task.assignedModel}
               configuredProviders={configuredProviders} modelApiMapping={modelApiMapping}
-              onChange={(assignment) => onModelChange(task.id, assignment)} />
+              onChange={(assignment) => onModelChange(task.id, assignment)}
+              onOpen={onModelsRefreshNeeded} />
           )}
 
           {!isExecuting && task.type === 'ai' && onModeChange && (

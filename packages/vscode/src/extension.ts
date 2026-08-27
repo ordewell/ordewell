@@ -565,6 +565,17 @@ function setupChatListener(context: vscode.ExtensionContext): void {
         break;
       }
 
+      // A per-task model dropdown opened. Discovery is cached per-runner and
+      // otherwise only refreshed on activation, config change, or webview
+      // reconnect (see `ready` above) — so a runner that was cold or
+      // unconfigured at one of those moments would stay stuck showing an
+      // empty catalog for an already-assigned task until one of those events
+      // recurred. `sendRunnerAndModels` already dedupes concurrent calls, so
+      // this is cheap even if several dropdowns open in quick succession.
+      case 'refreshModels':
+        void sendRunnerAndModels().catch((err) => log(`Model dropdown refresh failed: ${err}`));
+        break;
+
       case 'sendMessage': {
         const text = msg.text ?? '';
         const ctx = msg.actionContext;

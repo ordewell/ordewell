@@ -10,6 +10,9 @@ interface ModelSelectorProps {
   configuredProviders?: ApiProvider[];
   modelApiMapping?: Record<string, ApiProvider[]>;
   label?: string;
+  /** Called when the dropdown opens, so a stale/degraded catalog can self-heal
+   *  the way the TUI's model picker already does (it re-fetches on every open). */
+  onOpen?: () => void;
 }
 
 export const API_PROVIDER_LABELS: Record<ApiProvider, string> = {
@@ -148,6 +151,7 @@ export default function ModelSelector({
   configuredProviders = [],
   modelApiMapping = {},
   label = 'Model',
+  onOpen,
 }: ModelSelectorProps) {
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState(false);
@@ -210,6 +214,7 @@ export default function ModelSelector({
         setDropdownPos({ top: rect.bottom + 2, left: rect.left, width: rect.width });
       }
       setFrozen({ models, mapping: modelApiMapping });
+      onOpen?.();
     } else {
       setFrozen(null);
     }

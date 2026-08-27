@@ -23,6 +23,11 @@ interface TaskCardProps {
   task: Task;
   models: DiscoveredModel[];
   modes?: RunnerMode[];
+  /** Every runner's catalog, keyed by runner id — used to re-scope a subtask's
+   *  own pickers to ITS `assignedRunner` rather than the parent's (a subtask
+   *  can run on a different runner than its parent). */
+  modelsByRunner?: Partial<Record<string, DiscoveredModel[]>>;
+  modesByRunner?: Record<string, RunnerMode[]>;
   runners?: RunnerOption[];
   effectiveRunner?: string;
   configuredProviders?: ('openrouter' | 'google' | 'openai_compatible')[];
@@ -39,6 +44,8 @@ interface TaskCardProps {
   onDependenciesChange?: (taskId: string, dependencies: string[]) => void;
   onRunnerChange?: (taskId: string, runner: string) => void;
   onModelChange?: (taskId: string, assignment: TaskModelAssignment) => void;
+  /** Called when this task's model dropdown opens, so a stale/degraded catalog self-heals. */
+  onModelsRefreshNeeded?: () => void;
   onModeChange?: (taskId: string, mode: string) => void;
   onRemoveTask?: (taskId: string) => void;
   onPromptChange?: (taskId: string, prompt: string) => void;
@@ -117,7 +124,7 @@ export function runnerOptionsFor(runners: RunnerOption[] | undefined, assignedRu
   return [...runners, { id: assignedRunner, displayName: assignedRunner }];
 }
 
-export default function TaskCard({ task, models, modes, runners, effectiveRunner, configuredProviders, modelApiMapping, isExecuting, output, idleSince, taskOrderMap, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModeChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask }: TaskCardProps) {
+export default function TaskCard({ task, models, modes, modelsByRunner, modesByRunner, runners, effectiveRunner, configuredProviders, modelApiMapping, isExecuting, output, idleSince, taskOrderMap, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask }: TaskCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<string | null>(null);
   const [editingDeps, setEditingDeps] = useState(false);
@@ -382,7 +389,8 @@ export default function TaskCard({ task, models, modes, runners, effectiveRunner
           {!isExecuting && task.type === 'ai' && models.length > 0 && onModelChange && (
             <ModelSelector models={models} currentModel={task.assignedModel}
               configuredProviders={configuredProviders} modelApiMapping={modelApiMapping}
-              onChange={(assignment) => onModelChange(task.id, assignment)} />
+              onChange={(assignment) => onModelChange(task.id, assignment)}
+              onOpen={onModelsRefreshNeeded} />
           )}
 
           {!isExecuting && task.type === 'ai' && onModeChange && (
@@ -407,19 +415,29 @@ export default function TaskCard({ task, models, modes, runners, effectiveRunner
 
           {sortedSubtasks.length > 0 && (
             <div className="subtasks">
-              {sortedSubtasks.map((sub) => (
-                <SubTaskCard key={sub.id} task={sub} parentTask={task} models={models}
-                  modes={modes} runners={runners} effectiveRunner={effectiveRunner}
-                  configuredProviders={configuredProviders} modelApiMapping={modelApiMapping}
-                  isExecuting={isExecuting}
-                  onRunnerChange={onRunnerChange}
-                  onModelChange={onModelChange} onModeChange={onModeChange}
-                  onRemoveTask={onRemoveTask} onPromptChange={onPromptChange}
-                  onRetry={onRetry} onSkip={onSkip} onCancel={onCancel}
-                  onForceStart={onForceStart} onMarkComplete={onMarkComplete}
-                  onMarkIncomplete={onMarkIncomplete}
-                  onRunTask={onRunTask} />
-              ))}
+              {sortedSubtasks.map((sub) => {
+                // A subtask can run on a different runner than its parent, so its
+                // pickers must be scoped to ITS OWN assignedRunner, not the
+                // parent's — reusing the parent's `models`/`modes` here would
+                // show the wrong runner's catalog (or none at all).
+                const subRunner = sub.assignedRunner;
+                const subRunnerModels = subRunner ? modelsByRunner?.[subRunner] : undefined;
+                const subModels = subRunnerModels && subRunnerModels.length > 0 ? subRunnerModels : models;
+                const subModes = subRunner ? (modesByRunner?.[subRunner] ?? []) : [];
+                return (
+                  <SubTaskCard key={sub.id} task={sub} parentTask={task} models={subModels}
+                    modes={subModes} runners={runners} effectiveRunner={subRunner}
+                    configuredProviders={configuredProviders} modelApiMapping={modelApiMapping}
+                    isExecuting={isExecuting}
+                    onRunnerChange={onRunnerChange}
+                    onModelChange={onModelChange} onModelsRefreshNeeded={onModelsRefreshNeeded} onModeChange={onModeChange}
+                    onRemoveTask={onRemoveTask} onPromptChange={onPromptChange}
+                    onRetry={onRetry} onSkip={onSkip} onCancel={onCancel}
+                    onForceStart={onForceStart} onMarkComplete={onMarkComplete}
+                    onMarkIncomplete={onMarkIncomplete}
+                    onRunTask={onRunTask} />
+                );
+              })}
             </div>
           )}
 

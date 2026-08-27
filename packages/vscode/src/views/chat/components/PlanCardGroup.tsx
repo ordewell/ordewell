@@ -23,6 +23,7 @@ interface PlanCardGroupProps {
   onDependenciesChange?: (taskId: string, dependencies: string[]) => void;
   onAddTask?: (draft: TaskDraft) => void;
   onModelChange?: (taskId: string, assignment: TaskModelAssignment) => void;
+  onModelsRefreshNeeded?: () => void;
   onModeChange?: (taskId: string, mode: string) => void;
   onRemoveTask?: (taskId: string) => void;
   onPromptChange?: (taskId: string, prompt: string) => void;
@@ -53,6 +54,7 @@ export default function PlanCardGroup({
   onDependenciesChange,
   onAddTask,
   onModelChange,
+  onModelsRefreshNeeded,
   onModeChange,
   onRemoveTask,
   onPromptChange,
@@ -207,6 +209,8 @@ export default function PlanCardGroup({
                 task={task}
                 models={taskModels}
                 modes={taskModes}
+                modelsByRunner={modelsByRunner}
+                modesByRunner={modesByRunner}
                 runners={runners}
                 effectiveRunner={effectiveRunner}
                 isExecuting={isExecuting}
@@ -218,6 +222,7 @@ export default function PlanCardGroup({
                 onDependenciesChange={onDependenciesChange}
                 onRunnerChange={onRunnerChange}
                 onModelChange={onModelChange}
+                onModelsRefreshNeeded={onModelsRefreshNeeded}
                 onModeChange={onModeChange}
                 onRemoveTask={onRemoveTask}
                 onPromptChange={onPromptChange}

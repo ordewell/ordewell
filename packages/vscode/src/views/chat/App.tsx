@@ -708,6 +708,17 @@ export default function App() {
     vscode.postMessage({ type: 'sendMessage', text: JSON.stringify(draft), runners, actionContext: { type: 'addTask' } });
   }, [runners]);
 
+  // Activation-time discovery can cache a degraded (empty) catalog for a runner
+  // that was cold or unconfigured at that moment (see extension.ts's
+  // maybeWarnDegradedDiscovery). Unlike the TUI's task-model picker, which
+  // re-fetches on every open, this webview only refreshes on activation, a
+  // config change, or reconnect — so a stale empty list for an already-
+  // assigned task's runner never self-heals on its own. Re-discover whenever a
+  // task's model dropdown opens, same as the TUI does.
+  const handleModelsRefreshNeeded = useCallback(() => {
+    vscode.postMessage({ type: 'refreshModels' });
+  }, []);
+
   const handleModelChange = useCallback((taskId: string, assignment: TaskModelAssignment) => {
     vscode.postMessage({ type: 'sendMessage', text: JSON.stringify(assignment), runners, actionContext: { type: 'execute', taskId } });
     const current = planRef.current;
@@ -1020,6 +1031,7 @@ export default function App() {
             onDependenciesChange={handleDependenciesChange}
             onAddTask={handleAddTask}
             onModelChange={handleModelChange}
+            onModelsRefreshNeeded={handleModelsRefreshNeeded}
             onModeChange={handleModeChange}
             onRemoveTask={handleRemoveTask}
             onPromptChange={handlePromptChange}

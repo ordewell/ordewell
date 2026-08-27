@@ -610,7 +610,10 @@ function plannerModelItems(state: TuiState): PickerItem[] {
     .map((m) => ({
       id: m.id,
       label: m.label,
-      detail: m.variants?.length ? `${m.variants.length} effort level${m.variants.length === 1 ? '' : 's'}` : 'runner default effort',
+      detail: [
+        m.provider,
+        m.variants?.length ? `${m.variants.length} effort level${m.variants.length === 1 ? '' : 's'}` : 'runner default effort',
+      ].filter(Boolean).join(' · '),
       selected: m.id === state.orchestratorModel,
     }));
   // An empty catalog means discovery hasn't landed (or failed); a blank picker
@@ -668,7 +671,7 @@ function pickerItemsFor(state: TuiState, action: PickerState['action']): PickerI
     return state.runners.map((runner) => ({ id: runner.id, label: runner.name }));
   }
   if (action.kind === 'set-task-runner') {
-    const task = state.tasks.find((candidate) => candidate.id === action.taskId);
+    const task = findTask(state.tasks, action.taskId);
     if (!task) return [];
     return state.runners.map((runner) => ({
       id: runner.id,
@@ -685,7 +688,7 @@ function pickerItemsFor(state: TuiState, action: PickerState['action']): PickerI
     }));
   }
   if (action.kind === 'set-task-mode') {
-    const task = state.tasks.find((candidate) => candidate.id === action.taskId);
+    const task = findTask(state.tasks, action.taskId);
     if (!task) return [];
     return modesForTask(state.modesByRunner, task).map((mode) => ({
       id: mode.id,
@@ -695,7 +698,7 @@ function pickerItemsFor(state: TuiState, action: PickerState['action']): PickerI
     }));
   }
   if (action.kind === 'set-task-model') {
-    const task = state.tasks.find((candidate) => candidate.id === action.taskId);
+    const task = findTask(state.tasks, action.taskId);
     if (!task) return [];
     const items = modelsForTask(state.models, task).map((model) => ({
       id: model.id,
@@ -713,7 +716,7 @@ function pickerItemsFor(state: TuiState, action: PickerState['action']): PickerI
       : [{ id: '', label: `No ${task.assignedRunner ?? 'runner'} models discovered yet`, detail: 'run /refresh', disabled: true }];
   }
   if (action.kind === 'set-task-effort') {
-    const task = state.tasks.find((candidate) => candidate.id === action.taskId);
+    const task = findTask(state.tasks, action.taskId);
     if (!task) return [];
     const current = task.assignedModel?.thinkingEffort;
     return [
@@ -1252,7 +1255,7 @@ function choose(state: TuiState, picker: PickerState, item: PickerItem | undefin
   }
   if (picker.action.kind === 'set-task-deps') {
     const taskId = picker.action.taskId;
-    const task = state.tasks.find((candidate) => candidate.id === taskId);
+    const task = findTask(state.tasks, taskId);
     if (!task || !state.sessionId) return step(closed);
     return step(closed, [{
       type: 'updateTask',
@@ -1321,26 +1324,26 @@ function choose(state: TuiState, picker: PickerState, item: PickerItem | undefin
     }
     case 'set-task-runner': {
       const taskId = picker.action.taskId;
-      const task = state.tasks.find((candidate) => candidate.id === taskId);
+      const task = findTask(state.tasks, taskId);
       if (!task || !state.sessionId) return step(closed);
       return assignTaskRunner(closed, state.sessionId, task, item.id, item.label);
     }
     case 'set-task-mode': {
       const taskId = picker.action.taskId;
-      const task = state.tasks.find((candidate) => candidate.id === taskId);
+      const task = findTask(state.tasks, taskId);
       if (!task || !state.sessionId) return step(closed);
       return assignTaskMode(closed, state.sessionId, task, item.id, item.label);
     }
     case 'set-task-model': {
       const taskId = picker.action.taskId;
-      const task = state.tasks.find((candidate) => candidate.id === taskId);
+      const task = findTask(state.tasks, taskId);
       const model = state.models.find((candidate) => candidate.id === item.id);
       if (!task || !model || !state.sessionId) return step(closed);
       return assignTaskModel(closed, state.sessionId, task, model);
     }
     case 'set-task-effort': {
       const taskId = picker.action.taskId;
-      const task = state.tasks.find((candidate) => candidate.id === taskId);
+      const task = findTask(state.tasks, taskId);
       if (!task || !state.sessionId) return step(closed);
       return assignTaskEffort(closed, state.sessionId, task, item.id === DEFAULT_EFFORT ? undefined : item.id);
     }
@@ -1458,7 +1461,7 @@ function runCommand(state: TuiState, { name, args }: ParsedCommand): Step {
       return taskModeCommand(state, args);
     case 'task-deps':
       return taskCommand(state, args[0], (_sessionId, taskId) =>
-        openTaskDepsPicker(state, state.tasks.find((candidate) => candidate.id === taskId)!),
+        openTaskDepsPicker(state, findTask(state.tasks, taskId)!),
       );
     case 'complete':
     case 'uncomplete':
@@ -1987,7 +1990,7 @@ function assignTaskEffort(
 
 function taskModelCommand(state: TuiState, args: string[]): Step {
   return taskCommand(state, args[0], (sessionId, taskId) => {
-    const task = state.tasks.find((candidate) => candidate.id === taskId)!;
+    const task = findTask(state.tasks, taskId)!;
     if (!args[1]) return openTaskModelPicker(state, task);
     const model = state.models.find((candidate) => candidate.id === args[1]) ?? {
       id: args[1],
@@ -2004,7 +2007,7 @@ function taskModelCommand(state: TuiState, args: string[]): Step {
 
 function taskRunnerCommand(state: TuiState, args: string[]): Step {
   return taskCommand(state, args[0], (sessionId, taskId) => {
-    const task = state.tasks.find((candidate) => candidate.id === taskId)!;
+    const task = findTask(state.tasks, taskId)!;
     if (!args[1]) return openTaskRunnerPicker(state, task);
     const runner = state.runners.find((candidate) => candidate.id === args[1]);
     if (!runner) return fail(state, `Unknown runner "${args[1]}".`);
@@ -2014,7 +2017,7 @@ function taskRunnerCommand(state: TuiState, args: string[]): Step {
 
 function taskModeCommand(state: TuiState, args: string[]): Step {
   return taskCommand(state, args[0], (sessionId, taskId) => {
-    const task = state.tasks.find((candidate) => candidate.id === taskId)!;
+    const task = findTask(state.tasks, taskId)!;
     if (!args[1]) return openTaskModePicker(state, task);
     const mode = modesForTask(state.modesByRunner, task).find((candidate) => candidate.id === args[1]);
     if (!mode) return fail(state, `Unsupported mode "${args[1]}" for ${task.assignedRunner}.`);
@@ -2024,7 +2027,7 @@ function taskModeCommand(state: TuiState, args: string[]): Step {
 
 function taskEffortCommand(state: TuiState, args: string[]): Step {
   return taskCommand(state, args[0], (sessionId, taskId) => {
-    const task = state.tasks.find((candidate) => candidate.id === taskId)!;
+    const task = findTask(state.tasks, taskId)!;
     if (!args[1]) return openTaskEffortPicker(state, task);
     if (!task.assignedModel) return fail(state, 'Choose a model for this task before setting its thinking effort.');
     const effort = args[1].toLowerCase();
@@ -2064,7 +2067,7 @@ function taskCommand(
 
 /** Users refer to tasks by the number shown in the plan pane as often as by id. */
 export function resolveTaskId(state: TuiState, token: string): string | null {
-  const byId = state.tasks.find((t) => t.id === token);
+  const byId = findTask(state.tasks, token);
   if (byId) return byId.id;
 
   const order = Number(token);

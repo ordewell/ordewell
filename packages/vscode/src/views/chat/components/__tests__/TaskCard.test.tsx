@@ -217,6 +217,34 @@ describe('TaskCard — subtask order labels', () => {
   });
 });
 
+describe('TaskCard — a subtask on a different runner than its parent', () => {
+  it('scopes the subtask\'s model dropdown to ITS OWN runner\'s catalog via modelsByRunner, not the parent\'s', () => {
+    const subtask: Task = {
+      id: 's1', order: 1, title: 'Subtask one', description: '', type: 'ai', status: 'pending',
+      dependencies: [], subtasks: [], assignedRunner: 'opencode', completionMarker: 'm2', taskMode: 'build',
+    };
+    render(
+      <TaskCard
+        task={makeTask({ assignedRunner: 'claude-code', subtasks: [subtask] })}
+        // The parent-scoped flat list intentionally carries no models, so the
+        // parent's own selector doesn't render — only `modelsByRunner['opencode']`
+        // can be the source of the subtask's options.
+        models={emptyModels}
+        modelsByRunner={{
+          opencode: [{ modelId: 'opencode/x', modelLabel: 'X Model', runnerProvider: 'opencode', variants: [] }],
+        }}
+        onModelChange={vi.fn()}
+      />,
+    );
+    act(() => { fireEvent.click(screen.getByText('Test task')); });
+    act(() => { fireEvent.click(screen.getByText('Subtask one')); });
+    const trigger = document.querySelector('.model-picker-trigger');
+    expect(trigger).toBeTruthy();
+    act(() => { fireEvent.click(trigger!); });
+    expect(document.querySelector('.model-picker-item-label')?.textContent).toBe('X Model');
+  });
+});
+
 describe('TaskCard — Stalled state', () => {
   it('renders Stalled instead of Running when idleSince is set on an in_progress task', () => {
     render(

@@ -17,6 +17,8 @@ type ChatWebviewMessage =
       taskId?: string;
     }
   | { type: 'ready' }
+  /** A per-task model dropdown opened — re-discover so a stale/degraded catalog self-heals. */
+  | { type: 'refreshModels' }
   | { type: 'stopResearch' }
   | { type: 'newSession' }
   | { type: 'toggleSkill'; skillId: string; enabled: boolean }
