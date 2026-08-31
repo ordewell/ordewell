@@ -556,7 +556,9 @@ export default function ChatInput({
         } else if (sel && (sel.kind === 'provider' || sel.kind === 'back')) {
           selectSuggestion(sel);
         } else if (sel?.id) {
-          setText(`${modelCmdPrefix(text)} ${sel.id}`);
+          // A model row only ever surfaces behind `/model set`, so that's the
+          // only prefix a Tab-filled model id is ever completed onto.
+          setText(`/model set ${sel.id}`);
         } else if (sel && sel.kind !== 'hint') {
           setText(sel.insertText);
         }

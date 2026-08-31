@@ -102,6 +102,14 @@ describe('ChatInput two-step model picker', () => {
     expect(onSend).toHaveBeenCalledWith('/model set anthropic/claude-sonnet-4');
   });
 
+  it('Tab on a highlighted model row fills the command without sending it', () => {
+    const { onSend } = renderInput({ configuredProviders: ['openrouter'] });
+    const ta = type('/model set sonnet');
+    fireEvent.keyDown(ta, { key: 'Tab' });
+    expect(onSend).not.toHaveBeenCalled();
+    expect((ta as HTMLTextAreaElement).value).toBe('/model set anthropic/claude-sonnet-4');
+  });
+
   it('filters models by search term once a provider is chosen', () => {
     renderInput({ configuredProviders: ['openrouter'] });
     type('/model set sonnet');
