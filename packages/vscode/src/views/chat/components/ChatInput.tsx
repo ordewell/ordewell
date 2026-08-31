@@ -135,6 +135,121 @@ export function getLeadingSlashToken(text: string, knownNames: Set<string>): str
   return knownNames.has(match[1].toLowerCase()) ? match[0] : null;
 }
 
+/** A `/word` token found anywhere in the prompt, whitespace- (or string-edge-) bounded. */
+export interface SlashToken {
+  /** Offset of this token's leading `/` in the text. */
+  start: number;
+  /** Offset immediately after the raw non-whitespace run following the `/`. */
+  end: number;
+  /** Lower-cased, with trailing `, . ! ? ; :` peeled off — what actually gets matched. */
+  name: string;
+  /** Offset immediately after `name`, before any trailing punctuation. */
+  nameEnd: number;
+}
+
+const TRAILING_PUNCT = /[,.!?;:]+$/;
+
+/**
+ * Every `/word` token in `text`, bounded by whitespace or the string edges —
+ * the same shape core's `resolveSkillInvocation` splices against, so a token
+ * offered here for completion or highlighting is exactly one that expands.
+ */
+export function slashTokens(text: string): SlashToken[] {
+  const tokens: SlashToken[] = [];
+  const re = /(^|\s)\/(\S*)/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text))) {
+    const start = match.index + match[1].length;
+    const raw = match[2];
+    const punct = raw.match(TRAILING_PUNCT)?.[0] ?? '';
+    const nameLen = raw.length - punct.length;
+    tokens.push({
+      start,
+      end: start + 1 + raw.length,
+      name: raw.slice(0, nameLen).toLowerCase(),
+      nameEnd: start + 1 + nameLen,
+    });
+  }
+  return tokens;
+}
+
+/** The token the caret is actively composing — immediately after it, nothing typed past it yet. */
+export function activeToken(text: string, cursor: number): SlashToken | null {
+  return slashTokens(text).find((t) => t.end === cursor) ?? null;
+}
+
+/**
+ * Whether `name` names a discovered skill exactly, or is a live prefix of one.
+ * Never a built-in — only a discovered skill's content is ever spliced into a
+ * mid-prompt token (see resolveSkillInvocation in core).
+ */
+export function skillMatchKind(name: string, skillNames: Set<string>): 'exact' | 'prefix' | null {
+  if (name.length === 0) return null;
+  if (skillNames.has(name)) return 'exact';
+  for (const known of skillNames) {
+    if (known.startsWith(name)) return 'prefix';
+  }
+  return null;
+}
+
+/**
+ * Highlight ranges (offsets into `text`) for every recognized `/word` token:
+ * the leading token keeps its existing rule (any known command or skill,
+ * exact match only), while any other token in the message is skills-only,
+ * live-prefix-matched — mirroring the TUI. A skill name repeated verbatim
+ * only highlights its first occurrence, matching resolveSkillInvocation.
+ */
+export function highlightSpans(
+  text: string,
+  knownNames: Set<string>,
+  skillNames: Set<string>,
+): Array<{ start: number; end: number }> {
+  const spans: Array<{ start: number; end: number }> = [];
+  const leading = getLeadingSlashToken(text, knownNames);
+  // A leading *skill* token falls through to the loop below instead, so a
+  // repeat of that same skill later in the message is deduped against it —
+  // only a leading built-in (which never expands, so can't collide with a
+  // later repeat) keeps the always-on, un-deduped highlight.
+  const leadingIsSkill = leading !== null
+    && skillMatchKind(leading.slice(1).toLowerCase(), skillNames) === 'exact';
+  if (leading && !leadingIsSkill) spans.push({ start: 0, end: leading.length });
+
+  const expandedExact = new Set<string>();
+  for (const token of slashTokens(text)) {
+    const kind = skillMatchKind(token.name, skillNames);
+    if (kind === null) continue;
+    if (kind === 'exact') {
+      if (expandedExact.has(token.name)) continue;
+      expandedExact.add(token.name);
+    }
+    spans.push({ start: token.start, end: token.nameEnd });
+  }
+  return spans;
+}
+
+/** Splits `text` into plain-text and `<mark>`-wrapped React nodes for `spans`. */
+function markSpans(text: string, spans: Array<{ start: number; end: number }>): React.ReactNode {
+  if (spans.length === 0) return text;
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+  spans.forEach((span, i) => {
+    if (span.start > cursor) parts.push(text.slice(cursor, span.start));
+    parts.push(<mark key={i}>{text.slice(span.start, span.end)}</mark>);
+    cursor = span.end;
+  });
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return parts;
+}
+
+/** `text` with the token at `[token.start, token.end)` replaced by `/name ` in place. */
+function spliceToken(text: string, token: SlashToken, name: string): { text: string; cursor: number } {
+  const completed = `/${name} `;
+  return {
+    text: text.slice(0, token.start) + completed + text.slice(token.end),
+    cursor: token.start + completed.length,
+  };
+}
+
 export default function ChatInput({
   onSend,
   disabled,
@@ -149,8 +264,18 @@ export default function ChatInput({
   skills = [],
 }: ChatInputProps) {
   const [text, setText] = useState('');
+  // The caret offset into `text` — tracked separately from `text` itself since
+  // it can move (click, arrow keys) without the text changing, and a mid-prompt
+  // skill token is only "active" (eligible for a hint/highlight-while-typing)
+  // while the caret sits immediately after it.
+  const [cursor, setCursor] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
+  // A caret position to apply once React has re-rendered the textarea with new
+  // text — e.g. after splicing a selected skill in place mid-prompt, where the
+  // caret must land right after the inserted name rather than at wherever it
+  // ends up by default.
+  const pendingCursorRef = useRef<number | null>(null);
   const [selectedIdx, setSelectedIdx] = useState(0);
   // The API provider chosen in step 1 of the two-step picker (null = step 1).
   const [pickerProvider, setPickerProvider] = useState<ApiProvider | null>(null);
@@ -173,8 +298,23 @@ export default function ChatInput({
     if (!isModelCommand) setPickerProvider(null);
   }, [isModelCommand]);
 
+  // The `/word` the caret is actively composing when it is *not* at the very
+  // start of the message — e.g. "explain this bug /gri" with the caret right
+  // after "gri". Null whenever the message starts with `/`, so that case keeps
+  // going through the unchanged leading-command branch below, combined-list
+  // and all.
+  const midToken = useMemo(
+    () => (text.startsWith('/') ? null : activeToken(text, cursor)),
+    [text, cursor],
+  );
+
   const suggestions = useMemo<SlashSuggestion[]>(() => {
-    if (!text.startsWith('/')) return [];
+    if (!text.startsWith('/')) {
+      // Anywhere else in the message, only a discovered skill can ever be
+      // spliced in (see resolveSkillInvocation in core) — never a built-in.
+      if (!midToken) return [];
+      return skills.map(toSkillSuggestion).filter((s) => s.label.slice(1).toLowerCase().startsWith(midToken.name));
+    }
     const lower = text.toLowerCase();
 
     if (isModelCommand) {
@@ -214,7 +354,7 @@ export default function ChatInput({
 
     const all = [...COMMAND_SUGGESTIONS, ...skills.map(toSkillSuggestion)];
     return all.filter((s) => s.label.toLowerCase().startsWith(lower));
-  }, [text, isModelCommand, modelFilterTerm, modelOptions, configuredProviders, pickerProvider, skills]);
+  }, [text, midToken, isModelCommand, modelFilterTerm, modelOptions, configuredProviders, pickerProvider, skills]);
 
   // Command names (without the leading slash) plus discovered skill names —
   // the set the leading `/word` of the input is checked against to decide
@@ -224,7 +364,12 @@ export default function ChatInput({
     return new Set([...names, ...skills.map((s) => s.name.toLowerCase())]);
   }, [skills]);
 
-  const highlightedToken = useMemo(() => getLeadingSlashToken(text, knownNames), [text, knownNames]);
+  const skillNames = useMemo(() => new Set(skills.map((s) => s.name.toLowerCase())), [skills]);
+
+  const highlightRanges = useMemo(
+    () => highlightSpans(text, knownNames, skillNames),
+    [text, knownNames, skillNames],
+  );
 
   // Special entries (provider picks, back, hints) render flat above the model
   // list; only actual model rows get grouped under their model-provider header.
@@ -237,7 +382,7 @@ export default function ChatInput({
     return groupByProvider(suggestions.filter((s) => s.kind === 'model'));
   }, [suggestions, isModelCommand]);
 
-  const showSuggestions = suggestions.length > 0 && text.startsWith('/');
+  const showSuggestions = suggestions.length > 0 && (text.startsWith('/') || midToken !== null);
 
   useEffect(() => {
     // Default-highlight the first actionable row, skipping a leading "back"
@@ -280,6 +425,17 @@ export default function ChatInput({
     autoResize();
   }, [text]);
 
+  // Applies a caret position queued by a mid-prompt splice, once React has
+  // committed the new text to the textarea — setSelectionRange before that
+  // would be clamped against the stale (pre-splice) value.
+  useEffect(() => {
+    if (pendingCursorRef.current === null) return;
+    const pos = pendingCursorRef.current;
+    pendingCursorRef.current = null;
+    textareaRef.current?.setSelectionRange(pos, pos);
+    setCursor(pos);
+  }, [text]);
+
   useEffect(() => {
     if (prefill !== undefined && prefill !== null) {
       setText(prefill);
@@ -294,10 +450,24 @@ export default function ChatInput({
     setText('');
   };
 
+  // Splices a chosen skill into the token being composed mid-prompt, leaving
+  // the rest of the message untouched and keeping the message open for more
+  // typing — unlike a leading command, there is no "whole message" to send yet.
+  const applyMidPromptSkill = (s: SlashSuggestion) => {
+    if (!midToken) return;
+    const { text: spliced, cursor: newCursor } = spliceToken(text, midToken, s.label.slice(1));
+    pendingCursorRef.current = newCursor;
+    setText(spliced);
+  };
+
   // Acts on a suggestion: provider entries advance to step 2, the back entry
   // returns to step 1, model rows send the command, command rows are sent as-is.
   const selectSuggestion = (s: SlashSuggestion | undefined) => {
     if (!s) return;
+    if (midToken) {
+      applyMidPromptSkill(s);
+      return;
+    }
     if (s.kind === 'provider') {
       setPickerProvider(s.providerId ?? null);
       navigatedRef.current = false;
@@ -352,6 +522,12 @@ export default function ChatInput({
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         const sel = suggestions[selectedIdx];
+        // Mid-prompt: splice the skill in and keep composing, never send —
+        // there is more of the message left to type around it.
+        if (midToken && sel) {
+          applyMidPromptSkill(sel);
+          return;
+        }
         // Provider / back / hint entries always act on their own (advancing or
         // returning a step), regardless of navigation state.
         if (sel && (sel.kind === 'provider' || sel.kind === 'back' || sel.kind === 'hint')) {
@@ -375,7 +551,9 @@ export default function ChatInput({
       if (e.key === 'Tab') {
         e.preventDefault();
         const sel = suggestions[selectedIdx];
-        if (sel && (sel.kind === 'provider' || sel.kind === 'back')) {
+        if (midToken && sel) {
+          applyMidPromptSkill(sel);
+        } else if (sel && (sel.kind === 'provider' || sel.kind === 'back')) {
           selectSuggestion(sel);
         } else if (sel?.id) {
           setText(`${modelCmdPrefix(text)} ${sel.id}`);
@@ -443,7 +621,9 @@ export default function ChatInput({
         onMouseEnter={() => { navigatedRef.current = true; setSelectedIdx(i); }}
         onMouseDown={(e) => {
           e.preventDefault();
-          if (s.id) {
+          if (midToken) {
+            applyMidPromptSkill(s);
+          } else if (s.id) {
             applyModel(s.id);
           } else {
             onSend(s.insertText);
@@ -468,11 +648,13 @@ export default function ChatInput({
       {showSuggestions && (
         <div className="slash-suggestions" ref={suggestionsRef}>
           <div className="slash-suggestions-header">
-            {isModelCommand ? 'Select a model — type to filter, Enter to pick' : 'Commands — type / to filter'}
+            {isModelCommand
+              ? 'Select a model — type to filter, Enter to pick'
+              : midToken ? 'Skills — type / to filter' : 'Commands — type / to filter'}
           </div>
           {renderedSuggestions()}
           <div className="slash-suggestions-footer">
-            ↑↓ navigate  {isModelCommand ? 'Enter apply · Tab fill' : 'Tab complete · Enter run'}  Esc cancel
+            ↑↓ navigate  {isModelCommand ? 'Enter apply · Tab fill' : midToken ? 'Tab · Enter insert' : 'Tab complete · Enter run'}  Esc cancel
           </div>
         </div>
       )}
@@ -481,17 +663,15 @@ export default function ChatInput({
           <div className="chat-input-row">
             <div className="chat-input-highlight-wrap">
               <div className="chat-input-highlight-backdrop" ref={backdropRef} aria-hidden="true">
-                {highlightedToken ? (
-                  <>
-                    <mark>{highlightedToken}</mark>
-                    {text.slice(highlightedToken.length)}
-                  </>
-                ) : text}
+                {markSpans(text, highlightRanges)}
               </div>
               <textarea
                 ref={textareaRef}
                 value={text}
-                onChange={(e) => setText(e.target.value)}
+                onChange={(e) => { setText(e.target.value); setCursor(e.target.selectionStart ?? e.target.value.length); }}
+                onSelect={(e) => setCursor(e.currentTarget.selectionStart ?? 0)}
+                onClick={(e) => setCursor(e.currentTarget.selectionStart ?? 0)}
+                onKeyUp={(e) => setCursor(e.currentTarget.selectionStart ?? 0)}
                 onKeyDown={handleKeyDown}
                 onScroll={syncBackdropScroll}
                 placeholder={getPlaceholderText()}

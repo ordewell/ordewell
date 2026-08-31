@@ -5,7 +5,7 @@ import { applyKey, commit, emptyEditor, type EditorState } from './editor';
 import { chatEditorRoom, chatPaneWidth, paneColumns, planPaneWidth, taskEditorRoom } from './geometry';
 import { bodyRows, chatScrollMax, helpScrollMax, planScrollExtent } from './layout';
 import { selectedText } from './render';
-import { completions, findCommand, parseSlash, type ParsedCommand } from './slash';
+import { activeToken, findCommand, parseSlash, tokenCompletions, type ParsedCommand } from './slash';
 import {
   findTask, initialState, SKILL_IDS, planRows, selectedPlanRow, visibleItems,
   type ApprovalRequestView, type Cell, type ChatMessage, type Focus, type MessageRole, type ModeView,
@@ -924,10 +924,13 @@ function handleKey(state: TuiState, key: Key): Step {
   if (isMouseSelect(key)) return handleMouseSelect(state, key);
   if (key.name === 'wheelignored') return step(state);
   if (key.name === 'tab' && state.focus === 'chat') {
-    const matches = completions(state.editor.text);
-    if (matches.length > 0) {
-      const text = `/${matches[0].name} `;
-      return step({ ...state, editor: { ...state.editor, text, cursor: text.length } });
+    const token = activeToken(state.editor.text, state.editor.cursor);
+    const matches = token ? tokenCompletions(token) : [];
+    if (token && matches.length > 0) {
+      const { text: full } = state.editor;
+      const completed = `/${matches[0].name} `;
+      const text = full.slice(0, token.start) + completed + full.slice(token.end);
+      return step({ ...state, editor: { ...state.editor, text, cursor: token.start + completed.length } });
     }
   }
   if (key.name === 'tab') return step({ ...state, focus: state.focus === 'chat' ? 'plan' : 'chat' });

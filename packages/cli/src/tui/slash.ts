@@ -127,3 +127,71 @@ export function completions(text: string): SlashCommand[] {
   const prefix = typed.toLowerCase();
   return [...SLASH_COMMANDS, ...skillCommands].filter((c) => c.name.startsWith(prefix));
 }
+
+/** A `/word` token found anywhere in a prompt, whitespace- (or string-edge-) bounded. */
+export interface SlashToken {
+  /** Offset of this token's leading `/` in the buffer. */
+  start: number;
+  /** Offset immediately after the raw non-whitespace run following the `/`. */
+  end: number;
+  /** `name` lower-cased, with trailing `, . ! ? ; :` peeled off — what actually gets matched. */
+  name: string;
+  /** Offset immediately after `name`, i.e. before any trailing punctuation — where a highlight span should stop. */
+  nameEnd: number;
+}
+
+const TRAILING_PUNCT = /[,.!?;:]+$/;
+
+/**
+ * Every `/word` token in `text`, bounded by whitespace or the string edges —
+ * the same shape `resolveSkillInvocation` (core) splices against, so a token
+ * the TUI offers to complete or highlights is exactly one core will expand.
+ */
+export function slashTokens(text: string): SlashToken[] {
+  const tokens: SlashToken[] = [];
+  const re = /(^|\s)\/(\S*)/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text))) {
+    const start = match.index + match[1].length;
+    const raw = match[2];
+    const punct = raw.match(TRAILING_PUNCT)?.[0] ?? '';
+    const nameLen = raw.length - punct.length;
+    tokens.push({
+      start,
+      end: start + 1 + raw.length,
+      name: raw.slice(0, nameLen).toLowerCase(),
+      nameEnd: start + 1 + nameLen,
+    });
+  }
+  return tokens;
+}
+
+/** The token the caret is actively composing — immediately after it, nothing typed past it yet. */
+export function activeToken(text: string, cursor: number): SlashToken | null {
+  return slashTokens(text).find((t) => t.end === cursor) ?? null;
+}
+
+/**
+ * Whether `name` names a *discovered* skill exactly, or is a live prefix of
+ * one — never a built-in, since only a discovered skill's content is ever
+ * spliced into a message (see resolveSkillInvocation in core).
+ */
+export function skillMatchKind(name: string): 'exact' | 'prefix' | null {
+  if (name.length === 0) return null;
+  if (skillByName.has(name)) return 'exact';
+  for (const key of skillByName.keys()) {
+    if (key.startsWith(name)) return 'prefix';
+  }
+  return null;
+}
+
+/**
+ * Commands matching a token being composed at `token.start`: the combined
+ * built-in+skill list at the very start of the buffer (unchanged contract —
+ * `completions` above), skills only anywhere else, since a mid-prompt token
+ * only ever expands into a discovered skill's content, never a built-in.
+ */
+export function tokenCompletions(token: SlashToken): SlashCommand[] {
+  const pool = token.start === 0 ? [...SLASH_COMMANDS, ...skillCommands] : skillCommands;
+  return pool.filter((c) => c.name.startsWith(token.name));
+}

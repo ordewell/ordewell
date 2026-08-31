@@ -1,6 +1,6 @@
 import { pad, stripAnsi, style, truncate, width, wrap } from './ansi';
 import { cursorInLines } from './editor';
-import { completions, findCommand } from './slash';
+import { activeToken, skillMatchKind, slashTokens, tokenCompletions } from './slash';
 import {
   bodyRows, chatInputWrap, chatLayout, footerHints, helpLayout, packHints, planLayout, planOffset,
 } from './layout';
@@ -224,34 +224,52 @@ function renderStatus(state: TuiState, cols: number): string {
   return truncate(`${head}${style.grey(` · ${tail}`)}`, cols);
 }
 
-/** The leading `/word` of the input, up to the first space, or `''`. */
-const LEADING_TOKEN = /^\/\S*/;
-
 /**
- * How many leading characters of the input are a `/skill-name` token that
- * will be substituted with the skill's text — 0 when there is none. Only an
- * exact match to a registered *skill* command counts; built-ins keep their
- * existing styling, and a partial token typed mid-word is not yet a match.
+ * Cyan-highlight ranges (absolute offsets into the input) for every `/word`
+ * token that could resolve to a *discovered* skill — a live,
+ * character-by-character prefix match while composing, not just an exact
+ * name, and never a built-in (those keep their plain styling). Trailing
+ * punctuation on a token is left uncoloured even when the name before it
+ * matches, mirroring how resolveSkillInvocation keeps it outside the splice.
+ * A skill name repeated verbatim only highlights its first occurrence —
+ * resolveSkillInvocation only expands that one, so nothing here should look
+ * "recognized" that substitution then leaves untouched.
  */
-function skillTokenLength(text: string): number {
-  const match = LEADING_TOKEN.exec(text);
-  if (!match) return 0;
-  return findCommand(match[0])?.source === 'skill' ? match[0].length : 0;
+function highlightSpans(text: string): Array<{ start: number; end: number }> {
+  const spans: Array<{ start: number; end: number }> = [];
+  const expandedExact = new Set<string>();
+  for (const token of slashTokens(text)) {
+    const kind = skillMatchKind(token.name);
+    if (kind === null) continue;
+    if (kind === 'exact') {
+      if (expandedExact.has(token.name)) continue;
+      expandedExact.add(token.name);
+    }
+    spans.push({ start: token.start, end: token.nameEnd });
+  }
+  return spans;
 }
 
 /**
- * `text` represents the slice of the full input starting at column `base`.
- * The part of it that falls inside `[0, tokenEnd)` of the full input is
+ * `text` is the slice of the full input starting at column `base`. Any part
+ * of it inside one of `spans` (absolute offsets into the full input) is
  * painted; the rest passes through untouched. Splitting after slicing —
  * rather than colouring the whole line up front — keeps every existing
  * index (`col`, `line.slice(...)`) counting plain characters, so the caret
  * math above is never asked to account for inserted escape codes.
  */
-function paintRange(text: string, base: number, tokenEnd: number): string {
-  const localEnd = Math.max(0, Math.min(text.length, tokenEnd - base));
-  if (localEnd <= 0) return text;
-  if (localEnd >= text.length) return style.cyan(text);
-  return style.cyan(text.slice(0, localEnd)) + text.slice(localEnd);
+function paintSpans(text: string, base: number, spans: Array<{ start: number; end: number }>): string {
+  if (spans.length === 0) return text;
+  let out = '';
+  let cursor = 0;
+  for (const span of spans) {
+    const localStart = Math.max(cursor, Math.min(text.length, span.start - base));
+    const localEnd = Math.max(0, Math.min(text.length, span.end - base));
+    if (localEnd <= localStart) continue;
+    out += text.slice(cursor, localStart) + style.cyan(text.slice(localStart, localEnd));
+    cursor = localEnd;
+  }
+  return out + text.slice(cursor);
 }
 
 function renderInput(state: TuiState, cols: number): string[] {
@@ -262,44 +280,44 @@ function renderInput(state: TuiState, cols: number): string[] {
   const room = chatEditorRoom(cols, lines !== null);
   const { text, cursor } = state.editor;
   const continuation = ' '.repeat(width(prompt));
-  const tokenEnd = skillTokenLength(text);
+  const spans = highlightSpans(text);
 
   // A blurred editor never wraps — a literal \n here would push every
   // following row down one line, so newlines/tabs are squashed to one row.
   if (!lines) {
     const visible = text.replace(/\n/g, '¶').replace(/\t/g, ' ');
-    const painted = tokenEnd > 0 ? paintRange(visible, 0, tokenEnd) : visible;
+    const painted = paintSpans(visible, 0, spans);
     return [prompt + painted + suggest(state, room - width(visible))];
   }
 
   // The caret is derived from the same wrapped lines rather than re-wrapping,
   // which doubled the cost of every keystroke on a long input.
   const { line: lineIndex, col } = cursorInLines(lines, cursor, text.length);
-  const rawLines = lines.map((l) => l.line);
 
-  return rawLines.map((raw, i) => {
+  return lines.map(({ line: raw, start: base }, i) => {
     const prefix = i === 0 ? prompt : continuation;
     const line = raw.replace(/\t/g, ' ');
     const isCursorLine = i === lineIndex;
-    // Only the first line can start with the leading token, so later lines
-    // never paint — `tokenEnd` is a column offset into the whole input, and
-    // those lines start well past it.
-    const lineTokenEnd = i === 0 ? tokenEnd : 0;
-    const rendered = isCursorLine
-      ? paintRange(line.slice(0, col), 0, lineTokenEnd)
-        + style.inverse(line.slice(col, col + 1) || ' ')
-        + paintRange(line.slice(col + 1), col + 1, lineTokenEnd)
-      : paintRange(line, 0, lineTokenEnd);
-    const used = width(line) + (isCursorLine && col >= line.length ? 1 : 0);
-    const hint = i === rawLines.length - 1 ? suggest(state, room - used) : '';
-    return prefix + rendered + hint;
+    if (!isCursorLine) return prefix + paintSpans(line, base, spans);
+
+    const before = paintSpans(line.slice(0, col), base, spans);
+    const caretChar = line.slice(col, col + 1) || ' ';
+    const after = paintSpans(line.slice(col + 1), base + col + 1, spans);
+    // The suggestion hint sits right after the caret — where the token being
+    // composed actually is — rather than always at the end of the row, so it
+    // still lands next to a `/skill` typed mid-sentence.
+    const used = width(line.slice(0, col)) + width(caretChar);
+    const hint = suggest(state, room - used);
+    return prefix + before + style.inverse(caretChar) + hint + after;
   });
 }
 
-/** Inline hint of the first matching command, shown while typing a `/`. */
+/** Inline hint of matching commands, shown right after a `/word` being actively typed. */
 function suggest(state: TuiState, room: number): string {
   if (state.focus === 'plan' || room <= 2) return '';
-  const matches = completions(state.editor.text);
+  const token = activeToken(state.editor.text, state.editor.cursor);
+  if (!token) return '';
+  const matches = tokenCompletions(token);
   if (matches.length === 0) return '';
   const names = matches.map((c) => c.name).join(' ');
   return style.grey(`  ${truncate(names, Math.max(0, room - 2))}`);

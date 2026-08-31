@@ -1,5 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { parseSlash, SLASH_COMMANDS, findCommand, completions, registerSkillCommands } from '../slash';
+import {
+  parseSlash, SLASH_COMMANDS, findCommand, completions, registerSkillCommands,
+  slashTokens, activeToken, skillMatchKind, tokenCompletions,
+} from '../slash';
 
 describe('parseSlash', () => {
   it('returns null for text that is not a slash command', () => {
@@ -101,6 +104,102 @@ describe('registerSkillCommands', () => {
   it('does not leak into the built-in help listing', () => {
     registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
     expect(SLASH_COMMANDS.some((c) => c.name === 'grilling')).toBe(false);
+  });
+});
+
+describe('slashTokens', () => {
+  it('finds a leading token', () => {
+    expect(slashTokens('/grilling')).toEqual([{ start: 0, end: 9, name: 'grilling', nameEnd: 9 }]);
+  });
+
+  it('finds a token in the middle of a sentence, bounded by whitespace', () => {
+    const tokens = slashTokens('explain this /grilling please');
+    expect(tokens).toEqual([{ start: 13, end: 22, name: 'grilling', nameEnd: 22 }]);
+  });
+
+  it('finds every distinct token in a message', () => {
+    const tokens = slashTokens('/grilling this and /to-spec that');
+    expect(tokens.map((t) => t.name)).toEqual(['grilling', 'to-spec']);
+  });
+
+  it('strips trailing punctuation from name and nameEnd, keeping it out of the matched range', () => {
+    const [token] = slashTokens('use /grilling, please');
+    expect(token.name).toBe('grilling');
+    expect(token.nameEnd).toBe(token.end - 1); // the comma sits just past nameEnd
+  });
+
+  it('does not treat a "/" glued to the previous word as a token', () => {
+    expect(slashTokens('hello/grilling')).toEqual([]);
+  });
+
+  it('captures a path-like run as one non-matching token (no letters-only name to strip)', () => {
+    expect(slashTokens('see /usr/bin/foo for details')).toEqual([
+      { start: 4, end: 16, name: 'usr/bin/foo', nameEnd: 16 },
+    ]);
+  });
+});
+
+describe('activeToken', () => {
+  it('finds the token the caret sits immediately after', () => {
+    const token = activeToken('explain this /gri', 'explain this /gri'.length);
+    expect(token?.name).toBe('gri');
+  });
+
+  it('is null once the caret has moved past the token', () => {
+    expect(activeToken('/grilling now', 13)).toBeNull();
+  });
+
+  it('is null when there is no token at all', () => {
+    expect(activeToken('just a normal question', 5)).toBeNull();
+  });
+});
+
+describe('skillMatchKind', () => {
+  afterEach(() => registerSkillCommands([]));
+
+  it('is "exact" for a full discovered-skill name', () => {
+    registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
+    expect(skillMatchKind('grilling')).toBe('exact');
+  });
+
+  it('is "prefix" for a live-typed prefix of a discovered skill', () => {
+    registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
+    expect(skillMatchKind('gri')).toBe('prefix');
+  });
+
+  it('is null for a built-in command, even one tagged category "skills"', () => {
+    expect(skillMatchKind('tdd')).toBeNull();
+  });
+
+  it('is null for text that names nothing discovered', () => {
+    registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
+    expect(skillMatchKind('grix')).toBeNull();
+  });
+
+  it('is null for an empty name', () => {
+    registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
+    expect(skillMatchKind('')).toBeNull();
+  });
+});
+
+describe('tokenCompletions', () => {
+  afterEach(() => registerSkillCommands([]));
+
+  it('offers the combined built-in+skill list for a token at the start of the buffer', () => {
+    registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
+    const names = tokenCompletions({ start: 0, end: 4, name: 'gri', nameEnd: 4 }).map((c) => c.name);
+    expect(names).toContain('grilling');
+  });
+
+  it('offers skills only for a token elsewhere in the buffer', () => {
+    registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
+    const names = tokenCompletions({ start: 8, end: 12, name: 'gri', nameEnd: 12 }).map((c) => c.name);
+    expect(names).toEqual(['grilling']);
+  });
+
+  it('excludes a built-in even when its name matches the prefix, once mid-prompt', () => {
+    const names = tokenCompletions({ start: 8, end: 11, name: 'td', nameEnd: 11 }).map((c) => c.name);
+    expect(names).not.toContain('tdd');
   });
 });
 

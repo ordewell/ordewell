@@ -72,6 +72,106 @@ describe('skill invocation interception', () => {
     expect(continueConversation.mock.calls[0][0]).toContain('just a normal question');
   });
 
+  it('splices a mid-prompt skill token in place, keeping the surrounding text', async () => {
+    const startConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'hi', researchLog: [] });
+    const continueConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'ok', researchLog: [] });
+    const session = makeSession({
+      skillsService: fakeSkillsService({ grilling: 'GRILL-BODY' }),
+      aiService: {
+        startConversation,
+        continueConversation,
+        hasActiveConversation: () => true,
+        conversationMatchesConfig: () => true,
+        reset: vi.fn(),
+      },
+    });
+
+    await session.startPlanning('goal', ['claude-code']);
+    await session.continueConversation('explain this bug /grilling then summarize');
+
+    expect(continueConversation.mock.calls[0][0]).toContain('explain this bug GRILL-BODY then summarize');
+  });
+
+  it('strips trailing punctuation from a mid-prompt token before matching', async () => {
+    const startConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'hi', researchLog: [] });
+    const continueConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'ok', researchLog: [] });
+    const session = makeSession({
+      skillsService: fakeSkillsService({ grilling: 'GRILL-BODY' }),
+      aiService: {
+        startConversation,
+        continueConversation,
+        hasActiveConversation: () => true,
+        conversationMatchesConfig: () => true,
+        reset: vi.fn(),
+      },
+    });
+
+    await session.startPlanning('goal', ['claude-code']);
+    await session.continueConversation('use /grilling, please');
+
+    expect(continueConversation.mock.calls[0][0]).toContain('use GRILL-BODY, please');
+  });
+
+  it('expands every distinct skill token in a message', async () => {
+    const startConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'hi', researchLog: [] });
+    const continueConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'ok', researchLog: [] });
+    const session = makeSession({
+      skillsService: fakeSkillsService({ grilling: 'GRILL', 'to-spec': 'SPEC' }),
+      aiService: {
+        startConversation,
+        continueConversation,
+        hasActiveConversation: () => true,
+        conversationMatchesConfig: () => true,
+        reset: vi.fn(),
+      },
+    });
+
+    await session.startPlanning('goal', ['claude-code']);
+    await session.continueConversation('/grilling this idea and then /to-spec it');
+
+    expect(continueConversation.mock.calls[0][0]).toContain('GRILL this idea and then SPEC it');
+  });
+
+  it('only expands the first occurrence of a repeated skill token', async () => {
+    const startConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'hi', researchLog: [] });
+    const continueConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'ok', researchLog: [] });
+    const session = makeSession({
+      skillsService: fakeSkillsService({ grilling: 'GRILL' }),
+      aiService: {
+        startConversation,
+        continueConversation,
+        hasActiveConversation: () => true,
+        conversationMatchesConfig: () => true,
+        reset: vi.fn(),
+      },
+    });
+
+    await session.startPlanning('goal', ['claude-code']);
+    await session.continueConversation('/grilling this and /grilling that');
+
+    expect(continueConversation.mock.calls[0][0]).toContain('GRILL this and /grilling that');
+  });
+
+  it('leaves an unrecognized mid-prompt token as plain text, without an unknown-skill notice', async () => {
+    const startConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'hi', researchLog: [] });
+    const continueConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'ok', researchLog: [] });
+    const session = makeSession({
+      skillsService: fakeSkillsService({ grilling: 'GRILL' }),
+      aiService: {
+        startConversation,
+        continueConversation,
+        hasActiveConversation: () => true,
+        conversationMatchesConfig: () => true,
+        reset: vi.fn(),
+      },
+    });
+
+    await session.startPlanning('goal', ['claude-code']);
+    await session.continueConversation('check out /nope for details');
+
+    expect(continueConversation.mock.calls[0][0]).toContain('check out /nope for details');
+  });
+
   it('substitutes a skill invocation without a matching skill with an unknown-skill notice', async () => {
     const startConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'hi', researchLog: [] });
     const continueConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'ok', researchLog: [] });

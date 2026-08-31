@@ -314,6 +314,17 @@ describe('skill commands', () => {
     expect(completed.editor.text).toBe('/grilling ');
   });
 
+  it('Tab completes a skill token typed mid-prompt, keeping the rest of the text', () => {
+    registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
+    const base = initialState();
+    const text = 'explain this bug /gri then summarize';
+    const cursor = text.indexOf('/gri') + '/gri'.length;
+    const state = { ...base, editor: { ...base.editor, text, cursor } };
+    const { state: completed } = reduce(state, { type: 'key', key: { name: 'tab' } });
+    expect(completed.editor.text).toBe('explain this bug /grilling  then summarize');
+    expect(completed.editor.cursor).toBe('explain this bug /grilling '.length);
+  });
+
   it('dispatches a skill command to the planner instead of reporting it unknown', () => {
     registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
     const { state, effects } = run('/grilling');

@@ -415,6 +415,34 @@ describe('input line', () => {
     expect(out.join('\n')).toContain('terminal');
   });
 
+  describe('mid-prompt skill suggestions', () => {
+    afterEach(() => registerSkillCommands([]));
+
+    it('suggests a discovered skill for a token typed mid-prompt', () => {
+      registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
+      const s = initialState({ rows: 24, cols: 80 });
+      const text = 'explain this bug /gri';
+      const out = render({ ...s, editor: { ...s.editor, text, cursor: text.length } });
+      expect(out.join('\n')).toContain('grilling');
+    });
+
+    it('does not suggest a built-in command for a token typed mid-prompt', () => {
+      const s = initialState({ rows: 24, cols: 80 });
+      const text = 'explain this bug /te';
+      const out = render({ ...s, editor: { ...s.editor, text, cursor: text.length } });
+      expect(out.join('\n')).not.toContain('terminal');
+    });
+
+    it('shows no hint once the caret has moved past the token', () => {
+      registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
+      const s = initialState({ rows: 24, cols: 80 });
+      const text = 'explain /grilling to me';
+      const out = render({ ...s, editor: { ...s.editor, text, cursor: text.length } });
+      const occurrences = out.join('\n').split('grilling').length - 1;
+      expect(occurrences).toBe(1); // the typed token itself, no repeated hint
+    });
+  });
+
   it('renders multi-line input on separate rows with continuation prompt', () => {
     const s = initialState({ rows: 24, cols: 80 });
     const out = render({ ...s, editor: { ...s.editor, text: 'line1\nline2\nline3', cursor: 17 } });
@@ -619,12 +647,31 @@ describe('input cursor', () => {
       });
     });
 
-    it('does not colour a partial, unmatched skill token', () => {
+    it('colours a live-typed prefix of a discovered skill, before it is exact', () => {
       withColour(() => {
         registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
         const s = initialState({ rows: 24, cols: 80 });
-        const out = render({ ...s, editor: { ...s.editor, text: '/gri', cursor: 0 } });
-        expect(out[out.length - 2]).not.toContain(style.cyan('/gri'));
+        const out = render({ ...s, editor: { ...s.editor, text: '/gri', cursor: 4 } });
+        expect(out[out.length - 2]).toContain(style.cyan('/gri'));
+      });
+    });
+
+    it('does not colour a token that has diverged from every skill name', () => {
+      withColour(() => {
+        registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
+        const s = initialState({ rows: 24, cols: 80 });
+        const out = render({ ...s, editor: { ...s.editor, text: '/grix', cursor: 5 } });
+        expect(out[out.length - 2]).not.toContain(style.cyan('/grix'));
+      });
+    });
+
+    it('colours a skill token typed in the middle of a longer prompt, not just a leading one', () => {
+      withColour(() => {
+        registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
+        const s = initialState({ rows: 24, cols: 80 });
+        const text = 'explain this bug /grilling please';
+        const out = render({ ...s, editor: { ...s.editor, text, cursor: text.length } });
+        expect(out[out.length - 2]).toContain(style.cyan('/grilling'));
       });
     });
 

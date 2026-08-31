@@ -116,27 +116,55 @@ export function sessionRuntimeSettings(settings: UserSettings): SessionRuntimeSe
 }
 
 /**
- * Resolve a `/skill-name` invocation to the skill's markdown content. Pure and
- * exported so surfaces and verification can drive substitution without a full
- * Session. Plain text passes through unchanged; an unknown skill becomes a
- * notice naming what IS available instead of a bare slash token that a runner
- * would mis-resolve in its own skills directory.
+ * A `/skill-name` token anywhere in a message: whitespace (or string start)
+ * before it, a lowercase-led name, optional trailing punctuation that isn't
+ * part of the name, then whitespace (or string end). The punctuation group
+ * is what lets "/grilling," resolve as "grilling" with the comma kept intact
+ * in the output.
+ */
+const SKILL_TOKEN = /(^|\s)\/([a-z][a-z0-9_-]*)([,.!?;:]*)(?=\s|$)/gi;
+
+/**
+ * Resolve `/skill-name` invocations to their skill's markdown content. Pure
+ * and exported so surfaces and verification can drive substitution without a
+ * full Session.
+ *
+ * A message that is *only* `/skill-name` keeps the legacy whole-message
+ * behaviour: an unknown skill becomes a notice naming what IS available,
+ * instead of a bare slash token a runner would mis-resolve in its own skills
+ * directory. Anywhere else in a message, a matching token is spliced in place
+ * (surrounding text is untouched); a token that doesn't name a real skill is
+ * left as plain text rather than raising a notice, since embedded in a
+ * sentence it's as likely to be incidental text (a path, an example command)
+ * as a typo'd invocation. The same skill name repeated only expands its first
+ * occurrence — later repeats stay literal.
  */
 export function resolveSkillInvocation(
   text: string,
   skillsService: Pick<SkillsService, 'findSkill' | 'listSkills'>,
 ): string {
-  const match = text.trim().match(/^\/([a-z][a-z0-9_-]*)$/im);
-  if (!match) return text;
-  const skillName = match[1].toLowerCase();
-  const skill = skillsService.findSkill(skillName);
-  if (!skill) {
-    const available = typeof skillsService.listSkills === 'function'
-      ? skillsService.listSkills().map((s) => s.name).join(', ')
-      : '';
-    return `Unknown skill: ${skillName}. Available skills: ${available}`;
+  const bareMatch = text.trim().match(/^\/([a-z][a-z0-9_-]*)$/im);
+  if (bareMatch) {
+    const skillName = bareMatch[1].toLowerCase();
+    const skill = skillsService.findSkill(skillName);
+    if (!skill) {
+      const available = typeof skillsService.listSkills === 'function'
+        ? skillsService.listSkills().map((s) => s.name).join(', ')
+        : '';
+      return `Unknown skill: ${skillName}. Available skills: ${available}`;
+    }
+    return skill.content;
   }
-  return skill.content;
+
+  const expanded = new Set<string>();
+  return text.replace(SKILL_TOKEN, (full, lead: string, name: string, punct: string) => {
+    const skillName = name.toLowerCase();
+    if (expanded.has(skillName)) return full;
+    const skill = skillsService.findSkill(skillName);
+    if (!skill) return full;
+    expanded.add(skillName);
+    return `${lead}${skill.content}${punct}`;
+  });
 }
 
 /**

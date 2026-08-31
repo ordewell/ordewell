@@ -41,6 +41,13 @@ function type(value: string) {
   return textarea;
 }
 
+/** Like `type`, but places the caret at `cursor` instead of the end of `value`. */
+function typeAt(value: string, cursor: number) {
+  const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+  fireEvent.change(textarea, { target: { value, selectionStart: cursor, selectionEnd: cursor } });
+  return textarea;
+}
+
 describe('ChatInput two-step model picker', () => {
   it('/model set with two providers shows provider entries, not models', () => {
     renderInput({ configuredProviders: ['openrouter', 'google'] });
@@ -257,6 +264,77 @@ describe('discovered skill suggestions', () => {
     type('/grill');
     fireEvent.mouseDown(screen.getByText('/grilling'));
     expect(onSend).toHaveBeenCalledWith('/grilling');
+  });
+});
+
+describe('mid-prompt skill suggestions', () => {
+  const SKILLS = [{ name: 'grilling', description: 'Grill the plan' }];
+
+  it('suggests a discovered skill for a token typed mid-prompt', () => {
+    renderInput({ skills: SKILLS });
+    const text = 'explain this bug /gri';
+    typeAt(text, text.length);
+    expect(screen.getByText('/grilling')).toBeTruthy();
+  });
+
+  it('does not suggest a built-in command for a token typed mid-prompt', () => {
+    renderInput({});
+    const text = 'explain this bug /he';
+    typeAt(text, text.length);
+    expect(screen.queryByText('/help')).toBeNull();
+  });
+
+  it('splices the selected skill into place, keeps the rest of the message, and does not send', () => {
+    const { onSend } = renderInput({ skills: SKILLS });
+    const text = 'explain this bug /gri then summarize';
+    const cursor = text.indexOf('/gri') + '/gri'.length;
+    const ta = typeAt(text, cursor) as HTMLTextAreaElement;
+    fireEvent.mouseDown(screen.getByText('/grilling'));
+    expect(onSend).not.toHaveBeenCalled();
+    expect(ta.value).toBe('explain this bug /grilling  then summarize');
+  });
+
+  it('shows no suggestion dropdown once the caret has moved past the token', () => {
+    const { container } = renderInput({ skills: SKILLS });
+    const text = 'explain /grilling to me';
+    typeAt(text, text.length);
+    expect(container.querySelector('.slash-suggestions')).toBeNull();
+  });
+});
+
+describe('mid-prompt skill highlight', () => {
+  const SKILLS = [{ name: 'grilling', description: 'Grill' }];
+
+  it('highlights a skill token typed in the middle of a longer prompt', () => {
+    const { container } = renderInput({ skills: SKILLS });
+    const text = 'explain this bug /grilling please';
+    typeAt(text, text.length);
+    const marks = Array.from(container.querySelectorAll('.chat-input-highlight-backdrop mark')).map((m) => m.textContent);
+    expect(marks).toContain('/grilling');
+  });
+
+  it('does not highlight a built-in command typed mid-prompt', () => {
+    const { container } = renderInput({});
+    const text = 'explain this bug /help please';
+    typeAt(text, text.length);
+    const marks = Array.from(container.querySelectorAll('.chat-input-highlight-backdrop mark')).map((m) => m.textContent);
+    expect(marks).not.toContain('/help');
+  });
+
+  it('highlights a live-typed prefix of a discovered skill', () => {
+    const { container } = renderInput({ skills: SKILLS });
+    const text = 'please /gri';
+    typeAt(text, text.length);
+    const mark = container.querySelector('.chat-input-highlight-backdrop mark');
+    expect(mark?.textContent).toBe('/gri');
+  });
+
+  it('only highlights the first occurrence of a repeated skill token', () => {
+    const { container } = renderInput({ skills: SKILLS });
+    const text = '/grilling this and /grilling that';
+    typeAt(text, text.length);
+    const marks = Array.from(container.querySelectorAll('.chat-input-highlight-backdrop mark')).map((m) => m.textContent);
+    expect(marks).toEqual(['/grilling']);
   });
 });
 
