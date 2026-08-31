@@ -1,6 +1,6 @@
 {
   "name": "@ordewell/core",
-  "version": "0.4.14",
+  "version": "0.4.15",
   "description": "Ordewell core — planner, orchestrator, runners and verification engine.",
   "license": "Apache-2.0",
   "author": "Alessandro Costanzo Ciano",

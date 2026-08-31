@@ -8,6 +8,21 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.4.15] — 2026-08-31
+
+### Fixed
+
+- **A brand-new project directory can now be initialized instead of just
+  being refused.** `assertWorkspaceIsProject` (the 0.4.9 confinement-boundary
+  check — see below) rejected any workspace without a `.git`/`.ordewell`/
+  manifest marker, but nothing ever bootstrapped one: there was no `init`
+  command, and `.ordewell/` was only ever created lazily on first session
+  save, after this check had already thrown. Starting `ordewell` in a
+  genuinely fresh folder had no way through. The check itself is unchanged —
+  an unmarked directory is still never admitted silently — but the TUI now
+  offers an explicit "Initialize this as a new workspace?" prompt on
+  rejection, and only on confirmation does it create `.ordewell/` and retry.
+
 ## [0.4.14] — 2026-08-27
 
 ### Fixed
