@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { listSessions, saveSession, Session, WorkspaceNotFoundError, type LegacyPlanState } from '@ordewell/core';
+import { existsSync } from 'fs';
+import { listSessions, saveSession, Session, WorkspaceNotFoundError, WorkspaceNotAProjectError, type LegacyPlanState } from '@ordewell/core';
 import { OrchestratorPool } from '../orchestratorPool';
 
 function savedPlan(over: Partial<LegacyPlanState> = {}): LegacyPlanState {
@@ -149,6 +150,51 @@ describe('OrchestratorPool workspace validation', () => {
       .generatePlan('session-missing-ws-3', 'Add a widget', ['claude-code'], missing)
       .catch((e) => e);
     expect(err.message).toContain(missing);
+  });
+});
+
+// A directory with no .git/.ordewell/manifest is the "starting a brand-new
+// project" case — it must still be refused by default (this is the same
+// check that stops the filesystem root becoming the confinement boundary),
+// but an explicit allowInit lets the caller bootstrap it deliberately rather
+// than being stuck with no way in.
+describe('OrchestratorPool workspace initialization', () => {
+  let workspace: string;
+  let pool: OrchestratorPool;
+
+  beforeEach(() => {
+    workspace = mkdtempSync(join(tmpdir(), 'ordewell-pool-new-'));
+    pool = new OrchestratorPool();
+  });
+
+  afterEach(() => {
+    pool.destroyAll();
+    rmSync(workspace, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('still refuses an unmarked directory by default', async () => {
+    await expect(
+      pool.startPlanning('session-unmarked', 'Add a widget', ['claude-code'], workspace),
+    ).rejects.toThrow(WorkspaceNotAProjectError);
+    expect(pool.hasSession('session-unmarked')).toBe(false);
+    expect(existsSync(join(workspace, '.ordewell'))).toBe(false);
+  });
+
+  it('bootstraps .ordewell and proceeds when allowInit is explicitly set', async () => {
+    vi.spyOn(Session.prototype, 'startPlanning').mockResolvedValue(savedPlan());
+
+    await pool.startPlanning('session-init', 'Add a widget', ['claude-code'], workspace, undefined, { allowInit: true });
+
+    expect(pool.hasSession('session-init')).toBe(true);
+    expect(existsSync(join(workspace, '.ordewell'))).toBe(true);
+  });
+
+  it('never bootstraps for any other rejection, such as a missing directory', async () => {
+    const missing = join(workspace, 'does-not-exist');
+    await expect(
+      pool.startPlanning('session-init-missing', 'Add a widget', ['claude-code'], missing, undefined, { allowInit: true }),
+    ).rejects.toThrow(WorkspaceNotFoundError);
   });
 });
 

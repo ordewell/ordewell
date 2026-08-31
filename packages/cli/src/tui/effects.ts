@@ -2,6 +2,7 @@ import { execSync } from 'child_process';
 import { ALL_PROVIDERS, clipboardCopyCommand, isCliProvider, truncateCheckpointSummary, type AiProvider, type ConversationMessage, type HasBinFn, type PlannerModelRecall } from '@ordewell/core';
 import { summarizeToolCall } from '@ordewell/core/plan-utils';
 import { describeConnectionRefused, isConnectionRefused } from '../daemonClient';
+import { WorkspaceInitNeededError } from '../apiClient';
 import { normalizeCatalog } from '../catalog';
 import { describePlannerSwitch } from '../plannerModelSwitch';
 import type { Action, Effect } from './reducer';
@@ -10,7 +11,7 @@ import type { WsEvent } from '../apiClient';
 
 /** The slice of the daemon client the TUI needs; `ApiClient` satisfies it. */
 export interface OrdewellApi {
-  startConversation(sessionId: string, goal: string, runners: string[] | undefined, workspace: string): Promise<any>;
+  startConversation(sessionId: string, goal: string, runners: string[] | undefined, workspace: string, allowInit?: boolean): Promise<any>;
   sendConversationMessage(sessionId: string, message: string): Promise<any>;
   executePlan(sessionId: string): Promise<{ status: string }>;
   stopExecution(sessionId: string): Promise<{ status: string }>;
@@ -213,11 +214,19 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       const sessionId = deps.newSessionId();
       dispatch({ type: 'sessionStarted', sessionId, goal: effect.goal });
       try {
-        await converse(deps, sessionId, () => api.startConversation(sessionId, effect.goal, undefined, workspace));
+        await converse(deps, sessionId, () => api.startConversation(sessionId, effect.goal, undefined, workspace, effect.allowInit));
       } catch (err) {
         // The daemon registers a session only after planning succeeds, so this
         // id points at nothing — keeping it would 404 every following message.
         dispatch({ type: 'sessionCleared' });
+        // Offer to initialize instead of just reporting failure — but only
+        // once: a rejection on the confirmed retry (allowInit already true)
+        // falls through to the generic error path instead of looping the
+        // prompt forever.
+        if (err instanceof WorkspaceInitNeededError && !effect.allowInit) {
+          dispatch({ type: 'workspaceNeedsInit', goal: effect.goal, workspace: err.workspace });
+          return;
+        }
         throw err;
       }
       return;

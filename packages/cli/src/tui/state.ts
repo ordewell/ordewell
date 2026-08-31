@@ -178,7 +178,8 @@ export type PromptAction =
 /** A yes/no overlay for destructive actions — enter confirms, escape cancels. */
 export type ConfirmAction =
   | { kind: 'new-session' }
-  | { kind: 'remove-task'; taskId: string };
+  | { kind: 'remove-task'; taskId: string }
+  | { kind: 'init-workspace'; goal: string; workspace: string };
 
 export type Focus = 'chat' | 'plan';
 

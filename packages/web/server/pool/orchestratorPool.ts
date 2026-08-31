@@ -22,6 +22,8 @@ import {
   PROVIDER_PRIORITY,
   assertWorkspaceExists,
   assertWorkspaceIsProject,
+  WorkspaceNotAProjectError,
+  ensureStateDirIgnored,
   runnerForProvider,
   PlannerModelMemory,
   admitSettingsEnv,
@@ -123,15 +125,25 @@ export class OrchestratorPool {
     return sessionRuntimeSettings(this.settingsService.getAll());
   }
 
-  private createSessionFor(sessionId: string, workspace: string, modelOverride?: string): Session {
+  private createSessionFor(sessionId: string, workspace: string, modelOverride?: string, options: { allowInit?: boolean } = {}): Session {
     // Rejected here rather than left to the planner: a non-existent workspace
     // otherwise reaches the harness adapter's `spawn` as an ENOENT that reads
     // as a missing agent binary, not a missing directory.
     assertWorkspaceExists(workspace);
     // Rejected here too: without a project marker, the filesystem root or an
     // arbitrary system directory becomes the confinement boundary for every
-    // read, search and permitted command the planner runs.
-    assertWorkspaceIsProject(workspace);
+    // read, search and permitted command the planner runs. `allowInit` only
+    // ever arrives here on the retry of a call the user already saw and
+    // explicitly confirmed (the TUI's "initialize this as a new workspace?"
+    // prompt) — never as a default, so an unmarked directory is still never
+    // admitted silently.
+    try {
+      assertWorkspaceIsProject(workspace);
+    } catch (err) {
+      if (!(err instanceof WorkspaceNotAProjectError) || !options.allowInit) throw err;
+      ensureStateDirIgnored(workspace);
+      assertWorkspaceIsProject(workspace);
+    }
     const config = new WebConfig({
       enabledRunners: this.enabledRunnerOverride(),
       modelOverride,
@@ -426,8 +438,8 @@ export class OrchestratorPool {
       }));
   }
 
-  async generatePlan(sessionId: string, goal: string, runners: RunnerId[], workspace: string, modelOverride?: string): Promise<PlanState> {
-    const session = this.createSessionFor(sessionId, workspace, modelOverride);
+  async generatePlan(sessionId: string, goal: string, runners: RunnerId[], workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<PlanState> {
+    const session = this.createSessionFor(sessionId, workspace, modelOverride, options);
     // Registered before the blocking call, not after: research inside
     // generatePlan can raise an approval and await the answer, and that
     // answer arrives over POST /api/approvals/:sessionId — which 404s until
@@ -450,8 +462,8 @@ export class OrchestratorPool {
    * planner had enough context, otherwise the dialogue so far (last
    * assistant message lives in conversationHistory).
    */
-  async startPlanning(sessionId: string, goal: string, runners: RunnerId[], workspace: string, modelOverride?: string): Promise<LegacyPlanState> {
-    const session = this.createSessionFor(sessionId, workspace, modelOverride);
+  async startPlanning(sessionId: string, goal: string, runners: RunnerId[], workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<LegacyPlanState> {
+    const session = this.createSessionFor(sessionId, workspace, modelOverride, options);
     // See generatePlan: must be registered before the blocking call so a
     // mid-research approval is answerable rather than 404ing until timeout.
     this.sessions.set(sessionId, session);

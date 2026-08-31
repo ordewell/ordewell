@@ -15,6 +15,16 @@ export interface PlanResult {
 
 interface ErrorResponse {
   error?: string;
+  code?: string;
+  workspace?: string;
+}
+
+/** A workspace the daemon rejected for lacking a project marker, distinguished from other 400s so the TUI can offer to initialize it instead of just reporting failure. */
+export class WorkspaceInitNeededError extends Error {
+  constructor(message: string, readonly workspace: string) {
+    super(message);
+    this.name = 'WorkspaceInitNeededError';
+  }
 }
 
 export interface RunnerState {
@@ -157,13 +167,18 @@ export class ApiClient {
     goal: string,
     runners?: string[],
     workspace?: string,
+    allowInit?: boolean,
   ): Promise<SerializedPlan> {
     const res = await this.httpRequest<{ plan: SerializedPlan } & ErrorResponse>('POST', `/api/plans/${sessionId}/converse/start`, {
       goal,
       runners: runners || undefined,
       workspace,
+      allowInit,
     });
     if (res.status !== 200) {
+      if (res.data?.code === 'workspace_not_a_project') {
+        throw new WorkspaceInitNeededError(res.data.error || 'Not a project directory', res.data.workspace || workspace || '');
+      }
       throw new Error(res.data?.error || 'Planning failed');
     }
     return res.data.plan;

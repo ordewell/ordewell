@@ -19,7 +19,8 @@ export { initialState };
 
 /** Side effects the runtime performs; the reducer itself stays pure. */
 export type Effect =
-  | { type: 'startConversation'; goal: string }
+  /** `allowInit` is only ever set on the retry after the user confirms the "initialize this as a new workspace?" prompt — see `workspaceNeedsInit`. */
+  | { type: 'startConversation'; goal: string; allowInit?: boolean }
   | { type: 'sendMessage'; sessionId: string; message: string }
   | { type: 'command'; name: string; action: 'on' | 'off' }
   | { type: 'setModel'; modelId: string }
@@ -78,6 +79,8 @@ export type Action =
   | { type: 'sessionsLoaded'; sessions: SessionView[] }
   | { type: 'runnersLoaded'; runners: RunnerView[]; orchestratorModel?: string }
   | { type: 'failed'; message: string }
+  /** The workspace has no project marker — offer to initialize it rather than just failing. */
+  | { type: 'workspaceNeedsInit'; goal: string; workspace: string }
   | { type: 'notice'; message: string }
   | { type: 'resize'; rows: number; cols: number }
   | { type: 'spinnerTick' };
@@ -419,6 +422,20 @@ export function reduce(state: TuiState, action: Action): Step {
 
     case 'failed':
       return step({ ...say(state, 'error', action.message), status: 'idle', busyLabel: '', thinkingLine: '' });
+
+    case 'workspaceNeedsInit':
+      return step({
+        ...state,
+        status: 'idle',
+        busyLabel: '',
+        thinkingLine: '',
+        overlay: {
+          kind: 'confirm',
+          title: 'Initialize new workspace?',
+          message: `"${action.workspace}" isn't a recognized project yet (no .git or manifest found). Start a new ordewell workspace here?`,
+          action: { kind: 'init-workspace', goal: action.goal, workspace: action.workspace },
+        },
+      });
 
     case 'notice':
       return step(say(state, 'system', action.message));
@@ -1149,6 +1166,9 @@ function handleConfirmKey(
   if (overlay.action.kind === 'remove-task') {
     if (!state.sessionId) return step(closed);
     return step(closed, [{ type: 'removeTask', sessionId: state.sessionId, taskId: overlay.action.taskId }]);
+  }
+  if (overlay.action.kind === 'init-workspace') {
+    return step({ ...closed, status: 'planning' }, [{ type: 'startConversation', goal: overlay.action.goal, allowInit: true }]);
   }
   return step(closed);
 }
