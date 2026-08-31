@@ -404,6 +404,9 @@ export class Session {
   }
 
   private translateProgress(progress: ResearchProgress): void {
+    if (progress.type === 'liveness') {
+      this.broadcast({ type: 'planner_liveness' });
+    }
     if (progress.type === 'thinking' && progress.text) {
       this.broadcast({ type: 'plan_thinking', text: progress.text });
     }

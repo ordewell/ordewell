@@ -26,6 +26,12 @@ export function routePlannerStream(msg: SessionMessage, sink: PlannerStreamSink,
     case 'plan_thinking':
       if (active) sink.sendResearchProgress({ type: 'thinking', text: msg.text });
       return true;
+    case 'planner_liveness':
+      // No content to render — routed purely so the webview's watchdog sees
+      // the postMessage traffic and doesn't mistake filtered subagent output
+      // for a stalled planner.
+      if (active) sink.sendResearchProgress({ type: 'liveness' });
+      return true;
     case 'research_step':
       if (active) sink.sendResearchProgress({ type: 'tool_call', tool: msg.tool, toolLabel: msg.toolLabel, toolArgs: msg.args, subagentId: msg.subagentId, toolCallId: msg.toolCallId });
       return true;

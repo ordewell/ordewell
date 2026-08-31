@@ -162,6 +162,21 @@ describe('CliAgentAiService — Claude Code', () => {
     expect(turn.researchLog.flatMap((s) => ('toolCallId' in s ? [s.toolCallId] : []))).toEqual(['toolu_agent']);
   });
 
+  // A VS Code idle watchdog resets on any progress event reaching the
+  // webview. The subagent's own thinking, tool call and tool result are
+  // filtered out (previous test) — if liveness rode along with those alone,
+  // a long subagent stretch would starve the watchdog and it would report a
+  // false "stopped responding" while the CLI process was still working.
+  it('pings liveness on every raw line, including the ones the subagent filter drops', async () => {
+    const { svc } = service('claude-code', [fixture('claude-code', 'subagent')]);
+    const { events, onProgress } = collector();
+    await svc.startConversation(request({ onProgress }));
+
+    const liveness = events.filter((e) => e.type === 'liveness').length;
+    const visible = events.filter((e) => e.type !== 'liveness').length;
+    expect(liveness).toBeGreaterThan(visible);
+  });
+
   it('opens a paragraph for each message after the first, instead of running them together', async () => {
     const { svc } = service('claude-code', [fixture('claude-code', 'subagent')]);
     const turn = await svc.startConversation(request());

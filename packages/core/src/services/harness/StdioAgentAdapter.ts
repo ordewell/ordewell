@@ -48,6 +48,8 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
   private exited: { code: number | null; signal: string | null } | null = null;
   /** Set for the duration of a turn. Outside one, events are buffered rather than dropped. */
   private turnEmit: ((event: AgentEvent) => void) | null = null;
+  /** Set for the duration of a turn. Pinged on every raw line, whether or not `handleLine` turns it into an event. */
+  private turnActivity: (() => void) | null = null;
   /**
    * Events the agent produced before its first turn — in practice the startup
    * warnings that arrive during the handshake. Dropping them hid the one
@@ -122,12 +124,18 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
     // message is sent, and dropping them left the handshake waiting on a reply
     // that had already come and gone.
     this.process.stdout?.on('data', (chunk: Buffer) => {
-      this.stdout.push(chunk.toString(), (line) => this.handleLine(line, (event) => {
-        if (this.turnEmit) this.turnEmit(event);
-        else if (!this.hadTurn && !TURN_SCOPED_EVENTS.has(event.type) && this.betweenTurns.length < BETWEEN_TURN_EVENT_CAP) {
-          this.betweenTurns.push(event);
-        }
-      }));
+      this.stdout.push(chunk.toString(), (line) => {
+        // Ahead of `handleLine`, which some agents (Claude Code's subagent
+        // transcript) deliberately parse into nothing at all — the process is
+        // still working even on a line that yields no event.
+        this.turnActivity?.();
+        this.handleLine(line, (event) => {
+          if (this.turnEmit) this.turnEmit(event);
+          else if (!this.hadTurn && !TURN_SCOPED_EVENTS.has(event.type) && this.betweenTurns.length < BETWEEN_TURN_EVENT_CAP) {
+            this.betweenTurns.push(event);
+          }
+        });
+      });
     });
     this.process.stderr?.on('data', (chunk: Buffer) => {
       this.stderrTail = (this.stderrTail + chunk.toString()).slice(-STDERR_TAIL_CHARS);
@@ -142,7 +150,7 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
     await this.handshake(opts);
   }
 
-  async send(message: string, onEvent: (event: AgentEvent) => void, signal?: AbortSignal): Promise<void> {
+  async send(message: string, onEvent: (event: AgentEvent) => void, signal?: AbortSignal, onActivity?: () => void): Promise<void> {
     if (!this.process) throw new Error(`${this.agentId} planner session is not started`);
     if (this.exited) {
       onEvent({ type: 'error', message: this.exitMessage() });
@@ -155,6 +163,7 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
         if (settled) return;
         settled = true;
         this.turnEmit = null;
+        this.turnActivity = null;
         this.hadTurn = true;
         signal?.removeEventListener('abort', onAbort);
         this.process?.removeListener('exit', onExit);
@@ -183,6 +192,7 @@ export abstract class StdioAgentAdapter implements AgentAdapter {
       };
 
       this.turnEmit = emit;
+      this.turnActivity = onActivity ?? null;
       this.process!.once('exit', onExit);
       this.process!.once('error', onExit);
       if (signal?.aborted) { onAbort(); return; }
