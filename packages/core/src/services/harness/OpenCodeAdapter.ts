@@ -163,7 +163,7 @@ export class OpenCodeAdapter implements AgentAdapter {
     this.sessionId = created.id;
   }
 
-  async send(message: string, onEvent: (event: AgentEvent) => void, signal?: AbortSignal): Promise<void> {
+  async send(message: string, onEvent: (event: AgentEvent) => void, signal?: AbortSignal, onActivity?: () => void): Promise<void> {
     if (!this.baseUrl || !this.sessionId) throw new Error('OpenCode planner session is not started');
     if (this.exited) {
       onEvent({ type: 'error', message: this.exitMessage() });
@@ -186,6 +186,7 @@ export class OpenCodeAdapter implements AgentAdapter {
       (part) => { if (part.type === 'tool') this.emitPart(part, seen, onEvent); },
       (ask) => this.denyPermission(ask, seen, onEvent),
       connected,
+      onActivity,
     );
 
     // The stream stopped being best-effort the moment permission denial moved
@@ -317,6 +318,7 @@ export class OpenCodeAdapter implements AgentAdapter {
     onPart: (part: OpenCodePart) => void,
     onPermission: (ask: OpenCodePermissionAsk) => void,
     onConnected: () => void,
+    onActivity?: () => void,
   ): Promise<void> {
     const response = await this.deps.fetch(`${this.baseUrl}/event`, { signal }).catch(() => null);
     const body = response?.body;
@@ -328,6 +330,11 @@ export class OpenCodeAdapter implements AgentAdapter {
     for (;;) {
       const { done, value } = await reader.read().catch(() => ({ done: true, value: undefined }));
       if (done) return;
+      // Any bytes at all mean the server is still talking, independent of
+      // whether this chunk resolves into a part this adapter forwards —
+      // the same gap that made Claude Code's watchdog false-positive on
+      // filtered subagent output, closed here before it can recur.
+      onActivity?.();
       buffer += decoder.decode(value, { stream: true });
       let newline: number;
       while ((newline = buffer.indexOf('\n')) >= 0) {

@@ -52,6 +52,10 @@ export type SessionMessage =
   | { type: 'task_started'; taskId: string; order: number; title: string; runner: RunnerId; modelId?: string }
   | { type: 'task_output'; taskId: string; text: string }
   | { type: 'plan_thinking'; text: string }
+  // Carries no content — see `ResearchProgress['liveness']`. Exists only so a
+  // surface's idle watchdog sees the harness process working even during a
+  // stretch that produces nothing visible.
+  | { type: 'planner_liveness' }
   // `toolLabel` carries a harness planner's own name for the tool (ADR-0009) —
   // always set when `tool` is `agent_tool`, so no surface has to render the
   // catch-all member name at the user.

@@ -455,7 +455,7 @@ export class CliAgentAiService implements IAiService {
         case 'turn_end':
           return;
       }
-    }, signal);
+    }, signal, () => onProgress({ type: 'liveness' }));
 
     // Anything still pending when the turn ended never produced a result —
     // report it rather than leaving a spinner running in every surface.

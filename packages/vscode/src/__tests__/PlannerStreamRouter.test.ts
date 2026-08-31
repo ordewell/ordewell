@@ -71,6 +71,13 @@ describe('routePlannerStream', () => {
     expect(sink.sendResearchProgress.mock.calls[0][0].step?.outcome).toBe('refused');
   });
 
+  it('routes planner_liveness as a contentless research-progress ping', () => {
+    const sink = fakeSink();
+    const handled = routePlannerStream({ type: 'planner_liveness' }, sink, true);
+    expect(handled).toBe(true);
+    expect(sink.sendResearchProgress).toHaveBeenCalledWith({ type: 'liveness' });
+  });
+
   it('leaves lifecycle messages to the caller', () => {
     const sink = fakeSink();
     const lifecycle: SessionMessage[] = [

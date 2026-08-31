@@ -72,8 +72,16 @@ export interface AgentAdapter {
    * Send one user message and stream the turn's events until it ends. Resolves
    * when the agent yields the floor; rejects only when the transport itself
    * failed in a way no `error` event could describe.
+   *
+   * `onActivity`, when given, fires on raw transport traffic — every stdio
+   * line or stream chunk the process produces — independent of whether that
+   * traffic becomes an `AgentEvent`. An adapter may legitimately emit nothing
+   * for long stretches (a subagent's filtered output, most often); a caller
+   * using presence-of-events as a liveness signal would read that silence as
+   * a hang. `onActivity` is the seam that keeps liveness detection from being
+   * coupled to what each adapter chooses to surface.
    */
-  send(message: string, onEvent: (event: AgentEvent) => void, signal?: AbortSignal): Promise<void>;
+  send(message: string, onEvent: (event: AgentEvent) => void, signal?: AbortSignal, onActivity?: () => void): Promise<void>;
 
   /** The agent's native session id once it has announced one. Resumption hint only. */
   nativeSessionId(): string | null;

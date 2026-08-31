@@ -123,7 +123,11 @@ export interface UserPromptEntry {
 export type ResearchLogEntry = ResearchStep | UserPromptEntry;
 
 export interface ResearchProgress {
-  type: 'thinking' | 'tool_call' | 'tool_result' | 'plan_token' | 'interrupted';
+  // 'liveness' carries no content: a raw-line signal from the harness process
+  // (ADR-0009) that reaches a surface even when a turn is producing nothing
+  // visible — a subagent's filtered chatter, most often — so an idle watchdog
+  // downstream doesn't mistake "nothing to show" for "nothing happening".
+  type: 'thinking' | 'tool_call' | 'tool_result' | 'plan_token' | 'interrupted' | 'liveness';
   text?: string;
   tool?: string;
   /** Harness planners (ADR-0009): the agent's own name for a tool Ordewell has no member for. */
