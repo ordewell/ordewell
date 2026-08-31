@@ -21,7 +21,7 @@ export function plansRoute(pool: OrchestratorPool) {
 
   router.post('/:sessionId/generate', async (c) => {
     try {
-      const { goal, runners, workspace, model } = await c.req.json();
+      const { goal, runners, workspace, model, allowInit } = await c.req.json();
       if (!goal) return c.json({ error: 'goal is required' }, 400);
       const ws = workspace || c.req.query('workspace') || process.cwd();
       const queryRunners = c.req.query('runners');
@@ -29,12 +29,14 @@ export function plansRoute(pool: OrchestratorPool) {
       // a hard-coded default here contradicts the /runners toggle state and
       // fails planning for anyone who disabled claude-code.
       const runnerList: string[] = Array.isArray(runners) ? runners : (runners ? [runners] : (queryRunners ? queryRunners.split(',').map(s => s.trim()).filter(Boolean) : pool.getRunnerState().enabledRunners));
-      const plan = await pool.generatePlan(c.req.param('sessionId'), goal, runnerList, ws, model);
+      const plan = await pool.generatePlan(c.req.param('sessionId'), goal, runnerList, ws, model, { allowInit });
       const { models, modelsByRunner } = await pool.getProviderModels();
       return c.json({ plan, models, modelsByRunner });
     } catch (err) {
       if (err instanceof WorkspaceNotFoundError) return c.json({ error: err.message }, 400);
-      if (err instanceof WorkspaceNotAProjectError) return c.json({ error: err.message }, 400);
+      if (err instanceof WorkspaceNotAProjectError) {
+        return c.json({ error: err.message, code: 'workspace_not_a_project', workspace: err.workspace }, 400);
+      }
       // Log before returning: the message alone travels to the client, so an
       // unexpected throw in here (a research tool crashing the whole turn, say)
       // left no stack anywhere — server.log showed nothing and the CLI showed
@@ -205,15 +207,17 @@ export function plansRoute(pool: OrchestratorPool) {
   // planner committed the plan.
   router.post('/:sessionId/converse/start', async (c) => {
     try {
-      const { goal, runners, workspace, model } = await c.req.json();
+      const { goal, runners, workspace, model, allowInit } = await c.req.json();
       if (!goal) return c.json({ error: 'goal is required' }, 400);
       const ws = workspace || c.req.query('workspace') || process.cwd();
       const runnerList: string[] = Array.isArray(runners) ? runners : (runners ? [runners] : pool.getRunnerState().enabledRunners);
-      const plan = await pool.startPlanning(c.req.param('sessionId'), goal, runnerList, ws, model);
+      const plan = await pool.startPlanning(c.req.param('sessionId'), goal, runnerList, ws, model, { allowInit });
       return c.json({ plan });
     } catch (err) {
       if (err instanceof WorkspaceNotFoundError) return c.json({ error: err.message }, 400);
-      if (err instanceof WorkspaceNotAProjectError) return c.json({ error: err.message }, 400);
+      if (err instanceof WorkspaceNotAProjectError) {
+        return c.json({ error: err.message, code: 'workspace_not_a_project', workspace: err.workspace }, 400);
+      }
       return c.json({ error: err instanceof Error ? (err as Error).message : 'Planning failed' }, 500);
     }
   });

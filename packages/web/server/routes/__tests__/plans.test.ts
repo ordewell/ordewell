@@ -32,7 +32,7 @@ describe('POST /:sessionId/generate', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(pool.generatePlan).toHaveBeenCalledWith('s1', 'test goal', ['opencode'], expect.any(String), 'openai/gpt-4o');
+    expect(pool.generatePlan).toHaveBeenCalledWith('s1', 'test goal', ['opencode'], expect.any(String), 'openai/gpt-4o', { allowInit: undefined });
   });
 
   it('omits model when not provided (backward compatible)', async () => {
@@ -43,7 +43,7 @@ describe('POST /:sessionId/generate', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(pool.generatePlan).toHaveBeenCalledWith('s1', 'test goal', ['opencode'], expect.any(String), undefined);
+    expect(pool.generatePlan).toHaveBeenCalledWith('s1', 'test goal', ['opencode'], expect.any(String), undefined, { allowInit: undefined });
   });
 
   it('returns error when no requested runners match enabled ones', async () => {
@@ -117,7 +117,7 @@ describe('POST /:sessionId/generate', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(pool.generatePlan).toHaveBeenCalledWith('s1', 'test goal', ['claude-code', 'opencode'], expect.any(String), undefined);
+    expect(pool.generatePlan).toHaveBeenCalledWith('s1', 'test goal', ['claude-code', 'opencode'], expect.any(String), undefined, { allowInit: undefined });
   });
 });
 
