@@ -8,6 +8,32 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.4.16] — 2026-08-31
+
+### Fixed
+
+- **The VS Code extension no longer false-positives "The planner stopped
+  responding" while Claude Code is still actively working.** The webview's
+  idle watchdog reset only when a progress event reached it, but Claude
+  Code's adapter deliberately drops every raw line belonging to a native
+  subagent before it becomes an event. A subagent doing long nested
+  exploration produced nothing for over two minutes, starving the watchdog
+  into interrupting a session that was never actually stuck. Liveness is now
+  signaled at the shared raw-line boundary, below any adapter's content
+  filtering, so it no longer depends on what a given runner chooses to
+  surface — closing the same gap for every harness planner, not just Claude
+  Code.
+- **`/skill-name` now expands anywhere in a message, not only when it is the
+  entire message.** `resolveSkillInvocation` substituted a skill invocation
+  only when a message matched it exactly, so `/grilling do this` sent the
+  literal, unexpanded token to the model even though the TUI and VS Code
+  webview both highlighted it as recognized. Any whitespace-bounded
+  `/skill-name` token is now spliced in wherever it appears.
+- **Pressing Tab on a highlighted `/model set` suggestion no longer crashes.**
+  It called `modelCmdPrefix(text)`, a function that was never defined
+  anywhere in the codebase. A model row is only ever completed onto
+  `/model set`, so that prefix is now inlined directly.
+
 ## [0.4.15] — 2026-08-31
 
 ### Fixed
