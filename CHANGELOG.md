@@ -8,6 +8,20 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.4.17] — 2026-09-02
+
+### Added
+
+- **A third built-in skill, `improve-codebase-architecture`.** Adapted from
+  [Matt Pocock's skill of the same name](https://github.com/mattpocock/skills):
+  scans the codebase for deepening opportunities and presents them prioritized
+  directly in chat (the original's HTML report has no analog here — the
+  planner is read-only and can never write a file), then splits however many
+  candidates the user wants to act on into ordered plan tasks instead of
+  grilling through a single live refactor. Two selected candidates that touch
+  overlapping files are made dependent on each other so independent runners
+  never edit the same file in parallel. Invoke with `/improve-codebase-architecture`.
+
 ## [0.4.16] — 2026-08-31
 
 ### Fixed

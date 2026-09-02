@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- A third built-in skill, `improve-codebase-architecture` — invoke with
+  `/improve-codebase-architecture` to surface deepening opportunities and turn
+  the ones you pick into ordered plan tasks.
+
 ### Changed
 
 - **The `grill-me` skill is renamed to `grilling`**, invoked as `/grilling`.
