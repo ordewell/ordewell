@@ -33,6 +33,7 @@ function builtinFixture(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-builtin-'));
   writeSkill(dir, 'grilling', { name: 'grilling', description: 'Builtin G' }, 'Builtin grilling body.');
   writeSkill(dir, 'to-spec', { name: 'to-spec', description: 'Builtin S' }, 'Builtin spec body.');
+  writeSkill(dir, 'improve-codebase-architecture', { name: 'improve-codebase-architecture', description: 'Builtin A' }, 'Builtin architecture body.');
   return dir;
 }
 
@@ -101,13 +102,13 @@ describe('SkillsService', () => {
       writeSkill(path.join(workspaceRoot, '.ordewell', 'skills'), 'local-only', { name: 'local-only', description: 'L' }, 'Local.');
       const svc = createSkillsService(workspaceRoot);
       const names = svc.listSkills().map((s) => s.name).sort();
-      expect(names).toEqual(['grilling', 'local-only', 'to-spec']);
+      expect(names).toEqual(['grilling', 'improve-codebase-architecture', 'local-only', 'to-spec']);
     });
 
     it('seeds built-in skills into the global dir when no user skills exist', () => {
       const svc = createSkillsService(workspaceRoot);
       const names = svc.listSkills().map((s) => s.name).sort();
-      expect(names).toEqual(['grilling', 'to-spec']);
+      expect(names).toEqual(['grilling', 'improve-codebase-architecture', 'to-spec']);
     });
 
     it('prunes a stale grill-me seed left by an older build', () => {
@@ -117,7 +118,7 @@ describe('SkillsService', () => {
       }, 'Old grill-me body.');
       const svc = createSkillsService(workspaceRoot);
       const names = svc.listSkills().map((s) => s.name).sort();
-      expect(names).toEqual(['grilling', 'to-spec']);
+      expect(names).toEqual(['grilling', 'improve-codebase-architecture', 'to-spec']);
       expect(fs.existsSync(path.join(home, '.ordewell', 'skills', 'grill-me'))).toBe(false);
     });
 
@@ -154,7 +155,7 @@ describe('SkillsService', () => {
       }, 'My body.');
       const svc = createSkillsService(workspaceRoot);
       const names = svc.listSkills().map((s) => s.name).sort();
-      expect(names).toEqual(['grilling', 'my-skill', 'to-spec']);
+      expect(names).toEqual(['grilling', 'improve-codebase-architecture', 'my-skill', 'to-spec']);
     });
 
     it('does not prune a retired-name skill vendored locally', () => {

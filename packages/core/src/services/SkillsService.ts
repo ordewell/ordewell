@@ -3,7 +3,7 @@ import * as path from 'path';
 import { globalDataDir } from '../utils/globalDataDir';
 import { builtinSkillsDir } from './builtinSkills';
 
-export const BUILTIN_SKILL_NAMES = ['grilling', 'to-spec'] as const;
+export const BUILTIN_SKILL_NAMES = ['grilling', 'to-spec', 'improve-codebase-architecture'] as const;
 
 /** Built-in skills that were renamed/removed; their stale seeds are pruned from ~/.ordewell/skills. */
 export const RETIRED_BUILTIN_SKILL_NAMES = ['grill-me'] as const;
