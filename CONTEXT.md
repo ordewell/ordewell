@@ -143,7 +143,10 @@ part of it.
 *Avoid:* hand-rolling a retry loop or a corrective prompt at a call site —
 adapt `repairLoop` instead.
 
-**Context compaction** (`contextCompaction.ts`) — the recovery for a plan
+**Context compaction** (`contextCompaction.ts`) — comes in two kinds that share
+a name and nothing else: this entry's *reactive/proactive* compaction, which
+Ordewell triggers on its own, and the *user-triggered* **Compaction** below,
+which the user asks for. This one is the recovery for a plan
 emission cut off by the output-token limit (a long research phase, especially
 with subagents, bloats the planner context until the final JSON no longer
 fits). Truncation is detected two ways — the unbalanced-JSON heuristic
@@ -163,6 +166,32 @@ reactive repair is the backstop, not the primary path.
 *Avoid:* a truncation retry that re-sends the same context — it will be cut
 at the same point again.
 
+**Compaction** (`Session.compactConversation()`) — the user-triggered kind: the
+user decides a planner conversation has grown unwieldy and asks for it to be
+condensed, on a live turn rather than after a cut-off. One hidden planner turn,
+through whichever planner is configured, asks for a summary of the goal,
+decisions, constraints, open questions, key file and code findings and where the
+plan stands. The live context is pruned of bulky tool output first
+(`IAiService.pruneContext`, the same pruning **Context compaction** does), or
+the whole transcript is replayed into the turn when no live context matches. The
+transcript then becomes a `compaction` entry — the summary, visible, always
+first — followed by the last two user messages and their replies verbatim, and
+the live context is reset so the next message replays from that shorter record
+on every backend alike. The summary must arrive inside `<conversation_summary>`
+tags: a harness planner reports a failure as an ordinary reply, and the tags are
+how a dead agent is told apart from a summary. Anything else the turn emits —
+task ops included — is discarded, so the task list is untouched, and nothing is
+written until the summary is in hand, so a failed or stopped turn leaves the
+conversation as it was. Refused while a planner turn is in flight and when the
+conversation has two user messages or fewer. **Rewind** stops at the summary
+(its entry plays the part the goal did) and **Fork** copies the compacted
+transcript. Only the planner conversation compacts, never a runner. TUI
+`/compact`; CLI `ordewell compact`; the daemon route is
+`POST /api/plans/:id/conversation/compact`. It announces itself with a
+`planner_message` carrying the summary.
+*Avoid:* "summarize" for the operation — the result replaces the transcript; and
+"clear", which loses what was decided.
+
 **conversationHistory** — the planner dialogue persisted on the plan state:
 `{ role: 'user' | 'assistant', content, timestamp, kind? }[]`. The single source of
 truth for UI redisplay. Tool-call results are NOT stored here — they live in
@@ -172,7 +201,8 @@ into a fresh model context; the tool history is gone. Written only by
 **PlannerConversation**: conversation turns, the one-shot `modifyPlan`
 exchange (request plus a `plan_generated` marker), and queued mid-run edits
 once `processQueuedMessages` applies them (a `system` entry, so the transcript
-and the plan do not drift apart), and a **Rewind**, which cuts it short. Every
+and the plan do not drift apart), a **Rewind**, which cuts it short, and a
+**Compaction**, which replaces it with a summary and its last two exchanges. Every
 write is persisted and broadcast through Session's `mutatePlan` ritual.
 
 **Rewind** (`Session.rewindConversation(index)`) — cut the conversation back to
@@ -180,7 +210,8 @@ just before one of the user's messages, discarding it and everything after it;
 the planner's `researchLog` goes back to the same point. `index` is the
 message's position in `conversationHistory`, and `rewindTargets()` lists the
 candidates with a one-line preview — every user message except the opening
-goal, since a conversation without its goal is a new session. The task list
+goal, since a conversation without its goal is a new session (after a
+**Compaction**, the summary entry stands where the goal did). The task list
 is untouched, including tasks the discarded turns created, and so is any run
 executing it: a rewind moves where the conversation resumes, not what the plan
 is (ADR-0002, update of 2026-09-25). The planner's live context is reset, so

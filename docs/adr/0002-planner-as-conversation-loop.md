@@ -225,3 +225,33 @@ as-is makes the result obvious — the conversation moved, the plan did not — 
 the planner sees the real current plan in its per-turn block on the next
 message, so it can reconcile anything the user wants changed.
 
+## Update (2026-09-25) — the conversation line can be condensed on request
+
+Issue #10. The line only grew: reactive and proactive compaction
+(`contextCompaction.ts`) prune tool output on the planner's schedule, and only
+under pressure. A user can now ask for the conversation itself to be condensed.
+
+One hidden planner turn produces a summary; the transcript is replaced by a
+`compaction` entry holding it, followed by the last two user messages and their
+replies verbatim; the live context is reset. Like rewind and fork it is a
+transcript edit plus `reset`, so it is the same on a vendor API planner and on a
+harness planner (ADR-0009) — the summary is asked through the planner's own
+conversation, not through a vendor-specific compaction call the harness agents
+do not share. The task list is out of it: anything the summary turn emits beside
+the summary, task ops included, is discarded.
+
+Two rules keep it safe. The summary must be wrapped in tags, because a harness
+planner returns a crashed agent's error as a normal reply and would otherwise
+overwrite the transcript with it; and nothing is written until the summary is in
+hand, so a failure or a stop is a no-op. A rewind cannot cross the summary — the
+turns before it no longer exist — and a fork copies the condensed transcript.
+
+**Rejected: a deterministic prune of the transcript, with no summary turn.**
+The transcript holds no tool output to prune (the tool history lives in the
+model's context and `researchLog`), so what makes it long is the dialogue
+itself, and only a model can say which of it still matters.
+
+**Rejected: asking the planner's own native compaction (a harness agent's
+`/compact`).** It exists only on some harnesses, leaves Ordewell's persisted
+transcript at full length, and the two would drift.
+
