@@ -106,7 +106,8 @@ export interface IWorktreeIsolation {
   /**
    * Merge the integration branch into whatever the user has checked out. The
    * one irreversible step, so it only ever happens when a caller asks for it.
-   * A conflict is aborted, leaving the user's tree as it was.
+   * A conflict is aborted, leaving the user's tree as it was; a merge the user
+   * already had in progress is left alone and reported `failed`.
    */
   mergeIntoCheckedOut(run: IsolationRun): Promise<IsolationOutcome>;
 

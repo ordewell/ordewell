@@ -637,6 +637,32 @@ describe.skipIf(!hasGit)('WorktreeIsolation end-of-run handoff', () => {
     expect(readFileSync(join(root, 'shared.txt'), 'utf8')).toBe('user version\n');
   });
 
+  // The run only needed a clean tree to start; the user keeps working in it,
+  // and a merge of their own may be half-resolved when they ask for this one.
+  it("leaves the user's own unfinished merge alone instead of aborting it", async () => {
+    const root = repo({ 'shared.txt': 'base\n' });
+    const iso = create({ config: fakeConfig() });
+    const run = await iso.startRun(root);
+    const t = task(1, 'Add alpha');
+    const { cwd } = await iso.prepare(t, run);
+    writeFileSync(join(cwd, 'alpha.txt'), 'alpha\n');
+    await iso.integrate(t, run);
+    await iso.handoff(run);
+    git(root, 'checkout', '-q', '-b', 'feature');
+    writeFileSync(join(root, 'shared.txt'), 'feature\n');
+    git(root, 'commit', '-q', '-am', 'feature edit');
+    git(root, 'checkout', '-q', 'main');
+    writeFileSync(join(root, 'shared.txt'), 'main\n');
+    git(root, 'commit', '-q', '-am', 'main edit');
+    expect(() => git(root, 'merge', 'feature')).toThrow();
+    writeFileSync(join(root, 'shared.txt'), 'resolved by hand\n');
+
+    expect(await iso.mergeIntoCheckedOut(run)).toBe('failed');
+    expect(git(root, 'rev-parse', '-q', '--verify', 'MERGE_HEAD')).toBe(git(root, 'rev-parse', 'feature'));
+    expect(readFileSync(join(root, 'shared.txt'), 'utf8')).toBe('resolved by hand\n');
+    expect(existsSync(join(root, 'alpha.txt'))).toBe(false);
+  });
+
   it('discard removes worktrees and task branches but can keep the integration branch', async () => {
     const root = repo();
     const iso = create({ config: fakeConfig() });

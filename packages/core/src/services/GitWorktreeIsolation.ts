@@ -212,10 +212,16 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   }
 
   async mergeIntoCheckedOut(run: IsolationRun): Promise<IsolationOutcome> {
+    // The user keeps working in this tree during a run. An unfinished merge
+    // there is theirs: git refuses ours, and the conflict path below would
+    // otherwise abort their resolution as if it were ours.
+    if (await this.mergeInProgress(run.workspaceRoot)) return 'failed';
     const merge = await this.tryGit(run.workspaceRoot, ['merge', '--no-edit', run.integrationBranch]);
     if (merge.ok) return 'merged';
     if (await this.mergeInProgress(run.workspaceRoot)) {
-      await this.abortMerge(run.workspaceRoot);
+      // Not `abortMerge`: its `reset --hard` fallback is for Ordewell's own
+      // integration worktree, and here it would discard uncommitted work.
+      await this.tryGit(run.workspaceRoot, ['merge', '--abort']);
       return 'conflict';
     }
     return 'failed';
