@@ -1,8 +1,7 @@
-import { createAiService, type IAiService, type ConversationTurn } from './AiService';
-import { applyTaskOps, canMergeTasks, canSplitTask, UPDATABLE_FIELDS } from './TaskOps';
+import { createAiService, type IAiService } from './AiService';
+import { applyTaskOps, canMergeTasks, canSplitTask } from './TaskOps';
 import { validateTaskEdit, type EditCatalog } from './TaskEditValidator';
-import { repairLoop, taskOpsRejectedPrompt } from './PlanRepair';
-import { renderTaskQueryAnswer, taskQuerySignature, TASK_QUERY_ANSWER_OR_OPS, TASK_QUERY_REMINDER, type TaskQuery } from './TaskQuery';
+import { PlannerConversation, type ConversationOpening } from './PlannerConversation';
 import { Planner } from './Planner';
 import { TaskOrchestrator } from './TaskOrchestrator';
 import type { OrchestratorObserver } from './TaskOrchestrator';
@@ -27,49 +26,13 @@ import {
 import { saveSession } from '../utils/sessionStore';
 import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
-import { type ConversationMessage, type DiscoveredModel, type LegacyPlanState, type PlanState, type Task, type TaskSnapshot, type RunnerId, type ResearchProgress } from '../models/Task';
+import { type DiscoveredModel, type LegacyPlanState, type PlanState, type Task, type TaskSnapshot, type RunnerId, type ResearchProgress } from '../models/Task';
 import type { AiProvider, IConfig } from '../interfaces/IConfig';
 import type { IFileSystem } from '../interfaces/IFileSystem';
 import type { INotification } from '../interfaces/INotification';
 import type { ITerminalRunner } from '../interfaces/ITerminalRunner';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import { runnerModesFrom, resolveDefaultMode, type RunnerModeInfo } from './ModeResolver';
-
-/**
- * Per-runner model cap for the always-on catalog block. Generous enough that
- * a typical single-agent catalog (dozens of models) is never truncated —
- * only runners that aggregate hundreds of models (e.g. OpenRouter) hit it.
- */
-const CATALOG_MODEL_CAP = 100;
-
-/**
- * Reads a planner gets per user turn before every answer also carries an
- * instruction to land the turn. Three covers the realistic shape of a read —
- * look at a task, look at the catalog, look at a neighbour it now suspects —
- * without letting a confused planner explore on the user's tokens forever.
- */
-const MAX_TASK_QUERIES = 3;
-
-/**
- * Reads answered per user turn, full stop. The soft limit above still answers,
- * so without a hard stop a planner that ignores the instruction loops until
- * something else breaks.
- */
-const MAX_TASK_QUERIES_HARD = 6;
-
-/** Per-user-turn read state. Shared across the repair loop so retries don't reset it. */
-interface ReadBudget {
-  answered: number;
-  /** Query signatures already answered this turn — a repeat is a loop, not a read. */
-  seen: Set<string>;
-}
-
-function freshReadBudget(): ReadBudget {
-  return { answered: 0, seen: new Set() };
-}
-
-/** A turn with every read already drained — what the settle path actually commits. */
-type SettleableTurn = Exclude<ConversationTurn, { kind: 'task_query' }>;
 
 /**
  * A direct (non-planner) plan edit the session refused. Distinct from a plain
@@ -250,6 +213,7 @@ export class Session {
   private readonly hostSessionId?: string;
   private currentSessionId: string;
   private readonly skillsService: SkillsService;
+  private readonly conversation: PlannerConversation;
 
   constructor(deps: SessionDeps) {
     this.config = deps.config;
@@ -310,6 +274,39 @@ export class Session {
     // `fetch`/`web_search` route through the same approval channel as paths and
     // commands — one decision surface for everything that leaves the workspace.
     this.fetcher = new HttpWebFetcher({ approval: this.approvalPolicy });
+
+    this.conversation = new PlannerConversation({
+      plan: () => this.plan,
+      goal: () => this.goal,
+      aiService: () => this.aiService,
+      onProgress: (p) => this.translateProgress(p),
+      opening: (runners) => this.conversationOpening(runners),
+      catalog: () => {
+        const runners = this.plan?.runners ?? [];
+        return {
+          runners,
+          // Allowlist-filtered: neither the per-turn block nor a read may offer
+          // a model the planner is forbidden to assign.
+          models: filterModelsForPrompt(this.models(), this.allowlist()),
+          modes: this.runnerModesFor(runners),
+          autonomousDefault: this.config.autonomousMode,
+        };
+      },
+      tasks: () => this.store.planTasks,
+      hasLiveWork: () => this.hasLiveWork,
+      mutate: (op, notify) => this.mutatePlan(op, notify),
+      broadcast: (msg) => this.broadcast(msg),
+      broadcastPlan: () => this.broadcastPlan(),
+      validateOps: (ops) => applyTaskOps(this.store.planTasks, ops, this.plan!.runners, this.editCatalog()),
+      adoptTasks: (tasks, how) => this.adoptPlannerTasks(tasks, how),
+      capturePrd: (text) => this.capturePrd(text),
+      queueEdit: (userMessage) => {
+        this.queueMessage(userMessage);
+        this.plan!.queuedMessages = this.getQueuedMessages();
+        return this.queuedCount;
+      },
+      afterEdit: () => this.orchestrator.tick(),
+    });
 
     this.attachObserver();
   }
@@ -427,6 +424,7 @@ export class Session {
     this.plan.tasks = this.store.planTasks;
     this.plan.lastUpdated = new Date().toISOString();
     saveSession(this.plan, this.goal, this.workspace, this.currentSessionId);
+    this.conversation.markPersisted();
   }
 
   /** A new plan on a long-lived Session gets its own persisted identity (unless the host fixed one). */
@@ -438,12 +436,12 @@ export class Session {
    * A new plan starts from zero: drop the live planner conversation and every
    * task, log, and queued message left over from a previous plan on this
    * Session. Without this, a long-lived Session (VS Code hosts exactly one)
-   * leaks the previous session's tasks into `planContextBlock()` — the model
-   * is told they are the CURRENT plan and re-presents them as its draft.
+   * leaks the previous session's tasks into the per-turn plan block — the
+   * model is told they are the CURRENT plan and re-presents them as its draft.
    */
   private beginFreshPlan(): void {
     if (this.isExecuting) this.stopExecution();
-    this.aiService.reset();
+    this.conversation.reset();
     // A prompt raised by the turn we are abandoning has nobody left to serve;
     // denying it unblocks the old research loop instead of stranding it.
     this.approvals.clear();
@@ -597,15 +595,11 @@ export class Session {
     const chosenRunners = runners.filter((r) => enabled.includes(r));
     if (chosenRunners.length === 0) throw new Error('None of the requested runners are enabled');
 
-    const modelsByRunner = await this.modelResolver.modelsForRunners(chosenRunners);
-    this.modelsCache = modelsByRunner;
-    const runnerModes = this.runnerModesFor(chosenRunners);
+    const { modelsByRunner, runnerModes, settings } = await this.plannerCatalog(chosenRunners);
     // Every planner toggle, not the two this path used to remember: `modesFor`
     // drops the ones a one-shot run cannot honour, so a structural toggle like
     // verify — which only appends a task — stops being silently lost between
     // here and the prompt.
-    const settings = this.settingsFn();
-    const { modelAllowlist } = settings;
     const modes = plannerModesFrom(settings, this.config.autonomousMode);
 
     const releaseAbort = this.denyApprovalsOnAbort(options?.signal);
@@ -621,7 +615,7 @@ export class Session {
         fetcher: this.fetcher,
         onProgress: (p) => this.translateProgress(p),
         signal: options?.signal,
-        perRunnerAllowlist: modelAllowlist,
+        perRunnerAllowlist: settings.modelAllowlist,
         modes,
       });
     } finally {
@@ -638,8 +632,8 @@ export class Session {
 
   /**
    * Kick off the planner conversation (ADR-0002): research + the first planner
-   * message. The AI service retains the tool-use history; the Session persists
-   * the user/assistant dialogue on the plan state.
+   * message. The conversation itself — transcript, live model context, turn
+   * settlement — is {@link PlannerConversation}'s; the Session hosts it.
    */
   async startPlanning(goal: string, runners: RunnerId[], options?: GeneratePlanOptions): Promise<LegacyPlanState> {
     this.plan = null;
@@ -650,39 +644,13 @@ export class Session {
     const chosenRunners = runners.filter((r) => enabled.includes(r));
     if (chosenRunners.length === 0) throw new Error('None of the requested runners are enabled');
 
-    const modelsByRunner = await this.modelResolver.modelsForRunners(chosenRunners);
-    this.modelsCache = modelsByRunner;
-    const runnerModes = this.runnerModesFor(chosenRunners);
-    const { verificationEnabled, modelAllowlist } = this.settingsFn();
-    const filteredModels = filterModelsForPrompt(modelsByRunner, modelAllowlist ?? {});
-
+    const opening = await this.conversationOpening(chosenRunners);
     const now = new Date().toISOString();
-    this.plan = {
-      tasks: [],
-      generatedAt: now,
-      status: 'draft',
-      runners: chosenRunners,
-      lastUpdated: now,
-      researchLog: [{ id: `up-${Date.now()}`, type: 'user_prompt', content: this.goal, timestamp: now }],
-      conversationHistory: [{ role: 'user', content: this.goal, timestamp: now }],
-    };
+    this.plan = { tasks: [], generatedAt: now, status: 'draft', runners: chosenRunners, lastUpdated: now };
 
     const releaseAbort = this.denyApprovalsOnAbort(options?.signal);
     try {
-      const turn = await this.aiService.startConversation({
-        goal: this.goal,
-        runners: chosenRunners,
-        modelsByRunner: filteredModels,
-        runnerModes,
-        autonomousDefault: this.config.autonomousMode,
-        verificationEnabled: verificationEnabled ?? false,
-        fs: this.fsAdapter,
-        fetcher: this.fetcher,
-        onProgress: (p) => this.translateProgress(p),
-        signal: options?.signal,
-      });
-
-      return await this.settleTurn(turn, options);
+      return await this.conversation.start(this.goal, opening, options?.signal);
     } finally {
       releaseAbort();
     }
@@ -694,388 +662,20 @@ export class Session {
    */
   async continueConversation(userMessage: string, options?: GeneratePlanOptions): Promise<LegacyPlanState> {
     if (!this.plan) throw new Error('No planning conversation to continue');
-    const priorHistory = this.plan.conversationHistory ?? [];
-    const priorResearchLog = this.plan.researchLog ?? [];
-    const now = new Date().toISOString();
-    const resolved = this.resolveSkillInvocation(userMessage);
-    this.appendTranscript('user', resolved, now);
-    // The two appends above mutate `this.plan` directly (persist happens later,
-    // via settleTurn's mutatePlan) — snapshot the array this call created so the
-    // catch can roll back exactly its own writes, and nothing it did not write.
-    const historyAfterOwnAppend = this.plan.conversationHistory;
-    this.plan.researchLog = [...(this.plan.researchLog ?? []), { id: `up-${Date.now()}`, type: 'user_prompt', content: resolved, timestamp: now }];
-
-    // The persisted transcript keeps the raw user message; the model gets the
-    // live catalog (always) and the current plan (tasks, statuses, edit
-    // protocol — once tasks exist) alongside it.
-    const contextBlock = [this.catalogBlock(), this.planContextBlock()].filter(Boolean).join('\n\n');
-    const outgoing = contextBlock ? `${contextBlock}\n\n${resolved}` : resolved;
-
-    // A live conversation is only safe to continue in-place when it also
-    // matches the model/effort configured right now — a harness planner's
-    // running process was spawned with the old one baked in and cannot pick
-    // up a switch (ADR-0009). `resumeConversation` handles both cases the
-    // same way: tear down and restart, folding the transcript so far into the
-    // opening message.
-    const aiService = this.aiService;
-    const canContinueLive = aiService.hasActiveConversation() && (aiService.conversationMatchesConfig?.() ?? true);
     const releaseAbort = this.denyApprovalsOnAbort(options?.signal);
     try {
-      let turn = canContinueLive
-        ? await aiService.continueConversation(
-            outgoing,
-            (p) => this.translateProgress(p),
-            options?.signal,
-          )
-        : await this.resumeConversation(outgoing, priorHistory, options);
-
-      // Reads settle before the execution gate below, so a query is answered
-      // on the spot even mid-run: it mutates nothing, and parking it behind a
-      // batch boundary would strand the planner waiting on detail it needs to
-      // write the very edit that gets queued.
-      const reads = freshReadBudget();
-      turn = await this.drainTaskQueries(turn, reads, options);
-
-      // Structural changes while tasks execute are queued, never applied live —
-      // the orchestrator must not have the plan mutated under a running batch.
-      // The gate is live runners, not an armed scheduler: a run paused on a user
-      // task keeps `isExecuting` true with nothing reading the plan, and queueing
-      // there parks the edit behind a batch boundary that will never arrive.
-      if ((turn.kind === 'task_ops' || turn.kind === 'plan') && this.hasLiveWork) {
-        this.queueMessage(userMessage);
-        this.plan.queuedMessages = this.getQueuedMessages();
-        turn = {
-          kind: 'message',
-          text: `Execution is running, so I queued your change — it will be applied between task batches (${this.queuedCount} queued).`,
-          researchLog: turn.researchLog,
-        };
-      }
-
-      return await this.settleTurn(turn, options, reads);
-    } catch (err) {
-      // If nothing persisted since this call's own append, the transcript and
-      // research log still hold the exact array this call created — undo both
-      // so a failed turn leaves session memory matching disk/UI. Every settle
-      // path reassigns conversationHistory before persisting, so the reference
-      // check alone separates "rolled back" from "already committed, don't
-      // erase it".
-      if (this.plan && this.plan.conversationHistory === historyAfterOwnAppend) {
-        this.plan.conversationHistory = priorHistory;
-        this.plan.researchLog = priorResearchLog;
-      }
-      throw err;
+      return await this.conversation.reply(this.resolveSkillInvocation(userMessage), {
+        signal: options?.signal,
+        verbatim: userMessage,
+      });
     } finally {
       releaseAbort();
     }
   }
 
-  /**
-   * Answer every read the planner emits until it says something else.
-   *
-   * The channel is a text envelope rather than a registered tool because the
-   * protocol has to be identical on both planner backends (ADR-0009): Ordewell
-   * owns a tool loop only in the API case, and a harness planner running as a
-   * coding-agent subprocess can only be reached this way.
-   *
-   * Draining here — outside {@link repairLoop} — is what keeps reads free of
-   * the repair budget. A planner that looks a task up and *then* fumbles its
-   * ops JSON still gets its two corrective retries; charging it for the read
-   * would cost it the chance to fix the edit.
-   */
-  private async drainTaskQueries(
-    turn: ConversationTurn,
-    reads: ReadBudget,
-    options?: GeneratePlanOptions,
-  ): Promise<SettleableTurn> {
-    const carried: ConversationTurn['researchLog'] = [];
-    let current = turn;
-    while (current.kind === 'task_query') {
-      carried.push(...current.researchLog);
-      if (reads.answered >= MAX_TASK_QUERIES_HARD
-        || !this.aiService.hasActiveConversation()
-        || options?.signal?.aborted) {
-        return {
-          kind: 'message',
-          text: 'The planner kept asking to read tasks instead of answering. Nothing was changed — ask again, or be more specific about the edit you want.',
-          researchLog: carried,
-        };
-      }
-      const signature = taskQuerySignature(current.query);
-      // Two reasons to stop being accommodating: the budget is spent, or the
-      // planner asked the identical question again — a loop, not a read.
-      const insist = reads.seen.has(signature) || reads.answered >= MAX_TASK_QUERIES;
-      reads.seen.add(signature);
-      reads.answered++;
-      const answer = this.taskQueryAnswer(current.query);
-      current = await this.aiService.continueConversation(
-        insist ? `${answer}\n\n${TASK_QUERY_ANSWER_OR_OPS}` : answer,
-        (p) => this.translateProgress(p),
-        options?.signal,
-      );
-    }
-    return carried.length > 0
-      ? { ...current, researchLog: [...carried, ...current.researchLog] }
-      : current;
-  }
-
-  /**
-   * Render one read out of live state. Never persisted to the transcript: the
-   * detail is context for the planner's next reply, and re-sending it on every
-   * later turn is exactly the cost this channel exists to avoid.
-   */
-  private taskQueryAnswer(query: TaskQuery): string {
-    const runners = this.plan?.runners ?? [];
-    const allowlist = this.allowlist();
-    return renderTaskQueryAnswer(query, this.store.planTasks, {
-      runners,
-      // Allowlist-filtered like the always-on block: a read must not offer a
-      // model the planner is forbidden to assign.
-      models: filterModelsForPrompt(this.models(), allowlist),
-      modes: this.runnerModesFor(runners),
-      autonomousDefault: this.config.autonomousMode,
-    });
-  }
-
-  /**
-   * Drive a planner turn to a persisted, broadcast outcome. Task edits apply
-   * atomically; validation failures are fed back to the model for up to 2
-   * silent retries, then surfaced as a message with the plan untouched. The
-   * first turn (startPlanning) and every later turn route through here — one
-   * path, not two.
-   */
-  private async settleTurn(turn: ConversationTurn, options?: GeneratePlanOptions, reads = freshReadBudget()): Promise<LegacyPlanState> {
-    type Settled = { plan: LegacyPlanState } | { turn: Exclude<SettleableTurn, { kind: 'task_ops' }> };
-    const invalidOps = (errors: string[], researchLog: ConversationTurn['researchLog']): Settled => ({
-      turn: {
-        kind: 'message',
-        text: `I tried to modify the tasks, but the changes were invalid:\n- ${errors.join('\n- ')}\n\nThe plan is unchanged. Rephrase the request, or adjust the tasks manually.`,
-        researchLog,
-      },
-    });
-
-    const settled = await repairLoop<SettleableTurn, Settled>({
-      first: () => this.drainTaskQueries(turn, reads, options),
-      resend: async (corrective) => this.drainTaskQueries(
-        await this.aiService.continueConversation(
-          corrective,
-          (p) => this.translateProgress(p),
-          options?.signal,
-        ),
-        reads,
-        options,
-      ),
-      interpret: (t) => {
-        if (t.kind !== 'task_ops') return { done: { turn: t } };
-        const applied = this.applyTaskOpsTurn(t);
-        if ('plan' in applied) return { done: { plan: applied.plan } };
-        // No live conversation (or an abort) means no corrective re-send is
-        // possible — surface the failure instead of retrying into the void.
-        if (!this.aiService.hasActiveConversation() || options?.signal?.aborted) {
-          return { done: invalidOps(applied.errors, t.researchLog) };
-        }
-        return { retry: { errors: applied.errors, corrective: taskOpsRejectedPrompt(applied.errors) } };
-      },
-      maxRepairs: 2,
-      onExhausted: ({ reply, errors }) => invalidOps(errors, reply.researchLog),
-    });
-
-    if ('plan' in settled) {
-      // A landed edit can make work ready under a scheduler that is armed but
-      // idle-paused (waiting on a user task or a hold), and nothing else will
-      // wake it — the queue-drain path never runs, because nothing queued.
-      // `tick()` no-ops when the scheduler is not armed, so this costs nothing
-      // during plain planning.
-      await this.orchestrator.tick();
-      return settled.plan;
-    }
-    return this.applyConversationTurn(settled.turn);
-  }
-
-  /**
-   * The catalog the planner may actually draw from — model ids and task-mode
-   * ids, per selected runner — emitted on EVERY turn, before any plan exists
-   * or after. The system prompt shows this once at conversation start; a long
-   * clarifying conversation outlives that single showing and the planner
-   * starts misquoting it, so this re-states it per turn instead.
-   *
-   * Built from the allowlist-filtered view (`filterModelsForPrompt`), the same
-   * one the system prompt used — a restricted allowlist stays a hard bound on
-   * every turn, not just the first. {@link models} itself is never
-   * filtered: `coerceAssignments` needs the full discovered catalog alongside
-   * the allowlist to resolve labels and clamp effort to real variants.
-   *
-   * Reads `this.plan.runners` live, so a runner admitted mid-session by a
-   * retarget (`admitRunner`) is filtered and shown like every other — there is
-   * no separate "originally selected" list to fall stale.
-   */
-  private catalogBlock(): string | null {
-    if (!this.plan) return null;
-    const allowlist = this.allowlist();
-    const filteredModels = filterModelsForPrompt(this.models(), allowlist);
-    const runnerModes = this.runnerModesFor(this.plan.runners);
-    const autonomousDefault = this.config.autonomousMode;
-
-    const modelLines = this.plan.runners.map((runner) => {
-      const models = filteredModels[runner] ?? [];
-      const capped = models.slice(0, CATALOG_MODEL_CAP);
-      const remainder = models.length - capped.length;
-      const ids = capped.map((m) => m.modelId).join(', ') || '(no models discovered)';
-      return `${runner}: ${ids}${remainder > 0 ? ` … +${remainder} more not shown` : ''}`;
-    });
-
-    const modeLines = this.plan.runners.map((runner) => {
-      const modes = runnerModes[runner] ?? [];
-      if (modes.length === 0) return `${runner}: (no modes declared)`;
-      const defaultId = resolveDefaultMode(modes, autonomousDefault);
-      const ids = modes.map((m) => `${m.id}${m.id === defaultId ? ' (default)' : ''}`).join(', ');
-      return `${runner}: ${ids}`;
-    });
-
-    return [
-      '<available_models>',
-      ...modelLines,
-      '</available_models>',
-      '<available_task_modes>',
-      ...modeLines,
-      '</available_task_modes>',
-    ].join('\n');
-  }
-
-  /**
-   * The "you are here" block for post-plan chat: current tasks with stable
-   * references, plus the task-ops protocol. Injected per turn (never
-   * persisted) so the model always sees live statuses — including which tasks
-   * are locked by a running execution.
-   */
-  private planContextBlock(): string | null {
-    if (!this.plan || this.store.planTasks.length === 0) return null;
-    const orderOf = new Map(this.store.planTasks.map((t) => [t.id, `#${t.order}`]));
-    const lines = this.store.planTasks.map((t) => {
-      const isMan = t.type === 'user';
-      // A MAN task has no model or mode to run under — the field that means
-      // something there is how many steps the human still has to do.
-      const runFields = isMan
-        ? `steps:${t.userSteps?.length ?? 0}`
-        : `${t.assignedModel ? `model:${t.assignedModel.modelId} ` : ''}mode:${t.taskMode ?? 'build'} effort:${t.thinkingEffort ?? '-'}`;
-      return `#${t.order} id=${t.id} "${t.title}" [${t.status}] type:${isMan ? 'MAN' : 'AI'} runner:${t.assignedRunner} ${runFields} autonomy:${t.autonomy ?? '-'} slice:${t.sliceType ?? '-'} deps:[${t.dependencies.map((d) => orderOf.get(d) ?? d).join(', ')}]`;
-    });
-    // Gated on live runners, not on `isExecuting`: a paused-but-armed run takes
-    // edits immediately, so promising a queue there is a lie the model plans
-    // around (it stops emitting ops and asks the user to wait).
-    const locked = this.store.planTasks.filter((t) => t.status === 'in_progress');
-    const execNote = this.hasLiveWork
-      ? `\nExecution is RUNNING${locked.length ? ` — these tasks are locked: ${locked.map((t) => `#${t.order}`).join(', ')}` : ''}. Any task edits you emit will be queued and applied between batches.`
-      : '';
-    // Derived from the applier's own UPDATABLE_FIELDS so this prose can never
-    // undersell what applyTaskOps actually accepts.
-    const updateChanges = UPDATABLE_FIELDS
-      .map((f) => (f === 'dependencies' ? '"dependencies"?:["<id or #order>"]' : `"${f}"?`))
-      .join(',');
-    return [
-      '<current_plan>',
-      ...lines,
-      '</current_plan>',
-      'The block above is the CURRENT task plan — short fields only. Choose how to respond:',
-      '- To answer a question or discuss, reply in plain prose (no JSON).',
-      // The reminder text is owned by TaskQuery beside the parser, so the
-      // protocol the planner reads and the one Ordewell accepts stay one thing.
-      TASK_QUERY_REMINDER,
-      '- To modify specific tasks, reply with ONLY this JSON object:',
-      '  {"taskOps": [',
-      `    {"op":"update","taskId":"<id or #order>","changes":{${updateChanges}}},`,
-      '    {"op":"add","task":{"title","description","prompt","dependencies":["<id or #order>"],"assignedRunner"?,"assignedModel"?},"handle"?:"<name>"},',
-      '    {"op":"remove","taskId":"<id or #order>"},',
-      '    {"op":"reorder","taskIds":["<id or #order>", "... every task exactly once"]},   // only to re-prioritise INDEPENDENT tasks',
-      '    {"op":"merge","taskIds":["<id or #order>", "..."],"merged":{"title","description","prompt"?,"assignedRunner"?,"assignedModel"?,...},"handle"?:"<name>"},',
-      '    {"op":"split","taskId":"<id or #order>","parts":[{"title","description","prompt"?,"assignedRunner"?,"assignedModel"?,...}, ...],"handle"?:"<name>"},',
-      `    {"op":"rearm","taskId":"<id or #order>","changes"?:{${updateChanges}}}`,
-      '  ]}',
-      '- For sweeping changes, you may instead emit a full {"tasks":[...]} plan JSON.',
-      'Every "<id or #order>" ref in a batch resolves against the plan shown above, before any op in the batch runs — an earlier remove/merge/split never shifts what a later "#N" means.',
-      'Give "add", "merge", or "split" a "handle" (any name you choose, unused elsewhere in this batch) to let a LATER op in the same batch reference the task it produces — for "split", the handle names its last part. A handle used before its defining op is rejected.',
-      'When creating or changing tasks, set "assignedRunner" and "assignedModel" ({"modelId","modelLabel","thinkingEffort"?}) using only the runners and models listed in <available_models>.',
-      'Keep dependencies consistent: no cycles, no references to removed tasks, and never touch running or completed tasks — "rearm" is the one exception, below.',
-      'Just declare the dependencies you want — display order is repaired for you afterwards, so a rewire or a newly added prerequisite never needs a "reorder" op. Only a task that is running or completed cannot be shifted, so an edit that would need one to move is rejected.' + execNote,
-      'Flipping "type" between "ai" and "user" is a content change, not just a label: an update to "user" needs "userSteps" in the SAME op, and an update to "ai" needs "prompt" in the SAME op — the model/mode/effort/autonomy fields (flipping to "user") or the userSteps (flipping to "ai") are cleared automatically.',
-      '"rearm" puts a failed OR completed task back to pending — verdict and output summary are cleared, any dependents it had blocked are released, and it may carry field changes (e.g. a corrected "prompt") applied in the same op. A running task cannot be re-armed. Never rearm a task just to relabel it — only when it should actually run again.',
-    ].filter(Boolean).join('\n');
-  }
-
-  /** Validate + commit a task_ops turn atomically. Returns the errors on rejection (plan untouched). */
-  private applyTaskOpsTurn(turn: Extract<ConversationTurn, { kind: 'task_ops' }>): { plan: LegacyPlanState } | { errors: string[] } {
-    if (!this.plan) throw new Error('No active plan state');
-    const result = applyTaskOps(this.store.planTasks, turn.ops, this.plan.runners, this.editCatalog());
-    if (!result.ok) return { errors: result.errors };
-
-    const now = new Date().toISOString();
-    const content = `Tasks updated:\n- ${result.summary.join('\n- ')}`;
-    const plan = this.mutatePlan(
-      () => {
-        this.plan!.researchLog = [...(this.plan!.researchLog ?? []), ...turn.researchLog];
-        const allowlist = this.allowlist();
-        const coerced = coerceAssignments(result.tasks, allowlist, this.plan!.runners, this.models());
-        // An armed scheduler owns run state the edit is not allowed to wipe:
-        // `loadPlan` clears the on-hold set and the review approval, so a task
-        // the user cancelled would be re-armed and re-spawned by the re-tick
-        // that follows. `reconcilePlan` is the mid-run adoption.
-        if (this.orchestrator.isRunning) {
-          this.orchestrator.reconcilePlan(coerced, this.plan!.runners);
-        } else {
-          this.orchestrator.loadPlan(coerced, this.plan!.runners);
-          this.store.resetForRun();
-        }
-        this.appendTranscript('assistant', content, now);
-        return true;
-      },
-      () => {
-        this.broadcast({ type: 'planner_message', content, timestamp: now });
-        this.broadcastPlan();
-      },
-    );
-    return { plan: plan! };
-  }
-
-  /**
-   * Resume a persisted dialogue onto a fresh AI-service conversation — either
-   * because the in-memory one is gone (session reload, extension restart), or
-   * because {@link continueConversation} found it stale against the planner
-   * config now in effect (a harness planner's model/effort switched mid-chat).
-   * The saved transcript seeds the new conversation; no LLM call happens
-   * before the user's message is sent.
-   */
-  private async resumeConversation(
-    userMessage: string,
-    priorHistory: ConversationMessage[],
-    options?: GeneratePlanOptions,
-  ): Promise<Awaited<ReturnType<IAiService['startConversation']>>> {
-    if (!this.plan) throw new Error('No active plan state');
-    const runners = this.plan.runners;
-    const modelsByRunner = await this.modelResolver.modelsForRunners(runners);
-    this.modelsCache = modelsByRunner;
-    const runnerModes = this.runnerModesFor(runners);
-    const { verificationEnabled, modelAllowlist } = this.settingsFn();
-    const filteredModels = filterModelsForPrompt(modelsByRunner, modelAllowlist ?? {});
-    const goal = this.goal || priorHistory.find((m) => m.role === 'user')?.content || userMessage;
-
-    return this.aiService.startConversation({
-      goal,
-      runners,
-      modelsByRunner: filteredModels,
-      runnerModes,
-      autonomousDefault: this.config.autonomousMode,
-      verificationEnabled: verificationEnabled ?? false,
-      fs: this.fsAdapter,
-      fetcher: this.fetcher,
-      onProgress: (p) => this.translateProgress(p),
-      signal: options?.signal,
-      priorHistory,
-      initialMessage: userMessage,
-    });
-  }
-
   /** Whether the planner conversation is live (started and not yet committed to a plan). */
   get isConversationActive(): boolean {
-    return this.aiService.hasActiveConversation();
+    return this.conversation.isActive;
   }
 
   /**
@@ -1090,52 +690,54 @@ export class Session {
     return resolveSkillInvocation(text, this.skillsService);
   }
 
-  /** Append one dialogue entry to the persisted transcript. Callers persist via the mutatePlan ritual. */
-  private appendTranscript(role: 'user' | 'assistant', content: string, timestamp: string, kind?: 'plan_generated'): void {
-    if (!this.plan) return;
-    this.plan.conversationHistory = [
-      ...(this.plan.conversationHistory ?? []),
-      { role, content, timestamp, ...(kind ? { kind } : {}) },
-    ];
+  /**
+   * The one place planning discovers what it may draw from: the runners'
+   * models (cached for later effort clamping), their modes, and the settings
+   * in force. `filteredModels` is the allowlisted view a prompt may show;
+   * `modelsByRunner` stays whole because coercion needs real labels and variants.
+   */
+  private async plannerCatalog(runners: RunnerId[]) {
+    const modelsByRunner = await this.modelResolver.modelsForRunners(runners);
+    this.modelsCache = modelsByRunner;
+    const settings = this.settingsFn();
+    return {
+      modelsByRunner,
+      filteredModels: filterModelsForPrompt(modelsByRunner, settings.modelAllowlist ?? {}),
+      runnerModes: this.runnerModesFor(runners),
+      settings,
+    };
   }
 
-  /** Commit a settled (non-task_ops) turn. Both branches run the mutatePlan ritual. */
-  private applyConversationTurn(turn: Exclude<SettleableTurn, { kind: 'task_ops' }>): LegacyPlanState {
-    if (!this.plan) throw new Error('No active plan state');
-    const now = new Date().toISOString();
+  private async conversationOpening(runners: RunnerId[]): Promise<ConversationOpening> {
+    const { filteredModels, runnerModes, settings } = await this.plannerCatalog(runners);
+    return {
+      runners,
+      modelsByRunner: filteredModels,
+      runnerModes,
+      autonomousDefault: this.config.autonomousMode,
+      verificationEnabled: settings.verificationEnabled ?? false,
+      fs: this.fsAdapter,
+      fetcher: this.fetcher,
+    };
+  }
 
-    if (turn.kind === 'plan') {
-      return this.mutatePlan(() => {
-        this.plan!.researchLog = [...(this.plan!.researchLog ?? []), ...turn.researchLog];
-        // A cheap model may emit the PRD block and the plan JSON in one turn —
-        // capture the PRD here too so it isn't dropped with the plan preamble.
-        this.capturePrd(turn.text);
-        // Read the allowlist live: it may have changed since startPlanning, and
-        // committed tasks must respect the current one.
-        const allowlist = this.allowlist();
-        const coerced = coerceAssignments(turn.tasks, allowlist, this.plan!.runners, this.models());
-        this.orchestrator.loadPlan(coerced, this.plan!.runners);
-        this.store.resetForRun({ preserveCompleted: false });
-        this.appendTranscript('assistant', `Plan generated with ${coerced.length} task${coerced.length === 1 ? '' : 's'}.`, now, 'plan_generated');
-        return true;
-      })!;
+  /**
+   * Load planner-produced tasks, coerced to the allowlist read live — it may
+   * have changed since planning started. An edit on an armed scheduler is
+   * reconciled rather than reloaded: `loadPlan` clears the on-hold set and the
+   * review approval, so a task the user cancelled would be re-armed and
+   * re-spawned by the re-tick that follows.
+   */
+  private adoptPlannerTasks(tasks: Task[], how: 'edit' | 'commit'): number {
+    const runners = this.plan!.runners;
+    const coerced = coerceAssignments(tasks, this.allowlist(), runners, this.models());
+    if (how === 'edit' && this.orchestrator.isRunning) {
+      this.orchestrator.reconcilePlan(coerced, runners);
+    } else {
+      this.orchestrator.loadPlan(coerced, runners);
+      this.store.resetForRun(how === 'commit' ? { preserveCompleted: false } : undefined);
     }
-
-    // A message turn: persist it in the dialogue; the UI re-renders from here.
-    // Budget models occasionally return an empty content turn after tool use —
-    // surface that visibly instead of rendering a blank bubble.
-    const text = turn.text.trim()
-      ? turn.text
-      : '(The planner returned an empty response. Reply to continue, or rephrase your goal.)';
-    return this.mutatePlan(
-      () => {
-        this.plan!.researchLog = [...(this.plan!.researchLog ?? []), ...turn.researchLog];
-        this.appendTranscript('assistant', text, now);
-        this.capturePrd(text);
-        return true;
-      },
-      () => this.broadcast({ type: 'planner_message', content: text, timestamp: now }),
-    )!;
+    return coerced.length;
   }
 
   /**
@@ -1317,7 +919,7 @@ export class Session {
    * queues — so a task the edit just unblocked would sit ready and never
    * start. `tick()` no-ops while the scheduler is idle, so this costs nothing
    * during plain planning. The planner-driven path re-ticks in
-   * {@link settleTurn} instead; it must not tick twice.
+   * {@link PlannerConversation} instead (`afterEdit`); it must not tick twice.
    */
   private async editPlan(op: () => boolean, notify?: () => void): Promise<LegacyPlanState | null> {
     const plan = this.mutatePlan(op, notify);
@@ -1534,7 +1136,7 @@ export class Session {
     // re-adopting the current plan on approval) keeps the conversation; after
     // a drop, the first user send reseeds it from this plan's own transcript.
     if (plan !== this.plan) {
-      this.aiService.reset();
+      this.conversation.reset();
       // The execution log and queued messages are scoped to the outgoing plan;
       // callers restoring a saved queue re-apply it after adoption.
       this.store.clearLog();
@@ -1556,11 +1158,8 @@ export class Session {
 
   async modifyPlan(userRequest: string): Promise<Task[]> {
     if (!this.plan) throw new Error('No plan to modify');
-    const now = new Date().toISOString();
-    this.appendTranscript('user', userRequest, now);
-    const modelsByRunner = await this.modelResolver.modelsForRunners(this.plan.runners);
-    const runnerModes = this.runnerModesFor(this.plan.runners);
-    const { modelAllowlist } = this.settingsFn();
+    this.conversation.append('user', userRequest);
+    const { modelsByRunner, runnerModes, settings } = await this.plannerCatalog(this.plan.runners);
     const result = await this.planner.modify({
       existingPlan: this.plan,
       userRequest,
@@ -1569,10 +1168,10 @@ export class Session {
       autonomousDefault: this.config.autonomousMode,
       fs: this.fsAdapter,
       fetcher: this.fetcher,
-      perRunnerAllowlist: modelAllowlist,
+      perRunnerAllowlist: settings.modelAllowlist,
     });
     this.orchestrator.loadPlan(result.tasks, this.plan.runners);
-    this.appendTranscript('assistant', `Plan updated — now ${result.tasks.length} task${result.tasks.length === 1 ? '' : 's'}.`, new Date().toISOString(), 'plan_generated');
+    this.conversation.append('assistant', `Plan updated — now ${result.tasks.length} task${result.tasks.length === 1 ? '' : 's'}.`, { kind: 'plan_generated' });
     this.persist();
     return result.tasks;
   }
@@ -1582,7 +1181,7 @@ export class Session {
     // Planning research runs on a separate conduit from task execution — a
     // live spawn_research_agent/bash tool call would otherwise keep running
     // server-side after the client has already moved on to a new session.
-    this.aiService.reset();
+    this.conversation.reset();
     // Deny any still-pending approval prompts so their timers and awaited
     // continuations settle before the Session goes away.
     this.approvals.clear();

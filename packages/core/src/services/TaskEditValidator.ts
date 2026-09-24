@@ -31,7 +31,7 @@ const AI_ONLY_FIELDS = ['assignedModel', 'thinkingEffort', 'taskMode', 'autonomy
 /**
  * The catalog a model/task-mode edit is checked against — the same discovered
  * models and manifest modes the planner was shown in the per-turn catalog
- * block (`Session.catalogBlock`), so a refusal here can never name something
+ * block (`PlannerConversation.catalogBlock`), so a refusal here can never name something
  * as invalid that the planner was never told about, or vice versa.
  */
 export interface EditCatalog {
