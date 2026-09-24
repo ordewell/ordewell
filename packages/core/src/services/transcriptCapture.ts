@@ -23,7 +23,8 @@ export class HomeTranscriptReader implements TranscriptReader {
   constructor(opts: { homeDir?: string } = {}) {
     // Resolved per call when not injected: `os.homedir()` may be cached once
     // per process by the runtime, while HOME can change under it.
-    this.home = opts.homeDir ? () => opts.homeDir as string : () => process.env.HOME || os.homedir();
+    const { homeDir } = opts;
+    this.home = homeDir ? () => homeDir : () => process.env.HOME || os.homedir();
   }
 
   async finalAssistantText(query: TranscriptQuery, maxChars = 4000): Promise<string | null> {
