@@ -7,6 +7,7 @@ import * as sessionStore from '../../utils/sessionStore';
 import type { ConversationTurn } from '../AiService';
 import { ConversationBusyError, ConversationEditError } from '../PlannerConversation';
 import { makeSession } from './sessionTestKit';
+import { FakeWorktreeIsolation } from '../../testing';
 
 const GOAL = 'build me a parser';
 
@@ -106,6 +107,27 @@ describe('Session.forkConversation', () => {
     expect(saved.tasks[1].outputSummary).toBeUndefined();
     expect(saved.queuedMessages).toBeUndefined();
     expect(session.planTasks.map((t) => t.status)).toEqual(['completed', 'in_progress', 'awaiting_user', 'failed', 'pending']);
+  });
+
+  it('leaves the isolation run and its branches with the original plan', async () => {
+    const session = makeSession({ isolation: new FakeWorktreeIsolation() });
+    const plan = runningPlan();
+    plan.tasks = [task('first', 1, 'pending')];
+    delete plan.queuedMessages;
+    session.loadPlan(plan, GOAL, workspace, { sessionId: 'session-original', persist: false });
+    await session.executePlan();
+    const persisted = vi.mocked(sessionStore.saveSession).mock.calls.at(-1)![0];
+    expect(persisted.isolation?.run.tasks.first.branch).toBeTruthy();
+    vi.mocked(sessionStore.saveSession).mockRestore();
+
+    const fork = session.forkConversation();
+
+    // The original was never written to disk here, so everything in the store is the fork.
+    const dir = path.join(workspace, '.ordewell', 'sessions');
+    const raw = fs.readdirSync(dir).map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
+    expect(sessionStore.loadSession(fork.sessionId, workspace)!.plan.isolation).toBeUndefined();
+    expect(raw).not.toContain(persisted.isolation!.run.integrationBranch);
+    expect(raw).not.toContain(persisted.isolation!.run.tasks.first.worktree);
   });
 
   it('forks again from either side', () => {

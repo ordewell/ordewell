@@ -411,3 +411,20 @@ describe('OrchestratorPool.cancelPlanning', () => {
     expect(pool.cancelPlanning('session-settled')).toBe(false);
   });
 });
+
+describe('OrchestratorPool isolation messages', () => {
+  it('sends isolation_blocked and isolation_handoff to subscribers as they were emitted', () => {
+    const pool = new OrchestratorPool();
+    const sent: string[] = [];
+    const ws = { OPEN: 1, readyState: 1, send: (data: string) => sent.push(data) };
+    pool.subscribe('s1', ws as never);
+    const broadcast = (pool as unknown as { broadcast(id: string, msg: unknown): void }).broadcast.bind(pool);
+    const blocked = { type: 'isolation_blocked', reason: 'dirty', message: 'Tracked files have uncommitted changes' };
+    const handoff = { type: 'isolation_handoff', branch: 'ordewell/r1/integration', baseRef: 'abc123', landed: [{ taskId: 't1', order: 1, title: 'One' }] };
+
+    broadcast('s1', blocked);
+    broadcast('s1', handoff);
+
+    expect(sent.map((s) => JSON.parse(s))).toEqual([blocked, handoff]);
+  });
+});

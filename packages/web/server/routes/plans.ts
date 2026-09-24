@@ -121,6 +121,49 @@ export function plansRoute(pool: OrchestratorPool) {
     });
   }
 
+  // Isolated-run handoff (ADR-0013). A merge that conflicts or fails is an
+  // outcome the surface reports, not a malformed request, so it answers 200.
+  router.get('/:sessionId/isolation/diff', async (c) => {
+    try {
+      return c.json({ diff: await pool.session(c.req.param('sessionId')).reviewRunDiff() });
+    } catch (err) {
+      return editFailure(c, err);
+    }
+  });
+
+  router.post('/:sessionId/isolation/merge', async (c) => {
+    try {
+      return c.json({ outcome: await pool.session(c.req.param('sessionId')).mergeRun() });
+    } catch (err) {
+      return editFailure(c, err);
+    }
+  });
+
+  for (const [segment, run] of [
+    ['discard', (s: ReturnType<typeof pool.session>) => s.discardRun()],
+    ['cleanup', (s: ReturnType<typeof pool.session>) => s.cleanupRun()],
+    ['stash-and-continue', (s: ReturnType<typeof pool.session>) => s.continueWithStash()],
+    ['run-without', (s: ReturnType<typeof pool.session>) => s.continueWithoutIsolation()],
+  ] as const) {
+    router.post(`/:sessionId/isolation/${segment}`, async (c) => {
+      try {
+        await run(pool.session(c.req.param('sessionId')));
+        return c.json({ ok: true });
+      } catch (err) {
+        return editFailure(c, err);
+      }
+    });
+  }
+
+  router.post('/:sessionId/tasks/:taskId/resolve-conflict', async (c) => {
+    try {
+      const plan = await pool.session(c.req.param('sessionId')).resolveConflictAsTask(c.req.param('taskId'));
+      return c.json({ plan });
+    } catch (err) {
+      return editFailure(c, err);
+    }
+  });
+
   router.put('/:sessionId/tasks/:taskId', async (c) => {
     try {
       const { assignedRunner, dependencies, ...rest } = await c.req.json();
