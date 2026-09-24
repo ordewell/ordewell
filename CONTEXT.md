@@ -637,11 +637,16 @@ strategy is gone — a human who must confirm is modeled directly as a
 
 ## Surfaces
 
-**Surface** — a client that drives Ordewell. There are four: the **VS Code
-extension** (webview), the **web UI**, the per-command **CLI**, and the **TUI**.
-All four consume the same `SessionMessage` union over the same daemon seam; none
-of them holds orchestration logic. A session planned on one surface opens
-unchanged on another.
+**Surface** — a client that drives Ordewell: the **VS Code extension**
+(webview), the per-command **CLI**, and the **TUI**. All of them consume the same
+`SessionMessage` union and none holds orchestration logic, but they reach a
+`Session` two ways. The CLI and the TUI talk to the **local daemon**
+(`packages/web`, HTTP + WebSocket on `127.0.0.1`, with no frontend of its own);
+the VS Code extension runs core's `Session` in-process and never connects to the
+daemon. A session planned on one surface opens unchanged on another through the
+saved-session store in `.ordewell/sessions/`, not through a shared transport
+(ADR-0006, update of 2026-09-24).
+*Avoid:* "web UI" — there is none; the web package is the daemon.
 
 **TUI** — `ordewell tui`, the full-screen terminal surface (ADR-0006). Its core
 is pure: `reduce(state, action)` returns `{ state, effects }` and `render(state)`

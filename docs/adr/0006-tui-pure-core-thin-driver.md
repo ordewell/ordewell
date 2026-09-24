@@ -33,3 +33,28 @@ We decided to build `ordewell tui` as a **pure state core** (`state`, `reducer`,
 - **The saved id is adopted with the plan (A3).** Without `{ sessionId }`, `persist()` would fork the session under a fresh identity; with it, the same file is rewritten. Because `persist()` derives the filename from goal + `generatedAt` + id, adoption lands on the file it came from — pinned by test.
 - **No LLM call (A4).** The plan is adopted exactly as saved; the planner is contacted only when the user next sends a message.
 
+
+## Update (2026-09-24) — the VS Code extension does not use the daemon
+
+This ADR says the TUI talks to "the same daemon the webview and web UI use" and
+consumes `SessionMessage` "over the same websocket the webview does". Neither
+was true. The VS Code extension constructs core's `Session` in-process
+(`packages/vscode/src/extension.ts`) and relays its `SessionMessage`s to the
+webview over VS Code's own webview messaging; it opens no connection to the
+daemon. There is no web UI either: `packages/web` *is* the daemon, an HTTP +
+WebSocket server with no frontend, and its clients are the CLI and the TUI.
+
+The decision stands, on different grounds than stated:
+
+- **S1** is accurate for the TUI itself: it holds no orchestration logic and
+  consumes `SessionMessage` over the daemon's websocket. What keeps it in step
+  with VS Code is that both hosts run the same core `Session` — the daemon one
+  per session in `OrchestratorPool`, the extension one for the window — not a
+  shared transport.
+- "A session planned in the terminal opens unchanged in VS Code" holds through
+  the saved-session store in `.ordewell/sessions/`, which both hosts read and
+  write through core, and adoption is the same `Session.loadPlan` seam on
+  either side.
+- **S2**'s rejection stands because an in-process TUI would duplicate the
+  session hosting the daemon already does for the CLI. It would not have forked
+  the webview's execution path, which was in-process all along.
