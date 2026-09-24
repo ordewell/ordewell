@@ -566,5 +566,27 @@ describe('VerdictEngine', () => {
       expect(verdicts).toHaveLength(1);            // one from onOutput, none from stale exit
       expect(verdicts[0]).toBe('pass');
     });
+
+    // stop/loadPlan reset the engine without killing every terminal (a VS Code
+    // terminal stays open; a tmux exit lands on the next poll), so a session
+    // from before the reset can still speak after the task's next watch.
+    it('a session from before the reset cannot decide the next attempt of the same task', async () => {
+      const engine = new VerdictEngine();
+      const verdicts: string[] = [];
+      engine.onVerdict((_id, v) => verdicts.push(v.outcome));
+      const before = fakeSession();
+      const after = fakeSession();
+
+      engine.watch(buildTask(), before);
+      engine.reset();
+      engine.watch(buildTask(), after);
+      before.emit('<<<ORDEWELL_DONE_mk-1>>>');
+      before.exit(1);
+      await new Promise(r => setTimeout(r, 10));
+
+      expect(verdicts).toEqual([]);
+      after.emit('<<<ORDEWELL_DONE_mk-1>>>');
+      expect(verdicts).toEqual(['pass']);
+    });
   });
 });

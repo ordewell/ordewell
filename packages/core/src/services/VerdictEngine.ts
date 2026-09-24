@@ -38,12 +38,18 @@ export class VerdictEngine {
   private checkpointListeners: CheckpointListener[] = [];
   private idleListeners: IdleListener[] = [];
   /**
-   * Per-task generation counter. Incremented on every watch() and clear().
+   * Per-task generation. Replaced on every watch(), clear() and verdict.
    * Stale callbacks (from a prior session whose generation doesn't match
    * the current one) bail out instead of delivering a verdict for the
    * wrong session.
    */
   private generations = new Map<string, number>();
+  /**
+   * Generations come from one counter that {@link reset} never rewinds: a
+   * per-task count restarted at 1 after a reset, and the next watch handed a
+   * session that outlived the reset the same generation as its successor.
+   */
+  private lastGeneration = 0;
   private idleTimers = new Map<string, NodeJS.Timeout>();
   private idleSince = new Map<string, string | null>();
 
@@ -127,8 +133,7 @@ export class VerdictEngine {
    */
   watch(task: Task, session: ITerminalSession): void {
     const doneToken = `<<<ORDEWELL_DONE_${task.completionMarker}>>>`;
-    const gen = (this.generations.get(task.id) ?? 0) + 1;
-    this.generations.set(task.id, gen);
+    const gen = this.bumpGeneration(task.id);
     this.markerTails.set(task.id, '');
     this.checkpointCarry.set(task.id, '');
     session.onOutput((text: string) => {
@@ -144,7 +149,7 @@ export class VerdictEngine {
         // with the AI runner. Bump the generation so the onExit callback
         // (which will fire when the terminal eventually closes) bails out.
         this.forget(task.id);
-        this.generations.set(task.id, gen + 1);
+        this.bumpGeneration(task.id);
         const verdict = this.decide(task, 0);
         for (const l of this.listeners) l(task.id, verdict);
         return;
@@ -174,6 +179,12 @@ export class VerdictEngine {
     this.checkpointCarry.set(taskId, scan.slice(consumed).slice(-CHECKPOINT_CARRY));
   }
 
+  private bumpGeneration(taskId: string): number {
+    this.lastGeneration += 1;
+    this.generations.set(taskId, this.lastGeneration);
+    return this.lastGeneration;
+  }
+
   private forget(taskId: string): void {
     this.markerTails.delete(taskId);
     this.checkpointCarry.delete(taskId);
@@ -185,7 +196,7 @@ export class VerdictEngine {
   markComplete(task: Task): Verdict {
     this.markerSeen.delete(task.id);
     this.forget(task.id);
-    this.generations.set(task.id, (this.generations.get(task.id) ?? 0) + 1);
+    this.bumpGeneration(task.id);
     return {
       outcome: 'pass',
       reason: 'Manually marked complete by user.',
@@ -205,7 +216,7 @@ export class VerdictEngine {
   clear(task: Task): void {
     this.markerSeen.delete(task.id);
     this.forget(task.id);
-    this.generations.set(task.id, (this.generations.get(task.id) ?? 0) + 1);
+    this.bumpGeneration(task.id);
   }
 
   /** Drop all tracking state (used on stop / loadPlan). */
