@@ -4,8 +4,8 @@ import { INotification } from '../interfaces/INotification';
 import { ITerminalRunner, ITerminalSession } from '../interfaces/ITerminalRunner';
 import { composeAugmentedPrompt, summarizeOutput } from './promptAugment';
 import { VerdictEngine } from './VerdictEngine';
-import { renderCleanCapture } from './terminalRender';
-import { HomeTranscriptReader } from './transcriptCapture';
+import { BufferedTaskOutputSource } from './BufferedTaskOutputSource';
+import type { LiveTail, LiveTailOptions, TaskOutputSource } from '../interfaces/TaskOutputSource';
 import { PlanStore } from './PlanStore';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 
@@ -101,6 +101,7 @@ export class TaskOrchestrator {
     private notifications: INotification,
     private terminalRunner: ITerminalRunner,
     store?: PlanStore,
+    private output: TaskOutputSource = new BufferedTaskOutputSource(),
   ) {
     this.store = store ?? new PlanStore();
     this.store.onMutate = () => this.emit('onTaskChanged');
@@ -119,6 +120,11 @@ export class TaskOrchestrator {
   /** Advisory silence timestamp for a task's live runner, or null if not idle. */
   getIdleSince(taskId: string): string | null {
     return this.verifier.getIdleSince(taskId);
+  }
+
+  /** Recent clean output of a task's latest attempt, running or ended; null if it never ran. */
+  getLiveOutput(taskId: string, opts: LiveTailOptions): LiveTail | null {
+    return this.output.liveTail(taskId, opts);
   }
 
   get storeInstance(): PlanStore { return this.store; }
@@ -303,32 +309,20 @@ export class TaskOrchestrator {
     const task = this.store.get(taskId);
     if (!task) return;
     const attempt = this.endAttempt(taskId, 'verdict');
-    const output = attempt?.session?.getOutput() ?? '';
 
     console.error(`[TaskOrchestrator] Task #${task.order} "${task.title}" verdict=${verdict.outcome}`);
     console.error(`[TaskOrchestrator] Runner: ${task.assignedRunner}, Model: ${task.assignedModel?.modelId ?? 'default'}`);
     console.error(`[TaskOrchestrator] Prompt preview: ${(task.prompt ?? '').slice(0, 200)}`);
-    if (output && output.length > 0) {
-      console.error(`[TaskOrchestrator] Output (last 3000 chars):\n${output.slice(-3000)}`);
-    } else {
-      console.error(`[TaskOrchestrator] Output: (empty — no stdout/stderr captured)`);
-    }
 
     this.store.setTaskVerdict(taskId, verdict);
 
-    // The durable summary prefers the agent's own session transcript (issue
-    // #16): the clean, structured record the agent writes about itself, no
-    // terminal roundtrip. All transcript readers are defensive — a missing or
-    // rotated store returns null and the #14 cleaned terminal render takes
-    // over, so the capture degrades, never breaks. The terminal stays the
-    // source of truth for the verdict itself; this only changes what gets
-    // summarized for downstream consumers.
+    // The terminal stays the source of truth for the verdict itself; this only
+    // changes what gets summarized for downstream consumers.
     const doneToken = `<<<ORDEWELL_DONE_${task.completionMarker}>>>`;
-    const transcript = attempt?.cwd
-      ? await new HomeTranscriptReader().finalAssistantText({ runner: attempt.runner, cwd: attempt.cwd, startedAt: attempt.startedAt, marker: task.completionMarker })
-      : null;
-    const cleaned = transcript ?? renderCleanCapture(output, doneToken);
-    const effective = cleaned.length > 0 ? cleaned : output;
+    const summary = attempt
+      ? await this.output.finalText({ ...attempt, completionMarker: task.completionMarker }, doneToken)
+      : '';
+    console.error(`[TaskOrchestrator] Output summary:\n${summary || '(empty — no output captured)'}`);
     if (verdict.outcome === 'pass') {
       this.store.markCompleted(taskId);
       this.notifications.info(`Task "${task.title}" completed.`);
@@ -342,7 +336,7 @@ export class TaskOrchestrator {
       this.notifications.error(`Task "${task.title}" failed verification: ${verdict.reason}`);
     }
 
-    this.store.setTaskOutputSummary(taskId, summarizeOutput(verdict.reason, effective));
+    this.store.setTaskOutputSummary(taskId, summarizeOutput(verdict.reason, summary));
 
     this.logAndArchive(task, verdict);
 
@@ -642,6 +636,9 @@ export class TaskOrchestrator {
       attempt.phase = 'running';
       attempt.session = session;
 
+      // Attached before the verifier so the chunk that carries the marker is
+      // captured before that chunk's verdict asks for the final text.
+      this.output.attach(task.id, session);
       this.verifier.watch(task, session);
 
       this.emit('onTaskChanged');
@@ -691,6 +688,7 @@ export class TaskOrchestrator {
   private endAttempt(taskId: string, reason: AttemptEnd): TaskAttempt | undefined {
     const attempt = this.attempts.get(taskId);
     this.attempts.delete(taskId);
+    if (attempt) this.output.detach(taskId);
     if (reason === 'cancel' || reason === 'release' || reason === 'complete' || reason === 'retry') {
       const task = this.store.get(taskId);
       if (task) this.verifier.clear(task);
@@ -702,5 +700,6 @@ export class TaskOrchestrator {
   private endAllAttempts(reason: 'stop' | 'load'): void {
     for (const taskId of [...this.attempts.keys()]) this.endAttempt(taskId, reason);
     this.verifier.reset();
+    if (reason === 'load') this.output.reset();
   }
 }

@@ -7,6 +7,21 @@ import type { INotification } from '../../interfaces/INotification';
 import type { ITerminalRunner, ITerminalSession } from '../../interfaces/ITerminalRunner';
 import { fakeConfig, FakeTerminalSession } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
+import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
+import type { TaskOutputSource, TranscriptQuery, TranscriptReader } from '../../interfaces/TaskOutputSource';
+import { stripAnsi } from '../../utils/shell';
+
+/** Never touches the real HOME: every orchestrator here reads transcripts from this. */
+function fakeTranscripts(answers: Record<string, string> = {}): TranscriptReader & { queries: TranscriptQuery[] } {
+  const queries: TranscriptQuery[] = [];
+  return {
+    queries,
+    finalAssistantText: async (query) => {
+      queries.push(query);
+      return answers[query.marker] ?? null;
+    },
+  };
+}
 
 function fakeTerminalRunner(): ITerminalRunner {
   return {
@@ -32,11 +47,13 @@ function makeOrchestrator(overrides: {
   config?: Partial<IConfig>;
   notifications?: Partial<INotification>;
   terminalRunner?: Partial<ITerminalRunner>;
+  output?: TaskOutputSource;
 } = {}) {
   const config = fakeConfig(overrides.config);
   const notifications = { ...fakeNotification(), ...overrides.notifications };
   const terminalRunner = { ...fakeTerminalRunner(), ...overrides.terminalRunner } as ITerminalRunner;
-  return new TaskOrchestrator(config, notifications, terminalRunner);
+  const output = overrides.output ?? new BufferedTaskOutputSource({ transcripts: fakeTranscripts() });
+  return new TaskOrchestrator(config, notifications, terminalRunner, undefined, output);
 }
 
 describe('TaskOrchestrator', () => {
@@ -1248,5 +1265,76 @@ describe('task attempts', () => {
     expectNoAttemptState(orchestrator);
     await orchestrator.forceStartTask('t1');
     expect(orchestrator.getAttempt('t1')).toMatchObject({ attempt: 2, sessionId: 's2' });
+  });
+});
+
+describe('TaskOrchestrator task output', () => {
+  /** Keeps getOutput() ANSI-stripped, the way HeadlessRunner and TmuxRunner do. */
+  class StrippingSession extends FakeTerminalSession {
+    getOutput(): string { return stripAnsi(this.output); }
+  }
+
+  function strippingRunner() {
+    const sessions: StrippingSession[] = [];
+    const spawn = vi.fn(async (opts: Parameters<ITerminalRunner['spawn']>[0]) => {
+      const session = new StrippingSession(`s${sessions.length + 1}`, opts.taskId);
+      sessions.push(session);
+      return session;
+    });
+    return { sessions, spawn };
+  }
+
+  const settle = () => new Promise((r) => setTimeout(r, 10));
+
+  it('summarizes an exit without a marker from the raw stream, not the stripped session buffer', async () => {
+    const { sessions, spawn } = strippingRunner();
+    const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
+    orchestrator.setWorkspaceRoot(() => '/repo');
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'T', prompt: 'do', completionMarker: 'mk-1' })]);
+    await orchestrator.forceStartTask('t1');
+
+    // A status row repainted in place; the stripped buffer runs both frames together.
+    sessions[0].emitOutput('\x1b[1;1Hrunning tests…\x1b[1;1H\x1b[2Ktests failed: 2 of 40');
+    sessions[0].emitExit(1);
+    await settle();
+
+    const task = orchestrator.storeInstance.get('t1')!;
+    expect(task.verdict?.outcome).toBe('fail');
+    expect(task.outputSummary?.logTail).toBe('tests failed: 2 of 40');
+  });
+
+  it('summarizes a finished task from the transcript carrying its marker', async () => {
+    const { sessions, spawn } = strippingRunner();
+    const transcripts = fakeTranscripts({ 'mk-1': 'Renamed the module and updated imports.' });
+    const orchestrator = makeOrchestrator({
+      terminalRunner: { spawn },
+      output: new BufferedTaskOutputSource({ transcripts }),
+    });
+    orchestrator.setWorkspaceRoot(() => '/repo');
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'T', prompt: 'do', completionMarker: 'mk-1' })]);
+    await orchestrator.forceStartTask('t1');
+
+    sessions[0].emitOutput('terminal noise\n<<<ORDEWELL_DONE_mk-1>>>\n');
+    await settle();
+
+    expect(transcripts.queries).toEqual([expect.objectContaining({ runner: 'claude-code', cwd: '/repo', marker: 'mk-1' })]);
+    expect(orchestrator.storeInstance.get('t1')!.outputSummary?.logTail).toBe('Renamed the module and updated imports.');
+  });
+
+  it('exposes a running task\'s recent output, rendered clean', async () => {
+    const { sessions, spawn } = strippingRunner();
+    const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
+    orchestrator.setWorkspaceRoot(() => '/repo');
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'T', prompt: 'do', completionMarker: 'mk-1' })]);
+    await orchestrator.forceStartTask('t1');
+
+    sessions[0].emitOutput('\x1b[1mcompiling\x1b[0m\nlinking\n');
+
+    expect(orchestrator.getLiveOutput('t1', { maxLines: 1 })).toEqual({ text: 'linking', nextOffset: 26, running: true });
+    expect(orchestrator.getLiveOutput('t2', { maxLines: 1 })).toBeNull();
+
+    sessions[0].emitExit(1);
+    await settle();
+    expect(orchestrator.getLiveOutput('t1', { maxLines: 5 })).toMatchObject({ text: 'compiling\nlinking', running: false });
   });
 });
