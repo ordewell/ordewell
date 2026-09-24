@@ -396,3 +396,248 @@ describe('queued mid-run edits', () => {
     expect(broadcast.mock.calls.some(([m]) => m.type === 'plan_generated')).toBe(true);
   });
 });
+
+const summaryTurn = (summary: string, extra = ''): ConversationTurn => ({
+  kind: 'message',
+  text: `${extra}<conversation_summary>\n${summary}\n</conversation_summary>`,
+  researchLog: [],
+});
+
+describe('PlannerConversation compact', () => {
+  it('replaces the transcript with a compaction entry and the last two exchanges verbatim, persisting once', async () => {
+    const ai = fakeAi({ continueConversation: vi.fn().mockResolvedValue(summaryTurn('Goal: a JSON parser. Streaming chosen.')) });
+    const { conversation, state } = fakeHost(ai, threeTurnPlan());
+
+    const result = await conversation.compact();
+
+    const [entry, ...tail] = state.plan!.conversationHistory!;
+    expect(entry).toMatchObject({ role: 'assistant', kind: 'compaction' });
+    expect(entry.content).toContain('Goal: a JSON parser. Streaming chosen.');
+    expect(tail.map((m) => m.content)).toEqual(['JSON only', 'Streaming or not?', 'Streaming', 'Plan generated with 2 tasks.']);
+    expect(tail[3].kind).toBe('plan_generated');
+    expect(result.summary).toBe('Goal: a JSON parser. Streaming chosen.');
+    expect(state.persists).toBe(1);
+  });
+
+  it('leaves the research trace and the task list alone', async () => {
+    const ai = fakeAi({ continueConversation: vi.fn().mockResolvedValue(summaryTurn('s')) });
+    const { conversation, state, host } = fakeHost(ai, threeTurnPlan());
+
+    await conversation.compact();
+
+    expect(state.plan!.researchLog).toHaveLength(3);
+    expect(host.adoptTasks).not.toHaveBeenCalled();
+  });
+
+  it('ignores task ops the summary turn emits alongside the summary', async () => {
+    const ops: ConversationTurn = {
+      kind: 'task_ops',
+      ops: [{ op: 'remove', ref: '#1' }] as never,
+      text: `{"task_ops":[{"op":"remove","ref":"#1"}]}\n<conversation_summary>kept</conversation_summary>`,
+      researchLog: [{ id: 'x', type: 'user_prompt', content: 'ignored', timestamp: '2026-01-02T00:00:00Z' }],
+    };
+    const ai = fakeAi({ continueConversation: vi.fn().mockResolvedValue(ops) });
+    const { conversation, state, host } = fakeHost(ai, threeTurnPlan());
+
+    await conversation.compact();
+
+    expect(host.validateOps).not.toHaveBeenCalled();
+    expect(host.adoptTasks).not.toHaveBeenCalled();
+    expect(state.plan!.researchLog!.map((e) => e.id)).toEqual(['up-1', 'up-2', 'up-3']);
+    expect(state.plan!.conversationHistory![0].content).toContain('kept');
+  });
+
+  it('announces the condensed conversation, summary included, and drops the live context', async () => {
+    const ai = fakeAi({ continueConversation: vi.fn().mockResolvedValue(summaryTurn('the state')) });
+    const { conversation, host } = fakeHost(ai, threeTurnPlan());
+
+    await conversation.compact();
+
+    expect(host.broadcast).toHaveBeenCalledWith(expect.objectContaining({ type: 'planner_message', content: expect.stringContaining('the state') }));
+    expect(vi.mocked(host.broadcast).mock.calls[0][0]).toMatchObject({ content: expect.stringMatching(/condensed/i) });
+    expect(host.broadcastPlan).toHaveBeenCalled();
+    expect(ai.reset).toHaveBeenCalled();
+  });
+
+  it('runs the summary turn on the live context, without persisting the request', async () => {
+    const ai = fakeAi({ continueConversation: vi.fn().mockResolvedValue(summaryTurn('s')) });
+    const { conversation } = fakeHost(ai, threeTurnPlan());
+
+    await conversation.compact();
+
+    expect(ai.continueConversation).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(ai.continueConversation).mock.calls[0][0]).toContain('<conversation_summary>');
+    expect(ai.startConversation).not.toHaveBeenCalled();
+  });
+
+  it('replays the whole transcript into the summary turn when no live context matches', async () => {
+    const ai = fakeAi({
+      hasActiveConversation: () => false,
+      startConversation: vi.fn().mockResolvedValue(summaryTurn('s')),
+    });
+    const { conversation } = fakeHost(ai, threeTurnPlan());
+
+    await conversation.compact();
+
+    const req = vi.mocked(ai.startConversation).mock.calls[0][0];
+    expect(req.priorHistory).toHaveLength(6);
+    expect(req.initialMessage).toContain('<conversation_summary>');
+    expect(ai.continueConversation).not.toHaveBeenCalled();
+  });
+
+  it('prunes bulky tool output out of the live context before asking for the summary', async () => {
+    const order: string[] = [];
+    const ai = fakeAi({
+      pruneContext: vi.fn(() => { order.push('prune'); return 10; }),
+      continueConversation: vi.fn(async () => { order.push('turn'); return summaryTurn('s'); }),
+    });
+    const { conversation } = fakeHost(ai, threeTurnPlan());
+
+    await conversation.compact();
+
+    expect(order).toEqual(['prune', 'turn']);
+  });
+
+  it('shows the summary turn nothing but liveness, so its prose never lands in the chat', async () => {
+    const ai = fakeAi({
+      continueConversation: vi.fn(async (_m, onProgress) => {
+        onProgress({ type: 'plan_token', planToken: 'leak' });
+        onProgress({ type: 'liveness' });
+        return summaryTurn('s');
+      }),
+    });
+    const { conversation, host } = fakeHost(ai, threeTurnPlan());
+
+    await conversation.compact();
+
+    expect(host.onProgress).toHaveBeenCalledTimes(1);
+    expect(host.onProgress).toHaveBeenCalledWith({ type: 'liveness' });
+  });
+});
+
+describe('PlannerConversation compact failure', () => {
+  const failures: Array<[string, () => Partial<IAiService>, string | RegExp]> = [
+    ['the transport rejects', () => ({ continueConversation: vi.fn().mockRejectedValue(new Error('transport down')) }), 'transport down'],
+    ['the reply carries no summary', () => ({ continueConversation: vi.fn().mockResolvedValue({ kind: 'message', text: 'Agent exited: rate limited', researchLog: [] }) }), /no summary/i],
+    ['the summary is empty', () => ({ continueConversation: vi.fn().mockResolvedValue(summaryTurn('   ')) }), /no summary/i],
+  ];
+
+  it.each(failures)('leaves the transcript, persistence and broadcasts untouched when %s', async (_label, overrides, message) => {
+    const ai = fakeAi(overrides());
+    const plan = threeTurnPlan();
+    const before = structuredClone(plan.conversationHistory);
+    const { conversation, state, host } = fakeHost(ai, plan);
+
+    await expect(conversation.compact()).rejects.toThrow(message);
+
+    expect(state.plan!.conversationHistory).toEqual(before);
+    expect(state.persists).toBe(0);
+    expect(host.broadcast).not.toHaveBeenCalled();
+    expect(conversation.isTurnInFlight).toBe(false);
+  });
+
+  it('is atomic when the turn is aborted, even if the model still returned a summary', async () => {
+    const controller = new AbortController();
+    const ai = fakeAi({
+      continueConversation: vi.fn(async () => { controller.abort(); return summaryTurn('partial'); }),
+    });
+    const { conversation, state } = fakeHost(ai, threeTurnPlan());
+
+    await expect(conversation.compact(controller.signal)).rejects.toThrow(/stopped/i);
+
+    expect(state.plan!.conversationHistory).toHaveLength(6);
+    expect(state.persists).toBe(0);
+  });
+
+  it('drops the live context after a failed turn, since it now holds the half-done summary exchange', async () => {
+    const ai = fakeAi({ continueConversation: vi.fn().mockRejectedValue(new Error('boom')) });
+    const { conversation } = fakeHost(ai, threeTurnPlan());
+
+    await expect(conversation.compact()).rejects.toThrow('boom');
+
+    expect(ai.reset).toHaveBeenCalled();
+  });
+});
+
+describe('PlannerConversation compact refusals', () => {
+  it('refuses while a planner turn is in flight', async () => {
+    let finish: (turn: ConversationTurn) => void = () => {};
+    const ai = fakeAi({ continueConversation: vi.fn(() => new Promise<ConversationTurn>((resolve) => { finish = resolve; })) });
+    const { conversation } = fakeHost(ai, threeTurnPlan());
+
+    const turn = conversation.reply('Also CSV');
+    await expect(conversation.compact()).rejects.toThrow(ConversationBusyError);
+
+    finish({ kind: 'message', text: 'Noted', researchLog: [] });
+    await turn;
+  });
+
+  it('refuses a conversation of two exchanges or fewer, naming why', async () => {
+    const ai = fakeAi();
+    const plan = threeTurnPlan();
+    plan.conversationHistory = plan.conversationHistory!.slice(0, 4);
+    const { conversation, state } = fakeHost(ai, plan);
+
+    await expect(conversation.compact()).rejects.toThrow(/too short/i);
+
+    expect(ai.continueConversation).not.toHaveBeenCalled();
+    expect(state.persists).toBe(0);
+  });
+
+  it('refuses rewind and fork while it runs', async () => {
+    let finish: (turn: ConversationTurn) => void = () => {};
+    const ai = fakeAi({ continueConversation: vi.fn(() => new Promise<ConversationTurn>((resolve) => { finish = resolve; })) });
+    const { conversation } = fakeHost(ai, threeTurnPlan());
+
+    const compacting = conversation.compact();
+    expect(() => conversation.rewind(2)).toThrow(ConversationBusyError);
+    expect(() => conversation.clone()).toThrow(ConversationBusyError);
+
+    finish(summaryTurn('s'));
+    await compacting;
+  });
+
+  it('refuses without a plan', async () => {
+    const { conversation } = fakeHost(fakeAi(), null);
+
+    await expect(conversation.compact()).rejects.toThrow(ConversationEditError);
+  });
+});
+
+describe('PlannerConversation after a compaction', () => {
+  async function compacted() {
+    const ai = fakeAi({ continueConversation: vi.fn().mockResolvedValue(summaryTurn('s')) });
+    const fixture = fakeHost(ai, threeTurnPlan());
+    await fixture.conversation.compact();
+    fixture.conversation.append('user', 'Add CSV', { timestamp: '2026-01-02T00:00:00Z' });
+    fixture.conversation.append('assistant', 'Done', { timestamp: '2026-01-02T00:00:01Z' });
+    return fixture;
+  }
+
+  it('offers only user messages after the compaction entry as rewind targets', async () => {
+    const { conversation } = await compacted();
+
+    expect(conversation.rewindTargets().map((t) => [t.index, t.preview])).toEqual([[1, 'JSON only'], [3, 'Streaming'], [5, 'Add CSV']]);
+  });
+
+  it('cannot rewind across the entry', async () => {
+    const { conversation, state } = await compacted();
+
+    expect(() => conversation.rewind(0)).toThrow(ConversationEditError);
+    conversation.rewind(1);
+    expect(state.plan!.conversationHistory!.map((m) => m.kind)).toEqual(['compaction']);
+  });
+
+  it('cannot be compacted again until enough has been said since', async () => {
+    const { conversation } = await compacted();
+
+    await expect(conversation.compact()).resolves.toBeDefined();
+    await expect(conversation.compact()).rejects.toThrow(/too short/i);
+  });
+
+  it('is copied whole by a fork', async () => {
+    const { conversation } = await compacted();
+
+    expect(conversation.clone().conversationHistory[0]).toMatchObject({ kind: 'compaction' });
+  });
+});

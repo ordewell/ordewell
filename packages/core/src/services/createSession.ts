@@ -1,7 +1,7 @@
 import { createAiService, type IAiService } from './AiService';
 import { applyTaskOps, canMergeTasks, canSplitTask } from './TaskOps';
 import { validateTaskEdit, type EditCatalog } from './TaskEditValidator';
-import { ConversationEditError, PlannerConversation, type ConversationOpening, type RewindTarget } from './PlannerConversation';
+import { ConversationEditError, PlannerConversation, type ConversationCompaction, type ConversationOpening, type RewindTarget } from './PlannerConversation';
 import { forkPlanState } from './conversationFork';
 import { Planner } from './Planner';
 import { TaskOrchestrator } from './TaskOrchestrator';
@@ -714,6 +714,23 @@ export class Session {
   rewindConversation(userMessageIndex: number): LegacyPlanState {
     if (!this.plan) throw new ConversationEditError('No planning conversation to rewind');
     return this.conversation.rewind(userMessageIndex);
+  }
+
+  /**
+   * Condense the conversation on the user's say-so: a hidden planner turn
+   * summarises it, and the summary replaces everything but the last two
+   * exchanges. Conversation only, like a rewind — the tasks, and any run
+   * executing them, are untouched. Atomic: a failed or stopped turn changes
+   * nothing.
+   */
+  async compactConversation(signal?: AbortSignal): Promise<ConversationCompaction> {
+    if (!this.plan) throw new ConversationEditError('No planning conversation to condense');
+    const releaseAbort = this.denyApprovalsOnAbort(signal);
+    try {
+      return await this.conversation.compact(signal);
+    } finally {
+      releaseAbort();
+    }
   }
 
   rewindTargets(): RewindTarget[] {

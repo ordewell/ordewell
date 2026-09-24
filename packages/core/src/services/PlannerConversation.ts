@@ -5,6 +5,7 @@ import { taskOpsProtocol, type ApplyTaskOpsResult, type TaskOp } from './TaskOps
 import { resolveDefaultMode } from './ModeResolver';
 import type { SessionBroadcaster } from './SessionMessage';
 import type { ForkedDialogue } from './conversationFork';
+import { condensedNotice, extractSummary, keptTail, summaryRequest } from './conversationSummary';
 import type { ConversationMessage, LegacyPlanState, ResearchLogEntry, ResearchProgress, RunnerId, Task } from '../models/Task';
 
 /**
@@ -121,6 +122,13 @@ export interface RewindTarget {
   timestamp: string;
 }
 
+/** What a compaction left behind. */
+export interface ConversationCompaction {
+  summary: string;
+  /** Transcript entries kept verbatim after the summary entry. */
+  keptMessages: number;
+}
+
 /** A point a failed turn returns the dialogue to. Opaque outside this module. */
 export interface TranscriptSnapshot {
   readonly plan: LegacyPlanState;
@@ -222,7 +230,9 @@ export class PlannerConversation {
   /**
    * The user messages a rewind may land before. The opening message is the
    * goal: cutting it leaves a conversation about nothing, which is a new
-   * session, not a rewind.
+   * session, not a rewind. After a compaction the summary entry, always
+   * first, plays the goal's part: what it replaced is gone, so a rewind stops
+   * at it.
    */
   rewindTargets(): RewindTarget[] {
     return this.transcript.flatMap((m, index) => {
@@ -245,9 +255,10 @@ export class PlannerConversation {
     this.assertIdle('rewind the conversation');
     const plan = this.requirePlan();
     if (!this.rewindTargets().some((t) => t.index === index)) {
-      throw new ConversationEditError(index === 0
-        ? 'The first message is the goal — start a new session to change it.'
-        : `No user message at position ${index} to rewind to.`);
+      if (index > 0) throw new ConversationEditError(`No user message at position ${index} to rewind to.`);
+      throw new ConversationEditError(this.transcript[0]?.kind === 'compaction'
+        ? 'The conversation was condensed there — a rewind cannot reach back past the summary.'
+        : 'The first message is the goal — start a new session to change it.');
     }
     const cutoff = this.transcript[index].timestamp;
     const rewound = this.host.mutate(() => {
@@ -257,6 +268,69 @@ export class PlannerConversation {
     }, () => this.host.broadcastPlan());
     this.reset();
     return rewound!;
+  }
+
+  /**
+   * Replace the transcript with a summary of it, keeping the last two
+   * exchanges as they were, and drop the live context so the next message
+   * replays from the shorter record.
+   *
+   * The summary is one hidden turn through whichever planner is configured —
+   * on the live context when it still matches, replayed from the transcript
+   * when not — so the compaction is the same for a vendor API and a harness
+   * agent. Whatever the turn emits besides the summary is discarded, ops
+   * included: it condenses the conversation, never the plan. Nothing is
+   * written until the summary is in hand, so a failed or stopped turn leaves
+   * the transcript exactly as it was.
+   */
+  async compact(signal?: AbortSignal): Promise<ConversationCompaction> {
+    this.assertIdle('condense the conversation');
+    const plan = this.host.plan();
+    if (!plan) throw new ConversationEditError('No planning conversation to condense');
+    if (!keptTail(this.transcript)) {
+      throw new ConversationEditError('The conversation is too short to condense — it takes more than two exchanges before a summary saves anything.');
+    }
+    return this.inTurn(async () => {
+      try {
+        const summary = await this.summarize(signal);
+        const tail = keptTail(this.transcript);
+        if (this.host.plan() !== plan || !tail) throw new ConversationEditError('The conversation changed while it was being condensed — nothing was replaced.');
+        const now = new Date().toISOString();
+        const content = condensedNotice(summary);
+        this.host.mutate(() => {
+          plan.conversationHistory = [{ role: 'assistant', content, timestamp: now, kind: 'compaction' }, ...tail];
+          return true;
+        }, () => {
+          this.host.broadcast({ type: 'planner_message', content, timestamp: now });
+          this.host.broadcastPlan();
+        });
+        return { summary, keptMessages: tail.length };
+      } finally {
+        // Success and failure alike: the live context either holds the
+        // conversation this replaced or a summary exchange nobody kept.
+        this.reset();
+      }
+    });
+  }
+
+  private async summarize(signal?: AbortSignal): Promise<string> {
+    const ai = this.host.aiService();
+    const request = summaryRequest(this.currentPlanLines());
+    // Only liveness gets through: streamed prose or research steps from this
+    // turn would land in the chat as if the planner had said them.
+    const onProgress = (p: ResearchProgress) => { if (p.type === 'liveness') this.host.onProgress(p); };
+    const canContinueLive = ai.hasActiveConversation() && (ai.conversationMatchesConfig?.() ?? true);
+    let turn: ConversationTurn;
+    if (canContinueLive) {
+      ai.pruneContext?.();
+      turn = await ai.continueConversation(request, onProgress, signal);
+    } else {
+      turn = await this.resume(request, [...this.transcript], signal, onProgress);
+    }
+    if (signal?.aborted) throw new ConversationEditError('Condensing was stopped — the conversation is unchanged.');
+    const summary = extractSummary(turn.text);
+    if (!summary) throw new ConversationEditError('The planner returned no summary, so the conversation is unchanged. Try again.');
+    return summary;
   }
 
   /**
@@ -404,7 +478,12 @@ export class PlannerConversation {
    * against the planner config now in effect. No LLM call happens for the
    * replayed turns; the first call is the one the user's message opens.
    */
-  private async resume(message: string, priorHistory: ConversationMessage[], signal?: AbortSignal): Promise<ConversationTurn> {
+  private async resume(
+    message: string,
+    priorHistory: ConversationMessage[],
+    signal?: AbortSignal,
+    onProgress: (progress: ResearchProgress) => void = (p) => this.host.onProgress(p),
+  ): Promise<ConversationTurn> {
     const runners = this.requirePlan().runners;
     const opening = await this.host.opening(runners);
     const goal = this.host.goal() || priorHistory.find((m) => m.role === 'user')?.content || message;
@@ -417,7 +496,7 @@ export class PlannerConversation {
       ...opening,
       runners,
       goal,
-      onProgress: (p) => this.host.onProgress(p),
+      onProgress,
       signal,
       priorHistory,
       initialMessage: message,
@@ -631,17 +710,8 @@ export class PlannerConversation {
    */
   private planContextBlock(): string | null {
     const tasks = this.host.tasks();
-    if (!this.host.plan() || tasks.length === 0) return null;
-    const orderOf = new Map(tasks.map((t) => [t.id, `#${t.order}`]));
-    const lines = tasks.map((t) => {
-      const isMan = t.type === 'user';
-      // A MAN task has no model or mode to run under — the field that means
-      // something there is how many steps the human still has to do.
-      const runFields = isMan
-        ? `steps:${t.userSteps?.length ?? 0}`
-        : `${t.assignedModel ? `model:${t.assignedModel.modelId} ` : ''}mode:${t.taskMode ?? 'build'} effort:${t.thinkingEffort ?? '-'}`;
-      return `#${t.order} id=${t.id} "${t.title}" [${t.status}] type:${isMan ? 'MAN' : 'AI'} runner:${t.assignedRunner} ${runFields} autonomy:${t.autonomy ?? '-'} slice:${t.sliceType ?? '-'} deps:[${t.dependencies.map((d) => orderOf.get(d) ?? d).join(', ')}]`;
-    });
+    const lines = this.currentPlanLines();
+    if (!lines) return null;
     // Gated on live runners, not on an armed scheduler: a paused-but-armed run
     // takes edits immediately, so promising a queue there is a lie the model
     // plans around (it stops emitting ops and asks the user to wait).
@@ -658,5 +728,21 @@ export class PlannerConversation {
       TASK_QUERY_REMINDER,
       ...taskOpsProtocol(execNote),
     ].filter(Boolean).join('\n');
+  }
+
+  /** One line per task with stable references — null until the plan has tasks. */
+  private currentPlanLines(): string[] | null {
+    const tasks = this.host.tasks();
+    if (!this.host.plan() || tasks.length === 0) return null;
+    const orderOf = new Map(tasks.map((t) => [t.id, `#${t.order}`]));
+    return tasks.map((t) => {
+      const isMan = t.type === 'user';
+      // A MAN task has no model or mode to run under — the field that means
+      // something there is how many steps the human still has to do.
+      const runFields = isMan
+        ? `steps:${t.userSteps?.length ?? 0}`
+        : `${t.assignedModel ? `model:${t.assignedModel.modelId} ` : ''}mode:${t.taskMode ?? 'build'} effort:${t.thinkingEffort ?? '-'}`;
+      return `#${t.order} id=${t.id} "${t.title}" [${t.status}] type:${isMan ? 'MAN' : 'AI'} runner:${t.assignedRunner} ${runFields} autonomy:${t.autonomy ?? '-'} slice:${t.sliceType ?? '-'} deps:[${t.dependencies.map((d) => orderOf.get(d) ?? d).join(', ')}]`;
+    });
   }
 }

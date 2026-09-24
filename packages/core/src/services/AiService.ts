@@ -96,6 +96,14 @@ export interface IAiService {
   conversationMatchesConfig?(): boolean;
 
   /**
+   * Optional: prune bulky raw tool output out of the live conversation, in
+   * place, keeping subagent digests. Returns the characters removed. Absent
+   * where the backend holds no tool transcript to prune (a harness planner's
+   * agent owns its own context).
+   */
+  pruneContext?(): number;
+
+  /**
    * One-shot research + plan for non-conversational surfaces (CLI `plan --goal`,
    * web REST). Never asks questions — it plans with what it can find.
    */

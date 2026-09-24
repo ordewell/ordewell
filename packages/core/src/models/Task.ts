@@ -200,10 +200,12 @@ export interface ConversationMessage {
   /**
    * Timeline marker: 'plan_generated' records the point in the dialogue where
    * the plan was committed (the UI anchors the plan card there on restore);
-   * 'system' is a host-injected notice. Absent for ordinary chat turns, so
+   * 'system' is a host-injected notice; 'compaction' is the summary a
+   * user-triggered compaction left in place of the earlier messages — always
+   * the transcript's first entry. Absent for ordinary chat turns, so
    * sessions saved before markers existed degrade gracefully.
    */
-  kind?: 'plan_generated' | 'system';
+  kind?: 'plan_generated' | 'system' | 'compaction';
 }
 
 export interface QueuedMessage {

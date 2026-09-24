@@ -85,6 +85,8 @@ export abstract class BaseAiService {
 
   hasActiveConversation(): boolean { return this.conversation !== null; }
 
+  pruneContext(): number { return this.conversation?.ctx.chat.compactHistory?.() ?? 0; }
+
   protected startAbortScope(callerSignal?: AbortSignal): AbortSignal | undefined {
     this.activeAbort = new AbortController();
     if (!callerSignal) return this.activeAbort.signal;

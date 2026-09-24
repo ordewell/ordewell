@@ -78,7 +78,7 @@ export type { TaskQuery, TaskQueryField, TaskQueryCatalog, LiveOutputLookup } fr
 export { Session, PlanEditError, sessionRuntimeSettings, resolveSkillInvocation } from './services/createSession';
 export type { SessionDeps, SessionRuntimeSettings, SessionPlanner, ConversationFork } from './services/createSession';
 export { ConversationEditError, ConversationBusyError } from './services/PlannerConversation';
-export type { RewindTarget } from './services/PlannerConversation';
+export type { RewindTarget, ConversationCompaction } from './services/PlannerConversation';
 export {
   SkillsService,
   createSkillsService,
