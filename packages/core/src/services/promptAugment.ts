@@ -42,9 +42,15 @@ export function collectDirectDependencyOutputs(task: Task, allTasks: Task[]): Pr
  * output — a quoted marker would settle this task on the previous one's
  * evidence. Hyphenated rather than spaced: the scanner also reads a
  * whitespace-flattened view of the terminal, which would rejoin a space.
+ *
+ * A completion marker also loses its id: transcripts are bound to a task by
+ * that id, and a dependent's transcript quoting it would answer for the
+ * predecessor the next time the predecessor runs.
  */
 function defuseMarkers(text: string): string {
-  return text.replace(/<<<ORDEWELL_/g, '<<<ORDEWELL-');
+  return text
+    .replace(/<<<ORDEWELL_DONE_[^\s>]*>>>/g, '<<<ORDEWELL-DONE>>>')
+    .replace(/<<<ORDEWELL_/g, '<<<ORDEWELL-');
 }
 
 export function renderPriorOutputs(outputs: PriorOutput[]): string {

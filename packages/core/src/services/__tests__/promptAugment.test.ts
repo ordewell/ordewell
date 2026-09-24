@@ -335,7 +335,24 @@ describe('composeAugmentedPrompt', () => {
     expect(out).not.toContain('<<<ORDEWELL_DONE_mk-a>>>');
     // the text is still readable — only the token opener is broken
     expect(out).toContain('<<<ORDEWELL-CHECKPOINT: ask the user>>>');
-    expect(out).toContain('<<<ORDEWELL-DONE_mk-a>>>');
+    expect(out).toContain('<<<ORDEWELL-DONE>>>');
+  });
+
+  // A transcript is bound to its task by the marker id its prompt carries, so a
+  // dependent's transcript must not carry its predecessor's: a re-run of the
+  // predecessor would otherwise take the dependent's answer as its own.
+  it("never carries a predecessor's completion marker id into a dependent's prompt", () => {
+    const dep = createTask({ id: 'a', order: 1, title: 'A', prompt: 'pa', completionMarker: '0f6c2a1e-mk-a' });
+    dep.outputSummary = {
+      reviewReason: 'Verified: completion marker detected in agent output.',
+      logTail: 'All done.\n<<<ORDEWELL_DONE_0f6c2a1e-mk-a>>>',
+      capturedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const task = createTask({ id: 'b', order: 2, title: 'B', prompt: 'pb', dependencies: ['a'], completionMarker: 'mk-b' });
+
+    const out = composeAugmentedPrompt(task, [dep, task]);
+    expect(out).toContain('All done.');
+    expect(out).not.toContain('0f6c2a1e-mk-a');
   });
 
   it('includes checkpoint instructions for HITL tasks (sliceType=HITL)', () => {
