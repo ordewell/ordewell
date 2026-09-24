@@ -42,12 +42,17 @@ queue-ready signals travel over it and become `status_update`/`queue_ready`
 broadcasts (there is no separate `onRefresh` callback for a surface to wire).
 Mutation is an internal seam — every structural plan mutation *and every
 settled conversation turn* (plan commit, task-ops apply, planner message) runs
-one `mutatePlan` ritual (store op → persist → broadcast), so forgetting the
-persist step is impossible. Direct (non-planner) edits go one step further
+one `mutatePlan` ritual (store op → persist → broadcast), and so do the one-shot
+`modifyPlan` and the between-batch drain of queued edits. The ritual covers plan
+edits only: scheduler actions (retry, cancel, mark complete, tick) go through
+the orchestrator, persist after it, and reach surfaces as `status_update` over
+the observer, while `generatePlan` and `loadPlan` persist the plan they adopt
+directly. Direct (non-planner) edits go one step further
 through `editPlan`, which adds the reschedule they owe an armed scheduler:
 nothing else wakes one after a hand edit, because a direct edit never queues,
 so a task the edit unblocked would sit ready and never start. PlanStore is the single source of truth for task
-state; `LegacyPlanState.tasks` is populated only at persist time. The old
+state; `LegacyPlanState.tasks` is written from it at persist time and never read
+back into it. The old
 `syncStoreFromPlan` (plan → store direction) is removed — there is only one
 direction (store → plan, at persist). Emits
 **SessionMessage** (the plan-lifecycle events) through the `broadcast` seam;
@@ -233,7 +238,12 @@ mark complete, retry, a failed spawn, stop, plan load — goes through the one
 `endAttempt`, which also clears the verifier state an interrupted run leaves
 behind. Ending an attempt is also what invalidates a spawn still in flight: the
 late session is compared by identity against the task's *current* attempt, so
-it is killed rather than resurrecting a stopped task or displacing a newer run.
+it is killed rather than resurrecting a stopped task or displacing a newer run,
+and it takes back only its own claim — a task marked complete meanwhile stays
+complete. A verdict obeys the same identity rule: the attempt stays live while
+its summary is read, and the verdict lands only if that attempt is still the
+task's current one, so a cancel, retry, mark complete, stop or plan load in that
+window is never overwritten by a stale verdict.
 The working directory is decided in one place (`resolveAttemptCwd`), which is
 where a per-attempt workspace hooks in. Holds, retry counts and spawn counts are
 deliberately *not* on the record — they describe the task across attempts and
@@ -572,16 +582,21 @@ machine: the completion-marker lifecycle (detect in session output, track),
 the checkpoint protocol, idle tracking, exit-code normalization, verdict
 production, and the manual "Mark complete" override. The orchestrator hands
 each spawned session to `watch(task, session)` and receives the verdict via
-`onVerdict`; it never re-derives a verdict. `markComplete`, `clear` (retry),
+`onVerdict`; it never re-derives a verdict, though it drops one whose attempt
+has already ended (see **Task attempt**). `markComplete`, `clear` (every user
+interruption of a task: cancel, retry, mark complete, removal, mark not done),
 and `reset` (stop/loadPlan) route through here too — one producer of every
 verdict. It does not render or capture output: it keeps only a bounded raw
 tail to scan for the marker (on the exit path too, never the runner's
 ANSI-stripped `getOutput()`) and a small carry so a checkpoint split across
 chunks still assembles; rendering is **Terminal render**'s and what a task
-printed or answered is **TaskOutputSource**'s. The old two-branch `verifyTask`
-function and the marker tracking that used to live in `TaskOrchestrator` are
-its *implementation*, not its interface; a fake `ITerminalSession` is the test
-seam.
+printed or answered is **TaskOutputSource**'s. Every callback carries the
+generation its `watch` was given, and generations come from one counter that
+`reset` never rewinds, so a terminal that outlives a stop or plan load (an open
+VS Code terminal, a tmux exit seen on the next poll) cannot speak for the task's
+next attempt. The old two-branch `verifyTask` function and the marker tracking
+that used to live in `TaskOrchestrator` are its *implementation*, not its
+interface; a fake `ITerminalSession` is the test seam.
 *Avoid:* "the verifier", "TaskVerifier" (the old shallow pass-through, now
 deleted) — use VerdictEngine.
 
@@ -596,7 +611,8 @@ lost.
 
 **TaskOutputSource** (`interfaces/TaskOutputSource.ts`, default
 `BufferedTaskOutputSource`) — the one owner of a task attempt's output,
-injected into TaskOrchestrator. It keeps one bounded raw buffer per attempt,
+injected into TaskOrchestrator (through `SessionDeps.taskOutput` when a Session
+builds it, which is how no test reads the real home directory). It keeps one bounded raw buffer per attempt,
 fed from the attempt's session, and answers two questions: `finalText` — the
 durable summary, taken from the agent's own transcript when one matches and
 from the clean **Terminal render** otherwise — and `liveTail` — the last lines
@@ -606,7 +622,10 @@ an injected **TranscriptReader** (`HomeTranscriptReader`, home directory
 injectable) that binds a transcript to a task by content: the startedAt cutoff
 only narrows the candidates, and the transcript must carry the task's
 completion marker UUID, which its prompt contains. Directory and recency alone
-hand task A task B's answer when parallel attempts share a cwd.
+hand task A task B's answer when parallel attempts share a cwd. The binding holds
+only while no other task's prompt carries that id, which is why a dependent's
+prompt quotes its predecessor's output with the marker id dropped
+(`defuseMarkers` in `promptAugment.ts`).
 *Avoid:* "the output buffer", "transcript capture" as the owner — the runners'
 `getOutput()` buffers are transport detail, and the transcript is one input.
 
