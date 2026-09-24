@@ -146,15 +146,18 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
   async integrate(task: Task, run: IsolationRun): Promise<IsolationOutcome> {
     this.log({ op: 'integrate', taskId: task.id });
     await this.holds.get(task.id);
-    const outcome = this.outcomes.get(task.id) ?? 'merged';
     const record = run.tasks[task.id];
-    if (record) record.status = outcome;
+    if (!record) return 'failed';
+    const outcome = this.outcomes.get(task.id) ?? 'merged';
+    record.status = outcome;
     return outcome;
   }
 
   async release(run: IsolationRun, taskId: string, opts: { keep: boolean }): Promise<void> {
     this.log({ op: 'release', taskId, keep: opts.keep });
+    const record = run.tasks[taskId];
     if (!opts.keep) delete run.tasks[taskId];
+    else if (record?.status === 'active') record.status = 'kept';
   }
 
   async handoff(run: IsolationRun): Promise<IsolationHandoff> {

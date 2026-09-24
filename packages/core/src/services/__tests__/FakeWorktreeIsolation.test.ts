@@ -20,6 +20,7 @@ describe('FakeWorktreeIsolation', () => {
   it('integrates as merged unless scripted, and can hold an integration open', async () => {
     const iso = new FakeWorktreeIsolation();
     const run = await iso.startRun('/ws');
+    for (const order of [1, 2, 3]) await iso.prepare(task(order), run);
     iso.outcomes.set('task-2', 'conflict');
     expect(await iso.integrate(task(1), run)).toBe('merged');
     expect(await iso.integrate(task(2), run)).toBe('conflict');
@@ -31,6 +32,26 @@ describe('FakeWorktreeIsolation', () => {
     expect(settled).toBe(false);
     open();
     expect(await pending).toBe('merged');
+  });
+
+  // Scheduling tests trust the fake to settle records the way git does.
+  it('fails an integration nothing prepared, as the real module does', async () => {
+    const iso = new FakeWorktreeIsolation();
+    const run = await iso.startRun('/ws');
+    expect(await iso.integrate(task(1), run)).toBe('failed');
+  });
+
+  it('moves a kept release off active and drops a discarded one', async () => {
+    const iso = new FakeWorktreeIsolation();
+    const run = await iso.startRun('/ws');
+    await iso.prepare(task(1), run);
+    await iso.prepare(task(2), run);
+
+    await iso.release(run, 'task-1', { keep: true });
+    await iso.release(run, 'task-2', { keep: false });
+
+    expect(run.tasks['task-1']?.status).toBe('kept');
+    expect(run.tasks['task-2']).toBeUndefined();
   });
 
   it('reports the availability it is given', async () => {
