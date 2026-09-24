@@ -4552,3 +4552,107 @@ body {
   color: var(--accent);
   border-color: var(--accent);
 }
+
+/* ---- Worktree isolation (ADR-0013) ----
+   A conflict is the one isolation state that needs a decision, so it earns a
+   header badge; the branch and worktree are inspection detail and live in the
+   expanded body. */
+.task-isolation-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-left: 6px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.task-isolation-badge.conflict {
+  background: var(--red-subtle);
+  color: var(--red);
+}
+
+.task-isolation {
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  font-size: 11px;
+}
+
+.task-isolation-row {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  margin-bottom: 3px;
+}
+
+.task-isolation-label {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  width: 58px;
+}
+
+.task-isolation code {
+  font-family: var(--font-mono, monospace);
+  word-break: break-all;
+}
+
+.task-isolation-resolve {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.isolation-handoff {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+}
+
+.isolation-handoff-header {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.isolation-handoff-title {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.isolation-handoff-branch {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.isolation-handoff-base {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.isolation-handoff-landed {
+  margin: 6px 0;
+  padding-left: 18px;
+  font-size: 11px;
+}
+
+.isolation-handoff-order {
+  display: inline-block;
+  min-width: 16px;
+  color: var(--text-muted);
+}
+
+.isolation-handoff-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}

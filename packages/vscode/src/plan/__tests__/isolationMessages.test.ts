@@ -1,19 +1,52 @@
 import { describe, it, expect, vi } from 'vitest';
 import { handleSessionMessage } from '../PlanManager';
 import type { PlanManagerDeps } from '../PlanManager';
+import type { TaskIsolation } from '@ordewell/core';
 
 function deps() {
-  const chatProvider = { sendNewMessage: vi.fn(), showPlan: vi.fn() };
-  const d = { session: {}, chatProvider, isGeneratingPlan: () => false } as unknown as PlanManagerDeps;
+  const chatProvider = {
+    sendTaskIdle: vi.fn(),
+    sendTaskIsolation: vi.fn(),
+    showIsolationHandoff: vi.fn(),
+    showPlan: vi.fn(),
+  };
+  const plan = { status: 'draft', tasks: [] };
+  const d = {
+    session: { isExecuting: true, status: 'running' },
+    chatProvider,
+    getCurrentPlan: () => plan,
+    isGeneratingPlan: () => false,
+  } as unknown as PlanManagerDeps;
   return { d, chatProvider };
 }
 
 describe('worktree isolation messages (ADR-0013)', () => {
-  it('tells the user why a run on a dirty tree did not start', () => {
+  it('forwards each task\'s isolation to the webview', () => {
     const { d, chatProvider } = deps();
+    const conflict: TaskIsolation = { state: 'conflict', branch: 'ordewell/r/1-a', worktree: '/w/1-a' };
 
-    handleSessionMessage({ type: 'isolation_blocked', reason: 'dirty', message: 'Stash them, or run without isolation.' }, d);
+    handleSessionMessage({
+      type: 'status_update',
+      tasks: [
+        { id: 't1', status: 'awaiting_user', verdict: null, isolation: conflict },
+        { id: 't2', status: 'in_progress', verdict: null },
+      ],
+    }, d);
 
-    expect(chatProvider.sendNewMessage).toHaveBeenCalledWith('Stash them, or run without isolation.', expect.any(String));
+    // Only the task that has one: a shared-root plan stays quiet.
+    expect(chatProvider.sendTaskIsolation.mock.calls).toEqual([['t1', conflict]]);
+  });
+
+  it('posts the end-of-run handoff to the webview', () => {
+    const { d, chatProvider } = deps();
+    const handoff = {
+      branch: 'ordewell/r/integration',
+      baseRef: 'abc123',
+      landed: [{ taskId: 't1', order: 1, title: 'A' }],
+    };
+
+    handleSessionMessage({ type: 'isolation_handoff', ...handoff }, d);
+
+    expect(chatProvider.showIsolationHandoff).toHaveBeenCalledWith(handoff);
   });
 });

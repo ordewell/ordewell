@@ -3,7 +3,7 @@ import TaskCard from './TaskCard';
 import NewTaskCard from './NewTaskCard';
 import type { TaskDraft } from './NewTaskCard';
 import type { RunnerMode, RunnerOption } from './TaskCard';
-import { Task, DiscoveredModel, TaskModelAssignment } from '@ordewell/core';
+import { Task, DiscoveredModel, TaskModelAssignment, TaskIsolation } from '@ordewell/core';
 import { canMergeTasks, canSplitTask } from '@ordewell/core/plan-utils';
 
 interface PlanCardGroupProps {
@@ -19,6 +19,10 @@ interface PlanCardGroupProps {
   taskOutput?: Record<string, string>;
   /** Advisory silence timestamp per task id; null/absent means not stalled. */
   taskIdle?: Record<string, string | null>;
+  /** Per-task isolation state (ADR-0013), keyed by task id. */
+  isolationByTask?: Record<string, TaskIsolation>;
+  /** Opt in to resolving a conflicted task's merge as a new AI task. */
+  onResolveConflict?: (taskId: string) => void;
   onRunnerChange?: (taskId: string, runner: string) => void;
   onDependenciesChange?: (taskId: string, dependencies: string[]) => void;
   onAddTask?: (draft: TaskDraft) => void;
@@ -50,6 +54,8 @@ export default function PlanCardGroup({
   runnerLabels: _runnerLabels,
   taskOutput,
   taskIdle,
+  isolationByTask,
+  onResolveConflict,
   onRunnerChange,
   onDependenciesChange,
   onAddTask,
@@ -220,6 +226,8 @@ export default function PlanCardGroup({
                 dependentCount={dependentCountMap.get(task.id) ?? 0}
                 output={taskOutput?.[task.id]}
                 idleSince={taskIdle?.[task.id] ?? null}
+                isolation={isolationByTask?.[task.id] ?? null}
+                onResolveConflict={onResolveConflict}
                 siblings={sorted}
                 onDependenciesChange={onDependenciesChange}
                 onRunnerChange={onRunnerChange}
