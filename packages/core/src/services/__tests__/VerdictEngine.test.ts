@@ -43,8 +43,8 @@ describe('VerdictEngine', () => {
 
     it('does not pass on a clean exit until the completion marker was emitted', async () => {
       const engine = new VerdictEngine();
-      const verdicts: { taskId: string; outcome: string; output: string }[] = [];
-      engine.onVerdict((taskId, verdict, output) => verdicts.push({ taskId, outcome: verdict.outcome, output }));
+      const verdicts: { taskId: string; outcome: string }[] = [];
+      engine.onVerdict((taskId, verdict) => verdicts.push({ taskId, outcome: verdict.outcome }));
       const session = fakeSession('all good');
 
       engine.watch(buildTask(), session);
@@ -53,7 +53,6 @@ describe('VerdictEngine', () => {
 
       expect(verdicts).toHaveLength(1);
       expect(verdicts[0].outcome).toBe('fail');
-      expect(verdicts[0].output).toBe('all good');
       expect(verdicts[0].taskId).toBe('t1');
     });
 
@@ -169,19 +168,6 @@ describe('VerdictEngine', () => {
 
       expect(session.kill).not.toHaveBeenCalled();
     });
-
-    it('delivers the session output to listeners (not its internal marker buffer)', async () => {
-      const engine = new VerdictEngine();
-      let deliveredOutput = '';
-      engine.onVerdict((_id, _verdict, output) => { deliveredOutput = output; });
-      const session = fakeSession('captured-by-session');
-
-      engine.watch(buildTask(), session);
-      session.exit(0);
-      await new Promise(r => setTimeout(r, 10));
-
-      expect(deliveredOutput).toBe('captured-by-session');
-    });
   });
 
   describe('checkpoint markers', () => {
@@ -268,6 +254,37 @@ describe('VerdictEngine', () => {
 
       expect(checkpoints).toHaveLength(1);
       expect(checkpoints[0].summary).toBe('split across chunks');
+    });
+
+    it('assembles a checkpoint whose opening, summary and closing arrive in separate chunks', () => {
+      const engine = new VerdictEngine();
+      const summaries: string[] = [];
+      engine.onCheckpoint((_id, summary) => summaries.push(summary));
+      const session = fakeSession();
+
+      engine.watch(buildTask(), session);
+      session.emit('log line\n<<<ORDEW');
+      session.emit('ELL_CHECKPOINT: drop the ');
+      session.emit('legacy table?');
+      session.emit('>');
+      session.emit('>> waiting');
+      session.emit(' <<<ORDEWELL_CHECKPOINT: second>>>');
+
+      expect(summaries).toEqual(['drop the legacy table?', 'second']);
+    });
+
+    it('does not bridge an abandoned checkpoint opening to a closing far downstream', () => {
+      const engine = new VerdictEngine();
+      const summaries: string[] = [];
+      engine.onCheckpoint((_id, summary) => summaries.push(summary));
+      const session = fakeSession();
+
+      engine.watch(buildTask(), session);
+      session.emit('<<<ORDEWELL_CHECKPOINT: ');
+      for (let i = 0; i < 200; i++) session.emit(`${'build output '.repeat(40)}\n`);
+      session.emit('arrow -> >>> end');
+
+      expect(summaries).toEqual([]);
     });
 
     it('approveCheckpoint writes ORDEWELL_CONTINUE to session stdin', () => {

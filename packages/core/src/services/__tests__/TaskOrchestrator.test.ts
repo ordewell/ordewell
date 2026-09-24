@@ -440,7 +440,7 @@ describe('TaskOrchestrator', () => {
       orchestrator.loadPlan([task]);
       await orchestrator.forceStartTask('t1');
 
-      sessions[0].output = 'Something went wrong.';
+      sessions[0].emitOutput('Something went wrong.');
       sessions[0].emitExit(1);
 
       // Wait for the async onAiTaskExit to complete
@@ -920,7 +920,7 @@ describe('execution log tracking', () => {
 
       await orchestrator.approveReview();
 
-      sessions[0].output = 'Done.\n<<<ORDEWELL_DONE_mk-1>>>';
+      sessions[0].emitOutput('Done.\n<<<ORDEWELL_DONE_mk-1>>>');
       sessions[0].emitExit(0);
 
       await new Promise(r => setTimeout(r, 50));
@@ -945,7 +945,7 @@ describe('execution log tracking', () => {
 
       await orchestrator.approveReview();
 
-      sessions[0].output = 'Error occurred';
+      sessions[0].emitOutput('Error occurred');
       sessions[0].emitExit(1);
 
       await new Promise(r => setTimeout(r, 50));

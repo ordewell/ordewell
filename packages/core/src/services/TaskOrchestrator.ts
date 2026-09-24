@@ -104,7 +104,7 @@ export class TaskOrchestrator {
   ) {
     this.store = store ?? new PlanStore();
     this.store.onMutate = () => this.emit('onTaskChanged');
-    this.verifier.onVerdict((taskId, verdict, output) => this.onVerdict(taskId, verdict, output));
+    this.verifier.onVerdict((taskId, verdict) => this.onVerdict(taskId, verdict));
     this.verifier.onCheckpoint((taskId, summary) => {
       const task = this.store.get(taskId);
       if (!task) return;
@@ -299,10 +299,11 @@ export class TaskOrchestrator {
     return this.markTaskComplete(taskId);
   }
 
-  private async onVerdict(taskId: string, verdict: Verdict, output: string): Promise<void> {
+  private async onVerdict(taskId: string, verdict: Verdict): Promise<void> {
     const task = this.store.get(taskId);
     if (!task) return;
     const attempt = this.endAttempt(taskId, 'verdict');
+    const output = attempt?.session?.getOutput() ?? '';
 
     console.error(`[TaskOrchestrator] Task #${task.order} "${task.title}" verdict=${verdict.outcome}`);
     console.error(`[TaskOrchestrator] Runner: ${task.assignedRunner}, Model: ${task.assignedModel?.modelId ?? 'default'}`);

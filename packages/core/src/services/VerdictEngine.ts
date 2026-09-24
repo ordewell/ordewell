@@ -2,16 +2,28 @@ import type { Task, Verdict, VerificationCheck } from '../models/Task';
 import type { ITerminalSession } from '../interfaces/ITerminalRunner';
 import { flattenTerminalOutput, renderTerminalOutput } from './terminalRender';
 
-export type VerdictListener = (taskId: string, verdict: Verdict, output: string) => void;
+export type VerdictListener = (taskId: string, verdict: Verdict) => void;
 export type CheckpointListener = (taskId: string, summary: string) => void;
 /** Fires on every idleSince transition (null→timestamp on silence, timestamp→null on resume/teardown). */
 export type IdleListener = (taskId: string, idleSince: string | null) => void;
 
 const CHECKPOINT_RE = /<<<ORDEWELL_CHECKPOINT:\s*(.*?)>>>/gs;
 
-/** Only the tail of the buffer is flattened per chunk — markers are short and
+function markerVisible(raw: string, doneToken: string): boolean {
+  return flattenTerminalOutput(raw).includes(doneToken)
+    || flattenTerminalOutput(renderTerminalOutput(raw)).includes(doneToken);
+}
+
+/** Only the tail of the output is flattened per chunk — markers are short and
  *  recent, and re-flattening an unbounded buffer on every write is O(n²). */
 const MARKER_SCAN_TAIL = 16384;
+
+/**
+ * Unmatched text carried from one chunk's checkpoint scan into the next, so a
+ * marker split across writes still assembles. A checkpoint summary is a short
+ * question; an opening further back than this is abandoned, not pending.
+ */
+const CHECKPOINT_CARRY = 2048;
 
 /** No output for this long marks a running task idle (advisory, UI-only). */
 const IDLE_TIMEOUT_MS = 60_000;
@@ -19,8 +31,8 @@ const IDLE_TIMEOUT_MS = 60_000;
 
 export class VerdictEngine {
   private markerSeen = new Set<string>();
-  private buffers = new Map<string, string>();
-  private checkpointCounts = new Map<string, number>();
+  private markerTails = new Map<string, string>();
+  private checkpointCarry = new Map<string, string>();
   private pausedSessions = new Map<string, ITerminalSession>();
   private listeners: VerdictListener[] = [];
   private checkpointListeners: CheckpointListener[] = [];
@@ -108,7 +120,7 @@ export class VerdictEngine {
   }
 
   /**
-   * Attach to a spawned session: buffer output, scan for the task's completion
+   * Attach to a spawned session: scan the output tail for the task's completion
    * marker (delivering a verdict immediately while leaving interactive sessions
    * open), scan for checkpoint markers, and on exit produce a failed verdict
    * when the marker was never observed.
@@ -117,68 +129,62 @@ export class VerdictEngine {
     const doneToken = `<<<ORDEWELL_DONE_${task.completionMarker}>>>`;
     const gen = (this.generations.get(task.id) ?? 0) + 1;
     this.generations.set(task.id, gen);
-    this.buffers.set(task.id, '');
-    this.checkpointCounts.set(task.id, 0);
+    this.markerTails.set(task.id, '');
+    this.checkpointCarry.set(task.id, '');
     session.onOutput((text: string) => {
       if (this.generations.get(task.id) !== gen) return;
       this.touchIdle(task.id, gen);
       if (this.markerSeen.has(task.id)) return;
-      const buf = (this.buffers.get(task.id) ?? '') + text;
-      this.buffers.set(task.id, buf);
-      const tail = buf.slice(-MARKER_SCAN_TAIL);
-      const markerVisible = flattenTerminalOutput(tail).includes(doneToken)
-        || flattenTerminalOutput(renderTerminalOutput(tail)).includes(doneToken);
-      if (markerVisible) {
+      const tail = ((this.markerTails.get(task.id) ?? '') + text).slice(-MARKER_SCAN_TAIL);
+      this.markerTails.set(task.id, tail);
+      if (markerVisible(tail, doneToken)) {
         this.markerSeen.add(task.id);
         // Deliver verdict immediately instead of killing the session.
         // The terminal stays open so the user can read output or keep chatting
         // with the AI runner. Bump the generation so the onExit callback
         // (which will fire when the terminal eventually closes) bails out.
-        const output = buf;
-        this.buffers.delete(task.id);
-        this.checkpointCounts.delete(task.id);
-        this.pausedSessions.delete(task.id);
-        this.clearIdle(task.id);
+        this.forget(task.id);
         this.generations.set(task.id, gen + 1);
         const verdict = this.decide(task, 0);
-        for (const l of this.listeners) l(task.id, verdict, output);
+        for (const l of this.listeners) l(task.id, verdict);
         return;
       }
-      const matches = [...buf.matchAll(CHECKPOINT_RE)];
-      const prevCount = this.checkpointCounts.get(task.id) ?? 0;
-      for (let i = prevCount; i < matches.length; i++) {
-        const summary = matches[i][1].trim();
-        this.pausedSessions.set(task.id, session);
-        for (const l of this.checkpointListeners) l(task.id, summary);
-      }
-      this.checkpointCounts.set(task.id, matches.length);
+      this.scanCheckpoints(task.id, session, text);
     });
     session.onExit((exitCode: number) => {
       if (this.generations.get(task.id) !== gen) return;
-      const output = session.getOutput();
-      const tail = output.slice(-MARKER_SCAN_TAIL);
-      if (
-        flattenTerminalOutput(tail).includes(doneToken)
-        || flattenTerminalOutput(renderTerminalOutput(tail)).includes(doneToken)
-      ) {
-        this.markerSeen.add(task.id);
-      }
-      this.buffers.delete(task.id);
-      this.checkpointCounts.delete(task.id);
-      this.pausedSessions.delete(task.id);
-      this.clearIdle(task.id);
+      // The raw tail, not session.getOutput(): runners strip ANSI from that
+      // buffer, which loses the cursor positioning a TUI-painted marker needs.
+      if (markerVisible(this.markerTails.get(task.id) ?? '', doneToken)) this.markerSeen.add(task.id);
+      this.forget(task.id);
       const verdict = this.decide(task, exitCode);
-      for (const l of this.listeners) l(task.id, verdict, output);
+      for (const l of this.listeners) l(task.id, verdict);
     });
+  }
+
+  /** Scan only the new text plus the unmatched carry, so a long run stays linear. */
+  private scanCheckpoints(taskId: string, session: ITerminalSession, text: string): void {
+    const scan = (this.checkpointCarry.get(taskId) ?? '') + text;
+    let consumed = 0;
+    for (const match of scan.matchAll(CHECKPOINT_RE)) {
+      consumed = match.index + match[0].length;
+      this.pausedSessions.set(taskId, session);
+      for (const l of this.checkpointListeners) l(taskId, match[1].trim());
+    }
+    this.checkpointCarry.set(taskId, scan.slice(consumed).slice(-CHECKPOINT_CARRY));
+  }
+
+  private forget(taskId: string): void {
+    this.markerTails.delete(taskId);
+    this.checkpointCarry.delete(taskId);
+    this.pausedSessions.delete(taskId);
+    this.clearIdle(taskId);
   }
 
   /** Manual "Mark complete" override: a pass verdict that bypasses evidence. */
   markComplete(task: Task): Verdict {
     this.markerSeen.delete(task.id);
-    this.buffers.delete(task.id);
-    this.checkpointCounts.delete(task.id);
-    this.pausedSessions.delete(task.id);
-    this.clearIdle(task.id);
+    this.forget(task.id);
     this.generations.set(task.id, (this.generations.get(task.id) ?? 0) + 1);
     return {
       outcome: 'pass',
@@ -198,18 +204,15 @@ export class VerdictEngine {
   /** Clear verification state for a task (used on retry). */
   clear(task: Task): void {
     this.markerSeen.delete(task.id);
-    this.buffers.delete(task.id);
-    this.checkpointCounts.delete(task.id);
-    this.pausedSessions.delete(task.id);
-    this.clearIdle(task.id);
+    this.forget(task.id);
     this.generations.set(task.id, (this.generations.get(task.id) ?? 0) + 1);
   }
 
   /** Drop all tracking state (used on stop / loadPlan). */
   reset(): void {
     this.markerSeen.clear();
-    this.buffers.clear();
-    this.checkpointCounts.clear();
+    this.markerTails.clear();
+    this.checkpointCarry.clear();
     this.pausedSessions.clear();
     for (const timer of this.idleTimers.values()) clearTimeout(timer);
     this.idleTimers.clear();
