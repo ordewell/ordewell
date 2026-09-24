@@ -53,7 +53,10 @@ export abstract class AbstractRunner<S extends ITerminalSession> implements ITer
 
   protected registerSession(id: string, session: S): void {
     this.sessions.set(id, session);
-    session.onExit(() => this.sessions.delete(id));
+    // A replaced session's late exit must not unregister its successor.
+    session.onExit(() => {
+      if (this.sessions.get(id) === session) this.sessions.delete(id);
+    });
   }
 
   abstract spawn(opts: {

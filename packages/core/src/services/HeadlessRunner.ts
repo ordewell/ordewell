@@ -136,6 +136,7 @@ export class HeadlessRunner extends AbstractRunner<HeadlessSession> {
   private hasScriptCmd: () => boolean;
   private resolvePath: () => Promise<string>;
   private launchDeps: LaunchDeps;
+  private spawnCount = 0;
 
   /**
    * Session shape: a piped subprocess is not a terminal, so runners get their
@@ -152,6 +153,17 @@ export class HeadlessRunner extends AbstractRunner<HeadlessSession> {
     this.hasScriptCmd = deps.hasScriptCmd ?? defaultHasScriptCmd;
     this.resolvePath = deps.resolvePath ?? augmentedPath;
     this.launchDeps = { resolvePath: this.resolvePath, ...deps.launchDeps };
+  }
+
+  /**
+   * Unique per spawn, not per task: a retry reuses its task id and ids often
+   * share a prefix, and a shared registry key let the old attempt's exit
+   * unregister the new one. Unlike TmuxRunner, nothing outside this process
+   * keys on the id, so a counter is enough to scope it to the attempt.
+   */
+  protected nextSessionId(taskId: string): string {
+    this.spawnCount += 1;
+    return `ordewell-${taskId.slice(0, 8)}-${this.spawnCount}`;
   }
 
   protected createSession(id: string, taskId: string): HeadlessSession {
@@ -199,7 +211,7 @@ export class HeadlessRunner extends AbstractRunner<HeadlessSession> {
   }
 
   async spawn(opts: RunnerSpawnOptions): Promise<ITerminalSession> {
-    const id = `ordewell-${opts.taskId.slice(0, 8)}`;
+    const id = this.nextSessionId(opts.taskId);
     const session = this.createSession(id, opts.taskId);
     const prepared = await this.prepareLaunch(opts);
 

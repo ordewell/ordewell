@@ -35,7 +35,7 @@ export class VsCodeTerminalRunner extends HeadlessRunner {
 
   override async spawn(opts: RunnerSpawnOptions): Promise<ITerminalSession> {
     const shortId = opts.taskId.slice(0, 8);
-    const id = `ordewell-${shortId}`;
+    const id = this.nextSessionId(opts.taskId);
     const session = this.createSession(id, opts.taskId);
     // Resolve and validate now — an unknown runner or an unlaunchable command
     // must hold the task (TaskOrchestrator.startTask) rather than throw from

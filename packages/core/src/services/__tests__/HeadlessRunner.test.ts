@@ -163,6 +163,43 @@ describe('HeadlessRunner', () => {
     expect(runner.activeCount).toBe(0);
   });
 
+  // A retry respawns the same task id, and task ids often share a prefix
+  // ("task-1234-abcd" / "task-1234-wxyz"), so the old attempt's late exit used
+  // to unregister the new attempt under the shared key.
+  it('keeps a retry registered when the previous attempt of the same task exits', async () => {
+    const m = manifest();
+    const child1 = new FakeChildProcess();
+    const child2 = new FakeChildProcess();
+    const spawnImpl = vi.fn().mockReturnValueOnce(child1).mockReturnValueOnce(child2) as unknown as SpawnFn;
+    const runner = new HeadlessRunner({ spawnImpl, hasScriptCmd: () => false, resolvePath: async () => '' });
+
+    const first = await runner.spawn(baseOpts(m));
+    const retry = await runner.spawn(baseOpts(m));
+    child1.emit('close', 1);
+
+    expect(retry.id).not.toBe(first.id);
+    expect(runner.activeCount).toBe(1);
+    runner.stop(retry.id);
+    expect(child2.kill).toHaveBeenCalledWith('SIGTERM');
+  });
+
+  it('gives tasks that share an 8-character id prefix distinct sessions', async () => {
+    const m = manifest();
+    const child1 = new FakeChildProcess();
+    const child2 = new FakeChildProcess();
+    const spawnImpl = vi.fn().mockReturnValueOnce(child1).mockReturnValueOnce(child2) as unknown as SpawnFn;
+    const runner = new HeadlessRunner({ spawnImpl, hasScriptCmd: () => false, resolvePath: async () => '' });
+
+    const a = await runner.spawn({ ...baseOpts(m), taskId: 'task-1234-abcd' });
+    const b = await runner.spawn({ ...baseOpts(m), taskId: 'task-1234-wxyz' });
+
+    expect(a.id).not.toBe(b.id);
+    expect(runner.activeCount).toBe(2);
+    runner.stop(a.id);
+    expect(child1.kill).toHaveBeenCalled();
+    expect(child2.kill).not.toHaveBeenCalled();
+  });
+
   it('forwards write() to the child stdin', async () => {
     const m = manifest();
     const { runner, child } = makeRunner();

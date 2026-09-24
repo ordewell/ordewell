@@ -218,6 +218,19 @@ describe('VsCodeTerminalRunner', () => {
     expect(spawnImpl).not.toHaveBeenCalled();
   });
 
+  it('stopping a previous attempt leaves the retry of the same task running', async () => {
+    const { runner, spawnOpts } = makeRunner();
+    const first = await runner.spawn(spawnOpts);
+    const retry = await runner.spawn(spawnOpts);
+    const retryExits: number[] = [];
+    retry.onExit((code) => retryExits.push(code));
+
+    runner.stop(first.id);
+
+    expect(retryExits).toEqual([]);
+    expect(runner.activeCount).toBe(1);
+  });
+
   it('starts the child anyway if the terminal is never rendered', async () => {
     vi.useFakeTimers();
     const { runner, spawnImpl, spawnOpts } = makeRunner({ hasScript: true });
