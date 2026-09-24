@@ -490,18 +490,47 @@ selected task's status (footer hint follows: `m done` / `m undone`).
 a retry attempt and releases the hold.
 
 **VerdictEngine** — the deep module owning the whole verification state
-machine: the completion-marker lifecycle (detect in session output, track,
-reconstruct cursor-positioned TUI repaints before scanning), exit-code
-normalization, verdict production, and
-the manual "Mark complete" override. The orchestrator hands each spawned
-session to `watch(task, session)` and receives the verdict via `onVerdict`; it
-never re-derives a verdict. `markComplete`, `clear` (retry), and `reset`
-(stop/loadPlan) route through here too — one producer of every verdict. The
-old two-branch `verifyTask` function and the marker tracking that used to live
-in `TaskOrchestrator` are its *implementation*, not its interface; a fake
-`ITerminalSession` is the test seam.
+machine: the completion-marker lifecycle (detect in session output, track),
+the checkpoint protocol, idle tracking, exit-code normalization, verdict
+production, and the manual "Mark complete" override. The orchestrator hands
+each spawned session to `watch(task, session)` and receives the verdict via
+`onVerdict`; it never re-derives a verdict. `markComplete`, `clear` (retry),
+and `reset` (stop/loadPlan) route through here too — one producer of every
+verdict. It does not render or capture output: it keeps only a bounded raw
+tail to scan for the marker (on the exit path too, never the runner's
+ANSI-stripped `getOutput()`) and a small carry so a checkpoint split across
+chunks still assembles; rendering is **Terminal render**'s and what a task
+printed or answered is **TaskOutputSource**'s. The old two-branch `verifyTask`
+function and the marker tracking that used to live in `TaskOrchestrator` are
+its *implementation*, not its interface; a fake `ITerminalSession` is the test
+seam.
 *Avoid:* "the verifier", "TaskVerifier" (the old shallow pass-through, now
 deleted) — use VerdictEngine.
+
+**Terminal render** (`terminalRender.ts`) — the pure functions that turn raw
+PTY bytes into what a user would see: `renderTerminalOutput` replays the
+cursor/erase subset coding-agent TUIs use onto a small virtual screen,
+`flattenTerminalOutput` strips escapes, box-drawing and whitespace for marker
+scanning, and `renderCleanCapture` renders and cuts at the completion-marker
+row, dropping the TUI chrome below it. No state, no I/O. It needs *raw* output:
+the cursor escapes it replays are exactly what a runner's stripped buffer has
+lost.
+
+**TaskOutputSource** (`interfaces/TaskOutputSource.ts`, default
+`BufferedTaskOutputSource`) — the one owner of a task attempt's output,
+injected into TaskOrchestrator. It keeps one bounded raw buffer per attempt,
+fed from the attempt's session, and answers two questions: `finalText` — the
+durable summary, taken from the agent's own transcript when one matches and
+from the clean **Terminal render** otherwise — and `liveTail` — the last lines
+of what a task printed, rendered clean, with an absolute `nextOffset` to read
+only what follows (`TaskOrchestrator.getLiveOutput`). Transcripts come through
+an injected **TranscriptReader** (`HomeTranscriptReader`, home directory
+injectable) that binds a transcript to a task by content: the startedAt cutoff
+only narrows the candidates, and the transcript must carry the task's
+completion marker UUID, which its prompt contains. Directory and recency alone
+hand task A task B's answer when parallel attempts share a cwd.
+*Avoid:* "the output buffer", "transcript capture" as the owner — the runners'
+`getOutput()` buffers are transport detail, and the transcript is one input.
 
 **Check** — one deterministic signal inside a verdict. The VerdictEngine
 requires `completion_marker` and records `exit_code` as supporting diagnostic
@@ -515,8 +544,8 @@ to every agent prompt as `<<<ORDEWELL_DONE_<uuid>>>>`. The **VerdictEngine** own
 the marker lifecycle: it detects the marker in session output (via `watch`),
 and produces a `pass` verdict immediately with `exit_code` bypassed
 (marker-seen), while leaving an interactive terminal open. Cursor-positioned
-TUI output is rendered into a small virtual screen so split OpenCode repaints
-are scanned as the token visible to the user. If the marker never appears and
+TUI output is rendered into a small virtual screen (**Terminal render**) so
+split OpenCode repaints are scanned as the token visible to the user. If the marker never appears and
 the process exits — even with code 0 — the verdict fails and dependent tasks
 stay blocked. A stuck task (no marker, no exit) is advanced manually via "Mark
 complete", which calls `VerdictEngine.markComplete` for a `pass` verdict.

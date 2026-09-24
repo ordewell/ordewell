@@ -36,7 +36,7 @@ node bench/live/drive-conversation.mjs
 
 | Path | What lives there |
 | --- | --- |
-| `packages/core` | Pure TypeScript, no UI dependencies. Session, PlanStore, Planner, TaskOrchestrator, VerdictEngine, ModelResolver, ModeResolver, RunnerRegistry. |
+| `packages/core` | Pure TypeScript, no UI dependencies. Session, PlanStore, Planner, TaskOrchestrator, VerdictEngine, TaskOutputSource, ModelResolver, ModeResolver, RunnerRegistry. |
 | `packages/cli` | The `ordewell` binary. `src/tui/` is a pure reducer + renderer behind a thin raw-mode driver. |
 | `packages/vscode` | Extension host and React webview. |
 | `packages/web` | Hono HTTP + WebSocket server. This is the **local daemon** the CLI and TUI drive over `127.0.0.1` — it is not a website and has no frontend. |
