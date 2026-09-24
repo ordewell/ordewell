@@ -4,28 +4,28 @@ import { composeAugmentedPrompt } from '../promptAugment';
 import { createTask } from '../../models/Task';
 import type { IConfig } from '../../interfaces/IConfig';
 import type { INotification } from '../../interfaces/INotification';
-import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
-import { fakeConfig } from '../../testing';
+import type { ITerminalRunner, ITerminalSession } from '../../interfaces/ITerminalRunner';
+import { fakeConfig, FakeTerminalSession } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
-
-type OrchestratorInternals = {
-  reviewApproved: boolean;
-  running: boolean;
-  activeTaskSessions: Map<string, string>;
-  _planStatus: string;
-};
-
-function internals(orchestrator: TaskOrchestrator): OrchestratorInternals {
-  return orchestrator as unknown as OrchestratorInternals;
-}
 
 function fakeTerminalRunner(): ITerminalRunner {
   return {
-    spawn: vi.fn().mockResolvedValue({ id: 's1', taskId: '', onOutput: vi.fn(), onExit: vi.fn(), kill: vi.fn(), getOutput: vi.fn().mockReturnValue(''), write: vi.fn() }),
+    spawn: vi.fn(async () => new FakeTerminalSession()),
     stop: vi.fn(),
     stopAll: vi.fn(),
     activeCount: 0,
   };
+}
+
+/** Spawns {@link FakeTerminalSession}s the test can drive, in spawn order. */
+function sessionRunner() {
+  const sessions: FakeTerminalSession[] = [];
+  const spawn = vi.fn(async (opts: Parameters<ITerminalRunner['spawn']>[0]) => {
+    const session = new FakeTerminalSession(`s${sessions.length + 1}`, opts.taskId);
+    sessions.push(session);
+    return session;
+  });
+  return { sessions, spawn, stop: vi.fn(), stopAll: vi.fn() };
 }
 
 function makeOrchestrator(overrides: {
@@ -188,12 +188,12 @@ describe('TaskOrchestrator', () => {
 
   describe('markAiTaskComplete', () => {
     it('delegates to markTaskComplete', async () => {
-      const stop = vi.fn();
-      const orchestrator = makeOrchestrator({ terminalRunner: { stop } });
+      const { spawn, stop } = sessionRunner();
+      const orchestrator = makeOrchestrator({ terminalRunner: { spawn, stop } });
       orchestrator.loadPlan([
-        createTask({ id: 't1', order: 1, title: 'AI Task', prompt: 'do', status: 'in_progress' }),
+        createTask({ id: 't1', order: 1, title: 'AI Task', prompt: 'do' }),
       ]);
-      internals(orchestrator).activeTaskSessions.set('t1', 'session-t1');
+      await orchestrator.forceStartTask('t1');
 
       await orchestrator.markAiTaskComplete('t1');
 
@@ -201,7 +201,7 @@ describe('TaskOrchestrator', () => {
       expect(log).toHaveLength(1);
       expect(log[0].verdict!.outcome).toBe('pass');
       expect(log[0].verdict!.checks[0].name).toBe('manual');
-      expect(stop).toHaveBeenCalledWith('session-t1');
+      expect(stop).toHaveBeenCalledWith('s1');
     });
   });
 
@@ -251,24 +251,21 @@ describe('TaskOrchestrator', () => {
     });
 
     it('stops only the running session for the task being marked complete', async () => {
-      const stop = vi.fn();
-      const stopAll = vi.fn();
-      const orchestrator = makeOrchestrator({ terminalRunner: { stop, stopAll } });
+      const { spawn, stop, stopAll } = sessionRunner();
+      const orchestrator = makeOrchestrator({ terminalRunner: { spawn, stop, stopAll } });
       orchestrator.loadPlan([
-        createTask({ id: 't1', order: 1, title: 'AI Task', prompt: 'do', status: 'in_progress' }),
-        createTask({ id: 't2', order: 2, title: 'Other AI Task', prompt: 'do other', status: 'in_progress' }),
+        createTask({ id: 't1', order: 1, title: 'AI Task', prompt: 'do' }),
+        createTask({ id: 't2', order: 2, title: 'Other AI Task', prompt: 'do other' }),
       ]);
-      // Simulate active sessions as if both tasks were spawned.
-      internals(orchestrator).activeTaskSessions.set('t1', 'session-t1');
-      internals(orchestrator).activeTaskSessions.set('t2', 'session-t2');
+      await orchestrator.forceStartTask('t1');
+      await orchestrator.forceStartTask('t2');
 
       await orchestrator.markTaskComplete('t1');
 
       expect(stop).toHaveBeenCalledTimes(1);
-      expect(stop).toHaveBeenCalledWith('session-t1');
+      expect(stop).toHaveBeenCalledWith('s1');
       expect(stopAll).not.toHaveBeenCalled();
-      expect(internals(orchestrator).activeTaskSessions.has('t1')).toBe(false);
-      expect(internals(orchestrator).activeTaskSessions.has('t2')).toBe(true);
+      expect(orchestrator.activeSessionMap).toEqual(new Map([['t2', 's2']]));
     });
 
     it('unblocks dependents when marking a failed task complete', async () => {
@@ -335,13 +332,15 @@ describe('TaskOrchestrator', () => {
     });
 
     it('holds the un-marked task so a running plan does not immediately respawn it', async () => {
-      const spawn = vi.fn().mockResolvedValue({ id: 's1', taskId: '', onOutput: vi.fn(), onExit: vi.fn(), kill: vi.fn(), getOutput: vi.fn().mockReturnValue(''), write: vi.fn() });
+      const { spawn } = sessionRunner();
       const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
       orchestrator.loadPlan([
         createTask({ id: 't1', order: 1, title: 'AI Task', prompt: 'do', status: 'completed' }),
+        // A pending user task keeps the run armed but idle.
+        createTask({ id: 'u1', order: 2, title: 'Check', type: 'user' }),
       ]);
-      internals(orchestrator).reviewApproved = true;
-      internals(orchestrator).running = true;
+      await orchestrator.approveReview();
+      expect(orchestrator.isRunning).toBe(true);
 
       await orchestrator.markTaskIncomplete('t1');
 
@@ -357,9 +356,8 @@ describe('TaskOrchestrator', () => {
       orchestrator.loadPlan([
         createTask({ id: 't1', order: 1, title: 'AI Task', prompt: 'do', status: 'pending' }),
       ]);
-      internals(orchestrator).reviewApproved = true;
       await orchestrator.markTaskComplete('t1');
-      await orchestrator.start();
+      await orchestrator.approveReview();
       expect(orchestrator.status).toBe('completed');
 
       await orchestrator.markTaskIncomplete('t1');
@@ -369,12 +367,8 @@ describe('TaskOrchestrator', () => {
   });
 
   describe('forceStartTask', () => {
-    function makeSession() {
-      return { id: 's1', taskId: '', onOutput: vi.fn(), onExit: vi.fn(), kill: vi.fn(), getOutput: vi.fn().mockReturnValue(''), write: vi.fn() };
-    }
-
     it('starts an AI task with the augmented prompt (not the raw prompt)', async () => {
-      const spawn = vi.fn().mockResolvedValue(makeSession());
+      const { spawn } = sessionRunner();
       const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
       orchestrator.setWorkspaceRoot(() => '/repo');
       const tasks = [
@@ -397,7 +391,7 @@ describe('TaskOrchestrator', () => {
     });
 
     it('is a no-op for unknown ids and non-AI tasks', async () => {
-      const spawn = vi.fn().mockResolvedValue(makeSession());
+      const { spawn } = sessionRunner();
       const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
       orchestrator.loadPlan([
         createTask({ id: 'u1', order: 1, title: 'Manual', type: 'user' }),
@@ -410,22 +404,7 @@ describe('TaskOrchestrator', () => {
     });
 
     it('detects the completion marker in output and logs the task', async () => {
-      // Build a session where we control onOutput and onExit callbacks manually
-      let onOutputCb: ((text: string) => void) | undefined;
-      let onExitCb: ((code: number) => void) | undefined;
-      let output = '';
-
-      const session = {
-        id: 's1',
-        taskId: 't1',
-        onOutput: vi.fn((cb) => { onOutputCb = cb; }),
-        onExit: vi.fn((cb) => { onExitCb = cb; }),
-        kill: vi.fn(),
-        getOutput: vi.fn(() => output),
-        write: vi.fn(),
-      };
-
-      const spawn = vi.fn().mockResolvedValue(session);
+      const { sessions, spawn } = sessionRunner();
       const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
       orchestrator.setWorkspaceRoot(() => '/repo');
 
@@ -434,15 +413,8 @@ describe('TaskOrchestrator', () => {
       orchestrator.loadPlan([task]);
       await orchestrator.forceStartTask('t1');
 
-      expect(onOutputCb).toBeDefined();
-      expect(onExitCb).toBeDefined();
-
-      // Simulate output arriving with the marker
-      output = 'Working on it...\n<<<ORDEWELL_DONE_mk-1>>>\nDone.';
-      onOutputCb!(output);
-
-      // Now simulate the session exiting naturally
-      onExitCb!(-1);
+      sessions[0].emitOutput('Working on it...\n<<<ORDEWELL_DONE_mk-1>>>\nDone.');
+      sessions[0].emitExit(-1);
 
       // Wait for the async onAiTaskExit to complete
       await new Promise(r => setTimeout(r, 10));
@@ -459,20 +431,7 @@ describe('TaskOrchestrator', () => {
     });
 
     it('marks task as failed when session exits without marker seen and non-zero exit code', async () => {
-      let onExitCb: ((code: number) => void) | undefined;
-      let output = '';
-
-      const session = {
-        id: 's1',
-        taskId: 't1',
-        onOutput: vi.fn(),
-        onExit: vi.fn((cb) => { onExitCb = cb; }),
-        kill: vi.fn(),
-        getOutput: vi.fn(() => output),
-        write: vi.fn(),
-      };
-
-      const spawn = vi.fn().mockResolvedValue(session);
+      const { sessions, spawn } = sessionRunner();
       const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
       orchestrator.setWorkspaceRoot(() => '/repo');
 
@@ -481,9 +440,8 @@ describe('TaskOrchestrator', () => {
       orchestrator.loadPlan([task]);
       await orchestrator.forceStartTask('t1');
 
-      // Simulate session exit without marker
-      output = 'Something went wrong.';
-      onExitCb!(1);
+      sessions[0].output = 'Something went wrong.';
+      sessions[0].emitExit(1);
 
       // Wait for the async onAiTaskExit to complete
       await new Promise(r => setTimeout(r, 10));
@@ -500,17 +458,7 @@ describe('TaskOrchestrator', () => {
 
   describe('runTask', () => {
     it('runs only the selected task, stays busy until its marker, and does not schedule following work', async () => {
-      let onOutputCb: ((text: string) => void) | undefined;
-      const runnerSession = {
-        id: 'single-1',
-        taskId: 't1',
-        onOutput: vi.fn((cb: (text: string) => void) => { onOutputCb = cb; }),
-        onExit: vi.fn(),
-        kill: vi.fn(),
-        getOutput: vi.fn(() => ''),
-        write: vi.fn(),
-      };
-      const spawn = vi.fn().mockResolvedValue(runnerSession);
+      const { sessions, spawn } = sessionRunner();
       const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
       orchestrator.setWorkspaceRoot(() => '/repo');
       orchestrator.loadPlan([
@@ -525,7 +473,7 @@ describe('TaskOrchestrator', () => {
       expect(orchestrator.isRunning).toBe(true);
       expect(orchestrator.storeInstance.get('t1')?.status).toBe('in_progress');
 
-      onOutputCb?.('<<<ORDEWELL_DONE_mk-1>>>');
+      sessions[0].emitOutput('<<<ORDEWELL_DONE_mk-1>>>');
       await new Promise(r => setTimeout(r, 10));
 
       expect(orchestrator.storeInstance.get('t1')?.status).toBe('completed');
@@ -724,12 +672,8 @@ describe('TaskOrchestrator', () => {
   });
 
   describe('queue check in tick', () => {
-    function makeSession() {
-      return { id: 's1', taskId: '', onOutput: vi.fn(), onExit: vi.fn(), kill: vi.fn(), getOutput: vi.fn().mockReturnValue(''), write: vi.fn() };
-    }
-
     it('pauses when queue has messages and no active sessions', async () => {
-      const spawn = vi.fn().mockResolvedValue(makeSession());
+      const { spawn } = sessionRunner();
       const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
       orchestrator.setWorkspaceRoot(() => '/repo');
 
@@ -747,65 +691,57 @@ describe('TaskOrchestrator', () => {
       expect(spawn).not.toHaveBeenCalled();
     });
 
+    // The run is armed on a user gate; t1 is force-started past it so a
+    // runner is live when the gate opens and the scheduler looks at t2.
+    function gatedPlan() {
+      return [
+        createTask({ id: 'u1', order: 1, title: 'Gate', type: 'user' }),
+        createTask({ id: 't1', order: 2, title: 'Task 1', prompt: 'do it', dependencies: ['u1'] }),
+        createTask({ id: 't2', order: 3, title: 'Task 2', prompt: 'do also', dependencies: ['u1'] }),
+      ];
+    }
+
     it('prevents starting new tasks when queue has messages and active sessions exist', async () => {
-      const spawn = vi.fn().mockResolvedValue(makeSession());
+      const { spawn } = sessionRunner();
       const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
       orchestrator.setWorkspaceRoot(() => '/repo');
-
-      orchestrator.loadPlan([
-        createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it' }),
-        createTask({ id: 't2', order: 2, title: 'Task 2', prompt: 'do also' }),
-      ]);
-
-      internals(orchestrator).running = true;
-      internals(orchestrator).reviewApproved = true;
-
+      orchestrator.loadPlan(gatedPlan());
+      await orchestrator.approveReview();
       await orchestrator.forceStartTask('t1');
-      await new Promise(r => setTimeout(r, 10));
 
       orchestrator.queueMessage('hold on');
+      await orchestrator.markTaskComplete('u1');
 
-      const spawnCount = spawn.mock.calls.length;
-      await orchestrator.tick();
-      await new Promise(r => setTimeout(r, 10));
-
-      expect(spawn).toHaveBeenCalledTimes(spawnCount);
+      expect(spawn).toHaveBeenCalledTimes(1);
     });
 
     it('proceeds normally when queue is empty', async () => {
-      const spawn = vi.fn().mockResolvedValue(makeSession());
+      const { spawn } = sessionRunner();
       const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
       orchestrator.setWorkspaceRoot(() => '/repo');
-
-      orchestrator.loadPlan([
-        createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it' }),
-        createTask({ id: 't2', order: 2, title: 'Task 2', prompt: 'do also' }),
-      ]);
-
-      internals(orchestrator).running = true;
-      internals(orchestrator).reviewApproved = true;
-
+      orchestrator.loadPlan(gatedPlan());
+      await orchestrator.approveReview();
       await orchestrator.forceStartTask('t1');
-      await new Promise(r => setTimeout(r, 10));
 
-      const spawnCount = spawn.mock.calls.length;
-      await orchestrator.tick();
+      await orchestrator.markTaskComplete('u1');
 
-      expect(spawn).toHaveBeenCalledTimes(spawnCount + 1);
+      expect(spawn).toHaveBeenCalledTimes(2);
+      expect(spawn.mock.calls[1][0].taskId).toBe('t2');
     });
   });
 
 describe('merge-on-reload', () => {
+    /** A one-task plan whose run is approved and whose task has a live runner ('s1'). */
+    async function runningOn(taskId: string) {
+      const { spawn } = sessionRunner();
+      const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
+      orchestrator.loadPlan([createTask({ id: taskId, order: 1, title: 'Task 1', prompt: 'do it' })]);
+      await orchestrator.approveReview();
+      return orchestrator;
+    }
 
-    it('preserves running sessions when task exists in new plan as in_progress', () => {
-      const orchestrator = makeOrchestrator();
-      orchestrator.loadPlan([
-        createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it' }),
-      ]);
-
-      internals(orchestrator).running = true;
-      internals(orchestrator).reviewApproved = true;
-      internals(orchestrator).activeTaskSessions.set('t1', 's1');
+    it('preserves running sessions when task exists in new plan as in_progress', async () => {
+      const orchestrator = await runningOn('t1');
 
       const newTasks = [
         createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it', status: 'in_progress' }),
@@ -819,15 +755,8 @@ describe('merge-on-reload', () => {
       expect(orchestrator.isRunning).toBe(true);
     });
 
-    it('keeps running task in store when removed from new plan (for onVerdict processing)', () => {
-      const orchestrator = makeOrchestrator();
-      orchestrator.loadPlan([
-        createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it' }),
-      ]);
-
-      internals(orchestrator).running = true;
-      internals(orchestrator).reviewApproved = true;
-      internals(orchestrator).activeTaskSessions.set('t1', 's1');
+    it('keeps running task in store when removed from new plan (for onVerdict processing)', async () => {
+      const orchestrator = await runningOn('t1');
 
       const newTasks = [
         createTask({ id: 't2', order: 1, title: 'New Task', prompt: 'new work' }),
@@ -843,15 +772,8 @@ describe('merge-on-reload', () => {
     // The edited plan is a snapshot, and a task that started after it was taken
     // reads as 'pending' in it. Adopting that status would hand the same work to
     // the scheduler a second time while the first runner is still going.
-    it('keeps a live task in_progress, its session tracked and the review approved', () => {
-      const orchestrator = makeOrchestrator();
-      orchestrator.loadPlan([
-        createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it' }),
-      ]);
-
-      internals(orchestrator).running = true;
-      internals(orchestrator).reviewApproved = true;
-      internals(orchestrator).activeTaskSessions.set('t1', 's1');
+    it('keeps a live task in_progress, its session tracked and the review approved', async () => {
+      const orchestrator = await runningOn('t1');
 
       orchestrator.reconcilePlan([
         createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it', status: 'pending' }),
@@ -863,16 +785,9 @@ describe('merge-on-reload', () => {
       expect(orchestrator.isReviewApproved).toBe(true);
     });
 
-    it('logs a warning when running task status changed in new plan', () => {
+    it('logs a warning when running task status changed in new plan', async () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      const orchestrator = makeOrchestrator();
-      orchestrator.loadPlan([
-        createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it' }),
-      ]);
-
-      internals(orchestrator).running = true;
-      internals(orchestrator).reviewApproved = true;
-      internals(orchestrator).activeTaskSessions.set('t1', 's1');
+      const orchestrator = await runningOn('t1');
 
       const newTasks = [
         createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it', status: 'pending' }),
@@ -890,31 +805,7 @@ describe('merge-on-reload', () => {
 
 describe('sequential dependency chain', () => {
     it('spawns dependent task after its dependency completes and is archived', async () => {
-      let onOutputCb: ((text: string) => void) | undefined;
-      let onExitCb: ((code: number) => void) | undefined;
-      let output = '';
-
-      const session1 = {
-        id: 's1', taskId: 't1',
-        onOutput: vi.fn((cb) => { onOutputCb = cb; }),
-        onExit: vi.fn((cb) => { onExitCb = cb; }),
-        kill: vi.fn(),
-        getOutput: vi.fn(() => output),
-        write: vi.fn(),
-      };
-
-      // For t2, we just track whether it was spawned — it won't complete in this test
-      const session2 = {
-        id: 's2', taskId: 't2',
-        onOutput: vi.fn(), onExit: vi.fn(), kill: vi.fn(),
-        getOutput: vi.fn(() => ''), write: vi.fn(),
-      };
-
-      let spawnCount = 0;
-      const spawn = vi.fn().mockImplementation(() => {
-        spawnCount++;
-        return spawnCount === 1 ? session1 : session2;
-      });
+      const { sessions, spawn } = sessionRunner();
       const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
       orchestrator.setWorkspaceRoot(() => '/repo');
 
@@ -930,10 +821,8 @@ describe('sequential dependency chain', () => {
       expect(spawn).toHaveBeenCalledTimes(1);
       expect(spawn.mock.calls[0][0].taskId).toBe('t1');
 
-      // Simulate t1 completing
-      output = 'Done.\n<<<ORDEWELL_DONE_mk-1>>>';
-      onOutputCb!(output);
-      onExitCb!(0);
+      sessions[0].emitOutput('Done.\n<<<ORDEWELL_DONE_mk-1>>>');
+      sessions[0].emitExit(0);
       await new Promise(r => setTimeout(r, 50));
 
       // t2 should now be spawned
@@ -952,9 +841,7 @@ describe('sequential dependency chain', () => {
 
 describe('resuming after a user-action pause', () => {
     it('keeps running=true when the only remaining work needs user action, so completing it resumes the dependent AI task', async () => {
-      const spawn = vi.fn().mockResolvedValue({
-        id: 's2', taskId: 't2', onOutput: vi.fn(), onExit: vi.fn(), kill: vi.fn(), getOutput: vi.fn(() => ''), write: vi.fn(),
-      });
+      const { spawn } = sessionRunner();
       const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
       orchestrator.setWorkspaceRoot(() => '/repo');
 
@@ -1022,35 +909,19 @@ describe('resuming after a user-action pause', () => {
   });
 
 describe('execution log tracking', () => {
-    function makeSessionWithCallbacks() {
-      let onExitCb: ((code: number) => void) | undefined;
-      let output = '';
-      return {
-        session: {
-          id: 's1', taskId: '', onOutput: vi.fn(), onExit: vi.fn((cb: (code: number) => void) => { onExitCb = cb; }),
-          kill: vi.fn(), getOutput: vi.fn(() => output), write: vi.fn(),
-        },
-        setOutput: (o: string) => { output = o; },
-        triggerExit: (code: number) => { onExitCb?.(code); },
-      };
-    }
 
     it('appends completed task to execution log while keeping it in the active plan', async () => {
-      const { session, setOutput, triggerExit } = makeSessionWithCallbacks();
-      const spawn = vi.fn().mockResolvedValue(session);
+      const { sessions, spawn } = sessionRunner();
       const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
       orchestrator.setWorkspaceRoot(() => '/repo');
 
       const task = createTask({ id: 't1', order: 1, title: 'Test', prompt: 'do it', completionMarker: 'mk-1' });
       orchestrator.loadPlan([task]);
 
-      internals(orchestrator).running = true;
-      internals(orchestrator).reviewApproved = true;
+      await orchestrator.approveReview();
 
-      await orchestrator.forceStartTask('t1');
-
-      setOutput('Done.\n<<<ORDEWELL_DONE_mk-1>>>');
-      triggerExit(0);
+      sessions[0].output = 'Done.\n<<<ORDEWELL_DONE_mk-1>>>';
+      sessions[0].emitExit(0);
 
       await new Promise(r => setTimeout(r, 50));
 
@@ -1065,21 +936,17 @@ describe('execution log tracking', () => {
     });
 
     it('logs failed task to execution log', async () => {
-      const { session, setOutput, triggerExit } = makeSessionWithCallbacks();
-      const spawn = vi.fn().mockResolvedValue(session);
+      const { sessions, spawn } = sessionRunner();
       const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
       orchestrator.setWorkspaceRoot(() => '/repo');
 
       const task = createTask({ id: 't1', order: 1, title: 'Test', prompt: 'do it', completionMarker: 'mk-1' });
       orchestrator.loadPlan([task]);
 
-      internals(orchestrator).running = true;
-      internals(orchestrator).reviewApproved = true;
+      await orchestrator.approveReview();
 
-      await orchestrator.forceStartTask('t1');
-
-      setOutput('Error occurred');
-      triggerExit(1);
+      sessions[0].output = 'Error occurred';
+      sessions[0].emitExit(1);
 
       await new Promise(r => setTimeout(r, 50));
 
@@ -1093,171 +960,99 @@ describe('execution log tracking', () => {
   });
 
 describe('checkpoints', () => {
-    it('emits onCheckpoint event when verifier detects a checkpoint', () => {
-      const orchestrator = makeOrchestrator();
-      orchestrator.loadPlan([
-        createTask({ id: 't1', order: 1, title: 'HITL Task', prompt: 'do', autonomy: 'HITL' }),
-      ]);
+    function hitlPlan() {
+      return [createTask({ id: 't1', order: 1, title: 'HITL Task', prompt: 'do', autonomy: 'HITL', completionMarker: 'mk-1' })];
+    }
 
+    it('emits onCheckpoint event when verifier detects a checkpoint', async () => {
+      const { sessions, spawn } = sessionRunner();
+      const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
+      orchestrator.setWorkspaceRoot(() => '/repo');
+      orchestrator.loadPlan(hitlPlan());
       const events: { taskId: string; taskTitle: string; summary: string }[] = [];
-      orchestrator.subscribe({
-        onCheckpoint: (data) => events.push(data),
-      });
+      orchestrator.subscribe({ onCheckpoint: (data) => events.push(data) });
 
-      // Simulate the verifier emitting a checkpoint event
-      const session = { id: 's1', taskId: 't1', onOutput: vi.fn(), onExit: vi.fn(), kill: vi.fn(), getOutput: vi.fn().mockReturnValue(''), write: vi.fn() };
-      const spawn = vi.fn().mockResolvedValue(session);
-      const orchestrator2 = makeOrchestrator({ terminalRunner: { spawn } });
-      orchestrator2.setWorkspaceRoot(() => '/repo');
-      orchestrator2.loadPlan([
-        createTask({ id: 't1', order: 1, title: 'HITL Task', prompt: 'do', autonomy: 'HITL', completionMarker: 'mk-1' }),
-      ]);
-      orchestrator2.subscribe({
-        onCheckpoint: (data) => events.push(data),
-      });
+      await orchestrator.forceStartTask('t1');
+      sessions[0].emitOutput('<<<ORDEWELL_CHECKPOINT: need review>>>');
 
-      orchestrator2.forceStartTask('t1').then(() => {
-        const onOutputCb = (session.onOutput as import("vitest").Mock).mock.calls[0]?.[0];
-        if (onOutputCb) onOutputCb('<<<ORDEWELL_CHECKPOINT: need review>>>');
-      });
-
-      return new Promise<void>(resolve => setTimeout(() => {
-        // The verifier's onCheckpoint listener should cascade to orchestrator's onCheckpoint
-        // Just verifying the event shape is consumable
-        expect(events.length).toBeGreaterThanOrEqual(0);
-        resolve();
-      }, 50));
+      expect(events).toEqual([{ taskId: 't1', taskTitle: 'HITL Task', summary: 'need review' }]);
     });
 
     it('sets task status to awaiting_user on checkpoint', async () => {
-      const session = {
-        id: 's1', taskId: 't1',
-        onOutput: vi.fn(), onExit: vi.fn(), kill: vi.fn(),
-        getOutput: vi.fn().mockReturnValue(''),
-        write: vi.fn(),
-      };
-      const spawn = vi.fn().mockResolvedValue(session);
+      const { sessions, spawn } = sessionRunner();
       const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
       orchestrator.setWorkspaceRoot(() => '/repo');
-      orchestrator.loadPlan([
-        createTask({ id: 't1', order: 1, title: 'HITL Task', prompt: 'do', autonomy: 'HITL', completionMarker: 'mk-1' }),
-      ]);
+      orchestrator.loadPlan(hitlPlan());
 
       await orchestrator.forceStartTask('t1');
+      sessions[0].emitOutput('<<<ORDEWELL_CHECKPOINT: approve this>>>');
 
-      // Manually trigger the verifier checkpoint callback (integration test)
-      const onOutputCb = (session.onOutput as import("vitest").Mock).mock.calls[0]?.[0];
-      if (onOutputCb) {
-        onOutputCb('<<<ORDEWELL_CHECKPOINT: approve this>>>');
-        await new Promise(r => setTimeout(r, 10));
-        expect(orchestrator.storeInstance.get('t1')!.status).toBe('awaiting_user');
-      }
+      expect(orchestrator.storeInstance.get('t1')!.status).toBe('awaiting_user');
     });
 
     it('approveCheckpoint resumes task status to in_progress', async () => {
-      const session = {
-        id: 's1', taskId: 't1',
-        onOutput: vi.fn(), onExit: vi.fn(), kill: vi.fn(),
-        getOutput: vi.fn().mockReturnValue(''),
-        write: vi.fn(),
-      };
-      const spawn = vi.fn().mockResolvedValue(session);
+      const { sessions, spawn } = sessionRunner();
       const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
       orchestrator.setWorkspaceRoot(() => '/repo');
-      orchestrator.loadPlan([
-        createTask({ id: 't1', order: 1, title: 'HITL Task', prompt: 'do', autonomy: 'HITL', completionMarker: 'mk-1' }),
-      ]);
+      orchestrator.loadPlan(hitlPlan());
 
       await orchestrator.forceStartTask('t1');
-      const onOutputCb = (session.onOutput as import("vitest").Mock).mock.calls[0]?.[0];
-      if (onOutputCb) {
-        onOutputCb('<<<ORDEWELL_CHECKPOINT: approve this>>>');
-        await new Promise(r => setTimeout(r, 10));
-        expect(orchestrator.storeInstance.get('t1')!.status).toBe('awaiting_user');
+      sessions[0].emitOutput('<<<ORDEWELL_CHECKPOINT: approve this>>>');
+      expect(orchestrator.storeInstance.get('t1')!.status).toBe('awaiting_user');
 
-        orchestrator.approveCheckpoint('t1');
-        expect(orchestrator.storeInstance.get('t1')!.status).toBe('in_progress');
-        expect(session.write).toHaveBeenCalled();
-      }
+      orchestrator.approveCheckpoint('t1');
+      expect(orchestrator.storeInstance.get('t1')!.status).toBe('in_progress');
+      expect(sessions[0].written.length).toBeGreaterThan(0);
     });
 
     it('rejectCheckpoint resumes task status to in_progress', async () => {
-      const session = {
-        id: 's1', taskId: 't1',
-        onOutput: vi.fn(), onExit: vi.fn(), kill: vi.fn(),
-        getOutput: vi.fn().mockReturnValue(''),
-        write: vi.fn(),
-      };
-      const spawn = vi.fn().mockResolvedValue(session);
+      const { sessions, spawn } = sessionRunner();
       const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
       orchestrator.setWorkspaceRoot(() => '/repo');
-      orchestrator.loadPlan([
-        createTask({ id: 't1', order: 1, title: 'HITL Task', prompt: 'do', autonomy: 'HITL', completionMarker: 'mk-1' }),
-      ]);
+      orchestrator.loadPlan(hitlPlan());
 
       await orchestrator.forceStartTask('t1');
-      const onOutputCb = (session.onOutput as import("vitest").Mock).mock.calls[0]?.[0];
-      if (onOutputCb) {
-        onOutputCb('<<<ORDEWELL_CHECKPOINT: approve this>>>');
-        await new Promise(r => setTimeout(r, 10));
-        expect(orchestrator.storeInstance.get('t1')!.status).toBe('awaiting_user');
+      sessions[0].emitOutput('<<<ORDEWELL_CHECKPOINT: approve this>>>');
+      expect(orchestrator.storeInstance.get('t1')!.status).toBe('awaiting_user');
 
-        orchestrator.rejectCheckpoint('t1', 'try again');
-        expect(orchestrator.storeInstance.get('t1')!.status).toBe('in_progress');
-        expect(session.write).toHaveBeenCalled();
-      }
+      orchestrator.rejectCheckpoint('t1', 'try again');
+      expect(orchestrator.storeInstance.get('t1')!.status).toBe('in_progress');
+      expect(sessions[0].written.length).toBeGreaterThan(0);
     });
 
-    it('setTddEnabled wires tdd config to verifier', () => {
-      const orchestrator = makeOrchestrator();
-      orchestrator.setWorkspaceRoot(() => '/repo');
-      orchestrator.setTddEnabled(true);
-
-      // Verify TDD instructions are included in prompt
+    it('setTddEnabled wires tdd config to verifier', async () => {
       const tasks = [
         createTask({ id: 'a', order: 1, title: 'A', prompt: 'do work' }),
         createTask({ id: 'b', order: 2, title: 'B', prompt: 'pb' }),
         createTask({ id: 'c', order: 3, title: 'C', prompt: 'pc' }),
       ];
-      orchestrator.loadPlan(tasks);
-
-      // forceStartTask will use composeAugmentedPrompt with tddEnabled
-      const session = { id: 's1', taskId: 'a', onOutput: vi.fn(), onExit: vi.fn(), kill: vi.fn(), getOutput: vi.fn().mockReturnValue(''), write: vi.fn() };
-      const spawn = vi.fn().mockResolvedValue(session);
-      const orchestrator2 = makeOrchestrator({ terminalRunner: { spawn } });
-      orchestrator2.setWorkspaceRoot(() => '/repo');
-      orchestrator2.setTddEnabled(true);
-      orchestrator2.loadPlan(tasks);
-
-      orchestrator2.forceStartTask('a');
-      return new Promise<void>(resolve => setTimeout(() => {
-        expect(spawn).toHaveBeenCalledTimes(1);
-        const prompt = spawn.mock.calls[0][0].prompt;
-        expect(prompt).toContain('## Implementation workflow (TDD)');
-        resolve();
-      }, 20));
-    });
-
-    it('tddEnabled=false omits TDD instructions', () => {
-      const tasks = [
-        createTask({ id: 'a', order: 1, title: 'A', prompt: 'do work' }),
-        createTask({ id: 'b', order: 2, title: 'B', prompt: 'pb' }),
-        createTask({ id: 'c', order: 3, title: 'C', prompt: 'pc' }),
-      ];
-      const session = { id: 's1', taskId: 'a', onOutput: vi.fn(), onExit: vi.fn(), kill: vi.fn(), getOutput: vi.fn().mockReturnValue(''), write: vi.fn() };
-      const spawn = vi.fn().mockResolvedValue(session);
+      const { spawn } = sessionRunner();
       const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
       orchestrator.setWorkspaceRoot(() => '/repo');
-      // tddEnabled defaults to false
+      orchestrator.setTddEnabled(true);
       orchestrator.loadPlan(tasks);
 
-      orchestrator.forceStartTask('a');
-      return new Promise<void>(resolve => setTimeout(() => {
-        expect(spawn).toHaveBeenCalledTimes(1);
-        const prompt = spawn.mock.calls[0][0].prompt;
-        expect(prompt).not.toContain('## TDD workflow');
-        resolve();
-      }, 20));
+      await orchestrator.forceStartTask('a');
+
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(spawn.mock.calls[0][0].prompt).toContain('## Implementation workflow (TDD)');
+    });
+
+    it('tddEnabled=false omits TDD instructions', async () => {
+      const tasks = [
+        createTask({ id: 'a', order: 1, title: 'A', prompt: 'do work' }),
+        createTask({ id: 'b', order: 2, title: 'B', prompt: 'pb' }),
+        createTask({ id: 'c', order: 3, title: 'C', prompt: 'pc' }),
+      ];
+      const { spawn } = sessionRunner();
+      const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
+      orchestrator.setWorkspaceRoot(() => '/repo');
+      orchestrator.loadPlan(tasks);
+
+      await orchestrator.forceStartTask('a');
+
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(spawn.mock.calls[0][0].prompt).not.toContain('## Implementation workflow (TDD)');
     });
   });
 
@@ -1267,28 +1062,8 @@ describe('cancelTask', () => {
     // from within stop()/kill() — this mimics that to reproduce the race
     // where a cancelled task's dependent gets spawned before the cancelled
     // task is reverted to 'pending'.
-    let onExitCb: ((code: number) => void) | undefined;
-    const session1 = {
-      id: 's1', taskId: 't1',
-      onOutput: vi.fn(), onExit: vi.fn((cb: (code: number) => void) => { onExitCb = cb; }),
-      kill: vi.fn(), getOutput: vi.fn(() => ''), write: vi.fn(),
-    };
-    const session2 = {
-      id: 's2', taskId: 't2',
-      onOutput: vi.fn(), onExit: vi.fn(),
-      kill: vi.fn(), getOutput: vi.fn(() => ''), write: vi.fn(),
-    };
-
-    let spawnCount = 0;
-    const spawn = vi.fn().mockImplementation(() => {
-      spawnCount++;
-      return Promise.resolve(spawnCount === 1 ? session1 : session2);
-    });
-    const stop = vi.fn().mockImplementation(() => {
-      // Simulate TmuxSession.kill() -> synchronous exit(-1) before cancelTask
-      // has a chance to revert the task to 'pending'.
-      onExitCb?.(-1);
-    });
+    const { sessions, spawn } = sessionRunner();
+    const stop = vi.fn(() => sessions[0].emitExit(-1));
     const orchestrator = makeOrchestrator({ terminalRunner: { spawn, stop } });
     orchestrator.setWorkspaceRoot(() => '/repo');
 
@@ -1298,7 +1073,6 @@ describe('cancelTask', () => {
     ]);
 
     await orchestrator.approveReview();
-    await new Promise(r => setTimeout(r, 20));
 
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(spawn.mock.calls[0][0].taskId).toBe('t1');
@@ -1313,4 +1087,166 @@ describe('cancelTask', () => {
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 });
+});
+
+describe('task attempts', () => {
+  it('records the runner, working directory and start time of a running attempt', async () => {
+    const { sessions, spawn } = sessionRunner();
+    const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
+    orchestrator.setWorkspaceRoot(() => '/repo');
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' })]);
+
+    await orchestrator.forceStartTask('t1');
+
+    const attempt = orchestrator.getAttempt('t1');
+    expect(attempt).toMatchObject({ taskId: 't1', attempt: 1, phase: 'running', runner: 'claude-code', cwd: '/repo', sessionId: 's1' });
+    expect(Number.isNaN(Date.parse(attempt!.startedAt))).toBe(false);
+    expect(orchestrator.getAttemptSession('t1')).toBe(sessions[0]);
+  });
+
+  function expectNoAttemptState(orchestrator: TaskOrchestrator) {
+    expect(orchestrator.getAttempt('t1')).toBeUndefined();
+    expect(orchestrator.getAttemptSession('t1')).toBeUndefined();
+    expect(orchestrator.activeSessionMap.size).toBe(0);
+    expect(orchestrator.hasLiveWork).toBe(false);
+  }
+
+  it('cancel stops the runner and leaves no attempt state', async () => {
+    const { spawn, stop } = sessionRunner();
+    const orchestrator = makeOrchestrator({ terminalRunner: { spawn, stop } });
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' })]);
+    await orchestrator.forceStartTask('t1');
+
+    await orchestrator.cancelTask('t1');
+
+    expect(stop).toHaveBeenCalledWith('s1');
+    expectNoAttemptState(orchestrator);
+  });
+
+  it('stop leaves no attempt state', async () => {
+    const { spawn, stopAll } = sessionRunner();
+    const orchestrator = makeOrchestrator({ terminalRunner: { spawn, stopAll } });
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' })]);
+    await orchestrator.approveReview();
+    expect(orchestrator.getAttempt('t1')?.phase).toBe('running');
+
+    orchestrator.stop();
+
+    expect(stopAll).toHaveBeenCalled();
+    expectNoAttemptState(orchestrator);
+    expect(orchestrator.isRunning).toBe(false);
+  });
+
+  it('loading a plan leaves no attempt state', async () => {
+    const { spawn } = sessionRunner();
+    const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
+    const plan = [createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' })];
+    orchestrator.loadPlan(plan);
+    await orchestrator.forceStartTask('t1');
+
+    orchestrator.loadPlan(plan);
+
+    expectNoAttemptState(orchestrator);
+  });
+
+  /** A runner whose spawns resolve only when the test says so. */
+  function heldSpawns() {
+    const pending: Array<(session: FakeTerminalSession) => void> = [];
+    const spawn = vi.fn(() => new Promise<ITerminalSession>((resolve) => { pending.push(resolve); }));
+    const settle = async (index: number, session: FakeTerminalSession) => {
+      pending[index](session);
+      await new Promise((r) => setTimeout(r, 0));
+    };
+    return { spawn, settle, spawned: () => pending.length };
+  }
+
+  it('stop during an in-flight spawn kills the late session and does not resurrect the task', async () => {
+    const { spawn, settle, spawned } = heldSpawns();
+    const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' })]);
+    void orchestrator.forceStartTask('t1');
+    await vi.waitFor(() => expect(spawned()).toBe(1));
+    expect(orchestrator.getAttempt('t1')?.phase).toBe('starting');
+    expect(orchestrator.getAttemptSession('t1')).toBeUndefined();
+
+    orchestrator.stop();
+    const late = new FakeTerminalSession('late', 't1');
+    await settle(0, late);
+
+    expect(late.killed).toBe(true);
+    expect(orchestrator.storeInstance.get('t1')!.status).toBe('pending');
+    expectNoAttemptState(orchestrator);
+    expect(orchestrator.isRunning).toBe(false);
+  });
+
+  // The old guard checked only that *a* spawn was starting for the id, so a
+  // restart claimed the flag and the stale spawn took it over.
+  it('a stale spawn settling after a restart neither replaces nor resets the new attempt', async () => {
+    const { spawn, settle, spawned } = heldSpawns();
+    const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' })]);
+    void orchestrator.forceStartTask('t1');
+    await vi.waitFor(() => expect(spawned()).toBe(1));
+    orchestrator.stop();
+    void orchestrator.forceStartTask('t1');
+    await vi.waitFor(() => expect(spawned()).toBe(2));
+
+    const stale = new FakeTerminalSession('stale', 't1');
+    const fresh = new FakeTerminalSession('fresh', 't1');
+    await settle(0, stale);
+    await settle(1, fresh);
+
+    expect(stale.killed).toBe(true);
+    expect(fresh.killed).toBe(false);
+    expect(orchestrator.getAttemptSession('t1')).toBe(fresh);
+    expect(orchestrator.getAttempt('t1')?.attempt).toBe(2);
+    expect(orchestrator.storeInstance.get('t1')!.status).toBe('in_progress');
+  });
+
+  it('cancel during an in-flight spawn kills the late session', async () => {
+    const { spawn, settle, spawned } = heldSpawns();
+    const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' })]);
+    void orchestrator.forceStartTask('t1');
+    await vi.waitFor(() => expect(spawned()).toBe(1));
+
+    await orchestrator.cancelTask('t1');
+    const late = new FakeTerminalSession('late', 't1');
+    await settle(0, late);
+
+    expect(late.killed).toBe(true);
+    expect(orchestrator.storeInstance.get('t1')!.status).toBe('pending');
+    expectNoAttemptState(orchestrator);
+  });
+
+  it('a verdict ends the attempt and a retry runs the task as a fresh one', async () => {
+    const { sessions, spawn } = sessionRunner();
+    const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first', completionMarker: 'mk-1' })]);
+    await orchestrator.approveReview();
+    sessions[0].emitExit(1);
+    await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('failed'));
+    expectNoAttemptState(orchestrator);
+
+    await orchestrator.retryTask('t1');
+    await orchestrator.start();
+
+    expect(orchestrator.getAttempt('t1')).toMatchObject({ attempt: 2, sessionId: 's2', phase: 'running' });
+  });
+
+  // Retrying a task whose runner is still up used to leave the old attempt
+  // registered, so the scheduler could never start the retry.
+  it('retrying a live task stops its runner so the retry can start', async () => {
+    const { spawn, stop } = sessionRunner();
+    const orchestrator = makeOrchestrator({ terminalRunner: { spawn, stop } });
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' })]);
+    await orchestrator.forceStartTask('t1');
+
+    await orchestrator.retryTask('t1');
+
+    expect(stop).toHaveBeenCalledWith('s1');
+    expectNoAttemptState(orchestrator);
+    await orchestrator.forceStartTask('t1');
+    expect(orchestrator.getAttempt('t1')).toMatchObject({ attempt: 2, sessionId: 's2' });
+  });
 });
