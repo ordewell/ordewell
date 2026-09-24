@@ -1342,6 +1342,26 @@ describe('task attempts', () => {
     expect(onExecutionComplete).not.toHaveBeenCalled();
   });
 
+  // loadPlan ends attempts without killing their runners, and a plan reload
+  // keeps task ids — the old runner's exit must not decide the new attempt.
+  it('a runner left over from before a plan load cannot fail the reloaded task', async () => {
+    const { sessions, spawn } = sessionRunner();
+    const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
+    const plan = () => [createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first', completionMarker: 'mk-1' })];
+    orchestrator.loadPlan(plan());
+    await orchestrator.forceStartTask('t1');
+
+    orchestrator.loadPlan(plan());
+    await orchestrator.forceStartTask('t1');
+    sessions[0].emitExit(1);
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(orchestrator.storeInstance.get('t1')!.status).toBe('in_progress');
+    expect(orchestrator.getAttempt('t1')).toMatchObject({ sessionId: 's2', phase: 'running' });
+    sessions[1].emitOutput('<<<ORDEWELL_DONE_mk-1>>>');
+    await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
+  });
+
   // Retrying a task whose runner is still up used to leave the old attempt
   // registered, so the scheduler could never start the retry.
   it('retrying a live task stops its runner so the retry can start', async () => {
