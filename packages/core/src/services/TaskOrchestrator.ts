@@ -644,7 +644,7 @@ export class TaskOrchestrator {
       this.emit('onTaskChanged');
       this.notifications.info(`Task "${task.title}" started (${attempt.runner})`);
     } catch (err) {
-      if (this.attempts.get(task.id) !== attempt) return;
+      if (this.attempts.get(task.id) !== attempt) return this.abandonSpawn(task);
       this.endAttempt(task.id, 'spawn-failed');
       // Couldn't spawn — the task was never executed, so it stays "to do".
       // Held out of auto-scheduling to avoid a spawn-throw retry loop.
@@ -656,10 +656,14 @@ export class TaskOrchestrator {
     }
   }
 
-  /** A spawn whose attempt ended while it was in flight: kill what it produced. */
+  /**
+   * A spawn whose attempt ended while it was in flight: kill what it produced
+   * and take back the claim it made. Only the claim — whatever ended the
+   * attempt may have decided the task since (mark complete, cancel, retry).
+   */
   private abandonSpawn(task: Task, session?: ITerminalSession): void {
     session?.kill();
-    if (this.attempts.has(task.id)) return;
+    if (this.attempts.has(task.id) || this.store.get(task.id)?.status !== 'in_progress') return;
     this.store.markPending(task.id);
     this.emit('onTaskChanged');
   }

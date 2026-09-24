@@ -1168,13 +1168,17 @@ describe('task attempts', () => {
 
   /** A runner whose spawns resolve only when the test says so. */
   function heldSpawns() {
-    const pending: Array<(session: FakeTerminalSession) => void> = [];
-    const spawn = vi.fn(() => new Promise<ITerminalSession>((resolve) => { pending.push(resolve); }));
+    const pending: Array<{ resolve: (session: FakeTerminalSession) => void; reject: (err: Error) => void }> = [];
+    const spawn = vi.fn(() => new Promise<ITerminalSession>((resolve, reject) => { pending.push({ resolve, reject }); }));
     const settle = async (index: number, session: FakeTerminalSession) => {
-      pending[index](session);
+      pending[index].resolve(session);
       await new Promise((r) => setTimeout(r, 0));
     };
-    return { spawn, settle, spawned: () => pending.length };
+    const fail = async (index: number, err: Error) => {
+      pending[index].reject(err);
+      await new Promise((r) => setTimeout(r, 0));
+    };
+    return { spawn, settle, fail, spawned: () => pending.length };
   }
 
   it('stop during an in-flight spawn kills the late session and does not resurrect the task', async () => {
@@ -1249,6 +1253,38 @@ describe('task attempts', () => {
     await orchestrator.start();
 
     expect(orchestrator.getAttempt('t1')).toMatchObject({ attempt: 2, sessionId: 's2', phase: 'running' });
+  });
+
+  it('stop during an in-flight spawn that then fails returns the task to pending', async () => {
+    const { spawn, fail, spawned } = heldSpawns();
+    const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' })]);
+    void orchestrator.forceStartTask('t1');
+    await vi.waitFor(() => expect(spawned()).toBe(1));
+
+    orchestrator.stop();
+    await fail(0, new Error('runner not found'));
+
+    expect(orchestrator.storeInstance.get('t1')!.status).toBe('pending');
+    expectNoAttemptState(orchestrator);
+    expect(orchestrator.isRunning).toBe(false);
+  });
+
+  it('marking a task complete while its spawn is in flight keeps it completed when the spawn lands', async () => {
+    const { spawn, settle, spawned } = heldSpawns();
+    const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' })]);
+    void orchestrator.forceStartTask('t1');
+    await vi.waitFor(() => expect(spawned()).toBe(1));
+
+    await orchestrator.markTaskComplete('t1');
+    const late = new FakeTerminalSession('late', 't1');
+    await settle(0, late);
+
+    expect(late.killed).toBe(true);
+    expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed');
+    expect(orchestrator.storeInstance.isCompleted('t1')).toBe(true);
+    expectNoAttemptState(orchestrator);
   });
 
   // Retrying a task whose runner is still up used to leave the old attempt
