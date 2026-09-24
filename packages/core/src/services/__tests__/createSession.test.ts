@@ -5,6 +5,8 @@ import { makeSession, FakeTerminalSession } from './sessionTestKit';
 import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
 import { parsePlanJson } from '../PlanValidator';
 import type { Session } from '../createSession';
+import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
+import type { TranscriptQuery } from '../../interfaces/TaskOutputSource';
 
 describe('model allowlist wiring', () => {
   function smallPlan(): LegacyPlanState {
@@ -447,6 +449,30 @@ describe('Session phase transitions', () => {
     expect(session.getTask('t1')?.status).toBe('completed');
     expect(session.getTask('t2')?.status).toBe('pending');
     expect(runner.spawn).toHaveBeenCalledOnce();
+  });
+
+  it("reads a finished task's answer through the injected output source, never the real home", async () => {
+    const terminal = new FakeTerminalSession('terminal-1', 't1');
+    const runner = { spawn: vi.fn().mockResolvedValue(terminal), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 } satisfies ITerminalRunner;
+    const queries: TranscriptQuery[] = [];
+    const taskOutput = new BufferedTaskOutputSource({
+      transcripts: { finalAssistantText: async (q) => { queries.push(q); return 'answer from the transcript'; } },
+    });
+    const session = makeSession({ runner, taskOutput });
+    session.loadPlan({
+      tasks: [createTask({ id: 't1', order: 1, title: 'Only', prompt: 'one', completionMarker: 'mk-1' })],
+      generatedAt: new Date().toISOString(),
+      status: 'draft',
+      runners: ['claude-code'],
+      lastUpdated: new Date().toISOString(),
+    }, 'Test', '/repo');
+    await session.runTask('t1');
+
+    terminal.emitOutput('<<<ORDEWELL_DONE_mk-1>>>');
+    await new Promise(r => setTimeout(r, 10));
+
+    expect(queries).toEqual([expect.objectContaining({ runner: 'claude-code', marker: 'mk-1' })]);
+    expect(session.getTask('t1')?.outputSummary?.logTail).toBe('answer from the transcript');
   });
 
   describe('every spawn path composes the same augmented prompt', () => {

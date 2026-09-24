@@ -31,6 +31,7 @@ import type { AiProvider, IConfig } from '../interfaces/IConfig';
 import type { IFileSystem } from '../interfaces/IFileSystem';
 import type { INotification } from '../interfaces/INotification';
 import type { ITerminalRunner } from '../interfaces/ITerminalRunner';
+import type { TaskOutputSource } from '../interfaces/TaskOutputSource';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import { runnerModesFrom, resolveDefaultMode, type RunnerModeInfo } from './ModeResolver';
 
@@ -171,6 +172,12 @@ export interface SessionDeps {
    * over the session's workspace root.
    */
   skillsService?: SkillsService;
+  /**
+   * Where a task's output and final answer are read. Defaults to the agents'
+   * own transcripts under the user's home; tests inject one that never
+   * touches the disk.
+   */
+  taskOutput?: TaskOutputSource;
 }
 
 /**
@@ -222,7 +229,7 @@ export class Session {
     this.workspaceRootFn = deps.workspaceRoot;
     this.planner = deps.planner ?? new Planner(deps.config, () => this.aiService);
     this.store = new PlanStore();
-    this.orchestrator = new TaskOrchestrator(deps.config, deps.notifications, deps.runner, this.store);
+    this.orchestrator = new TaskOrchestrator(deps.config, deps.notifications, deps.runner, this.store, deps.taskOutput);
     this.orchestrator.setRegistry(deps.registry);
     this.orchestrator.setWorkspaceRoot(deps.workspaceRoot);
     this.orchestrator.setTddEnabled(() => this.settingsFn().tddEnabled);
