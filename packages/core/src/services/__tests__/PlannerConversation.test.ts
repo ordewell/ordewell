@@ -1,7 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { LegacyPlanState } from '../../models/Task';
+import { createTask, type LegacyPlanState } from '../../models/Task';
+import * as sessionStore from '../../utils/sessionStore';
+import type { SessionMessage } from '../SessionMessage';
 import type { IAiService } from '../AiService';
 import { PlannerConversation, type PlannerConversationHost } from '../PlannerConversation';
+import { makeSession, testWorkspace } from './sessionTestKit';
 
 function dialoguePlan(): LegacyPlanState {
   return {
@@ -175,5 +178,85 @@ describe('PlannerConversation turns', () => {
     expect(ai.reset).toHaveBeenCalledTimes(1);
     expect(ai.startConversation).toHaveBeenCalledTimes(1);
     expect(ai.continueConversation).not.toHaveBeenCalled();
+  });
+});
+
+function approvedPlan(): LegacyPlanState {
+  return {
+    tasks: [createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it', assignedRunner: 'claude-code' })],
+    generatedAt: new Date().toISOString(),
+    status: 'approved',
+    runners: ['claude-code'],
+    lastUpdated: new Date().toISOString(),
+    conversationHistory: [
+      { role: 'user', content: 'build it', timestamp: '2026-01-01T00:00:00Z' },
+      { role: 'assistant', content: 'Plan generated with 1 task.', timestamp: '2026-01-01T00:00:01Z', kind: 'plan_generated' },
+    ],
+  };
+}
+
+function lastPersistedHistory(): LegacyPlanState['conversationHistory'] {
+  const calls = vi.mocked(sessionStore.saveSession).mock.calls;
+  return calls[calls.length - 1][0].conversationHistory;
+}
+
+describe('modifyPlan transcript write', () => {
+  it('records the request and the outcome, then persists and broadcasts them', async () => {
+    const broadcast = vi.fn<(msg: SessionMessage) => void>();
+    const tasks = [
+      createTask({ id: 't1', order: 1, title: 'Task 1', prompt: 'do it', assignedRunner: 'claude-code' }),
+      createTask({ id: 't2', order: 2, title: 'Task 2', prompt: 'docs', assignedRunner: 'claude-code' }),
+    ];
+    const session = makeSession({ broadcast, planner: { modify: vi.fn().mockResolvedValue({ tasks }) } });
+    session.loadPlan(approvedPlan(), 'build it', testWorkspace, { persist: false });
+
+    await session.modifyPlan('add a docs task');
+
+    const history = session.planState!.conversationHistory!;
+    expect(history).toHaveLength(4);
+    expect(history[2]).toMatchObject({ role: 'user', content: 'add a docs task' });
+    expect(history[3]).toMatchObject({ role: 'assistant', content: 'Plan updated — now 2 tasks.', kind: 'plan_generated' });
+    expect(lastPersistedHistory()).toHaveLength(4);
+    const planEvents = broadcast.mock.calls.map(([m]) => m).filter((m) => m.type === 'plan_generated');
+    expect(planEvents).toHaveLength(1);
+    expect(planEvents[0].type === 'plan_generated' && planEvents[0].plan.conversationHistory).toHaveLength(4);
+  });
+
+  it('leaves the transcript untouched when the planner fails', async () => {
+    const session = makeSession({ planner: { modify: vi.fn().mockRejectedValue(new Error('planner down')) } });
+    session.loadPlan(approvedPlan(), 'build it', testWorkspace, { persist: false });
+
+    await expect(session.modifyPlan('add a docs task')).rejects.toThrow('planner down');
+
+    expect(session.planState!.conversationHistory).toHaveLength(2);
+  });
+});
+
+describe('queued mid-run edits', () => {
+  it('records the applied edit in the transcript as a labelled system entry', async () => {
+    const broadcast = vi.fn<(msg: SessionMessage) => void>();
+    const planner = {
+      modifyDuringExecution: vi.fn().mockResolvedValue({
+        pendingTasks: [createTask({ id: 't1', order: 1, title: 'Renamed', prompt: 'do it', assignedRunner: 'claude-code' })],
+        message: 'Plan modified: 1 pending task(s)',
+      }),
+    };
+    const session = makeSession({ planner, broadcast });
+    session.loadPlan(approvedPlan(), 'build it', testWorkspace, { persist: false });
+    await session.startExecution();
+    session.queueMessage('rename task 1');
+    session.queueMessage('and keep it short');
+
+    await session.processQueuedMessages();
+
+    const history = session.planState!.conversationHistory!;
+    expect(history).toHaveLength(3);
+    const entry = history[2];
+    expect(entry.kind).toBe('system');
+    expect(entry.content).toMatch(/^Queued change applied between task batches/);
+    expect(entry.content).toContain('rename task 1');
+    expect(entry.content).toContain('and keep it short');
+    expect(lastPersistedHistory()).toHaveLength(3);
+    expect(broadcast.mock.calls.some(([m]) => m.type === 'plan_generated')).toBe(true);
   });
 });

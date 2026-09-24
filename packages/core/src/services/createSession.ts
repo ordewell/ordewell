@@ -856,8 +856,11 @@ export class Session {
       perRunnerAllowlist: modelAllowlist,
     });
 
-    this.orchestrator.reconcilePlan(result.pendingTasks, this.plan?.runners ?? ['claude-code']);
-    this.persist();
+    this.mutatePlan(() => {
+      this.orchestrator.reconcilePlan(result.pendingTasks, this.plan!.runners);
+      this.conversation.recordQueuedEdits(messages.map((m) => m.text), result.pendingTasks.length);
+      return true;
+    });
 
     // Re-schedule. `onQueueReady` only fires when no task is active, so a paused
     // run still has `running === true` — `start()` would no-op (it early-returns
@@ -1158,7 +1161,7 @@ export class Session {
 
   async modifyPlan(userRequest: string): Promise<Task[]> {
     if (!this.plan) throw new Error('No plan to modify');
-    this.conversation.append('user', userRequest);
+    const requestedAt = new Date().toISOString();
     const { modelsByRunner, runnerModes, settings } = await this.plannerCatalog(this.plan.runners);
     const result = await this.planner.modify({
       existingPlan: this.plan,
@@ -1170,9 +1173,13 @@ export class Session {
       fetcher: this.fetcher,
       perRunnerAllowlist: settings.modelAllowlist,
     });
-    this.orchestrator.loadPlan(result.tasks, this.plan.runners);
-    this.conversation.append('assistant', `Plan updated — now ${result.tasks.length} task${result.tasks.length === 1 ? '' : 's'}.`, { kind: 'plan_generated' });
-    this.persist();
+    // The exchange lands only with its outcome, so a failed modification
+    // leaves nothing behind to roll back.
+    this.mutatePlan(() => {
+      this.orchestrator.loadPlan(result.tasks, this.plan!.runners);
+      this.conversation.recordModification(userRequest, requestedAt, result.tasks.length);
+      return true;
+    });
     return result.tasks;
   }
 

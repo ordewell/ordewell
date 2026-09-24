@@ -170,6 +170,26 @@ export class PlannerConversation {
     this.host.aiService().reset();
   }
 
+  /** A one-shot `modifyPlan` exchange. Call inside the host's mutation ritual. */
+  recordModification(request: string, requestedAt: string, taskCount: number): void {
+    this.append('user', request, { timestamp: requestedAt });
+    this.append('assistant', `Plan updated — now ${taskCount} task${taskCount === 1 ? '' : 's'}.`, { kind: 'plan_generated' });
+  }
+
+  /**
+   * Queued mid-run edits applied between batches. The user's message is
+   * already in the transcript from when it was queued; this records that it
+   * finally took effect, so a replay does not read the plan as never changed.
+   * Call inside the host's mutation ritual.
+   */
+  recordQueuedEdits(messages: string[], taskCount: number): void {
+    this.append('assistant', [
+      'Queued change applied between task batches:',
+      ...messages.map((m) => `- ${m}`),
+      `The plan now has ${taskCount} task${taskCount === 1 ? '' : 's'}.`,
+    ].join('\n'), { kind: 'system' });
+  }
+
   /** Open the conversation on a fresh plan: the goal is its first message. */
   async start(goal: string, opening: ConversationOpening, signal?: AbortSignal): Promise<LegacyPlanState> {
     this.recordUser(goal, new Date().toISOString());
