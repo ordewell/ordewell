@@ -9,7 +9,7 @@ import { activeToken, findCommand, parseSlash, tokenCompletions, type ParsedComm
 import {
   findTask, initialState, SKILL_IDS, planRows, selectedPlanRow, visibleItems,
   type ApprovalRequestView, type Cell, type ChatMessage, type Focus, type MessageRole, type ModeView,
-  type ModelView, type PickerItem, type PickerState, type RunnerView, type Selection, type SessionView,
+  type ModelView, type PickerItem, type PickerState, type RewindTargetView, type RunnerView, type Selection, type SessionView,
   type SkillId, type TaskView, type TuiState,
 } from './state';
 import { assignedModelFor, effortsForTask, modelsForRunner, modelsForTask, modesForTask, runnerAccepts } from './taskAssignment';
@@ -39,6 +39,10 @@ export type Effect =
   | { type: 'loadSessions' }
   | { type: 'loadSession'; sessionId: string }
   | { type: 'deleteSession'; sessionId: string }
+  | { type: 'forkConversation'; sessionId: string }
+  | { type: 'loadRewindTargets'; sessionId: string }
+  | { type: 'rewindConversation'; sessionId: string; index: number }
+  | { type: 'compactConversation'; sessionId: string }
   | { type: 'saveSession'; sessionId: string }
   | { type: 'closeSession'; sessionId: string }
   | { type: 'execute'; sessionId: string }
@@ -77,6 +81,8 @@ export type Action =
   | { type: 'settingsLoaded'; settings: Record<string, unknown> }
   | { type: 'modelsLoaded'; models: ModelView[]; orchestratorModels?: ModelView[]; providers?: string[]; providerErrors?: Record<string, string>; modesByRunner?: Record<string, ModeView[]> }
   | { type: 'sessionsLoaded'; sessions: SessionView[] }
+  | { type: 'sessionForked'; sessionId: string; goal: string }
+  | { type: 'rewindTargetsLoaded'; targets: RewindTargetView[]; sessionId?: string }
   | { type: 'runnersLoaded'; runners: RunnerView[]; orchestratorModel?: string }
   | { type: 'failed'; message: string }
   /** The workspace has no project marker — offer to initialize it rather than just failing. */
@@ -127,7 +133,7 @@ function say(
  */
 function restoredMessages(history: ConversationMessage[]): ChatMessage[] {
   return history.map((entry) => ({
-    role: entry.kind === 'plan_generated' ? 'system' : entry.kind === 'system' ? 'system' : entry.role,
+    role: entry.kind === 'plan_generated' || entry.kind === 'system' || entry.kind === 'compaction' ? 'system' : entry.role,
     content: sanitize(entry.kind === 'plan_generated' ? 'Plan generated.' : entry.content),
     timestamp: entry.timestamp,
   }));
@@ -147,7 +153,11 @@ const isPendingResearch = (m: ChatMessage): boolean => m.role === 'research' && 
  */
 function alreadySpoken(messages: ChatMessage[], content: string): boolean {
   const last = findLastIndex(messages, (m) => m.role === 'assistant' || m.role === 'user');
-  return last >= 0 && messages[last].role === 'assistant' && messages[last].content === content;
+  const spoken = last >= 0 && messages[last].role === 'assistant' && messages[last].content === content;
+  // A compaction's summary is redrawn as a system entry, and the daemon's
+  // notice of the same text may land on either side of that redraw.
+  const redrawn = messages.at(-1)?.role === 'system' && messages.at(-1)?.content === content;
+  return spoken || redrawn;
 }
 
 /**
@@ -410,6 +420,25 @@ export function reduce(state: TuiState, action: Action): Step {
     case 'sessionsLoaded':
       return step(refillPicker({ ...state, sessions: action.sessions }, ['load-session', 'delete-session']));
 
+    case 'rewindTargetsLoaded':
+      if (stale(state, action.sessionId)) return step(state);
+      return step(refillPicker({ ...state, rewindTargets: action.targets }, ['rewind']));
+
+    // A fork holds no run, whatever the session it came from was doing — the
+    // original keeps its run, and its events are stale from here on.
+    case 'sessionForked':
+      return step({
+        ...state,
+        sessionId: action.sessionId,
+        goal: action.goal,
+        status: 'idle',
+        busyLabel: '',
+        thinkingLine: '',
+        planApproved: false,
+        pendingApprovals: [],
+        overlay: state.overlay?.kind === 'approval' ? null : state.overlay,
+      });
+
     case 'runnersLoaded':
       // Installed runners are the planner picker's preflight signal, so a
       // picker opened before discovery landed fills in rather than sitting
@@ -669,6 +698,13 @@ function pickerItemsFor(state: TuiState, action: PickerState['action']): PickerI
   }
   if (action.kind === 'set-planner-effort') {
     return plannerEffortItems(state);
+  }
+  if (action.kind === 'rewind') {
+    if (state.rewindTargets === null) return [];
+    if (state.rewindTargets.length === 0) {
+      return [{ id: '', label: 'Nothing to rewind to yet', detail: 'the only message so far is the goal', disabled: true }];
+    }
+    return [...state.rewindTargets].reverse().map((t) => ({ id: String(t.index), label: t.preview, detail: `message ${t.index}` }));
   }
   if (action.kind === 'load-session' || action.kind === 'delete-session') {
     return state.sessions.map((s) => ({
@@ -1312,6 +1348,10 @@ function choose(state: TuiState, picker: PickerState, item: PickerItem | undefin
 
     case 'load-session':
       return step(closed, [{ type: 'loadSession', sessionId: item.id }]);
+    case 'rewind':
+      return withSession(closed, (sessionId) =>
+        step(closed, [{ type: 'rewindConversation', sessionId, index: Number(item.id) }]),
+      );
     case 'delete-session':
       return step(closed, [{ type: 'deleteSession', sessionId: item.id }]);
     case 'set-key':
@@ -1451,6 +1491,14 @@ function runCommand(state: TuiState, { name, args }: ParsedCommand): Step {
         { ...state, overlay: { kind: 'picker', picker: picker('Sessions', [], { kind: 'load-session' }) } },
         [{ type: 'loadSessions' }],
       );
+    case 'fork':
+      return withIdlePlanner(state, (sessionId) => step(state, [{ type: 'forkConversation', sessionId }]));
+    case 'rewind':
+      return rewind(state, args[0]);
+    case 'compact':
+      return withIdlePlanner(state, (sessionId) =>
+        step({ ...state, status: 'planning', busyLabel: 'Condensing the conversation…' }, [{ type: 'compactConversation', sessionId }]),
+      );
     case 'new':
       return requestNewSession(state);
     case 'save':
@@ -1517,6 +1565,32 @@ function withSession(state: TuiState, run: (sessionId: string) => Step): Step {
     return fail(state, 'No active plan — describe a goal first, or load a session with /sessions.');
   }
   return run(state.sessionId);
+}
+
+/**
+ * Fork, rewind and compact edit the conversation, so they wait out a planner turn — the
+ * daemon refuses them too, but saying so here costs no round trip. A task run
+ * is no obstacle: none of them touches the plan it is executing.
+ */
+function withIdlePlanner(state: TuiState, run: (sessionId: string) => Step): Step {
+  return withSession(state, (sessionId) =>
+    state.status === 'planning' || state.status === 'researching'
+      ? fail(state, 'The planner is still answering — wait for its reply, or /stop it first.')
+      : run(sessionId),
+  );
+}
+
+function rewind(state: TuiState, arg: string | undefined): Step {
+  return withIdlePlanner(state, (sessionId) => {
+    if (arg === undefined) {
+      return step(
+        { ...state, rewindTargets: null, overlay: { kind: 'picker', picker: picker('Rewind to before…', [], { kind: 'rewind' }, { hint: 'The chosen message and everything after it are discarded; the tasks stay as they are.' }) } },
+        [{ type: 'loadRewindTargets', sessionId }],
+      );
+    }
+    if (!/^\d+$/.test(arg)) return fail(state, 'Usage: /rewind [<message>] — or /rewind alone to pick one.');
+    return step(state, [{ type: 'rewindConversation', sessionId, index: Number(arg) }]);
+  });
 }
 
 /** `on`/`off` when given explicitly, otherwise the opposite of what is set now. */

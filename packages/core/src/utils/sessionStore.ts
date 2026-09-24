@@ -29,10 +29,40 @@ function sanitizeName(goal: string): string {
     .slice(0, 40);
 }
 
-function sessionFilename(session: SessionMeta): string {
+function filenameStem(session: SessionMeta): string {
   const date = new Date(session.createdAt).toISOString().replace(/:/g, '-').replace(/\..+/, '');
-  const name = sanitizeName(session.goal);
-  return `${date}_${name || 'session'}_${session.id.slice(0, 8)}.json`;
+  return `${date}_${sanitizeName(session.goal) || 'session'}`;
+}
+
+/**
+ * The id's random part names the file. Its first eight characters used to,
+ * which stopped distinguishing anything once ids became `session-<hex>`: two
+ * sessions with one goal saved in the same second — a conversation forked
+ * twice — wrote the same file.
+ */
+function sessionFilename(session: SessionMeta): string {
+  return `${filenameStem(session)}_${session.id.replace(/^session-/, '').slice(0, 8)}.json`;
+}
+
+/** The name {@link sessionFilename} gave before, still on disk for sessions saved then. */
+function legacySessionFilename(session: SessionMeta): string {
+  return `${filenameStem(session)}_${session.id.slice(0, 8)}.json`;
+}
+
+/**
+ * A session saved under the old name moves to the new one on its next save,
+ * rather than living on as a second file with the same id. Only a file that
+ * really holds this id is removed — the old name was shared, by the bug above.
+ */
+function dropLegacyFile(sessionsDir: string, meta: SessionMeta): void {
+  const legacy = path.join(sessionsDir, legacySessionFilename(meta));
+  if (legacy === path.join(sessionsDir, sessionFilename(meta)) || !fs.existsSync(legacy)) return;
+  try {
+    const held = (JSON.parse(fs.readFileSync(legacy, 'utf-8')) as SessionData).meta?.id;
+    if (held === meta.id) fs.unlinkSync(legacy);
+  } catch {
+    // Unreadable: not provably this session's, so it stays.
+  }
 }
 
 export function saveSession(plan: LegacyPlanState, goal: string, baseDir?: string, id?: string): SessionMeta {
@@ -61,6 +91,7 @@ export function saveSession(plan: LegacyPlanState, goal: string, baseDir?: strin
   const filePath = path.join(sessionsDir, filename);
 
   fs.writeFileSync(filePath, JSON.stringify(session, null, 2));
+  dropLegacyFile(sessionsDir, meta);
 
   return meta;
 }

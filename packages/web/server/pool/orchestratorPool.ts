@@ -1,6 +1,8 @@
 import { WebSocket } from 'ws';
 import {
   Session,
+  ConversationBusyError,
+  type ConversationCompaction,
   type SessionMessage,
   type SessionRuntimeSettings,
   ModelResolver,
@@ -488,6 +490,25 @@ export class OrchestratorPool {
   }
 
   /**
+   * Condense a session's conversation. The summary turn is a planning turn as
+   * far as a surface is concerned, so it registers the same abort controller
+   * and `cancelPlanning` stops it — but only when no turn holds that slot
+   * already: taking it over would leave the reply in flight beyond stopping.
+   */
+  async compactConversation(sessionId: string): Promise<ConversationCompaction & { plan: LegacyPlanState }> {
+    const session = this.session(sessionId);
+    if (this.planningAborts.has(sessionId)) throw new ConversationBusyError('condense the conversation');
+    const controller = new AbortController();
+    this.planningAborts.set(sessionId, controller);
+    try {
+      const compaction = await session.compactConversation(controller.signal);
+      return { ...compaction, plan: session.planState! };
+    } finally {
+      this.clearPlanningAbort(sessionId, controller);
+    }
+  }
+
+  /**
    * Abort the planning turn in flight for a session, if any. Answers whether
    * there was one to cancel — the route reports that rather than 404ing a
    * session that simply is not planning right now.
@@ -533,6 +554,17 @@ export class OrchestratorPool {
     this.sessions.set(sessionId, session);
 
     return session.planState ?? saved.plan;
+  }
+
+  /**
+   * Fork a session's conversation into a new session and adopt it, so the
+   * fork is addressable at once — through the same path a saved session is
+   * adopted by, reading back the file the fork was written to. The original
+   * keeps running, or planning, untouched.
+   */
+  forkConversation(sessionId: string): { sessionId: string; goal: string; plan: LegacyPlanState } {
+    const fork = this.session(sessionId).forkConversation();
+    return { sessionId: fork.sessionId, goal: fork.goal, plan: this.adoptSavedSession(fork.sessionId, fork.workspace) };
   }
 
   /**

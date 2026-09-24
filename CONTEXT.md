@@ -150,7 +150,10 @@ part of it.
 *Avoid:* hand-rolling a retry loop or a corrective prompt at a call site —
 adapt `repairLoop` instead.
 
-**Context compaction** (`contextCompaction.ts`) — the recovery for a plan
+**Context compaction** (`contextCompaction.ts`) — comes in two kinds that share
+a name and nothing else: this entry's *reactive/proactive* compaction, which
+Ordewell triggers on its own, and the *user-triggered* **Compaction** below,
+which the user asks for. This one is the recovery for a plan
 emission cut off by the output-token limit (a long research phase, especially
 with subagents, bloats the planner context until the final JSON no longer
 fits). Truncation is detected two ways — the unbalanced-JSON heuristic
@@ -170,6 +173,32 @@ reactive repair is the backstop, not the primary path.
 *Avoid:* a truncation retry that re-sends the same context — it will be cut
 at the same point again.
 
+**Compaction** (`Session.compactConversation()`) — the user-triggered kind: the
+user decides a planner conversation has grown unwieldy and asks for it to be
+condensed, on a live turn rather than after a cut-off. One hidden planner turn,
+through whichever planner is configured, asks for a summary of the goal,
+decisions, constraints, open questions, key file and code findings and where the
+plan stands. The live context is pruned of bulky tool output first
+(`IAiService.pruneContext`, the same pruning **Context compaction** does), or
+the whole transcript is replayed into the turn when no live context matches. The
+transcript then becomes a `compaction` entry — the summary, visible, always
+first — followed by the last two user messages and their replies verbatim, and
+the live context is reset so the next message replays from that shorter record
+on every backend alike. The summary must arrive inside `<conversation_summary>`
+tags: a harness planner reports a failure as an ordinary reply, and the tags are
+how a dead agent is told apart from a summary. Anything else the turn emits —
+task ops included — is discarded, so the task list is untouched, and nothing is
+written until the summary is in hand, so a failed or stopped turn leaves the
+conversation as it was. Refused while a planner turn is in flight and when the
+conversation has two user messages or fewer. **Rewind** stops at the summary
+(its entry plays the part the goal did) and **Fork** copies the compacted
+transcript. Only the planner conversation compacts, never a runner. TUI
+`/compact`; CLI `ordewell compact`; the daemon route is
+`POST /api/plans/:id/conversation/compact`. It announces itself with a
+`planner_message` carrying the summary.
+*Avoid:* "summarize" for the operation — the result replaces the transcript; and
+"clear", which loses what was decided.
+
 **conversationHistory** — the planner dialogue persisted on the plan state:
 `{ role: 'user' | 'assistant', content, timestamp, kind? }[]`. The single source of
 truth for UI redisplay. Tool-call results are NOT stored here — they live in
@@ -179,8 +208,39 @@ into a fresh model context; the tool history is gone. Written only by
 **PlannerConversation**: conversation turns, the one-shot `modifyPlan`
 exchange (request plus a `plan_generated` marker), and queued mid-run edits
 once `processQueuedMessages` applies them (a `system` entry, so the transcript
-and the plan do not drift apart). Every write is persisted and broadcast
-through Session's `mutatePlan` ritual.
+and the plan do not drift apart), a **Rewind**, which cuts it short, and a
+**Compaction**, which replaces it with a summary and its last two exchanges. Every
+write is persisted and broadcast through Session's `mutatePlan` ritual.
+
+**Rewind** (`Session.rewindConversation(index)`) — cut the conversation back to
+just before one of the user's messages, discarding it and everything after it;
+the planner's `researchLog` goes back to the same point. `index` is the
+message's position in `conversationHistory`, and `rewindTargets()` lists the
+candidates with a one-line preview — every user message except the opening
+goal, since a conversation without its goal is a new session (after a
+**Compaction**, the summary entry stands where the goal did). The task list
+is untouched, including tasks the discarded turns created, and so is any run
+executing it: a rewind moves where the conversation resumes, not what the plan
+is (ADR-0002, update of 2026-09-25). The planner's live context is reset, so
+the next message replays from the shortened transcript on every backend alike.
+Refused while a planner turn is in flight (`ConversationBusyError`), because
+the turn's reply would land on a transcript that no longer holds the message
+it answers. TUI `/rewind` (picker) or `/rewind <n>`; CLI `ordewell rewind [n]`.
+*Avoid:* "undo" — nothing about the plan is undone.
+
+**Fork** (`Session.forkConversation()`) — copy the conversation and its task
+list into a new persisted session and continue there; the original, its file
+and its live planner context are untouched, so either side can be forked
+again. The fork carries no run: tasks caught in progress or at a checkpoint
+become pending, finished ones keep their status, and queued mid-run edits and
+any other per-run record stay behind. What travels is decided in one place,
+`forkPlanState`, which lists fields rather than spreading the plan, so a field
+added to the plan later stays behind until someone decides it should travel.
+The daemon adopts the fork immediately (see **Adopt**); its first message
+replays the copied transcript. Refused mid-turn like a rewind; allowed while
+the original executes. TUI `/fork` switches to the fork; `ordewell fork` makes
+it the current session.
+*Avoid:* "branch" — that word belongs to git and to worktree isolation.
 
 **PRD (prdMarkdown)** — with the PRD toggle on, the planner previews the PRD in
 prose, and after the user agrees writes the full markdown wrapped in
@@ -455,18 +515,28 @@ block is short-fields-only by design (title, status, runner, model, mode,
 deps — never a task's `prompt`, `userSteps`, `verdict`, `outputSummary`, or
 `userStoriesCovered`), so a query is how the planner reads what the block
 leaves out before rewriting it, instead of fabricating content it never saw.
-`PlannerConversation` answers it — from live state, never persisted to
-`conversationHistory` — in its own loop *before* `repairLoop`, so a read never
-spends the corrective-retry budget a fumbled edit is owed, and *before* the
-live-execution queue gate, so a read still lands mid-run (it mutates nothing).
-Budgeted per user turn: three reads before every answer also nudges the model
-to land the turn, six before the loop stops answering and returns a message
-turn instead; a repeated identical query (`taskQuerySignature`) is treated as
-already at the soft cap. `catalog: true` needs no plan yet, so it is legal on
-the very first planning turn.
+`PlannerConversation.drainTaskQueries` answers it — from live state, never
+persisted to `conversationHistory` — in its own loop *before* `repairLoop`, so
+a read never spends the corrective-retry budget a fumbled edit is owed, and
+*before* the live-execution queue gate, so a read still lands mid-run (it
+mutates nothing). One field reads execution state: `output` (with top-level
+`outputLines`, default 80 capped at 400, and `outputSince`, a previous
+answer's next offset) returns the clean-rendered tail of a task that is
+running right now, from `TaskOrchestrator.getLiveOutput` through the
+conversation host — the planner's way to diagnose a stuck task mid-execution.
+An ended task is pointed at its `outputSummary`/`verdict` instead. The answer
+is kept within a character budget, trimming the tail's oldest lines and saying
+so. Budgeted per user turn: three reads before every answer also nudges the
+model to land the turn, six before the loop stops answering and returns a
+message turn instead; a repeated identical query (`taskQuerySignature`) is
+treated as already at the soft cap. `catalog: true` needs no plan yet, so it is
+legal on the very first planning turn.
 *Avoid:* inlining full task bodies into the per-turn plan block to sidestep
 this — that is the token cost the channel exists to avoid paying on every
-turn regardless of whether the turn needs it.
+turn regardless of whether the turn needs it. *Avoid:* disclosing task log
+file paths to the planner as a second read mechanism — it would carve `.ordewell/`
+out of ADR-0008's path confinement and put the read outside the query budget;
+the envelope read is bounded by construction.
 
 **Webview modals are host modals** — `window.confirm`/`alert`/`prompt` are inert
 in a VS Code webview: it is sandboxed without `allow-modals`, so Chromium ignores

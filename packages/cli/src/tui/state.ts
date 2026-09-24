@@ -59,6 +59,13 @@ export interface ModeView {
   autonomous?: boolean;
 }
 
+/** A user message `/rewind` can land just before — `index` is its transcript position. */
+export interface RewindTargetView {
+  index: number;
+  preview: string;
+  timestamp: string;
+}
+
 export interface RunnerView {
   id: string;
   name: string;
@@ -114,6 +121,7 @@ export type PickerAction =
   | { kind: 'set-key' }
   | { kind: 'load-session' }
   | { kind: 'delete-session' }
+  | { kind: 'rewind' }
   | { kind: 'set-runners' }
   | { kind: 'choose-allowlist-runner' }
   | { kind: 'set-allowlist'; runner: string }
@@ -235,6 +243,8 @@ export interface TuiState {
   skills: Skills;
   runners: RunnerView[];
   sessions: SessionView[];
+  /** The open `/rewind` picker's rows; `null` until the daemon has answered. */
+  rewindTargets: RewindTargetView[] | null;
   models: ModelView[];
   /** Each runner's manifest modes, keyed by runner id — a task's mode picker reads its own runner's list. */
   modesByRunner: Record<string, ModeView[]>;
@@ -365,6 +375,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     skills: noSkills(),
     runners: [],
     sessions: [],
+    rewindTargets: null,
     models: [],
     modesByRunner: {},
     orchestratorModels: [],

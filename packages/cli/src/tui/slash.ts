@@ -58,6 +58,9 @@ export const SLASH_COMMANDS: SlashCommand[] = [
 
   // Sessions
   { name: 'sessions', usage: '/sessions', description: 'List saved sessions', category: 'session' },
+  { name: 'fork', usage: '/fork', description: 'Continue in a copy of this conversation and its tasks; the original stays as it is', category: 'session' },
+  { name: 'compact', usage: '/compact', description: 'Condense this conversation into a summary; the last two exchanges and all tasks are kept', category: 'session' },
+  { name: 'rewind', usage: '/rewind [<message>]', description: 'Rewind the conversation to just before one of your messages (tasks are kept)', category: 'session' },
   { name: 'new', usage: '/new', description: 'Start a new session', category: 'session' },
   { name: 'save', usage: '/save', description: 'Save the current session', category: 'session' },
   { name: 'load', usage: '/load <id>', description: 'Load a saved session', category: 'session' },

@@ -39,6 +39,7 @@ class TestService extends BaseAiService {
   reset(): void {}
   ensureInit(): void {}
   protected async streamPlanText(): Promise<string> { return ''; }
+  hold(ctx: ConversationTurnContext): void { this.conversation = { ctx, setProgress: () => {} }; }
   runTurn(
     ctx: ConversationTurnContext,
     message: string,
@@ -531,5 +532,24 @@ describe('spawn_research_agent interception', () => {
     expect(turn.kind).toBe('message');
     expect(svc.subagentChatsCreated).toBe(0);
     expect(chat.toolResultsSent[0][0].output).toContain('prompt');
+  });
+});
+
+describe('pruneContext', () => {
+  it('prunes the live conversation\'s history and reports what it removed', () => {
+    const chat = new ScriptedChat([]);
+    chat.compactHistory = () => 321;
+    const svc = new TestService(fakeConfig());
+    svc.hold(makeCtx(chat));
+
+    expect(svc.pruneContext()).toBe(321);
+  });
+
+  it('removes nothing without a conversation, or from a chat that cannot prune', () => {
+    const svc = new TestService(fakeConfig());
+    expect(svc.pruneContext()).toBe(0);
+
+    svc.hold(makeCtx(new ScriptedChat([])));
+    expect(svc.pruneContext()).toBe(0);
   });
 });

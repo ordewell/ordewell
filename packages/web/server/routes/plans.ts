@@ -1,5 +1,5 @@
 import { Hono, type Context } from 'hono';
-import { PlanEditError, WorkspaceNotFoundError, WorkspaceNotAProjectError } from '@ordewell/core';
+import { ConversationBusyError, ConversationEditError, PlanEditError, WorkspaceNotFoundError, WorkspaceNotAProjectError } from '@ordewell/core';
 import { OrchestratorPool } from '../pool/orchestratorPool';
 
 /**
@@ -13,6 +13,20 @@ function editFailure(c: Context, err: unknown) {
   if (e.message === 'Session not found') return c.json({ error: e.message }, 404);
   if (e instanceof PlanEditError) return c.json({ error: e.message }, 400);
   console.error('[plans] task edit failed:', err);
+  return c.json({ error: e.message || 'Internal error' }, 500);
+}
+
+/**
+ * A refused conversation edit is either the request being wrong (400) or
+ * arriving mid-turn (409) — the same call succeeds once the reply lands, and a
+ * surface should say "wait", not "invalid".
+ */
+function conversationFailure(c: Context, err: unknown) {
+  const e = err as Error;
+  if (e.message === 'Session not found') return c.json({ error: e.message }, 404);
+  if (e instanceof ConversationBusyError) return c.json({ error: e.message }, 409);
+  if (e instanceof ConversationEditError) return c.json({ error: e.message }, 400);
+  console.error('[plans] conversation edit failed:', err);
   return c.json({ error: e.message || 'Internal error' }, 500);
 }
 
@@ -234,6 +248,44 @@ export function plansRoute(pool: OrchestratorPool) {
       const e = err as Error;
       const status = e.message === 'Session not found' ? 404 : 500;
       return c.json({ error: e.message }, status as Parameters<typeof c.json>[1]);
+    }
+  });
+
+  // Fork and rewind act on the conversation, never on the plan: the task list
+  // rides along as-is (ADR-0002, update of 2026-09-25).
+  router.post('/:sessionId/conversation/fork', (c) => {
+    try {
+      return c.json(pool.forkConversation(c.req.param('sessionId')));
+    } catch (err) {
+      return conversationFailure(c, err);
+    }
+  });
+
+  router.get('/:sessionId/conversation/rewind-targets', (c) => {
+    try {
+      return c.json({ targets: pool.session(c.req.param('sessionId')).rewindTargets() });
+    } catch (err) {
+      return conversationFailure(c, err);
+    }
+  });
+
+  router.post('/:sessionId/conversation/rewind', async (c) => {
+    try {
+      const { index } = await c.req.json();
+      if (!Number.isInteger(index) || index < 0) return c.json({ error: 'index must be a non-negative integer' }, 400);
+      return c.json({ plan: pool.session(c.req.param('sessionId')).rewindConversation(index) });
+    } catch (err) {
+      return conversationFailure(c, err);
+    }
+  });
+
+  // The summary is one planner call, so this can take as long as a reply and
+  // fail like one — a failure leaves the conversation exactly as it was.
+  router.post('/:sessionId/conversation/compact', async (c) => {
+    try {
+      return c.json(await pool.compactConversation(c.req.param('sessionId')));
+    } catch (err) {
+      return conversationFailure(c, err);
     }
   });
 

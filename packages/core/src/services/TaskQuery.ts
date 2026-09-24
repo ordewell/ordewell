@@ -1,6 +1,7 @@
 import type { DiscoveredModel, RunnerId, Task } from '../models/Task';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_QUERY_ENVELOPE_KEY } from './JsonExtractor';
 import { resolveDefaultMode, type RunnerModeInfo } from './ModeResolver';
+import type { LiveTail, LiveTailOptions } from '../interfaces/TaskOutputSource';
 
 /**
  * The planner's read channel: a `{"taskQuery":{...}}` reply asking Ordewell to
@@ -19,10 +20,25 @@ import { resolveDefaultMode, type RunnerModeInfo } from './ModeResolver';
 
 /** The long fields a query may ask for. Everything else is already in the plan block. */
 export const TASK_QUERY_FIELDS = [
-  'description', 'prompt', 'userSteps', 'verdict', 'outputSummary', 'userStoriesCovered',
+  'description', 'prompt', 'userSteps', 'verdict', 'outputSummary', 'userStoriesCovered', 'output',
 ] as const;
 
 export type TaskQueryField = typeof TASK_QUERY_FIELDS[number];
+
+/** Lines a `output` read returns when the query sets no count. */
+export const OUTPUT_LINES_DEFAULT = 80;
+/** Hard cap on `outputLines` — the tail read is bounded however the planner asks. */
+export const OUTPUT_LINES_MAX = 400;
+
+/**
+ * Character budget the rendered answer converges to. A running output tail is
+ * the only part with no natural bound — a runner may print for minutes — so
+ * the tail absorbs the clamp; everything else (task bodies, the catalog cap)
+ * is bounded upstream.
+ */
+export const TASK_QUERY_ANSWER_MAX_CHARS = 20_000;
+/** Room for the closing instruction and whatever follows a task's tail. */
+const ANSWER_TAIL_RESERVE = 4_000;
 
 export interface TaskQuery {
   /** Task references to read in full — an id, "#order", a bare order, or a title. */
@@ -31,6 +47,10 @@ export interface TaskQuery {
   fields?: TaskQueryField[];
   /** Also return the full runner/model catalog with labels, variants and mode descriptions. */
   catalog: boolean;
+  /** Line count for `output` reads. Clamped at render to [1, {@link OUTPUT_LINES_MAX}]. */
+  outputLines?: number;
+  /** A previous answer's next offset: the output tail then covers only what came after it. */
+  outputSince?: number;
 }
 
 export function textHasTaskQuery(text: string): boolean {
@@ -68,7 +88,7 @@ function parseTaskQueryObject(json: string, text: string): TaskQuery {
     throw new PlanParseError('"taskQuery" must be an object (or an array of task references)', text);
   }
 
-  const { tasks: rawTasks, fields: rawFields, catalog: rawCatalog } = body as Record<string, unknown>;
+  const { tasks: rawTasks, fields: rawFields, catalog: rawCatalog, outputLines: rawLines, outputSince: rawSince } = body as Record<string, unknown>;
 
   const tasks: string[] = [];
   if (rawTasks !== undefined) {
@@ -94,15 +114,32 @@ function parseTaskQueryObject(json: string, text: string): TaskQuery {
   }
 
   const catalog = rawCatalog === true;
+
+  let outputLines: number | undefined;
+  if (rawLines !== undefined) {
+    if (typeof rawLines !== 'number' || !Number.isFinite(rawLines) || rawLines < 1) {
+      throw new PlanParseError('"outputLines" in a taskQuery must be a positive number of lines', text);
+    }
+    outputLines = rawLines;
+  }
+
+  let outputSince: number | undefined;
+  if (rawSince !== undefined) {
+    if (typeof rawSince !== 'number' || !Number.isFinite(rawSince) || rawSince < 0) {
+      throw new PlanParseError('"outputSince" in a taskQuery must be the non-negative offset a previous answer reported', text);
+    }
+    outputSince = rawSince;
+  }
+
   if (tasks.length === 0 && !catalog) {
     throw new PlanParseError('A taskQuery must name at least one task or set "catalog": true', text);
   }
-  return { tasks, fields, catalog };
+  return { tasks, fields, catalog, outputLines, outputSince };
 }
 
 /** Stable identity of a query, so a turn can recognise the planner asking the same thing twice. */
 export function taskQuerySignature(query: TaskQuery): string {
-  return JSON.stringify([query.tasks, query.fields ?? null, query.catalog]);
+  return JSON.stringify([query.tasks, query.fields ?? null, query.catalog, query.outputLines ?? null, query.outputSince ?? null]);
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +175,7 @@ export const TASK_QUERY_PROTOCOL: string[] = [
   `  {"${TASK_QUERY_ENVELOPE_KEY}":{"tasks":["<id or #order>", "..."],"fields":[${TASK_QUERY_FIELDS.map((f) => `"${f}"`).join(', ')}],"catalog":true}}`,
   '- "tasks": one or more task references. Ask for everything you need in ONE query — each query costs a round-trip.',
   '- "fields": optional. Omit it to get every field above.',
+  '- "fields" may include "output": the recent clean output of a task that is running right now — the way to diagnose a task that looks stuck mid-execution. "outputLines" (default 80, at most 400) sets how many lines; "outputSince" resumes a previous read at the offset its answer reported. A task that is not running answers with a pointer to its outputSummary and verdict instead.',
   '- "catalog": optional. Set it to true for the full runner and model catalog — every model id with its label and thinking-effort variants, and every task mode with its description. It works before any task exists, and may be used on its own.',
   'Ordewell answers immediately with the detail and changes nothing. Then reply again with your taskOps JSON, or with prose for the user.',
   'Three queries per user message; after that every answer also tells you to land the turn. Do not ask the same question twice.',
@@ -159,7 +197,53 @@ function findTask(tasks: Task[], ref: string): Task | undefined {
   return tasks.find((t) => t.title === ref);
 }
 
-function renderField(task: Task, field: TaskQueryField): string[] {
+/**
+ * Where an `output` read is answered from: the orchestrator's live capture of
+ * the task's latest attempt. Injected so this module stays planner-side and
+ * never imports the orchestrator.
+ */
+export type LiveOutputLookup = (taskId: string, opts: LiveTailOptions) => LiveTail | null;
+
+interface OutputRenderContext {
+  liveOutput?: LiveOutputLookup;
+  outputLines: number;
+  outputSince?: number;
+  /** Chars committed to the answer so far, so a tail is clamped against what remains. */
+  used: number;
+}
+
+/** Keep the newest of an over-long tail, dropping whole lines from the front. */
+function fitTail(text: string, budget: number): { text: string; trimmed: boolean } {
+  if (text.length <= budget) return { text, trimmed: false };
+  if (budget <= 0) return { text: '', trimmed: true };
+  const lines = text.split('\n');
+  const kept: string[] = [];
+  let total = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const cost = lines[i].length + (kept.length > 0 ? 1 : 0);
+    if (total + cost > budget) break;
+    kept.unshift(lines[i]);
+    total += cost;
+  }
+  if (kept.length === 0) return { text: text.slice(text.length - budget), trimmed: true };
+  return { text: kept.join('\n'), trimmed: true };
+}
+
+function renderLiveOutput(taskId: string, ctx: OutputRenderContext): string[] {
+  const tail = ctx.liveOutput?.(taskId, { maxLines: ctx.outputLines, sinceOffset: ctx.outputSince }) ?? null;
+  if (!tail) return ['output: (no captured output — the task has not run in this session)'];
+  if (!tail.running) return ['output: (not running — read "outputSummary" and "verdict" for how it ended)'];
+  if (!tail.text) return [`output: (running; nothing new past offset ${tail.nextOffset})`];
+  const budget = Math.max(0, TASK_QUERY_ANSWER_MAX_CHARS - ctx.used - ANSWER_TAIL_RESERVE);
+  const fitted = fitTail(tail.text, budget);
+  const trimmed = fitted.trimmed ? 'earliest output trimmed to fit the answer budget; ' : '';
+  return [
+    `output: (running; ${trimmed}pass offset ${tail.nextOffset} back as "outputSince" to read only what follows)`,
+    ...fitted.text.split('\n'),
+  ];
+}
+
+function renderField(task: Task, field: TaskQueryField, ctx: OutputRenderContext): string[] {
   switch (field) {
     case 'description':
       return [`description: ${task.description || '(none)'}`];
@@ -186,15 +270,23 @@ function renderField(task: Task, field: TaskQueryField): string[] {
       if (stories.length === 0) return ['userStoriesCovered: (none)'];
       return ['userStoriesCovered:', ...stories.map((s) => `  - ${s}`)];
     }
+    case 'output':
+      return renderLiveOutput(task.id, ctx);
   }
 }
 
-function renderTask(task: Task, fields: readonly TaskQueryField[]): string[] {
-  return [
+function renderTask(task: Task, fields: readonly TaskQueryField[], ctx: OutputRenderContext): string[] {
+  // The tail renders after the task's other fields and before the closing
+  // blank, so its budget is computed against everything already committed —
+  // including this task's own bounded fields.
+  const lines = [
     `#${task.order} id=${task.id} "${task.title}" [${task.status}] type:${task.type === 'user' ? 'MAN' : 'AI'}`,
-    ...fields.flatMap((f) => renderField(task, f)),
+    ...fields.filter((f) => f !== 'output').flatMap((f) => renderField(task, f, ctx)),
+    ...(fields.includes('output') ? renderLiveOutput(task.id, ctx) : []),
     '',
   ];
+  ctx.used += lines.reduce((n, l) => n + l.length + 1, 0);
+  return lines;
 }
 
 function renderCatalog(catalog: TaskQueryCatalog): string[] {
@@ -223,10 +315,22 @@ function renderCatalog(catalog: TaskQueryCatalog): string[] {
 /**
  * Render the injected answer to one read. Never persisted — it is context for
  * the planner's next reply and nothing else — so it is built fresh from live
- * state on every query rather than cached.
+ * state on every query rather than cached. `liveOutput` backs the `output`
+ * field; omitting it reads as "nothing captured".
  */
-export function renderTaskQueryAnswer(query: TaskQuery, tasks: Task[], catalog: TaskQueryCatalog): string {
+export function renderTaskQueryAnswer(
+  query: TaskQuery,
+  tasks: Task[],
+  catalog: TaskQueryCatalog,
+  liveOutput?: LiveOutputLookup,
+): string {
   const fields = query.fields ?? TASK_QUERY_FIELDS;
+  const ctx: OutputRenderContext = {
+    liveOutput,
+    outputLines: Math.min(Math.max(1, Math.round(query.outputLines ?? OUTPUT_LINES_DEFAULT)), OUTPUT_LINES_MAX),
+    outputSince: query.outputSince,
+    used: 0,
+  };
   const blocks: string[] = [];
 
   if (query.tasks.length > 0) {
@@ -239,7 +343,7 @@ export function renderTaskQueryAnswer(query: TaskQuery, tasks: Task[], catalog: 
         body.push(`${ref}: no task matches this reference in the current plan.`, '');
         continue;
       }
-      body.push(...renderTask(task, fields));
+      body.push(...renderTask(task, fields, ctx));
     }
     blocks.push(['<task_detail>', ...body, '</task_detail>'].join('\n'));
   }

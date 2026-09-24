@@ -2,7 +2,7 @@ import http from 'http';
 import WebSocket from 'ws';
 import { DEFAULT_PORT } from './daemon';
 import { bearerHeaderValue, readDaemonToken, tokenSubprotocols, mintSessionId } from '@ordewell/core';
-import type { SerializedPlan, DiscoveredModel, SessionMessage } from '@ordewell/core';
+import type { SerializedPlan, DiscoveredModel, SessionMessage, RewindTarget } from '@ordewell/core';
 
 const DEFAULT_HTTP_TIMEOUT_MS = 15 * 60 * 1000;
 
@@ -346,6 +346,44 @@ export class ApiClient {
       throw new Error(res.data?.error || 'Delete session failed');
     }
     return res.data;
+  }
+
+  /** Copy the conversation and its tasks into a new session the daemon has already adopted. */
+  async forkConversation(sessionId: string): Promise<{ sessionId: string; goal: string; plan: SerializedPlan }> {
+    const res = await this.httpRequest<{ sessionId: string; goal: string; plan: SerializedPlan } & ErrorResponse>('POST', `/api/plans/${sessionId}/conversation/fork`);
+    if (res.status !== 200) {
+      throw new Error(res.data?.error || 'Fork failed');
+    }
+    return { sessionId: res.data.sessionId, goal: res.data.goal, plan: res.data.plan };
+  }
+
+  async rewindTargets(sessionId: string): Promise<RewindTarget[]> {
+    const res = await this.httpRequest<{ targets: RewindTarget[] } & ErrorResponse>('GET', `/api/plans/${sessionId}/conversation/rewind-targets`);
+    if (res.status !== 200) {
+      throw new Error(res.data?.error || 'Failed to list rewind targets');
+    }
+    return res.data.targets;
+  }
+
+  /** Cut the conversation back to just before the user message at `index` (a transcript position). */
+  async rewindConversation(sessionId: string, index: number): Promise<SerializedPlan> {
+    const res = await this.httpRequest<{ plan: SerializedPlan } & ErrorResponse>('POST', `/api/plans/${sessionId}/conversation/rewind`, { index });
+    if (res.status !== 200) {
+      throw new Error(res.data?.error || 'Rewind failed');
+    }
+    return res.data.plan;
+  }
+
+  /**
+   * Condense the conversation into a summary. One planner call, so it can take
+   * as long as a reply; a refusal or failure leaves the conversation as it was.
+   */
+  async compactConversation(sessionId: string): Promise<{ plan: SerializedPlan; summary: string; keptMessages: number }> {
+    const res = await this.httpRequest<{ plan: SerializedPlan; summary: string; keptMessages: number } & ErrorResponse>('POST', `/api/plans/${sessionId}/conversation/compact`);
+    if (res.status !== 200) {
+      throw new Error(res.data?.error || 'Compaction failed');
+    }
+    return { plan: res.data.plan, summary: res.data.summary, keptMessages: res.data.keptMessages };
   }
 
   async closeSession(sessionId: string): Promise<{ ok: boolean }> {

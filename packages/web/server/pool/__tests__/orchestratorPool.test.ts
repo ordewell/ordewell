@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { existsSync } from 'fs';
-import { listSessions, saveSession, Session, WorkspaceNotFoundError, WorkspaceNotAProjectError, type LegacyPlanState } from '@ordewell/core';
+import { ConversationBusyError, listSessions, saveSession, Session, WorkspaceNotFoundError, WorkspaceNotAProjectError, type LegacyPlanState } from '@ordewell/core';
 import { OrchestratorPool } from '../orchestratorPool';
 
 function savedPlan(over: Partial<LegacyPlanState> = {}): LegacyPlanState {
@@ -112,6 +112,119 @@ describe('OrchestratorPool.adoptSavedSession', () => {
     pool.adoptSavedSession(meta.id, workspace);
 
     expect(pool.session(meta.id)).toBe(live);
+  });
+});
+
+describe('OrchestratorPool.forkConversation', () => {
+  let workspace: string;
+  let pool: OrchestratorPool;
+  const conversation = {
+    conversationHistory: [
+      { role: 'user' as const, content: 'Rate limiting', timestamp: '2026-07-21T10:00:00.000Z' },
+      { role: 'assistant' as const, content: 'Plan generated with 2 tasks.', timestamp: '2026-07-21T10:00:01.000Z', kind: 'plan_generated' as const },
+    ],
+  };
+
+  beforeEach(() => {
+    workspace = mkdtempSync(join(tmpdir(), 'ordewell-pool-'));
+    mkdirSync(join(workspace, '.git'));
+    pool = new OrchestratorPool();
+  });
+
+  afterEach(() => {
+    pool.destroyAll();
+    rmSync(workspace, { recursive: true, force: true });
+  });
+
+  it('registers the fork the way an adopted session is, beside the untouched original', () => {
+    const meta = saveSession(savedPlan(conversation), 'Rate limiting', workspace, 'session-saved');
+    pool.adoptSavedSession(meta.id, workspace);
+
+    const fork = pool.forkConversation(meta.id);
+
+    expect(fork.sessionId).not.toBe('session-saved');
+    expect(pool.hasSession(fork.sessionId)).toBe(true);
+    expect(pool.session(fork.sessionId).sessionId).toBe(fork.sessionId);
+    expect(fork.goal).toBe('Rate limiting');
+    expect(pool.getGoal(fork.sessionId)).toBe('Rate limiting');
+    expect(fork.plan.tasks.map((t) => t.id)).toEqual(['t1', 't2']);
+    expect(fork.plan.conversationHistory).toHaveLength(2);
+    expect(pool.session('session-saved').sessionId).toBe('session-saved');
+    expect(listSessions(workspace).map((m) => m.id).sort()).toEqual([fork.sessionId, 'session-saved'].sort());
+  });
+
+  it('refuses a session the pool never adopted', () => {
+    expect(() => pool.forkConversation('session-nope')).toThrow('Session not found');
+  });
+});
+
+describe('OrchestratorPool.compactConversation', () => {
+  let workspace: string;
+  let pool: OrchestratorPool;
+
+  beforeEach(() => {
+    workspace = mkdtempSync(join(tmpdir(), 'ordewell-pool-'));
+    mkdirSync(join(workspace, '.git'));
+    pool = new OrchestratorPool();
+    const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
+    pool.adoptSavedSession(meta.id, workspace);
+  });
+
+  afterEach(() => {
+    pool.destroyAll();
+    rmSync(workspace, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('answers the condensed plan with the summary, and clears its abort controller once settled', async () => {
+    vi.spyOn(Session.prototype, 'compactConversation').mockResolvedValue({ summary: 'the state', keptMessages: 4 });
+
+    const result = await pool.compactConversation('session-saved');
+
+    expect(result.summary).toBe('the state');
+    expect(result.keptMessages).toBe(4);
+    expect(result.plan.tasks.map((t) => t.id)).toEqual(['t1', 't2']);
+    expect(pool.cancelPlanning('session-saved')).toBe(false);
+  });
+
+  it('lets a planning stop abort the summary turn', async () => {
+    let signal: AbortSignal | undefined;
+    let finish!: (v: { summary: string; keptMessages: number }) => void;
+    vi.spyOn(Session.prototype, 'compactConversation').mockImplementation((s) => {
+      signal = s;
+      return new Promise((resolve) => { finish = resolve; });
+    });
+
+    const call = pool.compactConversation('session-saved');
+    await Promise.resolve();
+
+    expect(pool.cancelPlanning('session-saved')).toBe(true);
+    expect(signal?.aborted).toBe(true);
+    finish({ summary: 's', keptMessages: 4 });
+    await call;
+  });
+
+  it('refuses while a planner turn is in flight without displacing that turn\'s abort controller', async () => {
+    let signal: AbortSignal | undefined;
+    let finish!: (v: LegacyPlanState) => void;
+    vi.spyOn(Session.prototype, 'continueConversation').mockImplementation((_m, options) => {
+      signal = options?.signal;
+      return new Promise((resolve) => { finish = resolve; });
+    });
+    const compact = vi.spyOn(Session.prototype, 'compactConversation');
+
+    const turn = pool.continuePlanning('session-saved', 'and CSV');
+    await expect(pool.compactConversation('session-saved')).rejects.toThrow(ConversationBusyError);
+
+    expect(compact).not.toHaveBeenCalled();
+    expect(pool.cancelPlanning('session-saved')).toBe(true);
+    expect(signal?.aborted).toBe(true);
+    finish(savedPlan());
+    await turn;
+  });
+
+  it('refuses a session the pool never adopted', async () => {
+    await expect(pool.compactConversation('session-nope')).rejects.toThrow('Session not found');
   });
 });
 

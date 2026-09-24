@@ -1,9 +1,11 @@
 import type { ConversationRequest, ConversationTurn, IAiService } from './AiService';
 import { repairLoop, taskOpsRejectedPrompt } from './PlanRepair';
-import { renderTaskQueryAnswer, taskQuerySignature, TASK_QUERY_ANSWER_OR_OPS, TASK_QUERY_REMINDER, type TaskQuery, type TaskQueryCatalog } from './TaskQuery';
+import { renderTaskQueryAnswer, taskQuerySignature, TASK_QUERY_ANSWER_OR_OPS, TASK_QUERY_REMINDER, type LiveOutputLookup, type TaskQuery, type TaskQueryCatalog } from './TaskQuery';
 import { taskOpsProtocol, type ApplyTaskOpsResult, type TaskOp } from './TaskOps';
 import { resolveDefaultMode } from './ModeResolver';
 import type { SessionBroadcaster } from './SessionMessage';
+import type { ForkedDialogue } from './conversationFork';
+import { condensedNotice, extractSummary, keptTail, summaryRequest } from './conversationSummary';
 import type { ConversationMessage, LegacyPlanState, ResearchLogEntry, ResearchProgress, RunnerId, Task } from '../models/Task';
 
 /**
@@ -62,6 +64,12 @@ export interface PlannerConversationHost {
   /** What the per-turn catalog block and every read draw from, as of now. */
   catalog(): TaskQueryCatalog;
   tasks(): Task[];
+  /**
+   * The orchestrator's live capture for a task's latest attempt, backing the
+   * `output` field of a read. Injected the same way as the catalog so the
+   * conversation never reaches into execution state directly.
+   */
+  liveOutput: LiveOutputLookup;
   hasLiveWork(): boolean;
   /** The session's single mutation ritual: op → persist → notify (default: the plan). */
   mutate(op: () => boolean, notify?: () => void): LegacyPlanState | null;
@@ -76,6 +84,49 @@ export interface PlannerConversationHost {
   queueEdit(userMessage: string): number;
   /** Wake a scheduler an applied edit may have unblocked. */
   afterEdit(): Promise<void>;
+}
+
+/**
+ * A conversation edit (rewind, fork) the conversation refused because the
+ * request itself is wrong — no such message, nothing to fork. Transport-agnostic
+ * like `PlanEditError`: a route maps it to a status, core carries none.
+ */
+export class ConversationEditError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ConversationEditError';
+  }
+}
+
+/**
+ * Refused because a planner turn is in flight. Distinct from a bad request:
+ * the same call succeeds once the turn settles, and the turn would otherwise
+ * append its reply to a transcript that no longer holds the message it
+ * answers.
+ */
+export class ConversationBusyError extends ConversationEditError {
+  constructor(operation: string) {
+    super(`Cannot ${operation} while the planner is answering — wait for the reply, or stop it first.`);
+    this.name = 'ConversationBusyError';
+  }
+}
+
+/** Width of a rewind target's preview — one picker row, not the whole message. */
+const REWIND_PREVIEW_WIDTH = 80;
+
+/** A user message the conversation can be rewound to just before. */
+export interface RewindTarget {
+  /** Position in the transcript — what {@link PlannerConversation.rewind} takes. */
+  index: number;
+  preview: string;
+  timestamp: string;
+}
+
+/** What a compaction left behind. */
+export interface ConversationCompaction {
+  summary: string;
+  /** Transcript entries kept verbatim after the summary entry. */
+  keptMessages: number;
 }
 
 /** A point a failed turn returns the dialogue to. Opaque outside this module. */
@@ -111,11 +162,17 @@ export interface ReplyOptions {
 export class PlannerConversation {
   /** Bumped on every persist, so a rollback can tell whether its writes already reached disk. */
   private persisted = 0;
+  private turnsInFlight = 0;
 
   constructor(private readonly host: PlannerConversationHost) {}
 
   get transcript(): readonly ConversationMessage[] {
     return this.host.plan()?.conversationHistory ?? [];
+  }
+
+  /** Whether a user turn is between its transcript append and its settled outcome. */
+  get isTurnInFlight(): boolean {
+    return this.turnsInFlight > 0;
   }
 
   /** Whether the model still holds this conversation in memory. */
@@ -170,6 +227,127 @@ export class PlannerConversation {
     this.host.aiService().reset();
   }
 
+  /**
+   * The user messages a rewind may land before. The opening message is the
+   * goal: cutting it leaves a conversation about nothing, which is a new
+   * session, not a rewind. After a compaction the summary entry, always
+   * first, plays the goal's part: what it replaced is gone, so a rewind stops
+   * at it.
+   */
+  rewindTargets(): RewindTarget[] {
+    return this.transcript.flatMap((m, index) => {
+      if (m.role !== 'user' || index === 0) return [];
+      const line = m.content.split('\n')[0];
+      const preview = line.length > REWIND_PREVIEW_WIDTH ? `${line.slice(0, REWIND_PREVIEW_WIDTH - 1)}…` : line;
+      return [{ index, preview, timestamp: m.timestamp }];
+    });
+  }
+
+  /**
+   * Cut the dialogue back to just before the user message at `index` (a
+   * position in the transcript), discarding it and everything after. The task
+   * list is the host's and rides along untouched — rewinding moves where the
+   * conversation resumes, not what the plan is. The planner's research trace
+   * goes back to the same point, by time: its entries carry no link to the
+   * message that caused them.
+   */
+  rewind(index: number): LegacyPlanState {
+    this.assertIdle('rewind the conversation');
+    const plan = this.requirePlan();
+    if (!this.rewindTargets().some((t) => t.index === index)) {
+      if (index > 0) throw new ConversationEditError(`No user message at position ${index} to rewind to.`);
+      throw new ConversationEditError(this.transcript[0]?.kind === 'compaction'
+        ? 'The conversation was condensed there — a rewind cannot reach back past the summary.'
+        : 'The first message is the goal — start a new session to change it.');
+    }
+    const cutoff = this.transcript[index].timestamp;
+    const rewound = this.host.mutate(() => {
+      plan.conversationHistory = this.transcript.slice(0, index);
+      plan.researchLog = (plan.researchLog ?? []).filter((e) => e.timestamp < cutoff);
+      return true;
+    }, () => this.host.broadcastPlan());
+    this.reset();
+    return rewound!;
+  }
+
+  /**
+   * Replace the transcript with a summary of it, keeping the last two
+   * exchanges as they were, and drop the live context so the next message
+   * replays from the shorter record.
+   *
+   * The summary is one hidden turn through whichever planner is configured —
+   * on the live context when it still matches, replayed from the transcript
+   * when not — so the compaction is the same for a vendor API and a harness
+   * agent. Whatever the turn emits besides the summary is discarded, ops
+   * included: it condenses the conversation, never the plan. Nothing is
+   * written until the summary is in hand, so a failed or stopped turn leaves
+   * the transcript exactly as it was.
+   */
+  async compact(signal?: AbortSignal): Promise<ConversationCompaction> {
+    this.assertIdle('condense the conversation');
+    const plan = this.host.plan();
+    if (!plan) throw new ConversationEditError('No planning conversation to condense');
+    if (!keptTail(this.transcript)) {
+      throw new ConversationEditError('The conversation is too short to condense — it takes more than two exchanges before a summary saves anything.');
+    }
+    return this.inTurn(async () => {
+      try {
+        const summary = await this.summarize(signal);
+        const tail = keptTail(this.transcript);
+        if (this.host.plan() !== plan || !tail) throw new ConversationEditError('The conversation changed while it was being condensed — nothing was replaced.');
+        const now = new Date().toISOString();
+        const content = condensedNotice(summary);
+        this.host.mutate(() => {
+          plan.conversationHistory = [{ role: 'assistant', content, timestamp: now, kind: 'compaction' }, ...tail];
+          return true;
+        }, () => {
+          this.host.broadcast({ type: 'planner_message', content, timestamp: now });
+          this.host.broadcastPlan();
+        });
+        return { summary, keptMessages: tail.length };
+      } finally {
+        // Success and failure alike: the live context either holds the
+        // conversation this replaced or a summary exchange nobody kept.
+        this.reset();
+      }
+    });
+  }
+
+  private async summarize(signal?: AbortSignal): Promise<string> {
+    const ai = this.host.aiService();
+    const request = summaryRequest(this.currentPlanLines());
+    // Only liveness gets through: streamed prose or research steps from this
+    // turn would land in the chat as if the planner had said them.
+    const onProgress = (p: ResearchProgress) => { if (p.type === 'liveness') this.host.onProgress(p); };
+    const canContinueLive = ai.hasActiveConversation() && (ai.conversationMatchesConfig?.() ?? true);
+    let turn: ConversationTurn;
+    if (canContinueLive) {
+      ai.pruneContext?.();
+      turn = await ai.continueConversation(request, onProgress, signal);
+    } else {
+      turn = await this.resume(request, [...this.transcript], signal, onProgress);
+    }
+    if (signal?.aborted) throw new ConversationEditError('Condensing was stopped — the conversation is unchanged.');
+    const summary = extractSummary(turn.text);
+    if (!summary) throw new ConversationEditError('The planner returned no summary, so the conversation is unchanged. Try again.');
+    return summary;
+  }
+
+  /**
+   * A copy of the dialogue record for a forked session to carry. Refused
+   * mid-turn: the copy would hold the user's message without the reply to it.
+   * The live context is not part of it — the fork replays from this record on
+   * its first turn, like any adopted session.
+   */
+  clone(): ForkedDialogue {
+    this.assertIdle('fork the conversation');
+    const plan = this.host.plan();
+    return structuredClone({
+      conversationHistory: plan?.conversationHistory ?? [],
+      researchLog: plan?.researchLog ?? [],
+    });
+  }
+
   /** A one-shot `modifyPlan` exchange. Call inside the host's mutation ritual. */
   recordModification(request: string, requestedAt: string, taskCount: number): void {
     this.append('user', request, { timestamp: requestedAt });
@@ -192,14 +370,16 @@ export class PlannerConversation {
 
   /** Open the conversation on a fresh plan: the goal is its first message. */
   async start(goal: string, opening: ConversationOpening, signal?: AbortSignal): Promise<LegacyPlanState> {
-    this.recordUser(goal, new Date().toISOString());
-    const turn = await this.host.aiService().startConversation({
-      ...opening,
-      goal,
-      onProgress: (p) => this.host.onProgress(p),
-      signal,
+    return this.inTurn(async () => {
+      this.recordUser(goal, new Date().toISOString());
+      const turn = await this.host.aiService().startConversation({
+        ...opening,
+        goal,
+        onProgress: (p) => this.host.onProgress(p),
+        signal,
+      });
+      return this.settle(turn, signal);
     });
-    return this.settle(turn, signal);
   }
 
   /**
@@ -208,6 +388,10 @@ export class PlannerConversation {
    * writes back out, so session memory never drifts from disk and the UI.
    */
   async reply(message: string, options: ReplyOptions = {}): Promise<LegacyPlanState> {
+    return this.inTurn(() => this.replyTurn(message, options));
+  }
+
+  private async replyTurn(message: string, options: ReplyOptions): Promise<LegacyPlanState> {
     const { signal } = options;
     const plan = this.requirePlan();
     const priorHistory = plan.conversationHistory ?? [];
@@ -259,6 +443,19 @@ export class PlannerConversation {
     }
   }
 
+  private assertIdle(operation: string): void {
+    if (this.isTurnInFlight) throw new ConversationBusyError(operation);
+  }
+
+  private async inTurn<T>(turn: () => Promise<T>): Promise<T> {
+    this.turnsInFlight++;
+    try {
+      return await turn();
+    } finally {
+      this.turnsInFlight--;
+    }
+  }
+
   private requirePlan(): LegacyPlanState {
     const plan = this.host.plan();
     if (!plan) throw new Error('No active plan state');
@@ -281,7 +478,12 @@ export class PlannerConversation {
    * against the planner config now in effect. No LLM call happens for the
    * replayed turns; the first call is the one the user's message opens.
    */
-  private async resume(message: string, priorHistory: ConversationMessage[], signal?: AbortSignal): Promise<ConversationTurn> {
+  private async resume(
+    message: string,
+    priorHistory: ConversationMessage[],
+    signal?: AbortSignal,
+    onProgress: (progress: ResearchProgress) => void = (p) => this.host.onProgress(p),
+  ): Promise<ConversationTurn> {
     const runners = this.requirePlan().runners;
     const opening = await this.host.opening(runners);
     const goal = this.host.goal() || priorHistory.find((m) => m.role === 'user')?.content || message;
@@ -294,7 +496,7 @@ export class PlannerConversation {
       ...opening,
       runners,
       goal,
-      onProgress: (p) => this.host.onProgress(p),
+      onProgress,
       signal,
       priorHistory,
       initialMessage: message,
@@ -351,7 +553,7 @@ export class PlannerConversation {
    * later turn is exactly the cost this channel exists to avoid.
    */
   private taskQueryAnswer(query: TaskQuery): string {
-    return renderTaskQueryAnswer(query, this.host.tasks(), this.host.catalog());
+    return renderTaskQueryAnswer(query, this.host.tasks(), this.host.catalog(), this.host.liveOutput);
   }
 
   /**
@@ -508,17 +710,8 @@ export class PlannerConversation {
    */
   private planContextBlock(): string | null {
     const tasks = this.host.tasks();
-    if (!this.host.plan() || tasks.length === 0) return null;
-    const orderOf = new Map(tasks.map((t) => [t.id, `#${t.order}`]));
-    const lines = tasks.map((t) => {
-      const isMan = t.type === 'user';
-      // A MAN task has no model or mode to run under — the field that means
-      // something there is how many steps the human still has to do.
-      const runFields = isMan
-        ? `steps:${t.userSteps?.length ?? 0}`
-        : `${t.assignedModel ? `model:${t.assignedModel.modelId} ` : ''}mode:${t.taskMode ?? 'build'} effort:${t.thinkingEffort ?? '-'}`;
-      return `#${t.order} id=${t.id} "${t.title}" [${t.status}] type:${isMan ? 'MAN' : 'AI'} runner:${t.assignedRunner} ${runFields} autonomy:${t.autonomy ?? '-'} slice:${t.sliceType ?? '-'} deps:[${t.dependencies.map((d) => orderOf.get(d) ?? d).join(', ')}]`;
-    });
+    const lines = this.currentPlanLines();
+    if (!lines) return null;
     // Gated on live runners, not on an armed scheduler: a paused-but-armed run
     // takes edits immediately, so promising a queue there is a lie the model
     // plans around (it stops emitting ops and asks the user to wait).
@@ -535,5 +728,21 @@ export class PlannerConversation {
       TASK_QUERY_REMINDER,
       ...taskOpsProtocol(execNote),
     ].filter(Boolean).join('\n');
+  }
+
+  /** One line per task with stable references — null until the plan has tasks. */
+  private currentPlanLines(): string[] | null {
+    const tasks = this.host.tasks();
+    if (!this.host.plan() || tasks.length === 0) return null;
+    const orderOf = new Map(tasks.map((t) => [t.id, `#${t.order}`]));
+    return tasks.map((t) => {
+      const isMan = t.type === 'user';
+      // A MAN task has no model or mode to run under — the field that means
+      // something there is how many steps the human still has to do.
+      const runFields = isMan
+        ? `steps:${t.userSteps?.length ?? 0}`
+        : `${t.assignedModel ? `model:${t.assignedModel.modelId} ` : ''}mode:${t.taskMode ?? 'build'} effort:${t.thinkingEffort ?? '-'}`;
+      return `#${t.order} id=${t.id} "${t.title}" [${t.status}] type:${isMan ? 'MAN' : 'AI'} runner:${t.assignedRunner} ${runFields} autonomy:${t.autonomy ?? '-'} slice:${t.sliceType ?? '-'} deps:[${t.dependencies.map((d) => orderOf.get(d) ?? d).join(', ')}]`;
+    });
   }
 }

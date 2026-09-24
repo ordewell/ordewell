@@ -1,7 +1,8 @@
 import { createAiService, type IAiService } from './AiService';
 import { applyTaskOps, canMergeTasks, canSplitTask } from './TaskOps';
 import { validateTaskEdit, type EditCatalog } from './TaskEditValidator';
-import { PlannerConversation, type ConversationOpening } from './PlannerConversation';
+import { ConversationEditError, PlannerConversation, type ConversationCompaction, type ConversationOpening, type RewindTarget } from './PlannerConversation';
+import { forkPlanState } from './conversationFork';
 import { Planner } from './Planner';
 import { TaskOrchestrator } from './TaskOrchestrator';
 import type { OrchestratorObserver } from './TaskOrchestrator';
@@ -139,6 +140,13 @@ export function resolveSkillInvocation(
  * settings (tdd, verification) are read live via the `settings` callback so a toggle
  * between generate and execute takes effect.
  */
+/** Where a fork landed: the new session's id, and what adopting it needs. */
+export interface ConversationFork {
+  sessionId: string;
+  goal: string;
+  workspace: string;
+}
+
 export interface SessionDeps {
   config: IConfig;
   notifications: INotification;
@@ -306,6 +314,7 @@ export class Session {
         };
       },
       tasks: () => this.store.planTasks,
+      liveOutput: (taskId, opts) => this.orchestrator.getLiveOutput(taskId, opts),
       hasLiveWork: () => this.hasLiveWork,
       mutate: (op, notify) => this.mutatePlan(op, notify),
       broadcast: (msg) => this.broadcast(msg),
@@ -703,6 +712,54 @@ export class Session {
     } finally {
       releaseAbort();
     }
+  }
+
+  /**
+   * Copy this conversation and its task list into a new persisted session and
+   * answer its id. This session is untouched — not even its live planner
+   * context, so the original carries on exactly where it was. The fork holds
+   * no run (see {@link forkPlanState}); a host adopts it like any saved
+   * session, and its first message replays the copied transcript.
+   */
+  forkConversation(): ConversationFork {
+    if (!this.plan) throw new ConversationEditError('No planning conversation to fork');
+    const dialogue = this.conversation.clone();
+    const sessionId = mintSessionId();
+    const plan = forkPlanState(this.plan, this.store.planTasks, dialogue, new Date().toISOString());
+    saveSession(plan, this.goal, this.workspace, sessionId);
+    return { sessionId, goal: this.goal, workspace: this.workspace };
+  }
+
+  /**
+   * Cut the conversation back to just before a user message (a transcript
+   * position from {@link rewindTargets}). Conversation only: the task list,
+   * and any run executing it, carry on as they are. The planner's live context
+   * is dropped, so the next message replays from the shortened transcript.
+   */
+  rewindConversation(userMessageIndex: number): LegacyPlanState {
+    if (!this.plan) throw new ConversationEditError('No planning conversation to rewind');
+    return this.conversation.rewind(userMessageIndex);
+  }
+
+  /**
+   * Condense the conversation on the user's say-so: a hidden planner turn
+   * summarises it, and the summary replaces everything but the last two
+   * exchanges. Conversation only, like a rewind — the tasks, and any run
+   * executing them, are untouched. Atomic: a failed or stopped turn changes
+   * nothing.
+   */
+  async compactConversation(signal?: AbortSignal): Promise<ConversationCompaction> {
+    if (!this.plan) throw new ConversationEditError('No planning conversation to condense');
+    const releaseAbort = this.denyApprovalsOnAbort(signal);
+    try {
+      return await this.conversation.compact(signal);
+    } finally {
+      releaseAbort();
+    }
+  }
+
+  rewindTargets(): RewindTarget[] {
+    return this.conversation.rewindTargets();
   }
 
   /** Whether the planner conversation is live (started and not yet committed to a plan). */
