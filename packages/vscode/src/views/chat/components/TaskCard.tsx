@@ -4,7 +4,7 @@ import ModelSelector, { getModelClass, providerLabel } from './ModelSelector';
 import DependencyPicker from './DependencyPicker';
 import { lastLine } from '../taskOutput';
 import { dependencyCandidates } from '@ordewell/core/plan-utils';
-import { Task, DiscoveredModel, TaskModelAssignment } from '@ordewell/core';
+import { Task, DiscoveredModel, TaskModelAssignment, TaskIsolation } from '@ordewell/core';
 
 export interface RunnerMode {
   id: string;
@@ -37,6 +37,10 @@ interface TaskCardProps {
   output?: string;
   /** Advisory silence timestamp (VerdictEngine) — set while in_progress with no recent output. */
   idleSince?: string | null;
+  /** Per-task isolation state (ADR-0013), only when the plan has an isolation run. */
+  isolation?: TaskIsolation | null;
+  /** Opt in to resolving this task's merge conflict as an AI task. */
+  onResolveConflict?: (taskId: string) => void;
   taskOrderMap?: Map<string, number>;
   dependentCount?: number;
   /** The task list this task belongs to — the dependency editor's candidate pool. */
@@ -128,7 +132,7 @@ export function runnerOptionsFor(runners: RunnerOption[] | undefined, assignedRu
   return [...runners, { id: assignedRunner, displayName: assignedRunner }];
 }
 
-export default function TaskCard({ task, models, modes, modelsByRunner, modesByRunner, runners, effectiveRunner, configuredProviders, modelApiMapping, isExecuting, output, idleSince, taskOrderMap, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
+export default function TaskCard({ task, models, modes, modelsByRunner, modesByRunner, runners, effectiveRunner, configuredProviders, modelApiMapping, isExecuting, output, idleSince, isolation, onResolveConflict, taskOrderMap, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
   const [internalExpanded, setInternalExpanded] = useState(false);
   const isControlled = expandedProp !== undefined;
   const expanded = isControlled ? expandedProp : internalExpanded;
@@ -139,7 +143,11 @@ export default function TaskCard({ task, models, modes, modelsByRunner, modesByR
   const [editingPrompt, setEditingPrompt] = useState<string | null>(null);
   const [editingDeps, setEditingDeps] = useState(false);
   const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set());
+  const [offeringResolve, setOfferingResolve] = useState(false);
   const sortedSubtasks = [...task.subtasks].sort((a, b) => a.order - b.order);
+
+  const hasConflict = isolation?.state === 'conflict';
+  const isolatedWork = isolation && isolation.state !== 'none' ? isolation : null;
 
   // A live tail is only useful pinned to its newest line; left alone the pane
   // holds the top of the buffer and the incoming output scrolls out of sight.
@@ -197,6 +205,15 @@ export default function TaskCard({ task, models, modes, modelsByRunner, modesByR
           {isUserTask ? 'Manual' : 'AI'}
         </span>
         <span className="task-title-text">{task.title}</span>
+
+        {/* A stopped integration is not a hidden failure (US33) — visible on the
+            collapsed card, since it is the one isolation state that needs a
+            decision, not just inspection. */}
+        {hasConflict && (
+          <span className="task-isolation-badge conflict" title="Integrating this task conflicted. Its worktree and branch are kept.">
+            Conflict
+          </span>
+        )}
 
         {(isExecuting || task.status === 'failed') && (
           <>
@@ -271,6 +288,27 @@ export default function TaskCard({ task, models, modes, modelsByRunner, modesByR
       {expanded && (
         <div className="task-card-body">
           <p className="task-description">{task.description}</p>
+
+          {/* Worktrees are an implementation detail unless something needs the
+              user's attention (US34) — so the branch and path live in the
+              details, and only a conflict earns a header badge. */}
+          {isolatedWork && (
+            <div className="task-isolation">
+              <div className="task-isolation-row"><span className="task-isolation-label">Branch</span><code>{isolatedWork.branch}</code></div>
+              <div className="task-isolation-row"><span className="task-isolation-label">Worktree</span><code>{isolatedWork.worktree}</code></div>
+              {hasConflict && onResolveConflict && (
+                offeringResolve ? (
+                  <div className="task-isolation-resolve">
+                    <span>Resolve this conflict as a new AI task?</span>
+                    <button className="task-action-btn run" onClick={(e) => { e.stopPropagation(); onResolveConflict(task.id); setOfferingResolve(false); }}>Resolve as a task</button>
+                    <button className="task-action-btn" onClick={(e) => { e.stopPropagation(); setOfferingResolve(false); }}>Cancel</button>
+                  </div>
+                ) : (
+                  <button className="task-action-btn run" onClick={(e) => { e.stopPropagation(); setOfferingResolve(true); }}>Resolve</button>
+                )
+              )}
+            </div>
+          )}
 
           {output && (
             <div className="task-output">

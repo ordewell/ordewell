@@ -7,10 +7,11 @@ import { applyToolResult, previewResult, type Activity } from './activity';
 import { appendTaskOutput, type TaskOutputMap } from './taskOutput';
 import ModelSelector, { API_PROVIDER_LABELS } from './components/ModelSelector';
 import PlanCardGroup from './components/PlanCardGroup';
+import HandoffCard from './components/HandoffCard';
 import CheckpointPanel from './components/CheckpointPanel';
 import type { RunnerMode } from './components/TaskCard';
 import type { TaskDraft } from './components/NewTaskCard';
-import { LegacyPlanState, DiscoveredModel, TaskModelAssignment, RunnerId } from '@ordewell/core';
+import { LegacyPlanState, DiscoveredModel, TaskModelAssignment, RunnerId, IsolationHandoff, TaskIsolation } from '@ordewell/core';
 import type { AiProvider } from '@ordewell/core';
 import { summarizeToolCall } from '@ordewell/core/plan-utils';
 import { isPlanRevision, planSummaryLabel, nextDock } from './planDock';
@@ -90,6 +91,10 @@ export default function App() {
   const [taskOutput, setTaskOutput] = useState<TaskOutputMap>({});
   /** Advisory silence timestamp per task id, keyed like taskOutput; null/absent means not stalled. */
   const [taskIdle, setTaskIdle] = useState<Record<string, string | null>>({});
+  /** Per-task isolation state (ADR-0013); only tasks an isolated run has touched appear. */
+  const [taskIsolation, setTaskIsolation] = useState<Record<string, TaskIsolation>>({});
+  /** The end-of-run handoff card, present until the run is merged, discarded or restarted. */
+  const [handoff, setHandoff] = useState<IsolationHandoff | null>(null);
   const [prefill, setPrefill] = useState<string | undefined>(undefined);
   /** Is the plan dock open? See planDock.ts for when this flips. */
   const [dockExpanded, setDockExpanded] = useState(false);
@@ -180,6 +185,9 @@ export default function App() {
             setTimeline([]);
             setCheckpoint(null);
             setTaskOutput({});
+            setTaskIdle({});
+            setTaskIsolation({});
+            setHandoff(null);
             setDockExpanded((v) => nextDock(v, 'session-reset'));
           }
           setIsResearchActive(msg.state === 'researching');
@@ -250,6 +258,8 @@ export default function App() {
           setCheckpoint(null);
           setPlan(null);
           setTaskOutput({});
+          setTaskIsolation({});
+          setHandoff(null);
           setDockExpanded((v) => nextDock(v, 'session-reset'));
           const history: { role: string; content: string; timestamp: string; kind?: string }[] = msg.history ?? [];
           const items: TimelineItem[] = [];
@@ -313,6 +323,23 @@ export default function App() {
 
         case 'taskIdle':
           setTaskIdle((prev) => ({ ...prev, [msg.taskId]: msg.idleSince }));
+          break;
+
+        case 'taskIsolation':
+          setTaskIsolation((prev) => ({ ...prev, [msg.taskId]: msg.isolation }));
+          break;
+
+        case 'isolationHandoff':
+          setHandoff({
+            branch: msg.branch ?? '',
+            baseRef: msg.baseRef ?? '',
+            landed: msg.landed ?? [],
+          });
+          break;
+
+        case 'isolationCleared':
+          setTaskIsolation({});
+          setHandoff(null);
           break;
 
         case 'researchProgress': {
@@ -597,6 +624,8 @@ export default function App() {
     setError('');
     setCheckpoint(null);
     setTaskOutput({});
+    setTaskIsolation({});
+    setHandoff(null);
     setDockExpanded((v) => nextDock(v, 'session-reset'));
     // A distinct message from stopResearch: /new resets the whole session,
     // while Stop only aborts the current planner turn.
@@ -883,6 +912,16 @@ export default function App() {
     vscode.postMessage({ type: 'sendMessage', text: '', runners, actionContext: { type: 'split', taskId } });
   }, [runners, pushSystem]);
 
+  // The host owns every isolation action: opening the diff, and the merge,
+  // discard and cleanup that touch the user's real branches.
+  const handleIsolationAction = useCallback((action: 'reviewDiff' | 'merge' | 'discard' | 'cleanup' | 'resolveConflict', taskId?: string) => {
+    vscode.postMessage({ type: 'isolationAction', action, taskId });
+  }, []);
+
+  const handleResolveConflict = useCallback((taskId: string) => {
+    handleIsolationAction('resolveConflict', taskId);
+  }, [handleIsolationAction]);
+
   const getPlaceholder = (): string => {
     if (isResearchActive || isExecuting) return 'AI is working...';
     if (plan && plan.tasks.length > 0) return 'Modify the plan...';
@@ -1049,7 +1088,17 @@ export default function App() {
             onExecutePlan={handleExecutePlan}
             onStopExecution={handleStopExecution}
             onRunTask={handleRunTask}
+            isolationByTask={taskIsolation}
+            onResolveConflict={handleResolveConflict}
           />
+          {handoff && (
+            <HandoffCard
+              branch={handoff.branch}
+              baseRef={handoff.baseRef}
+              landed={handoff.landed}
+              onAction={(action) => handleIsolationAction(action)}
+            />
+          )}
           {isExecuting && (
             <div className="executing-footer">
               <div className="queue-badge done-counter">

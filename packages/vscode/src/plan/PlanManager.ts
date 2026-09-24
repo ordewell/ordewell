@@ -10,6 +10,7 @@ import { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
 import { VsCodeTerminalRunner } from '../adapters/VsCodeTerminalRunner';
 import { routePlannerStream } from '../PlannerStreamRouter';
 import { handleApprovalMessage, handleApprovalDecidedMessage } from '../approvals';
+import { handleIsolationBlocked, handleIsolationHandoff } from './isolation';
 
 /**
  * Open approval prompts keyed by approval id, so an `approval_settled`
@@ -299,6 +300,7 @@ export async function handleApprovePlan(deps: PlanManagerDeps): Promise<void> {
   for (const task of allTasks) { if (task.status !== 'completed') task.status = 'approved'; }
   deps.session.loadPlan(plan, deps.getCurrentGoal(), '');
   deps.chatProvider.planApproved();
+  deps.chatProvider.clearIsolationHandoff();
   saveState(plan, deps.fsAdapter.getWorkspaceRoot());
   deps.saveCurrentSession();
   try {
@@ -374,9 +376,11 @@ export async function handleSystemCommand(
       await deps.session.markTaskIncomplete(taskId);
       break;
     case 'forceStart':
+      deps.chatProvider.clearIsolationHandoff();
       await deps.session.forceStartTask(taskId);
       break;
     case 'runTask':
+      deps.chatProvider.clearIsolationHandoff();
       await deps.session.runTask(taskId);
       break;
     case 'executePlan':
@@ -475,6 +479,9 @@ export function handleSessionMessage(
           : 'draft';
       for (const task of msg.tasks) {
         deps.chatProvider.sendTaskIdle(task.id, task.idleSince ?? null);
+        // A shared-root plan sends none; only a task with isolated work reports
+        // it, so the cards stay quiet unless isolation has something to say.
+        if (task.isolation) deps.chatProvider.sendTaskIsolation(task.id, task.isolation);
       }
       deps.chatProvider.showPlan(plan);
       break;
@@ -500,11 +507,33 @@ export function handleSessionMessage(
       deps.chatProvider.showPlan(plan);
       break;
     }
-    // Nothing started, and nothing else says so. The stash / no-isolation
-    // choice itself is not wired into the webview yet.
+    // A dirty tree parked the run. The user's way out is a real modal: stash
+    // and continue, run in the shared root this once, or cancel.
     case 'isolation_blocked':
-      deps.chatProvider.sendNewMessage(msg.message, new Date().toISOString());
+      handleIsolationBlocked(msg.message, deps);
       break;
+    // An isolated run settled: the branch its work landed on and what landed.
+    // Sent before `execution_complete`; the webview shows the handoff card.
+    case 'isolation_handoff':
+      handleIsolationHandoff({ branch: msg.branch, baseRef: msg.baseRef, landed: msg.landed }, deps);
+      break;
+    // Handled by `routePlannerStream` above (it returns before the switch), or
+    // not rendered by this surface at all. Named so a new SessionMessage variant
+    // fails to compile until someone decides what it means here.
+    case 'plan_token':
+    case 'plan_thinking':
+    case 'planner_liveness':
+    case 'research_step':
+    case 'research_step_done':
+    case 'plan_generated':
+    case 'review_approved':
+    case 'task_updated':
+    case 'task_started':
+      break;
+    default: {
+      const exhaustive: never = msg;
+      return exhaustive;
+    }
   }
 }
 

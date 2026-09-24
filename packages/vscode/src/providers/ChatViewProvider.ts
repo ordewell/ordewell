@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { AiProvider, ConversationMessage, LegacyPlanState, Task, DiscoveredModel, ResearchProgress, RunnerId, TaskStatus } from '@ordewell/core';
+import { AiProvider, ConversationMessage, LegacyPlanState, Task, DiscoveredModel, ResearchProgress, RunnerId, TaskStatus, TaskIsolation, IsolationHandoff } from '@ordewell/core';
 
 type ChatWebviewMessage =
   | {
@@ -25,7 +25,13 @@ type ChatWebviewMessage =
   /** Who plans (ADR-0009) — a vendor provider id or one of the harness planners. */
   | { type: 'setPlanner'; provider: string }
   /** The planner's own model and thinking effort, a pair so neither can outlive the other. */
-  | { type: 'setPlannerModel'; modelId: string; effort?: string };
+  | { type: 'setPlannerModel'; modelId: string; effort?: string }
+  /**
+   * An action on an isolated run, from a task's conflict indicator or the
+   * handoff card. Reviewing, merging, discarding and cleaning up are all
+   * asymmetric operations the host alone can confirm and perform.
+   */
+  | { type: 'isolationAction'; action: 'reviewDiff' | 'merge' | 'discard' | 'cleanup' | 'resolveConflict'; taskId?: string };
 
 /** One selectable planner backend, with the reason it can't be picked when it can't. */
 export interface PlannerBackend {
@@ -81,6 +87,15 @@ type ExtensionChatMessage =
   | { type: 'showWarnings'; warnings: string; pendingTasks: Task[] }
   | { type: 'checkpoint'; taskId: string; taskTitle: string; summary: string }
   | { type: 'setGoal'; goal: string }
+  // Per-task isolation state (ADR-0013) — sent only for tasks that have one, so
+  // a shared-root plan's cards stay quiet (US34).
+  | { type: 'taskIsolation'; taskId: string; isolation: TaskIsolation }
+  // The end-of-run handoff: the integration branch and what landed, with the
+  // actions the host performs on request.
+  | { type: 'isolationHandoff'; branch: string; baseRef: string; landed: IsolationHandoff['landed'] }
+  // The run's isolation is gone (discarded or the plan restarted); the handoff
+  // card and every conflict indicator clear.
+  | { type: 'isolationCleared' }
   | { type: 'restoreChat'; history: ConversationMessage[]; hasPlan: boolean };
 
 function getNonce(): string {
@@ -174,6 +189,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
   showCheckpoint(taskId: string, taskTitle: string, summary: string): void {
     this.postMessage({ type: 'checkpoint', taskId, taskTitle, summary });
+  }
+
+  /** Where one task's isolated work stands — conflict indicator, branch and worktree. */
+  sendTaskIsolation(taskId: string, isolation: TaskIsolation): void {
+    this.postMessage({ type: 'taskIsolation', taskId, isolation });
+  }
+
+  /** The end-of-run handoff card: branch, base ref and what landed. */
+  showIsolationHandoff(handoff: IsolationHandoff): void {
+    this.postMessage({ type: 'isolationHandoff', ...handoff });
+  }
+
+  /** Drop the handoff card and every per-task isolation indicator. */
+  clearIsolationHandoff(): void {
+    this.postMessage({ type: 'isolationCleared' });
   }
 
   // Config pass-throughs — store locally and emit on request
