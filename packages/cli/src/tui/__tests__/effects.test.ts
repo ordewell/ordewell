@@ -1265,3 +1265,138 @@ describe('conversation compact effect', () => {
     expect(state.busyLabel).toBe('');
   });
 });
+
+describe('worktree isolation', () => {
+  /** Drive one run with scripted websocket messages, the way `execute` sees them. */
+  const running = (events: unknown[], api: Partial<OrdewellApi> = {}) =>
+    harness({
+      streamExecution: vi.fn().mockImplementation((_id: string, cb: (e: unknown) => void, onReady?: (error?: Error) => void) => {
+        onReady?.();
+        for (const event of events) cb(event);
+        return Promise.resolve();
+      }),
+      ...api,
+    });
+
+  it('carries each task\'s isolation from a status_update into the reducer', async () => {
+    const isolation = { state: 'conflict', branch: 'ordewell/r1/2-b', worktree: '/w/2-b' };
+    const h = running([{ type: 'status_update', tasks: [{ id: 'b', status: 'awaiting_user', verdict: null, isolation }] }]);
+
+    await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
+
+    expect(h.actions).toContainEqual({ type: 'tasksStatus', sessionId: 's1', updates: { b: { status: 'awaiting_user', idleSince: null, isolation } } });
+  });
+
+  it('turns isolation_blocked into the stash / run-without / cancel question', async () => {
+    const h = running([{ type: 'isolation_blocked', reason: 'dirty', message: 'Tracked files have uncommitted changes' }]);
+
+    await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
+
+    expect(h.actions).toContainEqual({ type: 'isolationBlocked', message: 'Tracked files have uncommitted changes', sessionId: 's1' });
+  });
+
+  it('turns isolation_handoff into the handoff, before the run completes', async () => {
+    const landed = [{ taskId: 't1', order: 1, title: 'One' }];
+    const h = running([
+      { type: 'isolation_handoff', branch: 'ordewell/r1/integration', baseRef: 'abc', landed },
+      { type: 'execution_complete', summary: { total: 1, completed: 1, failed: 0 } },
+    ]);
+
+    await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
+
+    expect(types(h.actions).filter((t) => t === 'isolationHandoff' || t === 'executionComplete')).toEqual(['isolationHandoff', 'executionComplete']);
+    expect(h.actions).toContainEqual({ type: 'isolationHandoff', handoff: { branch: 'ordewell/r1/integration', baseRef: 'abc', landed }, sessionId: 's1' });
+  });
+
+  it('ignores socket greetings that are not session messages', async () => {
+    const h = running([{ type: 'connected', sessionId: 's1' }, { type: 'chat_backlog', history: [] }]);
+
+    await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
+
+    expect(messageOf(h.actions, 'failed')).toBeUndefined();
+  });
+
+  it('review hands the diff to the reducer', async () => {
+    const h = harness({ reviewRunDiff: vi.fn().mockResolvedValue('diff --git a/x b/x') } as Partial<OrdewellApi>);
+
+    await runEffect({ type: 'isolationReviewDiff', sessionId: 's1' }, h.deps);
+
+    expect(h.actions).toEqual([{ type: 'handoffDiff', diff: 'diff --git a/x b/x', sessionId: 's1' }]);
+  });
+
+  it('a merged run says where it landed', async () => {
+    const h = harness({ mergeRun: vi.fn().mockResolvedValue('merged') } as Partial<OrdewellApi>);
+
+    await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration' }, h.deps);
+
+    expect(messageOf(h.actions, 'notice')).toMatch(/Merged ordewell\/r1\/integration into your checked-out branch/);
+  });
+
+  it.each([
+    ['conflict', /conflicted, so it was aborted — your tree is as it was/],
+    ['failed', /merge already in progress/],
+  ] as const)('a %s merge is reported as a failure that changed nothing', async (outcome, pattern) => {
+    const h = harness({ mergeRun: vi.fn().mockResolvedValue(outcome) } as Partial<OrdewellApi>);
+
+    await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration' }, h.deps);
+
+    expect(messageOf(h.actions, 'failed')).toMatch(pattern);
+    expect(messageOf(h.actions, 'notice')).toBeUndefined();
+  });
+
+  it('discard tells the reducer the run is gone', async () => {
+    const h = harness({ discardRun: vi.fn().mockResolvedValue(undefined) } as Partial<OrdewellApi>);
+
+    await runEffect({ type: 'isolationDiscard', sessionId: 's1', branch: 'ordewell/r1/integration' }, h.deps);
+
+    expect(types(h.actions)).toEqual(['handoffDiscarded', 'notice']);
+  });
+
+  it('cleanup refreshes the plan, since the worktrees the marks named are gone', async () => {
+    const cleanupRun = vi.fn().mockResolvedValue(undefined);
+    const h = harness({ cleanupRun } as Partial<OrdewellApi>);
+
+    await runEffect({ type: 'isolationCleanup', sessionId: 's1', branch: 'ordewell/r1/integration' }, h.deps);
+
+    expect(cleanupRun).toHaveBeenCalledWith('s1');
+    expect(h.api.getSession).toHaveBeenCalled();
+    expect(messageOf(h.actions, 'notice')).toMatch(/ordewell\/r1\/integration is kept/);
+  });
+
+  it.each([
+    ['stash', 'continueWithStash'],
+    ['shared', 'continueWithoutIsolation'],
+  ] as const)('%s: opens a stream of its own, then continues, then follows the run', async (mode, method) => {
+    const order: string[] = [];
+    const h = harness({
+      streamExecution: vi.fn().mockImplementation((_id: string, _cb: unknown, onReady?: () => void) => {
+        order.push('stream');
+        onReady?.();
+        return Promise.resolve();
+      }),
+      [method]: vi.fn().mockImplementation(async () => { order.push(method); }),
+    } as Partial<OrdewellApi>);
+
+    await runEffect({ type: 'isolationContinue', sessionId: 's1', mode }, h.deps);
+
+    expect(order).toEqual(['stream', method]);
+  });
+
+  it('resolve-as-a-task adds the task, refreshes the plan and says what to do next', async () => {
+    const resolveConflictAsTask = vi.fn().mockResolvedValue({});
+    const h = harness({ resolveConflictAsTask } as Partial<OrdewellApi>);
+
+    await runEffect({ type: 'resolveConflict', sessionId: 's1', taskId: 't2' }, h.deps);
+
+    expect(resolveConflictAsTask).toHaveBeenCalledWith('s1', 't2');
+    expect(types(h.actions)).toEqual(['planUpdated', 'notice']);
+  });
+
+  it('a refused action surfaces the daemon\'s reason', async () => {
+    const h = harness({ discardRun: vi.fn().mockRejectedValue(new Error('The run is still running — stop it first')) } as Partial<OrdewellApi>);
+
+    await runEffect({ type: 'isolationDiscard', sessionId: 's1', branch: 'b' }, h.deps);
+
+    expect(messageOf(h.actions, 'failed')).toBe('The run is still running — stop it first');
+  });
+});

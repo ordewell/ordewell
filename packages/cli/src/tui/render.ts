@@ -5,6 +5,7 @@ import {
   bodyRows, chatInputWrap, chatLayout, footerHints, helpLayout, packHints, planLayout, planOffset,
 } from './layout';
 import { chatEditorRoom, chatPaneWidth, paneColumns, planPaneWidth } from './geometry';
+import { diffRoom, HANDOFF_ACTIONS } from './handoff';
 import { SKILL_IDS, visibleItems, type PickerState, type TuiState } from './state';
 
 /**
@@ -443,7 +444,59 @@ function renderOverlay(state: TuiState, rows: number, cols: number): string[] {
       cols,
     );
   }
+  if (overlay.kind === 'handoff') return renderHandoff(state, overlay, rows, cols);
   return renderPicker(overlay.picker, rows, cols);
+}
+
+function renderHandoff(
+  state: TuiState,
+  overlay: Extract<NonNullable<TuiState['overlay']>, { kind: 'handoff' }>,
+  rows: number,
+  cols: number,
+): string[] {
+  const handoff = state.handoff;
+  if (!handoff) return frame('Handoff', [style.grey('Nothing to hand off.')], rows, cols);
+
+  if (overlay.diff) {
+    const room = diffRoom(rows);
+    const { lines, scroll } = overlay.diff;
+    const shown = lines.slice(scroll, scroll + room).map(paintDiffLine);
+    const more = scroll + room < lines.length ? '↑↓ pgup/pgdn scroll · ' : '';
+    return frame(`Diff — ${handoff.branch}`, [...shown, '', style.grey(`${more}enter or esc goes back`)], rows, cols);
+  }
+
+  const landed = handoff.landed.length === 0
+    ? [style.grey('Nothing landed on it.')]
+    : handoff.landed.map((task) => `  ${style.green('✓')} #${task.order} ${task.title}`);
+  const actions = HANDOFF_ACTIONS.map((action, index) => {
+    const active = index === overlay.index;
+    const caret = active ? style.cyan('❯') : ' ';
+    return `${caret} ${active ? style.bold(action.label) : action.label}${style.grey(` — ${action.hint}`)}`;
+  });
+  return frame(
+    'Run handoff',
+    [
+      `Branch  ${style.cyan(handoff.branch)}`,
+      style.grey(`Forked from ${handoff.baseRef.slice(0, 12)}`),
+      '',
+      'Landed on it, in plan order:',
+      ...landed,
+      '',
+      ...actions,
+      '',
+      style.grey('↑↓ choose · enter selects · esc closes'),
+    ],
+    rows,
+    cols,
+  );
+}
+
+function paintDiffLine(line: string): string {
+  if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff ')) return style.bold(line);
+  if (line.startsWith('+')) return style.green(line);
+  if (line.startsWith('-')) return style.red(line);
+  if (line.startsWith('@@')) return style.cyan(line);
+  return line;
 }
 
 function renderPicker(picker: PickerState, rows: number, cols: number): string[] {

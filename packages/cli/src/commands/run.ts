@@ -1,4 +1,4 @@
-import { flag, readLastSession } from '../utils';
+import { flag, hasFlag, readLastSession } from '../utils';
 import { iconFor } from '../utils/output';
 import { ensureDaemon, ApiClient, resolvePort, type TaskStatus } from '../daemonClient';
 import { truncateCheckpointSummary } from '@ordewell/core';
@@ -26,7 +26,8 @@ export function resolveSessionId(subArgs: string[]): string {
  * Shared by `run` and `approve` — both hand the orchestrator work and then
  * watch the same stream, and a second copy of the redraw would drift.
  */
-export async function followExecution(api: ApiClient, sessionId: string): Promise<void> {
+export async function followExecution(api: ApiClient, sessionId: string, onBlocked?: 'stash' | 'shared'): Promise<void> {
+  let blocked: string | null = null;
   const taskStates = new Map<string, TaskStatus>();
   let lastPrinted = '';
 
@@ -78,11 +79,31 @@ export async function followExecution(api: ApiClient, sessionId: string): Promis
       if (event.type === 'execution_stopped') {
         console.log('\nExecution stopped.');
       }
+      if (event.type === 'isolation_blocked') blocked = event.message;
+      if (event.type === 'isolation_handoff') {
+        const n = event.landed.length;
+        console.log(`\nRun finished on ${event.branch} — ${n} task${n === 1 ? '' : 's'} landed.`);
+        console.log('  `ordewell handoff review|merge|discard|cleanup` to land it.');
+      }
     });
   } catch (err) {
     console.error(`Execution stream error: ${(err as Error).message}`);
     process.exit(1);
   }
+
+  if (blocked === null) return;
+
+  // The daemon parked the start and will hold it until it hears a choice, and a
+  // parked start swallows a re-run — so without a choice, release it.
+  if (!onBlocked) {
+    await api.stopExecution(sessionId);
+    console.error(blocked);
+    console.error('Nothing was started. Re-run with `--stash` to stash your tracked changes first, or `--without-isolation` to run in your working tree this once.');
+    process.exit(1);
+  }
+  const following = followExecution(api, sessionId);
+  await (onBlocked === 'stash' ? api.continueWithStash(sessionId) : api.continueWithoutIsolation(sessionId));
+  await following;
 }
 
 export async function handleRun(subArgs: string[]): Promise<void> {
@@ -97,5 +118,6 @@ export async function handleRun(subArgs: string[]): Promise<void> {
     process.exit(1);
   }
 
-  await followExecution(api, sessionId);
+  const onBlocked = hasFlag(subArgs, '--stash') ? 'stash' : hasFlag(subArgs, '--without-isolation') ? 'shared' : undefined;
+  await followExecution(api, sessionId, onBlocked);
 }

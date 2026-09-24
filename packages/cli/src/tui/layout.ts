@@ -46,7 +46,10 @@ export function chatInputWrap(state: TuiState): WrapLine[] | null {
 export function footerHints(state: TuiState): string[] {
   // `m` toggles, so the hint has to name the direction it will actually go for
   // the selected task — a fixed 'm done' on a finished task reads as a no-op.
-  const markHint = selectedPlanRow(state)?.task.status === 'completed' ? 'm undone' : 'm done';
+  const selected = selectedPlanRow(state)?.task;
+  const markHint = selected?.status === 'completed' ? 'm undone' : 'm done';
+  // Only on a task that has a conflict to resolve: isolation stays quiet otherwise.
+  const resolveHint = selected?.isolation?.state === 'conflict' ? ['x resolve conflict'] : [];
   // A planning turn in flight owns ESC ahead of whatever the pane would
   // otherwise bind it to — the hint has to say so or the key isn't discoverable.
   const planning = state.status === 'planning' || state.status === 'researching';
@@ -62,7 +65,7 @@ export function footerHints(state: TuiState): string[] {
     return [
       ...(escHint ? [escHint] : []),
       'enter expand', 'R runner', 'o model', 'e effort', 'M mode', 'D deps', 'f start',
-      'E run plan', 'c cancel', markHint, 's skip', 'a add', 'd remove', 't terminal',
+      'E run plan', 'c cancel', markHint, 's skip', 'a add', 'd remove', 't terminal', ...resolveHint,
       'pgup/pgdn scroll', 'tab chat',
     ];
   }
@@ -524,10 +527,22 @@ function taskLines(state: TuiState, row: PlanRow, index: number, cols: number): 
   const meta = [running ? 'working' : '', runner, model].filter(Boolean).join(' · ');
   if (meta) lines.push(style.grey(truncate(`${bodyPad}${meta}`, cols)));
   if (effort || mode) lines.push(style.grey(truncate(`${bodyPad}${[effort, mode].filter(Boolean).join(' · ')}`, cols)));
+  // The one isolation state that needs the user; every other stays out of the
+  // row and shows only in the expanded detail below.
+  if (task.isolation?.state === 'conflict') {
+    lines.push(style.red(truncate(`${bodyPad}⚠ merge conflict — its work is kept on its own branch`, cols)));
+  }
 
   let editorLine: number | undefined;
   if (expanded) {
     lines.push(style.grey(`${bodyPad}${task.status.replace(/_/g, ' ')}`));
+    if (task.isolation && task.isolation.state !== 'none' && task.isolation.branch) {
+      lines.push(...taskText('Branch', task.isolation.branch, cols, bodyPad));
+      // An integrated task's worktree is gone; naming it would point at nothing.
+      if (task.isolation.state !== 'integrated' && task.isolation.worktree) {
+        lines.push(...taskText('Worktree', task.isolation.worktree, cols, bodyPad));
+      }
+    }
     if (modeInfo?.autonomous) {
       lines.push(...taskText('Autonomy', 'Runs without permission prompts. Toggle with /auto.', cols, bodyPad));
     }

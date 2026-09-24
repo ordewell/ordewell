@@ -9,7 +9,7 @@ const REWIND_USAGE = 'Usage: ordewell rewind [<n>] [--session-id <id>] [--worksp
  * Both act on a session the daemon holds; adopting first is a no-op for a live
  * one and makes a session from an earlier daemon run addressable.
  */
-async function adopted(subArgs: string[], injectedApi?: ApiClient): Promise<{ api: ApiClient; sessionId: string; workspace: string }> {
+export async function adopted(subArgs: string[], injectedApi?: ApiClient): Promise<{ api: ApiClient; sessionId: string; workspace: string }> {
   const workspace = flag(subArgs, '--workspace') || process.cwd();
   const sessionId = resolveSessionId(subArgs);
   const api = await connect(subArgs, injectedApi);

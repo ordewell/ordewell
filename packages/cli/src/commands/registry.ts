@@ -15,6 +15,7 @@ import { handleAddTask } from './add-task';
 import { handleRemoveTask } from './remove-task';
 import { handleSessions } from './sessions';
 import { handleCompact, handleFork, handleRewind } from './conversation';
+import { handleHandoff } from './handoff';
 import { handlePlanner, handlePlannerEffort } from './planner';
 import { handleModel } from './model';
 import { handleKey } from './key';
@@ -75,5 +76,6 @@ export const COMMANDS: Record<string, (args: string[]) => Promise<void> | void> 
   fork: handleFork,
   compact: handleCompact,
   rewind: handleRewind,
+  handoff: handleHandoff,
   tui: handleTui,
 };

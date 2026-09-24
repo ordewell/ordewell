@@ -1,6 +1,12 @@
 import { ALL_PROVIDERS, CLI_PROVIDERS, PROVIDER_PRIORITY, runnerForProvider, type AiProvider, type ConversationMessage, type ResearchStepOutcome } from '@ordewell/core';
 import { dependencyCandidates, dependentsOf } from '@ordewell/core/plan-utils';
 import { sanitize } from './ansi';
+import { say } from './transcript';
+import {
+  blockedPicker, chooseBlocked, clearIsolation, confirmedHandoff, handleHandoffKey, handoffArrived, handoffCommand,
+  isolationForPlan, sameIsolation, showDiff, type BlockedChoice,
+} from './handoff';
+import { isolationOfPlan } from '../isolation';
 import { applyKey, commit, emptyEditor, type EditorState } from './editor';
 import { chatEditorRoom, chatPaneWidth, paneColumns, planPaneWidth, taskEditorRoom } from './geometry';
 import { bodyRows, chatScrollMax, helpScrollMax, planScrollExtent } from './layout';
@@ -8,9 +14,9 @@ import { selectedText } from './render';
 import { activeToken, findCommand, parseSlash, tokenCompletions, type ParsedCommand } from './slash';
 import {
   findTask, initialState, SKILL_IDS, planRows, selectedPlanRow, visibleItems,
-  type ApprovalRequestView, type Cell, type ChatMessage, type Focus, type MessageRole, type ModeView,
-  type ModelView, type PickerItem, type PickerState, type RewindTargetView, type RunnerView, type Selection, type SessionView,
-  type SkillId, type TaskView, type TuiState,
+  type ApprovalRequestView, type Cell, type ChatMessage, type Focus, type ModeView,
+  type HandoffView, type ModelView, type PickerItem, type PickerState, type RewindTargetView, type RunnerView, type Selection, type SessionView,
+  type SkillId, type TaskIsolationView, type TaskView, type TuiState,
 } from './state';
 import { assignedModelFor, effortsForTask, modelsForRunner, modelsForTask, modesForTask, runnerAccepts } from './taskAssignment';
 import type { Key } from './keys';
@@ -43,6 +49,14 @@ export type Effect =
   | { type: 'loadRewindTargets'; sessionId: string }
   | { type: 'rewindConversation'; sessionId: string; index: number }
   | { type: 'compactConversation'; sessionId: string }
+  | { type: 'isolationReviewDiff'; sessionId: string }
+  /** `branch` is only for the words the result is reported in. */
+  | { type: 'isolationMerge'; sessionId: string; branch: string }
+  | { type: 'isolationDiscard'; sessionId: string; branch: string }
+  | { type: 'isolationCleanup'; sessionId: string; branch: string }
+  /** Replays a run a dirty tree parked; `stash` puts tracked changes aside first, `shared` runs in the working tree this once. */
+  | { type: 'isolationContinue'; sessionId: string; mode: 'stash' | 'shared' }
+  | { type: 'resolveConflict'; sessionId: string; taskId: string }
   | { type: 'saveSession'; sessionId: string }
   | { type: 'closeSession'; sessionId: string }
   | { type: 'execute'; sessionId: string }
@@ -75,7 +89,12 @@ export type Action =
   | { type: 'approvalRequested'; request: ApprovalRequestView; sessionId?: string }
   | { type: 'approvalSettled'; approvalId: string; sessionId?: string }
   | { type: 'taskStatus'; taskId: string; status: string; sessionId?: string }
-  | { type: 'tasksStatus'; updates: Record<string, { status: string; idleSince?: string | null }>; sessionId?: string }
+  | { type: 'tasksStatus'; updates: Record<string, { status: string; idleSince?: string | null; isolation?: TaskIsolationView }>; sessionId?: string }
+  | { type: 'isolationBlocked'; message: string; sessionId?: string }
+  | { type: 'isolationHandoff'; handoff: HandoffView; sessionId?: string }
+  | { type: 'handoffDiff'; diff: string; sessionId?: string }
+  /** The run and its record are gone; nothing is left to hand off or to mark. */
+  | { type: 'handoffDiscarded'; sessionId?: string }
   | { type: 'queueReady'; sessionId?: string }
   | { type: 'executionComplete'; summary?: { total: number; completed: number; failed: number }; stopped?: boolean; sessionId?: string }
   | { type: 'settingsLoaded'; settings: Record<string, unknown> }
@@ -101,28 +120,6 @@ const DEFAULT_EFFORT = '__runner_default__';
 
 function step(state: TuiState, effects: Effect[] = []): Step {
   return { state, effects };
-}
-
-function say(
-  state: TuiState,
-  role: MessageRole,
-  content: string,
-  research?: ChatMessage['research'],
-  extra?: Partial<Pick<ChatMessage, 'research' | 'streaming'>>,
-): TuiState {
-  // The daemon, not just the keyboard, can hand us a literal tab (a planner
-  // turn, a research summary) — see `sanitize` for why one left in breaks
-  // the frame just as a pasted one would.
-  const message: ChatMessage = {
-    role,
-    content: sanitize(content),
-    timestamp: new Date().toISOString(),
-    ...(research ? { research } : {}),
-    ...extra,
-  };
-  // A new turn snaps a scrolled-back transcript to the tail — following the
-  // conversation beats preserving the reading position.
-  return { ...state, messages: [...state.messages, message], scroll: 0 };
 }
 
 /**
@@ -221,8 +218,10 @@ export function reduce(state: TuiState, action: Action): Step {
     case 'key':
       return handleKey(state, action.key);
 
+    // Isolation belongs to one session's plan, and task ids repeat across
+    // sessions, so nothing of the last one's may carry over into this.
     case 'sessionStarted':
-      return step({ ...state, sessionId: action.sessionId, goal: action.goal });
+      return step(clearIsolation({ ...state, sessionId: action.sessionId, goal: action.goal }));
 
     // The daemon registers a session only once planning succeeds; when it does
     // not, holding on to the id would send every next message to a session the
@@ -230,7 +229,7 @@ export function reduce(state: TuiState, action: Action): Step {
     case 'sessionCleared':
       // Prompts belong to the session that raised them; the old planner is gone.
       return step({
-        ...state,
+        ...clearIsolation(state),
         sessionId: null,
         goal: '',
         pendingApprovals: [],
@@ -253,7 +252,10 @@ export function reduce(state: TuiState, action: Action): Step {
 
     case 'planUpdated': {
       if (stale(state, action.sessionId)) return step(state);
-      const tasks = normalizeTasks(action.plan);
+      // A saved plan carries its isolation record; a planner reply does not,
+      // and says nothing about it, so what the stream last reported stays.
+      const isolation = isolationOfPlan(action.plan);
+      const tasks = isolationForPlan(normalizeTasks(action.plan), isolation, state.tasks);
       // A plan refresh can supersede the task whose prompt is open; the editor
       // survives only while its task does. The cursor is clamped against the
       // visible rows afterwards, so an expanded parent's subtasks count.
@@ -264,6 +266,7 @@ export function reduce(state: TuiState, action: Action): Step {
       const next: TuiState = {
         ...state,
         tasks,
+        handoff: isolation ? isolation.handoff : state.handoff,
         status: state.status === 'planning' || state.status === 'researching' ? 'idle' : state.status,
         busyLabel: '',
         thinkingLine: '',
@@ -359,9 +362,10 @@ export function reduce(state: TuiState, action: Action): Step {
         const update = updates[t.id];
         if (update === undefined) return t;
         const idleSince = update.idleSince ?? null;
-        if (update.status !== t.status || idleSince !== (t.idleSince ?? null)) {
+        const isolation = update.isolation ?? t.isolation;
+        if (update.status !== t.status || idleSince !== (t.idleSince ?? null) || !sameIsolation(isolation, t.isolation)) {
           changed = true;
-          return { ...t, status: update.status, idleSince };
+          return { ...t, status: update.status, idleSince, isolation };
         }
         return t;
       });
@@ -377,6 +381,29 @@ export function reduce(state: TuiState, action: Action): Step {
       const sessionId = action.sessionId ?? state.sessionId;
       if (sessionId === null) return step(state);
       return step(state, [{ type: 'processQueued', sessionId }]);
+    }
+
+    case 'isolationBlocked': {
+      if (stale(state, action.sessionId)) return step(state);
+      return step(blockedPicker(state, action.message));
+    }
+
+    case 'isolationHandoff': {
+      if (stale(state, action.sessionId)) return step(state);
+      return step(handoffArrived(state, action.handoff));
+    }
+
+    case 'handoffDiff': {
+      if (stale(state, action.sessionId)) return step(state);
+      return step(showDiff(state, action.diff));
+    }
+
+    case 'handoffDiscarded': {
+      if (stale(state, action.sessionId)) return step(state);
+      // Whatever overlay the discard was confirmed from is already closed; one
+      // opened since (a picker, help) has nothing to do with the run and stays.
+      const overlay = state.overlay?.kind === 'handoff' ? null : state.overlay;
+      return step({ ...clearIsolation(state), overlay });
     }
 
     case 'executionComplete': {
@@ -428,7 +455,7 @@ export function reduce(state: TuiState, action: Action): Step {
     // original keeps its run, and its events are stale from here on.
     case 'sessionForked':
       return step({
-        ...state,
+        ...clearIsolation(state),
         sessionId: action.sessionId,
         goal: action.goal,
         status: 'idle',
@@ -1095,6 +1122,10 @@ function handlePlanKey(state: TuiState, key: Key): Step {
   if (key.char === 't') {
     return step(state, [{ type: 'openTaskTerminal', sessionId: state.sessionId, taskId: task.id }]);
   }
+  // Adds a task, so it is asked for by name — and only where a conflict exists.
+  if (key.char === 'x' && task.isolation?.state === 'conflict') {
+    return step(state, [{ type: 'resolveConflict', sessionId: state.sessionId, taskId: task.id }]);
+  }
   if (key.char === 'R') return openTaskRunnerPicker(state, task);
   if (key.char === 'o') return openTaskModelPicker(state, task);
   if (key.char === 'e') return openTaskEffortPicker(state, task);
@@ -1181,6 +1212,9 @@ function handleOverlayKey(state: TuiState, overlay: NonNullable<TuiState['overla
   // A sideways notch is not a keystroke, and every overlay below reads an
   // unhandled key as a cue to close or to hold still.
   if (key.name === 'wheelignored') return step(state);
+  // Ahead of the wheel rule below: the diff is the one overlay with a list of
+  // its own, so a notch scrolls it rather than the panes underneath.
+  if (overlay.kind === 'handoff') return handleHandoffKey(state, overlay, key, bodyRows(state));
   // The pickers turn a notch into selection movement, which is what scrolls
   // their list. Everything else here floats over the panes with nothing of its
   // own to scroll, so the notch belongs to the pane underneath rather than in
@@ -1188,6 +1222,11 @@ function handleOverlayKey(state: TuiState, overlay: NonNullable<TuiState['overla
   if (isWheel(key) && overlay.kind !== 'picker') return scrollPointed(state, key);
   if (overlay.kind === 'approval') return handleApprovalKey(state, overlay, key);
   if (overlay.kind === 'confirm') return handleConfirmKey(state, overlay, key);
+  // Cancelling is a choice here, not a dismissal: the run is parked in the
+  // daemon until it hears one.
+  if (key.name === 'escape' && overlay.kind === 'picker' && overlay.picker.action.kind === 'isolation-blocked') {
+    return chooseBlocked(state, 'cancel');
+  }
   if (key.name === 'escape') return step({ ...state, overlay: null });
   if (overlay.kind === 'prompt') return handlePromptKey(state, overlay, key);
   return handlePickerKey(state, overlay.picker, key);
@@ -1205,6 +1244,9 @@ function handleConfirmKey(
   if (overlay.action.kind === 'remove-task') {
     if (!state.sessionId) return step(closed);
     return step(closed, [{ type: 'removeTask', sessionId: state.sessionId, taskId: overlay.action.taskId }]);
+  }
+  if (overlay.action.kind === 'merge-run' || overlay.action.kind === 'discard-run') {
+    return confirmedHandoff(state, overlay.action.kind);
   }
   if (overlay.action.kind === 'init-workspace') {
     return step({ ...closed, status: 'planning' }, [{ type: 'startConversation', goal: overlay.action.goal, allowInit: true }]);
@@ -1293,6 +1335,7 @@ function handlePickerKey(state: TuiState, picker: PickerState, key: Key): Step {
 function choose(state: TuiState, picker: PickerState, item: PickerItem | undefined): Step {
   const closed: TuiState = { ...state, overlay: null };
 
+  if (picker.action.kind === 'isolation-blocked') return chooseBlocked(state, (item?.id ?? 'cancel') as BlockedChoice);
   if (picker.action.kind === 'set-allowlist') {
     return step(closed, [{ type: 'setAllowlist', runner: picker.action.runner, modelIds: picker.chosen }]);
   }
@@ -1491,6 +1534,8 @@ function runCommand(state: TuiState, { name, args }: ParsedCommand): Step {
         { ...state, overlay: { kind: 'picker', picker: picker('Sessions', [], { kind: 'load-session' }) } },
         [{ type: 'loadSessions' }],
       );
+    case 'handoff':
+      return handoffCommand(state, args[0]);
     case 'fork':
       return withIdlePlanner(state, (sessionId) => step(state, [{ type: 'forkConversation', sessionId }]));
     case 'rewind':
@@ -1630,6 +1675,7 @@ function newSession(state: TuiState): Step {
   const closeEffects: Effect[] = state.sessionId ? [{ type: 'closeSession', sessionId: state.sessionId }] : [];
   return step({
     ...state,
+    handoff: null,
     sessionId: null,
     goal: '',
     tasks: [],

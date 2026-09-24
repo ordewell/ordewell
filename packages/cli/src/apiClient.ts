@@ -386,6 +386,54 @@ export class ApiClient {
     return { plan: res.data.plan, summary: res.data.summary, keptMessages: res.data.keptMessages };
   }
 
+  async reviewRunDiff(sessionId: string): Promise<string> {
+    const res = await this.httpRequest<{ diff: string } & ErrorResponse>('GET', `/api/plans/${sessionId}/isolation/diff`);
+    if (res.status !== 200) {
+      throw new Error(res.data?.error || 'Could not read the diff');
+    }
+    return res.data.diff;
+  }
+
+  /** A conflict or a refusal is an outcome, not an error: the user's tree is untouched either way. */
+  async mergeRun(sessionId: string): Promise<'merged' | 'conflict' | 'failed'> {
+    const res = await this.httpRequest<{ outcome: 'merged' | 'conflict' | 'failed' } & ErrorResponse>('POST', `/api/plans/${sessionId}/isolation/merge`);
+    if (res.status !== 200) {
+      throw new Error(res.data?.error || 'Merge failed');
+    }
+    return res.data.outcome;
+  }
+
+  discardRun(sessionId: string): Promise<void> {
+    return this.isolationAction(sessionId, 'discard', 'Discard failed');
+  }
+
+  cleanupRun(sessionId: string): Promise<void> {
+    return this.isolationAction(sessionId, 'cleanup', 'Cleanup failed');
+  }
+
+  continueWithStash(sessionId: string): Promise<void> {
+    return this.isolationAction(sessionId, 'stash-and-continue', 'Could not stash and continue');
+  }
+
+  continueWithoutIsolation(sessionId: string): Promise<void> {
+    return this.isolationAction(sessionId, 'run-without', 'Could not continue without isolation');
+  }
+
+  private async isolationAction(sessionId: string, segment: string, failure: string): Promise<void> {
+    const res = await this.httpRequest<{ ok: boolean } & ErrorResponse>('POST', `/api/plans/${sessionId}/isolation/${segment}`);
+    if (res.status !== 200) {
+      throw new Error(res.data?.error || failure);
+    }
+  }
+
+  async resolveConflictAsTask(sessionId: string, taskId: string): Promise<SerializedPlan> {
+    const res = await this.httpRequest<{ plan: SerializedPlan } & ErrorResponse>('POST', `/api/plans/${sessionId}/tasks/${taskId}/resolve-conflict`);
+    if (res.status !== 200) {
+      throw new Error(res.data?.error || 'Could not add a resolver task');
+    }
+    return res.data.plan;
+  }
+
   async closeSession(sessionId: string): Promise<{ ok: boolean }> {
     const res = await this.httpRequest<{ ok: boolean }>('POST', `/api/sessions/${sessionId}/close`);
     return res.data;
@@ -489,9 +537,13 @@ export class ApiClient {
         try {
           const event: WsEvent = JSON.parse(data.toString());
           onEvent(event);
+          // A blocked run spawns nothing and waits for the user's choice, so
+          // this stream has no completion coming. Ending it here lets the
+          // choice open its own, instead of two streams reporting one run.
           if (
             (event.type === 'execution_complete' ||
-              event.type === 'execution_stopped') &&
+              event.type === 'execution_stopped' ||
+              event.type === 'isolation_blocked') &&
             !resolved
           ) {
             resolved = true;

@@ -396,6 +396,22 @@ conflicted task leaves by a hand resolution plus Mark complete, a retry, or
 through whose landing the conflicted task lands.
 *Avoid:* "result", "output branch" for the handoff — it is a branch to review,
 not an outcome.
+In the terminal the same four steps are the handoff overlay (`/handoff`, opened
+by `isolation_handoff` on a screen with nothing else open) and
+`ordewell handoff [review|merge|discard|cleanup]`. Merge and discard are asked
+about first, in both — the CLI takes `--yes` as having asked. A reloaded session
+gets its handoff and its per-task marks from the plan's persisted run record, not
+from a stream. A conflicted task carries a **conflict mark** in the plan pane;
+every other isolation state stays out of the row and appears, with the task's
+branch, only in the expanded detail.
+
+**Blocked run** — a run `isolation_blocked` turned away because tracked files are
+modified. The daemon parks the start until it hears `continueWithStash` or
+`continueWithoutIsolation`, so the run's execution stream ends at the block and
+the choice opens its own. Cancelling is `stopExecution`, not a dismissal: a
+parked start swallows a re-run. The TUI asks with a three-way picker (Stash and
+continue / Run without isolation / Cancel); `ordewell run` takes `--stash` and
+`--without-isolation`, and without either releases the run and says so.
 
 **The plan** — the typed, editable, diffable artifact the planner emits: an ordered
 list of tasks with per-task model, thinking effort, runner, and mode. It is data,
