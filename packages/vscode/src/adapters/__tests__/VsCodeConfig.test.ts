@@ -24,7 +24,7 @@ async function makeStore(initial: Record<string, string> = {}) {
   return store;
 }
 
-const ENV_KEYS = ['OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'ORCHESTRATOR_MODEL', 'AI_PROVIDER'];
+const ENV_KEYS = ['ORDEWELL_WORKTREE_ISOLATION', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'ORCHESTRATOR_MODEL', 'AI_PROVIDER'];
 let savedEnv: Record<string, string | undefined>;
 
 beforeEach(() => {
@@ -42,6 +42,31 @@ afterEach(() => {
     else process.env[k] = savedEnv[k];
   }
   __resetConfig();
+});
+
+describe('VsCodeConfig.worktreeIsolation', () => {
+  it('defaults to on with no setup command', async () => {
+    const store = await makeStore({});
+    __setConfig({});
+    const cfg = new VsCodeConfig(store);
+    expect(cfg.worktreeIsolation).toBe(true);
+    expect(cfg.worktreeSetupCommand).toBeUndefined();
+  });
+
+  it('reflects the ordewell settings', async () => {
+    const store = await makeStore({});
+    __setConfig({ worktreeIsolation: false, worktreeSetupCommand: 'pnpm i' });
+    const cfg = new VsCodeConfig(store);
+    expect(cfg.worktreeIsolation).toBe(false);
+    expect(cfg.worktreeSetupCommand).toBe('pnpm i');
+  });
+
+  it('lets ORDEWELL_WORKTREE_ISOLATION override the setting', async () => {
+    const store = await makeStore({});
+    __setConfig({ worktreeIsolation: true });
+    process.env.ORDEWELL_WORKTREE_ISOLATION = 'false';
+    expect(new VsCodeConfig(store).worktreeIsolation).toBe(false);
+  });
 });
 
 describe('VsCodeConfig.autonomousMode', () => {

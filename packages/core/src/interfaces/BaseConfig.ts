@@ -109,6 +109,9 @@ export abstract class BaseConfig implements IConfig {
 
   get autonomousMode(): boolean { return process.env.ORDEWELL_AUTONOMOUS_MODE !== 'false' && process.env.ORDEWELL_AUTONOMOUS_MODE !== '0'; }
 
+  get worktreeIsolation(): boolean { return process.env.ORDEWELL_WORKTREE_ISOLATION !== 'false' && process.env.ORDEWELL_WORKTREE_ISOLATION !== '0'; }
+  get worktreeSetupCommand(): string | undefined { return process.env.ORDEWELL_WORKTREE_SETUP?.trim() || undefined; }
+
   get approvalMode(): ApprovalMode {
     const raw = (process.env.ORDEWELL_APPROVAL_MODE || '').trim().toLowerCase();
     return raw === 'allow' || raw === 'deny' ? raw : 'ask';

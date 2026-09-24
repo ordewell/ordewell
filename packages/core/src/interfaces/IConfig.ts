@@ -47,6 +47,19 @@ export interface IConfig {
   autonomousMode: boolean;
 
   /**
+   * Run each AI task in its own git worktree and integrate the results on a
+   * per-run branch (ADR-0013). Non-git workspaces fall back to the shared
+   * workspace root regardless of this flag.
+   */
+  worktreeIsolation: boolean;
+  /**
+   * Shell command run in a fresh task worktree instead of symlinking ignored
+   * artifacts from the main worktree — for repos where sharing `node_modules`
+   * or a virtualenv is wrong.
+   */
+  worktreeSetupCommand?: string;
+
+  /**
    * What to do when planner research reaches outside its default envelope — an
    * out-of-workspace path, or a shell command beyond the auto-allowed read-only
    * set. `ask` prompts the user (and denies where no surface can prompt, such as

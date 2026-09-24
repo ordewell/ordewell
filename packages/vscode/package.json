@@ -255,6 +255,16 @@
           "type": "boolean",
           "default": true,
           "description": "Default new plans to each runner's most autonomous permission mode (off → safe mode). Toggle via the /auto slash command."
+        },
+        "ordewell.worktreeIsolation": {
+          "type": "boolean",
+          "default": true,
+          "description": "In a git repository, run each AI task in its own worktree and integrate the results on a per-run branch. Turn off to run every task in the shared workspace."
+        },
+        "ordewell.worktreeSetupCommand": {
+          "type": "string",
+          "default": "",
+          "description": "Command run in each new task worktree instead of symlinking node_modules, .env files and agent config from the main worktree."
         }
       }
     }
