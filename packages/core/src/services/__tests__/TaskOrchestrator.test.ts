@@ -1287,6 +1287,61 @@ describe('task attempts', () => {
     expectNoAttemptState(orchestrator);
   });
 
+  /** A transcript reader whose reads resolve only when the test says so. */
+  function heldTranscripts() {
+    const pending: Array<(text: string | null) => void> = [];
+    const transcripts: TranscriptReader = {
+      finalAssistantText: () => new Promise((resolve) => { pending.push(resolve); }),
+    };
+    const answer = async (index: number, text: string | null) => {
+      pending[index](text);
+      await new Promise((r) => setTimeout(r, 0));
+    };
+    return { transcripts, answer, reads: () => pending.length };
+  }
+
+  // The verdict's summary is read from disk before the verdict is applied; a
+  // user action in that window must not be overwritten by the stale verdict.
+  it('a retry while a verdict is still reading its transcript keeps the new attempt', async () => {
+    const { sessions, spawn } = sessionRunner();
+    const { transcripts, answer, reads } = heldTranscripts();
+    const orchestrator = makeOrchestrator({ terminalRunner: { spawn }, output: new BufferedTaskOutputSource({ transcripts }) });
+    orchestrator.setWorkspaceRoot(() => '/repo');
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first', completionMarker: 'mk-1' })]);
+    await orchestrator.approveReview();
+    sessions[0].emitExit(1);
+    await vi.waitFor(() => expect(reads()).toBe(1));
+
+    await orchestrator.retryTask('t1');
+    expect(orchestrator.getAttempt('t1')).toMatchObject({ attempt: 2, sessionId: 's2' });
+    await answer(0, 'stale answer');
+
+    expect(orchestrator.storeInstance.get('t1')!.status).toBe('in_progress');
+    expect(orchestrator.getAttempt('t1')).toMatchObject({ attempt: 2, sessionId: 's2', phase: 'running' });
+    expect(orchestrator.storeInstance.get('t1')!.verdict).toBeUndefined();
+    expect(orchestrator.isRunning).toBe(true);
+  });
+
+  // stop() kills the runners before it resets the verifier, and a tmux runner
+  // fires the exit from inside stopAll() — a verdict raised there must not
+  // fail a task the user merely stopped.
+  it('an exit fired synchronously from stopAll does not record a verdict', async () => {
+    const { sessions, spawn } = sessionRunner();
+    const stopAll = vi.fn(() => sessions.forEach((s) => s.emitExit(-1)));
+    const orchestrator = makeOrchestrator({ terminalRunner: { spawn, stopAll } });
+    const onExecutionComplete = vi.fn();
+    orchestrator.subscribe({ onExecutionComplete });
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first', completionMarker: 'mk-1' })]);
+    await orchestrator.approveReview();
+
+    orchestrator.stop();
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(orchestrator.storeInstance.get('t1')!.verdict).toBeUndefined();
+    expect(orchestrator.storeInstance.isFailed('t1')).toBe(false);
+    expect(onExecutionComplete).not.toHaveBeenCalled();
+  });
+
   // Retrying a task whose runner is still up used to leave the old attempt
   // registered, so the scheduler could never start the retry.
   it('retrying a live task stops its runner so the retry can start', async () => {

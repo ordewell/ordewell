@@ -307,21 +307,23 @@ export class TaskOrchestrator {
 
   private async onVerdict(taskId: string, verdict: Verdict): Promise<void> {
     const task = this.store.get(taskId);
-    if (!task) return;
-    const attempt = this.endAttempt(taskId, 'verdict');
+    const attempt = this.attempts.get(taskId);
+    if (!task || !attempt) return;
 
     console.error(`[TaskOrchestrator] Task #${task.order} "${task.title}" verdict=${verdict.outcome}`);
     console.error(`[TaskOrchestrator] Runner: ${task.assignedRunner}, Model: ${task.assignedModel?.modelId ?? 'default'}`);
     console.error(`[TaskOrchestrator] Prompt preview: ${(task.prompt ?? '').slice(0, 200)}`);
 
-    this.store.setTaskVerdict(taskId, verdict);
-
     // The terminal stays the source of truth for the verdict itself; this only
     // changes what gets summarized for downstream consumers.
     const doneToken = `<<<ORDEWELL_DONE_${task.completionMarker}>>>`;
-    const summary = attempt
-      ? await this.output.finalText({ ...attempt, completionMarker: task.completionMarker }, doneToken)
-      : '';
+    const summary = await this.output.finalText({ ...attempt, completionMarker: task.completionMarker }, doneToken);
+    // The attempt stays live across the read, so a cancel, retry, mark
+    // complete, stop or plan load in that window ends it — and has decided the
+    // task since. A stale verdict must not overwrite that decision.
+    if (this.attempts.get(taskId) !== attempt) return;
+    this.endAttempt(taskId, 'verdict');
+    this.store.setTaskVerdict(taskId, verdict);
     console.error(`[TaskOrchestrator] Output summary:\n${summary || '(empty — no output captured)'}`);
     if (verdict.outcome === 'pass') {
       this.store.markCompleted(taskId);
