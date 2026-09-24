@@ -216,6 +216,7 @@ export class OpenAiService extends BaseAiService implements IAiService {
       req.runnerModes,
       req.autonomousDefault ?? true,
       req.verificationEnabled ?? false,
+      { isolatedExecution: req.isolatedExecution },
     );
 
     const userText = req.goal;

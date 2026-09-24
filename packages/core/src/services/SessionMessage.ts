@@ -1,6 +1,7 @@
 import type { LegacyPlanState, QueuedMessage, ResearchStep, RunnerId, Task, Verdict } from '../models/Task';
 import type { ApprovalKind } from '../interfaces/IApproval';
 import type { ApprovalSource } from './ApprovalPolicy';
+import type { IsolationHandoff, TaskIsolation } from '../interfaces/IWorktreeIsolation';
 
 export type SerializedTaskStatus = {
   id: string;
@@ -8,6 +9,8 @@ export type SerializedTaskStatus = {
   verdict: { outcome: 'pass' | 'fail'; reason: string; checks: Verdict['checks'] } | null;
   /** Advisory silence timestamp from VerdictEngine — not part of task status semantics. */
   idleSince?: string | null;
+  /** Absent unless the plan has an isolation run, so a shared-root plan's updates are unchanged. */
+  isolation?: TaskIsolation;
 };
 
 export type SerializedTask = {
@@ -51,6 +54,14 @@ export type SessionMessage =
   | { type: 'task_updated'; taskId: string; changes: Record<string, unknown> }
   | { type: 'task_started'; taskId: string; order: number; title: string; runner: RunnerId; modelId?: string }
   | { type: 'task_output'; taskId: string; text: string }
+  // A run did not start because tracked files are modified. It waits for the
+  // user to stash (`continueWithStash`) or to run without isolation this once
+  // (`continueWithoutIsolation`); nothing is spawned until then.
+  | { type: 'isolation_blocked'; reason: 'dirty'; message: string }
+  // An isolated run settled: the branch its work landed on, the commit that
+  // branch forked from, and what landed, in plan order. Sent before
+  // `execution_complete`, which surfaces treat as the end of the stream.
+  | { type: 'isolation_handoff'; branch: string; baseRef: string; landed: IsolationHandoff['landed'] }
   | { type: 'plan_thinking'; text: string }
   // Carries no content — see `ResearchProgress['liveness']`. Exists only so a
   // surface's idle watchdog sees the harness process working even during a
@@ -108,7 +119,7 @@ export function serializeTask(t: Task): SerializedTask {
   };
 }
 
-export function serializeTaskStatus(t: Task, idleSince: string | null = null): SerializedTaskStatus {
+export function serializeTaskStatus(t: Task, idleSince: string | null = null, isolation: TaskIsolation | null = null): SerializedTaskStatus {
   return {
     id: t.id,
     status: t.status,
@@ -116,6 +127,7 @@ export function serializeTaskStatus(t: Task, idleSince: string | null = null): S
       ? { outcome: t.verdict.outcome, reason: t.verdict.reason, checks: t.verdict.checks || [] }
       : null,
     idleSince,
+    ...(isolation ? { isolation } : {}),
   };
 }
 

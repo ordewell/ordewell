@@ -8,6 +8,17 @@ import { BufferedTaskOutputSource } from './BufferedTaskOutputSource';
 import type { LiveTail, LiveTailOptions, TaskOutputSource } from '../interfaces/TaskOutputSource';
 import { PlanStore } from './PlanStore';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
+import type {
+  IsolationHandoff,
+  IsolationInactiveReason,
+  IsolationOutcome,
+  IsolationRun,
+  IsolationTaskStatus,
+  IWorktreeIsolation,
+  PlanIsolation,
+  TaskIsolation,
+} from '../interfaces/IWorktreeIsolation';
+import { createWorktreeIsolation } from './GitWorktreeIsolation';
 
 /**
  * The one notification channel out of the orchestrator. Everything that used
@@ -24,7 +35,26 @@ export interface OrchestratorObserver {
   onReviewNeeded?(data: { tasks: Task[]; planRunners: RunnerId[] }): void;
   onReviewApproved?(data: { tasks: Task[] }): void;
   onCheckpoint?(data: { taskId: string; taskTitle: string; summary: string }): void;
+  /** The isolation run record changed and should be persisted with the plan. */
+  onIsolationChanged?(): void;
+  /** A run did not start: the tree is dirty, and the user picks stash or no isolation. */
+  onIsolationBlocked?(data: { reason: 'dirty' }): void;
+  /** An isolated run settled; emitted before `onExecutionComplete`, which surfaces treat as terminal. */
+  onIsolationHandoff?(handoff: IsolationHandoff): void;
 }
+
+type RunDecision =
+  | { mode: 'isolated'; continuing: boolean }
+  | { mode: 'blocked' }
+  | { mode: 'shared'; reason: Exclude<IsolationInactiveReason, 'dirty'> };
+
+/** Why a run fell back to the shared workspace root, as the one line the user is told. */
+const SHARED_ROOT_NOTICE: Record<Exclude<IsolationInactiveReason, 'dirty'>, string> = {
+  'disabled': 'Worktree isolation is off — tasks run in the workspace root.',
+  'git-missing': 'git was not found — tasks run in the workspace root without worktree isolation.',
+  'not-git': 'Not a git repository — tasks run in the workspace root without worktree isolation.',
+  'no-commits': 'The repository has no commits yet — tasks run in the workspace root without worktree isolation.',
+};
 
 /**
  * One run of one task, from the moment the scheduler claims it until its
@@ -36,20 +66,39 @@ interface TaskAttempt {
   readonly taskId: string;
   /** 1-based count of spawns this task has had since the plan was loaded. */
   readonly attempt: number;
-  /** `starting` while the async spawn is in flight; `session` is null until `running`. */
-  phase: 'starting' | 'running';
+  /**
+   * `starting` while the async spawn is in flight; `session` is null until
+   * `running`. `integrating` once a passed verdict is merging the attempt's
+   * worktree — still live, so the task neither completes nor frees its
+   * dependents until the merge says so.
+   */
+  phase: AttemptPhase;
   session: ITerminalSession | null;
   readonly runner: string;
   /** Null until {@link TaskOrchestrator.resolveAttemptCwd} settles. */
   cwd: string | null;
+  /** Whether `cwd` is a worktree prepared for this attempt rather than the workspace root. */
+  worktree: boolean;
+  /** The merge in flight, so a cancel waits for it before tearing the worktree down. */
+  integration: Promise<IsolationOutcome> | null;
   readonly startedAt: string;
 }
+
+type AttemptPhase = 'starting' | 'running' | 'integrating';
+
+const ISOLATION_STATE: Record<IsolationTaskStatus, Exclude<TaskIsolation['state'], 'none'>> = {
+  active: 'active',
+  merged: 'integrated',
+  conflict: 'conflict',
+  kept: 'kept',
+  failed: 'kept',
+};
 
 /** Read-only view of a task's live attempt. */
 export interface TaskAttemptSnapshot {
   taskId: string;
   attempt: number;
-  phase: 'starting' | 'running';
+  phase: AttemptPhase;
   sessionId: string | null;
   runner: string;
   cwd: string | null;
@@ -91,6 +140,21 @@ export class TaskOrchestrator {
    */
   private onHold = new Set<string>();
 
+  private isolation: IWorktreeIsolation;
+  /** The plan's isolation run (ADR-0013). Outlives one run: a resumed plan continues it. */
+  private isolationRun: IsolationRun | null = null;
+  /**
+   * How the open run executes; null while no run is open. A run is one
+   * Execute-Plan or one manual task run, from its start until it settles or
+   * is stopped.
+   */
+  private runMode: 'isolated' | 'shared' | null = null;
+  /** Resolver task id → the conflicted task it resolves; see {@link linkConflictResolver}. */
+  private resolvers: Record<string, string> = {};
+  private opening: Promise<boolean> | null = null;
+  /** The start a dirty tree turned away, replayed once the user chooses how to go on. */
+  private blockedStart: (() => Promise<void>) | null = null;
+
   private registry: RunnerRegistry | null = null;
   private workspaceRootFn: () => string = () => process.cwd();
   private observers: OrchestratorObserver[] = [];
@@ -102,8 +166,10 @@ export class TaskOrchestrator {
     private terminalRunner: ITerminalRunner,
     store?: PlanStore,
     private output: TaskOutputSource = new BufferedTaskOutputSource(),
+    isolation?: IWorktreeIsolation,
   ) {
     this.store = store ?? new PlanStore();
+    this.isolation = isolation ?? createWorktreeIsolation({ config });
     this.store.onMutate = () => this.emit('onTaskChanged');
     this.verifier.onVerdict((taskId, verdict) => this.onVerdict(taskId, verdict));
     this.verifier.onCheckpoint((taskId, summary) => {
@@ -147,13 +213,20 @@ export class TaskOrchestrator {
     this.tddEnabled = typeof enabled === 'function' ? enabled : () => enabled;
   }
 
+  /*
+   * A checkpoint only exists while its attempt runs. Without a live attempt the
+   * task is awaiting the user for another reason — a merge conflict — and
+   * putting it back to in_progress would strand it with no runner behind it.
+   */
   approveCheckpoint(taskId: string): void {
+    if (!this.attempts.has(taskId)) return;
     this.verifier.approveCheckpoint(taskId);
     this.store.markInProgress(taskId);
     this.emit('onTaskChanged');
   }
 
   rejectCheckpoint(taskId: string, reason?: string): void {
+    if (!this.attempts.has(taskId)) return;
     this.verifier.rejectCheckpoint(taskId, reason ?? 'Checkpoint rejected by user');
     this.store.markInProgress(taskId);
     this.emit('onTaskChanged');
@@ -200,14 +273,83 @@ export class TaskOrchestrator {
   getAttempt(taskId: string): TaskAttemptSnapshot | undefined {
     const attempt = this.attempts.get(taskId);
     if (!attempt) return undefined;
-    const { session, ...rest } = attempt;
-    return { ...rest, sessionId: session?.id ?? null };
+    const { taskId: id, attempt: n, phase, session, runner, cwd, startedAt } = attempt;
+    return { taskId: id, attempt: n, phase, sessionId: session?.id ?? null, runner, cwd, startedAt };
+  }
+
+  /** Where a task's isolated work stands; null when the plan has no isolation run to speak of. */
+  getTaskIsolation(taskId: string): TaskIsolation | null {
+    if (!this.isolationRun) return null;
+    const record = this.isolationRun.tasks[taskId];
+    if (!record) return { state: 'none' };
+    return { state: ISOLATION_STATE[record.status], branch: record.branch, worktree: record.worktree };
   }
 
   getAttemptSession(taskId: string): ITerminalSession | undefined {
     return this.attempts.get(taskId)?.session ?? undefined;
   }
   get queuedCount(): number { return this.messageQueue.length; }
+
+  /** A run is waiting on the user to stash or to go on without isolation. */
+  get awaitingIsolationChoice(): boolean { return this.blockedStart !== null; }
+
+  /**
+   * Take over a plan's persisted isolation, or none for a plan that has not
+   * isolated yet. Whatever a crashed process left behind for the run — a
+   * worktree still marked active, a directory no record owns — is pruned,
+   * while kept, failed and conflicted worktrees stay for the user.
+   *
+   * Deliberately silent on the observer: adopting is not a change to persist,
+   * and a host that adopts without persisting (VS Code's restore) would
+   * otherwise write a new session file on every reload.
+   */
+  async adoptIsolation(state: PlanIsolation | null): Promise<void> {
+    this.isolationRun = state?.run ?? null;
+    this.resolvers = { ...(state?.resolvers ?? {}) };
+    if (!this.isolationRun) return;
+    try {
+      await this.isolation.pruneOrphans(this.isolationRun);
+    } catch (err) {
+      this.notifications.warn(`Could not prune leftover worktrees: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  async reviewRunDiff(): Promise<string> {
+    return this.isolation.reviewDiff(this.requireRun());
+  }
+
+  async mergeRun(): Promise<IsolationOutcome> {
+    const run = this.requireRun();
+    const outcome = await this.isolation.mergeIntoCheckedOut(run);
+    if (outcome === 'merged') this.notifications.info(`Merged ${run.integrationBranch} into your checked-out branch.`);
+    else if (outcome === 'conflict') this.notifications.warn(`Merging ${run.integrationBranch} conflicted, so it was aborted — your tree is as it was.`);
+    else this.notifications.error(`Could not merge ${run.integrationBranch} — finish or abort the merge already in progress, then try again.`);
+    return outcome;
+  }
+
+  /** Worktrees and task branches go; the integration branch and the record stay for review and merge. */
+  async cleanupRun(): Promise<void> {
+    await this.isolation.discard(this.requireRun(), { keepIntegration: true });
+    this.emit('onIsolationChanged');
+  }
+
+  /** The run and everything it made go, and the plan forgets it; the next run starts afresh. */
+  async discardRun(): Promise<void> {
+    await this.isolation.discard(this.requireRun(), { keepIntegration: false });
+    this.isolationRun = null;
+    this.resolvers = {};
+    this.emit('onIsolationChanged');
+  }
+
+  private requireRun(): IsolationRun {
+    if (!this.isolationRun) throw new Error('This plan has no isolated run');
+    return this.isolationRun;
+  }
+
+  /** What the plan persists of isolated execution; null when no run ever isolated. */
+  get isolationRecord(): PlanIsolation | null {
+    return this.isolationRun ? { run: this.isolationRun, resolvers: this.resolvers } : null;
+  }
 
   queueMessage(text: string): void {
     this.messageQueue.push({
@@ -238,6 +380,10 @@ export class TaskOrchestrator {
   loadPlan(tasks: Task[], planRunners: RunnerId[] = ['claude-code']): void {
     this.store.load(tasks, planRunners);
     this.endAllAttempts('load');
+    // A plan committed while the scheduler runs keeps that run, and its mode
+    // with it; otherwise the next start decides afresh.
+    if (!this.running) this.runMode = null;
+    this.blockedStart = null;
     this.planStatus = 'approved';
     this.reviewApproved = false;
     this.retryCounts.clear();
@@ -276,6 +422,7 @@ export class TaskOrchestrator {
   }
 
   async start(): Promise<void> {
+    if (this.blockedStart) return;
     if (this.running) {
       console.error('[TaskOrchestrator] start() called but already running — no-op');
       return;
@@ -285,6 +432,7 @@ export class TaskOrchestrator {
       this.emit('onReviewNeeded', { tasks: this.store.planTasks, planRunners: this.store.planRunners });
       return;
     }
+    if (!(await this.openRun(() => this.start())) || this.running) return;
     console.log(`[TaskOrchestrator] Starting with ${this.store.allTasks.length} tasks (${this.store.allTasks.filter(t => t.type === 'ai' && t.prompt).length} AI ready)`);
     this.running = true;
     this.planStatus = 'running';
@@ -296,7 +444,13 @@ export class TaskOrchestrator {
     this.running = false;
     this.planStatus = 'approved';
     this.terminalRunner.stopAll();
+    // Interrupted work is kept like a failed attempt's: inspectable, and off
+    // `active` so a crash-recovery prune does not sweep it away.
+    const interrupted = [...this.attempts.values()].filter((a) => a.worktree);
     this.endAllAttempts('stop');
+    for (const a of interrupted) void this.releaseWorktree(a.taskId, { keep: true }, a.integration);
+    this.runMode = null;
+    this.blockedStart = null;
     this.onHold.clear();
     this.emit('onTaskChanged');
   }
@@ -322,12 +476,13 @@ export class TaskOrchestrator {
     // complete, stop or plan load in that window ends it — and has decided the
     // task since. A stale verdict must not overwrite that decision.
     if (this.attempts.get(taskId) !== attempt) return;
+    const landing = verdict.outcome === 'pass' && attempt.worktree ? await this.integrate(task, attempt) : 'merged';
+    if (this.attempts.get(taskId) !== attempt) return;
     this.endAttempt(taskId, 'verdict');
     this.store.setTaskVerdict(taskId, verdict);
     console.error(`[TaskOrchestrator] Output summary:\n${summary || '(empty — no output captured)'}`);
     if (verdict.outcome === 'pass') {
-      this.store.markCompleted(taskId);
-      this.notifications.info(`Task "${task.title}" completed.`);
+      await this.landPassed(task, landing);
     } else {
       this.store.markFailed(taskId);
       // Missing completion evidence is a hard boundary: do not launch more
@@ -336,6 +491,7 @@ export class TaskOrchestrator {
       this.running = false;
       this.planStatus = 'approved';
       this.notifications.error(`Task "${task.title}" failed verification: ${verdict.reason}`);
+      if (attempt.worktree) await this.releaseWorktree(taskId, { keep: true });
     }
 
     this.store.setTaskOutputSummary(taskId, summarizeOutput(verdict.reason, summary));
@@ -347,11 +503,105 @@ export class TaskOrchestrator {
       if (this.attempts.size === 0) {
         if (this.store.isAllComplete()) this.planStatus = 'completed';
         this.emit('onTick');
+        await this.closeRun();
         this.emit('onExecutionComplete');
       }
       return;
     }
     await this.tick();
+  }
+
+  /**
+   * Merge a passed attempt's worktree. The attempt stays live while it waits on
+   * the module's merge queue, so a cancel, retry or stop in that window still
+   * wins, and nothing counts the task as done before its work is on the
+   * integration branch.
+   */
+  private async integrate(task: Task, attempt: TaskAttempt): Promise<IsolationOutcome> {
+    if (!this.hasUnlandedWork(task.id)) return 'failed';
+    attempt.phase = 'integrating';
+    attempt.integration = this.integrateWork(task);
+    return attempt.integration;
+  }
+
+  /** A worktree whose work is not on the integration branch yet. */
+  private hasUnlandedWork(taskId: string): boolean {
+    const record = this.isolationRun?.tasks[taskId];
+    return !!record && record.status !== 'merged';
+  }
+
+  private async integrateWork(task: Task): Promise<IsolationOutcome> {
+    const run = this.isolationRun;
+    if (!run) return 'failed';
+    const outcome = await this.isolation.integrate(task, run).catch((): IsolationOutcome => 'failed');
+    this.emit('onIsolationChanged');
+    return outcome;
+  }
+
+  /** Settle a task whose work passed, by what its integration reported. */
+  private async landPassed(task: Task, landing: IsolationOutcome): Promise<void> {
+    if (landing !== 'merged') return this.landUnmerged(task, landing);
+    this.store.markCompleted(task.id);
+    this.notifications.info(`Task "${task.title}" completed.`);
+    await this.landResolved(task.id);
+  }
+
+  private landUnmerged(task: Task, landing: Exclude<IsolationOutcome, 'merged'>): void {
+    if (landing === 'conflict') {
+      // Never resolved here, by a model or otherwise: the task waits on the
+      // user, and its dependents wait on it.
+      this.store.markAwaitingUser(task.id);
+      this.notifications.warn(`Task "${task.title}" passed, but merging it into ${this.isolationRun?.integrationBranch ?? 'the integration branch'} conflicted. Its worktree is kept — resolve it by hand, retry it, or resolve it as a task.`);
+    } else {
+      this.store.markFailed(task.id);
+      this.running = false;
+      this.planStatus = 'approved';
+      this.notifications.error(`Task "${task.title}" passed, but git could not integrate its work. Its worktree is kept for inspection.`);
+    }
+  }
+
+  /**
+   * Mark which added task resolves which conflict. The resolver merges the
+   * conflicted task's branch by hand in its own worktree; once that lands, the
+   * conflicted task's branch is already on the integration branch and it can
+   * land in turn — through the same merge, so a resolver that did not really
+   * bring it along conflicts again instead of being taken at its word.
+   */
+  linkConflictResolver(resolverId: string, conflictedId: string): void {
+    this.resolvers[resolverId] = conflictedId;
+    this.emit('onIsolationChanged');
+  }
+
+  private async landResolved(resolverId: string): Promise<void> {
+    const conflictedId = this.resolvers[resolverId];
+    if (!conflictedId) return;
+    delete this.resolvers[resolverId];
+    this.emit('onIsolationChanged');
+    const conflicted = this.store.get(conflictedId);
+    if (!conflicted || !this.hasUnlandedWork(conflictedId)) return;
+    const landing = await this.integrateWork(conflicted);
+    if (landing !== 'merged') return this.landUnmerged(conflicted, landing);
+    this.store.markCompleted(conflictedId);
+    this.store.unblockDependents(conflictedId);
+    if (conflicted.verdict) this.logAndArchive(conflicted, conflicted.verdict);
+    this.notifications.info(`Task "${conflicted.title}" landed through its conflict resolution.`);
+  }
+
+  /**
+   * Let go of a task's worktree. `keep` leaves it and its branch for
+   * inspection; otherwise both go. A merge still in flight finishes first, so
+   * the worktree is never torn down underneath it.
+   */
+  private async releaseWorktree(taskId: string, opts: { keep: boolean }, integration?: Promise<IsolationOutcome> | null): Promise<void> {
+    await integration;
+    const run = this.isolationRun;
+    if (!run?.tasks[taskId]) return;
+    try {
+      await this.isolation.release(run, taskId, opts);
+    } catch (err) {
+      this.notifications.warn(`Could not clean up the worktree of task ${taskId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    this.emit('onIsolationChanged');
   }
 
   getReadyTasks(): Task[] {
@@ -367,7 +617,7 @@ export class TaskOrchestrator {
       if (!t.prompt) return false;
       if (this.onHold.has(t.id)) return false;
       if (this.isBlocked(t)) return false;
-      if (t.dependencies.length > 0 && !t.dependencies.every((depId) => this.store.isCompleted(depId))) return false;
+      if (!t.dependencies.every((depId) => this.dependencyMet(depId))) return false;
       return true;
     });
 
@@ -378,13 +628,25 @@ export class TaskOrchestrator {
         if (t.status !== 'pending' && t.status !== 'approved') reasons.push(`status=${t.status}`);
         if (this.onHold.has(t.id)) reasons.push('on-hold');
         if (this.isBlocked(t)) reasons.push('blocked');
-        if (t.dependencies.length > 0 && !t.dependencies.every((depId) => this.store.isCompleted(depId))) reasons.push('deps');
+        if (!t.dependencies.every((depId) => this.dependencyMet(depId))) reasons.push('deps');
         console.log(`[TaskOrchestrator] excluded: #${t.order} "${t.title}" — ${reasons.join(', ')}`);
       }
     }
 
     console.log(`[TaskOrchestrator] getReadyTasks: ${candidates.length} candidates, ${availableSlots} slots, maxParallel=${maxParallel}`);
     return candidates.sort((a, b) => a.order - b.order).slice(0, availableSlots);
+  }
+
+  /**
+   * In an isolated run a dependency is met once its work is on the integration
+   * branch, not merely once it passed: the dependent's worktree is cut from
+   * that branch, so starting earlier would hand it a tree without the work it
+   * depends on.
+   */
+  private dependencyMet(depId: string): boolean {
+    if (!this.store.isCompleted(depId)) return false;
+    const record = this.runMode === 'isolated' ? this.isolationRun?.tasks[depId] : undefined;
+    return !record || record.status === 'merged';
   }
 
   isBlocked(task: Task): boolean {
@@ -401,10 +663,11 @@ export class TaskOrchestrator {
   async cancelTask(taskId: string): Promise<void> {
     const task = this.store.get(taskId);
     if (!task) return;
-    this.endAttempt(taskId, 'cancel');
+    const ended = this.endAttempt(taskId, 'cancel');
     this.store.markPending(taskId);
     this.onHold.add(taskId);
     this.emit('onTaskChanged');
+    await this.releaseWorktree(taskId, { keep: false }, ended?.integration);
     await this.tick();
   }
 
@@ -416,8 +679,12 @@ export class TaskOrchestrator {
    * count kept for a task that no longer exists would be inherited by nothing.
    */
   async releaseTask(taskId: string): Promise<void> {
-    if (this.attempts.get(taskId)?.phase === 'running') await this.cancelTask(taskId);
-    else this.endAttempt(taskId, 'release');
+    const phase = this.attempts.get(taskId)?.phase;
+    if (phase === 'running' || phase === 'integrating') await this.cancelTask(taskId);
+    else {
+      this.endAttempt(taskId, 'release');
+      await this.releaseWorktree(taskId, { keep: false });
+    }
     this.onHold.delete(taskId);
     this.retryCounts.delete(taskId);
     this.spawnCounts.delete(taskId);
@@ -427,17 +694,25 @@ export class TaskOrchestrator {
     const task = this.store.get(taskId);
     if (!task || task.status === 'completed') return;
 
-    this.endAttempt(taskId, 'complete');
+    const ended = this.endAttempt(taskId, 'complete');
     const verdict = this.verifier.markComplete(task);
+    // The user vouches for the work, so it lands the way a passed verdict's
+    // would — including a merge a passed verdict already has in flight.
+    const merging = ended?.integration ?? (this.hasUnlandedWork(taskId) ? this.integrateWork(task) : null);
+    const landing = merging ? await merging : 'merged';
 
-    this.store.markCompleted(taskId);
+    if (landing === 'merged') this.store.markCompleted(taskId);
+    else this.landUnmerged(task, landing);
     this.store.setTaskVerdict(taskId, verdict);
     this.store.setTaskOutputSummary(taskId, summarizeOutput(verdict.reason, ''));
     this.logAndArchive(task, verdict);
-    this.store.unblockDependents(taskId);
-    this.onHold.delete(taskId);
+    if (landing === 'merged') {
+      this.store.unblockDependents(taskId);
+      this.onHold.delete(taskId);
+      this.notifications.info(`Task "${task.title}" marked complete.`);
+      await this.landResolved(taskId);
+    }
 
-    this.notifications.info(`Task "${task.title}" marked complete.`);
     this.emit('onTaskChanged');
     await this.tick();
   }
@@ -487,11 +762,14 @@ export class TaskOrchestrator {
     const task = this.store.get(taskId);
     if (!task) return;
     this.retryCounts.set(taskId, (this.retryCounts.get(taskId) ?? 0) + 1);
-    this.endAttempt(taskId, 'retry');
+    const ended = this.endAttempt(taskId, 'retry');
     this.store.retry(taskId);
     this.store.unblockDependents(taskId);
     this.onHold.delete(taskId);
     this.emit('onTaskChanged');
+    // A retry starts over from the integration tip, which by now holds what its
+    // predecessors landed; the old attempt's worktree has nothing to offer it.
+    await this.releaseWorktree(taskId, { keep: false }, ended?.integration);
     await this.tick();
   }
 
@@ -506,6 +784,7 @@ export class TaskOrchestrator {
     const task = this.store.get(taskId);
     if (!task || task.type !== 'ai') return;
     if (this.attempts.has(taskId)) return;
+    if (!(await this.openRun(() => this.forceStartTask(taskId)))) return;
     this.onHold.delete(taskId);
     await this.startTask(task);
   }
@@ -520,6 +799,7 @@ export class TaskOrchestrator {
     if (this.isRunning) return;
     const task = this.store.get(taskId);
     if (!task || task.type !== 'ai') return;
+    if (!(await this.openRun(() => this.runTask(taskId)))) return;
     this.onHold.delete(taskId);
     await this.startTask(task);
   }
@@ -571,6 +851,7 @@ export class TaskOrchestrator {
         this.notifications.info('All tasks completed!');
         this.emit('onTaskChanged');
         this.emit('onTick');
+        await this.closeRun();
         this.emit('onExecutionComplete');
       } else {
         // Not done — just waiting on a user task, checkpoint, or held task.
@@ -602,6 +883,8 @@ export class TaskOrchestrator {
       session: null,
       runner: this.store.resolveTaskRunner(task),
       cwd: null,
+      worktree: false,
+      integration: null,
       startedAt: new Date().toISOString(),
     };
     this.spawnCounts.set(task.id, attempt.attempt);
@@ -609,9 +892,14 @@ export class TaskOrchestrator {
     this.store.markInProgress(task.id);
     this.emit('onTaskChanged');
     try {
-      const cwd = await this.resolveAttemptCwd(task);
+      const cwd = await this.resolveAttemptCwd(task, attempt);
       attempt.cwd = cwd;
-      if (this.attempts.get(task.id) !== attempt) return this.abandonSpawn(task);
+      if (this.attempts.get(task.id) !== attempt) {
+        // Ended while its worktree was being made, so whatever ended it could
+        // not release it. A newer attempt's own prepare replaces it instead.
+        if (attempt.worktree && !this.attempts.has(task.id)) await this.releaseWorktree(task.id, { keep: false });
+        return this.abandonSpawn(task);
+      }
       const finalPrompt = composeAugmentedPrompt(task, this.store.planTasks, {
         planMapEnabled: this.config.planMapEnabled,
         tddEnabled: this.tddEnabled(),
@@ -648,6 +936,7 @@ export class TaskOrchestrator {
     } catch (err) {
       if (this.attempts.get(task.id) !== attempt) return this.abandonSpawn(task);
       this.endAttempt(task.id, 'spawn-failed');
+      await this.releaseWorktree(task.id, { keep: false });
       // Couldn't spawn — the task was never executed, so it stays "to do".
       // Held out of auto-scheduling to avoid a spawn-throw retry loop.
       this.store.markPending(task.id);
@@ -674,8 +963,118 @@ export class TaskOrchestrator {
    * The one place an attempt's working directory is decided. Async so a
    * per-attempt workspace (worktree isolation, #12) can be prepared here.
    */
-  private async resolveAttemptCwd(_task: Task): Promise<string> {
-    return this.workspaceRootFn();
+  private async resolveAttemptCwd(task: Task, attempt: TaskAttempt): Promise<string> {
+    if (this.runMode !== 'isolated' || !this.isolationRun) {
+      // A worktree left by an earlier attempt describes work this attempt
+      // replaces; left alone it could later be integrated as if it were this one's.
+      await this.releaseWorktree(task.id, { keep: false });
+      return this.workspaceRootFn();
+    }
+    const { cwd } = await this.isolation.prepare(task, this.isolationRun);
+    attempt.worktree = true;
+    this.emit('onIsolationChanged');
+    return cwd;
+  }
+
+  /**
+   * Open a run if none is: decide once, at its start, whether it executes in
+   * worktrees. `resume` is what a dirty tree parks until the user chooses how
+   * to go on. Resolves false when the run did not start.
+   */
+  private openRun(resume: () => Promise<void>): Promise<boolean> {
+    if (this.runMode) return Promise.resolve(true);
+    this.opening ??= this.activate(resume).finally(() => { this.opening = null; });
+    return this.opening;
+  }
+
+  /**
+   * Whether the run in force, or else the next one, gives each task its own
+   * worktree — what the planner is told, since it decides whether tasks on the
+   * same file have to be ordered. A tree that would block counts as not
+   * isolating: the user may yet run without isolation, and ordering is the
+   * safe rule then.
+   */
+  async willIsolate(): Promise<boolean> {
+    if (this.runMode) return this.runMode === 'isolated';
+    return (await this.decideRun(this.workspaceRootFn())).mode === 'isolated';
+  }
+
+  private async decideRun(root: string): Promise<RunDecision> {
+    const availability = await this.isolation.isActive(root);
+    const continuing = this.continuableRun(root);
+    if (availability.active) return { mode: 'isolated', continuing };
+    // A continued run's base is already fixed, so edits the user has made in
+    // their own tree since cannot change what its tasks start from.
+    if (availability.reason === 'dirty') return continuing ? { mode: 'isolated', continuing } : { mode: 'blocked' };
+    return { mode: 'shared', reason: availability.reason };
+  }
+
+  private async activate(resume: () => Promise<void>): Promise<boolean> {
+    const root = this.workspaceRootFn();
+    const decision = await this.decideRun(root);
+    if (decision.mode === 'blocked') {
+      this.blockedStart = resume;
+      this.emit('onIsolationBlocked', { reason: 'dirty' });
+      return false;
+    }
+    if (decision.mode === 'isolated') {
+      if (!decision.continuing) await this.mintRun(root);
+    } else {
+      this.notifications.info(SHARED_ROOT_NOTICE[decision.reason]);
+    }
+    this.runMode = decision.mode;
+    return true;
+  }
+
+  /**
+   * The plan's run carries on while anything has landed on its integration
+   * branch: a resumed plan's dependents must start from a tip that holds their
+   * predecessors' work, and a fresh branch from the checked-out commit does not.
+   */
+  private continuableRun(root: string): boolean {
+    const run = this.isolationRun;
+    return !!run && run.workspaceRoot === root && Object.values(run.tasks).some((r) => r.status === 'merged');
+  }
+
+  /** A run with nothing landed holds only superseded attempts, so it goes whole. */
+  private async mintRun(root: string): Promise<void> {
+    const previous = this.isolationRun;
+    if (previous) await this.isolation.discard(previous, { keepIntegration: false }).catch(() => undefined);
+    this.isolationRun = await this.isolation.startRun(root);
+    this.resolvers = {};
+    this.emit('onIsolationChanged');
+  }
+
+  /** Close the open run. An isolated one hands its integration branch over for review. */
+  private async closeRun(): Promise<void> {
+    const mode = this.runMode;
+    this.runMode = null;
+    if (mode !== 'isolated' || !this.isolationRun) return;
+    try {
+      this.emit('onIsolationHandoff', await this.isolation.handoff(this.isolationRun));
+    } catch (err) {
+      this.notifications.warn(`Could not hand the run's integration branch over: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    this.emit('onIsolationChanged');
+  }
+
+  /**
+   * Replay the start a dirty tree turned away. `stash` puts the user's tracked
+   * changes on the git stash first, so the run isolates; `shared` runs this one
+   * run in the workspace root, knowingly.
+   */
+  async continueBlockedRun(how: 'stash' | 'shared'): Promise<void> {
+    const resume = this.blockedStart;
+    if (!resume) return;
+    this.blockedStart = null;
+    if (how === 'stash') {
+      await this.isolation.stash(this.workspaceRootFn());
+      this.notifications.info('Stashed your uncommitted changes — `git stash pop` brings them back.');
+    } else {
+      this.runMode = 'shared';
+      this.notifications.info('Running without worktree isolation — tasks share the workspace root for this run.');
+    }
+    await resume();
   }
 
   /**

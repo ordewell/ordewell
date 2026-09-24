@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import type { PlanIsolation } from '../interfaces/IWorktreeIsolation';
 
 export interface UserStep {
   order: number;
@@ -237,6 +238,13 @@ export interface LegacyPlanState {
   prdMarkdown?: string;
   /** Follow-ups queued while tasks execute — applied as plan modifications between batches. */
   queuedMessages?: QueuedMessage[];
+  /**
+   * The plan's isolation run (ADR-0013), written from the orchestrator at
+   * persist time and read back only when a saved plan is adopted. It names
+   * branches and worktrees that belong to this plan alone: a fork of the plan
+   * must leave it behind rather than share it.
+   */
+  isolation?: PlanIsolation;
 }
 
 export interface Message {

@@ -166,7 +166,7 @@ export class CliAgentAiService implements IAiService {
       req.runnerModes,
       req.autonomousDefault ?? true,
       req.verificationEnabled ?? false,
-      true,
+      { harness: true, isolatedExecution: req.isolatedExecution },
     );
 
     const startOptions: AgentStartOptions = {

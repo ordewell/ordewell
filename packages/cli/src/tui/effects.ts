@@ -734,6 +734,11 @@ function onExecutionEvent(dispatch: (action: Action) => void, event: WsEvent, se
       dispatch({ type: 'executionComplete', stopped: true, sessionId });
       return;
 
+    // Nothing started, and nothing else would say so.
+    case 'isolation_blocked':
+      dispatch({ type: 'notice', message: event.message });
+      return;
+
     // task_output / plan_token / plan_thinking are raw runner chatter; the
     // status line and the plan pane already say everything the user needs.
     default:

@@ -31,7 +31,9 @@ export function fakeConfig(overrides: Partial<IConfig> = {}): IConfig {
     geminiModel: '',
     planMapEnabled: true,
     autonomousMode: true,
-    worktreeIsolation: true,
+    // Off so an orchestrator built without an injected isolation never runs
+    // real git against whatever repository the tests happen to run in.
+    worktreeIsolation: false,
     approvalMode: 'ask',
     approvalPreApproved: [],
     setProviderModelLists: () => {},
@@ -87,6 +89,7 @@ export class FakeTerminalSession implements ITerminalSession {
 
 export type FakeIsolationCall =
   | { op: 'isActive'; workspaceRoot: string }
+  | { op: 'stash'; workspaceRoot: string }
   | { op: 'startRun'; workspaceRoot: string }
   | { op: 'prepare'; taskId: string }
   | { op: 'integrate'; taskId: string }
@@ -126,6 +129,12 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
   async isActive(workspaceRoot: string): Promise<IsolationAvailability> {
     this.log({ op: 'isActive', workspaceRoot });
     return this.availability;
+  }
+
+  /** Like git: once the tracked changes are stashed, the tree is no longer dirty. */
+  async stash(workspaceRoot: string): Promise<void> {
+    this.log({ op: 'stash', workspaceRoot });
+    if (!this.availability.active && this.availability.reason === 'dirty') this.availability = { active: true };
   }
 
   async startRun(workspaceRoot: string): Promise<IsolationRun> {

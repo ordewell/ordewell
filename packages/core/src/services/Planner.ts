@@ -61,6 +61,8 @@ export interface ModifyDuringExecutionRequest {
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>;
   autonomousDefault?: boolean;
   perRunnerAllowlist?: Partial<Record<RunnerId, string[]>>;
+  /** The run in force gives each task its own worktree (ADR-0013). */
+  isolatedExecution?: boolean;
 }
 
 export interface ModifyDuringExecutionResult {
@@ -163,7 +165,7 @@ export class Planner {
       filteredModels,
       req.runners,
       req.runnerModes,
-      req.autonomousDefault ?? true,
+      { autonomousDefault: req.autonomousDefault ?? true, isolatedExecution: req.isolatedExecution ?? false },
     );
     const send = (corrective?: string) => this.aiService.sendPlanningPrompt(
       corrective ? basePrompt + corrective : basePrompt,

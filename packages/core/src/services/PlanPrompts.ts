@@ -135,6 +135,27 @@ function researchPhaseBlock(harnessMode: boolean): string {
   ].join('\n');
 }
 
+/**
+ * Facts about who plans and where tasks will run, as opposed to the user's
+ * mode toggles: they change what the prompt can promise, not what it asks for.
+ */
+export interface ConversationVariant {
+  /** Harness planner (ADR-0009): the agent owns its own tools and research budget. */
+  harness?: boolean;
+  /** Every AI task gets its own worktree (ADR-0013), so file overlap no longer forces an order. */
+  isolatedExecution?: boolean;
+}
+
+/**
+ * The parallelism rule for tasks that each run in their own worktree. Only
+ * ever instead of the overlap-avoidance rule, never beside it: in a shared
+ * workspace, two tasks on one file really do overwrite each other.
+ */
+const ISOLATED_PARALLELISM_RULE =
+  '- Each AI task runs in its own git worktree, and its work is merged in afterwards, so tasks that edit the same files can still run in parallel. Never add a dependency just because two tasks touch the same file — keep dependencies for genuine logical ordering.';
+
+const OVERLAP_AVOIDANCE_RULE = '- For parallel tasks, specify different target files to avoid merge conflicts.';
+
 export function buildConversationSystemPrompt(
   goal: string,
   context: string,
@@ -143,8 +164,7 @@ export function buildConversationSystemPrompt(
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
   autonomousDefault = true,
   verificationEnabled = false,
-  /** Harness planner (ADR-0009): the agent owns its own tools and research budget. */
-  harnessMode = false,
+  variant: ConversationVariant = {},
 ): string {
   const modelsJson = modelsJsonFor(modelsByRunner, runners);
   const modeGuide = runnerModes ? buildModeGuide(runnerModes, autonomousDefault) : buildModeGuideForRunners(runners, autonomousDefault);
@@ -159,7 +179,7 @@ export function buildConversationSystemPrompt(
   const verificationBlock = verificationEnabled ? verificationModeBlock() : '';
 
   return buildConversationBody(
-    goal, context, modelsJson, runners, modeGuide, modeExamples, harnessMode,
+    goal, context, modelsJson, runners, modeGuide, modeExamples, variant,
     verificationBlock,
   );
 }
@@ -171,7 +191,7 @@ function buildConversationBody(
   runners: RunnerId[],
   modeGuide: string,
   modeExamples: string,
-  harnessMode: boolean,
+  variant: ConversationVariant,
   verificationBlock: string,
 ): string {
   return [
@@ -183,7 +203,7 @@ function buildConversationBody(
     '3. When you have enough context, produce a prose outline — a short list describing each vertical slice in order.',
     '4. After the user confirms the outline, emit the final task plan as a JSON object with a "tasks" array.',
     '',
-    researchPhaseBlock(harnessMode),
+    researchPhaseBlock(variant.harness ?? false),
     verificationBlock,
     '',
     'OUTLINE PHASE:',
@@ -234,12 +254,13 @@ function buildConversationBody(
     'DEPENDENCY & PARALLELISM:',
     '- Independent slices should have NO dependencies — they run in parallel.',
     '- Only add dependencies when a slice truly depends on artifacts another slice creates.',
+    ...(variant.isolatedExecution ? [ISOLATED_PARALLELISM_RULE] : []),
     '',
     'RULES:',
     '- Do NOT wrap the JSON in markdown code blocks. Output ONLY the JSON object when committing the plan.',
     '- Emit the outline BEFORE the JSON. Do not skip the outline.',
     '- Reference specific files and patterns from your research in task prompts.',
-    '- For parallel tasks, specify different target files to avoid merge conflicts.',
+    ...(variant.isolatedExecution ? [] : [OVERLAP_AVOIDANCE_RULE]),
     '',
     'CONVENTIONS:',
     '- When suggesting libraries, frameworks, or patterns, first verify they already exist in the codebase. NEVER assume a library is available just because it is well-known. Check package.json, imports, or surrounding files first.',
@@ -287,7 +308,8 @@ const ONE_SHOT_INSTRUCTIONS = [
   '',
 ].join('\n');
 
-export const CORE_PLANNER_PROMPT = [
+function corePlannerPrompt(isolatedExecution: boolean): string {
+  return [
   'You are a software project planner that produces structured task plans as JSON.',
   'Given a user\'s goal, create an ordered list of tasks that accomplish it.',
   '',
@@ -330,10 +352,12 @@ export const CORE_PLANNER_PROMPT = [
   '- "sliceType" is REQUIRED on every task, and "autonomy" on every "ai" task, at every depth — a "subtasks" entry is a full task object with all the same required fields, not a bare label.',
   '',
   'DEPENDENCY & PARALLELISM RULES:',
-  '- Independent vertical slices (no shared files/modules) should have NO dependencies between them — they can run in parallel.',
+  isolatedExecution
+    ? '- Independent vertical slices should have NO dependencies between them — they can run in parallel.'
+    : '- Independent vertical slices (no shared files/modules) should have NO dependencies between them — they can run in parallel.',
   '- Only add dependencies when the second slice truly depends on artifacts (files, APIs) that the first slice creates.',
   '- Prefer parallelism over serial chains. A plan with 3 independent slices running in parallel is better than 3 sequential tasks.',
-  '- Slices that touch different areas of the codebase are naturally parallel.',
+  isolatedExecution ? ISOLATED_PARALLELISM_RULE : '- Slices that touch different areas of the codebase are naturally parallel.',
   '',
   'RULES:',
   '- Mark as type "ai" any task the coding assistant can do autonomously.',
@@ -346,14 +370,18 @@ export const CORE_PLANNER_PROMPT = [
   'PROMPT QUALITY RULES:',
   '- Include specific file paths discovered during research in prompts (e.g. "In src/components/Settings.tsx").',
   '- Reference existing patterns and hooks found in the codebase (e.g. "Use the existing useLocalStorage hook from src/hooks/useLocalStorage.ts").',
-  '- For parallel tasks, specify different target files to avoid merge conflicts.',
+  ...(isolatedExecution ? [] : [OVERLAP_AVOIDANCE_RULE]),
   '',
   'Do NOT wrap the JSON in markdown code blocks. Output ONLY the JSON object.',
-].join('\n');
+  ].join('\n');
+}
 
-function getPlanTemplate(): string {
+/** The one-shot planner's core rules for tasks that share the workspace root. */
+export const CORE_PLANNER_PROMPT = corePlannerPrompt(false);
+
+function getPlanTemplate(isolatedExecution: boolean): string {
   return [
-    CORE_PLANNER_PROMPT,
+    corePlannerPrompt(isolatedExecution),
     '',
     '{{RESEARCH_SECTION}}',
     'MODEL ASSIGNMENT:',
@@ -426,7 +454,7 @@ function buildPlanPromptBase(
 ): string {
   const scoped = modesFor('one-shot', modes);
   const { autonomousDefault } = scoped;
-  const template = getPlanTemplate();
+  const template = getPlanTemplate(scoped.isolatedExecution);
   const researchReplacement = includeResearchSection ? RESEARCH_SECTION : '';
   const modelsJson = modelsJsonFor(modelsByRunner, runners);
 
@@ -608,14 +636,14 @@ export function buildModifyDuringExecutionPrompt(
   modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>>,
   runners: RunnerId[],
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
-  autonomousDefault = true,
+  modes: Pick<PlannerModes, 'autonomousDefault' | 'isolatedExecution'> = DEFAULT_PLANNER_MODES,
 ): string {
   const execLogBlock = executionLogBlock(executionLog);
   const rulesBlock = pendingEditRulesBlock();
-  const modelBlock = modelContextBlock(modelsByRunner, runners, runnerModes, autonomousDefault);
+  const modelBlock = modelContextBlock(modelsByRunner, runners, runnerModes, modes.autonomousDefault);
 
   const sections = [
-    CORE_PLANNER_PROMPT,
+    corePlannerPrompt(modes.isolatedExecution),
     '',
     'You are modifying a plan that is currently executing. Some tasks have already been completed or failed.',
     '',
@@ -677,5 +705,21 @@ export function buildSplitPrompt(taskId: string, tasks: Task[]): string {
     'Reply with ONLY a taskOps JSON object using a single "split" op:',
     `  {"taskOps":[{"op":"split","taskId":"${task.id}","parts":[{"title":"...","description":"...","prompt":"...","assignedRunner":"...","assignedModel":{"modelId":"...","modelLabel":"..."}},...]}]}`,
     'If this split needs a companion op in the same batch (e.g. another task that should depend on the last part), give the split op a "handle" (any unused name) — it names the last part — and reference it from the later op\'s taskId/dependencies.',
+  ].join('\n');
+}
+
+/**
+ * Runner prompt for the opt-in task that resolves an integration conflict
+ * (ADR-0013). The resolver's own worktree starts at the integration tip, so the
+ * merge it performs is exactly the one that conflicted; the conflicted task
+ * then lands through that merge. Ordewell never resolves a conflict itself.
+ */
+export function buildConflictResolutionPrompt(task: Task, branch: string, integrationBranch: string): string {
+  return [
+    `Task #${task.order} "${task.title}" passed, but merging its branch \`${branch}\` into \`${integrationBranch}\` conflicted.`,
+    `This working tree starts at the tip of \`${integrationBranch}\`. Run \`git merge --no-ff ${branch}\` here and resolve every conflict so that both sides' intent survives: keep the work already integrated and add what the task contributed. Do not drop either side wholesale.`,
+    'Build and test the result the way this project does, then commit the merge.',
+    '',
+    `What the task was asked to do:\n${task.prompt ?? task.description}`,
   ].join('\n');
 }

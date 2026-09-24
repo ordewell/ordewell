@@ -70,11 +70,17 @@ export function plannerRuntimeToggles(settings: UserSettings): PlannerRuntimeTog
 export interface PlannerModes {
   autonomousDefault: boolean;
   verification: boolean;
+  /**
+   * Not a toggle: whether the run will give each task its own worktree
+   * (ADR-0013), which is what decides if tasks on the same file must be ordered.
+   */
+  isolatedExecution: boolean;
 }
 
 export const DEFAULT_PLANNER_MODES: PlannerModes = {
   autonomousDefault: true,
   verification: false,
+  isolatedExecution: false,
 };
 
 /** Read the toggles a planner cares about off whatever the settings callback returned. */
@@ -87,6 +93,7 @@ export function plannerModesFrom(
   return {
     autonomousDefault,
     verification: settings.verificationEnabled ?? false,
+    isolatedExecution: false,
   };
 }
 

@@ -92,7 +92,7 @@ describe('WorktreeIsolation.isActive', () => {
 
   it('reports git-missing when the git binary cannot be started', async () => {
     const iso = create({
-      config: fakeConfig(),
+      config: fakeConfig({ worktreeIsolation: true }),
       execFileImpl: async () => { throw Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' }); },
       resolvePath: async () => '',
     });
@@ -103,7 +103,7 @@ describe('WorktreeIsolation.isActive', () => {
     it('reports not-git for a plain directory', async () => {
       const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-plain-')));
       roots.push(dir);
-      const iso = create({ config: fakeConfig() });
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
       expect(await iso.isActive(dir)).toEqual({ active: false, reason: 'not-git' });
     });
 
@@ -111,21 +111,21 @@ describe('WorktreeIsolation.isActive', () => {
       const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-empty-')));
       roots.push(dir);
       git(dir, 'init', '-q');
-      const iso = create({ config: fakeConfig() });
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
       expect(await iso.isActive(dir)).toEqual({ active: false, reason: 'no-commits' });
     });
 
     it('is active for a clean repository, and untracked files do not block it', async () => {
       const root = repo();
       writeFileSync(join(root, 'scratch.txt'), 'untracked');
-      const iso = create({ config: fakeConfig() });
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
       expect(await iso.isActive(root)).toEqual({ active: true });
     });
 
     it('reports dirty when a tracked file is modified', async () => {
       const root = repo();
       writeFileSync(join(root, 'README.md'), 'changed\n');
-      const iso = create({ config: fakeConfig() });
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
       expect(await iso.isActive(root)).toEqual({ active: false, reason: 'dirty' });
     });
 
@@ -133,8 +133,23 @@ describe('WorktreeIsolation.isActive', () => {
       const root = repo();
       writeFileSync(join(root, 'README.md'), 'staged\n');
       git(root, 'add', 'README.md');
-      const iso = create({ config: fakeConfig() });
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
       expect(await iso.isActive(root)).toEqual({ active: false, reason: 'dirty' });
+    });
+
+    it('stashes tracked changes so the tree isolates, leaving untracked files where they are', async () => {
+      const root = repo();
+      writeFileSync(join(root, 'README.md'), 'work in progress\n');
+      writeFileSync(join(root, 'notes.txt'), 'untracked\n');
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+
+      await iso.stash(root);
+
+      expect(await iso.isActive(root)).toEqual({ active: true });
+      expect(readFileSync(join(root, 'README.md'), 'utf8')).toBe('hello\n');
+      expect(readFileSync(join(root, 'notes.txt'), 'utf8')).toBe('untracked\n');
+      git(root, 'stash', 'pop');
+      expect(readFileSync(join(root, 'README.md'), 'utf8')).toBe('work in progress\n');
     });
   });
 });
@@ -144,7 +159,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation run lifecycle', () => {
   beforeEach(() => { root = repo(); });
 
   it('runs a task in its own worktree and lands it on the integration branch with a merge commit', async () => {
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     const headBefore = git(root, 'rev-parse', 'HEAD');
 
@@ -179,7 +194,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation run lifecycle', () => {
   });
 
   it('starts a later task from a tree that already contains integrated work', async () => {
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     const first = await iso.prepare(task(1, 'First'), run);
     writeFileSync(join(first.cwd, 'one.txt'), '1\n');
@@ -190,7 +205,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation run lifecycle', () => {
   });
 
   it('mints a record that survives a JSON round trip', async () => {
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     await iso.prepare(task(1, 'Persist me'), run);
     const restored = JSON.parse(JSON.stringify(run)) as IsolationRun;
@@ -199,7 +214,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation run lifecycle', () => {
   });
 
   it('gives two runs different ids and integration branches', async () => {
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const a = await iso.startRun(root);
     const b = await iso.startRun(root);
     expect(a.id).not.toBe(b.id);
@@ -207,7 +222,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation run lifecycle', () => {
   });
 
   it('prepares several tasks concurrently', async () => {
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     const prepared = await Promise.all([1, 2, 3].map((n) => iso.prepare(task(n, `Task ${n}`), run)));
     for (const { cwd } of prepared) expect(worktreePaths(root)).toContain(cwd);
@@ -217,7 +232,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation run lifecycle', () => {
 describe.skipIf(!hasGit)('WorktreeIsolation integration queue', () => {
   it('merges in plan order when tasks finish out of order', async () => {
     const root = repo();
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     const [t1, t2, t3] = [task(1, 'One'), task(2, 'Two'), task(3, 'Three')];
     for (const t of [t1, t2, t3]) {
@@ -234,7 +249,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation integration queue', () => {
 
   it('does not wait for a lower-order task that has not finished', async () => {
     const root = repo();
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     const [t1, t2] = [task(1, 'Slow'), task(2, 'Fast')];
     await iso.prepare(t1, run);
@@ -248,7 +263,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation integration queue', () => {
 
   it('commits what the runner left uncommitted, and keeps commits the runner made itself', async () => {
     const root = repo();
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     const t = task(1, 'Mixed');
     const { cwd } = await iso.prepare(t, run);
@@ -265,7 +280,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation integration queue', () => {
 
   it('treats a task that changed nothing as merged', async () => {
     const root = repo();
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     const t = task(1, 'Noop');
     await iso.prepare(t, run);
@@ -274,7 +289,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation integration queue', () => {
 
   it('reports failed for a task that was never prepared', async () => {
     const root = repo();
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     expect(await iso.integrate(task(1, 'Ghost'), run)).toBe('failed');
   });
@@ -283,7 +298,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation integration queue', () => {
 describe.skipIf(!hasGit)('WorktreeIsolation conflicts', () => {
   async function conflicted() {
     const root = repo({ 'shared.txt': 'base\n' });
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     const [t1, t2] = [task(1, 'Left'), task(2, 'Right')];
     const a = await iso.prepare(t1, run);
@@ -329,7 +344,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation conflicts', () => {
 describe.skipIf(!hasGit)('WorktreeIsolation.release', () => {
   it('keep: true preserves the worktree and branch for inspection', async () => {
     const root = repo();
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     const { cwd, branch } = await iso.prepare(task(1, 'Failed verdict'), run);
     writeFileSync(join(cwd, 'evidence.txt'), 'what the runner did\n');
@@ -344,7 +359,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation.release', () => {
 
   it('keep: false removes the worktree, the branch and the record', async () => {
     const root = repo();
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     const { cwd, branch } = await iso.prepare(task(1, 'Cancelled'), run);
 
@@ -359,14 +374,14 @@ describe.skipIf(!hasGit)('WorktreeIsolation.release', () => {
 
   it('releasing an unknown task is a no-op', async () => {
     const root = repo();
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     await expect(iso.release(run, 'nope', { keep: false })).resolves.toBeUndefined();
   });
 
   it('a retry starts fresh from the current integration tip', async () => {
     const root = repo();
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     const [t1, t2] = [task(1, 'Predecessor'), task(2, 'Retried')];
     const first = await iso.prepare(t2, run);
@@ -402,7 +417,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation bootstrap', () => {
 
   it('links ignored artifacts from the main worktree and never links .ordewell', async () => {
     const root = repoWithLocalState();
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     const { cwd } = await iso.prepare(task(1, 'Bootstrap'), run);
 
@@ -418,7 +433,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation bootstrap', () => {
 
   it('skips artifacts that are not present in the main worktree', async () => {
     const root = repo();
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     const { cwd } = await iso.prepare(task(1, 'Bare'), run);
     expect(existsSync(join(cwd, 'node_modules'))).toBe(false);
@@ -427,7 +442,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation bootstrap', () => {
 
   it('does not commit the links, even where an ignore rule would not match a symlink', async () => {
     const root = repoWithLocalState();
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     const t = task(1, 'Links stay out');
     const { cwd } = await iso.prepare(t, run);
@@ -442,7 +457,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation bootstrap', () => {
 
   it('removing a worktree leaves the linked directories in the main tree intact', async () => {
     const root = repoWithLocalState();
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     await iso.prepare(task(1, 'Cancel'), run);
     await iso.release(run, 'task-1', { keep: false });
@@ -452,7 +467,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation bootstrap', () => {
 
   it('on Windows uses junctions for directories and copies for files, needing no symlink privilege', async () => {
     const root = repoWithLocalState();
-    const iso = create({ config: fakeConfig(), platform: 'win32' });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }), platform: 'win32' });
     const run = await iso.startRun(root);
     const { cwd } = await iso.prepare(task(1, 'Windows'), run);
 
@@ -464,7 +479,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation bootstrap', () => {
 
   it('keeps copied files out of the commit on Windows', async () => {
     const root = repoWithLocalState();
-    const iso = create({ config: fakeConfig(), platform: 'win32' });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }), platform: 'win32' });
     const run = await iso.startRun(root);
     const t = task(1, 'Copies stay out');
     const { cwd } = await iso.prepare(t, run);
@@ -500,7 +515,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation bootstrap', () => {
 describe.skipIf(!hasGit)('WorktreeIsolation.pruneOrphans', () => {
   it('drops stale active worktrees and unowned leftovers, keeps what the user may want to inspect', async () => {
     const root = repo();
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     const crashed = await iso.prepare(task(1, 'Was running'), run);
     const kept = await iso.prepare(task(2, 'Failed verdict'), run);
@@ -525,7 +540,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation.pruneOrphans', () => {
 
   it('forgets a worktree whose directory was deleted out from under git', async () => {
     const root = repo();
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     const { cwd } = await iso.prepare(task(1, 'Vanished'), run);
     await iso.release(run, 'task-1', { keep: true });
@@ -537,7 +552,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation.pruneOrphans', () => {
 
   it('only touches its own run', async () => {
     const root = repo();
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const other = await iso.startRun(root);
     const mine = await iso.startRun(root);
     const theirs = await iso.prepare(task(1, 'Other run'), other);
@@ -552,7 +567,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation.pruneOrphans', () => {
 describe.skipIf(!hasGit)('WorktreeIsolation end-of-run handoff', () => {
   async function finishedRun() {
     const root = repo({ 'shared.txt': 'base\n' });
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     const [t1, t2] = [task(1, 'Add alpha'), task(2, 'Add beta')];
     const a = await iso.prepare(t1, run);
@@ -620,7 +635,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation end-of-run handoff', () => {
 
   it('aborts a conflicting merge and leaves the checked-out tree as it was', async () => {
     const root = repo({ 'shared.txt': 'base\n' });
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     const t = task(1, 'Edit shared');
     const { cwd } = await iso.prepare(t, run);
@@ -641,7 +656,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation end-of-run handoff', () => {
   // and a merge of their own may be half-resolved when they ask for this one.
   it("leaves the user's own unfinished merge alone instead of aborting it", async () => {
     const root = repo({ 'shared.txt': 'base\n' });
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     const t = task(1, 'Add alpha');
     const { cwd } = await iso.prepare(t, run);
@@ -665,7 +680,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation end-of-run handoff', () => {
 
   it('discard removes worktrees and task branches but can keep the integration branch', async () => {
     const root = repo();
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     const [t1, t2] = [task(1, 'Landed'), task(2, 'Still running')];
     const a = await iso.prepare(t1, run);
@@ -683,7 +698,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation end-of-run handoff', () => {
 
   it('discard can give up the integration branch too, leaving no trace', async () => {
     const root = repo();
-    const iso = create({ config: fakeConfig() });
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(root);
     await iso.prepare(task(1, 'Abandoned'), run);
 

@@ -25,6 +25,8 @@ export interface ConversationRequest {
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>;
   autonomousDefault?: boolean;
   verificationEnabled?: boolean;
+  /** Tasks will each run in their own worktree (ADR-0013), so the prompt drops file-overlap ordering. */
+  isolatedExecution?: boolean;
   signal?: AbortSignal;
   /**
    * Persisted dialogue to seed a resumed conversation (session reload). The

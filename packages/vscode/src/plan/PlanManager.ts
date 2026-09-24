@@ -500,6 +500,11 @@ export function handleSessionMessage(
       deps.chatProvider.showPlan(plan);
       break;
     }
+    // Nothing started, and nothing else says so. The stash / no-isolation
+    // choice itself is not wired into the webview yet.
+    case 'isolation_blocked':
+      deps.chatProvider.sendNewMessage(msg.message, new Date().toISOString());
+      break;
   }
 }
 

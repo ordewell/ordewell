@@ -143,7 +143,7 @@ describe('buildConversationSystemPrompt harness variant (ADR-0009)', () => {
       undefined,
       true,
       toggles.verify ?? false,
-      harnessMode,
+      { harness: harnessMode },
     );
   }
 
@@ -198,5 +198,45 @@ describe('buildConversationSystemPrompt harness variant (ADR-0009)', () => {
     expect(api).toContain('VERIFICATION MODE:');
     // The two variants differ only in the research-phase block.
     expect(harness.replace(/RESEARCH PHASE:[\s\S]*?\n\n/, '')).toEqual(api.replace(/RESEARCH PHASE:[\s\S]*?\n\n/, ''));
+  });
+});
+
+describe('planner parallelism rules under worktree isolation (ADR-0013)', () => {
+  const OVERLAP_RULE = '- For parallel tasks, specify different target files to avoid merge conflicts.';
+
+  function conversation(isolatedExecution: boolean) {
+    return buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, true, false, { isolatedExecution });
+  }
+
+  function oneShot(isolatedExecution: boolean) {
+    return buildResearchPrompt('goal', '', {}, ['claude-code'], undefined, modes({ isolatedExecution }));
+  }
+
+  it('keeps today\'s overlap-avoidance text verbatim when tasks share the workspace', () => {
+    expect(conversation(false)).toContain([
+      'DEPENDENCY & PARALLELISM:',
+      '- Independent slices should have NO dependencies — they run in parallel.',
+      '- Only add dependencies when a slice truly depends on artifacts another slice creates.',
+    ].join('\n'));
+    expect(conversation(false)).toContain(OVERLAP_RULE);
+
+    const p = oneShot(false);
+    expect(p).toContain('- Independent vertical slices (no shared files/modules) should have NO dependencies between them — they can run in parallel.');
+    expect(p).toContain('- Slices that touch different areas of the codebase are naturally parallel.');
+    expect(p).toContain(OVERLAP_RULE);
+  });
+
+  it('stops asking for different files or file-overlap dependencies when every task gets its own worktree', () => {
+    for (const p of [conversation(true), oneShot(true)]) {
+      expect(p).not.toContain(OVERLAP_RULE);
+      expect(p).not.toContain('no shared files/modules');
+      expect(p).toMatch(/own git worktree/i);
+      expect(p).toMatch(/never add a dependency just because two tasks touch the same file/i);
+    }
+  });
+
+  it('still asks for dependencies that reflect genuine ordering', () => {
+    expect(conversation(true)).toContain('- Only add dependencies when a slice truly depends on artifacts another slice creates.');
+    expect(oneShot(true)).toContain('- Only add dependencies when the second slice truly depends on artifacts (files, APIs) that the first slice creates.');
   });
 });

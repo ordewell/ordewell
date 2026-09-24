@@ -54,6 +54,30 @@ export interface IsolationRun {
   tasks: Record<string, IsolationTaskRecord>;
 }
 
+/**
+ * What a plan persists of isolated execution (`LegacyPlanState.isolation`): its
+ * run, and which added tasks resolve which conflicts. Belongs to that plan and
+ * its branches alone, so a copy of the plan (a fork) must not carry it.
+ */
+export interface PlanIsolation {
+  run: IsolationRun;
+  /** Resolver task id → the conflicted task whose branch it merges. */
+  resolvers: Record<string, string>;
+}
+
+/**
+ * A task's isolation as a surface shows it. `kept` covers every record whose
+ * worktree stays for inspection — a failed verdict, an interrupted attempt, an
+ * integration git refused — because to the user they are one thing: work that
+ * did not land and can be looked at. `none` is a task with no worktree in a plan
+ * that has an isolation run.
+ */
+export type TaskIsolationState = 'none' | 'active' | 'integrated' | 'conflict' | 'kept';
+
+export type TaskIsolation =
+  | { state: 'none' }
+  | { state: Exclude<TaskIsolationState, 'none'>; branch: string; worktree: string };
+
 export interface IsolationHandoff {
   branch: string;
   baseRef: string;
@@ -64,6 +88,12 @@ export interface IsolationHandoff {
 export interface IWorktreeIsolation {
   /** Git repo + clean tracked tree + config enabled; otherwise the reason it is not. */
   isActive(workspaceRoot: string): Promise<IsolationAvailability>;
+
+  /**
+   * Put the workspace's tracked changes on the git stash, the user's way out of
+   * a `dirty` refusal. Untracked files stay: they never block isolation.
+   */
+  stash(workspaceRoot: string): Promise<void>;
 
   /** Mint a run: resolve the base ref to a commit now. Only meaningful after `isActive` said yes. */
   startRun(workspaceRoot: string): Promise<IsolationRun>;

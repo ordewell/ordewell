@@ -112,6 +112,10 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     return { active: true };
   }
 
+  async stash(workspaceRoot: string): Promise<void> {
+    await this.git(workspaceRoot, ['stash', 'push', '-m', 'ordewell: stashed before an isolated run']);
+  }
+
   async startRun(workspaceRoot: string): Promise<IsolationRun> {
     const baseRef = (await this.git(workspaceRoot, ['rev-parse', 'HEAD'])).trim();
     const branch = (await this.tryGit(workspaceRoot, ['symbolic-ref', '--short', '-q', 'HEAD'])).stdout.trim();

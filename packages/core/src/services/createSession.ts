@@ -15,7 +15,7 @@ import { retargetTaskRunner, runnerAssignment, type RunnerCatalog } from './Task
 import { plannerModesFrom, plannerRuntimeToggles } from './plannerModes';
 import type { UserSettings } from './SettingsService';
 import { SkillsService } from './SkillsService';
-import { buildMergePrompt, buildSplitPrompt } from './PlanPrompts';
+import { buildConflictResolutionPrompt, buildMergePrompt, buildSplitPrompt } from './PlanPrompts';
 import {
   serializeTask,
   serializeTaskStatus,
@@ -32,6 +32,7 @@ import type { IFileSystem } from '../interfaces/IFileSystem';
 import type { INotification } from '../interfaces/INotification';
 import type { ITerminalRunner } from '../interfaces/ITerminalRunner';
 import type { TaskOutputSource } from '../interfaces/TaskOutputSource';
+import type { IsolationOutcome, IWorktreeIsolation } from '../interfaces/IWorktreeIsolation';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import { runnerModesFrom, resolveDefaultMode, type RunnerModeInfo } from './ModeResolver';
 
@@ -178,6 +179,11 @@ export interface SessionDeps {
    * touches the disk.
    */
   taskOutput?: TaskOutputSource;
+  /**
+   * Git worktree isolation (ADR-0013). Defaults to git itself, gated by
+   * `config.worktreeIsolation`; tests inject `FakeWorktreeIsolation`.
+   */
+  isolation?: IWorktreeIsolation;
 }
 
 /**
@@ -229,7 +235,7 @@ export class Session {
     this.workspaceRootFn = deps.workspaceRoot;
     this.planner = deps.planner ?? new Planner(deps.config, () => this.aiService);
     this.store = new PlanStore();
-    this.orchestrator = new TaskOrchestrator(deps.config, deps.notifications, deps.runner, this.store, deps.taskOutput);
+    this.orchestrator = new TaskOrchestrator(deps.config, deps.notifications, deps.runner, this.store, deps.taskOutput, deps.isolation);
     this.orchestrator.setRegistry(deps.registry);
     this.orchestrator.setWorkspaceRoot(deps.workspaceRoot);
     this.orchestrator.setTddEnabled(() => this.settingsFn().tddEnabled);
@@ -374,11 +380,7 @@ export class Session {
 
   private buildObserver(): OrchestratorObserver {
     return {
-      onTaskChanged: () => {
-        if (!this.plan) return;
-        const tasks = this.store.allTasks;
-        this.broadcast({ type: 'status_update', tasks: tasks.map((t) => serializeTaskStatus(t, this.orchestrator.getIdleSince(t.id))) });
-      },
+      onTaskChanged: () => this.broadcastStatus(),
       onQueueReady: () => {
         this.broadcast({ type: 'queue_ready' });
       },
@@ -392,10 +394,22 @@ export class Session {
       onCheckpoint: (data) => {
         this.broadcast({ type: 'checkpoint', taskId: data.taskId, taskTitle: data.taskTitle, summary: data.summary });
       },
-      onTick: () => {
-        if (!this.plan) return;
-        const tasks = this.store.allTasks;
-        this.broadcast({ type: 'status_update', tasks: tasks.map((t) => serializeTaskStatus(t, this.orchestrator.getIdleSince(t.id))) });
+      onTick: () => this.broadcastStatus(),
+      onIsolationChanged: () => {
+        // The run record names branches and worktrees on disk, so it is saved
+        // as it changes rather than at the end: a crash must still find them.
+        this.persist();
+        this.broadcastStatus();
+      },
+      onIsolationBlocked: ({ reason }) => {
+        this.broadcast({
+          type: 'isolation_blocked',
+          reason,
+          message: 'Tracked files have uncommitted changes, so tasks cannot run in isolated worktrees. Stash them, or run this plan without isolation.',
+        });
+      },
+      onIsolationHandoff: (handoff) => {
+        this.broadcast({ type: 'isolation_handoff', ...handoff });
       },
       onExecutionComplete: () => {
         if (!this.plan) return;
@@ -404,6 +418,15 @@ export class Session {
         this.persist();
       },
     };
+  }
+
+  private broadcastStatus(): void {
+    if (!this.plan) return;
+    const tasks = this.store.allTasks;
+    this.broadcast({
+      type: 'status_update',
+      tasks: tasks.map((t) => serializeTaskStatus(t, this.orchestrator.getIdleSince(t.id), this.orchestrator.getTaskIsolation(t.id))),
+    });
   }
 
   private translateProgress(progress: ResearchProgress): void {
@@ -429,6 +452,7 @@ export class Session {
   private persist(): void {
     if (!this.plan) return;
     this.plan.tasks = this.store.planTasks;
+    this.plan.isolation = this.orchestrator.isolationRecord ?? undefined;
     this.plan.lastUpdated = new Date().toISOString();
     saveSession(this.plan, this.goal, this.workspace, this.currentSessionId);
     this.conversation.markPersisted();
@@ -455,6 +479,7 @@ export class Session {
     this.orchestrator.clearQueuedMessages();
     this.store.clearLog();
     this.orchestrator.loadPlan([]);
+    void this.orchestrator.adoptIsolation(null);
   }
 
   /**
@@ -607,7 +632,7 @@ export class Session {
     // drops the ones a one-shot run cannot honour, so a structural toggle like
     // verify — which only appends a task — stops being silently lost between
     // here and the prompt.
-    const modes = plannerModesFrom(settings, this.config.autonomousMode);
+    const modes = { ...plannerModesFrom(settings, this.config.autonomousMode), isolatedExecution: await this.orchestrator.willIsolate() };
 
     const releaseAbort = this.denyApprovalsOnAbort(options?.signal);
     let plan: LegacyPlanState;
@@ -723,6 +748,7 @@ export class Session {
       runnerModes,
       autonomousDefault: this.config.autonomousMode,
       verificationEnabled: settings.verificationEnabled ?? false,
+      isolatedExecution: await this.orchestrator.willIsolate(),
       fs: this.fsAdapter,
       fetcher: this.fetcher,
     };
@@ -774,7 +800,7 @@ export class Session {
     this.orchestrator.loadPlan(this.store.planTasks, this.plan.runners);
     await this.orchestrator.approveReview();
 
-    if (!this.orchestrator.isRunning) {
+    if (!this.orchestrator.isRunning && !this.orchestrator.awaitingIsolationChoice) {
       const tasks = this.store.allTasks;
       this.broadcast({ type: 'execution_complete', summary: executionSummary(tasks) });
       this.persist();
@@ -861,6 +887,7 @@ export class Session {
       runnerModes,
       autonomousDefault: this.config.autonomousMode,
       perRunnerAllowlist: modelAllowlist,
+      isolatedExecution: await this.orchestrator.willIsolate(),
     });
 
     this.mutatePlan(() => {
@@ -901,6 +928,91 @@ export class Session {
   get queuedCount(): number { return this.orchestrator.queuedCount; }
   getTask(taskId: string) { return this.store.get(taskId); }
   get isReviewApproved(): boolean { return this.orchestrator.isReviewApproved; }
+
+  /** Replay a run a dirty tree blocked, after stashing the tracked changes. */
+  async continueWithStash(): Promise<void> {
+    await this.orchestrator.continueBlockedRun('stash');
+    this.persist();
+  }
+
+  /** Replay a run a dirty tree blocked, in the workspace root, for this run only. */
+  async continueWithoutIsolation(): Promise<void> {
+    await this.orchestrator.continueBlockedRun('shared');
+    this.persist();
+  }
+
+  /** The run's integration branch against its base ref, as a unified diff. */
+  async reviewRunDiff(): Promise<string> {
+    if (!this.orchestrator.isolationRecord) throw new PlanEditError('This plan has no isolated run');
+    return this.orchestrator.reviewRunDiff();
+  }
+
+  /**
+   * Merge the run's integration branch into whatever the user has checked out.
+   * The one irreversible step of isolated execution, so this explicit call is
+   * the only way it ever happens.
+   */
+  async mergeRun(): Promise<IsolationOutcome> {
+    this.requireSettledRun();
+    return this.orchestrator.mergeRun();
+  }
+
+  /** Remove the run's worktrees and task branches; keep its integration branch to review or merge. */
+  async cleanupRun(): Promise<void> {
+    this.requireSettledRun();
+    await this.orchestrator.cleanupRun();
+    this.persist();
+  }
+
+  /**
+   * Give the whole run up, integration branch included. The plan is not
+   * rewritten: a task that landed there stays completed until the user says
+   * otherwise (Mark not done), because only they know whether they kept the work.
+   */
+  async discardRun(): Promise<void> {
+    this.requireSettledRun();
+    await this.orchestrator.discardRun();
+    this.persist();
+  }
+
+  private requireSettledRun(): void {
+    if (!this.orchestrator.isolationRecord) throw new PlanEditError('This plan has no isolated run');
+    if (this.orchestrator.isRunning) throw new PlanEditError('The run is still running — stop it first');
+  }
+
+  /**
+   * The opt-in way through a merge conflict: add an AI task, on the conflicted
+   * task's own runner and model, that merges its branch by hand in a worktree
+   * of its own. When that task lands, the conflicted one lands through it (see
+   * {@link TaskOrchestrator.linkConflictResolver}). Never automatic — nothing
+   * but this call adds it.
+   */
+  async resolveConflictAsTask(taskId: string): Promise<LegacyPlanState | null> {
+    if (!this.plan) return null;
+    const task = this.store.get(taskId);
+    const isolation = this.orchestrator.getTaskIsolation(taskId);
+    const run = this.orchestrator.isolationRecord?.run;
+    if (!task || !run || isolation?.state !== 'conflict') {
+      throw new PlanEditError('Only a task whose merge conflicted can be resolved as a task');
+    }
+    return this.editPlan(() => {
+      const resolver = this.store.add({
+        title: `Resolve merge conflict: ${task.title}`,
+        description: `Merge ${isolation.branch} into ${run.integrationBranch} by hand.`,
+        type: 'ai',
+        prompt: buildConflictResolutionPrompt(task, isolation.branch, run.integrationBranch),
+        assignedRunner: task.assignedRunner,
+        assignedModel: task.assignedModel,
+        thinkingEffort: task.thinkingEffort,
+        taskMode: task.taskMode,
+        autonomy: 'AFK',
+        sliceType: 'AFK',
+        dependencies: [],
+      });
+      this.orchestrator.linkConflictResolver(resolver.id, taskId);
+      return true;
+    });
+  }
 
   stopExecution(): void {
     this.orchestrator.stop();
@@ -1156,6 +1268,7 @@ export class Session {
       this.approvals.clear();
       this.approvalPolicy.reset();
     }
+    const adopting = plan !== this.plan;
     this.plan = plan;
     this.goal = goal;
     this.workspace = workspace;
@@ -1163,6 +1276,9 @@ export class Session {
     // same file instead of forking the session under a fresh identity.
     if (opts?.sessionId) this.currentSessionId = opts.sessionId;
     this.orchestrator.loadPlan(plan.tasks, plan.runners);
+    // The run record is taken synchronously; only the orphan prune is awaited
+    // in the background, and git serializes it ahead of any worktree a run adds.
+    if (adopting) void this.orchestrator.adoptIsolation(plan.isolation ?? null);
     if (opts?.persist !== false) this.persist();
   }
 
