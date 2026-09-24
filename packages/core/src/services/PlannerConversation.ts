@@ -4,6 +4,7 @@ import { renderTaskQueryAnswer, taskQuerySignature, TASK_QUERY_ANSWER_OR_OPS, TA
 import { taskOpsProtocol, type ApplyTaskOpsResult, type TaskOp } from './TaskOps';
 import { resolveDefaultMode } from './ModeResolver';
 import type { SessionBroadcaster } from './SessionMessage';
+import type { ForkedDialogue } from './conversationFork';
 import type { ConversationMessage, LegacyPlanState, ResearchLogEntry, ResearchProgress, RunnerId, Task } from '../models/Task';
 
 /**
@@ -264,7 +265,7 @@ export class PlannerConversation {
    * The live context is not part of it — the fork replays from this record on
    * its first turn, like any adopted session.
    */
-  clone(): { conversationHistory: ConversationMessage[]; researchLog: ResearchLogEntry[] } {
+  clone(): ForkedDialogue {
     this.assertIdle('fork the conversation');
     const plan = this.host.plan();
     return structuredClone({

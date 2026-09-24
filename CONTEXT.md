@@ -172,8 +172,37 @@ into a fresh model context; the tool history is gone. Written only by
 **PlannerConversation**: conversation turns, the one-shot `modifyPlan`
 exchange (request plus a `plan_generated` marker), and queued mid-run edits
 once `processQueuedMessages` applies them (a `system` entry, so the transcript
-and the plan do not drift apart). Every write is persisted and broadcast
-through Session's `mutatePlan` ritual.
+and the plan do not drift apart), and a **Rewind**, which cuts it short. Every
+write is persisted and broadcast through Session's `mutatePlan` ritual.
+
+**Rewind** (`Session.rewindConversation(index)`) — cut the conversation back to
+just before one of the user's messages, discarding it and everything after it;
+the planner's `researchLog` goes back to the same point. `index` is the
+message's position in `conversationHistory`, and `rewindTargets()` lists the
+candidates with a one-line preview — every user message except the opening
+goal, since a conversation without its goal is a new session. The task list
+is untouched, including tasks the discarded turns created, and so is any run
+executing it: a rewind moves where the conversation resumes, not what the plan
+is (ADR-0002, update of 2026-09-25). The planner's live context is reset, so
+the next message replays from the shortened transcript on every backend alike.
+Refused while a planner turn is in flight (`ConversationBusyError`), because
+the turn's reply would land on a transcript that no longer holds the message
+it answers. TUI `/rewind` (picker) or `/rewind <n>`; CLI `ordewell rewind [n]`.
+*Avoid:* "undo" — nothing about the plan is undone.
+
+**Fork** (`Session.forkConversation()`) — copy the conversation and its task
+list into a new persisted session and continue there; the original, its file
+and its live planner context are untouched, so either side can be forked
+again. The fork carries no run: tasks caught in progress or at a checkpoint
+become pending, finished ones keep their status, and queued mid-run edits and
+any other per-run record stay behind. What travels is decided in one place,
+`forkPlanState`, which lists fields rather than spreading the plan, so a field
+added to the plan later stays behind until someone decides it should travel.
+The daemon adopts the fork immediately (see **Adopt**); its first message
+replays the copied transcript. Refused mid-turn like a rewind; allowed while
+the original executes. TUI `/fork` switches to the fork; `ordewell fork` makes
+it the current session.
+*Avoid:* "branch" — that word belongs to git and to worktree isolation.
 
 **PRD (prdMarkdown)** — with the PRD toggle on, the planner previews the PRD in
 prose, and after the user agrees writes the full markdown wrapped in

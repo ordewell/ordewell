@@ -187,3 +187,41 @@ toggle at all. The references to `grill-me`, `grillMeEnabled`, and the
 `GRILL-ME` block above describe the toggle-based mechanism as it existed at the
 time each entry was written and are left as-is; the current mechanism is the
 skills system, not a mode toggle.
+
+## Update (2026-09-25) — the conversation line can be rewound or forked; the task list rides along
+
+Issue #9. "One persisted dialogue" above described an append-only line: once a
+message was sent, the only way on was another message. The line can now be cut
+short or copied:
+
+- **Rewind** truncates `conversationHistory` to just before a chosen user
+  message (the opening goal excepted) and the planner's `researchLog` to the
+  same point.
+- **Fork** copies the conversation and the task list into a new persisted
+  session, leaving the original untouched.
+
+Both act on the **conversation only**. The task list — tasks, statuses,
+assignments, runner set — rides along as-is: a rewind keeps tasks that the
+discarded turns created, and a fork starts with the tasks the original had at
+the moment of forking. The one exception is run state, which a fork cannot
+carry because it has no run: in-progress and checkpointed tasks become pending,
+queued mid-run edits stay behind (`forkPlanState` is the one place that decides
+what travels).
+
+Either operation ends with the planner's live context reset through
+`PlannerConversation`, so the next message replays from the edited transcript
+through the ordinary resume path. That is what makes the feature identical on a
+vendor API planner and on a harness planner (ADR-0009), whose native session id
+the reset clears — otherwise the agent would resume its own memory of the
+discarded turns underneath the replay. Both are refused while a planner turn is
+in flight; a task run is no obstacle.
+
+**Rejected: reconstructing the plan as it was at the rewind point.** It would
+need plan history (versioned `PlanStore` snapshots per turn) and a rule for
+tasks that ran or completed after that point — whose effects are in the
+working tree, not in the transcript. Rolling the plan back while the code keeps
+the work is a second, less predictable kind of drift. Keeping the task list
+as-is makes the result obvious — the conversation moved, the plan did not — and
+the planner sees the real current plan in its per-turn block on the next
+message, so it can reconcile anything the user wants changed.
+
