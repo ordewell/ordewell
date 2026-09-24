@@ -15,6 +15,8 @@ Planning:
   ordewell stop                   Stop execution of the last session (or --server)
   ordewell status                 List recent sessions (use --session-id for detail)
   ordewell sessions list|load|delete            Manage named sessions
+  ordewell fork                   Continue in a copy of the conversation and its tasks
+  ordewell rewind [<n>]           Rewind the conversation to before message <n> (no <n>: list them)
 
 Tasks (<id> is an order number or a task ID):
   ordewell add-task --title "..."  Add a task to the current plan

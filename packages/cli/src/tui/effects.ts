@@ -6,7 +6,7 @@ import { WorkspaceInitNeededError } from '../apiClient';
 import { normalizeCatalog } from '../catalog';
 import { describePlannerSwitch } from '../plannerModelSwitch';
 import type { Action, Effect } from './reducer';
-import type { SessionView } from './state';
+import type { RewindTargetView, SessionView } from './state';
 import type { WsEvent } from '../apiClient';
 
 /** The slice of the daemon client the TUI needs; `ApiClient` satisfies it. */
@@ -27,6 +27,9 @@ export interface OrdewellApi {
   getSession(sessionId: string, workspace?: string): Promise<{ meta: any; plan: any }>;
   adoptSession(sessionId: string, workspace?: string): Promise<{ plan: any; goal: string }>;
   deleteSession(sessionId: string, workspace?: string): Promise<{ ok: boolean }>;
+  forkConversation(sessionId: string): Promise<{ sessionId: string; goal: string; plan: unknown }>;
+  rewindTargets(sessionId: string): Promise<RewindTargetView[]>;
+  rewindConversation(sessionId: string, index: number): Promise<unknown>;
   closeSession(sessionId: string): Promise<{ ok: boolean }>;
   getSettings(): Promise<Record<string, unknown>>;
   updateSettings(changes: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -438,6 +441,29 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       dispatch({ type: 'chatRestored', history: (plan as { conversationHistory?: ConversationMessage[] }).conversationHistory ?? [], sessionId: effect.sessionId });
       dispatch({ type: 'planUpdated', plan, sessionId: effect.sessionId });
       dispatch({ type: 'notice', message: `Loaded "${goal || effect.sessionId}".` });
+      return;
+    }
+
+    // The daemon has already adopted the fork, so switching is only the TUI
+    // catching up — the original session is not closed: it may be running.
+    case 'forkConversation': {
+      const fork = await api.forkConversation(effect.sessionId);
+      dispatch({ type: 'sessionForked', sessionId: fork.sessionId, goal: fork.goal });
+      dispatch({ type: 'chatRestored', history: (fork.plan as { conversationHistory?: ConversationMessage[] }).conversationHistory ?? [], sessionId: fork.sessionId });
+      dispatch({ type: 'planUpdated', plan: fork.plan, sessionId: fork.sessionId });
+      dispatch({ type: 'notice', message: `Forked ${effect.sessionId} into ${fork.sessionId} — you are in the fork now. /sessions to go back.` });
+      return;
+    }
+
+    case 'loadRewindTargets':
+      dispatch({ type: 'rewindTargetsLoaded', targets: await api.rewindTargets(effect.sessionId), sessionId: effect.sessionId });
+      return;
+
+    case 'rewindConversation': {
+      const plan = await api.rewindConversation(effect.sessionId, effect.index);
+      dispatch({ type: 'chatRestored', history: (plan as { conversationHistory?: ConversationMessage[] }).conversationHistory ?? [], sessionId: effect.sessionId });
+      dispatch({ type: 'planUpdated', plan, sessionId: effect.sessionId });
+      dispatch({ type: 'notice', message: 'Rewound the conversation. The tasks are unchanged; your next message continues from here.' });
       return;
     }
 

@@ -1162,3 +1162,73 @@ describe('copying a selection', () => {
     expect(writeTerminal).toHaveBeenCalledWith(`\x1b]52;c;${Buffer.from('hi').toString('base64')}\x07`);
   });
 });
+
+describe('conversation fork and rewind effects', () => {
+  const history = [
+    { role: 'user' as const, content: 'build me a parser', timestamp: '2026-01-01T00:00:00Z' },
+    { role: 'assistant' as const, content: 'Which formats?', timestamp: '2026-01-01T00:00:01Z' },
+  ];
+
+  it('forks, then switches the TUI to the fork with its conversation and tasks', async () => {
+    const plan = { tasks: [{ id: 't1' }], conversationHistory: history };
+    const h = harness({ forkConversation: vi.fn().mockResolvedValue({ sessionId: 'session-fork', goal: 'build me a parser', plan }) });
+
+    await runEffect({ type: 'forkConversation', sessionId: 'session-1' }, h.deps);
+
+    expect(h.api.forkConversation).toHaveBeenCalledWith('session-1');
+    expect(h.actions).toEqual([
+      { type: 'sessionForked', sessionId: 'session-fork', goal: 'build me a parser' },
+      { type: 'chatRestored', history, sessionId: 'session-fork' },
+      { type: 'planUpdated', plan, sessionId: 'session-fork' },
+      { type: 'notice', message: expect.stringMatching(/Forked session-1.*session-fork/) },
+    ]);
+  });
+
+  it('reports a refused fork and stays where it was', async () => {
+    const h = harness({ forkConversation: vi.fn().mockRejectedValue(new Error('Cannot fork the conversation while the planner is answering')) });
+
+    await runEffect({ type: 'forkConversation', sessionId: 'session-1' }, h.deps);
+
+    expect(types(h.actions)).toEqual(['failed']);
+    expect(messageOf(h.actions, 'failed')).toMatch(/planner is answering/);
+  });
+
+  it('loads the rewind targets for the session', async () => {
+    const targets = [{ index: 2, preview: 'JSON only', timestamp: '2026-01-01T00:00:02Z' }];
+    const h = harness({ rewindTargets: vi.fn().mockResolvedValue(targets) });
+
+    await runEffect({ type: 'loadRewindTargets', sessionId: 'session-1' }, h.deps);
+
+    expect(h.api.rewindTargets).toHaveBeenCalledWith('session-1');
+    expect(h.actions).toEqual([{ type: 'rewindTargetsLoaded', targets, sessionId: 'session-1' }]);
+  });
+
+  it('rewinds, then redraws the transcript from what the daemon kept', async () => {
+    const plan = { tasks: [{ id: 't1' }], conversationHistory: history };
+    const h = harness({ rewindConversation: vi.fn().mockResolvedValue(plan) });
+
+    await runEffect({ type: 'rewindConversation', sessionId: 'session-1', index: 2 }, h.deps);
+
+    expect(h.api.rewindConversation).toHaveBeenCalledWith('session-1', 2);
+    expect(h.actions).toEqual([
+      { type: 'chatRestored', history, sessionId: 'session-1' },
+      { type: 'planUpdated', plan, sessionId: 'session-1' },
+      { type: 'notice', message: expect.stringMatching(/Rewound/) },
+    ]);
+  });
+
+  it('a rewound transcript replaces the one on screen', async () => {
+    const plan = { tasks: [], conversationHistory: history };
+    const h = harness({ rewindConversation: vi.fn().mockResolvedValue(plan) });
+    let state: TuiState = initialState({
+      sessionId: 'session-1',
+      messages: [...history, { role: 'user', content: 'discarded', timestamp: '2026-01-01T00:00:02Z' }],
+    });
+
+    await runEffect({ type: 'rewindConversation', sessionId: 'session-1', index: 2 }, h.deps);
+    for (const action of h.actions) state = reduce(state, action).state;
+
+    expect(state.messages.map((m) => m.content)).not.toContain('discarded');
+    expect(state.messages.map((m) => m.content)).toEqual(expect.arrayContaining(['build me a parser', 'Which formats?']));
+  });
+});

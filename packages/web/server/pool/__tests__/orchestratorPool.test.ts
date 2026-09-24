@@ -145,6 +145,7 @@ describe('OrchestratorPool.forkConversation', () => {
     expect(fork.sessionId).not.toBe('session-saved');
     expect(pool.hasSession(fork.sessionId)).toBe(true);
     expect(pool.session(fork.sessionId).sessionId).toBe(fork.sessionId);
+    expect(fork.goal).toBe('Rate limiting');
     expect(pool.getGoal(fork.sessionId)).toBe('Rate limiting');
     expect(fork.plan.tasks.map((t) => t.id)).toEqual(['t1', 't2']);
     expect(fork.plan.conversationHistory).toHaveLength(2);

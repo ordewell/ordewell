@@ -541,9 +541,9 @@ export class OrchestratorPool {
    * adopted by, reading back the file the fork was written to. The original
    * keeps running, or planning, untouched.
    */
-  forkConversation(sessionId: string): { sessionId: string; plan: LegacyPlanState } {
+  forkConversation(sessionId: string): { sessionId: string; goal: string; plan: LegacyPlanState } {
     const fork = this.session(sessionId).forkConversation();
-    return { sessionId: fork.sessionId, plan: this.adoptSavedSession(fork.sessionId, fork.workspace) };
+    return { sessionId: fork.sessionId, goal: fork.goal, plan: this.adoptSavedSession(fork.sessionId, fork.workspace) };
   }
 
   /**
