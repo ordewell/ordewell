@@ -27,7 +27,11 @@ state directly; Session owns the store and routes plan mutations through it.
 plan is the artifact.
 
 **Session** — the deep module owning one plan's full lifecycle: generation,
-execution, mutation, persistence, and the orchestrator observer wiring.
+execution, mutation, persistence, and the orchestrator observer wiring. It
+*hosts* the planner conversation but does not own it: `startPlanning`,
+`continueConversation` and `isConversationActive` are thin delegations to a
+**PlannerConversation**, which reaches plan state, persistence and scheduling
+only through the host interface Session hands it.
 Constructed with injected adapters (`config`, `runner`, `registry`,
 `fsAdapter`, `broadcast`, `modelResolver`, `settings`, and optionally
 `aiService`/`planner` — the constructor is the test seam; no test reaches
@@ -42,10 +46,7 @@ one `mutatePlan` ritual (store op → persist → broadcast), so forgetting the
 persist step is impossible. Direct (non-planner) edits go one step further
 through `editPlan`, which adds the reschedule they owe an armed scheduler:
 nothing else wakes one after a hand edit, because a direct edit never queues,
-so a task the edit unblocked would sit ready and never start. Planner turns
-settle through one path
-(`settleTurn`): the first turn and every later turn get the same task-ops
-validation and bounded corrective retries. PlanStore is the single source of truth for task
+so a task the edit unblocked would sit ready and never start. PlanStore is the single source of truth for task
 state; `LegacyPlanState.tasks` is populated only at persist time. The old
 `syncStoreFromPlan` (plan → store direction) is removed — there is only one
 direction (store → plan, at persist). Emits
@@ -71,6 +72,27 @@ one) otherwise presents the previous session's tasks to the planner as the
 current plan.
 *Avoid:* "the pool" (that's the web transport host), "the session manager" —
 Session is the lifecycle owner, not a registry.
+
+**PlannerConversation** — the deep module owning the planner conversation
+(ADR-0002) end to end: the persisted dialogue record (`conversationHistory` and
+the planner's `researchLog`), the live model context behind it, and every turn
+from the user's message to a settled outcome. Planner turns settle through one
+path: the first turn and every later turn get the same read draining (the
+task-query channel), task-ops validation and bounded corrective retries, and
+commit through the host's `mutatePlan` ritual. It builds the per-turn prompt
+blocks (the always-on catalog block and the current-plan block, whose edit
+protocol prose lives beside the applier as `taskOpsProtocol` in `TaskOps.ts`).
+The live model context — a vendor service's message list, a harness planner's
+process and native session id — is disposable: `reset()` drops it, and the
+next turn is replayed from the transcript (`reset` runs before every replay,
+so a harness planner never resumes its own memory on top of the replayed
+one). A turn that throws before anything was persisted rolls its own writes
+back (`snapshot`/`restore`); once anything has been persisted, memory already
+matches disk and the rollback declines. Transcript edits are whole-array
+operations (`append`, `replace`), so rewinding, forking or compacting a
+conversation is a transcript edit plus a `reset`.
+*Avoid:* "chat" or "thread" for the module — the conversation is the thing; the
+AI service only holds a disposable copy of it.
 
 **SessionMessage** — the single union every delivery surface consumes: the
 plan-lifecycle events (`plan_generated`, `planner_message`, `status_update`, …)
@@ -137,11 +159,16 @@ reactive repair is the backstop, not the primary path.
 at the same point again.
 
 **conversationHistory** — the planner dialogue persisted on the plan state:
-`{ role: 'user' | 'assistant', content, timestamp }[]`. The single source of
+`{ role: 'user' | 'assistant', content, timestamp, kind? }[]`. The single source of
 truth for UI redisplay. Tool-call results are NOT stored here — they live in
 the AI service's in-memory tool-use history; `researchLog` remains the
-persisted tool trace. A reloaded session cannot resume the conversation (the
-tool history is gone); a new message starts a fresh one.
+persisted tool trace. A reloaded session resumes by replaying this transcript
+into a fresh model context; the tool history is gone. Written only by
+**PlannerConversation**: conversation turns, the one-shot `modifyPlan`
+exchange (request plus a `plan_generated` marker), and queued mid-run edits
+once `processQueuedMessages` applies them (a `system` entry, so the transcript
+and the plan do not drift apart). Every write is persisted and broadcast
+through Session's `mutatePlan` ritual.
 
 **PRD (prdMarkdown)** — with the PRD toggle on, the planner previews the PRD in
 prose, and after the user agrees writes the full markdown wrapped in
@@ -313,7 +340,7 @@ block is short-fields-only by design (title, status, runner, model, mode,
 deps — never a task's `prompt`, `userSteps`, `verdict`, `outputSummary`, or
 `userStoriesCovered`), so a query is how the planner reads what the block
 leaves out before rewriting it, instead of fabricating content it never saw.
-`Session.drainTaskQueries` answers it — from live state, never persisted to
+`PlannerConversation` answers it — from live state, never persisted to
 `conversationHistory` — in its own loop *before* `repairLoop`, so a read never
 spends the corrective-retry budget a fumbled edit is owed, and *before* the
 live-execution queue gate, so a read still lands mid-run (it mutates nothing).
