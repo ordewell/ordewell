@@ -536,6 +536,17 @@ export class OrchestratorPool {
   }
 
   /**
+   * Fork a session's conversation into a new session and adopt it, so the
+   * fork is addressable at once — through the same path a saved session is
+   * adopted by, reading back the file the fork was written to. The original
+   * keeps running, or planning, untouched.
+   */
+  forkConversation(sessionId: string): { sessionId: string; plan: LegacyPlanState } {
+    const fork = this.session(sessionId).forkConversation();
+    return { sessionId: fork.sessionId, plan: this.adoptSavedSession(fork.sessionId, fork.workspace) };
+  }
+
+  /**
    * Direct access to a session's interface — routes call the Session; the
    * pool only registers sessions and fans broadcasts out to WS clients.
    */

@@ -115,6 +115,48 @@ describe('OrchestratorPool.adoptSavedSession', () => {
   });
 });
 
+describe('OrchestratorPool.forkConversation', () => {
+  let workspace: string;
+  let pool: OrchestratorPool;
+  const conversation = {
+    conversationHistory: [
+      { role: 'user' as const, content: 'Rate limiting', timestamp: '2026-07-21T10:00:00.000Z' },
+      { role: 'assistant' as const, content: 'Plan generated with 2 tasks.', timestamp: '2026-07-21T10:00:01.000Z', kind: 'plan_generated' as const },
+    ],
+  };
+
+  beforeEach(() => {
+    workspace = mkdtempSync(join(tmpdir(), 'ordewell-pool-'));
+    mkdirSync(join(workspace, '.git'));
+    pool = new OrchestratorPool();
+  });
+
+  afterEach(() => {
+    pool.destroyAll();
+    rmSync(workspace, { recursive: true, force: true });
+  });
+
+  it('registers the fork the way an adopted session is, beside the untouched original', () => {
+    const meta = saveSession(savedPlan(conversation), 'Rate limiting', workspace, 'session-saved');
+    pool.adoptSavedSession(meta.id, workspace);
+
+    const fork = pool.forkConversation(meta.id);
+
+    expect(fork.sessionId).not.toBe('session-saved');
+    expect(pool.hasSession(fork.sessionId)).toBe(true);
+    expect(pool.session(fork.sessionId).sessionId).toBe(fork.sessionId);
+    expect(pool.getGoal(fork.sessionId)).toBe('Rate limiting');
+    expect(fork.plan.tasks.map((t) => t.id)).toEqual(['t1', 't2']);
+    expect(fork.plan.conversationHistory).toHaveLength(2);
+    expect(pool.session('session-saved').sessionId).toBe('session-saved');
+    expect(listSessions(workspace).map((m) => m.id).sort()).toEqual([fork.sessionId, 'session-saved'].sort());
+  });
+
+  it('refuses a session the pool never adopted', () => {
+    expect(() => pool.forkConversation('session-nope')).toThrow('Session not found');
+  });
+});
+
 // A workspace that does not exist on disk (a shell's stale cwd, a typo'd
 // --workspace) must be refused before it ever reaches a harness adapter's
 // `spawn` — there it surfaces as an ENOENT that reads as a missing agent
