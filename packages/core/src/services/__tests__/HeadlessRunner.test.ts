@@ -40,6 +40,12 @@ function makeRunner(overrides: { hasScript?: boolean } = {}) {
   return { runner, child, spawnImpl: spawnImpl as ReturnType<typeof vi.fn> };
 }
 
+/** A runner whose spawns hand out `children` in order. */
+function runnerSpawning(...children: FakeChildProcess[]): HeadlessRunner {
+  const spawnImpl = children.reduce((fn, child) => fn.mockReturnValueOnce(child), vi.fn()) as unknown as SpawnFn;
+  return new HeadlessRunner({ spawnImpl, hasScriptCmd: () => false, resolvePath: async () => '' });
+}
+
 const baseOpts = (m: RunnerPluginManifest) => ({
   taskId: 'task-1234-abcd',
   runner: m.name,
@@ -151,8 +157,7 @@ describe('HeadlessRunner', () => {
     const m = manifest();
     const child1 = new FakeChildProcess();
     const child2 = new FakeChildProcess();
-    const spawnImpl = vi.fn().mockReturnValueOnce(child1).mockReturnValueOnce(child2) as unknown as SpawnFn;
-    const runner = new HeadlessRunner({ spawnImpl, hasScriptCmd: () => false, resolvePath: async () => '' });
+    const runner = runnerSpawning(child1, child2);
 
     await runner.spawn(baseOpts(m));
     await runner.spawn({ ...baseOpts(m), taskId: 'task-5678-efgh' });
@@ -170,8 +175,7 @@ describe('HeadlessRunner', () => {
     const m = manifest();
     const child1 = new FakeChildProcess();
     const child2 = new FakeChildProcess();
-    const spawnImpl = vi.fn().mockReturnValueOnce(child1).mockReturnValueOnce(child2) as unknown as SpawnFn;
-    const runner = new HeadlessRunner({ spawnImpl, hasScriptCmd: () => false, resolvePath: async () => '' });
+    const runner = runnerSpawning(child1, child2);
 
     const first = await runner.spawn(baseOpts(m));
     const retry = await runner.spawn(baseOpts(m));
@@ -187,8 +191,7 @@ describe('HeadlessRunner', () => {
     const m = manifest();
     const child1 = new FakeChildProcess();
     const child2 = new FakeChildProcess();
-    const spawnImpl = vi.fn().mockReturnValueOnce(child1).mockReturnValueOnce(child2) as unknown as SpawnFn;
-    const runner = new HeadlessRunner({ spawnImpl, hasScriptCmd: () => false, resolvePath: async () => '' });
+    const runner = runnerSpawning(child1, child2);
 
     const a = await runner.spawn({ ...baseOpts(m), taskId: 'task-1234-abcd' });
     const b = await runner.spawn({ ...baseOpts(m), taskId: 'task-1234-wxyz' });
