@@ -5,7 +5,7 @@ import { ITerminalRunner, ITerminalSession } from '../interfaces/ITerminalRunner
 import { composeAugmentedPrompt, summarizeOutput } from './promptAugment';
 import { VerdictEngine } from './VerdictEngine';
 import { renderCleanCapture } from './terminalRender';
-import { readFinalAssistantText } from './transcriptCapture';
+import { HomeTranscriptReader } from './transcriptCapture';
 import { PlanStore } from './PlanStore';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 
@@ -325,7 +325,7 @@ export class TaskOrchestrator {
     // summarized for downstream consumers.
     const doneToken = `<<<ORDEWELL_DONE_${task.completionMarker}>>>`;
     const transcript = attempt?.cwd
-      ? await readFinalAssistantText({ runner: attempt.runner, cwd: attempt.cwd, startedAt: attempt.startedAt })
+      ? await new HomeTranscriptReader().finalAssistantText({ runner: attempt.runner, cwd: attempt.cwd, startedAt: attempt.startedAt, marker: task.completionMarker })
       : null;
     const cleaned = transcript ?? renderCleanCapture(output, doneToken);
     const effective = cleaned.length > 0 ? cleaned : output;

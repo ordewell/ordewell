@@ -2,8 +2,16 @@
  * Live-store verification for transcriptCapture (#16). Run with the repo's
  * tsx: `npx tsx scripts/verify-transcript-capture.mjs` from packages/core.
  * Reads the REAL stores under $HOME — read-only, no writes anywhere.
+ *
+ * Pass a task's completion marker as the first argument to check the binding
+ * to that task; without one the marker is empty, which every transcript
+ * contains, so this only exercises the parsers.
  */
-import { readFinalAssistantText } from '../src/services/transcriptCapture';
+import { HomeTranscriptReader } from '../src/services/transcriptCapture';
+
+const reader = new HomeTranscriptReader();
+const marker = process.argv[2] ?? '';
+const readFinalAssistantText = (query) => reader.finalAssistantText({ ...query, marker });
 
 function show(label, out) {
   console.log(`\n=== ${label} ===`);

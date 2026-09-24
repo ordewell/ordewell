@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, statSync, existsSync } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import type { TranscriptQuery, TranscriptReader } from '../interfaces/TaskOutputSource';
 
 /**
  * Read a task's final answer from the agent's own session transcript — the
@@ -11,46 +12,38 @@ import * as path from 'path';
  * from files to SQLite mid-2026). Every reader is therefore defensive: any
  * missing file, unparseable line, or shape drift returns null and the caller
  * falls back to the terminal capture. Nothing here is a hard dependency.
+ *
+ * Directory and recency only narrow the candidates: with several attempts in
+ * one cwd the newest session is whichever task finished last. A transcript is
+ * accepted only when its content carries the task's completion marker.
  */
+export class HomeTranscriptReader implements TranscriptReader {
+  private readonly home: () => string;
 
-/** Context of one task's spawn, enough to locate the transcript. */
-export interface TranscriptQuery {
-  runner: string;
-  /** The task's working directory (the agent's cwd at spawn). */
-  cwd: string;
-  /** When the agent process started, ISO — used to reject older sessions. */
-  startedAt?: string;
-}
-
-/**
- * Read lazily at every call: tests swap HOME, and `os.homedir()` may be
- * resolved once per process by the runtime rather than per call.
- */
-function homeDir(): string {
-  return process.env.HOME || os.homedir();
-}
-
-/**
- * Last assistant-authored prose from the transcript, or null when no
- * transcript can be located/parsed. Truncated to `maxChars` from the end.
- */
-export async function readFinalAssistantText(query: TranscriptQuery, maxChars = 4000): Promise<string | null> {
-  try {
-    if (query.runner === 'claude-code') return claudeFinal(query, maxChars);
-    if (query.runner === 'opencode') return await opencodeFinal(query, maxChars);
-    if (query.runner === 'codex') return codexFinal(query, maxChars);
-  } catch {
-    /* store unreadable — fall through */
+  constructor(opts: { homeDir?: string } = {}) {
+    // Resolved per call when not injected: `os.homedir()` may be cached once
+    // per process by the runtime, while HOME can change under it.
+    this.home = opts.homeDir ? () => opts.homeDir as string : () => process.env.HOME || os.homedir();
   }
-  return null;
+
+  async finalAssistantText(query: TranscriptQuery, maxChars = 4000): Promise<string | null> {
+    try {
+      if (query.runner === 'claude-code') return claudeFinal(this.home(), query, maxChars);
+      if (query.runner === 'opencode') return await opencodeFinal(this.home(), query, maxChars);
+      if (query.runner === 'codex') return codexFinal(this.home(), query, maxChars);
+    } catch {
+      /* store unreadable — fall through */
+    }
+    return null;
+  }
 }
 
 // --- Claude Code: ~/.claude/projects/<munged-cwd>/<sessionId>.jsonl ---
 // Each line is a typed record; assistant records carry message.content blocks.
 
-function claudeFinal(query: TranscriptQuery, maxChars: number): string | null {
+function claudeFinal(home: string, query: TranscriptQuery, maxChars: number): string | null {
   const munged = query.cwd.replaceAll('/', '-').replaceAll('_', '-');
-  const dir = path.join(homeDir(), '.claude', 'projects', munged);
+  const dir = path.join(home, '.claude', 'projects', munged);
   if (!existsSync(dir)) return null;
   const cutoff = query.startedAt ? Date.parse(query.startedAt) : 0;
   // A session file is created at spawn; anything last-modified before the task
@@ -61,22 +54,21 @@ function claudeFinal(query: TranscriptQuery, maxChars: number): string | null {
     .filter((f) => (cutoff ? statSync(f).mtimeMs >= cutoff - 5_000 : true))
     .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
   for (const file of candidates) {
-    const text = claudeLastAssistant(file);
+    const raw = readFileSync(file, 'utf8');
+    if (!raw.includes(query.marker)) continue;
+    const text = claudeLastAssistant(raw);
     if (text) return clamp(text, maxChars);
   }
   return null;
 }
 
-function claudeLastAssistant(file: string): string | null {
+function claudeLastAssistant(raw: string): string | null {
   let last: string | null = null;
-  let buf = '';
-  // Read only the tail: transcripts reach megabytes and the final answer is
-  // the last text-bearing line. A large chunk without a line boundary is kept
-  // over and completed by the next chunk, so the final record is never lost.
-  const fd = statSync(file);
-  const start = Math.max(0, fd.size - 512 * 1024);
-  buf = readFileSync(file, { encoding: 'utf8' }).toString();
-  if (start > 0) buf = buf.slice(buf.indexOf('\n', Math.min(start, buf.length - 1)) + 1);
+  // Parse only the tail: transcripts reach megabytes and the final answer is
+  // the last text-bearing line. The cut moves forward to a line boundary so
+  // the first parsed record is whole.
+  const start = Math.max(0, raw.length - 512 * 1024);
+  const buf = start > 0 ? raw.slice(raw.indexOf('\n', start) + 1) : raw;
   for (const line of buf.split('\n')) {
     if (!line.trim()) continue;
     let rec: { type?: string; isSidechain?: boolean; message?: { content?: unknown } };
@@ -101,7 +93,7 @@ function claudeLastAssistant(file: string): string | null {
 // --- OpenCode: SQLite at ~/.local/share/opencode/opencode.db ---
 // message rows hold role; part rows hold typed content pieces.
 
-async function opencodeFinal(query: TranscriptQuery, maxChars: number): Promise<string | null> {
+async function opencodeFinal(home: string, query: TranscriptQuery, maxChars: number): Promise<string | null> {
   // node:sqlite exists from Node 22; core's engine floor is 20, so import it
   // lazily — an older Node simply falls back to the terminal capture.
   let DatabaseSync: (new (loc: string, opts?: { open?: boolean }) => {
@@ -113,7 +105,7 @@ async function opencodeFinal(query: TranscriptQuery, maxChars: number): Promise<
   } catch {
     return null;
   }
-  const dbPath = path.join(homeDir(), '.local', 'share', 'opencode', 'opencode.db');
+  const dbPath = path.join(home, '.local', 'share', 'opencode', 'opencode.db');
   if (!existsSync(dbPath)) return null;
   let db: InstanceType<typeof DatabaseSync>;
   try {
@@ -131,11 +123,18 @@ async function opencodeFinal(query: TranscriptQuery, maxChars: number): Promise<
         `select s.id, s.time_updated from session s
          join project p on p.id = s.project_id
          where s.directory = ?
-         order by s.time_updated desc limit 5`,
+         order by s.time_updated desc limit 20`,
       )
       .all(query.cwd) as Array<{ id: string; time_updated: number }>;
+    const carriesMarker = db.prepare(
+      `select 1 from part pt
+       join message m on m.id = pt.message_id
+       where m.session_id = ? and instr(pt.data, ?) > 0
+       limit 1`,
+    );
     for (const row of rows) {
       if (cutoff && row.time_updated < cutoff - 5_000) continue;
+      if (!carriesMarker.get(row.id, query.marker)) continue;
       // Assistant message ids sort chronologically (msg_<base36-ish>); the
       // newest assistant message's text parts are the final answer.
       const parts = db
@@ -172,10 +171,10 @@ async function opencodeFinal(query: TranscriptQuery, maxChars: number): Promise<
 // --- Codex: ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl ---
 // Each line {timestamp, type, payload}; assistant text lives in
 // response_item/message records with role assistant. The thread id is
-// server-minted, so a task maps by recency within its cwd.
+// server-minted, so a task maps by its marker within its cwd.
 
-function codexFinal(query: TranscriptQuery, maxChars: number): string | null {
-  const root = path.join(homeDir(), '.codex', 'sessions');
+function codexFinal(home: string, query: TranscriptQuery, maxChars: number): string | null {
+  const root = path.join(home, '.codex', 'sessions');
   if (!existsSync(root)) return null;
   const cutoff = query.startedAt ? Date.parse(query.startedAt) : 0;
   const files: string[] = [];
@@ -201,17 +200,18 @@ function codexFinal(query: TranscriptQuery, maxChars: number): string | null {
     }
   }
   files.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
-  for (const file of files.slice(0, 10)) {
-    const text = codexLastAssistant(file, query.cwd);
+  // Without a start time the store's whole history qualifies, so only the
+  // newest few are opened; with one, every rollout since is a real candidate.
+  for (const file of cutoff ? files : files.slice(0, 10)) {
+    const text = codexLastAssistant(file, query);
     if (text) return clamp(text, maxChars);
   }
   return null;
 }
 
-function codexLastAssistant(file: string, cwd: string): string | null {
-  // Rollouts can be large; scan the tail first and widen only if no assistant
-  // message is found there (short sessions fit entirely in the tail).
+function codexLastAssistant(file: string, query: TranscriptQuery): string | null {
   const raw = readFileSync(file, 'utf8');
+  if (!raw.includes(query.marker)) return null;
   const lines = raw.split('\n').filter((l) => l.trim());
   let sawCwd = false;
   let last: string | null = null;
@@ -222,7 +222,7 @@ function codexLastAssistant(file: string, cwd: string): string | null {
     } catch {
       continue;
     }
-    if (rec.type === 'session_meta' && rec.payload?.cwd === cwd) sawCwd = true;
+    if (rec.type === 'session_meta' && rec.payload?.cwd === query.cwd) sawCwd = true;
     if (rec.type !== 'response_item') continue;
     const p = rec.payload;
     if (p?.role !== 'assistant' || p.type !== 'message') continue;
