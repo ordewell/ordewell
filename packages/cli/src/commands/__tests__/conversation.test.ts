@@ -161,3 +161,38 @@ describe('ordewell rewind', () => {
     expect(stderr).toMatch(/No user message at position 3/);
   });
 });
+
+describe('ordewell compact', () => {
+  const compacted = { plan: { tasks: [] }, summary: 'Goal: a JSON parser. Streaming chosen.', keptMessages: 4 };
+
+  it('adopts the current session, condenses it, and prints the summary that replaced the conversation', async () => {
+    const srv = await daemon(({ url }) => url.includes('/load') ? { body: adopted } : { body: compacted });
+    const { handleCompact } = await import('../conversation');
+
+    const { stdout, exitCode } = await capture(() => handleCompact(['--workspace', '/tmp/ws'], new ApiClient(srv.port)));
+    srv.close();
+
+    expect(exitCode).toBeNull();
+    expect(srv.hits.map((h) => `${h.method} ${h.url}`)).toEqual([
+      'POST /api/sessions/session-1/load?workspace=%2Ftmp%2Fws',
+      'POST /api/plans/session-1/conversation/compact',
+    ]);
+    expect(stdout).toMatch(/Condensed session-1/);
+    expect(stdout).toContain('Goal: a JSON parser. Streaming chosen.');
+    expect(stdout).toMatch(/tasks are unchanged/);
+  });
+
+  it.each([
+    [409, 'Cannot condense the conversation while the planner is answering', /planner is answering/],
+    [400, 'The conversation is too short to condense.', /too short/],
+  ])('reports a refusal (%i) and exits non-zero', async (status, error, expected) => {
+    const srv = await daemon(({ url }) => url.includes('/load') ? { body: adopted } : { status, body: { error } });
+    const { handleCompact } = await import('../conversation');
+
+    const { stderr, exitCode } = await capture(() => handleCompact(['--workspace', '/tmp/ws'], new ApiClient(srv.port)));
+    srv.close();
+
+    expect(exitCode).toBe(1);
+    expect(stderr).toMatch(expected);
+  });
+});

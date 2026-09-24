@@ -40,6 +40,23 @@ export async function handleFork(subArgs: string[], injectedApi?: ApiClient): Pr
 }
 
 /**
+ * Condense the conversation into a summary, keeping the last two exchanges. The
+ * summary is printed because the user should see what the planner will carry
+ * forward, not take it on trust.
+ */
+export async function handleCompact(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
+  const { api, sessionId } = await adopted(subArgs, injectedApi);
+  let result;
+  try {
+    result = await api.compactConversation(sessionId);
+  } catch (err) {
+    fail(`Failed to condense: ${(err as Error).message}`);
+  }
+  console.log(`Condensed ${sessionId}. The last two exchanges were kept as they were; the tasks are unchanged.\n`);
+  console.log(result.summary);
+}
+
+/**
  * Cut the conversation back to just before message <n>. With no <n>, print the
  * messages the TUI's picker would offer — the same numbers `rewind <n>` takes.
  */

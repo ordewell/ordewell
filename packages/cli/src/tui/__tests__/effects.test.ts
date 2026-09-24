@@ -1232,3 +1232,36 @@ describe('conversation fork and rewind effects', () => {
     expect(state.messages.map((m) => m.content)).toEqual(expect.arrayContaining(['build me a parser', 'Which formats?']));
   });
 });
+
+describe('conversation compact effect', () => {
+  const condensed = [
+    { role: 'assistant' as const, content: 'Conversation condensed: …', timestamp: '2026-01-02T00:00:00Z', kind: 'compaction' as const },
+    { role: 'user' as const, content: 'add CSV', timestamp: '2026-01-02T00:00:01Z' },
+  ];
+
+  it('condenses, then redraws the transcript and plan from what the daemon kept', async () => {
+    const plan = { tasks: [{ id: 't1' }], conversationHistory: condensed };
+    const h = harness({ compactConversation: vi.fn().mockResolvedValue({ plan, summary: 'the state', keptMessages: 4 }) });
+
+    await runEffect({ type: 'compactConversation', sessionId: 'session-1' }, h.deps);
+
+    expect(h.api.compactConversation).toHaveBeenCalledWith('session-1');
+    expect(h.actions).toEqual([
+      { type: 'chatRestored', history: condensed, sessionId: 'session-1' },
+      { type: 'planUpdated', plan, sessionId: 'session-1' },
+    ]);
+  });
+
+  it('reports a refusal, and a busy planner goes back to idle', async () => {
+    const h = harness({ compactConversation: vi.fn().mockRejectedValue(new Error('The conversation is too short to condense.')) });
+    let state: TuiState = initialState({ sessionId: 'session-1', status: 'planning', busyLabel: 'Condensing the conversation…' });
+
+    await runEffect({ type: 'compactConversation', sessionId: 'session-1' }, h.deps);
+    for (const action of h.actions) state = reduce(state, action).state;
+
+    expect(types(h.actions)).toEqual(['failed']);
+    expect(messageOf(h.actions, 'failed')).toMatch(/too short/);
+    expect(state.status).toBe('idle');
+    expect(state.busyLabel).toBe('');
+  });
+});

@@ -42,6 +42,7 @@ export type Effect =
   | { type: 'forkConversation'; sessionId: string }
   | { type: 'loadRewindTargets'; sessionId: string }
   | { type: 'rewindConversation'; sessionId: string; index: number }
+  | { type: 'compactConversation'; sessionId: string }
   | { type: 'saveSession'; sessionId: string }
   | { type: 'closeSession'; sessionId: string }
   | { type: 'execute'; sessionId: string }
@@ -132,7 +133,7 @@ function say(
  */
 function restoredMessages(history: ConversationMessage[]): ChatMessage[] {
   return history.map((entry) => ({
-    role: entry.kind === 'plan_generated' ? 'system' : entry.kind === 'system' ? 'system' : entry.role,
+    role: entry.kind === 'plan_generated' || entry.kind === 'system' || entry.kind === 'compaction' ? 'system' : entry.role,
     content: sanitize(entry.kind === 'plan_generated' ? 'Plan generated.' : entry.content),
     timestamp: entry.timestamp,
   }));
@@ -152,7 +153,11 @@ const isPendingResearch = (m: ChatMessage): boolean => m.role === 'research' && 
  */
 function alreadySpoken(messages: ChatMessage[], content: string): boolean {
   const last = findLastIndex(messages, (m) => m.role === 'assistant' || m.role === 'user');
-  return last >= 0 && messages[last].role === 'assistant' && messages[last].content === content;
+  const spoken = last >= 0 && messages[last].role === 'assistant' && messages[last].content === content;
+  // A compaction's summary is redrawn as a system entry, and the daemon's
+  // notice of the same text may land on either side of that redraw.
+  const redrawn = messages.at(-1)?.role === 'system' && messages.at(-1)?.content === content;
+  return spoken || redrawn;
 }
 
 /**
@@ -1490,6 +1495,10 @@ function runCommand(state: TuiState, { name, args }: ParsedCommand): Step {
       return withIdlePlanner(state, (sessionId) => step(state, [{ type: 'forkConversation', sessionId }]));
     case 'rewind':
       return rewind(state, args[0]);
+    case 'compact':
+      return withIdlePlanner(state, (sessionId) =>
+        step({ ...state, status: 'planning', busyLabel: 'Condensing the conversation…' }, [{ type: 'compactConversation', sessionId }]),
+      );
     case 'new':
       return requestNewSession(state);
     case 'save':
@@ -1559,9 +1568,9 @@ function withSession(state: TuiState, run: (sessionId: string) => Step): Step {
 }
 
 /**
- * Fork and rewind edit the conversation, so they wait out a planner turn — the
+ * Fork, rewind and compact edit the conversation, so they wait out a planner turn — the
  * daemon refuses them too, but saying so here costs no round trip. A task run
- * is no obstacle: neither touches the plan it is executing.
+ * is no obstacle: none of them touches the plan it is executing.
  */
 function withIdlePlanner(state: TuiState, run: (sessionId: string) => Step): Step {
   return withSession(state, (sessionId) =>

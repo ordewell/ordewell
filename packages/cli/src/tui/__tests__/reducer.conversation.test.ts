@@ -124,3 +124,53 @@ describe('/rewind', () => {
     expect(run('/rewind 4', { ...planned, status: 'executing' }).effects).toEqual([{ type: 'rewindConversation', sessionId: 'session-1', index: 4 }]);
   });
 });
+
+describe('/compact', () => {
+  it('condenses the current session and shows the planner as busy until it answers', () => {
+    const { state, effects } = run('/compact', planned);
+
+    expect(effects).toEqual([{ type: 'compactConversation', sessionId: 'session-1' }]);
+    expect(state.status).toBe('planning');
+    expect(state.busyLabel).toMatch(/Condensing/);
+  });
+
+  it('needs a session to condense', () => {
+    const { effects, state } = run('/compact');
+    expect(effects).toEqual([]);
+    expect(lastError(state)).toMatch(/No active plan/);
+  });
+
+  it.each(['planning', 'researching'] as const)('waits for the planner while it is %s', (status) => {
+    const { effects, state } = run('/compact', { ...planned, status });
+    expect(effects).toEqual([]);
+    expect(lastError(state)).toMatch(/planner is still answering/);
+  });
+
+  it('is allowed while tasks execute', () => {
+    expect(run('/compact', { ...planned, status: 'executing' }).effects).toEqual([{ type: 'compactConversation', sessionId: 'session-1' }]);
+  });
+
+  it('shows the summary entry as a system note, not a spoken turn', () => {
+    const history = [
+      { role: 'assistant' as const, content: 'Conversation condensed: …\n\nGoal: a parser', timestamp: '2026-01-02T00:00:00Z', kind: 'compaction' as const },
+      { role: 'user' as const, content: 'add CSV', timestamp: '2026-01-02T00:00:01Z' },
+    ];
+
+    const { state } = reduce(initialState(planned), { type: 'chatRestored', history, sessionId: 'session-1' });
+
+    expect(state.messages.map((m) => [m.role, m.content])).toEqual([
+      ['system', 'Conversation condensed: …\n\nGoal: a parser'],
+      ['user', 'add CSV'],
+    ]);
+  });
+
+  it('does not repeat the summary when the daemon\'s notice arrives after the transcript was redrawn', () => {
+    const summary = 'Conversation condensed: …\n\nGoal: a parser';
+    const history = [{ role: 'assistant' as const, content: summary, timestamp: '2026-01-02T00:00:00Z', kind: 'compaction' as const }];
+    let state = reduce(initialState(planned), { type: 'chatRestored', history, sessionId: 'session-1' }).state;
+
+    state = reduce(state, { type: 'plannerMessage', content: summary, sessionId: 'session-1' }).state;
+
+    expect(state.messages).toHaveLength(1);
+  });
+});

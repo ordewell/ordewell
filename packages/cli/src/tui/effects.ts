@@ -30,6 +30,7 @@ export interface OrdewellApi {
   forkConversation(sessionId: string): Promise<{ sessionId: string; goal: string; plan: unknown }>;
   rewindTargets(sessionId: string): Promise<RewindTargetView[]>;
   rewindConversation(sessionId: string, index: number): Promise<unknown>;
+  compactConversation(sessionId: string): Promise<{ plan: unknown; summary: string; keptMessages: number }>;
   closeSession(sessionId: string): Promise<{ ok: boolean }>;
   getSettings(): Promise<Record<string, unknown>>;
   updateSettings(changes: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -464,6 +465,15 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       dispatch({ type: 'chatRestored', history: (plan as { conversationHistory?: ConversationMessage[] }).conversationHistory ?? [], sessionId: effect.sessionId });
       dispatch({ type: 'planUpdated', plan, sessionId: effect.sessionId });
       dispatch({ type: 'notice', message: 'Rewound the conversation. The tasks are unchanged; your next message continues from here.' });
+      return;
+    }
+
+    // The redrawn transcript opens with the summary entry, which is what the
+    // user gets to read — no separate notice to repeat it.
+    case 'compactConversation': {
+      const { plan } = await api.compactConversation(effect.sessionId);
+      dispatch({ type: 'chatRestored', history: (plan as { conversationHistory?: ConversationMessage[] }).conversationHistory ?? [], sessionId: effect.sessionId });
+      dispatch({ type: 'planUpdated', plan, sessionId: effect.sessionId });
       return;
     }
 

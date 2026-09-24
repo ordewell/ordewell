@@ -374,6 +374,18 @@ export class ApiClient {
     return res.data.plan;
   }
 
+  /**
+   * Condense the conversation into a summary. One planner call, so it can take
+   * as long as a reply; a refusal or failure leaves the conversation as it was.
+   */
+  async compactConversation(sessionId: string): Promise<{ plan: SerializedPlan; summary: string; keptMessages: number }> {
+    const res = await this.httpRequest<{ plan: SerializedPlan; summary: string; keptMessages: number } & ErrorResponse>('POST', `/api/plans/${sessionId}/conversation/compact`);
+    if (res.status !== 200) {
+      throw new Error(res.data?.error || 'Compaction failed');
+    }
+    return { plan: res.data.plan, summary: res.data.summary, keptMessages: res.data.keptMessages };
+  }
+
   async closeSession(sessionId: string): Promise<{ ok: boolean }> {
     const res = await this.httpRequest<{ ok: boolean }>('POST', `/api/sessions/${sessionId}/close`);
     return res.data;
