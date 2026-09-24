@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderCleanCapture } from '../VerdictEngine';
+import { renderCleanCapture } from '../terminalRender';
 
 const MARKER = '<<<ORDEWELL_DONE_mk-1>>>';
 
