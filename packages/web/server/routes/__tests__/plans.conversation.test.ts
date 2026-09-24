@@ -117,6 +117,53 @@ describe('POST /:sessionId/conversation/rewind', () => {
   });
 });
 
+describe('POST /:sessionId/conversation/compact', () => {
+  it('answers the condensed plan and the summary that replaced the conversation', async () => {
+    const compactConversation = vi.fn().mockResolvedValue({ plan: { tasks: [] }, summary: 'the state', keptMessages: 4 });
+    const app = appFor(poolWith({}, { compactConversation }));
+
+    const res = await post(app, 'conversation/compact');
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ plan: { tasks: [] }, summary: 'the state', keptMessages: 4 });
+    expect(compactConversation).toHaveBeenCalledWith('s1');
+  });
+
+  it('is a conflict while the planner is answering', async () => {
+    const compactConversation = vi.fn().mockRejectedValue(new ConversationBusyError('condense the conversation'));
+    const app = appFor(poolWith({}, { compactConversation }));
+
+    expect((await post(app, 'conversation/compact')).status).toBe(409);
+  });
+
+  it('is a 400 with the reason when the conversation is too short or the summary failed', async () => {
+    const compactConversation = vi.fn().mockRejectedValue(new ConversationEditError('The conversation is too short to condense.'));
+    const app = appFor(poolWith({}, { compactConversation }));
+
+    const res = await post(app, 'conversation/compact');
+
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toMatch(/too short/);
+  });
+
+  it('is a 404 for a session the daemon does not hold', async () => {
+    const compactConversation = vi.fn().mockRejectedValue(new Error('Session not found'));
+    const app = appFor(poolWith({}, { compactConversation }));
+
+    expect((await post(app, 'conversation/compact')).status).toBe(404);
+  });
+
+  it('is a 500 when the planner itself fails', async () => {
+    const compactConversation = vi.fn().mockRejectedValue(new Error('rate limited'));
+    const app = appFor(poolWith({}, { compactConversation }));
+
+    const res = await post(app, 'conversation/compact');
+
+    expect(res.status).toBe(500);
+    expect(((await res.json()) as { error: string }).error).toBe('rate limited');
+  });
+});
+
 /** The mocked-pool tests pin the contract; this drives a real pool, Session and session store. */
 describe('conversation routes — real daemon wiring', () => {
   it('rewinds a saved session and persists it, then forks it into a second addressable session', async () => {

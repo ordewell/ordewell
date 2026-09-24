@@ -279,6 +279,16 @@ export function plansRoute(pool: OrchestratorPool) {
     }
   });
 
+  // The summary is one planner call, so this can take as long as a reply and
+  // fail like one — a failure leaves the conversation exactly as it was.
+  router.post('/:sessionId/conversation/compact', async (c) => {
+    try {
+      return c.json(await pool.compactConversation(c.req.param('sessionId')));
+    } catch (err) {
+      return conversationFailure(c, err);
+    }
+  });
+
   // Drain queued structural edits between task batches. The orchestrator pauses
   // fan-out while a message is queued (so an edit can't race a spawn) and emits
   // `queue_ready` once no task is active; a surface calls this to apply the edit

@@ -1,6 +1,8 @@
 import { WebSocket } from 'ws';
 import {
   Session,
+  ConversationBusyError,
+  type ConversationCompaction,
   type SessionMessage,
   type SessionRuntimeSettings,
   ModelResolver,
@@ -482,6 +484,25 @@ export class OrchestratorPool {
     this.planningAborts.set(sessionId, controller);
     try {
       return await this.session(sessionId).continueConversation(message, { signal: controller.signal });
+    } finally {
+      this.clearPlanningAbort(sessionId, controller);
+    }
+  }
+
+  /**
+   * Condense a session's conversation. The summary turn is a planning turn as
+   * far as a surface is concerned, so it registers the same abort controller
+   * and `cancelPlanning` stops it — but only when no turn holds that slot
+   * already: taking it over would leave the reply in flight beyond stopping.
+   */
+  async compactConversation(sessionId: string): Promise<ConversationCompaction & { plan: LegacyPlanState }> {
+    const session = this.session(sessionId);
+    if (this.planningAborts.has(sessionId)) throw new ConversationBusyError('condense the conversation');
+    const controller = new AbortController();
+    this.planningAborts.set(sessionId, controller);
+    try {
+      const compaction = await session.compactConversation(controller.signal);
+      return { ...compaction, plan: session.planState! };
     } finally {
       this.clearPlanningAbort(sessionId, controller);
     }
