@@ -195,6 +195,29 @@ injected seams, never a real PTY.
 *Avoid:* re-declaring quoting/ANSI helpers inside an adapter — that
 duplication is exactly what this module deleted.
 
+**Task attempt** (`TaskAttempt`, inside TaskOrchestrator) — one run of one
+task, from the moment the scheduler claims it to the moment it ends. It holds
+everything that has to die with the run: the attempt number, the phase
+(`starting` while the async spawn is in flight, `running` once the runner is
+up), the live `ITerminalSession`, and the runner, working directory and start
+time the transcript reader needs at verdict time. The orchestrator keeps one
+`Map<taskId, TaskAttempt>`, and every way a run ends — verdict, cancel, release,
+mark complete, retry, a failed spawn, stop, plan load — goes through the one
+`endAttempt`, which also clears the verifier state an interrupted run leaves
+behind. Ending an attempt is also what invalidates a spawn still in flight: the
+late session is compared by identity against the task's *current* attempt, so
+it is killed rather than resurrecting a stopped task or displacing a newer run.
+The working directory is decided in one place (`resolveAttemptCwd`), which is
+where a per-attempt workspace hooks in. Holds, retry counts and spawn counts are
+deliberately *not* on the record — they describe the task across attempts and
+must survive one ending. Surfaces read an attempt through `getAttempt` /
+`getAttemptSession`; `activeSessionMap` is derived from it. Runner session ids
+are unique per spawn for the same reason: a retry reuses its task id, and a
+registry keyed by task let the old attempt's exit unregister the new one.
+*Avoid:* "session" for this concept — the session is the runner's process, one
+field of the attempt. Do not add another per-task map to the orchestrator for
+state that ends with the run; put it on the attempt.
+
 **The plan** — the typed, editable, diffable artifact the planner emits: an ordered
 list of tasks with per-task model, thinking effort, runner, and mode. It is data,
 not a running agent's internal state.
