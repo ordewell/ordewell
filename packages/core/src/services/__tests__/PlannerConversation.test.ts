@@ -2,8 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { createTask, type LegacyPlanState } from '../../models/Task';
 import * as sessionStore from '../../utils/sessionStore';
 import type { SessionMessage } from '../SessionMessage';
-import type { IAiService } from '../AiService';
-import { PlannerConversation, type PlannerConversationHost } from '../PlannerConversation';
+import type { ConversationTurn, IAiService } from '../AiService';
+import { ConversationBusyError, ConversationEditError, PlannerConversation, type PlannerConversationHost } from '../PlannerConversation';
 import { makeSession, testWorkspace } from './sessionTestKit';
 
 function dialoguePlan(): LegacyPlanState {
@@ -45,6 +45,7 @@ function fakeHost(ai: IAiService, plan: LegacyPlanState | null = dialoguePlan())
     opening: vi.fn().mockResolvedValue({ runners: ['claude-code'], modelsByRunner: {}, fs: {} }),
     catalog: () => ({ runners: ['claude-code'], models: {}, modes: {}, autonomousDefault: true }),
     tasks: () => [],
+    liveOutput: () => null,
     hasLiveWork: () => false,
     mutate: (op, notify) => {
       if (!state.plan || !op()) return null;
@@ -116,6 +117,141 @@ describe('PlannerConversation transcript', () => {
 
     expect(conversation.restore(snap)).toBe(false);
     expect(adopted.conversationHistory).toEqual([]);
+  });
+});
+
+function threeTurnPlan(): LegacyPlanState {
+  return {
+    ...dialoguePlan(),
+    conversationHistory: [
+      { role: 'user', content: 'build me a parser', timestamp: '2026-01-01T00:00:00Z' },
+      { role: 'assistant', content: 'Which file formats?', timestamp: '2026-01-01T00:00:01Z' },
+      { role: 'user', content: 'JSON only', timestamp: '2026-01-01T00:00:02Z' },
+      { role: 'assistant', content: 'Streaming or not?', timestamp: '2026-01-01T00:00:03Z' },
+      { role: 'user', content: 'Streaming', timestamp: '2026-01-01T00:00:04Z' },
+      { role: 'assistant', content: 'Plan generated with 2 tasks.', timestamp: '2026-01-01T00:00:05Z', kind: 'plan_generated' },
+    ],
+    researchLog: [
+      { id: 'up-1', type: 'user_prompt', content: 'build me a parser', timestamp: '2026-01-01T00:00:00Z' },
+      { id: 'up-2', type: 'user_prompt', content: 'JSON only', timestamp: '2026-01-01T00:00:02Z' },
+      { id: 'up-3', type: 'user_prompt', content: 'Streaming', timestamp: '2026-01-01T00:00:04Z' },
+    ],
+  };
+}
+
+describe('PlannerConversation rewind', () => {
+  it('truncates to just before the chosen user message, persists once, and drops the live context', async () => {
+    const ai = fakeAi();
+    const { conversation, state, host } = fakeHost(ai, threeTurnPlan());
+
+    conversation.rewind(2);
+
+    expect(state.plan!.conversationHistory!.map((m) => m.content)).toEqual(['build me a parser', 'Which file formats?']);
+    expect(state.plan!.researchLog!.map((e) => e.id)).toEqual(['up-1']);
+    expect(state.persists).toBe(1);
+    expect(host.broadcastPlan).toHaveBeenCalled();
+    expect(ai.reset).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('PlannerConversation rewind refusals', () => {
+  it.each([
+    ['the opening goal', 0],
+    ['an assistant message', 3],
+    ['a position past the end', 9],
+  ])('refuses %s and leaves the dialogue and the live context alone', (_label, index) => {
+    const ai = fakeAi();
+    const { conversation, state } = fakeHost(ai, threeTurnPlan());
+
+    expect(() => conversation.rewind(index)).toThrow(ConversationEditError);
+
+    expect(state.plan!.conversationHistory).toHaveLength(6);
+    expect(state.persists).toBe(0);
+    expect(ai.reset).not.toHaveBeenCalled();
+  });
+
+  it('refuses while a planner turn is in flight, then allows it once the turn settles', async () => {
+    let finish: (turn: ConversationTurn) => void = () => {};
+    const ai = fakeAi({ continueConversation: vi.fn(() => new Promise<ConversationTurn>((resolve) => { finish = resolve; })) });
+    const { conversation } = fakeHost(ai, threeTurnPlan());
+
+    const turn = conversation.reply('Also CSV');
+    expect(conversation.isTurnInFlight).toBe(true);
+    expect(() => conversation.rewind(2)).toThrow(ConversationBusyError);
+
+    finish({ kind: 'message', text: 'Noted', researchLog: [] });
+    await turn;
+    expect(conversation.isTurnInFlight).toBe(false);
+    expect(() => conversation.rewind(2)).not.toThrow();
+  });
+
+  it('clears the in-flight flag when a turn fails', async () => {
+    const ai = fakeAi({ continueConversation: vi.fn().mockRejectedValue(new Error('transport down')) });
+    const { conversation } = fakeHost(ai, threeTurnPlan());
+
+    await expect(conversation.reply('Also CSV')).rejects.toThrow('transport down');
+
+    expect(conversation.isTurnInFlight).toBe(false);
+  });
+});
+
+describe('PlannerConversation clone', () => {
+  it('copies the dialogue record without sharing it, and leaves the live context alone', () => {
+    const ai = fakeAi();
+    const { conversation, state } = fakeHost(ai, threeTurnPlan());
+
+    const copy = conversation.clone();
+    conversation.append('user', 'after the fork', { timestamp: '2026-01-01T00:00:06Z' });
+    state.plan!.conversationHistory![0].content = 'edited in place';
+    state.plan!.researchLog![0].timestamp = 'edited in place';
+
+    expect(copy.conversationHistory.map((m) => m.content)).toEqual([
+      'build me a parser', 'Which file formats?', 'JSON only', 'Streaming or not?', 'Streaming', 'Plan generated with 2 tasks.',
+    ]);
+    expect(copy.conversationHistory[5].kind).toBe('plan_generated');
+    expect(copy.researchLog.map((e) => [e.id, e.timestamp])).toEqual([
+      ['up-1', '2026-01-01T00:00:00Z'], ['up-2', '2026-01-01T00:00:02Z'], ['up-3', '2026-01-01T00:00:04Z'],
+    ]);
+    expect(ai.reset).not.toHaveBeenCalled();
+  });
+
+  it('refuses while a planner turn is in flight', async () => {
+    let finish: (turn: ConversationTurn) => void = () => {};
+    const ai = fakeAi({ continueConversation: vi.fn(() => new Promise<ConversationTurn>((resolve) => { finish = resolve; })) });
+    const { conversation } = fakeHost(ai, threeTurnPlan());
+
+    const turn = conversation.reply('Also CSV');
+    expect(() => conversation.clone()).toThrow(ConversationBusyError);
+
+    finish({ kind: 'message', text: 'Noted', researchLog: [] });
+    await turn;
+  });
+});
+
+describe('PlannerConversation rewind targets', () => {
+  it('lists every user message after the opening goal, with its transcript index and a one-line preview', () => {
+    const plan = threeTurnPlan();
+    plan.conversationHistory![4] = { role: 'user', content: 'Streaming\nand also resumable', timestamp: '2026-01-01T00:00:04Z' };
+    const { conversation } = fakeHost(fakeAi(), plan);
+
+    expect(conversation.rewindTargets()).toEqual([
+      { index: 2, preview: 'JSON only', timestamp: '2026-01-01T00:00:02Z' },
+      { index: 4, preview: 'Streaming', timestamp: '2026-01-01T00:00:04Z' },
+    ]);
+  });
+
+  it('shortens a long message to a fixed-width preview', () => {
+    const plan = threeTurnPlan();
+    plan.conversationHistory![2] = { role: 'user', content: 'x'.repeat(200), timestamp: '2026-01-01T00:00:02Z' };
+    const { conversation } = fakeHost(fakeAi(), plan);
+
+    expect(conversation.rewindTargets()[0].preview).toBe(`${'x'.repeat(79)}…`);
+  });
+
+  it('is empty with no plan', () => {
+    const { conversation } = fakeHost(fakeAi(), null);
+
+    expect(conversation.rewindTargets()).toEqual([]);
   });
 });
 

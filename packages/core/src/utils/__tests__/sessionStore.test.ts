@@ -44,6 +44,28 @@ describe('sessionStore', () => {
       expect(loaded).not.toBeNull();
       expect(loaded!.plan.runners).toEqual(['claude-code', 'opencode']);
     });
+
+    it('keeps two sessions apart that share a goal and a creation second', () => {
+      const plan = { ...createEmptyPlan(), runners: ['claude-code'], tasks: [], generatedAt: '2026-01-01T00:00:00.000Z' };
+
+      saveSession(plan, 'Same goal', tmpDir, 'session-aaaaaaaaaaaaaaaa');
+      saveSession(plan, 'Same goal', tmpDir, 'session-bbbbbbbbbbbbbbbb');
+
+      expect(listSessions(tmpDir).map((m) => m.id).sort()).toEqual(['session-aaaaaaaaaaaaaaaa', 'session-bbbbbbbbbbbbbbbb']);
+    });
+
+    it('rewrites a session saved under the older file name instead of leaving a duplicate', () => {
+      const plan = { ...createEmptyPlan(), runners: ['claude-code'], tasks: [], generatedAt: '2026-01-01T00:00:00.000Z' };
+      const sessionsDir = path.join(tmpDir, '.ordewell', 'sessions');
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      const legacy = path.join(sessionsDir, '2026-01-01T00-00-00_same-goal_session-.json');
+      fs.writeFileSync(legacy, JSON.stringify({ meta: { id: 'session-aaaaaaaaaaaaaaaa', goal: 'Same goal', runners: ['claude-code'], taskCount: 0, status: 'draft', createdAt: plan.generatedAt, updatedAt: plan.generatedAt }, plan }));
+
+      saveSession({ ...plan, status: 'approved' }, 'Same goal', tmpDir, 'session-aaaaaaaaaaaaaaaa');
+
+      expect(fs.readdirSync(sessionsDir).filter((f) => f.endsWith('.json'))).toHaveLength(1);
+      expect(loadSession('session-aaaaaaaaaaaaaaaa', tmpDir)!.plan.status).toBe('approved');
+    });
   });
 
   describe('state-directory ignore file', () => {
