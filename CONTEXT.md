@@ -424,18 +424,28 @@ block is short-fields-only by design (title, status, runner, model, mode,
 deps — never a task's `prompt`, `userSteps`, `verdict`, `outputSummary`, or
 `userStoriesCovered`), so a query is how the planner reads what the block
 leaves out before rewriting it, instead of fabricating content it never saw.
-`PlannerConversation` answers it — from live state, never persisted to
-`conversationHistory` — in its own loop *before* `repairLoop`, so a read never
-spends the corrective-retry budget a fumbled edit is owed, and *before* the
-live-execution queue gate, so a read still lands mid-run (it mutates nothing).
-Budgeted per user turn: three reads before every answer also nudges the model
-to land the turn, six before the loop stops answering and returns a message
-turn instead; a repeated identical query (`taskQuerySignature`) is treated as
-already at the soft cap. `catalog: true` needs no plan yet, so it is legal on
-the very first planning turn.
+`PlannerConversation.drainTaskQueries` answers it — from live state, never
+persisted to `conversationHistory` — in its own loop *before* `repairLoop`, so
+a read never spends the corrective-retry budget a fumbled edit is owed, and
+*before* the live-execution queue gate, so a read still lands mid-run (it
+mutates nothing). One field reads execution state: `output` (with top-level
+`outputLines`, default 80 capped at 400, and `outputSince`, a previous
+answer's next offset) returns the clean-rendered tail of a task that is
+running right now, from `TaskOrchestrator.getLiveOutput` through the
+conversation host — the planner's way to diagnose a stuck task mid-execution.
+An ended task is pointed at its `outputSummary`/`verdict` instead. The answer
+is kept within a character budget, trimming the tail's oldest lines and saying
+so. Budgeted per user turn: three reads before every answer also nudges the
+model to land the turn, six before the loop stops answering and returns a
+message turn instead; a repeated identical query (`taskQuerySignature`) is
+treated as already at the soft cap. `catalog: true` needs no plan yet, so it is
+legal on the very first planning turn.
 *Avoid:* inlining full task bodies into the per-turn plan block to sidestep
 this — that is the token cost the channel exists to avoid paying on every
-turn regardless of whether the turn needs it.
+turn regardless of whether the turn needs it. *Avoid:* disclosing task log
+file paths to the planner as a second read mechanism — it would carve `.ordewell/`
+out of ADR-0008's path confinement and put the read outside the query budget;
+the envelope read is bounded by construction.
 
 **Webview modals are host modals** — `window.confirm`/`alert`/`prompt` are inert
 in a VS Code webview: it is sandboxed without `allow-modals`, so Chromium ignores

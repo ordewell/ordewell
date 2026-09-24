@@ -168,3 +168,45 @@ than cached or replayed.
   way to escape (T5) — the alternative of simply cutting the model off was
   rejected for the reason ADR-0008 already established for `bash`: an
   unanswered request is worse than an answered one that comes with a nudge.
+
+## Live output field
+
+**Amended 2026-09-24.** A query's `fields` may now include `output`: the
+recent clean-rendered tail of a task that is running right now, answered from
+`TaskOrchestrator.getLiveOutput` (the in-memory capture every runner session
+feeds; the same render the VS Code task card reads). The query carries two
+top-level options — `outputLines` (default 80, hard cap 400) and `outputSince`
+(an offset a previous answer's `nextOffset` reported, so a follow-up read
+covers only what came after it) — and the answer is kept within a character
+budget, with an over-long tail trimmed from its oldest lines and the trim
+stated. A task that is not running is answered with a pointer to its
+`outputSummary` and `verdict` instead of a stale tail, because those fields
+already own how an attempt ended. The protocol prose (`TASK_QUERY_PROTOCOL`)
+teaches the field and names its use: diagnosing a task that looks stuck
+mid-execution, before the planner spends a turn guessing or re-prompting the
+user.
+
+Two things this amendment deliberately does not do:
+
+- **ADR-0008's envelope is unchanged.** No new tool, no new path, no path
+  carve-out. The read rides the existing task-query text envelope, so it
+  works identically for native and harness planners (T1), answers through the
+  same budget machinery (T4), and hands the planner only output Ordewell
+  itself captured — nothing on the filesystem the planner's confined
+  `bash`/`read_file` surface would otherwise reach.
+- **The file-path approach from issue #3 was rejected.** Disclosing a per-task
+  log file's path to harness planners (the issue's pragmatic path) would have
+  (a) pointed a confined planner at `.ordewell/`, an explicit carve-out of
+  ADR-0008's path confinement that needed its own stated decision and would
+  have leaked log paths to a model that then reads them with its own un-audited
+  tools; (b) made headless output diverge from tmux output, since the in-memory
+  capture is the one source that exists for every runner; and (c) put the read
+  outside the query budget, which is what keeps a planner from paging output
+  forever on the user's tokens. The envelope answer is bounded by construction;
+  the file answer was bounded only by convention.
+
+The `nextOffset` in an answer is the total output received so far, so a
+planner that pages with `outputSince` never re-reads; lines older than the
+tail's line cap (or trimmed for budget) are not recoverable through this
+channel — the tail read is a diagnostic window, not a log archive, and
+`outputSummary.logTail` remains the durable record.

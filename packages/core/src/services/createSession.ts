@@ -300,6 +300,7 @@ export class Session {
         };
       },
       tasks: () => this.store.planTasks,
+      liveOutput: (taskId, opts) => this.orchestrator.getLiveOutput(taskId, opts),
       hasLiveWork: () => this.hasLiveWork,
       mutate: (op, notify) => this.mutatePlan(op, notify),
       broadcast: (msg) => this.broadcast(msg),

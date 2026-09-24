@@ -1,6 +1,6 @@
 import type { ConversationRequest, ConversationTurn, IAiService } from './AiService';
 import { repairLoop, taskOpsRejectedPrompt } from './PlanRepair';
-import { renderTaskQueryAnswer, taskQuerySignature, TASK_QUERY_ANSWER_OR_OPS, TASK_QUERY_REMINDER, type TaskQuery, type TaskQueryCatalog } from './TaskQuery';
+import { renderTaskQueryAnswer, taskQuerySignature, TASK_QUERY_ANSWER_OR_OPS, TASK_QUERY_REMINDER, type LiveOutputLookup, type TaskQuery, type TaskQueryCatalog } from './TaskQuery';
 import { taskOpsProtocol, type ApplyTaskOpsResult, type TaskOp } from './TaskOps';
 import { resolveDefaultMode } from './ModeResolver';
 import type { SessionBroadcaster } from './SessionMessage';
@@ -62,6 +62,12 @@ export interface PlannerConversationHost {
   /** What the per-turn catalog block and every read draw from, as of now. */
   catalog(): TaskQueryCatalog;
   tasks(): Task[];
+  /**
+   * The orchestrator's live capture for a task's latest attempt, backing the
+   * `output` field of a read. Injected the same way as the catalog so the
+   * conversation never reaches into execution state directly.
+   */
+  liveOutput: LiveOutputLookup;
   hasLiveWork(): boolean;
   /** The session's single mutation ritual: op → persist → notify (default: the plan). */
   mutate(op: () => boolean, notify?: () => void): LegacyPlanState | null;
@@ -351,7 +357,7 @@ export class PlannerConversation {
    * later turn is exactly the cost this channel exists to avoid.
    */
   private taskQueryAnswer(query: TaskQuery): string {
-    return renderTaskQueryAnswer(query, this.host.tasks(), this.host.catalog());
+    return renderTaskQueryAnswer(query, this.host.tasks(), this.host.catalog(), this.host.liveOutput);
   }
 
   /**

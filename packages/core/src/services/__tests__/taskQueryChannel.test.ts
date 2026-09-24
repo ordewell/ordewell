@@ -1,7 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createTask, type LegacyPlanState } from '../../models/Task';
-import { makeSession, testWorkspace } from './sessionTestKit';
-import type { ConversationTurn } from '../AiService';
+import { makeSession, testWorkspace, FakeTerminalSession, fakeConfig } from './sessionTestKit';
+import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
+import { CliAgentAiService } from '../harness/CliAgentAiService';
+import { fakeSpawn, fixture } from './harnessTestKit';
+import type { ConversationTurn, IAiService } from '../AiService';
 
 /**
  * A plan whose long fields are exactly what the per-turn plan block leaves out:
@@ -306,5 +309,102 @@ describe('the task-query read channel', () => {
     expect(session.queuedCount).toBe(1);
     const last = plan.conversationHistory![plan.conversationHistory!.length - 1];
     expect(last.content).toMatch(/queued your change/i);
+  });
+
+  // The live tail comes from the orchestrator's own capture — the same source
+  // the VS Code task card reads — so both planner backends see what a user sees.
+  it('answers an output read for a running task from the live capture, then pages from its offset', async () => {
+    const taskOutput = new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } });
+    let capture: FakeTerminalSession | null = null;
+    const continueConversation = vi.fn()
+      .mockResolvedValueOnce(read({ tasks: ['#2'], fields: ['output'] }))
+      .mockImplementationOnce(async () => {
+        capture?.emitOutput('second\nthird\n');
+        return read({ tasks: ['#2'], fields: ['output'], outputSince: 6 });
+      })
+      .mockResolvedValueOnce({ kind: 'message', text: 'ok', researchLog: [] });
+    const session = makeSession({
+      aiService: { continueConversation, hasActiveConversation: () => true },
+      taskOutput,
+    });
+    session.loadPlan(planWithBodies(), 'build it', testWorkspace, { persist: false });
+
+    // Adopting a plan resets the captures (a new plan reuses task ids), so the
+    // fake capture attaches after load, the way a spawned runner would.
+    capture = new FakeTerminalSession('s1', 'b');
+    taskOutput.attach('b', capture);
+    capture.emitOutput('first\n');
+
+    await session.continueConversation('what is task 2 printing?');
+
+    const first = sent(continueConversation, 1);
+    const second = sent(continueConversation, 2);
+    expect(first).toContain('first');
+    expect(first).toContain('pass offset 6');
+    expect(second).toContain('second');
+    expect(second).toContain('third');
+    expect(second).toContain('pass offset 19');
+    expect(second).not.toContain('first');
+  });
+
+  it('answers an output read for a task that has not run without pretending it did', async () => {
+    const continueConversation = vi.fn()
+      .mockResolvedValueOnce(read({ tasks: ['#2'], fields: ['output'] }))
+      .mockResolvedValueOnce({ kind: 'message', text: 'ok', researchLog: [] });
+    const session = makeSession({
+      aiService: { continueConversation, hasActiveConversation: () => true },
+    });
+    session.loadPlan(planWithBodies(), 'build it', testWorkspace, { persist: false });
+
+    await session.continueConversation('what is task 2 doing?');
+
+    expect(sent(continueConversation, 1)).toContain('no captured output');
+  });
+
+  // The channel is a text envelope precisely so a harness planner (ADR-0009) —
+  // a subprocess Ordewell owns no tool loop for — reads the same answer.
+  it('gives a harness planner the same output answer over the text protocol', async () => {
+    const taskOutput = new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } });
+    const query = JSON.stringify({ taskQuery: { tasks: ['#2'], fields: ['output'] } });
+    const spawned = fakeSpawn([
+      fixture('claude-code', 'plan', { PLAN: query }),
+      fixture('claude-code', 'prose'),
+    ]);
+    const svc = new CliAgentAiService(
+      fakeConfig({ aiProvider: 'claude-code' }),
+      {
+        spawn: spawned.spawn,
+        fetch: (async () => { throw new Error('no HTTP in this test'); }) as unknown as typeof fetch,
+        resolvePath: async () => '/usr/bin',
+        workspaceRoot: () => '/repo',
+        platform: 'linux',
+        isDirectory: () => true,
+        exists: () => true,
+      },
+    );
+    // Forward the four conversation verbs; the rest of IAiService is unused on
+    // the conversational path. Forwarding keeps the real adapter's parsing in
+    // the loop instead of a mock that would answer by construction.
+    const ai: IAiService = {
+      startConversation: (req) => svc.startConversation(req),
+      continueConversation: (msg, onProgress, signal) => svc.continueConversation(msg, onProgress, signal),
+      hasActiveConversation: () => svc.hasActiveConversation(),
+      reset: () => svc.reset(),
+    } as IAiService;
+    const session = makeSession({ aiService: ai, taskOutput });
+    session.loadPlan(planWithBodies(), 'build it', testWorkspace, { persist: false });
+
+    const capture = new FakeTerminalSession('s1', 'b');
+    taskOutput.attach('b', capture);
+    capture.emitOutput('compiling\nlinking\n');
+
+    await session.continueConversation('is task 2 stuck?');
+
+    const written = spawned.processes[0].written;
+    expect(written.length).toBeGreaterThanOrEqual(2);
+    const answer = JSON.parse(written[1]) as { message: { content: { text: string }[] } };
+    expect(answer.message.content[0].text).toContain('compiling');
+    expect(answer.message.content[0].text).toContain('linking');
+    expect(answer.message.content[0].text).toContain('pass offset 18');
   });
 });

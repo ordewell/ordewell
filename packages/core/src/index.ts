@@ -72,8 +72,9 @@ export type { TaskOp, ApplyTaskOpsResult, TaskRef } from './services/TaskOps';
 export {
   parseTaskQueryJson, textHasTaskQuery, taskQuerySignature, renderTaskQueryAnswer,
   TASK_QUERY_FIELDS, TASK_QUERY_PROTOCOL, TASK_QUERY_REMINDER, TASK_QUERY_ANSWER_OR_OPS,
+  OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX, TASK_QUERY_ANSWER_MAX_CHARS,
 } from './services/TaskQuery';
-export type { TaskQuery, TaskQueryField, TaskQueryCatalog } from './services/TaskQuery';
+export type { TaskQuery, TaskQueryField, TaskQueryCatalog, LiveOutputLookup } from './services/TaskQuery';
 export { Session, PlanEditError, sessionRuntimeSettings, resolveSkillInvocation } from './services/createSession';
 export type { SessionDeps, SessionRuntimeSettings, SessionPlanner } from './services/createSession';
 export {
