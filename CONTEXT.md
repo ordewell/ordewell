@@ -107,6 +107,13 @@ plus the four planner streaming variants (`plan_token`, `plan_thinking`,
 into a surface. Surfaces adapt it to their own presentation protocol (VS Code:
 `PlannerStreamRouter` → webview messages; web: raw JSON over WS) but never
 re-map `ResearchProgress` themselves.
+Isolated execution (ADR-0013) travels on it too: each `status_update` task
+carries `isolation` (`state: none | active | integrated | conflict | kept`, plus
+its branch and worktree) — absent altogether while the plan has no isolation
+run, so a shared-root plan's updates are exactly what they were;
+`isolation_blocked` says a run did not start on a dirty tree; and
+`isolation_handoff` (integration branch, base ref, landed tasks) is sent when an
+isolated run settles, *before* `execution_complete`.
 *Avoid:* "event", "progress callback" for this concept — and do not add a
 per-call progress override; the broadcast seam is the only channel.
 
@@ -231,8 +238,10 @@ duplication is exactly what this module deleted.
 task, from the moment the scheduler claims it to the moment it ends. It holds
 everything that has to die with the run: the attempt number, the phase
 (`starting` while the async spawn is in flight, `running` once the runner is
-up), the live `ITerminalSession`, and the runner, working directory and start
-time the transcript reader needs at verdict time. The orchestrator keeps one
+up, `integrating` while a passed verdict's worktree merges), the live
+`ITerminalSession`, and the runner, working directory and start
+time the transcript reader needs at verdict time — plus, in an isolated run,
+whether that directory is its worktree and the merge in flight. The orchestrator keeps one
 `Map<taskId, TaskAttempt>`, and every way a run ends — verdict, cancel, release,
 mark complete, retry, a failed spawn, stop, plan load — goes through the one
 `endAttempt`, which also clears the verifier state an interrupted run leaves
@@ -244,8 +253,11 @@ complete. A verdict obeys the same identity rule: the attempt stays live while
 its summary is read, and the verdict lands only if that attempt is still the
 task's current one, so a cancel, retry, mark complete, stop or plan load in that
 window is never overwritten by a stale verdict.
-The working directory is decided in one place (`resolveAttemptCwd`), which is
-where a per-attempt workspace hooks in. Holds, retry counts and spawn counts are
+The working directory is decided in one place (`resolveAttemptCwd`): the
+workspace root, or in an isolated run the worktree `WorktreeIsolation.prepare`
+made for the attempt. A passed verdict keeps the attempt live through its merge,
+so the task completes — and frees its dependents — only once its work is on the
+integration branch. Holds, retry counts and spawn counts are
 deliberately *not* on the record — they describe the task across attempts and
 must survive one ending. Surfaces read an attempt through `getAttempt` /
 `getAttemptSession`; `activeSessionMap` is derived from it. Runner session ids
@@ -305,6 +317,25 @@ branch name and each task's branch, worktree and status. It is plain JSON so it
 can persist with the plan state, and a new run mints a new record. Task ids are
 only unique within one plan, so every operation that acts on a task takes the run
 it belongs to.
+It persists as `LegacyPlanState.isolation` (`{ run, resolvers }`), written from
+the orchestrator at persist time and saved whenever it changes; adopting a saved
+plan prunes the run's orphans. A plan's record is *continued* rather than
+replaced while anything has landed on it — a resumed plan's dependents need
+their predecessors' work, which a fresh branch from the checked-out commit does
+not have — and a record with nothing landed is discarded whole when the next run
+mints its own. The field belongs to one plan: a fork must not copy it.
+
+**Isolation handoff** — the end of an isolated run: the integration branch, the
+base ref and the tasks that landed, broadcast as `isolation_handoff`. What
+follows is the user's: `reviewRunDiff`, `mergeRun` (a normal `git merge` into the
+checked-out branch, only ever on that explicit call), `cleanupRun` (worktrees and
+task branches go, the integration branch stays) and `discardRun` (everything
+goes, and the plan forgets the run; task statuses are left as they are). A
+conflicted task leaves by a hand resolution plus Mark complete, a retry, or
+`resolveConflictAsTask` — an added task that merges the branch by hand and
+through whose landing the conflicted task lands.
+*Avoid:* "result", "output branch" for the handoff — it is a branch to review,
+not an outcome.
 
 **The plan** — the typed, editable, diffable artifact the planner emits: an ordered
 list of tasks with per-task model, thinking effort, runner, and mode. It is data,

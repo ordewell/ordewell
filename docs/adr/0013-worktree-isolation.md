@@ -135,5 +135,89 @@ the surfaces is separate work.
 - Git hooks run on the per-task and merge commits as they would for the user.
   A hook that assumes a single worktree fails the commit, the task lands
   `failed` with its refs kept, and the user can opt out.
-- Not yet true, by design: the orchestrator does not use the module, nothing is
-  persisted, and no surface shows isolation state. Those follow.
+- Not yet true when this was accepted: the orchestrator did not use the module
+  and nothing was persisted. See the update below; no surface shows isolation
+  state yet beyond a one-line notice when a dirty tree blocks a run.
+
+## Update (2026-09-25) — wired into the orchestrator, Session and planner prompt
+
+The orchestrator now executes through the module. What that took, where the
+first draft of the wiring was wrong, and what was chosen instead:
+
+- **Integration happens inside the attempt.** A passed verdict does not end the
+  attempt: it moves to an `integrating` phase and the task stays `in_progress`
+  until the merge answers. Only `merged` completes it, so "a dependent waits for
+  its predecessor to be *integrated*" is not a second rule in `getReadyTasks`
+  but what `completed` means in an isolated run (`dependencyMet` states it
+  anyway, for completions that did not come from a verdict). Keeping the attempt
+  live also keeps the identity rule: a cancel, retry or stop during the merge
+  wins, and waits for the merge before it tears the worktree down.
+- **`merged` does not call `release`.** `integrate` already removes a merged
+  task's worktree and branch and keeps its record, which is what the handoff's
+  `landed` list is read from. A `release(…, { keep: false })` after it — the
+  obvious wiring — would drop that record and the task would vanish from the
+  handoff it landed in.
+- **The other outcomes.** `conflict` → the task is `awaiting_user`, worktree
+  and refs kept, dependents wait. `failed` (git refused, e.g. a hook) → the task
+  is `failed` and the run halts exactly as for a failed verdict, refs kept. A
+  failed verdict and a stop keep the worktree (`keep: true`); cancel, retry,
+  removal from the plan and a failed spawn remove it. A retry prepares afresh
+  from the integration tip when it next starts. Mark complete is a passed
+  verdict the user vouches for, so it integrates too — the way out of a stuck
+  task whose work is sitting in its worktree, and of a conflict resolved by hand.
+- **A run continues the plan's record while anything has landed on it.** "A new
+  run mints a new record" was the plan, and it is wrong for a resumed plan: after
+  a failure, the next Execute preserves completed tasks, and a fresh integration
+  branch cut from the checked-out commit would hand their dependents a tree
+  without the work they depend on. So a run continues the plan's `IsolationRun`
+  (same integration branch, same base ref) while it has a `merged` task; a
+  record with nothing landed holds only superseded attempts and is discarded
+  whole before a new one is minted. `discardRun` is how a user starts over.
+- **Activation.** A run starts (Execute Plan, Run task, or Force start with
+  nothing running) by asking `isActive`. `not-git`, `git-missing`, `no-commits`
+  and `disabled` run in the workspace root with one notice. `dirty` does not
+  start: an `isolation_blocked` message goes out, and the start is parked until
+  `Session.continueWithStash` (a `git stash push`, through the module like every
+  other git operation) or `Session.continueWithoutIsolation` (this run only) replays it.
+  Continuing a run on a dirty tree is not blocked — its base is already fixed,
+  so the user's edits could not reach it either way.
+- **Handoff before completion.** When an isolated run settles, `handoff` runs and
+  `isolation_handoff` is broadcast *before* `execution_complete`: the TUI closes
+  its execution stream on the latter, so anything after it is lost.
+- **Persistence.** `LegacyPlanState.isolation` holds `{ run, resolvers }`,
+  written from the orchestrator at persist time like `tasks`, and saved on every
+  change to it rather than at the end of the run — the record is what lets a
+  crashed process's worktrees be found again. Adopting a saved plan prunes
+  orphans without persisting: VS Code's restore adopts with `persist: false`,
+  and a write there would fork a new session file on every reload. A fork of a
+  plan must not carry the field; the branches it names belong to one plan.
+- **Resolve as a task.** `resolveConflictAsTask` adds an AI task on the
+  conflicted task's runner and model whose prompt is to `git merge --no-ff` the
+  conflicted branch in its own worktree (which starts at the integration tip)
+  and resolve it. When that task lands, the conflicted task is integrated again
+  through the same queue: its branch is an ancestor by then, so it merges clean
+  — and if the resolver did not really bring it along, it conflicts again rather
+  than being taken at its word. Nothing adds the task but the explicit call.
+- **Discard does not rewrite the plan.** Discarding a run leaves completed tasks
+  completed. Whether their work was kept (merged by hand, or with `mergeRun`)
+  is something only the user knows; Mark not done is how they say it was not.
+- **The planner is told.** `PlannerModes.isolatedExecution` (one-shot and
+  mid-run edits) and `ConversationVariant.isolatedExecution` (the conversation)
+  swap the overlap-avoidance rule for one that allows same-file parallelism and
+  keeps dependencies for genuine ordering. The shared-workspace text is
+  unchanged, word for word. A dirty tree counts as *not* isolating: the user may
+  still choose to run without isolation, and the ordering rule is the safe one then.
+- **Transcripts in a worktree.** Claude Code names its transcript directory
+  after the cwd with every non-alphanumeric turned into `-`. The reader only
+  replaced `/` and `_`, which never mattered until the cwd was under
+  `.ordewell/`; it now matches Claude Code's rule, so a worktree task's summary
+  comes from its transcript rather than the terminal render.
+- **A checkpoint needs a live attempt.** A conflicted task is `awaiting_user` like
+  a checkpoint is. Approving or rejecting a checkpoint with no attempt behind it
+  is now ignored; before, it would have put the conflicted task back to
+  `in_progress` with no runner.
+- **Tests do not run git by accident.** `fakeConfig` now has
+  `worktreeIsolation: false`. An orchestrator built without an injected
+  isolation falls back to git, and the suites run inside this repository; with
+  the setting on, they would have created worktrees in it.
+
