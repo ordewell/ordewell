@@ -44,6 +44,36 @@ describe('BaseConfig', () => {
     });
   });
 
+  describe('worktree isolation', () => {
+    const keys = ['ORDEWELL_WORKTREE_ISOLATION', 'ORDEWELL_WORKTREE_SETUP'];
+    const backup: Record<string, string | undefined> = {};
+    beforeEach(() => { for (const k of keys) { backup[k] = process.env[k]; delete process.env[k]; } });
+    afterEach(() => { for (const k of keys) { if (backup[k] !== undefined) process.env[k] = backup[k]; else delete process.env[k]; } });
+
+    it('is on by default with no setup command', () => {
+      const config = new TestConfig();
+      expect(config.worktreeIsolation).toBe(true);
+      expect(config.worktreeSetupCommand).toBeUndefined();
+    });
+
+    it.each(['false', '0'])('ORDEWELL_WORKTREE_ISOLATION=%s turns it off', (value) => {
+      process.env.ORDEWELL_WORKTREE_ISOLATION = value;
+      expect(new TestConfig().worktreeIsolation).toBe(false);
+    });
+
+    it('ORDEWELL_WORKTREE_ISOLATION=true keeps it on', () => {
+      process.env.ORDEWELL_WORKTREE_ISOLATION = 'true';
+      expect(new TestConfig().worktreeIsolation).toBe(true);
+    });
+
+    it('reads the setup command from ORDEWELL_WORKTREE_SETUP and ignores blanks', () => {
+      process.env.ORDEWELL_WORKTREE_SETUP = 'npm ci';
+      expect(new TestConfig().worktreeSetupCommand).toBe('npm ci');
+      process.env.ORDEWELL_WORKTREE_SETUP = '   ';
+      expect(new TestConfig().worktreeSetupCommand).toBeUndefined();
+    });
+  });
+
   describe('provider detection & key resolution', () => {
     const keys = ['AI_PROVIDER', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'GEMINI_BASE_URL'];
     const backup: Record<string, string | undefined> = {};

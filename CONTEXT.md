@@ -245,6 +245,57 @@ registry keyed by task let the old attempt's exit unregister the new one.
 field of the attempt. Do not add another per-task map to the orchestrator for
 state that ends with the run; put it on the attempt.
 
+**Isolated execution** — running each AI task in its own *worktree* instead of
+the shared workspace root, then integrating the results deterministically
+(ADR-0013). Available only when the workspace is a git repository with a clean
+tracked tree and `worktreeIsolation` on; otherwise every task runs in the
+workspace root exactly as before, and `WorktreeIsolation.isActive` says which
+of `disabled`, `git-missing`, `not-git`, `no-commits` or `dirty` applied. The
+Runner is only ever handed a `cwd` (ADR-0007) — git never enters
+`ITerminalRunner`, `RunnerRegistry` or a runner adapter.
+*Avoid:* "sandbox" (an OS-level runner sandbox is a separate concern, ADR-0011),
+"clone" (a worktree shares the repository's object store).
+
+**WorktreeIsolation** — the deep module owning every git and filesystem
+operation isolated execution needs: worktree creation, the artifact bootstrap,
+committing a task's work, the serialized integration merge, conflict detection,
+release, orphan pruning, and the end-of-run handoff (diff, merge, discard).
+`GitWorktreeIsolation` is the implementation; the orchestrator's tests use
+`FakeWorktreeIsolation` from `@ordewell/core/testing`, and git behavior is
+tested only against real temporary repositories.
+
+**Worktree** — a linked git checkout on its own branch, created for one task at
+`.ordewell/worktrees/<run-id>/<order>-<slug>` on branch
+`ordewell/<run-id>/<order>-<slug>`. It is where that task's Runner executes.
+Created when the task starts, removed when it integrates cleanly. A failed or
+conflicted task's worktree is kept so its work can be inspected; a retry
+discards it and starts a fresh one from the current integration tip. Ignored
+artifacts (`node_modules`, `.env*`, `.claude`, …) are linked in from the main
+worktree so it is runnable at once — never `.ordewell/`, which stays at the main
+root.
+*Avoid:* "workspace" for a worktree — the workspace is the user's checkout.
+
+**Integration branch** — `ordewell/<run-id>/integration`, the one branch a run's
+work lands on. Each task that passes its Verdict is merged into it with
+`git merge --no-ff`, one at a time, lowest plan order first among the tasks
+waiting, so the history is reproducible and each task is attributable to a merge
+commit. A merge conflict is aborted and reported, never resolved for the user
+and never by a model. It is never merged into the checked-out branch until the
+user asks; it survives a discarded run until it is explicitly given up.
+*Avoid:* "result branch", "staging branch".
+
+**Base ref** — the commit the user's checked-out branch pointed at when a run
+started, resolved once at that moment. The integration branch forks from it and
+the review diff is taken against it, so switching or advancing the user's branch
+mid-run does not retarget the run.
+
+**Isolation run** — one Execute-Plan click or one manual task run's worth of
+isolation: the `IsolationRun` record holding the run id, base ref, integration
+branch name and each task's branch, worktree and status. It is plain JSON so it
+can persist with the plan state, and a new run mints a new record. Task ids are
+only unique within one plan, so every operation that acts on a task takes the run
+it belongs to.
+
 **The plan** — the typed, editable, diffable artifact the planner emits: an ordered
 list of tasks with per-task model, thinking effort, runner, and mode. It is data,
 not a running agent's internal state.

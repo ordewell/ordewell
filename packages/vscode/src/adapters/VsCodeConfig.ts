@@ -228,6 +228,11 @@ export class VsCodeConfig extends BaseConfig {
   get researchMaxSteps() { return this.config.get<number>('researchMaxSteps', 48); }
   get researchMaxFileSize() { return this.config.get<number>('researchMaxFileSize', 10); }
   get autonomousMode() { return this.config.get<boolean>('autonomousMode', true); }
+  get worktreeIsolation() {
+    if (process.env.ORDEWELL_WORKTREE_ISOLATION !== undefined) return super.worktreeIsolation;
+    return this.config.get<boolean>('worktreeIsolation', true);
+  }
+  get worktreeSetupCommand() { return this.config.get<string>('worktreeSetupCommand', '').trim() || super.worktreeSetupCommand; }
 
   async update(key: string, value: unknown): Promise<void> {
     await this.config.update(key, value, true);

@@ -1,6 +1,14 @@
 import type { IConfig } from './interfaces/IConfig';
 import type { IFileSystem, ToolOutcome } from './interfaces/IFileSystem';
 import type { ITerminalSession } from './interfaces/ITerminalRunner';
+import type {
+  IsolationAvailability,
+  IsolationHandoff,
+  IsolationOutcome,
+  IsolationRun,
+  IWorktreeIsolation,
+} from './interfaces/IWorktreeIsolation';
+import type { Task } from './models/Task';
 
 export function fakeConfig(overrides: Partial<IConfig> = {}): IConfig {
   return {
@@ -23,6 +31,7 @@ export function fakeConfig(overrides: Partial<IConfig> = {}): IConfig {
     geminiModel: '',
     planMapEnabled: true,
     autonomousMode: true,
+    worktreeIsolation: true,
     approvalMode: 'ask',
     approvalPreApproved: [],
     setProviderModelLists: () => {},
@@ -73,5 +82,94 @@ export class FakeTerminalSession implements ITerminalSession {
   }
   emitExit(code: number): void {
     for (const cb of this.exitCbs) cb(code);
+  }
+}
+
+export type FakeIsolationCall =
+  | { op: 'isActive'; workspaceRoot: string }
+  | { op: 'startRun'; workspaceRoot: string }
+  | { op: 'prepare'; taskId: string }
+  | { op: 'integrate'; taskId: string }
+  | { op: 'release'; taskId: string; keep: boolean }
+  | { op: 'handoff' | 'pruneOrphans' | 'reviewDiff' | 'mergeIntoCheckedOut' }
+  | { op: 'discard'; keepIntegration: boolean };
+
+/**
+ * An in-memory {@link IWorktreeIsolation} for scheduling tests: no git, no
+ * filesystem. Every call is logged in `calls`; `prepare` hands back a
+ * deterministic fake cwd. Set `availability` to exercise the fallbacks, `outcomes`
+ * to script a conflict, and `holdIntegration` to keep a task un-integrated so a
+ * test can observe that its dependents wait.
+ */
+export class FakeWorktreeIsolation implements IWorktreeIsolation {
+  availability: IsolationAvailability = { active: true };
+  /** Per task id; a task not listed integrates as `merged`. */
+  outcomes = new Map<string, IsolationOutcome>();
+  calls: FakeIsolationCall[] = [];
+  private holds = new Map<string, Promise<void>>();
+  private runCount = 0;
+
+  private log(call: FakeIsolationCall): void { this.calls.push(call); }
+
+  /** Task ids in the order `op` was called for them. */
+  taskIdsFor(op: 'prepare' | 'integrate' | 'release'): string[] {
+    return this.calls.flatMap((c) => (c.op === op && 'taskId' in c ? [c.taskId] : []));
+  }
+
+  /** Make `integrate` for this task wait until the returned function is called. */
+  holdIntegration(taskId: string): () => void {
+    let open!: () => void;
+    this.holds.set(taskId, new Promise<void>((resolve) => { open = resolve; }));
+    return open;
+  }
+
+  async isActive(workspaceRoot: string): Promise<IsolationAvailability> {
+    this.log({ op: 'isActive', workspaceRoot });
+    return this.availability;
+  }
+
+  async startRun(workspaceRoot: string): Promise<IsolationRun> {
+    this.log({ op: 'startRun', workspaceRoot });
+    const id = `run${++this.runCount}`;
+    return { id, workspaceRoot, baseRef: 'base0000', baseBranch: 'main', integrationBranch: `ordewell/${id}/integration`, tasks: {} };
+  }
+
+  async prepare(task: Task, run: IsolationRun): Promise<{ cwd: string; branch: string }> {
+    this.log({ op: 'prepare', taskId: task.id });
+    const name = `${task.order}-${task.id}`;
+    const cwd = `/fake-worktrees/${run.id}/${name}`;
+    const branch = `ordewell/${run.id}/${name}`;
+    run.tasks[task.id] = { taskId: task.id, order: task.order, title: task.title, branch, worktree: cwd, status: 'active', linked: [] };
+    return { cwd, branch };
+  }
+
+  async integrate(task: Task, run: IsolationRun): Promise<IsolationOutcome> {
+    this.log({ op: 'integrate', taskId: task.id });
+    await this.holds.get(task.id);
+    const outcome = this.outcomes.get(task.id) ?? 'merged';
+    const record = run.tasks[task.id];
+    if (record) record.status = outcome;
+    return outcome;
+  }
+
+  async release(run: IsolationRun, taskId: string, opts: { keep: boolean }): Promise<void> {
+    this.log({ op: 'release', taskId, keep: opts.keep });
+    if (!opts.keep) delete run.tasks[taskId];
+  }
+
+  async handoff(run: IsolationRun): Promise<IsolationHandoff> {
+    this.log({ op: 'handoff' });
+    const landed = Object.values(run.tasks)
+      .filter((r) => r.status === 'merged')
+      .sort((a, b) => a.order - b.order)
+      .map((r) => ({ taskId: r.taskId, order: r.order, title: r.title }));
+    return { branch: run.integrationBranch, baseRef: run.baseRef, landed };
+  }
+
+  async pruneOrphans(): Promise<void> { this.log({ op: 'pruneOrphans' }); }
+  async reviewDiff(): Promise<string> { this.log({ op: 'reviewDiff' }); return ''; }
+  async mergeIntoCheckedOut(): Promise<IsolationOutcome> { this.log({ op: 'mergeIntoCheckedOut' }); return 'merged'; }
+  async discard(_run: IsolationRun, opts: { keepIntegration: boolean }): Promise<void> {
+    this.log({ op: 'discard', keepIntegration: opts.keepIntegration });
   }
 }
