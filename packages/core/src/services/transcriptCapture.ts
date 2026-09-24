@@ -43,7 +43,9 @@ export class HomeTranscriptReader implements TranscriptReader {
 // Each line is a typed record; assistant records carry message.content blocks.
 
 function claudeFinal(home: string, query: TranscriptQuery, maxChars: number): string | null {
-  const munged = query.cwd.replaceAll('/', '-').replaceAll('_', '-');
+  // Claude Code names the directory after the cwd with every non-alphanumeric
+  // turned into '-'. A worktree lives under `.ordewell/`, so the dot matters.
+  const munged = query.cwd.replace(/[^a-zA-Z0-9]/g, '-');
   const dir = path.join(home, '.claude', 'projects', munged);
   if (!existsSync(dir)) return null;
   const cutoff = query.startedAt ? Date.parse(query.startedAt) : 0;

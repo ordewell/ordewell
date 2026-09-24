@@ -122,6 +122,27 @@ describe('HomeTranscriptReader', () => {
     });
   });
 
+  describe('in a task worktree (ADR-0013)', () => {
+    const WORKTREE = '/repo/.ordewell/worktrees/a1b2c3d4/2-add_login';
+
+    it('finds a claude-code transcript under the directory Claude Code names after every non-alphanumeric', async () => {
+      const dir = path.join(fakeHome, '.claude', 'projects', '-repo--ordewell-worktrees-a1b2c3d4-2-add-login');
+      mkdirSync(dir, { recursive: true });
+      claudeSession(path.join(dir, 's.jsonl'), 'mk-1', 'answer from the worktree');
+
+      expect(await reader.finalAssistantText({ runner: 'claude-code', cwd: WORKTREE, marker: 'mk-1' })).toBe('answer from the worktree');
+    });
+
+    it('binds a codex rollout to the worktree, not to the workspace root', async () => {
+      const day = path.join(fakeHome, '.codex', 'sessions', '2026', '09', '25');
+      mkdirSync(day, { recursive: true });
+      codexRollout(path.join(day, 'rollout-root.jsonl'), '/repo', 'mk-1', 'from the root');
+      codexRollout(path.join(day, 'rollout-wt.jsonl'), WORKTREE, 'mk-1', 'from the worktree');
+
+      expect(await reader.finalAssistantText({ runner: 'codex', cwd: WORKTREE, marker: 'mk-1' })).toBe('from the worktree');
+    });
+  });
+
   describe('codex', () => {
     it('binds a rollout to the task cwd via session_meta and takes the last assistant message', async () => {
       const day = path.join(fakeHome, '.codex', 'sessions', '2026', '09', '22');
