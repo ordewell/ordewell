@@ -238,6 +238,32 @@ describe('TaskOrchestrator with worktree isolation', () => {
     expect(isolation.calls.filter((c) => c.op === 'startRun')).toHaveLength(1);
   });
 
+  it('hands over a manual run that ends by Mark complete rather than a verdict', async () => {
+    const { orchestrator } = setup();
+    const handoffs: unknown[] = [];
+    orchestrator.subscribe({ onIsolationHandoff: (h) => handoffs.push(h) });
+    orchestrator.loadPlan([task('t1', 1)]);
+    await orchestrator.runTask('t1');
+
+    await orchestrator.markTaskComplete('t1');
+
+    expect(handoffs).toEqual([{
+      branch: 'ordewell/run1/integration', baseRef: 'base0000', landed: [{ taskId: 't1', order: 1, title: 'Task t1' }],
+    }]);
+  });
+
+  it('decides afresh after a cancelled manual run, instead of running a discarded run in the workspace root', async () => {
+    const { orchestrator, spawn } = setup();
+    orchestrator.loadPlan([task('t1', 1)]);
+    await orchestrator.runTask('t1');
+    await orchestrator.cancelTask('t1');
+
+    await orchestrator.discardRun();
+    await orchestrator.runTask('t1');
+
+    expect(spawn.mock.calls[1][0].cwd).toBe('/fake-worktrees/run2/1-t1');
+  });
+
   describe('when isolation is unavailable', () => {
     it.each([
       ['not-git', /not a git repository/i],
@@ -442,6 +468,22 @@ describe('TaskOrchestrator with worktree isolation', () => {
       await vi.waitFor(() => expect(spawnedCwd('t2')).toBe('/fake-worktrees/run1/2-t2'));
       expect(orchestrator.isolationRecord?.resolvers).toEqual({});
     });
+
+    it('does not land a conflicted task the user retried meanwhile, whose new attempt is still running', async () => {
+      const { orchestrator, isolation, pass, sessionFor } = await conflicted();
+      const resolver = orchestrator.storeInstance.add({ title: 'Resolve', prompt: 'merge it' });
+      orchestrator.linkConflictResolver(resolver.id, 't1');
+      isolation.outcomes.set('t1', 'merged');
+      await orchestrator.retryTask('t1');
+      await vi.waitFor(() => expect(sessionFor(resolver.id)).toBeDefined());
+
+      pass(resolver);
+      await vi.waitFor(() => expect(orchestrator.storeInstance.get(resolver.id)!.status).toBe('completed'));
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(orchestrator.storeInstance.get('t1')!.status).toBe('in_progress');
+      expect(isolation.taskIdsFor('integrate')).toEqual(['t1', resolver.id]);
+    });
   });
 
   describe('a resumed plan', () => {
@@ -460,6 +502,22 @@ describe('TaskOrchestrator with worktree isolation', () => {
       expect(spawnedCwd('t2')).toBe('/fake-worktrees/old/2-t2');
       expect(isolation.calls.map((c) => c.op)).not.toContain('startRun');
       expect(orchestrator.getTaskIsolation('t1')).toMatchObject({ state: 'integrated' });
+    });
+
+    it('keeps the integration branch of a run it cannot continue while that branch holds landed work', async () => {
+      const { orchestrator, isolation, spawnedCwd } = setup({ workspace: '/repo' });
+      const run = {
+        id: 'old', workspaceRoot: '/elsewhere/repo', baseRef: 'abc', integrationBranch: 'ordewell/old/integration',
+        tasks: { t1: { taskId: 't1', order: 1, title: 'Task t1', branch: 'ordewell/old/1-t1', worktree: '/wt/1', status: 'merged' as const, linked: [] } },
+      };
+      orchestrator.loadPlan([task('t1', 1, { status: 'completed' }), task('t2', 2)]);
+      await orchestrator.adoptIsolation({ run, resolvers: {} });
+
+      await orchestrator.approveReview();
+
+      expect(spawnedCwd('t2')).toBe('/fake-worktrees/run1/2-t2');
+      expect(isolation.calls).toContainEqual({ op: 'discard', keepIntegration: true });
+      expect(isolation.calls).not.toContainEqual({ op: 'discard', keepIntegration: false });
     });
   });
 

@@ -578,7 +578,9 @@ export class TaskOrchestrator {
     delete this.resolvers[resolverId];
     this.emit('onIsolationChanged');
     const conflicted = this.store.get(conflictedId);
-    if (!conflicted || !this.hasUnlandedWork(conflictedId)) return;
+    // Only the conflict it was added for: a task retried since has a new
+    // attempt of its own, whose worktree it would merge half-done.
+    if (!conflicted || this.isolationRun?.tasks[conflictedId]?.status !== 'conflict') return;
     const landing = await this.integrateWork(conflicted);
     if (landing !== 'merged') return this.landUnmerged(conflicted, landing);
     this.store.markCompleted(conflictedId);
@@ -824,7 +826,14 @@ export class TaskOrchestrator {
   getPlanVisualization() { return this.store.getPlanVisualization(); }
 
   async tick(): Promise<void> {
-    if (!this.running) return;
+    if (!this.running) {
+      // A run the scheduler is not driving — a manual task run, or a halted
+      // plan's remaining attempts — is closed by a verdict only. Ended by
+      // cancel, Mark complete or a failed spawn instead, it would stay open, and
+      // the next run would inherit its mode rather than decide its own.
+      if (this.attempts.size === 0 && this.runMode) await this.closeRun();
+      return;
+    }
 
     if (this.messageQueue.length > 0) {
       if (this.attempts.size === 0) {
@@ -1036,10 +1045,18 @@ export class TaskOrchestrator {
     return !!run && run.workspaceRoot === root && Object.values(run.tasks).some((r) => r.status === 'merged');
   }
 
-  /** A run with nothing landed holds only superseded attempts, so it goes whole. */
+  /**
+   * A run with nothing landed holds only superseded attempts, so it goes whole.
+   * One that cannot be continued for another reason — it ran from a different
+   * workspace path — keeps its integration branch: only the user gives landed
+   * work up.
+   */
   private async mintRun(root: string): Promise<void> {
     const previous = this.isolationRun;
-    if (previous) await this.isolation.discard(previous, { keepIntegration: false }).catch(() => undefined);
+    if (previous) {
+      const landed = Object.values(previous.tasks).some((r) => r.status === 'merged');
+      await this.isolation.discard(previous, { keepIntegration: landed }).catch(() => undefined);
+    }
     this.isolationRun = await this.isolation.startRun(root);
     this.resolvers = {};
     this.emit('onIsolationChanged');
