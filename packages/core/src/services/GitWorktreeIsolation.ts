@@ -382,7 +382,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
         }
 
         // Taken afresh for every task: a loose file the user adds mid-run is shared from the next one on.
-        run.shared = [...this.sharedPaths(run)];
+        run.shared = this.sharedPaths(run);
         for (const rel of run.shared) {
           const target = path.join(dir, rel);
           fs.mkdirSync(path.dirname(target), { recursive: true });
