@@ -122,6 +122,10 @@ function lexists(target: string): boolean {
   try { fs.lstatSync(target); return true; } catch { return false; }
 }
 
+function resolves(target: string): boolean {
+  try { fs.statSync(target); return true; } catch { return false; }
+}
+
 function listDir(dir: string): string[] {
   try { return fs.readdirSync(dir).sort(); } catch { return []; }
 }
@@ -375,7 +379,8 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
         const child = rel ? `${rel}/${name}` : name;
         if (isolated.includes(child)) continue;
         if (isolated.some((p) => p.startsWith(`${child}/`))) walk(child);
-        else shared.push(child);
+        // A link that leads nowhere, such as an editor's lock file, has nothing to share, and linking it would fail every task.
+        else if (resolves(path.join(workspaceRoot, child))) shared.push(child);
       }
     };
     walk('');

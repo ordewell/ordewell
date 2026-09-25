@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execFile, execFileSync } from 'child_process';
 import { promisify } from 'util';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createWorktreeIsolation, type GitExecFn, type WorktreeIsolationDeps } from '../GitWorktreeIsolation';
@@ -68,6 +68,10 @@ function worktreePaths(root: string): string[] {
     .split('\n')
     .filter((l) => l.startsWith('worktree '))
     .map((l) => realpathSafe(l.slice('worktree '.length)));
+}
+
+function lexists(p: string): boolean {
+  try { lstatSync(p); return true; } catch { return false; }
 }
 
 function realpathSafe(p: string): string {
@@ -988,6 +992,20 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
 
       expect(readFileSync(join(dir, 'NOTES.md'), 'utf8')).toBe('edited by a task\n');
       expect(readFileSync(join(dir, 'design', 'new.txt'), 'utf8')).toBe('new\n');
+    });
+
+    it('prepares a task beside a loose link that leads nowhere, such as an editor lock file, without sharing it', async () => {
+      const dir = group();
+      symlinkSync('user@host.4242:1700000000', join(dir, '.#NOTES.md'));
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      expect(await iso.isActive(dir)).toEqual({ active: true, repos: GROUP, shared: ['NOTES.md', 'design', 'scratch'] });
+      const run = await iso.startRun(dir);
+
+      const { cwd } = await iso.prepare(task(1, 'Beside a lock file'), run);
+
+      expect(run.shared).toEqual(['NOTES.md', 'design', 'scratch']);
+      expect(lexists(join(cwd, '.#NOTES.md'))).toBe(false);
+      expect(realpathSync(join(cwd, 'NOTES.md'))).toBe(join(dir, 'NOTES.md'));
     });
 
     it('lands each repository the task changed on that repository’s integration branch', async () => {
