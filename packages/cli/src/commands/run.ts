@@ -1,5 +1,5 @@
 import { flag, hasFlag, readLastSession } from '../utils';
-import { handoffBranch } from '../isolation';
+import { handoffBranch, isRepoGroup, repoResultLines } from '../isolation';
 import { iconFor } from '../utils/output';
 import type { ApiClient, TaskStatus } from '../daemonClient';
 import { truncateCheckpointSummary } from '@ordewell/core';
@@ -40,6 +40,7 @@ export async function followExecution(
   onBlocked?: 'stash' | 'shared',
 ): Promise<void> {
   let blocked: string | null = null;
+  let dirtyRepos: string[] = [];
   const taskStates = new Map<string, TaskStatus>();
   let lastPrinted = '';
 
@@ -94,10 +95,16 @@ export async function followExecution(
     if (event.type === 'execution_stopped') {
       console.log('\nExecution stopped.');
     }
-    if (event.type === 'isolation_blocked') blocked = event.message;
+    if (event.type === 'notice') console.error(`· ${event.message}`);
+    if (event.type === 'isolation_blocked') {
+      blocked = event.message;
+      dirtyRepos = event.repos ?? [];
+    }
     if (event.type === 'isolation_handoff') {
       const n = event.landed.length;
-      console.log(`\nRun finished on ${handoffBranch(event)} — ${n} task${n === 1 ? '' : 's'} landed.`);
+      const where = isRepoGroup(event) ? ` in ${event.repos.map((r) => r.path).join(', ')}` : '';
+      console.log(`\nRun finished on ${handoffBranch(event)}${where} — ${n} task${n === 1 ? '' : 's'} landed.`);
+      if (isRepoGroup(event)) for (const line of repoResultLines(event)) console.log(`  ${line}`);
       console.log('  `ordewell handoff review|merge|discard|cleanup` to land it.');
     }
   }, settleReady);
@@ -118,7 +125,8 @@ export async function followExecution(
   if (!onBlocked) {
     await api.stopExecution(sessionId);
     console.error(blocked);
-    console.error('Nothing was started. Re-run with `--stash` to stash your tracked changes first, or `--without-isolation` to run in your working tree this once.');
+    const where = dirtyRepos.length > 0 ? ` in ${dirtyRepos.join(', ')}` : '';
+    console.error(`Nothing was started. Re-run with \`--stash\` to stash your tracked changes${where} first, or \`--without-isolation\` to run in your working tree this once.`);
     process.exit(1);
   }
   await followExecution(api, sessionId, () => (onBlocked === 'stash' ? api.continueWithStash(sessionId) : api.continueWithoutIsolation(sessionId)));
