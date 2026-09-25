@@ -162,6 +162,23 @@ describe('WorktreeIsolation.isActive', () => {
       expect(await iso.isActive(root)).toEqual({ active: true });
     });
 
+    it('does not treat a path its .gitmodules declares as a nested repository, even before the gitlink is staged', async () => {
+      const root = repo({ 'README.md': 'hello\n', '.gitmodules': '[submodule "lib"]\n\tpath = vendor/lib\n\turl = ../lib\n' });
+      initRepo(join(root, 'vendor', 'lib'));
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      expect(await iso.isActive(root)).toEqual({ active: true });
+    });
+
+    it('counts a checkout with a .git file as a nested repository, and looks no deeper than two levels', async () => {
+      const root = repo();
+      const elsewhere = repo();
+      mkdirSync(join(root, 'tools'));
+      git(elsewhere, 'worktree', 'add', '-q', join(root, 'tools', 'linked'));
+      initRepo(join(root, 'a', 'b', 'too-deep'));
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      expect(await iso.isActive(root)).toEqual({ active: false, reason: 'nested-repos', repos: ['tools/linked'] });
+    });
+
     it('resolves submodules against the repository top level when the workspace is a subdirectory', async () => {
       const root = repo({ 'app/README.md': 'hello\n' });
       const upstream = repo();
@@ -1089,6 +1106,32 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
       expect(tree).toContain('vpc.tf');
       expect(tree.some((f) => f === 'terraform.tfstate' || f.startsWith('.terraform'))).toBe(false);
       expect(readFileSync(join(dir, 'infra', 'terraform.tfstate'), 'utf8')).toBe('{"serial":7}\n');
+    });
+
+    it('links each repository’s default artifacts from that repository and keeps them out of its commit', async () => {
+      const dir = group();
+      mkdirSync(join(dir, 'web', 'node_modules', 'left-pad'), { recursive: true });
+      writeFileSync(join(dir, 'infra', '.envrc'), 'export TF_VAR_x=1\n');
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      const run = await iso.startRun(dir);
+      const t = task(1, 'Use the defaults');
+      const { cwd } = await iso.prepare(t, run);
+
+      expect(realpathSync(join(cwd, 'web', 'node_modules'))).toBe(join(dir, 'web', 'node_modules'));
+      expect(realpathSync(join(cwd, 'infra', '.envrc'))).toBe(join(dir, 'infra', '.envrc'));
+      expect(existsSync(join(cwd, 'api', 'node_modules'))).toBe(false);
+      expect(run.tasks['task-1'].repos.web.linked).toEqual(['node_modules']);
+      expect(run.tasks['task-1'].repos.infra.linked).toEqual(['.envrc']);
+
+      writeFileSync(join(cwd, 'web', 'page.html'), 'page\n');
+      writeFileSync(join(cwd, 'infra', 'vpc.tf'), 'vpc\n');
+      expect(await iso.integrate(t, run)).toBe('merged');
+      const tree = (repo: string) => git(join(dir, repo), 'ls-tree', '-r', '--name-only', `ordewell/${run.id}/integration`).split('\n');
+      expect(tree('web')).toContain('page.html');
+      expect(tree('web').some((f) => f.startsWith('node_modules'))).toBe(false);
+      expect(tree('infra')).toContain('vpc.tf');
+      expect(tree('infra')).not.toContain('.envrc');
+      expect(existsSync(join(dir, 'web', 'node_modules', 'left-pad'))).toBe(true);
     });
 
     it('runs the setup command once per isolated repository, in its worktree, naming the repository', async () => {
