@@ -530,8 +530,11 @@ export function handleSessionMessage(
     case 'task_updated':
     case 'task_started':
       break;
-    // This host asked for the merge and has its result, and core's notices already told the user.
+    // What Merge all did, whether this host asked for it or another surface did.
+    // The webview shows a blocked or part-landed group per repo; core's notices
+    // already told the user in prose.
     case 'isolation_merge':
+      deps.chatProvider.showIsolationMergeResult(msg.result);
       break;
     default: {
       const exhaustive: never = msg;

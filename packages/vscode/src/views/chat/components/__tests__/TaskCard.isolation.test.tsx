@@ -30,7 +30,7 @@ describe('TaskCard — isolation conflict (ADR-0013)', () => {
         task={makeTask()}
         models={emptyModels}
         isExecuting={false}
-        isolation={{ state: 'conflict', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a' }}
+        isolation={{ state: 'conflict', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['.'], conflictRepo: '.' }}
       />,
     );
 
@@ -43,7 +43,7 @@ describe('TaskCard — isolation conflict (ADR-0013)', () => {
         task={makeTask({ status: 'in_progress' })}
         models={emptyModels}
         isExecuting={false}
-        isolation={{ state: 'active', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a' }}
+        isolation={{ state: 'active', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['.'] }}
       />,
     );
 
@@ -57,7 +57,7 @@ describe('TaskCard — isolation conflict (ADR-0013)', () => {
         task={makeTask()}
         models={emptyModels}
         isExecuting={false}
-        isolation={{ state: 'active', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a' }}
+        isolation={{ state: 'active', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['.'] }}
       />,
     );
 
@@ -74,7 +74,7 @@ describe('TaskCard — isolation conflict (ADR-0013)', () => {
         task={makeTask()}
         models={emptyModels}
         isExecuting={false}
-        isolation={{ state: 'conflict', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a' }}
+        isolation={{ state: 'conflict', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['.'], conflictRepo: '.' }}
         onResolveConflict={onResolveConflict}
       />,
     );
@@ -92,5 +92,48 @@ describe('TaskCard — isolation conflict (ADR-0013)', () => {
     act(() => { fireEvent.click(screen.getByText('Test task')); });
 
     expect(document.querySelector('.task-isolation')).toBeNull();
+  });
+});
+
+describe('TaskCard — repo group (ADR-0014)', () => {
+  it('names the conflicting repo on a group conflict badge', () => {
+    render(
+      <TaskCard
+        task={makeTask()}
+        models={emptyModels}
+        isExecuting={false}
+        isolation={{ state: 'conflict', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['api', 'web'], conflictRepo: 'api' }}
+      />,
+    );
+
+    expect(screen.getByText(/Conflict.*api/)).toBeTruthy();
+  });
+
+  it('lists the repos the task changed in the details', () => {
+    render(
+      <TaskCard
+        task={makeTask()}
+        models={emptyModels}
+        isExecuting={false}
+        isolation={{ state: 'active', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['api', 'web'] }}
+      />,
+    );
+
+    act(() => { fireEvent.click(screen.getByText('Test task')); });
+    expect(screen.getByText('api, web')).toBeTruthy();
+  });
+
+  it('does not list repos for a lone repository at the workspace root', () => {
+    render(
+      <TaskCard
+        task={makeTask()}
+        models={emptyModels}
+        isExecuting={false}
+        isolation={{ state: 'active', branch: 'ordewell/r/1-a', worktree: '.ordewell/worktrees/r/1-a', repos: ['.'] }}
+      />,
+    );
+
+    act(() => { fireEvent.click(screen.getByText('Test task')); });
+    expect(document.querySelector('.task-isolation-repos')).toBeNull();
   });
 });
