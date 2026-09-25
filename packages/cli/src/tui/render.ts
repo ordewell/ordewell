@@ -460,7 +460,9 @@ function renderHandoff(
   if (overlay.diff) {
     const room = diffRoom(rows);
     const { lines, scroll } = overlay.diff;
-    const shown = lines.slice(scroll, scroll + room).map(paintDiffLine);
+    // Cut, not wrapped: the scroll counts one row per diff line, and a wrapped
+    // line would push the end of the diff and the footer out of the frame.
+    const shown = lines.slice(scroll, scroll + room).map((line) => paintDiffLine(truncate(line, Math.max(1, cols - 2))));
     const more = scroll + room < lines.length ? '↑↓ pgup/pgdn scroll · ' : '';
     return frame(`Diff — ${handoff.branch}`, [...shown, '', style.grey(`${more}enter or esc goes back`)], rows, cols);
   }

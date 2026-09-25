@@ -1,5 +1,6 @@
 import type { Effect, Step } from './reducer';
 import { say } from './transcript';
+import { sanitize } from './ansi';
 import type { Key } from './keys';
 import type { PlanIsolationView } from '../isolation';
 import type { HandoffView, Overlay, PickerItem, TaskIsolationView, TaskView, TuiState } from './state';
@@ -100,7 +101,10 @@ export function confirmedHandoff(state: TuiState, kind: 'merge-run' | 'discard-r
 export function showDiff(state: TuiState, diff: string): TuiState {
   if (diff.trim() === '') return say(state, 'system', `Nothing differs from ${state.handoff?.baseRef.slice(0, 8) ?? 'the base commit'}.`);
   const index = state.overlay?.kind === 'handoff' ? state.overlay.index : 0;
-  return { ...state, overlay: { kind: 'handoff', index, diff: { lines: diff.replace(/\r/g, '').split('\n'), scroll: 0 } } };
+  // Tabs are expanded before sanitizing, which would turn each into one space
+  // and flatten tab-indented code — the one thing a review needs to read.
+  const lines = sanitize(diff.replace(/\t/g, '    ')).split('\n');
+  return { ...state, overlay: { kind: 'handoff', index, diff: { lines, scroll: 0 } } };
 }
 
 export function handleHandoffKey(

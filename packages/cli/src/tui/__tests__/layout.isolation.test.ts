@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { initialState } from '../reducer';
+import { initialState, reduce } from '../reducer';
 import { render } from '../render';
-import { footerHints } from '../layout';
+import { bodyRows, footerHints } from '../layout';
+import { diffRoom } from '../handoff';
 import { style } from '../ansi';
 import type { HandoffView, TaskView, TuiState } from '../state';
 
@@ -96,6 +97,23 @@ describe('handoff overlay frame', () => {
     expect(rows).toHaveLength(30);
     expect(rows.join('\n')).toContain('+added 10');
     expect(rows.join('\n')).not.toContain('+added 9\n');
+  });
+
+  it('keeps the end of a diff with long lines reachable, one row per line', () => {
+    const lines = Array.from({ length: 60 }, (_, i) => `+line ${i} ${'x'.repeat(300)}`);
+    const room = diffRoom(bodyRows(open()));
+    const rows = render(open({ overlay: { kind: 'handoff', index: 0, diff: { lines, scroll: lines.length - room } } }));
+    const out = rows.join('\n');
+
+    expect(rows).toHaveLength(30);
+    expect(out).toContain('+line 59 ');
+    expect(out).toContain('enter or esc goes back');
+  });
+
+  it('keeps a diff\'s tab indentation', () => {
+    const { state } = reduce(open(), { type: 'handoffDiff', diff: '+func main() {\n+\treturn\n+}', sessionId: 's1' });
+
+    expect(frame(state)).toMatch(/\+ {2,}return/);
   });
 
   it('asks before merging, in words that say it is the user\'s step', () => {
