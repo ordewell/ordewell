@@ -732,6 +732,11 @@ describe.skipIf(!hasGit)('WorktreeIsolation end-of-run handoff', () => {
     expect(diff).not.toContain('later.txt');
   });
 
+  it('reviewDiff needs no header for a repository that is the whole workspace', async () => {
+    const { iso, run } = await finishedRun();
+    expect(await iso.reviewDiff(run)).toMatch(/^diff --git a\/alpha\.txt b\/alpha\.txt\n/);
+  });
+
   it('never merges into the checked-out branch until asked, and then does', async () => {
     const { root, iso, run } = await finishedRun();
     const before = git(root, 'rev-parse', 'HEAD');
@@ -1339,7 +1344,37 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
 
         expect(tip(dir, 'api', persisted)).toBe(moved);
         expect(persisted.landing).toEqual({ taskId: 'task-2', tips });
+
+        // Its integration branch holds part of a task, so none of it is merged for the user or built on.
+        const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+        const heads = ['api', 'db', 'web'].map((repo) => git(join(dir, repo), 'rev-parse', 'HEAD'));
+        expect(await iso.mergeIntoCheckedOut(persisted)).toEqual({
+          outcome: 'blocked',
+          blocked: [{ repo: 'api', reason: 'partial-landing', files: [] }],
+        });
+        expect(['api', 'db', 'web'].map((repo) => git(join(dir, repo), 'rev-parse', 'HEAD'))).toEqual(heads);
+        const next = task(3, 'Next');
+        const { cwd } = await iso.prepare(next, persisted);
+        writeFileSync(join(cwd, 'db', 'next.txt'), 'n\n');
+        expect(await iso.integrate(next, persisted)).toBe('failed');
+        expect(tip(dir, 'db', persisted)).toBe(tips.db);
       });
+    });
+
+    it('cleanup and discard reach a conflicted task\'s worktrees and branches in every repository', async () => {
+      const { dir, iso, run, b } = await secondConflicts();
+      expect(await iso.integrate(task(2, 'Edit both'), run)).toBe('conflict');
+
+      await iso.discard(run, { keepIntegration: true });
+      for (const repo of ['api', 'web']) {
+        expect(worktreePaths(join(dir, repo))).toEqual([join(dir, repo)]);
+        expect(branches(join(dir, repo))).toEqual([integrationOf(run)]);
+      }
+      expect(existsSync(b.cwd)).toBe(false);
+
+      await iso.discard(run, { keepIntegration: false });
+      for (const repo of ['api', 'web']) expect(branches(join(dir, repo))).toEqual([]);
+      expect(existsSync(join(dir, '.ordewell', 'worktrees', run.id))).toBe(false);
     });
 
     it('fails a task whose merge a hook refuses, naming the repository, and rolls the others back', async () => {
@@ -1363,7 +1398,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
     });
   });
 
-  describe('Merge all', () => {
+  describe('handoff', () => {
     /** A handed-off run whose one task changed api.txt and web.txt. */
     async function handedOff(deps: Partial<WorktreeIsolationDeps> = {}, opts: { idleRepo?: string } = {}) {
       const dir = pair();
@@ -1480,6 +1515,24 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
       expect(git(join(dir, 'web'), 'rev-parse', 'HEAD')).toBe(webHead);
       expect(() => git(join(dir, 'web'), 'rev-parse', '-q', '--verify', 'MERGE_HEAD')).toThrow();
       expect(git(join(dir, 'web'), 'status', '--porcelain', '--untracked-files=no')).toBe('');
+    });
+
+    it('reviews one section per repository with changes, each headed by its path and rooted at the workspace', async () => {
+      const { run, iso } = await handedOff({}, { idleRepo: 'docs' });
+      const base = (repo: string) => run.repos.find((r) => r.path === repo)!.baseRef.slice(0, 12);
+
+      const diff = await iso.reviewDiff(run);
+
+      const sections = diff.split(/^(?=# )/m);
+      expect(sections.map((section) => section.split('\n', 1)[0])).toEqual([
+        `# api — ${integrationOf(run)} against ${base('api')}`,
+        `# web — ${integrationOf(run)} against ${base('web')}`,
+      ]);
+      expect(sections[0]).toContain('diff --git a/api/api.txt b/api/api.txt');
+      expect(sections[0]).toContain('+run api');
+      expect(sections[0]).not.toContain('web.txt');
+      expect(sections[1]).toContain('+++ b/web/web.txt');
+      expect(diff).not.toContain('docs');
     });
 
     describe('on git older than 2.38', () => {

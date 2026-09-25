@@ -472,6 +472,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       // A branch checked out in a worktree cannot be checked out in the main
       // one, and the user is about to review it.
       await this.removeIntegrationWorktrees(run);
+      await this.settleLanding(run);
       return handoffOf(run);
     });
   }
@@ -492,13 +493,26 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     });
   }
 
+  /**
+   * One section per repo with changes. A repo below the workspace root gets a
+   * header and paths prefixed with its own, so the whole reads as one patch
+   * over the workspace; a repo that is the workspace needs neither.
+   */
   async reviewDiff(run: IsolationRun): Promise<string> {
     let diff = '';
-    for (const repo of run.repos) diff += await this.git(repo.root, ['diff', repo.baseRef, repo.integrationBranch]);
+    for (const repo of run.repos) {
+      const prefixes = repo.path === SELF_REPO ? [] : [`--src-prefix=a/${repo.path}/`, `--dst-prefix=b/${repo.path}/`];
+      const section = await this.git(repo.root, ['diff', ...prefixes, repo.baseRef, repo.integrationBranch]);
+      if (section === '') continue;
+      if (repo.path !== SELF_REPO) diff += `# ${repo.path} — ${repo.integrationBranch} against ${repo.baseRef.slice(0, 12)}\n`;
+      diff += section;
+    }
     return diff;
   }
 
   async mergeIntoCheckedOut(run: IsolationRun): Promise<IsolationMergeResult> {
+    const partial = await this.settleLanding(run);
+    if (partial.length > 0) return { outcome: 'blocked', blocked: partial.map((repo) => ({ repo, reason: 'partial-landing', files: [] })) };
     const repos = await this.reposWithWork(run);
     // One repo needs no preflight: its merge lands or is aborted whole, as it always has.
     if (run.repos.length === 1 || !(await this.canPreflight())) return this.mergeInTurn(repos);
@@ -620,7 +634,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     if (!record) return 'failed';
     if (record.status === 'merged') return 'merged';
     // A landing left half-rolled-back would have this one merged on top of it.
-    if (!(await this.settleLanding(run))) return this.stopLanding(record, 'failed');
+    if ((await this.settleLanding(run)).length > 0) return this.stopLanding(record, 'failed');
 
     const changed: IsolationRepo[] = [];
     for (const repo of run.repos) {
@@ -653,7 +667,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       for (const repo of changed) {
         const outcome = await this.mergeTask(run, repo, record);
         if (outcome === 'merged') continue;
-        return (await this.settleLanding(run)) ? this.stopLanding(record, outcome, repo) : this.stopLanding(record, 'failed', repo);
+        return (await this.settleLanding(run)).length === 0 ? this.stopLanding(record, outcome, repo) : this.stopLanding(record, 'failed', repo);
       }
     }
 
@@ -692,20 +706,20 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
 
   /**
    * Return every repo of the landing in flight to its recorded tip, then
-   * forget the landing. True when there is none left: a tip git would not
-   * move stays recorded, so the next attempt tries again rather than landing
-   * on top of it.
+   * forget the landing. Resolves to the repos still holding part of it: a tip
+   * git would not move stays recorded, so the next attempt tries again rather
+   * than building on top of it.
    */
-  private async settleLanding(run: IsolationRun): Promise<boolean> {
+  private async settleLanding(run: IsolationRun): Promise<string[]> {
     const landing = run.landing;
-    if (!landing) return true;
-    let settled = true;
+    if (!landing) return [];
+    const unsettled: string[] = [];
     for (const repo of run.repos) {
       const tip = landing.tips[repo.path];
-      if (tip !== undefined && !(await this.restoreTip(run, repo, tip))) settled = false;
+      if (tip !== undefined && !(await this.restoreTip(run, repo, tip))) unsettled.push(repo.path);
     }
-    if (settled) delete run.landing;
-    return settled;
+    if (unsettled.length === 0) delete run.landing;
+    return unsettled;
   }
 
   /**

@@ -177,8 +177,12 @@ export interface IsolationView {
   handoff: IsolationHandoff;
 }
 
-/** Why "Merge all" would not touch a repo. */
-export type IsolationMergeBlockReason = 'merge-in-progress' | 'conflict' | 'uncommitted-changes' | 'git-error';
+/**
+ * Why "Merge all" would not touch a repo. `partial-landing`: a task's landing
+ * was interrupted and could not be rolled back there, so its integration
+ * branch holds part of a task.
+ */
+export type IsolationMergeBlockReason = 'merge-in-progress' | 'conflict' | 'uncommitted-changes' | 'partial-landing' | 'git-error';
 
 export interface IsolationMergeBlock {
   repo: string;
@@ -197,8 +201,8 @@ export interface IsolationMergeBlock {
  *   merge was aborted, leaving `repo` as it was; `landed` names the repos
  *   merged before it, which stay merged, and is absent when there are none.
  *
- * A group of one is never `blocked`: its one merge lands or is aborted whole,
- * so it reports as it always has.
+ * A group of one is blocked only by a partial landing; otherwise its one merge
+ * lands or is aborted whole, so it reports as it always has.
  */
 export type IsolationMergeResult =
   | { outcome: 'merged' }
