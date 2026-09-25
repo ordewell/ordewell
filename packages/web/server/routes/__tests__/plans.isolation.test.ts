@@ -66,6 +66,27 @@ describe('POST /:sessionId/isolation/merge', () => {
     expect(await res.json()).toEqual({ outcome: 'conflict', repo: '.', files: ['shared.txt'] });
   });
 
+  it('answers a blocked Merge all whole: each repo, why, and its files', async () => {
+    const blocked = [
+      { repo: 'api', reason: 'conflict', files: ['src/a.ts'] },
+      { repo: 'web', reason: 'uncommitted-changes', files: ['index.html'] },
+      { repo: 'infra', reason: 'merge-in-progress', files: [] },
+    ];
+    const app = appFor({ mergeRun: vi.fn().mockResolvedValue({ outcome: 'blocked', blocked }) });
+
+    const res = await post(app, 'isolation/merge');
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ outcome: 'blocked', blocked });
+  });
+
+  it('answers a Merge all that stopped part-way with the repos that stay merged', async () => {
+    const result = { outcome: 'conflict', repo: 'web', files: ['web.txt'], landed: ['api'] };
+    const app = appFor({ mergeRun: vi.fn().mockResolvedValue(result) });
+
+    expect(await (await post(app, 'isolation/merge')).json()).toEqual(result);
+  });
+
   it('is a 400 while the run is still running', async () => {
     const app = appFor({ mergeRun: vi.fn().mockRejectedValue(new PlanEditError('The run is still running — stop it first')) });
 

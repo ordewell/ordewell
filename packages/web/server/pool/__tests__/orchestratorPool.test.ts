@@ -447,3 +447,30 @@ describe('OrchestratorPool isolation messages', () => {
     expect(sent.map((s) => JSON.parse(s))).toEqual([blocked, handoff]);
   });
 });
+
+describe('OrchestratorPool run notices', () => {
+  let workspace: string;
+
+  beforeEach(() => {
+    workspace = mkdtempSync(join(tmpdir(), 'ordewell-pool-'));
+    mkdirSync(join(workspace, '.git'));
+  });
+
+  afterEach(() => rmSync(workspace, { recursive: true, force: true }));
+
+  it('sends a run\'s isolation notice to the session\'s subscribers as a notice frame', async () => {
+    const runner = { spawn: vi.fn().mockRejectedValue(new Error('no runner in a test')), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 };
+    const pool = new OrchestratorPool({ runner });
+    const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-notice');
+    pool.adoptSavedSession(meta.id, workspace);
+    const sent: string[] = [];
+    pool.subscribe(meta.id, { OPEN: 1, readyState: 1, send: (data: string) => sent.push(data) } as never);
+
+    await pool.session(meta.id).runTask('t2').catch(() => undefined);
+
+    const frames = sent.map((s) => JSON.parse(s) as { type: string; level?: string; message?: string });
+    expect(frames).toContainEqual({ type: 'notice', level: 'info', message: expect.stringMatching(/workspace root|isolation/i) });
+    pool.destroyAll();
+  });
+});
+

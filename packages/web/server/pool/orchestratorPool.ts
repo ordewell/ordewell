@@ -4,6 +4,7 @@ import {
   ConversationBusyError,
   type ConversationCompaction,
   type SessionMessage,
+  type SessionNotice,
   type SessionRuntimeSettings,
   ModelResolver,
   RunnerRegistry,
@@ -92,7 +93,7 @@ export class OrchestratorPool {
     if (this.clients.get(sessionId)?.size === 0) this.clients.delete(sessionId);
   }
 
-  private broadcast(sessionId: string, msg: SessionMessage): void {
+  private broadcast(sessionId: string, msg: SessionMessage | SessionNotice): void {
     const payload = JSON.stringify(msg);
     for (const ws of this.clients.get(sessionId) ?? []) {
       if (ws.readyState === ws.OPEN) ws.send(payload);
@@ -164,6 +165,8 @@ export class OrchestratorPool {
       workspaceRoot: () => workspace,
       fsAdapter,
       broadcast,
+      // The notification channel above is silent here; this is how a client hears how the run isolates.
+      onNotice: (notice) => this.broadcast(sessionId, notice),
       modelResolver: this.modelResolver,
       settings: () => this.runtimeSettings(),
       sessionId,
