@@ -11,7 +11,6 @@ import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type {
   IsolationHandoff,
   IsolationInactiveReason,
-  IsolationMergeBlock,
   IsolationMergeResult,
   IsolationOutcome,
   IsolationRun,
