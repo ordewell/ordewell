@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { execFileSync } from 'child_process';
-import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { TaskOrchestrator } from '../TaskOrchestrator';
@@ -29,9 +29,14 @@ function git(cwd: string, ...args: string[]): string {
 const roots: string[] = [];
 afterEach(() => { while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true }); });
 
-function repo(): string {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-e2e-')));
-  roots.push(root);
+function tempDir(): string {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-e2e-')));
+  roots.push(dir);
+  return dir;
+}
+
+function repo(root = tempDir()): string {
+  mkdirSync(root, { recursive: true });
   git(root, 'init', '-q', '-b', 'main');
   git(root, 'config', 'user.name', 'Test');
   git(root, 'config', 'user.email', 'test@example.com');
@@ -44,10 +49,10 @@ function repo(): string {
 
 /**
  * A runner that does what a coding agent does, minus the model: writes the
- * task's file in whatever directory it was handed, then prints the marker.
- * It records whether each file its task depends on was already there.
+ * task's files in whatever directory it was handed, then prints the marker.
+ * It records whether every file its task depends on was already there.
  */
-function writingRunner(files: Record<string, { name: string; needs?: string }>, tasks: Task[]) {
+function writingRunner(files: Record<string, { write: string[]; needs?: string[] }>, tasks: Task[]) {
   const sawPredecessor: Record<string, boolean> = {};
   const runner: ITerminalRunner = {
     spawn: vi.fn(async (opts) => {
@@ -55,8 +60,8 @@ function writingRunner(files: Record<string, { name: string; needs?: string }>, 
       const job = files[opts.taskId];
       const marker = tasks.find((t) => t.id === opts.taskId)!.completionMarker;
       setTimeout(() => {
-        if (job.needs) sawPredecessor[opts.taskId] = existsSync(join(opts.cwd!, job.needs));
-        writeFileSync(join(opts.cwd!, job.name), `written by ${opts.taskId}\n`);
+        if (job.needs) sawPredecessor[opts.taskId] = job.needs.every((file) => existsSync(join(opts.cwd!, file)));
+        for (const file of job.write) writeFileSync(join(opts.cwd!, file), `written by ${opts.taskId}\n`);
         session.emitOutput(`done\n<<<ORDEWELL_DONE_${marker}>>>`);
       }, 5);
       return session;
@@ -76,7 +81,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
       createTask({ id: 't1', order: 1, title: 'Add a', prompt: 'write a.txt' }),
       createTask({ id: 't2', order: 2, title: 'Add b on top of a', prompt: 'write b.txt', dependencies: ['t1'] }),
     ];
-    const { runner, sawPredecessor } = writingRunner({ t1: { name: 'a.txt' }, t2: { name: 'b.txt', needs: 'a.txt' } }, tasks);
+    const { runner, sawPredecessor } = writingRunner({ t1: { write: ['a.txt'] }, t2: { write: ['b.txt'], needs: ['a.txt'] } }, tasks);
     const isolation = createWorktreeIsolation({
       config: fakeConfig({ worktreeIsolation: true }),
       resolvePath: async () => process.env.PATH ?? '',
@@ -105,5 +110,49 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     expect(existsSync(join(root, 'b.txt'))).toBe(false);
     expect(git(root, 'status', '--porcelain')).toBe('');
     expect(git(root, 'worktree', 'list', '--porcelain').split('\n').filter((l) => l.startsWith('worktree '))).toHaveLength(1);
+  }, 30_000);
+
+  it('lands each task across a folder of repositories as a whole, starts a dependent only once all of it has, and merges every repository at handoff', async () => {
+    const dir = tempDir();
+    const [api, web] = [repo(join(dir, 'api')), repo(join(dir, 'web'))];
+    const bases = { api: git(api, 'rev-parse', 'HEAD'), web: git(web, 'rev-parse', 'HEAD') };
+    const tasks = [
+      createTask({ id: 't1', order: 1, title: 'Add the endpoint and its client', prompt: 'write both' }),
+      createTask({ id: 't2', order: 2, title: 'Use the client', prompt: 'build on both', dependencies: ['t1'] }),
+      createTask({ id: 't3', order: 3, title: 'Unrelated page', prompt: 'write a page' }),
+    ];
+    const { runner, sawPredecessor } = writingRunner({
+      t1: { write: ['api/endpoint.txt', 'web/client.txt'] },
+      t2: { write: ['web/usage.txt'], needs: ['api/endpoint.txt', 'web/client.txt'] },
+      t3: { write: ['web/page.txt'] },
+    }, tasks);
+    const isolation = createWorktreeIsolation({ config: fakeConfig({ worktreeIsolation: true }), resolvePath: async () => process.env.PATH ?? '' });
+    const output = new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } });
+    const orchestrator = new TaskOrchestrator(fakeConfig({ maxParallelSessions: 3 }), fakeNotification(), runner, undefined, output, isolation);
+    orchestrator.setWorkspaceRoot(() => dir);
+    let handoff: IsolationHandoff | undefined;
+    orchestrator.subscribe({ onIsolationHandoff: (h) => { handoff = h; } });
+    orchestrator.loadPlan(tasks);
+
+    await orchestrator.approveReview();
+    await vi.waitFor(() => expect(handoff).toBeDefined(), { timeout: 20_000 });
+
+    expect(orchestrator.storeInstance.allTasks.map((t) => t.status)).toEqual(['completed', 'completed', 'completed']);
+    expect(sawPredecessor.t2).toBe(true);
+    expect(handoff!.repos.map((r) => [r.path, r.baseRef, r.landed.map((l) => l.taskId)])).toEqual([
+      ['api', bases.api, ['t1']],
+      ['web', bases.web, ['t1', 't2', 't3']],
+    ]);
+    const [{ integrationBranch }] = handoff!.repos;
+    expect(git(api, 'show', `${integrationBranch}:endpoint.txt`)).toBe('written by t1');
+    for (const file of ['client.txt', 'usage.txt', 'page.txt']) expect(git(web, 'ls-tree', '--name-only', integrationBranch, file)).toBe(file);
+    for (const [root, base] of [[api, bases.api], [web, bases.web]]) {
+      expect(git(root, 'rev-parse', 'main')).toBe(base);
+      expect(git(root, 'status', '--porcelain')).toBe('');
+    }
+
+    expect(await orchestrator.mergeRun()).toEqual({ outcome: 'merged' });
+    expect(readFileSync(join(api, 'endpoint.txt'), 'utf8')).toBe('written by t1\n');
+    expect(readFileSync(join(web, 'usage.txt'), 'utf8')).toBe('written by t2\n');
   }, 30_000);
 });
