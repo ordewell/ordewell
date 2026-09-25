@@ -57,11 +57,17 @@ const isolatedPlan = {
   },
 };
 
-/** A daemon holding a session with an isolated run, answering each handoff route. */
+/**
+ * A daemon holding a session with an isolated run, answering each handoff route.
+ * Like the real one, only adoption answers with the saved plan itself; reading a
+ * session answers the phase-shaped view, which carries no run record.
+ */
 function isolatedDaemon(over: Record<string, { status?: number; body: unknown }> = {}) {
   return daemon(({ method, url }) => {
     if (url.includes('/load')) return { body: { plan: isolatedPlan, goal: 'g' } };
-    if (method === 'GET' && url.startsWith('/api/sessions/session-1')) return { body: { meta: { id: 'session-1' }, plan: isolatedPlan } };
+    if (method === 'GET' && url.startsWith('/api/sessions/session-1')) {
+      return { body: { meta: { id: 'session-1' }, plan: { phase: 'executing', history: [], message: '', executionLog: [], pendingTasks: [] } } };
+    }
     const route = Object.keys(over).find((key) => url.endsWith(key));
     return route ? over[route] : { body: { ok: true } };
   });

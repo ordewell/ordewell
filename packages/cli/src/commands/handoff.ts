@@ -38,13 +38,8 @@ export async function handleHandoff(
   }
   if (!HANDOFF_ACTIONS.some((a) => a.id === action)) fail(`Unknown handoff action "${action}".`, USAGE);
 
-  const { api, sessionId, workspace } = await adopted(subArgs, injectedApi);
-  let handoff;
-  try {
-    handoff = isolationOfPlan((await api.getSession(sessionId, workspace)).plan)?.handoff;
-  } catch (err) {
-    fail(`Failed to load session: ${(err as Error).message}`);
-  }
+  const { api, sessionId, plan } = await adopted(subArgs, injectedApi);
+  const handoff = isolationOfPlan(plan)?.handoff;
   if (!handoff) fail('This session has no isolated run to hand off.');
 
   const asked = hasFlag(subArgs, '--yes');

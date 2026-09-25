@@ -7,18 +7,21 @@ const REWIND_USAGE = 'Usage: ordewell rewind [<n>] [--session-id <id>] [--worksp
 
 /**
  * Both act on a session the daemon holds; adopting first is a no-op for a live
- * one and makes a session from an earlier daemon run addressable.
+ * one and makes a session from an earlier daemon run addressable. The plan it
+ * answers is the saved shape, run record included — reading the session back
+ * answers a phase-shaped view without it.
  */
-export async function adopted(subArgs: string[], injectedApi?: ApiClient): Promise<{ api: ApiClient; sessionId: string; workspace: string }> {
+export async function adopted(subArgs: string[], injectedApi?: ApiClient): Promise<{ api: ApiClient; sessionId: string; workspace: string; plan: unknown }> {
   const workspace = flag(subArgs, '--workspace') || process.cwd();
   const sessionId = resolveSessionId(subArgs);
   const api = await connect(subArgs, injectedApi);
+  let plan: unknown;
   try {
-    await api.adoptSession(sessionId, workspace);
+    ({ plan } = await api.adoptSession(sessionId, workspace));
   } catch (err) {
     fail(`Failed to load session: ${(err as Error).message}`);
   }
-  return { api, sessionId, workspace };
+  return { api, sessionId, workspace, plan };
 }
 
 /**
