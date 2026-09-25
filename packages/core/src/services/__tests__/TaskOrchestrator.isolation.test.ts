@@ -484,6 +484,14 @@ describe('TaskOrchestrator with worktree isolation', () => {
         );
       });
 
+      it('reports a merge that could not start in a repository as an error, and that nothing landed', async () => {
+        const { notifications } = await settled({ outcome: 'failed', repo: 'api' });
+
+        expect(said(notifications.error)).toContain(
+          'Could not merge ordewell/run1/integration in api — finish or abort any merge in progress there, then try again. Nothing was merged.',
+        );
+      });
+
       it('says it merged into the checked-out branch of every repository', async () => {
         const { notifications } = await settled({ outcome: 'merged' });
         expect(said(notifications.info)).toContain('Merged ordewell/run1/integration into the checked-out branch of every repository.');

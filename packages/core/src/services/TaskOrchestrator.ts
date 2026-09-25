@@ -386,15 +386,14 @@ export class TaskOrchestrator {
         this.notifications.warn(`Merged nothing, so every tree is as it was: ${result.blocked.map(mergeBlockNotice).join('; ')}.`);
         break;
       case 'conflict':
+        this.notifications.warn(result.repo === SELF_REPO
+          ? `Merging ${branch} conflicted, so it was aborted — your tree is as it was.`
+          : `Merging ${branch} conflicted in ${result.repo}${result.files?.length ? ` (${result.files.join(', ')})` : ''}, so it was aborted there. ${landedNotice(result.landed ?? [])}`);
+        break;
       case 'failed':
-        if (result.repo === SELF_REPO) {
-          if (result.outcome === 'conflict') this.notifications.warn(`Merging ${branch} conflicted, so it was aborted — your tree is as it was.`);
-          else this.notifications.error(`Could not merge ${branch} — finish or abort the merge already in progress, then try again.`);
-          break;
-        }
-        this.notifications.warn(`${result.outcome === 'conflict'
-          ? `Merging ${branch} conflicted in ${result.repo}${result.files?.length ? ` (${result.files.join(', ')})` : ''}, so it was aborted there.`
-          : `Could not merge ${branch} in ${result.repo} — finish or abort any merge in progress there, then try again.`} ${landedNotice(result.landed ?? [])}`);
+        this.notifications.error(result.repo === SELF_REPO
+          ? `Could not merge ${branch} — finish or abort the merge already in progress, then try again.`
+          : `Could not merge ${branch} in ${result.repo} — finish or abort any merge in progress there, then try again. ${landedNotice(result.landed ?? [])}`);
         break;
     }
     return result;
