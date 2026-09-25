@@ -36,6 +36,8 @@ export function fakeConfig(overrides: Partial<IConfig> = {}): IConfig {
     // Off so an orchestrator built without an injected isolation never runs
     // real git against whatever repository the tests happen to run in.
     worktreeIsolation: false,
+    workspaceRepos: [],
+    worktreeLinks: [],
     approvalMode: 'ask',
     approvalPreApproved: [],
     setProviderModelLists: () => {},

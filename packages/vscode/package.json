@@ -277,6 +277,18 @@
           "type": "string",
           "default": "",
           "description": "Command run in each new task worktree instead of symlinking node_modules, .env files and agent config from the main worktree."
+        },
+        "ordewell.workspaceRepos": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "In a folder that is not itself a git repository, extra repositories to isolate together with the ones directly inside it, as paths relative to the workspace (for repositories nested deeper than one level)."
+        },
+        "ordewell.worktreeLinks": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra paths or globs, relative to each repository root, linked from the real repository into every task worktree where they exist — for gitignored local state such as *.tfstate or .terraform/."
         }
       }
     }

@@ -233,6 +233,13 @@ export class VsCodeConfig extends BaseConfig {
     return this.config.get<boolean>('worktreeIsolation', true);
   }
   get worktreeSetupCommand() { return this.config.get<string>('worktreeSetupCommand', '').trim() || super.worktreeSetupCommand; }
+  get workspaceRepos() { return this.stringList('workspaceRepos') ?? super.workspaceRepos; }
+  get worktreeLinks() { return this.stringList('worktreeLinks') ?? super.worktreeLinks; }
+
+  private stringList(key: string): string[] | undefined {
+    const list = this.config.get<string[]>(key, []).map((s) => s.trim()).filter(Boolean);
+    return list.length > 0 ? list : undefined;
+  }
 
   async update(key: string, value: unknown): Promise<void> {
     await this.config.update(key, value, true);

@@ -7,6 +7,10 @@ export function normalizeGeminiModel(id: string): string {
   return id.replace(/^gemini:/, '').replace(/^google\//, '');
 }
 
+function commaList(raw: string | undefined): string[] {
+  return (raw || '').split(',').map((s) => s.trim()).filter(Boolean);
+}
+
 export abstract class BaseConfig implements IConfig {
   abstract aiProvider: AiProvider;
   abstract apiKey: string;
@@ -111,6 +115,8 @@ export abstract class BaseConfig implements IConfig {
 
   get worktreeIsolation(): boolean { return process.env.ORDEWELL_WORKTREE_ISOLATION !== 'false' && process.env.ORDEWELL_WORKTREE_ISOLATION !== '0'; }
   get worktreeSetupCommand(): string | undefined { return process.env.ORDEWELL_WORKTREE_SETUP?.trim() || undefined; }
+  get workspaceRepos(): string[] { return commaList(process.env.ORDEWELL_WORKSPACE_REPOS); }
+  get worktreeLinks(): string[] { return commaList(process.env.ORDEWELL_WORKTREE_LINKS); }
 
   get approvalMode(): ApprovalMode {
     const raw = (process.env.ORDEWELL_APPROVAL_MODE || '').trim().toLowerCase();

@@ -45,7 +45,7 @@ describe('BaseConfig', () => {
   });
 
   describe('worktree isolation', () => {
-    const keys = ['ORDEWELL_WORKTREE_ISOLATION', 'ORDEWELL_WORKTREE_SETUP'];
+    const keys = ['ORDEWELL_WORKTREE_ISOLATION', 'ORDEWELL_WORKTREE_SETUP', 'ORDEWELL_WORKSPACE_REPOS', 'ORDEWELL_WORKTREE_LINKS'];
     const backup: Record<string, string | undefined> = {};
     beforeEach(() => { for (const k of keys) { backup[k] = process.env[k]; delete process.env[k]; } });
     afterEach(() => { for (const k of keys) { if (backup[k] !== undefined) process.env[k] = backup[k]; else delete process.env[k]; } });
@@ -71,6 +71,20 @@ describe('BaseConfig', () => {
       expect(new TestConfig().worktreeSetupCommand).toBe('npm ci');
       process.env.ORDEWELL_WORKTREE_SETUP = '   ';
       expect(new TestConfig().worktreeSetupCommand).toBeUndefined();
+    });
+
+    it('has no workspace repos or extra worktree links by default', () => {
+      const config = new TestConfig();
+      expect(config.workspaceRepos).toEqual([]);
+      expect(config.worktreeLinks).toEqual([]);
+    });
+
+    it('reads workspace repos and worktree links as comma-separated lists, dropping blanks', () => {
+      process.env.ORDEWELL_WORKSPACE_REPOS = 'services/api, web ,,';
+      process.env.ORDEWELL_WORKTREE_LINKS = '*.tfstate,.terraform/';
+      const config = new TestConfig();
+      expect(config.workspaceRepos).toEqual(['services/api', 'web']);
+      expect(config.worktreeLinks).toEqual(['*.tfstate', '.terraform/']);
     });
   });
 

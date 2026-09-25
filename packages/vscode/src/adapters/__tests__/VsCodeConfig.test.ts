@@ -24,7 +24,7 @@ async function makeStore(initial: Record<string, string> = {}) {
   return store;
 }
 
-const ENV_KEYS = ['ORDEWELL_WORKTREE_ISOLATION', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'ORCHESTRATOR_MODEL', 'AI_PROVIDER'];
+const ENV_KEYS = ['ORDEWELL_WORKTREE_ISOLATION', 'ORDEWELL_WORKSPACE_REPOS', 'ORDEWELL_WORKTREE_LINKS', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'ORCHESTRATOR_MODEL', 'AI_PROVIDER'];
 let savedEnv: Record<string, string | undefined>;
 
 beforeEach(() => {
@@ -59,6 +59,24 @@ describe('VsCodeConfig.worktreeIsolation', () => {
     const cfg = new VsCodeConfig(store);
     expect(cfg.worktreeIsolation).toBe(false);
     expect(cfg.worktreeSetupCommand).toBe('pnpm i');
+  });
+
+  it('reads workspace repos and worktree links, trimming blanks', async () => {
+    const store = await makeStore({});
+    __setConfig({ workspaceRepos: ['libs/core', ' '], worktreeLinks: ['*.tfstate'] });
+    const cfg = new VsCodeConfig(store);
+    expect(cfg.workspaceRepos).toEqual(['libs/core']);
+    expect(cfg.worktreeLinks).toEqual(['*.tfstate']);
+  });
+
+  it('falls back to the environment when the lists are not set', async () => {
+    const store = await makeStore({});
+    __setConfig({});
+    process.env.ORDEWELL_WORKSPACE_REPOS = 'a/b';
+    process.env.ORDEWELL_WORKTREE_LINKS = '.terraform/';
+    const cfg = new VsCodeConfig(store);
+    expect(cfg.workspaceRepos).toEqual(['a/b']);
+    expect(cfg.worktreeLinks).toEqual(['.terraform/']);
   });
 
   it('lets ORDEWELL_WORKTREE_ISOLATION override the setting', async () => {
