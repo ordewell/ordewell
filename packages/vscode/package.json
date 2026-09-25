@@ -73,6 +73,18 @@
     },
     "commands": [
       {
+        "command": "ordewell.forkConversation",
+        "title": "Ordewell: Fork Conversation"
+      },
+      {
+        "command": "ordewell.rewindConversation",
+        "title": "Ordewell: Rewind Conversation"
+      },
+      {
+        "command": "ordewell.compactConversation",
+        "title": "Ordewell: Compact Conversation"
+      },
+      {
         "command": "ordewell.focusChat",
         "title": "Ordewell: Focus Chat"
       },
