@@ -217,6 +217,58 @@ The slice that made groups real sharpened four points and deviated on one.
   commits reports `no-commits` naming them, and a dirty group names its dirty
   repos in `repos`.
 
+### As implemented: atomic landing, Merge all and the planner prompt
+
+The slice that made integration and the handoff atomic sharpened these points
+and deviated on two.
+
+- **The tips are recorded on the run, not the task.** Before a task's first
+  merge, `IsolationRun.landing` holds the task id and each changed repo's
+  integration tip, and the orchestrator saves the run — `integrate` takes a
+  `persist` callback for exactly that moment. On the run because a retry drops
+  and recreates the task's record, and the tips must outlive it until every
+  repo is back at its tip. Cleared, with the task marked `merged`, in one
+  synchronous step, so a saved run never shows one without the other.
+- **A rollback resets only what it can prove is the landing's.** An integration
+  branch goes back to its recorded tip only when what sits on it is one merge
+  whose first parent is that tip, and only through Ordewell's own integration
+  worktree or a bare ref update with the old value checked; never while the
+  branch is checked out anywhere else. `pruneOrphans` applies the same rule
+  after a crash, which also rolls back a task that had merged everywhere but was
+  not yet saved as landed: the saved run is the truth. A landing it cannot
+  settle stays recorded and blocks further landings and Merge all
+  (`partial-landing`), rather than letting either build on part of a task.
+- **`failed` names its repo too**, in `conflictRepo`, and a merge a hook refuses
+  (a merge in progress with nothing unmerged) is `failed` rather than
+  `conflict`. That also corrects a group of one, which called it a conflict.
+- **A resolver merges the branch in every repo the task changed.** A conflict
+  in one repo rolled the task back in all of them, so the resolver prompt names
+  the repos and the one that conflicted. When the resolver lands, the conflicted
+  task's re-landing finds its branch already merged wherever the resolver
+  merged it, and merges the rest.
+- **Deviation: a group of one gets no preflight.** Its one merge lands or is
+  aborted whole, which is already all-or-nothing, so Merge all merges it the way
+  it always has and it answers `merged`, `conflict` or `failed`, never
+  `blocked`. The preflight exists for atomicity across repos. Git older than
+  2.38 takes the same path for every group, as decided above.
+- **Only repos with work are preflighted and merged**: those whose integration
+  branch has commits its base ref does not. A merge of the user's in progress
+  in a repo the run never touched is none of Merge all's business.
+- **Merge all's answer** is `merged`; `blocked` with each repo, its reason
+  (`merge-in-progress`, `conflict`, `uncommitted-changes`, `partial-landing`,
+  `git-error`) and its files; or `conflict` / `failed` naming the repo a merge
+  stopped in and the repos already `landed`, which stay merged. Session
+  broadcasts it as `isolation_merge`, so every surface can show it.
+- **The review diff is one patch over the workspace**: each repo's section is
+  headed by its path, and its file paths are prefixed with it. A repo that is
+  the workspace needs neither, so a group of one reads as before.
+- **Deviation: the planner is told about any group but a lone repo at `.`**,
+  not only groups of more than one. A folder holding a single repo still has
+  its files under that repo's path, and may have shared paths, which is what
+  the section exists to say. `isActive` names the repos and shared paths when
+  it answers yes for a folder, so the planner can be told before a run is
+  minted; a run in force or being continued describes its own group.
+
 ## Considered options
 
 - **Treating the parent folder as the unit and initializing it as a repo.**
