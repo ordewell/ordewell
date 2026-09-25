@@ -18,10 +18,9 @@ nested directories are untracked and absent, so a task that needs them either
 cannot see them or is linked to the live ones and edits them unreviewed, while
 the run's handoff claims to describe the whole workspace.
 
-This ADR records the design for both. It is the first of a series of slices: this
-one adds the refusal for the nested case and the notice for the folder case, and
-changes no isolation behavior for multi-repo folders yet. The slices that follow
-implement what is decided here.
+This ADR records the design for both. It was built in slices; the *As
+implemented* sections below say where each one sharpened the design or
+deviated from it.
 
 ## Decision
 
@@ -178,14 +177,16 @@ format are converted when a session loads.
 
 Version 1 covers core, daemon, TUI, CLI and VS Code.
 
-### What this task changes
+### As implemented: the nested-repos refusal
 
 - `IsolationInactiveReason` gains `nested-repos`, and an inactive
   `IsolationAvailability` may carry `repos`, the paths behind the reason.
-- `isActive` refuses a repo that contains nested non-submodule repos, and a
-  `not-git` folder reports the repos directly inside it.
-- The orchestrator's fallback notice names them. Behavior is otherwise
-  unchanged: both cases still run in the workspace root, with one notice.
+- `isActive` refuses a repo that contains nested non-submodule repos, and the
+  orchestrator's fallback notice names them and says how to get isolation
+  back: ignore them in git, or make them submodules.
+- This slice also had a `not-git` folder name the repos directly inside it,
+  while such a folder still ran in the workspace root. The next slice made
+  those folders isolate, and the naming went with it (below).
 
 ### As implemented: detection, shared paths and bootstrap
 
@@ -292,6 +293,29 @@ and deviated on two.
 - **The stash names the repos it acts on**, and stashes all of them through the
   one call; there is no per-repo stash.
 
+### As implemented: the integration review
+
+Reviewing the branches together, end to end against real repositories,
+changed one thing and confirmed two.
+
+- **A loose link that leads nowhere is not shared.** An editor's lock file
+  (`.#NOTES.md`) is a symlink to nothing, and linking it into a task workspace
+  threw, so every task of the run failed to start. A shared path must resolve
+  now; one that does not is left out of the task workspaces, the notice and the
+  planner prompt.
+- **The planner's envelope (ADR-0008) is not widened.** Every link in a task
+  workspace points at the same path in the real workspace — a shared path at
+  itself, a bootstrap link at its repo — never further, so a path through a
+  task workspace reaches only what the same path in the workspace does. A user's
+  own link out of the workspace is shared as a link to that link, not to where
+  it leads. The planner's searches skip `.ordewell/` and follow no links, so
+  they neither enter a task workspace nor leave the workspace through one.
+- **Fork, rewind and compaction leave a group's run alone**, as they do a
+  group of one's: a fork carries no run, and the other two change the
+  conversation only. The planner's read of a running task's output (#3) and
+  the transcript lookup work in a group's task workspace, which is not itself
+  a repository, as they do in a worktree.
+
 ## Considered options
 
 - **Treating the parent folder as the unit and initializing it as a repo.**
@@ -318,6 +342,6 @@ and deviated on two.
   isolation guarantees.
 - `git merge-tree --write-tree` needs git 2.38; older git gets a handoff that
   can land some repos and not others, and says which.
-- Not yet true when this was accepted: the group, the task workspace, the shared
-  paths and the atomic handoff are recorded here and implemented by the slices
-  that follow.
+- VS Code multi-root workspaces remain a later slice: the first folder is the
+  workspace, as it always was, and the other roots are neither isolated nor
+  shared.

@@ -1,5 +1,13 @@
 # Worktree isolation for parallel task execution
 
+> What was built from this spec is recorded in
+> [ADR-0013](../adr/0013-worktree-isolation.md), and
+> [ADR-0014](../adr/0014-multi-repo-workspaces.md) widens it from one repository
+> to a repo group: a folder of repositories isolates them together, with the
+> `workspaceRepos` (`ORDEWELL_WORKSPACE_REPOS`) and `worktreeLinks`
+> (`ORDEWELL_WORKTREE_LINKS`) settings. Where they differ from this spec, the
+> ADRs are current.
+
 ## Problem Statement
 
 When an Ordewell plan runs, every task is executed by its **Runner** in the

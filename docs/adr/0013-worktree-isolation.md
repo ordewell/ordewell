@@ -74,7 +74,7 @@ the surfaces is separate work.
   boolean, since the orchestrator answers a dirty tree with an offer to stash or
   to run without isolation, and the others with a one-line notice and today's
   shared-root behavior.
-  *ADR-0014: any dirty repo in the group holds the whole run, the notice names the repos, and stash and "run without isolation" apply to the whole group. `nested-repos` is a new reason, and `not-git` names the repos found inside the folder.*
+  *ADR-0014: any dirty repo in the group holds the whole run, the notice names the repos, and stash and "run without isolation" apply to the whole group. `nested-repos` is a new reason, naming the nested repos; `not-git` is left for a folder with no repository in it, and `no-commits` for a group none of whose repos has a commit.*
 - **Bootstrap makes a worktree runnable.** Ignored artifacts — `node_modules`,
   `vendor`, `.venv`, `.env*`, `.envrc`, `.claude`, `.opencode`, `.codegraph` —
   are linked from the main worktree, only where the checkout does not already
@@ -141,6 +141,7 @@ the surfaces is separate work.
 
 - Non-git workspaces, a missing git binary, `no-commits` and a disabled setting
   behave exactly as before.
+  *ADR-0014: a folder that holds repositories is no longer a non-git workspace; it isolates them as a repo group. A repository with nested repositories that are not submodules, which used to isolate without them, is refused (`nested-repos`).*
 - Integration serializes, so the throughput gain is bounded by the dependency
   graph the planner emits. Isolation makes overlap safe; it does not predict it.
 - A linked `node_modules` is shared, so concurrent installs from two worktrees

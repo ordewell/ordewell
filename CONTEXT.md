@@ -340,14 +340,13 @@ state that ends with the run; put it on the attempt.
 
 **Isolated execution** — running each AI task in its own *worktree* instead of
 the shared workspace root, then integrating the results deterministically
-(ADR-0013, amended by ADR-0014). Available only when the workspace is a git
-repository with a clean tracked tree and `worktreeIsolation` on; otherwise every
-task runs in the workspace root exactly as before, and
-`WorktreeIsolation.isActive` says which of `disabled`, `git-missing`, `not-git`,
-`no-commits`, `dirty` or `nested-repos` applied (the last two, and `not-git`,
-may name the repositories behind them). ADR-0014 widens the unit from one
-repository to a *repo group*: a folder of repositories isolates them together,
-and `not-git` is left for a folder with none; a group's task integrates by an
+(ADR-0013, amended by ADR-0014). Available when the workspace forms a *repo
+group* — a git repository, or a folder of them — with a clean tracked tree in
+each repository and `worktreeIsolation` on; otherwise every task runs in the
+workspace root exactly as before, and `WorktreeIsolation.isActive` says which of
+`disabled`, `git-missing`, `not-git`, `no-commits`, `dirty` or `nested-repos`
+applied (the last three may name the repositories behind them). `not-git` is
+left for a folder with no repository in it. A group's task integrates by an
 atomic *landing*. The
 Runner is only ever handed a `cwd` (ADR-0007) — git never enters
 `ITerminalRunner`, `RunnerRegistry` or a runner adapter.
@@ -360,8 +359,8 @@ committing a task's work, the serialized integration merge, conflict detection,
 release, orphan pruning, and the end-of-run handoff (diff, merge, discard).
 `GitWorktreeIsolation` is the implementation; the orchestrator's tests use
 `FakeWorktreeIsolation` from `@ordewell/core/testing`, and git behavior is
-tested only against real temporary repositories. ADR-0014 keeps it the one owner
-of git and the filesystem while it grows from one repository to a repo group.
+tested only against real temporary repositories. Under ADR-0014 it owns them for
+every repository of the repo group.
 
 **Worktree** — a linked git checkout on its own branch, created for one task at
 `.ordewell/worktrees/<run-id>/<order>-<slug>` on branch
@@ -372,7 +371,9 @@ discards it and starts a fresh one from the current integration tip. Ignored
 artifacts (`node_modules`, `.env*`, `.claude`, …) are linked in from the main
 worktree so it is runnable at once — never `.ordewell/`, which stays at the main
 root. Under ADR-0014 a task has one worktree per repo of the group, gathered in
-its *task workspace*.
+its *task workspace*; each is bootstrapped from its own repo, with the
+`worktreeLinks` matches linked beside the defaults, and `worktreeSetupCommand`
+runs once per repo with `ORDEWELL_REPO` and `ORDEWELL_MAIN_REPO` set.
 *Avoid:* "workspace" for a worktree — the workspace is the user's checkout.
 
 **Repo group** — the git repositories isolated together for one workspace
@@ -395,8 +396,12 @@ parallel tasks that edit one. `.ordewell/` is never one. Symlinks on POSIX;
 junctions for directories and hard links for files on Windows, with a copy and a
 notice where a hard link is impossible. A directory that holds a deeper repo of
 the group is recreated in the task workspace rather than linked, and its other
-entries are shared one by one. Recorded in the run as `shared`, with the repos
-among them in `sharedRepos`.
+entries are shared one by one. A link that leads nowhere (an editor's lock file)
+is not shared: there is nothing to share, and linking it would fail every task.
+Every link points at the same path in the real workspace, never where a user's
+own link leads, so a task workspace reaches nothing the workspace does not and
+the planner's envelope (ADR-0008) is unchanged. Recorded in the run as `shared`,
+with the repos among them in `sharedRepos`.
 *Avoid:* "ignored file" — a shared path need not be ignored; "linked artifact"
 for the per-repo bootstrap links (`node_modules`, `.env*`), which are recorded
 and kept out of the task's commit.
