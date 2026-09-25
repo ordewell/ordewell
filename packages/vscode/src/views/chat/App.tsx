@@ -11,7 +11,7 @@ import HandoffCard from './components/HandoffCard';
 import CheckpointPanel from './components/CheckpointPanel';
 import type { RunnerMode } from './components/TaskCard';
 import type { TaskDraft } from './components/NewTaskCard';
-import { LegacyPlanState, DiscoveredModel, TaskModelAssignment, RunnerId, IsolationHandoff, TaskIsolation } from '@ordewell/core';
+import { LegacyPlanState, DiscoveredModel, TaskModelAssignment, RunnerId, IsolationHandoff, IsolationMergeResult, TaskIsolation } from '@ordewell/core';
 import type { AiProvider } from '@ordewell/core';
 import { summarizeToolCall } from '@ordewell/core/plan-utils';
 import { isPlanRevision, planSummaryLabel, nextDock } from './planDock';
@@ -133,6 +133,8 @@ export default function App() {
   const [taskIsolation, setTaskIsolation] = useState<Record<string, TaskIsolation>>({});
   /** The end-of-run handoff card, present until the run is merged, discarded or restarted. */
   const [handoff, setHandoff] = useState<IsolationHandoff | null>(null);
+  /** What the last Merge all did; a blocked or part-landed group stays visible until the run clears. */
+  const [mergeResult, setMergeResult] = useState<IsolationMergeResult | null>(null);
   const [prefill, setPrefill] = useState<string | undefined>(undefined);
   /** Is the plan dock open? See planDock.ts for when this flips. */
   const [dockExpanded, setDockExpanded] = useState(false);
@@ -226,6 +228,7 @@ export default function App() {
             setTaskIdle({});
             setTaskIsolation({});
             setHandoff(null);
+            setMergeResult(null);
             setDockExpanded((v) => nextDock(v, 'session-reset'));
           }
           setIsResearchActive(msg.state === 'researching');
@@ -298,6 +301,7 @@ export default function App() {
           setTaskOutput({});
           setTaskIsolation({});
           setHandoff(null);
+          setMergeResult(null);
           setDockExpanded((v) => nextDock(v, 'session-reset'));
           setTimeline(timelineFromHistory(msg.history ?? [], !!msg.hasPlan));
           break;
@@ -355,9 +359,14 @@ export default function App() {
           });
           break;
 
+        case 'isolationMergeResult':
+          setMergeResult(msg.result ?? null);
+          break;
+
         case 'isolationCleared':
           setTaskIsolation({});
           setHandoff(null);
+          setMergeResult(null);
           break;
 
         case 'researchProgress': {
@@ -644,6 +653,7 @@ export default function App() {
     setTaskOutput({});
     setTaskIsolation({});
     setHandoff(null);
+    setMergeResult(null);
     setDockExpanded((v) => nextDock(v, 'session-reset'));
     // A distinct message from stopResearch: /new resets the whole session,
     // while Stop only aborts the current planner turn.
@@ -1113,6 +1123,7 @@ export default function App() {
             <HandoffCard
               repos={handoff.repos}
               landed={handoff.landed}
+              mergeResult={mergeResult}
               onAction={(action) => handleIsolationAction(action)}
             />
           )}

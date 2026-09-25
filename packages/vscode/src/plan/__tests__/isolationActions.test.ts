@@ -81,6 +81,20 @@ describe('isolation_blocked host modal (ADR-0013)', () => {
     expect(session.continueWithStash).not.toHaveBeenCalled();
     expect(session.continueWithoutIsolation).not.toHaveBeenCalled();
   });
+
+  it('names a dirty group in the modal and stashes every repo when asked', async () => {
+    showWarningMessage.mockResolvedValue('Stash and continue');
+    const { d, session } = deps();
+    const message = 'Tracked files have uncommitted changes in api, web, so tasks cannot run in isolated worktrees. Stash them, or run this plan without isolation.';
+    handleIsolationBlocked(message, d);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const [shown] = showWarningMessage.mock.calls[0] as unknown as [string];
+    expect(shown).toContain('api, web');
+    expect(session.continueWithStash).toHaveBeenCalledTimes(1);
+    expect(session.continueWithoutIsolation).not.toHaveBeenCalled();
+  });
 });
 
 describe('handoff actions (ADR-0013)', () => {

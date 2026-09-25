@@ -9,6 +9,7 @@ function deps() {
     sendTaskIdle: vi.fn(),
     sendTaskIsolation: vi.fn(),
     showIsolationHandoff: vi.fn(),
+    showIsolationMergeResult: vi.fn(),
     showPlan: vi.fn(),
   };
   const plan = { status: 'draft', tasks: [] };
@@ -50,6 +51,38 @@ describe('worktree isolation messages (ADR-0013)', () => {
 
     expect(chatProvider.showIsolationHandoff).toHaveBeenCalledWith(handoff);
   });
+
+  it('posts a repo group handoff with each repo its own work', () => {
+    const { d, chatProvider } = deps();
+    const apiLanded = [{ taskId: 't1', order: 1, title: 'A' }];
+    const webLanded = [{ taskId: 't2', order: 2, title: 'B' }];
+    const handoff = {
+      repos: [
+        { path: 'api', integrationBranch: 'ordewell/r/integration', baseRef: 'aaa111', landed: apiLanded },
+        { path: 'web', integrationBranch: 'ordewell/r/integration', baseRef: 'bbb222', landed: webLanded },
+      ],
+      landed: [...apiLanded, ...webLanded],
+    };
+
+    handleSessionMessage({ type: 'isolation_handoff', ...handoff }, d);
+
+    expect(chatProvider.showIsolationHandoff).toHaveBeenCalledWith(handoff);
+  });
+
+  it('forwards a blocked Merge all result with every repo it names', () => {
+    const { d, chatProvider } = deps();
+    const result = {
+      outcome: 'blocked' as const,
+      blocked: [
+        { repo: 'api', reason: 'conflict' as const, files: ['src/a.ts'] },
+        { repo: 'web', reason: 'uncommitted-changes' as const, files: ['src/b.ts'] },
+      ],
+    };
+
+    handleSessionMessage({ type: 'isolation_merge', result }, d);
+
+    expect(chatProvider.showIsolationMergeResult).toHaveBeenCalledWith(result);
+  });
 });
 
 // The stream only reports changes, and a webview loses its state whenever it is
@@ -88,5 +121,22 @@ describe('replaying isolation to a webview that was not listening', () => {
 
     expect(chatProvider.sendTaskIsolation).not.toHaveBeenCalled();
     expect(chatProvider.showIsolationHandoff).not.toHaveBeenCalled();
+  });
+
+  it('replays a repo group mark and handoff, naming each repo', () => {
+    const group: IsolationView = {
+      tasks: { t1: { state: 'conflict', branch: 'ordewell/r/1-a', worktree: '/w/1-a', repos: ['api', 'web'], conflictRepo: 'api' } },
+      handoff: {
+        repos: [
+          { path: 'api', integrationBranch: 'ordewell/r/integration', baseRef: 'aaa111', landed: [{ taskId: 't1', order: 1, title: 'A' }] },
+          { path: 'web', integrationBranch: 'ordewell/r/integration', baseRef: 'bbb222', landed: [] },
+        ],
+        landed: [{ taskId: 't1', order: 1, title: 'A' }],
+      },
+    };
+    const chatProvider = replay({ view: group, executing: false });
+
+    expect(chatProvider.sendTaskIsolation.mock.calls).toEqual([['t1', group.tasks.t1]]);
+    expect(chatProvider.showIsolationHandoff).toHaveBeenCalledWith(group.handoff);
   });
 });

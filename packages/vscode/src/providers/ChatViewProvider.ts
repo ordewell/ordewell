@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { AiProvider, ConversationMessage, LegacyPlanState, Task, DiscoveredModel, ResearchProgress, RunnerId, TaskStatus, TaskIsolation, IsolationHandoff } from '@ordewell/core';
+import { AiProvider, ConversationMessage, LegacyPlanState, Task, DiscoveredModel, ResearchProgress, RunnerId, TaskStatus, TaskIsolation, IsolationHandoff, IsolationMergeResult } from '@ordewell/core';
 
 type ChatWebviewMessage =
   | {
@@ -93,6 +93,9 @@ type ExtensionChatMessage =
   // The end-of-run handoff: each repo's integration branch and base, and what
   // landed, with the actions the host performs on request.
   | { type: 'isolationHandoff'; repos: IsolationHandoff['repos']; landed: IsolationHandoff['landed'] }
+  // What "Merge all" did: all-or-nothing per repo, or which repos one landed in
+  // before it stopped. A group of one reports its single merge as before.
+  | { type: 'isolationMergeResult'; result: IsolationMergeResult }
   // The run's isolation is gone (discarded or the plan restarted); the handoff
   // card and every conflict indicator clear.
   | { type: 'isolationCleared' }
@@ -214,6 +217,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** The end-of-run handoff card: each repo's branch and base ref, and what landed. */
   showIsolationHandoff(handoff: IsolationHandoff): void {
     this.postMessage({ type: 'isolationHandoff', ...handoff });
+  }
+
+  /** What "Merge all" did, so a blocked or part-landed group is visible on the card. */
+  showIsolationMergeResult(result: IsolationMergeResult): void {
+    this.postMessage({ type: 'isolationMergeResult', result });
   }
 
   /** Drop the handoff card and every per-task isolation indicator. */
