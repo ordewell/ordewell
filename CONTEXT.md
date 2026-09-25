@@ -416,8 +416,10 @@ the review diff is taken against it, so switching or advancing the user's branch
 mid-run does not retarget the run.
 
 **Isolation run** — one Execute-Plan click or one manual task run's worth of
-isolation: the `IsolationRun` record holding the run id, base ref, integration
-branch name and each task's branch, worktree and status. It is plain JSON so it
+isolation: the `IsolationRun` record holding the run id, the repo group (`repos`:
+each repo's path, root, base ref and integration branch; a single repository is
+one repo at `.`), the shared paths, and each task's branch, task workspace,
+per-repo worktree and status. It is plain JSON so it
 can persist with the plan state, and a new run mints a new record. Task ids are
 only unique within one plan, so every operation that acts on a task takes the run
 it belongs to.
@@ -432,9 +434,12 @@ workspace path) loses its worktrees but keeps its integration branch. A run clos
 when its last attempt ends, however it ends — verdict, cancel, Mark complete or a
 failed spawn — so the next one decides its own mode. The field belongs to one
 plan: a fork must not copy it.
+A record saved in the ADR-0013 shape (the refs on the run itself, one `worktree`
+per task) is converted to a group of one when plan state is loaded, so a session
+saved by 0.4.23 resumes and hands off as it would have.
 
-**Isolation handoff** — the end of an isolated run: the integration branch, the
-base ref and the tasks that landed, broadcast as `isolation_handoff`. What
+**Isolation handoff** — the end of an isolated run: for each repo, its integration
+branch and base ref, and the tasks that landed, broadcast as `isolation_handoff`. What
 follows is the user's: `reviewRunDiff`, `mergeRun` (a normal `git merge` into the
 checked-out branch, only ever on that explicit call), `cleanupRun` (worktrees and
 task branches go, the integration branch stays) and `discardRun` (everything
