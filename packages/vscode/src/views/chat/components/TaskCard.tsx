@@ -148,6 +148,10 @@ export default function TaskCard({ task, models, modes, modelsByRunner, modesByR
 
   const hasConflict = isolation?.state === 'conflict';
   const isolatedWork = isolation && isolation.state !== 'none' ? isolation : null;
+  // A lone repository at the workspace root is not named: the group of one
+  // reads exactly as it did before repo groups existed.
+  const changedRepos = isolatedWork ? (isolatedWork.repos ?? []).filter((r) => r !== '.') : [];
+  const conflictRepo = isolatedWork?.conflictRepo && isolatedWork.conflictRepo !== '.' ? isolatedWork.conflictRepo : null;
 
   // A live tail is only useful pinned to its newest line; left alone the pane
   // holds the top of the buffer and the incoming output scrolls out of sight.
@@ -210,8 +214,8 @@ export default function TaskCard({ task, models, modes, modelsByRunner, modesByR
             collapsed card, since it is the one isolation state that needs a
             decision, not just inspection. */}
         {hasConflict && (
-          <span className="task-isolation-badge conflict" title="Integrating this task conflicted. Its worktree and branch are kept.">
-            Conflict
+          <span className="task-isolation-badge conflict" title={`Integrating this task conflicted${conflictRepo ? ` in ${conflictRepo}` : ''}. Its worktree and branch are kept.`}>
+            Conflict{conflictRepo ? ` in ${conflictRepo}` : ''}
           </span>
         )}
 
@@ -296,6 +300,12 @@ export default function TaskCard({ task, models, modes, modelsByRunner, modesByR
             <div className="task-isolation">
               <div className="task-isolation-row"><span className="task-isolation-label">Branch</span><code>{isolatedWork.branch}</code></div>
               <div className="task-isolation-row"><span className="task-isolation-label">Worktree</span><code>{isolatedWork.worktree}</code></div>
+              {changedRepos.length > 0 && (
+                <div className="task-isolation-row task-isolation-repos"><span className="task-isolation-label">Repos</span><code>{changedRepos.join(', ')}</code></div>
+              )}
+              {conflictRepo && (
+                <div className="task-isolation-row task-isolation-conflict-repo"><span className="task-isolation-label">Conflict</span><code>{conflictRepo}</code></div>
+              )}
               {hasConflict && onResolveConflict && (
                 offeringResolve ? (
                   <div className="task-isolation-resolve">
