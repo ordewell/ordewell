@@ -75,7 +75,7 @@ function sharedRootNotice(reason: SharedRootReason, repos: string[]): string {
         : `The repository has no commits yet — ${SHARED_ROOT_TAIL}`;
     case 'not-git': return `Not a git repository — ${SHARED_ROOT_TAIL}`;
     case 'nested-repos':
-      return `This repository contains nested repositories that are not submodules (${repos.join(', ')}) — ${SHARED_ROOT_TAIL}`;
+      return `This repository contains nested repositories that are not submodules (${repos.join(', ')}) — ${SHARED_ROOT_TAIL} Ignore them in git or make them submodules to isolate this repository.`;
   }
 }
 

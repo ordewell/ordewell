@@ -309,7 +309,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
 
     it('names the nested repositories that keep a repository from isolating', async () => {
       expect(await noticesFor({ active: false, reason: 'nested-repos', repos: ['services/billing', 'tools/cli'] })).toContain(
-        'This repository contains nested repositories that are not submodules (services/billing, tools/cli) — tasks run in the workspace root without worktree isolation.',
+        'This repository contains nested repositories that are not submodules (services/billing, tools/cli) — tasks run in the workspace root without worktree isolation. Ignore them in git or make them submodules to isolate this repository.',
       );
     });
 
@@ -600,7 +600,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
 
       expect(notices).toEqual([{
         level: 'info',
-        message: 'This repository contains nested repositories that are not submodules (services/billing) — tasks run in the workspace root without worktree isolation.',
+        message: 'This repository contains nested repositories that are not submodules (services/billing) — tasks run in the workspace root without worktree isolation. Ignore them in git or make them submodules to isolate this repository.',
       }]);
     });
 
