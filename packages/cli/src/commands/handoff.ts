@@ -1,7 +1,7 @@
 import { createInterface } from 'readline';
 import { hasFlag, positionals } from '../utils';
 import type { ApiClient } from '../daemonClient';
-import { handoffBase, handoffBranch, isolationOfPlan } from '../isolation';
+import { handoffBase, handoffBranch, isolationOfPlan, isRepoGroup, mergeOutcome, repoResultLines, reposWithWork } from '../isolation';
 import { HANDOFF_ACTIONS } from '../tui/handoff';
 import { adopted } from './conversation';
 import { fail } from './shared';
@@ -42,6 +42,8 @@ export async function handleHandoff(
   const handoff = isolationOfPlan(plan)?.handoff;
   if (!handoff) fail('This session has no isolated run to hand off.');
   const branch = handoffBranch(handoff);
+  const group = isRepoGroup(handoff);
+  if (group) for (const line of repoResultLines(handoff)) console.error(line);
 
   const asked = hasFlag(subArgs, '--yes');
   const confirmed = async (question: string): Promise<void> => {
@@ -66,25 +68,24 @@ export async function handleHandoff(
       return;
     }
     case 'merge': {
-      await confirmed(`Merge ${branch} into the branch you have checked out?`);
-      const { outcome } = await attempt(() => api.mergeRun(sessionId));
-      if (outcome === 'merged') {
-        console.log(`Merged ${branch} into your checked-out branch.`);
-        return;
-      }
-      fail(outcome === 'conflict'
-        ? `Merging ${branch} conflicted, so it was aborted — your tree is as it was. Merge it with git and resolve the conflict there.`
-        : `Could not merge ${branch} — finish or abort the merge already in progress, then try again.`);
+      await confirmed(group
+        ? `Merge ${branch} into the branch checked out in each of ${reposWithWork(handoff).join(', ')}? Nothing is merged unless every repository can take it.`
+        : `Merge ${branch} into the branch you have checked out?`);
+      const { ok, message } = mergeOutcome(await attempt(() => api.mergeRun(sessionId)), branch, group);
+      if (ok) console.log(message);
+      else fail(message);
       return;
     }
     case 'discard':
-      await confirmed(`Discard this run's worktrees and task branches, and delete ${branch}?`);
+      await confirmed(group
+        ? `Discard this run's worktrees and task branches, and delete ${branch} in every repository?`
+        : `Discard this run's worktrees and task branches, and delete ${branch}?`);
       await attempt(() => api.discardRun(sessionId));
-      console.log(`Discarded the run and ${branch}.`);
+      console.log(`Discarded the run and ${branch}${group ? ' in every repository' : ''}.`);
       return;
     case 'cleanup':
       await attempt(() => api.cleanupRun(sessionId));
-      console.log(`Removed the run's worktrees and task branches; ${branch} is kept.`);
+      console.log(`Removed the run's worktrees and task branches; ${branch} is kept${group ? ' in every repository' : ''}.`);
       return;
   }
 }

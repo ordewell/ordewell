@@ -2,7 +2,7 @@ import type { Effect, Step } from './reducer';
 import { say } from './transcript';
 import { sanitize } from './ansi';
 import type { Key } from './keys';
-import { handoffBase, handoffBranch, isRepoGroup, type PlanIsolationView } from '../isolation';
+import { handoffBase, handoffBranch, isRepoGroup, reposWithWork, type PlanIsolationView } from '../isolation';
 import type { HandoffView, Overlay, PickerItem, TaskIsolationView, TaskView, TuiState } from './state';
 
 /**
@@ -32,12 +32,6 @@ export function handoffActions(handoff: HandoffView): ReadonlyArray<{ id: Handof
 }
 
 const reposOf = (handoff: HandoffView): string => handoff.repos.map((r) => r.path).join(', ');
-
-/** The repos Merge all will merge: those with work on their integration branch, else all of them. */
-function reposWithWork(handoff: HandoffView): string {
-  const withWork = handoff.repos.filter((r) => r.landed.length > 0);
-  return (withWork.length > 0 ? withWork : handoff.repos).map((r) => r.path).join(', ');
-}
 
 export const HANDOFF_USAGE = `/handoff [${HANDOFF_ACTIONS.map((a) => a.id).join('|')}]`;
 
@@ -85,7 +79,7 @@ export function runHandoffAction(state: TuiState, id: HandoffActionId): Step {
             ? {
               kind: 'confirm',
               title: 'Merge all into your branches?',
-              message: `Merge ${handoffBranch(handoff)} into whatever each of ${reposWithWork(handoff)} has checked out. Ordewell never does this on its own. It checks every repository first and merges none unless every repository can take it; on git older than 2.38 it goes repository by repository and stops at the first that fails. A merge that conflicts is aborted, and your trees stay as they were.`,
+              message: `Merge ${handoffBranch(handoff)} into whatever each of ${reposWithWork(handoff).join(', ')} has checked out. Ordewell never does this on its own. It checks every repository first and merges none unless every repository can take it; on git older than 2.38 it goes repository by repository and stops at the first that fails. A merge that conflicts is aborted, and your trees stay as they were.`,
               action: { kind: 'merge-run' },
             }
             : {

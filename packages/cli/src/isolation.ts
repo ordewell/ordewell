@@ -118,6 +118,12 @@ export function isRepoGroup(handoff: HandoffView): boolean {
   return handoff.repos.some((r) => r.path !== '.');
 }
 
+/** The repos Merge all will merge: those with work on their integration branch, else all of them. */
+export function reposWithWork(handoff: HandoffView): string[] {
+  const withWork = handoff.repos.filter((r) => r.landed.length > 0);
+  return (withWork.length > 0 ? withWork : handoff.repos).map((r) => r.path);
+}
+
 /** One line per repo: what landed on its integration branch, or that there is nothing to merge. */
 export function repoResultLines(handoff: HandoffView): string[] {
   return handoff.repos.map(({ path, landed }) => {
