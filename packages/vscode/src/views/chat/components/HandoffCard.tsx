@@ -6,9 +6,14 @@ export interface HandoffLandedTask {
   title: string;
 }
 
-interface HandoffCardProps {
-  branch: string;
+export interface HandoffRepo {
+  path: string;
+  integrationBranch: string;
   baseRef: string;
+}
+
+interface HandoffCardProps {
+  repos: HandoffRepo[];
   landed: HandoffLandedTask[];
   /** The run is settled, so every action here is available. */
   onAction: (action: 'reviewDiff' | 'merge' | 'discard' | 'cleanup') => void;
@@ -19,8 +24,11 @@ interface HandoffCardProps {
  * checked-out branch on its own, so this is where that irreversible step is
  * offered — next to the one artifact to review it with, the integration branch.
  */
-export default function HandoffCard({ branch, baseRef, landed, onAction }: HandoffCardProps) {
+export default function HandoffCard({ repos, landed, onAction }: HandoffCardProps) {
   const sorted = [...landed].sort((a, b) => a.order - b.order);
+  // Every repo's integration branch has the same name.
+  const branch = [...new Set(repos.map((r) => r.integrationBranch))].join(', ');
+  const baseRef = repos.map((r) => r.baseRef.slice(0, 12)).join(', ');
   return (
     <div className="isolation-handoff">
       <div className="isolation-handoff-header">
@@ -28,7 +36,7 @@ export default function HandoffCard({ branch, baseRef, landed, onAction }: Hando
         <code className="isolation-handoff-branch">{branch}</code>
       </div>
       <div className="isolation-handoff-base">
-        {sorted.length} task{sorted.length === 1 ? '' : 's'} landed on top of <code>{baseRef.slice(0, 12)}</code>
+        {sorted.length} task{sorted.length === 1 ? '' : 's'} landed on top of <code>{baseRef}</code>
       </div>
       {sorted.length > 0 && (
         <ul className="isolation-handoff-landed">

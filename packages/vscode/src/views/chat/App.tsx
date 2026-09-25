@@ -350,8 +350,7 @@ export default function App() {
 
         case 'isolationHandoff':
           setHandoff({
-            branch: msg.branch ?? '',
-            baseRef: msg.baseRef ?? '',
+            repos: msg.repos ?? [],
             landed: msg.landed ?? [],
           });
           break;
@@ -1112,8 +1111,7 @@ export default function App() {
           />
           {handoff && (
             <HandoffCard
-              branch={handoff.branch}
-              baseRef={handoff.baseRef}
+              repos={handoff.repos}
               landed={handoff.landed}
               onAction={(action) => handleIsolationAction(action)}
             />

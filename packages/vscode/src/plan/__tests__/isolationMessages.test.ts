@@ -24,7 +24,7 @@ function deps() {
 describe('worktree isolation messages (ADR-0013)', () => {
   it('forwards each task\'s isolation to the webview', () => {
     const { d, chatProvider } = deps();
-    const conflict: TaskIsolation = { state: 'conflict', branch: 'ordewell/r/1-a', worktree: '/w/1-a' };
+    const conflict: TaskIsolation = { state: 'conflict', branch: 'ordewell/r/1-a', worktree: '/w/1-a', repos: [], conflictRepo: '.' };
 
     handleSessionMessage({
       type: 'status_update',
@@ -40,10 +40,10 @@ describe('worktree isolation messages (ADR-0013)', () => {
 
   it('posts the end-of-run handoff to the webview', () => {
     const { d, chatProvider } = deps();
+    const landed = [{ taskId: 't1', order: 1, title: 'A' }];
     const handoff = {
-      branch: 'ordewell/r/integration',
-      baseRef: 'abc123',
-      landed: [{ taskId: 't1', order: 1, title: 'A' }],
+      repos: [{ path: '.', integrationBranch: 'ordewell/r/integration', baseRef: 'abc123', landed }],
+      landed,
     };
 
     handleSessionMessage({ type: 'isolation_handoff', ...handoff }, d);
@@ -56,8 +56,11 @@ describe('worktree isolation messages (ADR-0013)', () => {
 // disposed — so a reconnect or a loaded session is re-told from the run record.
 describe('replaying isolation to a webview that was not listening', () => {
   const view: IsolationView = {
-    tasks: { t2: { state: 'conflict', branch: 'ordewell/r/2-b', worktree: '/w/2-b' } },
-    handoff: { branch: 'ordewell/r/integration', baseRef: 'abc123', landed: [{ taskId: 't1', order: 1, title: 'A' }] },
+    tasks: { t2: { state: 'conflict', branch: 'ordewell/r/2-b', worktree: '/w/2-b', repos: [], conflictRepo: '.' } },
+    handoff: {
+      repos: [{ path: '.', integrationBranch: 'ordewell/r/integration', baseRef: 'abc123', landed: [{ taskId: 't1', order: 1, title: 'A' }] }],
+      landed: [{ taskId: 't1', order: 1, title: 'A' }],
+    },
   };
 
   function replay(opts: { view: IsolationView | null; executing: boolean }) {

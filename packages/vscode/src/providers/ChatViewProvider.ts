@@ -90,9 +90,9 @@ type ExtensionChatMessage =
   // Per-task isolation state (ADR-0013) — sent only for tasks that have one, so
   // a shared-root plan's cards stay quiet (US34).
   | { type: 'taskIsolation'; taskId: string; isolation: TaskIsolation }
-  // The end-of-run handoff: the integration branch and what landed, with the
-  // actions the host performs on request.
-  | { type: 'isolationHandoff'; branch: string; baseRef: string; landed: IsolationHandoff['landed'] }
+  // The end-of-run handoff: each repo's integration branch and base, and what
+  // landed, with the actions the host performs on request.
+  | { type: 'isolationHandoff'; repos: IsolationHandoff['repos']; landed: IsolationHandoff['landed'] }
   // The run's isolation is gone (discarded or the plan restarted); the handoff
   // card and every conflict indicator clear.
   | { type: 'isolationCleared' }
@@ -211,7 +211,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.postMessage({ type: 'taskIsolation', taskId, isolation });
   }
 
-  /** The end-of-run handoff card: branch, base ref and what landed. */
+  /** The end-of-run handoff card: each repo's branch and base ref, and what landed. */
   showIsolationHandoff(handoff: IsolationHandoff): void {
     this.postMessage({ type: 'isolationHandoff', ...handoff });
   }

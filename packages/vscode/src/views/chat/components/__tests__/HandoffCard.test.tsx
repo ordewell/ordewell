@@ -4,8 +4,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import HandoffCard from '../HandoffCard';
 
 const handoff = {
-  branch: 'ordewell/run-1/integration',
-  baseRef: 'abcdef0123456789',
+  repos: [{ path: '.', integrationBranch: 'ordewell/run-1/integration', baseRef: 'abcdef0123456789' }],
   landed: [
     { taskId: 't2', order: 2, title: 'Second task' },
     { taskId: 't1', order: 1, title: 'First task' },

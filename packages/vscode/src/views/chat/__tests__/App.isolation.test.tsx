@@ -23,10 +23,10 @@ const plan = {
   lastUpdated: new Date().toISOString(),
 };
 
+const landed = [{ taskId: 't1', order: 1, title: 'Add rate limiting' }];
 const handoff = {
-  branch: 'ordewell/run-1/integration',
-  baseRef: 'abcdef0123456789',
-  landed: [{ taskId: 't1', order: 1, title: 'Add rate limiting' }],
+  repos: [{ path: '.', integrationBranch: 'ordewell/run-1/integration', baseRef: 'abcdef0123456789', landed }],
+  landed,
 };
 
 describe('App — worktree isolation (ADR-0013)', () => {

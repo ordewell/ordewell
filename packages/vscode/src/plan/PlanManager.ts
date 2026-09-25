@@ -515,7 +515,7 @@ export function handleSessionMessage(
     // An isolated run settled: the branch its work landed on and what landed.
     // Sent before `execution_complete`; the webview shows the handoff card.
     case 'isolation_handoff':
-      handleIsolationHandoff({ branch: msg.branch, baseRef: msg.baseRef, landed: msg.landed }, deps);
+      handleIsolationHandoff({ repos: msg.repos, landed: msg.landed }, deps);
       break;
     // Handled by `routePlannerStream` above (it returns before the switch), or
     // not rendered by this surface at all. Named so a new SessionMessage variant
