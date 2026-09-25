@@ -12,13 +12,13 @@ export async function handleApprove(subArgs: string[], injectedApi?: ApiClient):
   const sessionId = resolveSessionId(subArgs);
   const api = await connect(subArgs, injectedApi);
 
-  try {
-    await api.approveReview(sessionId);
-  } catch (err) {
-    console.error(`Failed to approve: ${(err as Error).message}`);
-    process.exit(1);
-  }
-
-  console.error('Plan approved — continuing execution.');
-  await followExecution(api, sessionId);
+  await followExecution(api, sessionId, async () => {
+    try {
+      await api.approveReview(sessionId);
+    } catch (err) {
+      console.error(`Failed to approve: ${(err as Error).message}`);
+      process.exit(1);
+    }
+    console.error('Plan approved — continuing execution.');
+  });
 }

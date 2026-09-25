@@ -1,7 +1,8 @@
 import { flag, hasFlag, readLastSession } from '../utils';
 import { iconFor } from '../utils/output';
-import { ensureDaemon, ApiClient, resolvePort, type TaskStatus } from '../daemonClient';
+import type { ApiClient, TaskStatus } from '../daemonClient';
 import { truncateCheckpointSummary } from '@ordewell/core';
+import { connect } from './shared';
 
 /**
  * Resolve the session every execution command acts on: `--session-id`, else the
@@ -25,8 +26,18 @@ export function resolveSessionId(subArgs: string[]): string {
  * Follow a session's execution to completion, redrawing one line per task.
  * Shared by `run` and `approve` — both hand the orchestrator work and then
  * watch the same stream, and a second copy of the redraw would drift.
+ *
+ * `start` is the call that hands over the work, made only once the stream is
+ * open: what it starts can answer before the call returns — a dirty tree's
+ * block is broadcast from inside it — and a stream opened afterwards waited
+ * for a run that never began.
  */
-export async function followExecution(api: ApiClient, sessionId: string, onBlocked?: 'stash' | 'shared'): Promise<void> {
+export async function followExecution(
+  api: ApiClient,
+  sessionId: string,
+  start: () => Promise<unknown>,
+  onBlocked?: 'stash' | 'shared',
+): Promise<void> {
   let blocked: string | null = null;
   const taskStates = new Map<string, TaskStatus>();
   let lastPrinted = '';
@@ -55,41 +66,49 @@ export async function followExecution(api: ApiClient, sessionId: string, onBlock
     }
   }
 
-  try {
-    await api.streamExecution(sessionId, (event) => {
-      if (event.type === 'task_started') {
-        process.stderr.write(`[${event.order}/${event.title}] Started: ${event.runner} / ${event.modelId}\n`);
-      }
-      if (event.type === 'checkpoint') {
-        process.stderr.write(`· Checkpoint — ${event.taskTitle}: ${truncateCheckpointSummary(event.summary)}\n`);
-      }
-      if (event.type === 'status_update' && event.tasks) {
-        printStatus(event.tasks as TaskStatus[]);
-      }
-      if (event.type === 'review_needed') {
-        console.log('\nPlan needs your sign-off — run `ordewell approve` to continue.');
-      }
-      if (event.type === 'execution_complete') {
-        const s = event as { summary?: { completed?: number; failed?: number; blocked?: number; total: number } };
-        const summary = s.summary || { total: 0 };
-        console.log(
-          `\nDone. ${summary.completed || 0} completed, ${summary.failed || 0} failed, ${summary.blocked ?? (summary.total - (summary.completed || 0) - (summary.failed || 0))} blocked.`,
-        );
-      }
-      if (event.type === 'execution_stopped') {
-        console.log('\nExecution stopped.');
-      }
-      if (event.type === 'isolation_blocked') blocked = event.message;
-      if (event.type === 'isolation_handoff') {
-        const n = event.landed.length;
-        console.log(`\nRun finished on ${event.branch} — ${n} task${n === 1 ? '' : 's'} landed.`);
-        console.log('  `ordewell handoff review|merge|discard|cleanup` to land it.');
-      }
-    });
-  } catch (err) {
+  let settleReady: (error?: Error) => void = () => {};
+  const streamReady = new Promise<void>((resolve, reject) => {
+    settleReady = (error) => (error ? reject(error) : resolve());
+  });
+  const stream = api.streamExecution(sessionId, (event) => {
+    if (event.type === 'task_started') {
+      process.stderr.write(`[${event.order}/${event.title}] Started: ${event.runner} / ${event.modelId}\n`);
+    }
+    if (event.type === 'checkpoint') {
+      process.stderr.write(`· Checkpoint — ${event.taskTitle}: ${truncateCheckpointSummary(event.summary)}\n`);
+    }
+    if (event.type === 'status_update' && event.tasks) {
+      printStatus(event.tasks as TaskStatus[]);
+    }
+    if (event.type === 'review_needed') {
+      console.log('\nPlan needs your sign-off — run `ordewell approve` to continue.');
+    }
+    if (event.type === 'execution_complete') {
+      const s = event as { summary?: { completed?: number; failed?: number; blocked?: number; total: number } };
+      const summary = s.summary || { total: 0 };
+      console.log(
+        `\nDone. ${summary.completed || 0} completed, ${summary.failed || 0} failed, ${summary.blocked ?? (summary.total - (summary.completed || 0) - (summary.failed || 0))} blocked.`,
+      );
+    }
+    if (event.type === 'execution_stopped') {
+      console.log('\nExecution stopped.');
+    }
+    if (event.type === 'isolation_blocked') blocked = event.message;
+    if (event.type === 'isolation_handoff') {
+      const n = event.landed.length;
+      console.log(`\nRun finished on ${event.branch} — ${n} task${n === 1 ? '' : 's'} landed.`);
+      console.log('  `ordewell handoff review|merge|discard|cleanup` to land it.');
+    }
+  }, settleReady);
+
+  const streamFailed = (err: unknown): never => {
     console.error(`Execution stream error: ${(err as Error).message}`);
     process.exit(1);
-  }
+  };
+  void stream.catch(settleReady);
+  await streamReady.catch(streamFailed);
+  await start();
+  await stream.catch(streamFailed);
 
   if (blocked === null) return;
 
@@ -101,23 +120,21 @@ export async function followExecution(api: ApiClient, sessionId: string, onBlock
     console.error('Nothing was started. Re-run with `--stash` to stash your tracked changes first, or `--without-isolation` to run in your working tree this once.');
     process.exit(1);
   }
-  const following = followExecution(api, sessionId);
-  await (onBlocked === 'stash' ? api.continueWithStash(sessionId) : api.continueWithoutIsolation(sessionId));
-  await following;
+  await followExecution(api, sessionId, () => (onBlocked === 'stash' ? api.continueWithStash(sessionId) : api.continueWithoutIsolation(sessionId)));
 }
 
-export async function handleRun(subArgs: string[]): Promise<void> {
+export async function handleRun(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
   const sessionId = resolveSessionId(subArgs);
-  const api = new ApiClient(await ensureDaemon(resolvePort(subArgs)));
+  const api = await connect(subArgs, injectedApi);
 
   console.error(`Executing plan...`);
-  try {
-    await api.executePlan(sessionId);
-  } catch (err) {
-    console.error(`Failed to start execution: ${(err as Error).message}`);
-    process.exit(1);
-  }
-
   const onBlocked = hasFlag(subArgs, '--stash') ? 'stash' : hasFlag(subArgs, '--without-isolation') ? 'shared' : undefined;
-  await followExecution(api, sessionId, onBlocked);
+  await followExecution(api, sessionId, async () => {
+    try {
+      await api.executePlan(sessionId);
+    } catch (err) {
+      console.error(`Failed to start execution: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  }, onBlocked);
 }
