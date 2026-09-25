@@ -223,6 +223,25 @@ describe('OrchestratorPool.compactConversation', () => {
     await turn;
   });
 
+  it('refuses a message sent mid-compaction without displacing the compaction\'s abort controller', async () => {
+    let signal: AbortSignal | undefined;
+    let finish!: (v: { summary: string; keptMessages: number }) => void;
+    vi.spyOn(Session.prototype, 'compactConversation').mockImplementation((s) => {
+      signal = s;
+      return new Promise((resolve) => { finish = resolve; });
+    });
+    const reply = vi.spyOn(Session.prototype, 'continueConversation');
+
+    const call = pool.compactConversation('session-saved');
+    await expect(pool.continuePlanning('session-saved', 'and CSV')).rejects.toThrow(ConversationBusyError);
+
+    expect(reply).not.toHaveBeenCalled();
+    expect(pool.cancelPlanning('session-saved')).toBe(true);
+    expect(signal?.aborted).toBe(true);
+    finish({ summary: 's', keptMessages: 4 });
+    await call;
+  });
+
   it('refuses a session the pool never adopted', async () => {
     await expect(pool.compactConversation('session-nope')).rejects.toThrow('Session not found');
   });

@@ -165,6 +165,18 @@ describe('POST /:sessionId/conversation/compact', () => {
 });
 
 /** The mocked-pool tests pin the contract; this drives a real pool, Session and session store. */
+describe('POST /:sessionId/converse/message', () => {
+  it('is a conflict while the conversation is being condensed', async () => {
+    const continuePlanning = vi.fn().mockRejectedValue(new ConversationBusyError('send a message'));
+    const app = appFor(poolWith({}, { continuePlanning }));
+
+    const res = await post(app, 'converse/message', { message: 'and CSV' });
+
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toMatch(/planner is answering/);
+  });
+});
+
 describe('conversation routes — real daemon wiring', () => {
   it('rewinds a saved session and persists it, then forks it into a second addressable session', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'ordewell-conv-'));

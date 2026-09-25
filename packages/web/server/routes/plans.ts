@@ -289,6 +289,7 @@ export function plansRoute(pool: OrchestratorPool) {
       return c.json({ plan });
     } catch (err) {
       const e = err as Error;
+      if (e instanceof ConversationBusyError) return c.json({ error: e.message }, 409);
       const status = e.message === 'Session not found' ? 404 : 500;
       return c.json({ error: e.message }, status as Parameters<typeof c.json>[1]);
     }

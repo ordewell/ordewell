@@ -202,6 +202,22 @@ describe('Session.compactConversation', () => {
     await turn;
   });
 
+  it('refuses a message sent while the summary is being written, and replaces only what it summarised', async () => {
+    let finish: (turn: ConversationTurn) => void = () => {};
+    const { planner, state } = apiStylePlanner();
+    planner.continueConversation = vi.fn(() => new Promise<ConversationTurn>((resolve) => { finish = resolve; }));
+    const session = sessionWith(planner);
+    state.context = ['live'];
+
+    const compaction = session.compactConversation();
+    await expect(session.continueConversation('and CSV')).rejects.toThrow(ConversationBusyError);
+    finish(summary(SUMMARY_TEXT));
+    await compaction;
+
+    expect(planner.continueConversation).toHaveBeenCalledTimes(1);
+    expect(session.planState!.conversationHistory!.map((m) => m.content).join('\n')).not.toContain('and CSV');
+  });
+
   it('refuses a conversation too short to be worth condensing', async () => {
     const { planner } = apiStylePlanner();
     const session = makeSession({ aiService: planner });

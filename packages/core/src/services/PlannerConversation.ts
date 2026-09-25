@@ -163,6 +163,7 @@ export class PlannerConversation {
   /** Bumped on every persist, so a rollback can tell whether its writes already reached disk. */
   private persisted = 0;
   private turnsInFlight = 0;
+  private compacting = false;
 
   constructor(private readonly host: PlannerConversationHost) {}
 
@@ -291,6 +292,7 @@ export class PlannerConversation {
       throw new ConversationEditError('The conversation is too short to condense — it takes more than two exchanges before a summary saves anything.');
     }
     return this.inTurn(async () => {
+      this.compacting = true;
       try {
         const summary = await this.summarize(signal);
         const tail = keptTail(this.transcript);
@@ -306,6 +308,7 @@ export class PlannerConversation {
         });
         return { summary, keptMessages: tail.length };
       } finally {
+        this.compacting = false;
         // Success and failure alike: the live context either holds the
         // conversation this replaced or a summary exchange nobody kept.
         this.reset();
@@ -388,6 +391,10 @@ export class PlannerConversation {
    * writes back out, so session memory never drifts from disk and the UI.
    */
   async reply(message: string, options: ReplyOptions = {}): Promise<LegacyPlanState> {
+    // A reply would share the summary turn's live context, which the
+    // compaction resets as it lands, and its message would be condensed away
+    // unanswered or left dangling after the summary.
+    if (this.compacting) throw new ConversationBusyError('send a message');
     return this.inTurn(() => this.replyTurn(message, options));
   }
 

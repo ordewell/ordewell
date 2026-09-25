@@ -60,6 +60,8 @@ export class OrchestratorPool {
   private clients = new Map<string, Set<WebSocket>>();
   /** The in-flight planning turn's abort controller, one per session — see `cancelPlanning`. */
   private planningAborts = new Map<string, AbortController>();
+  /** Sessions whose planning slot a compaction holds; a reply must not take it over. */
+  private compacting = new Set<string>();
   private registry: CoreRunnerRegistry = (() => { const r = new RunnerRegistry(); r.loadUserPlugins(); return r; })();
   private modelResolver: ModelResolver;
   private runnerInstallation = new RunnerInstallation(this.registry);
@@ -478,8 +480,14 @@ export class OrchestratorPool {
     }
   }
 
-  /** Continue the planner dialogue with the user's reply. */
+  /**
+   * Continue the planner dialogue with the user's reply. Refused during a
+   * compaction before the abort slot is touched: the session refuses the reply
+   * too, but by then the compaction's controller would be gone and a stop could
+   * no longer reach its summary turn.
+   */
   async continuePlanning(sessionId: string, message: string): Promise<LegacyPlanState> {
+    if (this.compacting.has(sessionId)) throw new ConversationBusyError('send a message');
     const controller = new AbortController();
     this.planningAborts.set(sessionId, controller);
     try {
@@ -500,10 +508,12 @@ export class OrchestratorPool {
     if (this.planningAborts.has(sessionId)) throw new ConversationBusyError('condense the conversation');
     const controller = new AbortController();
     this.planningAborts.set(sessionId, controller);
+    this.compacting.add(sessionId);
     try {
       const compaction = await session.compactConversation(controller.signal);
       return { ...compaction, plan: session.planState! };
     } finally {
+      this.compacting.delete(sessionId);
       this.clearPlanningAbort(sessionId, controller);
     }
   }
