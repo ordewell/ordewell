@@ -262,3 +262,12 @@ TUI lets a message through during `/compact`, and taking it would have shared th
 summary turn's live context — which the compaction resets as it lands — and
 condensed the message away unanswered. The daemon refuses it before touching the
 planning abort slot, so a stop still reaches the summary turn.
+
+The VS Code extension offers all three (`/fork`, `/rewind [n]`, `/compact` and
+matching Command Palette entries) by calling `Session` directly, since it does
+not use the daemon. Its host refuses a planner message during `/compact` by
+locking the webview input, with core's `ConversationBusyError` behind it. A
+rewind or compaction redraws only the webview's transcript, never the plan or a
+running task's output, because both are allowed mid-run. A fork is loaded as a
+saved session, and loading replaces the extension's single `Session` and stops
+its run, so the extension asks before forking while one is executing.

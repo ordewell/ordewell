@@ -219,6 +219,12 @@ describe('slash command suggestions', () => {
     type('/');
     expect(screen.getByText('/help')).toBeTruthy();
   });
+
+  it('offers the conversation-editing commands', () => {
+    renderInput();
+    type('/');
+    for (const name of ['/fork', '/rewind', '/compact']) expect(screen.getByText(name)).toBeTruthy();
+  });
 });
 
 describe('ChatInput prefill', () => {

@@ -194,8 +194,10 @@ conversation has two user messages or fewer; a message sent while it runs is
 refused in turn (`ConversationBusyError`, 409 from the daemon), since the reply
 would share the live context the compaction resets. **Rewind** stops at the summary
 (its entry plays the part the goal did) and **Fork** copies the compacted
-transcript. Only the planner conversation compacts, never a runner. TUI
-`/compact`; CLI `ordewell compact`; the daemon route is
+transcript. Only the planner conversation compacts, never a runner. TUI and
+VS Code `/compact` (VS Code also "Ordewell: Compact Conversation", cancellable
+from its progress notification, with the chat input locked while it runs); CLI
+`ordewell compact`; the daemon route is
 `POST /api/plans/:id/conversation/compact`. It announces itself with a
 `planner_message` carrying the summary.
 *Avoid:* "summarize" for the operation — the result replaces the transcript; and
@@ -227,7 +229,8 @@ is (ADR-0002, update of 2026-09-25). The planner's live context is reset, so
 the next message replays from the shortened transcript on every backend alike.
 Refused while a planner turn is in flight (`ConversationBusyError`), because
 the turn's reply would land on a transcript that no longer holds the message
-it answers. TUI `/rewind` (picker) or `/rewind <n>`; CLI `ordewell rewind [n]`.
+it answers. TUI and VS Code `/rewind` (picker) or `/rewind <n>` (VS Code also
+"Ordewell: Rewind Conversation"); CLI `ordewell rewind [n]`.
 *Avoid:* "undo" — nothing about the plan is undone.
 
 **Fork** (`Session.forkConversation()`) — copy the conversation and its task
@@ -241,7 +244,9 @@ added to the plan later stays behind until someone decides it should travel.
 The daemon adopts the fork immediately (see **Adopt**); its first message
 replays the copied transcript. Refused mid-turn like a rewind; allowed while
 the original executes. TUI `/fork` switches to the fork; `ordewell fork` makes
-it the current session.
+it the current session; VS Code `/fork` ("Ordewell: Fork Conversation") loads
+it like a saved session, which replaces the extension's one in-process
+`Session` — so it asks first when a run is executing, since loading stops it.
 *Avoid:* "branch" — that word belongs to git and to worktree isolation.
 
 **PRD (prdMarkdown)** — with the PRD toggle on, the planner previews the PRD in

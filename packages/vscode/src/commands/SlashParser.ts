@@ -19,6 +19,7 @@ import { resolveAutonomousQuickPickItems, applyAutonomousChoice } from '../Slash
  */
 const KNOWN_SLASH_COMMAND_NAMES: ReadonlySet<string> = new Set([
   'refresh', 'model', 'planner', 'planner-effort', 'key', 'sessions', 'allowlist', 'help', 'new', 'auto',
+  'fork', 'rewind', 'compact',
 ]);
 
 export function isKnownSlashCommand(text: string): boolean {
@@ -251,8 +252,23 @@ export async function handleSlashCommand(text: string, deps: SlashDeps): Promise
   }
   if (cmd === '/help') {
     vscode.window.showInformationMessage(
-      'Commands: /planner, /model, /model set, /planner-effort, /key set, /sessions, /new, /refresh, /auto, /allowlist, /help. Type / after a command to see model suggestions.',
+      'Commands: /planner, /model, /model set, /planner-effort, /key set, /sessions, /new, /refresh, /auto, /allowlist, /help. Type / after a command to see model suggestions.\n'
+      + '/fork — continue in a copy of this conversation and its tasks; the original stays as it is. '
+      + '/rewind [<message>] — rewind the conversation to just before one of your messages (tasks are kept). '
+      + '/compact — condense this conversation into a summary; the last two exchanges and all tasks are kept.',
     );
+    return;
+  }
+  if (cmd === '/fork') {
+    await vscode.commands.executeCommand('ordewell.forkConversation');
+    return;
+  }
+  if (cmd === '/rewind') {
+    await vscode.commands.executeCommand('ordewell.rewindConversation', args[0]);
+    return;
+  }
+  if (cmd === '/compact') {
+    await vscode.commands.executeCommand('ordewell.compactConversation');
     return;
   }
   if (cmd === '/new') {

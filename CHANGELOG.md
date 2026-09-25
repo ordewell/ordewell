@@ -33,10 +33,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   back to just before one of your messages; fork continues in a copy of the
   conversation and its tasks while the original stays as it was. Both act on
   the conversation only — the task list is kept as it is — and work with any
-  planner. TUI `/fork` and `/rewind`; CLI `ordewell fork` and
-  `ordewell rewind [n]`.
+  planner. TUI and VS Code `/fork` and `/rewind`; CLI `ordewell fork` and
+  `ordewell rewind [n]`; in VS Code also the Command Palette ("Ordewell: Fork
+  Conversation" and "Ordewell: Rewind Conversation").
 - **Condense a planner conversation on request (#10).** `/compact` in the TUI
-  or `ordewell compact` replaces the conversation with a summary the planner
+  and VS Code (also "Ordewell: Compact Conversation" in the Command Palette) or
+  `ordewell compact` replaces the conversation with a summary the planner
   writes, keeping the last two exchanges as they were. The tasks are untouched,
   the summary is shown to you, and a failed or stopped compaction changes
   nothing.
