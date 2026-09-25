@@ -7,6 +7,7 @@ import type { IConfig } from '../interfaces/IConfig';
 import type {
   IsolationAvailability,
   IsolationHandoff,
+  IsolationInactiveReason,
   IsolationMergeResult,
   IsolationOutcome,
   IsolationRepo,
@@ -14,12 +15,14 @@ import type {
   IsolationTaskRecord,
   IsolationTaskRepo,
   IWorktreeIsolation,
+  PreparedTask,
 } from '../interfaces/IWorktreeIsolation';
 import type { Task } from '../models/Task';
 import { augmentedPath, withPath } from '../utils/shellPath';
 import { ensureStateDirIgnored, STATE_DIR } from '../utils/fsHelpers';
 import { sanitizeSlug } from '../utils/prdStore';
 import { handoffOf, integrationBranchFor, repoRootOf, SELF_REPO } from './isolationRecord';
+import { linkPath } from './worktreeLink';
 
 export type GitExecFn = (
   file: string,
@@ -28,7 +31,7 @@ export type GitExecFn = (
 ) => Promise<{ stdout: string; stderr: string }>;
 
 export interface WorktreeIsolationDeps {
-  config: Pick<IConfig, 'worktreeIsolation' | 'worktreeSetupCommand'>;
+  config: Pick<IConfig, 'worktreeIsolation' | 'worktreeSetupCommand' | 'workspaceRepos' | 'worktreeLinks'>;
   /** Test seam: every git invocation goes through this. */
   execFileImpl?: GitExecFn;
   resolvePath?: () => Promise<string>;
@@ -71,6 +74,9 @@ const GITLINK_MODE = '160000';
 
 interface GitResult { ok: boolean; stdout: string; stderr: string; code?: string | number }
 
+/** The repo group a workspace forms, or the reason it forms none. */
+type GroupScan = { paths: string[] } | { refused: IsolationAvailability };
+
 interface QueuedMerge {
   task: Task;
   run: IsolationRun;
@@ -89,6 +95,52 @@ function hasGitEntry(dir: string): boolean {
 
 function firstLine(text: string): string {
   return text.split(/\r?\n/, 1)[0].trim();
+}
+
+function lexists(target: string): boolean {
+  try { fs.lstatSync(target); return true; } catch { return false; }
+}
+
+function listDir(dir: string): string[] {
+  try { return fs.readdirSync(dir).sort(); } catch { return []; }
+}
+
+/** An inactive availability naming `repos`; `.` is not a name, so a group of one names none. */
+function inactive(reason: IsolationInactiveReason, repos: string[]): IsolationAvailability {
+  const named = repos.filter((r) => r !== SELF_REPO);
+  return named.length > 0 ? { active: false, reason, repos: named } : { active: false, reason };
+}
+
+/** A `workspaceRepos` entry as a group path, or null for one that is not below the workspace. */
+function groupPathOf(listed: string): string | null {
+  const slashed = listed.trim().replace(/\\/g, '/');
+  if (path.posix.isAbsolute(slashed) || path.win32.isAbsolute(slashed)) return null;
+  const rel = path.posix.normalize(slashed).replace(/\/+$/, '');
+  return rel === '' || rel === '.' || rel === '..' || rel.startsWith('../') ? null : rel;
+}
+
+/**
+ * The `worktreeLinks` entries present under `root`, relative to it. `*` and
+ * `?` match within one path segment; there is no `**`, so a pattern never
+ * walks a whole tree.
+ */
+function matchLinks(root: string, patterns: string[]): string[] {
+  const found = new Set<string>();
+  for (const pattern of patterns) {
+    const segments = pattern.replace(/\\/g, '/').split('/').filter((seg) => seg !== '' && seg !== '.');
+    if (segments.length === 0 || segments.includes('..')) continue;
+    let matches = [''];
+    for (const segment of segments) matches = matches.flatMap((base) => segmentMatches(root, base, segment));
+    for (const match of matches) found.add(match);
+  }
+  return [...found];
+}
+
+function segmentMatches(root: string, base: string, segment: string): string[] {
+  const under = (name: string) => (base ? `${base}/${name}` : name);
+  if (!/[*?]/.test(segment)) return lexists(path.join(root, base, segment)) ? [under(segment)] : [];
+  const pattern = new RegExp(`^${segment.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`);
+  return listDir(path.join(root, base)).filter((name) => !NEVER_SCANNED.has(name) && pattern.test(name)).map(under);
 }
 
 class GitWorktreeIsolation implements IWorktreeIsolation {
@@ -116,21 +168,58 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     const version = await this.tryGit(undefined, ['--version']);
     if (!version.ok) return { active: false, reason: 'git-missing' };
 
+    const scan = await this.scanGroup(workspaceRoot);
+    if ('refused' in scan) return scan.refused;
+    // A commitless repo is shared rather than isolated; only a group of nothing but those is refused.
+    const committed = await this.committedRepos(workspaceRoot, scan.paths);
+    if (committed.length === 0) return inactive('no-commits', scan.paths);
+
+    const dirty: string[] = [];
+    for (const repoPath of committed) {
+      const tracked = await this.trackedChanges(repoRootOf(workspaceRoot, repoPath));
+      if (tracked === null) return { active: false, reason: 'not-git' };
+      if (tracked) dirty.push(repoPath);
+    }
+    return dirty.length > 0 ? inactive('dirty', dirty) : { active: true };
+  }
+
+  /**
+   * A workspace inside a repository is a group of one at `.`. A folder that is
+   * not forms a group from `workspaceRepos` when set, otherwise from the
+   * repositories directly inside it.
+   */
+  private async scanGroup(workspaceRoot: string): Promise<GroupScan> {
     // cwd may not exist; any failure here is "not a repository" as far as the caller can act on it.
     const toplevel = await this.tryGit(workspaceRoot, ['rev-parse', '--show-toplevel']);
-    if (!toplevel.ok) {
-      const repos = this.reposDirectlyIn(workspaceRoot);
-      return repos.length > 0 ? { active: false, reason: 'not-git', repos } : { active: false, reason: 'not-git' };
+    if (toplevel.ok) {
+      const nested = await this.nestedRepos(workspaceRoot, toplevel.stdout.trim());
+      return nested.length > 0 ? { refused: { active: false, reason: 'nested-repos', repos: nested } } : { paths: [SELF_REPO] };
     }
-    const nested = await this.nestedRepos(workspaceRoot, toplevel.stdout.trim());
-    if (nested.length > 0) return { active: false, reason: 'nested-repos', repos: nested };
-    if (!(await this.tryGit(workspaceRoot, ['rev-parse', '--verify', '-q', 'HEAD'])).ok) return { active: false, reason: 'no-commits' };
+    const paths = this.groupPaths(workspaceRoot);
+    return paths.length > 0 ? { paths } : { refused: { active: false, reason: 'not-git' } };
+  }
 
-    // Untracked and ignored files never block: the bootstrap step accounts for them.
-    const status = await this.tryGit(workspaceRoot, ['status', '--porcelain', '--untracked-files=no']);
-    if (!status.ok) return { active: false, reason: 'not-git' };
-    if (status.stdout.trim() !== '') return { active: false, reason: 'dirty' };
-    return { active: true };
+  private groupPaths(workspaceRoot: string): string[] {
+    const listed = this.deps.config.workspaceRepos;
+    if (listed.length === 0) return this.reposDirectlyIn(workspaceRoot);
+    const paths = listed
+      .map(groupPathOf)
+      .filter((rel): rel is string => rel !== null && hasGitEntry(path.join(workspaceRoot, rel)));
+    return [...new Set(paths)].sort();
+  }
+
+  private async committedRepos(workspaceRoot: string, paths: string[]): Promise<string[]> {
+    const committed: string[] = [];
+    for (const repoPath of paths) {
+      if ((await this.tryGit(repoRootOf(workspaceRoot, repoPath), ['rev-parse', '--verify', '-q', 'HEAD'])).ok) committed.push(repoPath);
+    }
+    return committed;
+  }
+
+  /** Whether tracked files differ from HEAD; null when git cannot tell. Untracked and ignored files never count: the bootstrap step accounts for them. */
+  private async trackedChanges(root: string): Promise<boolean | null> {
+    const status = await this.tryGit(root, ['status', '--porcelain', '--untracked-files=no']);
+    return status.ok ? status.stdout.trim() !== '' : null;
   }
 
   private reposDirectlyIn(dir: string): string[] {
@@ -192,30 +281,87 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   }
 
   async stash(workspaceRoot: string): Promise<void> {
-    await this.git(workspaceRoot, ['stash', 'push', '-m', 'ordewell: stashed before an isolated run']);
+    const scan = await this.scanGroup(workspaceRoot);
+    for (const repoPath of await this.committedRepos(workspaceRoot, 'paths' in scan ? scan.paths : [SELF_REPO])) {
+      const root = repoRootOf(workspaceRoot, repoPath);
+      if (await this.trackedChanges(root)) await this.git(root, ['stash', 'push', '-m', 'ordewell: stashed before an isolated run']);
+    }
   }
 
-  async startRun(workspaceRoot: string): Promise<IsolationRun> {
-    const id = this.mintRunId();
-    return { id, workspaceRoot, repos: [await this.startRepo(workspaceRoot, SELF_REPO, id)], shared: [], tasks: {} };
+  startRun(workspaceRoot: string): Promise<IsolationRun> {
+    return this.admin(workspaceRoot, async () => {
+      const scan = await this.scanGroup(workspaceRoot);
+      const run: IsolationRun = { id: this.mintRunId(), workspaceRoot, repos: [], shared: [], sharedRepos: [], tasks: {} };
+      for (const repoPath of 'paths' in scan ? scan.paths : [SELF_REPO]) {
+        const repo = await this.startRepo(run, repoPath);
+        if (repo) run.repos.push(repo);
+        else run.sharedRepos.push(repoPath);
+      }
+      if (run.repos.length === 0) throw new Error(`No repository could be isolated: ${run.sharedRepos.join(', ')}`);
+      run.shared = this.sharedPaths(run);
+      return run;
+    });
   }
 
-  private async startRepo(workspaceRoot: string, repoPath: string, runId: string): Promise<IsolationRepo> {
-    const root = repoRootOf(workspaceRoot, repoPath);
-    const baseRef = (await this.git(root, ['rev-parse', 'HEAD'])).trim();
+  /** The repo's share of a new run, or null when it cannot be isolated and is to be shared instead. */
+  private async startRepo(run: IsolationRun, repoPath: string): Promise<IsolationRepo | null> {
+    const root = repoRootOf(run.workspaceRoot, repoPath);
+    const head = await this.tryGit(root, ['rev-parse', '--verify', '-q', 'HEAD']);
+    if (!head.ok) return null;
+    const baseRef = head.stdout.trim();
     const branch = (await this.tryGit(root, ['symbolic-ref', '--short', '-q', 'HEAD'])).stdout.trim();
     const repo: IsolationRepo = {
       path: repoPath,
       root,
       baseRef,
       ...(branch ? { baseBranch: branch } : {}),
-      integrationBranch: integrationBranchFor(runId),
+      integrationBranch: integrationBranchFor(run.id),
     };
-    await this.git(root, ['branch', repo.integrationBranch, baseRef]);
-    return repo;
+    if (!(await this.tryGit(root, ['branch', repo.integrationBranch, baseRef])).ok) return null;
+    if (await this.acceptsWorktree(run, repo)) return repo;
+    await this.tryGit(root, ['branch', '-D', repo.integrationBranch]);
+    return null;
   }
 
-  prepare(task: Task, run: IsolationRun): Promise<{ cwd: string; branch: string }> {
+  /**
+   * Whether git will add a worktree for this repo. Only trying tells — a
+   * repository format it cannot extend, an admin directory it cannot write —
+   * and a refusal found here shares the repo for the whole run instead of
+   * failing its first task. `--no-checkout` keeps the try cheap.
+   */
+  private async acceptsWorktree(run: IsolationRun, repo: IsolationRepo): Promise<boolean> {
+    const dir = this.integrationDir(run, repo);
+    ensureStateDirIgnored(run.workspaceRoot);
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    const added = await this.tryGit(repo.root, ['worktree', 'add', '-q', '--no-checkout', dir, repo.integrationBranch]);
+    await this.removeWorktreeDir(run, repo, dir, []);
+    return added.ok;
+  }
+
+  /**
+   * What each task workspace links live from the real workspace: everything
+   * outside the isolated repos except `.ordewell` and `.git`. A directory that
+   * holds a deeper repo is recreated rather than linked, so the repo's worktree
+   * can sit at its real path inside it.
+   */
+  private sharedPaths(run: IsolationRun): string[] {
+    const isolated = run.repos.map((r) => r.path);
+    if (isolated.includes(SELF_REPO)) return [];
+    const shared: string[] = [];
+    const walk = (rel: string): void => {
+      for (const name of listDir(path.join(run.workspaceRoot, rel))) {
+        if (!rel && (name === STATE_DIR || name === '.git')) continue;
+        const child = rel ? `${rel}/${name}` : name;
+        if (isolated.includes(child)) continue;
+        if (isolated.some((p) => p.startsWith(`${child}/`))) walk(child);
+        else shared.push(child);
+      }
+    };
+    walk('');
+    return shared;
+  }
+
+  prepare(task: Task, run: IsolationRun): Promise<PreparedTask> {
     return this.admin(run.workspaceRoot, async () => {
       const previous = run.tasks[task.id];
       if (previous) await this.removeTask(run, previous, { dropRecord: true });
@@ -224,21 +370,32 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       ensureStateDirIgnored(run.workspaceRoot);
       const record: IsolationTaskRecord = { taskId: task.id, order: task.order, title: task.title, branch, workspace: dir, status: 'active', repos: {} };
       let cwd = dir;
-      for (const repo of run.repos) {
-        const worktree = path.join(dir, repo.path);
-        const tip = (await this.git(repo.root, ['rev-parse', repo.integrationBranch])).trim();
-        fs.mkdirSync(path.dirname(worktree), { recursive: true });
-        // -B: the name is inside this run's namespace, so a leftover from a crashed attempt is ours to reset.
-        await this.git(repo.root, ['worktree', 'add', '-q', '-B', branch, worktree, tip]);
-        record.repos[repo.path] = { worktree, linked: [] };
-      }
-
+      const copied: string[] = [];
       try {
+        for (const repo of run.repos) {
+          const worktree = path.join(dir, repo.path);
+          const tip = (await this.git(repo.root, ['rev-parse', repo.integrationBranch])).trim();
+          fs.mkdirSync(path.dirname(worktree), { recursive: true });
+          // -B: the name is inside this run's namespace, so a leftover from a crashed attempt is ours to reset.
+          await this.git(repo.root, ['worktree', 'add', '-q', '-B', branch, worktree, tip]);
+          record.repos[repo.path] = { worktree, linked: [] };
+        }
+
+        // Taken afresh for every task: a loose file the user adds mid-run is shared from the next one on.
+        run.shared = [...this.sharedPaths(run)];
+        for (const rel of run.shared) {
+          const target = path.join(dir, rel);
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+          if (linkPath(path.join(run.workspaceRoot, rel), target, this.platform) === 'copy') copied.push(rel);
+        }
+
         for (const repo of run.repos) {
           const entry = record.repos[repo.path];
           const inRepo = await this.inWorkspacePlace(repo, entry.worktree);
           if (repo.path === SELF_REPO) cwd = inRepo;
-          entry.linked = await this.bootstrap(repo.root, inRepo);
+          const boot = await this.bootstrap(repo, inRepo);
+          entry.linked = boot.linked;
+          copied.push(...boot.copied.map((name) => path.posix.join(repo.path, name)));
         }
       } catch (err) {
         record.status = 'failed';
@@ -246,7 +403,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
         throw err;
       }
       run.tasks[task.id] = record;
-      return { cwd, branch };
+      return { cwd, branch, copied };
     });
   }
 
@@ -466,7 +623,29 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       if (entry) await this.removeWorktreeDir(run, repo, entry.worktree, entry.linked);
       await this.tryGit(repo.root, ['branch', '-D', record.branch]);
     }
+    this.removeTaskWorkspace(run, record.workspace);
     if (opts.dropRecord) delete run.tasks[record.taskId];
+  }
+
+  /**
+   * What is left of a task workspace once its worktrees are gone: the shared
+   * links and the directories that held deeper repos. Links are unlinked
+   * first, so removing the rest can never walk into the real workspace.
+   */
+  private removeTaskWorkspace(run: IsolationRun, dir: string): void {
+    if (!isInside(this.runRoot(run), dir) || !fs.existsSync(dir)) return;
+    this.unlinkLinksUnder(dir);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  private unlinkLinksUnder(dir: string): void {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const target = path.join(dir, entry.name);
+      if (entry.isSymbolicLink()) this.unlinkIfLink(target);
+      else if (entry.isDirectory()) this.unlinkLinksUnder(target);
+    }
   }
 
   /** Task workspaces and branches under this run that no record accounts for. */
@@ -478,6 +657,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
         const dir = path.join(root, entry);
         if (entry === INTEGRATION_DIR || owned.has(path.resolve(dir))) continue;
         for (const repo of run.repos) await this.removeWorktreeDir(run, repo, path.join(dir, repo.path), []);
+        this.removeTaskWorkspace(run, dir);
       }
     }
     const taskBranches = Object.values(run.tasks).map((r) => r.branch);
@@ -500,6 +680,8 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     await this.tryGit(repo.root, ['worktree', 'remove', '--force', dir]);
     if (fs.existsSync(dir) && isInside(this.runRoot(run), dir)) fs.rmSync(dir, { recursive: true, force: true });
     await this.tryGit(repo.root, ['worktree', 'prune']);
+    // A deeper repo's worktree leaves the directories above it behind.
+    for (let parent = path.dirname(dir); isInside(this.runRoot(run), parent); parent = path.dirname(parent)) this.removeIfEmpty(parent);
   }
 
   private unlinkIfLink(target: string): void {
@@ -524,45 +706,47 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     return { branch: `ordewell/${run.id}/${name}`, dir: path.join(this.runRoot(run), name) };
   }
 
-  private async bootstrap(mainRoot: string, cwd: string): Promise<string[]> {
+  /**
+   * Make one repo's worktree runnable: the default artifacts, unless a setup
+   * command replaces them, then the `worktreeLinks` matches, then the setup
+   * command, which can rely on those. Returns what it linked and, of that,
+   * what had to be copied.
+   */
+  private async bootstrap(repo: IsolationRepo, cwd: string): Promise<{ linked: string[]; copied: string[] }> {
     const setup = this.deps.config.worktreeSetupCommand?.trim();
-    if (setup) {
-      await this.runSetup(setup, mainRoot, cwd);
-      return [];
-    }
-
     const linked: string[] = [];
-    for (const name of fs.readdirSync(mainRoot)) {
-      if (name === STATE_DIR || !(LINKED_ARTIFACTS.has(name) || isEnvFile(name))) continue;
+    const copied: string[] = [];
+    const link = (name: string): void => {
       const target = path.join(cwd, name);
       // Present already means it is tracked: the checkout is the truth, not a link to the main tree's copy.
-      if (this.lexists(target)) continue;
-      const source = path.join(mainRoot, name);
-      if (fs.statSync(source).isDirectory()) {
-        // A junction needs no privilege; a directory symlink on Windows does.
-        fs.symlinkSync(source, target, this.platform === 'win32' ? 'junction' : 'dir');
-      } else if (this.platform === 'win32') {
-        fs.copyFileSync(source, target);
-      } else {
-        fs.symlinkSync(source, target, 'file');
-      }
+      if (lexists(target)) return;
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      if (linkPath(path.join(repo.root, name), target, this.platform) === 'copy') copied.push(name);
       linked.push(name);
+    };
+
+    if (!setup) {
+      for (const name of fs.readdirSync(repo.root)) {
+        if (name !== STATE_DIR && (LINKED_ARTIFACTS.has(name) || isEnvFile(name))) link(name);
+      }
     }
-    return linked;
+    for (const name of matchLinks(repo.root, this.deps.config.worktreeLinks)) link(name);
+    if (setup) await this.runSetup(setup, repo, cwd);
+    return { linked, copied };
   }
 
-  private async runSetup(command: string, mainRoot: string, cwd: string): Promise<void> {
-    const env = withPath(this.cleanEnv(), await this.resolvePath(), { ORDEWELL_MAIN_WORKTREE: mainRoot });
+  private async runSetup(command: string, repo: IsolationRepo, cwd: string): Promise<void> {
+    const env = withPath(this.cleanEnv(), await this.resolvePath(), {
+      ORDEWELL_REPO: repo.path,
+      ORDEWELL_MAIN_REPO: repo.root,
+      ORDEWELL_MAIN_WORKTREE: repo.root,
+    });
     try {
       await execAsync(command, { cwd, env, timeout: SETUP_TIMEOUT_MS, maxBuffer: MAX_BUFFER, windowsHide: true });
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       throw new Error(`Worktree setup command failed: ${detail}`);
     }
-  }
-
-  private lexists(target: string): boolean {
-    try { fs.lstatSync(target); return true; } catch { return false; }
   }
 
   private async mergeInProgress(cwd: string): Promise<boolean> {

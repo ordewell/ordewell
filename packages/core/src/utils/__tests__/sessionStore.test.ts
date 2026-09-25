@@ -190,7 +190,7 @@ describe('sessionStore', () => {
 
       expect(loadSession(meta.id, tmpDir)!.plan.isolation).toEqual({
         run: {
-          id: 'r1', workspaceRoot: '/work/app', shared: [],
+          id: 'r1', workspaceRoot: '/work/app', shared: [], sharedRepos: [],
           repos: [{ path: '.', root: '/work/app', baseRef: 'abc', baseBranch: 'main', integrationBranch: 'ordewell/r1/integration' }],
           tasks: { t1: { taskId: 't1', order: 1, title: 'T1', branch: 'ordewell/r1/1-t1', workspace: '/wt/1', status: 'kept', repos: { '.': { worktree: '/wt/1', linked: ['.env'] } } } },
         },

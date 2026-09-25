@@ -7,6 +7,7 @@ import type {
   IsolationMergeResult,
   IsolationOutcome,
   IsolationRun,
+  PreparedTask,
   IWorktreeIsolation,
 } from './interfaces/IWorktreeIsolation';
 import type { Task } from './models/Task';
@@ -110,6 +111,10 @@ export type FakeIsolationCall =
  */
 export class FakeWorktreeIsolation implements IWorktreeIsolation {
   availability: IsolationAvailability = { active: true };
+  /** What `startRun` shares and `prepare` copies, to exercise their notices. */
+  shared: string[] = [];
+  sharedRepos: string[] = [];
+  copied: string[] = [];
   /** Per task id; a task not listed integrates as `merged`. */
   outcomes = new Map<string, IsolationOutcome>();
   calls: FakeIsolationCall[] = [];
@@ -148,12 +153,13 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
       id,
       workspaceRoot,
       repos: [{ path: SELF_REPO, root: workspaceRoot, baseRef: 'base0000', baseBranch: 'main', integrationBranch: integrationBranchFor(id) }],
-      shared: [],
+      shared: [...this.shared],
+      sharedRepos: [...this.sharedRepos],
       tasks: {},
     };
   }
 
-  async prepare(task: Task, run: IsolationRun): Promise<{ cwd: string; branch: string }> {
+  async prepare(task: Task, run: IsolationRun): Promise<PreparedTask> {
     this.log({ op: 'prepare', taskId: task.id });
     const name = `${task.order}-${task.id}`;
     const cwd = `/fake-worktrees/${run.id}/${name}`;
@@ -162,7 +168,7 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
       taskId: task.id, order: task.order, title: task.title, branch, workspace: cwd, status: 'active',
       repos: { [SELF_REPO]: { worktree: cwd, linked: [] } },
     };
-    return { cwd, branch };
+    return { cwd, branch, copied: [...this.copied] };
   }
 
   async integrate(task: Task, run: IsolationRun): Promise<IsolationOutcome> {

@@ -21,7 +21,7 @@ describe('loadState', () => {
 
     expect(loadState(tmpDir)!.isolation).toEqual({
       run: {
-        id: 'r1', workspaceRoot: '/work/app', shared: [], tasks: {},
+        id: 'r1', workspaceRoot: '/work/app', shared: [], sharedRepos: [], tasks: {},
         repos: [{ path: '.', root: '/work/app', baseRef: 'abc', integrationBranch: 'ordewell/r1/integration' }],
       },
       resolvers: { r: 'c' },

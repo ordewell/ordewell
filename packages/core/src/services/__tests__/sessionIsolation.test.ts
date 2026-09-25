@@ -132,7 +132,7 @@ describe('Session with worktree isolation', () => {
       ...plan([task('t1', 1, { status: 'completed' }), task('t2', 2, { dependencies: ['t1'] })]),
       isolation: {
         run: {
-          id: 'old', workspaceRoot: process.cwd(), shared: [],
+          id: 'old', workspaceRoot: process.cwd(), shared: [], sharedRepos: [],
           repos: [{ path: '.', root: process.cwd(), baseRef: 'abc', integrationBranch: 'ordewell/old/integration' }],
           tasks: { t1: { taskId: 't1', order: 1, title: 'Task t1', branch: 'ordewell/old/1-t1', workspace: '/wt/1', status: 'merged', repos: { '.': { worktree: '/wt/1', linked: [], changed: true } } } },
         },
@@ -198,7 +198,7 @@ describe('Session with worktree isolation', () => {
       ...plan([task('t1', 1, { status: 'completed' }), task('t2', 2, { status: 'awaiting_user' }), task('t3', 3)]),
       isolation: {
         run: {
-          id: 'old', workspaceRoot: process.cwd(), shared: [],
+          id: 'old', workspaceRoot: process.cwd(), shared: [], sharedRepos: [],
           repos: [{ path: '.', root: process.cwd(), baseRef: 'abc', integrationBranch: 'ordewell/old/integration' }],
           tasks: { t2: record('t2', 2, 'conflict'), t1: record('t1', 1, 'merged') },
         },
@@ -231,7 +231,7 @@ describe('Session with worktree isolation', () => {
       ...plan([task('t1', 1)]),
       isolation: {
         run: {
-          id: 'old', workspaceRoot: process.cwd(), shared: [], tasks: {},
+          id: 'old', workspaceRoot: process.cwd(), shared: [], sharedRepos: [], tasks: {},
           repos: [{ path: '.', root: process.cwd(), baseRef: 'abc', integrationBranch: 'ordewell/old/integration' }],
         },
         resolvers: {},

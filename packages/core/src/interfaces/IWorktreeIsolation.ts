@@ -10,7 +10,8 @@ export type IsolationInactiveReason = 'disabled' | 'git-missing' | 'not-git' | '
 
 /**
  * `repos` names, relative to the workspace, the repositories behind the reason:
- * the nested ones `nested-repos` refuses, or the ones a `not-git` folder holds.
+ * the nested ones `nested-repos` refuses, the dirty ones of a `dirty` group, or
+ * the commitless ones of a `no-commits` group. A group of one names none.
  */
 export type IsolationAvailability = { active: true } | { active: false; reason: IsolationInactiveReason; repos?: string[] };
 
@@ -88,8 +89,14 @@ export interface IsolationRun {
   id: string;
   workspaceRoot: string;
   repos: IsolationRepo[];
-  /** Workspace paths outside every repo, linked live into each task workspace. Empty until those are linked. */
+  /**
+   * Workspace paths outside every isolated repo, linked live into each task
+   * workspace: loose entries of the workspace root, the entries beside a deeper
+   * repo, and `sharedRepos`. Empty for a group of one.
+   */
   shared: string[];
+  /** Repos of the group that could not be isolated — no commits, or git refused a worktree — and are among `shared`. */
+  sharedRepos: string[];
   /** Keyed by task id — ids are unique within one plan and a run belongs to one plan. */
   tasks: Record<string, IsolationTaskRecord>;
 }
@@ -159,26 +166,46 @@ export interface IsolationMergeResult {
   files?: string[];
 }
 
+export interface PreparedTask {
+  cwd: string;
+  branch: string;
+  /**
+   * Paths, relative to the task workspace, that are copies rather than links
+   * because a hard link was impossible (Windows, another volume). Edits to them
+   * stay in the task, so the user is told.
+   */
+  copied: string[];
+}
+
 export interface IWorktreeIsolation {
-  /** Git repo + clean tracked tree + config enabled; otherwise the reason it is not. */
+  /**
+   * A repo group with at least one repo to isolate, a clean tracked tree in
+   * each, and the config enabled; otherwise the reason it is not.
+   */
   isActive(workspaceRoot: string): Promise<IsolationAvailability>;
 
   /**
-   * Put the workspace's tracked changes on the git stash, the user's way out of
-   * a `dirty` refusal. Untracked files stay: they never block isolation.
+   * Put the tracked changes of every dirty repo of the group on its git stash,
+   * the user's way out of a `dirty` refusal. Untracked files stay: they never
+   * block isolation.
    */
   stash(workspaceRoot: string): Promise<void>;
 
-  /** Mint a run: resolve each repo's base ref to a commit now. Only meaningful after `isActive` said yes. */
+  /**
+   * Mint a run: resolve each repo's base ref to a commit now, and share the
+   * repos that cannot be isolated. Only meaningful after `isActive` said yes;
+   * throws when no repo of the group can be isolated after all.
+   */
   startRun(workspaceRoot: string): Promise<IsolationRun>;
 
   /**
-   * Create the task's worktree from the current integration tip and return the
-   * cwd to spawn the Runner into. A second `prepare` for the same task is a
-   * retry: the old attempt is discarded and the worktree recreated from the
-   * tip, so the task sees everything its predecessors have integrated.
+   * Create the task workspace — one worktree per isolated repo from its
+   * integration tip, the shared paths linked in — and return the cwd to spawn
+   * the Runner into. A second `prepare` for the same task is a retry: the old
+   * attempt is discarded and the workspace recreated from the tips, so the
+   * task sees everything its predecessors have integrated.
    */
-  prepare(task: Task, run: IsolationRun): Promise<{ cwd: string; branch: string }>;
+  prepare(task: Task, run: IsolationRun): Promise<PreparedTask>;
 
   /**
    * Commit the worktree's contents, then `git merge --no-ff` the task branch

@@ -123,7 +123,7 @@ export function migratePlanIsolation(state: PlanIsolation | Adr0013PlanIsolation
     integrationBranch: run.integrationBranch,
   };
   const tasks = Object.fromEntries(Object.entries(run.tasks ?? {}).map(([id, r]) => [id, fromAdr0013Task(r)]));
-  return { run: { id: run.id, workspaceRoot: run.workspaceRoot, repos: [repo], shared: [], tasks }, resolvers: resolvers ?? {} };
+  return { run: { id: run.id, workspaceRoot: run.workspaceRoot, repos: [repo], shared: [], sharedRepos: [], tasks }, resolvers: resolvers ?? {} };
 }
 
 /** Bring a loaded plan's isolation record, if any, to today's shape in place. */

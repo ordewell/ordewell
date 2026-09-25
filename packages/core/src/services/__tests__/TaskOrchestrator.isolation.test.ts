@@ -527,7 +527,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
     it('adopts its persisted run, prunes what a crash left behind, and continues it', async () => {
       const { orchestrator, isolation, spawnedCwd } = setup();
       const run = {
-        id: 'old', workspaceRoot: '/repo', shared: [],
+        id: 'old', workspaceRoot: '/repo', shared: [], sharedRepos: [],
         repos: [{ path: '.', root: '/repo', baseRef: 'abc', integrationBranch: 'ordewell/old/integration' }],
         tasks: { t1: { taskId: 't1', order: 1, title: 'Task t1', branch: 'ordewell/old/1-t1', workspace: '/wt/1', status: 'merged' as const, repos: { '.': { worktree: '/wt/1', linked: [], changed: true } } } },
       };
@@ -545,7 +545,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
     it('keeps the integration branch of a run it cannot continue while that branch holds landed work', async () => {
       const { orchestrator, isolation, spawnedCwd } = setup({ workspace: '/repo' });
       const run = {
-        id: 'old', workspaceRoot: '/elsewhere/repo', shared: [],
+        id: 'old', workspaceRoot: '/elsewhere/repo', shared: [], sharedRepos: [],
         repos: [{ path: '.', root: '/elsewhere/repo', baseRef: 'abc', integrationBranch: 'ordewell/old/integration' }],
         tasks: { t1: { taskId: 't1', order: 1, title: 'Task t1', branch: 'ordewell/old/1-t1', workspace: '/wt/1', status: 'merged' as const, repos: { '.': { worktree: '/wt/1', linked: [], changed: true } } } },
       };
