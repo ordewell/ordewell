@@ -420,7 +420,10 @@ modified. The daemon parks the start until it hears `continueWithStash` or
 the choice opens its own. Cancelling is `stopExecution`, not a dismissal: a
 parked start swallows a re-run. The TUI asks with a three-way picker (Stash and
 continue / Run without isolation / Cancel); `ordewell run` takes `--stash` and
-`--without-isolation`, and without either releases the run and says so.
+`--without-isolation`, and without either releases the run and says so. The block
+is broadcast from inside the call that starts the run, so every surface opens its
+execution stream before making that call — one opened after it never hears the
+block.
 
 **The plan** — the typed, editable, diffable artifact the planner emits: an ordered
 list of tasks with per-task model, thinking effort, runner, and mode. It is data,
