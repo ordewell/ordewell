@@ -7,6 +7,7 @@ import type {
   IsolationTaskRecord,
   IsolationTaskStatus,
   PlanIsolation,
+  RepoGroupLayout,
   TaskIsolation,
 } from '../interfaces/IWorktreeIsolation';
 
@@ -19,6 +20,11 @@ export function integrationBranchFor(runId: string): string {
 
 export function repoRootOf(workspaceRoot: string, repoPath: string): string {
   return path.join(workspaceRoot, repoPath);
+}
+
+/** The group a run isolates, as the planner is told it. */
+export function layoutOf(run: IsolationRun): RepoGroupLayout {
+  return { repos: run.repos.map((r) => r.path), shared: [...run.shared] };
 }
 
 /** The run's integration branch for a one-line notice: every repo's has the same name. */

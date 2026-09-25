@@ -8,7 +8,7 @@ import { GeminiService } from './GeminiService';
 import { OpenAiService } from './OpenAiService';
 import { isCliProvider } from './ProviderRegistry';
 import { CliAgentAiService, type CliAgentAiServiceDeps } from './harness/CliAgentAiService';
-import type { PlannerModes } from './plannerModes';
+import type { IsolatedExecution, PlannerModes } from './plannerModes';
 
 /**
  * Everything the conversation loop needs to start planning (ADR-0002).
@@ -25,8 +25,8 @@ export interface ConversationRequest {
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>;
   autonomousDefault?: boolean;
   verificationEnabled?: boolean;
-  /** Tasks will each run in their own worktree (ADR-0013), so the prompt drops file-overlap ordering. */
-  isolatedExecution?: boolean;
+  /** Where tasks will run (ADR-0013, ADR-0014): in worktrees, the prompt drops file-overlap ordering and describes a repo group. */
+  isolatedExecution?: IsolatedExecution;
   signal?: AbortSignal;
   /**
    * Persisted dialogue to seed a resumed conversation (session reload). The

@@ -373,6 +373,19 @@ describe('TaskOrchestrator with worktree isolation', () => {
       ]);
     });
 
+    it('tells the planner the layout of the run in force, or else of the next one', async () => {
+      const isolation = new FakeWorktreeIsolation();
+      isolation.availability = { active: true, repos: ['api', 'web'], shared: ['NOTES.md'] };
+      const { orchestrator } = setup({ isolation, workspace: '/group' });
+      expect(await orchestrator.plannerIsolation()).toEqual({ repos: ['api', 'web'], shared: ['NOTES.md'] });
+
+      isolation.repos = ['api', 'web', 'infra'];
+      isolation.shared = ['design'];
+      orchestrator.loadPlan([task('t1', 1)]);
+      await orchestrator.approveReview();
+      expect(await orchestrator.plannerIsolation()).toEqual({ repos: ['api', 'web', 'infra'], shared: ['design'] });
+    });
+
     function group(configure: (isolation: FakeWorktreeIsolation) => void = () => undefined) {
       const isolation = new FakeWorktreeIsolation();
       isolation.repos = ['api', 'web'];

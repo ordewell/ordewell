@@ -18,10 +18,12 @@ import type {
   IsolationView,
   IWorktreeIsolation,
   PlanIsolation,
+  RepoGroupLayout,
   TaskIsolation,
 } from '../interfaces/IWorktreeIsolation';
 import { createWorktreeIsolation } from './GitWorktreeIsolation';
-import { handoffOf, integrationBranchNameOf, SELF_REPO, taskIsolationOf } from './isolationRecord';
+import { handoffOf, integrationBranchNameOf, layoutOf, SELF_REPO, taskIsolationOf } from './isolationRecord';
+import type { IsolatedExecution } from './plannerModes';
 
 /**
  * The one notification channel out of the orchestrator. Everything that used
@@ -49,7 +51,7 @@ export interface OrchestratorObserver {
 type SharedRootReason = Exclude<IsolationInactiveReason, 'dirty'>;
 
 type RunDecision =
-  | { mode: 'isolated'; continuing: boolean }
+  | { mode: 'isolated'; continuing: boolean; layout: RepoGroupLayout }
   | { mode: 'blocked'; repos: string[] }
   | { mode: 'shared'; reason: SharedRootReason; repos: string[] };
 
@@ -1089,23 +1091,32 @@ export class TaskOrchestrator {
 
   /**
    * Whether the run in force, or else the next one, gives each task its own
-   * worktree — what the planner is told, since it decides whether tasks on the
-   * same file have to be ordered. A tree that would block counts as not
-   * isolating: the user may yet run without isolation, and ordering is the
-   * safe rule then.
+   * worktrees, and of which repo group — what the planner is told, since it
+   * decides whether tasks on the same file have to be ordered and which shared
+   * paths two tasks must not edit at once. A tree that would block counts as
+   * not isolating: the user may yet run without isolation, and ordering is
+   * the safe rule then.
    */
-  async willIsolate(): Promise<boolean> {
-    if (this.runMode) return this.runMode === 'isolated';
-    return (await this.decideRun(this.workspaceRootFn())).mode === 'isolated';
+  async plannerIsolation(): Promise<IsolatedExecution> {
+    if (this.runMode) return this.runMode === 'isolated' && this.isolationRun ? layoutOf(this.isolationRun) : false;
+    const decision = await this.decideRun(this.workspaceRootFn());
+    return decision.mode === 'isolated' ? decision.layout : false;
   }
 
   private async decideRun(root: string): Promise<RunDecision> {
     const availability = await this.isolation.isActive(root);
-    const continuing = this.continuableRun(root);
-    if (availability.active) return { mode: 'isolated', continuing };
+    const continued = this.continuableRun(root);
+    const continuing = continued !== null;
+    // A continued run keeps the group it started with.
+    if (availability.active) {
+      const layout = continued ? layoutOf(continued) : { repos: availability.repos ?? [SELF_REPO], shared: availability.shared ?? [] };
+      return { mode: 'isolated', continuing, layout };
+    }
     // A continued run's base is already fixed, so edits the user has made in
     // their own tree since cannot change what its tasks start from.
-    if (availability.reason === 'dirty') return continuing ? { mode: 'isolated', continuing } : { mode: 'blocked', repos: availability.repos ?? [] };
+    if (availability.reason === 'dirty') {
+      return continued ? { mode: 'isolated', continuing, layout: layoutOf(continued) } : { mode: 'blocked', repos: availability.repos ?? [] };
+    }
     return { mode: 'shared', reason: availability.reason, repos: availability.repos ?? [] };
   }
 
@@ -1142,9 +1153,9 @@ export class TaskOrchestrator {
    * branch: a resumed plan's dependents must start from a tip that holds their
    * predecessors' work, and a fresh branch from the checked-out commit does not.
    */
-  private continuableRun(root: string): boolean {
+  private continuableRun(root: string): IsolationRun | null {
     const run = this.isolationRun;
-    return !!run && run.workspaceRoot === root && Object.values(run.tasks).some((r) => r.status === 'merged');
+    return run && run.workspaceRoot === root && Object.values(run.tasks).some((r) => r.status === 'merged') ? run : null;
   }
 
   /**

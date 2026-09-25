@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildConflictResolutionPrompt, buildConversationSystemPrompt, buildResearchPrompt, buildResearchToolsPrompt, buildSubagentSystemPrompt } from '../PlanPrompts';
+import { buildConflictResolutionPrompt, buildConversationSystemPrompt, buildModifyDuringExecutionPrompt, buildResearchPrompt, buildResearchToolsPrompt, buildSubagentSystemPrompt } from '../PlanPrompts';
+import type { RepoGroupLayout } from '../../interfaces/IWorktreeIsolation';
 import { createTask, type DiscoveredModel, type RunnerId } from '../../models/Task';
 
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from '../plannerModes';
@@ -201,16 +202,22 @@ describe('buildConversationSystemPrompt harness variant (ADR-0009)', () => {
   });
 });
 
+const LONE_REPO: RepoGroupLayout = { repos: ['.'], shared: [] };
+
+function conversation(isolatedExecution: false | RepoGroupLayout) {
+  return buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, true, false, { isolatedExecution });
+}
+
+function oneShot(isolatedExecution: false | RepoGroupLayout) {
+  return buildResearchPrompt('goal', '', {}, ['claude-code'], undefined, modes({ isolatedExecution }));
+}
+
+function midRun(isolatedExecution: false | RepoGroupLayout) {
+  return buildModifyDuringExecutionPrompt([], '[]', 'add a task', {}, ['claude-code'], undefined, { autonomousDefault: true, isolatedExecution });
+}
+
 describe('planner parallelism rules under worktree isolation (ADR-0013)', () => {
   const OVERLAP_RULE = '- For parallel tasks, specify different target files to avoid merge conflicts.';
-
-  function conversation(isolatedExecution: boolean) {
-    return buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, true, false, { isolatedExecution });
-  }
-
-  function oneShot(isolatedExecution: boolean) {
-    return buildResearchPrompt('goal', '', {}, ['claude-code'], undefined, modes({ isolatedExecution }));
-  }
 
   it('keeps today\'s overlap-avoidance text verbatim when tasks share the workspace', () => {
     expect(conversation(false)).toContain([
@@ -227,7 +234,7 @@ describe('planner parallelism rules under worktree isolation (ADR-0013)', () => 
   });
 
   it('stops asking for different files or file-overlap dependencies when every task gets its own worktree', () => {
-    for (const p of [conversation(true), oneShot(true)]) {
+    for (const p of [conversation(LONE_REPO), oneShot(LONE_REPO)]) {
       expect(p).not.toContain(OVERLAP_RULE);
       expect(p).not.toContain('no shared files/modules');
       expect(p).toMatch(/own git worktree/i);
@@ -236,8 +243,48 @@ describe('planner parallelism rules under worktree isolation (ADR-0013)', () => 
   });
 
   it('still asks for dependencies that reflect genuine ordering', () => {
-    expect(conversation(true)).toContain('- Only add dependencies when a slice truly depends on artifacts another slice creates.');
-    expect(oneShot(true)).toContain('- Only add dependencies when the second slice truly depends on artifacts (files, APIs) that the first slice creates.');
+    expect(conversation(LONE_REPO)).toContain('- Only add dependencies when a slice truly depends on artifacts another slice creates.');
+    expect(oneShot(LONE_REPO)).toContain('- Only add dependencies when the second slice truly depends on artifacts (files, APIs) that the first slice creates.');
+  });
+});
+
+describe('planner rules for a repo group (ADR-0014)', () => {
+  const GROUP: RepoGroupLayout = { repos: ['api', 'web'], shared: ['NOTES.md', 'design'] };
+  const builders = { conversation, oneShot, midRun };
+
+  /** The prompt with its repo-group section cut out, line for line. */
+  function withoutGroupSection(prompt: string): string {
+    const lines = prompt.split('\n');
+    const at = lines.indexOf('REPO GROUP:');
+    let end = at + 1;
+    while (lines[end]?.startsWith('- ')) end++;
+    return [...lines.slice(0, at - 1), ...lines.slice(end)].join('\n');
+  }
+
+  it.each(Object.entries(builders))('tells the %s planner the repos, the shared paths, and what a task sees and lands', (_name, build) => {
+    const p = build(GROUP);
+
+    expect(p).toContain('\n\nREPO GROUP:\n');
+    expect(p).toContain('- The workspace is a folder of git repositories isolated together: api, web (paths relative to the workspace).');
+    expect(p).toMatch(/every task sees all of them at these same relative paths/i);
+    expect(p).toMatch(/lands atomically: its changes to every repository it touched are merged together, or none are/i);
+    expect(p).toContain('NOTES.md, design');
+    expect(p).toMatch(/shared paths are live[^\n]*two tasks that edit the same shared path must not run in parallel/i);
+  });
+
+  it.each(Object.entries(builders))('otherwise gives the %s planner exactly the prompt a lone repository gets', (_name, build) => {
+    expect(build(LONE_REPO)).not.toContain('REPO GROUP');
+    expect(withoutGroupSection(build(GROUP))).toBe(build(LONE_REPO));
+  });
+
+  it('says nothing about shared paths when there are none', () => {
+    const p = conversation({ repos: ['api', 'web'], shared: [] });
+    expect(p).toContain('REPO GROUP:');
+    expect(p).not.toMatch(/shared path/i);
+  });
+
+  it('never tells a planner whose tasks share the workspace root about a group', () => {
+    for (const build of Object.values(builders)) expect(build(false)).not.toContain('REPO GROUP');
   });
 });
 

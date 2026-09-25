@@ -1,7 +1,7 @@
 import { DiscoveredModel, RunnerId, type TaskSnapshot, type Task } from '../models/Task';
 import type { LegacyPlanState } from '../models/Task';
 import { buildModeGuide, filteredBuildModes, type RunnerModeInfo } from './ModeResolver';
-import { DEFAULT_PLANNER_MODES, modesFor, type PlannerModes } from './plannerModes';
+import { DEFAULT_PLANNER_MODES, modesFor, type IsolatedExecution, type PlannerModes } from './plannerModes';
 import { TASK_QUERY_PROTOCOL } from './TaskQuery';
 import { SELF_REPO } from './isolationRecord';
 
@@ -143,8 +143,8 @@ function researchPhaseBlock(harnessMode: boolean): string {
 export interface ConversationVariant {
   /** Harness planner (ADR-0009): the agent owns its own tools and research budget. */
   harness?: boolean;
-  /** Every AI task gets its own worktree (ADR-0013), so file overlap no longer forces an order. */
-  isolatedExecution?: boolean;
+  /** Every AI task gets its own worktree (ADR-0013), so file overlap no longer forces an order; of every repo of a group (ADR-0014). */
+  isolatedExecution?: IsolatedExecution;
 }
 
 /**
@@ -156,6 +156,27 @@ const ISOLATED_PARALLELISM_RULE =
   '- Each AI task runs in its own git worktree, and its work is merged in afterwards, so tasks that edit the same files can still run in parallel. Never add a dependency just because two tasks touch the same file — keep dependencies for genuine logical ordering.';
 
 const OVERLAP_AVOIDANCE_RULE = '- For parallel tasks, specify different target files to avoid merge conflicts.';
+
+/**
+ * What a planner must know about a repo group (ADR-0014), as a section of its
+ * own; nothing for tasks in the shared root or a lone repository, whose
+ * prompts stay as they were. The repos are named as the workspace has them:
+ * no name or role is assumed. Shared paths are the one place isolation does
+ * not keep parallel tasks apart, and the planner is the only thing that can.
+ */
+function repoGroupSection(isolated: IsolatedExecution | undefined): string[] {
+  if (!isolated || (isolated.repos.length === 1 && isolated.repos[0] === SELF_REPO)) return [];
+  return [
+    '',
+    'REPO GROUP:',
+    `- The workspace is a folder of git repositories isolated together: ${isolated.repos.join(', ')} (paths relative to the workspace).`,
+    '- Every task sees all of them at these same relative paths, so one task can read and change any of them. Refer to files by their path from the workspace root.',
+    '- A task lands atomically: its changes to every repository it touched are merged together, or none are.',
+    ...(isolated.shared.length > 0
+      ? [`- Shared paths are live, linked into every task rather than isolated: ${isolated.shared.join(', ')}. Edits to them take effect at once and are never merged or reviewed, so two tasks that edit the same shared path must not run in parallel — make one depend on the other.`]
+      : []),
+  ];
+}
 
 export function buildConversationSystemPrompt(
   goal: string,
@@ -256,6 +277,7 @@ function buildConversationBody(
     '- Independent slices should have NO dependencies — they run in parallel.',
     '- Only add dependencies when a slice truly depends on artifacts another slice creates.',
     ...(variant.isolatedExecution ? [ISOLATED_PARALLELISM_RULE] : []),
+    ...repoGroupSection(variant.isolatedExecution),
     '',
     'RULES:',
     '- Do NOT wrap the JSON in markdown code blocks. Output ONLY the JSON object when committing the plan.',
@@ -309,7 +331,7 @@ const ONE_SHOT_INSTRUCTIONS = [
   '',
 ].join('\n');
 
-function corePlannerPrompt(isolatedExecution: boolean): string {
+function corePlannerPrompt(isolatedExecution: IsolatedExecution): string {
   return [
   'You are a software project planner that produces structured task plans as JSON.',
   'Given a user\'s goal, create an ordered list of tasks that accomplish it.',
@@ -359,6 +381,7 @@ function corePlannerPrompt(isolatedExecution: boolean): string {
   '- Only add dependencies when the second slice truly depends on artifacts (files, APIs) that the first slice creates.',
   '- Prefer parallelism over serial chains. A plan with 3 independent slices running in parallel is better than 3 sequential tasks.',
   isolatedExecution ? ISOLATED_PARALLELISM_RULE : '- Slices that touch different areas of the codebase are naturally parallel.',
+  ...repoGroupSection(isolatedExecution),
   '',
   'RULES:',
   '- Mark as type "ai" any task the coding assistant can do autonomously.',
@@ -380,7 +403,7 @@ function corePlannerPrompt(isolatedExecution: boolean): string {
 /** The one-shot planner's core rules for tasks that share the workspace root. */
 export const CORE_PLANNER_PROMPT = corePlannerPrompt(false);
 
-function getPlanTemplate(isolatedExecution: boolean): string {
+function getPlanTemplate(isolatedExecution: IsolatedExecution): string {
   return [
     corePlannerPrompt(isolatedExecution),
     '',

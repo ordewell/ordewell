@@ -473,8 +473,20 @@ describe('Session with worktree isolation', () => {
       await session.startPlanning('goal', ['claude-code']);
       await session.generatePlan('goal', ['claude-code']);
 
-      expect(startConversation).toHaveBeenCalledWith(expect.objectContaining({ isolatedExecution: true }));
-      expect(generate).toHaveBeenCalledWith(expect.objectContaining({ modes: expect.objectContaining({ isolatedExecution: true }) }));
+      const lone = { repos: ['.'], shared: [] };
+      expect(startConversation).toHaveBeenCalledWith(expect.objectContaining({ isolatedExecution: lone }));
+      expect(generate).toHaveBeenCalledWith(expect.objectContaining({ modes: expect.objectContaining({ isolatedExecution: lone }) }));
+    });
+
+    it('describes a repo group to the planner: its repositories and the paths its tasks share', async () => {
+      const layout = { repos: ['api', 'web'], shared: ['NOTES.md'] };
+      const { session, startConversation, generate } = planning({ active: true, ...layout });
+
+      await session.startPlanning('goal', ['claude-code']);
+      await session.generatePlan('goal', ['claude-code']);
+
+      expect(startConversation).toHaveBeenCalledWith(expect.objectContaining({ isolatedExecution: layout }));
+      expect(generate).toHaveBeenCalledWith(expect.objectContaining({ modes: expect.objectContaining({ isolatedExecution: layout }) }));
     });
 
     it.each([

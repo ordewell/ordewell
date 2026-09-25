@@ -192,7 +192,7 @@ describe('WorktreeIsolation.isActive', () => {
       mkdirSync(join(dir, 'docs'));
       initRepo(join(dir, 'docs', 'deep'));
       const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
-      expect(await iso.isActive(dir)).toEqual({ active: true });
+      expect(await iso.isActive(dir)).toEqual({ active: true, repos: ['api', 'web'], shared: ['docs'] });
       const run = await iso.startRun(dir);
       expect(run.repos.map((r) => r.path)).toEqual(['api', 'web']);
       expect(run.shared).toEqual(['docs']);
@@ -852,7 +852,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
     it('isolates the repositories directly inside a folder, sharing the one with no commits and the loose paths', async () => {
       const dir = group();
       const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
-      expect(await iso.isActive(dir)).toEqual({ active: true });
+      expect(await iso.isActive(dir)).toEqual({ active: true, repos: GROUP, shared: ['NOTES.md', 'design', 'scratch'] });
 
       const run = await iso.startRun(dir);
       expect(run.repos.map((r) => r.path)).toEqual(GROUP);
@@ -872,7 +872,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
       initRepo(join(dir, 'libs', 'core'), { 'lib.ts': 'export {};\n' });
       writeFileSync(join(dir, 'libs', 'README.md'), 'libs\n');
       const iso = create({ config: fakeConfig({ worktreeIsolation: true, workspaceRepos: ['libs/core/', './api'] }) });
-      expect(await iso.isActive(dir)).toEqual({ active: true });
+      expect(await iso.isActive(dir)).toEqual({ active: true, repos: ['api', 'libs/core'], shared: ['NOTES.md', 'design', 'infra', 'libs/README.md', 'scratch', 'web'] });
 
       const run = await iso.startRun(dir);
       expect(run.repos.map((r) => r.path)).toEqual(['api', 'libs/core']);
@@ -943,7 +943,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
 
       await iso.stash(dir);
 
-      expect(await iso.isActive(dir)).toEqual({ active: true });
+      expect(await iso.isActive(dir)).toEqual({ active: true, repos: GROUP, shared: ['NOTES.md', 'design', 'scratch'] });
       expect(readFileSync(join(dir, 'web', 'index.html'), 'utf8')).toBe('<p>web</p>\n');
       expect(git(join(dir, 'web'), 'stash', 'list')).toContain('ordewell');
       expect(git(join(dir, 'infra'), 'stash', 'list')).toContain('ordewell');

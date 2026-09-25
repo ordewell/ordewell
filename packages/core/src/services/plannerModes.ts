@@ -1,4 +1,5 @@
 import type { UserSettings } from './SettingsService';
+import type { RepoGroupLayout } from '../interfaces/IWorktreeIsolation';
 
 /**
  * The mode toggles, as data, and which planner entry points honour each one.
@@ -67,14 +68,18 @@ export function plannerRuntimeToggles(settings: UserSettings): PlannerRuntimeTog
  * every planner signature used to carry positionally — where a thirteenth
  * parameter was the only place left to put a new toggle.
  */
+/**
+ * Where the run's tasks will work: `false` in the shared workspace root;
+ * otherwise each in its own worktree of every repo of the group (ADR-0013,
+ * ADR-0014), which is what decides if tasks on the same file must be ordered.
+ */
+export type IsolatedExecution = false | RepoGroupLayout;
+
 export interface PlannerModes {
   autonomousDefault: boolean;
   verification: boolean;
-  /**
-   * Not a toggle: whether the run will give each task its own worktree
-   * (ADR-0013), which is what decides if tasks on the same file must be ordered.
-   */
-  isolatedExecution: boolean;
+  /** Not a toggle: a fact about the run. */
+  isolatedExecution: IsolatedExecution;
 }
 
 export const DEFAULT_PLANNER_MODES: PlannerModes = {

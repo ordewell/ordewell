@@ -644,7 +644,7 @@ export class Session {
     // drops the ones a one-shot run cannot honour, so a structural toggle like
     // verify — which only appends a task — stops being silently lost between
     // here and the prompt.
-    const modes = { ...plannerModesFrom(settings, this.config.autonomousMode), isolatedExecution: await this.orchestrator.willIsolate() };
+    const modes = { ...plannerModesFrom(settings, this.config.autonomousMode), isolatedExecution: await this.orchestrator.plannerIsolation() };
 
     const releaseAbort = this.denyApprovalsOnAbort(options?.signal);
     let plan: LegacyPlanState;
@@ -808,7 +808,7 @@ export class Session {
       runnerModes,
       autonomousDefault: this.config.autonomousMode,
       verificationEnabled: settings.verificationEnabled ?? false,
-      isolatedExecution: await this.orchestrator.willIsolate(),
+      isolatedExecution: await this.orchestrator.plannerIsolation(),
       fs: this.fsAdapter,
       fetcher: this.fetcher,
     };
@@ -947,7 +947,7 @@ export class Session {
       runnerModes,
       autonomousDefault: this.config.autonomousMode,
       perRunnerAllowlist: modelAllowlist,
-      isolatedExecution: await this.orchestrator.willIsolate(),
+      isolatedExecution: await this.orchestrator.plannerIsolation(),
     });
 
     this.mutatePlan(() => {

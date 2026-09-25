@@ -201,7 +201,8 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       if (tracked === null) return { active: false, reason: 'not-git' };
       if (tracked) dirty.push(repoPath);
     }
-    return dirty.length > 0 ? inactive('dirty', dirty) : { active: true };
+    if (dirty.length > 0) return inactive('dirty', dirty);
+    return committed.includes(SELF_REPO) ? { active: true } : { active: true, repos: committed, shared: this.sharedPaths(workspaceRoot, committed) };
   }
 
   /**
@@ -319,7 +320,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
         else run.sharedRepos.push(repoPath);
       }
       if (run.repos.length === 0) throw new Error(`No repository could be isolated: ${run.sharedRepos.join(', ')}`);
-      run.shared = this.sharedPaths(run);
+      run.shared = this.sharedPaths(workspaceRoot, run.repos.map((r) => r.path));
       return run;
     });
   }
@@ -365,12 +366,11 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
    * holds a deeper repo is recreated rather than linked, so the repo's worktree
    * can sit at its real path inside it.
    */
-  private sharedPaths(run: IsolationRun): string[] {
-    const isolated = run.repos.map((r) => r.path);
+  private sharedPaths(workspaceRoot: string, isolated: string[]): string[] {
     if (isolated.includes(SELF_REPO)) return [];
     const shared: string[] = [];
     const walk = (rel: string): void => {
-      for (const name of listDir(path.join(run.workspaceRoot, rel))) {
+      for (const name of listDir(path.join(workspaceRoot, rel))) {
         if (!rel && (name === STATE_DIR || name === '.git')) continue;
         const child = rel ? `${rel}/${name}` : name;
         if (isolated.includes(child)) continue;
@@ -403,7 +403,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
         }
 
         // Taken afresh for every task: a loose file the user adds mid-run is shared from the next one on.
-        run.shared = this.sharedPaths(run);
+        run.shared = this.sharedPaths(run.workspaceRoot, run.repos.map((r) => r.path));
         for (const rel of run.shared) {
           const target = path.join(dir, rel);
           fs.mkdirSync(path.dirname(target), { recursive: true });

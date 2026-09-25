@@ -7,7 +7,7 @@ import { sessionRuntimeSettings } from '../createSession';
 const all: PlannerModes = {
   autonomousDefault: true,
   verification: true,
-  isolatedExecution: true,
+  isolatedExecution: { repos: ['api', 'web'], shared: ['NOTES.md'] },
 };
 
 describe('mode toggle registry', () => {
@@ -71,7 +71,7 @@ describe('mode toggle registry', () => {
   });
 
   it('never clears isolated execution: it is a fact about the run, not a toggle a scope may not honour', () => {
-    for (const scope of ['chat', 'one-shot', 'task'] as const) expect(modesFor(scope, all).isolatedExecution).toBe(true);
+    for (const scope of ['chat', 'one-shot', 'task'] as const) expect(modesFor(scope, all).isolatedExecution).toEqual(all.isolatedExecution);
   });
 
   it('never invents a toggle the settings did not set', () => {

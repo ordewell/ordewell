@@ -8,7 +8,7 @@ import { validatePlanModification } from './PlanValidator';
 import { repairLoop, modifyValidationFeedback } from './PlanRepair';
 import { buildModifyDuringExecutionPrompt } from './PlanPrompts';
 import { filterModelsForPrompt, coerceAssignments } from './ModelAllowlistResolver';
-import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
+import { DEFAULT_PLANNER_MODES, type IsolatedExecution, type PlannerModes } from './plannerModes';
 
 /**
  * `autonomousDefault` still arrives on its own — it is not a user toggle but a
@@ -61,8 +61,8 @@ export interface ModifyDuringExecutionRequest {
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>;
   autonomousDefault?: boolean;
   perRunnerAllowlist?: Partial<Record<RunnerId, string[]>>;
-  /** The run in force gives each task its own worktree (ADR-0013). */
-  isolatedExecution?: boolean;
+  /** Where the run in force puts each task (ADR-0013, ADR-0014). */
+  isolatedExecution?: IsolatedExecution;
 }
 
 export interface ModifyDuringExecutionResult {

@@ -9,11 +9,25 @@ import type { Task } from '../models/Task';
 export type IsolationInactiveReason = 'disabled' | 'git-missing' | 'not-git' | 'no-commits' | 'dirty' | 'nested-repos';
 
 /**
- * `repos` names, relative to the workspace, the repositories behind the reason:
- * the nested ones `nested-repos` refuses, the dirty ones of a `dirty` group, or
- * the commitless ones of a `no-commits` group. A group of one names none.
+ * `repos` names, relative to the workspace, the repositories behind the answer:
+ * when active, the ones that will isolate, with `shared` the paths every task
+ * will share live; otherwise the nested ones `nested-repos` refuses, the dirty
+ * ones of a `dirty` group, or the commitless ones of a `no-commits` group. A
+ * group of one names none.
  */
-export type IsolationAvailability = { active: true } | { active: false; reason: IsolationInactiveReason; repos?: string[] };
+export type IsolationAvailability =
+  | { active: true; repos?: string[]; shared?: string[] }
+  | { active: false; reason: IsolationInactiveReason; repos?: string[] };
+
+/**
+ * Where a run's tasks work, as the planner is told it: the repos of the group
+ * and the paths shared live between tasks. A lone repository is `['.']` with
+ * nothing shared.
+ */
+export interface RepoGroupLayout {
+  repos: string[];
+  shared: string[];
+}
 
 export type IsolationOutcome = 'merged' | 'conflict' | 'failed';
 
