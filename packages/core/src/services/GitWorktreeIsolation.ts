@@ -464,8 +464,10 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   pruneOrphans(run: IsolationRun): Promise<void> {
     return this.admin(run.workspaceRoot, async () => {
       // A half-finished merge from a crash is easier to drop than to repair;
-      // the branch ref is the only state that matters and it is intact.
+      // the branch refs are the only state that matters. What a landing had
+      // merged goes back too, since the run was saved as not having it.
       await this.removeIntegrationWorktrees(run);
+      await this.settleLanding(run);
       for (const record of Object.values(run.tasks)) {
         if (record.status === 'active') await this.removeTask(run, record, { dropRecord: true });
         else if (record.status === 'merged') await this.removeTask(run, record, { dropRecord: false });

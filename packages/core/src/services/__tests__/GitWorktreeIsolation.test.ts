@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execFile, execFileSync } from 'child_process';
 import { promisify } from 'util';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
@@ -89,6 +89,23 @@ function refuseWorktreesIn(...repoRoots: string[]): GitExecFn {
     const { stdout, stderr } = await execFileAsync(file, args, { cwd: opts.cwd, env: opts.env });
     return { stdout: String(stdout), stderr: String(stderr) };
   };
+}
+
+/**
+ * Real git until the first call `at` matches, which never returns: the
+ * process died there. Every later call hangs too, as it would in a dead process.
+ */
+function crashAt(at: (args: string[], cwd: string | undefined) => boolean): { exec: GitExecFn; crashed: () => boolean } {
+  let crashed = false;
+  const exec: GitExecFn = async (file, args, opts) => {
+    if (crashed || at(args, opts.cwd)) {
+      crashed = true;
+      return new Promise(() => undefined);
+    }
+    const { stdout, stderr } = await execFileAsync(file, args, { cwd: opts.cwd, env: opts.env });
+    return { stdout: String(stdout), stderr: String(stderr) };
+  };
+  return { exec, crashed: () => crashed };
 }
 
 const roots: string[] = [];
@@ -1135,6 +1152,214 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
         expect(git(integrationDir, 'rev-parse', 'HEAD')).toBe(before[repo as 'api' | 'web']);
       }
       expect(git(join(dir, 'api'), 'show', `${b.branch}:api.txt`)).toBe('both');
+    });
+
+    it('lands the task in both repositories once a resolver has merged its branch by hand', async () => {
+      const { dir, iso, run, both, b } = await secondConflicts();
+      expect(await iso.integrate(both, run)).toBe('conflict');
+
+      // What a resolver task's agent does: merge the conflicted branch in each
+      // repository it changed, resolving the one that collides.
+      const resolver = task(3, 'Resolve merge conflict: Edit both');
+      const r = await iso.prepare(resolver, run);
+      git(join(r.cwd, 'api'), 'merge', '--no-ff', '--no-edit', b.branch);
+      expect(() => git(join(r.cwd, 'web'), 'merge', '--no-ff', '--no-edit', b.branch)).toThrow();
+      writeFileSync(join(r.cwd, 'web', 'web.txt'), 'first and both\n');
+      git(join(r.cwd, 'web'), 'add', 'web.txt');
+      git(join(r.cwd, 'web'), 'commit', '-q', '--no-edit');
+      expect(await iso.integrate(resolver, run)).toBe('merged');
+
+      expect(await iso.integrate(both, run)).toBe('merged');
+      expect(git(join(dir, 'api'), 'show', `${integrationOf(run)}:api.txt`)).toBe('both');
+      expect(git(join(dir, 'web'), 'show', `${integrationOf(run)}:web.txt`)).toBe('first and both');
+      expect(run.tasks['task-2']).toMatchObject({ status: 'merged', repos: { api: { changed: true }, web: { changed: true } } });
+      expect(run.tasks['task-2'].conflictRepo).toBeUndefined();
+      for (const repo of ['api', 'web']) {
+        expect(branches(join(dir, repo))).not.toContain(b.branch);
+        expect(existsSync(join(b.cwd, repo))).toBe(false);
+      }
+      const { repos } = await iso.handoff(run);
+      expect(repos.map((r) => [r.path, r.landed.map((l) => l.taskId)])).toEqual([
+        ['api', ['task-2', 'task-3']],
+        ['web', ['task-1', 'task-2', 'task-3']],
+      ]);
+    });
+
+    it('lands the task in both repositories once it is resolved by hand in its own worktree', async () => {
+      const { dir, iso, run, both, b } = await secondConflicts();
+      expect(await iso.integrate(both, run)).toBe('conflict');
+
+      expect(() => git(join(b.cwd, 'web'), 'merge', '--no-edit', integrationOf(run))).toThrow();
+      writeFileSync(join(b.cwd, 'web', 'web.txt'), 'resolved\n');
+      git(join(b.cwd, 'web'), 'add', 'web.txt');
+      git(join(b.cwd, 'web'), 'commit', '-q', '--no-edit');
+
+      expect(await iso.integrate(both, run)).toBe('merged');
+      expect(git(join(dir, 'api'), 'show', `${integrationOf(run)}:api.txt`)).toBe('both');
+      expect(git(join(dir, 'web'), 'show', `${integrationOf(run)}:web.txt`)).toBe('resolved');
+    });
+
+    it('merges nothing for a task that changed nothing, and lands it', async () => {
+      const dir = pair();
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      const run = await iso.startRun(dir);
+      const idle = task(1, 'Idle');
+      const { cwd } = await iso.prepare(idle, run);
+      const before = { api: tip(dir, 'api', run), web: tip(dir, 'web', run) };
+      const persisted: string[] = [];
+
+      expect(await iso.integrate(idle, run, () => persisted.push('persist'))).toBe('merged');
+
+      expect({ api: tip(dir, 'api', run), web: tip(dir, 'web', run) }).toEqual(before);
+      expect(persisted).toEqual([]);
+      expect(run.tasks['task-1']).toMatchObject({ status: 'merged', repos: { api: { changed: false }, web: { changed: false } } });
+      expect(existsSync(cwd)).toBe(false);
+    });
+
+    it('records every changed repository\'s tip and has the run persisted before the first merge', async () => {
+      const dir = pair();
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      const run = await iso.startRun(dir);
+      const t = task(1, 'Both');
+      const { cwd } = await iso.prepare(t, run);
+      writeFileSync(join(cwd, 'api', 'a.txt'), 'a\n');
+      writeFileSync(join(cwd, 'web', 'w.txt'), 'w\n');
+      const before = { api: tip(dir, 'api', run), web: tip(dir, 'web', run) };
+      const seen: unknown[] = [];
+
+      await iso.integrate(t, run, () => seen.push({
+        landing: JSON.parse(JSON.stringify(run.landing)),
+        tips: { api: tip(dir, 'api', run), web: tip(dir, 'web', run) },
+      }));
+
+      expect(seen).toEqual([{ landing: { taskId: 'task-1', tips: before }, tips: before }]);
+      expect(run.landing).toBeUndefined();
+    });
+
+    describe('after a crash mid-landing', () => {
+      // Three repositories; task 1 has landed a change to web.txt, and task 2
+      // changes all three, colliding in web — merged last, in path order.
+      function trio(): string {
+        const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-trio-')));
+        roots.push(dir);
+        initRepo(join(dir, 'api'), { 'api.txt': 'api\n' });
+        initRepo(join(dir, 'db'), { 'db.txt': 'db\n' });
+        initRepo(join(dir, 'web'), { 'web.txt': 'web\n' });
+        return dir;
+      }
+      const integrationDir = (dir: string, run: IsolationRun, repo: string) => join(dir, '.ordewell', 'worktrees', run.id, 'integration', repo);
+
+      /** Run task 2's landing until `at` kills the process; return the run as it was last persisted. */
+      async function crashDuringLanding(dir: string, opts: { conflict: boolean; at: (run: IsolationRun) => (args: string[], cwd: string | undefined) => boolean }) {
+        let run: IsolationRun | null = null;
+        const crash = crashAt((args, cwd) => run !== null && opts.at(run)(args, cwd));
+        const iso = create({ config: fakeConfig({ worktreeIsolation: true }), execFileImpl: crash.exec });
+        run = await iso.startRun(dir);
+        const started = run;
+        const [first, all] = [task(1, 'Edit web'), task(2, 'Edit all')];
+        const f = await iso.prepare(first, started);
+        const a = await iso.prepare(all, started);
+        writeFileSync(join(f.cwd, 'web', 'web.txt'), 'first\n');
+        for (const repo of ['api', 'db', 'web']) writeFileSync(join(a.cwd, repo, `${repo}.txt`), opts.conflict ? 'all\n' : `${repo}.txt`);
+        if (opts.conflict) expect(await iso.integrate(first, started)).toBe('merged');
+        const tips = Object.fromEntries(['api', 'db', 'web'].map((repo) => [repo, tip(dir, repo, started)]));
+        let saved = '';
+        void iso.integrate(all, started, () => { saved = JSON.stringify(started); });
+        await vi.waitFor(() => expect(crash.crashed()).toBe(true));
+        return { persisted: JSON.parse(saved) as IsolationRun, tips, workspace: a.cwd };
+      }
+
+      async function recover(dir: string, persisted: IsolationRun) {
+        await create({ config: fakeConfig({ worktreeIsolation: true }) }).pruneOrphans(persisted);
+      }
+
+      it('rolls back the repositories merged before the crash', async () => {
+        const dir = trio();
+        const { persisted, tips, workspace } = await crashDuringLanding(dir, {
+          conflict: false,
+          at: (run) => (args, cwd) => args[0] === 'merge' && cwd === integrationDir(dir, run, 'web'),
+        });
+        expect(tip(dir, 'api', persisted)).not.toBe(tips.api);
+        expect(persisted.landing).toEqual({ taskId: 'task-2', tips });
+
+        await recover(dir, persisted);
+
+        for (const repo of ['api', 'db', 'web']) {
+          expect(tip(dir, repo, persisted)).toBe(tips[repo]);
+          expect(worktreePaths(join(dir, repo))).toEqual([join(dir, repo)]);
+          expect(branches(join(dir, repo))).toEqual([integrationOf(persisted)]);
+        }
+        expect(persisted.landing).toBeUndefined();
+        expect(persisted.tasks['task-2']).toBeUndefined();
+        expect(existsSync(workspace)).toBe(false);
+      });
+
+      it('finishes a rollback the crash cut short, leaving no repository half-rolled-back', async () => {
+        const dir = trio();
+        const { persisted, tips } = await crashDuringLanding(dir, {
+          conflict: true,
+          at: (run) => (args, cwd) => args[0] === 'reset' && cwd === integrationDir(dir, run, 'db'),
+        });
+        expect(tip(dir, 'api', persisted)).toBe(tips.api);
+        expect(tip(dir, 'db', persisted)).not.toBe(tips.db);
+
+        await recover(dir, persisted);
+
+        for (const repo of ['api', 'db', 'web']) expect(tip(dir, repo, persisted)).toBe(tips[repo]);
+        expect(persisted.landing).toBeUndefined();
+      });
+
+      it('rolls back a task that merged everywhere but was not yet saved as landed', async () => {
+        const dir = trio();
+        const { persisted, tips } = await crashDuringLanding(dir, {
+          conflict: false,
+          at: () => (args) => args[0] === 'worktree' && args[1] === 'remove',
+        });
+        for (const repo of ['api', 'db', 'web']) expect(tip(dir, repo, persisted)).not.toBe(tips[repo]);
+        expect(persisted.tasks['task-2'].status).toBe('active');
+
+        await recover(dir, persisted);
+
+        for (const repo of ['api', 'db', 'web']) expect(tip(dir, repo, persisted)).toBe(tips[repo]);
+        expect(persisted.landing).toBeUndefined();
+      });
+
+      it('leaves an integration branch alone that has moved past the landing, and keeps the landing recorded', async () => {
+        const dir = trio();
+        const { persisted, tips } = await crashDuringLanding(dir, {
+          conflict: false,
+          at: (run) => (args, cwd) => args[0] === 'merge' && cwd === integrationDir(dir, run, 'web'),
+        });
+        // Something other than this landing committed on top of it.
+        const api = join(dir, 'api');
+        const moved = git(api, 'commit-tree', `${integrationOf(persisted)}^{tree}`, '-p', integrationOf(persisted), '-m', 'not ours');
+        git(api, 'update-ref', `refs/heads/${integrationOf(persisted)}`, moved);
+
+        await recover(dir, persisted);
+
+        expect(tip(dir, 'api', persisted)).toBe(moved);
+        expect(persisted.landing).toEqual({ taskId: 'task-2', tips });
+      });
+    });
+
+    it('fails a task whose merge a hook refuses, naming the repository, and rolls the others back', async () => {
+      const dir = pair();
+      writeFileSync(join(dir, 'web', '.git', 'hooks', 'pre-merge-commit'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      const run = await iso.startRun(dir);
+      const t = task(1, 'Both');
+      const { cwd } = await iso.prepare(t, run);
+      writeFileSync(join(cwd, 'api', 'a.txt'), 'a\n');
+      writeFileSync(join(cwd, 'web', 'w.txt'), 'w\n');
+      const before = tip(dir, 'api', run);
+
+      expect(await iso.integrate(t, run)).toBe('failed');
+
+      expect(tip(dir, 'api', run)).toBe(before);
+      expect(run.tasks['task-1']).toMatchObject({ status: 'failed', conflictRepo: 'web' });
+      const integrationDir = join(dir, '.ordewell', 'worktrees', run.id, 'integration', 'web');
+      expect(git(integrationDir, 'status', '--porcelain')).toBe('');
+      expect(existsSync(join(cwd, 'web'))).toBe(true);
     });
   });
 
