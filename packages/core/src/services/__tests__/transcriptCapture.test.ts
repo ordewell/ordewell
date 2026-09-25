@@ -133,6 +133,20 @@ describe('HomeTranscriptReader', () => {
       expect(await reader.finalAssistantText({ runner: 'claude-code', cwd: WORKTREE, marker: 'mk-1' })).toBe('answer from the worktree');
     });
 
+    it('finds a claude-code transcript whose directory name Claude Code shortened, among others sharing its prefix', async () => {
+      // Claude Code keeps the first 200 characters of a longer name and appends a hash of the full path.
+      const root = `/home/someone/${'deeply-nested-projects/'.repeat(6)}repo`;
+      const worktree = `${root}/.ordewell/worktrees/a1b2c3d4/12-add-the-login-form-and-its-validation`;
+      const shortened = worktree.replace(/[^a-zA-Z0-9]/g, '-').slice(0, 200);
+      const projects = path.join(fakeHome, '.claude', 'projects');
+      mkdirSync(path.join(projects, `${shortened}-1x9k2a`), { recursive: true });
+      mkdirSync(path.join(projects, `${shortened}-7qp0zz`), { recursive: true });
+      claudeSession(path.join(projects, `${shortened}-1x9k2a`, 'a.jsonl'), 'mk-other', 'another task');
+      claudeSession(path.join(projects, `${shortened}-7qp0zz`, 'b.jsonl'), 'mk-1', 'answer from the long worktree');
+
+      expect(await reader.finalAssistantText({ runner: 'claude-code', cwd: worktree, marker: 'mk-1' })).toBe('answer from the long worktree');
+    });
+
     it('binds a codex rollout to the worktree, not to the workspace root', async () => {
       const day = path.join(fakeHome, '.codex', 'sessions', '2026', '09', '25');
       mkdirSync(day, { recursive: true });

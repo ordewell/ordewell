@@ -42,18 +42,34 @@ export class HomeTranscriptReader implements TranscriptReader {
 // --- Claude Code: ~/.claude/projects/<munged-cwd>/<sessionId>.jsonl ---
 // Each line is a typed record; assistant records carry message.content blocks.
 
+/** Past this length Claude Code keeps only the first this-many characters of a directory name and appends a hash. */
+const CLAUDE_PROJECT_NAME_MAX = 200;
+
+/**
+ * Claude Code names the directory after the cwd with every non-alphanumeric
+ * turned into '-'. A worktree lives under `.ordewell/`, so the dot matters, and
+ * its path is long enough to reach the shortened form, whose hash is Claude
+ * Code's own — every directory with the kept prefix is a candidate, and the
+ * marker check decides between them.
+ */
+function claudeProjectDirs(home: string, cwd: string): string[] {
+  const projects = path.join(home, '.claude', 'projects');
+  const munged = cwd.replace(/[^a-zA-Z0-9]/g, '-');
+  if (munged.length <= CLAUDE_PROJECT_NAME_MAX) {
+    const dir = path.join(projects, munged);
+    return existsSync(dir) ? [dir] : [];
+  }
+  if (!existsSync(projects)) return [];
+  const prefix = `${munged.slice(0, CLAUDE_PROJECT_NAME_MAX)}-`;
+  return readdirSync(projects).filter((name) => name.startsWith(prefix)).map((name) => path.join(projects, name));
+}
+
 function claudeFinal(home: string, query: TranscriptQuery, maxChars: number): string | null {
-  // Claude Code names the directory after the cwd with every non-alphanumeric
-  // turned into '-'. A worktree lives under `.ordewell/`, so the dot matters.
-  const munged = query.cwd.replace(/[^a-zA-Z0-9]/g, '-');
-  const dir = path.join(home, '.claude', 'projects', munged);
-  if (!existsSync(dir)) return null;
   const cutoff = query.startedAt ? Date.parse(query.startedAt) : 0;
   // A session file is created at spawn; anything last-modified before the task
   // started is a previous session in the same directory, not this task's.
-  const candidates = readdirSync(dir)
-    .filter((f) => f.endsWith('.jsonl'))
-    .map((f) => path.join(dir, f))
+  const candidates = claudeProjectDirs(home, query.cwd)
+    .flatMap((dir) => readdirSync(dir).filter((f) => f.endsWith('.jsonl')).map((f) => path.join(dir, f)))
     .filter((f) => (cutoff ? statSync(f).mtimeMs >= cutoff - 5_000 : true))
     .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
   for (const file of candidates) {
