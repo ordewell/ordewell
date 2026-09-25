@@ -80,6 +80,7 @@ type GroupScan = { paths: string[] } | { refused: IsolationAvailability };
 interface QueuedMerge {
   task: Task;
   run: IsolationRun;
+  persist: () => void;
   settle: (outcome: IsolationOutcome) => void;
 }
 
@@ -95,6 +96,11 @@ function hasGitEntry(dir: string): boolean {
 
 function firstLine(text: string): string {
   return text.split(/\r?\n/, 1)[0].trim();
+}
+
+function sameDir(a: string, b: string): boolean {
+  const real = (p: string) => { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } };
+  return real(a) === real(b);
 }
 
 function lexists(target: string): boolean {
@@ -421,9 +427,9 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     return (await this.git(repo.root, ['rev-parse', '--show-prefix'])).trim();
   }
 
-  integrate(task: Task, run: IsolationRun): Promise<IsolationOutcome> {
+  integrate(task: Task, run: IsolationRun, persist: () => void = () => undefined): Promise<IsolationOutcome> {
     return new Promise((settle) => {
-      this.waiting.push({ task, run, settle });
+      this.waiting.push({ task, run, persist, settle });
       // Deferred a microtask so verdicts landing in the same tick queue up
       // together and plan order, not arrival order, decides who merges first.
       if (!this.draining) {
@@ -527,50 +533,144 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
           if (entry.run.id === runId && (pick < 0 || entry.task.order < this.waiting[pick].task.order)) pick = i;
         });
         const [entry] = this.waiting.splice(pick, 1);
-        entry.settle(await this.mergeOne(entry.task, entry.run).catch((): IsolationOutcome => 'failed'));
+        entry.settle(await this.land(entry.task, entry.run, entry.persist).catch((): IsolationOutcome => 'failed'));
       }
     } finally {
       this.draining = false;
     }
   }
 
-  private async mergeOne(task: Task, run: IsolationRun): Promise<IsolationOutcome> {
+  /**
+   * Land a task in every repo it changed, or in none. The tips are recorded
+   * on the run and persisted before the first merge, so a rollback — now, or
+   * after a crash — knows exactly what to return to.
+   */
+  private async land(task: Task, run: IsolationRun, persist: () => void): Promise<IsolationOutcome> {
     const record = run.tasks[task.id];
     if (!record) return 'failed';
     if (record.status === 'merged') return 'merged';
+    // A landing left half-rolled-back would have this one merged on top of it.
+    if (!(await this.settleLanding(run))) return this.stopLanding(record, 'failed');
 
-    try {
-      for (const repo of run.repos) {
-        const entry = record.repos[repo.path];
-        if (!entry) continue;
+    const changed: IsolationRepo[] = [];
+    for (const repo of run.repos) {
+      const entry = record.repos[repo.path];
+      if (!entry) continue;
+      try {
         await this.commitWorktree(repo, record, entry);
-        if (await this.brings(repo, record.branch)) entry.changed = true;
-        else entry.changed ??= false;
-        const integrationDir = await this.ensureIntegrationWorktree(run, repo);
-        const merge = await this.tryGit(integrationDir, [
-          'merge', '--no-ff', '--no-edit', '-m', `Merge task ${record.order}: ${firstLine(record.title)}`, record.branch,
-        ]);
-        if (!merge.ok) {
-          const conflicted = await this.mergeInProgress(integrationDir);
-          if (conflicted) {
-            await this.abortMerge(integrationDir);
-            record.conflictRepo = repo.path;
-          }
-          record.status = conflicted ? 'conflict' : 'failed';
-          return record.status;
-        }
+      } catch {
+        return this.stopLanding(record, 'failed', repo);
       }
-    } catch {
-      record.status = 'failed';
-      return 'failed';
+      // A resolver may have landed this branch already; what it changed stays recorded.
+      if (await this.brings(repo, record.branch)) {
+        entry.changed = true;
+        changed.push(repo);
+      } else {
+        entry.changed ??= false;
+      }
     }
 
+    if (changed.length > 0) {
+      try {
+        const tips: Record<string, string> = {};
+        for (const repo of changed) tips[repo.path] = (await this.git(repo.root, ['rev-parse', '--verify', repo.integrationBranch])).trim();
+        run.landing = { taskId: task.id, tips };
+        persist();
+      } catch {
+        delete run.landing;
+        return this.stopLanding(record, 'failed');
+      }
+      for (const repo of changed) {
+        const outcome = await this.mergeTask(run, repo, record);
+        if (outcome === 'merged') continue;
+        return (await this.settleLanding(run)) ? this.stopLanding(record, outcome, repo) : this.stopLanding(record, 'failed', repo);
+      }
+    }
+
+    // No await between these: a persist must never see the landing cleared without the task merged.
+    delete run.landing;
     record.status = 'merged';
     delete record.conflictRepo;
-    // The work is on the integration branch already; a stuck cleanup must not
-    // turn that into a failure. `pruneOrphans` sweeps up whatever it leaves.
+    // The work is on the integration branches already; a stuck cleanup must
+    // not turn that into a failure. `pruneOrphans` sweeps up whatever it leaves.
     await this.admin(run.workspaceRoot, () => this.removeTask(run, record, { dropRecord: false })).catch(() => undefined);
     return 'merged';
+  }
+
+  private stopLanding(record: IsolationTaskRecord, outcome: Exclude<IsolationOutcome, 'merged'>, repo?: IsolationRepo): IsolationOutcome {
+    record.status = outcome;
+    if (repo) record.conflictRepo = repo.path;
+    else delete record.conflictRepo;
+    return outcome;
+  }
+
+  /** Merge the task branch into one repo's integration branch. A merge that does not complete is aborted: it is Ordewell's own. */
+  private async mergeTask(run: IsolationRun, repo: IsolationRepo, record: IsolationTaskRecord): Promise<IsolationOutcome> {
+    let dir: string;
+    try {
+      dir = await this.ensureIntegrationWorktree(run, repo);
+    } catch {
+      return 'failed';
+    }
+    const merge = await this.tryGit(dir, ['merge', '--no-ff', '--no-edit', '-m', `Merge task ${record.order}: ${firstLine(record.title)}`, record.branch]);
+    if (merge.ok) return 'merged';
+    // A hook that refuses the merge commit leaves a merge in progress with nothing unmerged: a failure, not a conflict.
+    const conflicted = (await this.unmergedPaths(dir)).length > 0;
+    if (await this.mergeInProgress(dir)) await this.abortMerge(dir);
+    return conflicted ? 'conflict' : 'failed';
+  }
+
+  /**
+   * Return every repo of the landing in flight to its recorded tip, then
+   * forget the landing. True when there is none left: a tip git would not
+   * move stays recorded, so the next attempt tries again rather than landing
+   * on top of it.
+   */
+  private async settleLanding(run: IsolationRun): Promise<boolean> {
+    const landing = run.landing;
+    if (!landing) return true;
+    let settled = true;
+    for (const repo of run.repos) {
+      const tip = landing.tips[repo.path];
+      if (tip !== undefined && !(await this.restoreTip(run, repo, tip))) settled = false;
+    }
+    if (settled) delete run.landing;
+    return settled;
+  }
+
+  /**
+   * Put a repo's integration branch back at `tip`. Only ever a branch
+   * Ordewell owns, and only when what sits on it is one merge on top of `tip`
+   * — the one the serialized queue made; anything else is left alone, since
+   * resetting it could drop work that is not this landing's. The branch
+   * moves with Ordewell's integration worktree if it is checked out there,
+   * and not at all if it is checked out anywhere else.
+   */
+  private async restoreTip(run: IsolationRun, repo: IsolationRepo, tip: string): Promise<boolean> {
+    const current = await this.tryGit(repo.root, ['rev-parse', '--verify', '-q', repo.integrationBranch]);
+    if (!current.ok) return false;
+    const head = current.stdout.trim();
+    if (head === tip) return true;
+    const parent = await this.tryGit(repo.root, ['rev-parse', '--verify', '-q', `${head}^1`]);
+    const merge = await this.tryGit(repo.root, ['rev-parse', '--verify', '-q', `${head}^2`]);
+    if (!merge.ok || parent.stdout.trim() !== tip) return false;
+
+    const holder = await this.worktreeHolding(repo, repo.integrationBranch);
+    if (holder === null) return (await this.tryGit(repo.root, ['update-ref', `refs/heads/${repo.integrationBranch}`, tip, head])).ok;
+    if (!sameDir(holder, this.integrationDir(run, repo))) return false;
+    return (await this.tryGit(holder, ['reset', '-q', '--hard', tip])).ok;
+  }
+
+  /** The worktree that has `branch` checked out, or null when none does. */
+  private async worktreeHolding(repo: IsolationRepo, branch: string): Promise<string | null> {
+    // Not `-z`: that needs git 2.36, and the Merge-all fallback serves older git.
+    const listed = await this.tryGit(repo.root, ['worktree', 'list', '--porcelain']);
+    let worktree: string | null = null;
+    for (const line of listed.stdout.split(/\r?\n/)) {
+      if (line.startsWith('worktree ')) worktree = line.slice('worktree '.length);
+      else if (line === `branch refs/heads/${branch}`) return worktree;
+    }
+    return null;
   }
 
   /** Whether the task branch holds commits the repo's integration branch does not. */
@@ -747,6 +847,11 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       const detail = err instanceof Error ? err.message : String(err);
       throw new Error(`Worktree setup command failed: ${detail}`);
     }
+  }
+
+  private async unmergedPaths(cwd: string): Promise<string[]> {
+    const listed = await this.tryGit(cwd, ['diff', '--name-only', '-z', '--diff-filter=U']);
+    return [...new Set(listed.stdout.split('\0').filter(Boolean))];
   }
 
   private async mergeInProgress(cwd: string): Promise<boolean> {

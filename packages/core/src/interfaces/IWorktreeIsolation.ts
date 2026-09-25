@@ -56,8 +56,20 @@ export interface IsolationTaskRecord {
   status: IsolationTaskStatus;
   /** Keyed by repo path. */
   repos: Record<string, IsolationTaskRepo>;
-  /** The repo whose merge conflicted, while `status` is `conflict`. */
+  /** The repo whose merge stopped the task from landing, while `status` is `conflict` or `failed`. */
   conflictRepo?: string;
+}
+
+/**
+ * A task's landing in flight: each changed repo's integration tip from before
+ * the task's merge. On the run rather than the task record because it must
+ * outlive that record — a retry drops and recreates it — until every repo is
+ * back at its tip or the task has landed.
+ */
+export interface IsolationLanding {
+  taskId: string;
+  /** Keyed by repo path. */
+  tips: Record<string, string>;
 }
 
 /**
@@ -99,6 +111,12 @@ export interface IsolationRun {
   sharedRepos: string[];
   /** Keyed by task id — ids are unique within one plan and a run belongs to one plan. */
   tasks: Record<string, IsolationTaskRecord>;
+  /**
+   * Set before a task's first merge and cleared once it has landed or been
+   * rolled back. One found set — after a crash, or a rollback git refused —
+   * names exactly what to return each repo's integration branch to.
+   */
+  landing?: IsolationLanding;
 }
 
 /**
@@ -208,12 +226,19 @@ export interface IWorktreeIsolation {
   prepare(task: Task, run: IsolationRun): Promise<PreparedTask>;
 
   /**
-   * Commit the worktree's contents, then `git merge --no-ff` the task branch
-   * into the integration branch. Serialized inside the module; among tasks
-   * waiting at once the lowest plan order goes first. A conflict is aborted and
-   * reported — the worktree and refs stay, and nothing is ever auto-resolved.
+   * Land the task atomically across the repos it changed: commit each
+   * worktree, then `git merge --no-ff` the task branch into each changed
+   * repo's integration branch. If any merge conflicts or fails, it is aborted
+   * and the merges already made for the task are reset away, so `merged`
+   * always means the whole task landed. Serialized inside the module; among
+   * tasks waiting at once the lowest plan order goes first. On anything but
+   * `merged` the worktrees and refs stay, and nothing is ever auto-resolved.
+   *
+   * `persist` is called once `run.landing` is set and before the first
+   * merge; the caller saves the run there, synchronously, which is what
+   * lets `pruneOrphans` finish a landing a crash interrupted.
    */
-  integrate(task: Task, run: IsolationRun): Promise<IsolationOutcome>;
+  integrate(task: Task, run: IsolationRun, persist?: () => void): Promise<IsolationOutcome>;
 
   /**
    * `keep: false` removes the task's worktree, branch and record (cancel, task
@@ -228,7 +253,10 @@ export interface IWorktreeIsolation {
   /** End of run: park the integration branch for review and report what landed. */
   handoff(run: IsolationRun): Promise<IsolationHandoff>;
 
-  /** Drop what a crash left behind: stale active worktrees and directories no record owns. */
+  /**
+   * Drop what a crash left behind: a landing it interrupted is rolled back in
+   * every repo, then stale active worktrees and directories no record owns go.
+   */
   pruneOrphans(run: IsolationRun): Promise<void>;
 
   /** Unified diff of each repo's integration branch against its base ref. */

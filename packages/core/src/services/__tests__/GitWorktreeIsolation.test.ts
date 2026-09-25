@@ -1066,6 +1066,78 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
     });
   });
 
+  describe('atomic landing', () => {
+    // Two repositories in a folder, each with a file two tasks can collide on.
+    function pair(): string {
+      const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-pair-')));
+      roots.push(dir);
+      initRepo(join(dir, 'api'), { 'api.txt': 'api\n' });
+      initRepo(join(dir, 'web'), { 'web.txt': 'web\n' });
+      return dir;
+    }
+    const tip = (dir: string, repo: string, run: IsolationRun) => git(join(dir, repo), 'rev-parse', integrationOf(run));
+    const integrationOf = (run: IsolationRun) => `ordewell/${run.id}/integration`;
+
+    it('lands two parallel tasks that each change a different repository', async () => {
+      const dir = pair();
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      const run = await iso.startRun(dir);
+      const [inApi, inWeb] = [task(1, 'Api only'), task(2, 'Web only')];
+      const a = await iso.prepare(inApi, run);
+      const w = await iso.prepare(inWeb, run);
+      writeFileSync(join(a.cwd, 'api', 'route.ts'), 'route\n');
+      writeFileSync(join(w.cwd, 'web', 'page.html'), 'page\n');
+
+      expect(await Promise.all([iso.integrate(inWeb, run), iso.integrate(inApi, run)])).toEqual(['merged', 'merged']);
+
+      expect(git(join(dir, 'api'), 'show', `${integrationOf(run)}:route.ts`)).toBe('route');
+      expect(git(join(dir, 'web'), 'show', `${integrationOf(run)}:page.html`)).toBe('page');
+      expect(run.tasks['task-1'].repos.web.changed).toBe(false);
+      expect(run.tasks['task-2'].repos.api.changed).toBe(false);
+      // A repository the task did not change gets no merge commit at all.
+      expect(git(join(dir, 'api'), 'log', '--format=%s', integrationOf(run))).not.toContain('Web only');
+    });
+
+    /** Task 1 lands a change to web.txt; task 2, prepared beside it, changes both repositories and collides in web. */
+    async function secondConflicts() {
+      const dir = pair();
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      const run = await iso.startRun(dir);
+      const [first, both] = [task(1, 'Edit web'), task(2, 'Edit both')];
+      const f = await iso.prepare(first, run);
+      const b = await iso.prepare(both, run);
+      writeFileSync(join(f.cwd, 'web', 'web.txt'), 'first\n');
+      writeFileSync(join(b.cwd, 'api', 'api.txt'), 'both\n');
+      writeFileSync(join(b.cwd, 'web', 'web.txt'), 'both\n');
+      expect(await iso.integrate(first, run)).toBe('merged');
+      return { dir, iso, run, both, b };
+    }
+
+    it('rolls back what a task merged into one repository when another of its repositories conflicts', async () => {
+      const { dir, iso, run, both, b } = await secondConflicts();
+      const before = { api: tip(dir, 'api', run), web: tip(dir, 'web', run) };
+
+      expect(await iso.integrate(both, run)).toBe('conflict');
+
+      expect(tip(dir, 'api', run)).toBe(before.api);
+      expect(tip(dir, 'web', run)).toBe(before.web);
+      expect(git(join(dir, 'api'), 'show', `${integrationOf(run)}:api.txt`)).toBe('api');
+      expect(run.tasks['task-2'].status).toBe('conflict');
+      expect(run.tasks['task-2'].conflictRepo).toBe('web');
+      expect(run.tasks['task-2'].repos.api.changed).toBe(true);
+      expect(run.tasks['task-2'].repos.web.changed).toBe(true);
+      expect(run.landing).toBeUndefined();
+      for (const repo of ['api', 'web']) {
+        expect(worktreePaths(join(dir, repo))).toContain(join(b.cwd, repo));
+        expect(branches(join(dir, repo))).toContain(b.branch);
+        const integrationDir = join(dir, '.ordewell', 'worktrees', run.id, 'integration', repo);
+        expect(git(integrationDir, 'status', '--porcelain')).toBe('');
+        expect(git(integrationDir, 'rev-parse', 'HEAD')).toBe(before[repo as 'api' | 'web']);
+      }
+      expect(git(join(dir, 'api'), 'show', `${b.branch}:api.txt`)).toBe('both');
+    });
+  });
+
   describe('pruneOrphans', () => {
     it('drops a crashed task workspace and its worktrees and branches in every repository', async () => {
       const dir = group();
