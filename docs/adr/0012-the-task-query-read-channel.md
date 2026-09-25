@@ -210,3 +210,11 @@ planner that pages with `outputSince` never re-reads; lines older than the
 tail's line cap (or trimmed for budget) are not recoverable through this
 channel — the tail read is a diagnostic window, not a log archive, and
 `outputSummary.logTail` remains the durable record.
+
+Under worktree isolation (ADR-0013) nothing about the read changes: the capture
+is kept per task, not per working directory, so a task running in its worktree
+reads exactly as one in the workspace root, and one whose merge conflicted has
+ended its attempt and is answered like any other task that is not running — a
+pointer to its `outputSummary` and `verdict`, with `[awaiting_user]` in its
+header. The answer does not name the conflict; the user's surfaces do.
+

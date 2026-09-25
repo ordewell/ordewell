@@ -8,6 +8,73 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **Each AI task can run in its own git worktree (#12).** In a git repository,
+  every AI task gets a worktree on its own branch instead of the shared
+  workspace root, so tasks that edit the same files can run side by side
+  without overwriting each other. A task that passes its verdict is committed
+  and merged into one integration branch per run, lowest plan order first; its
+  dependents start only once its work is on that branch. A merge conflict stops
+  the task and keeps its worktree — it is never resolved automatically; resolve
+  it by hand and mark the task complete, retry it, or add a task that resolves
+  it. Nothing is merged into your checked-out branch until you ask: at the end
+  of a run you review the diff, merge, discard the run or clean up its
+  worktrees — `/handoff` in the TUI, `ordewell handoff` on the CLI, the handoff
+  card in VS Code. Uncommitted changes to tracked files hold a run until you
+  stash them or choose to run without isolation (`ordewell run --stash` /
+  `--without-isolation`). The planner stops ordering tasks just because they
+  touch the same file when isolation is on. Worktrees link `node_modules`,
+  `.env*` and agent config from your checkout; set `worktreeSetupCommand`
+  (`ORDEWELL_WORKTREE_SETUP`) to prepare them another way. Turn the feature off
+  with the `worktreeIsolation` setting or `ORDEWELL_WORKTREE_ISOLATION=false`;
+  outside a git repository nothing changes.
+- **Fork and rewind a planner conversation (#9).** Rewind cuts the conversation
+  back to just before one of your messages; fork continues in a copy of the
+  conversation and its tasks while the original stays as it was. Both act on
+  the conversation only — the task list is kept as it is — and work with any
+  planner. TUI `/fork` and `/rewind`; CLI `ordewell fork` and
+  `ordewell rewind [n]`.
+- **Condense a planner conversation on request (#10).** `/compact` in the TUI
+  or `ordewell compact` replaces the conversation with a summary the planner
+  writes, keeping the last two exchanges as they were. The tasks are untouched,
+  the summary is shown to you, and a failed or stopped compaction changes
+  nothing.
+- **The planner can read a running task's recent output (#3).** A task read
+  may ask for `output` — the clean-rendered tail of what the task is printing
+  right now, with `outputLines` and `outputSince` to page through it — so the
+  planner can look at a task that seems stuck instead of guessing. It uses the
+  existing task-read channel, so it works the same for every planner and reads
+  nothing outside what Ordewell captured.
+
+### Changed
+
+- **Internals reorganized behind narrower modules.** The planner conversation
+  has one owner, each task run is one record from spawn to verdict, a task's
+  output (the live tail and the final summary) has one owner, and terminal
+  rendering is a pure module. No behaviour change is intended beyond the fixes
+  below.
+
+### Fixed
+
+- **A task's summary is its own.** When parallel tasks ran in one directory, a
+  task could be summarized from another task's transcript; transcripts are now
+  matched by the task's completion marker, and a dependent's prompt no longer
+  carries its predecessor's marker id. Claude Code transcripts are now found
+  for a working directory with a dot in its path, or one long enough that
+  Claude Code shortens its name.
+- **A stale runner can no longer decide a newer attempt.** A retry, cancel,
+  Mark complete, stop or plan load that landed while a verdict was being read
+  was overwritten by that verdict; a retried task's runner could be dropped by
+  the previous attempt's exit; and a terminal that outlived a stop could fail
+  or pass the task's next attempt.
+- **Marking a task complete while its runner was starting is no longer undone**
+  when the runner comes up.
+- **One-shot plan changes and queued mid-run edits appear in the conversation**,
+  so the planner's replayed dialogue and the plan no longer drift apart.
+- **Two sessions saved in the same second with the same goal** — a conversation
+  forked twice — no longer overwrite each other's file.
+
 ## [0.4.23] — 2026-09-23
 
 ### Fixed

@@ -255,3 +255,10 @@ itself, and only a model can say which of it still matters.
 `/compact`).** It exists only on some harnesses, leaves Ordewell's persisted
 transcript at full length, and the two would drift.
 
+A third rule came out of reviewing this with the other surfaces: a message sent
+while the summary is being written is refused (`ConversationBusyError`, a 409
+from the daemon), the way a compaction is refused while a reply is in flight. The
+TUI lets a message through during `/compact`, and taking it would have shared the
+summary turn's live context — which the compaction resets as it lands — and
+condensed the message away unanswered. The daemon refuses it before touching the
+planning abort slot, so a stop still reaches the summary turn.

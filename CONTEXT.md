@@ -190,7 +190,9 @@ how a dead agent is told apart from a summary. Anything else the turn emits —
 task ops included — is discarded, so the task list is untouched, and nothing is
 written until the summary is in hand, so a failed or stopped turn leaves the
 conversation as it was. Refused while a planner turn is in flight and when the
-conversation has two user messages or fewer. **Rewind** stops at the summary
+conversation has two user messages or fewer; a message sent while it runs is
+refused in turn (`ConversationBusyError`, 409 from the daemon), since the reply
+would share the live context the compaction resets. **Rewind** stops at the summary
 (its entry plays the part the goal did) and **Fork** copies the compacted
 transcript. Only the planner conversation compacts, never a runner. TUI
 `/compact`; CLI `ordewell compact`; the daemon route is
@@ -383,7 +385,11 @@ plan prunes the run's orphans. A plan's record is *continued* rather than
 replaced while anything has landed on it — a resumed plan's dependents need
 their predecessors' work, which a fresh branch from the checked-out commit does
 not have — and a record with nothing landed is discarded whole when the next run
-mints its own. The field belongs to one plan: a fork must not copy it.
+mints its own. One with landed work that cannot be continued (it ran from another
+workspace path) loses its worktrees but keeps its integration branch. A run closes
+when its last attempt ends, however it ends — verdict, cancel, Mark complete or a
+failed spawn — so the next one decides its own mode. The field belongs to one
+plan: a fork must not copy it.
 
 **Isolation handoff** — the end of an isolated run: the integration branch, the
 base ref and the tasks that landed, broadcast as `isolation_handoff`. What
@@ -393,7 +399,8 @@ task branches go, the integration branch stays) and `discardRun` (everything
 goes, and the plan forgets the run; task statuses are left as they are). A
 conflicted task leaves by a hand resolution plus Mark complete, a retry, or
 `resolveConflictAsTask` — an added task that merges the branch by hand and
-through whose landing the conflicted task lands.
+through whose landing the conflicted task lands, if it is still conflicted by
+then (a retry in the meantime replaces the conflict with a new attempt).
 *Avoid:* "result", "output branch" for the handoff — it is a branch to review,
 not an outcome.
 In the terminal the same four steps are the handoff overlay (`/handoff`, opened
@@ -401,7 +408,9 @@ by `isolation_handoff` on a screen with nothing else open) and
 `ordewell handoff [review|merge|discard|cleanup]`. Merge and discard are asked
 about first, in both — the CLI takes `--yes` as having asked. A reloaded session
 gets its handoff and its per-task marks from the plan's persisted run record, not
-from a stream. A conflicted task carries a **conflict mark** in the plan pane;
+from a stream: the terminal reads it off the saved plan, and VS Code asks
+`Session.isolationView` whenever its webview reconnects or a session is loaded
+(the handoff card waits while a run executes). A conflicted task carries a **conflict mark** in the plan pane;
 every other isolation state stays out of the row and appears, with the task's
 branch, only in the expanded detail.
 
@@ -739,7 +748,9 @@ an injected **TranscriptReader** (`HomeTranscriptReader`, home directory
 injectable) that binds a transcript to a task by content: the startedAt cutoff
 only narrows the candidates, and the transcript must carry the task's
 completion marker UUID, which its prompt contains. Directory and recency alone
-hand task A task B's answer when parallel attempts share a cwd. The binding holds
+hand task A task B's answer when parallel attempts share a cwd — and for Claude
+Code the directory is not even unique: past 200 characters it keeps a prefix of
+the munged cwd plus a hash, so every directory with that prefix is a candidate. The binding holds
 only while no other task's prompt carries that id, which is why a dependent's
 prompt quotes its predecessor's output with the marker id dropped
 (`defuseMarkers` in `promptAugment.ts`).

@@ -136,8 +136,7 @@ the surfaces is separate work.
   A hook that assumes a single worktree fails the commit, the task lands
   `failed` with its refs kept, and the user can opt out.
 - Not yet true when this was accepted: the orchestrator did not use the module
-  and nothing was persisted. See the update below; no surface shows isolation
-  state yet beyond a one-line notice when a dirty tree blocks a run.
+  and nothing was persisted. See the updates below.
 
 ## Update (2026-09-25) — wired into the orchestrator, Session and planner prompt
 
@@ -220,4 +219,44 @@ first draft of the wiring was wrong, and what was chosen instead:
   `worktreeIsolation: false`. An orchestrator built without an injected
   isolation falls back to git, and the suites run inside this repository; with
   the setting on, they would have created worktrees in it.
+
+## Update (2026-09-25) — surfaces, and what the integration review changed
+
+The daemon passes `isolation_blocked` and `isolation_handoff` through unchanged
+and adds routes for the handoff steps (`/isolation/diff`, `merge`, `cleanup`,
+`discard`), for the blocked run's two ways on (`stash-and-continue`,
+`run-without`) and for `resolve-conflict`. The TUI marks a conflicted task in the
+plan pane and shows a branch and worktree only in a task's expanded detail; the
+handoff overlay (`/handoff`) opens on `isolation_handoff` when nothing else is
+open, and a blocked run asks with a three-way picker. The CLI has
+`ordewell handoff [review|merge|discard|cleanup]` and `ordewell run --stash` /
+`--without-isolation`. VS Code shows the same marks on its task cards, a handoff
+card, and a host modal for a blocked run; merge and discard are confirmed first
+everywhere.
+
+Reviewing the branches together changed five things:
+
+- **A run closes however its last attempt ends.** Only a verdict used to close
+  a run the scheduler was not driving — a manual task run, or a halted plan's
+  remaining attempts. Ended by cancel, Mark complete or a failed spawn, the run
+  stayed open, no handoff went out, and the next run inherited its mode: after a
+  discard, tasks ran in the workspace root while the planner was told they were
+  isolated. An idle `tick` now closes it.
+- **A resolver lands only a task that is still conflicted.** A conflicted task
+  the user retried meanwhile has a new attempt of its own; landing it through
+  the resolver merged that attempt's half-done worktree and completed it.
+- **Landed work keeps its branch when a run cannot be continued.** "A record
+  with nothing landed is discarded whole" was applied to every run a new one
+  replaced, including one that holds landed work but ran from another workspace
+  path; its integration branch now stays.
+- **Claude Code shortens long directory names.** It keeps the first 200
+  characters of the munged cwd and appends a hash of the full path, and a
+  worktree path reaches that sooner than a workspace root. The transcript reader
+  takes every directory with the kept prefix as a candidate; the completion
+  marker decides.
+- **A surface that was not listening is re-told from the record.** The stream
+  reports isolation only as it changes. `Session.isolationView` reads the marks
+  and the handoff from the run record; VS Code replays it when its webview
+  reconnects or a session is loaded (the card waits while a run executes), and
+  the TUI and CLI read the same record from the saved plan.
 
