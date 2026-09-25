@@ -8,6 +8,8 @@ import type {
   IsolationAvailability,
   IsolationHandoff,
   IsolationInactiveReason,
+  IsolationMergeBlock,
+  IsolationMergeBlockReason,
   IsolationMergeResult,
   IsolationOutcome,
   IsolationRepo,
@@ -96,6 +98,19 @@ function hasGitEntry(dir: string): boolean {
 
 function firstLine(text: string): string {
   return text.split(/\r?\n/, 1)[0].trim();
+}
+
+/** The paths of `git status --porcelain -z`; a rename or copy names both of its paths. */
+function statusPaths(porcelain: string): string[] {
+  const fields = porcelain.split('\0');
+  const paths: string[] = [];
+  for (let i = 0; i < fields.length; i++) {
+    const entry = fields[i];
+    if (entry.length < 4) continue;
+    paths.push(entry.slice(3));
+    if (/[RC]/.test(entry.slice(0, 2)) && fields[i + 1]) paths.push(fields[++i]);
+  }
+  return paths;
 }
 
 function sameDir(a: string, b: string): boolean {
@@ -484,28 +499,81 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   }
 
   async mergeIntoCheckedOut(run: IsolationRun): Promise<IsolationMergeResult> {
-    for (const repo of run.repos) {
-      const result = await this.mergeRepoIntoCheckedOut(repo);
-      if (result.outcome !== 'merged') return result;
+    const repos = await this.reposWithWork(run);
+    // One repo needs no preflight: its merge lands or is aborted whole, as it always has.
+    if (run.repos.length === 1 || !(await this.canPreflight())) return this.mergeInTurn(repos);
+    const blocked: IsolationMergeBlock[] = [];
+    for (const repo of repos) {
+      const block = await this.preflight(repo);
+      if (block) blocked.push(block);
     }
-    return { outcome: 'merged' };
+    return blocked.length > 0 ? { outcome: 'blocked', blocked } : this.mergeInTurn(repos);
   }
 
-  private async mergeRepoIntoCheckedOut(repo: IsolationRepo): Promise<IsolationMergeResult> {
-    // The user keeps working in this tree during a run. An unfinished merge
-    // there is theirs: git refuses ours, and the conflict path below would
-    // otherwise abort their resolution as if it were ours.
-    if (await this.mergeInProgress(repo.root)) return { outcome: 'failed', repo: repo.path };
-    const merge = await this.tryGit(repo.root, ['merge', '--no-edit', repo.integrationBranch]);
-    if (merge.ok) return { outcome: 'merged' };
-    if (await this.mergeInProgress(repo.root)) {
-      const files = (await this.tryGit(repo.root, ['diff', '--name-only', '--diff-filter=U'])).stdout.split('\n').map((f) => f.trim()).filter(Boolean);
+  /** Repos whose integration branch holds commits their base does not; one git cannot tell about is kept, so its merge says what is wrong. */
+  private async reposWithWork(run: IsolationRun): Promise<IsolationRepo[]> {
+    const withWork: IsolationRepo[] = [];
+    for (const repo of run.repos) {
+      const ahead = await this.tryGit(repo.root, ['rev-list', '--count', `${repo.baseRef}..${repo.integrationBranch}`]);
+      if (!ahead.ok || Number(ahead.stdout.trim()) > 0) withWork.push(repo);
+    }
+    return withWork;
+  }
+
+  /** `git merge-tree --write-tree`, which merges without touching a tree, arrived in git 2.38. */
+  private async canPreflight(): Promise<boolean> {
+    const version = await this.tryGit(undefined, ['--version']);
+    const [, major, minor] = /(\d+)\.(\d+)/.exec(version.stdout) ?? [];
+    return Number(major) > 2 || (Number(major) === 2 && Number(minor) >= 38);
+  }
+
+  /** Why this repo could not take its merge right now, found without touching the user's tree; null when it can. */
+  private async preflight(repo: IsolationRepo): Promise<IsolationMergeBlock | null> {
+    const block = (reason: IsolationMergeBlockReason, files: string[] = []): IsolationMergeBlock => ({ repo: repo.path, reason, files });
+    if (await this.mergeInProgress(repo.root)) return block('merge-in-progress');
+
+    const trial = await this.tryGit(repo.root, ['merge-tree', '--write-tree', '--name-only', '--no-messages', '-z', 'HEAD', repo.integrationBranch]);
+    if (!trial.ok) {
+      const [tree, ...files] = trial.stdout.split('\0').filter(Boolean);
+      // Exit 1 after a tree is a conflict; without one, git could not even try.
+      return trial.code === 1 && /^[0-9a-f]{40,64}$/.test(tree ?? '') ? block('conflict', [...new Set(files)]) : block('git-error');
+    }
+
+    // Git would refuse to merge over these, or worse, leave a half-merge in a tree holding the user's edits.
+    const incoming = await this.tryGit(repo.root, ['diff', '--name-only', '--no-renames', '-z', `HEAD...${repo.integrationBranch}`]);
+    const status = await this.tryGit(repo.root, ['status', '--porcelain', '-z', '--untracked-files=no']);
+    if (!incoming.ok || !status.ok) return block('git-error');
+    const touched = new Set(incoming.stdout.split('\0').filter(Boolean));
+    const overlap = statusPaths(status.stdout).filter((file) => touched.has(file));
+    return overlap.length > 0 ? block('uncommitted-changes', overlap) : null;
+  }
+
+  /** Merge each repo in turn, stopping at the first that does not take its merge. Only a merge started here is ever aborted. */
+  private async mergeInTurn(repos: IsolationRepo[]): Promise<IsolationMergeResult> {
+    const landed: string[] = [];
+    const stopped = (outcome: 'conflict' | 'failed', repo: IsolationRepo, files?: string[]): IsolationMergeResult => ({
+      outcome,
+      repo: repo.path,
+      ...(files ? { files } : {}),
+      ...(landed.length > 0 ? { landed } : {}),
+    });
+    for (const repo of repos) {
+      // The user keeps working in this tree during a run. An unfinished merge
+      // there is theirs: git refuses ours, and the abort below would otherwise
+      // throw away their resolution as if it were ours.
+      if (await this.mergeInProgress(repo.root)) return stopped('failed', repo);
+      const merge = await this.tryGit(repo.root, ['merge', '--no-edit', repo.integrationBranch]);
+      if (merge.ok) {
+        landed.push(repo.path);
+        continue;
+      }
+      const files = await this.unmergedPaths(repo.root);
       // Not `abortMerge`: its `reset --hard` fallback is for Ordewell's own
       // integration worktree, and here it would discard uncommitted work.
-      await this.tryGit(repo.root, ['merge', '--abort']);
-      return { outcome: 'conflict', repo: repo.path, files };
+      if (await this.mergeInProgress(repo.root)) await this.tryGit(repo.root, ['merge', '--abort']);
+      return files.length > 0 ? stopped('conflict', repo, files) : stopped('failed', repo);
     }
-    return { outcome: 'failed', repo: repo.path };
+    return { outcome: 'merged' };
   }
 
   discard(run: IsolationRun, opts: { keepIntegration: boolean }): Promise<void> {

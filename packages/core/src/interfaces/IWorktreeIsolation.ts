@@ -177,12 +177,33 @@ export interface IsolationView {
   handoff: IsolationHandoff;
 }
 
-/** How merging a run into the user's checkout went; on anything but `merged`, the repo that stopped it and, for a conflict, its files. */
-export interface IsolationMergeResult {
-  outcome: IsolationOutcome;
-  repo?: string;
-  files?: string[];
+/** Why "Merge all" would not touch a repo. */
+export type IsolationMergeBlockReason = 'merge-in-progress' | 'conflict' | 'uncommitted-changes' | 'git-error';
+
+export interface IsolationMergeBlock {
+  repo: string;
+  reason: IsolationMergeBlockReason;
+  /** The files that would conflict, or the user's uncommitted ones the merge also changes; empty for the other reasons. */
+  files: string[];
 }
+
+/**
+ * How "Merge all" went.
+ * - `merged`: every repo with work on its integration branch took it.
+ * - `blocked`: the preflight found repos that could not, so nothing was
+ *   touched anywhere; `blocked` says which and why.
+ * - `conflict` / `failed`: a merge stopped in `repo` — on git older than 2.38,
+ *   which cannot preflight, or for a reason no preflight could foresee. That
+ *   merge was aborted, leaving `repo` as it was; `landed` names the repos
+ *   merged before it, which stay merged, and is absent when there are none.
+ *
+ * A group of one is never `blocked`: its one merge lands or is aborted whole,
+ * so it reports as it always has.
+ */
+export type IsolationMergeResult =
+  | { outcome: 'merged' }
+  | { outcome: 'blocked'; blocked: IsolationMergeBlock[] }
+  | { outcome: 'conflict' | 'failed'; repo: string; files?: string[]; landed?: string[] };
 
 export interface PreparedTask {
   cwd: string;
@@ -263,10 +284,13 @@ export interface IWorktreeIsolation {
   reviewDiff(run: IsolationRun): Promise<string>;
 
   /**
-   * Merge the integration branch into whatever the user has checked out. The
-   * one irreversible step, so it only ever happens when a caller asks for it.
-   * A conflict is aborted, leaving the user's tree as it was; a merge the user
-   * already had in progress is left alone and reported `failed`.
+   * "Merge all": merge each repo's integration branch into whatever the user
+   * has checked out there. The one irreversible step, so it only ever happens
+   * when a caller asks for it. Every repo with work is preflighted first — no
+   * merge of the user's in progress, no conflict against their HEAD, no
+   * uncommitted edit to a file the merge changes — and unless all pass,
+   * nothing is merged anywhere. Only a merge Ordewell itself just started is
+   * ever aborted; nothing of the user's is reset.
    */
   mergeIntoCheckedOut(run: IsolationRun): Promise<IsolationMergeResult>;
 

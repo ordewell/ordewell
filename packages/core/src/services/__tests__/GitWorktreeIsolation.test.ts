@@ -1083,18 +1083,18 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
     });
   });
 
-  describe('atomic landing', () => {
-    // Two repositories in a folder, each with a file two tasks can collide on.
-    function pair(): string {
-      const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-pair-')));
-      roots.push(dir);
-      initRepo(join(dir, 'api'), { 'api.txt': 'api\n' });
-      initRepo(join(dir, 'web'), { 'web.txt': 'web\n' });
-      return dir;
-    }
-    const tip = (dir: string, repo: string, run: IsolationRun) => git(join(dir, repo), 'rev-parse', integrationOf(run));
-    const integrationOf = (run: IsolationRun) => `ordewell/${run.id}/integration`;
+  // Two repositories in a folder, each with a file two tasks can collide on.
+  function pair(): string {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-pair-')));
+    roots.push(dir);
+    initRepo(join(dir, 'api'), { 'api.txt': 'api\n' });
+    initRepo(join(dir, 'web'), { 'web.txt': 'web\n' });
+    return dir;
+  }
+  const integrationOf = (run: IsolationRun) => `ordewell/${run.id}/integration`;
+  const tip = (dir: string, repo: string, run: IsolationRun) => git(join(dir, repo), 'rev-parse', integrationOf(run));
 
+  describe('atomic landing', () => {
     it('lands two parallel tasks that each change a different repository', async () => {
       const dir = pair();
       const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
@@ -1360,6 +1360,162 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
       const integrationDir = join(dir, '.ordewell', 'worktrees', run.id, 'integration', 'web');
       expect(git(integrationDir, 'status', '--porcelain')).toBe('');
       expect(existsSync(join(cwd, 'web'))).toBe(true);
+    });
+  });
+
+  describe('Merge all', () => {
+    /** A handed-off run whose one task changed api.txt and web.txt. */
+    async function handedOff(deps: Partial<WorktreeIsolationDeps> = {}, opts: { idleRepo?: string } = {}) {
+      const dir = pair();
+      if (opts.idleRepo) initRepo(join(dir, opts.idleRepo), { 'idle.txt': 'idle\n' });
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }), ...deps });
+      const run = await iso.startRun(dir);
+      const t = task(1, 'Edit both');
+      const { cwd } = await iso.prepare(t, run);
+      writeFileSync(join(cwd, 'api', 'api.txt'), 'run api\n');
+      writeFileSync(join(cwd, 'web', 'web.txt'), 'run web\n');
+      expect(await iso.integrate(t, run)).toBe('merged');
+      await iso.handoff(run);
+      const heads = () => ({ api: git(join(dir, 'api'), 'rev-parse', 'HEAD'), web: git(join(dir, 'web'), 'rev-parse', 'HEAD') });
+      return { dir, iso, run, heads };
+    }
+
+    function commitIn(root: string, file: string, content: string): void {
+      writeFileSync(join(root, file), content);
+      git(root, 'add', file);
+      git(root, 'commit', '-q', '-m', `user edit of ${file}`);
+    }
+
+    it('merges every repository when each of them can take its merge', async () => {
+      const { dir, iso, run } = await handedOff();
+
+      expect(await iso.mergeIntoCheckedOut(run)).toEqual({ outcome: 'merged' });
+
+      expect(readFileSync(join(dir, 'api', 'api.txt'), 'utf8')).toBe('run api\n');
+      expect(readFileSync(join(dir, 'web', 'web.txt'), 'utf8')).toBe('run web\n');
+      for (const repo of ['api', 'web']) expect(git(join(dir, repo), 'branch', '--show-current')).toBe('main');
+    });
+
+    it('merges nothing anywhere when a commit of the user\'s would conflict in one repository', async () => {
+      const { dir, iso, run, heads } = await handedOff();
+      commitIn(join(dir, 'web'), 'web.txt', 'user web\n');
+      const before = heads();
+
+      expect(await iso.mergeIntoCheckedOut(run)).toEqual({
+        outcome: 'blocked',
+        blocked: [{ repo: 'web', reason: 'conflict', files: ['web.txt'] }],
+      });
+
+      expect(heads()).toEqual(before);
+      expect(readFileSync(join(dir, 'api', 'api.txt'), 'utf8')).toBe('api\n');
+      for (const repo of ['api', 'web']) {
+        expect(git(join(dir, repo), 'status', '--porcelain', '--untracked-files=no')).toBe('');
+        expect(() => git(join(dir, repo), 'rev-parse', '-q', '--verify', 'MERGE_HEAD')).toThrow();
+      }
+    });
+
+    it('merges nothing anywhere when the user has uncommitted edits to a file the merge changes', async () => {
+      const { dir, iso, run, heads } = await handedOff();
+      writeFileSync(join(dir, 'api', 'api.txt'), 'uncommitted\n');
+      // An uncommitted edit the merge does not touch is no obstacle.
+      commitIn(join(dir, 'web'), 'notes.txt', 'n\n');
+      writeFileSync(join(dir, 'web', 'notes.txt'), 'uncommitted notes\n');
+      const before = heads();
+
+      expect(await iso.mergeIntoCheckedOut(run)).toEqual({
+        outcome: 'blocked',
+        blocked: [{ repo: 'api', reason: 'uncommitted-changes', files: ['api.txt'] }],
+      });
+
+      expect(heads()).toEqual(before);
+      expect(readFileSync(join(dir, 'api', 'api.txt'), 'utf8')).toBe('uncommitted\n');
+      expect(readFileSync(join(dir, 'web', 'web.txt'), 'utf8')).toBe('web\n');
+      expect(readFileSync(join(dir, 'web', 'notes.txt'), 'utf8')).toBe('uncommitted notes\n');
+    });
+
+    it('merges nothing anywhere while a merge of the user\'s own is in progress in one repository, and leaves it alone', async () => {
+      const { dir, iso, run, heads } = await handedOff();
+      const web = join(dir, 'web');
+      git(web, 'checkout', '-q', '-b', 'feature');
+      commitIn(web, 'web.txt', 'feature\n');
+      git(web, 'checkout', '-q', 'main');
+      commitIn(web, 'web.txt', 'main\n');
+      expect(() => git(web, 'merge', 'feature')).toThrow();
+      const before = heads();
+
+      const result = await iso.mergeIntoCheckedOut(run);
+
+      expect(result).toEqual({ outcome: 'blocked', blocked: [{ repo: 'web', reason: 'merge-in-progress', files: [] }] });
+      expect(heads()).toEqual(before);
+      expect(git(web, 'rev-parse', 'MERGE_HEAD')).toBe(git(web, 'rev-parse', 'feature'));
+      expect(readFileSync(join(dir, 'api', 'api.txt'), 'utf8')).toBe('api\n');
+    });
+
+    it('reports every repository that blocks, and only repositories with work to merge', async () => {
+      const { dir, iso, run } = await handedOff({}, { idleRepo: 'docs' });
+      // docs landed nothing, so nothing of the user's there is in the way.
+      writeFileSync(join(dir, 'docs', 'idle.txt'), 'uncommitted\n');
+      commitIn(join(dir, 'web'), 'web.txt', 'user web\n');
+      writeFileSync(join(dir, 'api', 'api.txt'), 'uncommitted\n');
+
+      expect(await iso.mergeIntoCheckedOut(run)).toEqual({
+        outcome: 'blocked',
+        blocked: [
+          { repo: 'api', reason: 'uncommitted-changes', files: ['api.txt'] },
+          { repo: 'web', reason: 'conflict', files: ['web.txt'] },
+        ],
+      });
+    });
+
+    it('says which repositories landed when a merge fails after the preflight passed', async () => {
+      const { dir, iso, run } = await handedOff();
+      // A diverged branch makes a real merge commit, which the hook then refuses.
+      commitIn(join(dir, 'web'), 'other.txt', 'o\n');
+      writeFileSync(join(dir, 'web', '.git', 'hooks', 'pre-merge-commit'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+      const webHead = git(join(dir, 'web'), 'rev-parse', 'HEAD');
+
+      expect(await iso.mergeIntoCheckedOut(run)).toEqual({ outcome: 'failed', repo: 'web', landed: ['api'] });
+
+      expect(readFileSync(join(dir, 'api', 'api.txt'), 'utf8')).toBe('run api\n');
+      expect(git(join(dir, 'web'), 'rev-parse', 'HEAD')).toBe(webHead);
+      expect(() => git(join(dir, 'web'), 'rev-parse', '-q', '--verify', 'MERGE_HEAD')).toThrow();
+      expect(git(join(dir, 'web'), 'status', '--porcelain', '--untracked-files=no')).toBe('');
+    });
+
+    describe('on git older than 2.38', () => {
+      /** Real git that says it is 2.37 and records every command it runs. */
+      function oldGit(): { exec: GitExecFn; ran: string[][] } {
+        const ran: string[][] = [];
+        const exec: GitExecFn = async (file, args, opts) => {
+          ran.push(args);
+          if (args[0] === '--version') return { stdout: 'git version 2.37.1\n', stderr: '' };
+          const { stdout, stderr } = await execFileAsync(file, args, { cwd: opts.cwd, env: opts.env });
+          return { stdout: String(stdout), stderr: String(stderr) };
+        };
+        return { exec, ran };
+      }
+
+      it('merges repository by repository without a preflight, stops at the first failure and says what landed', async () => {
+        const git237 = oldGit();
+        const { dir, iso, run } = await handedOff({ execFileImpl: git237.exec });
+        commitIn(join(dir, 'web'), 'web.txt', 'user web\n');
+        const webHead = git(join(dir, 'web'), 'rev-parse', 'HEAD');
+
+        expect(await iso.mergeIntoCheckedOut(run)).toEqual({ outcome: 'conflict', repo: 'web', files: ['web.txt'], landed: ['api'] });
+
+        expect(readFileSync(join(dir, 'api', 'api.txt'), 'utf8')).toBe('run api\n');
+        expect(git(join(dir, 'web'), 'rev-parse', 'HEAD')).toBe(webHead);
+        expect(readFileSync(join(dir, 'web', 'web.txt'), 'utf8')).toBe('user web\n');
+        expect(() => git(join(dir, 'web'), 'rev-parse', '-q', '--verify', 'MERGE_HEAD')).toThrow();
+        expect(git237.ran.some((args) => args[0] === 'merge-tree')).toBe(false);
+      });
+
+      it('merges every repository when none fails', async () => {
+        const { dir, iso, run } = await handedOff({ execFileImpl: oldGit().exec });
+
+        expect(await iso.mergeIntoCheckedOut(run)).toEqual({ outcome: 'merged' });
+        expect(readFileSync(join(dir, 'web', 'web.txt'), 'utf8')).toBe('run web\n');
+      });
     });
   });
 
