@@ -5,6 +5,7 @@ import * as sessionStore from '../../utils/sessionStore';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
 import type { SessionMessage } from '../SessionMessage';
+import type { ConversationTurn, IAiService } from '../AiService';
 
 function runner() {
   const sessions: FakeTerminalSession[] = [];
@@ -24,10 +25,10 @@ function plan(tasks: Task[]): LegacyPlanState {
   return { tasks, generatedAt: now, status: 'approved', runners: ['claude-code'], lastUpdated: now };
 }
 
-function setup(isolation = new FakeWorktreeIsolation()) {
+function setup(isolation = new FakeWorktreeIsolation(), aiService?: Partial<IAiService>) {
   const messages: SessionMessage[] = [];
   const r = runner();
-  const session = makeSession({ runner: r.runner, isolation, broadcast: (m) => messages.push(m) });
+  const session = makeSession({ runner: r.runner, isolation, aiService, broadcast: (m) => messages.push(m) });
   const pass = (t: Task) => r.sessions.find((s) => s.taskId === t.id)!.emitOutput(`<<<ORDEWELL_DONE_${t.completionMarker}>>>`);
   const lastStatus = () => [...messages].reverse().find((m): m is Extract<SessionMessage, { type: 'status_update' }> => m.type === 'status_update');
   return { session, isolation, messages, pass, lastStatus, ...r };
@@ -245,6 +246,67 @@ describe('Session with worktree isolation', () => {
     const { session } = setup();
     session.loadPlan(plan([task('t1', 1)]), 'goal', '/repo');
     await expect(session.resolveConflictAsTask('t1')).rejects.toThrow(/conflict/i);
+  });
+
+  describe('beside the planner conversation', () => {
+    const talk = (...exchanges: [string, string][]) => exchanges.flatMap(([user, reply], i) => [
+      { role: 'user' as const, content: user, timestamp: `2026-01-01T00:00:0${2 * i}Z` },
+      { role: 'assistant' as const, content: reply, timestamp: `2026-01-01T00:00:0${2 * i + 1}Z` },
+    ]);
+    const read = (tasks: string[]): ConversationTurn => ({ kind: 'task_query', query: { tasks, fields: ['output'], catalog: false }, text: '', researchLog: [] });
+    const say = (text: string): ConversationTurn => ({ kind: 'message', text, researchLog: [] });
+
+    /** One task landed, one conflicted: a run record with something to lose. */
+    async function settledRun(continueConversation: IAiService['continueConversation']) {
+      const isolation = new FakeWorktreeIsolation();
+      isolation.outcomes.set('t2', 'conflict');
+      const env = setup(isolation, { continueConversation, hasActiveConversation: () => true });
+      const t1 = task('t1', 1);
+      const t2 = task('t2', 2);
+      env.session.loadPlan({
+        ...plan([t1, t2]),
+        conversationHistory: talk(['goal', 'Plan generated.'], ['split task 2', 'Done.'], ['rename it', 'Renamed.'], ['and test it', 'Added.']),
+      }, 'goal', '/repo');
+      await env.session.executePlan();
+      env.pass(t1);
+      env.pass(t2);
+      await vi.waitFor(() => expect(env.session.getTask('t2')!.status).toBe('awaiting_user'));
+      return env;
+    }
+
+    it('leaves the run record and every task\'s isolation as they are through a rewind and a compaction', async () => {
+      const { session, lastStatus } = await settledRun(vi.fn().mockResolvedValue(say('<conversation_summary>A goal, split and renamed.</conversation_summary>')));
+      const record = structuredClone(saved()!.isolation);
+      const marks = lastStatus()!.tasks.map((t) => [t.id, t.status, t.isolation]);
+      expect(marks.map(([, , i]) => (i as { state: string }).state)).toEqual(['integrated', 'conflict']);
+
+      session.rewindConversation(6);
+      expect(saved()!.conversationHistory).toHaveLength(6);
+      expect(saved()!.isolation).toEqual(record);
+
+      await session.compactConversation();
+      expect(saved()!.conversationHistory![0].kind).toBe('compaction');
+      expect(saved()!.isolation).toEqual(record);
+      expect(lastStatus()!.tasks.map((t) => [t.id, t.status, t.isolation])).toEqual(marks);
+    });
+
+    it('reads a task running in its worktree from its live output, and points a conflicted task at its verdict instead', async () => {
+      const continueConversation = vi.fn().mockResolvedValueOnce(read(['#2', '#3'])).mockResolvedValueOnce(say('ok'));
+      const { session, spawn, sessions } = await settledRun(continueConversation);
+      // The run is paused on the conflict, not over, so it picks the new task up at once.
+      await session.addTask({ title: 'Task t3', prompt: 'do t3' });
+      expect(spawn.mock.calls.at(-1)![0].cwd).toMatch(/^\/fake-worktrees\/run1\/3-/);
+      sessions.at(-1)!.emitOutput('building in the worktree\n');
+
+      await session.continueConversation('how are tasks 2 and 3 doing?');
+
+      const answer = String(continueConversation.mock.calls[1][0]);
+      const [conflicted, running] = answer.split(/^#3 /m);
+      expect(conflicted).toMatch(/\[awaiting_user\]/);
+      expect(conflicted).toMatch(/not running — read "outputSummary" and "verdict"/);
+      expect(running).toMatch(/output: \(running;/);
+      expect(running).toContain('building in the worktree');
+    });
   });
 
   describe('what the planner is told', () => {

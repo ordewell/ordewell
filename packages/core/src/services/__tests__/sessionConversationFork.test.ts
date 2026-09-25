@@ -130,6 +130,32 @@ describe('Session.forkConversation', () => {
     expect(raw).not.toContain(persisted.isolation!.run.tasks.first.worktree);
   });
 
+  it('carries the condensed transcript when forked after a compaction, and the fork rewinds no further than its summary', async () => {
+    const summaryTurn: ConversationTurn = { kind: 'message', text: '<conversation_summary>A parser; task 5 renamed.</conversation_summary>', researchLog: [] };
+    const session = makeSession({
+      aiService: { hasActiveConversation: () => true, continueConversation: vi.fn().mockResolvedValue(summaryTurn) },
+    });
+    const plan = runningPlan();
+    plan.conversationHistory!.push(
+      { role: 'assistant', content: 'Renamed.', timestamp: '2026-01-01T00:00:03Z' },
+      { role: 'user', content: 'and add CSV', timestamp: '2026-01-01T00:00:04Z' },
+      { role: 'assistant', content: 'Added.', timestamp: '2026-01-01T00:00:05Z' },
+    );
+    session.loadPlan(plan, GOAL, workspace, { sessionId: 'session-original', persist: false });
+    await session.compactConversation();
+    vi.mocked(sessionStore.saveSession).mockRestore();
+
+    const fork = session.forkConversation();
+
+    const forked = sessionStore.loadSession(fork.sessionId, workspace)!.plan;
+    expect(forked.conversationHistory).toEqual(session.planState!.conversationHistory);
+    expect(forked.conversationHistory![0]).toMatchObject({ kind: 'compaction', content: expect.stringContaining('task 5 renamed') });
+    const adopted = makeSession();
+    adopted.loadPlan(forked, GOAL, workspace, { sessionId: fork.sessionId, persist: false });
+    expect(adopted.rewindTargets().map((t) => t.preview)).toEqual(['rename task 5', 'and add CSV']);
+    expect(() => adopted.rewindConversation(0)).toThrow(/condensed/);
+  });
+
   it('forks again from either side', () => {
     const session = adoptedSession();
     const first = session.forkConversation();
