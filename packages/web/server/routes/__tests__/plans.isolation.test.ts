@@ -49,13 +49,21 @@ describe('GET /:sessionId/isolation/diff', () => {
 
 describe('POST /:sessionId/isolation/merge', () => {
   it.each(['merged', 'conflict', 'failed'] as const)('reports a %s merge as an outcome, not an HTTP error', async (outcome) => {
-    const mergeRun = vi.fn().mockResolvedValue(outcome);
+    const mergeRun = vi.fn().mockResolvedValue({ outcome });
     const app = appFor({ mergeRun });
 
     const res = await post(app, 'isolation/merge');
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ outcome });
+  });
+
+  it('passes on which repo stopped the merge and its conflicted files', async () => {
+    const app = appFor({ mergeRun: vi.fn().mockResolvedValue({ outcome: 'conflict', repo: '.', files: ['shared.txt'] }) });
+
+    const res = await post(app, 'isolation/merge');
+
+    expect(await res.json()).toEqual({ outcome: 'conflict', repo: '.', files: ['shared.txt'] });
   });
 
   it('is a 400 while the run is still running', async () => {

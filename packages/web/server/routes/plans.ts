@@ -133,7 +133,7 @@ export function plansRoute(pool: OrchestratorPool) {
 
   router.post('/:sessionId/isolation/merge', async (c) => {
     try {
-      return c.json({ outcome: await pool.session(c.req.param('sessionId')).mergeRun() });
+      return c.json(await pool.session(c.req.param('sessionId')).mergeRun());
     } catch (err) {
       return editFailure(c, err);
     }
