@@ -4,11 +4,13 @@ import type { ITerminalSession } from './interfaces/ITerminalRunner';
 import type {
   IsolationAvailability,
   IsolationHandoff,
+  IsolationMergeResult,
   IsolationOutcome,
   IsolationRun,
   IWorktreeIsolation,
 } from './interfaces/IWorktreeIsolation';
 import type { Task } from './models/Task';
+import { handoffOf, integrationBranchFor, SELF_REPO } from './services/isolationRecord';
 
 export function fakeConfig(overrides: Partial<IConfig> = {}): IConfig {
   return {
@@ -140,7 +142,13 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
   async startRun(workspaceRoot: string): Promise<IsolationRun> {
     this.log({ op: 'startRun', workspaceRoot });
     const id = `run${++this.runCount}`;
-    return { id, workspaceRoot, baseRef: 'base0000', baseBranch: 'main', integrationBranch: `ordewell/${id}/integration`, tasks: {} };
+    return {
+      id,
+      workspaceRoot,
+      repos: [{ path: SELF_REPO, root: workspaceRoot, baseRef: 'base0000', baseBranch: 'main', integrationBranch: integrationBranchFor(id) }],
+      shared: [],
+      tasks: {},
+    };
   }
 
   async prepare(task: Task, run: IsolationRun): Promise<{ cwd: string; branch: string }> {
@@ -148,7 +156,10 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
     const name = `${task.order}-${task.id}`;
     const cwd = `/fake-worktrees/${run.id}/${name}`;
     const branch = `ordewell/${run.id}/${name}`;
-    run.tasks[task.id] = { taskId: task.id, order: task.order, title: task.title, branch, worktree: cwd, status: 'active', linked: [] };
+    run.tasks[task.id] = {
+      taskId: task.id, order: task.order, title: task.title, branch, workspace: cwd, status: 'active',
+      repos: { [SELF_REPO]: { worktree: cwd, linked: [] } },
+    };
     return { cwd, branch };
   }
 
@@ -159,6 +170,12 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
     if (!record) return 'failed';
     const outcome = this.outcomes.get(task.id) ?? 'merged';
     record.status = outcome;
+    if (outcome === 'merged') {
+      record.repos[SELF_REPO].changed = true;
+      delete record.conflictRepo;
+    } else if (outcome === 'conflict') {
+      record.conflictRepo = SELF_REPO;
+    }
     return outcome;
   }
 
@@ -171,16 +188,12 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
 
   async handoff(run: IsolationRun): Promise<IsolationHandoff> {
     this.log({ op: 'handoff' });
-    const landed = Object.values(run.tasks)
-      .filter((r) => r.status === 'merged')
-      .sort((a, b) => a.order - b.order)
-      .map((r) => ({ taskId: r.taskId, order: r.order, title: r.title }));
-    return { branch: run.integrationBranch, baseRef: run.baseRef, landed };
+    return handoffOf(run);
   }
 
   async pruneOrphans(): Promise<void> { this.log({ op: 'pruneOrphans' }); }
   async reviewDiff(): Promise<string> { this.log({ op: 'reviewDiff' }); return ''; }
-  async mergeIntoCheckedOut(): Promise<IsolationOutcome> { this.log({ op: 'mergeIntoCheckedOut' }); return 'merged'; }
+  async mergeIntoCheckedOut(): Promise<IsolationMergeResult> { this.log({ op: 'mergeIntoCheckedOut' }); return { outcome: 'merged' }; }
   async discard(_run: IsolationRun, opts: { keepIntegration: boolean }): Promise<void> {
     this.log({ op: 'discard', keepIntegration: opts.keepIntegration });
   }

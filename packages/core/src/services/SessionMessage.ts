@@ -58,10 +58,10 @@ export type SessionMessage =
   // user to stash (`continueWithStash`) or to run without isolation this once
   // (`continueWithoutIsolation`); nothing is spawned until then.
   | { type: 'isolation_blocked'; reason: 'dirty'; message: string }
-  // An isolated run settled: the branch its work landed on, the commit that
-  // branch forked from, and what landed, in plan order. Sent before
-  // `execution_complete`, which surfaces treat as the end of the stream.
-  | { type: 'isolation_handoff'; branch: string; baseRef: string; landed: IsolationHandoff['landed'] }
+  // An isolated run settled: for each repo, the branch its work landed on and
+  // the commit that branch forked from; and what landed, in plan order. Sent
+  // before `execution_complete`, which surfaces treat as the end of the stream.
+  | ({ type: 'isolation_handoff' } & IsolationHandoff)
   | { type: 'plan_thinking'; text: string }
   // Carries no content — see `ResearchProgress['liveness']`. Exists only so a
   // surface's idle watchdog sees the harness process working even during a

@@ -126,8 +126,8 @@ describe('Session.forkConversation', () => {
     const dir = path.join(workspace, '.ordewell', 'sessions');
     const raw = fs.readdirSync(dir).map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
     expect(sessionStore.loadSession(fork.sessionId, workspace)!.plan.isolation).toBeUndefined();
-    expect(raw).not.toContain(persisted.isolation!.run.integrationBranch);
-    expect(raw).not.toContain(persisted.isolation!.run.tasks.first.worktree);
+    expect(raw).not.toContain(persisted.isolation!.run.repos[0].integrationBranch);
+    expect(raw).not.toContain(persisted.isolation!.run.tasks.first.workspace);
   });
 
   it('carries the condensed transcript when forked after a compaction, and the fork rewinds no further than its summary', async () => {

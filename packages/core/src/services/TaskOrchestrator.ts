@@ -11,15 +11,16 @@ import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type {
   IsolationHandoff,
   IsolationInactiveReason,
+  IsolationMergeResult,
   IsolationOutcome,
   IsolationRun,
-  IsolationTaskStatus,
   IsolationView,
   IWorktreeIsolation,
   PlanIsolation,
   TaskIsolation,
 } from '../interfaces/IWorktreeIsolation';
-import { createWorktreeIsolation, handoffOf } from './GitWorktreeIsolation';
+import { createWorktreeIsolation } from './GitWorktreeIsolation';
+import { handoffOf, integrationBranchNameOf, taskIsolationOf } from './isolationRecord';
 
 /**
  * The one notification channel out of the orchestrator. Everything that used
@@ -97,14 +98,6 @@ interface TaskAttempt {
 }
 
 type AttemptPhase = 'starting' | 'running' | 'integrating';
-
-const ISOLATION_STATE: Record<IsolationTaskStatus, Exclude<TaskIsolation['state'], 'none'>> = {
-  active: 'active',
-  merged: 'integrated',
-  conflict: 'conflict',
-  kept: 'kept',
-  failed: 'kept',
-};
 
 /** Read-only view of a task's live attempt. */
 export interface TaskAttemptSnapshot {
@@ -294,7 +287,7 @@ export class TaskOrchestrator {
     if (!this.isolationRun) return null;
     const record = this.isolationRun.tasks[taskId];
     if (!record) return { state: 'none' };
-    return { state: ISOLATION_STATE[record.status], branch: record.branch, worktree: record.worktree };
+    return taskIsolationOf(record);
   }
 
   /**
@@ -304,9 +297,7 @@ export class TaskOrchestrator {
   isolationView(): IsolationView | null {
     const run = this.isolationRun;
     if (!run) return null;
-    const tasks = Object.fromEntries(Object.values(run.tasks).map((r): [string, TaskIsolation] => (
-      [r.taskId, { state: ISOLATION_STATE[r.status], branch: r.branch, worktree: r.worktree }]
-    )));
+    const tasks = Object.fromEntries(Object.values(run.tasks).map((r): [string, TaskIsolation] => [r.taskId, taskIsolationOf(r)]));
     return { tasks, handoff: handoffOf(run) };
   }
 
@@ -343,13 +334,14 @@ export class TaskOrchestrator {
     return this.isolation.reviewDiff(this.requireRun());
   }
 
-  async mergeRun(): Promise<IsolationOutcome> {
+  async mergeRun(): Promise<IsolationMergeResult> {
     const run = this.requireRun();
-    const outcome = await this.isolation.mergeIntoCheckedOut(run);
-    if (outcome === 'merged') this.notifications.info(`Merged ${run.integrationBranch} into your checked-out branch.`);
-    else if (outcome === 'conflict') this.notifications.warn(`Merging ${run.integrationBranch} conflicted, so it was aborted — your tree is as it was.`);
-    else this.notifications.error(`Could not merge ${run.integrationBranch} — finish or abort the merge already in progress, then try again.`);
-    return outcome;
+    const result = await this.isolation.mergeIntoCheckedOut(run);
+    const branch = integrationBranchNameOf(run);
+    if (result.outcome === 'merged') this.notifications.info(`Merged ${branch} into your checked-out branch.`);
+    else if (result.outcome === 'conflict') this.notifications.warn(`Merging ${branch} conflicted, so it was aborted — your tree is as it was.`);
+    else this.notifications.error(`Could not merge ${branch} — finish or abort the merge already in progress, then try again.`);
+    return result;
   }
 
   /** Worktrees and task branches go; the integration branch and the record stay for review and merge. */
@@ -576,7 +568,7 @@ export class TaskOrchestrator {
       // Never resolved here, by a model or otherwise: the task waits on the
       // user, and its dependents wait on it.
       this.store.markAwaitingUser(task.id);
-      this.notifications.warn(`Task "${task.title}" passed, but merging it into ${this.isolationRun?.integrationBranch ?? 'the integration branch'} conflicted. Its worktree is kept — resolve it by hand, retry it, or resolve it as a task.`);
+      this.notifications.warn(`Task "${task.title}" passed, but merging it into ${this.isolationRun ? integrationBranchNameOf(this.isolationRun) : 'the integration branch'} conflicted. Its worktree is kept — resolve it by hand, retry it, or resolve it as a task.`);
     } else {
       this.store.markFailed(task.id);
       this.running = false;

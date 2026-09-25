@@ -3,6 +3,7 @@ import * as path from 'path';
 import { LegacyPlanState } from '../models/Task';
 import { defaultLogger, type ILogger } from '../interfaces/ILogger';
 import { getStateDir, ensureDir } from './fsHelpers';
+import { migratePlanStateIsolation } from '../services/isolationRecord';
 
 const STATE_FILE = 'state.json';
 
@@ -28,7 +29,9 @@ export function loadState(baseDir?: string, logger: ILogger = defaultLogger): Le
       logger.warn('stateStore', `rejecting state from ${statePath}: old format (scalar "runner" instead of "runners" array). Please re-plan.`);
       return null;
     }
-    return parsed as LegacyPlanState;
+    const plan = parsed as LegacyPlanState;
+    migratePlanStateIsolation(plan);
+    return plan;
   } catch (err: unknown) {
     logger.warn('stateStore', `failed to load state from ${statePath}; falling back to empty state`, err);
     return null;

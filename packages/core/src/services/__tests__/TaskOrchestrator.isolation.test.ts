@@ -59,7 +59,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
     openMerge();
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
     expect(orchestrator.getTaskIsolation('t1')).toEqual({
-      state: 'integrated', branch: 'ordewell/run1/1-t1', worktree: '/fake-worktrees/run1/1-t1',
+      state: 'integrated', branch: 'ordewell/run1/1-t1', worktree: '/fake-worktrees/run1/1-t1', repos: ['.'],
     });
   });
 
@@ -249,7 +249,8 @@ describe('TaskOrchestrator with worktree isolation', () => {
     await orchestrator.markTaskComplete('t1');
 
     expect(handoffs).toEqual([{
-      branch: 'ordewell/run1/integration', baseRef: 'base0000', landed: [{ taskId: 't1', order: 1, title: 'Task t1' }],
+      repos: [{ path: '.', integrationBranch: 'ordewell/run1/integration', baseRef: 'base0000', landed: [{ taskId: 't1', order: 1, title: 'Task t1' }] }],
+      landed: [{ taskId: 't1', order: 1, title: 'Task t1' }],
     }]);
   });
 
@@ -396,8 +397,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
     await vi.waitFor(() => expect(events).toEqual(['handoff', 'complete']));
 
     expect(handoff).toEqual({
-      branch: 'ordewell/run1/integration',
-      baseRef: 'base0000',
+      repos: [{ path: '.', integrationBranch: 'ordewell/run1/integration', baseRef: 'base0000', landed: [{ taskId: 't1', order: 1, title: 'Task t1' }] }],
       landed: [{ taskId: 't1', order: 1, title: 'Task t1' }],
     });
   });
@@ -527,8 +527,9 @@ describe('TaskOrchestrator with worktree isolation', () => {
     it('adopts its persisted run, prunes what a crash left behind, and continues it', async () => {
       const { orchestrator, isolation, spawnedCwd } = setup();
       const run = {
-        id: 'old', workspaceRoot: '/repo', baseRef: 'abc', integrationBranch: 'ordewell/old/integration',
-        tasks: { t1: { taskId: 't1', order: 1, title: 'Task t1', branch: 'ordewell/old/1-t1', worktree: '/wt/1', status: 'merged' as const, linked: [] } },
+        id: 'old', workspaceRoot: '/repo', shared: [],
+        repos: [{ path: '.', root: '/repo', baseRef: 'abc', integrationBranch: 'ordewell/old/integration' }],
+        tasks: { t1: { taskId: 't1', order: 1, title: 'Task t1', branch: 'ordewell/old/1-t1', workspace: '/wt/1', status: 'merged' as const, repos: { '.': { worktree: '/wt/1', linked: [], changed: true } } } },
       };
       orchestrator.loadPlan([task('t1', 1, { status: 'completed' }), task('t2', 2, { dependencies: ['t1'] })]);
 
@@ -544,8 +545,9 @@ describe('TaskOrchestrator with worktree isolation', () => {
     it('keeps the integration branch of a run it cannot continue while that branch holds landed work', async () => {
       const { orchestrator, isolation, spawnedCwd } = setup({ workspace: '/repo' });
       const run = {
-        id: 'old', workspaceRoot: '/elsewhere/repo', baseRef: 'abc', integrationBranch: 'ordewell/old/integration',
-        tasks: { t1: { taskId: 't1', order: 1, title: 'Task t1', branch: 'ordewell/old/1-t1', worktree: '/wt/1', status: 'merged' as const, linked: [] } },
+        id: 'old', workspaceRoot: '/elsewhere/repo', shared: [],
+        repos: [{ path: '.', root: '/elsewhere/repo', baseRef: 'abc', integrationBranch: 'ordewell/old/integration' }],
+        tasks: { t1: { taskId: 't1', order: 1, title: 'Task t1', branch: 'ordewell/old/1-t1', workspace: '/wt/1', status: 'merged' as const, repos: { '.': { worktree: '/wt/1', linked: [], changed: true } } } },
       };
       orchestrator.loadPlan([task('t1', 1, { status: 'completed' }), task('t2', 2)]);
       await orchestrator.adoptIsolation({ run, resolvers: {} });

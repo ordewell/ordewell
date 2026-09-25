@@ -21,6 +21,8 @@ export * from './interfaces/INotification';
 export * from './interfaces/ITerminalRunner';
 export * from './interfaces/IWorktreeIsolation';
 export { createWorktreeIsolation } from './services/GitWorktreeIsolation';
+export { migratePlanIsolation } from './services/isolationRecord';
+export type { Adr0013PlanIsolation, Adr0013IsolationRun, Adr0013TaskRecord } from './services/isolationRecord';
 export type { WorktreeIsolationDeps, GitExecFn } from './services/GitWorktreeIsolation';
 export * from './interfaces/ILogger';
 export { BaseAiService } from './services/BaseAiService';

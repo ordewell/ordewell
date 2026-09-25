@@ -172,6 +172,32 @@ describe('sessionStore', () => {
   });
 
   describe('loadSession', () => {
+    it('brings an ADR-0013 isolation record to the repo-group shape', () => {
+      const plan = { ...createEmptyPlan(), runners: ['claude-code'], tasks: [] };
+      const legacyIsolation = {
+        run: {
+          id: 'r1', workspaceRoot: '/work/app', baseRef: 'abc', baseBranch: 'main', integrationBranch: 'ordewell/r1/integration',
+          tasks: { t1: { taskId: 't1', order: 1, title: 'T1', branch: 'ordewell/r1/1-t1', worktree: '/wt/1', status: 'kept', linked: ['.env'] } },
+        },
+        resolvers: {},
+      };
+      const meta = saveSession(plan as Parameters<typeof saveSession>[0], 'goal', tmpDir);
+      const file = fs.readdirSync(path.join(tmpDir, '.ordewell', 'sessions'))[0];
+      const filePath = path.join(tmpDir, '.ordewell', 'sessions', file);
+      const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      raw.plan.isolation = legacyIsolation;
+      fs.writeFileSync(filePath, JSON.stringify(raw));
+
+      expect(loadSession(meta.id, tmpDir)!.plan.isolation).toEqual({
+        run: {
+          id: 'r1', workspaceRoot: '/work/app', shared: [],
+          repos: [{ path: '.', root: '/work/app', baseRef: 'abc', baseBranch: 'main', integrationBranch: 'ordewell/r1/integration' }],
+          tasks: { t1: { taskId: 't1', order: 1, title: 'T1', branch: 'ordewell/r1/1-t1', workspace: '/wt/1', status: 'kept', repos: { '.': { worktree: '/wt/1', linked: ['.env'] } } } },
+        },
+        resolvers: {},
+      });
+    });
+
     it('returns null for old sessions with scalar runner at meta level', () => {
       const sessionsDir = path.join(tmpDir, '.ordewell', 'sessions');
       fs.mkdirSync(sessionsDir, { recursive: true });

@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { LegacyPlanState, PlanState } from '../models/Task';
 import { migratePlanState } from '../models/Task';
+import { migratePlanStateIsolation } from '../services/isolationRecord';
 import type { SessionMeta, SessionData } from '../models/Session';
 import { defaultLogger, type ILogger } from '../interfaces/ILogger';
 import { getStateDir, ensureDir, ensureStateDirIgnored } from './fsHelpers';
@@ -155,6 +156,7 @@ export function loadSession(sessionId: string, baseDir?: string, logger: ILogger
       for (const t of plan.tasks.flatMap((task) => [task, ...(task.subtasks ?? [])])) {
         if (t.status === 'in_progress') t.status = 'pending';
       }
+      migratePlanStateIsolation(plan);
       return { meta: session.meta, plan };
     }
   } catch (err: unknown) {

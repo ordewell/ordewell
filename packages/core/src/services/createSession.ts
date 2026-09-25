@@ -33,7 +33,8 @@ import type { IFileSystem } from '../interfaces/IFileSystem';
 import type { INotification } from '../interfaces/INotification';
 import type { ITerminalRunner } from '../interfaces/ITerminalRunner';
 import type { TaskOutputSource } from '../interfaces/TaskOutputSource';
-import type { IsolationOutcome, IsolationView, IWorktreeIsolation } from '../interfaces/IWorktreeIsolation';
+import type { IsolationMergeResult, IsolationView, IWorktreeIsolation } from '../interfaces/IWorktreeIsolation';
+import { integrationBranchNameOf, migratePlanStateIsolation } from './isolationRecord';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import { runnerModesFrom, resolveDefaultMode, type RunnerModeInfo } from './ModeResolver';
 
@@ -1018,7 +1019,7 @@ export class Session {
    * The one irreversible step of isolated execution, so this explicit call is
    * the only way it ever happens.
    */
-  async mergeRun(): Promise<IsolationOutcome> {
+  async mergeRun(): Promise<IsolationMergeResult> {
     this.requireSettledRun();
     return this.orchestrator.mergeRun();
   }
@@ -1064,9 +1065,9 @@ export class Session {
     return this.editPlan(() => {
       const resolver = this.store.add({
         title: `Resolve merge conflict: ${task.title}`,
-        description: `Merge ${isolation.branch} into ${run.integrationBranch} by hand.`,
+        description: `Merge ${isolation.branch} into ${integrationBranchNameOf(run)} by hand.`,
         type: 'ai',
-        prompt: buildConflictResolutionPrompt(task, isolation.branch, run.integrationBranch),
+        prompt: buildConflictResolutionPrompt(task, isolation.branch, integrationBranchNameOf(run)),
         assignedRunner: task.assignedRunner,
         assignedModel: task.assignedModel,
         thinkingEffort: task.thinkingEffort,
@@ -1342,6 +1343,7 @@ export class Session {
     // same file instead of forking the session under a fresh identity.
     if (opts?.sessionId) this.currentSessionId = opts.sessionId;
     this.orchestrator.loadPlan(plan.tasks, plan.runners);
+    migratePlanStateIsolation(plan);
     // The run record is taken synchronously; only the orphan prune is awaited
     // in the background, and git serializes it ahead of any worktree a run adds.
     if (adopting) void this.orchestrator.adoptIsolation(plan.isolation ?? null);

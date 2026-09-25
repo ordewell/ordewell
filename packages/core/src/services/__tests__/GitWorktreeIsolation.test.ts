@@ -220,9 +220,11 @@ describe.skipIf(!hasGit)('WorktreeIsolation run lifecycle', () => {
     const run = await iso.startRun(root);
     const headBefore = git(root, 'rev-parse', 'HEAD');
 
-    expect(run.baseRef).toBe(headBefore);
-    expect(run.baseBranch).toBe('main');
-    expect(run.integrationBranch).toBe(`ordewell/${run.id}/integration`);
+    // A workspace that is one repository is a group of one, at `.`.
+    expect(run.repos).toEqual([
+      { path: '.', root, baseRef: headBefore, baseBranch: 'main', integrationBranch: `ordewell/${run.id}/integration` },
+    ]);
+    expect(run.shared).toEqual([]);
 
     const { cwd, branch } = await iso.prepare(task(1, 'Add greeting'), run);
     expect(cwd).toBe(join(root, '.ordewell', 'worktrees', run.id, '1-add-greeting'));
@@ -233,10 +235,10 @@ describe.skipIf(!hasGit)('WorktreeIsolation run lifecycle', () => {
     writeFileSync(join(cwd, 'greeting.txt'), 'hi\n');
     expect(await iso.integrate(task(1, 'Add greeting'), run)).toBe('merged');
 
-    expect(git(root, 'show', `${run.integrationBranch}:greeting.txt`)).toBe('hi');
+    expect(git(root, 'show', `${run.repos[0].integrationBranch}:greeting.txt`)).toBe('hi');
     // Two parents plus the commit id: --no-ff produced a real merge commit.
-    expect(git(root, 'rev-list', '--parents', '-n', '1', run.integrationBranch).split(' ')).toHaveLength(3);
-    expect(git(root, 'log', '-1', '--format=%s', run.integrationBranch)).toContain('Add greeting');
+    expect(git(root, 'rev-list', '--parents', '-n', '1', run.repos[0].integrationBranch).split(' ')).toHaveLength(3);
+    expect(git(root, 'log', '-1', '--format=%s', run.repos[0].integrationBranch)).toContain('Add greeting');
 
     expect(worktreePaths(root)).not.toContain(cwd);
     expect(existsSync(cwd)).toBe(false);
@@ -248,6 +250,24 @@ describe.skipIf(!hasGit)('WorktreeIsolation run lifecycle', () => {
     expect(git(root, 'branch', '--show-current')).toBe('main');
     expect(existsSync(join(root, 'greeting.txt'))).toBe(false);
     expect(git(root, 'status', '--porcelain', '--untracked-files=no')).toBe('');
+  });
+
+  it('records a task workspace holding the repo worktree, and which repos a landed task changed', async () => {
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const [changes, idle] = [task(1, 'Changes'), task(2, 'Idle')];
+    const a = await iso.prepare(changes, run);
+    const b = await iso.prepare(idle, run);
+    expect(run.tasks['task-1'].workspace).toBe(a.cwd);
+    expect(run.tasks['task-1'].repos).toEqual({ '.': { worktree: a.cwd, linked: [] } });
+
+    writeFileSync(join(a.cwd, 'new.txt'), 'n\n');
+    expect(await iso.integrate(changes, run)).toBe('merged');
+    expect(await iso.integrate(idle, run)).toBe('merged');
+
+    expect(run.tasks['task-1'].repos['.'].changed).toBe(true);
+    expect(run.tasks['task-2'].repos['.'].changed).toBe(false);
+    expect(existsSync(b.cwd)).toBe(false);
   });
 
   it('starts a later task from a tree that already contains integrated work', async () => {
@@ -275,7 +295,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation run lifecycle', () => {
     const a = await iso.startRun(root);
     const b = await iso.startRun(root);
     expect(a.id).not.toBe(b.id);
-    expect(a.integrationBranch).not.toBe(b.integrationBranch);
+    expect(a.repos[0].integrationBranch).not.toBe(b.repos[0].integrationBranch);
   });
 
   it('prepares several tasks concurrently', async () => {
@@ -300,7 +320,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation integration queue', () => {
     const outcomes = await Promise.all([iso.integrate(t3, run), iso.integrate(t1, run), iso.integrate(t2, run)]);
     expect(outcomes).toEqual(['merged', 'merged', 'merged']);
 
-    const merges = git(root, 'log', '--first-parent', '--reverse', '--merges', '--format=%s', run.integrationBranch).split('\n');
+    const merges = git(root, 'log', '--first-parent', '--reverse', '--merges', '--format=%s', run.repos[0].integrationBranch).split('\n');
     expect(merges).toEqual(['Merge task 1: One', 'Merge task 2: Two', 'Merge task 3: Three']);
   });
 
@@ -314,7 +334,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation integration queue', () => {
     writeFileSync(join(cwd, 'fast.txt'), 'x\n');
 
     expect(await iso.integrate(t2, run)).toBe('merged');
-    expect(git(root, 'show', `${run.integrationBranch}:fast.txt`)).toBe('x');
+    expect(git(root, 'show', `${run.repos[0].integrationBranch}:fast.txt`)).toBe('x');
     expect(run.tasks['task-1'].status).toBe('active');
   });
 
@@ -330,9 +350,9 @@ describe.skipIf(!hasGit)('WorktreeIsolation integration queue', () => {
     writeFileSync(join(cwd, 'loose.txt'), 'b\n');
 
     expect(await iso.integrate(t, run)).toBe('merged');
-    expect(git(root, 'show', `${run.integrationBranch}:committed.txt`)).toBe('a');
-    expect(git(root, 'show', `${run.integrationBranch}:loose.txt`)).toBe('b');
-    expect(git(root, 'log', '--format=%s', run.integrationBranch)).toContain('runner commit');
+    expect(git(root, 'show', `${run.repos[0].integrationBranch}:committed.txt`)).toBe('a');
+    expect(git(root, 'show', `${run.repos[0].integrationBranch}:loose.txt`)).toBe('b');
+    expect(git(root, 'log', '--format=%s', run.repos[0].integrationBranch)).toContain('runner commit');
   });
 
   it('treats a task that changed nothing as merged', async () => {
@@ -368,16 +388,17 @@ describe.skipIf(!hasGit)('WorktreeIsolation conflicts', () => {
   it('reports a conflict, keeps the worktree and both refs, and leaves the integration branch untouched', async () => {
     const { root, iso, run, t1, t2, b } = await conflicted();
     expect(await iso.integrate(t1, run)).toBe('merged');
-    const tipBefore = git(root, 'rev-parse', run.integrationBranch);
+    const tipBefore = git(root, 'rev-parse', run.repos[0].integrationBranch);
 
     expect(await iso.integrate(t2, run)).toBe('conflict');
 
-    expect(git(root, 'rev-parse', run.integrationBranch)).toBe(tipBefore);
-    expect(git(root, 'show', `${run.integrationBranch}:shared.txt`)).toBe('left');
+    expect(git(root, 'rev-parse', run.repos[0].integrationBranch)).toBe(tipBefore);
+    expect(git(root, 'show', `${run.repos[0].integrationBranch}:shared.txt`)).toBe('left');
     expect(worktreePaths(root)).toContain(b.cwd);
     expect(branches(root)).toContain(b.branch);
-    expect(branches(root)).toContain(run.integrationBranch);
+    expect(branches(root)).toContain(run.repos[0].integrationBranch);
     expect(run.tasks['task-2'].status).toBe('conflict');
+    expect(run.tasks['task-2'].conflictRepo).toBe('.');
     // The runner's work is committed on its branch, ready to resolve by hand.
     expect(git(root, 'show', `${b.branch}:shared.txt`)).toBe('right');
     // No half-finished merge is left in the integration worktree.
@@ -394,7 +415,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation conflicts', () => {
     await iso.integrate(t1, run);
     expect(await iso.integrate(t2, run)).toBe('conflict');
     expect(await iso.integrate(t3, run)).toBe('merged');
-    expect(git(root, 'show', `${run.integrationBranch}:other.txt`)).toBe('o');
+    expect(git(root, 'show', `${run.repos[0].integrationBranch}:other.txt`)).toBe('o');
   });
 });
 
@@ -426,7 +447,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation.release', () => {
     expect(existsSync(cwd)).toBe(false);
     expect(branches(root)).not.toContain(branch);
     expect(run.tasks['task-1']).toBeUndefined();
-    expect(branches(root)).toContain(run.integrationBranch);
+    expect(branches(root)).toContain(run.repos[0].integrationBranch);
   });
 
   it('releasing an unknown task is a no-op', async () => {
@@ -506,7 +527,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation bootstrap', () => {
     writeFileSync(join(cwd, 'feature.txt'), 'f\n');
 
     expect(await iso.integrate(t, run)).toBe('merged');
-    const tree = git(root, 'ls-tree', '-r', '--name-only', run.integrationBranch).split('\n');
+    const tree = git(root, 'ls-tree', '-r', '--name-only', run.repos[0].integrationBranch).split('\n');
     expect(tree).toContain('feature.txt');
     expect(tree.some((f) => f.startsWith('node_modules') || f.startsWith('.venv') || f === '.envrc' || f === '.env')).toBe(false);
     expect(tree.some((f) => f.startsWith('.ordewell'))).toBe(false);
@@ -542,7 +563,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation bootstrap', () => {
     const { cwd } = await iso.prepare(t, run);
     writeFileSync(join(cwd, 'feature.txt'), 'f\n');
     await iso.integrate(t, run);
-    const tree = git(root, 'ls-tree', '-r', '--name-only', run.integrationBranch).split('\n');
+    const tree = git(root, 'ls-tree', '-r', '--name-only', run.repos[0].integrationBranch).split('\n');
     expect(tree).not.toContain('.envrc');
   });
 
@@ -564,7 +585,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation bootstrap', () => {
 
     await expect(iso.prepare(task(1, 'Broken setup'), run)).rejects.toThrow(/setup command failed/i);
     expect(worktreePaths(root)).toEqual([root]);
-    expect(branches(root)).toEqual([run.integrationBranch]);
+    expect(branches(root)).toEqual([run.repos[0].integrationBranch]);
     expect(run.tasks['task-1']).toBeUndefined();
   });
 });
@@ -581,7 +602,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation.pruneOrphans', () => {
     run.tasks['task-3'].status = 'conflict';
     // A crash between `worktree add` and the record being persisted.
     const strayDir = join(root, '.ordewell', 'worktrees', run.id, '9-stray');
-    git(root, 'worktree', 'add', '-q', '-b', `ordewell/${run.id}/9-stray`, strayDir, run.integrationBranch);
+    git(root, 'worktree', 'add', '-q', '-b', `ordewell/${run.id}/9-stray`, strayDir, run.repos[0].integrationBranch);
 
     await iso.pruneOrphans(run);
 
@@ -590,7 +611,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation.pruneOrphans', () => {
     expect(listed).not.toContain(strayDir);
     expect(listed).toContain(kept.cwd);
     expect(listed).toContain(conflicted.cwd);
-    expect(branches(root).sort()).toEqual([run.integrationBranch, kept.branch, conflicted.branch].sort());
+    expect(branches(root).sort()).toEqual([run.repos[0].integrationBranch, kept.branch, conflicted.branch].sort());
     expect(run.tasks['task-1']).toBeUndefined();
     expect(Object.keys(run.tasks).sort()).toEqual(['task-2', 'task-3']);
   });
@@ -638,13 +659,13 @@ describe.skipIf(!hasGit)('WorktreeIsolation end-of-run handoff', () => {
   it('reports the integration branch, the base ref and what landed in plan order', async () => {
     const { root, iso, run } = await finishedRun();
     const handoff = await iso.handoff(run);
+    const landed = [
+      { taskId: 'task-1', order: 1, title: 'Add alpha' },
+      { taskId: 'task-2', order: 2, title: 'Add beta' },
+    ];
     expect(handoff).toEqual({
-      branch: run.integrationBranch,
-      baseRef: git(root, 'rev-parse', 'HEAD'),
-      landed: [
-        { taskId: 'task-1', order: 1, title: 'Add alpha' },
-        { taskId: 'task-2', order: 2, title: 'Add beta' },
-      ],
+      repos: [{ path: '.', integrationBranch: `ordewell/${run.id}/integration`, baseRef: git(root, 'rev-parse', 'HEAD'), landed }],
+      landed,
     });
   });
 
@@ -652,7 +673,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation end-of-run handoff', () => {
     const { root, iso, run } = await finishedRun();
     await iso.handoff(run);
     expect(worktreePaths(root)).toEqual([root]);
-    expect(branches(root)).toContain(run.integrationBranch);
+    expect(branches(root)).toContain(run.repos[0].integrationBranch);
   });
 
   it('a task retried after handoff still integrates', async () => {
@@ -662,7 +683,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation end-of-run handoff', () => {
     const { cwd } = await iso.prepare(t3, run);
     writeFileSync(join(cwd, 'late.txt'), 'late\n');
     expect(await iso.integrate(t3, run)).toBe('merged');
-    expect(git(root, 'show', `${run.integrationBranch}:late.txt`)).toBe('late');
+    expect(git(root, 'show', `${run.repos[0].integrationBranch}:late.txt`)).toBe('late');
   });
 
   it('reviewDiff shows the run against its base ref, not the current branch', async () => {
@@ -684,7 +705,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation end-of-run handoff', () => {
     expect(git(root, 'rev-parse', 'HEAD')).toBe(before);
     expect(existsSync(join(root, 'alpha.txt'))).toBe(false);
 
-    expect(await iso.mergeIntoCheckedOut(run)).toBe('merged');
+    expect(await iso.mergeIntoCheckedOut(run)).toEqual({ outcome: 'merged' });
     expect(readFileSync(join(root, 'alpha.txt'), 'utf8')).toBe('alpha\n');
     expect(readFileSync(join(root, 'beta.txt'), 'utf8')).toBe('beta\n');
     expect(git(root, 'branch', '--show-current')).toBe('main');
@@ -703,7 +724,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation end-of-run handoff', () => {
     git(root, 'commit', '-q', '-am', 'user edit');
     const head = git(root, 'rev-parse', 'HEAD');
 
-    expect(await iso.mergeIntoCheckedOut(run)).toBe('conflict');
+    expect(await iso.mergeIntoCheckedOut(run)).toEqual({ outcome: 'conflict', repo: '.', files: ['shared.txt'] });
     expect(git(root, 'rev-parse', 'HEAD')).toBe(head);
     expect(git(root, 'status', '--porcelain', '--untracked-files=no')).toBe('');
     expect(readFileSync(join(root, 'shared.txt'), 'utf8')).toBe('user version\n');
@@ -729,7 +750,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation end-of-run handoff', () => {
     expect(() => git(root, 'merge', 'feature')).toThrow();
     writeFileSync(join(root, 'shared.txt'), 'resolved by hand\n');
 
-    expect(await iso.mergeIntoCheckedOut(run)).toBe('failed');
+    expect(await iso.mergeIntoCheckedOut(run)).toEqual({ outcome: 'failed', repo: '.' });
     expect(git(root, 'rev-parse', '-q', '--verify', 'MERGE_HEAD')).toBe(git(root, 'rev-parse', 'feature'));
     expect(readFileSync(join(root, 'shared.txt'), 'utf8')).toBe('resolved by hand\n');
     expect(existsSync(join(root, 'alpha.txt'))).toBe(false);
@@ -749,8 +770,8 @@ describe.skipIf(!hasGit)('WorktreeIsolation end-of-run handoff', () => {
 
     expect(worktreePaths(root)).toEqual([root]);
     expect(existsSync(b.cwd)).toBe(false);
-    expect(branches(root)).toEqual([run.integrationBranch]);
-    expect(git(root, 'show', `${run.integrationBranch}:landed.txt`)).toBe('l');
+    expect(branches(root)).toEqual([run.repos[0].integrationBranch]);
+    expect(git(root, 'show', `${run.repos[0].integrationBranch}:landed.txt`)).toBe('l');
   });
 
   it('discard can give up the integration branch too, leaving no trace', async () => {

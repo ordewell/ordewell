@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { makeSession, FakeTerminalSession } from './sessionTestKit';
 import { FakeWorktreeIsolation } from '../../testing';
 import * as sessionStore from '../../utils/sessionStore';
@@ -46,7 +49,7 @@ describe('Session with worktree isolation', () => {
     await session.executePlan();
 
     expect(lastStatus()!.tasks.find((t) => t.id === 't1')!.isolation).toEqual({
-      state: 'active', branch: 'ordewell/run1/1-t1', worktree: '/fake-worktrees/run1/1-t1',
+      state: 'active', branch: 'ordewell/run1/1-t1', worktree: '/fake-worktrees/run1/1-t1', repos: [],
     });
     expect(lastStatus()!.tasks.find((t) => t.id === 't2')!.isolation).toEqual({ state: 'none' });
   });
@@ -75,12 +78,11 @@ describe('Session with worktree isolation', () => {
     expect(types.indexOf('isolation_handoff')).toBeLessThan(types.indexOf('execution_complete'));
     expect(messages.find((m) => m.type === 'isolation_handoff')).toEqual({
       type: 'isolation_handoff',
-      branch: 'ordewell/run1/integration',
-      baseRef: 'base0000',
+      repos: [{ path: '.', integrationBranch: 'ordewell/run1/integration', baseRef: 'base0000', landed: [{ taskId: 't1', order: 1, title: 'Task t1' }] }],
       landed: [{ taskId: 't1', order: 1, title: 'Task t1' }],
     });
     expect(saved()!.isolation).toEqual({
-      run: expect.objectContaining({ id: 'run1', integrationBranch: 'ordewell/run1/integration' }),
+      run: expect.objectContaining({ id: 'run1', repos: [expect.objectContaining({ path: '.', integrationBranch: 'ordewell/run1/integration' })] }),
       resolvers: {},
     });
   });
@@ -130,8 +132,9 @@ describe('Session with worktree isolation', () => {
       ...plan([task('t1', 1, { status: 'completed' }), task('t2', 2, { dependencies: ['t1'] })]),
       isolation: {
         run: {
-          id: 'old', workspaceRoot: process.cwd(), baseRef: 'abc', integrationBranch: 'ordewell/old/integration',
-          tasks: { t1: { taskId: 't1', order: 1, title: 'Task t1', branch: 'ordewell/old/1-t1', worktree: '/wt/1', status: 'merged', linked: [] } },
+          id: 'old', workspaceRoot: process.cwd(), shared: [],
+          repos: [{ path: '.', root: process.cwd(), baseRef: 'abc', integrationBranch: 'ordewell/old/integration' }],
+          tasks: { t1: { taskId: 't1', order: 1, title: 'Task t1', branch: 'ordewell/old/1-t1', workspace: '/wt/1', status: 'merged', repos: { '.': { worktree: '/wt/1', linked: [], changed: true } } } },
         },
         resolvers: {},
       },
@@ -144,16 +147,59 @@ describe('Session with worktree isolation', () => {
     expect(spawn.mock.calls[0][0].cwd).toBe('/fake-worktrees/old/2-t2');
   });
 
+  it('resumes a session saved by 0.4.23 with an unfinished run, and hands it off as before', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-legacy-'));
+    try {
+      const saved = {
+        ...plan([task('t1', 1, { status: 'completed' }), task('t2', 2, { dependencies: ['t1'] })]),
+        // The ADR-0013 record, as 0.4.23 wrote it: the refs on the run, one worktree per task.
+        isolation: {
+          run: {
+            id: 'old', workspaceRoot: process.cwd(), baseRef: 'abc', baseBranch: 'main', integrationBranch: 'ordewell/old/integration',
+            tasks: { t1: { taskId: 't1', order: 1, title: 'Task t1', branch: 'ordewell/old/1-t1', worktree: '/wt/1', status: 'merged', linked: [] } },
+          },
+          resolvers: {},
+        },
+      };
+      fs.mkdirSync(path.join(dir, '.ordewell', 'sessions'), { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, '.ordewell', 'sessions', '2026-09-20T10-00-00_goal_legacy1.json'),
+        JSON.stringify({ meta: { id: 'session-legacy1', goal: 'goal', runners: ['claude-code'], taskCount: 2, status: 'approved', createdAt: saved.generatedAt, updatedAt: saved.generatedAt }, plan: saved }),
+      );
+      const { session, isolation, spawn, pass, messages } = setup();
+
+      const loaded = sessionStore.loadSession('session-legacy1', dir)!;
+      session.loadPlan(loaded.plan, loaded.meta.goal, '/repo');
+      await vi.waitFor(() => expect(isolation.calls).toEqual([{ op: 'pruneOrphans' }]));
+      await session.executePlan();
+
+      expect(spawn.mock.calls[0][0].cwd).toBe('/fake-worktrees/old/2-t2');
+      pass(session.planState!.tasks[1]);
+      await vi.waitFor(() => expect(messages.map((m) => m.type)).toContain('isolation_handoff'));
+      const landed = [{ taskId: 't1', order: 1, title: 'Task t1' }, { taskId: 't2', order: 2, title: 'Task t2' }];
+      expect(messages.find((m) => m.type === 'isolation_handoff')).toEqual({
+        type: 'isolation_handoff',
+        repos: [{ path: '.', integrationBranch: 'ordewell/old/integration', baseRef: 'abc', landed }],
+        landed,
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('describes an adopted run to a surface no stream has told: each task\'s mark and the handoff', () => {
     const { session } = setup();
     const record = (taskId: string, order: number, status: 'merged' | 'conflict') => ({
-      taskId, order, title: `Task ${taskId}`, branch: `ordewell/old/${order}-${taskId}`, worktree: `/wt/${order}`, status, linked: [],
+      taskId, order, title: `Task ${taskId}`, branch: `ordewell/old/${order}-${taskId}`, workspace: `/wt/${order}`, status,
+      repos: { '.': { worktree: `/wt/${order}`, linked: [], ...(status === 'merged' ? { changed: true } : {}) } },
+      ...(status === 'conflict' ? { conflictRepo: '.' } : {}),
     });
     session.loadPlan({
       ...plan([task('t1', 1, { status: 'completed' }), task('t2', 2, { status: 'awaiting_user' }), task('t3', 3)]),
       isolation: {
         run: {
-          id: 'old', workspaceRoot: process.cwd(), baseRef: 'abc', integrationBranch: 'ordewell/old/integration',
+          id: 'old', workspaceRoot: process.cwd(), shared: [],
+          repos: [{ path: '.', root: process.cwd(), baseRef: 'abc', integrationBranch: 'ordewell/old/integration' }],
           tasks: { t2: record('t2', 2, 'conflict'), t1: record('t1', 1, 'merged') },
         },
         resolvers: {},
@@ -162,10 +208,13 @@ describe('Session with worktree isolation', () => {
 
     expect(session.isolationView()).toEqual({
       tasks: {
-        t1: { state: 'integrated', branch: 'ordewell/old/1-t1', worktree: '/wt/1' },
-        t2: { state: 'conflict', branch: 'ordewell/old/2-t2', worktree: '/wt/2' },
+        t1: { state: 'integrated', branch: 'ordewell/old/1-t1', worktree: '/wt/1', repos: ['.'] },
+        t2: { state: 'conflict', branch: 'ordewell/old/2-t2', worktree: '/wt/2', repos: [], conflictRepo: '.' },
       },
-      handoff: { branch: 'ordewell/old/integration', baseRef: 'abc', landed: [{ taskId: 't1', order: 1, title: 'Task t1' }] },
+      handoff: {
+        repos: [{ path: '.', integrationBranch: 'ordewell/old/integration', baseRef: 'abc', landed: [{ taskId: 't1', order: 1, title: 'Task t1' }] }],
+        landed: [{ taskId: 't1', order: 1, title: 'Task t1' }],
+      },
     });
   });
 
@@ -181,7 +230,10 @@ describe('Session with worktree isolation', () => {
     const restored: LegacyPlanState = {
       ...plan([task('t1', 1)]),
       isolation: {
-        run: { id: 'old', workspaceRoot: process.cwd(), baseRef: 'abc', integrationBranch: 'ordewell/old/integration', tasks: {} },
+        run: {
+          id: 'old', workspaceRoot: process.cwd(), shared: [], tasks: {},
+          repos: [{ path: '.', root: process.cwd(), baseRef: 'abc', integrationBranch: 'ordewell/old/integration' }],
+        },
         resolvers: {},
       },
     };
@@ -228,7 +280,7 @@ describe('Session with worktree isolation', () => {
       const { session, isolation } = await landed();
       expect(isolation.calls.map((c) => c.op)).not.toContain('mergeIntoCheckedOut');
 
-      expect(await session.mergeRun()).toBe('merged');
+      expect(await session.mergeRun()).toEqual({ outcome: 'merged' });
       expect(isolation.calls.map((c) => c.op)).toContain('mergeIntoCheckedOut');
     });
 

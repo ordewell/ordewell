@@ -93,9 +93,10 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
 
     expect(orchestrator.storeInstance.allTasks.map((t) => t.status)).toEqual(['completed', 'completed']);
     expect(handoff!.landed.map((l) => l.taskId)).toEqual(['t1', 't2']);
-    expect(handoff!.baseRef).toBe(base);
-    expect(git(root, 'show', `${handoff!.branch}:a.txt`)).toBe('written by t1');
-    expect(git(root, 'show', `${handoff!.branch}:b.txt`)).toBe('written by t2');
+    expect(handoff!.repos.map((r) => [r.path, r.baseRef])).toEqual([['.', base]]);
+    const [{ integrationBranch }] = handoff!.repos;
+    expect(git(root, 'show', `${integrationBranch}:a.txt`)).toBe('written by t1');
+    expect(git(root, 'show', `${integrationBranch}:b.txt`)).toBe('written by t2');
     expect(sawPredecessor.t2).toBe(true);
 
     expect(git(root, 'rev-parse', 'main')).toBe(base);

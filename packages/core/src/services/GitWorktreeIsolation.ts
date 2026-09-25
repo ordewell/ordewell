@@ -7,15 +7,19 @@ import type { IConfig } from '../interfaces/IConfig';
 import type {
   IsolationAvailability,
   IsolationHandoff,
+  IsolationMergeResult,
   IsolationOutcome,
+  IsolationRepo,
   IsolationRun,
   IsolationTaskRecord,
+  IsolationTaskRepo,
   IWorktreeIsolation,
 } from '../interfaces/IWorktreeIsolation';
 import type { Task } from '../models/Task';
 import { augmentedPath, withPath } from '../utils/shellPath';
 import { ensureStateDirIgnored, STATE_DIR } from '../utils/fsHelpers';
 import { sanitizeSlug } from '../utils/prdStore';
+import { handoffOf, integrationBranchFor, repoRootOf, SELF_REPO } from './isolationRecord';
 
 export type GitExecFn = (
   file: string,
@@ -71,15 +75,6 @@ interface QueuedMerge {
   task: Task;
   run: IsolationRun;
   settle: (outcome: IsolationOutcome) => void;
-}
-
-/** What a run hands over: its integration branch, its base, and what landed there, in plan order. */
-export function handoffOf(run: IsolationRun): IsolationHandoff {
-  const landed = Object.values(run.tasks)
-    .filter((r) => r.status === 'merged')
-    .sort((a, b) => a.order - b.order)
-    .map((r) => ({ taskId: r.taskId, order: r.order, title: r.title }));
-  return { branch: run.integrationBranch, baseRef: run.baseRef, landed };
 }
 
 function isInside(parent: string, child: string): boolean {
@@ -201,19 +196,23 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   }
 
   async startRun(workspaceRoot: string): Promise<IsolationRun> {
-    const baseRef = (await this.git(workspaceRoot, ['rev-parse', 'HEAD'])).trim();
-    const branch = (await this.tryGit(workspaceRoot, ['symbolic-ref', '--short', '-q', 'HEAD'])).stdout.trim();
     const id = this.mintRunId();
-    const run: IsolationRun = {
-      id,
-      workspaceRoot,
+    return { id, workspaceRoot, repos: [await this.startRepo(workspaceRoot, SELF_REPO, id)], shared: [], tasks: {} };
+  }
+
+  private async startRepo(workspaceRoot: string, repoPath: string, runId: string): Promise<IsolationRepo> {
+    const root = repoRootOf(workspaceRoot, repoPath);
+    const baseRef = (await this.git(root, ['rev-parse', 'HEAD'])).trim();
+    const branch = (await this.tryGit(root, ['symbolic-ref', '--short', '-q', 'HEAD'])).stdout.trim();
+    const repo: IsolationRepo = {
+      path: repoPath,
+      root,
       baseRef,
       ...(branch ? { baseBranch: branch } : {}),
-      integrationBranch: `ordewell/${id}/integration`,
-      tasks: {},
+      integrationBranch: integrationBranchFor(runId),
     };
-    await this.git(workspaceRoot, ['branch', run.integrationBranch, baseRef]);
-    return run;
+    await this.git(root, ['branch', repo.integrationBranch, baseRef]);
+    return repo;
   }
 
   prepare(task: Task, run: IsolationRun): Promise<{ cwd: string; branch: string }> {
@@ -222,17 +221,25 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       if (previous) await this.removeTask(run, previous, { dropRecord: true });
 
       const { branch, dir } = this.namesFor(run, task);
-      const tip = (await this.git(run.workspaceRoot, ['rev-parse', run.integrationBranch])).trim();
       ensureStateDirIgnored(run.workspaceRoot);
-      fs.mkdirSync(path.dirname(dir), { recursive: true });
-      // -B: the name is inside this run's namespace, so a leftover from a crashed attempt is ours to reset.
-      await this.git(run.workspaceRoot, ['worktree', 'add', '-q', '-B', branch, dir, tip]);
+      const record: IsolationTaskRecord = { taskId: task.id, order: task.order, title: task.title, branch, workspace: dir, status: 'active', repos: {} };
+      let cwd = dir;
+      for (const repo of run.repos) {
+        const worktree = path.join(dir, repo.path);
+        const tip = (await this.git(repo.root, ['rev-parse', repo.integrationBranch])).trim();
+        fs.mkdirSync(path.dirname(worktree), { recursive: true });
+        // -B: the name is inside this run's namespace, so a leftover from a crashed attempt is ours to reset.
+        await this.git(repo.root, ['worktree', 'add', '-q', '-B', branch, worktree, tip]);
+        record.repos[repo.path] = { worktree, linked: [] };
+      }
 
-      const prefix = (await this.git(run.workspaceRoot, ['rev-parse', '--show-prefix'])).trim();
-      const cwd = prefix ? path.join(dir, prefix) : dir;
-      const record: IsolationTaskRecord = { taskId: task.id, order: task.order, title: task.title, branch, worktree: dir, status: 'active', linked: [] };
       try {
-        record.linked = await this.bootstrap(run.workspaceRoot, cwd);
+        for (const repo of run.repos) {
+          const entry = record.repos[repo.path];
+          const inRepo = await this.inWorkspacePlace(repo, entry.worktree);
+          if (repo.path === SELF_REPO) cwd = inRepo;
+          entry.linked = await this.bootstrap(repo.root, inRepo);
+        }
       } catch (err) {
         record.status = 'failed';
         await this.removeTask(run, record, { dropRecord: false });
@@ -241,6 +248,20 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       run.tasks[task.id] = record;
       return { cwd, branch };
     });
+  }
+
+  /**
+   * The place in a repo's worktree that matches where the workspace sits in
+   * the real repo: the worktree itself, or a subdirectory of it when the
+   * workspace root is a subdirectory of the repository.
+   */
+  private async inWorkspacePlace(repo: IsolationRepo, worktree: string): Promise<string> {
+    const prefix = await this.prefixOf(repo);
+    return prefix ? path.join(worktree, prefix) : worktree;
+  }
+
+  private async prefixOf(repo: IsolationRepo): Promise<string> {
+    return (await this.git(repo.root, ['rev-parse', '--show-prefix'])).trim();
   }
 
   integrate(task: Task, run: IsolationRun): Promise<IsolationOutcome> {
@@ -272,7 +293,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     return this.admin(run.workspaceRoot, async () => {
       // A branch checked out in a worktree cannot be checked out in the main
       // one, and the user is about to review it.
-      await this.removeIntegrationWorktree(run);
+      await this.removeIntegrationWorktrees(run);
       return handoffOf(run);
     });
   }
@@ -281,49 +302,60 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     return this.admin(run.workspaceRoot, async () => {
       // A half-finished merge from a crash is easier to drop than to repair;
       // the branch ref is the only state that matters and it is intact.
-      await this.removeIntegrationWorktree(run);
+      await this.removeIntegrationWorktrees(run);
       for (const record of Object.values(run.tasks)) {
         if (record.status === 'active') await this.removeTask(run, record, { dropRecord: true });
         else if (record.status === 'merged') await this.removeTask(run, record, { dropRecord: false });
       }
       await this.removeUnowned(run);
-      await this.tryGit(run.workspaceRoot, ['worktree', 'prune']);
+      for (const repo of run.repos) await this.tryGit(repo.root, ['worktree', 'prune']);
     });
   }
 
   async reviewDiff(run: IsolationRun): Promise<string> {
-    return this.git(run.workspaceRoot, ['diff', run.baseRef, run.integrationBranch]);
+    let diff = '';
+    for (const repo of run.repos) diff += await this.git(repo.root, ['diff', repo.baseRef, repo.integrationBranch]);
+    return diff;
   }
 
-  async mergeIntoCheckedOut(run: IsolationRun): Promise<IsolationOutcome> {
+  async mergeIntoCheckedOut(run: IsolationRun): Promise<IsolationMergeResult> {
+    for (const repo of run.repos) {
+      const result = await this.mergeRepoIntoCheckedOut(repo);
+      if (result.outcome !== 'merged') return result;
+    }
+    return { outcome: 'merged' };
+  }
+
+  private async mergeRepoIntoCheckedOut(repo: IsolationRepo): Promise<IsolationMergeResult> {
     // The user keeps working in this tree during a run. An unfinished merge
     // there is theirs: git refuses ours, and the conflict path below would
     // otherwise abort their resolution as if it were ours.
-    if (await this.mergeInProgress(run.workspaceRoot)) return 'failed';
-    const merge = await this.tryGit(run.workspaceRoot, ['merge', '--no-edit', run.integrationBranch]);
-    if (merge.ok) return 'merged';
-    if (await this.mergeInProgress(run.workspaceRoot)) {
+    if (await this.mergeInProgress(repo.root)) return { outcome: 'failed', repo: repo.path };
+    const merge = await this.tryGit(repo.root, ['merge', '--no-edit', repo.integrationBranch]);
+    if (merge.ok) return { outcome: 'merged' };
+    if (await this.mergeInProgress(repo.root)) {
+      const files = (await this.tryGit(repo.root, ['diff', '--name-only', '--diff-filter=U'])).stdout.split('\n').map((f) => f.trim()).filter(Boolean);
       // Not `abortMerge`: its `reset --hard` fallback is for Ordewell's own
       // integration worktree, and here it would discard uncommitted work.
-      await this.tryGit(run.workspaceRoot, ['merge', '--abort']);
-      return 'conflict';
+      await this.tryGit(repo.root, ['merge', '--abort']);
+      return { outcome: 'conflict', repo: repo.path, files };
     }
-    return 'failed';
+    return { outcome: 'failed', repo: repo.path };
   }
 
   discard(run: IsolationRun, opts: { keepIntegration: boolean }): Promise<void> {
     return this.admin(run.workspaceRoot, async () => {
-      await this.removeIntegrationWorktree(run);
+      await this.removeIntegrationWorktrees(run);
       for (const record of Object.values(run.tasks)) {
         await this.removeTask(run, record, { dropRecord: record.status !== 'merged' });
       }
       await this.removeUnowned(run);
       if (!opts.keepIntegration) {
-        await this.tryGit(run.workspaceRoot, ['branch', '-D', run.integrationBranch]);
+        for (const repo of run.repos) await this.tryGit(repo.root, ['branch', '-D', repo.integrationBranch]);
         run.tasks = {};
         this.removeIfEmpty(this.runRoot(run));
       }
-      await this.tryGit(run.workspaceRoot, ['worktree', 'prune']);
+      for (const repo of run.repos) await this.tryGit(repo.root, ['worktree', 'prune']);
     });
   }
 
@@ -351,16 +383,25 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     if (record.status === 'merged') return 'merged';
 
     try {
-      await this.commitWorktree(run, record);
-      const integrationDir = await this.ensureIntegrationWorktree(run);
-      const merge = await this.tryGit(integrationDir, [
-        'merge', '--no-ff', '--no-edit', '-m', `Merge task ${record.order}: ${firstLine(record.title)}`, record.branch,
-      ]);
-      if (!merge.ok) {
-        const conflicted = await this.mergeInProgress(integrationDir);
-        if (conflicted) await this.abortMerge(integrationDir);
-        record.status = conflicted ? 'conflict' : 'failed';
-        return record.status;
+      for (const repo of run.repos) {
+        const entry = record.repos[repo.path];
+        if (!entry) continue;
+        await this.commitWorktree(repo, record, entry);
+        if (await this.brings(repo, record.branch)) entry.changed = true;
+        else entry.changed ??= false;
+        const integrationDir = await this.ensureIntegrationWorktree(run, repo);
+        const merge = await this.tryGit(integrationDir, [
+          'merge', '--no-ff', '--no-edit', '-m', `Merge task ${record.order}: ${firstLine(record.title)}`, record.branch,
+        ]);
+        if (!merge.ok) {
+          const conflicted = await this.mergeInProgress(integrationDir);
+          if (conflicted) {
+            await this.abortMerge(integrationDir);
+            record.conflictRepo = repo.path;
+          }
+          record.status = conflicted ? 'conflict' : 'failed';
+          return record.status;
+        }
       }
     } catch {
       record.status = 'failed';
@@ -368,80 +409,97 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     }
 
     record.status = 'merged';
+    delete record.conflictRepo;
     // The work is on the integration branch already; a stuck cleanup must not
     // turn that into a failure. `pruneOrphans` sweeps up whatever it leaves.
     await this.admin(run.workspaceRoot, () => this.removeTask(run, record, { dropRecord: false })).catch(() => undefined);
     return 'merged';
   }
 
-  private async commitWorktree(run: IsolationRun, record: IsolationTaskRecord): Promise<void> {
+  /** Whether the task branch holds commits the repo's integration branch does not. */
+  private async brings(repo: IsolationRepo, branch: string): Promise<boolean> {
+    const ahead = await this.tryGit(repo.root, ['rev-list', '--count', `${repo.integrationBranch}..${branch}`]);
+    return ahead.ok && Number(ahead.stdout.trim()) > 0;
+  }
+
+  private async commitWorktree(repo: IsolationRepo, record: IsolationTaskRecord, entry: IsolationTaskRepo): Promise<void> {
     // Bootstrapped links are untracked, and an ignore rule like `node_modules/`
     // does not match a symlink — without this they would be committed. Staging
     // one that is a junction would even walk into the main tree's contents.
     // Only links git does not already ignore need excluding: naming an ignored
     // path such as `.env` in an exclude pathspec makes `add` refuse.
-    const prefix = (await this.git(run.workspaceRoot, ['rev-parse', '--show-prefix'])).trim();
+    const prefix = await this.prefixOf(repo);
     const excludes: string[] = [];
-    for (const name of record.linked) {
-      if ((await this.tryGit(record.worktree, ['check-ignore', '-q', '--', prefix + name])).ok) continue;
+    for (const name of entry.linked) {
+      if ((await this.tryGit(entry.worktree, ['check-ignore', '-q', '--', prefix + name])).ok) continue;
       excludes.push(`:(exclude,literal)${(prefix + name).replace(/\\/g, '/')}`);
     }
-    await this.git(record.worktree, ['add', '-A', '--', '.', ...excludes]);
-    const staged = await this.tryGit(record.worktree, ['diff', '--cached', '--quiet']);
+    await this.git(entry.worktree, ['add', '-A', '--', '.', ...excludes]);
+    const staged = await this.tryGit(entry.worktree, ['diff', '--cached', '--quiet']);
     if (staged.ok) return;
-    await this.git(record.worktree, ['commit', '-q', '-m', `ordewell: task ${record.order} ${firstLine(record.title)}`]);
+    await this.git(entry.worktree, ['commit', '-q', '-m', `ordewell: task ${record.order} ${firstLine(record.title)}`]);
   }
 
-  private async ensureIntegrationWorktree(run: IsolationRun): Promise<string> {
+  private integrationDir(run: IsolationRun, repo: IsolationRepo): string {
+    return path.join(this.runRoot(run), INTEGRATION_DIR, repo.path);
+  }
+
+  private async ensureIntegrationWorktree(run: IsolationRun, repo: IsolationRepo): Promise<string> {
     return this.admin(run.workspaceRoot, async () => {
-      const dir = path.join(this.runRoot(run), INTEGRATION_DIR);
+      const dir = this.integrationDir(run, repo);
       if (fs.existsSync(path.join(dir, '.git'))) return dir;
-      await this.tryGit(run.workspaceRoot, ['worktree', 'prune']);
+      await this.tryGit(repo.root, ['worktree', 'prune']);
       ensureStateDirIgnored(run.workspaceRoot);
       fs.mkdirSync(path.dirname(dir), { recursive: true });
-      await this.git(run.workspaceRoot, ['worktree', 'add', '-q', dir, run.integrationBranch]);
+      await this.git(repo.root, ['worktree', 'add', '-q', dir, repo.integrationBranch]);
       return dir;
     });
   }
 
-  private async removeIntegrationWorktree(run: IsolationRun): Promise<void> {
-    await this.removeWorktreeDir(run, path.join(this.runRoot(run), INTEGRATION_DIR), []);
+  private async removeIntegrationWorktrees(run: IsolationRun): Promise<void> {
+    for (const repo of run.repos) await this.removeWorktreeDir(run, repo, this.integrationDir(run, repo), []);
   }
 
   private async removeTask(run: IsolationRun, record: IsolationTaskRecord, opts: { dropRecord: boolean }): Promise<void> {
-    await this.removeWorktreeDir(run, record.worktree, record.linked);
-    await this.tryGit(run.workspaceRoot, ['branch', '-D', record.branch]);
+    for (const repo of run.repos) {
+      const entry = record.repos[repo.path];
+      if (entry) await this.removeWorktreeDir(run, repo, entry.worktree, entry.linked);
+      await this.tryGit(repo.root, ['branch', '-D', record.branch]);
+    }
     if (opts.dropRecord) delete run.tasks[record.taskId];
   }
 
-  /** Worktree directories and branches under this run that no record accounts for. */
+  /** Task workspaces and branches under this run that no record accounts for. */
   private async removeUnowned(run: IsolationRun): Promise<void> {
-    const owned = new Set(Object.values(run.tasks).map((r) => path.resolve(r.worktree)));
+    const owned = new Set(Object.values(run.tasks).map((r) => path.resolve(r.workspace)));
     const root = this.runRoot(run);
     if (fs.existsSync(root)) {
       for (const entry of fs.readdirSync(root)) {
         const dir = path.join(root, entry);
         if (entry === INTEGRATION_DIR || owned.has(path.resolve(dir))) continue;
-        await this.removeWorktreeDir(run, dir, []);
+        for (const repo of run.repos) await this.removeWorktreeDir(run, repo, path.join(dir, repo.path), []);
       }
     }
-    const ownedBranches = new Set([run.integrationBranch, ...Object.values(run.tasks).map((r) => r.branch)]);
-    const listed = await this.tryGit(run.workspaceRoot, ['branch', '--list', `ordewell/${run.id}/*`, '--format=%(refname:short)']);
-    for (const branch of listed.stdout.split('\n').map((b) => b.trim()).filter(Boolean)) {
-      if (!ownedBranches.has(branch)) await this.tryGit(run.workspaceRoot, ['branch', '-D', branch]);
+    const taskBranches = Object.values(run.tasks).map((r) => r.branch);
+    for (const repo of run.repos) {
+      const ownedBranches = new Set([repo.integrationBranch, ...taskBranches]);
+      const listed = await this.tryGit(repo.root, ['branch', '--list', `ordewell/${run.id}/*`, '--format=%(refname:short)']);
+      for (const branch of listed.stdout.split('\n').map((b) => b.trim()).filter(Boolean)) {
+        if (!ownedBranches.has(branch)) await this.tryGit(repo.root, ['branch', '-D', branch]);
+      }
     }
   }
 
-  private async removeWorktreeDir(run: IsolationRun, dir: string, linked: string[]): Promise<void> {
+  private async removeWorktreeDir(run: IsolationRun, repo: IsolationRepo, dir: string, linked: string[]): Promise<void> {
     // Links first, so no removal path can ever walk through one into the main
     // worktree's node_modules.
     for (const name of linked) this.unlinkIfLink(path.join(dir, name));
     for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
       if (LINKED_ARTIFACTS.has(name) || isEnvFile(name)) this.unlinkIfLink(path.join(dir, name));
     }
-    await this.tryGit(run.workspaceRoot, ['worktree', 'remove', '--force', dir]);
+    await this.tryGit(repo.root, ['worktree', 'remove', '--force', dir]);
     if (fs.existsSync(dir) && isInside(this.runRoot(run), dir)) fs.rmSync(dir, { recursive: true, force: true });
-    await this.tryGit(run.workspaceRoot, ['worktree', 'prune']);
+    await this.tryGit(repo.root, ['worktree', 'prune']);
   }
 
   private unlinkIfLink(target: string): void {
