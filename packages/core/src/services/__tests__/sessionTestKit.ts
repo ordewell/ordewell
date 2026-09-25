@@ -38,6 +38,7 @@ export function fakeFs(): IFileSystem {
 
 export interface SessionOverrides {
   broadcast?: SessionDeps['broadcast'];
+  onNotice?: SessionDeps['onNotice'];
   config?: SessionDeps['config'];
   /** Supply a real adapter when a test needs the approval channel Session injects into it. */
   fsAdapter?: IFileSystem;
@@ -80,6 +81,7 @@ export function makeSession(overrides: SessionOverrides = {}): Session {
     workspaceRoot: () => testWorkspace,
     fsAdapter: overrides.fsAdapter ?? fakeFs(),
     broadcast: overrides.broadcast ?? vi.fn(),
+    onNotice: overrides.onNotice,
     modelResolver: { getCachedRunnerModels: () => [], ...(overrides.modelResolver ?? { modelsForRunners: vi.fn().mockResolvedValue({}) }) } as ModelResolver,
     settings: overrides.settings ?? (() => ({ tddEnabled: false })),
     sessionId: overrides.sessionId,

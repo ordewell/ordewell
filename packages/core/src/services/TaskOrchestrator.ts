@@ -22,6 +22,7 @@ import type {
   TaskIsolation,
 } from '../interfaces/IWorktreeIsolation';
 import { createWorktreeIsolation } from './GitWorktreeIsolation';
+import { describeMergeResult } from './mergeResultNotice';
 import { handoffOf, integrationBranchNameOf, layoutOf, SELF_REPO, taskIsolationOf } from './isolationRecord';
 import type { IsolatedExecution } from './plannerModes';
 
@@ -46,6 +47,12 @@ export interface OrchestratorObserver {
   onIsolationBlocked?(data: { reason: 'dirty'; repos: string[] }): void;
   /** An isolated run settled; emitted before `onExecutionComplete`, which surfaces treat as terminal. */
   onIsolationHandoff?(handoff: IsolationHandoff): void;
+  /**
+   * What a run says about how it isolates — the fallback to the workspace root,
+   * shared paths, copies, a stash. Beside the notification channel, which a
+   * daemon may leave unwired, so a surface without toasts can still show it.
+   */
+  onIsolationNotice?(data: { level: 'info' | 'warn'; message: string }): void;
 }
 
 type SharedRootReason = Exclude<IsolationInactiveReason, 'dirty'>;
@@ -56,23 +63,6 @@ type RunDecision =
   | { mode: 'shared'; reason: SharedRootReason; repos: string[] };
 
 const SHARED_ROOT_TAIL = 'tasks run in the workspace root without worktree isolation.';
-
-/** One repo that kept "Merge all" from touching anything, as part of one line. */
-function mergeBlockNotice({ repo, reason, files }: IsolationMergeBlock): string {
-  switch (reason) {
-    case 'merge-in-progress': return `${repo} has a merge in progress`;
-    case 'conflict': return `${repo} would conflict in ${files.join(', ')}`;
-    case 'uncommitted-changes': return `${repo} has uncommitted changes to ${files.join(', ')}`;
-    case 'partial-landing': return `${repo} holds part of a task whose landing could not be rolled back`;
-    case 'git-error': return `git could not check ${repo}`;
-  }
-}
-
-/** Which repos a "Merge all" that stopped part-way had merged already; merges into the user's branches are never undone. */
-function landedNotice(landed: string[]): string {
-  if (landed.length === 0) return 'Nothing was merged.';
-  return landed.length === 1 ? `${landed[0]} was merged already and stays merged.` : `${landed.join(', ')} were merged already and stay merged.`;
-}
 
 /** Why a run fell back to the shared workspace root, as the one line the user is told. */
 function sharedRootNotice(reason: SharedRootReason, repos: string[]): string {
@@ -195,6 +185,8 @@ export class TaskOrchestrator {
   private opening: Promise<boolean> | null = null;
   /** The start a dirty tree turned away, replayed once the user chooses how to go on. */
   private blockedStart: (() => Promise<void>) | null = null;
+  /** The dirty repos behind {@link blockedStart}, for the stash notice. */
+  private blockedRepos: string[] = [];
 
   private registry: RunnerRegistry | null = null;
   private workspaceRootFn: () => string = () => process.cwd();
@@ -362,7 +354,7 @@ export class TaskOrchestrator {
     try {
       await this.isolation.pruneOrphans(this.isolationRun);
     } catch (err) {
-      this.notifications.warn(`Could not prune leftover worktrees: ${err instanceof Error ? err.message : String(err)}`);
+      this.tell('warn', `Could not prune leftover worktrees: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -376,26 +368,8 @@ export class TaskOrchestrator {
     const result = await this.isolation.mergeIntoCheckedOut(run);
     const branch = integrationBranchNameOf(run);
     const group = run.repos.some((r) => r.path !== SELF_REPO);
-    switch (result.outcome) {
-      case 'merged':
-        this.notifications.info(group
-          ? `Merged ${branch} into the checked-out branch of every repository.`
-          : `Merged ${branch} into your checked-out branch.`);
-        break;
-      case 'blocked':
-        this.notifications.warn(`Merged nothing, so every tree is as it was: ${result.blocked.map(mergeBlockNotice).join('; ')}.`);
-        break;
-      case 'conflict':
-        this.notifications.warn(result.repo === SELF_REPO
-          ? `Merging ${branch} conflicted, so it was aborted — your tree is as it was.`
-          : `Merging ${branch} conflicted in ${result.repo}${result.files?.length ? ` (${result.files.join(', ')})` : ''}, so it was aborted there. ${landedNotice(result.landed ?? [])}`);
-        break;
-      case 'failed':
-        this.notifications.error(result.repo === SELF_REPO
-          ? `Could not merge ${branch} — finish or abort the merge already in progress, then try again.`
-          : `Could not merge ${branch} in ${result.repo} — finish or abort any merge in progress there, then try again. ${landedNotice(result.landed ?? [])}`);
-        break;
-    }
+    const { level, message } = describeMergeResult(result, branch, group);
+    this.notifications[level](message);
     return result;
   }
 
@@ -1067,12 +1041,18 @@ export class TaskOrchestrator {
     return cwd;
   }
 
+  private tell(level: 'info' | 'warn', message: string): void {
+    this.notifications[level](message);
+    this.emit('onIsolationNotice', { level, message });
+  }
+
   private reportCopies(copied: string[]): void {
     const fresh = copied.filter((p) => !this.reportedCopies.has(p));
     if (fresh.length === 0) return;
     for (const p of fresh) this.reportedCopies.add(p);
     const one = fresh.length === 1;
-    this.notifications.warn(
+    this.tell(
+      'warn',
       `${fresh.join(', ')} could not be linked into task workspaces (a hard link is impossible there), so each task gets ${one ? 'a copy' : 'copies'}: edits to ${one ? 'it' : 'them'} stay in the task.`,
     );
   }
@@ -1124,11 +1104,12 @@ export class TaskOrchestrator {
     const decision = await this.decideRun(root);
     if (decision.mode === 'blocked') {
       this.blockedStart = resume;
+      this.blockedRepos = decision.repos;
       this.emit('onIsolationBlocked', { reason: 'dirty', repos: decision.repos });
       return false;
     }
     if (decision.mode === 'shared') {
-      this.notifications.info(sharedRootNotice(decision.reason, decision.repos));
+      this.tell('info', sharedRootNotice(decision.reason, decision.repos));
       this.runMode = 'shared';
       return true;
     }
@@ -1137,7 +1118,7 @@ export class TaskOrchestrator {
         await this.mintRun(root);
       } catch (err) {
         // Git can still refuse every repo of the group once a run is minted — the one check `isActive` cannot make.
-        this.notifications.info(`${err instanceof Error ? err.message : String(err)} — ${SHARED_ROOT_TAIL}`);
+        this.tell('info', `${err instanceof Error ? err.message : String(err)} — ${SHARED_ROOT_TAIL}`);
         this.emit('onIsolationChanged');
         this.runMode = 'shared';
         return true;
@@ -1175,7 +1156,7 @@ export class TaskOrchestrator {
     this.reportedCopies.clear();
     this.emit('onIsolationChanged');
     const shared = sharedPathsNotice(this.isolationRun);
-    if (shared) this.notifications.info(shared);
+    if (shared) this.tell('info', shared);
   }
 
   /** Close the open run. An isolated one hands its integration branch over for review. */
@@ -1186,7 +1167,7 @@ export class TaskOrchestrator {
     try {
       this.emit('onIsolationHandoff', await this.isolation.handoff(this.isolationRun));
     } catch (err) {
-      this.notifications.warn(`Could not hand the run's integration branch over: ${err instanceof Error ? err.message : String(err)}`);
+      this.tell('warn', `Could not hand the run's integration branch over: ${err instanceof Error ? err.message : String(err)}`);
     }
     this.emit('onIsolationChanged');
   }
@@ -1202,10 +1183,12 @@ export class TaskOrchestrator {
     this.blockedStart = null;
     if (how === 'stash') {
       await this.isolation.stash(this.workspaceRootFn());
-      this.notifications.info('Stashed your uncommitted changes — `git stash pop` brings them back.');
+      this.tell('info', this.blockedRepos.length > 0
+        ? `Stashed your uncommitted changes in ${this.blockedRepos.join(', ')} — \`git stash pop\` in each brings them back.`
+        : 'Stashed your uncommitted changes — `git stash pop` brings them back.');
     } else {
       this.runMode = 'shared';
-      this.notifications.info('Running without worktree isolation — tasks share the workspace root for this run.');
+      this.tell('info', 'Running without worktree isolation — tasks share the workspace root for this run.');
     }
     await resume();
   }

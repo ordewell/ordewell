@@ -101,6 +101,18 @@ export type SessionMessage =
       source: Exclude<ApprovalSource, 'asked'>;
     };
 
+/**
+ * A line a run wants the user to read — how it isolates, what it shares. Not a
+ * {@link SessionMessage}: hosts that show notices as toasts already do, and
+ * widening the union would break every exhaustive switch over it. A host with
+ * no toast channel (the daemon) hands these to its clients by its own means.
+ */
+export interface SessionNotice {
+  type: 'notice';
+  level: 'info' | 'warn';
+  message: string;
+}
+
 export type SessionBroadcaster = (msg: SessionMessage) => void;
 
 export function serializeTask(t: Task): SerializedTask {

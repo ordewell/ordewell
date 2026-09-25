@@ -7,7 +7,7 @@ import { FakeWorktreeIsolation } from '../../testing';
 import * as sessionStore from '../../utils/sessionStore';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
-import type { SessionMessage } from '../SessionMessage';
+import type { SessionMessage, SessionNotice } from '../SessionMessage';
 import type { IsolationMergeResult } from '../../interfaces/IWorktreeIsolation';
 import type { ConversationTurn, IAiService } from '../AiService';
 
@@ -31,11 +31,12 @@ function plan(tasks: Task[]): LegacyPlanState {
 
 function setup(isolation = new FakeWorktreeIsolation(), aiService?: Partial<IAiService>) {
   const messages: SessionMessage[] = [];
+  const notices: SessionNotice[] = [];
   const r = runner();
-  const session = makeSession({ runner: r.runner, isolation, aiService, broadcast: (m) => messages.push(m) });
+  const session = makeSession({ runner: r.runner, isolation, aiService, broadcast: (m) => messages.push(m), onNotice: (n) => notices.push(n) });
   const pass = (t: Task) => r.sessions.find((s) => s.taskId === t.id)!.emitOutput(`<<<ORDEWELL_DONE_${t.completionMarker}>>>`);
   const lastStatus = () => [...messages].reverse().find((m): m is Extract<SessionMessage, { type: 'status_update' }> => m.type === 'status_update');
-  return { session, isolation, messages, pass, lastStatus, ...r };
+  return { session, isolation, messages, notices, pass, lastStatus, ...r };
 }
 
 const saved = () => vi.mocked(sessionStore.saveSession).mock.calls.at(-1)?.[0];
@@ -86,6 +87,18 @@ describe('Session with worktree isolation', () => {
       run: expect.objectContaining({ id: 'run1', repos: [expect.objectContaining({ path: '.', integrationBranch: 'ordewell/run1/integration' })] }),
       resolvers: {},
     });
+  });
+
+  it('hands a surface the notice of a run that falls back to the workspace root, apart from the session stream', async () => {
+    const isolation = new FakeWorktreeIsolation();
+    isolation.availability = { active: false, reason: 'not-git' };
+    const { session, notices, messages } = setup(isolation);
+    session.loadPlan(plan([task('t1', 1)]), 'goal', '/repo');
+
+    await session.executePlan();
+
+    expect(notices).toEqual([{ type: 'notice', level: 'info', message: 'Not a git repository — tasks run in the workspace root without worktree isolation.' }]);
+    expect(messages.map((m) => m.type)).not.toContain('notice');
   });
 
   describe('on a dirty tree', () => {

@@ -582,6 +582,72 @@ describe('TaskOrchestrator with worktree isolation', () => {
     });
   });
 
+  describe('the notices a surface is handed', () => {
+    function heard(orchestrator: TaskOrchestrator) {
+      const notices: Array<{ level: string; message: string }> = [];
+      orchestrator.subscribe({ onIsolationNotice: (n) => notices.push(n) });
+      return notices;
+    }
+
+    it('hands over the fallback to the workspace root, which the notification channel may drop', async () => {
+      const isolation = new FakeWorktreeIsolation();
+      isolation.availability = { active: false, reason: 'nested-repos', repos: ['services/billing'] };
+      const { orchestrator } = setup({ isolation, workspace: '/plain' });
+      const notices = heard(orchestrator);
+      orchestrator.loadPlan([task('t1', 1)]);
+
+      await orchestrator.approveReview();
+
+      expect(notices).toEqual([{
+        level: 'info',
+        message: 'This repository contains nested repositories that are not submodules (services/billing) — tasks run in the workspace root without worktree isolation.',
+      }]);
+    });
+
+    it('hands over the shared paths of a group and the copies a task got', async () => {
+      const isolation = new FakeWorktreeIsolation();
+      isolation.shared = ['NOTES.md'];
+      isolation.copied = ['api/.env'];
+      const { orchestrator } = setup({ isolation, workspace: '/group' });
+      const notices = heard(orchestrator);
+      orchestrator.loadPlan([task('t1', 1)]);
+
+      await orchestrator.approveReview();
+
+      expect(notices.map((n) => n.level)).toEqual(['info', 'warn']);
+      expect(notices[0].message).toBe('NOTES.md is shared live with every task, so edits to it are not isolated.');
+      expect(notices[1].message).toMatch(/^api\/\.env could not be linked/);
+    });
+
+    it('names the repositories it stashed, and where to pop them', async () => {
+      const isolation = new FakeWorktreeIsolation();
+      isolation.availability = { active: false, reason: 'dirty', repos: ['api', 'web'] };
+      const { orchestrator } = setup({ isolation });
+      const notices = heard(orchestrator);
+      orchestrator.loadPlan([task('t1', 1)]);
+      await orchestrator.approveReview();
+
+      await orchestrator.continueBlockedRun('stash');
+
+      expect(notices).toContainEqual({
+        level: 'info',
+        message: 'Stashed your uncommitted changes in api, web — `git stash pop` in each brings them back.',
+      });
+    });
+
+    it('keeps the stash notice as it was for a group of one', async () => {
+      const isolation = new FakeWorktreeIsolation();
+      isolation.availability = { active: false, reason: 'dirty' };
+      const { orchestrator, notifications } = setup({ isolation });
+      orchestrator.loadPlan([task('t1', 1)]);
+      await orchestrator.approveReview();
+
+      await orchestrator.continueBlockedRun('stash');
+
+      expect(vi.mocked(notifications.info)).toHaveBeenCalledWith('Stashed your uncommitted changes — `git stash pop` brings them back.');
+    });
+  });
+
   it('has the run saved with its landing before anything merges', async () => {
     const { orchestrator, isolation, pass } = setup();
     const saved: unknown[] = [];

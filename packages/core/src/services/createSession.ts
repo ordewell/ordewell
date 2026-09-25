@@ -23,6 +23,7 @@ import {
   serializePlan,
   executionSummary,
   type SessionBroadcaster,
+  type SessionNotice,
 } from './SessionMessage';
 import { saveSession } from '../utils/sessionStore';
 import { mintSessionId } from '../utils/sessionId';
@@ -159,6 +160,8 @@ export interface SessionDeps {
   fsAdapter: IFileSystem;
   /** Emits plan-lifecycle events to the surface. Transport-agnostic. */
   broadcast: SessionBroadcaster;
+  /** Where {@link SessionNotice}s go, for a host whose `notifications` are not seen by the user. */
+  onNotice?: (notice: SessionNotice) => void;
   /** Shared across sessions — sole producer of model catalogs and routing lists. */
   modelResolver: ModelResolver;
   /** Live runtime settings (tdd, verification). Read at each operation that needs them. */
@@ -223,6 +226,7 @@ export class Session {
   private goal = '';
   private workspace: string;
   private broadcast: SessionBroadcaster;
+  private onNotice?: (notice: SessionNotice) => void;
   private modelResolver: ModelResolver;
   private fsAdapter: IFileSystem;
   private approvals: PendingApprovals;
@@ -250,6 +254,7 @@ export class Session {
     this.orchestrator.setTddEnabled(() => this.settingsFn().tddEnabled);
     this.workspace = deps.workspaceRoot();
     this.broadcast = deps.broadcast;
+    this.onNotice = deps.onNotice;
     this.modelResolver = deps.modelResolver;
     this.fsAdapter = deps.fsAdapter;
     this.settingsFn = deps.settings;
@@ -419,6 +424,9 @@ export class Session {
           ...(repos.length > 0 ? { repos } : {}),
           message: `Tracked files have uncommitted changes${where}, so tasks cannot run in isolated worktrees. Stash them, or run this plan without isolation.`,
         });
+      },
+      onIsolationNotice: ({ level, message }) => {
+        this.onNotice?.({ type: 'notice', level, message });
       },
       onIsolationHandoff: (handoff) => {
         this.broadcast({ type: 'isolation_handoff', ...handoff });
