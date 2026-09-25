@@ -52,11 +52,49 @@ function nextId(prefix: string): string {
   return `${prefix}-${Date.now()}-${idCounter}`;
 }
 
+type HistoryEntry = { role: string; content: string; timestamp: string; kind?: string };
+
+function timelineFromHistory(history: HistoryEntry[], hasPlan: boolean): TimelineItem[] {
+  const items: TimelineItem[] = [];
+  for (const m of history) {
+    const ts = new Date(m.timestamp).getTime() || Date.now();
+    if (m.kind === 'plan_generated') {
+      // Every marker gets its own chip. Folding them into one anchor
+      // (which is what the plan-as-chat-message layout had to do) threw
+      // away the order the plan was revised in — the one thing the
+      // transcript is for.
+      const first = !items.some((i) => i.kind === 'planRevision');
+      items.push({
+        id: nextId('revision'),
+        kind: 'planRevision',
+        label: `Plan ${first ? 'generated' : 'updated'}`,
+        timestamp: ts,
+      });
+      continue;
+    }
+    // A compaction summary is the host's notice of what it kept, not something
+    // the planner just said.
+    if (m.kind === 'system' || m.kind === 'compaction') {
+      items.push({ id: nextId('sys'), kind: 'system', text: m.content, timestamp: ts });
+    } else if (m.role === 'user') {
+      items.push({ id: nextId('user'), kind: 'user', text: m.content, timestamp: ts });
+    } else {
+      items.push({ id: nextId('planner'), kind: 'planner', activities: [], text: m.content, streaming: false, timestamp: ts });
+    }
+  }
+  // Sessions saved before plan markers existed: one chip at the end.
+  if (hasPlan && !items.some((i) => i.kind === 'planRevision')) {
+    items.push({ id: nextId('revision'), kind: 'planRevision', label: 'Plan generated', timestamp: Date.now() });
+  }
+  return items;
+}
+
 export default function App() {
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [plan, setPlan] = useState<LegacyPlanState | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
   const [isResearchActive, setIsResearchActive] = useState(false);
+  const [conversationBusy, setConversationBusy] = useState(false);
   const [error, setError] = useState<string>('');
   const [models, setModels] = useState<DiscoveredModel[]>([]);
   const [modelsByRunner, setModelsByRunner] = useState<Partial<Record<string, DiscoveredModel[]>>>({});
@@ -261,39 +299,20 @@ export default function App() {
           setTaskIsolation({});
           setHandoff(null);
           setDockExpanded((v) => nextDock(v, 'session-reset'));
-          const history: { role: string; content: string; timestamp: string; kind?: string }[] = msg.history ?? [];
-          const items: TimelineItem[] = [];
-          for (const m of history) {
-            const ts = new Date(m.timestamp).getTime() || Date.now();
-            if (m.kind === 'plan_generated') {
-              // Every marker gets its own chip. Folding them into one anchor
-              // (which is what the plan-as-chat-message layout had to do) threw
-              // away the order the plan was revised in — the one thing the
-              // transcript is for.
-              const first = !items.some((i) => i.kind === 'planRevision');
-              items.push({
-                id: nextId('revision'),
-                kind: 'planRevision',
-                label: `Plan ${first ? 'generated' : 'updated'}`,
-                timestamp: ts,
-              });
-              continue;
-            }
-            if (m.kind === 'system') {
-              items.push({ id: nextId('sys'), kind: 'system', text: m.content, timestamp: ts });
-            } else if (m.role === 'user') {
-              items.push({ id: nextId('user'), kind: 'user', text: m.content, timestamp: ts });
-            } else {
-              items.push({ id: nextId('planner'), kind: 'planner', activities: [], text: m.content, streaming: false, timestamp: ts });
-            }
-          }
-          // Sessions saved before plan markers existed: one chip at the end.
-          if (msg.hasPlan && !items.some((i) => i.kind === 'planRevision')) {
-            items.push({ id: nextId('revision'), kind: 'planRevision', label: 'Plan generated', timestamp: Date.now() });
-          }
-          setTimeline(items);
+          setTimeline(timelineFromHistory(msg.history ?? [], !!msg.hasPlan));
           break;
         }
+
+        // A rewind or compaction edited the dialogue mid-session. Unlike
+        // restoreChat this must not clear the plan or a running task's output.
+        case 'conversationReplaced':
+          setError('');
+          setTimeline(timelineFromHistory(msg.history ?? [], !!msg.hasPlan));
+          break;
+
+        case 'conversationBusy':
+          setConversationBusy(!!msg.busy);
+          break;
 
         case 'showWarnings':
           if (sessionClearedRef.current) break;
@@ -648,7 +667,7 @@ export default function App() {
       return;
     }
     if (text === '/help') {
-      setSlashOutput('Commands: /model, /model set <id>, /key set, /sessions, /new, /refresh, /auto, /allowlist, /help\n\nType / after a command to see model suggestions.');
+      setSlashOutput('Commands: /model, /model set <id>, /key set, /sessions, /new, /fork, /rewind [n], /compact, /refresh, /auto, /allowlist, /help\n\nType / after a command to see model suggestions.');
       setTimeout(() => setSlashOutput(''), 6000);
       return;
     }
@@ -1346,7 +1365,7 @@ export default function App() {
       <ChatInput
         onSend={handleSend}
         onStop={handleStop}
-        disabled={isResearchActive}
+        disabled={isResearchActive || conversationBusy}
         placeholder={getPlaceholder()}
         modelOptions={modelOptions}
         configuredProviders={configuredProviders}

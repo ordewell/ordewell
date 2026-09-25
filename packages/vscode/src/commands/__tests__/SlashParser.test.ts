@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { window } from '../../test/vscode.mock';
+import { window, commands } from '../../test/vscode.mock';
 import { handleSlashCommand, isKnownSlashCommand, type SlashDeps } from '../SlashParser';
 import type { DiscoveredModel } from '@ordewell/core';
 
@@ -133,8 +133,53 @@ describe('isKnownSlashCommand', () => {
     expect(isKnownSlashCommand('/refresh')).toBe(true);
   });
 
+  it('recognizes the conversation-editing commands', () => {
+    expect(isKnownSlashCommand('/fork')).toBe(true);
+    expect(isKnownSlashCommand('/rewind')).toBe(true);
+    expect(isKnownSlashCommand('/rewind 3')).toBe(true);
+    expect(isKnownSlashCommand('/COMPACT')).toBe(true);
+  });
+
   it('rejects a discovered-skill invocation so it falls through to the message path', () => {
     expect(isKnownSlashCommand('/grilling')).toBe(false);
     expect(isKnownSlashCommand('/to-spec')).toBe(false);
+  });
+});
+
+describe('conversation-editing slash commands', () => {
+  const executeCommand = commands.executeCommand as unknown as ReturnType<typeof vi.fn>;
+
+  it('/fork runs the fork command', async () => {
+    executeCommand.mockClear();
+    await handleSlashCommand('/fork', makeDeps());
+    expect(executeCommand).toHaveBeenCalledWith('ordewell.forkConversation');
+  });
+
+  it('/rewind with no argument leaves the choice to the picker', async () => {
+    executeCommand.mockClear();
+    await handleSlashCommand('/rewind', makeDeps());
+    expect(executeCommand).toHaveBeenCalledWith('ordewell.rewindConversation', undefined);
+  });
+
+  it('/rewind <n> hands the message number on', async () => {
+    executeCommand.mockClear();
+    await handleSlashCommand('/rewind 3', makeDeps());
+    expect(executeCommand).toHaveBeenCalledWith('ordewell.rewindConversation', '3');
+  });
+
+  it('/compact runs the compact command', async () => {
+    executeCommand.mockClear();
+    await handleSlashCommand('/compact', makeDeps());
+    expect(executeCommand).toHaveBeenCalledWith('ordewell.compactConversation');
+  });
+
+  it('/help lists them', async () => {
+    const info = window.showInformationMessage as unknown as ReturnType<typeof vi.fn>;
+    info.mockClear();
+    await handleSlashCommand('/help', makeDeps());
+    const text = info.mock.calls[0][0] as string;
+    expect(text).toContain('/fork');
+    expect(text).toContain('/rewind');
+    expect(text).toContain('/compact');
   });
 });

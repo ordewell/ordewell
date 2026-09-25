@@ -96,7 +96,9 @@ type ExtensionChatMessage =
   // The run's isolation is gone (discarded or the plan restarted); the handoff
   // card and every conflict indicator clear.
   | { type: 'isolationCleared' }
-  | { type: 'restoreChat'; history: ConversationMessage[]; hasPlan: boolean };
+  | { type: 'restoreChat'; history: ConversationMessage[]; hasPlan: boolean }
+  | { type: 'conversationReplaced'; history: ConversationMessage[]; hasPlan: boolean }
+  | { type: 'conversationBusy'; busy: boolean };
 
 function getNonce(): string {
   let text = '';
@@ -166,6 +168,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    */
   restoreChat(history: ConversationMessage[], hasPlan: boolean): void {
     this.postMessage({ type: 'restoreChat', history, hasPlan });
+  }
+
+  /**
+   * Redraw only the transcript, after a rewind or compaction edited it. Unlike
+   * `restoreChat` this leaves the plan, task output and isolation state alone,
+   * because both edits are allowed while a run is executing.
+   */
+  replaceConversation(history: ConversationMessage[], hasPlan: boolean): void {
+    this.postMessage({ type: 'conversationReplaced', history, hasPlan });
+  }
+  /** Lock the input while core is refusing planner messages (a compaction in flight). */
+  setConversationBusy(busy: boolean): void {
+    this.postMessage({ type: 'conversationBusy', busy });
   }
 
   showPlan(plan: LegacyPlanState): void { this.sendPlanUpdated(plan); }

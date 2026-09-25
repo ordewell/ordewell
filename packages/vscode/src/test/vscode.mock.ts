@@ -129,3 +129,7 @@ export const window = {
     dispose: vi.fn(),
   })) as never,
 };
+
+export const commands = {
+  executeCommand: vi.fn(async () => undefined) as never,
+};
