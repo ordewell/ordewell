@@ -1,3 +1,4 @@
+import { describeMergeResult, type IsolationMergeResult } from '@ordewell/core';
 import type { HandoffRepoView, HandoffView, LandedTaskView, TaskIsolationView } from './tui/state';
 
 /**
@@ -105,4 +106,42 @@ export function handoffBranch(handoff: HandoffView): string {
 /** Where the run forked, as one line names it, each ref cut to `length`. */
 export function handoffBase(handoff: HandoffView, length: number): string {
   return handoff.repos.map((r) => r.baseRef.slice(0, length)).join(', ');
+}
+
+/**
+ * Whether the run spans more than a lone repo at the workspace root. A group of
+ * one at `.` is worded and drawn exactly as it was before repo groups; anything
+ * else names its repos.
+ */
+export function isRepoGroup(handoff: HandoffView): boolean {
+  return handoff.repos.some((r) => r.path !== '.');
+}
+
+/** One line per repo: what landed on its integration branch, or that there is nothing to merge. */
+export function repoResultLines(handoff: HandoffView): string[] {
+  return handoff.repos.map(({ path, landed }) => {
+    const n = landed.length;
+    return `${path}: ${n === 0 ? 'nothing to merge' : `${n} task${n === 1 ? '' : 's'} landed`}`;
+  });
+}
+
+/** The repos a task changed, for a row that names them; none for a group of one. */
+export function taskRepoNames(isolation: TaskIsolationView | undefined): string[] {
+  return (isolation?.repos ?? []).filter((r) => r !== '.');
+}
+
+/**
+ * What "Merge all" did, in words. A group of one reads as it did before repo
+ * groups; a group takes the shared wording and, when nothing or not everything
+ * merged, is told the integration branches are plain branches to merge by hand.
+ */
+export function mergeOutcome(result: IsolationMergeResult, handoff: HandoffView): { ok: boolean; message: string } {
+  const branch = handoffBranch(handoff);
+  const group = isRepoGroup(handoff);
+  const ok = result.outcome === 'merged';
+  if (!group && result.outcome === 'conflict') {
+    return { ok, message: `Merging ${branch} conflicted, so it was aborted — your tree is as it was. Merge it with git and resolve the conflict there.` };
+  }
+  const { message } = describeMergeResult(result, branch, group);
+  return { ok, message: ok || !group ? message : `${message} Each repository's ${branch} is a plain branch you can merge by hand.` };
 }

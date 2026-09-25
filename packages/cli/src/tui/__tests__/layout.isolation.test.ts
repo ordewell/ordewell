@@ -57,6 +57,24 @@ describe('plan pane — isolation', () => {
     expect(out).not.toContain('.ordewell/worktrees');
   });
 
+  it('names the repositories a task changed beside its branch, and only for a group', () => {
+    const group = frame(plan([task({ isolation: { ...integrated, repos: ['api', 'web'] } })], { expandedTaskId: 't1' }));
+    const lone = frame(plan([task({ isolation: { ...integrated, repos: ['.'] } })], { expandedTaskId: 't1' }));
+
+    expect(group).toContain('Repos');
+    expect(group).toContain('api, web');
+    expect(lone).not.toContain('Repos');
+    expect(frame(plan([task({ isolation: { ...integrated, repos: [] } })], { expandedTaskId: 't1' }))).not.toContain('Repos');
+  });
+
+  it('names the repository a conflict stopped in, and keeps the plain mark for a group of one', () => {
+    const named = frame(plan([task({ status: 'awaiting_user', isolation: { ...conflict, repos: ['api', 'web'], conflictRepo: 'web' } })]));
+    const lone = frame(plan([task({ status: 'awaiting_user', isolation: { ...conflict, repos: ['.'], conflictRepo: '.' } })]));
+
+    expect(named).toContain('⚠ merge conflict in web —');
+    expect(lone).toContain('⚠ merge conflict —');
+  });
+
   it('offers the resolve key only on a conflicted task', () => {
     expect(footerHints(plan([task({ isolation: conflict })]))).toContain('x resolve conflict');
     expect(footerHints(plan([task({ isolation: active })]))).not.toContain('x resolve conflict');

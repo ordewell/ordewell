@@ -2,6 +2,7 @@ import { pad, style, truncate, width, wrap, wrapLines, type WrapLine } from './a
 import { cursorInLines, type CursorPosition } from './editor';
 import { renderMarkdown } from './markdown';
 import { chatEditorRoom, chatPaneWidth, planPaneWidth } from './geometry';
+import { taskRepoNames } from '../isolation';
 import { SLASH_COMMANDS, type SlashCategory } from './slash';
 import { isTaskRunning, planRows, selectedPlanRow, type ChatMessage, type PlanRow, type TuiState } from './state';
 import { modesForTask } from './taskAssignment';
@@ -530,7 +531,8 @@ function taskLines(state: TuiState, row: PlanRow, index: number, cols: number): 
   // The one isolation state that needs the user; every other stays out of the
   // row and shows only in the expanded detail below.
   if (task.isolation?.state === 'conflict') {
-    lines.push(style.red(truncate(`${bodyPad}⚠ merge conflict — its work is kept on its own branch`, cols)));
+    const where = task.isolation.conflictRepo && task.isolation.conflictRepo !== '.' ? ` in ${task.isolation.conflictRepo}` : '';
+    lines.push(style.red(truncate(`${bodyPad}⚠ merge conflict${where} — its work is kept on its own branch`, cols)));
   }
 
   let editorLine: number | undefined;
@@ -538,6 +540,8 @@ function taskLines(state: TuiState, row: PlanRow, index: number, cols: number): 
     lines.push(style.grey(`${bodyPad}${task.status.replace(/_/g, ' ')}`));
     if (task.isolation && task.isolation.state !== 'none' && task.isolation.branch) {
       lines.push(...taskText('Branch', task.isolation.branch, cols, bodyPad));
+      const repos = taskRepoNames(task.isolation);
+      if (repos.length > 0) lines.push(...taskText('Repos', repos.join(', '), cols, bodyPad));
       // An integrated task's worktree is gone; naming it would point at nothing.
       if (task.isolation.state !== 'integrated' && task.isolation.worktree) {
         lines.push(...taskText('Worktree', task.isolation.worktree, cols, bodyPad));
