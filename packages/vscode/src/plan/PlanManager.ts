@@ -529,6 +529,8 @@ export function handleSessionMessage(
     case 'review_approved':
     case 'task_updated':
     case 'task_started':
+    // This host asked for the merge and has its result, and core's notices already told the user.
+    case 'isolation_merge':
       break;
     default: {
       const exhaustive: never = msg;

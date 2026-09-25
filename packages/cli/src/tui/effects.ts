@@ -842,6 +842,8 @@ function onExecutionEvent(dispatch: (action: Action) => void, event: WsEvent, se
     case 'research_step_done':
     case 'approval_request':
     case 'approval_settled':
+    // Its asker already has the result, from the merge request itself.
+    case 'isolation_merge':
       return;
 
     default: {

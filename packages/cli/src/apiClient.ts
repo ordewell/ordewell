@@ -397,14 +397,16 @@ export class ApiClient {
     return res.data.diff;
   }
 
-  /** A conflict or a refusal is an outcome, not an error: the user's tree is untouched either way. */
+  /**
+   * A conflict or a block is an outcome, not an error. Passed on whole: which
+   * repos blocked the merge, or landed before it stopped, is the answer.
+   */
   async mergeRun(sessionId: string): Promise<MergeRunResult> {
     const res = await this.httpRequest<MergeRunResult & ErrorResponse>('POST', `/api/plans/${sessionId}/isolation/merge`);
     if (res.status !== 200) {
       throw new Error(res.data?.error || 'Merge failed');
     }
-    const { outcome, repo, files } = res.data;
-    return { outcome, ...(repo !== undefined ? { repo } : {}), ...(files !== undefined ? { files } : {}) };
+    return res.data;
   }
 
   discardRun(sessionId: string): Promise<void> {

@@ -43,6 +43,13 @@ describe('ApiClient isolation endpoints', () => {
     expect([seen.method, seen.url]).toEqual(['POST', '/api/plans/s1/isolation/merge']);
   });
 
+  it('mergeRun passes on each repository that blocked the merge, and what landed before one stopped it', async () => {
+    const blocked = { outcome: 'blocked', blocked: [{ repo: 'web', reason: 'conflict', files: ['web.txt'] }] };
+    expect(await (await client(200, blocked)).api.mergeRun('s1')).toEqual(blocked);
+    const stopped = { outcome: 'failed', repo: 'web', landed: ['api'] };
+    expect(await (await client(200, stopped)).api.mergeRun('s1')).toEqual(stopped);
+  });
+
   it.each([
     ['discardRun', '/api/plans/s1/isolation/discard'],
     ['cleanupRun', '/api/plans/s1/isolation/cleanup'],
