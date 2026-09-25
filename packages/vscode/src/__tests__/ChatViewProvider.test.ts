@@ -94,3 +94,19 @@ describe('ChatViewProvider.resendAllState', () => {
     expect(setModelsMsg!.models[1].runnerProvider).toBe('opencode-go');
   });
 });
+
+describe('ChatViewProvider conversation edits', () => {
+  it('redraws only the transcript — a restoreChat would also wipe a running task\'s output', () => {
+    const { provider, posted } = providerWithCapture();
+    const history = [{ role: 'user' as const, content: 'goal', timestamp: '2026-01-01T00:00:00Z' }];
+    provider.replaceConversation(history, true);
+    expect(posted).toEqual([{ type: 'conversationReplaced', history, hasPlan: true }]);
+  });
+
+  it('tells the webview when to lock and free the input', () => {
+    const { provider, posted } = providerWithCapture();
+    provider.setConversationBusy(true);
+    provider.setConversationBusy(false);
+    expect(posted).toEqual([{ type: 'conversationBusy', busy: true }, { type: 'conversationBusy', busy: false }]);
+  });
+});
