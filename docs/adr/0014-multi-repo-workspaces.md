@@ -187,6 +187,36 @@ Version 1 covers core, daemon, TUI, CLI and VS Code.
 - The orchestrator's fallback notice names them. Behavior is otherwise
   unchanged: both cases still run in the workspace root, with one notice.
 
+### As implemented: detection, shared paths and bootstrap
+
+The slice that made groups real sharpened four points and deviated on one.
+
+- **Deviation: `workspaceRepos` replaces auto-detection rather than adding to
+  it.** When the setting is non-empty, the group is exactly the listed paths that
+  hold a `.git`; the repos directly inside the folder join only if listed. That
+  lets a user leave a directly-inside repo out, which "plus the listed ones"
+  could not. Unlisted repos are then ordinary shared paths.
+- **A repo git refuses a worktree for is found at run start.** `startRun` tries
+  a `--no-checkout` worktree for each repo and removes it again; a refusal
+  shares that repo for the whole run, so a run's group never changes mid-run. If
+  git refuses every repo, `startRun` throws and the orchestrator runs in the
+  workspace root with a notice.
+- **A directory holding a deeper repo is not itself shared.** The task workspace
+  recreates it as a real directory, so the repo's worktree sits at its real
+  path, and links the directory's other entries one by one.
+- **`worktreeLinks` still applies when `worktreeSetupCommand` is set**, and is
+  linked before the command runs so the command can rely on it; the command
+  replaces only the default artifacts. Its globs match `*` and `?` within one
+  path segment; there is no `**`, so a pattern never walks a whole tree. The
+  command's environment keeps ADR-0013's `ORDEWELL_MAIN_WORKTREE` beside
+  `ORDEWELL_REPO` and `ORDEWELL_MAIN_REPO`.
+- **Copies are reported once per run**, naming the paths, since every task of
+  the run gets the same ones.
+- **`not-git` no longer names repos.** A folder with repos inside now isolates
+  them, so the slice-1 notice listing them is gone; a group whose repos all lack
+  commits reports `no-commits` naming them, and a dirty group names its dirty
+  repos in `repos`.
+
 ## Considered options
 
 - **Treating the parent folder as the unit and initializing it as a repo.**

@@ -342,8 +342,9 @@ task runs in the workspace root exactly as before, and
 `WorktreeIsolation.isActive` says which of `disabled`, `git-missing`, `not-git`,
 `no-commits`, `dirty` or `nested-repos` applied (the last two, and `not-git`,
 may name the repositories behind them). ADR-0014 widens the unit from one
-repository to a *repo group*; until its later slices land, isolation still
-covers one repository and a folder of repositories runs in the workspace root. The
+repository to a *repo group*: a folder of repositories isolates them together,
+and `not-git` is left for a folder with none. Until its later slices land, a
+group's task still integrates repo by repo rather than atomically. The
 Runner is only ever handed a `cwd` (ADR-0007) — git never enters
 `ITerminalRunner`, `RunnerRegistry` or a runner adapter.
 *Avoid:* "sandbox" (an OS-level runner sandbox is a separate concern, ADR-0011),
@@ -372,7 +373,8 @@ its *task workspace*.
 
 **Repo group** — the git repositories isolated together for one workspace
 (ADR-0014). A folder that is not itself a repository forms one from the
-repositories directly inside it, plus any listed in `workspaceRepos`; a workspace
+repositories directly inside it, or, when `workspaceRepos` is set, from exactly
+the repositories it lists, at any depth; a workspace
 that is one repository is a group of one, with the repo at path `.`, so there is
 one code path. A repository that contains nested repositories that are not
 submodules is not a group but a refusal (`nested-repos`). Repo names and roles
@@ -387,7 +389,10 @@ worktree), linked live into every task workspace (ADR-0014). Edits to it are
 live and not reviewable, so the planner prompt lists them and does not run
 parallel tasks that edit one. `.ordewell/` is never one. Symlinks on POSIX;
 junctions for directories and hard links for files on Windows, with a copy and a
-notice where a hard link is impossible.
+notice where a hard link is impossible. A directory that holds a deeper repo of
+the group is recreated in the task workspace rather than linked, and its other
+entries are shared one by one. Recorded in the run as `shared`, with the repos
+among them in `sharedRepos`.
 *Avoid:* "ignored file" — a shared path need not be ignored; "linked artifact"
 for the per-repo bootstrap links (`node_modules`, `.env*`), which are recorded
 and kept out of the task's commit.
