@@ -54,6 +54,8 @@ export interface SessionOverrides {
   taskOutput?: TaskOutputSource;
   /** Defaults to git behind a config with isolation off, so no test runs git in the repo it runs in. */
   isolation?: IWorktreeIsolation;
+  /** Defaults to the directory the suite runs in; an end-to-end test points it at a temporary workspace. */
+  workspaceRoot?: () => string;
 }
 
 /**
@@ -78,7 +80,7 @@ export function makeSession(overrides: SessionOverrides = {}): Session {
     notifications: fakeNotification(),
     runner,
     registry: new RunnerRegistry(),
-    workspaceRoot: () => testWorkspace,
+    workspaceRoot: overrides.workspaceRoot ?? (() => testWorkspace),
     fsAdapter: overrides.fsAdapter ?? fakeFs(),
     broadcast: overrides.broadcast ?? vi.fn(),
     onNotice: overrides.onNotice,
