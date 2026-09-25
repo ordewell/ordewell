@@ -269,6 +269,29 @@ and deviated on two.
   it answers yes for a folder, so the planner can be told before a run is
   minted; a run in force or being continued describes its own group.
 
+### As implemented: daemon, TUI and CLI
+
+- **The daemon needed no new route.** `POST /isolation/merge` already answers
+  the per-repo result whole, and the handoff travels in the run record and the
+  `isolation_handoff` message. What it lacked was a way to say how a run
+  isolates: the pool's notification channel is silent, so the fallback to the
+  workspace root, shared paths, copies and the stash were told to nobody.
+  `Session` now takes an `onNotice` dependency, fed by the orchestrator's
+  `onIsolationNotice`, and the pool sends each as a `notice` frame beside the
+  session stream. It is deliberately not a `SessionMessage`: that union has
+  exhaustive switches on every surface, and a host that already shows these as
+  toasts has no use for a second copy.
+- **Merge all is worded once, in core** (`describeMergeResult`), for the
+  orchestrator's notification, the TUI and the CLI. A group of one keeps its
+  earlier wording for a conflict or a refusal; a group names the repo, the
+  files, the repos that stay merged, and says each repo's integration branch
+  can be merged by hand.
+- **A group is drawn only when it is one**: a handoff with a repo not at `.`.
+  A lone repo at the root reads exactly as before, in the overlay, the plan
+  pane, `ordewell run` and `ordewell handoff`.
+- **The stash names the repos it acts on**, and stashes all of them through the
+  one call; there is no per-repo stash.
+
 ## Considered options
 
 - **Treating the parent folder as the unit and initializing it as a repo.**
