@@ -4656,3 +4656,78 @@ body {
   margin-top: 6px;
   flex-wrap: wrap;
 }
+
+/* ---- Repo groups (ADR-0014) ----
+   A group reports per repository and merges all-or-nothing; a group of one
+   never renders these. */
+.isolation-handoff-repos {
+  margin: 6px 0;
+}
+
+.isolation-handoff-repo {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.isolation-handoff-repo-path {
+  font-family: var(--font-mono, monospace);
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.isolation-handoff-repo-base {
+  color: var(--text-muted);
+}
+
+.isolation-handoff-repo .isolation-handoff-landed {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+}
+
+.isolation-merge-result {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+}
+
+.isolation-merge-result.merged {
+  color: var(--green, var(--text-muted));
+}
+
+.isolation-merge-result.blocked {
+  background: var(--orange-subtle, rgba(210, 153, 29, 0.12));
+  color: var(--orange);
+}
+
+.isolation-merge-result.conflict,
+.isolation-merge-result.failed {
+  background: var(--red-subtle);
+  color: var(--red);
+}
+
+.isolation-merge-blocked-title {
+  font-weight: 600;
+}
+
+.isolation-merge-blocks {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+
+.isolation-merge-block code,
+.isolation-merge-hint code {
+  font-family: var(--font-mono, monospace);
+}
+
+.isolation-merge-hint {
+  margin-top: 2px;
+}
+
+.task-isolation-conflict-repo code {
+  color: var(--red);
+}
