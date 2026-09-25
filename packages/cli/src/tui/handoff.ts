@@ -2,7 +2,7 @@ import type { Effect, Step } from './reducer';
 import { say } from './transcript';
 import { sanitize } from './ansi';
 import type { Key } from './keys';
-import type { PlanIsolationView } from '../isolation';
+import { handoffBase, handoffBranch, type PlanIsolationView } from '../isolation';
 import type { HandoffView, Overlay, PickerItem, TaskIsolationView, TaskView, TuiState } from './state';
 
 /**
@@ -42,7 +42,7 @@ export function handoffArrived(state: TuiState, handoff: HandoffView): TuiState 
   const told = say(
     { ...state, handoff },
     'system',
-    `Run finished on ${handoff.branch} — ${landed} task${landed === 1 ? '' : 's'} landed. /handoff to review and land it.`,
+    `Run finished on ${handoffBranch(handoff)} — ${landed} task${landed === 1 ? '' : 's'} landed. /handoff to review and land it.`,
   );
   return state.overlay ? told : { ...told, overlay: { kind: 'handoff', index: 0, diff: null } };
 }
@@ -56,7 +56,7 @@ export function runHandoffAction(state: TuiState, id: HandoffActionId): Step {
     case 'review':
       return { state, effects: [{ type: 'isolationReviewDiff', sessionId }] };
     case 'cleanup':
-      return { state: closed, effects: [{ type: 'isolationCleanup', sessionId, branch: handoff.branch }] };
+      return { state: closed, effects: [{ type: 'isolationCleanup', sessionId, branch: handoffBranch(handoff) }] };
     case 'merge':
       return {
         state: {
@@ -64,7 +64,7 @@ export function runHandoffAction(state: TuiState, id: HandoffActionId): Step {
           overlay: {
             kind: 'confirm',
             title: 'Merge into your branch?',
-            message: `Merge ${handoff.branch} into whatever you have checked out. Ordewell never does this on its own. If it conflicts the merge is aborted and your tree stays as it was.`,
+            message: `Merge ${handoffBranch(handoff)} into whatever you have checked out. Ordewell never does this on its own. If it conflicts the merge is aborted and your tree stays as it was.`,
             action: { kind: 'merge-run' },
           },
         },
@@ -77,7 +77,7 @@ export function runHandoffAction(state: TuiState, id: HandoffActionId): Step {
           overlay: {
             kind: 'confirm',
             title: 'Discard this run?',
-            message: `Removes the run's worktrees and task branches and deletes ${handoff.branch}. Tasks keep their status — mark one not done if you did not keep its work.`,
+            message: `Removes the run's worktrees and task branches and deletes ${handoffBranch(handoff)}. Tasks keep their status — mark one not done if you did not keep its work.`,
             action: { kind: 'discard-run' },
           },
         },
@@ -92,14 +92,14 @@ export function confirmedHandoff(state: TuiState, kind: 'merge-run' | 'discard-r
   if (!state.sessionId || !state.handoff) return { state: closed, effects: [] };
   const { sessionId, handoff } = state;
   const effect: Effect = kind === 'merge-run'
-    ? { type: 'isolationMerge', sessionId, branch: handoff.branch }
-    : { type: 'isolationDiscard', sessionId, branch: handoff.branch };
+    ? { type: 'isolationMerge', sessionId, branch: handoffBranch(handoff) }
+    : { type: 'isolationDiscard', sessionId, branch: handoffBranch(handoff) };
   return { state: closed, effects: [effect] };
 }
 
 /** The diff arrived: show it in the overlay, opening it if the request came from `/handoff review`. */
 export function showDiff(state: TuiState, diff: string): TuiState {
-  if (diff.trim() === '') return say(state, 'system', `Nothing differs from ${state.handoff?.baseRef.slice(0, 8) ?? 'the base commit'}.`);
+  if (diff.trim() === '') return say(state, 'system', `Nothing differs from ${state.handoff ? handoffBase(state.handoff, 8) : 'the base commit'}.`);
   const index = state.overlay?.kind === 'handoff' ? state.overlay.index : 0;
   // Tabs are expanded before sanitizing, which would turn each into one space
   // and flatten tab-indented code — the one thing a review needs to read.
@@ -182,7 +182,8 @@ export function chooseBlocked(state: TuiState, choice: BlockedChoice): Step {
 // ── Per-task isolation on the plan pane ──────────────────────────────────────
 
 export function sameIsolation(a: TaskIsolationView | undefined, b: TaskIsolationView | undefined): boolean {
-  return a?.state === b?.state && a?.branch === b?.branch && a?.worktree === b?.worktree;
+  return a?.state === b?.state && a?.branch === b?.branch && a?.worktree === b?.worktree
+    && a?.conflictRepo === b?.conflictRepo && (a?.repos ?? []).join('\0') === (b?.repos ?? []).join('\0');
 }
 
 function mapTasks(tasks: TaskView[], map: (task: TaskView) => TaskView): TaskView[] {

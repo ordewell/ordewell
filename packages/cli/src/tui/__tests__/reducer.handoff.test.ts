@@ -7,8 +7,12 @@ const press = (state: TuiState, name: string, char?: string): Step => reduce(sta
 const apply = (state: TuiState, action: Action): Step => reduce(state, action);
 
 const handoff: HandoffView = {
-  branch: 'ordewell/r1/integration',
-  baseRef: 'abcdef1234567890',
+  repos: [{
+    path: '.',
+    integrationBranch: 'ordewell/r1/integration',
+    baseRef: 'abcdef1234567890',
+    landed: [{ taskId: 't1', order: 1, title: 'Add the route' }, { taskId: 't2', order: 2, title: 'Write the tests' }],
+  }],
   landed: [{ taskId: 't1', order: 1, title: 'Add the route' }, { taskId: 't2', order: 2, title: 'Write the tests' }],
 };
 
@@ -301,7 +305,7 @@ describe('per-task isolation on the plan', () => {
     const { state } = apply(session(), { type: 'planUpdated', sessionId: 's1', plan: savedPlan });
 
     expect(state.tasks.map((t) => t.isolation?.state)).toEqual(['conflict', 'none']);
-    expect(state.handoff).toMatchObject({ branch: 'ordewell/r1/integration', baseRef: 'abc', landed: [] });
+    expect(state.handoff).toEqual({ repos: [{ path: '.', integrationBranch: 'ordewell/r1/integration', baseRef: 'abc', landed: [] }], landed: [] });
   });
 
   it('a fork holds no run: switching to one drops the original\'s handoff and marks', () => {

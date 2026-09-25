@@ -7,7 +7,7 @@ import { normalizeCatalog } from '../catalog';
 import { describePlannerSwitch } from '../plannerModelSwitch';
 import type { Action, Effect } from './reducer';
 import type { RewindTargetView, SessionView, TaskIsolationView } from './state';
-import type { WsEvent } from '../apiClient';
+import type { MergeRunResult, WsEvent } from '../apiClient';
 
 /** The slice of the daemon client the TUI needs; `ApiClient` satisfies it. */
 export interface OrdewellApi {
@@ -33,7 +33,7 @@ export interface OrdewellApi {
   compactConversation(sessionId: string): Promise<{ plan: unknown; summary: string; keptMessages: number }>;
   closeSession(sessionId: string): Promise<{ ok: boolean }>;
   reviewRunDiff(sessionId: string): Promise<string>;
-  mergeRun(sessionId: string): Promise<'merged' | 'conflict' | 'failed'>;
+  mergeRun(sessionId: string): Promise<MergeRunResult>;
   discardRun(sessionId: string): Promise<void>;
   cleanupRun(sessionId: string): Promise<void>;
   continueWithStash(sessionId: string): Promise<void>;
@@ -491,7 +491,7 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
     // A conflict or a refusal is an answer, not a fault: either way the user's
     // tree is exactly as it was, and the words say what to do next.
     case 'isolationMerge': {
-      const outcome = await api.mergeRun(effect.sessionId);
+      const { outcome } = await api.mergeRun(effect.sessionId);
       dispatch(outcome === 'merged'
         ? { type: 'notice', message: `Merged ${effect.branch} into your checked-out branch.` }
         : outcome === 'conflict'
@@ -826,7 +826,7 @@ function onExecutionEvent(dispatch: (action: Action) => void, event: WsEvent, se
       return;
 
     case 'isolation_handoff':
-      dispatch({ type: 'isolationHandoff', handoff: { branch: event.branch, baseRef: event.baseRef, landed: event.landed }, sessionId });
+      dispatch({ type: 'isolationHandoff', handoff: { repos: event.repos, landed: event.landed }, sessionId });
       return;
 
     // Raw runner chatter, and the planner's own turn: the status line and the

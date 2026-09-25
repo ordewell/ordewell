@@ -6,7 +6,8 @@ import { handleApprove } from '../approve';
 type Event = Parameters<Parameters<ApiClient['streamExecution']>[1]>[0];
 
 const blocked: Event = { type: 'isolation_blocked', reason: 'dirty', message: 'Tracked files have uncommitted changes' };
-const handoff: Event = { type: 'isolation_handoff', branch: 'ordewell/r1/integration', baseRef: 'abc', landed: [{ taskId: 't1', order: 1, title: 'One' }] };
+const landed = [{ taskId: 't1', order: 1, title: 'One' }];
+const handoff: Event = { type: 'isolation_handoff', repos: [{ path: '.', integrationBranch: 'ordewell/r1/integration', baseRef: 'abc', landed }], landed };
 const complete: Event = { type: 'execution_complete', summary: { total: 1, completed: 1, failed: 0 } };
 
 const TERMINAL = new Set(['execution_complete', 'execution_stopped', 'isolation_blocked']);

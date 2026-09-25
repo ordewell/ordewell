@@ -65,8 +65,12 @@ describe('plan pane — isolation', () => {
 
 describe('handoff overlay frame', () => {
   const handoff: HandoffView = {
-    branch: 'ordewell/r1/integration',
-    baseRef: 'abcdef1234567890',
+    repos: [{
+      path: '.',
+      integrationBranch: 'ordewell/r1/integration',
+      baseRef: 'abcdef1234567890',
+      landed: [{ taskId: 't1', order: 1, title: 'Add the route' }, { taskId: 't2', order: 2, title: 'Write the tests' }],
+    }],
     landed: [{ taskId: 't1', order: 1, title: 'Add the route' }, { taskId: 't2', order: 2, title: 'Write the tests' }],
   };
   const open = (over: Partial<TuiState> = {}): TuiState =>

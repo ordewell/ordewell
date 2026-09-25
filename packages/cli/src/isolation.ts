@@ -1,4 +1,4 @@
-import type { HandoffView, TaskIsolationView } from './tui/state';
+import type { HandoffRepoView, HandoffView, LandedTaskView, TaskIsolationView } from './tui/state';
 
 /**
  * What a saved plan says about its isolated run, in the shape the surfaces show.
@@ -27,25 +27,82 @@ interface RunRecord {
   order?: unknown;
   title?: unknown;
   branch?: unknown;
+  workspace?: unknown;
+  /** ADR-0013 records named the one worktree here. */
   worktree?: unknown;
   status?: unknown;
+  repos?: Record<string, { changed?: unknown }>;
+  conflictRepo?: unknown;
+}
+
+type RepoFields = Omit<HandoffRepoView, 'landed'>;
+
+/**
+ * The run's repos. A run in the ADR-0013 shape — its one repository's refs on
+ * the run itself — comes from a daemon older than this CLI and reads as a
+ * group of one.
+ */
+function reposOf(run: Record<string, unknown>): RepoFields[] | null {
+  if (Array.isArray(run.repos)) {
+    const repos = (run.repos as Array<Record<string, unknown>>).filter((r) => (
+      r && typeof r.path === 'string' && typeof r.integrationBranch === 'string' && typeof r.baseRef === 'string'
+    ));
+    return repos.length > 0
+      ? repos.map((r) => ({ path: String(r.path), integrationBranch: String(r.integrationBranch), baseRef: String(r.baseRef) }))
+      : null;
+  }
+  if (typeof run.integrationBranch === 'string' && typeof run.baseRef === 'string') {
+    return [{ path: '.', integrationBranch: run.integrationBranch, baseRef: run.baseRef }];
+  }
+  return null;
+}
+
+function changedRepos(record: RunRecord, legacy: boolean, state: TaskIsolationView['state']): string[] {
+  if (legacy) return state === 'integrated' ? ['.'] : [];
+  return Object.entries(record.repos ?? {}).filter(([, r]) => r?.changed === true).map(([path]) => path);
 }
 
 export function isolationOfPlan(plan: unknown): PlanIsolationView | null {
   const run = (plan as { isolation?: { run?: Record<string, unknown> } } | null)?.isolation?.run;
-  if (!run || typeof run.integrationBranch !== 'string' || typeof run.baseRef !== 'string') return null;
+  const repos = run ? reposOf(run) : null;
+  if (!run || !repos) return null;
+  const legacy = !Array.isArray(run.repos);
 
   const records = Object.entries((run.tasks ?? {}) as Record<string, RunRecord>);
   const tasks: Record<string, TaskIsolationView> = {};
-  const landed: HandoffView['landed'] = [];
+  const landed: Array<LandedTaskView & { changed: string[] }> = [];
   for (const [taskId, record] of records) {
     const state = STATE_OF[String(record.status)];
     if (!state) continue;
-    tasks[taskId] = { state, branch: String(record.branch ?? ''), worktree: String(record.worktree ?? '') };
+    const changed = changedRepos(record, legacy, state);
+    tasks[taskId] = {
+      state,
+      branch: String(record.branch ?? ''),
+      worktree: String(record.workspace ?? record.worktree ?? ''),
+      repos: changed,
+      ...(typeof record.conflictRepo === 'string' ? { conflictRepo: record.conflictRepo } : legacy && state === 'conflict' ? { conflictRepo: '.' } : {}),
+    };
     if (state === 'integrated') {
-      landed.push({ taskId, order: Number(record.order ?? 0), title: String(record.title ?? taskId) });
+      landed.push({ taskId, order: Number(record.order ?? 0), title: String(record.title ?? taskId), changed });
     }
   }
   landed.sort((a, b) => a.order - b.order);
-  return { handoff: { branch: run.integrationBranch, baseRef: run.baseRef, landed }, tasks };
+  const entry = ({ taskId, order, title }: LandedTaskView): LandedTaskView => ({ taskId, order, title });
+  return {
+    handoff: {
+      repos: repos.map((repo) => ({ ...repo, landed: landed.filter((t) => t.changed.includes(repo.path)).map(entry) })),
+      landed: landed.map(entry),
+    },
+    tasks,
+  };
+}
+
+/** The run's integration branch as one line names it: every repo's has the same name. */
+export function handoffBranch(handoff: HandoffView): string {
+  return [...new Set(handoff.repos.map((r) => r.integrationBranch))].join(', ');
+}
+
+/** Where the run forked, as one line names it, each ref cut to `length`. */
+export function handoffBase(handoff: HandoffView, length: number): string {
+  return handoff.repos.map((r) => r.baseRef.slice(0, length)).join(', ');
 }

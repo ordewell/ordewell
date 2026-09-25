@@ -1,4 +1,5 @@
 import { flag, hasFlag, readLastSession } from '../utils';
+import { handoffBranch } from '../isolation';
 import { iconFor } from '../utils/output';
 import type { ApiClient, TaskStatus } from '../daemonClient';
 import { truncateCheckpointSummary } from '@ordewell/core';
@@ -96,7 +97,7 @@ export async function followExecution(
     if (event.type === 'isolation_blocked') blocked = event.message;
     if (event.type === 'isolation_handoff') {
       const n = event.landed.length;
-      console.log(`\nRun finished on ${event.branch} — ${n} task${n === 1 ? '' : 's'} landed.`);
+      console.log(`\nRun finished on ${handoffBranch(event)} — ${n} task${n === 1 ? '' : 's'} landed.`);
       console.log('  `ordewell handoff review|merge|discard|cleanup` to land it.');
     }
   }, settleReady);

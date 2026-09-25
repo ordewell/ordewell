@@ -1297,15 +1297,16 @@ describe('worktree isolation', () => {
 
   it('turns isolation_handoff into the handoff, before the run completes', async () => {
     const landed = [{ taskId: 't1', order: 1, title: 'One' }];
+    const repos = [{ path: '.', integrationBranch: 'ordewell/r1/integration', baseRef: 'abc', landed }];
     const h = running([
-      { type: 'isolation_handoff', branch: 'ordewell/r1/integration', baseRef: 'abc', landed },
+      { type: 'isolation_handoff', repos, landed },
       { type: 'execution_complete', summary: { total: 1, completed: 1, failed: 0 } },
     ]);
 
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
     expect(types(h.actions).filter((t) => t === 'isolationHandoff' || t === 'executionComplete')).toEqual(['isolationHandoff', 'executionComplete']);
-    expect(h.actions).toContainEqual({ type: 'isolationHandoff', handoff: { branch: 'ordewell/r1/integration', baseRef: 'abc', landed }, sessionId: 's1' });
+    expect(h.actions).toContainEqual({ type: 'isolationHandoff', handoff: { repos, landed }, sessionId: 's1' });
   });
 
   it('ignores socket greetings that are not session messages', async () => {
@@ -1325,7 +1326,7 @@ describe('worktree isolation', () => {
   });
 
   it('a merged run says where it landed', async () => {
-    const h = harness({ mergeRun: vi.fn().mockResolvedValue('merged') } as Partial<OrdewellApi>);
+    const h = harness({ mergeRun: vi.fn().mockResolvedValue({ outcome: 'merged' }) } as Partial<OrdewellApi>);
 
     await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration' }, h.deps);
 
@@ -1336,7 +1337,7 @@ describe('worktree isolation', () => {
     ['conflict', /conflicted, so it was aborted — your tree is as it was/],
     ['failed', /merge already in progress/],
   ] as const)('a %s merge is reported as a failure that changed nothing', async (outcome, pattern) => {
-    const h = harness({ mergeRun: vi.fn().mockResolvedValue(outcome) } as Partial<OrdewellApi>);
+    const h = harness({ mergeRun: vi.fn().mockResolvedValue({ outcome, repo: '.' }) } as Partial<OrdewellApi>);
 
     await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration' }, h.deps);
 

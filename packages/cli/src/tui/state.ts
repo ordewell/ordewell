@@ -58,14 +58,31 @@ export type TaskIsolationState = 'none' | 'active' | 'integrated' | 'conflict' |
 export interface TaskIsolationView {
   state: TaskIsolationState;
   branch?: string;
+  /** The task workspace; for a single repo, the task's worktree. */
   worktree?: string;
+  /** Paths of the repos the task changed. */
+  repos?: string[];
+  conflictRepo?: string;
 }
 
-/** What an isolated run left for the user to land: one branch, what is on it, and where it forked. */
-export interface HandoffView {
-  branch: string;
+export interface LandedTaskView {
+  taskId: string;
+  order: number;
+  title: string;
+}
+
+/** One repo's part of a handoff: its integration branch, where it forked, and what landed in it. */
+export interface HandoffRepoView {
+  path: string;
+  integrationBranch: string;
   baseRef: string;
-  landed: { taskId: string; order: number; title: string }[];
+  landed: LandedTaskView[];
+}
+
+/** What an isolated run left for the user to land: each repo's branch and base, and what landed, in plan order. */
+export interface HandoffView {
+  repos: HandoffRepoView[];
+  landed: LandedTaskView[];
 }
 
 /** One mode a runner's manifest declares, as the mode picker offers it. */

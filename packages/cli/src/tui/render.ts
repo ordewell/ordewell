@@ -6,6 +6,7 @@ import {
 } from './layout';
 import { chatEditorRoom, chatPaneWidth, paneColumns, planPaneWidth } from './geometry';
 import { diffRoom, HANDOFF_ACTIONS } from './handoff';
+import { handoffBase, handoffBranch } from '../isolation';
 import { SKILL_IDS, visibleItems, type PickerState, type TuiState } from './state';
 
 /**
@@ -464,7 +465,7 @@ function renderHandoff(
     // line would push the end of the diff and the footer out of the frame.
     const shown = lines.slice(scroll, scroll + room).map((line) => paintDiffLine(truncate(line, Math.max(1, cols - 2))));
     const more = scroll + room < lines.length ? '↑↓ pgup/pgdn scroll · ' : '';
-    return frame(`Diff — ${handoff.branch}`, [...shown, '', style.grey(`${more}enter or esc goes back`)], rows, cols);
+    return frame(`Diff — ${handoffBranch(handoff)}`, [...shown, '', style.grey(`${more}enter or esc goes back`)], rows, cols);
   }
 
   const landed = handoff.landed.length === 0
@@ -478,8 +479,8 @@ function renderHandoff(
   return frame(
     'Run handoff',
     [
-      `Branch  ${style.cyan(handoff.branch)}`,
-      style.grey(`Forked from ${handoff.baseRef.slice(0, 12)}`),
+      `Branch  ${style.cyan(handoffBranch(handoff))}`,
+      style.grey(`Forked from ${handoffBase(handoff, 12)}`),
       '',
       'Landed on it, in plan order:',
       ...landed,

@@ -61,7 +61,7 @@ export type SessionMessage =
   // An isolated run settled: for each repo, the branch its work landed on and
   // the commit that branch forked from; and what landed, in plan order. Sent
   // before `execution_complete`, which surfaces treat as the end of the stream.
-  | ({ type: 'isolation_handoff' } & IsolationHandoff)
+  | { type: 'isolation_handoff'; repos: IsolationHandoff['repos']; landed: IsolationHandoff['landed'] }
   | { type: 'plan_thinking'; text: string }
   // Carries no content — see `ResearchProgress['liveness']`. Exists only so a
   // surface's idle watchdog sees the harness process working even during a

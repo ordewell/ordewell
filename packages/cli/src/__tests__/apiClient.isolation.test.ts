@@ -38,8 +38,8 @@ describe('ApiClient isolation endpoints', () => {
   });
 
   it('mergeRun answers the outcome, conflict included', async () => {
-    const { api, seen } = await client(200, { outcome: 'conflict' });
-    expect(await api.mergeRun('s1')).toBe('conflict');
+    const { api, seen } = await client(200, { outcome: 'conflict', repo: '.', files: ['a.txt'] });
+    expect(await api.mergeRun('s1')).toEqual({ outcome: 'conflict', repo: '.', files: ['a.txt'] });
     expect([seen.method, seen.url]).toEqual(['POST', '/api/plans/s1/isolation/merge']);
   });
 
