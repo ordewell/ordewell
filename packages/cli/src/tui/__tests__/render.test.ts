@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import { render } from '../render';
-import { chatBodyLines } from '../layout';
+import { chatBodyLines, helpLayout } from '../layout';
 import { stripAnsi, style, width } from '../ansi';
 import { initialState, type ChatMessage, type TaskView, type TuiState } from '../state';
 import { reduce } from '../reducer';
@@ -526,6 +526,11 @@ describe('overlays', () => {
     const down = text({ overlay: { kind: 'help', scroll: 14 }, rows: 24 });
     expect(top).not.toContain('/allowlist');
     expect(down).toContain('/allowlist');
+  });
+
+  it('names the conversation commands in the help sheet', () => {
+    const sheet = helpLayout(200, 120).lines.map(stripAnsi).join('\n');
+    for (const command of ['/fork', '/rewind', '/compact']) expect(sheet).toContain(command);
   });
 
   it('keeps each help entry on a single line so the table stays aligned', () => {

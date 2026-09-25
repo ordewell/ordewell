@@ -66,6 +66,13 @@ describe('switching to a fork', () => {
 });
 
 describe('/rewind', () => {
+  it('needs a session to rewind', () => {
+    const { effects, state } = run('/rewind');
+    expect(effects).toEqual([]);
+    expect(state.overlay).toBeNull();
+    expect(lastError(state)).toMatch(/No active plan/);
+  });
+
   it('opens a picker of user messages and asks the daemon for them', () => {
     const { state, effects } = run('/rewind', planned);
 

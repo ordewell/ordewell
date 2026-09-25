@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { render, act, screen } from '@testing-library/react';
+import { render, act, screen, fireEvent } from '@testing-library/react';
 import App from '../App';
 
 function send(msg: unknown) {
@@ -56,5 +56,13 @@ describe('App — rewind and compact redraw the transcript', () => {
 
     send({ type: 'conversationBusy', busy: false });
     expect(textarea().disabled).toBe(false);
+  });
+
+  it('lists fork, rewind and compact in /help', () => {
+    fireEvent.change(textarea(), { target: { value: '/help' } });
+    fireEvent.keyDown(textarea(), { key: 'Enter' });
+
+    const shown = document.body.textContent ?? '';
+    for (const command of ['/fork', '/rewind', '/compact']) expect(shown).toContain(command);
   });
 });
