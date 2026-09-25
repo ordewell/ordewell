@@ -60,8 +60,9 @@ export interface IConfig {
   worktreeSetupCommand?: string;
   /**
    * Repositories of the repo group listed by hand, relative to the workspace
-   * (ADR-0014). Needed only for ones deeper than directly inside it, which
-   * are not auto-detected.
+   * (ADR-0014). When non-empty the group is exactly these, replacing the
+   * repositories auto-detected directly inside the folder; needed for ones
+   * deeper than that, which are never auto-detected.
    */
   workspaceRepos: string[];
   /**

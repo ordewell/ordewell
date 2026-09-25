@@ -282,7 +282,7 @@
           "type": "array",
           "items": { "type": "string" },
           "default": [],
-          "description": "In a folder that is not itself a git repository, extra repositories to isolate together with the ones directly inside it, as paths relative to the workspace (for repositories nested deeper than one level)."
+          "description": "In a folder that is not itself a git repository, the repositories to isolate together, as paths relative to the workspace. When set, exactly these are isolated, replacing the automatic pick of the repositories directly inside the folder; list one there too to keep it. Needed for repositories nested deeper than one level."
         },
         "ordewell.worktreeLinks": {
           "type": "array",
