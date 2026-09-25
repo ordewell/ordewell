@@ -28,8 +28,8 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd, env: cleanEnv(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
-function makeRepo(files: Record<string, string> = { 'README.md': 'hello\n' }): string {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-wt-')));
+function initRepo(root: string, files: Record<string, string> = { 'README.md': 'hello\n' }): string {
+  mkdirSync(root, { recursive: true });
   git(root, 'init', '-q', '-b', 'main');
   git(root, 'config', 'user.name', 'Test');
   git(root, 'config', 'user.email', 'test@example.com');
@@ -41,6 +41,10 @@ function makeRepo(files: Record<string, string> = { 'README.md': 'hello\n' }): s
   git(root, 'add', '-A');
   git(root, 'commit', '-q', '-m', 'initial');
   return root;
+}
+
+function makeRepo(files?: Record<string, string>): string {
+  return initRepo(realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-wt-'))), files);
 }
 
 function task(order: number, title: string): Task {
@@ -105,6 +109,59 @@ describe('WorktreeIsolation.isActive', () => {
       roots.push(dir);
       const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
       expect(await iso.isActive(dir)).toEqual({ active: false, reason: 'not-git' });
+    });
+
+    it('refuses a repository that contains a nested repository that is not a submodule, naming it', async () => {
+      const root = repo();
+      initRepo(join(root, 'services', 'billing'));
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      expect(await iso.isActive(root)).toEqual({ active: false, reason: 'nested-repos', repos: ['services/billing'] });
+    });
+
+    it('does not treat a submodule as a nested repository', async () => {
+      const root = repo();
+      const upstream = repo();
+      git(root, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', upstream, 'vendor/lib');
+      git(root, 'commit', '-q', '-m', 'add submodule');
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      expect(await iso.isActive(root)).toEqual({ active: true });
+    });
+
+    it('resolves submodules against the repository top level when the workspace is a subdirectory', async () => {
+      const root = repo({ 'app/README.md': 'hello\n' });
+      const upstream = repo();
+      git(root, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', upstream, 'app/vendor/lib');
+      git(root, 'commit', '-q', '-m', 'add submodule');
+      initRepo(join(root, 'app', 'tools', 'extra'));
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      expect(await iso.isActive(join(root, 'app'))).toEqual({ active: false, reason: 'nested-repos', repos: ['tools/extra'] });
+    });
+
+    it('skips a nested repository the outer repository ignores, at either depth', async () => {
+      const root = repo({ 'README.md': 'hello\n', '.gitignore': 'scratch/\ncache/\n' });
+      initRepo(join(root, 'scratch'));
+      initRepo(join(root, 'cache', 'clone'));
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      expect(await iso.isActive(root)).toEqual({ active: true });
+    });
+
+    it('does not look for nested repositories inside .ordewell or node_modules', async () => {
+      const root = repo();
+      initRepo(join(root, '.ordewell', 'worktrees', 'r1'));
+      initRepo(join(root, 'node_modules', 'pkg'));
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      expect(await iso.isActive(root)).toEqual({ active: true });
+    });
+
+    it('reports not-git with the repositories found directly inside the folder', async () => {
+      const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-group-')));
+      roots.push(dir);
+      initRepo(join(dir, 'web'));
+      initRepo(join(dir, 'api'));
+      mkdirSync(join(dir, 'docs'));
+      initRepo(join(dir, 'docs', 'deep'));
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      expect(await iso.isActive(dir)).toEqual({ active: false, reason: 'not-git', repos: ['api', 'web'] });
     });
 
     it('reports no-commits for a repository with nothing to branch from', async () => {

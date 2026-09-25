@@ -44,18 +44,29 @@ export interface OrchestratorObserver {
   onIsolationHandoff?(handoff: IsolationHandoff): void;
 }
 
+type SharedRootReason = Exclude<IsolationInactiveReason, 'dirty'>;
+
 type RunDecision =
   | { mode: 'isolated'; continuing: boolean }
   | { mode: 'blocked' }
-  | { mode: 'shared'; reason: Exclude<IsolationInactiveReason, 'dirty'> };
+  | { mode: 'shared'; reason: SharedRootReason; repos: string[] };
+
+const SHARED_ROOT_TAIL = 'tasks run in the workspace root without worktree isolation.';
 
 /** Why a run fell back to the shared workspace root, as the one line the user is told. */
-const SHARED_ROOT_NOTICE: Record<Exclude<IsolationInactiveReason, 'dirty'>, string> = {
-  'disabled': 'Worktree isolation is off — tasks run in the workspace root.',
-  'git-missing': 'git was not found — tasks run in the workspace root without worktree isolation.',
-  'not-git': 'Not a git repository — tasks run in the workspace root without worktree isolation.',
-  'no-commits': 'The repository has no commits yet — tasks run in the workspace root without worktree isolation.',
-};
+function sharedRootNotice(reason: SharedRootReason, repos: string[]): string {
+  switch (reason) {
+    case 'disabled': return 'Worktree isolation is off — tasks run in the workspace root.';
+    case 'git-missing': return `git was not found — ${SHARED_ROOT_TAIL}`;
+    case 'no-commits': return `The repository has no commits yet — ${SHARED_ROOT_TAIL}`;
+    case 'not-git':
+      return repos.length > 0
+        ? `Not a git repository (it contains ${repos.length} ${repos.length === 1 ? 'repository' : 'repositories'}: ${repos.join(', ')}) — ${SHARED_ROOT_TAIL}`
+        : `Not a git repository — ${SHARED_ROOT_TAIL}`;
+    case 'nested-repos':
+      return `This repository contains nested repositories that are not submodules (${repos.join(', ')}) — ${SHARED_ROOT_TAIL}`;
+  }
+}
 
 /**
  * One run of one task, from the moment the scheduler claims it until its
@@ -1029,7 +1040,7 @@ export class TaskOrchestrator {
     // A continued run's base is already fixed, so edits the user has made in
     // their own tree since cannot change what its tasks start from.
     if (availability.reason === 'dirty') return continuing ? { mode: 'isolated', continuing } : { mode: 'blocked' };
-    return { mode: 'shared', reason: availability.reason };
+    return { mode: 'shared', reason: availability.reason, repos: availability.repos ?? [] };
   }
 
   private async activate(resume: () => Promise<void>): Promise<boolean> {
@@ -1043,7 +1054,7 @@ export class TaskOrchestrator {
     if (decision.mode === 'isolated') {
       if (!decision.continuing) await this.mintRun(root);
     } else {
-      this.notifications.info(SHARED_ROOT_NOTICE[decision.reason]);
+      this.notifications.info(sharedRootNotice(decision.reason, decision.repos));
     }
     this.runMode = decision.mode;
     return true;

@@ -3,12 +3,16 @@ import type { Task } from '../models/Task';
 /**
  * Why isolated execution is unavailable for a workspace. The orchestrator needs
  * the reason, not just a boolean: `dirty` is offered a stash or an explicit
- * "run without isolation", while the other three fall back to the shared
+ * "run without isolation", while the others fall back to the shared
  * workspace root with a one-line notice.
  */
-export type IsolationInactiveReason = 'disabled' | 'git-missing' | 'not-git' | 'no-commits' | 'dirty';
+export type IsolationInactiveReason = 'disabled' | 'git-missing' | 'not-git' | 'no-commits' | 'dirty' | 'nested-repos';
 
-export type IsolationAvailability = { active: true } | { active: false; reason: IsolationInactiveReason };
+/**
+ * `repos` names, relative to the workspace, the repositories behind the reason:
+ * the nested ones `nested-repos` refuses, or the ones a `not-git` folder holds.
+ */
+export type IsolationAvailability = { active: true } | { active: false; reason: IsolationInactiveReason; repos?: string[] };
 
 export type IsolationOutcome = 'merged' | 'conflict' | 'failed';
 

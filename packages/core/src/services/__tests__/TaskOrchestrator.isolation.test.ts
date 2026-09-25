@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { TaskOrchestrator } from '../TaskOrchestrator';
 import { createTask, type Task } from '../../models/Task';
 import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
+import type { IsolationAvailability } from '../../interfaces/IWorktreeIsolation';
 import { fakeConfig, FakeTerminalSession, FakeWorktreeIsolation } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
@@ -270,6 +271,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
       ['git-missing', /git was not found/i],
       ['disabled', /isolation is off/i],
       ['no-commits', /no commits/i],
+      ['nested-repos', /nested repositories/i],
     ] as const)('runs in the workspace root when the workspace is %s, and says so once', async (reason, notice) => {
       const isolation = new FakeWorktreeIsolation();
       isolation.availability = { active: false, reason };
@@ -285,6 +287,41 @@ describe('TaskOrchestrator with worktree isolation', () => {
       expect(isolation.calls.map((c) => c.op)).toEqual(['isActive']);
       expect(vi.mocked(notifications.info).mock.calls.flat().filter((m) => notice.test(String(m)))).toHaveLength(1);
       expect(orchestrator.getTaskIsolation('t1')).toBeNull();
+    });
+  });
+
+  describe('the notice for a folder of repositories', () => {
+    async function noticesFor(availability: IsolationAvailability): Promise<string[]> {
+      const isolation = new FakeWorktreeIsolation();
+      isolation.availability = availability;
+      const { orchestrator, notifications } = setup({ isolation, workspace: '/plain' });
+      orchestrator.loadPlan([task('t1', 1)]);
+      await orchestrator.runTask('t1');
+      return vi.mocked(notifications.info).mock.calls.map((c) => String(c[0]));
+    }
+
+    it('names the repositories a non-git folder contains', async () => {
+      expect(await noticesFor({ active: false, reason: 'not-git', repos: ['api', 'web', 'infra'] })).toContain(
+        'Not a git repository (it contains 3 repositories: api, web, infra) — tasks run in the workspace root without worktree isolation.',
+      );
+    });
+
+    it('says "repository" for a folder with one', async () => {
+      expect(await noticesFor({ active: false, reason: 'not-git', repos: ['api'] })).toContain(
+        'Not a git repository (it contains 1 repository: api) — tasks run in the workspace root without worktree isolation.',
+      );
+    });
+
+    it('names the nested repositories that keep a repository from isolating', async () => {
+      expect(await noticesFor({ active: false, reason: 'nested-repos', repos: ['services/billing', 'tools/cli'] })).toContain(
+        'This repository contains nested repositories that are not submodules (services/billing, tools/cli) — tasks run in the workspace root without worktree isolation.',
+      );
+    });
+
+    it('keeps the plain wording when there is nothing to name', async () => {
+      expect(await noticesFor({ active: false, reason: 'not-git' })).toContain(
+        'Not a git repository — tasks run in the workspace root without worktree isolation.',
+      );
     });
   });
 

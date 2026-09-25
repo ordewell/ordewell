@@ -59,6 +59,12 @@ const isEnvFile = (name: string) => name.startsWith('.env');
 
 const INTEGRATION_DIR = 'integration';
 
+// How far below the workspace root a repository is looked for. Deeper ones are
+// not scanned for: a walk of the whole tree would visit every dependency folder.
+const NESTED_REPO_DEPTH = 2;
+const NEVER_SCANNED = new Set(['.git', STATE_DIR, 'node_modules']);
+const GITLINK_MODE = '160000';
+
 interface GitResult { ok: boolean; stdout: string; stderr: string; code?: string | number }
 
 interface QueuedMerge {
@@ -79,6 +85,11 @@ export function handoffOf(run: IsolationRun): IsolationHandoff {
 function isInside(parent: string, child: string): boolean {
   const rel = path.relative(parent, child);
   return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+// A `.git` file rather than a directory marks a linked worktree or a submodule checkout.
+function hasGitEntry(dir: string): boolean {
+  return fs.existsSync(path.join(dir, '.git'));
 }
 
 function firstLine(text: string): string {
@@ -111,7 +122,13 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     if (!version.ok) return { active: false, reason: 'git-missing' };
 
     // cwd may not exist; any failure here is "not a repository" as far as the caller can act on it.
-    if (!(await this.tryGit(workspaceRoot, ['rev-parse', '--show-toplevel'])).ok) return { active: false, reason: 'not-git' };
+    const toplevel = await this.tryGit(workspaceRoot, ['rev-parse', '--show-toplevel']);
+    if (!toplevel.ok) {
+      const repos = this.reposDirectlyIn(workspaceRoot);
+      return repos.length > 0 ? { active: false, reason: 'not-git', repos } : { active: false, reason: 'not-git' };
+    }
+    const nested = await this.nestedRepos(workspaceRoot, toplevel.stdout.trim());
+    if (nested.length > 0) return { active: false, reason: 'nested-repos', repos: nested };
     if (!(await this.tryGit(workspaceRoot, ['rev-parse', '--verify', '-q', 'HEAD'])).ok) return { active: false, reason: 'no-commits' };
 
     // Untracked and ignored files never block: the bootstrap step accounts for them.
@@ -119,6 +136,64 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     if (!status.ok) return { active: false, reason: 'not-git' };
     if (status.stdout.trim() !== '') return { active: false, reason: 'dirty' };
     return { active: true };
+  }
+
+  private reposDirectlyIn(dir: string): string[] {
+    return this.childDirs(dir).filter((name) => hasGitEntry(path.join(dir, name)));
+  }
+
+  private childDirs(dir: string): string[] {
+    try {
+      return fs.readdirSync(dir, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && !NEVER_SCANNED.has(e.name))
+        .map((e) => e.name)
+        .sort();
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Repositories below the workspace that the outer repository does not own as
+   * submodules. Isolating the outer one would leave them out of every task
+   * worktree, so the agents would edit them live.
+   */
+  private async nestedRepos(workspaceRoot: string, toplevel: string): Promise<string[]> {
+    const found: string[] = [];
+    const walk = (rel: string, depth: number): void => {
+      for (const name of this.childDirs(path.join(workspaceRoot, rel))) {
+        const child = rel ? `${rel}/${name}` : name;
+        if (hasGitEntry(path.join(workspaceRoot, child))) found.push(child);
+        else if (depth < NESTED_REPO_DEPTH) walk(child, depth + 1);
+      }
+    };
+    walk('', 1);
+    if (found.length === 0) return [];
+
+    // One call each rather than a batch: `-z` needs `--stdin`, and unquoted output is not guaranteed for odd names.
+    const ignored = new Set(
+      (await Promise.all(found.map(async (rel) => ((await this.tryGit(workspaceRoot, ['check-ignore', '-q', '--', rel])).ok ? rel : null))))
+        .filter((rel): rel is string => rel !== null),
+    );
+    const owned = await this.submodulePaths(workspaceRoot, toplevel);
+    const prefix = (await this.tryGit(workspaceRoot, ['rev-parse', '--show-prefix'])).stdout.trim();
+    return found.filter((rel) => !ignored.has(rel) && !owned.has(`${prefix}${rel}`));
+  }
+
+  /** Paths, relative to the repository's top level, that are submodules: staged gitlinks and `.gitmodules` entries. */
+  private async submodulePaths(workspaceRoot: string, toplevel: string): Promise<Set<string>> {
+    const paths = new Set<string>();
+    const staged = await this.tryGit(workspaceRoot, ['ls-files', '-s', '-z']);
+    for (const entry of staged.stdout.split('\0')) {
+      const [meta, file] = entry.split('\t');
+      if (file !== undefined && meta.startsWith(`${GITLINK_MODE} `)) paths.add(file);
+    }
+    const declared = await this.tryGit(workspaceRoot, ['config', '-z', '-f', path.join(toplevel, '.gitmodules'), '--get-regexp', '^submodule\\..*\\.path$']);
+    for (const entry of declared.stdout.split('\0')) {
+      const value = entry.split('\n')[1];
+      if (value) paths.add(value.replace(/\/+$/, ''));
+    }
+    return paths;
   }
 
   async stash(workspaceRoot: string): Promise<void> {
