@@ -39,8 +39,8 @@ export interface OrchestratorObserver {
   onCheckpoint?(data: { taskId: string; taskTitle: string; summary: string }): void;
   /** The isolation run record changed and should be persisted with the plan. */
   onIsolationChanged?(): void;
-  /** A run did not start: the tree is dirty, and the user picks stash or no isolation. */
-  onIsolationBlocked?(data: { reason: 'dirty' }): void;
+  /** A run did not start: the tree is dirty, and the user picks stash or no isolation. `repos` names the dirty repos of a group. */
+  onIsolationBlocked?(data: { reason: 'dirty'; repos: string[] }): void;
   /** An isolated run settled; emitted before `onExecutionComplete`, which surfaces treat as terminal. */
   onIsolationHandoff?(handoff: IsolationHandoff): void;
 }
@@ -49,7 +49,7 @@ type SharedRootReason = Exclude<IsolationInactiveReason, 'dirty'>;
 
 type RunDecision =
   | { mode: 'isolated'; continuing: boolean }
-  | { mode: 'blocked' }
+  | { mode: 'blocked'; repos: string[] }
   | { mode: 'shared'; reason: SharedRootReason; repos: string[] };
 
 const SHARED_ROOT_TAIL = 'tasks run in the workspace root without worktree isolation.';
@@ -59,14 +59,28 @@ function sharedRootNotice(reason: SharedRootReason, repos: string[]): string {
   switch (reason) {
     case 'disabled': return 'Worktree isolation is off — tasks run in the workspace root.';
     case 'git-missing': return `git was not found — ${SHARED_ROOT_TAIL}`;
-    case 'no-commits': return `The repository has no commits yet — ${SHARED_ROOT_TAIL}`;
-    case 'not-git':
+    case 'no-commits':
       return repos.length > 0
-        ? `Not a git repository (it contains ${repos.length} ${repos.length === 1 ? 'repository' : 'repositories'}: ${repos.join(', ')}) — ${SHARED_ROOT_TAIL}`
-        : `Not a git repository — ${SHARED_ROOT_TAIL}`;
+        ? `No repository in this folder has commits yet (${repos.join(', ')}) — ${SHARED_ROOT_TAIL}`
+        : `The repository has no commits yet — ${SHARED_ROOT_TAIL}`;
+    case 'not-git': return `Not a git repository — ${SHARED_ROOT_TAIL}`;
     case 'nested-repos':
       return `This repository contains nested repositories that are not submodules (${repos.join(', ')}) — ${SHARED_ROOT_TAIL}`;
   }
+}
+
+/** What a new run shares live instead of isolating, as one line; null when it shares nothing. */
+function sharedPathsNotice(run: IsolationRun): string | null {
+  const loose = run.shared.filter((p) => !run.sharedRepos.includes(p));
+  if (run.sharedRepos.length === 0) {
+    if (loose.length === 0) return null;
+    const one = loose.length === 1;
+    return `${loose.join(', ')} ${one ? 'is' : 'are'} shared live with every task, so edits to ${one ? 'it' : 'them'} are not isolated.`;
+  }
+  const one = run.sharedRepos.length === 1 && loose.length === 0;
+  const subject = [run.sharedRepos.length === 1 ? 'It' : 'They', ...(loose.length > 0 ? [`and ${loose.join(', ')}`] : [])].join(' ');
+  return `Could not isolate ${run.sharedRepos.join(', ')} (no commits, or git refused a worktree). `
+    + `${subject} ${one ? 'is' : 'are'} shared live with every task, so edits to ${one ? 'it' : 'them'} are not isolated.`;
 }
 
 /**
@@ -148,6 +162,8 @@ export class TaskOrchestrator {
   private isolation: IWorktreeIsolation;
   /** The plan's isolation run (ADR-0013). Outlives one run: a resumed plan continues it. */
   private isolationRun: IsolationRun | null = null;
+  /** Copied paths already reported for the current run: every task gets the same copies. */
+  private reportedCopies = new Set<string>();
   /**
    * How the open run executes; null while no run is open. A run is one
    * Execute-Plan or one manual task run, from its start until it settles or
@@ -996,10 +1012,21 @@ export class TaskOrchestrator {
       await this.releaseWorktree(task.id, { keep: false });
       return this.workspaceRootFn();
     }
-    const { cwd } = await this.isolation.prepare(task, this.isolationRun);
+    const { cwd, copied } = await this.isolation.prepare(task, this.isolationRun);
     attempt.worktree = true;
     this.emit('onIsolationChanged');
+    this.reportCopies(copied);
     return cwd;
+  }
+
+  private reportCopies(copied: string[]): void {
+    const fresh = copied.filter((p) => !this.reportedCopies.has(p));
+    if (fresh.length === 0) return;
+    for (const p of fresh) this.reportedCopies.add(p);
+    const one = fresh.length === 1;
+    this.notifications.warn(
+      `${fresh.join(', ')} could not be linked into task workspaces (a hard link is impossible there), so each task gets ${one ? 'a copy' : 'copies'}: edits to ${one ? 'it' : 'them'} stay in the task.`,
+    );
   }
 
   /**
@@ -1031,7 +1058,7 @@ export class TaskOrchestrator {
     if (availability.active) return { mode: 'isolated', continuing };
     // A continued run's base is already fixed, so edits the user has made in
     // their own tree since cannot change what its tasks start from.
-    if (availability.reason === 'dirty') return continuing ? { mode: 'isolated', continuing } : { mode: 'blocked' };
+    if (availability.reason === 'dirty') return continuing ? { mode: 'isolated', continuing } : { mode: 'blocked', repos: availability.repos ?? [] };
     return { mode: 'shared', reason: availability.reason, repos: availability.repos ?? [] };
   }
 
@@ -1040,15 +1067,26 @@ export class TaskOrchestrator {
     const decision = await this.decideRun(root);
     if (decision.mode === 'blocked') {
       this.blockedStart = resume;
-      this.emit('onIsolationBlocked', { reason: 'dirty' });
+      this.emit('onIsolationBlocked', { reason: 'dirty', repos: decision.repos });
       return false;
     }
-    if (decision.mode === 'isolated') {
-      if (!decision.continuing) await this.mintRun(root);
-    } else {
+    if (decision.mode === 'shared') {
       this.notifications.info(sharedRootNotice(decision.reason, decision.repos));
+      this.runMode = 'shared';
+      return true;
     }
-    this.runMode = decision.mode;
+    if (!decision.continuing) {
+      try {
+        await this.mintRun(root);
+      } catch (err) {
+        // Git can still refuse every repo of the group once a run is minted — the one check `isActive` cannot make.
+        this.notifications.info(`${err instanceof Error ? err.message : String(err)} — ${SHARED_ROOT_TAIL}`);
+        this.emit('onIsolationChanged');
+        this.runMode = 'shared';
+        return true;
+      }
+    }
+    this.runMode = 'isolated';
     return true;
   }
 
@@ -1073,10 +1111,14 @@ export class TaskOrchestrator {
     if (previous) {
       const landed = Object.values(previous.tasks).some((r) => r.status === 'merged');
       await this.isolation.discard(previous, { keepIntegration: landed }).catch(() => undefined);
+      this.isolationRun = null;
     }
     this.isolationRun = await this.isolation.startRun(root);
     this.resolvers = {};
+    this.reportedCopies.clear();
     this.emit('onIsolationChanged');
+    const shared = sharedPathsNotice(this.isolationRun);
+    if (shared) this.notifications.info(shared);
   }
 
   /** Close the open run. An isolated one hands its integration branch over for review. */

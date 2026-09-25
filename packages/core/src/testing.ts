@@ -115,6 +115,8 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
   shared: string[] = [];
   sharedRepos: string[] = [];
   copied: string[] = [];
+  /** Set to make `startRun` throw, as git does when no repo of the group can be isolated. */
+  startRunError: Error | null = null;
   /** Per task id; a task not listed integrates as `merged`. */
   outcomes = new Map<string, IsolationOutcome>();
   calls: FakeIsolationCall[] = [];
@@ -148,6 +150,7 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
 
   async startRun(workspaceRoot: string): Promise<IsolationRun> {
     this.log({ op: 'startRun', workspaceRoot });
+    if (this.startRunError) throw this.startRunError;
     const id = `run${++this.runCount}`;
     return {
       id,

@@ -301,15 +301,9 @@ describe('TaskOrchestrator with worktree isolation', () => {
       return vi.mocked(notifications.info).mock.calls.map((c) => String(c[0]));
     }
 
-    it('names the repositories a non-git folder contains', async () => {
-      expect(await noticesFor({ active: false, reason: 'not-git', repos: ['api', 'web', 'infra'] })).toContain(
-        'Not a git repository (it contains 3 repositories: api, web, infra) — tasks run in the workspace root without worktree isolation.',
-      );
-    });
-
-    it('says "repository" for a folder with one', async () => {
-      expect(await noticesFor({ active: false, reason: 'not-git', repos: ['api'] })).toContain(
-        'Not a git repository (it contains 1 repository: api) — tasks run in the workspace root without worktree isolation.',
+    it('names the repositories of a folder when none of them has a commit', async () => {
+      expect(await noticesFor({ active: false, reason: 'no-commits', repos: ['api', 'web'] })).toContain(
+        'No repository in this folder has commits yet (api, web) — tasks run in the workspace root without worktree isolation.',
       );
     });
 
@@ -326,6 +320,75 @@ describe('TaskOrchestrator with worktree isolation', () => {
     });
   });
 
+  describe('a run over a repo group', () => {
+    it('names the repositories and paths every task shares live, once per run', async () => {
+      const isolation = new FakeWorktreeIsolation();
+      isolation.shared = ['NOTES.md', 'design', 'scratch'];
+      isolation.sharedRepos = ['scratch'];
+      const { orchestrator, notifications } = setup({ isolation, workspace: '/group' });
+      orchestrator.loadPlan([task('t1', 1), task('t2', 2)]);
+
+      await orchestrator.approveReview();
+
+      const notices = vi.mocked(notifications.info).mock.calls.map((c) => String(c[0]));
+      expect(notices.filter((n) => /shared live/i.test(n))).toEqual([
+        'Could not isolate scratch (no commits, or git refused a worktree). It and NOTES.md, design are shared live with every task, so edits to them are not isolated.',
+      ]);
+    });
+
+    it('names loose paths alone when every repository isolated', async () => {
+      const isolation = new FakeWorktreeIsolation();
+      isolation.shared = ['NOTES.md'];
+      const { orchestrator, notifications } = setup({ isolation, workspace: '/group' });
+      orchestrator.loadPlan([task('t1', 1)]);
+
+      await orchestrator.approveReview();
+
+      expect(vi.mocked(notifications.info).mock.calls.map((c) => String(c[0]))).toContain(
+        'NOTES.md is shared live with every task, so edits to it are not isolated.',
+      );
+    });
+
+    it('says nothing about sharing for a group of one', async () => {
+      const { orchestrator, notifications } = setup();
+      orchestrator.loadPlan([task('t1', 1)]);
+      await orchestrator.approveReview();
+      expect(vi.mocked(notifications.info).mock.calls.flat().join('\n')).not.toMatch(/shared live/i);
+    });
+
+    it('says which paths a task got copies of, each only once per run', async () => {
+      const isolation = new FakeWorktreeIsolation();
+      isolation.copied = ['api/.env'];
+      const { orchestrator, notifications, pass, spawnedCwd } = setup({ isolation, workspace: '/group' });
+      const t1 = task('t1', 1);
+      orchestrator.loadPlan([t1, task('t2', 2, { dependencies: ['t1'] })]);
+
+      await orchestrator.approveReview();
+      pass(t1);
+      await vi.waitFor(() => expect(spawnedCwd('t2')).toBeDefined());
+
+      const copies = vi.mocked(notifications.warn).mock.calls.map((c) => String(c[0])).filter((n) => /cop(y|ies)/i.test(n));
+      expect(copies).toEqual([
+        'api/.env could not be linked into task workspaces (a hard link is impossible there), so each task gets a copy: edits to it stay in the task.',
+      ]);
+    });
+
+    it('runs in the workspace root when no repository of the group could be isolated after all', async () => {
+      const isolation = new FakeWorktreeIsolation();
+      isolation.startRunError = new Error('No repository could be isolated: api, web');
+      const { orchestrator, notifications, spawnedCwd } = setup({ isolation, workspace: '/group' });
+      orchestrator.loadPlan([task('t1', 1)]);
+
+      await orchestrator.approveReview();
+
+      expect(spawnedCwd('t1')).toBe('/group');
+      expect(vi.mocked(notifications.info).mock.calls.map((c) => String(c[0]))).toContain(
+        'No repository could be isolated: api, web — tasks run in the workspace root without worktree isolation.',
+      );
+      expect(orchestrator.getTaskIsolation('t1')).toBeNull();
+    });
+  });
+
   describe('when the tree is dirty', () => {
     function dirty() {
       const isolation = new FakeWorktreeIsolation();
@@ -336,6 +399,19 @@ describe('TaskOrchestrator with worktree isolation', () => {
       env.orchestrator.loadPlan([task('t1', 1)]);
       return { ...env, observed };
     }
+
+    it('names the dirty repositories of a group', async () => {
+      const isolation = new FakeWorktreeIsolation();
+      isolation.availability = { active: false, reason: 'dirty', repos: ['api', 'web'] };
+      const { orchestrator } = setup({ isolation });
+      const blocked: Array<{ reason: 'dirty'; repos: string[] }> = [];
+      orchestrator.subscribe({ onIsolationBlocked: (data) => blocked.push(data) });
+      orchestrator.loadPlan([task('t1', 1)]);
+
+      await orchestrator.approveReview();
+
+      expect(blocked).toEqual([{ reason: 'dirty', repos: ['api', 'web'] }]);
+    });
 
     it('does not start, and says why', async () => {
       const { orchestrator, spawn, observed } = dirty();

@@ -411,11 +411,12 @@ export class Session {
         this.persist();
         this.broadcastStatus();
       },
-      onIsolationBlocked: ({ reason }) => {
+      onIsolationBlocked: ({ reason, repos }) => {
+        const where = repos.length > 0 ? ` in ${repos.join(', ')}` : '';
         this.broadcast({
           type: 'isolation_blocked',
           reason,
-          message: 'Tracked files have uncommitted changes, so tasks cannot run in isolated worktrees. Stash them, or run this plan without isolation.',
+          message: `Tracked files have uncommitted changes${where}, so tasks cannot run in isolated worktrees. Stash them, or run this plan without isolation.`,
         });
       },
       onIsolationHandoff: (handoff) => {

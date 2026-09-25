@@ -106,6 +106,21 @@ describe('Session with worktree isolation', () => {
       expect(messages.map((m) => m.type)).not.toContain('execution_complete');
     });
 
+    it('names the dirty repositories of a group', async () => {
+      const isolation = new FakeWorktreeIsolation();
+      isolation.availability = { active: false, reason: 'dirty', repos: ['api', 'web'] };
+      const { session, messages } = setup(isolation);
+      session.loadPlan(plan([task('t1', 1)]), 'goal', '/group');
+
+      await session.executePlan();
+
+      expect(messages).toContainEqual({
+        type: 'isolation_blocked',
+        reason: 'dirty',
+        message: 'Tracked files have uncommitted changes in api, web, so tasks cannot run in isolated worktrees. Stash them, or run this plan without isolation.',
+      });
+    });
+
     it('continues isolated after stashing', async () => {
       const { session, spawn, isolation } = dirty();
       await session.executePlan();
