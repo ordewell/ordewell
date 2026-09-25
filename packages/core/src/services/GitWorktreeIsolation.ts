@@ -67,6 +67,15 @@ interface QueuedMerge {
   settle: (outcome: IsolationOutcome) => void;
 }
 
+/** What a run hands over: its integration branch, its base, and what landed there, in plan order. */
+export function handoffOf(run: IsolationRun): IsolationHandoff {
+  const landed = Object.values(run.tasks)
+    .filter((r) => r.status === 'merged')
+    .sort((a, b) => a.order - b.order)
+    .map((r) => ({ taskId: r.taskId, order: r.order, title: r.title }));
+  return { branch: run.integrationBranch, baseRef: run.baseRef, landed };
+}
+
 function isInside(parent: string, child: string): boolean {
   const rel = path.relative(parent, child);
   return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
@@ -189,11 +198,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       // A branch checked out in a worktree cannot be checked out in the main
       // one, and the user is about to review it.
       await this.removeIntegrationWorktree(run);
-      const landed = Object.values(run.tasks)
-        .filter((r) => r.status === 'merged')
-        .sort((a, b) => a.order - b.order)
-        .map((r) => ({ taskId: r.taskId, order: r.order, title: r.title }));
-      return { branch: run.integrationBranch, baseRef: run.baseRef, landed };
+      return handoffOf(run);
     });
   }
 

@@ -144,6 +144,38 @@ describe('Session with worktree isolation', () => {
     expect(spawn.mock.calls[0][0].cwd).toBe('/fake-worktrees/old/2-t2');
   });
 
+  it('describes an adopted run to a surface no stream has told: each task\'s mark and the handoff', () => {
+    const { session } = setup();
+    const record = (taskId: string, order: number, status: 'merged' | 'conflict') => ({
+      taskId, order, title: `Task ${taskId}`, branch: `ordewell/old/${order}-${taskId}`, worktree: `/wt/${order}`, status, linked: [],
+    });
+    session.loadPlan({
+      ...plan([task('t1', 1, { status: 'completed' }), task('t2', 2, { status: 'awaiting_user' }), task('t3', 3)]),
+      isolation: {
+        run: {
+          id: 'old', workspaceRoot: process.cwd(), baseRef: 'abc', integrationBranch: 'ordewell/old/integration',
+          tasks: { t2: record('t2', 2, 'conflict'), t1: record('t1', 1, 'merged') },
+        },
+        resolvers: {},
+      },
+    }, 'goal', '/repo', { persist: false });
+
+    expect(session.isolationView()).toEqual({
+      tasks: {
+        t1: { state: 'integrated', branch: 'ordewell/old/1-t1', worktree: '/wt/1' },
+        t2: { state: 'conflict', branch: 'ordewell/old/2-t2', worktree: '/wt/2' },
+      },
+      handoff: { branch: 'ordewell/old/integration', baseRef: 'abc', landed: [{ taskId: 't1', order: 1, title: 'Task t1' }] },
+    });
+  });
+
+  it('has no isolation to describe for a plan that never isolated', () => {
+    const { session } = setup();
+    session.loadPlan(plan([task('t1', 1)]), 'goal', '/repo', { persist: false });
+
+    expect(session.isolationView()).toBeNull();
+  });
+
   it('adopts without writing: a host that restores with persist off keeps its one session file', async () => {
     const { session, isolation } = setup();
     const restored: LegacyPlanState = {

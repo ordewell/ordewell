@@ -9,6 +9,7 @@ import {
   type AiProvider,
 } from '@ordewell/core';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
+import { replayIsolation } from '../plan/isolation';
 import { VsCodeConfig } from '../adapters/VsCodeConfig';
 import { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
 import { VsCodeTerminalRunner } from '../adapters/VsCodeTerminalRunner';
@@ -84,6 +85,7 @@ function applyLoadedSession(
   deps.chatProvider.restoreChat(loaded.plan.conversationHistory ?? [], loaded.plan.tasks.length > 0);
   deps.chatProvider.setGoal(loaded.meta.goal);
   if (loaded.plan.tasks.length > 0) deps.chatProvider.planGenerated(loaded.plan);
+  replayIsolation(deps.session, deps.chatProvider);
   saveState(loaded.plan, deps.fsAdapter.getWorkspaceRoot());
   return true;
 }

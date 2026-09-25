@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { handleSessionMessage } from '../PlanManager';
 import type { PlanManagerDeps } from '../PlanManager';
-import type { TaskIsolation } from '@ordewell/core';
+import { replayIsolation } from '../isolation';
+import type { IsolationView, TaskIsolation } from '@ordewell/core';
 
 function deps() {
   const chatProvider = {
@@ -48,5 +49,41 @@ describe('worktree isolation messages (ADR-0013)', () => {
     handleSessionMessage({ type: 'isolation_handoff', ...handoff }, d);
 
     expect(chatProvider.showIsolationHandoff).toHaveBeenCalledWith(handoff);
+  });
+});
+
+// The stream only reports changes, and a webview loses its state whenever it is
+// disposed — so a reconnect or a loaded session is re-told from the run record.
+describe('replaying isolation to a webview that was not listening', () => {
+  const view: IsolationView = {
+    tasks: { t2: { state: 'conflict', branch: 'ordewell/r/2-b', worktree: '/w/2-b' } },
+    handoff: { branch: 'ordewell/r/integration', baseRef: 'abc123', landed: [{ taskId: 't1', order: 1, title: 'A' }] },
+  };
+
+  function replay(opts: { view: IsolationView | null; executing: boolean }) {
+    const chatProvider = { sendTaskIsolation: vi.fn(), showIsolationHandoff: vi.fn() };
+    replayIsolation({ isolationView: () => opts.view, isExecuting: opts.executing }, chatProvider);
+    return chatProvider;
+  }
+
+  it('re-sends every task mark and the handoff card of a settled run', () => {
+    const chatProvider = replay({ view, executing: false });
+
+    expect(chatProvider.sendTaskIsolation.mock.calls).toEqual([['t2', view.tasks.t2]]);
+    expect(chatProvider.showIsolationHandoff).toHaveBeenCalledWith(view.handoff);
+  });
+
+  it('holds the handoff card back while the run is still executing', () => {
+    const chatProvider = replay({ view, executing: true });
+
+    expect(chatProvider.sendTaskIsolation).toHaveBeenCalledTimes(1);
+    expect(chatProvider.showIsolationHandoff).not.toHaveBeenCalled();
+  });
+
+  it('says nothing for a plan that never isolated', () => {
+    const chatProvider = replay({ view: null, executing: false });
+
+    expect(chatProvider.sendTaskIsolation).not.toHaveBeenCalled();
+    expect(chatProvider.showIsolationHandoff).not.toHaveBeenCalled();
   });
 });

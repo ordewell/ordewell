@@ -9,7 +9,7 @@ import { VsCodeTerminalRunner } from './adapters/VsCodeTerminalRunner';
 import { registerCommands } from './commands/CommandRegistry';
 import { handleSlashCommand, isKnownSlashCommand } from './commands/SlashParser';
 import { handleStartPlanning, handleContinueConversation, handleModifyPlan, handleApprovePlan, handleSendMessage, handleSystemCommand, handleSessionMessage, findTask, handleMergePlan, handleSplitPlan } from './plan/PlanManager';
-import { handleIsolationAction } from './plan/isolation';
+import { handleIsolationAction, replayIsolation } from './plan/isolation';
 import { classifyTaskEdit, parseTaskDraft, removalPrompt } from './plan/taskEdit';
 import { recallPlannerModel } from './plan/PlannerModelSwitch';
 import { saveCurrentSession, restoreState, persistState } from './state/StatePersistence';
@@ -560,6 +560,7 @@ function setupChatListener(context: vscode.ExtensionContext): void {
         if (currentPlan.tasks.length > 0) {
           chatProvider.showPlan(currentPlan);
           if (currentGoal) chatProvider.setGoal(currentGoal);
+          replayIsolation(session, chatProvider);
         } else {
           chatProvider.setState('empty');
         }

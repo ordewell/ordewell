@@ -33,7 +33,7 @@ import type { IFileSystem } from '../interfaces/IFileSystem';
 import type { INotification } from '../interfaces/INotification';
 import type { ITerminalRunner } from '../interfaces/ITerminalRunner';
 import type { TaskOutputSource } from '../interfaces/TaskOutputSource';
-import type { IsolationOutcome, IWorktreeIsolation } from '../interfaces/IWorktreeIsolation';
+import type { IsolationOutcome, IsolationView, IWorktreeIsolation } from '../interfaces/IWorktreeIsolation';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import { runnerModesFrom, resolveDefaultMode, type RunnerModeInfo } from './ModeResolver';
 
@@ -996,6 +996,15 @@ export class Session {
   async continueWithoutIsolation(): Promise<void> {
     await this.orchestrator.continueBlockedRun('shared');
     this.persist();
+  }
+
+  /**
+   * Each task's isolation mark and the run's handoff, read from the run record.
+   * The stream reports changes only; a surface that (re)connects or loads a
+   * session asks here instead.
+   */
+  isolationView(): IsolationView | null {
+    return this.orchestrator.isolationView();
   }
 
   /** The run's integration branch against its base ref, as a unified diff. */

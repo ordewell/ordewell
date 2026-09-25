@@ -14,11 +14,12 @@ import type {
   IsolationOutcome,
   IsolationRun,
   IsolationTaskStatus,
+  IsolationView,
   IWorktreeIsolation,
   PlanIsolation,
   TaskIsolation,
 } from '../interfaces/IWorktreeIsolation';
-import { createWorktreeIsolation } from './GitWorktreeIsolation';
+import { createWorktreeIsolation, handoffOf } from './GitWorktreeIsolation';
 
 /**
  * The one notification channel out of the orchestrator. Everything that used
@@ -283,6 +284,19 @@ export class TaskOrchestrator {
     const record = this.isolationRun.tasks[taskId];
     if (!record) return { state: 'none' };
     return { state: ISOLATION_STATE[record.status], branch: record.branch, worktree: record.worktree };
+  }
+
+  /**
+   * The plan's isolation as a surface shows it, for one with no stream to have
+   * told it — a reconnected webview, a session just loaded. Null without a run.
+   */
+  isolationView(): IsolationView | null {
+    const run = this.isolationRun;
+    if (!run) return null;
+    const tasks = Object.fromEntries(Object.values(run.tasks).map((r): [string, TaskIsolation] => (
+      [r.taskId, { state: ISOLATION_STATE[r.status], branch: r.branch, worktree: r.worktree }]
+    )));
+    return { tasks, handoff: handoffOf(run) };
   }
 
   getAttemptSession(taskId: string): ITerminalSession | undefined {

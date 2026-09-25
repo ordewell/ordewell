@@ -85,6 +85,12 @@ export interface IsolationHandoff {
   landed: Array<{ taskId: string; order: number; title: string }>;
 }
 
+/** A plan's isolation as a surface shows it: a mark for each task the run touched, and its handoff. */
+export interface IsolationView {
+  tasks: Record<string, TaskIsolation>;
+  handoff: IsolationHandoff;
+}
+
 export interface IWorktreeIsolation {
   /** Git repo + clean tracked tree + config enabled; otherwise the reason it is not. */
   isActive(workspaceRoot: string): Promise<IsolationAvailability>;
