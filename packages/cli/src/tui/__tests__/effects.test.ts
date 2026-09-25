@@ -1309,6 +1309,58 @@ describe('worktree isolation', () => {
     expect(h.actions).toContainEqual({ type: 'isolationHandoff', handoff: { repos, landed }, sessionId: 's1' });
   });
 
+  it('hands the dirty repos of a group to the stash question', async () => {
+    const h = running([{ type: 'isolation_blocked', reason: 'dirty', repos: ['api', 'web'], message: 'Tracked files have uncommitted changes in api, web' }]);
+
+    await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
+
+    expect(h.actions).toContainEqual({
+      type: 'isolationBlocked', message: 'Tracked files have uncommitted changes in api, web', repos: ['api', 'web'], sessionId: 's1',
+    });
+  });
+
+  it('shows a run\'s isolation notice as a notice, and a warning as one too', async () => {
+    const h = running([
+      { type: 'notice', level: 'info', message: 'NOTES.md is shared live with every task, so edits to it are not isolated.' },
+      { type: 'notice', level: 'warn', message: 'api/.env could not be linked into task workspaces' },
+    ]);
+
+    await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
+
+    expect(h.actions.filter((a) => a.type === 'notice')).toEqual([
+      { type: 'notice', message: 'NOTES.md is shared live with every task, so edits to it are not isolated.' },
+      { type: 'notice', message: 'api/.env could not be linked into task workspaces' },
+    ]);
+  });
+
+  it('reports a blocked Merge all as a failure that changed nothing, naming each repo and file', async () => {
+    const blocked = [{ repo: 'api', reason: 'conflict', files: ['src/a.ts'] }, { repo: 'web', reason: 'merge-in-progress', files: [] }];
+    const h = harness({ mergeRun: vi.fn().mockResolvedValue({ outcome: 'blocked', blocked }) } as Partial<OrdewellApi>);
+
+    await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration', group: true }, h.deps);
+
+    const message = messageOf(h.actions, 'failed');
+    expect(message).toContain('api would conflict in src/a.ts; web has a merge in progress');
+    expect(message).toContain("Each repository's ordewell/r1/integration is a plain branch you can merge by hand.");
+    expect(messageOf(h.actions, 'notice')).toBeUndefined();
+  });
+
+  it('says which repos a Merge all had landed when it stopped part-way', async () => {
+    const h = harness({ mergeRun: vi.fn().mockResolvedValue({ outcome: 'conflict', repo: 'web', files: ['w.txt'], landed: ['api'] }) } as Partial<OrdewellApi>);
+
+    await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration', group: true }, h.deps);
+
+    expect(messageOf(h.actions, 'failed')).toContain('api was merged already and stays merged.');
+  });
+
+  it('says a group merged into every repository', async () => {
+    const h = harness({ mergeRun: vi.fn().mockResolvedValue({ outcome: 'merged' }) } as Partial<OrdewellApi>);
+
+    await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration', group: true }, h.deps);
+
+    expect(messageOf(h.actions, 'notice')).toBe('Merged ordewell/r1/integration into the checked-out branch of every repository.');
+  });
+
   it('ignores socket greetings that are not session messages', async () => {
     const h = running([{ type: 'connected', sessionId: 's1' }, { type: 'chat_backlog', history: [] }]);
 

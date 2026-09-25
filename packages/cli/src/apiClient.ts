@@ -2,7 +2,7 @@ import http from 'http';
 import WebSocket from 'ws';
 import { DEFAULT_PORT } from './daemon';
 import { bearerHeaderValue, readDaemonToken, tokenSubprotocols, mintSessionId } from '@ordewell/core';
-import type { SerializedPlan, DiscoveredModel, SessionMessage, RewindTarget, IsolationMergeResult } from '@ordewell/core';
+import type { SerializedPlan, DiscoveredModel, SessionMessage, SessionNotice, RewindTarget, IsolationMergeResult } from '@ordewell/core';
 
 const DEFAULT_HTTP_TIMEOUT_MS = 15 * 60 * 1000;
 
@@ -77,7 +77,7 @@ export interface ExecutionSummary {
  * compiled everywhere and was silently dropped by their `default:` arms. Naming
  * the real type turns that into a compile error at each surface.
  */
-export type WsEvent = SessionMessage;
+export type WsEvent = SessionMessage | SessionNotice;
 
 export class ApiClient {
   private port: number;

@@ -51,7 +51,7 @@ export type Effect =
   | { type: 'compactConversation'; sessionId: string }
   | { type: 'isolationReviewDiff'; sessionId: string }
   /** `branch` is only for the words the result is reported in. */
-  | { type: 'isolationMerge'; sessionId: string; branch: string }
+  | { type: 'isolationMerge'; sessionId: string; branch: string; group?: boolean }
   | { type: 'isolationDiscard'; sessionId: string; branch: string }
   | { type: 'isolationCleanup'; sessionId: string; branch: string }
   /** Replays a run a dirty tree parked; `stash` puts tracked changes aside first, `shared` runs in the working tree this once. */
@@ -90,7 +90,7 @@ export type Action =
   | { type: 'approvalSettled'; approvalId: string; sessionId?: string }
   | { type: 'taskStatus'; taskId: string; status: string; sessionId?: string }
   | { type: 'tasksStatus'; updates: Record<string, { status: string; idleSince?: string | null; isolation?: TaskIsolationView }>; sessionId?: string }
-  | { type: 'isolationBlocked'; message: string; sessionId?: string }
+  | { type: 'isolationBlocked'; message: string; repos?: string[]; sessionId?: string }
   | { type: 'isolationHandoff'; handoff: HandoffView; sessionId?: string }
   | { type: 'handoffDiff'; diff: string; sessionId?: string }
   /** The run and its record are gone; nothing is left to hand off or to mark. */
@@ -385,7 +385,7 @@ export function reduce(state: TuiState, action: Action): Step {
 
     case 'isolationBlocked': {
       if (stale(state, action.sessionId)) return step(state);
-      return step(blockedPicker(state, action.message));
+      return step(blockedPicker(state, action.message, action.repos));
     }
 
     case 'isolationHandoff': {

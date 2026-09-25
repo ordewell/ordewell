@@ -2,7 +2,7 @@ import type { Effect, Step } from './reducer';
 import { say } from './transcript';
 import { sanitize } from './ansi';
 import type { Key } from './keys';
-import { handoffBase, handoffBranch, type PlanIsolationView } from '../isolation';
+import { handoffBase, handoffBranch, isRepoGroup, type PlanIsolationView } from '../isolation';
 import type { HandoffView, Overlay, PickerItem, TaskIsolationView, TaskView, TuiState } from './state';
 
 /**
@@ -19,6 +19,25 @@ export const HANDOFF_ACTIONS = [
 ] as const;
 
 export type HandoffActionId = (typeof HANDOFF_ACTIONS)[number]['id'];
+
+/** The actions as the overlay words them: a run over a repo group acts on every repo at once. */
+export function handoffActions(handoff: HandoffView): ReadonlyArray<{ id: HandoffActionId; label: string; hint: string }> {
+  if (!isRepoGroup(handoff)) return HANDOFF_ACTIONS;
+  return [
+    { id: 'review', label: 'Review diff', hint: "each repository's branch against the commit it forked from" },
+    { id: 'merge', label: 'Merge all', hint: "every repository's branch into what you have checked out there — asks first" },
+    { id: 'discard', label: 'Discard', hint: "the run, its worktrees and every repository's branch — asks first" },
+    { id: 'cleanup', label: 'Clean up', hint: 'remove worktrees and task branches everywhere, keep the integration branches' },
+  ];
+}
+
+const reposOf = (handoff: HandoffView): string => handoff.repos.map((r) => r.path).join(', ');
+
+/** The repos Merge all will merge: those with work on their integration branch, else all of them. */
+function reposWithWork(handoff: HandoffView): string {
+  const withWork = handoff.repos.filter((r) => r.landed.length > 0);
+  return (withWork.length > 0 ? withWork : handoff.repos).map((r) => r.path).join(', ');
+}
 
 export const HANDOFF_USAGE = `/handoff [${HANDOFF_ACTIONS.map((a) => a.id).join('|')}]`;
 
@@ -39,10 +58,11 @@ export function handoffCommand(state: TuiState, arg: string | undefined): Step {
 /** A run just settled with work on a branch. Interrupts only a screen with nothing else on it. */
 export function handoffArrived(state: TuiState, handoff: HandoffView): TuiState {
   const landed = handoff.landed.length;
+  const where = isRepoGroup(handoff) ? ` in ${reposOf(handoff)}` : '';
   const told = say(
     { ...state, handoff },
     'system',
-    `Run finished on ${handoffBranch(handoff)} — ${landed} task${landed === 1 ? '' : 's'} landed. /handoff to review and land it.`,
+    `Run finished on ${handoffBranch(handoff)}${where} — ${landed} task${landed === 1 ? '' : 's'} landed. /handoff to review and land it.`,
   );
   return state.overlay ? told : { ...told, overlay: { kind: 'handoff', index: 0, diff: null } };
 }
@@ -61,12 +81,19 @@ export function runHandoffAction(state: TuiState, id: HandoffActionId): Step {
       return {
         state: {
           ...state,
-          overlay: {
-            kind: 'confirm',
-            title: 'Merge into your branch?',
-            message: `Merge ${handoffBranch(handoff)} into whatever you have checked out. Ordewell never does this on its own. If it conflicts the merge is aborted and your tree stays as it was.`,
-            action: { kind: 'merge-run' },
-          },
+          overlay: isRepoGroup(handoff)
+            ? {
+              kind: 'confirm',
+              title: 'Merge all into your branches?',
+              message: `Merge ${handoffBranch(handoff)} into whatever each of ${reposWithWork(handoff)} has checked out. Ordewell never does this on its own. It checks every repository first and merges none unless every repository can take it; on git older than 2.38 it goes repository by repository and stops at the first that fails. A merge that conflicts is aborted, and your trees stay as they were.`,
+              action: { kind: 'merge-run' },
+            }
+            : {
+              kind: 'confirm',
+              title: 'Merge into your branch?',
+              message: `Merge ${handoffBranch(handoff)} into whatever you have checked out. Ordewell never does this on its own. If it conflicts the merge is aborted and your tree stays as it was.`,
+              action: { kind: 'merge-run' },
+            },
         },
         effects: [],
       };
@@ -77,7 +104,7 @@ export function runHandoffAction(state: TuiState, id: HandoffActionId): Step {
           overlay: {
             kind: 'confirm',
             title: 'Discard this run?',
-            message: `Removes the run's worktrees and task branches and deletes ${handoffBranch(handoff)}. Tasks keep their status — mark one not done if you did not keep its work.`,
+            message: `Removes the run's worktrees and task branches and deletes ${handoffBranch(handoff)}${isRepoGroup(handoff) ? ` in ${reposOf(handoff)}` : ''}. Tasks keep their status — mark one not done if you did not keep its work.`,
             action: { kind: 'discard-run' },
           },
         },
@@ -92,7 +119,7 @@ export function confirmedHandoff(state: TuiState, kind: 'merge-run' | 'discard-r
   if (!state.sessionId || !state.handoff) return { state: closed, effects: [] };
   const { sessionId, handoff } = state;
   const effect: Effect = kind === 'merge-run'
-    ? { type: 'isolationMerge', sessionId, branch: handoffBranch(handoff) }
+    ? { type: 'isolationMerge', sessionId, branch: handoffBranch(handoff), ...(isRepoGroup(handoff) ? { group: true } : {}) }
     : { type: 'isolationDiscard', sessionId, branch: handoffBranch(handoff) };
   return { state: closed, effects: [effect] };
 }
@@ -150,7 +177,13 @@ const BLOCKED_ITEMS: PickerItem[] = [
 
 export type BlockedChoice = 'stash' | 'shared' | 'cancel';
 
-export function blockedPicker(state: TuiState, message: string): TuiState {
+/** `repos` names the dirty repos of a group; Stash acts on all of them. */
+export function blockedPicker(state: TuiState, message: string, repos: string[] = []): TuiState {
+  const items = repos.length === 0
+    ? BLOCKED_ITEMS
+    : BLOCKED_ITEMS.map((item) => (item.id === 'stash'
+      ? { ...item, detail: `git stash the tracked changes in ${repos.join(', ')}, then run in worktrees` }
+      : item));
   return {
     ...state,
     overlay: {
@@ -158,7 +191,7 @@ export function blockedPicker(state: TuiState, message: string): TuiState {
       picker: {
         title: 'Run blocked by uncommitted changes',
         hint: message,
-        items: BLOCKED_ITEMS,
+        items,
         filter: '',
         index: 0,
         multi: false,

@@ -111,19 +111,19 @@ describe('what Merge all says', () => {
   const branch = 'ordewell/r1/integration';
 
   it('words a group of one as before', () => {
-    expect(mergeOutcome({ outcome: 'merged' }, single)).toEqual({ ok: true, message: `Merged ${branch} into your checked-out branch.` });
-    expect(mergeOutcome({ outcome: 'conflict', repo: '.', files: ['a.txt'] }, single)).toEqual({
+    expect(mergeOutcome({ outcome: 'merged' }, branch, false)).toEqual({ ok: true, message: `Merged ${branch} into your checked-out branch.` });
+    expect(mergeOutcome({ outcome: 'conflict', repo: '.', files: ['a.txt'] }, branch, false)).toEqual({
       ok: false,
       message: `Merging ${branch} conflicted, so it was aborted — your tree is as it was. Merge it with git and resolve the conflict there.`,
     });
-    expect(mergeOutcome({ outcome: 'failed', repo: '.' }, single)).toEqual({
+    expect(mergeOutcome({ outcome: 'failed', repo: '.' }, branch, false)).toEqual({
       ok: false,
       message: `Could not merge ${branch} — finish or abort the merge already in progress, then try again.`,
     });
   });
 
   it('says a group merged into every repository', () => {
-    expect(mergeOutcome({ outcome: 'merged' }, group)).toEqual({ ok: true, message: `Merged ${branch} into the checked-out branch of every repository.` });
+    expect(mergeOutcome({ outcome: 'merged' }, branch, true)).toEqual({ ok: true, message: `Merged ${branch} into the checked-out branch of every repository.` });
   });
 
   it('names each repo that blocked it, why, and its files, and says the branches can be merged by hand', () => {
@@ -133,7 +133,7 @@ describe('what Merge all says', () => {
         { repo: 'api', reason: 'conflict', files: ['src/a.ts'] },
         { repo: 'web', reason: 'uncommitted-changes', files: ['index.html'] },
       ],
-    }, group);
+    }, branch, true);
 
     expect(ok).toBe(false);
     expect(message).toContain('api would conflict in src/a.ts; web has uncommitted changes to index.html');
@@ -141,7 +141,7 @@ describe('what Merge all says', () => {
   });
 
   it('says which repos had landed when git without merge-tree stopped part-way', () => {
-    const { message } = mergeOutcome({ outcome: 'conflict', repo: 'web', files: ['w.txt'], landed: ['api'] }, group);
+    const { message } = mergeOutcome({ outcome: 'conflict', repo: 'web', files: ['w.txt'], landed: ['api'] }, branch, true);
 
     expect(message).toContain('conflicted in web (w.txt)');
     expect(message).toContain('api was merged already and stays merged.');

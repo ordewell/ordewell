@@ -103,9 +103,10 @@ export function handoffBranch(handoff: HandoffView): string {
   return [...new Set(handoff.repos.map((r) => r.integrationBranch))].join(', ');
 }
 
-/** Where the run forked, as one line names it, each ref cut to `length`. */
+/** Where the run forked, as one line names it, each ref cut to `length` and, for a group, headed by its repo. */
 export function handoffBase(handoff: HandoffView, length: number): string {
-  return handoff.repos.map((r) => r.baseRef.slice(0, length)).join(', ');
+  const group = isRepoGroup(handoff);
+  return handoff.repos.map((r) => `${group ? `${r.path} ` : ''}${r.baseRef.slice(0, length)}`).join(', ');
 }
 
 /**
@@ -135,9 +136,7 @@ export function taskRepoNames(isolation: TaskIsolationView | undefined): string[
  * groups; a group takes the shared wording and, when nothing or not everything
  * merged, is told the integration branches are plain branches to merge by hand.
  */
-export function mergeOutcome(result: IsolationMergeResult, handoff: HandoffView): { ok: boolean; message: string } {
-  const branch = handoffBranch(handoff);
-  const group = isRepoGroup(handoff);
+export function mergeOutcome(result: IsolationMergeResult, branch: string, group: boolean): { ok: boolean; message: string } {
   const ok = result.outcome === 'merged';
   if (!group && result.outcome === 'conflict') {
     return { ok, message: `Merging ${branch} conflicted, so it was aborted — your tree is as it was. Merge it with git and resolve the conflict there.` };

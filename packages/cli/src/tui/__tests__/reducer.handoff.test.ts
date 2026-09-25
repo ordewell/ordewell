@@ -345,3 +345,59 @@ describe('resolving a conflict', () => {
     expect(press(quiet, 'char', 'x').effects).toEqual([]);
   });
 });
+
+describe('a run over a repo group', () => {
+  const t = (order: number) => ({ taskId: `t${order}`, order, title: `Task ${order}` });
+  const branch = 'ordewell/r1/integration';
+  const group: HandoffView = {
+    repos: [
+      { path: 'api', integrationBranch: branch, baseRef: 'aaaaaaaa', landed: [t(1), t(2)] },
+      { path: 'web', integrationBranch: branch, baseRef: 'bbbbbbbb', landed: [t(2)] },
+      { path: 'infra', integrationBranch: branch, baseRef: 'cccccccc', landed: [] },
+    ],
+    landed: [t(1), t(2)],
+  };
+  const inGroup = (over: Partial<TuiState> = {}): TuiState => session({ handoff: group, ...over });
+
+  it('says which repos the run finished in when it arrives', () => {
+    const { state } = apply(session(), { type: 'isolationHandoff', handoff: group, sessionId: 's1' });
+
+    expect(lastMessage(state)?.content).toBe(`Run finished on ${branch} in api, web, infra — 2 tasks landed. /handoff to review and land it.`);
+  });
+
+  it('asks before Merge all, naming the repos it will merge and that it merges none unless all can', () => {
+    const { state, effects } = typed(inGroup(), '/handoff merge');
+
+    expect(effects).toEqual([]);
+    const overlay = state.overlay as { title: string; message: string; action: { kind: string } };
+    expect(overlay.title).toBe('Merge all into your branches?');
+    expect(overlay.message).toContain('api, web');
+    expect(overlay.message).not.toContain('infra');
+    expect(overlay.message).toMatch(/unless every repository can take it/);
+    expect(overlay.action).toEqual({ kind: 'merge-run' });
+  });
+
+  it('sends the merge with the group marked, so its answer is worded for a group', () => {
+    const asked = typed(inGroup(), '/handoff merge');
+
+    expect(press(asked.state, 'enter').effects).toEqual([{ type: 'isolationMerge', sessionId: 's1', branch, group: true }]);
+  });
+
+  it('asks before discarding, naming every repo', () => {
+    const { state } = typed(inGroup(), '/handoff discard');
+
+    expect((state.overlay as { message: string }).message).toContain('in api, web, infra');
+  });
+
+  it('cleans up with the branch, as for one repo', () => {
+    expect(typed(inGroup(), '/handoff cleanup').effects).toEqual([{ type: 'isolationCleanup', sessionId: 's1', branch }]);
+  });
+
+  it('names the dirty repos in the stash choice, which stashes all of them', () => {
+    const { state } = apply(session(), { type: 'isolationBlocked', message: 'dirty in api, web', repos: ['api', 'web'], sessionId: 's1' });
+
+    const items = (state.overlay as { picker: { items: { id: string; detail?: string }[] } }).picker.items;
+    expect(items.find((i) => i.id === 'stash')?.detail).toBe('git stash the tracked changes in api, web, then run in worktrees');
+    expect(items.find((i) => i.id === 'shared')?.detail).toBe('this run only, in your working tree');
+  });
+});
