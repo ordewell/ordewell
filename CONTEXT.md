@@ -336,10 +336,14 @@ state that ends with the run; put it on the attempt.
 
 **Isolated execution** — running each AI task in its own *worktree* instead of
 the shared workspace root, then integrating the results deterministically
-(ADR-0013). Available only when the workspace is a git repository with a clean
-tracked tree and `worktreeIsolation` on; otherwise every task runs in the
-workspace root exactly as before, and `WorktreeIsolation.isActive` says which
-of `disabled`, `git-missing`, `not-git`, `no-commits` or `dirty` applied. The
+(ADR-0013, amended by ADR-0014). Available only when the workspace is a git
+repository with a clean tracked tree and `worktreeIsolation` on; otherwise every
+task runs in the workspace root exactly as before, and
+`WorktreeIsolation.isActive` says which of `disabled`, `git-missing`, `not-git`,
+`no-commits`, `dirty` or `nested-repos` applied (the last two, and `not-git`,
+may name the repositories behind them). ADR-0014 widens the unit from one
+repository to a *repo group*; until its later slices land, isolation still
+covers one repository and a folder of repositories runs in the workspace root. The
 Runner is only ever handed a `cwd` (ADR-0007) — git never enters
 `ITerminalRunner`, `RunnerRegistry` or a runner adapter.
 *Avoid:* "sandbox" (an OS-level runner sandbox is a separate concern, ADR-0011),
@@ -351,7 +355,8 @@ committing a task's work, the serialized integration merge, conflict detection,
 release, orphan pruning, and the end-of-run handoff (diff, merge, discard).
 `GitWorktreeIsolation` is the implementation; the orchestrator's tests use
 `FakeWorktreeIsolation` from `@ordewell/core/testing`, and git behavior is
-tested only against real temporary repositories.
+tested only against real temporary repositories. ADR-0014 keeps it the one owner
+of git and the filesystem while it grows from one repository to a repo group.
 
 **Worktree** — a linked git checkout on its own branch, created for one task at
 `.ordewell/worktrees/<run-id>/<order>-<slug>` on branch
@@ -361,11 +366,43 @@ conflicted task's worktree is kept so its work can be inspected; a retry
 discards it and starts a fresh one from the current integration tip. Ignored
 artifacts (`node_modules`, `.env*`, `.claude`, …) are linked in from the main
 worktree so it is runnable at once — never `.ordewell/`, which stays at the main
-root.
+root. Under ADR-0014 a task has one worktree per repo of the group, gathered in
+its *task workspace*.
 *Avoid:* "workspace" for a worktree — the workspace is the user's checkout.
 
+**Repo group** — the git repositories isolated together for one workspace
+(ADR-0014). A folder that is not itself a repository forms one from the
+repositories directly inside it, plus any listed in `workspaceRepos`; a workspace
+that is one repository is a group of one, with the repo at path `.`, so there is
+one code path. A repository that contains nested repositories that are not
+submodules is not a group but a refusal (`nested-repos`). Repo names and roles
+are arbitrary and nothing may depend on them; a group is a set of paths.
+*Avoid:* "monorepo" (one repository holding many projects — a group is many
+repositories), "multi-root workspace" (a VS Code notion, a later slice), "project"
+or "package" for a repo.
+
+**Shared path** — a loose file or folder in the workspace root that is in no repo
+of the group, or a repo that cannot be isolated (no commits, or git refuses a
+worktree), linked live into every task workspace (ADR-0014). Edits to it are
+live and not reviewable, so the planner prompt lists them and does not run
+parallel tasks that edit one. `.ordewell/` is never one. Symlinks on POSIX;
+junctions for directories and hard links for files on Windows, with a copy and a
+notice where a hard link is impossible.
+*Avoid:* "ignored file" — a shared path need not be ignored; "linked artifact"
+for the per-repo bootstrap links (`node_modules`, `.env*`), which are recorded
+and kept out of the task's commit.
+
+**Task workspace** — `.ordewell/worktrees/<run-id>/<order>-<slug>/`, the
+directory a task's Runner starts in under ADR-0014: one worktree per isolated
+repo at the same relative path as in the real workspace, plus the shared paths
+linked in, so the agent sees the real layout. Every worktree in it is on the same
+branch name, `ordewell/<run-id>/<order>-<slug>`. For a group of one it is the
+worktree.
+*Avoid:* "workspace" bare — that is the user's real folder; "sandbox".
+
 **Integration branch** — `ordewell/<run-id>/integration`, the one branch a run's
-work lands on. Each task that passes its Verdict is merged into it with
+work lands on (in each repo of the group, under ADR-0014, where landing a task is
+atomic across the repos it changed). Each task that passes its Verdict is merged into it with
 `git merge --no-ff`, one at a time, lowest plan order first among the tasks
 waiting, so the history is reproducible and each task is attributable to a merge
 commit. A merge conflict is aborted and reported, never resolved for the user
@@ -408,6 +445,9 @@ through whose landing the conflicted task lands, if it is still conflicted by
 then (a retry in the meantime replaces the conflict with a new attempt).
 *Avoid:* "result", "output branch" for the handoff — it is a branch to review,
 not an outcome.
+Under ADR-0014 the handoff covers every repo of the group: one "Merge all" that
+preflights each repo and merges none unless all pass, and a review diff with one
+section per repo.
 In the terminal the same four steps are the handoff overlay (`/handoff`, opened
 by `isolation_handoff` on a screen with nothing else open) and
 `ordewell handoff [review|merge|discard|cleanup]`. Merge and discard are asked
@@ -420,7 +460,7 @@ every other isolation state stays out of the row and appears, with the task's
 branch, only in the expanded detail.
 
 **Blocked run** — a run `isolation_blocked` turned away because tracked files are
-modified. The daemon parks the start until it hears `continueWithStash` or
+modified (in any repo of the group, under ADR-0014, which the notice names). The daemon parks the start until it hears `continueWithStash` or
 `continueWithoutIsolation`, so the run's execution stream ends at the block and
 the choice opens its own. Cancelling is `stopExecution`, not a dismissal: a
 parked start swallows a re-run. The TUI asks with a three-way picker (Stash and

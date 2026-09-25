@@ -1,6 +1,8 @@
 # 0013 — Worktree isolation: one checkout per task, one branch per run
 
-**Status:** accepted
+**Status:** accepted — amended by [ADR-0014](0014-multi-repo-workspaces.md)
+
+**Amended by ADR-0014** (multi-repo workspaces): the workspace is a *repo group* rather than one repository. Where a decision below is changed, a note marked *ADR-0014* says how; everything unmarked stands.
 
 Every AI task ran in the same working directory — the workspace root. With
 `maxParallelSessions` above one, several Runners edited that one tree at once.
@@ -23,6 +25,8 @@ after the evidence-based Verdict calls `integrate`. This task adds the module,
 its record types and its config; wiring it into the orchestrator, persistence and
 the surfaces is separate work.
 
+*ADR-0014: "the workspace is a git repository" becomes "the workspace is a repo group". A single repo is a group of one; each task gets one worktree per repo.*
+
 ### Key properties
 
 - **One seam, and it is not the runner's.** A Runner is handed a `cwd` and
@@ -39,6 +43,7 @@ the surfaces is separate work.
   with the plan state. Because task ids are only unique within one plan and one
   daemon serves many (the ADR-0007 T7 point), operations that act on a task take
   the run — `release(run, taskId, …)`, not a bare id.
+  *ADR-0014: the base ref and integration branch are per repo, so the run holds one of each for every repo in the group.*
 - **Naming and location.** Worktrees at
   `.ordewell/worktrees/<run-id>/<order>-<slug>`, branches
   `ordewell/<run-id>/<order>-<slug>`, integration branch
@@ -47,6 +52,7 @@ the surfaces is separate work.
   is directory removal plus `git worktree prune`. A merge needs a checkout, and
   the user's is off limits, so the integration branch has its own worktree, which
   is released at handoff so the user can check the branch out.
+  *ADR-0014: a task's worktrees live together in one task workspace, `.ordewell/worktrees/<run-id>/<order>-<slug>/`, each at its repo's relative path and all on one shared branch name.*
 - **Integration is a serialized queue.** Verdicts can land concurrently. The
   module merges one task at a time with `git merge --no-ff` — a merge commit per
   task preserves any commits a Runner made itself, makes attribution visible, and
@@ -60,6 +66,7 @@ the surfaces is separate work.
   the worktree and both refs are kept, and the outcome is `conflict`. Nothing
   resolves it automatically; running a resolve task is an opt-in the surfaces
   offer.
+  *ADR-0014: integration is atomic across repos — a conflict or failure in any repo the task changed rolls back its merges in the others, and the task is `conflict` as a whole.*
 - **Dirty trees block isolation.** Modified tracked files make isolated
   execution unavailable for that run (`dirty`). Untracked and ignored files do
   not, because the bootstrap accounts for them. `isActive` returns the reason
@@ -67,6 +74,7 @@ the surfaces is separate work.
   boolean, since the orchestrator answers a dirty tree with an offer to stash or
   to run without isolation, and the others with a one-line notice and today's
   shared-root behavior.
+  *ADR-0014: any dirty repo in the group holds the whole run, the notice names the repos, and stash and "run without isolation" apply to the whole group. `nested-repos` is a new reason, and `not-git` names the repos found inside the folder.*
 - **Bootstrap makes a worktree runnable.** Ignored artifacts — `node_modules`,
   `vendor`, `.venv`, `.env*`, `.envrc`, `.claude`, `.opencode`, `.codegraph` —
   are linked from the main worktree, only where the checkout does not already
@@ -76,10 +84,12 @@ the surfaces is separate work.
   The links are recorded, and the commit step keeps them out of the task's
   commit: an ignore rule such as `node_modules/` does not match a symlink, so
   without that they would be committed.
+  *ADR-0014: linking and the setup command apply per repo, `worktreeLinks` adds paths, and loose files and un-isolatable repos become shared paths.*
 - **Windows needs no privilege (ADR-0010).** Directory symlinks require
   administrator rights or developer mode on Windows, so directories become
   junctions and files are copied. Copies are what make the recorded link list
   matter there, since a copied `.envrc` is a plain untracked file.
+  *ADR-0014: files become hard links, copied only when a hard link is impossible (a different volume), with a notice.*
 - **Never merged for the user.** Ordewell never merges into the checked-out
   branch on its own. The end of a run is a handoff: the integration branch, the
   base ref and what landed, with helpers to review the diff against the base ref,
@@ -87,17 +97,20 @@ the surfaces is separate work.
   tree is left as it was), and to discard a run. Discarding removes worktrees and
   task branches but can keep the integration branch until it is explicitly given
   up.
+  *ADR-0014: one "Merge all" preflights every repo first and merges none unless all pass, and the review diff has one section per repo.*
 - **Crash recovery.** `pruneOrphans` runs when a session is adopted: it drops
   worktrees of tasks that were `active` when the process died, directories and
   branches under the run that no record owns, and stale registrations. Kept,
   failed and conflicted worktrees are what the user may want, so they stay.
   `release(..., { keep: true })` exists so a task whose verification failed is
   moved off `active` and survives that sweep.
+  *ADR-0014: pruning covers every repo in the group.*
 - **Config.** `worktreeIsolation` (default on), an `ORDEWELL_WORKTREE_ISOLATION`
   environment override, and an optional `worktreeSetupCommand`
   (`ORDEWELL_WORKTREE_SETUP`), following the `BaseConfig`/`EnvConfig` pattern.
   A repo with hooks or submodules that assume one worktree opts out with the
   setting rather than by not being a git repo.
+  *ADR-0014: adds `workspaceRepos` and `worktreeLinks`.*
 
 ## Considered options
 
