@@ -416,6 +416,7 @@ export class Session {
         this.broadcast({
           type: 'isolation_blocked',
           reason,
+          ...(repos.length > 0 ? { repos } : {}),
           message: `Tracked files have uncommitted changes${where}, so tasks cannot run in isolated worktrees. Stash them, or run this plan without isolation.`,
         });
       },
@@ -1016,13 +1017,16 @@ export class Session {
   }
 
   /**
-   * Merge the run's integration branch into whatever the user has checked out.
-   * The one irreversible step of isolated execution, so this explicit call is
-   * the only way it ever happens.
+   * "Merge all": each repo's integration branch into whatever the user has
+   * checked out there — every repo, or none if any cannot take it. The one
+   * irreversible step of isolated execution, so this explicit call is the
+   * only way it ever happens.
    */
   async mergeRun(): Promise<IsolationMergeResult> {
     this.requireSettledRun();
-    return this.orchestrator.mergeRun();
+    const result = await this.orchestrator.mergeRun();
+    this.broadcast({ type: 'isolation_merge', result });
+    return result;
   }
 
   /** Remove the run's worktrees and task branches; keep its integration branch to review or merge. */
@@ -1068,7 +1072,7 @@ export class Session {
         title: `Resolve merge conflict: ${task.title}`,
         description: `Merge ${isolation.branch} into ${integrationBranchNameOf(run)} by hand.`,
         type: 'ai',
-        prompt: buildConflictResolutionPrompt(task, isolation.branch, integrationBranchNameOf(run)),
+        prompt: buildConflictResolutionPrompt(task, isolation, integrationBranchNameOf(run)),
         assignedRunner: task.assignedRunner,
         assignedModel: task.assignedModel,
         thinkingEffort: task.thinkingEffort,

@@ -11,6 +11,7 @@ import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type {
   IsolationHandoff,
   IsolationInactiveReason,
+  IsolationMergeBlock,
   IsolationMergeResult,
   IsolationOutcome,
   IsolationRun,
@@ -20,7 +21,7 @@ import type {
   TaskIsolation,
 } from '../interfaces/IWorktreeIsolation';
 import { createWorktreeIsolation } from './GitWorktreeIsolation';
-import { handoffOf, integrationBranchNameOf, taskIsolationOf } from './isolationRecord';
+import { handoffOf, integrationBranchNameOf, SELF_REPO, taskIsolationOf } from './isolationRecord';
 
 /**
  * The one notification channel out of the orchestrator. Everything that used
@@ -53,6 +54,23 @@ type RunDecision =
   | { mode: 'shared'; reason: SharedRootReason; repos: string[] };
 
 const SHARED_ROOT_TAIL = 'tasks run in the workspace root without worktree isolation.';
+
+/** One repo that kept "Merge all" from touching anything, as part of one line. */
+function mergeBlockNotice({ repo, reason, files }: IsolationMergeBlock): string {
+  switch (reason) {
+    case 'merge-in-progress': return `${repo} has a merge in progress`;
+    case 'conflict': return `${repo} would conflict in ${files.join(', ')}`;
+    case 'uncommitted-changes': return `${repo} has uncommitted changes to ${files.join(', ')}`;
+    case 'partial-landing': return `${repo} holds part of a task whose landing could not be rolled back`;
+    case 'git-error': return `git could not check ${repo}`;
+  }
+}
+
+/** Which repos a "Merge all" that stopped part-way had merged already; merges into the user's branches are never undone. */
+function landedNotice(landed: string[]): string {
+  if (landed.length === 0) return 'Nothing was merged.';
+  return landed.length === 1 ? `${landed[0]} was merged already and stays merged.` : `${landed.join(', ')} were merged already and stay merged.`;
+}
 
 /** Why a run fell back to the shared workspace root, as the one line the user is told. */
 function sharedRootNotice(reason: SharedRootReason, repos: string[]): string {
@@ -350,13 +368,33 @@ export class TaskOrchestrator {
     return this.isolation.reviewDiff(this.requireRun());
   }
 
+  /** "Merge all": the run's integration branches into whatever the user has checked out, in every repo or none. */
   async mergeRun(): Promise<IsolationMergeResult> {
     const run = this.requireRun();
     const result = await this.isolation.mergeIntoCheckedOut(run);
     const branch = integrationBranchNameOf(run);
-    if (result.outcome === 'merged') this.notifications.info(`Merged ${branch} into your checked-out branch.`);
-    else if (result.outcome === 'conflict') this.notifications.warn(`Merging ${branch} conflicted, so it was aborted — your tree is as it was.`);
-    else this.notifications.error(`Could not merge ${branch} — finish or abort the merge already in progress, then try again.`);
+    const group = run.repos.some((r) => r.path !== SELF_REPO);
+    switch (result.outcome) {
+      case 'merged':
+        this.notifications.info(group
+          ? `Merged ${branch} into the checked-out branch of every repository.`
+          : `Merged ${branch} into your checked-out branch.`);
+        break;
+      case 'blocked':
+        this.notifications.warn(`Merged nothing, so every tree is as it was: ${result.blocked.map(mergeBlockNotice).join('; ')}.`);
+        break;
+      case 'conflict':
+      case 'failed':
+        if (result.repo === SELF_REPO) {
+          if (result.outcome === 'conflict') this.notifications.warn(`Merging ${branch} conflicted, so it was aborted — your tree is as it was.`);
+          else this.notifications.error(`Could not merge ${branch} — finish or abort the merge already in progress, then try again.`);
+          break;
+        }
+        this.notifications.warn(`${result.outcome === 'conflict'
+          ? `Merging ${branch} conflicted in ${result.repo}${result.files?.length ? ` (${result.files.join(', ')})` : ''}, so it was aborted there.`
+          : `Could not merge ${branch} in ${result.repo} — finish or abort any merge in progress there, then try again.`} ${landedNotice(result.landed ?? [])}`);
+        break;
+    }
     return result;
   }
 
@@ -566,7 +604,8 @@ export class TaskOrchestrator {
   private async integrateWork(task: Task): Promise<IsolationOutcome> {
     const run = this.isolationRun;
     if (!run) return 'failed';
-    const outcome = await this.isolation.integrate(task, run).catch((): IsolationOutcome => 'failed');
+    // Saved before the first merge, so a crash mid-landing leaves the tips to roll back to.
+    const outcome = await this.isolation.integrate(task, run, () => this.emit('onIsolationChanged')).catch((): IsolationOutcome => 'failed');
     this.emit('onIsolationChanged');
     return outcome;
   }
@@ -580,16 +619,24 @@ export class TaskOrchestrator {
   }
 
   private landUnmerged(task: Task, landing: Exclude<IsolationOutcome, 'merged'>): void {
+    const branch = this.isolationRun ? integrationBranchNameOf(this.isolationRun) : 'the integration branch';
+    // Named only where there is a repo to name: a group of one reads as it always has.
+    const repo = this.isolationRun?.tasks[task.id]?.conflictRepo;
+    const inRepo = repo && repo !== SELF_REPO ? repo : null;
     if (landing === 'conflict') {
       // Never resolved here, by a model or otherwise: the task waits on the
       // user, and its dependents wait on it.
       this.store.markAwaitingUser(task.id);
-      this.notifications.warn(`Task "${task.title}" passed, but merging it into ${this.isolationRun ? integrationBranchNameOf(this.isolationRun) : 'the integration branch'} conflicted. Its worktree is kept — resolve it by hand, retry it, or resolve it as a task.`);
+      this.notifications.warn(inRepo
+        ? `Task "${task.title}" passed, but landing it on ${branch} conflicted in ${inRepo}, so none of it landed. Its worktrees are kept — resolve it by hand, retry it, or resolve it as a task.`
+        : `Task "${task.title}" passed, but merging it into ${branch} conflicted. Its worktree is kept — resolve it by hand, retry it, or resolve it as a task.`);
     } else {
       this.store.markFailed(task.id);
       this.running = false;
       this.planStatus = 'approved';
-      this.notifications.error(`Task "${task.title}" passed, but git could not integrate its work. Its worktree is kept for inspection.`);
+      this.notifications.error(inRepo
+        ? `Task "${task.title}" passed, but git could not integrate its work in ${inRepo}, so none of it landed. Its worktrees are kept for inspection.`
+        : `Task "${task.title}" passed, but git could not integrate its work. Its worktree is kept for inspection.`);
     }
   }
 

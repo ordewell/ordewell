@@ -3,6 +3,7 @@ import type { LegacyPlanState } from '../models/Task';
 import { buildModeGuide, filteredBuildModes, type RunnerModeInfo } from './ModeResolver';
 import { DEFAULT_PLANNER_MODES, modesFor, type PlannerModes } from './plannerModes';
 import { TASK_QUERY_PROTOCOL } from './TaskQuery';
+import { SELF_REPO } from './isolationRecord';
 
 export function buildResearchToolsPrompt(): string {
   const lines = [
@@ -713,13 +714,33 @@ export function buildSplitPrompt(taskId: string, tasks: Task[]): string {
  * (ADR-0013). The resolver's own worktree starts at the integration tip, so the
  * merge it performs is exactly the one that conflicted; the conflicted task
  * then lands through that merge. Ordewell never resolves a conflict itself.
+ *
+ * In a repo group (ADR-0014) the conflict in one repo rolled the task back in
+ * all of them, so the resolver merges the branch in every repo the task
+ * changed, not only the one that conflicted.
  */
-export function buildConflictResolutionPrompt(task: Task, branch: string, integrationBranch: string): string {
+export function buildConflictResolutionPrompt(
+  task: Task,
+  conflict: { branch: string; repos: string[]; conflictRepo?: string },
+  integrationBranch: string,
+): string {
+  const { branch } = conflict;
+  const asked = `What the task was asked to do:\n${task.prompt ?? task.description}`;
+  const repos = conflict.repos.filter((repo) => repo !== SELF_REPO);
+  if (repos.length === 0) {
+    return [
+      `Task #${task.order} "${task.title}" passed, but merging its branch \`${branch}\` into \`${integrationBranch}\` conflicted.`,
+      `This working tree starts at the tip of \`${integrationBranch}\`. Run \`git merge --no-ff ${branch}\` here and resolve every conflict so that both sides' intent survives: keep the work already integrated and add what the task contributed. Do not drop either side wholesale.`,
+      'Build and test the result the way this project does, then commit the merge.',
+      '',
+      asked,
+    ].join('\n');
+  }
   return [
-    `Task #${task.order} "${task.title}" passed, but merging its branch \`${branch}\` into \`${integrationBranch}\` conflicted.`,
-    `This working tree starts at the tip of \`${integrationBranch}\`. Run \`git merge --no-ff ${branch}\` here and resolve every conflict so that both sides' intent survives: keep the work already integrated and add what the task contributed. Do not drop either side wholesale.`,
-    'Build and test the result the way this project does, then commit the merge.',
+    `Task #${task.order} "${task.title}" passed, but landing its branch \`${branch}\` on \`${integrationBranch}\` conflicted in ${conflict.conflictRepo ?? repos[0]}. A task lands in every repository it changed or in none, so none of its work has landed yet.`,
+    `This workspace holds every repository at its usual path, each starting at the tip of \`${integrationBranch}\`. In each repository the task changed — ${repos.join(', ')} — run \`git merge --no-ff ${branch}\` inside that repository's directory, and resolve every conflict so that both sides' intent survives: keep the work already integrated and add what the task contributed. Do not drop either side wholesale.`,
+    'Build and test the result the way this project does, then commit the merge in each repository.',
     '',
-    `What the task was asked to do:\n${task.prompt ?? task.description}`,
+    asked,
   ].join('\n');
 }

@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { TaskOrchestrator } from '../TaskOrchestrator';
 import { createTask, type Task } from '../../models/Task';
 import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
-import type { IsolationAvailability } from '../../interfaces/IWorktreeIsolation';
+import type { IsolationAvailability, IsolationMergeResult } from '../../interfaces/IWorktreeIsolation';
 import { fakeConfig, FakeTerminalSession, FakeWorktreeIsolation } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
@@ -373,6 +373,110 @@ describe('TaskOrchestrator with worktree isolation', () => {
       ]);
     });
 
+    function group(configure: (isolation: FakeWorktreeIsolation) => void = () => undefined) {
+      const isolation = new FakeWorktreeIsolation();
+      isolation.repos = ['api', 'web'];
+      configure(isolation);
+      return setup({ isolation, workspace: '/group' });
+    }
+
+    it('names the repository a task\'s landing conflicted in, and says none of it landed', async () => {
+      const { orchestrator, notifications, pass } = group((iso) => {
+        iso.outcomes.set('t1', 'conflict');
+        iso.stopsIn.set('t1', 'web');
+      });
+      const t1 = task('t1', 1);
+      orchestrator.loadPlan([t1, task('t2', 2, { dependencies: ['t1'] })]);
+      await orchestrator.approveReview();
+
+      pass(t1);
+      await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('awaiting_user'));
+
+      expect(orchestrator.getTaskIsolation('t1')).toEqual({
+        state: 'conflict', branch: 'ordewell/run1/1-t1', worktree: '/fake-worktrees/run1/1-t1', repos: ['api', 'web'], conflictRepo: 'web',
+      });
+      expect(vi.mocked(notifications.warn).mock.calls.map((c) => String(c[0]))).toContain(
+        'Task "Task t1" passed, but landing it on ordewell/run1/integration conflicted in web, so none of it landed. Its worktrees are kept — resolve it by hand, retry it, or resolve it as a task.',
+      );
+    });
+
+    it('names the repository git could not integrate a task in', async () => {
+      const { orchestrator, notifications, pass } = group((iso) => {
+        iso.outcomes.set('t1', 'failed');
+        iso.stopsIn.set('t1', 'api');
+      });
+      const t1 = task('t1', 1);
+      orchestrator.loadPlan([t1]);
+      await orchestrator.approveReview();
+
+      pass(t1);
+      await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('failed'));
+
+      expect(orchestrator.getTaskIsolation('t1')).toMatchObject({ state: 'kept', conflictRepo: 'api' });
+      expect(vi.mocked(notifications.error).mock.calls.map((c) => String(c[0]))).toContain(
+        'Task "Task t1" passed, but git could not integrate its work in api, so none of it landed. Its worktrees are kept for inspection.',
+      );
+    });
+
+    it('waits for the whole task to land before starting a dependent', async () => {
+      const { orchestrator, isolation, pass, spawn } = group((iso) => iso.changes.set('t1', ['api', 'web']));
+      const t1 = task('t1', 1);
+      orchestrator.loadPlan([t1, task('t2', 2, { dependencies: ['t1'] })]);
+      await orchestrator.approveReview();
+      const openMerge = isolation.holdIntegration('t1');
+
+      pass(t1);
+      await vi.waitFor(() => expect(isolation.taskIdsFor('integrate')).toEqual(['t1']));
+      await new Promise((r) => setTimeout(r, 10));
+      expect(spawn).toHaveBeenCalledTimes(1);
+
+      openMerge();
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
+    });
+
+    describe('Merge all', () => {
+      async function settled(result: IsolationMergeResult) {
+        const env = group((iso) => { iso.mergeResult = result; });
+        const t1 = task('t1', 1);
+        env.orchestrator.loadPlan([t1]);
+        await env.orchestrator.approveReview();
+        env.pass(t1);
+        await vi.waitFor(() => expect(env.orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
+        return { ...env, merged: await env.orchestrator.mergeRun() };
+      }
+      const said = (fn: (message: string) => void) => vi.mocked(fn).mock.calls.map((c) => String(c[0]));
+
+      it('says each repository that blocked it, and why, and that nothing was merged', async () => {
+        const result: IsolationMergeResult = {
+          outcome: 'blocked',
+          blocked: [
+            { repo: 'api', reason: 'uncommitted-changes', files: ['api.txt', 'b.txt'] },
+            { repo: 'web', reason: 'conflict', files: ['web.txt'] },
+            { repo: 'docs', reason: 'merge-in-progress', files: [] },
+          ],
+        };
+        const { notifications, merged } = await settled(result);
+
+        expect(merged).toEqual(result);
+        expect(said(notifications.warn)).toContain(
+          'Merged nothing, so every tree is as it was: api has uncommitted changes to api.txt, b.txt; web would conflict in web.txt; docs has a merge in progress.',
+        );
+      });
+
+      it('says which repositories stay merged when a merge stops part-way', async () => {
+        const { notifications } = await settled({ outcome: 'conflict', repo: 'web', files: ['web.txt'], landed: ['api'] });
+
+        expect(said(notifications.warn)).toContain(
+          'Merging ordewell/run1/integration conflicted in web (web.txt), so it was aborted there. api was merged already and stays merged.',
+        );
+      });
+
+      it('says it merged into the checked-out branch of every repository', async () => {
+        const { notifications } = await settled({ outcome: 'merged' });
+        expect(said(notifications.info)).toContain('Merged ordewell/run1/integration into the checked-out branch of every repository.');
+      });
+    });
+
     it('runs in the workspace root when no repository of the group could be isolated after all', async () => {
       const isolation = new FakeWorktreeIsolation();
       isolation.startRunError = new Error('No repository could be isolated: api, web');
@@ -455,6 +559,44 @@ describe('TaskOrchestrator with worktree isolation', () => {
       await orchestrator.continueBlockedRun('stash');
       expect(spawnedCwd('t1')).toBe('/fake-worktrees/run1/1-t1');
     });
+  });
+
+  it('has the run saved with its landing before anything merges', async () => {
+    const { orchestrator, isolation, pass } = setup();
+    const saved: unknown[] = [];
+    orchestrator.subscribe({ onIsolationChanged: () => saved.push(JSON.parse(JSON.stringify(orchestrator.isolationRecord!.run.landing ?? null))) });
+    const t1 = task('t1', 1);
+    orchestrator.loadPlan([t1]);
+    await orchestrator.approveReview();
+    const openMerge = isolation.holdIntegration('t1');
+
+    pass(t1);
+    await vi.waitFor(() => expect(saved).toContainEqual({ taskId: 't1', tips: { '.': 'tip-.' } }));
+
+    openMerge();
+    await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
+    expect(saved.at(-1)).toBeNull();
+  });
+
+  it('words a group of one\'s conflict and Merge all as it always has', async () => {
+    const { orchestrator, isolation, notifications, pass } = setup();
+    isolation.outcomes.set('t1', 'conflict');
+    const t1 = task('t1', 1);
+    orchestrator.loadPlan([t1]);
+    await orchestrator.approveReview();
+    pass(t1);
+    await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('awaiting_user'));
+    isolation.mergeResult = { outcome: 'conflict', repo: '.', files: ['a.txt'] };
+    await orchestrator.mergeRun();
+    isolation.mergeResult = { outcome: 'failed', repo: '.' };
+    await orchestrator.mergeRun();
+
+    const warned = vi.mocked(notifications.warn).mock.calls.map((c) => String(c[0]));
+    expect(warned).toContain('Task "Task t1" passed, but merging it into ordewell/run1/integration conflicted. Its worktree is kept — resolve it by hand, retry it, or resolve it as a task.');
+    expect(warned).toContain('Merging ordewell/run1/integration conflicted, so it was aborted — your tree is as it was.');
+    expect(vi.mocked(notifications.error).mock.calls.map((c) => String(c[0]))).toContain(
+      'Could not merge ordewell/run1/integration — finish or abort the merge already in progress, then try again.',
+    );
   });
 
   it('hands the integration branch over when the plan settles, before reporting completion', async () => {

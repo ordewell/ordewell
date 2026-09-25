@@ -8,6 +8,7 @@ import * as sessionStore from '../../utils/sessionStore';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
 import type { SessionMessage } from '../SessionMessage';
+import type { IsolationMergeResult } from '../../interfaces/IWorktreeIsolation';
 import type { ConversationTurn, IAiService } from '../AiService';
 
 function runner() {
@@ -117,6 +118,7 @@ describe('Session with worktree isolation', () => {
       expect(messages).toContainEqual({
         type: 'isolation_blocked',
         reason: 'dirty',
+        repos: ['api', 'web'],
         message: 'Tracked files have uncommitted changes in api, web, so tasks cannot run in isolated worktrees. Stash them, or run this plan without isolation.',
       });
     });
@@ -299,6 +301,30 @@ describe('Session with worktree isolation', () => {
       expect(isolation.calls.map((c) => c.op)).toContain('mergeIntoCheckedOut');
     });
 
+    it('tells every surface what Merge all did, down to each repository that blocked it', async () => {
+      const { session, isolation, messages } = await landed();
+      const result: IsolationMergeResult = { outcome: 'blocked', blocked: [{ repo: 'web', reason: 'conflict', files: ['web.txt'] }] };
+      isolation.mergeResult = result;
+
+      expect(await session.mergeRun()).toEqual(result);
+      expect(messages.at(-1)).toEqual({ type: 'isolation_merge', result });
+    });
+
+    it('saves the run with its landing before anything merges, and again once it has landed', async () => {
+      const { session, isolation, pass } = setup();
+      const t1 = task('t1', 1);
+      session.loadPlan(plan([t1]), 'goal', '/repo');
+      await session.executePlan();
+      const openMerge = isolation.holdIntegration('t1');
+
+      pass(t1);
+      await vi.waitFor(() => expect(saved()!.isolation?.run.landing).toEqual({ taskId: 't1', tips: { '.': 'tip-.' } }));
+
+      openMerge();
+      await vi.waitFor(() => expect(saved()!.isolation?.run.tasks.t1.status).toBe('merged'));
+      expect(saved()!.isolation?.run.landing).toBeUndefined();
+    });
+
     it('cleans up worktrees but keeps the branch and the record', async () => {
       const { session, isolation } = await landed();
       await session.cleanupRun();
@@ -339,6 +365,25 @@ describe('Session with worktree isolation', () => {
     expect(resolver.assignedModel?.modelId).toBe('sonnet');
     expect(resolver.dependencies).toEqual([]);
     expect(saved()!.isolation!.resolvers).toEqual({ [resolver.id]: 't1' });
+  });
+
+  it('asks a resolver to merge the conflicted branch in every repository the task changed, naming where it conflicted', async () => {
+    const isolation = new FakeWorktreeIsolation();
+    isolation.repos = ['api', 'web'];
+    isolation.outcomes.set('t1', 'conflict');
+    isolation.stopsIn.set('t1', 'web');
+    const { session, pass } = setup(isolation);
+    const t1 = task('t1', 1);
+    session.loadPlan(plan([t1]), 'goal', '/group');
+    await session.executePlan();
+    pass(t1);
+    await vi.waitFor(() => expect(session.getTask('t1')!.status).toBe('awaiting_user'));
+
+    await session.resolveConflictAsTask('t1');
+
+    const { prompt } = session.planTasks[1];
+    expect(prompt).toContain('conflicted in web');
+    expect(prompt).toContain('In each repository the task changed — api, web — run `git merge --no-ff ordewell/run1/1-t1`');
   });
 
   it('refuses to resolve a task that did not conflict', async () => {

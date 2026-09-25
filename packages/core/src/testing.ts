@@ -107,10 +107,20 @@ export type FakeIsolationCall =
  * filesystem. Every call is logged in `calls`; `prepare` hands back a
  * deterministic fake cwd. Set `availability` to exercise the fallbacks, `outcomes`
  * to script a conflict, and `holdIntegration` to keep a task un-integrated so a
- * test can observe that its dependents wait.
+ * test can observe that its dependents wait. `repos` makes the run a group of
+ * several; `changes` and `stopsIn` say which of them a task changes and where
+ * its landing stops.
  */
 export class FakeWorktreeIsolation implements IWorktreeIsolation {
   availability: IsolationAvailability = { active: true };
+  /** The repo paths `startRun` groups: a group of one at `.` unless set. */
+  repos: string[] = [SELF_REPO];
+  /** Per task id, the repos it changes; every repo of the group when not listed. */
+  changes = new Map<string, string[]>();
+  /** Per task id, the repo its landing stops in when its outcome is not `merged`; its first changed repo when not listed. */
+  stopsIn = new Map<string, string>();
+  /** What `mergeIntoCheckedOut` answers. */
+  mergeResult: IsolationMergeResult = { outcome: 'merged' };
   /** What `startRun` shares and `prepare` copies, to exercise their notices. */
   shared: string[] = [];
   sharedRepos: string[] = [];
@@ -155,7 +165,9 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
     return {
       id,
       workspaceRoot,
-      repos: [{ path: SELF_REPO, root: workspaceRoot, baseRef: 'base0000', baseBranch: 'main', integrationBranch: integrationBranchFor(id) }],
+      repos: this.repos.map((repo) => ({
+        path: repo, root: `${workspaceRoot}/${repo}`.replace(/\/\.$/, ''), baseRef: 'base0000', baseBranch: 'main', integrationBranch: integrationBranchFor(id),
+      })),
       shared: [...this.shared],
       sharedRepos: [...this.sharedRepos],
       tasks: {},
@@ -169,24 +181,28 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
     const branch = `ordewell/${run.id}/${name}`;
     run.tasks[task.id] = {
       taskId: task.id, order: task.order, title: task.title, branch, workspace: cwd, status: 'active',
-      repos: { [SELF_REPO]: { worktree: cwd, linked: [] } },
+      repos: Object.fromEntries(run.repos.map((r) => [r.path, { worktree: r.path === SELF_REPO ? cwd : `${cwd}/${r.path}`, linked: [] }])),
     };
     return { cwd, branch, copied: [...this.copied] };
   }
 
-  async integrate(task: Task, run: IsolationRun): Promise<IsolationOutcome> {
+  /** Like git: the landing is recorded and persisted before the (held) merge, and cleared once it settles. */
+  async integrate(task: Task, run: IsolationRun, persist: () => void = () => undefined): Promise<IsolationOutcome> {
     this.log({ op: 'integrate', taskId: task.id });
-    await this.holds.get(task.id);
     const record = run.tasks[task.id];
     if (!record) return 'failed';
+    const changed = this.changes.get(task.id) ?? run.repos.map((r) => r.path);
+    for (const [repo, entry] of Object.entries(record.repos)) entry.changed = changed.includes(repo) || (entry.changed ?? false);
+    if (changed.length > 0) {
+      run.landing = { taskId: task.id, tips: Object.fromEntries(changed.map((repo) => [repo, `tip-${repo}`])) };
+      persist();
+    }
+    await this.holds.get(task.id);
+    delete run.landing;
     const outcome = this.outcomes.get(task.id) ?? 'merged';
     record.status = outcome;
-    if (outcome === 'merged') {
-      record.repos[SELF_REPO].changed = true;
-      delete record.conflictRepo;
-    } else if (outcome === 'conflict') {
-      record.conflictRepo = SELF_REPO;
-    }
+    if (outcome === 'merged') delete record.conflictRepo;
+    else record.conflictRepo = this.stopsIn.get(task.id) ?? changed[0] ?? SELF_REPO;
     return outcome;
   }
 
@@ -204,7 +220,7 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
 
   async pruneOrphans(): Promise<void> { this.log({ op: 'pruneOrphans' }); }
   async reviewDiff(): Promise<string> { this.log({ op: 'reviewDiff' }); return ''; }
-  async mergeIntoCheckedOut(): Promise<IsolationMergeResult> { this.log({ op: 'mergeIntoCheckedOut' }); return { outcome: 'merged' }; }
+  async mergeIntoCheckedOut(): Promise<IsolationMergeResult> { this.log({ op: 'mergeIntoCheckedOut' }); return this.mergeResult; }
   async discard(_run: IsolationRun, opts: { keepIntegration: boolean }): Promise<void> {
     this.log({ op: 'discard', keepIntegration: opts.keepIntegration });
   }

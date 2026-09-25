@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildConversationSystemPrompt, buildResearchPrompt, buildResearchToolsPrompt, buildSubagentSystemPrompt } from '../PlanPrompts';
-import type { DiscoveredModel, RunnerId } from '../../models/Task';
+import { buildConflictResolutionPrompt, buildConversationSystemPrompt, buildResearchPrompt, buildResearchToolsPrompt, buildSubagentSystemPrompt } from '../PlanPrompts';
+import { createTask, type DiscoveredModel, type RunnerId } from '../../models/Task';
 
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from '../plannerModes';
 
@@ -238,5 +238,29 @@ describe('planner parallelism rules under worktree isolation (ADR-0013)', () => 
   it('still asks for dependencies that reflect genuine ordering', () => {
     expect(conversation(true)).toContain('- Only add dependencies when a slice truly depends on artifacts another slice creates.');
     expect(oneShot(true)).toContain('- Only add dependencies when the second slice truly depends on artifacts (files, APIs) that the first slice creates.');
+  });
+});
+
+describe('the resolver task prompt', () => {
+  const conflicted = createTask({ id: 't1', order: 3, title: 'Edit both', prompt: 'change the API and its client' });
+
+  it('reads as it always has for a repository that is the whole workspace', () => {
+    expect(buildConflictResolutionPrompt(conflicted, { branch: 'ordewell/r1/3-edit-both', repos: ['.'], conflictRepo: '.' }, 'ordewell/r1/integration')).toBe([
+      'Task #3 "Edit both" passed, but merging its branch `ordewell/r1/3-edit-both` into `ordewell/r1/integration` conflicted.',
+      'This working tree starts at the tip of `ordewell/r1/integration`. Run `git merge --no-ff ordewell/r1/3-edit-both` here and resolve every conflict so that both sides\' intent survives: keep the work already integrated and add what the task contributed. Do not drop either side wholesale.',
+      'Build and test the result the way this project does, then commit the merge.',
+      '',
+      'What the task was asked to do:\nchange the API and its client',
+    ].join('\n'));
+  });
+
+  it('has the branch merged in every repository the task changed, since none of it landed, and names where it conflicted', () => {
+    const p = buildConflictResolutionPrompt(conflicted, { branch: 'ordewell/r1/3-edit-both', repos: ['api', 'web'], conflictRepo: 'web' }, 'ordewell/r1/integration');
+
+    expect(p).toContain('conflicted in web');
+    expect(p).toMatch(/lands in every repository it changed or in none/);
+    expect(p).toContain('In each repository the task changed — api, web — run `git merge --no-ff ordewell/r1/3-edit-both` inside that repository');
+    expect(p).toContain('commit the merge in each repository');
+    expect(p).toContain('change the API and its client');
   });
 });
