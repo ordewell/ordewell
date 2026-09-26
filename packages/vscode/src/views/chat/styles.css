@@ -7,10 +7,10 @@
   --bg-input: var(--vscode-input-background, var(--bg-primary));
   --border-color: var(--vscode-panel-border, #30363d);
   --border-muted: var(--vscode-widget-border, var(--border-color));
-  --border-subtle: var(--vscode-panel-border, var(--border-color));
+  --border-subtle: color-mix(in srgb, var(--border-color) 60%, transparent);
   --text-primary: var(--vscode-foreground, #e6edf3);
   --text-secondary: var(--vscode-descriptionForeground, #8b949e);
-  --text-muted: var(--vscode-descriptionForeground, #636c76);
+  --text-muted: color-mix(in srgb, var(--text-secondary) 70%, transparent);
   --text-placeholder: var(--vscode-input-placeholderForeground, var(--text-muted));
   --accent: #58a6ff;
   --accent-emphasis: #1f6feb;
