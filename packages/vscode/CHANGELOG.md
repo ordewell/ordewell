@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- The chat panel follows light themes: the focused chat input, hovered and
+  expanded task cards and inline code no longer render dark, and hover
+  highlights and the runner chip in the model badge are visible.
+
 ## [0.5.3] — 2026-09-26
 
 No extension changes; released alongside the CLI's fixes.

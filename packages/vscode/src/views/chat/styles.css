@@ -1,17 +1,17 @@
 :root {
   --bg-primary: var(--vscode-editor-background, #0d1117);
   --bg-secondary: var(--vscode-sideBar-background, #161b22);
-  --bg-tertiary: #1c2128;
-  --bg-elevated: #1e2430;
-  --bg-hover: rgba(255, 255, 255, 0.04);
-  --bg-input: var(--vscode-input-background, #0d1117);
+  --bg-tertiary: var(--vscode-editorWidget-background, var(--bg-secondary));
+  --bg-elevated: var(--vscode-quickInput-background, var(--bg-secondary));
+  --bg-hover: var(--vscode-list-hoverBackground, var(--bg-secondary));
+  --bg-input: var(--vscode-input-background, var(--bg-primary));
   --border-color: var(--vscode-panel-border, #30363d);
-  --border-muted: #21262d;
-  --border-subtle: rgba(48, 54, 61, 0.6);
+  --border-muted: var(--vscode-widget-border, var(--border-color));
+  --border-subtle: var(--vscode-panel-border, var(--border-color));
   --text-primary: var(--vscode-foreground, #e6edf3);
   --text-secondary: var(--vscode-descriptionForeground, #8b949e);
-  --text-muted: #636c76;
-  --text-placeholder: rgba(139, 148, 158, 0.45);
+  --text-muted: var(--vscode-descriptionForeground, #636c76);
+  --text-placeholder: var(--vscode-input-placeholderForeground, var(--text-muted));
   --accent: #58a6ff;
   --accent-emphasis: #1f6feb;
   --accent-subtle: rgba(88, 166, 255, 0.08);
@@ -1824,13 +1824,14 @@ body {
 .task-model-badge.model-hash-6 { background: rgba(175,82,222,0.12); color: #af52de; }
 .task-model-badge.model-hash-7 { background: rgba(255,59,48,0.12); color: #ff3b30; }
 
-/* Runner abbreviation chip inside the model badge */
+/* Runner abbreviation chip inside the model badge. Tinted from the badge's own
+   text color, not white, so it stays visible on light themes too. */
 .task-runner-abbrev {
   display: inline-block;
   margin-left: 4px;
   padding: 0 4px;
   border-radius: 3px;
-  background: rgba(255,255,255,0.12);
+  background: color-mix(in srgb, currentColor 16%, transparent);
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.03em;
@@ -2458,7 +2459,7 @@ body {
 .chat-input-inner {
   display: flex;
   flex-direction: column;
-  background: var(--bg-secondary);
+  background: var(--bg-input);
   border: 1px solid var(--border-muted);
   border-radius: var(--radius-lg);
   padding: 0 2px 0 4px;
@@ -2468,7 +2469,6 @@ body {
 .chat-input-inner:focus-within {
   border-color: rgba(88, 166, 255, 0.4);
   box-shadow: 0 0 0 2px var(--accent-glow);
-  background: var(--bg-tertiary);
 }
 
 .chat-input-row {
