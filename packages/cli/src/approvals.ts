@@ -14,6 +14,8 @@ export interface ApprovalDeps {
   autoApprove?: boolean;
   /** False in a pipe or CI, where there is nobody to answer. Defaults to true. */
   interactive?: boolean;
+  /** Optional notification hook called when human input or approval is required. */
+  notify?: (message: string, event: ApprovalEvent) => void;
 }
 
 /** A socket event, which may or may not be an approval request. */
@@ -24,10 +26,21 @@ export interface ApprovalEvent {
   subject?: unknown;
   scope?: unknown;
   detail?: unknown;
+  reason?: unknown;
+  options?: unknown;
+  sourceNode?: unknown;
+  deadline?: unknown;
   [key: string]: unknown;
 }
 
 export function describeApproval(event: ApprovalEvent): string {
+  if (event.type === 'escalation' || event.kind === 'escalation') {
+    const reason = event.reason ? String(event.reason) : (event.subject ? String(event.subject) : 'Escalation pending');
+    const source = event.sourceNode ? `[Node: ${String(event.sourceNode)}] ` : '';
+    const detailLine = event.detail ? `\n  ${String(event.detail)}` : '';
+    return `${source}Escalation: ${reason}${detailLine}`;
+  }
+
   const subject = String(event.subject ?? '');
   const scope = String(event.scope ?? '');
   const detail = event.detail ? String(event.detail) : '';
@@ -81,17 +94,20 @@ export async function handleApprovalEvent(
   deps: ApprovalDeps,
   answered: Set<string> = new Set(),
 ): Promise<void> {
-  if (event.type === 'approval_decided') {
+  if (event.type === 'approval_decided' || event.type === 'escalation_decided') {
     deps.write(`\n${describeApprovalDecision(event)}\n`);
     return;
   }
-  if (event.type !== 'approval_request') return;
+  if (event.type !== 'approval_request' && event.type !== 'escalation') return;
   const id = String(event.id ?? '');
   if (!id || answered.has(id)) return;
   answered.add(id);
 
+  const description = describeApproval(event);
+  deps.notify?.(description, event);
+
   const interactive = deps.interactive ?? true;
-  deps.write(`\n${describeApproval(event)}\n`);
+  deps.write(`\n${description}\n`);
 
   let granted: boolean;
   if (deps.autoApprove) {
