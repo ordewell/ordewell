@@ -101,3 +101,43 @@ export async function handleRewind(subArgs: string[], injectedApi?: ApiClient): 
   console.log('\nThe message you rewound to, to resend or edit:\n');
   console.log(fork.rewoundMessage);
 }
+
+/**
+ * Pause the session and its subtree. It stops spawning new sessions and running
+ * sessions are interrupted at the next turn boundary.
+ */
+export async function handlePause(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
+  const { api, sessionId } = await adopted(subArgs, injectedApi);
+  try {
+    await api.pauseSession(sessionId);
+  } catch (err) {
+    fail(`Failed to pause: ${(err as Error).message}`);
+  }
+  console.log(`Paused ${sessionId}.`);
+}
+
+/**
+ * Resume a paused session and its subtree.
+ */
+export async function handleResume(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
+  const { api, sessionId } = await adopted(subArgs, injectedApi);
+  try {
+    await api.resumeSession(sessionId);
+  } catch (err) {
+    fail(`Failed to resume: ${(err as Error).message}`);
+  }
+  console.log(`Resumed ${sessionId}.`);
+}
+
+/**
+ * Kill the session and its subtree.
+ */
+export async function handleKill(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
+  const { api, sessionId } = await adopted(subArgs, injectedApi);
+  try {
+    await api.killSession(sessionId);
+  } catch (err) {
+    fail(`Failed to kill: ${(err as Error).message}`);
+  }
+  console.log(`Killed ${sessionId}.`);
+}
