@@ -19,6 +19,9 @@ record of who built what, rather than `git log`.
 - **Luca Palumbo** ([@LucaPalumbo](https://github.com/LucaPalumbo)) — strict
   typing across the monorepo, the ESLint configuration, and the original CI
   workflow.
+- [@directsol](https://github.com/directsol) — verified the Codex transcript
+  reader against a live rollout store (#16) and made the VS Code chat panel
+  follow light themes (#20).
 
 Thank you. Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
