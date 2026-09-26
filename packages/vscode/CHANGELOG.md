@@ -6,7 +6,8 @@
 
 - The chat panel follows light themes: the focused chat input, hovered and
   expanded task cards and inline code no longer render dark, and hover
-  highlights and the runner chip in the model badge are visible.
+  highlights and the runner chip in the model badge are visible. Thanks to
+  @directsol.
 
 ## [0.5.3] — 2026-09-26
 
