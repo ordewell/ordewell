@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.5.4] — 2026-09-26
+
 ### Fixed
 
 - The chat panel follows light themes: the focused chat input, hovered and

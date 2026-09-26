@@ -8,6 +8,15 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.5.4] — 2026-09-26
+
+### Fixed
+
+- **The VS Code chat panel follows light themes.** The focused chat input,
+  hovered and expanded task cards and inline code no longer render as dark
+  blocks, hover highlights and the runner chip in the model badge are visible,
+  and muted text stays lighter than body text. Thanks to @directsol (#20).
+
 ## [0.5.3] — 2026-09-26
 
 ### Fixed
