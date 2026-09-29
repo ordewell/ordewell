@@ -94,6 +94,19 @@ describe('loadEnvFile', () => {
     expect(process.env[key]).toBe('from-shell');
   });
 
+  it.each([
+    ['double quotes', `${key}="sk-or-v1-abc"`],
+    ['single quotes', `${key}='sk-or-v1-abc'`],
+    ['an export prefix', `export ${key}=sk-or-v1-abc`],
+    ['CRLF line endings', `${key}=sk-or-v1-abc\r`],
+  ])('reads the bare value when the line uses %s', (_label, line) => {
+    const file = path.join(os.tmpdir(), '.ordewell', '.env');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${line}\n`);
+    loadEnvFile();
+    expect(process.env[key]).toBe('sk-or-v1-abc');
+  });
+
   it('is a no-op when no .env file exists', () => {
     expect(() => loadEnvFile()).not.toThrow();
     expect(process.env[key]).toBeUndefined();

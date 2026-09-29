@@ -25,7 +25,7 @@ import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
 import { IAiService, ConversationRequest, ConversationTurn } from './AiService';
 import { BaseAiService, ResearchChat, ResearchTurn, ToolResult, ConversationTurnContext } from './BaseAiService';
 import { toOpenAiTools, toOpenAiSubagentTools } from './researchTools';
-import { stripModelPrefix } from './ProviderRegistry';
+import { getProviderMeta, stripModelPrefix } from './ProviderRegistry';
 import { compactToolMessages, type CompactableMessage } from './contextCompaction';
 import type { UsageRecord } from '../models/Usage';
 import type { LegacyPlanState } from '../models/Task';
@@ -39,10 +39,13 @@ interface StreamUsage {
   cost?: number;
 }
 
+const KEYLESS_PLACEHOLDER = 'not-needed';
+
 class OpenAiResearchChat implements ResearchChat {
   constructor(
     private messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[],
-    private client: OpenAI,
+    /** Resolved per API call, never captured: a key or endpoint changed mid-conversation must reach the next turn. */
+    private getClient: () => OpenAI,
     private model: string,
     private tools: OpenAI.Chat.Completions.ChatCompletionTool[],
     /** Live reasoning deltas during a turn, so the UI isn't frozen while a reasoning
@@ -94,7 +97,7 @@ class OpenAiResearchChat implements ResearchChat {
     // for the model's entire think time with no signal — the "0 steps / nothing for
     // a long time" symptom on reasoning models. Tool-call deltas are reassembled by
     // index into the final message the loop acts on.
-    const stream = await this.client.chat.completions.create({
+    const stream = await this.getClient().chat.completions.create({
       model: this.model,
       messages: this.messages,
       tools: this.tools,
@@ -182,25 +185,41 @@ class OpenAiResearchChat implements ResearchChat {
 
 export class OpenAiService extends BaseAiService implements IAiService {
   private client: OpenAI | null = null;
+  private clientCredentials = '';
 
   constructor(config: IConfig) { super(config); }
 
+  /**
+   * Rebuilt whenever the key or endpoint differs from the one the client was
+   * made with. A Session outlives `/key` and endpoint edits, so a client cached
+   * for good kept sending the previous key: the provider answered 401 for a
+   * key the user had already replaced.
+   */
   private getClient(): OpenAI {
-    if (!this.client) {
-      const baseUrl = this.config.getProviderBaseUrl(this.config.aiProvider);
-      const apiKey = this.config.getProviderApiKey(this.config.aiProvider);
-      this.client = new OpenAI({ baseURL: baseUrl, apiKey });
+    const provider = this.config.aiProvider;
+    const baseURL = this.config.getProviderBaseUrl(provider);
+    // Keyless local servers (ollama, LM Studio) are valid `openai_compatible`
+    // targets, but the SDK refuses an empty key outright.
+    const apiKey = this.config.getProviderApiKey(provider) || KEYLESS_PLACEHOLDER;
+    const credentials = `${baseURL}\n${apiKey}`;
+    if (!this.client || credentials !== this.clientCredentials) {
+      this.client = new OpenAI({ baseURL, apiKey });
+      this.clientCredentials = credentials;
     }
     return this.client;
   }
 
   ensureInit(): void {
-    if (this.config.aiProvider === 'openai_compatible' && !this.config.openaiCompatibleBaseUrl) {
-      throw new Error('OpenAI-compatible base URL not configured. Set OPENAI_COMPATIBLE_BASE_URL.');
+    const provider = this.config.aiProvider;
+    if (provider === 'openai_compatible') {
+      if (!this.config.openaiCompatibleBaseUrl) {
+        throw new Error('OpenAI-compatible base URL not configured. Set OPENAI_COMPATIBLE_BASE_URL.');
+      }
+      return;
     }
-    const apiKey = this.config.getProviderApiKey(this.config.aiProvider);
-    if (!apiKey) {
-      throw new Error('OpenAI API key not configured. Set OPENAI_API_KEY.');
+    if (!this.config.getProviderApiKey(provider)) {
+      const meta = getProviderMeta(provider);
+      throw new Error(`${meta.label} API key not configured. Set ${meta.apiKeyEnvVar}.`);
     }
   }
 
@@ -247,13 +266,12 @@ export class OpenAiService extends BaseAiService implements IAiService {
 
   /** A research subagent: fresh history, digest contract, cheap model, read-only tools. */
   protected createSubagentChat(onReasoning?: (delta: string) => void, onUsage?: (record: UsageRecord) => void): ResearchChat | null {
-    const client = this.getClient();
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       { role: 'system', content: buildSubagentSystemPrompt() },
     ];
     return new OpenAiResearchChat(
       messages,
-      client,
+      () => this.getClient(),
       this.requireModel('researchSubagentModel', this.config.researchSubagentModel),
       toOpenAiSubagentTools(),
       onReasoning,
@@ -267,7 +285,6 @@ export class OpenAiService extends BaseAiService implements IAiService {
 
   async startConversation(req: ConversationRequest): Promise<ConversationTurn> {
     this.ensureInit();
-    const client = this.getClient();
 
     const contextStr = await BaseAiService.collectResearchContext(req.fs, req.runners);
     const systemPrompt = buildConversationSystemPrompt(
@@ -293,7 +310,7 @@ export class OpenAiService extends BaseAiService implements IAiService {
     let currentProgress = req.onProgress;
     const chat = new OpenAiResearchChat(
       messages,
-      client,
+      () => this.getClient(),
       this.requireModel('orchestratorModel', this.config.orchestratorModel),
       toOpenAiTools(),
       (delta, segmentId) => currentProgress({ type: 'thinking', text: delta, segmentId }),
@@ -341,7 +358,6 @@ export class OpenAiService extends BaseAiService implements IAiService {
     signal?: AbortSignal,
   ): Promise<{ tasks: Task[]; researchLog: ResearchLogEntry[]; researchResults: string }> {
     this.ensureInit();
-    const client = this.getClient();
     const { autonomousDefault } = modes;
 
     const contextStr = await BaseAiService.collectResearchContext(fs, runners);
@@ -356,7 +372,7 @@ export class OpenAiService extends BaseAiService implements IAiService {
 
     const researchChat: ResearchChat = new OpenAiResearchChat(
       messages,
-      client,
+      () => this.getClient(),
       this.requireModel('orchestratorModel', this.config.orchestratorModel),
       toOpenAiTools(),
       (delta) => onProgress({ type: 'thinking', text: delta }),

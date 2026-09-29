@@ -56,6 +56,15 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **An API planner now uses the key you set last.** The planner kept the
+  client it built with the first key, so after a wrong key gave
+  `401 User not found.` a corrected `/key` (or edited endpoint) still went out
+  with the old one, mid-conversation included. The client is rebuilt whenever
+  the key or base URL changes, for OpenAI-compatible providers and Gemini alike.
+  A missing key now names its own provider and variable, keyless local
+  `openai_compatible` endpoints work, and keys and base URLs are trimmed.
+  `.env` values in quotes or behind `export` are read without them.
+
 - **An error from the UI while a task starts no longer corrupts that task.**
   Observers (the host broadcast, session persistence) could throw during
   `startTask`; one throwing observer now only fails to notify — the task keeps

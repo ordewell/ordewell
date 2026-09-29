@@ -154,18 +154,25 @@ class GeminiResearchChat implements ResearchChat {
 
 export class GeminiService extends BaseAiService implements IAiService {
   private genAI: GoogleGenerativeAI | null = null;
+  private genAIKey = '';
   private model: GenerativeModel | null = null;
 
   constructor(config: IConfig) { super(config); }
 
   private init(): boolean {
-    if (!this.config.apiKey) return false;
-    if (!this.genAI) this.genAI = new GoogleGenerativeAI(this.config.apiKey);
+    const apiKey = this.config.apiKey;
+    if (!apiKey) return false;
+    // A replaced key must not keep serving from the client built with the old one.
+    if (!this.genAI || apiKey !== this.genAIKey) {
+      this.genAI = new GoogleGenerativeAI(apiKey);
+      this.genAIKey = apiKey;
+      this.model = null;
+    }
     return true;
   }
 
   private getPlanningModel(): GenerativeModel {
-    if (!this.genAI) this.init();
+    this.init();
     if (!this.model || this.model.model !== this.config.planningModel) {
       this.model = this.genAI!.getGenerativeModel({
         model: this.config.planningModel,

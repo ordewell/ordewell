@@ -131,6 +131,23 @@ describe('BaseConfig', () => {
       expect(detect()).toBe('openrouter');
     });
 
+    it('trims whitespace off a key and a base URL override', () => {
+      process.env.OPENROUTER_API_KEY = '  sk-or-v1-abc\r\n';
+      process.env.OPENROUTER_BASE_URL = ' https://openrouter.example/api/v1 ';
+      const config = new TestConfig();
+      try {
+        expect(config.getProviderApiKey('openrouter')).toBe('sk-or-v1-abc');
+        expect(config.getProviderBaseUrl('openrouter')).toBe('https://openrouter.example/api/v1');
+      } finally {
+        delete process.env.OPENROUTER_BASE_URL;
+      }
+    });
+
+    it('treats a whitespace-only key as unset', () => {
+      process.env.OPENROUTER_API_KEY = '   ';
+      expect(new TestConfig().getProviderApiKey('openrouter')).toBe('');
+    });
+
     it('honors GEMINI_BASE_URL as the google base URL override', () => {
       process.env.GEMINI_BASE_URL = 'https://custom.gemini.example/v1';
       expect(new TestConfig().getProviderBaseUrl('google')).toBe('https://custom.gemini.example/v1');

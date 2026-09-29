@@ -6,10 +6,12 @@ import type { UsageRecord } from '../../models/Usage';
 import type { ConversationRequest } from '../AiService';
 
 const createSpy = vi.hoisted(() => vi.fn());
+const clientSpy = vi.hoisted(() => vi.fn());
 
 vi.mock('openai', () => ({
   default: class {
     chat = { completions: { create: createSpy } };
+    constructor(opts: unknown) { clientSpy(opts); }
   },
 }));
 
@@ -196,5 +198,68 @@ describe('OpenAiService conversation history', () => {
 
     const sent = createSpy.mock.calls.at(-1)?.[0] as { messages: Parameters<typeof unansweredCalls>[0] };
     expect(unansweredCalls(sent.messages)).toEqual([]);
+  });
+});
+
+describe('OpenAiService credentials', () => {
+  beforeEach(() => { createSpy.mockClear(); clientSpy.mockClear(); });
+
+  const plan = (service: OpenAiService) => (service as unknown as {
+    streamPlanText(p: string, h: string | undefined, onToken: (t: string) => void): Promise<string>;
+  }).streamPlanText('prompt', undefined, () => {});
+
+  it('sends a key replaced after the first call, not the one the client was built with', async () => {
+    let key = 'sk-old';
+    const service = new OpenAiService(cfg({ aiProvider: 'openrouter', orchestratorModel: 'openai/gpt-4o', getProviderApiKey: () => key } as Partial<IConfig>));
+    createSpy.mockImplementation(() => streamOf([{ choices: [{ delta: { content: 'ok' } }] }]));
+
+    await plan(service);
+    key = 'sk-new';
+    await plan(service);
+
+    expect(clientSpy.mock.calls.map((c) => (c[0] as { apiKey: string }).apiKey)).toEqual(['sk-old', 'sk-new']);
+  });
+
+  it('keeps one client while the credentials are unchanged', async () => {
+    const service = new OpenAiService(cfg());
+    createSpy.mockImplementation(() => streamOf([{ choices: [{ delta: { content: 'ok' } }] }]));
+
+    await plan(service);
+    await plan(service);
+
+    expect(clientSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('carries a key replaced mid-conversation into the next turn', async () => {
+    let key = 'sk-old';
+    const service = new OpenAiService(cfg({ aiProvider: 'openrouter', orchestratorModel: 'openai/gpt-4o', getProviderApiKey: () => key } as Partial<IConfig>));
+    createSpy.mockImplementation(() => streamOf([{ choices: [{ delta: { content: 'ok' } }], finish_reason: 'stop' }]));
+
+    await service.startConversation({
+      goal: 'add a cache', runners: ['claude-code'], modelsByRunner: {}, fs: fakeFileSystem(), onProgress: () => {},
+    });
+    key = 'sk-new';
+    await service.continueConversation('go on', () => {});
+
+    expect(clientSpy.mock.calls.map((c) => (c[0] as { apiKey: string }).apiKey)).toEqual(['sk-old', 'sk-new']);
+  });
+
+  it('names the configured provider and its variable when the key is missing', () => {
+    const service = new OpenAiService(cfg({ aiProvider: 'openrouter', getProviderApiKey: () => '' } as Partial<IConfig>));
+    expect(() => service.ensureInit()).toThrow('OpenRouter API key not configured. Set OPENROUTER_API_KEY.');
+  });
+
+  it('lets a keyless openai_compatible endpoint through with a placeholder key', async () => {
+    const service = new OpenAiService(cfg({
+      aiProvider: 'openai_compatible',
+      orchestratorModel: 'openai_compat:llama3',
+      openaiCompatibleBaseUrl: 'http://localhost:11434/v1',
+      getProviderApiKey: () => '',
+    } as Partial<IConfig>));
+    createSpy.mockImplementation(() => streamOf([{ choices: [{ delta: { content: 'ok' } }] }]));
+
+    expect(() => service.ensureInit()).not.toThrow();
+    await plan(service);
+    expect((clientSpy.mock.calls[0][0] as { apiKey: string }).apiKey).toBeTruthy();
   });
 });

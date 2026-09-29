@@ -6,6 +6,13 @@ export function findEnvFile(): string {
   return join(globalDataDir(), '.env');
 }
 
+// Quotes are shell syntax; taken literally they become part of an API key and
+// the provider answers 401.
+function unquote(value: string): string {
+  const quote = value[0];
+  return value.length >= 2 && (quote === '"' || quote === "'") && value.endsWith(quote) ? value.slice(1, -1) : value;
+}
+
 /**
  * Populate process.env from ~/.ordewell/.env.
  * Shell-exported vars always win — a var already set is left untouched — so this
@@ -16,12 +23,12 @@ export function loadEnvFile(): void {
   if (!existsSync(filePath)) return;
   const content = readFileSync(filePath, 'utf8');
   for (const line of content.split('\n')) {
-    const trimmed = line.trim();
+    const trimmed = line.trim().replace(/^export\s+/, '');
     if (!trimmed || trimmed.startsWith('#')) continue;
     const eq = trimmed.indexOf('=');
     if (eq === -1) continue;
     const key = trimmed.slice(0, eq).trim();
-    const value = trimmed.slice(eq + 1).trim();
+    const value = unquote(trimmed.slice(eq + 1).trim());
     if (key && process.env[key] === undefined) {
       process.env[key] = value;
     }

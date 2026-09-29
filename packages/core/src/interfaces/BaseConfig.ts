@@ -96,15 +96,17 @@ export abstract class BaseConfig implements IConfig {
   getProviderBaseUrl(provider: AiProvider): string {
     const meta = getProviderMeta(provider);
     if (!meta) return '';
-    if (meta.baseUrlEnvVar && process.env[meta.baseUrlEnvVar]) return process.env[meta.baseUrlEnvVar]!;
-    return meta.defaultBaseUrl;
+    const custom = meta.baseUrlEnvVar ? process.env[meta.baseUrlEnvVar]?.trim() : undefined;
+    return custom || meta.defaultBaseUrl;
   }
 
   getProviderApiKey(provider: AiProvider): string {
     const meta = getProviderMeta(provider);
     if (!meta) return '';
     for (const envVar of [meta.apiKeyEnvVar, ...meta.detectEnvVars]) {
-      const val = process.env[envVar];
+      // A hand-edited .env leaves stray whitespace on a key, and the provider
+      // rejects that as an unknown credential rather than a malformed one.
+      const val = process.env[envVar]?.trim();
       if (val) return val;
     }
     return '';
