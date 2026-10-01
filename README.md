@@ -118,6 +118,14 @@ commands, configuration and platform notes. Design decisions, including the opti
 that were rejected, are recorded as [architecture decision records](docs/adr/), and
 [CONTEXT.md](CONTEXT.md) defines the project's vocabulary.
 
+## Where it's going
+
+- **Now:** making the structured transport the default. Ordewell drives each runner through its own protocol instead of a terminal screen, and tmux stops being required ([#61](https://github.com/ordewell/ordewell/issues/61)).
+- **Next:** the planner keeps watching a run after you approve it, and suggests fixes when a task fails or gets stuck.
+- **Later:** the planner supervises a run on its own, within limits you set in advance.
+
+The full roadmap, and where to help, is in [#21](https://github.com/ordewell/ordewell/issues/21).
+
 ## Contributing
 
 Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) for the
