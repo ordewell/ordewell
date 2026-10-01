@@ -4,8 +4,8 @@
 
 See also [ADR-0011](0011-sandboxing-the-planners-shell.md): the classifier
 below is a denylist over a real shell, not an OS-level sandbox for it. That
-ADR tracks giving the planner's shell the same kind of sandboxing Codex
-already requires for itself.
+ADR runs the planner's shell under the same kind of OS sandbox Codex already
+requires for itself, beneath the classifier, where the platform has one.
 
 Planner research was tightly boxed by a `bash` denylist (`BaseFileSystem`) that matched **substrings** against the raw command string: allowlisted binaries only, no pipes, no `&&`, and a forbidden-pattern list containing `rm`, `cp`, `kill`, `>`, `|`. It was simultaneously too strict and too loose.
 

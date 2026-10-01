@@ -43,7 +43,10 @@ their own repositories. The parts most worth your attention:
   classifier didn't anticipate. Widening the auto-run set or fixing a
   classification gap therefore changes *which* commands are trusted, never
   *whether* trust in the classifier is well-founded — that second question is
-  [ADR-0011](docs/adr/0011-sandboxing-the-planners-shell.md), and it is open.
+  [ADR-0011](docs/adr/0011-sandboxing-the-planners-shell.md). That ADR is
+  accepted: on Linux (bubblewrap) and macOS (Seatbelt), the planner's commands
+  will run under a read-only sandbox beneath the classifier. Until that ships,
+  and on platforms without a sandbox, the classifier is the only barrier.
   Bypasses of the classifier remain in scope here and will be fixed as they're
   found; documenting the limit is not a decision to stop fixing them. Don't
   rely on this classifier as the only barrier between the planner and
