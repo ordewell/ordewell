@@ -423,20 +423,21 @@ the directive to attach.
 *Avoid:* "skill message", "skill event".
 
 **Executor / Runner** — an external coding-agent CLI (Claude Code, Codex,
-OpenCode, or a plugin) that runs *one task* in its own session. Identity and
-invocation flow through the `RunnerRegistry` + manifest engine.
+OpenCode) that runs *one task* in its own session through a structured
+connector. `RunnerRegistry` holds their built-in manifests: identity, command,
+model discovery and mode settings. External plugin manifests are ignored with
+one notice at host startup.
 *Avoid:* "backend", "provider" (provider means the LLM vendor, below).
 
 **Runner connector** (`RunnerConnector`, in the `CONNECTORS` registry) — what
 Ordewell holds for a runner it drives over the runner's own protocol: the
 adapter that serves it as a harness planner (ADR-0009) and as a structured
 task's runner (ADR-0018), and its *Ordewell tool binding*. The registry is
-keyed by runner id, and being in it is what makes a runner structured-capable;
-`connectorFor` answers undefined for a plugin runner. Adding a runner to it is
-the one place a runner's planner, task connector and Ordewell tools are
+keyed by runner id; a runner without a connector cannot run. Adding a runner
+to it is the one place a runner's planner, task connector and Ordewell tools are
 declared, so none of the three can drift apart.
 *Avoid:* conflating it with `RunnerRegistry`, which holds *manifests* (identity
-and invocation, and exists for every runner, plugin included); "adapter table".
+and mode/discovery settings for the built-in runners); "adapter table".
 
 **Runner process** (`RunnerProcess`, `harness/runnerProcess.ts`) — the one OS
 process a connector's adapter drives, whatever its protocol: launched under the
@@ -454,8 +455,9 @@ server's tools (`toolName`/`toolNames`), which of the runner's permission
 requests are for them and so are never refused or left waiting
 (`isOrdewellAsk`), what the runner's own status word for the server means
 (`attachState`), and the runner-specific injection that writes the server into
-its launch or configuration. A connector without one is never given the server:
-its tasks complete by marker and its planner submits by envelope.
+its launch or configuration. Every supported connector has one. Task runners
+and coding-agent planners must connect their tools before receiving a prompt;
+a failed attach is respawned once, then fails (ADR-0025).
 *Avoid:* "MCP adapter", "tool prefix" (a prefix is how two of the runners happen
 to name a tool, not the concept).
 
@@ -463,7 +465,7 @@ to name a tool, not the concept).
 report on the Ordewell server's connection, in one vocabulary for every runner.
 `pending` is the only state worth waiting through; `awaitAttach` polls until the
 runner says `connected` or `failed` or the deadline passes, and a runner that
-never attaches falls back to the marker.
+never attaches is respawned once before the task or planner turn fails.
 *Avoid:* "healthy", "ready" (this is a report by the runner, not a probe of ours).
 
 **OpenCode server API** (`openCodeTransport`) — the HTTP protocol work OpenCode's
@@ -479,11 +481,13 @@ contract, and OpenCode's HTTP protocol is one implementation of it.
 **Transport** — how Ordewell drives a task's runner: its programmatic
 protocol, with structured events in and messages out. Every `IRunnerSession`
 has this contract; runners without a task connector cannot run tasks. There
-is no transport setting, discriminator or terminal fallback.
+is no transport setting, discriminator or terminal fallback. Every coding-agent
+session requires Ordewell MCP attachment, checked after spawn with one respawn
+before failure (ADR-0025).
 *Avoid:* "mode" (that is permission mode, ADR-0001), "backend", "provider".
 
-**Waiting for input** — a structured task whose turn ended without the done
-signal: `awaiting_user` with a saved reason, `input | checkpoint | conflict |
+**Waiting for input** — a structured task whose turn ended without a `task_complete`
+call: `awaiting_user` with a saved reason, `input | checkpoint | conflict |
 files-changed` (a checkpoint wins over input; `files-changed` is an *ops task*
 that changed tracked files, ADR-0020). No verdict and no automatic nudge; the user
 answers or marks the task complete. A pending runner approval is *not* waiting
@@ -499,8 +503,8 @@ It is verified and landed like any attempt, is not offered on conflicts, and
 leaves dependents alone, as retry does. `continuability` is the one rule, and
 a status carries only whether it holds (`continuable`), never the session id.
 The first turn is the message plus a short reminder of the done and checkpoint
-protocol — the `task_complete`/`checkpoint` tools where they are attached, the
-markers as the fallback (`composeContinuationPrompt`) — not the original prompt.
+protocol — the required `task_complete`/`checkpoint` tools
+(`composeContinuationPrompt`) — not the original prompt.
 A session the runner
 cannot find fails the attempt with a message that suggests Retry; a fresh
 session is never started in its place.
@@ -515,7 +519,7 @@ and tail), subagents, usage, turns, the message queue and runner approvals
 `task_log` and appended to `.ordewell/sessions/<session>/tasks/<task>/<attempt>.jsonl`,
 one file per attempt, numbered from what is on disk. `reduceTaskLog` folds the
 same events into display blocks live and on reload, so the two draw alike. The
-file goes with its session. A terminal-transport task has none.
+file goes with its session. Every task attempt uses this log.
 *Avoid:* "transcript" (the planner conversation's saved record), "output"
 (the lossy plain-text channel `VerdictEngine` reads — nothing that needs
 fidelity reads it), and reading a verdict from the log.
@@ -530,8 +534,7 @@ runner's own session-scoped grant, offered only when it proposed one) and
 whole decision from any answerer, a person or later the supervisor (#28). The
 task stays `in_progress`: "waiting for approval" is derived from its pending
 requests. Cancel, stop and retry deny them before the runner goes; one the
-runner cancels itself, or whose process ends, is *withdrawn*. A mode whose
-manifest sets `approvals: auto` (OpenCode's `build`, the structured `--auto`)
+runner cancels itself, or whose process ends, is *withdrawn*. OpenCode's `build` mode (`--auto` on 2.x)
 answers its own requests: they are logged as requested and decided, never
 carded.
 *Avoid:* "permission prompt" for Ordewell's side (that is Claude's protocol),
@@ -557,8 +560,8 @@ message — the write or POST succeeding is not delivery.
 step boundary, after the tool call in flight and inside the same turn
 (ADR-0023): Claude Code by a `user` line on stdin, read when echoed; Codex by
 `turn/steer`; OpenCode 1.x by `prompt_async` while busy. It is a per-adapter
-optional capability (`steer`); without it — OpenCode 2.x, the terminal
-transport — messages wait for the turn to end, the *turn-end queue*. Offered
+optional adapter capability (`steer`); without it — OpenCode 2.x — messages
+wait for the turn to end, the *turn-end queue*. Offered
 one message at a time, in the order sent; a refusal leaves the rest for the
 turn's end.
 *Avoid:* "interrupt" (nothing in flight is stopped — that is *force send*),
@@ -569,9 +572,8 @@ and Codex's protocol (it names the call, not the delivery).
 the running turn, stopping the tool call in flight, and deliver a message as
 the turn that replaces it, ahead of everything still queued (ADR-0023,
 F1–F4). The task stays `in_progress` through the switch. With no turn running
-it is a plain send; a handed-over message cannot be force sent; the terminal
-transport refuses it. On Codex the interrupt stops the agent waiting, not the
-command, which runs to its end. TUI `ctrl-s`, VS Code *Send now* /
+it is a plain send; a handed-over message cannot be force sent. On Codex the interrupt stops the agent waiting,
+not the command, which runs to its end. TUI `ctrl-s`, VS Code *Send now* /
 `Ctrl+Enter`.
 *Avoid:* "force-start" (starting a task past its dependencies), "priority" or
 "urgent" message, and "interrupt" for the whole action — a plain interrupt
@@ -587,8 +589,7 @@ went unread at the turn's end (`message_dropped`), which puts it back in the
 queue, not out of it; and "lost".
 
 **Checkpoint** (task) — a task asking a person to approve its work before it
-goes on: the `checkpoint` tool call on the structured transport, the
-checkpoint marker as the fallback. The task is `awaiting_user` with reason
+goes on: the `checkpoint` tool call. The task is `awaiting_user` with reason
 `checkpoint`, and its status carries the whole question (`checkpoint`).
 Answered with approve — which carries no note — or reject with a reason: the
 TUI task view's *checkpoint card* (`ctrl-y` / `ctrl-g`, composer text as the
@@ -599,15 +600,15 @@ it, and the task goes back to in progress.
 *Avoid:* "runner approval" (a tool request mid-turn, not a question about the
 work), "pause", and "merge gate" (a scheduling wait).
 
-**Ordewell MCP server** — the one MCP server Ordewell runs (ADR-0022,
-proposed): Streamable HTTP on `127.0.0.1` at a random port, started on first
+**Ordewell MCP server** — the one MCP server Ordewell runs (ADR-0022):
+Streamable HTTP on `127.0.0.1` at a random port, started on first
 use by the process that owns the session (the daemon or the VS Code extension
 host) and shared by every session in it. Its configuration is injected into a
 runner when Ordewell spawns it — structured task runners and the three harness
 planners only — with its tools pre-authorized so no call ever prompts. Who sees
 which tools is decided by the caller's *task token* or *planner token*, never
-by running separate servers. Where it is not injected or did not attach, the
-completion marker and the JSON envelopes carry the same signals.
+by running separate servers. Attachment is checked after spawn, with one
+respawn before failure. API planners use JSON envelopes instead of this server.
 *Avoid:* "the task server" / "the planner server" (there is one server; the
 token decides the role), "MCP bridge", "plugin".
 
@@ -618,23 +619,24 @@ generations `VerdictEngine` tracks). It lists only `task_complete` and
 that is refused. It reaches the runner only in the injected MCP configuration,
 as an HTTP header — never in a prompt and never on a command line.
 *Avoid:* "session token" (*Session* is the plan's lifecycle module, and the
-token is narrower than a session), "attempt id", "API key", and the
-*completion marker* (that is the text signal, and stays in the prompt).
+token is narrower than a session), "attempt id", "API key".
 
 **Planner token** — the credential that binds one session's harness planner
 conversation to the *Ordewell MCP server*. It lists only the planner tools:
-`list_runners`, `list_models`, `task_query` and `task_output`, which read
-Ordewell state only, and `submit_plan` and `edit_plan`, the only writes, which
+`list_runners`, `list_models`, `task_query`, `task_output` and `load_skill`,
+which read Ordewell state and the planner skill catalog, and `submit_plan` and
+`edit_plan`, the only writes, which
 go through the same validation and commit path as the plan and `taskOps`
 envelopes. Revoked when the planner process is disposed.
 *Avoid:* "session token", "admin token", and describing the planner as
 write-capable — it writes nothing but the plan, and only through validation.
 
 **Completion call** — a `task_complete({status, summary, reason?})` call made
-with a task's *task token*: the second channel for the runner's own completion
-signal, beside the *completion marker*. Either is evidence; whichever arrives
-first in an attempt is handed to `VerdictEngine`, which alone produces the
-verdict. Only `done` passes; `blocked` and `failed` carry their reason. The
+with a task's *task token*: the only runner completion evidence. It is handed
+to `VerdictEngine`, which alone produces the verdict after checking the current
+generation. Evidence held behind an undelivered message is superseded when
+that message is read. Only `done` passes; `blocked` and `failed` carry their
+reason. The
 `summary` is the output handed to dependent tasks.
 *Avoid:* "self-report" or "the model says it's done" (it is the runner's
 explicit signal bound to the attempt, not a judgement anyone weighs), and
@@ -665,7 +667,7 @@ everything that has to die with the run: the attempt number, the phase
 (`starting` while the async spawn is in flight, `running` once the runner is
 up, `integrating` while *Landing* settles its verdict), the live
 `IRunnerSession`, and the runner, working directory and start
-time the transcript reader needs at verdict time — plus its *attempt kind* and,
+time — plus its *attempt kind* and,
 in an isolated run, whether that directory is its worktree and the landing in
 flight. The orchestrator keeps one
 `Map<taskId, TaskAttempt>`, and every way a run ends — verdict, cancel, release,
@@ -855,7 +857,7 @@ runner, model and mode (ADR-0001 — a repair is not a new task, so nothing
 about it is rewritten). Its prompt is to `git merge` the current integration
 tip into the task's branch, resolve the named files so both sides' intent
 survives, build, test, commit, and report the task done (the `task_complete`
-tool where it is attached, or its completion marker). It counts as having
+tool bound to the attempt's token). It counts as having
 repaired the conflict only once all of: the done signal arrives;
 the task branch now contains the tip the repair started from
 (`git merge-base --is-ancestor`); `git diff --check` finds no leftover
@@ -1104,7 +1106,7 @@ reach into work that is running or already finished. The direct path — the TUI
 user editing their own plan, so it allows both, and pays what that costs:
 removing a running task cancels its runner first (`releaseTask` → `cancelTask`,
 which bumps the verifier generation before the process dies), because a plan
-that simply dropped the task could never reach the tmux session again and the
+that simply dropped the task could never reach the runner session again and the
 orchestrator went on counting it as active — one of the ways "Execution is
 running" became permanent. Removing a `completed` task drops it from the
 completed set, which is safe because `removeTaskFromPlan` detaches the
@@ -1327,8 +1329,8 @@ runner state. Promotes the task to `status: 'completed'`, records a synthetic
 execution log, and unblocks dependents so the scheduler can advance. Distinct
 from `cancelTask` (which returns a task to `pending` and places it on hold) and
 from automatic completion (which is produced by the VerdictEngine when the
-runner emits its done signal — the completion marker or a **Completion call**).
-A clean runner exit without either signal is a failed verdict, never implicit
+runner makes a **Completion call**).
+A clean runner exit without a completion call is a failed verdict, never implicit
 completion.
 *Avoid:* "skip" for this concept in backend code — the VS Code `skip`
 affordance is implemented as Mark complete.
@@ -1347,89 +1349,37 @@ selected task's status (footer hint follows: `m done` / `m undone`).
 *Avoid:* "un-skip", "reopen" — and do not model it as `retryTask`, which counts
 a retry attempt and releases the hold.
 
-**VerdictEngine** — the deep module owning the whole verification state
-machine: the completion-marker and **Completion call** lifecycle (detect the
-marker in session output, or receive the call from its token-bound handler, and
-track either), the checkpoint protocol (the printed marker and the `checkpoint`
-tool, whose handler passes through the same path), idle tracking, exit-code
-normalization, verdict
-production, and the manual "Mark complete" override. The orchestrator hands
-each spawned session to `watch(task, session)` and receives the verdict via
-`onVerdict`; it never re-derives a verdict, though it drops one whose attempt
-has already ended (see **Task attempt**). `markComplete`, `clear` (every user
-interruption of a task: cancel, retry, mark complete, removal, mark not done),
-and `reset` (stop/loadPlan) route through here too — one producer of every
-verdict. It does not render or capture output: it keeps only a bounded raw
-tail to scan for the marker (on the exit path too, never the runner's
-ANSI-stripped `getOutput()`) and a small carry so a checkpoint split across
-chunks still assembles; rendering is **Terminal render**'s and what a task
-printed or answered is **TaskOutputSource**'s. Every callback carries the
-generation its `watch` was given, and generations come from one counter that
-`reset` never rewinds, so a terminal that outlives a stop or plan load (an open
-VS Code terminal, a tmux exit seen on the next poll) cannot speak for the task's
-next attempt. The old two-branch `verifyTask` function and the marker tracking
-that used to live in `TaskOrchestrator` are its *implementation*, not its
-interface; a fake `IRunnerSession` is the test seam.
-*Avoid:* "the verifier", "TaskVerifier" (the old shallow pass-through, now
-deleted) — use VerdictEngine.
-
-**Terminal render** (`terminalRender.ts`) — the pure functions that turn raw
-PTY bytes into what a user would see: `renderTerminalOutput` replays the
-cursor/erase subset coding-agent TUIs use onto a small virtual screen,
-`flattenTerminalOutput` strips escapes, box-drawing and whitespace for marker
-scanning, and `renderCleanCapture` renders and cuts at the completion-marker
-row, dropping the TUI chrome below it. No state, no I/O. It needs *raw* output:
-the cursor escapes it replays are exactly what a runner's stripped buffer has
-lost.
+**VerdictEngine** — the deep module owning the verification state machine:
+**Completion calls** from token-bound handlers, `checkpoint` tool calls and
+answers, idle tracking, exit-code normalization, verdict production and the
+manual "Mark complete" override. The orchestrator hands each spawned session
+to `watch(task, session)` and receives verdicts through `onVerdict`; it never
+re-derives them. `markComplete`, `clear` and `reset` route through the same
+owner. Each callback carries its attempt's generation, from a counter that
+`reset` never rewinds, so a stale callback cannot settle a later attempt. A
+completion call held behind an undelivered message is invalidated when the
+runner reads that message. Output only refreshes advisory idle tracking; it
+is never scanned for completion or checkpoint markers. A fake `IRunnerSession`
+is the test seam.
+*Avoid:* "the verifier", "TaskVerifier" — use VerdictEngine.
 
 **TaskOutputSource** (`interfaces/TaskOutputSource.ts`, default
 `BufferedTaskOutputSource`) — the one owner of a task attempt's output,
-injected into TaskOrchestrator (through `SessionDeps.taskOutput` when a Session
-builds it, which is how no test reads the real home directory). It keeps one bounded raw buffer per attempt,
-fed from the attempt's session, and answers two questions: `finalText` — the
-durable summary, taken from the agent's own transcript when one matches and
-from the clean **Terminal render** otherwise — and `liveTail` — the last lines
-of what a task printed, rendered clean, with an absolute `nextOffset` to read
-only what follows (`TaskOrchestrator.getLiveOutput`). Transcripts come through
-an injected **TranscriptReader** (`HomeTranscriptReader`, home directory
-injectable) that binds a transcript to a task by content: the startedAt cutoff
-only narrows the candidates, and the transcript must carry the task's
-completion marker UUID, which its prompt contains. Directory and recency alone
-hand task A task B's answer when parallel attempts share a cwd — and for Claude
-Code the directory is not even unique: past 200 characters it keeps a prefix of
-the munged cwd plus a hash, so every directory with that prefix is a candidate.
-A continued attempt's transcript still holds the earlier attempt's answer, so
-only records written since the attempt started count. The binding holds
-only while no other task's prompt carries that id, which is why a dependent's
-prompt quotes its predecessor's output with the marker id dropped
-(`defuseMarkers` in `promptAugment.ts`).
-*Avoid:* "the output buffer", "transcript capture" as the owner — the runners'
-`getOutput()` buffers are transport detail, and the transcript is one input.
+injected into TaskOrchestrator through `SessionDeps.taskOutput`. It keeps a
+bounded buffer fed by the session and answers `finalText` (the completion
+call's summary, falling back to clean plain output for the current turn) and
+`liveTail` (a bounded diagnostic window with an absolute `nextOffset`). A new
+turn or a message read mid-turn clears the earlier summary and advances the
+output boundary. It does not discover transcripts or render a runner's PTY.
+*Avoid:* "the output buffer", "transcript capture" as the owner — a transcript
+is a separate artifact, not completion evidence.
 
-**Check** — one deterministic signal inside a verdict. The VerdictEngine
-requires `completion_marker` for a verdict read from the output, or
-`task_complete` for one from a **Completion call** (with `completion_marker`
-bypassed), and records `exit_code` as supporting diagnostic
-evidence. `model_review`, `workspace_changes`, and `verify_command` were
-deliberately removed (see `docs/adr/`): they produced false failures on non-file
-tasks and conflated evidence with opinion. Verification is evidence-based, not
-opinion-based; the model is never a tie-breaker because it is never consulted.
-
-**Completion marker** — the `task.completionMarker` UUID the orchestrator appends
-to every agent prompt as `<<<ORDEWELL_DONE_<uuid>>>>`, the fallback for the done
-signal. On the structured transport a runner can instead make a **Completion
-call**; whichever evidence arrives first settles the attempt. The marker is what
-the terminal transport, plugin runners, and any session where the server did not
-attach use. The **VerdictEngine** owns the marker lifecycle: it detects the
-marker in session output (via `watch`),
-and produces a `pass` verdict immediately with `exit_code` bypassed
-(marker-seen), while leaving an interactive terminal open. Cursor-positioned
-TUI output is rendered into a small virtual screen (**Terminal render**) so
-split OpenCode repaints are scanned as the token visible to the user. If neither
-signal arrives and the process exits — even with code 0 — the verdict fails and
-dependent tasks stay blocked. A stuck task (no signal, no exit) is advanced
-manually via "Mark complete", which calls `VerdictEngine.markComplete` for a
-`pass` verdict.
+**Check** — one deterministic signal inside a verdict. `task_complete` is the
+required completion check, with `exit_code` as supporting diagnostic evidence.
+A manual completion has a `manual` check. `model_review`, `workspace_changes`
+and `verify_command` were removed because they conflated evidence with opinion.
+Verification never asks a model to break a tie. A runner exit without a
+completion call fails, even with exit code zero.
 
 **Testing strategy** — *removed.* Verification is completion-evidence based;
 the planner no longer assigns a testing strategy per task. The `user_verify`
@@ -1726,29 +1676,16 @@ load` both *read* and *adopt*, and the distinction is what the bug was.
 ## Platform
 
 **Launch plan** (`utils/launch.ts`) — the answer to "how do I start this agent
-CLI on this OS", asked by every surface that starts one: the VS Code terminal,
-the headless runner, each harness-planner adapter, Codex's app-server discovery.
-`planDirectLaunch` serves `spawn` callers; `planShellLaunch` serves surfaces that
-hand an executable to a terminal. Both are **identity on POSIX** — `execvp`
-already searches PATH, so resolving there would only be a new way for a working
-install to break. The Windows branch resolves against PATH × PATHEXT across three
-routes, best first: a native `.exe` spawned directly, a `.cmd` shim through
-`cmd.exe /d /s /c` with verbatim arguments, a `.ps1` shim through
-`powershell.exe -File`. See ADR-0010.
-*Avoid:* calling `spawn('claude', …)` directly — that is ENOENT on Windows, where
-CreateProcess performs no PATHEXT lookup and an npm-installed agent is
-`claude.cmd`.
-*Avoid:* handing `cmd /s /c` a bare command line. It strips the first quote on
-the line and the last one, so a shim under `C:\Program Files\…` loses its opening
-quote and the final argument loses its closing one. The outer pair `cmdArgs` adds
-is what cmd removes.
-*Avoid:* reordering the routes by capacity. They are ordered by availability, so
-a `.ps1` beside an overflowing `.cmd` still raises `CommandLineTooLongError` —
-a large prompt is where `-File` fidelity is least worth betting on, and a held
-task beats a mangled one.
-*Avoid:* filtering `.ps1` against PATHEXT. Windows' default PATHEXT omits it
-because PowerShell resolves scripts itself, so the filter would disable the tier
-on exactly the machines it exists for.
+CLI on this OS", shared by structured runners, harness planners and model
+discovery. `planDirectLaunch` serves every `spawn` caller and is identity on
+POSIX: execvp already searches PATH. Windows resolves PATH × PATHEXT in order:
+a native executable, a batch shim through `cmd.exe /d /s /c` with verbatim
+arguments, then a PowerShell shim through `powershell.exe -File` (ADR-0010).
+*Avoid:* calling `spawn('claude', …)` directly on Windows; CreateProcess does
+not perform PATHEXT lookup. A batch command line needs the outer quote pair
+that `cmd /s /c` strips. Capacity does not reorder the routes: an overflowing
+batch shim still raises, whereas a line break may fall through to PowerShell.
+PowerShell shims are considered even when PATHEXT omits `.ps1`.
 
 **Well-known bin dirs** (`utils/shellPath.ts`, `wellKnownBinDirs`) — where a
 runner might be, when PATH does not say. On Windows there is no login shell to
@@ -1795,24 +1732,20 @@ runner no longer hears Ctrl-C, so the host passes SIGINT/SIGTERM/SIGHUP and its
 own exit on to the groups it leads. Windows has no signals and the direct child
 may be a cmd.exe shim rather than the agent, so `taskkill /T` walks the tree;
 without it "stop" terminated the shim and left the agent running, still holding
-the workspace and the subscription. Two limits follow from how a runner is
+the workspace and the subscription. One limit follows from how a runner is
 started. A detached runner is a session leader (`setsid`) with no controlling
 tty, so anything it does that opens `/dev/tty` — a password or confirmation
-prompt — fails rather than prompting. And an interactive runner wrapped in a
-pty (`wrapWithPty`, via `script`) is a session leader *under* `script`, in a
-group the host never learns the id of: the group signal reaches `script`, and
-the agent's end relies on the pty hangup (SIGHUP to its foreground group), so a
-background job the agent detached can outlive Stop. After the leader exits, the
+prompt — fails rather than prompting. After the leader exits, the
 SIGKILL follow-up is sent only while the group still has members, since an
 empty group's id may have been recycled.
 *Avoid:* `proc.kill('SIGTERM')` at a dispose site — or a bare `proc.kill()`,
 which was the last one left, in `ModelDiscovery`'s Codex app-server probe.
 
 **Platform support** — the VS Code extension and the local daemon run on Linux,
-macOS, and native Windows. The **TUI is not verified on Windows**: its per-task
-terminal windows are tmux-backed (ADR-0007) and `hasTmux` feature-detects
-rather than assuming. tmux is optional now that structured is the default
-(ADR-0018), but WSL remains the supported answer for the TUI. Two things about Windows are explicitly unverified rather than
+macOS, and native Windows. The **TUI is not verified on Windows**; WSL remains
+the supported answer for
+that surface. Runner execution needs no tmux or per-task terminal windows
+(ADR-0025). Two things about Windows are explicitly unverified rather than
 claimed — Codex's read-only sandbox enforcement and `%VAR%` expansion on the
 cmd.exe shim route. Argument fidelity on the PowerShell shim route was measured
 on a Windows host. See ADR-0010.

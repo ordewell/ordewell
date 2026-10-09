@@ -26,13 +26,13 @@ mode.** ADR-0001 already forbids rewriting a plan's modes and models at spawn
 time; a repair is not a different task, so it inherits both unchanged. Its
 prompt is to `git merge` the current integration tip into the task's branch,
 resolve the listed files so both sides' intent survives, build and test, commit,
-and emit the task's normal completion marker — the same shape
+and call `task_complete` on the repair attempt's token — the same shape
 `resolveConflictAsTask` already prompts for, run automatically instead of on
 request.
 
 - **Evidence, not opinion.** A repair only counts as having repaired the
   conflict when all of the following hold, in order:
-  1. the completion marker appears in the runner's output, exactly as any
+  1. the runner calls `task_complete` with `done` on that attempt's token, as any
      other attempt is verified;
   2. the task branch now contains the integration tip the repair started
      from (`git merge-base --is-ancestor <integration-tip> <task-branch>`);
@@ -95,8 +95,9 @@ request.
   conflicted task always has. A repair that did not land waits on the user and
   is not tried again in the same run.
 - **What the repair is given.** `buildConflictRepairPrompt` goes through the
-  same `composeAugmentedPrompt` as any spawn, with the task's own completion
-  marker, minus the TDD block. The task keeps the verdict and output summary
+  same `composeAugmentedPrompt` as any spawn, with the completion and
+  checkpoint tool instructions. The repair uses a fresh attempt token
+  (ADR-0025). The task keeps the verdict and output summary
   its own work earned; the repair's verdict only decides whether its work
   tries to land.
 - **`git diff --check` exits 2 for whitespace as well as markers**, so only
@@ -145,3 +146,4 @@ request.
 ## History
 
 - 2026-09-26 — accepted and implemented.
+- 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).

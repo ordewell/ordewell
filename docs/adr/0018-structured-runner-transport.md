@@ -2,77 +2,52 @@
 
 **Status:** accepted
 
-A task's runner is a TUI in tmux (ADR-0007) or a headless one-shot process, and
-Ordewell talks to it through the screen and the keyboard. "Done" and
-checkpoints are found by scanning rendered PTY bytes (`VerdictEngine`,
-`terminalRender.ts`); idle is guessed from silence, so "waiting on a permission
-prompt" and "thinking" look the same; the only way to talk to a runner is
-`ITerminalSession.write`, which types keystrokes and cannot promise they land
-between turns; and what a run consumed is not observable.
-
-The harness planners (ADR-0009) already talk to Claude Code, Codex and OpenCode
-through their programmatic protocols (`stream-json`, `app-server`, `serve`).
-Task execution did not. Issue #25 settled the design; this ADR records it.
-Claude Code was the reference runner; Codex (#54) and OpenCode (#55) followed.
+Runner screen scraping cannot reliably distinguish a completed task, a
+permission request and a turn waiting for input. The harness planners and task
+runners share Claude Code, Codex and OpenCode programmatic connectors.
 
 ## Decision
 
-**Task runners are driven through their programmatic protocol — the
-*structured* transport. The terminal transport is only the fallback for a
-runner with no structured connector.** A task on the structured transport is driven through its runner's
-protocol instead of a screen and a keyboard.
+**Task runners are driven only through their programmatic protocols.**
+[ADR-0025](0025-structured-only-runners.md) defines the required MCP attachment
+and completion evidence.
 
 ## Key properties
 
-- **Structured always; no transport setting (S1).** A task whose runner has a
-  structured connector always runs structured. There is no setting, command or
-  toggle to choose the transport. The plan, not a live setting, says what runs
-  (ADR-0001), and the route is decided per task (S3).
-- **Drop-in shape (S2).** A structured session *is* an
-  `ITerminalRunner`/`ITerminalSession`, the way `TmuxRunner` was added
-  (ADR-0007 T1), so `VerdictEngine`, `TaskOutputSource`, `PoolAwareRunner` and
-  the orchestrator need no change. What a terminal cannot do sits on an
-  **optional capability** callers feature-detect, the way `writeControl` is
-  detected today: send a message, interrupt, turn state, the event stream and
-  the native session id. Code that does not look for the capability behaves as
-  it did.
-- **Per-task routing (S3).** A task runs structured if its runner has a
-  task-mode connector: Claude Code, Codex (`codex app-server`) and OpenCode
-  (`opencode serve`) do. Any other runner, a plugin runner included, falls back
-  to the terminal transport, and every surface shows the fallback and its
-  reason (for example `terminal: no structured connector for <runner>`) —
-  never a silent downgrade.
-- **The terminal transport is fallback-only.** Runner-facing features target
-  the structured transport; the terminal transport gets bug fixes, not new
-  features.
+- **Structured always; no transport setting (S1).** Every supported runner has
+  a connector. There is no terminal fallback, setting, command or toggle.
+- **One session contract (S2).** `IRunner` spawns `IRunnerSession`; every session
+  supplies events, messages, interrupt, approvals, native session id and task
+  tools. These methods are mandatory, without a capability discriminator.
+- **Built-in connectors (S3).** Claude Code (`stream-json`), Codex
+  (`app-server`) and OpenCode (`serve`) are the only supported runners. Plugin
+  manifests are ignored with one notice at host startup.
 - **One connector per runner, shared with the planner (C1).** The harness
   `AgentAdapter`s gain an explicit start switch: *read-only planner* versus
   *task*. The planner path always starts read-only, and tests assert that the
   planner has no other way to start an adapter, so the ADR-0008/0009 security
-  boundary holds. In task mode the permission mode and effort flags come from
-  the **runner manifest** — ADR-0001: manifests define what a mode means — via
-  the same code terminal tasks use. The adapter owns only the protocol flags
+  boundary holds. In task mode the permission mode and effort come from
+  the **runner manifest** — ADR-0001: manifests define what a mode means — through
+  the connector's mode resolution. The adapter owns only the protocol flags
   (stream format, input format, permission-prompt channel, resume).
 - **Two channels (O1).**
   (a) *Plain text to `onOutput`*: the assembled agent text plus one short line
   per tool call (`› Bash(npm test)`), no JSON and no ANSI. It feeds
-  `VerdictEngine` marker detection, the planner's live-output read (#3), usage-limit
+  the planner's live-output read (#3), usage-limit
   classification and the fallback summary handed to dependents.
   (b) *A full-fidelity view* built from the structured events as ADR-0017
   display blocks: streaming text, thinking, expandable tool calls with
   arguments and results, nested subagents, usage, approval cards. Channel (a)
   is deliberately lossy; nothing that needs fidelity reads it.
-- **A turn without the marker is "waiting for input" (W1).** A turn that ends
-  without the done marker makes the task `awaiting_user` with a saved reason:
-  `input | checkpoint | conflict`. That reason replaces today's inference that
-  a live attempt means checkpoint. A checkpoint wins over input. There is no
+- **A turn without a completion call is "waiting for input" (W1).** A turn that ends
+  without a `task_complete` call makes the task `awaiting_user` with a saved reason:
+  `input | checkpoint | conflict | files-changed`. A checkpoint wins over input. There is no
   automatic nudge — no verdict is guessed, and the user (later the supervisor,
   #28) responds or marks the task complete. Approval requests arrive
   mid-turn and do **not** change task status: "waiting for approval" is derived
   from the task's pending approvals. The idle timer keeps running during a turn
   and is paused while the task waits, on input, a checkpoint or an open
-  approval (2026-10-03: approvals added, so a long one doesn't also read as
-  idle). If a queued message is delivered as the
+  approval, so a long approval wait does not also read as idle. If a queued message is delivered as the
   turn ends, or the runner still owes one it was handed (M1), the task stays
   `in_progress` with no flicker.
 - **Talking to a task (M1).** Ordewell owns the message queue. A message sent
@@ -90,15 +65,16 @@ protocol instead of a screen and a keyboard.
   Codex's `turn/interrupt`, OpenCode's abort), with kill-and-resume as the
   fallback; an interrupted turn becomes "waiting for input" unless a forced
   message follows.
-  `session.write(text)` means "send as a user message", so checkpoint replies
-  work unchanged. Clarifying questions are plain text for now: a task starts
+  `session.write(text)` means "send as a user message". Checkpoint answers
+  settle the open MCP call through `VerdictEngine`. Clarifying questions are plain text for now: a task starts
   with `AskUserQuestion` disallowed, so the agent asks in prose and ends its
   turn; a question card is a later option.
 - **Background work (B1).** Claude Code reports a turn's `result` when the
   model stops talking, even with a background shell or agent still running, and
   opens a turn of its own when the work finishes. The Claude connector therefore
-  holds a task's turn open while the CLI lists background tasks, so what is said
-  afterwards — the marker included — belongs to the same turn. If the CLI starts
+  holds a task's turn open while the CLI lists background tasks, so later output
+  belongs to the same turn. Completion evidence arrives through the MCP tool,
+  independent of the output stream. If the CLI starts
   no follow-on turn once the list is empty, the turn ends after a short grace.
   Anything a runner does by itself after a turn has closed is delivered to the
   session as a turn of its own, with no user message, instead of being dropped.
@@ -107,10 +83,9 @@ protocol instead of a screen and a keyboard.
   asks about every write. The connector compares the mode `init` reports with
   the one the plan asked for and fails the turn in plain words on a mismatch
   (ADR-0001).
-- **Lifetime (L1).** A structured process ends once its task passes. This
-  deliberately differs from `LingeringRunners` for terminal tasks: the log
-  lives in Ordewell, and work after the verdict would go unverified. The native
-  session id is saved per attempt.
+- **Lifetime (L1).** The process ends once its task passes. The log lives in
+  Ordewell, and work after the verdict would go unverified. The native session
+  id is saved per attempt.
 - **Continue (K1).** A retry that resumes the saved native session with the
   user's message as the next turn. It is verified and landed like any attempt.
   It is offered on completed and failed structured tasks with a saved session
@@ -132,19 +107,15 @@ protocol instead of a screen and a keyboard.
   the TUI and a badge on the VS Code card. Cancel, stop and retry deny pending
   requests, so nothing is left hanging. The supervisor (#28) can answer through
   the same seam later; nothing assumes a human is the only answerer.
-- **Surfaces (V1, #57).** In the TUI, `t` or `/terminal` on a structured task
+- **Surfaces (V1, #57).** In the TUI, `/task <id>` on a task
   swaps the chat pane to the task view: a distinct accent colour, a state
   header, a `→ Task N` composer label, and Esc to return. In VS Code each task
   has an editor tab opened on demand ("Open log"); it never opens
   automatically, reopening focuses it, and closing it never affects the task.
   The card keeps its one-line peek and gains a waiting badge.
-- **No tmux, no `script` (W2).** A structured session is a plain child process
-  speaking a protocol, so it needs neither, and also works on native Windows
-  (ADR-0010). tmux is optional: nothing at start-up refuses to run or warns
-  when it is missing. Only a run on the terminal transport needs it, for the
-  per-task window; on a host without it those tasks run headless, the plan's
-  first such task says what is unavailable and how to get it (install tmux), and opening a task's terminal gives the same
-  advice.
+- **No tmux, no `script` (W2).** A session is a plain child process speaking
+  a protocol and needs neither. Runner execution also works on native Windows
+  (ADR-0010); the TUI itself remains unverified there.
 
 ### Codex specifics
 
@@ -162,50 +133,41 @@ protocol instead of a screen and a keyboard.
   too. One that asks for input is declined.
 - **Questions.** `item/tool/requestUserInput` is refused with an instruction to
   ask in plain text and end the turn. The question then arrives as a turn
-  without the marker (W1). Any other request gets `-32601` at once, so a turn
+  without a completion call (W1). Any other request gets `-32601` at once, so a turn
   never waits on Ordewell.
 
 ## Out of scope
 
-#58 (take over in the runner's own TUI), #26 roll-ups, #31.
+#58 (take over in the runner's own TUI), #26 roll-ups, #31. No terminal
+transport is retained for take-over.
 
 ## Considered options
 
 - **Keep scraping and get better at it.** Each fix so far was specific to one
   runner, and #11, #13 and #14 were bugs in exactly this path. Rejected as the
   foundation.
-- **Keep the TUI and add side channels** — runner hooks such as Claude Code's
-  `Stop`/`PreToolUse`, OpenCode's local server, Codex `notify`. The plumbing
-  differs per runner and is weakest for Codex, and sending a message would
-  still mean typing keystrokes. The TUI is not lost either: take-over (#58)
-  brings it back for structured tasks, and the terminal transport remains the
-  fallback for a runner with no connector.
-- **ACP for every agent.** ADR-0009 rejected it as the only transport; still
-  worth checking for the long tail.
-- **Replace `ITerminalSession` with a turn-based interface everywhere.** Too
-  large, and it would regress the tmux and VS Code terminals that work today.
-- **Raw JSON to `onOutput`.** Streamed text deltas would split the done marker
-  across lines, and tool results would flood the 256 KB buffer.
+- **Keep the runner TUI and add side channels.** Rejected: hooks differ per
+  runner and keystrokes cannot guarantee message delivery at a step boundary.
+- **ACP for every agent immediately.** Deferred: native connectors already
+  work. ADR-0025 records ACP as the expected successor for third-party harnesses.
+- **Optional structured capabilities on `ITerminalSession`.** Once adopted to
+  coexist with terminals; rejected now because every session has the same
+  structured contract (`IRunnerSession`).
+- **Raw JSON to `onOutput`.** Rejected: tool results would flood the bounded
+  output buffer; full-fidelity consumers read events instead.
 - **A new `TaskStatus` for waiting, or `in_progress` plus a flag.** Waiting is
   a reason for the existing `awaiting_user`, which every surface already
   handles; a flag would leave two sources of truth.
 - **`awaiting_user` for approvals too.** Status churn and a plan save on every
   request, for something that does not end the turn.
 - **Per-task transport** (a setting on each task). The plan would carry a
-  transport field on every task for the user to maintain; per-task *routing* by
-  connector availability (S3) covers the real need.
-- **Structured as an opt-in, terminal the default.** It shipped that way, marked
-  experimental, until structured matched terminal on a parity checklist (done
-  detection, approvals, log view, a connector for every built-in runner). Once
-  met, two first-class transports would have doubled every runner-facing
-  feature, so structured became the default and terminal the fallback.
-- **A user-facing transport setting** (`runnerTransport`, `/transport`,
-  `ordewell transport`, a Structured toggle). Shipped while structured was
-  maturing, then dropped: with a connector for every built-in runner, the
-  choice only let a user pin the path that gets bug fixes and no new features,
-  and a stored `terminal` from an older build was indistinguishable from a
-  deliberate one. Routing by connector availability (S3) covers the real need.
-- **A lingering process after pass.** Would mirror `LingeringRunners`, but the
+  transport field on every task for the user to maintain; the supported connector set (S3) already defines what can run.
+- **Structured as an opt-in, terminal the default or fallback.** Previously
+  adopted while connectors matured; rejected because maintaining two transports
+  duplicates runner behavior. Every supported runner now has a connector.
+- **A user-facing transport setting.** Previously adopted; rejected because
+  it permits selecting an obsolete path and leaves ambiguous saved choices.
+- **A lingering process after pass.** Rejected: the
   log lives in Ordewell and what the agent did after the verdict would be
   unverified.
 - **The adapter keeping its own mode table.** A second definition of what a
@@ -222,3 +184,4 @@ protocol instead of a screen and a keyboard.
 - 2026-10-04 — the OpenCode connector speaks the 2.x API as well as 1.x.
 - 2026-10-06 — M1 per ADR-0023: messages reach a running turn between tool calls, the turn-end queue as the fallback, force send.
 - 2026-10-09 — the `runnerTransport` setting and its surfaces removed; a saved plan pinned to `terminal` loads as structured and the field is dropped.
+- 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).

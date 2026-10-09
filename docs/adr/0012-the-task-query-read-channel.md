@@ -2,8 +2,6 @@
 
 **Status:** accepted
 
-*Pending (2026-10-05):* [ADR-0022](0022-ordewell-mcp-server.md) adopts M2, the MCP server, as the read and edit path for MCP-capable planners; this text envelope remains the fallback.
-
 The per-turn plan context block (`Session.planContextBlock`) deliberately
 carries only short fields — id, order, title, status, type, runner, model,
 mode, effort, autonomy, deps. A twenty-task plan re-sent in full on every
@@ -31,13 +29,13 @@ carries in full, once, on the turn that actually needs it.
 
 ## Decision
 
-**A `taskQuery` reply kind** — `{"taskQuery":{"tasks":[...], "fields"?:[...],
+**For API planners, a `taskQuery` reply kind** — `{"taskQuery":{"tasks":[...], "fields"?:[...],
 "catalog"?:true}}` — structurally alongside the plan and `taskOps` envelopes
 Ordewell already parses. `classifyPlannerReply` (`PlanRepair.ts`) recognizes
 it and a malformed attempt (`broken_task_query`) the same way it recognizes a
 botched plan or a botched edit: worth a corrective re-emit, not silence.
 `TaskQuery.ts` owns the wire shape, the reference resolver (id / `#order` /
-bare order / exact title), and the rendered answer; `Session.drainTaskQueries`
+bare order / exact title), and the rendered answer; `PlannerConversation.drainTaskQueries`
 owns the loop, the budget, and the injection.
 
 A query is answered **outside** `repairLoop`, in its own small loop, before a
@@ -59,14 +57,10 @@ than cached or replayed.
 
 ## Key properties
 
-- **One text envelope for both planner backends, like `taskOps` before it
-  (T1).** The channel is prose the model reads and writes, not a registered
-  tool call, because a harness planner (ADR-0009) is a subprocess Ordewell
-  does not own a tool loop for — `TASK_QUERY_PROTOCOL` is taught in
-  `buildConversationBody` for both the harness and API variants, verbatim,
-  the same way the `taskOps` protocol already is. A tool-call version would
-  only work for the API path, forking the read channel exactly where
-  ADR-0009 spent its effort keeping the two backends on one protocol.
+- **One read contract, two transports (T1).** API planners use the `taskQuery`
+  text envelope taught by `TASK_QUERY_PROTOCOL`. Coding-agent planners use the
+  required `task_query` and `task_output` MCP tools (ADR-0022, ADR-0025). Both
+  read the same live state through the same validation and query budget.
 - **Reads are free of the repair budget (T2).** `drainTaskQueries` runs before
   `repairLoop` is entered for the first reply, and is threaded through
   `first`/`resend` so a retried turn keeps draining too. A planner that reads
@@ -128,13 +122,11 @@ than cached or replayed.
   text but not a callable function. Registering a tool for one backend and a
   text protocol for the other is the fork ADR-0009 was written specifically
   to avoid.
-- **An MCP server exposing `read_task`/`apply_task_ops` (M2).** The genuinely
-  better end state, and deferred for the same reason ADR-0009 deferred it for
-  plan submission (its M5): there is no MCP code anywhere in this repo today,
-  so shipping it means standing up a stdio JSON-RPC server plus per-CLI
-  registration for Claude Code, Codex and OpenCode before the first read
-  works, for a channel whose text-envelope version already ships with zero
-  new infrastructure.
+- **Only text envelopes for coding-agent reads and edits (M2).** Previously
+  adopted while MCP injection was absent; rejected now because the injected
+  server provides `task_query`, `task_output`, and validated edits (ADR-0022).
+  The text read channel serves API planners; coding-agent planners require
+  their connected tools (ADR-0025).
 - **Silently coerce an invalid model/mode instead of refusing (M3).**
   Rejected. `coerceAssignments` already exists as the safety net for paths
   that bypass the validator entirely (a plan committed with a stale catalog,
@@ -188,11 +180,11 @@ teaches the field and names its use: diagnosing a task that looks stuck
 mid-execution, before the planner spends a turn guessing or re-prompting the
 user.
 
-Two things this amendment deliberately does not do:
+The read channel keeps these boundaries:
 
-- **ADR-0008's envelope is unchanged.** No new tool, no new path, no path
-  carve-out. The read rides the existing task-query text envelope, so it
-  works identically for native and harness planners (T1), answers through the
+- **ADR-0008's envelope is unchanged.** No new filesystem path or path
+  carve-out. API planners use the task-query envelope and coding-agent
+  planners the MCP read tools, sharing one read contract (T1), answers through the
   same budget machinery (T4), and hands the planner only output Ordewell
   itself captured — nothing on the filesystem the planner's confined
   `bash`/`read_file` surface would otherwise reach.
@@ -201,8 +193,8 @@ Two things this amendment deliberately does not do:
   (a) pointed a confined planner at `.ordewell/`, an explicit carve-out of
   ADR-0008's path confinement that needed its own stated decision and would
   have leaked log paths to a model that then reads them with its own un-audited
-  tools; (b) made headless output diverge from tmux output, since the in-memory
-  capture is the one source that exists for every runner; and (c) put the read
+  tools; (b) made file reads diverge from the shared captured-output channel;
+  and (c) put the read
   outside the query budget, which is what keeps a planner from paging output
   forever on the user's tokens. The envelope answer is bounded by construction;
   the file answer was bounded only by convention.
@@ -219,4 +211,4 @@ reads exactly as one in the workspace root, and one whose merge conflicted has
 ended its attempt and is answered like any other task that is not running — a
 pointer to its `outputSummary` and `verdict`, with `[awaiting_user]` in its
 header. The answer does not name the conflict; the user's surfaces do.
-
+- 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).

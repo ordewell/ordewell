@@ -1,6 +1,6 @@
 # 0007 — Runners execute inside tmux, terminals open on demand
 
-**Status:** accepted — the terminal transport it describes is the fallback since [ADR-0018](0018-structured-runner-transport.md)
+**Status:** superseded by [ADR-0025](0025-structured-only-runners.md)
 
 Every AI runner (`claude`, `codex`, `opencode`) ran headlessly (`HeadlessRunner`): piped stdio, one-shot, prompt baked into argv. The orchestrator only ever read the raw output to scan for a `<<<ORDEWELL_CHECKPOINT>>>` / `<<<ORDEWELL_DONE_...>>>` marker (`VerdictEngine`) and wrote back two fixed sentinel strings. `task_output` reached every client over the websocket but the TUI dropped it outright — a user could never see, let alone type into, what a runner was actually doing. The VS Code extension came closer (`VsCodeTerminalRunner` opens a real integrated-terminal PTY per runner) but Ordewell's own webview still never routed keystrokes into it.
 
@@ -34,3 +34,4 @@ Tasks run in a **tmux window** instead of a piped subprocess (`TmuxRunner`, alon
 - 2026-10-02 — structured the default; the terminal transport, and tmux with it, a fallback.
 - 2026-10-04 — a runner manifest may carry a command line per major version; OpenCode 2.x uses one.
 - 2026-10-09 — the transport setting removed; terminal is only the per-connector fallback (ADR-0018).
+- 2026-10-09 — superseded by [ADR-0025](0025-structured-only-runners.md).

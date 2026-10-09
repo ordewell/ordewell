@@ -23,7 +23,7 @@ useful tasks are serialized with a dependency purely because they touch the
 same file.
 
 When two tasks do overlap, the failure is silent and bad. Runner B rewrites a
-file Runner A just changed; A's completion marker still appears, so A verifies
+file Runner A just changed; A's attempt-bound completion call still appears, so A verifies
 `pass` on a tree that no longer contains A's work. There is no per-task record
 of what a task changed, no way to review one task's result on its own, and no
 way to undo a single task without untangling the whole run. And because the
@@ -99,8 +99,8 @@ opt out.
 every git and filesystem operation for the feature: worktree creation, the
 ignored-artifact symlink/bootstrap step, commit, integration merge, conflict
 detection, release/cleanup, orphan pruning, and the end-of-run handoff. It is
-injected into `TaskOrchestrator` the way `ITerminalRunner` and `PlanStore`
-already are, and it is the only new seam. Git never enters `ITerminalRunner`,
+injected into `TaskOrchestrator` the way `IRunner` and `PlanStore`
+already are, and it is the only new seam. Git never enters `IRunner`,
 `RunnerRegistry`, or any runner adapter — consistent with ADR-0007, where a
 Runner is handed a `cwd` and nothing more.
 
@@ -216,17 +216,17 @@ spawned with, and the task statuses the orchestrator settles on — never the
 literal git command lines or private fields.
 
 **`WorktreeIsolation` against real temporary repositories.** Prior art:
-`TmuxRunner.test.ts`, `sessionStore.test.ts`, and `workspace.test.ts` all build
-real temp directories with `mkdtempSync` and assert on real filesystem/git
-outcomes; `TmuxRunner` also shows the injectable-exec seam if any single command
-needs to be simulated. Tests cover: worktree creation from a base ref, symlink
+`sessionStore.test.ts` and `workspace.test.ts` build real temp directories with
+`mkdtempSync` and assert on real filesystem/git outcomes. Runner behavior uses
+structured connectors; the offline pipeline puts a fake `claude` executable
+first on PATH instead of registering a plugin runner (ADR-0025). Tests cover: worktree creation from a base ref, symlink
 bootstrap, commit-and-merge of a passed task, `--no-ff` attribution, conflict
 detection, cleanup, retry-from-tip, orphan pruning, and the non-git/disabled
 returns. Assertions read `git worktree list`, branch tips and file contents, not
 strings.
 
 **`TaskOrchestrator` against a fake isolation collaborator.** The existing suite
-(`TaskOrchestrator.test.ts`) already fakes `ITerminalRunner` and builds config
+(`TaskOrchestrator.test.ts`) already fakes `IRunner` and builds config
 via `fakeConfig` (`packages/core/src/testing.ts`) with the shared test kit; the
 fake isolation module is added the same way. Tests assert the seam: the spawn
 `cwd` is the worktree path, a dependent does not spawn until its predecessor is
@@ -277,3 +277,6 @@ exercise the git path.
   safe, but integration still serializes, so the throughput gain is capped by
   the dependency graph the planner emits. File-scope-gated scheduling is the
   obvious follow-up if conflicts prove frequent.
+
+## History
+- 2026-10-09 — aligned with [ADR-0025](../adr/0025-structured-only-runners.md).

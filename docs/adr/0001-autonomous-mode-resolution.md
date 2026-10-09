@@ -49,9 +49,8 @@ Concretely:
     `on-request`, `approvals_reviewer=auto_review` — Codex's risk-assessing
     subagent) is `safe`. The manifest expresses both per mode in
     `features.modeSettings` (`approvalPolicy`, `approvalsReviewer`). The
-    interactive shape passes them as `-a` and `-c approvals_reviewer=…`;
-    `exec` has no `-a`, so it takes `-c approval_policy=…` and
-    `-c approvals_reviewer=…`.
+    Codex connector supplies these to `thread/start` and `thread/resume`;
+    terminal invocation flags are not part of the manifest.
   - **OpenCode:** `build` wears both tags — an honest no-op, since OpenCode has
     nothing safer than build, rather than a mystery.
 - **The planner is steered, not coerced.** `buildModeGuide` names the resolved
@@ -127,3 +126,4 @@ Concretely:
 - 2026-10-05 — the levels renamed *Full* and *Guarded*: *Auto* collided with Claude
   Code's own `auto` permission mode (`/auto auto`), and *Guarded* holds on every
   runner, where a classifier does not. `auto` stays an alias of Guarded.
+- 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
