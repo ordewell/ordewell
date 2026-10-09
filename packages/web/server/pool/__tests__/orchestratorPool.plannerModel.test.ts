@@ -7,7 +7,7 @@ import {
   SettingsService,
   type ExecImpl,
   type RunnerRegistry,
-  type RunnerPluginManifest,
+  type RunnerManifest,
   type IConfig,
 } from '@ordewell/core';
 import { OrchestratorPool } from '../orchestratorPool';
@@ -23,7 +23,7 @@ function fakeFetch(routes: Array<[string, unknown]>): typeof fetch {
   }) as typeof fetch;
 }
 
-function harnessManifest(name: string, variants: { id: string; label: string }[] = []): RunnerPluginManifest {
+function harnessManifest(name: string, variants: { id: string; label: string }[] = []): RunnerManifest {
   return {
     name,
     displayName: name,
@@ -34,10 +34,10 @@ function harnessManifest(name: string, variants: { id: string; label: string }[]
       fallbackModels: [],
       variants,
     },
-  } as unknown as RunnerPluginManifest;
+  } as unknown as RunnerManifest;
 }
 
-function fakeRegistry(manifests: Record<string, RunnerPluginManifest>): RunnerRegistry {
+function fakeRegistry(manifests: Record<string, RunnerManifest>): RunnerRegistry {
   return { getManifest: (id: string) => manifests[id] } as unknown as RunnerRegistry;
 }
 

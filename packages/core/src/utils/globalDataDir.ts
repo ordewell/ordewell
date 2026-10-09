@@ -4,25 +4,11 @@ import * as os from 'os';
 
 /**
  * Where Ordewell keeps machine-global data (settings, daemon tokens, caches,
- * user plugins). A single home for everything not tied to a project directory,
+ * credentials). A single home for everything not tied to a project directory,
  * so per-project state in `.ordewell/` and global state never collide.
  */
 export function globalDataDir(): string {
   return path.join(os.homedir(), '.ordewell');
-}
-
-function copyDirSync(src: string, dest: string): void {
-  fs.mkdirSync(dest, { recursive: true });
-  const entries = fs.readdirSync(src, { withFileTypes: true });
-  for (const entry of entries) {
-    const srcPath = path.join(src, entry.name);
-    const destPath = path.join(dest, entry.name);
-    if (entry.isDirectory()) {
-      copyDirSync(srcPath, destPath);
-    } else {
-      fs.copyFileSync(srcPath, destPath);
-    }
-  }
 }
 
 let migrated = false;
@@ -55,10 +41,4 @@ export function migrateOldConfigDir(): void {
 
   liftFile('settings.json');
   liftFile('.env');
-
-  const oldPlugins = path.join(oldDir, 'plugins');
-  const newPlugins = path.join(newDir, 'plugins');
-  if (fs.existsSync(oldPlugins) && !fs.existsSync(newPlugins)) {
-    copyDirSync(oldPlugins, newPlugins);
-  }
 }

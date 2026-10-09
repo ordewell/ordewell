@@ -10,7 +10,7 @@ import { SecretStore, type ApiProvider, type SecretKey } from './adapters/Secret
 export interface ModelDiscoveryDeps {
   vscodeApi: typeof vscode;
   config: VsCodeConfig;
-  pluginRegistry: RunnerRegistry;
+  runnerRegistry: RunnerRegistry;
   runnerInstallation: RunnerInstallation;
   modelResolver: ModelResolver;
   chatProvider: ChatViewProvider;
@@ -57,9 +57,9 @@ export class ModelDiscovery {
     const enabled = d.config.enabledRunners;
     // Resolve installed runners up front so a discovery that returns nothing for
     // an *installed* runner can be surfaced as a real failure (see below).
-    const allPlugins = d.pluginRegistry.list();
+    const allRunners = d.runnerRegistry.list();
     const installedIds = new Set(
-      await d.runnerInstallation.filterInstalled(allPlugins.map((p) => p.manifest.name)),
+      await d.runnerInstallation.filterInstalled(allRunners.map((p) => p.manifest.name)),
     );
 
     // Discovery must cover every runner the UI lets the user pick for a task or
@@ -98,8 +98,8 @@ export class ModelDiscovery {
     d.chatProvider.setModelsByRunner(byRunner);
     this.warnDegradedDiscovery(degraded);
 
-    const installedPlugins = allPlugins.filter((p) => installedIds.has(p.manifest.name));
-    const runnerList = installedPlugins.map((p) => ({
+    const installedRunners = allRunners.filter((p) => installedIds.has(p.manifest.name));
+    const runnerList = installedRunners.map((p) => ({
       id: p.manifest.name,
       displayName: p.manifest.displayName,
     }));
@@ -107,8 +107,8 @@ export class ModelDiscovery {
     d.chatProvider.setEnabledRunnerIds(enabled.filter((r) => installedIds.has(r)));
 
     const modesByRunner: Record<string, { id: string; label: string; description: string; cliValue?: string; autonomous?: boolean }[]> = {};
-    for (const plugin of installedPlugins) {
-      modesByRunner[plugin.manifest.name] = (plugin.manifest.modes ?? []).map((m) => ({
+    for (const entry of installedRunners) {
+      modesByRunner[entry.manifest.name] = (entry.manifest.modes ?? []).map((m) => ({
         id: m.id, label: m.label, description: m.description, cliValue: m.cliValue, autonomous: m.autonomous,
       }));
     }

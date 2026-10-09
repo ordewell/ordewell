@@ -32,7 +32,7 @@ export const CONNECTORS: Readonly<Record<string, RunnerConnector>> = {
   opencode: { create: (deps) => new OpenCodeAdapter(deps), ordewellTools: OPENCODE_ORDEWELL },
 };
 
-/** The connector for a runner id; undefined for one without (a plugin runner, or `toString`). */
+/** The connector for a runner id; undefined for an unknown id (including `toString`). */
 export function connectorFor(runner: string): RunnerConnector | undefined {
   return Object.hasOwn(CONNECTORS, runner) ? CONNECTORS[runner] : undefined;
 }

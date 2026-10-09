@@ -64,7 +64,7 @@ function harness(aiService: Partial<IAiService> = { hasActiveConversation: () =>
     session,
     chatProvider,
     modelResolver: {} as unknown as WebviewRouterDeps['modelResolver'],
-    pluginRegistry: new RunnerRegistry(),
+    runnerRegistry: new RunnerRegistry(),
     config: { aiProvider: 'openrouter', apiKey: 'sk-test', planningModel: 'some/model', enabledRunners: ['claude-code'] } as unknown as WebviewRouterDeps['config'],
     fsAdapter: { getWorkspaceRoot: () => workspace } as unknown as WebviewRouterDeps['fsAdapter'],
     terminalRunner: { stopAll: vi.fn() } as unknown as WebviewRouterDeps['terminalRunner'],

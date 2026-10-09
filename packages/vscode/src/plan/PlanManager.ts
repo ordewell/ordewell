@@ -16,7 +16,7 @@ export interface PlanManagerDeps {
   session: Session;
   chatProvider: ChatViewProvider;
   modelResolver: ModelResolver;
-  pluginRegistry: RunnerRegistry;
+  runnerRegistry: RunnerRegistry;
   config: VsCodeConfig;
   fsAdapter: VsCodeFileSystem;
   terminalRunner: ITerminalRunner;
@@ -45,7 +45,7 @@ export function resolveRunnerSet(
   pendingRunners?: RunnerId[],
   currentPlanRunners?: RunnerId[],
 ): RunnerId[] | null {
-  const enabled = enabledRunners(deps.config).filter((r) => deps.pluginRegistry.get(r));
+  const enabled = enabledRunners(deps.config).filter((r) => deps.runnerRegistry.get(r));
   if (enabled.length === 0) {
     deps.chatProvider.showError('No runner is enabled. Toggle runners in the chat header first.');
     return null;

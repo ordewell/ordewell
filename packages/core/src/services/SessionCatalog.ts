@@ -37,7 +37,8 @@ export class SessionCatalog {
 
   /** The runners enabled right now. */
   enabledRunners(): RunnerId[] {
-    return this.deps.settings().enabledRunners ?? this.deps.config.enabledRunners;
+    return (this.deps.settings().enabledRunners ?? this.deps.config.enabledRunners)
+      .filter((runner) => this.deps.registry.getManifest(runner) !== undefined);
   }
 
   /**
@@ -113,12 +114,13 @@ export class SessionCatalog {
   }
 
   queryCatalog(runners: RunnerId[]): TaskQueryCatalog {
+    const registered = runners.filter((runner) => this.deps.registry.getManifest(runner) !== undefined);
     return {
-      runners,
+      runners: registered,
       // Allowlist-filtered: neither the per-turn block nor a read may offer
       // a model the planner is forbidden to assign.
       models: filterModelsForPrompt(this.models(), this.allowlist()),
-      modes: this.modes(runners),
+      modes: this.modes(registered),
       autonomousDefault: this.deps.config.autonomousMode,
     };
   }

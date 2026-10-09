@@ -205,7 +205,7 @@ function harness(overrides: {
   const sessionDeps: { current?: SessionDeps } = {};
   const resolver = overrides.modelResolver ?? fakeResolver();
   const installation = overrides.runnerInstallation ?? fakeRunnerInstallation(['claude-code']);
-  const pluginRegistry = new RunnerRegistry();
+  const runnerRegistry = new RunnerRegistry();
   const stored = new Map<string, unknown>();
   const globalState = {
     get: (key: string) => stored.get(key),
@@ -217,7 +217,7 @@ function harness(overrides: {
     outputChannel: { appendLine: vi.fn() } as unknown as vscode.OutputChannel,
     secretStore: { set: vi.fn(), get: vi.fn() } as unknown as SecretStore,
     config: config.config,
-    pluginRegistry,
+    runnerRegistry,
     runnerInstallation: installation as unknown as RunnerInstallation,
     fsAdapter: { getWorkspaceRoot: () => workspace } as unknown as VsCodeFileSystem,
     notifications: {} as unknown as VsCodeNotification,

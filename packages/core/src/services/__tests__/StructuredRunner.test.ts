@@ -2,9 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { StructuredRunner } from '../StructuredRunner';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
-import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest';
 import { isStructuredSession, type ITerminalSession, type StructuredEvent, type StructuredTurnEnd } from '../../interfaces/ITerminalRunner';
-import { TaskModeUnsupportedError, type AgentEvent, type SpawnFn, type AgentStartOptions, type TaskModeAgentAdapter } from '../harness/AgentAdapter';
+import type { AgentEvent, SpawnFn, AgentStartOptions, TaskModeAgentAdapter } from '../harness/AgentAdapter';
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
 import { claudeTurnEndQueue, fakeSpawn, fixture, type FakeSpawnResult, type ScriptedReply } from './harnessTestKit';
 
@@ -231,14 +230,9 @@ describe('StructuredRunner spawn', () => {
     session.kill();
   });
 
-  it('refuses a runner without a task-mode connector', async () => {
+  it('refuses an unknown runner before spawning a process', async () => {
     const { runner, spawned } = harness([]);
-    const withPlugin = new class extends RunnerRegistry {
-      override get(id: string) {
-        return id === 'my-plugin' ? { manifest: { ...CLAUDE_CODE_MANIFEST, name: 'my-plugin' }, source: 'user' as const } : super.get(id);
-      }
-    }();
-    await expect(runner.spawn(options({ runner: 'my-plugin', registry: withPlugin }))).rejects.toBeInstanceOf(TaskModeUnsupportedError);
+    await expect(runner.spawn(options({ runner: 'removed-runner' }))).rejects.toThrow('No runner manifest is registered for "removed-runner".');
     expect(spawned.processes).toHaveLength(0);
     expect(runner.activeCount).toBe(0);
   });

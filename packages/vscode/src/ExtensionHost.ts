@@ -45,7 +45,7 @@ export interface ExtensionServices {
   outputChannel: vscode.OutputChannel;
   secretStore: SecretStore;
   config: VsCodeConfig;
-  pluginRegistry: RunnerRegistry;
+  runnerRegistry: RunnerRegistry;
   runnerInstallation: RunnerInstallation;
   fsAdapter: VsCodeFileSystem;
   notifications: VsCodeNotification;
@@ -105,7 +105,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     get session(): Session { return requireSession(); },
     chatProvider: services.chatProvider,
     modelResolver: services.modelResolver,
-    pluginRegistry: services.pluginRegistry,
+    runnerRegistry: services.runnerRegistry,
     config: services.config,
     fsAdapter: services.fsAdapter,
     terminalRunner: services.terminalRunner,
@@ -135,7 +135,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     config: services.config,
     notifications: services.notifications,
     runner: services.terminalRunner,
-    registry: services.pluginRegistry,
+    registry: services.runnerRegistry,
     workspaceRoot: () => services.fsAdapter.getWorkspaceRoot(),
     fsAdapter: services.fsAdapter,
     // A panel is a second surface on the same session: it sees the event first
@@ -161,7 +161,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
   const discovery = new ModelDiscovery({
     vscodeApi,
     config: services.config,
-    pluginRegistry: services.pluginRegistry,
+    runnerRegistry: services.runnerRegistry,
     runnerInstallation: services.runnerInstallation,
     modelResolver: services.modelResolver,
     chatProvider: services.chatProvider,
@@ -223,10 +223,10 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
         refreshRunnerModels: () => services.modelResolver.refreshRunnerModels(),
         modelsForRunners: (runners: string[]) => services.modelResolver.modelsForRunners(runners),
       },
-      pluginRegistry: {
-        get: (id: string) => services.pluginRegistry.get(id),
-        getManifest: (id: string) => services.pluginRegistry.getManifest(id),
-        list: () => services.pluginRegistry.list(),
+      runnerRegistry: {
+        get: (id: string) => services.runnerRegistry.get(id),
+        getManifest: (id: string) => services.runnerRegistry.getManifest(id),
+        list: () => services.runnerRegistry.list(),
       },
       chatProvider: services.chatProvider,
       settingsService: services.settingsService,
