@@ -7,78 +7,6 @@ import { DEFAULT_PLANNER_MODES, type PlannerModes } from '../plannerModes';
 
 const modes = (over: Partial<PlannerModes> = {}): PlannerModes => ({ ...DEFAULT_PLANNER_MODES, ...over });
 
-describe('buildConversationSystemPrompt verification mode', () => {
-  function prompt(verificationEnabled: boolean) {
-    return buildConversationSystemPrompt(
-      'build a task planner',
-      '',
-      {},
-      ['claude-code'],
-      undefined,
-      true,
-      verificationEnabled,
-    );
-  }
-
-  it('adds an evidence-based AFK verification task block when enabled', () => {
-    const p = prompt(true);
-    expect(p).toContain('VERIFICATION MODE:');
-    expect(p).toMatch(/Add a FINAL verification task to the end of the plan/i);
-    expect(p).toMatch(/type "ai" and autonomy "AFK"/i);
-    expect(p).toMatch(/dependencies on ALL other AI tasks/i);
-    expect(p).toMatch(/commands and exit codes, never from judgement/i);
-  });
-
-  it('instructs feature-scope verification: full suite, spec walk, end-to-end', () => {
-    const p = prompt(true);
-    expect(p).toMatch(/Re-read the ORIGINAL goal/i);
-    expect(p).toMatch(/full test suite and typecheck\/build/i);
-    expect(p).toMatch(/requirement by requirement/i);
-    expect(p).toMatch(/END-TO-END/);
-    expect(p).toMatch(/integration gaps between task boundaries/i);
-    expect(p).toMatch(/never skip, weaken, or delete a check/i);
-  });
-
-  it('falls back to a standalone verification script in repos with no test infrastructure', () => {
-    const p = prompt(true);
-    expect(p).toMatch(/NO test infrastructure/);
-    expect(p).toMatch(/do not bootstrap a framework just for verification/i);
-    expect(p).toMatch(/standalone verification script/i);
-    expect(p).toMatch(/exits non-zero on any failed check/i);
-  });
-
-  it('gates the verification block with the toggle', () => {
-    const on = prompt(true);
-    const off = prompt(false);
-    expect(on).toContain('VERIFICATION MODE');
-    expect(off).not.toContain('VERIFICATION MODE');
-  });
-
-});
-
-describe('buildResearchPrompt verification mode (one-shot path)', () => {
-  function prompt(verificationEnabled: boolean) {
-    return buildResearchPrompt(
-      'build a task planner',
-      '',
-      {} as Partial<Record<RunnerId, DiscoveredModel[]>>,
-      ['claude-code'],
-      undefined,
-      modes({ verification: verificationEnabled }),
-    );
-  }
-
-  it('includes the verification block so headless `ordewell plan` gets the final task', () => {
-    const p = prompt(true);
-    expect(p).toContain('VERIFICATION MODE:');
-    expect(p).toMatch(/Add a FINAL verification task to the end of the plan/i);
-  });
-
-  it('omits the block when disabled', () => {
-    expect(prompt(false)).not.toContain('VERIFICATION MODE');
-  });
-});
-
 describe('buildConversationSystemPrompt slice rules', () => {
   it('sizes slices to a fresh context window, prefactors first, and allows expand-contract for wide refactors', () => {
     const p = buildConversationSystemPrompt('goal', '', {}, ['claude-code']);
@@ -135,7 +63,7 @@ describe('research subagent prompts', () => {
 });
 
 describe('buildConversationSystemPrompt harness variant (ADR-0009)', () => {
-  function variant(harnessMode: boolean, toggles: { verify?: boolean } = {}) {
+  function variant(harnessMode: boolean) {
     return buildConversationSystemPrompt(
       'build a task planner',
       'PROJECT CONTEXT HERE',
@@ -143,7 +71,6 @@ describe('buildConversationSystemPrompt harness variant (ADR-0009)', () => {
       ['claude-code'],
       undefined,
       true,
-      toggles.verify ?? false,
       { harness: harnessMode },
     );
   }
@@ -190,14 +117,10 @@ describe('buildConversationSystemPrompt harness variant (ADR-0009)', () => {
     }
   });
 
-  it('carries the verification mode block, so the toggle works on both backends', () => {
-    const all = { verify: true };
-    const harness = variant(true, all);
-    const api = variant(false, all);
+  it('differs from the API variant only in the research-phase block', () => {
+    const harness = variant(true);
+    const api = variant(false);
 
-    expect(harness).toContain('VERIFICATION MODE:');
-    expect(api).toContain('VERIFICATION MODE:');
-    // The two variants differ only in the research-phase block.
     expect(harness.replace(/RESEARCH PHASE:[\s\S]*?\n\n/, '')).toEqual(api.replace(/RESEARCH PHASE:[\s\S]*?\n\n/, ''));
   });
 });
@@ -205,7 +128,7 @@ describe('buildConversationSystemPrompt harness variant (ADR-0009)', () => {
 const LONE_REPO: RepoGroupLayout = { repos: ['.'], shared: [] };
 
 function conversation(isolatedExecution: false | RepoGroupLayout) {
-  return buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, true, false, { isolatedExecution });
+  return buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, true, { isolatedExecution });
 }
 
 function oneShot(isolatedExecution: false | RepoGroupLayout) {

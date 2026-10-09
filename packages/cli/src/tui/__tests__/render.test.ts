@@ -142,11 +142,6 @@ describe('frame geometry', () => {
 });
 
 describe('top bar', () => {
-  it('marks which skills are on', () => {
-    const on = text({ skills: { ...initialState().skills, verify: true } });
-    expect(on).toContain('● verify');
-  });
-
   it('names the autonomy level, Full or Guarded', () => {
     expect(text({ autonomous: true })).toContain('Full');
     const auto = text({ autonomous: false });
@@ -651,7 +646,7 @@ describe('overlays', () => {
 
   it('lists every command in the help sheet', () => {
     const out = text({ overlay: { kind: 'help' }, rows: 60 });
-    for (const name of ['/verify', '/allowlist', '/key', '/model']) {
+    for (const name of ['/allowlist', '/key', '/model']) {
       expect(out).toContain(name);
     }
   });
@@ -1014,7 +1009,8 @@ const detailed = (state: TuiState): TuiState => ({ ...state, detailAll: true });
 /** The painted rows of the block whose first row starts with `head`, up to the blank row after it. */
 function blockRows(state: TuiState, head: string): string[] {
   const rows = render(state).map((row) => stripAnsi(row).trimEnd());
-  const start = rows.findIndex((row) => row.startsWith(head));
+  // Row 0 is the top bar, whose autonomy badge starts with `●` too.
+  const start = rows.findIndex((row, i) => i > 0 && row.startsWith(head));
   if (start < 0) throw new Error(`no row starts with "${head}" in:\n${rows.join('\n')}`);
   const end = rows.indexOf('', start);
   return rows.slice(start, end < 0 ? undefined : end);

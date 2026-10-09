@@ -61,9 +61,9 @@ describe('what each kind decides', () => {
     expect(runs.attemptCwd.mock.calls.length + runs.workspaceCwd.mock.calls.length).toBe(1);
   });
 
-  it('uses the plan\'s transport for every kind but a continue, terminal before any run copied one', () => {
+  it('uses the requested transport for every kind but a continue, which is always structured', () => {
     expect(attemptTransport(KINDS.change, 'structured')).toBe('structured');
-    expect(attemptTransport(KINDS.ops, null)).toBe('terminal');
+    expect(attemptTransport(KINDS.ops, 'terminal')).toBe('terminal');
     expect(attemptTransport(KINDS['continued change'], 'terminal')).toBe('structured');
   });
 });

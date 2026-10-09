@@ -150,8 +150,8 @@ const TRAILING_PUNCT = /[,.!?;:]+$/;
 
 /**
  * Every `/word` token in `text`, bounded by whitespace or the string edges —
- * the same shape core's `resolveSkillInvocation` splices against, so a token
- * offered here for completion or highlighting is exactly one that expands.
+ * the same shape core's `resolveSkillInvocation` resolves, so a token offered
+ * here for completion or highlighting is exactly one that loads a skill.
  */
 export function slashTokens(text: string): SlashToken[] {
   const tokens: SlashToken[] = [];
@@ -179,8 +179,8 @@ export function activeToken(text: string, cursor: number): SlashToken | null {
 
 /**
  * Whether `name` names a discovered skill exactly, or is a live prefix of one.
- * Never a built-in — only a discovered skill's content is ever spliced into a
- * mid-prompt token (see resolveSkillInvocation in core).
+ * Never a built-in — only a discovered skill is ever loaded by a mid-prompt
+ * token (see resolveSkillInvocation in core).
  */
 export function skillMatchKind(name: string, skillNames: Set<string>): 'exact' | 'prefix' | null {
   if (name.length === 0) return null;
@@ -314,7 +314,7 @@ export default function ChatInput({
   const suggestions = useMemo<SlashSuggestion[]>(() => {
     if (!text.startsWith('/')) {
       // Anywhere else in the message, only a discovered skill can ever be
-      // spliced in (see resolveSkillInvocation in core) — never a built-in.
+      // loaded (see resolveSkillInvocation in core) — never a built-in.
       if (!midToken) return [];
       return skills.map(toSkillSuggestion).filter((s) => s.label.slice(1).toLowerCase().startsWith(midToken.name));
     }

@@ -6,7 +6,7 @@ import * as vscode from 'vscode';
 import {
   createTask, RunnerRegistry,
   type AiProvider, type DiscoveredModel, type LegacyPlanState,
-  type ModelResolver, type PlannerModelMemory, type RunnerInstallation, type RunnerTransport,
+  type ModelResolver, type PlannerModelMemory, type RunnerInstallation,
   type Session, type SessionDeps, type SettingsService,
 } from '@ordewell/core';
 import { createExtension, type ExtensionServices } from '../ExtensionHost';
@@ -50,8 +50,6 @@ function fakeChat() {
     showPlan: vi.fn(),
     planGenerated: vi.fn(),
     planApproved: vi.fn(),
-    setSkillToggles: vi.fn(),
-    setRunnerTransport: vi.fn(),
     setPlanDockHeight: vi.fn(),
     setSkills: vi.fn(),
     setModels: vi.fn(),
@@ -189,13 +187,7 @@ function fakeRunnerInstallation(installed: string[]) {
 }
 
 function fakeSettings() {
-  let verification = false;
-  let runnerTransport: RunnerTransport = 'structured';
   return {
-    getVerification: vi.fn(() => verification),
-    setVerification: vi.fn((v: boolean) => { verification = v; }),
-    getRunnerTransport: vi.fn(() => runnerTransport),
-    setRunnerTransport: vi.fn((v: RunnerTransport) => { runnerTransport = v; }),
     getAll: vi.fn(() => ({})),
   };
 }
@@ -263,7 +255,7 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
   });
 
   it("hands the session this window's enabled runners, read at each call", async () => {
-    h.settings.getAll.mockReturnValue({ verification: { enabled: false }, runnerTransport: 'structured', enabledRunners: ['opencode'] });
+    h.settings.getAll.mockReturnValue({ enabledRunners: ['opencode'] });
     await h.config.config.update('enabledRunners', ['claude-code', 'codex']);
 
     expect(h.sessionDeps.current?.settings().enabledRunners).toEqual(['claude-code', 'codex']);
@@ -294,7 +286,6 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     expect(h.chat.provider.showPlan).toHaveBeenCalledWith(expect.objectContaining({
       tasks: [expect.objectContaining({ id: 't1' })],
     }));
-    expect(h.chat.provider.setRunnerTransport).toHaveBeenCalledWith('structured');
     await vi.waitFor(() => expect(h.chat.provider.setModels).toHaveBeenCalledWith(models));
     await vi.waitFor(() => expect(h.chat.provider.setPlannerBackends).toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({ id: 'claude-code', usable: true })]),

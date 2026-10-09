@@ -1,10 +1,10 @@
 import {
-  diffRows, diffSummary, outputLines, outputPreview,
+  diffRows, diffSummary, loadedSkillTokens, outputLines, outputPreview,
   type DiffRow, type DiffStat,
   type ApprovalBlock, type ApprovalKind, type ApprovalSource, type DisplayBlock, type MessageBlock, type MessageRole, type PlanBlock,
-  type SubagentBlock, type SubagentStatus, type ThinkingDisplayBlock, type ToolBlock,
+  type SkillLoadBlock, type SubagentBlock, type SubagentStatus, type ThinkingDisplayBlock, type ToolBlock,
 } from '@ordewell/core';
-import { sanitize, style, truncate, width, wrap } from './ansi';
+import { sanitize, style, truncate, width, wrap, wrapLines } from './ansi';
 import { renderMarkdown } from './markdown';
 
 /*
@@ -48,8 +48,34 @@ const ROLE_PREFIX: Record<MessageRole, Paint> = {
 function messageLines(block: MessageBlock, cols: number): string[] {
   const text = sanitize(block.text);
   const room = Math.max(1, cols - 2);
-  const wrapped = block.role === 'planner' || block.role === 'agent' ? renderMarkdown(text, room) : wrap(text, room);
+  const wrapped = block.role === 'planner' || block.role === 'agent'
+    ? renderMarkdown(text, room)
+    : block.skills ? skillPaintedLines(text, block.skills, room) : wrap(text, room);
   return wrapped.map((line, i) => (i === 0 ? ROLE_PREFIX[block.role](line) : `  ${line}`));
+}
+
+/** Wrapped, with each `/name` that loaded a skill painted as the composer paints one being typed. */
+function skillPaintedLines(text: string, skills: readonly string[], room: number): string[] {
+  const tokens = loadedSkillTokens(text, skills);
+  return wrapLines(text, room).map(({ line, start }) => {
+    let painted = '';
+    let at = 0;
+    for (const token of tokens) {
+      const from = Math.max(token.start - start, at);
+      const to = Math.min(token.end - start, line.length);
+      if (to <= from) continue;
+      painted += line.slice(at, from) + style.cyan(line.slice(from, to));
+      at = to;
+    }
+    return painted + line.slice(at);
+  });
+}
+
+/** The path gives way first: it is the part a reader can do without. */
+function skillLoadLine(block: SkillLoadBlock, cols: number): string {
+  const head = `● /${sanitize(block.name)} skill loaded · `;
+  const line = truncate(`${head}${truncatePath(sanitize(block.path), Math.max(1, cols - width(head)))}`, cols);
+  return `${style.green('●')}${style.grey(line.slice(1))}`;
 }
 
 function thinkingLines(block: ThinkingDisplayBlock, cols: number, detailAll: boolean): string[] {
@@ -336,6 +362,8 @@ function blockLines(block: DisplayBlock, cols: number, detailAll: boolean): stri
       return [approvalLine(block, cols)];
     case 'plan':
       return [planLine(block, cols)];
+    case 'skill_load':
+      return [skillLoadLine(block, cols)];
     // Pinned under the pane rather than drawn in it — see `tokenLine`.
     case 'usage':
       return [];
@@ -366,11 +394,12 @@ function drawn(block: DisplayBlock, cols: number, detailAll: boolean): string[] 
 /** The conversation as chat-pane lines, a blank line after each block; `answering` is the request the task view's keys answer, which carries them under it. The token line is not among them. */
 export function conversationLines(blocks: readonly DisplayBlock[], cols: number, detailAll: boolean, answering?: ApprovalBlock): string[] {
   const lines: string[] = [];
-  for (const block of blocks) {
+  for (const [i, block] of blocks.entries()) {
     if (block.type === 'usage') continue;
     lines.push(...drawn(block, cols, detailAll));
     if (block === answering) lines.push(approvalKeysLine(block, cols));
-    lines.push('');
+    // A skill load sits right under the message that loaded it.
+    if (blocks[i + 1]?.type !== 'skill_load') lines.push('');
   }
   return lines;
 }

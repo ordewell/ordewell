@@ -1,6 +1,5 @@
 import type { ApprovalDecision } from './interfaces/IApproval';
 import type { AiProvider } from './interfaces/IConfig';
-import type { RunnerTransport } from './interfaces/ITerminalRunner';
 import type { IsolationMergeResult } from './interfaces/IWorktreeIsolation';
 import type { SessionMeta } from './models/Session';
 import type { DiscoveredModel, LegacyPlanState, PlanState } from './models/Task';
@@ -196,10 +195,8 @@ export interface SettingsResponse {
   aiProvider: AiProvider;
   plannerThinkingEffort: string;
   maxParallel: number;
-  verification: UserSettings['verification'];
   modelAllowlist: UserSettings['modelAllowlist'];
   plannerModels: UserSettings['plannerModels'];
-  runnerTransport: RunnerTransport;
 }
 
 /** What `PATCH /api/settings` answers: the settings as they now stand, plus what the write itself decided. */

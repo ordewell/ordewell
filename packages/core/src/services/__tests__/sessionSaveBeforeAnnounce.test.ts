@@ -48,7 +48,6 @@ function setup(tasks: Task[], opts: {
     isolation: opts.isolation ?? new FakeWorktreeIsolation(),
     config: opts.config,
     planner: opts.planner,
-    settings: () => ({ runnerTransport: opts.structured ? 'structured' : 'terminal' }),
     saveSession: (p) => { seen.push({ kind: 'save', statuses: statuses(flattenTasks(p.tasks)) }); },
     broadcast: (m) => {
       messages.push(m);

@@ -9,7 +9,8 @@ import { TurnStream } from './replyStream';
 import type { ForkedDialogue } from './conversationFork';
 import { condensedNotice, extractSummary, keptTail, summaryRequest } from './conversationSummary';
 import type { ConversationMessage, LegacyPlanState, ResearchLogEntry, ResearchProgress, RunnerId, Task } from '../models/Task';
-import { flattenTasks } from '../models/Task';
+import { flattenTasks, isUserMessage } from '../models/Task';
+import { plannerMessage, plannerTranscript, skillLoadLabel, skillLoadNotice, type SkillInvocation } from './skillInvocation';
 
 /**
  * Per-runner model cap for the always-on catalog block. Generous enough that
@@ -265,8 +266,6 @@ export interface TranscriptSnapshot {
 
 export interface ReplyOptions {
   signal?: AbortSignal;
-  /** The user's words before skill expansion — what a mid-run queue replays later. */
-  verbatim?: string;
 }
 
 /**
@@ -417,12 +416,12 @@ export class PlannerConversation {
   }
 
   append(role: ConversationMessage['role'], content: string, opts: { timestamp?: string; kind?: ConversationMessage['kind'] } = {}): void {
+    this.appendEntries([{ role, content, timestamp: opts.timestamp ?? new Date().toISOString(), ...(opts.kind ? { kind: opts.kind } : {}) }]);
+  }
+
+  private appendEntries(entries: ConversationMessage[]): void {
     const plan = this.host.plan();
-    if (!plan) return;
-    plan.conversationHistory = [
-      ...(plan.conversationHistory ?? []),
-      { role, content, timestamp: opts.timestamp ?? new Date().toISOString(), ...(opts.kind ? { kind: opts.kind } : {}) },
-    ];
+    if (plan) plan.conversationHistory = [...(plan.conversationHistory ?? []), ...entries];
   }
 
   /** Swap the whole transcript. The live context no longer matches it, so pair with {@link reset}. */
@@ -491,7 +490,7 @@ export class PlannerConversation {
    */
   rewindTargets(): RewindTarget[] {
     return this.transcript.flatMap((m, index) => {
-      if (m.role !== 'user' || index === 0) return [];
+      if (!isUserMessage(m) || index === 0) return [];
       const line = m.content.split('\n')[0];
       const preview = line.length > REWIND_PREVIEW_WIDTH ? `${line.slice(0, REWIND_PREVIEW_WIDTH - 1)}…` : line;
       return [{ index, preview, content: m.content, timestamp: m.timestamp }];
@@ -636,14 +635,14 @@ export class PlannerConversation {
    * Open the conversation on the host's fresh plan: the goal is its first
    * message. `prepare` (discovery) runs inside the turn, so a stop reaches it.
    */
-  async start(goal: string, prepare: () => Promise<ConversationOpening>, signal?: AbortSignal): Promise<LegacyPlanState> {
+  async start(goal: SkillInvocation, prepare: () => Promise<ConversationOpening>, signal?: AbortSignal): Promise<LegacyPlanState> {
     return this.userTurn('supersede', goal, signal, async (userTurn) => {
       const opening = await prepare();
       this.assertCurrent(userTurn);
       this.recordUser(goal, new Date().toISOString());
       const turn = await this.host.aiService().startConversation({
         ...opening,
-        goal,
+        goal: plannerMessage(goal.text, goal.skills),
         onProgress: userTurn.stream.sink(),
         signal: userTurn.signal,
       });
@@ -656,13 +655,14 @@ export class PlannerConversation {
    * outcome. A turn that throws before anything was persisted takes its own
    * writes back out, so session memory never drifts from disk and the UI.
    */
-  async reply(message: string, options: ReplyOptions = {}): Promise<LegacyPlanState> {
+  async reply(message: string | SkillInvocation, options: ReplyOptions = {}): Promise<LegacyPlanState> {
+    const sent = typeof message === 'string' ? { text: message, skills: [] } : message;
     // Refused while any turn is live: two would interleave their transcript
     // appends, and each would settle on the other's open turn.
-    return this.userTurn({ refuseAs: 'send a message' }, options.verbatim ?? message, options.signal, (userTurn) => this.replyTurn(message, options, userTurn));
+    return this.userTurn({ refuseAs: 'send a message' }, sent, options.signal, (userTurn) => this.replyTurn(sent, userTurn));
   }
 
-  private async replyTurn(message: string, options: ReplyOptions, userTurn: UserTurn): Promise<SettledTurn> {
+  private async replyTurn(message: SkillInvocation, userTurn: UserTurn): Promise<SettledTurn> {
     const { signal } = userTurn;
     const plan = this.requirePlan();
     const priorHistory = plan.conversationHistory ?? [];
@@ -673,7 +673,8 @@ export class PlannerConversation {
     // live catalog (always) and the current plan (tasks, statuses, edit
     // protocol — once tasks exist) alongside it.
     const contextBlock = [this.catalogBlock(), this.planContextBlock()].filter(Boolean).join('\n\n');
-    const outgoing = contextBlock ? `${contextBlock}\n\n${message}` : message;
+    const said = plannerMessage(message.text, message.skills);
+    const outgoing = contextBlock ? `${contextBlock}\n\n${said}` : said;
 
     const ai = this.host.aiService();
     try {
@@ -695,7 +696,7 @@ export class PlannerConversation {
       // or an added task, is reconciled into the plan now and the running batch
       // keeps going. A paused scheduler with no runner live queues nothing.
       if (this.editTouchesLiveWork(settleable)) {
-        const queued = this.host.queueEdit(options.verbatim ?? message);
+        const queued = this.host.queueEdit(message.text);
         settleable = {
           kind: 'message',
           text: `Execution is running, so I queued your change — it will be applied between task batches (${queued} queued).`,
@@ -758,13 +759,14 @@ export class PlannerConversation {
    * the turn is where the stream a surface draws begins and ends, and only the
    * conversation sees all of it — every backend call, read and retry.
    */
-  private async userTurn(admission: TurnAdmission, prompt: string, signal: AbortSignal | undefined, run: (turn: UserTurn) => Promise<SettledTurn>): Promise<LegacyPlanState> {
+  private async userTurn(admission: TurnAdmission, prompt: SkillInvocation, signal: AbortSignal | undefined, run: (turn: UserTurn) => Promise<SettledTurn>): Promise<LegacyPlanState> {
     const { turn: planner, release } = this.claim(admission, signal);
     const turnId = uuidv4();
     const stream = new TurnStream(turnId, (p) => this.host.onProgress(p));
     const turn: UserTurn = { stream, planner, signal: planner.signal, plan: this.host.plan(), reads: freshReadBudget() };
     this.openTurn = turn;
-    this.host.broadcast({ type: 'planner_turn_started', turnId, prompt });
+    const skills = prompt.skills.map(skillLoadNotice);
+    this.host.broadcast({ type: 'planner_turn_started', turnId, prompt: prompt.text, ...(skills.length > 0 ? { skills } : {}) });
     let outcome: PlannerTurnOutcome = 'error';
     try {
       const settled = await run(turn);
@@ -793,9 +795,13 @@ export class PlannerConversation {
     return plan;
   }
 
-  private recordUser(content: string, timestamp: string): void {
-    this.append('user', content, { timestamp });
-    this.recordResearch([{ id: `up-${Date.now()}`, type: 'user_prompt', content, timestamp }]);
+  /** The message as typed, then one entry per skill it loaded, sharing its timestamp so a reload keeps them together. */
+  private recordUser({ text, skills }: SkillInvocation, timestamp: string): void {
+    this.appendEntries([
+      { role: 'user', content: text, timestamp },
+      ...skills.map((skill): ConversationMessage => ({ role: 'user', content: skillLoadLabel(skill), timestamp, kind: 'skill_load', skill })),
+    ]);
+    this.recordResearch([{ id: `up-${Date.now()}`, type: 'user_prompt', content: text, timestamp }]);
   }
 
   private recordResearch(entries: ResearchLogEntry[]): void {
@@ -817,7 +823,11 @@ export class PlannerConversation {
   ): Promise<ConversationTurn> {
     const runners = this.requirePlan().runners;
     const opening = await this.host.opening(runners);
-    const goal = this.host.goal() || priorHistory.find((m) => m.role === 'user')?.content || message;
+    const replayed = plannerTranscript(priorHistory);
+    // The opening message as the planner first saw it — skill bodies included,
+    // as `start` composed it — unless a compaction has since condensed it away.
+    const opener = priorHistory[0] && isUserMessage(priorHistory[0]) ? replayed[0].content : undefined;
+    const goal = opener || this.host.goal() || message;
     // Explicit rather than left to each backend's start: a replay begins from
     // the transcript alone, which for a harness planner means its native
     // session id goes too — otherwise the agent's own memory of the old
@@ -829,7 +839,7 @@ export class PlannerConversation {
       goal,
       onProgress,
       signal,
-      priorHistory,
+      priorHistory: replayed,
       initialMessage: message,
     });
   }

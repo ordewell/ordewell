@@ -256,17 +256,14 @@ describe('execution', () => {
 });
 
 describe('loaded data', () => {
-  it('mirrors the daemon settings into the skill toggles', () => {
+  it('mirrors the daemon settings', () => {
     const s = send(initialState(), {
       type: 'settingsLoaded',
       settings: {
         orchestratorModel: 'x/y',
-        verification: { enabled: true },
         modelAllowlist: { opencode: ['a/b'] },
       },
     });
-    // The daemon calls it `verification`; the TUI toggle is `/verify`.
-    expect(s.skills.verify).toBe(true);
     expect(s.orchestratorModel).toBe('x/y');
     expect(s.allowlist).toEqual({ opencode: ['a/b'] });
   });

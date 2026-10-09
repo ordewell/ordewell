@@ -229,6 +229,28 @@ body {
   color: #fff;
 }
 
+.chat-msg-user .chat-msg-content mark.skill-token {
+  background: color-mix(in srgb, #fff 22%, transparent);
+  color: inherit;
+  font-weight: 600;
+  border-radius: 4px;
+  padding: 0 2px;
+}
+
+/* Sits right under the bubble of the message that loaded it. */
+.chat-msg-skill-load {
+  padding-top: 0;
+  margin-top: -4px;
+}
+
+.chat-msg-skill-load .skill-load-mark {
+  color: var(--green);
+}
+
+.chat-msg-skill-load .skill-load-path {
+  font-family: var(--font-mono);
+}
+
 .chat-msg-content {
   font-size: 13px;
   line-height: 1.55;
@@ -769,70 +791,6 @@ body {
   opacity: 0.45;
   cursor: not-allowed;
   text-decoration: line-through;
-}
-
-.skill-bar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 4px 10px;
-  border-bottom: 1px solid var(--border-subtle);
-  background: var(--bg-secondary);
-  font-size: 11px;
-  min-height: 28px;
-  /* This row wraps to two lines in a narrow panel. Left shrinkable, a tight
-     column compressed it toward `min-height` and its second row painted over
-     the message list — the pills overlapped the conversation. */
-  flex-shrink: 0;
-}
-
-.skill-toggle-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 11px;
-  border-radius: var(--radius-full);
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-  font-family: inherit;
-  letter-spacing: -0.01em;
-  white-space: nowrap;
-}
-
-.skill-toggle-pill .skill-toggle-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-muted);
-  transition: background var(--transition-fast);
-}
-
-.skill-toggle-pill.on {
-  border-color: rgba(163, 113, 247, 0.35);
-  color: var(--purple);
-  background: var(--purple-subtle);
-}
-
-.skill-toggle-pill.on .skill-toggle-dot {
-  background: var(--purple);
-}
-
-.skill-toggle-pill.off {
-  opacity: 0.5;
-}
-
-.skill-toggle-pill:hover {
-  background: var(--bg-hover);
-}
-
-.skill-toggle-pill.on:hover {
-  background: rgba(163, 113, 247, 0.14);
 }
 
 /* ---- Empty State ---- */

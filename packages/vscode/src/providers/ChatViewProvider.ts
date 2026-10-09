@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { AiProvider, LegacyPlanState, DiscoveredModel, RunnerId, TaskIsolation, IsolationHandoff, IsolationMergeResult, MergeGateView, RunnerTransport } from '@ordewell/core';
+import type { AiProvider, LegacyPlanState, DiscoveredModel, RunnerId, TaskIsolation, IsolationHandoff, IsolationMergeResult, MergeGateView } from '@ordewell/core';
 import { ConversationViewHost, type SavedConversation } from '../ConversationViewHost';
 import { renderWebviewHtml } from './webviewHtml';
 import type { ChatState, HostToWebview, ModelOption, PendingPlanEdit, PlannerBackend, RunnerMeta, RunnerModeMeta, WebviewToHost } from '../shared/protocol';
@@ -66,12 +66,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.postMessage({ type: 'setModels', models });
   }
   setRunners(runners: RunnerMeta[]): void { this.postMessage({ type: 'setRunners', runners }); }
-  setSkillToggles(verify: boolean, unavailable: string[] = []): void {
-    this.postMessage({ type: 'setSkillToggles', toggles: { verify }, unavailable });
-  }
-  setRunnerTransport(transport: RunnerTransport): void {
-    this.postMessage({ type: 'runnerTransport', transport });
-  }
   setPlanDockHeight(height: number | undefined): void {
     this.postMessage({ type: 'planDockHeight', height });
   }

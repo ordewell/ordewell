@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { RunnerId, RunnerTransport } from '@ordewell/core';
+import type { RunnerId } from '@ordewell/core';
 import type { WebviewToHost } from '../shared/protocol';
 import { isKnownSlashCommand } from '../commands/SlashParser';
 import { handleIsolationAction } from './isolation';
@@ -15,8 +15,6 @@ export interface ExtensionHandlers {
   runSlashCommand(text: string): Promise<void>;
   setPlanner(provider: string): Promise<void>;
   setPlannerModel(modelId: string, effort?: string): Promise<void>;
-  toggleSkill(skillId: string, enabled: boolean): void;
-  setRunnerTransport(transport: RunnerTransport): void;
   /** Open (or focus) the on-demand task-log tab for a structured task (ADR-0018, V1). */
   openTaskLog(taskId: string): void;
   setPlanDockHeight(height: number): void;
@@ -115,12 +113,6 @@ export async function routeWebviewMessage(msg: WebviewToHost, deps: WebviewRoute
       } catch (err) {
         deps.log(`Approval ${msg.id} could not be resolved: ${err instanceof Error ? err.message : String(err)}`);
       }
-      return;
-    case 'toggleSkill':
-      deps.extension.toggleSkill(msg.skillId, msg.enabled);
-      return;
-    case 'setRunnerTransport':
-      deps.extension.setRunnerTransport(msg.transport);
       return;
     // The panel is its own webview; the chat only asks for it to be opened.
     case 'openTaskLog':

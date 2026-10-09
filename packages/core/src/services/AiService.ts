@@ -35,7 +35,6 @@ export interface ConversationRequest {
   fetcher?: IWebFetcher;
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>;
   autonomousDefault?: boolean;
-  verificationEnabled?: boolean;
   /**
    * The planner model's context window when the catalog knows it. Threaded here
    * so a usage record can carry it (and the UI can show context fill); absent

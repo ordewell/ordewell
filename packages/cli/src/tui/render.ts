@@ -9,7 +9,7 @@ import { chatEditorRoomFor, chatPaneWidth, chatPromptLabel, paneColumns, planPan
 import { currentHandoff, diffRoom, handoffActions } from './handoff';
 import { handoffBase, handoffBranch, isRepoGroup, repoResultLines } from '../isolation';
 import { capConflictFiles, titledTaskRef } from '@ordewell/core';
-import { SKILL_IDS, plannerInFlight, visibleItems, type Overlay, type PickerState, type TuiState } from './state';
+import { plannerInFlight, visibleItems, type Overlay, type PickerState, type TuiState } from './state';
 
 /**
  * The whole frame as `state.rows` lines, each at most `state.cols` columns
@@ -28,7 +28,7 @@ export function render(state: TuiState): string[] {
     : renderBody(state, rowsForBody, cols);
 
   const lines = [
-    renderSkills(state, cols),
+    renderAutonomy(state, cols),
     ...body,
     renderStatus(state, cols),
     ...renderInput(state),
@@ -184,14 +184,9 @@ function fit(lines: string[], rows: number, anchor: 'top' | 'bottom'): string[] 
 
 // ── Chrome ───────────────────────────────────────────────────────────────────
 
-function renderSkills(state: TuiState, cols: number): string {
-  const badges = SKILL_IDS.map((id) =>
-    state.skills[id] ? style.green(`● ${id}`) : style.grey(`○ ${id}`),
-  );
+function renderAutonomy(state: TuiState, cols: number): string {
   const auto = state.autonomous ? style.yellow('● Full') : style.green('● Guarded');
-  // Structured is the default, so only the fallback is worth a badge.
-  const terminal = state.runnerTransport === 'terminal' ? [style.yellow('● terminal')] : [];
-  return truncate([...badges, auto, ...terminal].join(' '), cols);
+  return truncate(auto, cols);
 }
 
 /**
@@ -229,10 +224,10 @@ function renderStatus(state: TuiState, cols: number): string {
  * character-by-character prefix match while composing, not just an exact
  * name, and never a built-in (those keep their plain styling). Trailing
  * punctuation on a token is left uncoloured even when the name before it
- * matches, mirroring how resolveSkillInvocation keeps it outside the splice.
+ * matches, mirroring how resolveSkillInvocation keeps it out of the name.
  * A skill name repeated verbatim only highlights its first occurrence —
- * resolveSkillInvocation only expands that one, so nothing here should look
- * "recognized" that substitution then leaves untouched.
+ * the skill loads once, so nothing here should look "recognized" that
+ * resolution then leaves as plain text.
  */
 function highlightSpans(text: string): Array<{ start: number; end: number }> {
   const spans: Array<{ start: number; end: number }> = [];

@@ -1,4 +1,4 @@
-import { LegacyPlanState, Session, saveState, loadState, saveSession, flattenTasks } from '@ordewell/core';
+import { LegacyPlanState, Session, saveState, loadState, saveSession, flattenTasks, isUserMessage } from '@ordewell/core';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
 
 export interface PersistenceDeps {
@@ -40,7 +40,7 @@ export function restoreState(deps: PersistenceDeps): void {
     // The goal is not persisted on the plan; recover it from the dialogue so
     // later turns (session labels, goal display) don't run with an empty goal.
     if (!deps.getCurrentGoal()) {
-      const firstUserMessage = saved.conversationHistory?.find((m) => m.role === 'user')?.content;
+      const firstUserMessage = saved.conversationHistory?.find(isUserMessage)?.content;
       if (firstUserMessage) deps.setCurrentGoal(firstUserMessage);
     }
 

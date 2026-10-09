@@ -68,6 +68,9 @@ function makeOrchestrator(overrides: {
     workspaceRoot: overrides.workspaceRoot ?? (() => '/repo'),
     workspaceEnv: overrides.workspaceEnv,
     previousAttemptFromLog: overrides.previousAttemptFromLog,
+    // These fakes are terminal sessions that report through the completion
+    // marker, so they ask for what such a session is.
+    transport: 'terminal',
   });
 }
 

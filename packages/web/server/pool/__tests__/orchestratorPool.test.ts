@@ -440,7 +440,7 @@ describe('OrchestratorPool run notices', () => {
 
   it('sends a run\'s isolation notice to the session\'s subscribers as a notice frame', async () => {
     const runner = { spawn: vi.fn().mockRejectedValue(new Error('no runner in a test')), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 };
-    const pool = new OrchestratorPool({ runner });
+    const pool = new OrchestratorPool({ runner, structuredRunner: runner });
     const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-notice');
     pool.adoptSavedSession(meta.id, workspace);
     const sent: string[] = [];

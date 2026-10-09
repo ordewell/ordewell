@@ -163,7 +163,7 @@ describe('a session\'s runner approvals', () => {
       activeCount: 0,
     };
     const sent: SessionMessage[] = [];
-    const session = makeSession({ runner, broadcast: (m) => sent.push(m), settings: () => ({ runnerTransport: 'structured' }) });
+    const session = makeSession({ runner, broadcast: (m) => sent.push(m) });
     session.loadPlan(plan(), 'Goal', '/repo');
     await session.executePlan();
     await vi.waitFor(() => expect(sessions).toHaveLength(1));

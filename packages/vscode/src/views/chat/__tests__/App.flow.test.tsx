@@ -182,28 +182,8 @@ describe('chat plan flow', () => {
     expect(pill?.textContent?.includes('Claude Code')).toBeTruthy();
   });
 
-  it('has no TDD pill: tdd is a skill attached to tasks, not a toggle', () => {
-    send({ type: 'setSkillToggles', toggles: { verify: false } });
-    const labels = Array.from(document.querySelectorAll('.skill-toggle-pill')).map((b) => b.textContent ?? '');
-    expect(labels.some((l) => l.includes('TDD'))).toBe(false);
-  });
-
-  it('renders the structured transport pill and sets it via postMessage', () => {
-    api.postMessage.mockClear();
-
-    send({ type: 'runnerTransport', transport: 'terminal' });
-    const pill = () => Array.from(document.querySelectorAll('.skill-toggle-pill')).find(
-      (b) => b.textContent?.includes('Structured'),
-    ) as HTMLButtonElement;
-    expect(pill().textContent).not.toContain('experimental');
-    expect(pill().classList.contains('off')).toBeTruthy();
-
-    act(() => { fireEvent.click(pill()); });
-    expect(api.postMessage).toHaveBeenCalledWith({ type: 'setRunnerTransport', transport: 'structured' });
-    expect(pill().classList.contains('on')).toBeTruthy();
-
-    send({ type: 'runnerTransport', transport: 'terminal' });
-    expect(pill().classList.contains('off')).toBeTruthy();
+  it('offers no mode-toggle pills: TDD is a skill attached to tasks, and Verify and Structured are gone', () => {
+    expect(document.querySelectorAll('.skill-toggle-pill')).toHaveLength(0);
   });
 
   it('renders a reply sent outside a turn (a PRD) as a planner chat message', () => {

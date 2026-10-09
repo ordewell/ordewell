@@ -1,9 +1,9 @@
 import {
-  ALL_PROVIDERS, EMPTY_CONVERSATION, EMPTY_HOLD, NO_TURN, PROVIDER_PRIORITY, autonomyLevelLabel, isRunnerTransport, parseAutonomyLevel, parseMaxParallel, runnerForProvider, type AiProvider,
+  ALL_PROVIDERS, EMPTY_CONVERSATION, EMPTY_HOLD, NO_TURN, PROVIDER_PRIORITY, autonomyLevelLabel, parseAutonomyLevel, parseMaxParallel, runnerForProvider, type AiProvider,
 } from '@ordewell/core';
 import { handoffCommand } from '../handoff';
 import { findCommand, type ParsedCommand } from '../slash';
-import { findTask, plannerInFlight, SKILL_IDS, type PickerItem, type SkillId, type TuiState } from '../state';
+import { findTask, plannerInFlight, type PickerItem, type TuiState } from '../state';
 import { modelsForRunner } from '../taskAssignment';
 import { say } from '../transcript';
 import { DEFAULT_EFFORT, picker, pickerItemsFor, plannerEffortItems, plannerItems, providerErrorHint } from './pickers';
@@ -20,10 +20,6 @@ const KNOWN_PROVIDERS = Object.keys(ALL_PROVIDERS);
 export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step {
   if (!findCommand(name)) {
     return fail(state, `Unknown command: /${name} — type /help to see what's available.`);
-  }
-
-  if ((SKILL_IDS as readonly string[]).includes(name)) {
-    return toggleSkill(state, name as SkillId, args[0]);
   }
 
   switch (name) {
@@ -65,8 +61,6 @@ export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step
       return runners(state, args);
     case 'auto':
       return setAutonomous(state, args[0]);
-    case 'transport':
-      return setTransport(state, args[0]);
     case 'parallel':
       return setMaxParallel(state, args[0]);
     case 'mouse':
@@ -173,12 +167,6 @@ function resolveToggle(arg: string | undefined, current: boolean): boolean | nul
   if (value === 'off') return false;
   if (value === undefined) return !current;
   return null;
-}
-
-function toggleSkill(state: TuiState, skill: SkillId, arg: string | undefined): Step {
-  const enabled = resolveToggle(arg, state.skills[skill]);
-  if (enabled === null) return fail(state, `Usage: /${skill} [on|off]`);
-  return step(state, [{ type: 'command', name: skill, action: enabled ? 'on' : 'off' }]);
 }
 
 // Only asks when there is something to lose; an empty/idle session resets
@@ -423,13 +411,6 @@ function setAutonomous(state: TuiState, arg: string | undefined): Step {
   // Updated here, not from the effect: nothing round-trips this setting back
   // (it lives in .env), and a stale flag would freeze the toggle and the badge.
   return step({ ...state, autonomous: enabled }, [{ type: 'setAutonomous', enabled }]);
-}
-
-/** Like the toggles, a bare `/transport` flips it; the daemon says what it became. */
-function setTransport(state: TuiState, arg: string | undefined): Step {
-  const value = arg?.toLowerCase() ?? (state.runnerTransport === 'structured' ? 'terminal' : 'structured');
-  if (!isRunnerTransport(value)) return fail(state, 'Usage: /transport [terminal|structured]');
-  return step(state, [{ type: 'setTransport', transport: value }]);
 }
 
 /**

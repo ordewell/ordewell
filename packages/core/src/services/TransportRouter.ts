@@ -10,7 +10,7 @@ export interface TransportRoute {
 }
 
 /**
- * Where one task runs (ADR-0018, S3): structured only when the plan asks for
+ * Where one task runs (ADR-0018, S3): structured only when the attempt asks for
  * it and the task's runner has a task-mode connector. Anything else runs on
  * the terminal, and a structured request says why.
  */

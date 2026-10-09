@@ -289,9 +289,10 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
       expect(settings).toMatchObject({
         aiProvider: 'openrouter',
         orchestratorModel: 'openrouter/auto',
-        verification: { enabled: expect.any(Boolean) },
-        runnerTransport: expect.stringMatching(/structured|terminal/),
       });
+      expect(settings).not.toHaveProperty('runnerTransport');
+      expect(settings).not.toHaveProperty('verification');
+      expect(settings).not.toHaveProperty('tdd');
     });
 
     it('names the model a planner switch landed on and why', async () => {
@@ -302,9 +303,9 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
     });
 
     it('carries no recall for a write that left the planner alone', async () => {
-      const written = await client.updateSettings({ verification: { enabled: false } });
+      const written = await client.updateSettings({ modelAllowlist: { opencode: ['a/b'] } });
 
-      expect(written.verification).toEqual({ enabled: false });
+      expect(written.modelAllowlist).toEqual({ opencode: ['a/b'] });
       expect(written.switchRecall).toBeUndefined();
     });
 
@@ -320,11 +321,10 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
       expect(err.status).toBe(400);
     });
 
-    it('answers a command with the settings it left behind', async () => {
-      const result = await client.sendCommand('verify', { action: 'off' });
+    it('refuses a command now that no mode toggle is left to run', async () => {
+      const err = await refusal(client.sendCommand('verify', { action: 'off' }));
 
-      expect(result.ok).toBe(true);
-      expect(result.settings.verification).toEqual({ enabled: false });
+      expect(err.status).toBe(404);
     });
 
     it('reads the runners the daemon offers', async () => {

@@ -12,7 +12,7 @@ import QueuedPrompts from './components/QueuedPrompts';
 import HandoffCard from './components/HandoffCard';
 import CheckpointPanel from './components/CheckpointPanel';
 import type { TaskDraft } from './components/NewTaskCard';
-import type { Task, TaskModelAssignment, RunnerId, RunnerTransport } from '@ordewell/core';
+import type { Task, TaskModelAssignment, RunnerId } from '@ordewell/core';
 import { planSummaryLabel, nextDock } from './planDock';
 import { DetailContext } from './detail';
 import { useFollowOutput } from './followOutput';
@@ -38,8 +38,8 @@ export default function App() {
   const {
     conversation, plan, isExecuting, isResearchActive, conversationBusy, error, models, modelsByRunner,
     runnerList, enabledRunnerIds, runners, pendingEdits, held, unsent, modesByRunner, modelConfig,
-    modelOptions, configuredProviders, planner, isReady, modelDiscoveryErrors, verifyEnabled,
-    runnerTransport, skills, checkpoint, taskOutput, taskIdle, taskApprovals, taskIsolation, handoff,
+    modelOptions, configuredProviders, planner, isReady, modelDiscoveryErrors,
+    skills, checkpoint, taskOutput, taskIdle, taskApprovals, taskIsolation, handoff,
     mergeResult, mergeGate, taskGates, dockExpanded, dockHeight,
   } = host;
   const setPlan = useCallback((v: Updatable<HostState['plan']>) => dispatch({ type: 'patchPlan', plan: v }), []);
@@ -49,8 +49,6 @@ export default function App() {
   const setIsReady = useCallback((v: boolean) => dispatch({ type: 'patchReady', ready: v }), []);
   const setRunners = useCallback((v: Updatable<RunnerId[]>) => dispatch({ type: 'patchRunners', runners: v }), []);
   const setPendingEdits = useCallback((v: Updatable<PendingPlanEdit[]>) => dispatch({ type: 'patchPendingEdits', edits: v }), []);
-  const setVerifyEnabled = useCallback((v: boolean) => dispatch({ type: 'patchVerifyEnabled', enabled: v }), []);
-  const setRunnerTransport = useCallback((v: RunnerTransport) => dispatch({ type: 'patchRunnerTransport', transport: v }), []);
   const setCheckpoint = useCallback((v: HostState['checkpoint']) => dispatch({ type: 'patchCheckpoint', checkpoint: v }), []);
   const setDockHeight = useCallback((v: number | undefined) => dispatch({ type: 'patchDockHeight', height: v }), []);
   const setDockExpanded = useCallback((v: Updatable<boolean>) => dispatch({ type: 'patchDockExpanded', expanded: v }), []);
@@ -374,20 +372,6 @@ export default function App() {
     const timer = setTimeout(() => setStopArmed(false), STOP_ARM_MS);
     return () => clearTimeout(timer);
   }, [stopArmed, isResearchActive]);
-
-  const handleToggleSkill = useCallback((skillId: string) => {
-    if (skillId === 'verify') {
-      const next = !verifyEnabled;
-      setVerifyEnabled(next);
-      vscode.postMessage({ type: 'toggleSkill', skillId, enabled: next });
-    }
-  }, [verifyEnabled]);
-
-  const handleToggleTransport = useCallback(() => {
-    const next: RunnerTransport = runnerTransport === 'structured' ? 'terminal' : 'structured';
-    setRunnerTransport(next);
-    vscode.postMessage({ type: 'setRunnerTransport', transport: next });
-  }, [runnerTransport]);
 
   const handleApproveCheckpoint = useCallback(() => {
     if (!checkpoint) return;
@@ -771,17 +755,6 @@ export default function App() {
           </div>
         </section>
         </div>
-      </div>
-
-      <div className="skill-bar">
-        <button className={`skill-toggle-pill ${verifyEnabled ? 'on' : 'off'}`}
-          onClick={() => handleToggleSkill('verify')} title="Verify (run tests): adds a final evidence-based task that runs the full suite, writes missing spec checks, and must exit green">
-          <span className="skill-toggle-dot" /> Verify
-        </button>
-        <button className={`skill-toggle-pill ${runnerTransport === 'structured' ? 'on' : 'off'}`}
-          onClick={handleToggleTransport} title="Structured: drive tasks through each runner's protocol instead of a terminal. Switch it off to use a terminal. Applies from the next run; a runner without a structured connector keeps its terminal.">
-          <span className="skill-toggle-dot" /> Structured
-        </button>
       </div>
 
       {hasDetail && (

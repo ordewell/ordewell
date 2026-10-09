@@ -20,10 +20,8 @@ function settingsState(overrides: Partial<SettingsState> = {}): SettingsState {
     aiProvider: 'openrouter',
     plannerThinkingEffort: '',
     maxParallel: 3,
-    verification: { enabled: false },
     modelAllowlist: undefined,
     plannerModels: undefined,
-    runnerTransport: 'terminal',
     ...overrides,
   };
 }
@@ -55,8 +53,6 @@ describe('GET /api/settings', () => {
       plannerThinkingEffort: '',
       // How many tasks run at once — `/parallel` shows it from here.
       maxParallel: 3,
-      verification: { enabled: false },
-      runnerTransport: 'terminal',
     });
   });
 });
@@ -90,23 +86,6 @@ describe('PATCH /api/settings', () => {
     const body = (await res.json()) as { orchestratorModel: string };
     expect(body.orchestratorModel).toBe('gemini-2.5-flash');
     expect(pool.updateSettings).toHaveBeenCalledWith({ orchestratorModel: 'gemini-2.5-flash' });
-  });
-
-  it('updates verification feature toggle', async () => {
-    vi.mocked(pool.updateSettings).mockReturnValue(settingsState({
-      verification: { enabled: true },
-    }));
-
-    const res = await app.request('/api/settings', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ verification: { enabled: true } }),
-    });
-
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { verification: { enabled: boolean } };
-    expect(body.verification).toEqual({ enabled: true });
-    expect(pool.updateSettings).toHaveBeenCalledWith({ verification: { enabled: true } });
   });
 
   it('updates modelAllowlist and returns it in settings', async () => {

@@ -487,7 +487,7 @@ function submit(state: TuiState): Step {
   const command = parseSlash(text);
   // A skill-backed command is not dispatched here: it goes to the planner like
   // any other message, literal /name and all, so the daemon's own skill
-  // interception (see resolveSkillInvocation) substitutes it before a
+  // resolution (see resolveSkillInvocation) loads Ordewell's skill before a
   // coding-agent planner ever sees the token and tries to resolve it itself.
   if (command && findCommand(command.name)?.source !== 'skill') return runCommand(cleared, command);
 

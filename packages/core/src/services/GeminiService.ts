@@ -205,7 +205,6 @@ export class GeminiService extends BaseAiService implements IAiService {
       req.runners,
       req.runnerModes,
       req.autonomousDefault ?? true,
-      req.verificationEnabled ?? false,
       { isolatedExecution: req.isolatedExecution },
     );
 

@@ -155,7 +155,6 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     plannerModelMemory: services.plannerModelMemory,
     runnerInstallation: services.runnerInstallation,
     chatProvider: services.chatProvider,
-    settingsService: services.settingsService,
     sendModelConfig: () => sendModelConfig(services.config, services.chatProvider),
     log,
   });
@@ -197,8 +196,6 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       runSlashCommand: (text) => handleSlashCommand(text, slashDeps()),
       setPlanner: (provider) => planner.apply(provider as AiProvider),
       setPlannerModel: (modelId, effort) => planner.setModel(modelId, effort),
-      toggleSkill: (skillId, enabled) => planner.toggleSkill(skillId, enabled),
-      setRunnerTransport: (transport) => planner.setRunnerTransport(transport),
       openTaskLog: (taskId) => taskLogs.open(taskId),
       setPlanDockHeight: (height) => { void services.context.globalState.update(PLAN_DOCK_HEIGHT_KEY, height); },
     },
@@ -247,8 +244,6 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
 
   function onWebviewReady(): void {
     services.chatProvider.resendAllState();
-    services.chatProvider.setSkillToggles(services.settingsService.getVerification(), []);
-    services.chatProvider.setRunnerTransport(services.settingsService.getRunnerTransport());
     services.chatProvider.setPlanDockHeight(services.context.globalState.get<number>(PLAN_DOCK_HEIGHT_KEY));
     sendSkills();
     // Activation-time discovery can catch a runner CLI cold (server spawn,

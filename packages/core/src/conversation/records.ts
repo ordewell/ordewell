@@ -1,6 +1,6 @@
-import type { ResearchStep, ResearchStepOutcome } from '../models/Task';
+import type { ResearchStep, ResearchStepOutcome, SkillLoadNotice } from '../models/Task';
 import type { UsageLine } from '../models/Usage';
-import type { MessageBlock, MessageRole, PlanMarkerStatus, SubagentBlock, ToolBlock, ToolStatus, UsageBlock } from './blocks';
+import type { MessageBlock, MessageRole, PlanMarkerStatus, SkillLoadBlock, SubagentBlock, ToolBlock, ToolStatus, UsageBlock } from './blocks';
 import { diffStat, outputLines, toolHeadline } from './format';
 import { isFileEditTool } from '../services/harness/agentTools';
 
@@ -13,6 +13,16 @@ import { isFileEditTool } from '../services/harness/agentTools';
 /** A line that is done: nothing streams into it any more. */
 export function settledMessage(id: string, role: MessageRole, text: string, turnId?: string): MessageBlock {
   return { type: 'message', id, role, text, streaming: false, ...(turnId ? { turnId } : {}) };
+}
+
+/** The user's message, marked with the skills it loaded when it loaded any. */
+export function userMessage(id: string, text: string, skills: readonly SkillLoadNotice[], turnId?: string): MessageBlock {
+  const block = settledMessage(id, 'user', text, turnId);
+  return skills.length > 0 ? { ...block, skills: skills.map((s) => s.name) } : block;
+}
+
+export function skillLoadBlock(id: string, { invokedBy, name, source, path }: SkillLoadNotice, turnId?: string): SkillLoadBlock {
+  return { type: 'skill_load', id, invokedBy, name, source, path, ...(turnId ? { turnId } : {}) };
 }
 
 type SubagentFields = Omit<SubagentBlock, 'type' | 'id' | 'toolCallId' | 'model' | 'usage' | 'turnId'>

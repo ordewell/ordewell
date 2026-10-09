@@ -306,6 +306,11 @@ export class SkillsService {
   private catalog(): { skills: SkillInfo[]; shadowed: ShadowedSkill[] } {
     this.pruneRetired();
     for (const name of BUILTIN_SKILL_NAMES) this.seed(name);
+    return this.readCatalog();
+  }
+
+  /** Inspect installed skills without seeding, refreshing or pruning global files. */
+  readCatalog(): { skills: SkillInfo[]; shadowed: ShadowedSkill[] } {
     const byName = new Map<string, SkillInfo>();
     for (const skill of readDir(this.globalDir(), 'global')) {
       byName.set(skill.name, skill);

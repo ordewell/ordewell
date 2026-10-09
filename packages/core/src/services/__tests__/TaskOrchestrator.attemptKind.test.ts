@@ -58,7 +58,6 @@ function setup(opts: { isolation?: FakeWorktreeIsolation; config?: Partial<IConf
     isolation,
     workspaceRoot: () => '/repo',
     workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
-    runnerTransport: () => 'structured',
     skillsAt: (root) => {
       skillRoots.push(root);
       return { findSkill: (name) => CATALOG.get(name), searchedDirs: () => ['/g', `${root}/.ordewell/skills`] };

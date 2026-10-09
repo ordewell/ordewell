@@ -6,9 +6,8 @@ import { handleWeb } from './web';
 import { handleModels } from './models';
 import { handleSetup } from './setup';
 import { handlePlugins } from './plugins';
+import { handleSkills } from './skills';
 import { handleAllowlist } from './allowlist';
-import { handleVerify } from './verify';
-import { handleTransport } from './transport';
 import { handleMarkComplete, handleSkip, handleUncomplete } from './mark-complete';
 import { handleRunTask, handleForceStart, handleRetry, handleCancel, handleContinue, handleCheckpoint } from './task-control';
 import { handleAddTask } from './add-task';
@@ -53,11 +52,10 @@ export const COMMANDS: Record<string, (args: string[]) => Promise<void> | void> 
   key: handleKey,
   runners: handleRunners,
   auto: handleAuto,
-  transport: handleTransport,
   refresh: handleRefresh,
   setup: handleSetup,
   plugins: handlePlugins,
-  'verify': handleVerify,
+  skills: handleSkills,
   'mark-complete': handleMarkComplete,
   complete: handleMarkComplete,
   uncomplete: handleUncomplete,

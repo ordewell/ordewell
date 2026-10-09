@@ -1,7 +1,7 @@
 import { DiscoveredModel, RunnerId, type TaskSnapshot, type Task } from '../models/Task';
 import type { LegacyPlanState } from '../models/Task';
 import { buildModeGuide, filteredBuildModes, type RunnerModeInfo } from './ModeResolver';
-import { DEFAULT_PLANNER_MODES, modesFor, type IsolatedExecution, type PlannerModes } from './plannerModes';
+import { DEFAULT_PLANNER_MODES, type IsolatedExecution, type PlannerModes } from './plannerModes';
 import { TASK_QUERY_PROTOCOL, TASK_READ_TOOLS_PROTOCOL } from './TaskQuery';
 import { SELF_REPO } from './isolationRecord';
 
@@ -71,31 +71,6 @@ function buildModeExamplesForRunners(runners: RunnerId[]): string {
     if (r === 'opencode') return 'opencode: build|plan';
     return `${r}: default|plan`;
   }).join(', ');
-}
-
-/**
- * Verification mode (evidence-based, AFK): a final task whose verdict comes
- * from running the suite, closing the "every task passed but the feature is
- * short" gap that per-task exit codes cannot see.
- */
-function verificationModeBlock(): string {
-  return [
-    '',
-    'VERIFICATION MODE:',
-    'Add a FINAL verification task to the end of the plan (highest order number).',
-    'This task closes the gap between "every task finished" and "the feature is correct": tasks executed in isolated sessions can each pass while the integrated feature is still short. Its outcome must come from commands and exit codes, never from judgement.',
-    'This task must:',
-    '- Have type "ai" and autonomy "AFK" — it needs no human input',
-    '- Have dependencies on ALL other AI tasks in the plan',
-    '- Use the same runner as the other tasks; a mid-tier model is fine (the work is running and writing tests, not architecture)',
-    '- Its prompt should instruct the agent to:',
-    '  * Re-read the ORIGINAL goal (and the PRD at `.scratch/<slug>/PRD.md` if one exists) — the whole feature spec, not any single task\'s slice',
-    '  * Run the project\'s full test suite and typecheck/build, and fix any failure it finds',
-    '  * If the project has NO test infrastructure, do not bootstrap a framework just for verification (unless an earlier task already added one) — instead write a standalone verification script that exercises the feature end-to-end through its public interface and exits non-zero on any failed check, and run it',
-    '  * Walk the spec requirement by requirement — including every edge case the spec mentions — and check each one is covered by an executable test; write the missing tests at the public interface and make them pass',
-    '  * Exercise the feature END-TO-END: integration gaps between task boundaries are this task\'s responsibility',
-    '  * Succeed ONLY when the full suite, including the newly written tests, is green; if a check cannot be made to pass, fail the task loudly — never skip, weaken, or delete a check to get green',
-  ].join('\n');
 }
 
 /**
@@ -223,7 +198,6 @@ export function buildConversationSystemPrompt(
   runners: RunnerId[],
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
   autonomousDefault = true,
-  verificationEnabled = false,
   variant: ConversationVariant = {},
 ): string {
   const modelsJson = modelsJsonFor(modelsByRunner, runners);
@@ -236,12 +210,7 @@ export function buildConversationSystemPrompt(
       }).join(', ')
     : buildModeExamplesForRunners(runners);
 
-  const verificationBlock = verificationEnabled ? verificationModeBlock() : '';
-
-  return buildConversationBody(
-    goal, context, modelsJson, runners, modeGuide, modeExamples, variant,
-    verificationBlock,
-  );
+  return buildConversationBody(goal, context, modelsJson, runners, modeGuide, modeExamples, variant);
 }
 
 /**
@@ -267,7 +236,6 @@ function buildConversationBody(
   modeGuide: string,
   modeExamples: string,
   variant: ConversationVariant,
-  verificationBlock: string,
 ): string {
   const tools = variant.plannerTools ?? false;
   return [
@@ -282,7 +250,6 @@ function buildConversationBody(
       : '4. After the user confirms the outline, emit the final task plan as a JSON object with a "tasks" array.',
     '',
     researchPhaseBlock(variant.harness ?? false),
-    verificationBlock,
     '',
     'OUTLINE PHASE:',
     `- When you are ready to propose a plan, first show a prose outline. DO NOT jump straight to ${tools ? 'submit_plan' : 'JSON'}.`,
@@ -493,7 +460,6 @@ function getPlanTemplate(isolatedExecution: IsolatedExecution): string {
     '',
     'TASK MODE:',
     '{{MODE_GUIDE}}',
-    '{{VERIFICATION_BLOCK}}',
     '',
     'CONTEXT:',
     '{{CONTEXT}}',
@@ -545,9 +511,8 @@ function buildPlanPromptBase(
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
   modes: PlannerModes = DEFAULT_PLANNER_MODES,
 ): string {
-  const scoped = modesFor('one-shot', modes);
-  const { autonomousDefault } = scoped;
-  const template = getPlanTemplate(scoped.isolatedExecution);
+  const { autonomousDefault } = modes;
+  const template = getPlanTemplate(modes.isolatedExecution);
   const researchReplacement = includeResearchSection ? RESEARCH_SECTION : '';
   const modelsJson = modelsJsonFor(modelsByRunner, runners);
 
@@ -567,7 +532,6 @@ function buildPlanPromptBase(
     .replace('{{RUNNER_CHOICES}}', runners.join('|'))
     .replace('{{RUNNER_INSTRUCTION}}', runnerInstruction(runners))
     .replace('{{MODE_GUIDE}}', modeGuide)
-    .replace('{{VERIFICATION_BLOCK}}', scoped.verification ? `\n${verificationModeBlock()}\n` : '')
     .replace('{{MODE_EXAMPLES}}', modeExamples)
     .replace('{{CONTEXT}}', context || '(no additional context)')
     .replace('{{RESEARCH_RESULTS}}', researchResults ? `\n\nRESEARCH FINDINGS:\n${researchResults}` : '')

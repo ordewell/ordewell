@@ -37,7 +37,6 @@ import {
   PROVIDER_CREDENTIAL_ENV,
   type AiProvider,
   type PlannerModelCandidate,
-  isRunnerTransport,
   HeadlessRunner,
   StructuredRunner,
   TransportRouter,
@@ -235,13 +234,10 @@ export class OrchestratorPool {
       // for a planner that is running at "high".
       plannerThinkingEffort: config.plannerThinkingEffort ?? '',
       maxParallel: config.maxParallelSessions,
-      verification: userSettings.verification,
       modelAllowlist: userSettings.modelAllowlist,
       // The model remembered per planner backend (this task), so a surface can
       // render what's remembered without a second round-trip.
       plannerModels: userSettings.plannerModels,
-      // ADR-0018; a run copies it when it starts.
-      runnerTransport: userSettings.runnerTransport,
     };
   }
 
@@ -298,12 +294,6 @@ export class OrchestratorPool {
     }
     if (typeof changes.plannerThinkingEffort === 'string') {
       process.env.ORDEWELL_PLANNER_EFFORT = changes.plannerThinkingEffort;
-    }
-    if (changes.verification && typeof (changes.verification as Record<string, unknown>).enabled === 'boolean') {
-      this.settingsService.setVerification((changes.verification as Record<string, unknown>).enabled as boolean);
-    }
-    if (isRunnerTransport(changes.runnerTransport)) {
-      this.settingsService.setRunnerTransport(changes.runnerTransport);
     }
     if (envChanges) {
       let touched = false;

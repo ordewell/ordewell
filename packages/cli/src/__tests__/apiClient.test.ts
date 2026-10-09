@@ -110,14 +110,14 @@ describe('ApiClient', () => {
         expect(req.url).toBe('/api/commands/verify');
         const parsed = JSON.parse(body);
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, settings: { verification: { enabled: parsed.args.action === 'off' ? false : true } } }));
+        res.end(JSON.stringify({ ok: true, settings: { maxParallel: parsed.args.action === 'off' ? 1 : 3 } }));
       });
     });
     servers.push(srv);
     const client = new ApiClient(srv.port);
     const result = await client.sendCommand('verify', { action: 'off' });
     expect(result.ok).toBe(true);
-    expect(result.settings?.verification).toEqual({ enabled: false });
+    expect(result.settings?.maxParallel).toBe(1);
   });
 
   it('generatePlan posts to the caller-provided sessionId instead of minting its own', async () => {

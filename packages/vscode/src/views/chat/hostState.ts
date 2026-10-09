@@ -1,4 +1,4 @@
-import { type LegacyPlanState, type DiscoveredModel, type RunnerId, type RunnerTransport, type IsolationHandoff, type IsolationMergeResult, type MergeGateView, type TaskIsolation, type AiProvider } from '@ordewell/core';
+import { type LegacyPlanState, type DiscoveredModel, type RunnerId, type IsolationHandoff, type IsolationMergeResult, type MergeGateView, type TaskIsolation, type AiProvider } from '@ordewell/core';
 import { DEFAULT_RUNNERS, EMPTY_HOLD, type PromptHold } from '@ordewell/core/plan-utils';
 import type { HostToWebview, PendingPlanEdit, PlannerBackend, RunnerMeta } from '../../shared/protocol';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, type PatchedView } from '../../shared/conversationPatch';
@@ -47,8 +47,6 @@ export interface HostState {
   planner: { backends: PlannerBackend[]; provider: string; runner?: string; effort?: string };
   isReady: boolean;
   modelDiscoveryErrors: Record<string, string>;
-  verifyEnabled: boolean;
-  runnerTransport: RunnerTransport;
   skills: { name: string; description: string }[];
   checkpoint: { taskId: string; taskTitle: string; summary: string; pausedAt: number } | null;
   taskOutput: TaskOutputMap;
@@ -96,8 +94,6 @@ export const INITIAL_HOST_STATE: HostState = {
   planner: { backends: [], provider: '' },
   isReady: false,
   modelDiscoveryErrors: {},
-  verifyEnabled: false,
-  runnerTransport: 'structured',
   skills: [],
   checkpoint: null,
   taskOutput: {},
@@ -133,8 +129,6 @@ export type HostAction =
   | { type: 'patchReady'; ready: boolean }
   | { type: 'patchRunners'; runners: Updatable<RunnerId[]> }
   | { type: 'patchPendingEdits'; edits: Updatable<PendingPlanEdit[]> }
-  | { type: 'patchVerifyEnabled'; enabled: boolean }
-  | { type: 'patchRunnerTransport'; transport: RunnerTransport }
   | { type: 'patchCheckpoint'; checkpoint: HostState['checkpoint'] }
   | { type: 'patchDockHeight'; height: number | undefined }
   | { type: 'patchDockExpanded'; expanded: Updatable<boolean> };
@@ -213,12 +207,6 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'patchPendingEdits':
       return { ...state, pendingEdits: resolve(action.edits, state.pendingEdits) };
-
-    case 'patchVerifyEnabled':
-      return { ...state, verifyEnabled: action.enabled };
-
-    case 'patchRunnerTransport':
-      return { ...state, runnerTransport: action.transport };
 
     case 'patchCheckpoint':
       return { ...state, checkpoint: action.checkpoint };
@@ -356,15 +344,9 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
     case 'promptUnsent':
       return { ...state, unsent: { text: action.text, seq: (state.unsent?.seq ?? 0) + 1 } };
 
-    case 'setSkillToggles':
-      if (!action.toggles) return state;
-      return { ...state, verifyEnabled: action.toggles.verify ?? false };
-
     case 'setSkills':
       return { ...state, skills: action.skills ?? [] };
 
-    case 'runnerTransport':
-      return { ...state, runnerTransport: action.transport };
 
     case 'planDockHeight':
       return { ...state, dockHeight: action.height };

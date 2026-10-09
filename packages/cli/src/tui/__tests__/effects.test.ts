@@ -2,21 +2,10 @@ import { describe, it, expect, vi, type Mock, type Mocked } from 'vitest';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import { initialState, reduce, type Action } from '../reducer';
 import type { Effect } from '../reducer';
-import type { SessionMessage, SettingsResponse } from '@ordewell/core';
+import type { SessionMessage } from '@ordewell/core';
 import { DaemonError } from '../../apiClient';
 import type { TuiState } from '../state';
 import { chatOf, messagesOf } from './chat';
-
-const SETTINGS: SettingsResponse = {
-  orchestratorModel: '',
-  aiProvider: 'claude-code',
-  plannerThinkingEffort: '',
-  maxParallel: 3,
-  verification: { enabled: false },
-  modelAllowlist: undefined,
-  plannerModels: undefined,
-  runnerTransport: 'structured',
-};
 
 function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {}) {
   const actions: Action[] = [];
@@ -50,7 +39,6 @@ function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {})
       deleteSession: vi.fn().mockResolvedValue({ ok: true }),
       getSettings: vi.fn().mockResolvedValue({}),
       updateSettings: vi.fn().mockResolvedValue({}),
-      sendCommand: vi.fn().mockResolvedValue({ ok: true, settings: { verification: { enabled: true } } }),
       getRunners: vi.fn().mockResolvedValue({ runners: [], orchestratorModel: 'm/1' }),
       setRunnerEnabled: vi.fn().mockResolvedValue({ ok: true }),
       getModels: vi.fn().mockResolvedValue({ models: [], providers: [] }),
@@ -880,33 +868,7 @@ describe('planner switch', () => {
   });
 });
 
-describe('skills and settings', () => {
-  it('sends a skill toggle and mirrors the settings that come back', async () => {
-    const h = harness();
-    await runEffect({ type: 'command', name: 'verify', action: 'on' }, h.deps);
-
-    expect(h.api.sendCommand).toHaveBeenCalledWith('verify', { action: 'on' });
-    expect(h.actions).toContainEqual({ type: 'settingsLoaded', settings: { verification: { enabled: true } } });
-  });
-
-  it('sets the runner transport through the daemon and says when it applies', async () => {
-    const h = harness();
-    h.api.sendCommand.mockResolvedValueOnce({ ok: true, settings: { ...SETTINGS, runnerTransport: 'structured' } });
-    await runEffect({ type: 'setTransport', transport: 'structured' }, h.deps);
-
-    expect(h.api.sendCommand).toHaveBeenCalledWith('transport', { action: 'structured' });
-    expect(h.actions).toContainEqual({ type: 'settingsLoaded', settings: { ...SETTINGS, runnerTransport: 'structured' } });
-    expect(h.actions).toContainEqual({ type: 'notice', message: 'Runner transport is structured — it applies from the next run.' });
-  });
-
-  it('reports the terminal fallback the same way', async () => {
-    const h = harness();
-    h.api.sendCommand.mockResolvedValueOnce({ ok: true, settings: { ...SETTINGS, runnerTransport: 'terminal' } });
-    await runEffect({ type: 'setTransport', transport: 'terminal' }, h.deps);
-
-    expect(h.actions).toContainEqual({ type: 'notice', message: 'Runner transport is terminal — it applies from the next run.' });
-  });
-
+describe('settings', () => {
   it('persists the orchestrator model to .env as well as the running daemon', async () => {
     const h = harness();
     await runEffect({ type: 'setModel', modelId: 'a/b' }, h.deps);

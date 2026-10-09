@@ -168,8 +168,12 @@ export interface TaskOrchestratorDeps {
   workspaceEnv: (cwd: string) => Promise<WorkspaceEnv>;
   /** The skill catalog at a root — a task's worktree, or the workspace root — read at each spawn. */
   skillsAt: (root: string) => SkillLookup;
-  /** Read once as a run opens, never per spawn (ADR-0018, S1). */
-  runnerTransport: () => RunnerTransport;
+  /**
+   * What a fresh attempt asks its runner for (ADR-0018). Hosts take the
+   * structured default; `routeTransport` still sends a runner with no
+   * connector to the terminal.
+   */
+  transport: RunnerTransport;
   /** What the task's last saved attempt did, or null when it left no log (ADR-0020). */
   previousAttemptFromLog: (taskId: string) => string | null;
 }
@@ -190,7 +194,8 @@ export interface TaskOrchestratorOptions {
   workspaceRoot?: () => string;
   workspaceEnv?: (cwd: string) => Promise<WorkspaceEnv>;
   skillsAt?: (root: string) => SkillLookup;
-  runnerTransport?: () => RunnerTransport;
+  /** Tests whose fake sessions emit only the completion marker ask for `terminal`. */
+  transport?: RunnerTransport;
   previousAttemptFromLog?: (taskId: string) => string | null;
 }
 
@@ -266,14 +271,8 @@ export class TaskOrchestrator {
   private workspaceRootFn: () => string;
   private observers: OrchestratorObserver[] = [];
   private skillsAt: (root: string) => SkillLookup;
-  private readRunnerTransport: () => RunnerTransport;
+  private transport: RunnerTransport;
   private previousAttemptFromLog: (taskId: string) => string | null;
-  /**
-   * The setting as the latest run copied it when it opened. Every spawn of
-   * that run uses this, so flipping the setting mid-run changes the next run
-   * only — the plan, not a live setting, says what runs (ADR-0001).
-   */
-  private planTransport: RunnerTransport | null = null;
 
   constructor(deps: TaskOrchestratorDeps) {
     this.config = deps.config;
@@ -287,7 +286,7 @@ export class TaskOrchestrator {
     this.workspaceRootFn = deps.workspaceRoot;
     this.workspaceEnv = deps.workspaceEnv;
     this.skillsAt = deps.skillsAt;
-    this.readRunnerTransport = deps.runnerTransport;
+    this.transport = deps.transport;
     this.previousAttemptFromLog = deps.previousAttemptFromLog;
 
     this.store.onMutate = () => this.emit('onTaskChanged');
@@ -330,7 +329,6 @@ export class TaskOrchestrator {
       notifications: options.notifications,
       workspaceRoot,
       listener: {
-        opened: () => { orchestrator.planTransport = orchestrator.readRunnerTransport(); },
         changed: () => orchestrator.emit('onIsolationChanged'),
         blocked: (repos) => orchestrator.emit('onIsolationBlocked', { reason: 'dirty', repos }),
         handoff: (handoff) => orchestrator.emit('onIsolationHandoff', handoff),
@@ -352,7 +350,7 @@ export class TaskOrchestrator {
       workspaceRoot,
       workspaceEnv: options.workspaceEnv ?? ((cwd) => resolveWorkspaceEnv(cwd)),
       skillsAt: options.skillsAt ?? ((root) => new SkillsService(root)),
-      runnerTransport: options.runnerTransport ?? (() => 'terminal'),
+      transport: options.transport ?? 'structured',
       previousAttemptFromLog: options.previousAttemptFromLog ?? (() => null),
     });
     return orchestrator;
@@ -644,16 +642,6 @@ export class TaskOrchestrator {
       if (this.attempts.get(task.id) !== attempt) return;
       this.notifications.warn(`Task "${task.title}" is waiting for you: ${manifest?.displayName ?? attempt.runner} is asking ${prompt.asks}. Answer it in the task's terminal.`);
     });
-  }
-
-  /** The transport the plan's latest run copied from the setting; null before its first run. */
-  get runnerTransport(): RunnerTransport | null {
-    return this.planTransport;
-  }
-
-  /** Take over a saved plan's copied transport. The next run copies the setting afresh. */
-  adoptRunnerTransport(transport: RunnerTransport | null): void {
-    this.planTransport = transport;
   }
 
   queueMessage(text: string): void {
@@ -1467,7 +1455,7 @@ export class TaskOrchestrator {
       // Read where the attempt runs: a skill an earlier task committed is in
       // this worktree only once that task's work has landed.
       if (takesSkills(kind) && task.skills?.length) attempt.skills = resolveTaskSkills(task, this.skillsAt(cwd));
-      const transport = attemptTransport(kind, this.planTransport);
+      const transport = attemptTransport(kind, this.transport);
       const completionTool = givesCompletionTool(transport, attempt.runner, this.registry);
       const finalPrompt = attemptPrompt(kind, {
         task,
@@ -1577,8 +1565,8 @@ export class TaskOrchestrator {
   }
 
   /**
-   * Say on the task how this attempt is driven, when its plan asked for the
-   * structured transport; a terminal plan's tasks record nothing. A structured
+   * Say on the task how this attempt is driven, when it asked for the
+   * structured transport; a terminal request records nothing. A structured
    * request that came back a terminal session is a fallback, and says why —
    * a host without a router included — never a silent downgrade.
    */

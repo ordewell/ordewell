@@ -1,7 +1,7 @@
-import { isAwaitingReason, isRunnerTransport, type DisplayBlock, type SessionMessage, type SettingsResponse } from '@ordewell/core';
+import { isAwaitingReason, type DisplayBlock, type SessionMessage, type SettingsResponse } from '@ordewell/core';
 import { sanitize } from '../ansi';
 import {
-  isTaskRunning, plannerInFlight, SKILL_IDS, type GateView, type SkillId, type TaskView, type TuiState,
+  isTaskRunning, plannerInFlight, type GateView, type TaskView, type TuiState,
 } from '../state';
 import { hear } from '../transcript';
 import { dropApproval, enqueueApproval } from './approvals';
@@ -101,26 +101,9 @@ function toTaskView(t: Record<string, unknown>, index: number): TaskView {
   };
 }
 
-const enabledFlag = (value: unknown): boolean | undefined =>
-  typeof (value as { enabled?: unknown })?.enabled === 'boolean'
-    ? ((value as { enabled: boolean }).enabled)
-    : undefined;
-
 export function applySettings(state: TuiState, settings: Partial<SettingsResponse>): TuiState {
-  // The daemon names the verification skill `verification`; the TUI calls it `/verify`.
-  const sources: Record<SkillId, unknown> = {
-    verify: settings.verification,
-  };
-
-  const skills = { ...state.skills };
-  for (const id of SKILL_IDS) {
-    const flag = enabledFlag(sources[id]);
-    if (flag !== undefined) skills[id] = flag;
-  }
-
   return {
     ...state,
-    skills,
     orchestratorModel:
       typeof settings.orchestratorModel === 'string' ? settings.orchestratorModel : state.orchestratorModel,
     plannerProvider:
@@ -128,7 +111,6 @@ export function applySettings(state: TuiState, settings: Partial<SettingsRespons
     plannerEffort:
       typeof settings.plannerThinkingEffort === 'string' ? settings.plannerThinkingEffort : state.plannerEffort,
     maxParallel: typeof settings.maxParallel === 'number' ? settings.maxParallel : state.maxParallel,
-    runnerTransport: isRunnerTransport(settings.runnerTransport) ? settings.runnerTransport : state.runnerTransport,
     allowlist:
       settings.modelAllowlist && typeof settings.modelAllowlist === 'object'
         ? (settings.modelAllowlist as Record<string, string[]>)

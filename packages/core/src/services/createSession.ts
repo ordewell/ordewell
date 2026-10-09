@@ -16,9 +16,10 @@ import { approvalScopes, isRunnerApproval, type ApprovalAnswer, type ApprovalReq
 import { HttpWebFetcher } from './HttpWebFetcher';
 import { ModelResolver } from './ModelResolver';
 import { coerceAssignments } from './ModelAllowlistResolver';
-import { plannerModesFrom, plannerRuntimeToggles } from './plannerModes';
+import { plannerModesFrom } from './plannerModes';
 import type { UserSettings } from './SettingsService';
 import { SkillsService } from './SkillsService';
+import { resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
 import type { MergeGateView, SessionBroadcaster, SessionNotice } from './SessionMessage';
 import { SessionEventRelay } from './SessionEventRelay';
 import { saveSession } from '../utils/sessionStore';
@@ -34,7 +35,7 @@ import type { AiProvider, IConfig } from '../interfaces/IConfig';
 import type { IFileSystem } from '../interfaces/IFileSystem';
 import type { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { INotification } from '../interfaces/INotification';
-import type { ITerminalRunner, RunnerTransport } from '../interfaces/ITerminalRunner';
+import type { ITerminalRunner } from '../interfaces/ITerminalRunner';
 import type { TaskOutputSource } from '../interfaces/TaskOutputSource';
 import type { IsolationMergeResult, IsolationView, IWorktreeIsolation } from '../interfaces/IWorktreeIsolation';
 import { migratePlanStateIsolation } from './isolationRecord';
@@ -57,21 +58,11 @@ export type SessionPlanner = Pick<Planner, 'generate' | 'modifyDuringExecution'>
 
 /** Runtime prefs read live — may toggle between operations. */
 export interface SessionRuntimeSettings {
-  verificationEnabled?: boolean;
   modelAllowlist?: Record<string, string[]>;
-  /** Read once as a run starts, never per spawn (ADR-0018, S1). Absent means terminal. */
-  runnerTransport?: RunnerTransport;
   /** Absent means the user never chose, and `config.enabledRunners` (the host's defaults) decides. */
   enabledRunners?: RunnerId[];
 }
 
-/**
- * The whole of what a host reads off disk for a Session. Both hosts used to
- * assemble this by hand, mapping each toggle's settings key to its runtime key
- * in two blocks nothing kept in step — which is how one toggle came to be
- * dropped. `MODE_TOGGLES` holds the mapping now; this adds the one field that
- * is not a toggle.
- */
 
 /** Calls an ops retry is told about; earlier ones are counted, not listed (ADR-0020). */
 const OPS_RETRY_DIGEST_CALLS = 20;
@@ -86,63 +77,9 @@ function lastAttemptDigest(location: TaskLogLocation, taskId: string): string | 
 
 export function sessionRuntimeSettings(settings: UserSettings): SessionRuntimeSettings {
   return {
-    ...plannerRuntimeToggles(settings),
     modelAllowlist: settings.modelAllowlist,
-    runnerTransport: settings.runnerTransport,
     enabledRunners: settings.enabledRunners,
   };
-}
-
-/**
- * A `/skill-name` token anywhere in a message: whitespace (or string start)
- * before it, a lowercase-led name, optional trailing punctuation that isn't
- * part of the name, then whitespace (or string end). The punctuation group
- * is what lets "/grilling," resolve as "grilling" with the comma kept intact
- * in the output.
- */
-const SKILL_TOKEN = /(^|\s)\/([a-z][a-z0-9_-]*)([,.!?;:]*)(?=\s|$)/gi;
-
-/**
- * Resolve `/skill-name` invocations to their skill's markdown content. Pure
- * and exported so surfaces and verification can drive substitution without a
- * full Session.
- *
- * A message that is *only* `/skill-name` keeps the legacy whole-message
- * behaviour: an unknown skill becomes a notice naming what IS available,
- * instead of a bare slash token a runner would mis-resolve in its own skills
- * directory. Anywhere else in a message, a matching token is spliced in place
- * (surrounding text is untouched); a token that doesn't name a real skill is
- * left as plain text rather than raising a notice, since embedded in a
- * sentence it's as likely to be incidental text (a path, an example command)
- * as a typo'd invocation. The same skill name repeated only expands its first
- * occurrence — later repeats stay literal.
- */
-export function resolveSkillInvocation(
-  text: string,
-  skillsService: Pick<SkillsService, 'findSkill' | 'listSkills'>,
-): string {
-  const bareMatch = text.trim().match(/^\/([a-z][a-z0-9_-]*)$/im);
-  if (bareMatch) {
-    const skillName = bareMatch[1].toLowerCase();
-    const skill = skillsService.findSkill(skillName);
-    if (!skill) {
-      const available = typeof skillsService.listSkills === 'function'
-        ? skillsService.listSkills().map((s) => s.name).join(', ')
-        : '';
-      return `Unknown skill: ${skillName}. Available skills: ${available}`;
-    }
-    return skill.content;
-  }
-
-  const expanded = new Set<string>();
-  return text.replace(SKILL_TOKEN, (full, lead: string, name: string, punct: string) => {
-    const skillName = name.toLowerCase();
-    if (expanded.has(skillName)) return full;
-    const skill = skillsService.findSkill(skillName);
-    if (!skill) return full;
-    expanded.add(skillName);
-    return `${lead}${skill.content}${punct}`;
-  });
 }
 
 /** Where a fork landed: the new session's id, and what adopting it needs. */
@@ -164,7 +101,7 @@ export type SaveSession = (plan: LegacyPlanState, goal: string, workspace: strin
  * Everything a delivery surface constructs to host a session. Structural config
  * (orchestratorModel, providerModelLists) is snapshotted inside `config` at
  * construction and never re-read from the environment. Runtime settings
- * (verification, enabled runners) are read live via the `settings` callback so a
+ * (enabled runners) are read live via the `settings` callback so a
  * toggle between operations takes effect.
  */
 export interface SessionDeps {
@@ -182,7 +119,7 @@ export interface SessionDeps {
   onNotice?: (notice: SessionNotice) => void;
   /** Shared across sessions — sole producer of model catalogs and routing lists. */
   modelResolver: ModelResolver;
-  /** Live runtime settings (verification, enabled runners). Read at each operation that needs them. */
+  /** Live runtime settings (enabled runners). Read at each operation that needs them. */
   settings: () => SessionRuntimeSettings;
   /**
    * Host-assigned session id. When set, every persist writes under this id so
@@ -318,7 +255,6 @@ export function createSession(deps: SessionDeps): Session {
     registry: deps.registry,
     workspaceRoot: deps.workspaceRoot,
     skillsAt: (root) => (deps.skillsService ?? new SkillsService(root)).forRoot(root),
-    runnerTransport: () => deps.settings().runnerTransport ?? 'terminal',
     previousAttemptFromLog: (taskId) => lastAttemptDigest(session.taskLogLocation, taskId),
   });
   const usage = new PlannerUsageLedger();
@@ -640,7 +576,6 @@ export class Session {
     this.events.flushSubagentRuns(this.plan);
     this.syncPlanTasks();
     this.plan.isolation = this.runs.planIsolation ?? undefined;
-    this.plan.runnerTransport = this.orchestrator.runnerTransport ?? undefined;
     this.plan.plannerUsage = this.usage.snapshot();
     this.plan.lastUpdated = new Date().toISOString();
     this.save(this.plan, this.goal, this.workspace, this.currentSessionId);
@@ -674,7 +609,6 @@ export class Session {
     this.store.clearLog();
     this.orchestrator.loadPlan([]);
     void this.runs.adopt(null);
-    this.orchestrator.adoptRunnerTransport(null);
   }
 
   /**
@@ -765,11 +699,7 @@ export class Session {
     return this.conversation.hold(options?.signal, async (turn) => {
       const { modelsByRunner, runnerModes } = await this.catalog.planning(chosenRunners);
       const settings = this.settingsFn();
-      // Every planner toggle, not the two this path used to remember: `modesFor`
-      // drops the ones a one-shot run cannot honour, so a structural toggle like
-      // verify — which only appends a task — stops being silently lost between
-      // here and the prompt.
-      const modes = { ...plannerModesFrom(settings, this.config.autonomousMode), isolatedExecution: await this.runs.plannerLayout() };
+      const modes = { ...plannerModesFrom(this.config.autonomousMode), isolatedExecution: await this.runs.plannerLayout() };
 
       const plan = await this.planner.generate({
         goal,
@@ -803,7 +733,7 @@ export class Session {
    */
   async startPlanning(goal: string, runners: RunnerId[], options?: GeneratePlanOptions): Promise<LegacyPlanState> {
     this.plan = null;
-    this.goal = this.resolveSkillInvocation(goal);
+    this.goal = goal;
     this.remintSessionId();
     this.beginFreshPlan();
     const enabled = this.catalog.enabledRunners();
@@ -813,7 +743,7 @@ export class Session {
     const now = new Date().toISOString();
     this.plan = { tasks: [], generatedAt: now, status: 'draft', runners: chosenRunners, lastUpdated: now };
 
-    return this.conversation.start(this.goal, () => this.conversationOpening(chosenRunners), options?.signal);
+    return this.conversation.start(this.resolveSkillInvocation(goal), () => this.conversationOpening(chosenRunners), options?.signal);
   }
 
   /**
@@ -825,10 +755,7 @@ export class Session {
     // A turn that failed before persist leaves its runs unflushed; drop them so
     // the next turn's log cannot absorb a previous turn's uncommitted activity.
     this.events.dropSubagentRuns();
-    return this.conversation.reply(this.resolveSkillInvocation(userMessage), {
-      signal: options?.signal,
-      verbatim: userMessage,
-    });
+    return this.conversation.reply(this.resolveSkillInvocation(userMessage), { signal: options?.signal });
   }
 
   /**
@@ -934,14 +861,12 @@ export class Session {
   }
 
   /**
-   * Intercept a skill invocation (/skill-name) and substitute the skill's
-   * markdown content BEFORE the message reaches the planner. Prevents runners
-   * (Claude Code, OpenCode) from trying to resolve the skill in their own
-   * directory instead of .ordewell/skills/. An unknown skill is surfaced to
-   * the planner as a notice naming what IS available, rather than passing a
-   * bare /unknown through to be mis-resolved.
+   * The skills a message's `/skill-name` tokens load, snapshotted here so the
+   * planner gets Ordewell's skill rather than a runner (Claude Code, OpenCode)
+   * resolving the token in its own skills directory. The message stays as
+   * typed.
    */
-  private resolveSkillInvocation(text: string): string {
+  private resolveSkillInvocation(text: string): SkillInvocation {
     return resolveSkillInvocation(text, this.skillsService);
   }
 
@@ -952,7 +877,6 @@ export class Session {
       modelsByRunner: filteredModels,
       runnerModes,
       autonomousDefault: this.config.autonomousMode,
-      verificationEnabled: this.settingsFn().verificationEnabled ?? false,
       isolatedExecution: await this.runs.plannerLayout(),
       // The planner's own model window, when a cached catalog knows it, so the
       // usage line can show context fill (#49). Unknown stays absent.
@@ -1476,11 +1400,13 @@ export class Session {
     // store's copy; the adopted plan shows that result, not the caller's input.
     this.syncPlanTasks();
     migratePlanStateIsolation(plan);
+    // Older builds copied the since-removed transport setting onto the plan.
+    // Every plan now runs structured (ADR-0018), so the copy is not carried on.
+    delete (plan as { runnerTransport?: unknown }).runnerTransport;
     // The run record is taken synchronously; only the orphan prune is awaited
     // in the background, and git serializes it ahead of any worktree a run adds.
     if (adopting) {
       void this.runs.adopt(plan.isolation ?? null);
-      this.orchestrator.adoptRunnerTransport(plan.runnerTransport ?? null);
     }
     if (opts?.persist !== false) this.persist();
     // A reopened session shows its token line again without waiting for the

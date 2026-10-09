@@ -83,7 +83,8 @@ export {
   OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX, TASK_QUERY_ANSWER_MAX_CHARS,
 } from './services/TaskQuery';
 export type { TaskQuery, TaskQueryField, TaskQueryCatalog, LiveOutputLookup } from './services/TaskQuery';
-export { Session, createSession, sessionRuntimeSettings, resolveSkillInvocation } from './services/createSession';
+export { Session, createSession, sessionRuntimeSettings } from './services/createSession';
+export { resolveSkillInvocation, plannerMessage, plannerTranscript, type SkillInvocation } from './services/skillInvocation';
 export { PlanEditError } from './services/PlanEditError';
 export type * from './daemonContract';
 export { SessionNotFoundError, NoPlanError, AlreadyExecutingError } from './services/SessionErrors';
@@ -210,5 +211,4 @@ export {
   type PlannerModelRecall,
   type PlannerModelStore,
 } from './services/PlannerModelMemory';
-export { type PlannerRuntimeToggles } from './services/plannerModes';
 export { DEFAULT_MAX_PARALLEL, parseMaxParallel } from './utils/maxParallel';

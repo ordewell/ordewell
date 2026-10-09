@@ -1,7 +1,7 @@
 import {
   CLI_PROVIDERS, getProviderMeta, plannerBackendEntries, runnerForProvider,
   type AiProvider, type ModelResolver, type PlannerModelMemory,
-  type PlannerUsability, type RunnerInstallation, type RunnerTransport, type SettingsService,
+  type PlannerUsability, type RunnerInstallation,
 } from '@ordewell/core';
 import type { VsCodeConfig } from './adapters/VsCodeConfig';
 import type { ChatViewProvider, PlannerBackend } from './providers/ChatViewProvider';
@@ -13,7 +13,6 @@ export interface PlannerSelectionDeps {
   plannerModelMemory: PlannerModelMemory;
   runnerInstallation: RunnerInstallation;
   chatProvider: ChatViewProvider;
-  settingsService: SettingsService;
   /** Push the chosen model and its provider label to the webview. */
   sendModelConfig: () => void;
   log: (msg: string) => void;
@@ -59,7 +58,6 @@ export class PlannerSelection {
     await this.deps.config.update('plannerThinkingEffort', effort);
     this.deps.sendModelConfig();
     await this.sendState();
-    this.deps.chatProvider.setSkillToggles(this.deps.settingsService.getVerification(), []);
     this.deps.log(`Planner set to ${provider}`);
   }
 
@@ -79,15 +77,5 @@ export class PlannerSelection {
     this.deps.plannerModelMemory.remember(this.deps.config.aiProvider, modelId, effort);
     this.deps.sendModelConfig();
     await this.sendState();
-  }
-
-  setRunnerTransport(transport: RunnerTransport): void {
-    this.deps.settingsService.setRunnerTransport(transport);
-    this.deps.chatProvider.setRunnerTransport(this.deps.settingsService.getRunnerTransport());
-  }
-
-  toggleSkill(skillId: string, enabled: boolean): void {
-    if (skillId === 'verify') this.deps.settingsService.setVerification(enabled);
-    this.deps.chatProvider.setSkillToggles(this.deps.settingsService.getVerification(), []);
   }
 }
