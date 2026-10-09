@@ -189,9 +189,7 @@ function renderSkills(state: TuiState, cols: number): string {
     state.skills[id] ? style.green(`● ${id}`) : style.grey(`○ ${id}`),
   );
   const auto = state.autonomous ? style.yellow('● Full') : style.green('● Guarded');
-  // Structured is the default, so only the fallback is worth a badge.
-  const terminal = state.runnerTransport === 'terminal' ? [style.yellow('● terminal')] : [];
-  return truncate([...badges, auto, ...terminal].join(' '), cols);
+  return truncate([...badges, auto].join(' '), cols);
 }
 
 /**

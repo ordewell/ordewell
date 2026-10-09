@@ -70,6 +70,9 @@ function makeOrchestrator(overrides: {
     workspaceEnv: overrides.workspaceEnv,
     tddEnabled: overrides.tddEnabled,
     previousAttemptFromLog: overrides.previousAttemptFromLog,
+    // These fakes are terminal sessions that report through the completion
+    // marker, so they ask for what such a session is.
+    transport: 'terminal',
   });
 }
 

@@ -290,8 +290,9 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
         aiProvider: 'openrouter',
         orchestratorModel: 'openrouter/auto',
         tdd: { enabled: expect.any(Boolean) },
-        runnerTransport: expect.stringMatching(/structured|terminal/),
       });
+      expect(settings).not.toHaveProperty('runnerTransport');
+      expect(settings).not.toHaveProperty('verification');
     });
 
     it('names the model a planner switch landed on and why', async () => {

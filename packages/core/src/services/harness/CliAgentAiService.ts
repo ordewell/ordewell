@@ -187,7 +187,6 @@ export class CliAgentAiService implements IAiService {
       req.runners,
       req.runnerModes,
       req.autonomousDefault ?? true,
-      req.verificationEnabled ?? false,
       { harness: true, isolatedExecution: req.isolatedExecution },
     );
 
@@ -203,7 +202,7 @@ export class CliAgentAiService implements IAiService {
         offer: req.plannerTools,
         systemPrompt: buildConversationSystemPrompt(
           req.goal, contextStr, req.modelsByRunner, req.runners, req.runnerModes,
-          req.autonomousDefault ?? true, req.verificationEnabled ?? false,
+          req.autonomousDefault ?? true,
           { harness: true, isolatedExecution: req.isolatedExecution, plannerTools: true },
         ),
       }

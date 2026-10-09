@@ -1,4 +1,4 @@
-import type { AiProvider, ApprovalDecision, AwaitingReason, ConversationMessage, PlannerUsage, ResearchLogEntry, RunnerTransport, SessionMessage, SettingsResponse, TaskLogEvent } from '@ordewell/core';
+import type { AiProvider, ApprovalDecision, AwaitingReason, ConversationMessage, PlannerUsage, ResearchLogEntry, SessionMessage, SettingsResponse, TaskLogEvent } from '@ordewell/core';
 import type { Key } from '../keys';
 import type {
   GateView, HandoffView, LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
@@ -26,7 +26,6 @@ export type Effect =
   | { type: 'startConversation'; goal: string; allowInit?: boolean }
   | { type: 'sendMessage'; sessionId: string; message: string }
   | { type: 'command'; name: string; action: 'on' | 'off' }
-  | { type: 'setTransport'; transport: RunnerTransport }
   | { type: 'setModel'; modelId: string }
   | { type: 'setPlanner'; provider: string }
   | { type: 'setPlannerEffort'; effort: string }

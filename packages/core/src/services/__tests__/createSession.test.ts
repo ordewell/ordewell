@@ -53,28 +53,6 @@ describe('model allowlist wiring', () => {
     await expect(generation).rejects.toThrow(PlannerTurnStoppedError);
   });
 
-  it('generatePlan carries every mode toggle the one-shot path honours', async () => {
-    // The defect: this path used to destructure only some of the toggles and
-    // forget others, so `ordewell plan --no-chat` and the web plan endpoint
-    // planned without a toggle's task while every surface showed it as ON.
-    const planner = { generate: vi.fn().mockResolvedValue(smallPlan()) };
-    const session = makeSession({
-      settings: () => ({
-        tddEnabled: false,
-        verificationEnabled: true,
-      }),
-      planner,
-    });
-
-    await session.generatePlan('test goal', ['claude-code']);
-
-    expect(planner.generate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modes: expect.objectContaining({ verification: true }),
-      }),
-    );
-  });
-
   it('startPlanning filters modelsByRunner through allowlist before calling aiService', async () => {
     const startConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'hello', researchLog: [] });
     const session = makeSession({

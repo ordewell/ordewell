@@ -45,7 +45,6 @@ function setup(opts: { isolation?: FakeWorktreeIsolation; config?: Partial<IConf
     isolation,
     workspaceRoot: () => '/repo',
     workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
-    runnerTransport: () => 'structured',
     tddEnabled: () => opts.tdd ?? false,
   });
   const notices: string[] = [];

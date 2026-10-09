@@ -1,7 +1,7 @@
 import {
   CLI_PROVIDERS, getProviderMeta, plannerBackendEntries, runnerForProvider,
   type AiProvider, type ModelResolver, type PlannerModelMemory,
-  type PlannerUsability, type RunnerInstallation, type RunnerTransport, type SettingsService,
+  type PlannerUsability, type RunnerInstallation, type SettingsService,
 } from '@ordewell/core';
 import type { VsCodeConfig } from './adapters/VsCodeConfig';
 import type { ChatViewProvider, PlannerBackend } from './providers/ChatViewProvider';
@@ -59,7 +59,7 @@ export class PlannerSelection {
     await this.deps.config.update('plannerThinkingEffort', effort);
     this.deps.sendModelConfig();
     await this.sendState();
-    this.deps.chatProvider.setSkillToggles(this.deps.settingsService.getTdd(), this.deps.settingsService.getVerification(), []);
+    this.deps.chatProvider.setSkillToggles(this.deps.settingsService.getTdd(), []);
     this.deps.log(`Planner set to ${provider}`);
   }
 
@@ -81,14 +81,8 @@ export class PlannerSelection {
     await this.sendState();
   }
 
-  setRunnerTransport(transport: RunnerTransport): void {
-    this.deps.settingsService.setRunnerTransport(transport);
-    this.deps.chatProvider.setRunnerTransport(this.deps.settingsService.getRunnerTransport());
-  }
-
   toggleSkill(skillId: string, enabled: boolean): void {
     if (skillId === 'tdd') this.deps.settingsService.setTdd(enabled);
-    else if (skillId === 'verify') this.deps.settingsService.setVerification(enabled);
-    this.deps.chatProvider.setSkillToggles(this.deps.settingsService.getTdd(), this.deps.settingsService.getVerification(), []);
+    this.deps.chatProvider.setSkillToggles(this.deps.settingsService.getTdd(), []);
   }
 }

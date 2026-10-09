@@ -1,4 +1,4 @@
-import { type LegacyPlanState, type DiscoveredModel, type RunnerId, type RunnerTransport, type IsolationHandoff, type IsolationMergeResult, type MergeGateView, type TaskIsolation, type AiProvider } from '@ordewell/core';
+import { type LegacyPlanState, type DiscoveredModel, type RunnerId, type IsolationHandoff, type IsolationMergeResult, type MergeGateView, type TaskIsolation, type AiProvider } from '@ordewell/core';
 import { DEFAULT_RUNNERS, EMPTY_HOLD, type PromptHold } from '@ordewell/core/plan-utils';
 import type { HostToWebview, PendingPlanEdit, PlannerBackend, RunnerMeta } from '../../shared/protocol';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, type PatchedView } from '../../shared/conversationPatch';
@@ -48,8 +48,6 @@ export interface HostState {
   isReady: boolean;
   modelDiscoveryErrors: Record<string, string>;
   tddEnabled: boolean;
-  verifyEnabled: boolean;
-  runnerTransport: RunnerTransport;
   skills: { name: string; description: string }[];
   checkpoint: { taskId: string; taskTitle: string; summary: string; pausedAt: number } | null;
   taskOutput: TaskOutputMap;
@@ -98,8 +96,6 @@ export const INITIAL_HOST_STATE: HostState = {
   isReady: false,
   modelDiscoveryErrors: {},
   tddEnabled: true,
-  verifyEnabled: false,
-  runnerTransport: 'structured',
   skills: [],
   checkpoint: null,
   taskOutput: {},
@@ -136,8 +132,6 @@ export type HostAction =
   | { type: 'patchRunners'; runners: Updatable<RunnerId[]> }
   | { type: 'patchPendingEdits'; edits: Updatable<PendingPlanEdit[]> }
   | { type: 'patchTddEnabled'; enabled: boolean }
-  | { type: 'patchVerifyEnabled'; enabled: boolean }
-  | { type: 'patchRunnerTransport'; transport: RunnerTransport }
   | { type: 'patchCheckpoint'; checkpoint: HostState['checkpoint'] }
   | { type: 'patchDockHeight'; height: number | undefined }
   | { type: 'patchDockExpanded'; expanded: Updatable<boolean> };
@@ -220,11 +214,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
     case 'patchTddEnabled':
       return { ...state, tddEnabled: action.enabled };
 
-    case 'patchVerifyEnabled':
-      return { ...state, verifyEnabled: action.enabled };
 
-    case 'patchRunnerTransport':
-      return { ...state, runnerTransport: action.transport };
 
     case 'patchCheckpoint':
       return { ...state, checkpoint: action.checkpoint };
@@ -364,13 +354,11 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'setSkillToggles':
       if (!action.toggles) return state;
-      return { ...state, tddEnabled: action.toggles.tdd ?? true, verifyEnabled: action.toggles.verify ?? false };
+      return { ...state, tddEnabled: action.toggles.tdd ?? true };
 
     case 'setSkills':
       return { ...state, skills: action.skills ?? [] };
 
-    case 'runnerTransport':
-      return { ...state, runnerTransport: action.transport };
 
     case 'planDockHeight':
       return { ...state, dockHeight: action.height };

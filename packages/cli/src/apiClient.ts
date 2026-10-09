@@ -246,9 +246,9 @@ export class ApiClient {
   }
 
   /**
-   * Open the ADR-0002 planner dialogue. Unlike `generatePlan`, this path honours
-   * the verify toggle, so the returned plan may be a question
-   * (empty `tasks`, last word in `conversationHistory`) rather than a committed plan.
+   * Open the ADR-0002 planner dialogue. Unlike `generatePlan`, the returned plan
+   * may be a question (empty `tasks`, last word in `conversationHistory`) rather
+   * than a committed plan.
    */
   async startConversation(
     sessionId: string,

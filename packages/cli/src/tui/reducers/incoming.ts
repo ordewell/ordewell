@@ -1,4 +1,4 @@
-import { isAwaitingReason, isRunnerTransport, type DisplayBlock, type SessionMessage, type SettingsResponse } from '@ordewell/core';
+import { isAwaitingReason, type DisplayBlock, type SessionMessage, type SettingsResponse } from '@ordewell/core';
 import { sanitize } from '../ansi';
 import {
   isTaskRunning, plannerInFlight, SKILL_IDS, type GateView, type SkillId, type TaskView, type TuiState,
@@ -106,10 +106,8 @@ const enabledFlag = (value: unknown): boolean | undefined =>
     : undefined;
 
 export function applySettings(state: TuiState, settings: Partial<SettingsResponse>): TuiState {
-  // The daemon names the verification skill `verification`; the TUI calls it `/verify`.
   const sources: Record<SkillId, unknown> = {
     tdd: settings.tdd,
-    verify: settings.verification,
   };
 
   const skills = { ...state.skills };
@@ -128,7 +126,6 @@ export function applySettings(state: TuiState, settings: Partial<SettingsRespons
     plannerEffort:
       typeof settings.plannerThinkingEffort === 'string' ? settings.plannerThinkingEffort : state.plannerEffort,
     maxParallel: typeof settings.maxParallel === 'number' ? settings.maxParallel : state.maxParallel,
-    runnerTransport: isRunnerTransport(settings.runnerTransport) ? settings.runnerTransport : state.runnerTransport,
     allowlist:
       settings.modelAllowlist && typeof settings.modelAllowlist === 'object'
         ? (settings.modelAllowlist as Record<string, string[]>)

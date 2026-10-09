@@ -1,11 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { globalDataDir, migrateOldConfigDir } from '../utils/globalDataDir';
-import { isRunnerTransport, type RunnerTransport } from '../interfaces/ITerminalRunner';
 
 export interface UserSettings {
   tdd: { enabled: boolean };
-  verification: { enabled: boolean };
   modelAllowlist?: Record<string, string[]>;
   /** Last model (and its thinking effort) the user chose for each planner backend, keyed by AiProvider id. */
   plannerModels?: Record<string, { model: string; effort?: string }>;
@@ -14,17 +12,10 @@ export interface UserSettings {
    * back to the environment's defaults; `[]` is a deliberate "none of them".
    */
   enabledRunners?: string[];
-  /**
-   * How tasks' runners are driven (ADR-0018). A run copies it onto its plan
-   * when it starts, so a change applies from the next run.
-   */
-  runnerTransport: RunnerTransport;
 }
 
 const DEFAULTS: UserSettings = {
   tdd: { enabled: true },
-  verification: { enabled: false },
-  runnerTransport: 'structured',
 };
 
 /**
@@ -67,12 +58,6 @@ export class SettingsService {
   private filePath: string;
   private cache: UserSettings | null = null;
   private cachedMtimeMs: number | null = null;
-  /**
-   * Whether the transport on disk (or just set) is the user's own choice.
-   * Writing the default back out would turn it into one, and a later change of
-   * default would then never reach this user.
-   */
-  private transportChosen = false;
 
   constructor(filePath: string = getSettingsPath()) {
     this.filePath = filePath;
@@ -105,27 +90,6 @@ export class SettingsService {
   setTdd(enabled: boolean): void {
     this.getAll();
     this.cache!.tdd.enabled = enabled;
-    this.persist();
-  }
-
-  getVerification(): boolean {
-    return this.getAll().verification.enabled;
-  }
-
-  setVerification(enabled: boolean): void {
-    this.getAll();
-    this.cache!.verification.enabled = enabled;
-    this.persist();
-  }
-
-  getRunnerTransport(): RunnerTransport {
-    return this.getAll().runnerTransport;
-  }
-
-  setRunnerTransport(transport: RunnerTransport): void {
-    this.getAll();
-    this.cache!.runnerTransport = transport;
-    this.transportChosen = true;
     this.persist();
   }
 
@@ -189,15 +153,13 @@ export class SettingsService {
     // A pre-`.ordewell` install keeps its toggles in the old config dir; lift
     // them once before reading so the first read already sees the moved file.
     migrateOldConfigDir();
-    this.transportChosen = false;
     try {
       if (fs.existsSync(this.filePath)) {
         const raw = JSON.parse(fs.readFileSync(this.filePath, 'utf-8'));
-        this.transportChosen = isRunnerTransport(raw.runnerTransport);
+        // Only known keys are lifted, so the removed `verification` toggle and
+        // `runnerTransport` setting of older files are dropped on the next write.
         const settings: UserSettings = {
           tdd: { enabled: raw.tdd?.enabled ?? DEFAULTS.tdd.enabled },
-          verification: { enabled: raw.verification?.enabled ?? DEFAULTS.verification.enabled },
-          runnerTransport: isRunnerTransport(raw.runnerTransport) ? raw.runnerTransport : DEFAULTS.runnerTransport,
         };
         if (raw.modelAllowlist !== undefined) {
           settings.modelAllowlist = raw.modelAllowlist;
@@ -214,7 +176,7 @@ export class SettingsService {
     } catch {
       // corrupted file — use defaults
     }
-    return { ...DEFAULTS, tdd: { ...DEFAULTS.tdd }, verification: { ...DEFAULTS.verification } };
+    return { ...DEFAULTS, tdd: { ...DEFAULTS.tdd } };
   }
 
   private persist(): void {
@@ -222,9 +184,7 @@ export class SettingsService {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    const { runnerTransport, ...rest } = this.cache!;
-    const out = this.transportChosen ? { ...rest, runnerTransport } : rest;
-    fs.writeFileSync(this.filePath, JSON.stringify(out, null, 2));
+    fs.writeFileSync(this.filePath, JSON.stringify(this.cache, null, 2));
     this.cachedMtimeMs = this.fileMtimeMs();
   }
 }

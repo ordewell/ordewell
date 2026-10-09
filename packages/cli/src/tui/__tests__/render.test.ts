@@ -651,7 +651,7 @@ describe('overlays', () => {
 
   it('lists every command in the help sheet', () => {
     const out = text({ overlay: { kind: 'help' }, rows: 60 });
-    for (const name of ['/verify', '/allowlist', '/key', '/model', '/tdd']) {
+    for (const name of ['/allowlist', '/key', '/model', '/tdd']) {
       expect(out).toContain(name);
     }
   });

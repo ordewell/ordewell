@@ -20,12 +20,13 @@ const planned: Partial<TuiState> = {
 };
 
 describe('skills', () => {
-  it.each(['tdd', 'verify'])(
-    '/%s on turns the skill on through the daemon command API',
-    (skill) => {
-      expect(run(`/${skill} on`).effects).toEqual([{ type: 'command', name: skill, action: 'on' }]);
-    },
-  );
+  it('/tdd on turns the skill on through the daemon command API', () => {
+    expect(run('/tdd on').effects).toEqual([{ type: 'command', name: 'tdd', action: 'on' }]);
+  });
+
+  it.each(['/verify on', '/transport terminal'])('%s is no longer a command and sends nothing', (line) => {
+    expect(run(line).effects).toEqual([]);
+  });
 
   it('/tdd off turns the skill off', () => {
     expect(run('/tdd off').effects).toEqual([{ type: 'command', name: 'tdd', action: 'off' }]);

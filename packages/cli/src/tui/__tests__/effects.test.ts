@@ -2,22 +2,10 @@ import { describe, it, expect, vi, type Mock, type Mocked } from 'vitest';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import { initialState, reduce, type Action } from '../reducer';
 import type { Effect } from '../reducer';
-import type { SessionMessage, SettingsResponse } from '@ordewell/core';
+import type { SessionMessage } from '@ordewell/core';
 import { DaemonError } from '../../apiClient';
 import type { TuiState } from '../state';
 import { chatOf, messagesOf } from './chat';
-
-const SETTINGS: SettingsResponse = {
-  orchestratorModel: '',
-  aiProvider: 'claude-code',
-  plannerThinkingEffort: '',
-  maxParallel: 3,
-  tdd: { enabled: true },
-  verification: { enabled: false },
-  modelAllowlist: undefined,
-  plannerModels: undefined,
-  runnerTransport: 'structured',
-};
 
 function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {}) {
   const actions: Action[] = [];
@@ -888,24 +876,6 @@ describe('skills and settings', () => {
 
     expect(h.api.sendCommand).toHaveBeenCalledWith('tdd', { action: 'on' });
     expect(h.actions).toContainEqual({ type: 'settingsLoaded', settings: { tdd: { enabled: true } } });
-  });
-
-  it('sets the runner transport through the daemon and says when it applies', async () => {
-    const h = harness();
-    h.api.sendCommand.mockResolvedValueOnce({ ok: true, settings: { ...SETTINGS, runnerTransport: 'structured' } });
-    await runEffect({ type: 'setTransport', transport: 'structured' }, h.deps);
-
-    expect(h.api.sendCommand).toHaveBeenCalledWith('transport', { action: 'structured' });
-    expect(h.actions).toContainEqual({ type: 'settingsLoaded', settings: { ...SETTINGS, runnerTransport: 'structured' } });
-    expect(h.actions).toContainEqual({ type: 'notice', message: 'Runner transport is structured — it applies from the next run.' });
-  });
-
-  it('reports the terminal fallback the same way', async () => {
-    const h = harness();
-    h.api.sendCommand.mockResolvedValueOnce({ ok: true, settings: { ...SETTINGS, runnerTransport: 'terminal' } });
-    await runEffect({ type: 'setTransport', transport: 'terminal' }, h.deps);
-
-    expect(h.actions).toContainEqual({ type: 'notice', message: 'Runner transport is terminal — it applies from the next run.' });
   });
 
   it('persists the orchestrator model to .env as well as the running daemon', async () => {

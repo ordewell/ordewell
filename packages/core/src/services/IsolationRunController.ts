@@ -34,12 +34,6 @@ export type IsolationNoticeLevel = 'info' | 'warn' | 'error';
 export interface IsolationRunListener {
   /** The run record changed and should be persisted with the plan. */
   changed(): void;
-  /**
-   * A run opened — the one moment shared by Execute, a manual task run and
-   * a force start, so whatever a run pins for its whole length is read here.
-   * Whether it isolates is decided later, at its first change task.
-   */
-  opened(): void;
   /** A run did not start: `repos` of the group have tracked changes. */
   blocked(repos: string[]): void;
   /** An isolated run closed and handed its integration branches over. */
@@ -251,7 +245,6 @@ export class IsolationRunController {
   open(): void {
     if (this.mode) return;
     this.mode = 'undecided';
-    this.listener.opened();
   }
 
   /**

@@ -340,11 +340,6 @@ export interface LegacyPlanState {
    * must leave it behind rather than share it.
    */
   isolation?: PlanIsolation;
-  /**
-   * The `runnerTransport` setting as the plan's latest run copied it when it
-   * started (ADR-0018, S1): the plan, not the live setting, says what runs.
-   */
-  runnerTransport?: RunnerTransport;
   /** Kept so a reopened session shows the same token line (#49). */
   plannerUsage?: PlannerUsage;
 }

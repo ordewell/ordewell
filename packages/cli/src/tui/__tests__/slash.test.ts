@@ -28,7 +28,7 @@ describe('SLASH_COMMANDS', () => {
     'help', 'model', 'key', 'allowlist', 'refresh',
     'sessions', 'new', 'save', 'load', 'delete',
     'runners', 'auto',
-    'tdd', 'verify',
+    'tdd',
     // No 'plan': typing the goal starts planning, so an alias would only
     // shadow /planner and /planner-effort on completion.
     'run', 'stop', 'approve',

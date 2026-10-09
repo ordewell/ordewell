@@ -185,7 +185,7 @@ describe('chat plan flow', () => {
   it('renders TDD skill pill and toggles it via postMessage', () => {
     api.postMessage.mockClear();
 
-    send({ type: 'setSkillToggles', toggles: { tdd: false, verify: false } });
+    send({ type: 'setSkillToggles', toggles: { tdd: false } });
     const tddButton = Array.from(document.querySelectorAll('.skill-toggle-pill')).find(
       (b) => b.textContent?.includes('TDD'),
     ) as HTMLButtonElement;
@@ -198,22 +198,12 @@ describe('chat plan flow', () => {
     );
   });
 
-  it('renders the structured transport pill and sets it via postMessage', () => {
-    api.postMessage.mockClear();
+  it('offers no Verify or Structured pill', () => {
+    send({ type: 'setSkillToggles', toggles: { tdd: true } });
+    const pills = Array.from(document.querySelectorAll('.skill-toggle-pill')).map((b) => b.textContent?.trim());
 
-    send({ type: 'runnerTransport', transport: 'terminal' });
-    const pill = () => Array.from(document.querySelectorAll('.skill-toggle-pill')).find(
-      (b) => b.textContent?.includes('Structured'),
-    ) as HTMLButtonElement;
-    expect(pill().textContent).not.toContain('experimental');
-    expect(pill().classList.contains('off')).toBeTruthy();
-
-    act(() => { fireEvent.click(pill()); });
-    expect(api.postMessage).toHaveBeenCalledWith({ type: 'setRunnerTransport', transport: 'structured' });
-    expect(pill().classList.contains('on')).toBeTruthy();
-
-    send({ type: 'runnerTransport', transport: 'terminal' });
-    expect(pill().classList.contains('off')).toBeTruthy();
+    expect(pills).not.toContain('Verify');
+    expect(pills).not.toContain('Structured');
   });
 
   it('renders a reply sent outside a turn (a PRD) as a planner chat message', () => {

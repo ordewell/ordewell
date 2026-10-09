@@ -262,13 +262,10 @@ describe('loaded data', () => {
       settings: {
         orchestratorModel: 'x/y',
         tdd: { enabled: false },
-        verification: { enabled: true },
         modelAllowlist: { opencode: ['a/b'] },
       },
     });
     expect(s.skills.tdd).toBe(false);
-    // The daemon calls it `verification`; the TUI toggle is `/verify`.
-    expect(s.skills.verify).toBe(true);
     expect(s.orchestratorModel).toBe('x/y');
     expect(s.allowlist).toEqual({ opencode: ['a/b'] });
   });
