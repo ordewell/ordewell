@@ -47,7 +47,7 @@ export interface HostState {
   planner: { backends: PlannerBackend[]; provider: string; runner?: string; effort?: string };
   isReady: boolean;
   modelDiscoveryErrors: Record<string, string>;
-  skills: { name: string; description: string }[];
+  skills: { name: string; description: string; appliesTo?: 'planner' | 'task' }[];
   taskSkills: { name: string; description: string }[];
   checkpoint: { taskId: string; taskTitle: string; summary: string; pausedAt: number } | null;
   taskOutput: TaskOutputMap;

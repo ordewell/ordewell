@@ -87,6 +87,28 @@ describe('a message that loads a skill', () => {
   });
 });
 
+describe('a task skill the user named', () => {
+  const tdd: SkillLoadNotice = { invokedBy: 'user', name: 'tdd', source: 'global', path: '~/.ordewell/skills/tdd/SKILL.md', attaches: { description: 'Test first' } };
+  const notice = '● /tdd will be attached to fitting tasks · ~/.ordewell/skills/tdd/SKILL.md';
+
+  beforeEach(() => registerSkillCommands([{ name: 'tdd', description: 'Test first', appliesTo: 'task', userInvocable: true }]));
+
+  it('shows the attach notice under the message live', () => {
+    const state = sent('use /tdd here', [tdd]);
+    expect(rowsFrom(state, '❯', 2)).toEqual(['❯ use /tdd here', notice]);
+  });
+
+  it('shows the same notice on reload', () => {
+    style.enabled = false;
+    const history: ConversationMessage[] = [
+      { role: 'user', content: 'use /tdd here', timestamp: '2026-10-09T10:00:00.000Z' },
+      { role: 'user', content: '/tdd will be attached to fitting tasks', timestamp: '2026-10-09T10:00:00.000Z', kind: 'skill_load', skill: { ...tdd, content: '' } },
+    ];
+    const { state } = reduce(initialState({ rows: 60, cols: 80, sessionId: 's1' }), { type: 'chatRestored', history, sessionId: 's1' });
+    expect(rowsFrom(state, '❯', 2)).toEqual(['❯ use /tdd here', notice]);
+  });
+});
+
 describe('a reloaded session', () => {
   const history: ConversationMessage[] = [
     { role: 'user', content: '/grilling the cache', timestamp: '2026-10-09T10:00:00.000Z' },

@@ -100,6 +100,20 @@ describe('registerSkillCommands', () => {
     expect(completions('/help').filter((c) => c.name === 'help')).toHaveLength(1);
   });
 
+  it('lists user-invocable skills of both kinds, marking a task skill, and hides a model-only one', () => {
+    registerSkillCommands([
+      { name: 'grilling', description: 'Grill the plan', appliesTo: 'planner', userInvocable: true },
+      { name: 'tdd', description: 'Test first', appliesTo: 'task', userInvocable: true },
+      { name: 'secret', description: 'Model only', appliesTo: 'task', userInvocable: false },
+    ]);
+    expect(completions('/').filter((c) => c.source === 'skill').map((c) => [c.name, c.description])).toEqual([
+      ['grilling', 'Grill the plan'],
+      ['tdd', 'task skill · Test first'],
+    ]);
+    expect(findCommand('secret')).toBeUndefined();
+    expect(skillMatchKind('secret')).toBeNull();
+  });
+
   it('does not leak into the built-in help listing', () => {
     registerSkillCommands([{ name: 'grilling', description: 'Grill the plan' }]);
     expect(SLASH_COMMANDS.some((c) => c.name === 'grilling')).toBe(false);

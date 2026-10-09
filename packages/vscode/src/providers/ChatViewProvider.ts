@@ -72,7 +72,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   setTaskSkills(skills: { name: string; description: string }[]): void {
     this.postMessage({ type: 'setTaskSkills', skills });
   }
-  setSkills(skills: { name: string; description: string }[]): void {
+  setSkills(skills: { name: string; description: string; appliesTo?: 'planner' | 'task' }[]): void {
     this.postMessage({ type: 'setSkills', skills });
   }
   /**

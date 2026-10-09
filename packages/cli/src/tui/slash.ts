@@ -79,6 +79,9 @@ const BY_NAME = new Map(SLASH_COMMANDS.map((c) => [c.name, c]));
 export interface SkillCommandSource {
   name: string;
   description: string;
+  appliesTo?: 'planner' | 'task';
+  /** False hides the skill: only the model may invoke it. */
+  userInvocable?: boolean;
 }
 
 /**
@@ -94,11 +97,11 @@ let skillByName = new Map<string, SlashCommand>();
 export function registerSkillCommands(skills: SkillCommandSource[]): void {
   const map = new Map<string, SlashCommand>();
   for (const skill of skills) {
-    if (BY_NAME.has(skill.name)) continue;
+    if (BY_NAME.has(skill.name) || skill.userInvocable === false) continue;
     map.set(skill.name, {
       name: skill.name,
       usage: `/${skill.name}`,
-      description: skill.description,
+      description: skill.appliesTo === 'task' ? `task skill · ${skill.description}` : skill.description,
       category: 'skills',
       source: 'skill',
     });

@@ -188,7 +188,7 @@ export type HostToWebview =
   /** The remembered plan dock height in px; absent until the user first drags it. */
   | { type: 'planDockHeight'; height?: number }
   /** Discovered skills (global ~/.ordewell/skills/ + workspace .ordewell/skills/, workspace shadows global) for the /skill-name suggestion dropdown. */
-  | { type: 'setSkills'; skills: { name: string; description: string }[] }
+  | { type: 'setSkills'; skills: { name: string; description: string; appliesTo?: 'planner' | 'task' }[] }
   /** Every `applies-to: task` skill, user-only ones included: what a task card's skill chips can attach. */
   | { type: 'setTaskSkills'; skills: { name: string; description: string }[] }
   | { type: 'setConfiguredProviders'; providers: AiProvider[] }
