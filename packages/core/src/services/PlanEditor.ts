@@ -88,7 +88,7 @@ export class PlanEditor {
     if ('skills' in changes) changes = { ...changes, skills: skillNames(changes.skills) };
     const target = this.store.get(taskId);
     const skills = changes.skills && target
-      ? checkPlanSkills([{ ...target, skills: changes.skills, subtasks: [] }], this.taskSkills())
+      ? await checkPlanSkills([{ ...target, skills: changes.skills, subtasks: [] }], this.taskSkills())
       : undefined;
     if (skills?.errors.length) throw new PlanEditError(skills.errors.map((e) => e.message).join(' '));
     if ((changes.dependencies || changes.type || changes.assignedModel || changes.taskMode || 'ops' in changes) && target) {

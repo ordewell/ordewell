@@ -89,6 +89,9 @@ export interface TaskSkillSnapshot {
   content: string;
 }
 
+/** A task skill as a surface is told of it: the body stays in the task's log file and the session. */
+export type TaskSkillNotice = Omit<TaskSkillSnapshot, 'content'>;
+
 export interface Task {
   id: string;
   order: number;

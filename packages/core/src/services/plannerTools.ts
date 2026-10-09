@@ -107,7 +107,7 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       const catalog = await host.liveCatalog();
       const result = validatePlanTasks({ tasks }, catalog.runners, catalog.modes, catalog.autonomousDefault);
       if (!result.ok) return { isError: true, text: JSON.stringify({ ok: false, errors: result.errors, enabledRunners: catalog.runners }) };
-      const skills = checkPlanSkills(result.tasks, host.taskSkills());
+      const skills = await checkPlanSkills(result.tasks, host.taskSkills());
       if (skills.errors.length > 0) {
         return { isError: true, text: JSON.stringify({ ok: false, errors: skills.errors.map((e) => ({ ...e, field: 'skills' })) }) };
       }
@@ -159,7 +159,7 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
     async editPlan({ ops }) {
       // The applier checks each op's fields one by one, so a loose shape is its to refuse.
       const taskOps = ops as unknown as TaskOp[];
-      const skills = checkOpSkills(taskOps, host.taskSkills());
+      const skills = await checkOpSkills(taskOps, host.taskSkills());
       if (skills.errors.length > 0) return { isError: true, text: JSON.stringify({ ok: false, errors: skills.errors.map((e) => opError(e.message)) }) };
       const outcome = await host.editPlan(taskOps);
       if (!outcome.ok) return { isError: true, text: JSON.stringify({ ok: false, errors: outcome.errors.map(opError) }) };
