@@ -383,8 +383,8 @@ plus a saved file, not a typed state.
 loader (`SkillsService`), and the only thing Ordewell calls a skill (ADR-0024).
 The folder name is the skill's identity (`/name`, the names in a plan,
 `ordewell skills`); frontmatter carries `name` (which should match the folder),
-`description`, `applies-to: planner | task` (default `planner`) and Claude Code's `disable-model-invocation` and
-`user-invocable` (unmarked = both). It lives in one of two scopes: **global**
+`description`, `applies-to: planner | task` (default `planner`) and Claude
+Code's `disable-model-invocation` and `user-invocable` (unmarked = both). It lives in one of two scopes: **global**
 `~/.ordewell/skills/` (built-in seeds plus the user's own; tasks never write
 it) or **workspace** `.ordewell/skills/` (committed, so it reaches worktrees
 through git). On a name clash global wins and the workspace copy is reported

@@ -105,8 +105,8 @@ Windows paths are built with `path.win32` explicitly, not the host-flavoured
 off-platform it is what makes the behavior testable at all.
 
 **The cmd.exe buffer is a refusal, not a truncation.** A 12 KB
-`--append-system-prompt` (measured: 12,363 characters for the planner prompt,
-plus up to ~11 KB of collected context) does not fit, and Windows truncates
+`--append-system-prompt` (the planner prompt plus collected
+context) does not fit, and Windows truncates
 rather than rejecting. A truncated system prompt makes the planner answer half a
 question confidently, which is exactly the silent success this repo refuses — so
 `CommandLineTooLongError` names the fix instead. `TaskOrchestrator.startTask`

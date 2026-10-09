@@ -29,8 +29,11 @@ my-skill/
 
 A skill's name is lowercase letters, digits, `-` and `_`, starting with a letter
 or digit. A folder whose name is anything else is skipped, not listed, and
-`ordewell skills` reports it; a plan that attaches such a name gets a warning
-and the name is dropped.
+`ordewell skills` reports it. Names in a plan are lower-cased before they are
+checked, so `TDD` becomes `tdd` (with a not-found warning if no such skill
+exists); a name still invalid after that gets a warning and is dropped. Lookup
+is case-exact on the folder name on every OS, so a `Review/` folder is never
+found as `review`.
 
 Leave the two invocation fields out and both you and a model may invoke the
 skill. The built-in skills are all user-only.
@@ -88,8 +91,9 @@ conversation shows a one-line notice with the skill's name and path. The skill
 is saved as it was when loaded, so a resumed or forked conversation hands the
 planner the same text even if the file changes later.
 
-A `/word` that names no skill, or a skill that is not user-invocable, is
-ordinary text.
+In planner chat, a `/word` that names no skill, or a skill that is not
+user-invocable, is ordinary text. In the TUI task view an unknown `/word` is
+refused as an unknown command, and a skill name there points to `/task-skills`.
 
 When the planner has tools attached, it is also told which model-invocable
 planner skills exist (name and description) and can load one itself with the
@@ -127,9 +131,9 @@ task it depends on may create it. If the name still does not resolve when the
 task starts, the task fails before its runner is spawned, and the message lists
 the directories searched. Only `applies-to: task` skills can be attached.
 
-A workspace skill that exists but is not committed gets a warning too: tasks
-run in git worktrees, which receive only what is committed, so commit its
-`.ordewell/skills/<name>/` folder.
+A workspace skill that exists but is not committed gets a warning too, when
+tasks get worktrees (isolated runs): a worktree receives only what is
+committed, so commit its `.ordewell/skills/<name>/` folder.
 
 In a multi-repo group, the group folder's own `.ordewell/skills/` is read in
 place and needs no commit. Each repo's committed `.ordewell/skills/` is read as
