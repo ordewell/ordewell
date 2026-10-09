@@ -12,7 +12,7 @@ function send(msg: unknown) {
 function makeTask(id: string, order: number, title: string, dependencies: string[] = []) {
   return {
     id, order, title, description: '', type: 'ai' as const, status: 'pending' as const,
-    dependencies, subtasks: [], assignedRunner: 'claude-code', completionMarker: `m${order}`,
+    dependencies, subtasks: [], assignedRunner: 'claude-code',
     taskMode: 'default',
     assignedModel: { modelId: 'claude-sonnet-4-5', modelLabel: 'Claude Sonnet 4.5' },
   };

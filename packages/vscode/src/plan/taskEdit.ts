@@ -19,8 +19,8 @@ export function removalPrompt(tasks: readonly Task[], taskId: string): string {
 
 /**
  * A hand-written task from the webview's add form. Only what a user can
- * actually fill in is read across — everything else (id, status, completion
- * marker, and any assignment the form left blank) is the session's to derive.
+ * actually fill in is read across — everything else (id, status, and any
+ * assignment the form left blank) is the session's to derive.
  */
 export function taskFromDraft(draft: TaskDraft): Partial<Task> | null {
   const fields = newTaskFields(draft.title, draft.prompt);

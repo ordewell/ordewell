@@ -163,13 +163,13 @@ export class CommandLineTooLongError extends Error {
  * Thrown when only a batch shim resolved for a multi-line argument. cmd.exe
  * reads up to the first CR/LF and discards the rest with no error and exit code
  * 0 — quoting does not help — so the agent would get the first paragraph of its
- * prompt without the completion marker instruction, then exit looking successful.
+ * prompt without the instruction to report through `task_complete`, then exit looking successful.
  */
 export class EmbeddedNewlineError extends Error {
   constructor(readonly command: string) {
     super(
       `Cannot start "${command}" on Windows: its prompt spans multiple lines, and the only launcher found on PATH was a batch shim (${command}.cmd).\n\n` +
-      `cmd.exe stops reading a command line at the first line break and silently discards the rest, so the agent would be handed a prompt cut off at its first blank line — no plan map, no prior task output, and no completion marker, which is what Ordewell watches for to know the task finished.\n\n` +
+      `cmd.exe stops reading a command line at the first line break and silently discards the rest, so the agent would be handed a prompt cut off at its first blank line — no plan map, no prior task output, and no instruction to report back when it is done.\n\n` +
       `Install the native executable — Claude Code's Windows installer, Codex's release binary, or OpenCode's install script all provide one — and Ordewell will launch it directly, with no interpreter in the way. A PowerShell shim (${command}.ps1) beside the batch one is also enough.`,
     );
     this.name = 'EmbeddedNewlineError';

@@ -104,7 +104,6 @@ export function attemptCwd(
 export interface AttemptPromptSources {
   task: Task;
   plan: readonly Task[];
-  completionTool: boolean;
   planMapEnabled?: boolean;
   /** The task's skills, resolved where the attempt runs; a repair and a continue are given none. */
   skills: readonly TaskSkillSnapshot[];
@@ -116,22 +115,22 @@ export interface AttemptPromptSources {
 
 /**
  * The prompt an attempt is spawned with. Every kind goes through the same
- * augmenting, so the marker is the task's own and the verdict is watched for
- * unchanged.
+ * augmenting, so every one is told to report through `task_complete` and the
+ * verdict is watched for unchanged.
  */
 export function attemptPrompt(kind: AttemptKind, src: AttemptPromptSources): string {
-  const { task, plan, completionTool, planMapEnabled } = src;
+  const { task, plan, planMapEnabled } = src;
   switch (kind.kind) {
     case 'continuation':
-      return composeContinuationPrompt(task, kind.message, { ops: kind.ops, completionTool });
+      return composeContinuationPrompt(task, kind.message, { ops: kind.ops });
     case 'repair':
       // A merge to resolve is not the task's own work, so its skills do not apply.
-      return composeAugmentedPrompt({ ...task, prompt: src.repairPrompt(task) }, plan, { planMapEnabled, completionTool });
+      return composeAugmentedPrompt({ ...task, prompt: src.repairPrompt(task) }, plan, { planMapEnabled });
     case 'ops':
       // Its effects outlive a failed attempt and are never rolled back, so
       // the next one is told what the last one did.
-      return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, previousAttempt: src.previousAttempt(task.id), completionTool });
+      return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, previousAttempt: src.previousAttempt(task.id) });
     case 'change':
-      return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, completionTool });
+      return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills });
   }
 }

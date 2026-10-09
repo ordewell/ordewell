@@ -56,9 +56,8 @@ export const CODEX_ORDEWELL: CodexOrdewellBinding = {
   /**
    * Codex 0.160 keeps MCP tools out of the model's tool list: they are reached
    * through its `exec` tool, which lists them in `ALL_TOOLS`. Told only to
-   * "call the task_complete tool" a model answers with the marker and never
-   * looks, so the thread's instructions say where to look. Checked live:
-   * without this, three of three tasks finished by marker.
+   * "call the task_complete tool" a model never looks there, so the thread's
+   * instructions say where to look.
    */
   taskInstructions() {
     const tools = ordewellToolNames('task');

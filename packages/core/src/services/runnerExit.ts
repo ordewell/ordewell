@@ -10,8 +10,8 @@
 export type RunnerStop = 'usage-limit' | 'stopped';
 
 /**
- * What a runner says when its account, not the task, ran out. A marker-less
- * stop that names a limit is retryable once the limit resets, so it pauses the
+ * What a runner says when its account, not the task, ran out. A stop with no
+ * `task_complete` call that names a limit is retryable once the limit resets, so it pauses the
  * task instead of failing it. Deliberately narrow: a false positive would leave
  * a genuinely broken task waiting on the user forever, and the words below are
  * the ones the runners print for this and nothing else.

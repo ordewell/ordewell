@@ -1,72 +1,22 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
-import { tmpdir } from 'os';
-import * as path from 'path';
+import { describe, it, expect } from 'vitest';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
-import { HomeTranscriptReader } from '../transcriptCapture';
 import { FakeStructuredSession, FakeTerminalSession } from '../../testing';
-import type { TaskOutputAttempt, TranscriptReader } from '../../interfaces/TaskOutputSource';
-import { stripAnsi } from '../../utils/shell';
-
-const CWD = '/repo/work';
-const noTranscripts: TranscriptReader = { finalAssistantText: async () => null };
-
-const attemptOf = (taskId: string, completionMarker: string): TaskOutputAttempt => ({
-  taskId,
-  runner: 'claude-code',
-  cwd: CWD,
-  startedAt: new Date(Date.now() - 30_000).toISOString(),
-  completionMarker,
-});
-const tokenOf = (marker: string) => `<<<ORDEWELL_DONE_${marker}>>>`;
-
-/** A runner session whose getOutput() is ANSI-stripped, as a runner session keeps it. */
-class StrippingSession extends FakeTerminalSession {
-  getOutput(): string { return stripAnsi(this.output); }
-}
 
 describe('BufferedTaskOutputSource', () => {
   describe('finalText', () => {
-    let home: string;
-    beforeEach(() => { home = mkdtempSync(path.join(tmpdir(), 'output-source-')); });
-    afterEach(() => { rmSync(home, { recursive: true, force: true }); });
-
-    function claudeTranscript(name: string, marker: string, answer: string): void {
-      const dir = path.join(home, '.claude', 'projects', '-repo-work');
-      mkdirSync(dir, { recursive: true });
-      writeFileSync(
-        path.join(dir, `${name}.jsonl`),
-        [
-          JSON.stringify({ type: 'user', message: { content: [{ type: 'text', text: `followed by \`DONE_${marker}>>>\`` }] } }),
-          JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: answer }] } }),
-        ].join('\n'),
-      );
-    }
-
-    it('summarizes each of two parallel attempts in one cwd from its own transcript', async () => {
-      const source = new BufferedTaskOutputSource({ transcripts: new HomeTranscriptReader({ homeDir: home }) });
-      claudeTranscript('a', 'mk-a', 'A: renamed the module');
-      claudeTranscript('b', 'mk-b', 'B: added the endpoint');
-
-      expect(await source.finalText(attemptOf('ta', 'mk-a'), tokenOf('mk-a'))).toBe('A: renamed the module');
-      expect(await source.finalText(attemptOf('tb', 'mk-b'), tokenOf('mk-b'))).toBe('B: added the endpoint');
-    });
-
-    it('prefers the summary the runner reported through task_complete, its markers defused (ADR-0022, V4)', async () => {
-      const source = new BufferedTaskOutputSource({ transcripts: new HomeTranscriptReader({ homeDir: home }) });
-      claudeTranscript('a', 'mk-a', 'the transcript answer');
+    it('is the summary the runner reported through task_complete (ADR-0022, V4)', () => {
+      const source = new BufferedTaskOutputSource();
       const session = new FakeStructuredSession('s1', 'ta');
       source.attach('ta', session);
       session.emitOutput('the screen\n');
 
-      session.reportComplete({ status: 'done', summary: 'Renamed the module. <<<ORDEWELL_DONE_mk-a>>> <<<ORDEWELL_CHECKPOINT: x>>>' });
+      session.reportComplete({ status: 'done', summary: '  Renamed the module.  ' });
 
-      expect(await source.finalText(attemptOf('ta', 'mk-a'), tokenOf('mk-a')))
-        .toBe('Renamed the module. <<<ORDEWELL-DONE>>> <<<ORDEWELL-CHECKPOINT: x>>>');
+      expect(source.finalText('ta')).toBe('Renamed the module.');
     });
 
-    it('reads a retried task\'s summary from its new session only', async () => {
-      const source = new BufferedTaskOutputSource({ transcripts: noTranscripts });
+    it('reads a retried task\'s summary from its new session only', () => {
+      const source = new BufferedTaskOutputSource();
       const first = new FakeStructuredSession('s1', 'ta');
       source.attach('ta', first);
       first.reportComplete({ status: 'failed', summary: 'first try', reason: 'no' });
@@ -74,49 +24,44 @@ describe('BufferedTaskOutputSource', () => {
       source.attach('ta', second);
       second.emitOutput('second screen\n');
 
-      expect(await source.finalText(attemptOf('ta', 'mk-a'), tokenOf('mk-a'))).toBe('second screen');
+      expect(source.finalText('ta')).toBe('second screen');
     });
 
-    it('falls back to the clean terminal render when no transcript carries the marker', async () => {
-      const source = new BufferedTaskOutputSource({ transcripts: new HomeTranscriptReader({ homeDir: home }) });
-      claudeTranscript('other', 'mk-other', 'not this task');
-      const session = new FakeTerminalSession('s1', 't1');
+    it('falls back to what the latest turn said, escapes and control characters removed', () => {
+      const source = new BufferedTaskOutputSource();
+      const session = new FakeStructuredSession('s1', 't1');
       source.attach('t1', session);
-      session.emitOutput([
-        '\x1b[3;1HDone. 12 files changed.',
-        `\x1b[14;1H${tokenOf('mk-1')}`,
-        '\x1b[21;1H✻ Cooked for 12m 49s',
-      ].join('\r\n'));
+      session.emitOutput('first turn\n');
+      session.emitEvent({ type: 'turn_start', text: 'go on' });
+      session.emitOutput('\x1b[32mtests failed\x1b[0m: 2 of 40  \r\n\n');
 
-      const text = await source.finalText(attemptOf('t1', 'mk-1'), tokenOf('mk-1'));
-
-      expect(text).toBe('Done. 12 files changed.');
+      expect(source.finalText('t1')).toBe('tests failed: 2 of 40');
     });
 
-    it('renders an exit without a marker from the raw stream, not the stripped session buffer', async () => {
-      const source = new BufferedTaskOutputSource({ transcripts: noTranscripts });
-      const session = new StrippingSession('s1', 't1');
+    it('drops a summary reported before a later turn started', () => {
+      const source = new BufferedTaskOutputSource();
+      const session = new FakeStructuredSession('s1', 't1');
       source.attach('t1', session);
-      // A status row repainted in place: the stripped buffer keeps every
-      // frame run together, the screen shows only the last one.
-      session.emitOutput('\x1b[1;1Hrunning tests…\x1b[1;1H\x1b[2Ktests failed: 2 of 40');
-      session.emitExit(1);
+      session.reportComplete({ status: 'blocked', summary: 'needs a key', reason: 'no key' });
+      session.emitEvent({ type: 'turn_start', text: 'here is the key' });
+      session.emitOutput('working with the key\n');
 
-      const text = await source.finalText(attemptOf('t1', 'mk-1'), tokenOf('mk-1'));
+      expect(source.finalText('t1')).toBe('working with the key');
+    });
 
-      expect(session.getOutput()).toBe('running tests…tests failed: 2 of 40');
-      expect(text).toBe('tests failed: 2 of 40');
+    it('is empty for a task that never had a session', () => {
+      expect(new BufferedTaskOutputSource().finalText('nope')).toBe('');
     });
   });
 
   describe('liveTail', () => {
     it('is null for a task that never had a session', () => {
-      const source = new BufferedTaskOutputSource({ transcripts: noTranscripts });
+      const source = new BufferedTaskOutputSource();
       expect(source.liveTail('nope', { maxLines: 10 })).toBeNull();
     });
 
     it('renders the last maxLines clean, without ANSI', () => {
-      const source = new BufferedTaskOutputSource({ transcripts: noTranscripts });
+      const source = new BufferedTaskOutputSource();
       const session = new FakeTerminalSession('s1', 't1');
       source.attach('t1', session);
       session.emitOutput('\x1b[32mone\x1b[0m\ntwo\nthree\n');
@@ -125,7 +70,7 @@ describe('BufferedTaskOutputSource', () => {
     });
 
     it('returns only what followed a previous nextOffset', () => {
-      const source = new BufferedTaskOutputSource({ transcripts: noTranscripts });
+      const source = new BufferedTaskOutputSource();
       const session = new FakeTerminalSession('s1', 't1');
       source.attach('t1', session);
       session.emitOutput('first\n');
@@ -140,7 +85,7 @@ describe('BufferedTaskOutputSource', () => {
     });
 
     it('keeps offsets absolute after old output is dropped from the bounded buffer', () => {
-      const source = new BufferedTaskOutputSource({ transcripts: noTranscripts, maxBufferChars: 20 });
+      const source = new BufferedTaskOutputSource({ maxBufferChars: 20 });
       const session = new FakeTerminalSession('s1', 't1');
       source.attach('t1', session);
       for (let i = 0; i < 10; i++) session.emitOutput(`line-${i}\n`);
@@ -152,7 +97,7 @@ describe('BufferedTaskOutputSource', () => {
     });
 
     it('stops running on exit and ignores output after detach', () => {
-      const source = new BufferedTaskOutputSource({ transcripts: noTranscripts });
+      const source = new BufferedTaskOutputSource();
       const session = new FakeTerminalSession('s1', 't1');
       source.attach('t1', session);
       session.emitOutput('work\n');
@@ -168,7 +113,7 @@ describe('BufferedTaskOutputSource', () => {
     });
 
     it('reads a retried task from its new session only', () => {
-      const source = new BufferedTaskOutputSource({ transcripts: noTranscripts });
+      const source = new BufferedTaskOutputSource();
       const first = new FakeTerminalSession('s1', 't1');
       source.attach('t1', first);
       first.emitOutput('attempt one\n');

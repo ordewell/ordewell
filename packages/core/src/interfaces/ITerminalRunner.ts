@@ -11,14 +11,6 @@ export interface ITerminalSession {
   kill(): void;
   getOutput(): string;
   write(text: string): void;
-  /**
-   * True when the session runs the agent as a raw-mode TUI (a real PTY for the
-   * VS Code terminal, a tmux window). Such a surface submits an input line on
-   * the Enter keystroke (`\r`), so a synchronized resume token terminated with
-   * `\n` only types the line and never sends it. A line-oriented piped session
-   * (`defaultInteractive = false`) leaves this false and accepts `\n`.
-   */
-  readonly interactive?: boolean;
 }
 
 /** How a structured turn ended. `failed` carries the agent's own words in the preceding `error` event. */
@@ -109,7 +101,7 @@ export interface StructuredSessionCapability {
   answerPermission(id: string, decision: ApprovalDecision): boolean;
   /**
    * The runner's `task_complete` calls on this attempt's token (ADR-0022):
-   * completion evidence beside the marker, for `VerdictEngine` to weigh.
+   * the only completion evidence, for `VerdictEngine` to weigh.
    */
   onTaskComplete(listener: (report: TaskCompleteArgs) => void): void;
   /**
@@ -163,6 +155,8 @@ export interface ITerminalRunner {
      * attempt. Runners ignore it; it is for what wraps one to record (task logs).
      */
     skills?: readonly TaskSkillSnapshot[];
+    /** Something the user should know about how the spawn went that did not stop it — a respawn, most often. */
+    onNotice?: (message: string) => void;
   }): Promise<ITerminalSession>;
 
   stop(sessionId: string): void;

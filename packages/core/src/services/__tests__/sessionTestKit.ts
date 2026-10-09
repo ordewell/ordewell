@@ -14,11 +14,11 @@ import { flattenTasks, type Task } from '../../models/Task';
 import type { TaskLogEvent } from '../../models/TaskLog';
 import type { TaskLogFile, TaskLogLocation } from '../../utils/taskLogStore';
 
-import { fakeConfig, FakeTerminalSession } from '../../testing';
+import { fakeConfig, FakeStructuredSession, FakeTerminalSession } from '../../testing';
 
 export const testWorkspace = process.cwd();
 
-export { fakeConfig, FakeTerminalSession };
+export { fakeConfig, FakeStructuredSession, FakeTerminalSession };
 
 export function fakeNotification(): INotification {
   return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), confirm: vi.fn().mockResolvedValue(undefined) };
@@ -52,7 +52,6 @@ export interface SessionOverrides {
   planner?: Partial<SessionPlanner>;
   modelResolver?: Pick<ModelResolver, 'modelsForRunners'> & Partial<Pick<ModelResolver, 'getCachedRunnerModels' | 'contextWindowFor'>>;
   skillsService?: Pick<SkillsService, 'findSkill'> & Partial<Pick<SkillsService, 'listSkills'>>;
-  /** Defaults to one with no transcripts, so no test reads the real home directory. */
   taskOutput?: TaskOutputSource;
   /** Defaults to git behind a config with isolation off, so no test runs git in the repo it runs in. */
   isolation?: IWorktreeIsolation;
@@ -122,7 +121,7 @@ export function makeSession(overrides: SessionOverrides = {}): Session {
     skillsService: overrides.skillsService
       ? { listSkills: () => [], ...overrides.skillsService } as SkillsService
       : undefined,
-    taskOutput: overrides.taskOutput ?? new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } }),
+    taskOutput: overrides.taskOutput ?? new BufferedTaskOutputSource(),
     isolation: overrides.isolation,
     saveSession: overrides.saveSession ?? save,
     openTaskLog: overrides.openTaskLog ?? memoryTaskLogs(),

@@ -60,12 +60,11 @@ async function sessionAnswering(answer: (session: Session) => ConversationTurn) 
   return { session, broadcast };
 }
 
-/** The committed outcome with the per-parse and per-turn noise (markers, ids, clocks) taken out. */
+/** The committed outcome with the per-turn noise (ids, clocks) taken out. */
 function committed(session: Session, broadcast: ReturnType<typeof vi.fn>) {
-  const strip = (tasks: readonly Task[]): unknown[] => tasks.map(({ completionMarker: _, subtasks, ...rest }) => ({ ...rest, subtasks: strip(subtasks) }));
   const last = session.planState?.conversationHistory?.at(-1);
   return {
-    tasks: strip(session.planTasks),
+    tasks: session.planTasks,
     runners: session.planState?.runners,
     lastMessage: { role: last?.role, content: last?.content, kind: last?.kind },
     broadcasts: broadcast.mock.calls.map(([msg]) => msg.type),

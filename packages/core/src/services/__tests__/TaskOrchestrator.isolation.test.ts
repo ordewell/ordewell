@@ -4,15 +4,14 @@ import { createTask, type Task } from '../../models/Task';
 import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
 import type { IConfig } from '../../interfaces/IConfig';
 import type { IsolationAvailability, IsolationMergeResult, RepairEvidence } from '../../interfaces/IWorktreeIsolation';
-import { fakeConfig, FakeTerminalSession, FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
+import { fakeConfig, FakeStructuredSession, FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
-import type { TranscriptQuery } from '../../interfaces/TaskOutputSource';
 
 function sessionRunner() {
-  const sessions: FakeTerminalSession[] = [];
+  const sessions: FakeStructuredSession[] = [];
   const spawn = vi.fn(async (opts: Parameters<ITerminalRunner['spawn']>[0]) => {
-    const session = new FakeTerminalSession(`s${sessions.length + 1}`, opts.taskId);
+    const session = new FakeStructuredSession(`s${sessions.length + 1}`, opts.taskId);
     sessions.push(session);
     return session;
   });
@@ -24,7 +23,7 @@ function setup(opts: { isolation?: FakeWorktreeIsolation; workspace?: string; co
   const isolation = opts.isolation ?? new FakeWorktreeIsolation();
   const { sessions, spawn, runner } = sessionRunner();
   const notifications = fakeNotification();
-  const output = new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } });
+  const output = new BufferedTaskOutputSource();
   const orchestrator = TaskOrchestrator.compose({
     config: fakeConfig(opts.config),
     notifications,
@@ -35,15 +34,15 @@ function setup(opts: { isolation?: FakeWorktreeIsolation; workspace?: string; co
   });
   const spawnedCwd = (taskId: string) => spawn.mock.calls.find(([o]) => o.taskId === taskId)?.[0].cwd;
   const sessionFor = (taskId: string) => sessions.find((s) => s.taskId === taskId);
-  const pass = (task: Task) => sessionFor(task.id)!.emitOutput(`<<<ORDEWELL_DONE_${task.completionMarker}>>>`);
+  const pass = (task: Task) => sessionFor(task.id)!.reportComplete({ status: 'done', summary: '' });
   /** The task's newest session: a repair is a second attempt of the same task. */
   const latest = (taskId: string) => sessions.filter((s) => s.taskId === taskId).at(-1)!;
-  const passLatest = (task: Task) => latest(task.id).emitOutput(`<<<ORDEWELL_DONE_${task.completionMarker}>>>`);
+  const passLatest = (task: Task) => latest(task.id).reportComplete({ status: 'done', summary: '' });
   return { orchestrator, isolation, spawn, sessions, notifications, spawnedCwd, sessionFor, pass, latest, passLatest, runner };
 }
 
 const task = (id: string, order: number, over: Partial<Task> = {}) =>
-  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, completionMarker: `mk-${id}`, ...over });
+  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, ...over });
 
 describe('TaskOrchestrator with worktree isolation', () => {
   it('spawns each task in the worktree prepared for it', async () => {
@@ -949,7 +948,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
       expect(repair.prompt).toContain('conflicted in a.ts');
       expect(repair.prompt).toContain('git merge --no-edit ordewell/run1/integration');
       expect(repair.prompt).toContain('What the task was asked to do:\ndo t1');
-      expect(repair.prompt).toContain('DONE_mk-t1>>>');
+      expect(repair.prompt).toContain('only then call `task_complete`');
       expect(isolation.taskIdsFor('prepare')).toEqual(['t1']);
       expect(isolation.taskIdsFor('reopen')).toEqual(['t1']);
       expect(orchestrator.storeInstance.get('t1')!.status).toBe('in_progress');
@@ -1404,11 +1403,8 @@ describe('TaskOrchestrator with worktree isolation', () => {
     });
   });
 
-  it('reads a worktree task\'s transcript by the worktree it ran in, and its live output by task', async () => {
-    const queries: TranscriptQuery[] = [];
-    const output = new BufferedTaskOutputSource({
-      transcripts: { finalAssistantText: async (q) => { queries.push(q); return 'answer from the worktree'; } },
-    });
+  it('summarizes a worktree task by what it reported, and reads its live output by task', async () => {
+    const output = new BufferedTaskOutputSource();
     const isolation = new FakeWorktreeIsolation();
     const { sessions, runner } = sessionRunner();
     const orchestrator = TaskOrchestrator.compose({ config: fakeConfig(), notifications: fakeNotification(), terminalRunner: runner, output, isolation });
@@ -1418,13 +1414,11 @@ describe('TaskOrchestrator with worktree isolation', () => {
 
     sessions[0].emitOutput('working in the worktree\n');
     expect(orchestrator.getLiveOutput('t1', { maxLines: 5 })!.text).toContain('working in the worktree');
-    sessions[0].emitOutput(`<<<ORDEWELL_DONE_${t1.completionMarker}>>>`);
+    sessions[0].reportComplete({ status: 'done', summary: 'answer from the worktree' });
 
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
-    expect(queries[0]).toMatchObject({ cwd: '/fake-worktrees/run1/1-t1', marker: 'mk-t1' });
     expect(orchestrator.storeInstance.get('t1')!.outputSummary?.logTail).toBe('answer from the worktree');
   });
-
   describe('the agent a finished task leaves behind', () => {
     it('stops on its verdict, so none is left in a worktree Merge all removes', async () => {
       const { orchestrator, pass, sessionFor, runner } = setup();

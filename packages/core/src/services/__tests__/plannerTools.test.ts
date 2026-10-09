@@ -1,3 +1,4 @@
+import { buildMergePrompt, buildSplitPrompt } from '../PlanPrompts';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'fs';
 import { tmpdir } from 'os';
@@ -14,11 +15,8 @@ import { createTask, type DiscoveredModel, type Task } from '../../models/Task';
 import { openTaskLog } from '../../utils/taskLogStore';
 import { FakeTerminalSession, makeSession, saves } from './sessionTestKit';
 import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
-import { buildConversationSystemPrompt, buildMergePrompt, buildSplitPrompt } from '../PlanPrompts';
-import { runnerModesFrom } from '../ModeResolver';
-import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { fakeConfig, fakeFileSystem } from '../../testing';
-import { respondingSpawn, type FakeAgentProcess, type FakeSpawnResult } from './harnessTestKit';
+import { respondingSpawn, planJson, type FakeAgentProcess, type FakeSpawnResult } from './harnessTestKit';
 import { plannerToolHandler, PLANNER_TURN_ENDED, type PlannerToolsHost } from '../plannerTools';
 import type { SubmitPlanArgs } from '../mcp/tools';
 
@@ -72,14 +70,16 @@ function reply(proc: FakeAgentProcess, text: string): void {
 }
 
 interface FakeClaude {
-  /** What the CLI's own `mcp_status` reports for the Ordewell server. */
-  status?: 'connected' | 'failed';
+  /** What the CLI's own `mcp_status` reports for the Ordewell server; a list says it per spawn, in order. */
+  status?: 'connected' | 'failed' | Array<'connected' | 'failed'>;
   /** One user turn: what it does with the injected server (absent when none was injected), and the reply text. */
   turn?: (mcp: Client | null, message: string) => Promise<string>;
 }
 
-function fakeClaude({ status = 'connected', turn = async () => 'What should it do?' }: FakeClaude = {}): FakeSpawnResult {
-  return respondingSpawn((written, proc, args) => {
+function fakeClaude({ status: reported = 'connected', turn = async () => 'What should it do?' }: FakeClaude = {}): FakeSpawnResult {
+  const spawned: FakeSpawnResult = respondingSpawn((written, proc, args) => {
+    const n = spawned.processes.indexOf(proc);
+    const status = Array.isArray(reported) ? reported[n] ?? 'failed' : reported;
     const msg = JSON.parse(written) as { type: string; request_id?: string; request?: { subtype?: string }; message?: { content: { text: string }[] } };
     if (msg.type === 'control_request' && msg.request?.subtype === 'mcp_status') {
       const mcpServers = injectedServer(args) ? [{ name: 'ordewell', status }] : [];
@@ -95,6 +95,7 @@ function fakeClaude({ status = 'connected', turn = async () => 'What should it d
       (err: unknown) => reply(proc, `The fake planner failed: ${err instanceof Error ? err.message : String(err)}`),
     );
   });
+  return spawned;
 }
 
 function service(spawned: FakeSpawnResult, mcpServer?: OrdewellMcpServer) {
@@ -178,37 +179,47 @@ describe('the planner token', () => {
 });
 
 describe('a planner the server did not reach', () => {
-  it('is respawned with today\'s prompt and no server when the CLI reports the connection failed', async () => {
+  it('is killed and respawned once, on a fresh token, and plans with its tools', async () => {
     const server = newServer();
-    const withTools = fakeClaude({ status: 'failed' });
-    const svc = service(withTools, server);
-    await svc.startConversation(request());
+    const claude = fakeClaude({ status: ['failed', 'connected'] });
+    const svc = service(claude, server);
 
-    const without = fakeClaude();
-    await service(without).startConversation(request());
+    const turn = await svc.startConversation(request());
 
-    expect(withTools.processes).toHaveLength(2);
-    expect(withTools.processes[0].killed).toBe(true);
-    expect(withTools.lastArgs()).toEqual(without.lastArgs());
-    expect(svc.plannerToolsAttached()).toBe(false);
+    expect(claude.processes).toHaveLength(2);
+    expect(claude.processes[0].killed).toBe(true);
+    expect(claude.processes[0].written.some((line) => line.includes('"type":"user"'))).toBe(false);
+    expect(injectedServer(claude.lastArgs())).not.toBeNull();
+    expect(turn.text).toBe('What should it do?');
+    expect(svc.plannerToolsAttached()).toBe(true);
   });
 
-  it('is spawned exactly as before when the session has no server to offer', async () => {
-    const spawned = fakeClaude();
-    const svc = service(spawned);
-    await svc.startConversation(request());
+  it('fails the turn with a clear error when the respawn does not connect either, sending it nothing', async () => {
+    const server = newServer();
+    const claude = fakeClaude({ status: 'failed' });
 
-    expect(spawned.lastArgs()).not.toContain('--mcp-config');
-    expect(spawned.lastArgs()).not.toContain('--allowedTools');
-    expect(svc.plannerToolsAttached()).toBe(false);
+    await expect(service(claude, server).startConversation(request())).rejects.toThrow(
+      'Could not start the claude-code planner with Ordewell\'s tools. First spawn: claude-code did not report Ordewell\'s MCP server connected. Respawn: claude-code did not report Ordewell\'s MCP server connected.',
+    );
+
+    expect(claude.processes).toHaveLength(2);
+    expect(claude.processes.every((p) => p.killed)).toBe(true);
+    expect(claude.processes.some((p) => p.written.some((line) => line.includes('"type":"user"')))).toBe(false);
+  });
+
+  it('is never spawned when the session has no planner tool handler', async () => {
+    const claude = fakeClaude();
+
+    await expect(service(claude).startConversation(request({ plannerTools: undefined }))).rejects.toThrow('this session has no server to hand it');
+
+    expect(claude.processes).toHaveLength(0);
   });
 });
-
 /** A planning session on a real harness planner, whose settings the test rewrites the way a settings write would. */
-function plannerSession(claude: FakeSpawnResult, initial: Partial<SessionRuntimeSettings> = {}, { inject = true, runner, skills = [], skillsService }: { inject?: boolean; runner?: ITerminalRunner; skills?: SkillInfo[]; skillsService?: Pick<SkillsService, 'findSkill' | 'listSkills'> } = {}) {
+function plannerSession(claude: FakeSpawnResult, initial: Partial<SessionRuntimeSettings> = {}, { runner, skills = [], skillsService }: { runner?: ITerminalRunner; skills?: SkillInfo[]; skillsService?: Pick<SkillsService, 'findSkill' | 'listSkills'> } = {}) {
   const server = newServer();
   let settings: SessionRuntimeSettings = { enabledRunners: ['claude-code'], ...initial };
-  const ai = service(claude, inject ? server : undefined);
+  const ai = service(claude, server);
   const broadcast = vi.fn<(msg: SessionMessage) => void>();
   const session = makeSession({
     aiService: ai,
@@ -261,20 +272,16 @@ async function loadSkill(mcp: Client, name: string) {
 }
 
 describe('load_skill', () => {
-  it.each([
-    ['attached', true, 'connected', true],
-    ['not offered', false, 'connected', false],
-    ['connection failed', true, 'failed', false],
-  ] as const)('advertises the catalog only when tools attach: %s', async (_label, inject, status, advertised) => {
+  it('advertises the planner skills catalog, never a body', async () => {
     const files = new Map([['review-plan', plannerSkill('review-plan')]]);
-    const claude = fakeClaude({ status });
-    const { session } = plannerSession(claude, {}, { inject, skillsService: skillCatalog(files) });
+    const claude = fakeClaude();
+    const { session } = plannerSession(claude, {}, { skillsService: skillCatalog(files) });
     await session.startPlanning('goal', ['claude-code']);
     const args = claude.lastArgs();
     const prompt = args[args.indexOf('--append-system-prompt') + 1];
-    expect(prompt.includes('ORDEWELL PLANNER SKILLS:')).toBe(advertised);
-    expect(prompt.includes('- review-plan: Use review-plan to plan')).toBe(advertised);
-    expect(prompt.includes('load_skill')).toBe(advertised);
+    expect(prompt).toContain('ORDEWELL PLANNER SKILLS:');
+    expect(prompt).toContain('- review-plan: Use review-plan to plan');
+    expect(prompt).toContain('load_skill');
     expect(prompt).not.toContain('review-plan BODY v1');
   });
 
@@ -563,13 +570,13 @@ describe('the two routes to a plan', () => {
         return 'Submitted the plan.';
       },
     }), settings);
-    const viaEnvelope = plannerSession(fakeClaude({ turn: async () => JSON.stringify({ tasks }) }), settings, { inject: false });
+    const viaEnvelope = plannerSession(fakeClaude({ turn: async () => JSON.stringify({ tasks }) }), settings);
 
     await viaTool.session.startPlanning('add a cache', ['claude-code']);
     await viaEnvelope.session.startPlanning('add a cache', ['claude-code']);
 
     const committed = ({ session, broadcast }: ReturnType<typeof plannerSession>) => ({
-      tasks: session.planTasks.map(({ completionMarker: _, ...rest }) => rest),
+      tasks: session.planTasks,
       runners: session.planState?.runners,
       last: session.planState?.conversationHistory?.at(-1)?.kind,
       planBroadcasts: broadcast.mock.calls.filter(([m]) => m.type === 'plan_generated').length,
@@ -589,17 +596,17 @@ describe('what the planner is told', () => {
     return args[args.indexOf('--append-system-prompt') + 1];
   };
 
-  async function twoTurns(inject: boolean) {
+  async function twoTurns() {
     const messages: string[] = [];
     const claude = fakeClaude({ turn: async (_mcp, message) => { messages.push(message); return 'Which cache?'; } });
-    const { session, ai } = plannerSession(claude, {}, { inject });
+    const { session, ai } = plannerSession(claude);
     await session.startPlanning('add a cache', ['claude-code']);
     await session.continueConversation('in-process');
     return { claude, messages, attached: ai.plannerToolsAttached() };
   }
 
   it('with the tools: to pull the catalog just before submitting through submit_plan, and no pasted catalog', async () => {
-    const { claude, messages, attached } = await twoTurns(true);
+    const { claude, messages, attached } = await twoTurns();
 
     expect(attached).toBe(true);
     const prompt = systemPrompt(claude);
@@ -614,7 +621,7 @@ describe('what the planner is told', () => {
 
   describe('about reading and editing the plan', () => {
     /** The system prompt, and the message of the first turn after the plan exists. */
-    async function afterPlan(inject: boolean) {
+    async function afterPlan() {
       const messages: string[] = [];
       let planned = false;
       const claude = fakeClaude({
@@ -625,14 +632,14 @@ describe('what the planner is told', () => {
           return JSON.stringify({ tasks: TWO_TASKS });
         },
       });
-      const { session } = plannerSession(claude, {}, { inject });
+      const { session } = plannerSession(claude);
       await session.startPlanning('add a cache', ['claude-code']);
       await session.continueConversation('rename the first task');
       return { prompt: systemPrompt(claude), perTurn: messages[1] };
     }
 
     it('with the tools: to read through task_query and task_output and edit through edit_plan, not the envelopes', async () => {
-      const { prompt, perTurn } = await afterPlan(true);
+      const { prompt, perTurn } = await afterPlan();
 
       expect(prompt).toMatch(/task_query/);
       expect(prompt).toMatch(/task_output/);
@@ -651,42 +658,8 @@ describe('what the planner is told', () => {
       expect(buildSplitPrompt('a', tasks)).toMatch(/Reply with ONLY a taskOps JSON object using a single "split" op:\n {2}\{"taskOps":\[/);
     });
 
-    it('without them: the envelopes, unchanged', async () => {
-      const { prompt, perTurn } = await afterPlan(false);
-
-      expect(prompt).toContain('{"taskQuery":{"tasks":');
-      expect(perTurn).toContain('{"taskOps": [');
-      expect(perTurn).toContain('{"taskQuery":{"tasks":["<id or #order>"],"catalog":true}}');
-      expect(`${prompt}\n${perTurn}`).not.toMatch(/edit_plan|task_query|task_output/);
-    });
   });
 
-  it('without them: the task skills it may attach, but no planner skills, which load only through load_skill', async () => {
-    const files = new Map([
-      ['pr-style', { ...plannerSkill('pr-style', { appliesTo: 'task' }), description: 'House PR style' }],
-      ['review-plan', plannerSkill('review-plan')],
-    ]);
-    const claude = fakeClaude({ turn: async () => 'Which cache?' });
-    const { session } = plannerSession(claude, {}, { inject: false, skillsService: skillCatalog(files) });
-
-    await session.startPlanning('add a cache', ['claude-code']);
-
-    const prompt = systemPrompt(claude);
-    expect(prompt).toContain('Task skills you may attach:\n- pr-style: House PR style');
-    expect(prompt).not.toMatch(/review-plan|load_skill/);
-  });
-
-  it('without them: today\'s prompt and per-turn catalog, unchanged', async () => {
-    const { claude, messages, attached } = await twoTurns(false);
-
-    expect(attached).toBe(false);
-    expect(systemPrompt(claude)).toBe(buildConversationSystemPrompt(
-      'add a cache', '', { 'claude-code': CATALOG['claude-code'] }, ['claude-code'], runnerModesFrom(new RunnerRegistry(), ['claude-code']), true,
-      { harness: true, isolatedExecution: undefined },
-    ));
-    expect(messages[1]).toContain('<available_models>\nclaude-code: claude-sonnet-4, claude-opus-4\n</available_models>');
-    expect(messages[1]).not.toMatch(/list_runners|submit_plan/);
-  });
 });
 
 const TWO_TASKS = [
@@ -695,8 +668,8 @@ const TWO_TASKS = [
 ];
 
 /** A conversation with a committed two-task plan, whose every later reply is `second`. */
-async function planThen(second: (mcp: Client | null, message: string) => Promise<string>, opts: { inject?: boolean; runner?: ITerminalRunner; skills?: SkillInfo[] } & Partial<SessionRuntimeSettings> = {}) {
-  const { inject = true, runner, skills, ...settings } = opts;
+async function planThen(second: (mcp: Client | null, message: string) => Promise<string>, opts: { runner?: ITerminalRunner; skills?: SkillInfo[] } & Partial<SessionRuntimeSettings> = {}) {
+  const { runner, skills, ...settings } = opts;
   let planned = false;
   const planner = plannerSession(fakeClaude({
     turn: async (mcp, message) => {
@@ -704,20 +677,20 @@ async function planThen(second: (mcp: Client | null, message: string) => Promise
       planned = true;
       return JSON.stringify({ tasks: TWO_TASKS });
     },
-  }), settings, { inject, runner, skills });
+  }), settings, { runner, skills });
   await planner.session.startPlanning('add a cache', ['claude-code']);
   return planner;
 }
 
 const landed = ({ session, broadcast }: ReturnType<typeof plannerSession>) => ({
-  tasks: session.planTasks.map(({ id: _id, completionMarker: _marker, ...rest }) => rest),
+  tasks: session.planTasks.map(({ id: _id, ...rest }) => rest),
   runners: session.planState?.runners,
   last: session.planState?.conversationHistory?.at(-1)?.content,
   planBroadcasts: broadcast.mock.calls.filter(([m]) => m.type === 'plan_generated').length,
 });
 
 /** A started run on a plan of two tasks: `a` running behind `sessions[0]`, `b` waiting on it. */
-async function runningPlan(second: Parameters<typeof planThen>[0], opts: { inject?: boolean; sessions?: FakeTerminalSession[] } = {}) {
+async function runningPlan(second: Parameters<typeof planThen>[0], opts: { sessions?: FakeTerminalSession[] } = {}) {
   const { sessions = [], ...rest } = opts;
   const runner = {
     spawn: vi.fn(async ({ taskId }: { taskId: string }) => {
@@ -787,7 +760,7 @@ describe('edit_plan', () => {
       expect(await call(mcp!, 'edit_plan', { ops })).toEqual({ isError: false, body: expect.objectContaining({ ok: true }) });
       return 'Done.';
     });
-    const viaEnvelope = await planThen(async () => JSON.stringify({ taskOps: ops }), { inject: false });
+    const viaEnvelope = await planThen(async () => JSON.stringify({ taskOps: ops }));
 
     await viaTool.session.continueConversation('EDIT NOW');
     await viaEnvelope.session.continueConversation('EDIT NOW');
@@ -875,7 +848,7 @@ describe('edit_plan', () => {
         answered = await call(mcp!, 'edit_plan', { ops: edit });
         return 'Queued.';
       });
-      const viaEnvelope = await runningPlan(async () => JSON.stringify({ taskOps: edit }), { inject: false });
+      const viaEnvelope = await runningPlan(async () => JSON.stringify({ taskOps: edit }));
 
       await viaTool.session.continueConversation('EDIT NOW');
       await viaEnvelope.session.continueConversation('EDIT NOW');
@@ -1160,5 +1133,35 @@ describe('a submission whose planner turn ends while its skill check runs', () =
 
     expect(await call).toEqual({ isError: true, text: expect.stringContaining(PLANNER_TURN_ENDED) });
     expect(host.editPlan).not.toHaveBeenCalled();
+  });
+});
+
+describe('a one-shot coding-agent planner', () => {
+  it('requires attached tools, accepts submit_plan, and revokes its token when done', async () => {
+    const server = newServer();
+    let config: InjectedServer | null = null;
+    const spawned = fakeClaude({ turn: async (client) => {
+      if (!client) throw new Error('expected attached tools');
+      config = injectedServer(spawned.lastArgs());
+      const reply = await client.callTool({ name: 'submit_plan', arguments: JSON.parse(planJson()) });
+      expect(reply.isError).not.toBe(true);
+      return 'Plan submitted.';
+    } });
+    const tasks = await service(spawned, server).generatePlanDirect('Add a cache', ['claude-code']);
+
+    expect(tasks).toHaveLength(1);
+    expect(spawned.processes[0].killed).toBe(true);
+    expect(config).not.toBeNull();
+    const client = new Client({ name: 'stale-planner', version: '0' });
+    clients.push(client);
+    await expect(client.connect(new StreamableHTTPClientTransport(new URL(config!.url), { requestInit: { headers: config!.headers } }))).rejects.toThrow();
+  });
+
+  it('fails after one respawn without sending the planning request', async () => {
+    const spawned = fakeClaude({ status: 'failed' });
+    await expect(service(spawned, newServer()).generatePlanDirect('Add a cache', ['claude-code'])).rejects.toThrow('MCP server connected');
+    expect(spawned.processes).toHaveLength(2);
+    expect(spawned.processes.every((process) => process.killed)).toBe(true);
+    expect(spawned.processes.flatMap((process) => process.written).some((line) => JSON.parse(line).type === 'user')).toBe(false);
   });
 });

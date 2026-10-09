@@ -5,7 +5,7 @@ import { fakeConfig, fakeFileSystem } from '../../testing';
 import type { IConfig } from '../../interfaces/IConfig';
 import type { ConversationRequest } from '../AiService';
 import type { ResearchProgress, ResearchStep } from '../../models/Task';
-import { fakeSpawn, fixture, openCodeFixture, planJson, scriptedAdapter, sseResponse, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
+import { fakeMcpServer, fakeSpawn, fixture, openCodeFixture, planJson, scriptedAdapter, sseResponse, type FakeAgentProcess, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
 import type { AgentEvent } from '../harness/AgentAdapter';
 import { addPlannerUsage, plannerContextFill } from '../../models/Usage';
 import { TurnStream } from '../replyStream';
@@ -40,6 +40,7 @@ function service(
       // filesystem — the workspace and the agent binary are both fictional.
       isDirectory: () => true,
       exists: () => true,
+      mcpServer: fakeMcpServer(),
     },
   );
   return { svc, spawned, config };
@@ -53,8 +54,14 @@ function request(overrides: Partial<ConversationRequest> = {}): ConversationRequ
     modelsByRunner: { 'claude-code': [{ modelId: 'sonnet', modelLabel: 'Sonnet', variants: [] }] },
     fs: fakeFileSystem(),
     onProgress: (p) => progress.push(p),
+    plannerTools: { sessionId: 's1', handler: {} },
     ...overrides,
   };
+}
+
+/** What the service wrote to the agent, past the attach check a planner given tools opens with. */
+function writes(proc: FakeAgentProcess): string[] {
+  return proc.written.filter((line) => !line.includes('"subtype":"mcp_status"'));
 }
 
 function collector() {
@@ -231,7 +238,7 @@ describe('CliAgentAiService — Claude Code', () => {
     const turn = await svc.startConversation(request());
 
     expect(turn.text).toContain('KPI helpers live in lib/kpis.py');
-    const sent = spawned.processes[0].written;
+    const sent = writes(spawned.processes[0]);
     expect(sent).toHaveLength(2);
     expect(sent[1]).toContain('background');
   });
@@ -261,7 +268,7 @@ describe('CliAgentAiService — Claude Code', () => {
 
     expect(turn.kind).toBe('message');
     // One goal + two waits, then it stops asking.
-    expect(spawned.processes[0].written).toHaveLength(3);
+    expect(writes(spawned.processes[0])).toHaveLength(3);
   });
 
   // Work that lands after a turn closed — a backgrounded agent finishing, a
@@ -293,7 +300,7 @@ describe('CliAgentAiService — Claude Code', () => {
     // fixture's plan is cut off mid-object, so the re-emit asks for a terser
     // plan, as on the API backend — and claims no trim, since the agent's
     // context is its own.
-    const sent = spawned.processes[0].written;
+    const sent = writes(spawned.processes[0]);
     expect(sent).toHaveLength(2);
     expect(sent[1]).toContain('cut off by the output length limit');
     expect(sent[1]).not.toContain('trimmed');
@@ -306,7 +313,7 @@ describe('CliAgentAiService — Claude Code', () => {
 
     expect(turn.kind).toBe('message');
     // One goal + two corrective re-emits, then it stops asking.
-    expect(spawned.processes[0].written).toHaveLength(3);
+    expect(writes(spawned.processes[0])).toHaveLength(3);
   });
 
   it('denies any permission the agent asks for and records it as denied', async () => {
@@ -345,7 +352,7 @@ describe('CliAgentAiService — Claude Code', () => {
     await svc.continueConversation('Redis, please', () => {});
 
     expect(spawned.processes).toHaveLength(1);
-    expect(spawned.processes[0].written).toHaveLength(2);
+    expect(writes(spawned.processes[0])).toHaveLength(2);
   });
 
   it('kills the agent process on reset', async () => {
@@ -367,7 +374,7 @@ describe('CliAgentAiService — Claude Code', () => {
       initialMessage: 'In-process is fine',
     }));
 
-    const opening = spawned.processes[0].written[0];
+    const opening = writes(spawned.processes[0])[0];
     expect(opening).toContain('previous_conversation');
     expect(opening).toContain('Which store?');
     expect(opening).toContain('In-process is fine');
@@ -393,11 +400,13 @@ describe('CliAgentAiService — Claude Code', () => {
     let release = () => {};
     const svc = new CliAgentAiService(fakeConfig({ aiProvider: 'claude-code' }), {
       workspaceRoot: () => '/repo',
+      mcpServer: fakeMcpServer(),
       createAdapter: () => ({
         agentId: 'claude-code',
         start: async () => {},
         nativeSessionId: () => null,
         dispose: () => {},
+        mcpAttached: async () => true,
         send: async (_message, onEvent, signal) => {
           signals.push(signal);
           if (signals.length === 2) await new Promise<void>((resolve) => { release = resolve; });
@@ -467,6 +476,7 @@ describe('CliAgentAiService — streamed events (#47)', () => {
     return new CliAgentAiService(fakeConfig({ aiProvider: 'claude-code' }), {
       createAdapter: scriptedAdapter(turns),
       workspaceRoot: () => '/repo',
+      mcpServer: fakeMcpServer(),
     });
   }
 
@@ -752,7 +762,7 @@ describe('CliAgentAiService — Codex', () => {
     await svc.startConversation(request({ onProgress, runners: ['codex'] }));
 
     const threadStart = JSON.parse(spawned.processes[0].written[1]);
-    expect(threadStart.params.config).toEqual({ features: { use_legacy_landlock: true } });
+    expect(threadStart.params.config.features).toEqual({ use_legacy_landlock: true });
     expect(threadStart.params.sandbox).toBe('read-only');
     // Codex emits the bubblewrap warning from its default config regardless.
     // Passed through it is a false alarm; the replacement says what actually
@@ -945,6 +955,7 @@ describe('CliAgentAiService — OpenCode', () => {
       const url = String(input);
       // A 1.x server has no `/api/info`; the adapter's probe for 2.x gets an answer with no version, off the routes.
       if (url.endsWith('/api/info')) return { ok: true, status: 200, statusText: 'OK', json: async () => ({}) } as unknown as Response;
+      if (url.endsWith('/mcp')) return { ok: true, status: 200, statusText: 'OK', json: async () => ({ ordewell: { status: 'connected' } }) } as unknown as Response;
       const body = routes(url, init);
       if (url.endsWith('/event')) {
         if (!sseFrames) return { ok: true, status: 200, statusText: 'OK', body: null } as unknown as Response;
@@ -960,7 +971,7 @@ describe('CliAgentAiService — OpenCode', () => {
 
     const svc = new CliAgentAiService(
       fakeConfig({ aiProvider: 'opencode', enabledRunners: ['opencode'] }),
-      { spawn, fetch: fetchImpl, resolvePath: async () => '/usr/bin', workspaceRoot: () => '/repo', isDirectory: () => true, exists: () => true },
+      { spawn, fetch: fetchImpl, resolvePath: async () => '/usr/bin', workspaceRoot: () => '/repo', isDirectory: () => true, exists: () => true, mcpServer: fakeMcpServer() },
     );
     return { svc, spawned };
   }
@@ -1067,6 +1078,7 @@ describe('CliAgentAiService — OpenCode', () => {
     const fetchImpl = (async (input: string | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/event')) return { ok: true, status: 200, statusText: 'OK', body: null } as unknown as Response;
+      if (url.endsWith('/mcp')) return { ok: true, status: 200, statusText: 'OK', json: async () => ({ ordewell: { status: 'connected' } }) } as unknown as Response;
       if (init?.body) seen.push(JSON.parse(String(init.body)));
       return {
         ok: true, status: 200, statusText: 'OK',
@@ -1076,7 +1088,7 @@ describe('CliAgentAiService — OpenCode', () => {
 
     const svc = new CliAgentAiService(
       fakeConfig({ aiProvider: 'opencode', orchestratorModel: 'anthropic/claude-sonnet-4' }),
-      { spawn, fetch: fetchImpl, resolvePath: async () => '/usr/bin', workspaceRoot: () => '/repo', isDirectory: () => true, exists: () => true },
+      { spawn, fetch: fetchImpl, resolvePath: async () => '/usr/bin', workspaceRoot: () => '/repo', isDirectory: () => true, exists: () => true, mcpServer: fakeMcpServer() },
     );
     await svc.startConversation(request({ runners: ['opencode'] }));
 
@@ -1539,7 +1551,7 @@ describe('CliAgentAiService — Claude Code partial messages, usage and subagent
     it('stays open past its launch and finishes on the completion notice', async () => {
       const { events, turn, spawned } = await run();
 
-      expect(spawned.processes[0].written).toHaveLength(2);
+      expect(writes(spawned.processes[0])).toHaveLength(2);
       const lifecycle = events.filter((e) => ['subagent_started', 'tool_call', 'tool_result', 'subagent_finished'].includes(e.type));
       expect(lifecycle.map((e) => [e.type, e.toolCallId ?? null, e.subagentId ?? null])).toEqual([
         ['tool_call', AGENT, null],

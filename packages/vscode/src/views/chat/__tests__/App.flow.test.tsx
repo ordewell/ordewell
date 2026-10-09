@@ -11,7 +11,7 @@ function send(msg: HostToWebview) {
 }
 
 const plan = {
-  tasks: [{ id: 't1', order: 1, title: 'Only task', description: '', type: 'ai' as const, status: 'pending' as const, dependencies: [], subtasks: [], assignedRunner: 'claude-code', completionMarker: 'm1', taskMode: 'build' }],
+  tasks: [{ id: 't1', order: 1, title: 'Only task', description: '', type: 'ai' as const, status: 'pending' as const, dependencies: [], subtasks: [], assignedRunner: 'claude-code', taskMode: 'build' }],
   generatedAt: new Date().toISOString(),
   status: 'draft' as const,
   runners: ['claude-code'],

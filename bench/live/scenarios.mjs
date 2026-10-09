@@ -99,8 +99,8 @@ const PLAN_TURN = [
       type: 'planUpdated',
       plan: {
         tasks: [
-          { id: 'task-1', order: 1, title: 'Add the SQLite store', description: 'Wire up better-sqlite3 and a migrations table', type: 'ai', status: 'pending', dependencies: [], subtasks: [], assignedRunner: 'claude-code', completionMarker: 'm1', taskMode: 'acceptEdits', assignedModel: { modelId: 'deepseek/deepseek-v4-flash', modelLabel: 'DeepSeek V4 Flash' } },
-          { id: 'task-2', order: 2, title: 'Migrate', description: 'Write the migration runner', type: 'ai', status: 'pending', dependencies: ['task-1'], subtasks: [], assignedRunner: 'claude-code', completionMarker: 'm2', taskMode: 'acceptEdits' },
+          { id: 'task-1', order: 1, title: 'Add the SQLite store', description: 'Wire up better-sqlite3 and a migrations table', type: 'ai', status: 'pending', dependencies: [], subtasks: [], assignedRunner: 'claude-code', taskMode: 'acceptEdits', assignedModel: { modelId: 'deepseek/deepseek-v4-flash', modelLabel: 'DeepSeek V4 Flash' } },
+          { id: 'task-2', order: 2, title: 'Migrate', description: 'Write the migration runner', type: 'ai', status: 'pending', dependencies: ['task-1'], subtasks: [], assignedRunner: 'claude-code', taskMode: 'acceptEdits' },
         ],
         generatedAt: '2026-09-27T10:03:20.000Z',
         status: 'draft',
@@ -218,7 +218,7 @@ export const RELOAD_FIXTURE = {
 
 export const RELOAD_PLAN = {
   tasks: [
-    { id: 't1', order: 1, title: 'Restored Task', description: 'd', type: 'ai', status: 'pending', dependencies: [], subtasks: [], assignedRunner: 'claude-code', completionMarker: 'x', taskMode: 'build', prompt: 'p' },
+    { id: 't1', order: 1, title: 'Restored Task', description: 'd', type: 'ai', status: 'pending', dependencies: [], subtasks: [], assignedRunner: 'claude-code', taskMode: 'build', prompt: 'p' },
   ],
   generatedAt: '2026-01-01T00:00:03.000Z', status: 'draft', runners: ['claude-code'], lastUpdated: '2026-01-01T00:00:03.000Z',
 };

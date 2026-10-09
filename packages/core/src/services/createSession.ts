@@ -140,11 +140,7 @@ export interface SessionDeps {
    * over the session's workspace root.
    */
   skillsService?: SkillsService;
-  /**
-   * Where a task's output and final answer are read. Defaults to the agents'
-   * own transcripts under the user's home; tests inject one that never
-   * touches the disk.
-   */
+  /** Where a task's output and final answer are read. */
   taskOutput?: TaskOutputSource;
   /**
    * Git worktree isolation (ADR-0013). Defaults to git itself, gated by

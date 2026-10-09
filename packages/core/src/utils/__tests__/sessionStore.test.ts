@@ -418,6 +418,10 @@ describe('sessionStore', () => {
       expect(t1.transport).toEqual({ kind: 'structured', nativeSessionId: 'sess-1' });
     });
 
+    it('drops the completion marker id every task carried then, subtasks included', () => {
+      expect(JSON.stringify(loadFixture().plan)).not.toContain('completionMarker');
+    });
+
     it('keeps a structured task continuable, and leaves a terminal one to Retry', () => {
       const [t1, t2] = loadFixture().plan.tasks;
 

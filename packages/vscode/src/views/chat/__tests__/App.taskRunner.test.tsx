@@ -13,7 +13,7 @@ const plan = {
   tasks: [{
     id: 't1', order: 1, title: 'Only task', description: '', type: 'ai' as const,
     status: 'pending' as const, dependencies: [], subtasks: [],
-    assignedRunner: 'claude-code', completionMarker: 'm1', taskMode: 'default',
+    assignedRunner: 'claude-code', taskMode: 'default',
     assignedModel: { modelId: 'claude-sonnet-4-5', modelLabel: 'Claude Sonnet 4.5' },
   }],
   generatedAt: new Date().toISOString(),

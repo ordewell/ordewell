@@ -13,7 +13,6 @@ function task(overrides: Partial<Task> = {}): Task {
     dependencies: [],
     subtasks: [],
     assignedRunner: 'claude-code',
-    completionMarker: 'm1',
     taskMode: 'build',
     ...overrides,
   } as Task;

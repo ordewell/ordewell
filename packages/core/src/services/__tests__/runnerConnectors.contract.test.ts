@@ -125,27 +125,26 @@ describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
     adapter.dispose();
   });
 
-  it('respawns a planner the server did not reach without it, and plans by the envelope', async () => {
+  it('refuses a planner after one respawn still cannot attach tools', async () => {
     const server = new OrdewellMcpServer();
     servers.push(server);
     const fake = FAKE_RUNNERS[runner]({ attach: 'failed', reply: planJson(runner) });
     const svc = new CliAgentAiService(fakeConfig({ aiProvider: providerForRunner(runner)!, enabledRunners: [runner] }), { ...fake.deps, workspaceRoot: () => '/repo', mcpServer: server });
 
-    const turn = await svc.startConversation({
+    await expect(svc.startConversation({
       goal: 'Add the thing',
       runners: [runner],
       modelsByRunner: { [runner]: [{ modelId: 'sonnet', modelLabel: 'Sonnet', variants: [] }] },
       fs: fakeFileSystem(),
       onProgress: () => {},
       plannerTools: { sessionId: 's1', handler: {} },
-    });
+    })).rejects.toThrow('MCP server connected');
 
     expect(fake.launches()).toBe(2);
     expect(fake.injectedUrl(0)).toBe(server.url);
     expect(fake.killed(0)).toBe(true);
-    expect(fake.injectedUrl(1)).toBeNull();
-    expect(svc.plannerToolsAttached()).toBe(false);
-    expect(turn.kind).toBe('plan');
+    expect(fake.injectedUrl(1)).toBe(server.url);
+    expect(fake.killed(1)).toBe(true);
     svc.reset();
   });
 });

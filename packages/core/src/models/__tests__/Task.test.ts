@@ -31,18 +31,6 @@ describe('LegacyPlanState conversation fields', () => {
 });
 
 describe('createTask', () => {
-  it('generates a unique completionMarker UUID for each task', () => {
-    const a = createTask({ id: 'a', title: 'First', prompt: 'pa' });
-    const b = createTask({ id: 'b', title: 'Second', prompt: 'pb' });
-
-    expect(a.completionMarker).toBeDefined();
-    expect(a.completionMarker).toBeTypeOf('string');
-    expect(a.completionMarker.length).toBeGreaterThan(0);
-    expect(b.completionMarker).toBeDefined();
-    expect(b.completionMarker).toBeTypeOf('string');
-    expect(a.completionMarker).not.toBe(b.completionMarker);
-  });
-
   it('defaults sliceType to undefined for all task types', () => {
     const ai = createTask({ type: 'ai' });
     const user = createTask({ type: 'user' });

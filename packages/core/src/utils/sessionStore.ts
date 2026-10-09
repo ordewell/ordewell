@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { LegacyPlanState, PlanState } from '../models/Task';
-import { migratePlanState, migrateTaskTransports } from '../models/Task';
+import { migratePlanState, migrateLoadedTasks } from '../models/Task';
 import { migratePlanStateIsolation } from '../services/isolationRecord';
 import type { SessionMeta, SessionData } from '../models/Session';
 import { defaultLogger, type ILogger } from '../interfaces/ILogger';
@@ -174,7 +174,7 @@ export function loadSession(sessionId: string, baseDir?: string, logger: ILogger
         if (t.status === 'in_progress') t.status = 'pending';
       }
       migratePlanStateIsolation(plan);
-      migrateTaskTransports(plan.tasks);
+      migrateLoadedTasks(plan.tasks);
       return { meta: session.meta, plan };
     }
   } catch (err: unknown) {

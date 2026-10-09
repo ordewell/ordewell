@@ -9,7 +9,7 @@ import { fakeNotification, makeSession, saves, taskOf } from './sessionTestKit';
 import type { ITerminalRunner, ITerminalSession } from '../../interfaces/ITerminalRunner';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 
-/** Structured sessions, or plain ones that only report through the marker — the fakes, driven by hand. */
+/** Structured sessions, or plain ones with no turn to talk to — the fakes, driven by hand. */
 type SessionKind = 'structured' | 'plain';
 
 function setup(kind: SessionKind = 'structured') {
@@ -29,7 +29,7 @@ function setup(kind: SessionKind = 'structured') {
     config: fakeConfig(),
     notifications: fakeNotification(),
     terminalRunner: runner,
-    output: new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } }),
+    output: new BufferedTaskOutputSource(),
     registry: new RunnerRegistry(),
     workspaceRoot: () => '/repo',
     workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
@@ -49,7 +49,7 @@ function setup(kind: SessionKind = 'structured') {
 
 async function started(kind: SessionKind = 'structured', extra: Partial<Task> = {}) {
   const env = setup(kind);
-  env.orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', completionMarker: 'mk-1', ...extra })]);
+  env.orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', ...extra })]);
   await env.orchestrator.forceStartTask('t1');
   const session = env.sessions[0];
   return { ...env, session, structured: session instanceof FakeStructuredSession ? session : null };
@@ -57,7 +57,7 @@ async function started(kind: SessionKind = 'structured', extra: Partial<Task> = 
 
 const task = (orchestrator: TaskOrchestrator) => orchestrator.storeInstance.get('t1')!;
 
-describe('a structured turn that ends without the done marker', () => {
+describe('a structured turn that ends without a task_complete call', () => {
   it('leaves the task waiting for input, saved and announced, with no verdict', async () => {
     const { orchestrator, structured, seen, settled } = await started();
 
@@ -71,24 +71,17 @@ describe('a structured turn that ends without the done marker', () => {
     expect(serializeTaskStatus(task(orchestrator)).awaitingReason).toBe('input');
   });
 
-  it('is not waiting when the turn carried the marker: the verdict stands', async () => {
+  it('is not waiting when the turn called task_complete: the verdict stands', async () => {
     const { orchestrator, structured, seen } = await started();
 
-    structured!.emitOutput('Done.\n<<<ORDEWELL_DONE_mk-1>>>\n');
+    structured!.emitOutput('Done.\n');
+    structured!.reportComplete({ status: 'done', summary: '' });
+    structured!.emitOutput('\n');
     structured!.emitTurnEnd('completed');
     await vi.waitFor(() => expect(task(orchestrator).status).toBe('completed'));
 
     expect(seen).not.toContain('awaiting_user:input');
     expect(task(orchestrator).awaitingReason).toBeUndefined();
-  });
-
-  it('gives way to a checkpoint seen in the same turn', async () => {
-    const { orchestrator, structured } = await started();
-
-    structured!.emitOutput('<<<ORDEWELL_CHECKPOINT: use Postgres?>>>\n');
-    structured!.emitTurnEnd('completed');
-
-    expect(task(orchestrator)).toMatchObject({ status: 'awaiting_user', awaitingReason: 'checkpoint' });
   });
 
   it('stays in progress, never passing through waiting, when a queued message goes out as the turn ends', async () => {
@@ -161,17 +154,16 @@ describe('sending a structured task a message', () => {
 
   it('refuses a message to a task at a checkpoint, which approve or reject answers', async () => {
     const { orchestrator, structured } = await started();
-    structured!.emitOutput('<<<ORDEWELL_CHECKPOINT: ok?>>>\n');
-    structured!.emitTurnEnd('completed');
+    const answer = structured!.callCheckpoint('ok?');
 
     expect(() => orchestrator.sendTaskMessage('t1', 'yes')).toThrow(/checkpoint/);
 
     orchestrator.approveCheckpoint('t1');
     expect(task(orchestrator).status).toBe('in_progress');
     expect(task(orchestrator).awaitingReason).toBeUndefined();
-    expect(structured!.delivered).toEqual(['ORDEWELL_CONTINUE']);
+    await expect(answer).resolves.toEqual({ kind: 'continue' });
+    expect(structured!.delivered).toEqual([]);
   });
-
   it('refuses an empty message', async () => {
     const { orchestrator } = await started();
     expect(() => orchestrator.sendTaskMessage('t1', '   ')).toThrow(TaskControlError);
@@ -217,7 +209,8 @@ describe('talking to a task whose session is not structured', () => {
 
   it('refuses a task whose verdict has arrived', async () => {
     const { orchestrator, structured } = await started();
-    structured!.emitOutput('<<<ORDEWELL_DONE_mk-1>>>\n');
+    structured!.reportComplete({ status: 'done', summary: '' });
+    structured!.emitOutput('\n');
 
     expect(() => orchestrator.sendTaskMessage('t1', 'one more thing')).toThrow(/not running/);
     await flushMicrotasks();
@@ -265,18 +258,17 @@ describe('the saved reason, cleared on every way out of waiting', () => {
   });
 });
 
-describe('a marker checkpoint keeps its reason', () => {
-  it('marks a marker checkpoint as one, and approve clears it', async () => {
-    const { orchestrator, session } = await started('plain');
+describe('a checkpoint keeps its reason', () => {
+  it('marks a checkpoint call as one, and approve clears it', async () => {
+    const { orchestrator, structured } = await started();
 
-    session.emitOutput('<<<ORDEWELL_CHECKPOINT: ok?>>>');
+    void structured!.callCheckpoint('ok?');
     expect(task(orchestrator)).toMatchObject({ status: 'awaiting_user', awaitingReason: 'checkpoint' });
 
     orchestrator.approveCheckpoint('t1');
     expect(task(orchestrator).status).toBe('in_progress');
     expect(task(orchestrator).awaitingReason).toBeUndefined();
   });
-
   it('does not answer a checkpoint no runner is left to hear', async () => {
     const { orchestrator } = setup('plain');
     orchestrator.loadPlan([{ ...createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', status: 'awaiting_user' }), awaitingReason: 'checkpoint' }]);
@@ -297,25 +289,6 @@ describe('a marker checkpoint keeps its reason', () => {
   });
 });
 
-describe('a structured checkpoint, answered as a terminal one is (VerdictEngine unchanged)', () => {
-  it.each<[string, (o: TaskOrchestrator) => void, string]>([
-    ['approve', (o) => o.approveCheckpoint('t1'), 'ORDEWELL_CONTINUE'],
-    ['reject', (o) => o.rejectCheckpoint('t1', 'keep the README'), 'ORDEWELL_REJECT: keep the README'],
-  ])('%s is written to the session and goes out as the next user turn', async (_how, answer, token) => {
-    const { orchestrator, structured } = await started();
-    structured!.emitOutput('<<<ORDEWELL_CHECKPOINT: about to delete README.md>>>\n');
-    structured!.emitTurnEnd('completed');
-    expect(task(orchestrator)).toMatchObject({ status: 'awaiting_user', awaitingReason: 'checkpoint' });
-
-    answer(orchestrator);
-
-    expect(structured!.written).toEqual([`\n${token}\n`]);
-    expect(structured!.delivered).toEqual([token]);
-    expect(task(orchestrator).status).toBe('in_progress');
-    expect(task(orchestrator).awaitingReason).toBeUndefined();
-  });
-});
-
 describe('through the Session', () => {
   function sessionWith() {
     const sessions: FakeStructuredSession[] = [];
@@ -332,7 +305,7 @@ describe('through the Session', () => {
     const broadcast = vi.fn<(msg: SessionMessage) => void>();
     const session = makeSession({ runner, broadcast });
     const plan: LegacyPlanState = {
-      tasks: [createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', completionMarker: 'mk-1' })],
+      tasks: [createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })],
       generatedAt: new Date().toISOString(),
       status: 'approved',
       runners: ['claude-code'],

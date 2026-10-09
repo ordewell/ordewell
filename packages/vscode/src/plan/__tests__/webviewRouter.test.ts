@@ -53,7 +53,7 @@ function harness(aiService: Partial<IAiService> = { hasActiveConversation: () =>
     modelResolver: { getCachedRunnerModels: () => [], modelsForRunners: vi.fn().mockResolvedValue({}) } as unknown as ModelResolver,
     settings: () => ({}),
     aiService: { reset: () => {}, ...aiService } as unknown as IAiService,
-    taskOutput: new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } }),
+    taskOutput: new BufferedTaskOutputSource(),
   });
   session.loadPlan(plan(), 'build me a parser', workspace, { persist: false });
 

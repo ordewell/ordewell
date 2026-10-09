@@ -5,7 +5,7 @@ import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import { serializeTaskStatus } from '../SessionMessage';
 import { continuability } from '../continuation';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
-import { fakeConfig, FakeStructuredSession, FakeTerminalSession, FakeWorktreeIsolation } from '../../testing';
+import { fakeConfig, FakeStructuredSession, FakeWorktreeIsolation } from '../../testing';
 import { fakeNotification, makeSession, saves } from './sessionTestKit';
 import type { LegacyPlanState } from '../../models/Task';
 import type { ITerminalRunner, ITerminalSession } from '../../interfaces/ITerminalRunner';
@@ -18,7 +18,7 @@ import type { RunnerSpawnOptions } from '../AbstractRunner';
  * took up, or null for one it could not find.
  */
 function routingRunner(opts: { resumes?: (id: string) => string | null } = {}) {
-  const sessions: FakeTerminalSession[] = [];
+  const sessions: FakeStructuredSession[] = [];
   const requests: RunnerSpawnOptions[] = [];
   const runner = {
     spawn: vi.fn(async (o: RunnerSpawnOptions): Promise<ITerminalSession> => {
@@ -27,7 +27,7 @@ function routingRunner(opts: { resumes?: (id: string) => string | null } = {}) {
       const native = o.resumeSessionId ? (opts.resumes ?? ((resumed) => resumed))(o.resumeSessionId) : `native-${o.taskId}-${sessions.length + 1}`;
       const session = o.runner === 'claude-code'
         ? new FakeStructuredSession(id, o.taskId, native)
-        : new FakeTerminalSession(id, o.taskId);
+        : new FakeStructuredSession(id, o.taskId);
       sessions.push(session);
       return session;
     }),
@@ -45,7 +45,7 @@ function setup(opts: { runner?: ITerminalRunner; isolation?: IWorktreeIsolation;
     config: fakeConfig({ worktreeIsolation: opts.isolation !== undefined }),
     notifications,
     terminalRunner: opts.runner ?? routed.runner,
-    output: new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } }),
+    output: new BufferedTaskOutputSource(),
     registry: new RunnerRegistry(),
     isolation: opts.isolation,
     workspaceRoot: () => '/repo',
@@ -57,14 +57,16 @@ function setup(opts: { runner?: ITerminalRunner; isolation?: IWorktreeIsolation;
 
 // Spread over `createTask`, which drops the fields only a run sets (transport, awaiting reason).
 const plan = (overrides: Partial<Task> = {}): Task => ({
-  ...createTask({ id: 't1', order: 1, title: 'Parse JSON', prompt: 'ORIGINAL PROMPT BODY', completionMarker: 'mk-1' }),
+  ...createTask({ id: 't1', order: 1, title: 'Parse JSON', prompt: 'ORIGINAL PROMPT BODY' }),
   ...overrides,
 });
 
 /** Run t1 to a pass on the structured transport, leaving its session id saved. */
 async function completedStructured(h: ReturnType<typeof setup>): Promise<void> {
   await h.orchestrator.forceStartTask('t1');
-  h.sessions[0].emitOutput('Parsed objects.\n<<<ORDEWELL_DONE_mk-1>>>\n');
+  h.sessions[0].emitOutput('Parsed objects.\n');
+  h.sessions[0].reportComplete({ status: 'done', summary: '' });
+  h.sessions[0].emitOutput('\n');
   await vi.waitFor(() => expect(h.task('t1').status).toBe('completed'));
 }
 
@@ -113,20 +115,21 @@ describe('TaskOrchestrator.continueTask', () => {
     expect(request).toMatchObject({ resumeSessionId: 'native-t1-1', runner: 'claude-code' });
     expect(request.prompt.startsWith('also handle arrays\n')).toBe(true);
     expect(request.prompt).toContain('continuing this task in the same session');
-    expect(request.prompt).toContain('`DONE_mk-1>>>`');
-    expect(request.prompt).not.toContain('<<<ORDEWELL_DONE_mk-1>>>');
+    expect(request.prompt).toContain('call the `task_complete` tool');
     expect(request.prompt).not.toContain('ORIGINAL PROMPT BODY');
     expect(h.task('t1').status).toBe('in_progress');
   });
 
-  it('is verified by its own marker and summarized from the continued attempt', async () => {
+  it('is verified by its own task_complete call and summarized from the continued attempt', async () => {
     const h = setup();
     h.orchestrator.loadPlan([plan()]);
     await completedStructured(h);
 
     await h.orchestrator.continueTask('t1', 'also handle arrays');
     expect(h.task('t1').verdict).toBeUndefined();
-    h.sessions[1].emitOutput('Arrays handled too.\n<<<ORDEWELL_DONE_mk-1>>>\n');
+    h.sessions[1].emitOutput('Arrays handled too.\n');
+    h.sessions[1].reportComplete({ status: 'done', summary: '' });
+    h.sessions[1].emitOutput('\n');
 
     await vi.waitFor(() => expect(h.task('t1').status).toBe('completed'));
     expect(h.task('t1').verdict?.outcome).toBe('pass');
@@ -135,7 +138,7 @@ describe('TaskOrchestrator.continueTask', () => {
     expect(h.task('t1').transport).toEqual({ kind: 'structured', nativeSessionId: 'native-t1-1' });
   });
 
-  it('continues a failed task, and a continued turn that ends without the marker waits for input', async () => {
+  it('continues a failed task, and a continued turn that ends without a task_complete call waits for input', async () => {
     const h = setup();
     h.orchestrator.loadPlan([plan()]);
     await h.orchestrator.forceStartTask('t1');
@@ -150,11 +153,11 @@ describe('TaskOrchestrator.continueTask', () => {
 
   it('leaves dependents alone, as retry does', async () => {
     const h = setup();
-    h.orchestrator.loadPlan([plan(), createTask({ id: 't2', order: 2, title: 'Use it', prompt: 'two', completionMarker: 'mk-2', dependencies: ['t1'] })]);
+    h.orchestrator.loadPlan([plan(), createTask({ id: 't2', order: 2, title: 'Use it', prompt: 'two', dependencies: ['t1'] })]);
     await h.orchestrator.approveReview();
-    h.sessions[0].emitOutput('<<<ORDEWELL_DONE_mk-1>>>');
+    h.sessions[0].reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(h.sessions).toHaveLength(2));
-    h.sessions[1].emitOutput('<<<ORDEWELL_DONE_mk-2>>>');
+    h.sessions[1].reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(h.orchestrator.status).toBe('completed'));
     const t2Before = { ...h.task('t2') };
 
@@ -168,7 +171,7 @@ describe('TaskOrchestrator.continueTask', () => {
   it('starts from a fresh worktree at the task\'s own path, replacing the kept one', async () => {
     const isolation = new FakeWorktreeIsolation();
     const h = setup({ isolation });
-    h.orchestrator.loadPlan([plan(), createTask({ id: 't2', order: 2, title: 'Other', prompt: 'two', completionMarker: 'mk-2' })]);
+    h.orchestrator.loadPlan([plan(), createTask({ id: 't2', order: 2, title: 'Other', prompt: 'two' })]);
     await h.orchestrator.forceStartTask('t2');
     await h.orchestrator.forceStartTask('t1');
     h.sessions[1].emitExit(1);
@@ -263,7 +266,7 @@ describe('Session.continueTask', () => {
     };
     session.loadPlan(saved, 'Goal', '/repo');
     await session.executePlan();
-    sessions[0].emitOutput('<<<ORDEWELL_DONE_mk-1>>>');
+    sessions[0].reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(saves(session).mock.lastCall?.[0].tasks[0].status).toBe('completed'));
 
     await session.continueTask('t1', 'also handle arrays');

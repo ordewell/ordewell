@@ -3,7 +3,7 @@ import { TaskOrchestrator } from '../TaskOrchestrator';
 import { createTask, type Task } from '../../models/Task';
 import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
 import type { IsolationHandoff } from '../../interfaces/IWorktreeIsolation';
-import { fakeConfig, FakeTerminalSession, FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
+import { fakeConfig, FakeStructuredSession, FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 
@@ -13,13 +13,13 @@ import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
  * verdict for each before the orchestrator has ended its attempts.
  */
 function killingRunner() {
-  const sessions: FakeTerminalSession[] = [];
+  const sessions: FakeStructuredSession[] = [];
   const spawn = vi.fn(async (opts: Parameters<ITerminalRunner['spawn']>[0]) => {
-    const session = new FakeTerminalSession(`s${sessions.length + 1}`, opts.taskId);
+    const session = new FakeStructuredSession(`s${sessions.length + 1}`, opts.taskId);
     sessions.push(session);
     return session;
   });
-  const kill = (session: FakeTerminalSession) => {
+  const kill = (session: FakeStructuredSession) => {
     if (session.killed) return;
     session.killed = true;
     session.emitExit(-1);
@@ -36,7 +36,7 @@ function killingRunner() {
 function setup(isolation = new FakeWorktreeIsolation()) {
   const { sessions, spawn, runner } = killingRunner();
   const notifications = fakeNotification();
-  const output = new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } });
+  const output = new BufferedTaskOutputSource();
   const orchestrator = TaskOrchestrator.compose({
     config: fakeConfig(),
     notifications,
@@ -52,13 +52,13 @@ function setup(isolation = new FakeWorktreeIsolation()) {
     onIsolationNotice: ({ message }) => notices.push(message),
   });
   const latest = (taskId: string) => sessions.filter((s) => s.taskId === taskId).at(-1)!;
-  const pass = (task: Task) => latest(task.id).emitOutput(`<<<ORDEWELL_DONE_${task.completionMarker}>>>`);
+  const pass = (task: Task) => latest(task.id).reportComplete({ status: 'done', summary: '' });
   const status = (taskId: string) => orchestrator.storeInstance.get(taskId)!.status;
   return { orchestrator, isolation, sessions, spawn, runner, notifications, handoffs, notices, latest, pass, status };
 }
 
 const task = (id: string, order: number, over: Partial<Task> = {}) =>
-  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, completionMarker: `mk-${id}`, ...over });
+  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, ...over });
 
 describe('a merge never deletes a live task\'s worktree', () => {
   /*

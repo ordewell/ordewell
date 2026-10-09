@@ -37,32 +37,15 @@ export function collectDirectDependencyOutputs(task: Task, allTasks: readonly Ta
   return out;
 }
 
-/**
- * Break marker tokens carried in a predecessor's captured output. Interactive
- * runners echo the prompt they are given, and the watcher scans that terminal
- * output — a quoted marker would settle this task on the previous one's
- * evidence. Hyphenated rather than spaced: the scanner also reads a
- * whitespace-flattened view of the terminal, which would rejoin a space.
- *
- * A completion marker also loses its id: transcripts are bound to a task by
- * that id, and a dependent's transcript quoting it would answer for the
- * predecessor the next time the predecessor runs.
- */
-export function defuseMarkers(text: string): string {
-  return text
-    .replace(/<<<ORDEWELL_DONE_[^\s>]*>>>/g, '<<<ORDEWELL-DONE>>>')
-    .replace(/<<<ORDEWELL_/g, '<<<ORDEWELL-');
-}
-
 export function renderPriorOutputs(outputs: PriorOutput[]): string {
   if (outputs.length === 0) return '';
   const blocks = outputs
     .sort((a, b) => a.order - b.order)
     .map((o) => {
       const tail = o.logTail
-        ? defuseMarkers(o.logTail).split('\n').map((l) => '  ' + l).join('\n')
+        ? o.logTail.split('\n').map((l) => '  ' + l).join('\n')
         : '  (no output captured)';
-      const reason = defuseMarkers(o.reviewReason) || '(no review note)';
+      const reason = o.reviewReason || '(no review note)';
       return `### Task ${o.order}: ${o.title}\n- Review: ${reason}\n- Tail:\n${tail}`;
     });
   return `## Prior task outputs\n\n${blocks.join('\n\n')}`;
@@ -157,8 +140,6 @@ export interface ComposeOptions {
   skills?: readonly TaskSkillSnapshot[];
   /** An ops task's last attempt, as its output ended (ADR-0020); absent on a first attempt. */
   previousAttempt?: string;
-  /** The runner is given the `task_complete` and `checkpoint` tools (ADR-0022); the markers stay as their fallback. */
-  completionTool?: boolean;
 }
 
 /**
@@ -168,7 +149,7 @@ export interface ComposeOptions {
  */
 function renderPreviousAttempt(output: string): string {
   const tail = output.trim()
-    ? defuseMarkers(output.trim()).split('\n').map((l) => '  ' + l).join('\n')
+    ? output.trim().split('\n').map((l) => '  ' + l).join('\n')
     : '  (no output captured)';
   return [
     '## Previous attempt',
@@ -180,52 +161,19 @@ function renderPreviousAttempt(output: string): string {
   ].join('\n');
 }
 
-function renderCompletionMarker(task: Task, completionTool = false): string {
-  // The marker is given in two halves so the assembled token never appears in
-  // this prompt. Interactive TUIs echo the prompt into the terminal, and the
-  // watcher scans terminal output for the token — a literal marker here would
-  // complete the task the moment the session starts.
-  const howto = `Build it by writing \`<<<ORDEWELL_\` immediately followed by \`DONE_${task.completionMarker}>>>\` — joined into a single unbroken token, with no space, quote, or any other character between the two parts.`;
-  if (!completionTool) return `\n\nWhen you have fully completed this task, print one final line containing only the completion marker. ${howto}`;
-  return `\n\nWhen you have fully completed this task, call the \`task_complete\` tool with status \`done\` and a summary of what you did; the tasks that depend on this one are given that summary. If you cannot complete it, call \`task_complete\` with status \`blocked\` or \`failed\` and the reason instead, and print no marker. After a \`done\` call, or if the tool is not available to you, also print one final line containing only the completion marker. ${howto}`;
-}
+const COMPLETION_INSTRUCTION = '\n\nWhen you have fully completed this task, call the `task_complete` tool with status `done` and a summary of what you did; the tasks that depend on this one are given that summary. If you cannot complete it, call `task_complete` with status `blocked` or `failed` and the reason instead.';
 
-/*
- * Two halves, for the same reason as the completion marker above: the
- * watcher scans terminal output for this token, and interactive runners echo
- * the prompt — a literal marker here checkpointed the task (dropping it out
- * of `in_progress`) the moment the session started.
- */
-const CHECKPOINT_MARKER_HOWTO = 'Build it by writing `<<<ORDEWELL_` immediately followed by `CHECKPOINT:` — no space, quote, or any other character between those two parts — then a brief summary of what you are about to do and why human input is needed, closed with `>>>`';
-
-function renderCheckpointInstruction(checkpointTool = false): string {
-  if (checkpointTool) {
-    return [
-      '## Human-in-the-loop checkpoints',
-      '',
-      'When you reach a decision point that requires human judgment — before destructive',
-      'operations, after major design decisions, or when multiple viable paths exist — pause',
-      'and request input:',
-      '',
-      '1. Call the `checkpoint` tool with a brief summary of what you are about to do and why human input is needed. The call waits for the human, and its result is their answer',
-      '2. If the result is `continue`: proceed with the action you described',
-      '3. If the result starts with `rejected:`: the rest is why. Adjust your approach and call `checkpoint` again if needed',
-      `4. If the \`checkpoint\` tool is not available to you, or the call fails, fall back to the marker: print one line holding only the checkpoint marker and wait for ORDEWELL_CONTINUE or ORDEWELL_REJECT. ${CHECKPOINT_MARKER_HOWTO}`,
-    ].join('\n');
-  }
-  return [
-    '## Human-in-the-loop checkpoints',
-    '',
-    'When you reach a decision point that requires human judgment — before destructive',
-    'operations, after major design decisions, or when multiple viable paths exist — pause',
-    'and request input:',
-    '',
-    `1. Print one line holding only the checkpoint marker. ${CHECKPOINT_MARKER_HOWTO}`,
-    '2. Wait for the human to respond (they will send ORDEWELL_CONTINUE or ORDEWELL_REJECT)',
-    '3. On CONTINUE: proceed with the action you described',
-    '4. On REJECT: adjust your approach and re-emit a checkpoint if needed',
-  ].join('\n');
-}
+const CHECKPOINT_INSTRUCTION = [
+  '## Human-in-the-loop checkpoints',
+  '',
+  'When you reach a decision point that requires human judgment — before destructive',
+  'operations, after major design decisions, or when multiple viable paths exist — pause',
+  'and request input:',
+  '',
+  '1. Call the `checkpoint` tool with a brief summary of what you are about to do and why human input is needed. The call waits for the human, and its result is their answer',
+  '2. If the result is `continue`: proceed with the action you described',
+  '3. If the result starts with `rejected:`: the rest is why. Adjust your approach and call `checkpoint` again if needed',
+].join('\n');
 
 function isHitlTask(task: Task): boolean {
   return task.autonomy === 'HITL' || task.sliceType === 'HITL';
@@ -248,14 +196,10 @@ export function composeAugmentedPrompt(task: Task, allTasks: readonly Task[], op
 
   if (opts?.skills?.length) blocks.push(renderTaskSkills(opts.skills));
 
-  if (isHitlTask(task)) {
-    blocks.push(renderCheckpointInstruction(opts?.completionTool));
-  }
+  if (isHitlTask(task)) blocks.push(CHECKPOINT_INSTRUCTION);
 
-  const marker = renderCompletionMarker(task, opts?.completionTool);
-
-  if (blocks.length === 0) return basePrompt + marker;
-  return `${blocks.join('\n\n')}\n\n${basePrompt}${marker}`;
+  if (blocks.length === 0) return basePrompt + COMPLETION_INSTRUCTION;
+  return `${blocks.join('\n\n')}\n\n${basePrompt}${COMPLETION_INSTRUCTION}`;
 }
 
 /**
@@ -264,16 +208,14 @@ export function composeAugmentedPrompt(task: Task, allTasks: readonly Task[], op
  * original prompt, so it is not sent again — but it holds the old worktree
  * too, and this attempt's is fresh from the integration branch.
  */
-export function composeContinuationPrompt(task: Task, message: string, opts: { ops?: boolean; completionTool?: boolean } = {}): string {
+export function composeContinuationPrompt(task: Task, message: string, opts: { ops?: boolean } = {}): string {
   const reminder = [
     opts.ops
       ? '(Ordewell) You are continuing this task in the same session, in the same checkout. What your earlier attempt did outside the repository was not undone: check what already exists before acting again.'
       : '(Ordewell) You are continuing this task in the same session. Your working directory was recreated from the integration branch: work from your earlier attempt is there only if it landed, so check the files before relying on them.',
   ];
   if (isHitlTask(task)) {
-    reminder.push(opts.completionTool
-      ? `If you reach a decision that needs human judgment, call the \`checkpoint\` tool: its result is \`continue\` or \`rejected: <why>\`. Only if the tool is not available to you, print one line holding only the checkpoint marker and wait for ORDEWELL_CONTINUE or ORDEWELL_REJECT. ${CHECKPOINT_MARKER_HOWTO}.`
-      : `If you reach a decision that needs human judgment, print one line holding only the checkpoint marker and wait for ORDEWELL_CONTINUE or ORDEWELL_REJECT. ${CHECKPOINT_MARKER_HOWTO}.`);
+    reminder.push('If you reach a decision that needs human judgment, call the `checkpoint` tool: its result is `continue` or `rejected: <why>`.');
   }
-  return `${message.trim()}\n\n---\n${reminder.join('\n\n')}${renderCompletionMarker(task, opts.completionTool)}`;
+  return `${message.trim()}\n\n---\n${reminder.join('\n\n')}${COMPLETION_INSTRUCTION}`;
 }
