@@ -431,8 +431,8 @@ describe('input line', () => {
 
   it('suggests commands while a slash command is being typed', () => {
     const s = initialState({ rows: 24, cols: 80 });
-    const out = render({ ...s, editor: { ...s.editor, text: '/term', cursor: 5 } });
-    expect(out.join('\n')).toContain('terminal');
+    const out = render({ ...s, editor: { ...s.editor, text: '/task-m', cursor: 7 } });
+    expect(out.join('\n')).toContain('task-model');
   });
 
   describe('mid-prompt skill suggestions', () => {
@@ -448,9 +448,9 @@ describe('input line', () => {
 
     it('does not suggest a built-in command for a token typed mid-prompt', () => {
       const s = initialState({ rows: 24, cols: 80 });
-      const text = 'explain this bug /te';
+      const text = 'explain this bug /task-m';
       const out = render({ ...s, editor: { ...s.editor, text, cursor: text.length } });
-      expect(out.join('\n')).not.toContain('terminal');
+      expect(out.join('\n')).not.toContain('task-model');
     });
 
     it('shows no hint once the caret has moved past the token', () => {
@@ -665,15 +665,15 @@ describe('footer', () => {
     expect(out).not.toMatch(/retry/i);
   });
 
-  it('advertises opening a terminal on the selected task', () => {
-    expect(text({ tasks, focus: 'plan', cols: 140 })).toMatch(/terminal/i);
+  it('advertises opening the log on the selected task', () => {
+    expect(text({ tasks, focus: 'plan', cols: 140 })).toMatch(/enter log/);
   });
 
   it('wraps the plan hints instead of truncating the tail off a narrow terminal', () => {
     // A single truncated line hid the keys the footer exists to teach.
     const out = render(initialState({ tasks, focus: 'plan', rows: 40, cols: 60 }));
 
-    expect(out.join('\n')).toMatch(/t terminal/);
+    expect(out.join('\n')).toMatch(/enter log/);
     expect(out.every((line) => line.length <= 60)).toBe(true);
   });
 

@@ -34,11 +34,9 @@ describe('a plan row, pinned before its rules move to core', () => {
     expect(frame([task({ status })])).toContain(`  ${icon}  1 ${kind} Fix the parser`);
   });
 
-  it('draws a quiet running task with ~, and says how to look at it', () => {
+  it('draws a quiet running task with ~', () => {
     expect(frame([task({ status: 'in_progress', idleSince: '2026-01-01T00:00:00Z' })])).toContain('  ~  1 RUN Fix the parser');
-    expect(frame([task({ status: 'in_progress', idleSince: '2026-01-01T00:00:00Z' })])).toContain('quiet — t opens its terminal · claude-code');
-    expect(frame([task({ status: 'in_progress', idleSince: '2026-01-01T00:00:00Z', transport: { kind: 'structured' } })]))
-      .toContain('quiet · claude-code · structured');
+    expect(frame([task({ status: 'in_progress', idleSince: '2026-01-01T00:00:00Z' })])).toContain('quiet · claude-code');
   });
 
   it('names a manual and an ops task by kind', () => {
@@ -56,8 +54,8 @@ describe('a plan row, pinned before its rules move to core', () => {
   });
 
   it('counts approvals beyond one, and puts them ahead of the status', () => {
-    expect(frame([task({ status: 'in_progress', awaitingApproval: 1 })])).toContain('waiting for approval — t opens it · claude-code');
-    expect(frame([task({ status: 'in_progress', awaitingApproval: 3 })])).toContain('waiting for approval (3) — t opens it · claude-code');
+    expect(frame([task({ status: 'in_progress', awaitingApproval: 1 })])).toContain('waiting for approval — enter opens it · claude-code');
+    expect(frame([task({ status: 'in_progress', awaitingApproval: 3 })])).toContain('waiting for approval (3) — enter opens it · claude-code');
     expect(frame([task({ status: 'in_progress' })])).toContain('    working · claude-code');
   });
 
@@ -143,7 +141,7 @@ describe('task texts and actions, pinned before their rules move to core', () =>
     const deps: EffectDeps = {
       api: { addTask } as unknown as OrdewellApi,
       workspace: '/ws', port: 3742, dispatch: () => {}, newSessionId: () => 's2', setEnvVar: () => {}, hasBin: () => true, exit: vi.fn(),
-      reviveDaemon: vi.fn(), openTerminal: vi.fn(), setMouseCapture: vi.fn(), writeTerminal: vi.fn(),
+      reviveDaemon: vi.fn(), setMouseCapture: vi.fn(), writeTerminal: vi.fn(),
     };
     // Only the request is pinned; the plan refresh after it has no daemon to reach.
     await runEffect({ type: 'addTask', sessionId: 's1', title: 'Docs' }, deps).catch(() => undefined);

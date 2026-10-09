@@ -161,7 +161,7 @@ describe('an expanded task edits its prompt, not its assignment', () => {
   // Every letter types into the open prompt, so the assignment keys are only
   // reachable once collapsed. The hint line says "then" for exactly that reason.
   it.each(['R', 'o', 'e', 'M', 'D', 'd', 'a'])('%s types instead of acting', (char) => {
-    const expanded = press(planPane({ selectedTask: 1 }), 'enter').state;
+    const expanded = press(planPane({ selectedTask: 1 }), 'right').state;
     const after = press(expanded, 'char', char);
 
     expect(after.effects).toEqual([]);

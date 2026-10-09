@@ -1,4 +1,4 @@
-import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, NO_TURN, isTaskRunning, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type TaskLogEvent, type TaskLogView, type TaskTransport, type TurnGate } from '@ordewell/core';
+import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, NO_TURN, isTaskRunning, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type TaskLogEvent, type TaskLogView, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
 
 export type RunStatus = 'idle' | 'planning' | 'researching' | 'executing';
@@ -24,8 +24,6 @@ export interface TaskView {
   };
   /** Absent until the daemon reports a task's isolation; quiet in the pane unless there is a conflict. */
   isolation?: TaskIsolationView;
-  /** Absent until the task has run: what it ran on, or why it fell back to the terminal. */
-  transport?: TaskTransportView;
   /** What an `awaiting_user` task waits on, when the daemon saved why. */
   awaitingReason?: AwaitingReason;
   /** The whole question of the checkpoint the task waits at, while it does. */
@@ -45,8 +43,6 @@ export interface TaskView {
   /** Child tasks, recursively shaped the same way; absent until populated by `toTaskView`. */
   subtasks?: TaskView[];
 }
-
-export type TaskTransportView = Pick<TaskTransport, 'kind' | 'fallback'>;
 
 /** Where a task's isolated work stands (ADR-0013); `none` is a task with no worktree in a run that has some. */
 export type TaskIsolationState = 'none' | 'active' | 'integrated' | 'conflict' | 'repairing' | 'kept';
@@ -471,7 +467,7 @@ export interface PlanRow {
  * each reinvent the flattening and drift apart.
  *
  * A parent stays open while one of its subtasks is itself expanded, or the row
- * under the cursor (and its prompt editor) would vanish the moment enter opens
+ * under the cursor (and its prompt editor) would vanish the moment right opens
  * it. Only one level nests: a subtask's own children are never shown.
  */
 export function planRows(state: TuiState): PlanRow[] {

@@ -2,7 +2,7 @@ import type { AiProvider, ApprovalDecision, AwaitingReason, PlannerUsage, Resear
 import type { Key } from '../keys';
 import type {
   GateView, HandoffView, LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
-  TaskIsolationView, TaskTransportView, TuiState,
+  TaskIsolationView, TuiState,
 } from '../state';
 import { say } from '../transcript';
 
@@ -11,7 +11,6 @@ export interface TaskStatusUpdate {
   status: string;
   idleSince?: string | null;
   isolation?: TaskIsolationView;
-  transport?: TaskTransportView;
   awaitingReason?: AwaitingReason;
   checkpoint?: string;
   continuable?: boolean;
@@ -68,7 +67,6 @@ export type Effect =
   | { type: 'addTask'; sessionId: string; title: string }
   | { type: 'updateTask'; sessionId: string; taskId: string; changes: Record<string, unknown>; message: string }
   | { type: 'removeTask'; sessionId: string; taskId: string }
-  | { type: 'openTaskTerminal'; sessionId: string; taskId: string }
   /** Reads a structured task's saved log (ADR-0018, P1) so its view opens with its history. */
   | { type: 'openTaskLog'; sessionId: string; taskId: string }
   /** Reads one saved attempt, for switching to an earlier one. */
@@ -108,7 +106,7 @@ export type Action =
   | { type: 'taskLog'; taskId: string; attempt: number; events: TaskLogEvent[]; sessionId?: string }
   /** A structured task's saved log, read when its view opens or an attempt is switched to. `attempts` is omitted when a switch already knows the list. */
   | { type: 'taskLogLoaded'; taskId: string; attempts?: number[]; attempt: number; events: TaskLogEvent[]; sessionId?: string }
-  /** A task whose terminal does not exist but whose saved log does: show the log instead. */
+  /** Open a task's saved log in the chat pane. */
   | { type: 'taskViewRequested'; taskId: string; sessionId: string }
   | { type: 'taskStarted'; taskId: string; title: string; runner?: string; sessionId?: string }
   /** A task asked a checkpoint question; the chat pane says so, and where to answer. */

@@ -19,7 +19,7 @@ const QUESTION = 'Drop the users table?\nIt holds 40k rows and no backup exists,
 
 const task = (over: Partial<TaskView> = {}): TaskView => ({
   id: 't1', order: 2, title: 'Migrate the schema', type: 'ai', status: 'awaiting_user', awaitingReason: 'checkpoint', checkpoint: QUESTION,
-  dependencies: [], assignedRunner: 'claude-code', transport: { kind: 'structured' }, ...over,
+  dependencies: [], assignedRunner: 'claude-code', ...over,
 });
 
 const asked = (approvalId: string): TaskLogEvent => ({
@@ -187,12 +187,7 @@ describe('the notice in the chat pane', () => {
 
   it('names the task and the first line of its question, and points at the view', () => {
     const state = reduce(initialState({ sessionId: 's1', tasks: [task()] }), asks()).state;
-    expect(lastMessage(state)).toMatchObject({ role: 'system', text: '· Task 2 asks: Drop the users table? — t on it to answer' });
-  });
-
-  it('points a task with no view of its own at /checkpoint', () => {
-    const state = reduce(initialState({ sessionId: 's1', tasks: [task({ transport: undefined })] }), asks()).state;
-    expect(lastMessage(state)).toMatchObject({ text: '· Task 2 asks: Drop the users table? — /checkpoint 2 approve|reject to answer' });
+    expect(lastMessage(state)).toMatchObject({ role: 'system', text: '· Task 2 asks: Drop the users table? — enter on it to answer' });
   });
 
   it('arrives from the daemon\'s checkpoint message', () => {

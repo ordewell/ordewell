@@ -71,7 +71,7 @@ interface TaskCardProps {
   onMarkComplete?: (taskId: string) => void;
   onMarkIncomplete?: (taskId: string) => void;
   onRunTask?: (taskId: string) => void;
-  /** Open (or focus) this structured task's log tab (ADR-0018, V1). */
+  /** Open (or focus) this task's log tab (ADR-0018, V1). */
   onOpenLog?: (taskId: string) => void;
   /** Controlled expansion. When both are supplied the parent owns which card is
    *  open (an accordion); omitted, the card keeps its own state. */
@@ -234,9 +234,6 @@ export default function TaskCard({ task, models, modes, modelsByRunner, modesByR
   const runnerAbbrev = effectiveRunner ? (RUNNER_ABBREV[effectiveRunner] ?? effectiveRunner.slice(0, 2).toUpperCase()) : null;
   const modeInfo = activeModes.find((m) => m.id === task.taskMode);
 
-  // A structured task has a log tab to open (ADR-0018, V1); a terminal one has
-  // none, so the card offers nothing that would lead nowhere.
-  const isStructured = task.transport?.kind === 'structured';
 
   const runnerOptions = runnerOptionsFor(runners, task.assignedRunner);
   const canEditDeps = !isExecuting && !!onDependenciesChange;
@@ -278,15 +275,6 @@ export default function TaskCard({ task, models, modes, modelsByRunner, modesByR
           </span>
         )}
 
-        {/* A task that asked for the structured transport and did not get
-            it says why on the card (ADR-0018) — never a silent downgrade. */}
-        {task.transport?.kind === 'structured' && (
-          <span className="task-transport-badge" title="Driven through its runner's protocol instead of a terminal">Structured</span>
-        )}
-        {task.transport?.fallback && (
-          <span className="task-transport-badge fallback" title={`Ran in a terminal: ${task.transport.fallback}`}>Terminal: {task.transport.fallback}</span>
-        )}
-
         {/* Approvals arrive mid-turn and leave the status alone (ADR-0018,
             A1), so waiting on one is a badge beside it, which opens the log
             where the request is answered. */}
@@ -298,7 +286,7 @@ export default function TaskCard({ task, models, modes, modelsByRunner, modesByR
           </button>
         )}
 
-        {isStructured && onOpenLog && (
+        {onOpenLog && (
           <button type="button" className="task-log-open-btn"
             onClick={(e) => { e.stopPropagation(); onOpenLog(task.id); }}
             title="Open this task's log in an editor tab">

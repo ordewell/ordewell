@@ -192,7 +192,7 @@ describe('plan pane viewport — the pane changing under the cursor', () => {
   });
 
   it('does not move the view when collapsing an expanded task whose row stays visible', () => {
-    const expanded = press(planState({ selectedTask: 2 }), 'enter');
+    const expanded = press(planState({ selectedTask: 2 }), 'right');
     const collapsed = press(expanded, 'escape');
     expect(collapsed.expandedTaskId).toBeNull();
     expect(collapsed.planScroll).toBe(expanded.planScroll);
@@ -201,7 +201,7 @@ describe('plan pane viewport — the pane changing under the cursor', () => {
   it('follows the prompt caret while the editor is open', () => {
     const long = Array.from({ length: 30 }, (_, i) => `line${i}`).join('\n');
     const tasks = aiTasks(6).map((t, i) => (i === 0 ? { ...t, prompt: long } : t));
-    const editing = press(planState({ tasks, rows: 16 }), 'enter');
+    const editing = press(planState({ tasks, rows: 16 }), 'right');
     const layout = planScrollExtent(editing);
     const offset = planOffset(layout, editing.planScroll);
     expect(layout.anchor.start).toBeGreaterThanOrEqual(1 + offset);
