@@ -69,12 +69,15 @@ shadowed rather than dropped silently.
   attempt resolves the skills where it runs and **snapshots them**: the task
   keeps the latest attempt's snapshot, and on the structured transport, the one
   that keeps a task log, each attempt's log opens with a skills entry naming
-  them and their paths, so history shows what that attempt was given. A retry resolves again; a conflict repair and a continue add no
-  snapshot, since they resume work that already holds the skills.
+  them and their paths, so history shows what that attempt was given. A retry resolves again; a conflict
+  repair and a continue add no snapshot, since they resume work that already
+  holds the skills.
 - Names are checked **leniently at submit, hard at spawn**. An unresolved name
   in a submitted plan or edit is a warning, because a task it depends on may
   create the skill in its worktree. A planner skill on a task is refused. At
-  spawn the name is resolved in the task's worktree plus global; if any does
+  spawn the name is resolved in the task's worktree plus global (in a repo group
+  also the group root's folder, read from the main checkout; without worktrees,
+  the workspace instead of the worktree); if any does
   not resolve, the task fails before the runner starts and says which names
   and which directories were searched.
 - `/tdd` on a task skill is a **directive to the planner**: the entry carries
@@ -95,8 +98,9 @@ never needs committing; each repo's committed folder is read as checked out in
 the task's worktree, or in the workspace when tasks run without worktrees. The
 planner's catalog, `/name`, the chips, `ordewell task-skills` and `ordewell
 skills` read the same folders, so they list the same skills. Among workspace
-folders the group root's wins, then repos in layout order. A workspace skill attached to a task but not yet committed
-produces a warning at submit saying which folder to commit.
+folders the group root's wins, then repos in layout order. A workspace skill
+attached to a task but not yet committed, when tasks get worktrees, produces a
+warning at submit saying which folder to commit.
 
 ## Considered options
 

@@ -56,9 +56,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **`/name` keeps your text.** The message is sent as you typed it, with the
   skill's instructions beside it. The conversation records a snapshot of the
   skill as loaded and shows a one-line notice with its path (shortened and
-  displayed correctly on Windows). A `/word` that names no skill is plain text:
-  in the TUI it goes to the planner as typed, where it used to be reported as an
-  unknown command.
+  displayed correctly on Windows). In planner chat a `/word` that names no
+  skill is plain text: in the TUI it goes to the planner as typed, where it used
+  to be reported as an unknown command. In the TUI task view an unknown `/word`
+  is still refused as an unknown command, and a skill name points to
+  `/task-skills`.
 - **TDD is no longer applied to every task by default.** The `tdd` toggle is
   gone; use `/tdd` or attach the skill to the tasks that need it.
 
@@ -66,7 +68,6 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 - Skill files saved with CRLF line endings or a UTF-8 BOM (as git does for a
   committed skill on Windows) now load; their frontmatter was not read.
-- A saved plan that was pinned to the terminal transport now runs structured.
 
 ### Removed
 
@@ -76,7 +77,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - The runner-transport setting, its pill, `/transport` and `ordewell
   transport`. Structured is always chosen; the terminal transport remains only
   as the fallback for runners without a connector
-  ([ADR-0018](docs/adr/0018-structured-runner-transport.md)).
+  ([ADR-0018](docs/adr/0018-structured-runner-transport.md)). A saved plan
+  that was pinned to the terminal transport now runs structured.
 - **Daemon API:** `SettingsResponse` no longer carries `tdd`, `verification` or
   `runnerTransport`, and a settings update that sends them ignores them.
   `/api/commands` lists no commands, and `POST /api/commands/:name` answers

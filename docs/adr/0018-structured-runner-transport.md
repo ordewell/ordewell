@@ -143,8 +143,7 @@ protocol instead of a screen and a keyboard.
   (ADR-0010). tmux is optional: nothing at start-up refuses to run or warns
   when it is missing. Only a run on the terminal transport needs it, for the
   per-task window; on a host without it those tasks run headless, the plan's
-  first such task says what is unavailable and how to get it (install tmux, or
-  keep the structured transport), and opening a task's terminal gives the same
+  first such task says what is unavailable and how to get it (install tmux), and opening a task's terminal gives the same
   advice.
 
 ### Codex specifics
