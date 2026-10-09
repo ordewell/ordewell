@@ -38,7 +38,12 @@ export async function handleTui(subArgs: string[]): Promise<void> {
   }
   // Skills become slash commands for this run: completions, Tab, and dispatch
   // all read from the one registry in slash.ts (registerSkillCommands).
-  registerSkillCommands(createSkillsService(workspace).listSkills());
+  const discoveredSkills = createSkillsService(workspace).listSkills();
+  registerSkillCommands(discoveredSkills);
+  // A user-only skill is still attachable by hand, so no userInvocable filter.
+  const taskSkills = discoveredSkills
+    .filter((s) => s.appliesTo === 'task')
+    .map((s) => ({ name: s.name, description: s.description }));
 
   // Two `tui` instances that both defaulted to DEFAULT_PORT would share one
   // daemon's process-wide session map, so a task added in one shows up live
@@ -67,7 +72,7 @@ export async function handleTui(subArgs: string[]): Promise<void> {
   const mouseCapture = process.env.ORDEWELL_TUI_MOUSE !== 'false' && process.env.ORDEWELL_TUI_MOUSE !== '0';
 
   const app = createApp({
-    initial: { workspace, autonomous: autoMode !== 'false' && autoMode !== '0', mouseCapture },
+    initial: { workspace, autonomous: autoMode !== 'false' && autoMode !== '0', mouseCapture, taskSkills },
     draw: (frame) => terminal?.draw(frame),
     perform: (effect) =>
       runEffect(effect, {

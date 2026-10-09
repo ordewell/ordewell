@@ -33,6 +33,9 @@ interface PlanCardGroupProps {
   onModeChange?: (taskId: string, mode: string) => void;
   /** Change versus ops (ADR-0020). */
   onOpsChange?: (taskId: string, ops: boolean) => void;
+  /** The `applies-to: task` catalog the skill chips attach from. */
+  taskSkills?: { name: string; description: string }[];
+  onSkillsChange?: (taskId: string, skills: string[]) => void;
   /** Per task id, the dependencies it waits on at its merge gate (ADR-0020). */
   mergeGates?: Record<string, string[]>;
   onRemoveTask?: (taskId: string) => void;
@@ -72,6 +75,8 @@ export default function PlanCardGroup({
   onModelsRefreshNeeded,
   onModeChange,
   onOpsChange,
+  taskSkills,
+  onSkillsChange,
   mergeGates,
   onRemoveTask,
   onPromptChange,
@@ -248,6 +253,8 @@ export default function PlanCardGroup({
                 onModelsRefreshNeeded={onModelsRefreshNeeded}
                 onModeChange={onModeChange}
                 onOpsChange={onOpsChange}
+                taskSkills={taskSkills}
+                onSkillsChange={onSkillsChange}
                 mergeGate={mergeGates?.[task.id]}
                 onRemoveTask={onRemoveTask}
                 onPromptChange={onPromptChange}

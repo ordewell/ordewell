@@ -23,7 +23,7 @@ import { handleAuto, handleRefresh, handleRunners } from './runners';
 import { handleApprove } from './approve';
 import { handleTerminal } from './terminal';
 import {
-  handleTaskDeps, handleTaskEffort, handleTaskMode, handleTaskModel, handleTaskOps, handleTaskRunner,
+  handleTaskDeps, handleTaskEffort, handleTaskMode, handleTaskModel, handleTaskOps, handleTaskRunner, handleTaskSkills,
 } from './task-assign';
 import { handleTui } from '../tui';
 
@@ -73,6 +73,7 @@ export const COMMANDS: Record<string, (args: string[]) => Promise<void> | void> 
   'task-effort': handleTaskEffort,
   'task-mode': handleTaskMode,
   'task-deps': handleTaskDeps,
+  'task-skills': handleTaskSkills,
   'task-ops': handleTaskOps,
   terminal: handleTerminal,
   'sessions': handleSessions,

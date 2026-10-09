@@ -52,6 +52,7 @@ function fakeChat() {
     planApproved: vi.fn(),
     setPlanDockHeight: vi.fn(),
     setSkills: vi.fn(),
+    setTaskSkills: vi.fn(),
     setModels: vi.fn(),
     setModelsByRunner: vi.fn(),
     setRunnerList: vi.fn(),

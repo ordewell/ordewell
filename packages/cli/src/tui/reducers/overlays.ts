@@ -8,7 +8,7 @@ import { chooseBlocked, confirmedHandoff, handleHandoffKey, type BlockedChoice }
 import { DEFAULT_EFFORT, pickerItemsFor } from './pickers';
 import { WHEEL_NOTCH, isWheel, pageNotch, scrollPointed } from './pointer';
 import { taskActionEffect } from './planPane';
-import { assignTaskEffort, assignTaskMode, assignTaskModel, assignTaskRunner } from './taskEdits';
+import { assignTaskEffort, assignTaskSkills, assignTaskMode, assignTaskModel, assignTaskRunner } from './taskEdits';
 import { say } from '../transcript';
 import { clamp, fail, step, type Step } from './shared';
 
@@ -196,6 +196,11 @@ function choose(state: TuiState, picker: PickerState, item: PickerItem | undefin
         ? `Task ${taskRef(task)} now depends on ${picker.chosen.length} task${picker.chosen.length === 1 ? '' : 's'}.`
         : `Task ${taskRef(task)} no longer depends on anything.`,
     }]);
+  }
+  if (picker.action.kind === 'set-task-skills') {
+    const task = findTask(state.tasks, picker.action.taskId);
+    if (!task || !state.sessionId) return step(closed);
+    return assignTaskSkills(closed, state.sessionId, task, picker.chosen);
   }
   if (!item) return step(state);
 

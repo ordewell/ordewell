@@ -85,6 +85,38 @@ export function openTaskDepsPicker(state: TuiState, task: TaskView): Step {
   });
 }
 
+export function openTaskSkillsPicker(state: TuiState, task: TaskView): Step {
+  if (task.type !== 'ai') return fail(state, 'Manual tasks do not run an executor, so they take no skills.');
+  const action = { kind: 'set-task-skills' as const, taskId: task.id };
+  const items = pickerItemsFor(state, action);
+  if (items.length === 0) {
+    return fail(state, 'No task skills found. A skill with applies-to: task in .ordewell/skills/ or ~/.ordewell/skills/ shows up here.');
+  }
+  return step({
+    ...state,
+    overlay: {
+      kind: 'picker',
+      picker: picker(`Skills · ${titledTaskRef(task)}`, items, action, {
+        hint: "Attached skills go into this task's prompt when it starts.",
+        multi: true,
+        chosen: task.skills ?? [],
+      }),
+    },
+  });
+}
+
+export function assignTaskSkills(state: TuiState, sessionId: string, task: TaskView, skills: string[]): Step {
+  return step(state, [{
+    type: 'updateTask',
+    sessionId,
+    taskId: task.id,
+    changes: { skills },
+    message: skills.length > 0
+      ? `Task ${taskRef(task)} skills set to ${skills.join(', ')}.`
+      : `Task ${taskRef(task)} has no skills attached.`,
+  }]);
+}
+
 export function openTaskModePicker(state: TuiState, task: TaskView): Step {
   if (task.type !== 'ai') return fail(state, 'Manual tasks do not have an executor mode.');
   const modes = modesForTask(state.modesByRunner, task);
@@ -265,6 +297,21 @@ export function taskEffortCommand(state: TuiState, args: string[]): Step {
       return fail(state, `Unsupported effort "${value}" for ${task.assignedModel.modelLabel}.`);
     }
     return assignTaskEffort(state, sessionId, task, value);
+  });
+}
+
+export function taskSkillsCommand(state: TuiState, args: string[]): Step {
+  return taskCommand(state, args[0], (sessionId, taskId) => {
+    const task = findTask(state.tasks, taskId)!;
+    if (args.length < 2) return openTaskSkillsPicker(state, task);
+    if (task.type !== 'ai') return fail(state, 'Manual tasks do not run an executor, so they take no skills.');
+    const value = args.slice(1).join(' ');
+    const names = value.toLowerCase() === 'none' ? [] : [...new Set(value.split(/[,\s]+/).filter(Boolean))];
+    const unknown = names.filter((name) => !state.taskSkills.some((s) => s.name === name));
+    if (unknown.length > 0) {
+      return fail(state, `No task skill named ${unknown.map((n) => `"${n}"`).join(', ')}. Task skills: ${state.taskSkills.map((s) => s.name).join(', ') || 'none'}.`);
+    }
+    return assignTaskSkills(state, sessionId, task, names);
   });
 }
 

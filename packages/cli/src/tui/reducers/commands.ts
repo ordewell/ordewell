@@ -10,7 +10,7 @@ import { DEFAULT_EFFORT, picker, pickerItemsFor, plannerEffortItems, plannerItem
 import { taskActionEffect } from './planPane';
 import { answerCheckpoint, continueTaskStep, openTaskTerminalOrView } from './taskView';
 import {
-  addTask, confirmForceStartPastGate, openTaskDepsPicker, taskCommand, taskOpsCommand, taskEffortCommand, taskModeCommand, taskModelCommand, taskRunnerCommand,
+  addTask, confirmForceStartPastGate, openTaskDepsPicker, taskCommand, taskOpsCommand, taskEffortCommand, taskModeCommand, taskModelCommand, taskRunnerCommand, taskSkillsCommand,
 } from './taskEdits';
 import { stopPlanning } from './turnQueue';
 import { fail, step, withSession, type Effect, type Step, type TaskAction } from './shared';
@@ -127,6 +127,8 @@ export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step
       return taskModeCommand(state, args);
     case 'task-ops':
       return taskOpsCommand(state, args);
+    case 'task-skills':
+      return taskSkillsCommand(state, args);
     case 'task-deps':
       return taskCommand(state, args[0], (_sessionId, taskId) =>
         openTaskDepsPicker(state, findTask(state.tasks, taskId)!),

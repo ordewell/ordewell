@@ -106,6 +106,11 @@ export interface ModeView {
   autonomous?: boolean;
 }
 
+export interface SkillChoiceView {
+  name: string;
+  description: string;
+}
+
 /** A user message `/rewind` can land just before — `index` is its transcript position. */
 export interface RewindTargetView {
   index: number;
@@ -169,7 +174,8 @@ export type PickerAction =
   | { kind: 'set-task-model'; taskId: string }
   | { kind: 'set-task-effort'; taskId: string }
   | { kind: 'set-task-mode'; taskId: string }
-  | { kind: 'set-task-deps'; taskId: string };
+  | { kind: 'set-task-deps'; taskId: string }
+  | { kind: 'set-task-skills'; taskId: string };
 
 export interface PickerState {
   title: string;
@@ -356,6 +362,8 @@ export interface TuiState {
   models: ModelView[];
   /** Each runner's manifest modes, keyed by runner id — a task's mode picker reads its own runner's list. */
   modesByRunner: Record<string, ModeView[]>;
+  /** Every `applies-to: task` skill, user-only ones included — what a task's skills picker offers. */
+  taskSkills: SkillChoiceView[];
   /** Cross-provider catalog for the orchestrator (planner) model picker. */
   orchestratorModels: ModelView[];
   /** Per-provider catalog-fetch failures, keyed by provider id. */
@@ -546,6 +554,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     rewindTargets: null,
     models: [],
     modesByRunner: {},
+    taskSkills: [],
     orchestratorModels: [],
     providerErrors: {},
     orchestratorModel: '',

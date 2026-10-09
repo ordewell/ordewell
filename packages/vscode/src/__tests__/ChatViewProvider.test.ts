@@ -113,6 +113,15 @@ describe('ChatViewProvider.setSkills', () => {
   });
 });
 
+describe('ChatViewProvider.setTaskSkills', () => {
+  it('sends the task-skill catalog to the webview', () => {
+    const { provider, posted } = providerWithCapture();
+    provider.setTaskSkills([{ name: 'tdd', description: 'Test first' }]);
+
+    expect(posted).toEqual([{ type: 'setTaskSkills', skills: [{ name: 'tdd', description: 'Test first' }] }]);
+  });
+});
+
 describe('ChatViewProvider.resendAllState', () => {
   it('rebuilds flat models as DiscoveredModel[] preserving variants and all runner providers', () => {
     const { provider, posted } = providerWithCapture();

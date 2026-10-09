@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import SkillChips from './SkillChips';
 import ModelSelector, { getModelClass, providerLabel } from './ModelSelector';
 import { taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, TaskRowAction } from '@ordewell/core';
@@ -21,6 +22,8 @@ interface SubTaskCardProps {
   onModelChange?: (taskId: string, assignment: TaskModelAssignment) => void;
   onModelsRefreshNeeded?: () => void;
   onModeChange?: (taskId: string, mode: string) => void;
+  taskSkills?: { name: string; description: string }[];
+  onSkillsChange?: (taskId: string, skills: string[]) => void;
   onRemoveTask?: (taskId: string) => void;
   onPromptChange?: (taskId: string, prompt: string) => void;
   onRetry?: (taskId: string) => void;
@@ -48,7 +51,7 @@ const RUNNER_ABBREV: Record<string, string> = {
   'opencode': 'OC',
 };
 
-export default function SubTaskCard({ task, parentTask, models, modes, runners, effectiveRunner, configuredProviders, modelApiMapping, isExecuting, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onRemoveTask, onPromptChange, onRetry: _onRetry, onSkip, onCancel, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog }: SubTaskCardProps) {
+export default function SubTaskCard({ task, parentTask, models, modes, runners, effectiveRunner, configuredProviders, modelApiMapping, isExecuting, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry: _onRetry, onSkip, onCancel, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog }: SubTaskCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<string | null>(null);
 
@@ -177,6 +180,11 @@ export default function SubTaskCard({ task, parentTask, models, modes, runners, 
                 ))}
               </select>
             </div>
+          )}
+
+          {task.type === 'ai' && (
+            <SkillChips idPrefix="subtask" taskId={task.id} skills={task.skills} catalog={taskSkills}
+              onChange={!isExecuting ? onSkillsChange : undefined} />
           )}
 
           {!isExecuting && task.type === 'ai' && onRunTask && (

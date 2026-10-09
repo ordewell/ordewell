@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import http from 'http';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { ApiClient } from '../../apiClient';
 
 interface RecordedBody {
@@ -239,5 +242,47 @@ describe('ordewell task-ops (ADR-0020)', () => {
     expect(stdout).toContain('a change task');
     expect(updates(d.sent)).toEqual([]);
     d.close();
+  });
+});
+
+describe('ordewell task-skills', () => {
+  function workspaceWithSkill(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-skills-'));
+    const skillDir = path.join(dir, '.ordewell', 'skills', 'zz-house-style');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: zz-house-style\ndescription: House style\napplies-to: task\nuser-invocable: false\n---\nBody\n');
+    return dir;
+  }
+
+  it('attaches a task skill, user-only ones included', async () => {
+    const d = await fakeDaemon();
+    const ws = workspaceWithSkill();
+    const { handleTaskSkills } = await import('../task-assign');
+    await capture(() => handleTaskSkills([...SESSION, '--workspace', ws, '2', 'zz-house-style'], new ApiClient(d.port)));
+    expect(updates(d.sent)[0].body).toEqual({ skills: ['zz-house-style'] });
+    d.close();
+    fs.rmSync(ws, { recursive: true, force: true });
+  });
+
+  it('clears on "none"', async () => {
+    const d = await fakeDaemon();
+    const ws = workspaceWithSkill();
+    const { handleTaskSkills } = await import('../task-assign');
+    await capture(() => handleTaskSkills([...SESSION, '--workspace', ws, '2', 'none'], new ApiClient(d.port)));
+    expect(updates(d.sent)[0].body).toEqual({ skills: [] });
+    d.close();
+    fs.rmSync(ws, { recursive: true, force: true });
+  });
+
+  it('refuses a name that is not a task skill', async () => {
+    const d = await fakeDaemon();
+    const ws = workspaceWithSkill();
+    const { handleTaskSkills } = await import('../task-assign');
+    const { stderr, exitCode } = await capture(() => handleTaskSkills([...SESSION, '--workspace', ws, '2', 'nope'], new ApiClient(d.port)));
+    expect(stderr).toContain('No task skill named "nope"');
+    expect(exitCode).toBe(1);
+    expect(updates(d.sent)).toEqual([]);
+    d.close();
+    fs.rmSync(ws, { recursive: true, force: true });
   });
 });

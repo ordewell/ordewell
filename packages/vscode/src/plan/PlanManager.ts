@@ -300,6 +300,7 @@ function applyTaskEdit(session: Session, taskId: string, edit: TaskEdit): Promis
     case 'mode': return session.updateTask(taskId, { taskMode: edit.mode });
     case 'prompt': return session.updateTask(taskId, { prompt: edit.prompt, description: edit.prompt || undefined });
     case 'dependencies': return session.setTaskDependencies(taskId, edit.dependencies);
+    case 'skills': return session.updateTask(taskId, { skills: edit.skills });
     case 'ops': return session.updateTask(taskId, { ops: edit.ops });
   }
 }

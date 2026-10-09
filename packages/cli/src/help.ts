@@ -40,6 +40,7 @@ Per-task assignment (omit the value to list the options):
   ordewell task-effort <id> [level]    Set a task's thinking effort ("default" to clear)
   ordewell task-mode <id> [mode]       Set a task's runner mode
   ordewell task-deps <id> [a,b|none]   Set which earlier tasks a task waits for
+  ordewell task-skills <id> [a,b|none] Set the skills attached to a task (applies-to: task); none clears them
   ordewell task-ops <id> [on|off]      Make a task an ops task (runs in your checkout once its dependencies are merged) or a change task
 
 Planner, models and runners:
