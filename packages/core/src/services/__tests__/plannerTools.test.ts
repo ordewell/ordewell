@@ -9,10 +9,10 @@ import { OrdewellMcpServer } from '../mcp';
 import type { ConversationRequest } from '../AiService';
 import type { SessionRuntimeSettings } from '../createSession';
 import type { SessionMessage } from '../SessionMessage';
-import type { SkillInfo } from '../SkillsService';
+import type { SkillInfo, SkillsService } from '../SkillsService';
 import { createTask, type DiscoveredModel, type Task } from '../../models/Task';
 import { openTaskLog } from '../../utils/taskLogStore';
-import { FakeTerminalSession, makeSession } from './sessionTestKit';
+import { FakeTerminalSession, makeSession, saves } from './sessionTestKit';
 import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
 import { buildConversationSystemPrompt, buildMergePrompt, buildSplitPrompt } from '../PlanPrompts';
 import { runnerModesFrom } from '../ModeResolver';
@@ -138,6 +138,7 @@ describe('the Claude Code planner with the Ordewell server injected', () => {
     expect(args[args.indexOf('--allowedTools') + 1].split(',')).toEqual([
       'mcp__ordewell__list_runners', 'mcp__ordewell__list_models', 'mcp__ordewell__submit_plan',
       'mcp__ordewell__edit_plan', 'mcp__ordewell__task_query', 'mcp__ordewell__task_output',
+      'mcp__ordewell__load_skill',
     ]);
     expect(args[args.indexOf('--permission-mode') + 1]).toBe('plan');
   });
@@ -202,7 +203,7 @@ describe('a planner the server did not reach', () => {
 });
 
 /** A planning session on a real harness planner, whose settings the test rewrites the way a settings write would. */
-function plannerSession(claude: FakeSpawnResult, initial: Partial<SessionRuntimeSettings> = {}, { inject = true, runner, skills = [] }: { inject?: boolean; runner?: ITerminalRunner; skills?: SkillInfo[] } = {}) {
+function plannerSession(claude: FakeSpawnResult, initial: Partial<SessionRuntimeSettings> = {}, { inject = true, runner, skills = [], skillsService }: { inject?: boolean; runner?: ITerminalRunner; skills?: SkillInfo[]; skillsService?: Pick<SkillsService, 'findSkill' | 'listSkills'> } = {}) {
   const server = newServer();
   let settings: SessionRuntimeSettings = { enabledRunners: ['claude-code'], ...initial };
   const ai = service(claude, inject ? server : undefined);
@@ -211,12 +212,12 @@ function plannerSession(claude: FakeSpawnResult, initial: Partial<SessionRuntime
     aiService: ai,
     mcpServer: server,
     runner,
+    skillsService: skillsService ?? { findSkill: (name: string) => skills.find((sk) => sk.name === name) },
     modelResolver: {
       modelsForRunners: vi.fn(async (runners: string[]) => Object.fromEntries(runners.map((r) => [r, CATALOG[r] ?? []]))),
     },
     settings: () => settings,
     broadcast,
-    skillsService: { findSkill: (name: string) => skills.find((sk) => sk.name === name) },
   });
   return {
     session,
@@ -239,6 +240,145 @@ async function call(mcp: Client, name: string, args: Record<string, unknown> = {
   const [first] = result.content as { type: string; text: string }[];
   return { isError: result.isError === true, body: JSON.parse(first.text) };
 }
+
+function plannerSkill(name: string, extra: Partial<SkillInfo> = {}): SkillInfo {
+  return {
+    name, description: `Use ${name} to plan`, metadata: { name, description: `Use ${name} to plan` },
+    source: 'global', path: `/outside/workspace/skills/${name}/SKILL.md`, content: `${name} BODY v1`,
+    appliesTo: 'planner', modelInvocable: true, userInvocable: false, ...extra,
+  };
+}
+
+function skillCatalog(files: Map<string, SkillInfo>): Pick<SkillsService, 'findSkill' | 'listSkills'> {
+  return { findSkill: (name) => files.get(name), listSkills: () => [...files.values()] };
+}
+
+async function loadSkill(mcp: Client, name: string) {
+  const result = await mcp.callTool({ name: 'load_skill', arguments: { name } });
+  return { isError: result.isError === true, text: (result.content as { text: string }[])[0].text };
+}
+
+describe('load_skill', () => {
+  it.each([
+    ['attached', true, 'connected', true],
+    ['not offered', false, 'connected', false],
+    ['connection failed', true, 'failed', false],
+  ] as const)('advertises the catalog only when tools attach: %s', async (_label, inject, status, advertised) => {
+    const files = new Map([['review-plan', plannerSkill('review-plan')]]);
+    const claude = fakeClaude({ status });
+    const { session } = plannerSession(claude, {}, { inject, skillsService: skillCatalog(files) });
+    await session.startPlanning('goal', ['claude-code']);
+    const args = claude.lastArgs();
+    const prompt = args[args.indexOf('--append-system-prompt') + 1];
+    expect(prompt.includes('ORDEWELL PLANNER SKILLS:')).toBe(advertised);
+    expect(prompt.includes('- review-plan: Use review-plan to plan')).toBe(advertised);
+    expect(prompt.includes('load_skill')).toBe(advertised);
+    expect(prompt).not.toContain('review-plan BODY v1');
+  });
+
+  it('refuses a load after the planner turn settled, without changing the transcript', async () => {
+    const files = new Map([['review-plan', plannerSkill('review-plan')]]);
+    let client: Client | null = null;
+    const { session } = plannerSession(fakeClaude({ turn: async (mcp) => { client = mcp; return 'Done.'; } }), {}, { skillsService: skillCatalog(files) });
+    await session.startPlanning('goal', ['claude-code']);
+    const before = structuredClone(session.planState!.conversationHistory);
+    expect(await loadSkill(client!, 'review-plan')).toEqual({ isError: true, text: 'No planning turn is open to load a skill.' });
+    expect(session.planState!.conversationHistory).toEqual(before);
+  });
+
+  it('loads a model-only planner skill and persists its snapshot with a live notice', async () => {
+    const skill = plannerSkill('review-plan');
+    const files = new Map([[skill.name, skill]]);
+    let loaded: Awaited<ReturnType<typeof loadSkill>> | undefined;
+    const { session, broadcast } = plannerSession(fakeClaude({ turn: async (mcp) => {
+      loaded = await loadSkill(mcp!, skill.name);
+      return 'I reviewed the plan.';
+    } }), {}, { skillsService: skillCatalog(files) });
+
+    await session.startPlanning('goal', ['claude-code']);
+
+    expect(loaded).toEqual({ isError: false, text: skill.content });
+    const history = session.planState!.conversationHistory!;
+    expect(history.map((entry) => entry.kind)).toEqual([undefined, 'skill_load', undefined]);
+    expect(history[1]).toMatchObject({
+      role: 'assistant', content: 'review-plan skill loaded by planner',
+      skill: { invokedBy: 'planner', name: skill.name, content: skill.content, source: 'global', path: skill.path },
+    });
+    expect(saves(session).mock.calls.at(-1)![0].conversationHistory).toEqual(history);
+    expect(broadcast.mock.calls.map(([msg]) => msg).filter((msg) => msg.type === 'planner_skill_loaded')).toEqual([
+      { type: 'planner_skill_loaded', turnId: expect.any(String), skill: { invokedBy: 'planner', name: skill.name, source: 'global', path: skill.path } },
+    ]);
+  });
+
+  it.each(['missing', 'task-only', 'user-only', '../outside', '/absolute/path'])('refuses %s and lists only currently loadable names', async (name) => {
+    const skills = [plannerSkill('review-plan'), plannerSkill('task-only', { appliesTo: 'task' }), plannerSkill('user-only', { modelInvocable: false })];
+    const files = new Map(skills.map((skill) => [skill.name, skill]));
+    let loaded: Awaited<ReturnType<typeof loadSkill>> | undefined;
+    const { session, broadcast } = plannerSession(fakeClaude({ turn: async (mcp) => {
+      files.set('new-skill', plannerSkill('new-skill'));
+      loaded = await loadSkill(mcp!, name);
+      return 'Could not load it.';
+    } }), {}, { skillsService: skillCatalog(files) });
+
+    await session.startPlanning('goal', ['claude-code']);
+
+    expect(loaded).toEqual({ isError: true, text: `Skill "${name}" cannot be loaded by the planner. Loadable skills: review-plan, new-skill.` });
+    expect(session.planState!.conversationHistory!.some((entry) => entry.kind === 'skill_load')).toBe(false);
+    expect(broadcast.mock.calls.some(([msg]) => msg.type === 'planner_skill_loaded')).toBe(false);
+  });
+
+  it('re-resolves added and edited skills at call time, and reports an empty catalog after deletion', async () => {
+    const files = new Map<string, SkillInfo>();
+    const answers: Awaited<ReturnType<typeof loadSkill>>[] = [];
+    const { session } = plannerSession(fakeClaude({ turn: async (mcp) => {
+      files.set('new-skill', plannerSkill('new-skill'));
+      answers.push(await loadSkill(mcp!, 'new-skill'));
+      files.set('new-skill', plannerSkill('new-skill', { content: 'EDITED BODY' }));
+      answers.push(await loadSkill(mcp!, 'new-skill'));
+      files.delete('new-skill');
+      answers.push(await loadSkill(mcp!, 'new-skill'));
+      return 'Loaded it twice.';
+    } }), {}, { skillsService: skillCatalog(files) });
+
+    await session.startPlanning('goal', ['claude-code']);
+
+    expect(answers).toEqual([
+      { isError: false, text: 'new-skill BODY v1' }, { isError: false, text: 'EDITED BODY' },
+      { isError: true, text: 'Skill "new-skill" cannot be loaded by the planner. Loadable skills: (none).' },
+    ]);
+    expect(session.planState!.conversationHistory!.filter((entry) => entry.kind === 'skill_load').map((entry) => entry.skill!.content)).toEqual(['new-skill BODY v1', 'EDITED BODY']);
+  });
+
+  it('replays snapshotted loads on resume and fork, and keeps only loads before a rewind target', async () => {
+    const skill = plannerSkill('review-plan');
+    const files = new Map([[skill.name, skill]]);
+    const { session } = plannerSession(fakeClaude({ turn: async (mcp) => {
+      await loadSkill(mcp!, skill.name);
+      return 'Reviewed.';
+    } }), {}, { skillsService: skillCatalog(files) });
+    await session.startPlanning('goal', ['claude-code']);
+    files.set(skill.name, { ...skill, content: 'review-plan BODY v2' });
+    await session.continueConversation('second message');
+    const saved = structuredClone(session.planState!);
+    session.forkConversation();
+    const fork = saves(session).mock.calls.at(-1)![0];
+    session.rewindConversation(session.rewindTargets()[0].index);
+    const rewind = saves(session).mock.calls.at(-1)![0];
+    expect(fork.conversationHistory).toEqual(saved.conversationHistory);
+    expect(rewind.conversationHistory!.filter((entry) => entry.kind === 'skill_load').map((entry) => entry.skill!.content)).toEqual(['review-plan BODY v1']);
+
+    files.clear();
+    const ai = { startConversation: vi.fn().mockResolvedValue({ kind: 'message', text: 'Resumed.', researchLog: [] }), hasActiveConversation: () => false, reset: vi.fn() };
+    const resumed = makeSession({ aiService: ai, skillsService: skillCatalog(files) });
+    resumed.loadPlan(fork, 'goal', process.cwd(), { persist: false });
+    await resumed.continueConversation('next');
+    const request = ai.startConversation.mock.calls[0][0] as ConversationRequest;
+    expect(request.priorHistory!.map((entry) => entry.content)).toContain('<skill name="review-plan">\nreview-plan BODY v1\n</skill>');
+    expect(request.priorHistory!.map((entry) => entry.content)).toContain('<skill name="review-plan">\nreview-plan BODY v2\n</skill>');
+    expect(request.goal).toBe('goal');
+    expect(request.priorHistory!.some((entry) => entry.content.includes('The user invoked'))).toBe(false);
+  });
+});
 
 describe('list_runners and list_models', () => {
   it('answer from the settings in force at each call', async () => {

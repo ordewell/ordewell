@@ -2,7 +2,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { skillTokens } from '../conversation/skillTokens';
 import { isUserMessage, type ConversationMessage, type SkillLoad, type SkillLoadNotice } from '../models/Task';
-import type { SkillsService } from './SkillsService';
+import type { SkillInfo, SkillsService } from './SkillsService';
 
 /** A user's message as sent, and the skills its `/name` tokens load. */
 export interface SkillInvocation {
@@ -12,6 +12,14 @@ export interface SkillInvocation {
 
 function homeAbbreviated(file: string, home: string): string {
   return home && file.startsWith(home + path.sep) ? `~${file.slice(home.length)}` : file;
+}
+
+export function modelInvocablePlannerSkills(skills: readonly SkillInfo[]): SkillInfo[] {
+  return skills.filter((skill) => skill.appliesTo === 'planner' && skill.modelInvocable);
+}
+
+export function snapshotSkill(skill: SkillInfo, invokedBy: SkillLoad['invokedBy'], home = os.homedir()): SkillLoad {
+  return { invokedBy, name: skill.name, source: skill.source, path: homeAbbreviated(skill.path, home), content: skill.content };
 }
 
 /**
@@ -32,7 +40,7 @@ export function resolveSkillInvocation(
   const skills = skillTokens(text).flatMap(({ name }): SkillLoad[] => {
     const skill = skillsService.findSkill(name);
     return skill
-      ? [{ invokedBy: 'user', name, source: skill.source, path: homeAbbreviated(skill.path, home), content: skill.content }]
+      ? [snapshotSkill(skill, 'user', home)]
       : [];
   });
   return { text, skills };
@@ -44,7 +52,7 @@ export function skillLoadNotice({ invokedBy, name, source, path: file }: SkillLo
 
 /** A skill-load entry's `content`: the line a reader of the bare transcript sees, never what the planner is sent. */
 export function skillLoadLabel(skill: SkillLoad): string {
-  return `/${skill.name} skill loaded`;
+  return skill.invokedBy === 'planner' ? `${skill.name} skill loaded by planner` : `/${skill.name} skill loaded`;
 }
 
 /**
@@ -78,9 +86,12 @@ export function plannerTranscript(history: readonly ConversationMessage[]): Conv
   let owner = -1;
   for (const entry of history) {
     if (entry.kind === 'skill_load' && entry.skill) {
-      const loads = loadsOf.get(owner);
+      const loads = entry.skill.invokedBy === 'user' ? loadsOf.get(owner) : undefined;
       if (loads) loads.push(entry.skill);
-      else out.push({ role: entry.role, content: skillBlock(entry.skill), timestamp: entry.timestamp });
+      else {
+        out.push({ role: entry.role, content: skillBlock(entry.skill), timestamp: entry.timestamp });
+        owner = -1;
+      }
       continue;
     }
     owner = isUserMessage(entry) ? out.length : -1;

@@ -22,6 +22,7 @@ export interface GatedConversation {
 const TURN_STREAM = new Set<SessionMessage['type']>([
   'planner_text_delta', 'planner_thinking_delta', 'planner_text_retracted', 'planner_message', 'plan_token',
   'research_step', 'research_step_done', 'subagent_started', 'subagent_finished', 'planner_turn_ended',
+  'planner_skill_loaded',
 ]);
 
 // A message with no turn id while a stop stands can only be the stopped

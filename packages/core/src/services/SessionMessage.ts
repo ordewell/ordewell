@@ -122,6 +122,7 @@ export type SessionMessage =
    * `/name` tokens loaded, absent when none did.
    */
   | { type: 'planner_turn_started'; turnId: string; prompt?: string; skills?: SkillLoadNotice[] }
+  | { type: 'planner_skill_loaded'; turnId: string; skill: SkillLoadNotice }
   /**
    * A planner turn is over; nothing more carries its `turnId`. Emitted exactly
    * once per `planner_turn_started`, stop and failure included, after the

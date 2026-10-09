@@ -8,7 +8,7 @@ import type { PlannerTurnOutcome, SessionBroadcaster } from './SessionMessage';
 import { TurnStream } from './replyStream';
 import type { ForkedDialogue } from './conversationFork';
 import { condensedNotice, extractSummary, keptTail, summaryRequest } from './conversationSummary';
-import type { ConversationMessage, LegacyPlanState, ResearchLogEntry, ResearchProgress, RunnerId, Task } from '../models/Task';
+import type { ConversationMessage, LegacyPlanState, ResearchLogEntry, ResearchProgress, RunnerId, SkillLoad, Task } from '../models/Task';
 import { flattenTasks, isUserMessage } from '../models/Task';
 import { plannerMessage, plannerTranscript, skillLoadLabel, skillLoadNotice, type SkillInvocation } from './skillInvocation';
 
@@ -365,6 +365,14 @@ export class PlannerConversation {
   /** The user turn being answered, for what the host raises during it — an approval the turn's research asks for. */
   get currentTurnId(): string | undefined {
     return this.openTurn?.stream.turnId;
+  }
+
+  recordPlannerSkill(skill: SkillLoad): boolean {
+    const turn = this.openTurn;
+    if (!turn || turn.signal.aborted || turn.plan !== this.host.plan()) return false;
+    this.appendEntries([{ role: 'assistant', content: skillLoadLabel(skill), timestamp: new Date().toISOString(), kind: 'skill_load', skill }]);
+    this.host.broadcast({ type: 'planner_skill_loaded', turnId: turn.stream.turnId, skill: skillLoadNotice(skill) });
+    return true;
   }
 
   /**

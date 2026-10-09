@@ -255,6 +255,8 @@ export function reduceConversation(view: ConversationView, input: ConversationIn
       return append(view, (id) => settledMessage(id, input.role, input.text));
     case 'planner_turn_started':
       return input.prompt === undefined ? view : openTurn(view, input);
+    case 'planner_skill_loaded':
+      return append(sealLane(view, null, -1), (id) => skillLoadBlock(id, input.skill, input.turnId));
     case 'planner_text_delta':
       return streamText(view, input);
     case 'planner_message':

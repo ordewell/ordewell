@@ -28,6 +28,10 @@ const listModelsInput = z.object({
   runner: z.string().min(1).describe('A runner id from list_runners.'),
 });
 
+const loadSkillInput = z.object({
+  name: z.string().min(1).describe('The name of an Ordewell planner skill to load.'),
+});
+
 const taskRef = z.union([z.string().min(1), z.number().int().min(0)]).describe('A task id, "#order", a bare order, or a title.');
 
 const modelAssignment = z.looseObject({
@@ -97,6 +101,7 @@ export type TaskCompleteArgs = z.infer<typeof taskCompleteInput>;
 export type CheckpointArgs = z.infer<typeof checkpointInput>;
 export type ListRunnersArgs = z.infer<typeof listRunnersInput>;
 export type ListModelsArgs = z.infer<typeof listModelsInput>;
+export type LoadSkillArgs = z.infer<typeof loadSkillInput>;
 export type SubmitPlanArgs = z.infer<typeof submitPlanInput>;
 export type EditPlanArgs = z.infer<typeof editPlanInput>;
 export type TaskQueryArgs = z.infer<typeof taskQueryInput>;
@@ -140,6 +145,7 @@ export interface TaskToolHandler {
 }
 
 export interface PlannerToolHandler {
+  loadSkill?: Run<LoadSkillArgs>;
   listRunners?: Run<ListRunnersArgs>;
   listModels?: Run<ListModelsArgs>;
   submitPlan?: Run<SubmitPlanArgs>;
@@ -211,4 +217,6 @@ export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     taskQueryInput, (h) => h.taskQuery?.bind(h), PLANNER_READ_ONLY),
   tool('task_output', "Read the recent output of a running task, to check what its runner is doing; paged by offset. A task that is not running answers with its verdict, output summary and a digest of its last attempt.",
     taskOutputInput, (h) => h.taskOutput?.bind(h), PLANNER_READ_ONLY),
+  tool('load_skill', 'Load an Ordewell planner skill by name. Returns its instructions; only model-invocable planner skills can be loaded.',
+    loadSkillInput, (h) => h.loadSkill?.bind(h), PLANNER_READ_ONLY),
 ];

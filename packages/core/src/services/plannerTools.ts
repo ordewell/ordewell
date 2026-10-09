@@ -1,4 +1,6 @@
-import { flattenTasks, type RunnerId, type Task, type Verdict } from '../models/Task';
+import { flattenTasks, type RunnerId, type SkillLoad, type Task, type Verdict } from '../models/Task';
+import type { SkillInfo } from './SkillsService';
+import { modelInvocablePlannerSkills, snapshotSkill } from './skillInvocation';
 import { autonomyLevelLabel, filteredBuildModes, resolveDefaultMode } from './ModeResolver';
 import { validatePlanTasks } from './PlanValidator';
 import {
@@ -16,6 +18,8 @@ import type { McpToolReply, PlannerToolHandler } from './mcp';
  * against is what its submission is checked against (L2, L3).
  */
 export interface PlannerToolsHost {
+  skills(): readonly SkillInfo[];
+  recordSkillLoad(skill: SkillLoad): boolean;
   /** Enabled runners, their modes and their allowlisted models, as of now. */
   liveCatalog(): Promise<TaskQueryCatalog>;
   /** The assignments a commit of these tasks would land, under the allowlist in force (ADR-0003). */
@@ -33,7 +37,7 @@ export interface PlannerToolsHost {
   /** What a task's newest saved attempt did, or null when it left nothing to report. */
   lastAttempt(taskId: string): string | null;
   /** The skill catalog of the workspace root, which attached skill names are checked against. */
-  skills(): SkillLookup;
+  taskSkills(): SkillLookup;
 }
 
 /** What an edit made through the tool came to. `queued`: the turn parks it behind the running batch, so nothing was checked. */
@@ -56,6 +60,18 @@ export function runnersOf(tasks: readonly Task[]): RunnerId[] {
 
 export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
   return {
+    async loadSkill({ name }) {
+      const skills = modelInvocablePlannerSkills(host.skills());
+      const skill = skills.find((s) => s.name === name);
+      if (!skill) {
+        return { isError: true, text: `Skill "${name}" cannot be loaded by the planner. Loadable skills: ${skills.map((s) => s.name).join(', ') || '(none)'}.` };
+      }
+      if (!host.recordSkillLoad(snapshotSkill(skill, 'planner'))) {
+        return { isError: true, text: 'No planning turn is open to load a skill.' };
+      }
+      return { text: skill.content };
+    },
+
     async listRunners() {
       const catalog = await host.liveCatalog();
       return answer({
@@ -91,7 +107,7 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       const catalog = await host.liveCatalog();
       const result = validatePlanTasks({ tasks }, catalog.runners, catalog.modes, catalog.autonomousDefault);
       if (!result.ok) return { isError: true, text: JSON.stringify({ ok: false, errors: result.errors, enabledRunners: catalog.runners }) };
-      const skills = checkPlanSkills(result.tasks, host.skills());
+      const skills = checkPlanSkills(result.tasks, host.taskSkills());
       if (skills.errors.length > 0) {
         return { isError: true, text: JSON.stringify({ ok: false, errors: skills.errors.map((e) => ({ ...e, field: 'skills' })) }) };
       }
@@ -143,7 +159,7 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
     async editPlan({ ops }) {
       // The applier checks each op's fields one by one, so a loose shape is its to refuse.
       const taskOps = ops as unknown as TaskOp[];
-      const skills = checkOpSkills(taskOps, host.skills());
+      const skills = checkOpSkills(taskOps, host.taskSkills());
       if (skills.errors.length > 0) return { isError: true, text: JSON.stringify({ ok: false, errors: skills.errors.map((e) => opError(e.message)) }) };
       const outcome = await host.editPlan(taskOps);
       if (!outcome.ok) return { isError: true, text: JSON.stringify({ ok: false, errors: outcome.errors.map(opError) }) };

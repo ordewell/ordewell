@@ -86,6 +86,24 @@ describe('plannerTranscript', () => {
     const legacy = [entry('user', '# Grilling expanded body'), entry('assistant', 'question?')];
     expect(plannerTranscript(legacy)).toEqual(legacy);
   });
+
+  it('replays planner loads separately from user-invoked loads, including consecutive loads', () => {
+    const userSkill = load('grilling', 'GRILL');
+    const plannerSkill: SkillLoad = { ...load('review-plan', 'REVIEW'), invokedBy: 'planner' };
+    const replayed = plannerTranscript([
+      entry('user', '/grilling goal'),
+      entry('user', '/grilling skill loaded', { kind: 'skill_load', skill: userSkill }),
+      entry('assistant', 'review-plan skill loaded by planner', { kind: 'skill_load', skill: plannerSkill }),
+      entry('assistant', 'review-plan skill loaded by planner', { kind: 'skill_load', skill: plannerSkill }),
+      entry('assistant', 'Reviewed.'),
+    ]);
+    expect(replayed.map((message) => message.content)).toEqual([
+      plannerMessage('/grilling goal', [userSkill]),
+      '<skill name="review-plan">\nREVIEW\n</skill>',
+      '<skill name="review-plan">\nREVIEW\n</skill>',
+      'Reviewed.',
+    ]);
+  });
 });
 
 describe('skill invocation in a session', () => {

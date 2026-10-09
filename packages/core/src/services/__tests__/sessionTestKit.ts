@@ -51,7 +51,7 @@ export interface SessionOverrides {
   aiService?: Partial<IAiService>;
   planner?: Partial<SessionPlanner>;
   modelResolver?: Pick<ModelResolver, 'modelsForRunners'> & Partial<Pick<ModelResolver, 'getCachedRunnerModels' | 'contextWindowFor'>>;
-  skillsService?: Pick<SkillsService, 'findSkill'>;
+  skillsService?: Pick<SkillsService, 'findSkill'> & Partial<Pick<SkillsService, 'listSkills'>>;
   /** Defaults to one with no transcripts, so no test reads the real home directory. */
   taskOutput?: TaskOutputSource;
   /** Defaults to git behind a config with isolation off, so no test runs git in the repo it runs in. */
@@ -119,7 +119,9 @@ export function makeSession(overrides: SessionOverrides = {}): Session {
       ? ('reset' in overrides.aiService ? overrides.aiService as IAiService : ({ reset: vi.fn(), ...overrides.aiService } as IAiService))
       : undefined,
     planner: overrides.planner as SessionPlanner | undefined,
-    skillsService: overrides.skillsService as SkillsService | undefined,
+    skillsService: overrides.skillsService
+      ? { listSkills: () => [], ...overrides.skillsService } as SkillsService
+      : undefined,
     taskOutput: overrides.taskOutput ?? new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } }),
     isolation: overrides.isolation,
     saveSession: overrides.saveSession ?? save,
