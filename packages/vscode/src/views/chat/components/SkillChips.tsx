@@ -13,9 +13,11 @@ export default function SkillChips({ idPrefix, taskId, skills = [], catalog = []
   const addable = catalog.filter((s) => !skills.includes(s.name));
   if (skills.length === 0 && !(onChange && addable.length > 0)) return null;
 
+  const canAdd = Boolean(onChange) && addable.length > 0;
+
   return (
     <div className="model-selector task-skills" style={{ marginTop: '8px' }}>
-      <label htmlFor={`${idPrefix}-skill-${taskId}`}>Skills</label>
+      <label htmlFor={canAdd ? `${idPrefix}-skill-${taskId}` : undefined}>Skills</label>
       <div className="task-skill-chips">
         {skills.map((name) => (
           <span key={name} className="task-skill-chip" title={catalog.find((s) => s.name === name)?.description}>
@@ -26,9 +28,9 @@ export default function SkillChips({ idPrefix, taskId, skills = [], catalog = []
             )}
           </span>
         ))}
-        {onChange && addable.length > 0 && (
+        {canAdd && (
           <select id={`${idPrefix}-skill-${taskId}`} className="task-skill-add" value=""
-            onChange={(e) => { if (e.target.value) onChange(taskId, [...skills, e.target.value]); }}>
+            onChange={(e) => { if (e.target.value) onChange?.(taskId, [...skills, e.target.value]); }}>
             <option value="">+ skill</option>
             {addable.map((s) => (
               <option key={s.name} value={s.name}>{s.description ? `${s.name} — ${s.description}` : s.name}</option>

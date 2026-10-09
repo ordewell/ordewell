@@ -713,7 +713,7 @@ function restoredChat(plan: unknown, sessionId: string): Action {
 function lastAssistantMessage(plan: unknown): { content: string; timestamp?: string } | null {
   const history = (plan as Pick<LegacyPlanState, 'conversationHistory'> | null)?.conversationHistory ?? [];
   for (let i = history.length - 1; i >= 0; i--) {
-    if (history[i].role === 'assistant') {
+    if (history[i].role === 'assistant' && history[i].kind !== 'skill_load') {
       const { content, timestamp } = history[i];
       return { content, ...(timestamp ? { timestamp } : {}) };
     }

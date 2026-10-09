@@ -237,7 +237,7 @@ export async function handleTaskSkills(subArgs: string[], injectedApi?: ApiClien
       return;
     }
 
-    const skills = value.toLowerCase() === 'none' ? [] : [...new Set(value.split(',').map((s) => s.trim()).filter(Boolean))];
+    const skills = value.toLowerCase() === 'none' ? [] : [...new Set(value.split(/[,\s]+/).filter(Boolean))];
     const unknown = skills.filter((name) => !catalog.some((s) => s.name === name));
     if (unknown.length > 0) {
       fail(`No task skill named ${unknown.map((n) => `"${n}"`).join(', ')}.`, `Task skills: ${catalog.map((s) => s.name).join(', ') || 'none'}`);

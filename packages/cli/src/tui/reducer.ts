@@ -485,11 +485,15 @@ function submit(state: TuiState): Step {
 
   const cleared: TuiState = { ...state, editor: commit(state.editor) };
   const command = parseSlash(text);
-  // A skill-backed command is not dispatched here: it goes to the planner like
-  // any other message, literal /name and all, so the daemon's own skill
-  // resolution (see resolveSkillInvocation) loads Ordewell's skill before a
-  // coding-agent planner ever sees the token and tries to resolve it itself.
-  if (command && findCommand(command.name)?.source !== 'skill') return runCommand(cleared, command);
+  // Only a built-in is dispatched here. A skill-backed or unregistered /name
+  // goes to the planner like any other message, literal /name and all, so the
+  // daemon's own skill resolution (see resolveSkillInvocation) loads
+  // Ordewell's skill before a coding-agent planner ever sees the token and
+  // tries to resolve it itself.
+  if (command) {
+    const known = findCommand(command.name);
+    if (known && known.source !== 'skill') return runCommand(cleared, command);
+  }
 
   // The task view's composer talks to the runner, not the planner: the daemon
   // queues the message (or delivers it to a waiting task) and the log shows it.

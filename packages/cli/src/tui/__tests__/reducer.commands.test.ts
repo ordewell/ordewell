@@ -20,8 +20,8 @@ const planned: Partial<TuiState> = {
 };
 
 describe('retired mode toggles', () => {
-  it.each(['/tdd on', '/verify on', '/transport terminal'])('%s is no longer a command and sends nothing', (line) => {
-    expect(run(line).effects).toEqual([]);
+  it.each(['/tdd on', '/verify on', '/transport terminal'])('%s is no longer a command and goes to the planner as typed', (line) => {
+    expect(run(line).effects).toEqual([{ type: 'startConversation', goal: line }]);
   });
 });
 
@@ -363,10 +363,10 @@ describe('system commands', () => {
     expect(effects).toEqual([{ type: 'exit' }]);
   });
 
-  it('reports an unknown command instead of sending it to the planner', () => {
+  it('sends an unregistered /name to the planner as typed, without an error', () => {
     const { state, effects } = run('/nonsense');
-    expect(effects).toEqual([]);
-    expect(lastMessage(state)?.role).toBe('error');
+    expect(effects).toEqual([{ type: 'startConversation', goal: '/nonsense' }]);
+    expect(messagesOf(state).some((m) => m.role === 'error')).toBe(false);
   });
 
   it('never echoes a command into the transcript as a user turn', () => {

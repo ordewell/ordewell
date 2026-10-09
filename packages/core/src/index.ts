@@ -84,7 +84,7 @@ export {
 } from './services/TaskQuery';
 export type { TaskQuery, TaskQueryField, TaskQueryCatalog, LiveOutputLookup } from './services/TaskQuery';
 export { Session, createSession, sessionRuntimeSettings } from './services/createSession';
-export { resolveSkillInvocation, plannerMessage, plannerTranscript, type SkillInvocation } from './services/skillInvocation';
+export { abbreviateHome, resolveSkillInvocation, plannerMessage, plannerTranscript, type SkillInvocation } from './services/skillInvocation';
 export { PlanEditError } from './services/PlanEditError';
 export type * from './daemonContract';
 export { SessionNotFoundError, NoPlanError, AlreadyExecutingError } from './services/SessionErrors';

@@ -1,13 +1,7 @@
-import { createSkillsService, type SkillInfo } from '@ordewell/core';
-import { homedir } from 'os';
-import { resolve, sep } from 'path';
+import { abbreviateHome, createSkillsService, type SkillInfo } from '@ordewell/core';
+import { resolve } from 'path';
 import { flag, hasFlag, positionals } from '../utils';
 import { fail } from './shared';
-
-function abbreviateHome(file: string): string {
-  const home = homedir();
-  return file.startsWith(home + sep) ? `~${file.slice(home.length)}` : file;
-}
 
 function invocation(skill: SkillInfo): string {
   if (skill.userInvocable && skill.modelInvocable) return 'both';

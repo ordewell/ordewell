@@ -149,7 +149,7 @@ function truncatePath(path: string, max: number): string {
     if (width(char + tail) > max - 1) break;
     tail = char + tail;
   }
-  const slash = tail.indexOf('/');
+  const slash = tail.search(/[\\/]/);
   return `…${slash > 0 ? tail.slice(slash) : tail}`;
 }
 

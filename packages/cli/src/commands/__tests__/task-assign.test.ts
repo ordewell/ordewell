@@ -264,6 +264,19 @@ describe('ordewell task-skills', () => {
     fs.rmSync(ws, { recursive: true, force: true });
   });
 
+  it('takes names split by commas or spaces alike, as the TUI does', async () => {
+    const d = await fakeDaemon();
+    const ws = workspaceWithSkill();
+    const second = path.join(ws, '.ordewell', 'skills', 'zz-other');
+    fs.mkdirSync(second, { recursive: true });
+    fs.writeFileSync(path.join(second, 'SKILL.md'), '---\nname: zz-other\ndescription: Other\napplies-to: task\n---\nBody\n');
+    const { handleTaskSkills } = await import('../task-assign');
+    await capture(() => handleTaskSkills([...SESSION, '--workspace', ws, '2', 'zz-house-style zz-other,zz-house-style'], new ApiClient(d.port)));
+    expect(updates(d.sent)[0].body).toEqual({ skills: ['zz-house-style', 'zz-other'] });
+    d.close();
+    fs.rmSync(ws, { recursive: true, force: true });
+  });
+
   it('clears on "none"', async () => {
     const d = await fakeDaemon();
     const ws = workspaceWithSkill();

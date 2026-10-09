@@ -352,7 +352,6 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
     case 'setSkills':
       return { ...state, skills: action.skills ?? [] };
 
-
     case 'planDockHeight':
       return { ...state, dockHeight: action.height };
 
