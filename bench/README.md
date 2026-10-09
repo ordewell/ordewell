@@ -32,13 +32,26 @@ core stack:
 
 ## Execution pipeline harness (`bench/pipeline/`)
 
-- `fake-runner/` — a deterministic stand-in for a coding-agent CLI: no LLM, no
-  API key. Emits the completion marker on cue, so auto-advance, parallel task
-  scheduling, and dependency chains can be tested without spending anything.
-- `drive-pipeline.mjs` — drives a plan end to end through the fake runner.
+- `fake-claude/` — a deterministic stand-in for the `claude` CLI: no LLM, no
+  API key. Put the folder first on `PATH` and Ordewell's own `claude-code`
+  connector and structured runner drive it as they would the real binary. It
+  speaks the stream-json protocol the connector reads, answers the `mcp_status`
+  check, and completes a task by calling `task_complete` on the Ordewell MCP
+  server named in the `--mcp-config` file it is given — it never prints the
+  text marker. A task steers it with a cue in its prompt:
+  `<fake-claude>{"delayMs":400,"write":{"A.txt":"hi"},"status":"blocked","reason":"why"}</fake-claude>`
+  (all fields optional; see the header of `fake-claude.mjs` for the full list).
+  `claude` is the POSIX shim and `claude.cmd` the Windows one.
+- `drive-pipeline.mjs` — drives a plan end to end through the fake `claude`
+  (`--runner fake`, the default) so auto-advance, parallel task scheduling and
+  dependency chains can be tested without spending anything, or through a real
+  `opencode` (`--runner opencode`). The VS Code integration scenarios
+  (`packages/vscode/src/test-integration/`) use the same fake via `PATH`.
+- `pipeline.test.mjs` — runs the driver under `node:test`. Needs core built
+  first (`npm run build:core`).
 
 ## Tests
 
 ```bash
-node --test bench/
+node --test "bench/**/*.test.mjs"
 ```
