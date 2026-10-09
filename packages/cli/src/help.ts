@@ -61,6 +61,7 @@ Other:
   ordewell web                    Start the API server (foreground; --daemon for background)
   ordewell setup                  Interactive first-run setup wizard
   ordewell plugins list|install|remove|create   Manage runner plugins
+  ordewell skills                 List installed skills and shadowed workspace duplicates
   ordewell --help               Show this help
   ordewell --version            Print the installed version (alias: version, -v)
 
@@ -91,6 +92,10 @@ Status options:
 Sessions options:
   --workspace /path   Workspace to list sessions from (default: cwd)
   --json              Output the list as JSON
+
+Skills options:
+  --workspace /path   Workspace to read skills from (default: cwd)
+  --json              Output resolved skills and shadowed duplicates as JSON
 
 Task options (add-task):
   --title "text"      Task title (required)

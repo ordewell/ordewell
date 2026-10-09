@@ -22,7 +22,7 @@ const TUI_ONLY: Record<string, string> = {
 
 /** CLI-only commands: a daemon, a wizard or a catalog has no slash equivalent. */
 const CLI_ONLY = [
-  'web', 'setup', 'plugins', 'models', 'tui', 'status',
+  'web', 'setup', 'plugins', 'models', 'skills', 'tui', 'status',
   'stop-server', 'run-task', 'mark-complete', 'plan',
 ];
 
