@@ -279,6 +279,10 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     try {
       const skills = createSkillsService(services.fsAdapter.getWorkspaceRoot()).listSkills();
       services.chatProvider.setSkills(skills.filter((s) => s.userInvocable).map((s) => ({ name: s.name, description: s.description, appliesTo: s.appliesTo })));
+      // Attaching by hand is a user invocation, so user-only skills are offered too.
+      services.chatProvider.setTaskSkills(
+        skills.filter((s) => s.appliesTo === 'task').map((s) => ({ name: s.name, description: s.description })),
+      );
     } catch (err) {
       log(`Failed to list skills: ${err instanceof Error ? err.message : String(err)}`);
     }

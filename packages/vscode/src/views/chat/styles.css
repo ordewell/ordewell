@@ -5380,3 +5380,31 @@ body {
   padding-left: 4ch;
   color: var(--text-muted);
 }
+
+.task-skill-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.task-skill-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.task-skill-chip-remove {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1;
+}

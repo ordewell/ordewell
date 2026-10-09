@@ -7,7 +7,7 @@ import { scrollDelta, scrollPlan, settlePlan } from './pointer';
 import { openTaskTerminalOrView } from './taskView';
 import {
   addTask, confirmForceStartPastGate, confirmRemoveTask, openTaskDepsPicker, openTaskEffortPicker, openTaskModePicker, openTaskModelPicker,
-  openTaskRunnerPicker, toggleTaskOps,
+  openTaskRunnerPicker, openTaskSkillsPicker, toggleTaskOps,
 } from './taskEdits';
 import { clampSelection, step, type Effect, type Step, type TaskAction } from './shared';
 
@@ -111,6 +111,7 @@ export function handlePlanKey(state: TuiState, key: Key): Step {
   if (key.char === 'e') return openTaskEffortPicker(state, task);
   if (key.char === 'M') return openTaskModePicker(state, task);
   if (key.char === 'D') return openTaskDepsPicker(state, task);
+  if (key.char === 'K') return openTaskSkillsPicker(state, task);
   return step(state);
 }
 

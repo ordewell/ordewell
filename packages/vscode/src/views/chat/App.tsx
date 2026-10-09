@@ -39,7 +39,7 @@ export default function App() {
     conversation, plan, isExecuting, isResearchActive, conversationBusy, error, models, modelsByRunner,
     runnerList, enabledRunnerIds, runners, pendingEdits, held, unsent, modesByRunner, modelConfig,
     modelOptions, configuredProviders, planner, isReady, modelDiscoveryErrors,
-    skills, checkpoint, taskOutput, taskIdle, taskApprovals, taskIsolation, handoff,
+    skills, taskSkills, checkpoint, taskOutput, taskIdle, taskApprovals, taskIsolation, handoff,
     mergeResult, mergeGate, taskGates, dockExpanded, dockHeight,
   } = host;
   const setPlan = useCallback((v: Updatable<HostState['plan']>) => dispatch({ type: 'patchPlan', plan: v }), []);
@@ -249,6 +249,11 @@ export default function App() {
   const handleModeChange = useCallback((taskId: string, mode: string) => {
     vscode.postMessage({ type: 'editTask', taskId, edit: { kind: 'mode', mode } });
     echoTask(taskId, { taskMode: mode });
+  }, [echoTask]);
+
+  const handleSkillsChange = useCallback((taskId: string, skills: string[]) => {
+    vscode.postMessage({ type: 'editTask', taskId, edit: { kind: 'skills', skills } });
+    echoTask(taskId, { skills: skills.length > 0 ? skills : undefined });
   }, [echoTask]);
 
   const handleOpsChange = useCallback((taskId: string, ops: boolean) => {
@@ -595,6 +600,8 @@ export default function App() {
             onModelsRefreshNeeded={handleModelsRefreshNeeded}
             onModeChange={handleModeChange}
             onOpsChange={handleOpsChange}
+            taskSkills={taskSkills}
+            onSkillsChange={handleSkillsChange}
             mergeGates={taskGates}
             onRemoveTask={handleRemoveTask}
             onPromptChange={handlePromptChange}

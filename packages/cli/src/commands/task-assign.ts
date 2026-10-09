@@ -1,8 +1,10 @@
+import { createSkillsService } from '@ordewell/core';
 import { canSetDependencies, dependencyCandidates, taskRef, titledTaskRef } from '@ordewell/core/plan-utils';
 import { assignedModelFor, effortsForTask, modelsForTask, modesForTask, runnerAccepts } from '../tui/taskAssignment';
 import type { TaskView } from '../tui/state';
 import type { ApiClient } from '../apiClient';
 import { positionals } from '../utils';
+import { flag } from '../utils/args';
 import { fail, fetchCatalog, taskViews } from './shared';
 import { withResolvedTask } from './task-control';
 
@@ -212,6 +214,39 @@ export async function handleTaskDeps(subArgs: string[], injectedApi?: ApiClient)
     console.log(dependencies.length > 0
       ? `Task ${taskRef(task)} now depends on ${dependencies.length} task${dependencies.length === 1 ? '' : 's'}.`
       : `Task ${taskRef(task)} no longer depends on anything.`);
+  });
+}
+
+const SKILLS_USAGE = 'Usage: ordewell task-skills <task-id-or-order> [<name,name,…>|none] [--session-id <id>] [--workspace <path>]';
+
+export async function handleTaskSkills(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
+  await withTask(subArgs, SKILLS_USAGE, injectedApi, async (api, sessionId, task, _tasks, value) => {
+    if (task.type !== 'ai') fail('Manual tasks do not run an executor, so they take no skills.');
+    // User-only skills are included: attaching by hand is a user invocation.
+    const catalog = createSkillsService(flag(subArgs, '--workspace') || process.cwd())
+      .listSkills()
+      .filter((s) => s.appliesTo === 'task');
+
+    if (!value) {
+      console.log(`\nSkills · ${titledTaskRef(task)}\n`);
+      if (catalog.length === 0) console.log('  No task skills found (applies-to: task in .ordewell/skills/ or ~/.ordewell/skills/).');
+      for (const s of catalog) {
+        console.log(`  ${task.skills?.includes(s.name) ? '*' : ' '} ${s.name}${s.description ? `  ${s.description}` : ''}`);
+      }
+      console.log(`\n  * = attached. ${SKILLS_USAGE}`);
+      return;
+    }
+
+    const skills = value.toLowerCase() === 'none' ? [] : [...new Set(value.split(',').map((s) => s.trim()).filter(Boolean))];
+    const unknown = skills.filter((name) => !catalog.some((s) => s.name === name));
+    if (unknown.length > 0) {
+      fail(`No task skill named ${unknown.map((n) => `"${n}"`).join(', ')}.`, `Task skills: ${catalog.map((s) => s.name).join(', ') || 'none'}`);
+    }
+
+    await api.updateTask(sessionId, task.id, { skills });
+    console.log(skills.length > 0
+      ? `Task ${taskRef(task)} skills set to ${skills.join(', ')}.`
+      : `Task ${taskRef(task)} has no skills attached.`);
   });
 }
 

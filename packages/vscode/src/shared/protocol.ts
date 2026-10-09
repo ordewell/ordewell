@@ -58,6 +58,7 @@ export type TaskEdit =
   | { kind: 'mode'; mode: string }
   | { kind: 'prompt'; prompt: string }
   | { kind: 'dependencies'; dependencies: string[] }
+  | { kind: 'skills'; skills: string[] }
   /** Change versus ops (ADR-0020); the session refuses it once the task has started. */
   | { kind: 'ops'; ops: boolean };
 
@@ -188,6 +189,8 @@ export type HostToWebview =
   | { type: 'planDockHeight'; height?: number }
   /** Discovered skills (global ~/.ordewell/skills/ + workspace .ordewell/skills/, workspace shadows global) for the /skill-name suggestion dropdown. */
   | { type: 'setSkills'; skills: { name: string; description: string; appliesTo?: 'planner' | 'task' }[] }
+  /** Every `applies-to: task` skill, user-only ones included: what a task card's skill chips can attach. */
+  | { type: 'setTaskSkills'; skills: { name: string; description: string }[] }
   | { type: 'setConfiguredProviders'; providers: AiProvider[] }
   | { type: 'setModelOptions'; modelOptions: ModelOption[] }
   | { type: 'setModelsByRunner'; modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>> }

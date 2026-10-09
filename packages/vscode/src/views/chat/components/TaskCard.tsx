@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import SubTaskCard from './SubTaskCard';
 import ModelSelector, { getModelClass, providerLabel } from './ModelSelector';
 import DependencyPicker from './DependencyPicker';
+import SkillChips from './SkillChips';
 import { lastLine } from '../taskOutput';
 import { checkLabel } from '../checkLabel';
 import { useFollowOutput } from '../followOutput';
@@ -57,6 +58,8 @@ interface TaskCardProps {
   onModeChange?: (taskId: string, mode: string) => void;
   /** Change versus ops (ADR-0020); offered until the task starts. */
   onOpsChange?: (taskId: string, ops: boolean) => void;
+  taskSkills?: { name: string; description: string }[];
+  onSkillsChange?: (taskId: string, skills: string[]) => void;
   /** The dependencies this task waits on at its merge gate (ADR-0020); absent when it waits for no Merge all. */
   mergeGate?: string[];
   onRemoveTask?: (taskId: string) => void;
@@ -180,7 +183,7 @@ export function runnerOptionsFor(runners: RunnerOption[] | undefined, assignedRu
   return [...runners, { id: assignedRunner, displayName: assignedRunner }];
 }
 
-export default function TaskCard({ task, models, modes, modelsByRunner, modesByRunner, runners, effectiveRunner, configuredProviders, modelApiMapping, isExecuting, output, idleSince, awaitingApproval = 0, isolation, onResolveConflict, taskOrderMap, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, mergeGate, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
+export default function TaskCard({ task, models, modes, modelsByRunner, modesByRunner, runners, effectiveRunner, configuredProviders, modelApiMapping, isExecuting, output, idleSince, awaitingApproval = 0, isolation, onResolveConflict, taskOrderMap, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, mergeGate, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onOpenLog, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
   const [internalExpanded, setInternalExpanded] = useState(false);
   const isControlled = expandedProp !== undefined;
   const expanded = isControlled ? expandedProp : internalExpanded;
@@ -561,6 +564,11 @@ export default function TaskCard({ task, models, modes, modelsByRunner, modesByR
             </div>
           )}
 
+          {task.type === 'ai' && (
+            <SkillChips idPrefix="task" taskId={task.id} skills={task.skills} catalog={taskSkills}
+              onChange={!isExecuting ? onSkillsChange : undefined} />
+          )}
+
           {!isExecuting && onOpsChange && row.opsEditable && (
             <label className="task-ops-toggle" title="An ops task changes no repository files: it acts on outside systems or on your branch's refs, from your checkout, once the work it depends on is merged.">
               <input type="checkbox" checked={!!task.ops} onChange={(e) => onOpsChange(task.id, e.target.checked)} />
@@ -594,6 +602,7 @@ export default function TaskCard({ task, models, modes, modelsByRunner, modesByR
                     isExecuting={isExecuting}
                     onRunnerChange={onRunnerChange}
                     onModelChange={onModelChange} onModelsRefreshNeeded={onModelsRefreshNeeded} onModeChange={onModeChange}
+                    taskSkills={taskSkills} onSkillsChange={onSkillsChange}
                     onRemoveTask={onRemoveTask} onPromptChange={onPromptChange}
                     onRetry={onRetry} onSkip={onSkip} onCancel={onCancel}
                     onForceStart={onForceStart} onMarkComplete={onMarkComplete}

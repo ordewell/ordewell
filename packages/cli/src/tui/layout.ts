@@ -73,7 +73,7 @@ export function footerHints(state: TuiState): string[] {
     }
     return [
       ...(escHint ? [escHint] : []),
-      'enter expand', 'R runner', 'o model', 'e effort', 'M mode', 'D deps', 'O ops', 'f start',
+      'enter expand', 'R runner', 'o model', 'e effort', 'M mode', 'D deps', 'K skills', 'O ops', 'f start',
       'E run plan', 'S stop', 'c cancel', markHint, 's skip', 'a add', 'd remove', 't terminal', ...resolveHint,
       'pgup/pgdn scroll', 'tab chat',
     ];
@@ -643,8 +643,10 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
     : row.status === 'quiet'
       ? (structured ? 'quiet' : 'quiet — t opens its terminal')
       : row.running ? 'working' : row.awaiting ? inRow(row.awaiting) : '';
+  const skills = (task.skills ?? []).join(' · ');
   const meta = [activity, runner, structured ? 'structured' : '', model].filter(Boolean).join(' · ');
   if (meta) lines.push(style.grey(truncate(`${bodyPad}${meta}`, cols)));
+  if (skills) lines.push(style.grey(truncate(`${bodyPad}skills: ${skills}`, cols)));
   // Asked for structured and did not get it: said on the row, never silently.
   if (task.transport?.fallback) lines.push(style.yellow(truncate(`${bodyPad}terminal: ${task.transport.fallback}`, cols)));
   if (effort || mode) lines.push(style.grey(truncate(`${bodyPad}${[effort, mode].filter(Boolean).join(' · ')}`, cols)));
@@ -717,7 +719,7 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
     // are named as what leaving the editor gets you, not as keys that work here
     // — while the prompt is open every letter types into it.
     lines.push(style.grey(`${bodyPad}enter save · esc cancel`));
-    lines.push(style.grey(truncate(`${bodyPad}then R runner · o model · e effort · M mode · D deps`, cols)));
+    lines.push(style.grey(truncate(`${bodyPad}then R runner · o model · e effort · M mode · D deps · K skills`, cols)));
   }
 
   return { lines, editorLine };

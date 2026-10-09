@@ -90,6 +90,16 @@ describe('PlanEditor.updateTask', () => {
     expect(events).toEqual(['saved', 'task_updated', 'tick']);
   });
 
+  it('stores hand-set skills trimmed and deduplicated, and none as absent', async () => {
+    const { editor, task } = setup();
+
+    await editor.updateTask('t2', { skills: [' tdd ', 'tdd', 'api'] });
+    expect(task('t2')!.skills).toEqual(['tdd', 'api']);
+
+    await editor.updateTask('t2', { skills: [] });
+    expect(task('t2')!.skills).toBeUndefined();
+  });
+
   it('refuses an incoherent patch before anything lands, saying why', async () => {
     const { editor, mutate, scheduler, task } = setup();
 

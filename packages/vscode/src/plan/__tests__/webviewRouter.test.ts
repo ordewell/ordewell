@@ -131,6 +131,12 @@ describe('webview messages reach the session through one entry point each', () =
       expect(taskOf(h.session, 't1')?.taskMode).toBe('plan');
     });
 
+    it('hand-set skills land in the session, trimmed and deduplicated', async () => {
+      await h.route({ type: 'editTask', taskId: 't1', edit: { kind: 'skills', skills: [' tdd', 'tdd'] } });
+
+      expect(taskOf(h.session, 't1')?.skills).toEqual(['tdd']);
+    });
+
     it('a prompt edit lands in the session and is shown', async () => {
       await h.route({ type: 'editTask', taskId: 't2', edit: { kind: 'prompt', prompt: 'stream it in chunks' } });
 
