@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { CodexAdapter } from '../harness/CodexAdapter';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, TaskStartOptions } from '../harness/AgentAdapter';
 import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
@@ -804,6 +804,57 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
     expect(Object.keys(spawned.lastEnv()).filter((name) => name.startsWith('ORDEWELL_MCP'))).toEqual([]);
     expect(await adapter.mcpAttached()).toBe(false);
     adapter.dispose();
+  });
+
+  describe('under a host that is itself an Ordewell runner\'s child', () => {
+    afterEach(() => { vi.unstubAllEnvs(); });
+
+    const tokenNames = (env: NodeJS.ProcessEnv) => Object.keys(env).filter((name) => name.toUpperCase().startsWith('ORDEWELL_MCP_TOKEN_'));
+
+    function inheritParentTokens(): void {
+      vi.stubEnv('ORDEWELL_MCP_TOKEN_0', 'Bearer parent-synthetic-0');
+      vi.stubEnv('ORDEWELL_MCP_TOKEN_1', 'Bearer parent-synthetic-1');
+      vi.stubEnv('ordewell_mcp_token_0', 'Bearer parent-synthetic-lower');
+      vi.stubEnv('ORDEWELL_TEST_KEPT', 'yes');
+    }
+
+    it('passes none of the parent\'s tokens to a runner given no server', async () => {
+      inheritParentTokens();
+      const { spawned, processDeps } = deps(handshake());
+      const adapter = new CodexAdapter(processDeps);
+      await adapter.start(taskStart('agent'));
+
+      expect(tokenNames(spawned.lastEnv())).toEqual([]);
+      expect(spawned.lastEnv().ORDEWELL_TEST_KEPT).toBe('yes');
+      expect(spawned.lastEnv().PATH).toBe('/usr/bin');
+      adapter.dispose();
+    });
+
+    it('replaces the parent\'s token with the attempt\'s, under any spelling, and leaves no surplus one', async () => {
+      inheritParentTokens();
+      const { spawned, processDeps } = deps(handshake());
+      const adapter = new CodexAdapter(processDeps);
+      await adapter.start(taskStart('agent', { mcp }));
+
+      expect(tokenNames(spawned.lastEnv())).toEqual(['ORDEWELL_MCP_TOKEN_0']);
+      expect(spawned.lastEnv().ORDEWELL_MCP_TOKEN_0).toBe('Bearer tok-secret');
+      expect(spawned.lastEnv().ORDEWELL_TEST_KEPT).toBe('yes');
+      adapter.dispose();
+    });
+
+    it('takes no token from the workspace\'s own variables either', async () => {
+      const { spawned, processDeps } = deps(handshake());
+      const adapter = new CodexAdapter({
+        ...processDeps,
+        workspaceEnv: async () => ({ ORDEWELL_MCP_TOKEN_0: 'Bearer workspace-synthetic', ordewell_mcp_token_2: 'Bearer workspace-synthetic', PROJECT_VAR: 'kept' }),
+      });
+      await adapter.start(taskStart('agent', { mcp }));
+
+      expect(tokenNames(spawned.lastEnv())).toEqual(['ORDEWELL_MCP_TOKEN_0']);
+      expect(spawned.lastEnv().ORDEWELL_MCP_TOKEN_0).toBe('Bearer tok-secret');
+      expect(spawned.lastEnv().PROJECT_VAR).toBe('kept');
+      adapter.dispose();
+    });
   });
 
   describe('attachment, as Codex reports it', () => {

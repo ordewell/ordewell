@@ -1,5 +1,6 @@
 import { ORDEWELL_MCP_SERVER_NAME, TASK_COMPLETE_TOOL, type McpClientConfig } from '../mcp';
 import { MCP_CLIENT_TOOL_NAMES, listed, ordewellToolNames, type OrdewellToolBinding } from './ordewellBinding';
+import { MCP_TOKEN_VARIABLE_PREFIX } from './runnerEnv';
 
 /** A server→client request, as far as telling one for an Ordewell tool needs it. */
 export interface CodexAsk {
@@ -24,7 +25,7 @@ export interface CodexOrdewellBinding extends OrdewellToolBinding<CodexAsk> {
  * value to the commands the model runs.
  */
 function headerEnv(mcp: McpClientConfig): Record<string, string> {
-  return Object.fromEntries(Object.keys(mcp.headers).map((header, i) => [header, `ORDEWELL_MCP_TOKEN_${i}`]));
+  return Object.fromEntries(Object.keys(mcp.headers).map((header, i) => [header, `${MCP_TOKEN_VARIABLE_PREFIX}${i}`]));
 }
 
 const COUNT_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];

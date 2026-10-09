@@ -93,6 +93,19 @@ describe('the environment a runner starts under', () => {
     adapter.dispose();
   });
 
+  it.each(adapters)('%s leaves a parent Ordewell\'s MCP tokens behind, under any spelling', async (_label, start) => {
+    vi.stubEnv('ORDEWELL_MCP_TOKEN_0', 'Bearer parent-synthetic-0');
+    vi.stubEnv('Ordewell_Mcp_Token_3', 'Bearer parent-synthetic-3');
+    vi.stubEnv('ORDEWELL_TEST_KEPT', 'yes');
+    const spawned = fakeSpawn([]);
+    const envs: NodeJS.ProcessEnv[] = [];
+    const adapter = await start(spawned, deps(spawned, {}, envs));
+    expect(Object.keys(envs[0]).filter((name) => name.toUpperCase().startsWith('ORDEWELL_MCP_TOKEN_'))).toEqual([]);
+    expect(envs[0].ORDEWELL_TEST_KEPT).toBe('yes');
+    expect(envs[0].PATH).toBe('/usr/bin');
+    adapter.dispose();
+  });
+
   it.each(adapters)('%s starts its runner as the leader of a process group, so Stop reaches what it starts', async (_label, start) => {
     const spawned = fakeSpawn([]);
     const detached: Array<boolean | undefined> = [];
