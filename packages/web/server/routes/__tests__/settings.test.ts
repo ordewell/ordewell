@@ -20,7 +20,6 @@ function settingsState(overrides: Partial<SettingsState> = {}): SettingsState {
     aiProvider: 'openrouter',
     plannerThinkingEffort: '',
     maxParallel: 3,
-    tdd: { enabled: false },
     modelAllowlist: undefined,
     plannerModels: undefined,
     ...overrides,
@@ -41,7 +40,6 @@ describe('GET /api/settings', () => {
   it('returns orchestratorModel and feature toggles', async () => {
     vi.mocked(pool.getSettings).mockReturnValue(settingsState({
       orchestratorModel: 'openai/gpt-4o',
-      tdd: { enabled: true },
     }));
 
     const res = await app.request('/api/settings', { method: 'GET' });
@@ -55,7 +53,6 @@ describe('GET /api/settings', () => {
       plannerThinkingEffort: '',
       // How many tasks run at once — `/parallel` shows it from here.
       maxParallel: 3,
-      tdd: { enabled: true },
     });
   });
 });
@@ -74,11 +71,9 @@ describe('PATCH /api/settings', () => {
   it('updates orchestratorModel and returns new state', async () => {
     vi.mocked(pool.updateSettings).mockReturnValue(settingsState({
       orchestratorModel: 'gemini-2.5-flash',
-      tdd: { enabled: true },
     }));
     vi.mocked(pool.getSettings).mockReturnValue(settingsState({
       orchestratorModel: 'gemini-2.5-flash',
-      tdd: { enabled: true },
     }));
 
     const res = await app.request('/api/settings', {
@@ -93,27 +88,11 @@ describe('PATCH /api/settings', () => {
     expect(pool.updateSettings).toHaveBeenCalledWith({ orchestratorModel: 'gemini-2.5-flash' });
   });
 
-  it('updates tdd feature toggle', async () => {
-    vi.mocked(pool.updateSettings).mockReturnValue(settingsState());
-
-    const res = await app.request('/api/settings', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tdd: { enabled: false } }),
-    });
-
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { tdd: { enabled: boolean } };
-    expect(body.tdd).toEqual({ enabled: false });
-  });
-
   it('updates modelAllowlist and returns it in settings', async () => {
     vi.mocked(pool.updateSettings).mockReturnValue(settingsState({
-      tdd: { enabled: true },
       modelAllowlist: { opencode: ['model-a', 'model-b'] },
     }));
     vi.mocked(pool.getSettings).mockReturnValue(settingsState({
-      tdd: { enabled: true },
       modelAllowlist: { opencode: ['model-a', 'model-b'] },
     }));
 

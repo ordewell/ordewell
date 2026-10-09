@@ -1,101 +1,40 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { Hono } from 'hono';
-import type { OrchestratorPool } from '../../pool/orchestratorPool';
-
-function fakePool(initialSettings?: Record<string, unknown>): OrchestratorPool {
-  let state = initialSettings ?? {
-    orchestratorModel: '',
-    tdd: { enabled: true },
-  };
-  const pool = {
-    getSettings: vi.fn(() => state),
-    updateSettings: vi.fn((changes: Record<string, unknown>) => {
-      state = { ...state, ...changes };
-      return state;
-    }),
-  } as unknown as OrchestratorPool;
-  return pool;
-}
 
 describe('GET /api/commands', () => {
   let app: Hono;
-  let pool: OrchestratorPool;
 
   beforeEach(async () => {
-    pool = fakePool();
     const { commandsRoute } = await import('../../routes/commands');
     app = new Hono();
-    app.route('/api/commands', commandsRoute(pool));
+    app.route('/api/commands', commandsRoute());
   });
 
-  it('returns a list of available commands with descriptions', async () => {
+  it('offers no command now that tdd is a task skill and verify and transport are gone', async () => {
     const res = await app.request('/api/commands', { method: 'GET' });
 
     expect(res.status).toBe(200);
     const body = (await res.json()) as { commands: Array<{ name: string; description: string }> };
-    expect(body.commands).toBeInstanceOf(Array);
-    expect(body.commands.length).toBeGreaterThan(0);
-    for (const cmd of body.commands) {
-      expect(cmd).toHaveProperty('name');
-      expect(cmd).toHaveProperty('description');
-    }
-  });
-
-  it('no longer offers the verify or transport commands', async () => {
-    const res = await app.request('/api/commands', { method: 'GET' });
-    const body = (await res.json()) as { commands: Array<{ name: string }> };
-    const names = body.commands.map((c: { name: string }) => c.name);
-    expect(names).toContain('tdd');
-    expect(names).not.toContain('verify');
-    expect(names).not.toContain('transport');
+    expect(body.commands).toEqual([]);
   });
 });
 
 describe('POST /api/commands/:name', () => {
   let app: Hono;
-  let pool: OrchestratorPool;
 
   beforeEach(async () => {
-    pool = fakePool();
     const { commandsRoute } = await import('../../routes/commands');
     app = new Hono();
-    app.route('/api/commands', commandsRoute(pool));
+    app.route('/api/commands', commandsRoute());
   });
 
-  it('disables tdd via command', async () => {
-    const res = await app.request('/api/commands/tdd', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ args: { action: 'off' } }),
-    });
-
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { settings: { tdd: { enabled: boolean } } };
-    expect(body.settings.tdd.enabled).toBe(false);
-    expect(pool.updateSettings).toHaveBeenCalledWith({ tdd: { enabled: false } });
-  });
-
-  it('returns current state when no action specified', async () => {
-    const res = await app.request('/api/commands/tdd', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ args: {} }),
-    });
-
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: boolean; settings: { tdd: { enabled: boolean } } };
-    expect(body.ok).toBe(true);
-    expect(body.settings.tdd.enabled).toBe(true);
-  });
-
-  it.each(['verify', 'transport'])('refuses the removed %s command, changing nothing', async (name) => {
+  it.each(['tdd', 'verify', 'transport'])('refuses the removed %s command', async (name) => {
     const res = await app.request(`/api/commands/${name}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ args: { action: 'on' } }),
     });
     expect(res.status).toBe(404);
-    expect(pool.updateSettings).not.toHaveBeenCalled();
   });
 
   it('returns 404 for unknown command', async () => {

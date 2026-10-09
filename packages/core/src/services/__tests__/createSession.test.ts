@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createTask, type LegacyPlanState } from '../../models/Task';
+import type { SkillInfo } from '../SkillsService';
 import { makeSession, FakeTerminalSession, fakeConfig, taskOf, queue, saves } from './sessionTestKit';
 import { scriptedAdapter } from './harnessTestKit';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
@@ -27,7 +28,7 @@ describe('model allowlist wiring', () => {
   it('generatePlan passes perRunnerAllowlist to planner.generate', async () => {
     const planner = { generate: vi.fn().mockResolvedValue(smallPlan()) };
     const session = makeSession({
-      settings: () => ({ tddEnabled: false, modelAllowlist: { 'claude-code': ['kimi-2.6'] } }),
+      settings: () => ({ modelAllowlist: { 'claude-code': ['kimi-2.6'] } }),
       planner,
     });
 
@@ -57,7 +58,6 @@ describe('model allowlist wiring', () => {
     const startConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'hello', researchLog: [] });
     const session = makeSession({
       settings: () => ({
-        tddEnabled: false,
         modelAllowlist: { 'claude-code': ['kimi-2.6'] },
       }),
       aiService: {
@@ -84,7 +84,6 @@ describe('model allowlist wiring', () => {
 
   it('live semantic: a plan committed mid-conversation is coerced against the CURRENT allowlist', async () => {
     const mutableSettings = {
-      tddEnabled: false,
       modelAllowlist: { 'claude-code': ['kimi-2.6'] } as Record<string, string[]>,
     };
     const startConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'hello', researchLog: [] });
@@ -132,7 +131,7 @@ describe('model allowlist wiring', () => {
   it('processQueuedMessages passes perRunnerAllowlist to planner.modifyDuringExecution', async () => {
     const planner = { modifyDuringExecution: vi.fn().mockResolvedValue({ pendingTasks: [], message: 'ok' }) };
     const session = makeSession({
-      settings: () => ({ tddEnabled: false, modelAllowlist: { 'claude-code': ['kimi-2.6'] } }),
+      settings: () => ({ modelAllowlist: { 'claude-code': ['kimi-2.6'] } }),
       planner,
     });
     session.loadPlan(smallPlan(), 'Test', '/repo');
@@ -675,7 +674,7 @@ describe('Session phase transitions', () => {
       ['forceStartTask', (s: Session) => s.forceStartTask('t1')],
     ])('%s carries the plan map and the completion marker', async (_name, start) => {
       const runner = spyRunner();
-      const session = makeSession({ runner, settings: () => ({ tddEnabled: true }) });
+      const session = makeSession({ runner });
       session.loadPlan(threeTaskPlan(), 'Test', '/repo');
 
       await start(session);
@@ -684,19 +683,29 @@ describe('Session phase transitions', () => {
       expect(prompt).toContain('← you are here');
       expect(prompt).toContain('1. [NOW    ] First');
       expect(prompt).toContain('DONE_mk-1>>>');
-      expect(prompt).toContain('Implementation workflow (TDD)');
+      expect(prompt).not.toContain('## Task skills');
     });
 
-    it('reads the TDD toggle at spawn time, not at the last full-run start', async () => {
+    it('gives a task the skills attached to it, read from where it runs', async () => {
       const runner = spyRunner();
-      let tddEnabled = false;
-      const session = makeSession({ runner, settings: () => ({ tddEnabled }) });
-      session.loadPlan(threeTaskPlan(), 'Test', '/repo');
+      const roots: string[] = [];
+      const tdd: SkillInfo = {
+        name: 'tdd', description: 'test-first', metadata: { name: 'tdd', description: 'test-first' },
+        content: 'RED then GREEN.', path: '/home/u/.ordewell/skills/tdd/SKILL.md', source: 'global',
+        appliesTo: 'task', modelInvocable: false, userInvocable: true,
+      };
+      const lookup = { findSkill: (name: string) => (name === 'tdd' ? tdd : undefined), listSkills: () => [tdd], searchedDirs: () => [] };
+      const skillsService = { ...lookup, forRoot: (root: string) => { roots.push(root); return lookup; } };
+      const session = makeSession({ runner, skillsService });
+      const plan = threeTaskPlan();
+      plan.tasks[0].skills = ['tdd'];
+      session.loadPlan(plan, 'Test', '/repo');
 
-      tddEnabled = true;
       await session.runTask('t1');
 
-      expect(runner.spawn.mock.calls[0][0].prompt).toContain('Implementation workflow (TDD)');
+      expect(runner.spawn.mock.calls[0][0].prompt).toContain('### Skill: tdd\n\nRED then GREEN.');
+      expect(roots).toEqual([runner.spawn.mock.calls[0][0].cwd]);
+      expect(taskOf(session, 't1')?.attemptSkills).toEqual([{ name: 'tdd', source: 'global', path: tdd.path, content: 'RED then GREEN.' }]);
     });
   });
 

@@ -10,7 +10,6 @@ function models(...ids: string[]): DiscoveredModel[] {
 /** A session built with claude-code enabled, whose settings the test rewrites the way a settings write would. */
 function liveSession() {
   let settings: SessionRuntimeSettings = {
-    tddEnabled: false,
     enabledRunners: ['claude-code'],
     modelAllowlist: { codex: ['codex-model'] },
   };

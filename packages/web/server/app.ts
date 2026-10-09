@@ -41,7 +41,7 @@ export function createApp(pool: OrchestratorPool, admission: AdmissionContext) {
   app.route('/api/runners', runnersRoute(pool));
   app.route('/api/models', modelsRoute(pool));
   app.route('/api/settings', settingsRoute(pool));
-  app.route('/api/commands', commandsRoute(pool));
+  app.route('/api/commands', commandsRoute());
   app.route('/api/workspaces', workspacesRoute());
   app.route('/api/approvals', approvalsRoute(pool));
 

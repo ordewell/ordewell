@@ -36,6 +36,8 @@ export interface TaskView {
   awaitingApproval?: number;
   /** An ops task (ADR-0020): it runs in the user's checkout, never a worktree. */
   ops?: boolean;
+  /** Task skills attached by name, put in the runner's prompt at spawn. */
+  skills?: string[];
   /** The dependencies whose work must be merged into the user's branch before this task can go on (ADR-0020). */
   mergeGate?: string[];
   /** The dependencies, by title, a force start went past the merge gate of. */
@@ -135,16 +137,6 @@ export interface ModelView {
   variants?: { id: string; label: string }[];
   /** Executor runners that exposed this model during discovery. */
   runners?: string[];
-}
-
-/** The planner skills the VS Code webview exposes as toggles. */
-export const SKILL_IDS = ['tdd'] as const;
-export type SkillId = (typeof SKILL_IDS)[number];
-
-export type Skills = Record<SkillId, boolean>;
-
-export function noSkills(): Skills {
-  return { tdd: false };
 }
 
 export interface PickerItem {
@@ -357,7 +349,6 @@ export interface TuiState {
    * selection until the first key or resize settles it into a number.
    */
   planScroll: number | null;
-  skills: Skills;
   runners: RunnerView[];
   sessions: SessionView[];
   /** The open `/rewind` picker's rows; `null` until the daemon has answered. */
@@ -550,7 +541,6 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     taskEditor: null,
     scroll: 0,
     planScroll: null,
-    skills: noSkills(),
     runners: [],
     sessions: [],
     rewindTargets: null,

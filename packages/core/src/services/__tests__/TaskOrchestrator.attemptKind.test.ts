@@ -9,13 +9,26 @@ import type { IConfig } from '../../interfaces/IConfig';
 import type { IsolationMergeResult } from '../../interfaces/IWorktreeIsolation';
 import type { ITerminalRunner, ITerminalSession } from '../../interfaces/ITerminalRunner';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
+import type { SkillInfo } from '../SkillsService';
+
+function skill(name: string, appliesTo: SkillInfo['appliesTo'] = 'task'): SkillInfo {
+  return {
+    name, description: name, metadata: { name, description: name }, content: `${name} body.`,
+    path: `/g/${name}/SKILL.md`, source: 'global', appliesTo, modelInvocable: false, userInvocable: true,
+  };
+}
+
+/** The global catalog every root sees in these tests; `grilling` is the planner skill. */
+const CATALOG = new Map([['tdd', skill('tdd')], ['grilling', skill('grilling', 'planner')]]);
 
 /**
  * What differs between a change, an ops, a repair and a continued attempt, as
  * the orchestrator shows it: where each runs, what it is told, whether its
  * tree is checked, and whether it keeps Merge all out.
  */
-function setup(opts: { isolation?: FakeWorktreeIsolation; config?: Partial<IConfig>; tdd?: boolean } = {}) {
+function setup(opts: { isolation?: FakeWorktreeIsolation; config?: Partial<IConfig> } = {}) {
+  /** Every root a spawn read skills from. */
+  const skillRoots: string[] = [];
   const isolation = opts.isolation ?? new FakeWorktreeIsolation();
   const sessions: FakeTerminalSession[] = [];
   const requests: RunnerSpawnOptions[] = [];
@@ -45,7 +58,10 @@ function setup(opts: { isolation?: FakeWorktreeIsolation; config?: Partial<IConf
     isolation,
     workspaceRoot: () => '/repo',
     workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
-    tddEnabled: () => opts.tdd ?? false,
+    skillsAt: (root) => {
+      skillRoots.push(root);
+      return { findSkill: (name) => CATALOG.get(name), searchedDirs: () => ['/g', `${root}/.ordewell/skills`] };
+    },
   });
   const notices: string[] = [];
   orchestrator.subscribe({ onIsolationNotice: ({ message }) => notices.push(message) });
@@ -59,7 +75,7 @@ function setup(opts: { isolation?: FakeWorktreeIsolation; config?: Partial<IConf
     holds.set(taskId, new Promise<void>((resolve) => { open = resolve; }));
     return () => { holds.delete(taskId); open(); };
   };
-  return { orchestrator, isolation, spawned, latest, pass, status, ops, notices, hold };
+  return { orchestrator, isolation, spawned, latest, pass, status, ops, notices, hold, skillRoots };
 }
 
 const change = (id: string, order: number, over: Partial<Task> = {}) =>
@@ -191,29 +207,82 @@ describe('attempt kinds, as the orchestrator runs them', () => {
   });
 
   describe('what each is told', () => {
-    it('a change attempt gets the TDD workflow when it is on', async () => {
-      const env = setup({ tdd: true });
+    it('a change attempt gets its skills, read from where it runs, and keeps what it got', async () => {
+      const env = setup();
+      env.orchestrator.loadPlan([change('c1', 1, { skills: ['tdd'] })]);
+
+      await env.orchestrator.approveReview();
+
+      const [request] = env.spawned('c1');
+      expect(request.prompt).toContain('## Task skills');
+      expect(request.prompt).toContain('### Skill: tdd\n\ntdd body.');
+      expect(request.prompt).not.toContain('## Previous attempt');
+      expect(env.skillRoots).toEqual([request.cwd]);
+      const snapshot = [{ name: 'tdd', source: 'global', path: '/g/tdd/SKILL.md', content: 'tdd body.' }];
+      expect(env.orchestrator.storeInstance.get('c1')!.attemptSkills).toEqual(snapshot);
+      expect(env.orchestrator.getAttempt('c1')!.skills).toEqual(snapshot);
+    });
+
+    it('a task without skills is told none', async () => {
+      const env = setup();
       env.orchestrator.loadPlan([change('c1', 1)]);
 
       await env.orchestrator.approveReview();
 
-      expect(env.spawned('c1')[0].prompt).toContain('## Implementation workflow (TDD)');
-      expect(env.spawned('c1')[0].prompt).not.toContain('## Previous attempt');
+      expect(env.spawned('c1')[0].prompt).not.toContain('## Task skills');
+      expect(env.orchestrator.storeInstance.get('c1')!.attemptSkills).toBeUndefined();
     });
 
-    it('an ops attempt gets it too, and no previous attempt on its first run', async () => {
-      const env = setup({ tdd: true });
-      env.orchestrator.loadPlan([opsTask('o1', 1)]);
+    it('a subtask gets its own skills, not its parent\'s', async () => {
+      const env = setup();
+      const parent = change('p1', 1, { skills: ['tdd'], subtasks: [change('s1', 1)] });
+      env.orchestrator.loadPlan([parent]);
+
+      await env.orchestrator.forceStartTask('s1');
+
+      expect(env.spawned('s1')[0].prompt).not.toContain('### Skill: tdd');
+    });
+
+    it('an ops attempt gets its skills too, and no previous attempt on its first run', async () => {
+      const env = setup();
+      env.orchestrator.loadPlan([opsTask('o1', 1, { skills: ['tdd'] })]);
 
       await env.orchestrator.approveReview();
 
-      expect(env.spawned('o1')[0].prompt).toContain('## Implementation workflow (TDD)');
+      expect(env.spawned('o1')[0].prompt).toContain('### Skill: tdd');
       expect(env.spawned('o1')[0].prompt).not.toContain('## Previous attempt');
     });
 
-    it('a repair is asked to resolve the conflict, never test-first', async () => {
-      const env = setup({ tdd: true, config: { conflictRepairAttempts: 1 } });
-      const c1 = change('c1', 1);
+    it('a task whose skill is missing fails before any runner starts, naming it and where it looked', async () => {
+      const env = setup();
+      env.orchestrator.loadPlan([change('c1', 1, { skills: ['tdd', 'deploy-checklist'] }), change('c2', 2, { dependencies: ['c1'] })]);
+
+      await env.orchestrator.approveReview();
+
+      await vi.waitFor(() => expect(env.status('c1')).toBe('failed'));
+      expect(env.spawned('c1')).toHaveLength(0);
+      expect(env.spawned('c2')).toHaveLength(0);
+      const reason = env.orchestrator.storeInstance.get('c1')!.outputSummary!.reviewReason;
+      expect(reason).toContain('"deploy-checklist" not found in /g or ');
+      expect(reason).toContain('/.ordewell/skills');
+      expect(reason).not.toContain('"tdd"');
+      expect(env.notices.some((n) => n.includes('deploy-checklist'))).toBe(true);
+    });
+
+    it('a task attaching a planner skill fails before any runner starts', async () => {
+      const env = setup();
+      env.orchestrator.loadPlan([change('c1', 1, { skills: ['grilling'] })]);
+
+      await env.orchestrator.approveReview();
+
+      await vi.waitFor(() => expect(env.status('c1')).toBe('failed'));
+      expect(env.spawned('c1')).toHaveLength(0);
+      expect(env.orchestrator.storeInstance.get('c1')!.outputSummary!.reviewReason).toContain('"grilling" is a planner skill');
+    });
+
+    it('a repair is asked to resolve the conflict, without the task\'s skills', async () => {
+      const env = setup({ config: { conflictRepairAttempts: 1 } });
+      const c1 = change('c1', 1, { skills: ['tdd'] });
       conflicting(env, 'c1');
       env.orchestrator.loadPlan([c1]);
       await env.orchestrator.approveReview();
@@ -222,12 +291,12 @@ describe('attempt kinds, as the orchestrator runs them', () => {
 
       await vi.waitFor(() => expect(env.spawned('c1')).toHaveLength(2));
       expect(env.spawned('c1')[1].prompt).toContain('conflicted in a.ts');
-      expect(env.spawned('c1')[1].prompt).not.toContain('## Implementation workflow (TDD)');
+      expect(env.spawned('c1')[1].prompt).not.toContain('### Skill: tdd');
     });
 
     it('a continued change task is told its worktree was recreated', async () => {
-      const env = setup({ tdd: true });
-      const c1 = change('c1', 1);
+      const env = setup();
+      const c1 = change('c1', 1, { skills: ['tdd'] });
       env.orchestrator.loadPlan([c1]);
       await completed(env, c1);
 
@@ -236,7 +305,7 @@ describe('attempt kinds, as the orchestrator runs them', () => {
       const prompt = env.spawned('c1')[1].prompt;
       expect(prompt.startsWith('one more thing\n')).toBe(true);
       expect(prompt).toContain('Your working directory was recreated from the integration branch');
-      expect(prompt).not.toContain('## Implementation workflow (TDD)');
+      expect(prompt).not.toContain('### Skill: tdd');
     });
 
     it('a continued ops task is told its earlier effects were not undone', async () => {

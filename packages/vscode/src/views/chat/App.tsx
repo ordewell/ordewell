@@ -38,7 +38,7 @@ export default function App() {
   const {
     conversation, plan, isExecuting, isResearchActive, conversationBusy, error, models, modelsByRunner,
     runnerList, enabledRunnerIds, runners, pendingEdits, held, unsent, modesByRunner, modelConfig,
-    modelOptions, configuredProviders, planner, isReady, modelDiscoveryErrors, tddEnabled,
+    modelOptions, configuredProviders, planner, isReady, modelDiscoveryErrors,
     skills, checkpoint, taskOutput, taskIdle, taskApprovals, taskIsolation, handoff,
     mergeResult, mergeGate, taskGates, dockExpanded, dockHeight,
   } = host;
@@ -49,7 +49,6 @@ export default function App() {
   const setIsReady = useCallback((v: boolean) => dispatch({ type: 'patchReady', ready: v }), []);
   const setRunners = useCallback((v: Updatable<RunnerId[]>) => dispatch({ type: 'patchRunners', runners: v }), []);
   const setPendingEdits = useCallback((v: Updatable<PendingPlanEdit[]>) => dispatch({ type: 'patchPendingEdits', edits: v }), []);
-  const setTddEnabled = useCallback((v: boolean) => dispatch({ type: 'patchTddEnabled', enabled: v }), []);
   const setCheckpoint = useCallback((v: HostState['checkpoint']) => dispatch({ type: 'patchCheckpoint', checkpoint: v }), []);
   const setDockHeight = useCallback((v: number | undefined) => dispatch({ type: 'patchDockHeight', height: v }), []);
   const setDockExpanded = useCallback((v: Updatable<boolean>) => dispatch({ type: 'patchDockExpanded', expanded: v }), []);
@@ -373,14 +372,6 @@ export default function App() {
     const timer = setTimeout(() => setStopArmed(false), STOP_ARM_MS);
     return () => clearTimeout(timer);
   }, [stopArmed, isResearchActive]);
-
-  const handleToggleSkill = useCallback((skillId: string) => {
-    if (skillId === 'tdd') {
-      const next = !tddEnabled;
-      setTddEnabled(next);
-      vscode.postMessage({ type: 'toggleSkill', skillId, enabled: next });
-    }
-  }, [tddEnabled]);
 
   const handleApproveCheckpoint = useCallback(() => {
     if (!checkpoint) return;
@@ -764,13 +755,6 @@ export default function App() {
           </div>
         </section>
         </div>
-      </div>
-
-      <div className="skill-bar">
-        <button className={`skill-toggle-pill ${tddEnabled ? 'on' : 'off'}`}
-          onClick={() => handleToggleSkill('tdd')} title="TDD: test-driven development prompt augmentation">
-          <span className="skill-toggle-dot" /> TDD
-        </button>
       </div>
 
       {hasDetail && (

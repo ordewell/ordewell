@@ -53,7 +53,7 @@ function makeSession(workspace: string): Session {
     fsAdapter: fakeFileSystem(),
     broadcast: vi.fn(),
     modelResolver: { getCachedRunnerModels: () => [], modelsForRunners: vi.fn().mockResolvedValue({}) } as unknown as ModelResolver,
-    settings: () => ({ tddEnabled: false }),
+    settings: () => ({}),
     aiService: planner as IAiService,
     taskOutput: new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } }),
   });

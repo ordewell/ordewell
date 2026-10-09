@@ -19,23 +19,9 @@ const planned: Partial<TuiState> = {
   tasks: [task({ id: 'task-a', order: 1 }), task({ id: 'task-b', order: 2, title: 'Second' })],
 };
 
-describe('skills', () => {
-  it('/tdd on turns the skill on through the daemon command API', () => {
-    expect(run('/tdd on').effects).toEqual([{ type: 'command', name: 'tdd', action: 'on' }]);
-  });
-
-  it.each(['/verify on', '/transport terminal'])('%s is no longer a command and sends nothing', (line) => {
+describe('retired mode toggles', () => {
+  it.each(['/tdd on', '/verify on', '/transport terminal'])('%s is no longer a command and sends nothing', (line) => {
     expect(run(line).effects).toEqual([]);
-  });
-
-  it('/tdd off turns the skill off', () => {
-    expect(run('/tdd off').effects).toEqual([{ type: 'command', name: 'tdd', action: 'off' }]);
-  });
-
-  it('a bare /tdd toggles whatever is currently set', () => {
-    const on = { skills: { ...initialState().skills, tdd: true } };
-    expect(run('/tdd', on).effects).toEqual([{ type: 'command', name: 'tdd', action: 'off' }]);
-    expect(run('/tdd').effects).toEqual([{ type: 'command', name: 'tdd', action: 'on' }]);
   });
 });
 

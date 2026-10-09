@@ -34,7 +34,6 @@ export interface PlanRequest {
   autonomousDefault?: boolean;
   signal?: AbortSignal;
   perRunnerAllowlist?: Partial<Record<RunnerId, string[]>>;
-  /** The mode toggles this run honours. `modesFor('one-shot', …)` decides which apply. */
   modes?: PlannerModes;
 }
 

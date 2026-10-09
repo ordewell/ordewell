@@ -25,7 +25,6 @@ export type Effect =
   /** `allowInit` is only ever set on the retry after the user confirms the "initialize this as a new workspace?" prompt — see `workspaceNeedsInit`. */
   | { type: 'startConversation'; goal: string; allowInit?: boolean }
   | { type: 'sendMessage'; sessionId: string; message: string }
-  | { type: 'command'; name: string; action: 'on' | 'off' }
   | { type: 'setModel'; modelId: string }
   | { type: 'setPlanner'; provider: string }
   | { type: 'setPlannerEffort'; effort: string }

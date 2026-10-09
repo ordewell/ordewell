@@ -1,7 +1,7 @@
 import { isAwaitingReason, type DisplayBlock, type SessionMessage, type SettingsResponse } from '@ordewell/core';
 import { sanitize } from '../ansi';
 import {
-  isTaskRunning, plannerInFlight, SKILL_IDS, type GateView, type SkillId, type TaskView, type TuiState,
+  isTaskRunning, plannerInFlight, type GateView, type TaskView, type TuiState,
 } from '../state';
 import { hear } from '../transcript';
 import { dropApproval, enqueueApproval } from './approvals';
@@ -96,29 +96,14 @@ function toTaskView(t: Record<string, unknown>, index: number): TaskView {
           .map((s, i) => toTaskView(asRecord(s), i))
       : undefined,
     ...(t.ops === true ? { ops: true } : {}),
+    ...(Array.isArray(t.skills) && t.skills.length > 0 ? { skills: t.skills.map((name: unknown) => planLabel(name)) } : {}),
     ...(Array.isArray(t.forcedPastGate) && t.forcedPastGate.length > 0 ? { forcedPastGate: t.forcedPastGate.map((title: unknown) => planLabel(title)) } : {}),
   };
 }
 
-const enabledFlag = (value: unknown): boolean | undefined =>
-  typeof (value as { enabled?: unknown })?.enabled === 'boolean'
-    ? ((value as { enabled: boolean }).enabled)
-    : undefined;
-
 export function applySettings(state: TuiState, settings: Partial<SettingsResponse>): TuiState {
-  const sources: Record<SkillId, unknown> = {
-    tdd: settings.tdd,
-  };
-
-  const skills = { ...state.skills };
-  for (const id of SKILL_IDS) {
-    const flag = enabledFlag(sources[id]);
-    if (flag !== undefined) skills[id] = flag;
-  }
-
   return {
     ...state,
-    skills,
     orchestratorModel:
       typeof settings.orchestratorModel === 'string' ? settings.orchestratorModel : state.orchestratorModel,
     plannerProvider:

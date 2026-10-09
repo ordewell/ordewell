@@ -51,7 +51,7 @@ function harness(aiService: Partial<IAiService> = { hasActiveConversation: () =>
     fsAdapter: fakeFileSystem(),
     broadcast: (msg) => { broadcasts.push(msg); chatProvider.conversation.receive(msg); },
     modelResolver: { getCachedRunnerModels: () => [], modelsForRunners: vi.fn().mockResolvedValue({}) } as unknown as ModelResolver,
-    settings: () => ({ tddEnabled: false }),
+    settings: () => ({}),
     aiService: { reset: () => {}, ...aiService } as unknown as IAiService,
     taskOutput: new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } }),
   });
@@ -69,7 +69,6 @@ function harness(aiService: Partial<IAiService> = { hasActiveConversation: () =>
     fsAdapter: { getWorkspaceRoot: () => workspace } as unknown as WebviewRouterDeps['fsAdapter'],
     terminalRunner: { stopAll: vi.fn() } as unknown as WebviewRouterDeps['terminalRunner'],
     notifications: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), confirm: vi.fn() },
-    settingsService: { getTdd: () => false },
     getCurrentPlan: () => current,
     setCurrentPlan: (p) => { current = p; },
     getCurrentGoal: () => goal,
@@ -84,7 +83,6 @@ function harness(aiService: Partial<IAiService> = { hasActiveConversation: () =>
       runSlashCommand: vi.fn(async () => {}),
       setPlanner: vi.fn(async () => {}),
       setPlannerModel: vi.fn(async () => {}),
-      toggleSkill: vi.fn(),
       openTaskLog: vi.fn(),
       setPlanDockHeight: vi.fn(),
     },
@@ -309,7 +307,6 @@ describe('webview messages reach the session through one entry point each', () =
     [{ type: 'refreshModels' }, 'refreshModels', []],
     [{ type: 'setPlanner', provider: 'codex' }, 'setPlanner', ['codex']],
     [{ type: 'setPlannerModel', modelId: 'gpt-5', effort: 'high' }, 'setPlannerModel', ['gpt-5', 'high']],
-    [{ type: 'toggleSkill', skillId: 'tdd', enabled: true }, 'toggleSkill', ['tdd', true]],
     [{ type: 'openTaskLog', taskId: 't1' }, 'openTaskLog', ['t1']],
     [{ type: 'setPlanDockHeight', height: 320 }, 'setPlanDockHeight', [320]],
   ] as const)('hands %o to the extension', async (msg, handler, args) => {

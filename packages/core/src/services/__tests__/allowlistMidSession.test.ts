@@ -19,7 +19,6 @@ async function plannedSession(opts: {
   continueReplies: unknown[];
 }) {
   let settings: SessionRuntimeSettings = {
-    tddEnabled: false,
     modelAllowlist: opts.allowlist ? { 'claude-code': opts.allowlist } : undefined,
   };
   const continueConversation = vi.fn();

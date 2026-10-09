@@ -21,7 +21,6 @@ export interface PlanManagerDeps {
   fsAdapter: VsCodeFileSystem;
   terminalRunner: ITerminalRunner;
   notifications: INotification;
-  settingsService: { getTdd(): boolean; };
   getCurrentPlan: () => LegacyPlanState;
   setCurrentPlan: (plan: LegacyPlanState) => void;
   getCurrentGoal: () => string;

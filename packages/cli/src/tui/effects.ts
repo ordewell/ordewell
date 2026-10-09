@@ -27,7 +27,7 @@ export type OrdewellApi = Pick<ApiClient,
   | 'getSessions' | 'getSession' | 'adoptSession' | 'deleteSession' | 'closeSession'
   | 'forkConversation' | 'rewindTargets' | 'rewindConversation' | 'compactConversation'
   | 'reviewRunDiff' | 'mergeRun' | 'discardRun' | 'cleanupRun' | 'continueWithStash' | 'continueWithoutIsolation' | 'resolveConflictAsTask'
-  | 'getSettings' | 'updateSettings' | 'sendCommand'
+  | 'getSettings' | 'updateSettings'
   | 'getRunners' | 'setRunnerEnabled' | 'getModels'
   | 'streamPlanning' | 'respondToApproval' | 'streamExecution' | 'closeExecutionStream'
 >;
@@ -347,13 +347,6 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       await api.interruptTask(effect.sessionId, effect.taskId);
       dispatch({ type: 'notice', message: 'Interrupting the task…' });
       return;
-
-    case 'command': {
-      const result = await api.sendCommand(effect.name, { action: effect.action });
-      if (result.settings) dispatch({ type: 'settingsLoaded', settings: result.settings });
-      dispatch({ type: 'notice', message: `${effect.name} is ${effect.action}.` });
-      return;
-    }
 
     case 'setModel':
       // Daemon first, `.env` second — see `persistAfterDaemon` below.

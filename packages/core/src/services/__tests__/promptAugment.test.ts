@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createTask, resolveOrderLabel } from '../../models/Task';
+import { createTask, resolveOrderLabel, type TaskSkillSnapshot } from '../../models/Task';
 import { augmentPromptWithPriorOutputs, composeAugmentedPrompt, composeContinuationPrompt, renderPlanMap, summarizeOutput } from '../promptAugment';
 
 describe('summarizeOutput', () => {
@@ -261,38 +261,29 @@ describe('composeAugmentedPrompt', () => {
     expect(out.replace(/\s+/g, '')).not.toContain('<<<ORDEWELL_DONE_mk-echo>>>');
   });
 
-  it('includes TDD instructions when tddEnabled is true', () => {
+  const TDD: TaskSkillSnapshot = { name: 'tdd', source: 'global', path: '/g/tdd/SKILL.md', content: 'RED then GREEN.\n' };
+
+  it('puts each attached skill body in the prompt, framed with its name', () => {
     const tasks = [
       createTask({ id: 'a', order: 1, title: 'A', prompt: 'do work' }),
       createTask({ id: 'b', order: 2, title: 'B', prompt: 'pb' }),
       createTask({ id: 'c', order: 3, title: 'C', prompt: 'pc' }),
     ];
-    const out = composeAugmentedPrompt(tasks[0], tasks, { tddEnabled: true });
-    expect(out).toContain('## Implementation workflow (TDD)');
-    expect(out).toContain('RED: Write ONE failing test');
-    expect(out).toContain('GREEN: Write minimal production code');
-    expect(out).toContain('Refactoring is not part of the red-green cycle');
-    expect(out).toContain('run the full test suite once at the end of the task');
+    const deploy: TaskSkillSnapshot = { name: 'deploy', source: 'workspace', path: '/wt/.ordewell/skills/deploy/SKILL.md', content: 'Check the pipeline.' };
+    const out = composeAugmentedPrompt(tasks[0], tasks, { skills: [TDD, deploy] });
+    expect(out).toContain('## Task skills');
+    expect(out).toContain('### Skill: tdd\n\nRED then GREEN.\n\n### Skill: deploy\n\nCheck the pipeline.');
+    expect(out.indexOf('## Task skills')).toBeLessThan(out.indexOf('do work'));
   });
 
-  it('omits TDD instructions when tddEnabled is false', () => {
+  it('says nothing about skills when the task has none', () => {
     const tasks = [
       createTask({ id: 'a', order: 1, title: 'A', prompt: 'do work' }),
       createTask({ id: 'b', order: 2, title: 'B', prompt: 'pb' }),
       createTask({ id: 'c', order: 3, title: 'C', prompt: 'pc' }),
     ];
-    const out = composeAugmentedPrompt(tasks[0], tasks, { tddEnabled: false });
-    expect(out).not.toContain('## Implementation workflow (TDD)');
-  });
-
-  it('omits TDD instructions when tddEnabled is not set', () => {
-    const tasks = [
-      createTask({ id: 'a', order: 1, title: 'A', prompt: 'do work' }),
-      createTask({ id: 'b', order: 2, title: 'B', prompt: 'pb' }),
-      createTask({ id: 'c', order: 3, title: 'C', prompt: 'pc' }),
-    ];
-    const out = composeAugmentedPrompt(tasks[0], tasks);
-    expect(out).not.toContain('## Implementation workflow (TDD)');
+    expect(composeAugmentedPrompt(tasks[0], tasks)).not.toContain('## Task skills');
+    expect(composeAugmentedPrompt(tasks[0], tasks, { skills: [] })).not.toContain('## Task skills');
   });
 
   it('includes checkpoint instructions for HITL tasks (autonomy=HITL)', () => {
@@ -314,7 +305,7 @@ describe('composeAugmentedPrompt', () => {
       createTask({ id: 'b', order: 2, title: 'B', prompt: 'pb' }),
       createTask({ id: 'c', order: 3, title: 'C', prompt: 'pc' }),
     ];
-    const out = composeAugmentedPrompt(tasks[0], tasks, { tddEnabled: true });
+    const out = composeAugmentedPrompt(tasks[0], tasks, { skills: [TDD] });
     const checkpoint = /<<<ORDEWELL_CHECKPOINT:\s*(.*?)>>>/gs;
     expect(out).not.toMatch(checkpoint);
     // and after the soft-wrap flattening the watcher also scans
@@ -385,17 +376,16 @@ describe('composeAugmentedPrompt', () => {
     expect(out).not.toContain('## Human-in-the-loop checkpoints');
   });
 
-  it('includes both TDD and checkpoint instructions when applicable', () => {
+  it('includes both skills and checkpoint instructions when applicable', () => {
     const tasks = [
       createTask({ id: 'a', order: 1, title: 'A', prompt: 'do work', autonomy: 'HITL' }),
       createTask({ id: 'b', order: 2, title: 'B', prompt: 'pb' }),
       createTask({ id: 'c', order: 3, title: 'C', prompt: 'pc' }),
     ];
-    const out = composeAugmentedPrompt(tasks[0], tasks, { tddEnabled: true });
-    expect(out).toContain('## Implementation workflow (TDD)');
+    const out = composeAugmentedPrompt(tasks[0], tasks, { skills: [TDD] });
+    expect(out).toContain('## Task skills');
     expect(out).toContain('## Human-in-the-loop checkpoints');
-    // TDD should come before HITL instructions
-    const tddIdx = out.indexOf('## Implementation workflow (TDD)');
+    const tddIdx = out.indexOf('## Task skills');
     const hitlIdx = out.indexOf('## Human-in-the-loop checkpoints');
     expect(tddIdx).toBeGreaterThan(0);
     expect(hitlIdx).toBeGreaterThan(tddIdx);

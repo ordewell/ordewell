@@ -7,7 +7,6 @@ import { handleModels } from './models';
 import { handleSetup } from './setup';
 import { handlePlugins } from './plugins';
 import { handleSkills } from './skills';
-import { handleTdd } from './tdd';
 import { handleAllowlist } from './allowlist';
 import { handleMarkComplete, handleSkip, handleUncomplete } from './mark-complete';
 import { handleRunTask, handleForceStart, handleRetry, handleCancel, handleContinue, handleCheckpoint } from './task-control';
@@ -57,7 +56,6 @@ export const COMMANDS: Record<string, (args: string[]) => Promise<void> | void> 
   setup: handleSetup,
   plugins: handlePlugins,
   skills: handleSkills,
-  'tdd': handleTdd,
   'mark-complete': handleMarkComplete,
   complete: handleMarkComplete,
   uncomplete: handleUncomplete,

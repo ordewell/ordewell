@@ -146,7 +146,6 @@ export type WebviewToHost =
   | { type: 'newSession' }
   /** A notice the webview raised (a task action, the watchdog) — the conversation belongs to the host. */
   | { type: 'addNote'; text: string }
-  | { type: 'toggleSkill'; skillId: string; enabled: boolean }
   /** Open (or focus) the on-demand task-log tab for a structured task (ADR-0018, V1). */
   | { type: 'openTaskLog'; taskId: string }
   /** The plan dock's dragged height in px, saved on release so every later session opens at it. */
@@ -185,7 +184,6 @@ export type HostToWebview =
   | { type: 'setRunners'; runners: RunnerMeta[] }
   // `unavailable` lists toggles that have no meaning for the current planner
   // backend — hidden rather than silently ignored (ADR-0009, T8).
-  | { type: 'setSkillToggles'; toggles: { tdd: boolean }; unavailable?: string[] }
   /** The remembered plan dock height in px; absent until the user first drags it. */
   | { type: 'planDockHeight'; height?: number }
   /** Discovered skills (global ~/.ordewell/skills/ + workspace .ordewell/skills/, workspace shadows global) for the /skill-name suggestion dropdown. */

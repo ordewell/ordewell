@@ -54,9 +54,6 @@ Planner, models and runners:
   ordewell refresh                Re-discover runners and model catalogs
   ordewell models                 List every provider's catalog (works without a server)
 
-Modes:
-  ordewell tdd [on|off]         Toggle Test-Driven Development mode (or show status)
-
 Other:
   ordewell web                    Start the API server (foreground; --daemon for background)
   ordewell setup                  Interactive first-run setup wizard

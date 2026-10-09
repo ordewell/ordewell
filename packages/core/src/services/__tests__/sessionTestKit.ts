@@ -110,7 +110,7 @@ export function makeSession(overrides: SessionOverrides = {}): Session {
     broadcast: overrides.broadcast ?? vi.fn(),
     onNotice: overrides.onNotice,
     modelResolver: { getCachedRunnerModels: () => [], contextWindowFor: () => undefined, ...(overrides.modelResolver ?? { modelsForRunners: vi.fn().mockResolvedValue({}) }) } as ModelResolver,
-    settings: overrides.settings ?? (() => ({ tddEnabled: false })),
+    settings: overrides.settings ?? (() => ({})),
     sessionId: overrides.sessionId,
     // Session drops a live conversation via reset() on fresh-plan and
     // plan-adoption boundaries — default it so partial fakes don't explode.

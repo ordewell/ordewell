@@ -50,7 +50,6 @@ function fakeChat() {
     showPlan: vi.fn(),
     planGenerated: vi.fn(),
     planApproved: vi.fn(),
-    setSkillToggles: vi.fn(),
     setPlanDockHeight: vi.fn(),
     setSkills: vi.fn(),
     setModels: vi.fn(),
@@ -188,10 +187,7 @@ function fakeRunnerInstallation(installed: string[]) {
 }
 
 function fakeSettings() {
-  let tdd = false;
   return {
-    getTdd: vi.fn(() => tdd),
-    setTdd: vi.fn((v: boolean) => { tdd = v; }),
     getAll: vi.fn(() => ({})),
   };
 }
@@ -259,7 +255,7 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
   });
 
   it("hands the session this window's enabled runners, read at each call", async () => {
-    h.settings.getAll.mockReturnValue({ tdd: { enabled: false }, enabledRunners: ['opencode'] });
+    h.settings.getAll.mockReturnValue({ enabledRunners: ['opencode'] });
     await h.config.config.update('enabledRunners', ['claude-code', 'codex']);
 
     expect(h.sessionDeps.current?.settings().enabledRunners).toEqual(['claude-code', 'codex']);

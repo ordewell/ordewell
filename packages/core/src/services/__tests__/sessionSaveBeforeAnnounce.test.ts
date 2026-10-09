@@ -48,7 +48,6 @@ function setup(tasks: Task[], opts: {
     isolation: opts.isolation ?? new FakeWorktreeIsolation(),
     config: opts.config,
     planner: opts.planner,
-    settings: () => ({ tddEnabled: false }),
     saveSession: (p) => { seen.push({ kind: 'save', statuses: statuses(flattenTasks(p.tasks)) }); },
     broadcast: (m) => {
       messages.push(m);

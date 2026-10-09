@@ -57,9 +57,6 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'parallel', usage: '/parallel [<n>]', description: 'How many AI tasks run at once (applies to a live run)', category: 'models' },
   { name: 'refresh', usage: '/refresh', description: 'Re-discover runners and model catalogs', category: 'models' },
 
-  // Skills
-  { name: 'tdd', usage: '/tdd [on|off]', description: 'Test-Driven Development mode', category: 'skills' },
-
   // Sessions
   { name: 'sessions', usage: '/sessions', description: 'List saved sessions', category: 'session' },
   { name: 'fork', usage: '/fork', description: 'Continue in a copy of this conversation and its tasks; the original stays as it is', category: 'session' },

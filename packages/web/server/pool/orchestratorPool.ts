@@ -234,7 +234,6 @@ export class OrchestratorPool {
       // for a planner that is running at "high".
       plannerThinkingEffort: config.plannerThinkingEffort ?? '',
       maxParallel: config.maxParallelSessions,
-      tdd: userSettings.tdd,
       modelAllowlist: userSettings.modelAllowlist,
       // The model remembered per planner backend (this task), so a surface can
       // render what's remembered without a second round-trip.
@@ -295,9 +294,6 @@ export class OrchestratorPool {
     }
     if (typeof changes.plannerThinkingEffort === 'string') {
       process.env.ORDEWELL_PLANNER_EFFORT = changes.plannerThinkingEffort;
-    }
-    if (changes.tdd && typeof (changes.tdd as Record<string, unknown>).enabled === 'boolean') {
-      this.settingsService.setTdd((changes.tdd as Record<string, unknown>).enabled as boolean);
     }
     if (envChanges) {
       let touched = false;

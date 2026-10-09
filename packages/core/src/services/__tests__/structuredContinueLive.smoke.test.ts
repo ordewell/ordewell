@@ -50,7 +50,6 @@ function liveSession(dir: string) {
   const session = makeSession({
     runner,
     workspaceRoot: () => dir,
-    settings: () => ({ tddEnabled: false }),
     taskOutput: new BufferedTaskOutputSource(),
   });
   return { session, children, requests, attempts };

@@ -203,16 +203,16 @@ describe('a planner the server did not reach', () => {
 });
 
 /** A planning session on a real harness planner, whose settings the test rewrites the way a settings write would. */
-function plannerSession(claude: FakeSpawnResult, initial: Partial<SessionRuntimeSettings> = {}, { inject = true, runner, skillsService }: { inject?: boolean; runner?: ITerminalRunner; skillsService?: Pick<SkillsService, 'findSkill' | 'listSkills'> } = {}) {
+function plannerSession(claude: FakeSpawnResult, initial: Partial<SessionRuntimeSettings> = {}, { inject = true, runner, skills = [], skillsService }: { inject?: boolean; runner?: ITerminalRunner; skills?: SkillInfo[]; skillsService?: Pick<SkillsService, 'findSkill' | 'listSkills'> } = {}) {
   const server = newServer();
-  let settings: SessionRuntimeSettings = { tddEnabled: false, enabledRunners: ['claude-code'], ...initial };
+  let settings: SessionRuntimeSettings = { enabledRunners: ['claude-code'], ...initial };
   const ai = service(claude, inject ? server : undefined);
   const broadcast = vi.fn<(msg: SessionMessage) => void>();
   const session = makeSession({
     aiService: ai,
     mcpServer: server,
     runner,
-    skillsService,
+    skillsService: skillsService ?? { findSkill: (name: string) => skills.find((sk) => sk.name === name) },
     modelResolver: {
       modelsForRunners: vi.fn(async (runners: string[]) => Object.fromEntries(runners.map((r) => [r, CATALOG[r] ?? []]))),
     },
@@ -484,6 +484,68 @@ describe('submit_plan', () => {
   });
 });
 
+function skill(name: string, appliesTo: SkillInfo['appliesTo']): SkillInfo {
+  const path = `/home/u/.ordewell/skills/${name}/SKILL.md`;
+  return { name, description: name, metadata: { name, description: name }, content: `${name} body`, path, source: 'global', appliesTo, modelInvocable: false, userInvocable: true };
+}
+
+const SKILLS = [skill('tdd', 'task'), skill('grilling', 'planner')];
+
+describe('submit_plan with task skills', () => {
+  it('commits skills it knows and ones not created yet, warning about the latter', async () => {
+    let submitted: { isError: boolean; body: unknown } | undefined;
+    const { session } = plannerSession(fakeClaude({
+      turn: async (mcp) => {
+        submitted = await call(mcp!, 'submit_plan', {
+          tasks: [
+            planTask('a', 1, 'claude-code', 'claude-sonnet-4', {
+              skills: ['tdd'],
+              subtasks: [planTask('a1', 1, 'claude-code', 'claude-sonnet-4', { skills: ['deploy-checklist'] })],
+            }),
+            planTask('b', 2, 'claude-code', 'claude-sonnet-4'),
+          ],
+        });
+        return 'Submitted.';
+      },
+    }), {}, { skills: SKILLS });
+
+    await session.startPlanning('add a cache', ['claude-code']);
+
+    expect(submitted?.isError).toBe(false);
+    expect((submitted?.body as { warnings: string[] }).warnings).toEqual([
+      'Task "Task a1": skill "deploy-checklist" not found; it must exist in the task\'s worktree (.ordewell/skills/deploy-checklist/SKILL.md) or in ~/.ordewell/skills/ when the task starts, or the task fails.',
+    ]);
+    expect(session.planTasks[0].skills).toEqual(['tdd']);
+    expect(session.planTasks[0].subtasks[0].skills).toEqual(['deploy-checklist']);
+    expect(session.planTasks[1].skills).toBeUndefined();
+  });
+
+  it('refuses a planner skill on a task, and commits nothing', async () => {
+    let submitted: { isError: boolean; body: unknown } | undefined;
+    const { session } = plannerSession(fakeClaude({
+      turn: async (mcp) => {
+        submitted = await call(mcp!, 'submit_plan', { tasks: [planTask('a', 1, 'claude-code', 'claude-sonnet-4', { skills: ['tdd', 'grilling'] })] });
+        return 'Submitted.';
+      },
+    }), {}, { skills: SKILLS });
+
+    await session.startPlanning('add a cache', ['claude-code']);
+
+    expect(submitted).toEqual({
+      isError: true,
+      body: {
+        ok: false,
+        errors: [{
+          taskId: 'a',
+          field: 'skills',
+          message: 'Task "Task a": "grilling" is a planner skill (applies-to: planner, /home/u/.ordewell/skills/grilling/SKILL.md). Only skills with applies-to: task can be attached to a task.',
+        }],
+      },
+    });
+    expect(session.planTasks).toEqual([]);
+  });
+});
+
 describe('the two routes to a plan', () => {
   it('commit the same plan for the same tasks: submit_plan, and the JSON envelope in the reply', async () => {
     const tasks = [
@@ -610,8 +672,8 @@ const TWO_TASKS = [
 ];
 
 /** A conversation with a committed two-task plan, whose every later reply is `second`. */
-async function planThen(second: (mcp: Client | null, message: string) => Promise<string>, opts: { inject?: boolean; runner?: ITerminalRunner } & Partial<SessionRuntimeSettings> = {}) {
-  const { inject = true, runner, ...settings } = opts;
+async function planThen(second: (mcp: Client | null, message: string) => Promise<string>, opts: { inject?: boolean; runner?: ITerminalRunner; skills?: SkillInfo[] } & Partial<SessionRuntimeSettings> = {}) {
+  const { inject = true, runner, skills, ...settings } = opts;
   let planned = false;
   const planner = plannerSession(fakeClaude({
     turn: async (mcp, message) => {
@@ -619,7 +681,7 @@ async function planThen(second: (mcp: Client | null, message: string) => Promise
       planned = true;
       return JSON.stringify({ tasks: TWO_TASKS });
     },
-  }), settings, { inject, runner });
+  }), settings, { inject, runner, skills });
   await planner.session.startPlanning('add a cache', ['claude-code']);
   return planner;
 }
@@ -648,6 +710,32 @@ async function runningPlan(second: Parameters<typeof planThen>[0], opts: { injec
   await planner.session.executePlan();
   return planner;
 }
+
+describe('edit_plan with task skills', () => {
+  it('attaches a skill not created yet with a warning, and refuses a planner skill', async () => {
+    const answers: { isError: boolean; body: unknown }[] = [];
+    const planner = await planThen(async (mcp) => {
+      answers.push(await call(mcp!, 'edit_plan', { ops: [{ op: 'update', taskId: '#2', changes: { skills: ['grilling'] } }] }));
+      answers.push(await call(mcp!, 'edit_plan', { ops: [{ op: 'update', taskId: '#2', changes: { skills: ['tdd', 'smoke-test'] } }] }));
+      return 'Done.';
+    }, { skills: SKILLS });
+
+    await planner.session.continueConversation('EDIT NOW');
+
+    expect(answers[0]).toEqual({
+      isError: true,
+      body: {
+        ok: false,
+        errors: [{ op: 1, kind: 'update', message: '"grilling" is a planner skill (applies-to: planner, /home/u/.ordewell/skills/grilling/SKILL.md). Only skills with applies-to: task can be attached to a task.' }],
+      },
+    });
+    expect(answers[1].isError).toBe(false);
+    expect((answers[1].body as { warnings: string[] }).warnings).toEqual([
+      expect.stringContaining('op 1 (update): skill "smoke-test" not found'),
+    ]);
+    expect(planner.session.planTasks[1].skills).toEqual(['tdd', 'smoke-test']);
+  });
+});
 
 describe('edit_plan', () => {
   const ops = [

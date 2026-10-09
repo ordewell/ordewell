@@ -211,5 +211,4 @@ export {
   type PlannerModelRecall,
   type PlannerModelStore,
 } from './services/PlannerModelMemory';
-export { type PlannerRuntimeToggles } from './services/plannerModes';
 export { DEFAULT_MAX_PARALLEL, parseMaxParallel } from './utils/maxParallel';

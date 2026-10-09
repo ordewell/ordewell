@@ -77,6 +77,18 @@ export interface TaskTransport {
   nativeSessionId?: string;
 }
 
+/**
+ * A task skill as one attempt received it: read from the task's own worktree
+ * (or global) at spawn, kept so the user can see what the runner was told
+ * even after the skill's file changes.
+ */
+export interface TaskSkillSnapshot {
+  name: string;
+  source: 'global' | 'workspace';
+  path: string;
+  content: string;
+}
+
 export interface Task {
   id: string;
   order: number;
@@ -114,6 +126,14 @@ export interface Task {
    * (ADR-0020). Cleared when the task is retried.
    */
   forcedPastGate?: string[];
+  /**
+   * Task skills (`applies-to: task`) attached by name. Their bodies are put in
+   * the runner's prompt at spawn, resolved where the task runs — a subtask's
+   * are its own, never its parent's. Absent means none.
+   */
+  skills?: string[];
+  /** The skills the latest attempt was given, as read when it spawned. */
+  attemptSkills?: TaskSkillSnapshot[];
 }
 
 export interface DiscoveredMode {
@@ -556,6 +576,7 @@ export function migrateLegacyPlan(legacy: LegacyPlanState): PlanState {
 export { taskOrderLabel, taskRef, titledTaskRef, resolveOrderLabel } from '../order-labels';
 
 export function createTask(overrides: Partial<Task> = {}): Task {
+  const skills = skillNames(overrides.skills);
   return {
     id: overrides.id ?? uuidv4(),
     order: overrides.order ?? 0,
@@ -578,7 +599,19 @@ export function createTask(overrides: Partial<Task> = {}): Task {
     sliceType: overrides.sliceType,
     userStoriesCovered: overrides.userStoriesCovered,
     ...(opsFlag(overrides.ops, overrides.type) ? { ops: true } : {}),
+    ...(skills ? { skills } : {}),
   };
+}
+
+/**
+ * The `skills` field as a task stores it, however it arrived: the planner's
+ * JSON is untyped. Names are trimmed and deduplicated; none at all is stored
+ * absent, so a plan without skills reads exactly as it did before them.
+ */
+export function skillNames(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const names = [...new Set(value.filter((v): v is string => typeof v === 'string').map((v) => v.trim()).filter(Boolean))];
+  return names.length > 0 ? names : undefined;
 }
 
 /**
@@ -731,6 +764,7 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
         verdict: prior?.verdict,
         outputSummary: prior?.outputSummary,
         transport: prior?.transport,
+        attemptSkills: prior?.attemptSkills,
         // Where a task that has run ran is fixed, like its transport (ADR-0020).
         ...(prior?.status === 'failed' ? { ops: prior.ops } : {}),
         forcedPastGate: prior?.forcedPastGate,

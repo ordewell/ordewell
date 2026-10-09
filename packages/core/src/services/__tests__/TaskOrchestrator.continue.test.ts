@@ -272,7 +272,7 @@ describe('a continue whose session cannot be resumed', () => {
 describe('Session.continueTask', () => {
   it('saves the continued attempt\'s start, so a reload does not show the old outcome', async () => {
     const { runner, sessions } = routingRunner();
-    const session = makeSession({ runner, settings: () => ({ tddEnabled: false }) });
+    const session = makeSession({ runner });
     const saved: LegacyPlanState = {
       tasks: [plan()],
       generatedAt: new Date().toISOString(),

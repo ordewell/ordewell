@@ -28,7 +28,6 @@ describe('SLASH_COMMANDS', () => {
     'help', 'model', 'key', 'allowlist', 'refresh',
     'sessions', 'new', 'save', 'load', 'delete',
     'runners', 'auto',
-    'tdd',
     // No 'plan': typing the goal starts planning, so an alias would only
     // shadow /planner and /planner-effort on completion.
     'run', 'stop', 'approve',
@@ -63,7 +62,7 @@ describe('completions', () => {
   it('filters by prefix', () => {
     const names = completions('/re').map((c) => c.name);
     expect(names).toContain('remove-task');
-    expect(names).not.toContain('tdd');
+    expect(names).not.toContain('verify');
   });
 
   // Tab takes the first match, so a redundant `/plan` would make `/planner`
@@ -168,7 +167,7 @@ describe('skillMatchKind', () => {
   });
 
   it('is null for a built-in command, even one tagged category "skills"', () => {
-    expect(skillMatchKind('tdd')).toBeNull();
+    expect(skillMatchKind('verify')).toBeNull();
   });
 
   it('is null for text that names nothing discovered', () => {
@@ -198,8 +197,8 @@ describe('tokenCompletions', () => {
   });
 
   it('excludes a built-in even when its name matches the prefix, once mid-prompt', () => {
-    const names = tokenCompletions({ start: 8, end: 11, name: 'td', nameEnd: 11 }).map((c) => c.name);
-    expect(names).not.toContain('tdd');
+    const names = tokenCompletions({ start: 8, end: 11, name: 've', nameEnd: 11 }).map((c) => c.name);
+    expect(names).not.toContain('verify');
   });
 });
 

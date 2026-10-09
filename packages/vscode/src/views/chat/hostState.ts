@@ -47,7 +47,6 @@ export interface HostState {
   planner: { backends: PlannerBackend[]; provider: string; runner?: string; effort?: string };
   isReady: boolean;
   modelDiscoveryErrors: Record<string, string>;
-  tddEnabled: boolean;
   skills: { name: string; description: string }[];
   checkpoint: { taskId: string; taskTitle: string; summary: string; pausedAt: number } | null;
   taskOutput: TaskOutputMap;
@@ -95,7 +94,6 @@ export const INITIAL_HOST_STATE: HostState = {
   planner: { backends: [], provider: '' },
   isReady: false,
   modelDiscoveryErrors: {},
-  tddEnabled: true,
   skills: [],
   checkpoint: null,
   taskOutput: {},
@@ -131,7 +129,6 @@ export type HostAction =
   | { type: 'patchReady'; ready: boolean }
   | { type: 'patchRunners'; runners: Updatable<RunnerId[]> }
   | { type: 'patchPendingEdits'; edits: Updatable<PendingPlanEdit[]> }
-  | { type: 'patchTddEnabled'; enabled: boolean }
   | { type: 'patchCheckpoint'; checkpoint: HostState['checkpoint'] }
   | { type: 'patchDockHeight'; height: number | undefined }
   | { type: 'patchDockExpanded'; expanded: Updatable<boolean> };
@@ -210,11 +207,6 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'patchPendingEdits':
       return { ...state, pendingEdits: resolve(action.edits, state.pendingEdits) };
-
-    case 'patchTddEnabled':
-      return { ...state, tddEnabled: action.enabled };
-
-
 
     case 'patchCheckpoint':
       return { ...state, checkpoint: action.checkpoint };
@@ -351,10 +343,6 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'promptUnsent':
       return { ...state, unsent: { text: action.text, seq: (state.unsent?.seq ?? 0) + 1 } };
-
-    case 'setSkillToggles':
-      if (!action.toggles) return state;
-      return { ...state, tddEnabled: action.toggles.tdd ?? true };
 
     case 'setSkills':
       return { ...state, skills: action.skills ?? [] };

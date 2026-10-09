@@ -39,7 +39,6 @@ function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {})
       deleteSession: vi.fn().mockResolvedValue({ ok: true }),
       getSettings: vi.fn().mockResolvedValue({}),
       updateSettings: vi.fn().mockResolvedValue({}),
-      sendCommand: vi.fn().mockResolvedValue({ ok: true, settings: { tdd: { enabled: true } } }),
       getRunners: vi.fn().mockResolvedValue({ runners: [], orchestratorModel: 'm/1' }),
       setRunnerEnabled: vi.fn().mockResolvedValue({ ok: true }),
       getModels: vi.fn().mockResolvedValue({ models: [], providers: [] }),
@@ -869,15 +868,7 @@ describe('planner switch', () => {
   });
 });
 
-describe('skills and settings', () => {
-  it('sends a skill toggle and mirrors the settings that come back', async () => {
-    const h = harness();
-    await runEffect({ type: 'command', name: 'tdd', action: 'on' }, h.deps);
-
-    expect(h.api.sendCommand).toHaveBeenCalledWith('tdd', { action: 'on' });
-    expect(h.actions).toContainEqual({ type: 'settingsLoaded', settings: { tdd: { enabled: true } } });
-  });
-
+describe('settings', () => {
   it('persists the orchestrator model to .env as well as the running daemon', async () => {
     const h = harness();
     await runEffect({ type: 'setModel', modelId: 'a/b' }, h.deps);

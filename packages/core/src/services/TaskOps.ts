@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import {
   Task, RunnerId, flattenTasks,
   addTaskToPlan, removeTaskFromPlan, updateTaskInPlan, renumberTasks,
-  createTask, opsFlag, inheritedOps,
+  createTask, opsFlag, inheritedOps, skillNames,
 } from '../models/Task';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_OPS_ENVELOPE_KEY } from './JsonExtractor';
 import { validateTaskEdit, checkModelAndModeValidity, type EditCatalog, type TaskEditActor, type TaskEditCheck } from './TaskEditValidator';
@@ -23,7 +23,7 @@ export type TaskOp =
 
 /** Fields the planner may change on an existing task. Everything else (id, status, verdict…) is system-owned. */
 export const UPDATABLE_FIELDS: (keyof Task)[] = [
-  'title', 'description', 'prompt', 'dependencies', 'assignedRunner', 'assignedModel', 'taskMode', 'thinkingEffort', 'type', 'userSteps', 'autonomy', 'sliceType', 'ops',
+  'title', 'description', 'prompt', 'dependencies', 'assignedRunner', 'assignedModel', 'taskMode', 'thinkingEffort', 'type', 'userSteps', 'autonomy', 'sliceType', 'ops', 'skills',
 ];
 
 /**
@@ -192,6 +192,7 @@ function updatableChanges(raw: Partial<Task> | undefined): Partial<Task> {
     if (raw && key in raw) (changes as Record<string, unknown>)[key] = (raw as Record<string, unknown>)[key];
   }
   if ('ops' in changes) changes.ops = opsFlag(changes.ops);
+  if ('skills' in changes) changes.skills = skillNames(changes.skills);
   return changes;
 }
 
@@ -579,6 +580,7 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
           autonomy: spec.autonomy ?? toMerge.find((t) => t.autonomy)?.autonomy,
           sliceType: spec.sliceType ?? toMerge.find((t) => t.sliceType)?.sliceType,
           ops: inheritedOps(toMerge, spec.ops),
+          skills: spec.skills ?? toMerge.flatMap((t) => t.skills ?? []),
           userStoriesCovered: spec.userStoriesCovered ?? (toMerge.flatMap((t) => t.userStoriesCovered ?? []).length
             ? [...new Set(toMerge.flatMap((t) => t.userStoriesCovered ?? []))]
             : undefined),
@@ -639,6 +641,7 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
             autonomy: spec.autonomy ?? target.autonomy,
             sliceType: spec.sliceType ?? target.sliceType,
             ops: inheritedOps([target], spec.ops),
+            skills: spec.skills ?? target.skills,
             userStoriesCovered: spec.userStoriesCovered ?? target.userStoriesCovered,
           });
           newTasks.push(nt);

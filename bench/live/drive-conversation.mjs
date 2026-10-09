@@ -351,7 +351,7 @@ async function sessionSuite() {
     fsAdapter: makeFs(root),
     broadcast: (m) => broadcasts.push(m),
     modelResolver,
-    settings: () => ({ tddEnabled: true, grillingEnabled: false, prdEnabled: true }),
+    settings: () => ({ grillingEnabled: false, prdEnabled: true }),
   });
 
   console.log('\n=== full Session: PRD flow with save-to-disk ===');
@@ -415,7 +415,7 @@ async function approvalsSuite() {
       fsAdapter,
       broadcast: (m) => broadcasts.push(m),
       modelResolver: new core.ModelResolver(new core.RunnerRegistry(), config, { execImpl: () => Promise.reject(new Error('harness')) }),
-      settings: () => ({ tddEnabled: false, grillingEnabled: false }),
+      settings: () => ({ grillingEnabled: false }),
       ...configOverrides,
     });
     return { session, fsAdapter, broadcasts };
@@ -554,7 +554,7 @@ async function visibilitySuite() {
     fsAdapter: new SandboxFs(),
     broadcast,
     modelResolver: new ModelResolver(registry, config, { execImpl: () => Promise.reject(new Error('harness')) }),
-    settings: () => ({ tddEnabled: false, grillingEnabled: false }),
+    settings: () => ({ grillingEnabled: false }),
   });
 
   console.log('\n=== visibility: research stream reaches the surfaces intact ===');
@@ -627,7 +627,7 @@ async function taskQuerySuite() {
     fsAdapter: makeFs(root),
     broadcast: (m) => broadcasts.push(m),
     modelResolver,
-    settings: () => ({ tddEnabled: false, grillingEnabled: false }),
+    settings: () => ({ grillingEnabled: false }),
   });
 
   // A plan handed to the session already assembled — not one it just

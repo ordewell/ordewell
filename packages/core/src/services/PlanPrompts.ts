@@ -1,7 +1,7 @@
 import { DiscoveredModel, RunnerId, type TaskSnapshot, type Task } from '../models/Task';
 import type { LegacyPlanState } from '../models/Task';
 import { buildModeGuide, filteredBuildModes, type RunnerModeInfo } from './ModeResolver';
-import { DEFAULT_PLANNER_MODES, modesFor, type IsolatedExecution, type PlannerModes } from './plannerModes';
+import { DEFAULT_PLANNER_MODES, type IsolatedExecution, type PlannerModes } from './plannerModes';
 import { TASK_QUERY_PROTOCOL, TASK_READ_TOOLS_PROTOCOL } from './TaskQuery';
 import { SELF_REPO } from './isolationRecord';
 import type { SkillInfo } from './SkillsService';
@@ -524,9 +524,8 @@ function buildPlanPromptBase(
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
   modes: PlannerModes = DEFAULT_PLANNER_MODES,
 ): string {
-  const scoped = modesFor('one-shot', modes);
-  const { autonomousDefault } = scoped;
-  const template = getPlanTemplate(scoped.isolatedExecution);
+  const { autonomousDefault } = modes;
+  const template = getPlanTemplate(modes.isolatedExecution);
   const researchReplacement = includeResearchSection ? RESEARCH_SECTION : '';
   const modelsJson = modelsJsonFor(modelsByRunner, runners);
 

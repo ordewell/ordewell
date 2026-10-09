@@ -182,28 +182,8 @@ describe('chat plan flow', () => {
     expect(pill?.textContent?.includes('Claude Code')).toBeTruthy();
   });
 
-  it('renders TDD skill pill and toggles it via postMessage', () => {
-    api.postMessage.mockClear();
-
-    send({ type: 'setSkillToggles', toggles: { tdd: false } });
-    const tddButton = Array.from(document.querySelectorAll('.skill-toggle-pill')).find(
-      (b) => b.textContent?.includes('TDD'),
-    ) as HTMLButtonElement;
-    expect(tddButton).toBeTruthy();
-    expect(tddButton.classList.contains('off')).toBeTruthy();
-
-    act(() => { fireEvent.click(tddButton); });
-    expect(api.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'toggleSkill', skillId: 'tdd', enabled: true }),
-    );
-  });
-
-  it('offers no Verify or Structured pill', () => {
-    send({ type: 'setSkillToggles', toggles: { tdd: true } });
-    const pills = Array.from(document.querySelectorAll('.skill-toggle-pill')).map((b) => b.textContent?.trim());
-
-    expect(pills).not.toContain('Verify');
-    expect(pills).not.toContain('Structured');
+  it('offers no mode-toggle pills: TDD is a skill attached to tasks, and Verify and Structured are gone', () => {
+    expect(document.querySelectorAll('.skill-toggle-pill')).toHaveLength(0);
   });
 
   it('renders a reply sent outside a turn (a PRD) as a planner chat message', () => {

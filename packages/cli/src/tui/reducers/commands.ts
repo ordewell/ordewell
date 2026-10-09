@@ -3,7 +3,7 @@ import {
 } from '@ordewell/core';
 import { handoffCommand } from '../handoff';
 import { findCommand, type ParsedCommand } from '../slash';
-import { findTask, plannerInFlight, SKILL_IDS, type PickerItem, type SkillId, type TuiState } from '../state';
+import { findTask, plannerInFlight, type PickerItem, type TuiState } from '../state';
 import { modelsForRunner } from '../taskAssignment';
 import { say } from '../transcript';
 import { DEFAULT_EFFORT, picker, pickerItemsFor, plannerEffortItems, plannerItems, providerErrorHint } from './pickers';
@@ -20,10 +20,6 @@ const KNOWN_PROVIDERS = Object.keys(ALL_PROVIDERS);
 export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step {
   if (!findCommand(name)) {
     return fail(state, `Unknown command: /${name} — type /help to see what's available.`);
-  }
-
-  if ((SKILL_IDS as readonly string[]).includes(name)) {
-    return toggleSkill(state, name as SkillId, args[0]);
   }
 
   switch (name) {
@@ -171,12 +167,6 @@ function resolveToggle(arg: string | undefined, current: boolean): boolean | nul
   if (value === 'off') return false;
   if (value === undefined) return !current;
   return null;
-}
-
-function toggleSkill(state: TuiState, skill: SkillId, arg: string | undefined): Step {
-  const enabled = resolveToggle(arg, state.skills[skill]);
-  if (enabled === null) return fail(state, `Usage: /${skill} [on|off]`);
-  return step(state, [{ type: 'command', name: skill, action: enabled ? 'on' : 'off' }]);
 }
 
 // Only asks when there is something to lose; an empty/idle session resets

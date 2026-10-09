@@ -256,16 +256,14 @@ describe('execution', () => {
 });
 
 describe('loaded data', () => {
-  it('mirrors the daemon settings into the skill toggles', () => {
+  it('mirrors the daemon settings', () => {
     const s = send(initialState(), {
       type: 'settingsLoaded',
       settings: {
         orchestratorModel: 'x/y',
-        tdd: { enabled: false },
         modelAllowlist: { opencode: ['a/b'] },
       },
     });
-    expect(s.skills.tdd).toBe(false);
     expect(s.orchestratorModel).toBe('x/y');
     expect(s.allowlist).toEqual({ opencode: ['a/b'] });
   });

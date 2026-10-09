@@ -195,7 +195,6 @@ export interface SettingsResponse {
   aiProvider: AiProvider;
   plannerThinkingEffort: string;
   maxParallel: number;
-  tdd: UserSettings['tdd'];
   modelAllowlist: UserSettings['modelAllowlist'];
   plannerModels: UserSettings['plannerModels'];
 }

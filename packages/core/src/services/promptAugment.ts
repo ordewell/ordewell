@@ -1,5 +1,6 @@
-import type { Task } from '../models/Task';
+import type { Task, TaskSkillSnapshot } from '../models/Task';
 import { flattenTasks, flattenTasksWithParents, taskOrderLabel } from '../models/Task';
+import { renderTaskSkills } from './taskSkills';
 
 const MAX_TAIL_CHARS = 500;
 const DEFAULT_PLAN_MAP_MAX_ENTRIES = 30;
@@ -152,7 +153,8 @@ export function renderPlanMap(planTasks: readonly Task[], currentTaskId: string,
 export interface ComposeOptions {
   planMapEnabled?: boolean;
   planMapMaxEntries?: number;
-  tddEnabled?: boolean;
+  /** The task's skills as resolved where this attempt runs. */
+  skills?: readonly TaskSkillSnapshot[];
   /** An ops task's last attempt, as its output ended (ADR-0020); absent on a first attempt. */
   previousAttempt?: string;
   /** The runner is given the `task_complete` and `checkpoint` tools (ADR-0022); the markers stay as their fallback. */
@@ -186,25 +188,6 @@ function renderCompletionMarker(task: Task, completionTool = false): string {
   const howto = `Build it by writing \`<<<ORDEWELL_\` immediately followed by \`DONE_${task.completionMarker}>>>\` — joined into a single unbroken token, with no space, quote, or any other character between the two parts.`;
   if (!completionTool) return `\n\nWhen you have fully completed this task, print one final line containing only the completion marker. ${howto}`;
   return `\n\nWhen you have fully completed this task, call the \`task_complete\` tool with status \`done\` and a summary of what you did; the tasks that depend on this one are given that summary. If you cannot complete it, call \`task_complete\` with status \`blocked\` or \`failed\` and the reason instead, and print no marker. After a \`done\` call, or if the tool is not available to you, also print one final line containing only the completion marker. ${howto}`;
-}
-
-function renderTddInstruction(): string {
-  return [
-    '## Implementation workflow (TDD)',
-    '',
-    'Work test-first in vertical slices at the seams your task prompt names. A seam is the public boundary you test at — if the prompt names none, identify the highest public interface and test there, never against internals.',
-    '',
-    '1. RED: Write ONE failing test for the next behavior, through the public interface',
-    '2. GREEN: Write minimal production code to make that test pass',
-    '',
-    'Rules:',
-    '- One test per RED-GREEN cycle — do not write all tests first',
-    '- Expected values must come from an independent source of truth (spec, worked example, known-good literal), never recomputed the way the code computes them',
-    '- Prefer integration-style tests over unit tests with mocks; tests should survive internal refactors',
-    '- Use the project\'s existing test framework and patterns',
-    '- While iterating, run the typechecker and the single test file you are touching frequently; run the full test suite once at the end of the task',
-    '- Refactoring is not part of the red-green cycle: only once all tests are green, tidy what this task touched, keeping tests green',
-  ].join('\n');
 }
 
 /*
@@ -263,9 +246,7 @@ export function composeAugmentedPrompt(task: Task, allTasks: readonly Task[], op
 
   if (opts?.previousAttempt !== undefined) blocks.push(renderPreviousAttempt(opts.previousAttempt));
 
-  if (opts?.tddEnabled) {
-    blocks.push(renderTddInstruction());
-  }
+  if (opts?.skills?.length) blocks.push(renderTaskSkills(opts.skills));
 
   if (isHitlTask(task)) {
     blocks.push(renderCheckpointInstruction(opts?.completionTool));

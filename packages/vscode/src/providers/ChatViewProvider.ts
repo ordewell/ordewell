@@ -66,9 +66,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.postMessage({ type: 'setModels', models });
   }
   setRunners(runners: RunnerMeta[]): void { this.postMessage({ type: 'setRunners', runners }); }
-  setSkillToggles(tdd: boolean, unavailable: string[] = []): void {
-    this.postMessage({ type: 'setSkillToggles', toggles: { tdd }, unavailable });
-  }
   setPlanDockHeight(height: number | undefined): void {
     this.postMessage({ type: 'planDockHeight', height });
   }

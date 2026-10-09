@@ -110,7 +110,6 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     fsAdapter: services.fsAdapter,
     terminalRunner: services.terminalRunner,
     notifications: services.notifications,
-    settingsService: services.settingsService,
     getCurrentPlan: () => state.plan,
     setCurrentPlan: (plan) => { state.plan = plan; },
     getCurrentGoal: () => state.goal,
@@ -156,7 +155,6 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     plannerModelMemory: services.plannerModelMemory,
     runnerInstallation: services.runnerInstallation,
     chatProvider: services.chatProvider,
-    settingsService: services.settingsService,
     sendModelConfig: () => sendModelConfig(services.config, services.chatProvider),
     log,
   });
@@ -198,7 +196,6 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       runSlashCommand: (text) => handleSlashCommand(text, slashDeps()),
       setPlanner: (provider) => planner.apply(provider as AiProvider),
       setPlannerModel: (modelId, effort) => planner.setModel(modelId, effort),
-      toggleSkill: (skillId, enabled) => planner.toggleSkill(skillId, enabled),
       openTaskLog: (taskId) => taskLogs.open(taskId),
       setPlanDockHeight: (height) => { void services.context.globalState.update(PLAN_DOCK_HEIGHT_KEY, height); },
     },
@@ -247,7 +244,6 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
 
   function onWebviewReady(): void {
     services.chatProvider.resendAllState();
-    services.chatProvider.setSkillToggles(services.settingsService.getTdd(), []);
     services.chatProvider.setPlanDockHeight(services.context.globalState.get<number>(PLAN_DOCK_HEIGHT_KEY));
     sendSkills();
     // Activation-time discovery can catch a runner CLI cold (server spawn,

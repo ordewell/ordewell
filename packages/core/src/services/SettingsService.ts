@@ -3,7 +3,6 @@ import * as path from 'path';
 import { globalDataDir, migrateOldConfigDir } from '../utils/globalDataDir';
 
 export interface UserSettings {
-  tdd: { enabled: boolean };
   modelAllowlist?: Record<string, string[]>;
   /** Last model (and its thinking effort) the user chose for each planner backend, keyed by AiProvider id. */
   plannerModels?: Record<string, { model: string; effort?: string }>;
@@ -13,10 +12,6 @@ export interface UserSettings {
    */
   enabledRunners?: string[];
 }
-
-const DEFAULTS: UserSettings = {
-  tdd: { enabled: true },
-};
 
 /**
  * Where the user's toggles live. `ORDEWELL_SETTINGS_PATH` overrides it so several
@@ -83,16 +78,6 @@ export class SettingsService {
     }
   }
 
-  getTdd(): boolean {
-    return this.getAll().tdd.enabled;
-  }
-
-  setTdd(enabled: boolean): void {
-    this.getAll();
-    this.cache!.tdd.enabled = enabled;
-    this.persist();
-  }
-
   getModelAllowlist(runner: string): string[] | undefined {
     return this.getAll().modelAllowlist?.[runner];
   }
@@ -156,11 +141,10 @@ export class SettingsService {
     try {
       if (fs.existsSync(this.filePath)) {
         const raw = JSON.parse(fs.readFileSync(this.filePath, 'utf-8'));
-        // Only known keys are lifted, so the removed `verification` toggle and
-        // `runnerTransport` setting of older files are dropped on the next write.
-        const settings: UserSettings = {
-          tdd: { enabled: raw.tdd?.enabled ?? DEFAULTS.tdd.enabled },
-        };
+        // Only known keys are lifted, so the removed `tdd` (now a task skill)
+        // and `verification` toggles and the `runnerTransport` setting of older
+        // files are dropped on the next write.
+        const settings: UserSettings = {};
         if (raw.modelAllowlist !== undefined) {
           settings.modelAllowlist = raw.modelAllowlist;
         }
@@ -176,7 +160,7 @@ export class SettingsService {
     } catch {
       // corrupted file — use defaults
     }
-    return { ...DEFAULTS, tdd: { ...DEFAULTS.tdd } };
+    return {};
   }
 
   private persist(): void {

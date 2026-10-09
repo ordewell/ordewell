@@ -348,7 +348,7 @@ describe('VerdictEngine', () => {
       const task = buildTask({ prompt: 'ship it', sliceType: 'HITL' });
 
       engine.watch(task, session);
-      session.emit(composeAugmentedPrompt(task, [task], { tddEnabled: true }));
+      session.emit(composeAugmentedPrompt(task, [task]));
 
       expect(summaries).toEqual([]);
     });
