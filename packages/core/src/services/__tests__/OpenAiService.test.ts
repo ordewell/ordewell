@@ -4,6 +4,7 @@ import { fakeFileSystem } from '../../testing';
 import type { ResearchProgress } from '../../models/Task';
 import type { UsageRecord } from '../../models/Usage';
 import type { ConversationRequest } from '../AiService';
+import type { SkillInfo } from '../SkillsService';
 
 const createSpy = vi.hoisted(() => vi.fn());
 const clientSpy = vi.hoisted(() => vi.fn());
@@ -275,5 +276,26 @@ describe('OpenAiService credentials', () => {
     expect(() => service.ensureInit()).not.toThrow();
     await plan(service);
     expect((clientSpy.mock.calls[0][0] as { apiKey: string }).apiKey).toBeTruthy();
+  });
+});
+
+describe('OpenAiService planner skill catalog', () => {
+  beforeEach(() => createSpy.mockReset());
+
+  it('shows the task skills the planner may attach, and no planner skills, which load only through tools', async () => {
+    createSpy.mockImplementation(() => streamOf([{ choices: [{ delta: { content: 'Which cache?' }, finish_reason: 'stop' }] }]));
+    const skill = (name: string, appliesTo: SkillInfo['appliesTo']): SkillInfo => ({
+      name, description: `${name} description`, metadata: { name, description: '' }, content: 'BODY',
+      source: 'global', path: `/skills/${name}/SKILL.md`, appliesTo, modelInvocable: true, userInvocable: true,
+    });
+
+    await new OpenAiService(cfg()).startConversation({
+      goal: 'add a cache', runners: ['claude-code'], modelsByRunner: {}, fs: fakeFileSystem(), onProgress: () => {},
+      skills: [skill('pr-style', 'task'), skill('review-plan', 'planner')],
+    });
+
+    const [{ messages }] = createSpy.mock.calls[0] as [{ messages: { role: string; content: string }[] }];
+    expect(messages[0].content).toContain('Task skills you may attach:\n- pr-style: pr-style description');
+    expect(messages[0].content).not.toMatch(/review-plan|load_skill/);
   });
 });

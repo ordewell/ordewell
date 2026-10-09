@@ -3,6 +3,7 @@ import type { IConfig } from '../../interfaces/IConfig';
 import type { IFileSystem } from '../../interfaces/IFileSystem';
 import type { ResearchProgress } from '../../models/Task';
 import { fakeConfig, fakeFileSystem } from '../../testing';
+import type { SkillInfo } from '../SkillsService';
 
 /** The chat instance every getGenerativeModel().startChat() hands back. */
 const startChat = vi.hoisted(() => vi.fn());
@@ -193,5 +194,27 @@ describe('Gemini research chat streaming', () => {
     // Thought tokens bill as output alongside the answer tokens.
     expect(usage[0].record).toEqual({ source: 'google', inputTokens: 70, outputTokens: 72 });
     expect(tasks).toHaveLength(1);
+  });
+});
+
+describe('Gemini planner skill catalog', () => {
+  beforeEach(() => startChat.mockReset());
+
+  it('shows the task skills the planner may attach, and no planner skills, which load only through tools', async () => {
+    scriptStreams([streamResult([{ candidates: [{ content: { parts: [{ text: 'Which cache?' }] }, finishReason: 'STOP' }] }])]);
+    const skill = (name: string, appliesTo: SkillInfo['appliesTo']): SkillInfo => ({
+      name, description: `${name} description`, metadata: { name, description: '' }, content: 'BODY',
+      source: 'global', path: `/skills/${name}/SKILL.md`, appliesTo, modelInvocable: true, userInvocable: true,
+    });
+
+    await new GeminiService(geminiConfig()).startConversation({
+      goal: 'add a cache', runners: ['claude-code'], modelsByRunner: {}, fs: fakeFileSystem() as IFileSystem, onProgress: () => {},
+      skills: [skill('pr-style', 'task'), skill('review-plan', 'planner')],
+    });
+
+    const [{ history }] = startChat.mock.calls[0] as [{ history: { parts: { text: string }[] }[] }];
+    const system = history[0].parts[0].text;
+    expect(system).toContain('Task skills you may attach:\n- pr-style: pr-style description');
+    expect(system).not.toMatch(/review-plan|load_skill/);
   });
 });

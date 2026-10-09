@@ -57,6 +57,8 @@ function fakeHost(ai: IAiService, plan: LegacyPlanState | null = dialoguePlan())
     broadcast: vi.fn(),
     broadcastPlan: vi.fn(),
     validateOps: vi.fn(),
+    taskSkills: () => ({ findSkill: () => undefined, searchedDirs: () => [] }),
+    notice: vi.fn(),
     adoptTasks: vi.fn((tasks) => tasks.length),
     capturePrd: vi.fn(),
     queueEdit: vi.fn().mockReturnValue(1),

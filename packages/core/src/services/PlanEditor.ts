@@ -9,7 +9,8 @@ import type { SessionCatalog } from './SessionCatalog';
 import type { PlanStore } from './PlanStore';
 import type { TaskOrchestrator } from './TaskOrchestrator';
 import type { IsolationRunController } from './IsolationRunController';
-import type { SessionBroadcaster } from './SessionMessage';
+import type { SessionBroadcaster, SessionNotice } from './SessionMessage';
+import { checkPlanSkills, type SkillLookup } from './taskSkills';
 import { opsFlag, skillNames, type DiscoveredModel, type LegacyPlanState, type RunnerId, type Task } from '../models/Task';
 
 /** The catalogs an edit reads, as the session holds them at the moment of the edit. */
@@ -31,6 +32,9 @@ export interface PlanEditorDeps {
   broadcast: SessionBroadcaster;
   /** Whether the planner has Ordewell's tools, which changes how a merge or split is asked of it. */
   plannerTools: () => boolean;
+  /** The workspace root's skill catalog, which a hand-set skill list is checked against. */
+  taskSkills: () => SkillLookup;
+  notice: (level: SessionNotice['level'], message: string) => void;
 }
 
 /**
@@ -51,6 +55,8 @@ export class PlanEditor {
   private readonly runs: PlanEditorDeps['runs'];
   private readonly broadcast: SessionBroadcaster;
   private readonly plannerTools: () => boolean;
+  private readonly taskSkills: () => SkillLookup;
+  private readonly notice: PlanEditorDeps['notice'];
 
   constructor(deps: PlanEditorDeps) {
     this.store = deps.store;
@@ -61,6 +67,8 @@ export class PlanEditor {
     this.runs = deps.runs;
     this.broadcast = deps.broadcast;
     this.plannerTools = deps.plannerTools;
+    this.taskSkills = deps.taskSkills;
+    this.notice = deps.notice;
   }
 
   /**
@@ -72,21 +80,30 @@ export class PlanEditor {
    * rather than a second copy of the rules — and throws, so the surface can
    * say why. Gated on the task existing so an edit to an unknown id still
    * falls through to the no-op `store.update` below instead of throwing.
+   * Attached skills meet the rule a planner's do: a planner skill is refused,
+   * a name not found yet only warns.
    */
   async updateTask(taskId: string, changes: Partial<Task>): Promise<LegacyPlanState | null> {
     if ('ops' in changes) changes = { ...changes, ops: opsFlag(changes.ops) };
     if ('skills' in changes) changes = { ...changes, skills: skillNames(changes.skills) };
-    if ((changes.dependencies || changes.type || changes.assignedModel || changes.taskMode || 'ops' in changes) && this.store.get(taskId)) {
+    const target = this.store.get(taskId);
+    const skills = changes.skills && target
+      ? checkPlanSkills([{ ...target, skills: changes.skills, subtasks: [] }], this.taskSkills())
+      : undefined;
+    if (skills?.errors.length) throw new PlanEditError(skills.errors.map((e) => e.message).join(' '));
+    if ((changes.dependencies || changes.type || changes.assignedModel || changes.taskMode || 'ops' in changes) && target) {
       const check = validateTaskEdit('direct', this.store.planTasks, taskId, changes, this.catalog.edit());
       if (!check.ok) throw new PlanEditError(check.error ?? 'Those changes are not valid');
       if (check.clear?.length) {
         changes = { ...changes, ...Object.fromEntries(check.clear.map((f) => [f, undefined])) };
       }
     }
-    return this.commit(
+    const plan = await this.commit(
       () => Boolean(this.store.update(taskId, changes)),
       () => this.broadcast({ type: 'task_updated', taskId, changes: changes as Record<string, unknown> }),
     );
+    if (plan) for (const warning of skills?.warnings ?? []) this.notice('warn', warning);
+    return plan;
   }
 
   /**

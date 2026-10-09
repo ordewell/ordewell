@@ -1,13 +1,16 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Planner } from '../Planner';
-import { createTask, type TaskSnapshot, type DiscoveredModel } from '../../models/Task';
+import { createTask, type Task, type TaskSnapshot, type DiscoveredModel } from '../../models/Task';
 import type { IAiService } from '../AiService';
 import { fakeConfig } from '../../testing';
 import { DEFAULT_PLANNER_MODES } from '../plannerModes';
+import type { SkillLookup } from '../taskSkills';
 
 function discoveredModel(modelId: string, label?: string): DiscoveredModel {
   return { modelId, modelLabel: label ?? modelId, variants: [] };
 }
+
+const noSkills: SkillLookup = { findSkill: () => undefined, searchedDirs: () => [] };
 
 function fakeAiService(): IAiService {
   return {
@@ -211,6 +214,7 @@ describe('Planner', () => {
         userMessage: 'update the feature task',
         modelsByRunner: { 'claude-code': [] },
         runners: ['claude-code'],
+        skills: noSkills,
       });
 
       expect(aiService.sendPlanningPrompt).toHaveBeenCalledOnce();
@@ -240,6 +244,7 @@ describe('Planner', () => {
         userMessage: 'create a task',
         modelsByRunner: {},
         runners: ['claude-code'],
+        skills: noSkills,
       });
 
       expect(aiService.sendPlanningPrompt).toHaveBeenCalledTimes(2);
@@ -264,6 +269,7 @@ describe('Planner', () => {
         userMessage: 'create a task',
         modelsByRunner: {},
         runners: ['claude-code'],
+        skills: noSkills,
       })).rejects.toThrow(/validation|exhausted/i);
 
       expect(aiService.sendPlanningPrompt).toHaveBeenCalledTimes(3);
@@ -283,6 +289,7 @@ describe('Planner', () => {
         modelsByRunner: { 'opencode': [discoveredModel('kimi-2.6'), discoveredModel('gpt-5')] },
         runners: ['opencode'],
         perRunnerAllowlist: { 'opencode': ['kimi-2.6'] },
+        skills: noSkills,
       });
 
       const promptArg = (aiService.sendPlanningPrompt as import("vitest").Mock).mock.calls[0][0];
@@ -291,6 +298,44 @@ describe('Planner', () => {
       expect(promptArg).not.toContain('gpt-5');
       expect(result.pendingTasks[0].assignedModel?.modelId).toBe('kimi-2.6');
       expect(result.pendingTasks[0].assignedModel?.thinkingEffort).toBeUndefined();
+    });
+  });
+
+  describe('modifyDuringExecution and task skills', () => {
+    const lookup: SkillLookup = {
+      findSkill: (name) => (name === 'grilling'
+        ? { name, description: '', metadata: { name, description: '' }, content: '', path: '/g/grilling/SKILL.md', source: 'global', appliesTo: 'planner', modelInvocable: false, userInvocable: true }
+        : undefined),
+      searchedDirs: () => [],
+    };
+    const request = (pendingTasks: Task[]) => ({
+      executionLog: [], pendingTasks, activeSessions: new Map(), userMessage: 'restyle it', modelsByRunner: {}, runners: ['claude-code'], skills: lookup,
+    });
+
+    it('shows the planner the tasks without what only execution reads', async () => {
+      const ran = { ...createTask({ id: 't1', title: 'a', status: 'failed', prompt: 'p', skills: ['tdd'] }), attemptSkills: [{ name: 'tdd', source: 'global' as const, path: '/g/tdd/SKILL.md', content: 'WHOLE TDD BODY' }] };
+      const aiService = fakeAiService();
+      (aiService.sendPlanningPrompt as import("vitest").Mock).mockResolvedValue([createTask({ id: 't1', title: 'a' })]);
+
+      await new Planner(fakeConfig(), aiService).modifyDuringExecution(request([ran]));
+
+      const prompt = (aiService.sendPlanningPrompt as import("vitest").Mock).mock.calls[0][0] as string;
+      expect(prompt).toContain('"skills": [');
+      expect(prompt).not.toMatch(/WHOLE TDD BODY|attemptSkills|completionMarker/);
+    });
+
+    it('sends a planner skill on a task back for repair, and returns names not found as warnings', async () => {
+      const aiService = fakeAiService();
+      (aiService.sendPlanningPrompt as import("vitest").Mock)
+        .mockResolvedValueOnce([createTask({ id: 't1', title: 'a', skills: ['grilling'] })])
+        .mockResolvedValueOnce([createTask({ id: 't1', title: 'a', skills: ['later'] })]);
+
+      const result = await new Planner(fakeConfig(), aiService).modifyDuringExecution(request([]));
+
+      const retry = (aiService.sendPlanningPrompt as import("vitest").Mock).mock.calls[1][0] as string;
+      expect(retry).toMatch(/Task "a": "grilling" is a planner skill/);
+      expect(result.pendingTasks[0].skills).toEqual(['later']);
+      expect(result.skillWarnings).toEqual([expect.stringContaining('Task "a": skill "later" not found')]);
     });
   });
 

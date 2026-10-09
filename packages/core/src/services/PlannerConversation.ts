@@ -1,16 +1,17 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { ConversationRequest, ConversationTurn, IAiService } from './AiService';
-import { repairLoop, taskOpsRejectedPrompt } from './PlanRepair';
+import { reEmitPlanPrompt, repairLoop, taskOpsRejectedPrompt } from './PlanRepair';
 import { renderTaskQueryAnswer, taskQuerySignature, TASK_QUERY_ANSWER_OR_OPS, TASK_QUERY_REMINDER, TASK_READ_TOOLS_REMINDER, type LiveOutputLookup, type TaskQuery, type TaskQueryCatalog } from './TaskQuery';
 import { taskOpsProtocol, refMatchesTask, taskOpRefs, type ApplyTaskOpsResult, type TaskOp } from './TaskOps';
 import { resolveDefaultMode } from './ModeResolver';
-import type { PlannerTurnOutcome, SessionBroadcaster } from './SessionMessage';
+import type { PlannerTurnOutcome, SessionBroadcaster, SessionNotice } from './SessionMessage';
 import { TurnStream } from './replyStream';
 import type { ForkedDialogue } from './conversationFork';
 import { condensedNotice, extractSummary, keptTail, summaryRequest } from './conversationSummary';
 import type { ConversationMessage, LegacyPlanState, ResearchLogEntry, ResearchProgress, RunnerId, SkillLoad, Task } from '../models/Task';
 import { flattenTasks, isUserMessage } from '../models/Task';
 import { plannerMessage, plannerTranscript, skillLoadLabel, skillLoadNotice, type SkillInvocation } from './skillInvocation';
+import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
 
 /**
  * Per-runner model cap for the always-on catalog block. Generous enough that
@@ -154,11 +155,15 @@ export interface PlannerConversationHost {
   broadcastPlan(turnId?: string): void;
   /** Validate a batch against live state. Pure — nothing is applied. */
   validateOps(ops: TaskOp[]): ApplyTaskOpsResult;
+  /** The workspace root's skill catalog, which the skills a plan or edit attaches are checked against. */
+  taskSkills(): SkillLookup;
+  /** Tell the user something the transcript does not carry. */
+  notice(level: SessionNotice['level'], message: string): void;
   /** Load planner-produced tasks: an edit keeps run state, a commit starts over. Returns how many landed. */
   adoptTasks(tasks: readonly Task[], how: 'edit' | 'commit'): number;
   capturePrd(text: string): void;
   /** Park a structural edit until the next batch boundary. Returns the queue length. */
-  queueEdit(userMessage: string): number;
+  queueEdit(message: SkillInvocation): number;
   /** Wake a scheduler an applied edit may have unblocked. */
   afterEdit(): Promise<void>;
   /** The planner turn was stopped or abandoned: whatever it is waiting on (a parked approval) will never be answered. */
@@ -704,7 +709,7 @@ export class PlannerConversation {
       // or an added task, is reconciled into the plan now and the running batch
       // keeps going. A paused scheduler with no runner live queues nothing.
       if (this.editTouchesLiveWork(settleable)) {
-        const queued = this.host.queueEdit(message.text);
+        const queued = this.host.queueEdit(message);
         settleable = {
           kind: 'message',
           text: `Execution is running, so I queued your change — it will be applied between task batches (${queued} queued).`,
@@ -925,13 +930,21 @@ export class PlannerConversation {
    * one path, not two.
    */
   private async settle(turn: SettleableTurn, userTurn: UserTurn): Promise<SettledTurn> {
-    type Settled = { plan: LegacyPlanState } | { turn: CommitTurn };
+    type Settled = { plan: LegacyPlanState } | { turn: CommitTurn; skillWarnings?: string[] };
     const { signal, stream } = userTurn;
     const ai = this.host.aiService();
     const invalidOps = (errors: string[], researchLog: ConversationTurn['researchLog']): Settled => ({
       turn: {
         kind: 'message',
         text: `I tried to modify the tasks, but the changes were invalid:\n- ${errors.join('\n- ')}\n\nThe plan is unchanged. Rephrase the request, or adjust the tasks manually.`,
+        researchLog,
+      },
+    });
+
+    const invalidPlan = (errors: string[], researchLog: ConversationTurn['researchLog']): Settled => ({
+      turn: {
+        kind: 'message',
+        text: `I tried to commit a plan, but it was invalid:\n- ${errors.join('\n- ')}\n\nThe plan is unchanged. Rephrase the request, or adjust the tasks manually.`,
         researchLog,
       },
     });
@@ -943,6 +956,13 @@ export class PlannerConversation {
         return this.drainTaskQueries(await ai.continueConversation(corrective, stream.sink(), signal), userTurn);
       },
       interpret: (t) => {
+        if (t.kind === 'plan') {
+          const skills = checkPlanSkills(t.tasks, this.host.taskSkills());
+          if (skills.errors.length === 0) return { done: { turn: t, skillWarnings: skills.warnings } };
+          const errors = skills.errors.map((e) => e.message);
+          if (!ai.hasActiveConversation() || signal.aborted) return { done: invalidPlan(errors, t.researchLog) };
+          return { retry: { errors, corrective: reEmitPlanPrompt(errors.join('; ')) } };
+        }
         if (t.kind !== 'task_ops') return { done: { turn: t } };
         this.assertCurrent(userTurn, t);
         const applied = this.applyTaskOps(t, stream.turnId);
@@ -955,7 +975,7 @@ export class PlannerConversation {
         return { retry: { errors: applied.errors, corrective: taskOpsRejectedPrompt(applied.errors) } };
       },
       maxRepairs: 2,
-      onExhausted: ({ reply, errors }) => invalidOps(errors, reply.researchLog),
+      onExhausted: ({ reply, errors }) => (reply.kind === 'plan' ? invalidPlan : invalidOps)(errors, reply.researchLog),
     });
 
     if ('plan' in settled) {
@@ -966,12 +986,21 @@ export class PlannerConversation {
       return { plan: settled.plan, outcome: 'task_ops' };
     }
     this.assertCurrent(userTurn, settled.turn);
-    return { plan: this.commit(settled.turn, stream.turnId), outcome: settled.turn.kind };
+    const plan = this.commit(settled.turn, stream.turnId);
+    this.warnSkills(settled.skillWarnings ?? []);
+    return { plan, outcome: settled.turn.kind };
+  }
+
+  /** A name not found at submit only warns: a task the attaching one depends on may create it. */
+  private warnSkills(warnings: readonly string[]): void {
+    for (const warning of warnings) this.host.notice('warn', warning);
   }
 
   /** Validate + commit a task_ops turn atomically. Returns the errors on rejection (plan untouched). */
   private applyTaskOps(turn: Extract<ConversationTurn, { kind: 'task_ops' }>, turnId: string): { plan: LegacyPlanState } | { errors: string[] } {
     this.requirePlan();
+    const skills = checkOpSkills(turn.ops, this.host.taskSkills());
+    if (skills.errors.length > 0) return { errors: skills.errors.map((e) => e.message) };
     const result = this.host.validateOps(turn.ops);
     if (!result.ok) return { errors: result.errors };
 
@@ -989,6 +1018,7 @@ export class PlannerConversation {
         this.host.broadcastPlan();
       },
     );
+    this.warnSkills(skills.warnings);
     return { plan: plan! };
   }
 
@@ -1109,7 +1139,7 @@ export class PlannerConversation {
       const runFields = isMan
         ? `steps:${t.userSteps?.length ?? 0}`
         : `${t.assignedModel ? `model:${t.assignedModel.modelId} ` : ''}mode:${t.taskMode ?? 'build'} effort:${t.thinkingEffort ?? '-'}`;
-      return `#${t.order} id=${t.id} "${t.title}" [${t.status}] type:${isMan ? 'MAN' : t.ops ? 'AI ops' : 'AI'} runner:${t.assignedRunner} ${runFields} autonomy:${t.autonomy ?? '-'} slice:${t.sliceType ?? '-'} deps:[${t.dependencies.map((d) => orderOf.get(d) ?? d).join(', ')}]`;
+      return `#${t.order} id=${t.id} "${t.title}" [${t.status}] type:${isMan ? 'MAN' : t.ops ? 'AI ops' : 'AI'} runner:${t.assignedRunner} ${runFields} autonomy:${t.autonomy ?? '-'} slice:${t.sliceType ?? '-'} deps:[${t.dependencies.map((d) => orderOf.get(d) ?? d).join(', ')}]${t.skills?.length ? ` skills:[${t.skills.join(', ')}]` : ''}`;
     });
   }
 }

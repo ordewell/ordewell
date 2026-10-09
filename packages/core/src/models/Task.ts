@@ -360,6 +360,8 @@ export interface QueuedMessage {
   id: string;
   text: string;
   timestamp: string;
+  /** What its `/name` tokens loaded when it was sent: the drain composes them with the text, as a live send does. */
+  skills?: SkillLoad[];
 }
 
 export interface PlanModificationWarnings {
@@ -610,14 +612,36 @@ export function createTask(overrides: Partial<Task> = {}): Task {
 }
 
 /**
+ * A name a skill can have, lower-cased as `/name` is. Anything else — a path
+ * separator, `..` — is joined into a path and could only reach outside the
+ * skill dirs.
+ */
+const SKILL_NAME = /^[a-z0-9][a-z0-9_-]*$/;
+
+export function isSkillName(name: string): boolean {
+  return SKILL_NAME.test(name);
+}
+
+/**
  * The `skills` field as a task stores it, however it arrived: the planner's
- * JSON is untyped. Names are trimmed and deduplicated; none at all is stored
- * absent, so a plan without skills reads exactly as it did before them.
+ * JSON is untyped. Names are trimmed, lower-cased and deduplicated, and one
+ * no skill could have is dropped; none at all is stored absent, so a plan
+ * without skills reads exactly as it did before them.
  */
 export function skillNames(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
-  const names = [...new Set(value.filter((v): v is string => typeof v === 'string').map((v) => v.trim()).filter(Boolean))];
+  const names = [...new Set(value.filter((v): v is string => typeof v === 'string').map((v) => v.trim().toLowerCase()).filter(isSkillName))];
   return names.length > 0 ? names : undefined;
+}
+
+/**
+ * The skills of a task a merge or a split makes from others: what the edit
+ * chose when it named any, none when it chose an explicit `[]`, else what the
+ * tasks it came from had — a malformed value is not a request to drop them.
+ */
+export function inheritedSkills(chosen: unknown, inherited: readonly string[] | undefined): string[] | undefined {
+  if (Array.isArray(chosen) && chosen.length === 0) return undefined;
+  return skillNames(chosen) ?? skillNames(inherited);
 }
 
 /**
@@ -787,6 +811,23 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
   };
 
   return renumberTasks(overlay(rewrite, current));
+}
+
+/** What only execution reads; {@link keepExecutionState} puts it back on whatever a planner returns. */
+const EXECUTION_ONLY = ['attemptSkills', 'transport', 'awaitingReason', 'completionMarker', 'forcedPastGate', 'outputSummary'] as const satisfies readonly (keyof Task)[];
+
+export type PlannerTaskView = Omit<Task, typeof EXECUTION_ONLY[number] | 'subtasks'> & { subtasks: PlannerTaskView[] };
+
+/**
+ * A task as a planner prompt carries it. An attempt's skill snapshots are
+ * whole SKILL.md bodies and an output summary holds a log tail: sent on every
+ * planner call, they cost tokens and invite the planner to edit state it does
+ * not own.
+ */
+export function plannerTaskView(task: Task): PlannerTaskView {
+  const view: Record<string, unknown> = { ...task, subtasks: (task.subtasks ?? []).map(plannerTaskView) };
+  for (const key of EXECUTION_ONLY) delete view[key];
+  return view as PlannerTaskView;
 }
 
 export function validateModifiedPlan(original: Task[], modified: Task[]): PlanModificationWarnings {

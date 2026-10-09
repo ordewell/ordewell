@@ -653,6 +653,21 @@ describe('what the planner is told', () => {
     });
   });
 
+  it('without them: the task skills it may attach, but no planner skills, which load only through load_skill', async () => {
+    const files = new Map([
+      ['pr-style', { ...plannerSkill('pr-style', { appliesTo: 'task' }), description: 'House PR style' }],
+      ['review-plan', plannerSkill('review-plan')],
+    ]);
+    const claude = fakeClaude({ turn: async () => 'Which cache?' });
+    const { session } = plannerSession(claude, {}, { inject: false, skillsService: skillCatalog(files) });
+
+    await session.startPlanning('add a cache', ['claude-code']);
+
+    const prompt = systemPrompt(claude);
+    expect(prompt).toContain('Task skills you may attach:\n- pr-style: House PR style');
+    expect(prompt).not.toMatch(/review-plan|load_skill/);
+  });
+
   it('without them: today\'s prompt and per-turn catalog, unchanged', async () => {
     const { claude, messages, attached } = await twoTurns(false);
 
@@ -734,6 +749,22 @@ describe('edit_plan with task skills', () => {
       expect.stringContaining('op 1 (update): skill "smoke-test" not found'),
     ]);
     expect(planner.session.planTasks[1].skills).toEqual(['tdd', 'smoke-test']);
+  });
+});
+
+describe('task_query with task skills', () => {
+  it('reads a task\'s skills, null when it has none', async () => {
+    let read: { isError: boolean; body: unknown } | undefined;
+    const planner = await planThen(async (mcp, message) => {
+      if (message.includes('FIRST')) await call(mcp!, 'edit_plan', { ops: [{ op: 'update', taskId: '#2', changes: { skills: ['tdd'] } }] });
+      else read = await call(mcp!, 'task_query', { tasks: ['#1', '#2'], fields: ['skills'] });
+      return 'Done.';
+    }, { skills: SKILLS });
+
+    await planner.session.continueConversation('FIRST');
+    await planner.session.continueConversation('SECOND');
+
+    expect((read?.body as { tasks: { skills: unknown }[] }).tasks.map((t) => t.skills)).toEqual([null, ['tdd']]);
   });
 });
 

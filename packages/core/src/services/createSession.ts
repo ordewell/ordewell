@@ -19,7 +19,7 @@ import { coerceAssignments } from './ModelAllowlistResolver';
 import { plannerModesFrom } from './plannerModes';
 import type { UserSettings } from './SettingsService';
 import { SkillsService } from './SkillsService';
-import { resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
+import { plannerMessage, resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
 import type { MergeGateView, SessionBroadcaster, SessionNotice } from './SessionMessage';
 import { SessionEventRelay } from './SessionEventRelay';
 import { saveSession } from '../utils/sessionStore';
@@ -301,6 +301,7 @@ export function createSession(deps: SessionDeps): Session {
     workspace: deps.workspaceRoot(),
     fsAdapter: deps.fsAdapter,
     broadcast: deps.broadcast,
+    notifications: deps.notifications,
     onNotice: deps.onNotice,
     modelResolver: deps.modelResolver,
     settings: deps.settings,
@@ -331,6 +332,7 @@ export interface SessionParts {
   workspace: string;
   fsAdapter: IFileSystem;
   broadcast: SessionBroadcaster;
+  notifications: INotification;
   onNotice?: (notice: SessionNotice) => void;
   modelResolver: ModelResolver;
   settings: () => SessionRuntimeSettings;
@@ -378,6 +380,7 @@ export class Session {
   private goal = '';
   private workspace: string;
   private readonly broadcast: SessionBroadcaster;
+  private readonly notifications: INotification;
   private readonly onNotice?: (notice: SessionNotice) => void;
   private readonly modelResolver: ModelResolver;
   private readonly fsAdapter: IFileSystem;
@@ -418,6 +421,7 @@ export class Session {
     this.workspace = parts.workspace;
     this.fsAdapter = parts.fsAdapter;
     this.broadcast = parts.broadcast;
+    this.notifications = parts.notifications;
     this.onNotice = parts.onNotice;
     this.modelResolver = parts.modelResolver;
     this.settingsFn = parts.settings;
@@ -450,10 +454,12 @@ export class Session {
       broadcast: (msg) => this.broadcast(msg),
       broadcastPlan: (turnId) => this.events.planGenerated(this.plan, this.goal, turnId),
       validateOps: (ops) => applyTaskOps(this.store.planTasks, ops, this.plan!.runners, this.catalog.edit()),
+      taskSkills: () => this.skillsService,
+      notice: (level, message) => this.notice(level, message),
       adoptTasks: (tasks, how) => this.adoptPlannerTasks(tasks, how),
       capturePrd: (text) => this.capturePrd(text),
-      queueEdit: (userMessage) => {
-        this.orchestrator.queueMessage(userMessage);
+      queueEdit: ({ text, skills }) => {
+        this.orchestrator.queueMessage(text, skills);
         this.plan!.queuedMessages = this.getQueuedMessages();
         return this.orchestrator.queuedCount;
       },
@@ -473,6 +479,8 @@ export class Session {
       runs: this.runs,
       broadcast: (msg) => this.broadcast(msg),
       plannerTools: () => this.aiService().plannerToolsAttached?.() ?? false,
+      taskSkills: () => this.skillsService,
+      notice: (level, message) => this.notice(level, message),
     });
 
     this.unsubObserver = this.orchestrator.subscribe(this.observer());
@@ -537,7 +545,7 @@ export class Session {
       // this drain can wake it again.
       onQueueReady: () => {
         this.processQueuedMessages().catch((err: unknown) => {
-          this.onNotice?.({ type: 'notice', level: 'error', message: `The run could not resume after your queued change: ${err instanceof Error ? err.message : String(err)}` });
+          this.notice('error', `The run could not resume after your queued change: ${err instanceof Error ? err.message : String(err)}`);
         });
       },
       // Saved the moment it settles: a shared run has no run record to save
@@ -885,7 +893,8 @@ export class Session {
       contextWindow: this.modelResolver.contextWindowFor?.(this.config.orchestratorModel),
       fs: this.fsAdapter,
       fetcher: this.fetcher,
-      plannerTools: { sessionId: this.sessionId, handler: this.plannerTools, skills: () => this.skillsService.listSkills() },
+      plannerTools: { sessionId: this.sessionId, handler: this.plannerTools },
+      skills: this.skillsService.listSkills(),
     };
   }
 
@@ -1051,6 +1060,12 @@ export class Session {
     }
   }
 
+  /** Said through both channels: a host shows one or the other, never both (the daemon's toasts are no-ops). */
+  private notice(level: SessionNotice['level'], message: string): void {
+    this.notifications[level](message);
+    this.onNotice?.({ type: 'notice', level, message });
+  }
+
   private async applyQueuedEdits(messages: QueuedMessage[]): Promise<void> {
     const plan = this.plan;
     // Like a planner turn's, the answer is to the plan it was asked about: one
@@ -1063,7 +1078,7 @@ export class Session {
       for (const m of messages) this.orchestrator.removeQueuedMessage(m.id);
       if (this.plan) this.plan.queuedMessages = this.getQueuedMessages();
     };
-    const batchText = messages.map((m) => m.text).join('\n');
+    const batchText = messages.map((m) => plannerMessage(m.text, m.skills ?? [])).join('\n');
     const texts = messages.map((m) => m.text);
     const activeSessions = new Map(
       [...this.orchestrator.activeSessionMap.entries()].map(([taskId, sessionId]) => [
@@ -1092,6 +1107,7 @@ export class Session {
         autonomousDefault: this.config.autonomousMode,
         perRunnerAllowlist: modelAllowlist,
         isolatedExecution: await this.runs.plannerLayout(),
+        skills: this.skillsService,
       });
       if (stale()) return;
 
@@ -1102,6 +1118,7 @@ export class Session {
         this.conversation.recordQueuedEdits(texts, tasks.length);
         return true;
       });
+      for (const warning of result.skillWarnings ?? []) this.notice('warn', warning);
     } catch (err) {
       if (stale()) return;
       // The edit is lost either way; the run must not be. Left unticked, a run
@@ -1112,7 +1129,7 @@ export class Session {
         this.conversation.recordQueuedEditsFailed(texts, reason);
         return true;
       });
-      this.onNotice?.({ type: 'notice', level: 'error', message: `Your queued change could not be applied, so the plan is unchanged: ${reason}. Send it again to retry.` });
+      this.notice('error', `Your queued change could not be applied, so the plan is unchanged: ${reason}. Send it again to retry.`);
     }
   }
 
