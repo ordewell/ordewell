@@ -1577,13 +1577,12 @@ export class TaskOrchestrator {
   }
 
   /**
-   * The roots whose `.ordewell/skills/` an attempt at `cwd` reads: in an
-   * isolated repo group, `cwd` holds one worktree per repo and no folder of
-   * its own (ADR-0014); anywhere else, `cwd` itself.
+   * The roots whose `.ordewell/skills/` an attempt at `cwd` reads: in a repo
+   * group, `cwd` holds each repo — a worktree of it when isolated, the
+   * workspace's own checkout when not — and no folder of its own (ADR-0014).
    */
   private skillRoots(cwd: string): string[] {
-    const run = this.runs.isolating ? this.runs.current : null;
-    return workspaceSkillRoots(this.workspaceRootFn(), run ? run.repos.map((r) => r.path) : [], cwd);
+    return workspaceSkillRoots(this.workspaceRootFn(), this.runs.skillLayout().repos, cwd);
   }
 
   /**

@@ -269,15 +269,16 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
   }
 
   /**
-   * Push the merged skill list (workspace .ordewell/skills/ shadows global
-   * ~/.ordewell/skills/) to the webview for the /skill-name suggestion dropdown.
+   * Push the merged skill list (global ~/.ordewell/skills/ shadows the
+   * workspace's .ordewell/skills/ folders) to the webview for the /skill-name
+   * suggestion dropdown and the task skill chips.
    * Re-read on every call rather than cached: SkillsService reads straight off
    * disk and a fresh instance per call picks up whichever workspace folder is
    * current after a folder add/remove.
    */
   function sendSkills(): void {
     try {
-      const skills = createSkillsService(services.fsAdapter.getWorkspaceRoot()).listSkills();
+      const skills = createSkillsService(services.fsAdapter.getWorkspaceRoot(), services.config.workspaceRepos).listSkills();
       services.chatProvider.setSkills(skills.filter((s) => s.userInvocable).map((s) => ({ name: s.name, description: s.description, appliesTo: s.appliesTo })));
       // Attaching by hand is a user invocation, so user-only skills are offered too.
       services.chatProvider.setTaskSkills(

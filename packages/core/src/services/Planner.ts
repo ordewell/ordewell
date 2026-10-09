@@ -63,7 +63,7 @@ export interface ModifyDuringExecutionRequest {
   perRunnerAllowlist?: Partial<Record<RunnerId, string[]>>;
   /** Where the run in force puts each task (ADR-0013, ADR-0014). */
   isolatedExecution?: IsolatedExecution;
-  /** The workspace root's skill catalog, which the rewritten tasks' skills are checked against. */
+  /** The workspace's skill catalog under its repo group's layout, which the rewritten tasks' skills are checked against. */
   skills: SkillLookup;
 }
 

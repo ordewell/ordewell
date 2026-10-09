@@ -377,6 +377,56 @@ describe('SkillsService', () => {
       expect(shadowed.filter(([p]) => p.includes(`${path.sep}everywhere${path.sep}`))).toHaveLength(3);
       expect(svc.listSkills().find((s) => s.name === 'repos')!.path).toBe(apiFile);
     });
+
+    it('outside any task, are found by createSkillsService from the group the workspace holds', () => {
+      const skills = (root: string) => path.join(root, '.ordewell', 'skills');
+      for (const repo of ['web', 'api', 'docs']) fs.mkdirSync(path.join(workspaceRoot, repo, '.git'), { recursive: true });
+      fs.mkdirSync(path.join(workspaceRoot, 'loose', '.ordewell', 'skills'), { recursive: true });
+      const apiFile = writeSkill(skills(path.join(workspaceRoot, 'api')), 'api-check', { name: 'api-check', 'applies-to': 'task' }, 'Api.');
+      writeSkill(skills(path.join(workspaceRoot, 'loose')), 'loose-skill', { name: 'loose-skill' }, 'Not in a repo.');
+
+      const detected = createSkillsService(workspaceRoot);
+      expect(detected.searchedDirs()).toEqual([
+        path.join(home, '.ordewell', 'skills'),
+        skills(workspaceRoot),
+        skills(path.join(workspaceRoot, 'api')),
+        skills(path.join(workspaceRoot, 'docs')),
+        skills(path.join(workspaceRoot, 'web')),
+      ]);
+      expect(detected.findSkill('api-check')!.path).toBe(apiFile);
+      expect(detected.findSkill('loose-skill')).toBeUndefined();
+
+      expect(createSkillsService(workspaceRoot, ['web']).findSkill('api-check')).toBeUndefined();
+    });
+
+    it('are the workspace\'s own alone when it is a repository, whatever repos it holds', () => {
+      fs.mkdirSync(path.join(workspaceRoot, '.git'));
+      fs.mkdirSync(path.join(workspaceRoot, 'api', '.git'), { recursive: true });
+
+      expect(createSkillsService(workspaceRoot).searchedDirs()).toEqual([
+        path.join(home, '.ordewell', 'skills'), path.join(workspaceRoot, '.ordewell', 'skills'),
+      ]);
+    });
+  });
+
+  describe('a skill folder whose name no skill can have', () => {
+    it('is listed nowhere and resolves nothing, and is reported with the reason', () => {
+      const workspaceSkills = path.join(workspaceRoot, '.ordewell', 'skills');
+      const dotted = writeSkill(workspaceSkills, 'pr.review', { name: 'pr.review', 'applies-to': 'task' }, 'Dotted.');
+      const upper = writeSkill(path.join(home, '.ordewell', 'skills'), 'PR-Review', { name: 'PR-Review' }, 'Upper.');
+      writeSkill(workspaceSkills, 'kept', { name: 'kept' }, 'Kept.');
+
+      const svc = createSkillsService(workspaceRoot);
+
+      expect(svc.listSkills().map((s) => s.name)).not.toContain('pr.review');
+      expect(svc.listSkills().map((s) => s.name)).not.toContain('PR-Review');
+      expect(svc.findSkill('pr.review')).toBeUndefined();
+      expect(svc.listInvalid()).toEqual([
+        { name: 'PR-Review', path: upper, source: 'global', reason: expect.stringMatching(/^not a valid skill name/) },
+        { name: 'pr.review', path: dotted, source: 'workspace', reason: expect.stringMatching(/^not a valid skill name/) },
+      ]);
+      expect(svc.readCatalog().invalid.map((s) => s.name)).toEqual(['PR-Review', 'pr.review']);
+    });
   });
 
   describe('seedBuiltinSkill', () => {

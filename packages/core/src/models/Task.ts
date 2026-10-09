@@ -3,6 +3,7 @@ import type { PlanIsolation } from '../interfaces/IWorktreeIsolation';
 import type { RunnerTransport } from '../interfaces/ITerminalRunner';
 import type { PlannerUsage, UsageRecord, UsageTotals } from './Usage';
 import type { SkillSource } from '../services/SkillsService';
+import { SKILL_NAME_PATTERN } from '../conversation/skillTokens';
 
 export interface UserStep {
   order: number;
@@ -619,7 +620,7 @@ export function createTask(overrides: Partial<Task> = {}): Task {
  * separator, `..` — is joined into a path and could only reach outside the
  * skill dirs.
  */
-const SKILL_NAME = /^[a-z0-9][a-z0-9_-]*$/;
+const SKILL_NAME = new RegExp(`^${SKILL_NAME_PATTERN}$`);
 
 export function isSkillName(name: string): boolean {
   return SKILL_NAME.test(name);

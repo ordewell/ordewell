@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { loadedSkillTokens, skillTokens } from '../skillTokens';
+import { isSkillName } from '../../models/Task';
 
 describe('skillTokens', () => {
   it('finds the first token per name, spanning the slash and name but not trailing punctuation', () => {
@@ -13,6 +14,17 @@ describe('skillTokens', () => {
 
   it('ignores a slash inside a word', () => {
     expect(skillTokens('see src/grilling and a/b')).toEqual([]);
+  });
+
+  it('reads as a name exactly what a skill folder may be named, a digit-led one included', () => {
+    for (const name of ['2fa', 'pr-review', 'a_b', '0']) {
+      expect(isSkillName(name)).toBe(true);
+      expect(skillTokens(`run /${name} now`).map((t) => t.name)).toEqual([name]);
+    }
+    for (const name of ['-x', '_x', 'pr.review']) {
+      expect(isSkillName(name)).toBe(false);
+      expect(skillTokens(`run /${name} now`)).toEqual([]);
+    }
   });
 });
 

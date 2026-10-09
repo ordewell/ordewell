@@ -84,7 +84,42 @@ describe('ordewell skills', () => {
         { name: 'selected-only', scope: 'workspace', appliesTo: 'task', invocation: 'both', path: skillPath },
       ],
       shadowed: [{ name: 'shared', path: duplicatePath, shadowedBy: 'global' }],
+      invalid: [],
     });
+  });
+
+  it('in a repo group, lists a skill committed inside a repo after the group root\'s own, the root winning a clash', () => {
+    for (const repo of ['api', 'web']) mkdirSync(join(workspace, repo, '.git'), { recursive: true });
+    const rootPath = writeSkill(workspace, 'deploy', 'applies-to: task\n');
+    const apiPath = writeSkill(join(workspace, 'api'), 'api-check', 'applies-to: task\n');
+    const shadowedPath = writeSkill(join(workspace, 'web'), 'deploy', 'applies-to: task\n');
+
+    handleSkills(['--json']);
+
+    const listed = JSON.parse(logs[0]);
+    expect(listed.skills.map((s: { name: string; path: string }) => [s.name, s.path])).toEqual([['deploy', rootPath], ['api-check', apiPath]]);
+    expect(listed.shadowed).toEqual([{ name: 'deploy', path: shadowedPath, shadowedBy: 'workspace' }]);
+  });
+
+  it('reports a skill folder whose name no skill can have, with the reason, and lists it nowhere else', () => {
+    const dotted = writeSkill(workspace, 'pr.review', 'applies-to: task\n');
+    writeSkill(home, 'PR-Review');
+    writeSkill(workspace, 'kept');
+
+    handleSkills([]);
+
+    const skipped = (name: string) => logs.find((line) => line.startsWith(`skill folder "${name}" skipped: not a valid skill name`));
+    expect(logs.filter((line) => /^(pr\.review|PR-Review)\s/.test(line))).toEqual([]);
+    expect(skipped('pr.review')?.endsWith(` · ${dotted}`)).toBe(true);
+    expect(skipped('PR-Review')?.endsWith(' · ~/.ordewell/skills/PR-Review/SKILL.md')).toBe(true);
+
+    handleSkills(['--json']);
+    const listed = JSON.parse(logs[logs.length - 1]);
+    expect(listed.skills.map((s: { name: string }) => s.name)).toEqual(['kept']);
+    expect(listed.invalid).toEqual([
+      { name: 'PR-Review', path: '~/.ordewell/skills/PR-Review/SKILL.md', reason: expect.stringMatching(/^not a valid skill name/) },
+      { name: 'pr.review', path: dotted, reason: expect.stringMatching(/^not a valid skill name/) },
+    ]);
   });
 
   it('does not abbreviate a directory that merely shares the home prefix', () => {
@@ -112,7 +147,7 @@ describe('ordewell skills', () => {
     handleSkills([]);
     expect(logs).toEqual(['No skills installed.']);
     handleSkills(['--json']);
-    expect(JSON.parse(logs[1])).toEqual({ skills: [], shadowed: [] });
+    expect(JSON.parse(logs[1])).toEqual({ skills: [], shadowed: [], invalid: [] });
     expect(readdirSync(home)).toEqual([]);
     expect(readdirSync(workspace)).toEqual([]);
   });

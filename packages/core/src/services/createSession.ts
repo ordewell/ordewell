@@ -20,7 +20,7 @@ import { plannerModesFrom } from './plannerModes';
 import type { UserSettings } from './SettingsService';
 import { SkillsService } from './SkillsService';
 import { plannerMessage, resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
-import { plannedSkillLookup, type SkillLookup } from './taskSkills';
+import { plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
 import type { MergeGateView, SessionBroadcaster, SessionNotice } from './SessionMessage';
 import { SessionEventRelay } from './SessionEventRelay';
 import { saveSession } from '../utils/sessionStore';
@@ -402,7 +402,7 @@ export class Session {
   private readonly conversation: PlannerConversation;
   private readonly editor: PlanEditor;
   private readonly plannerTools: PlannerToolHandler = plannerToolHandler({
-    skills: () => this.skillsService.listSkills(),
+    skills: () => this.workspaceSkills().listSkills(),
     recordSkillLoad: (skill) => this.conversation.recordPlannerSkill(skill),
     liveCatalog: () => this.liveCatalog(),
     coerce: (tasks, runners) => coerceAssignments(tasks, this.catalog.allowlist(), runners, this.catalog.models()),
@@ -412,7 +412,7 @@ export class Session {
     read: (signature, answer) => this.conversation.read(signature, answer),
     liveOutput: (taskId, opts) => this.orchestrator.getLiveOutput(taskId, opts),
     lastAttempt: (taskId) => lastAttemptDigest(this.taskLogLocation, taskId),
-    taskSkills: () => this.taskSkills(),
+    taskSkills: () => this.workspaceSkills(),
   });
 
   constructor(parts: SessionParts) {
@@ -454,7 +454,7 @@ export class Session {
       broadcast: (msg) => this.broadcast(msg),
       broadcastPlan: (turnId) => this.events.planGenerated(this.plan, this.goal, turnId),
       validateOps: (ops) => applyTaskOps(this.store.planTasks, ops, this.plan!.runners, this.catalog.edit()),
-      taskSkills: () => this.taskSkills(),
+      taskSkills: () => this.workspaceSkills(),
       notice: (level, message) => this.notice(level, message),
       adoptTasks: (tasks, how) => this.adoptPlannerTasks(tasks, how),
       capturePrd: (text) => this.capturePrd(text),
@@ -479,7 +479,7 @@ export class Session {
       runs: this.runs,
       broadcast: (msg) => this.broadcast(msg),
       plannerTools: () => this.aiService().plannerToolsAttached?.() ?? false,
-      taskSkills: () => this.taskSkills(),
+      taskSkills: () => this.workspaceSkills(),
       notice: (level, message) => this.notice(level, message),
     });
 
@@ -877,16 +877,20 @@ export class Session {
    * typed.
    */
   private resolveSkillInvocation(text: string): SkillInvocation {
-    return resolveSkillInvocation(text, this.skillsService);
+    return resolveSkillInvocation(text, this.workspaceSkills());
   }
 
-  /** Task skills as the planner was told the run's layout, so every validation path checks the same roots. */
-  private taskSkills(): SkillLookup {
-    return plannedSkillLookup((roots) => this.skillsAt(roots), this.workspace, this.runs.lastPlannerLayout);
+  /**
+   * The one catalog every planner path reads — its skill catalogs, `/name`,
+   * and the check of what a plan or an edit attaches — over the folders the
+   * workspace's tasks will read at spawn.
+   */
+  private workspaceSkills(): SkillCatalogLookup {
+    return plannedSkillLookup((roots) => this.skillsAt(roots), this.workspace, this.runs.skillLayout());
   }
 
   /** The catalog over workspace `roots`; the workspace root alone is the session's own. */
-  private skillsAt(roots: readonly string[]): SkillLookup {
+  private skillsAt(roots: readonly string[]): SkillCatalogLookup {
     return roots.length === 1 && roots[0] === this.workspace ? this.skillsService : this.skillsService.forRoot(roots);
   }
 
@@ -904,7 +908,7 @@ export class Session {
       fs: this.fsAdapter,
       fetcher: this.fetcher,
       plannerTools: { sessionId: this.sessionId, handler: this.plannerTools },
-      skills: this.skillsService.listSkills(),
+      skills: this.workspaceSkills().listSkills(),
     };
   }
 
@@ -1117,7 +1121,7 @@ export class Session {
         autonomousDefault: this.config.autonomousMode,
         perRunnerAllowlist: modelAllowlist,
         isolatedExecution: await this.runs.plannerLayout(),
-        skills: this.taskSkills(),
+        skills: this.workspaceSkills(),
       });
       if (stale()) return;
 

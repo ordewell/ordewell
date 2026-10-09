@@ -1,3 +1,6 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { describe, it, expect, vi } from 'vitest';
 import { TaskOrchestrator, TaskControlError } from '../TaskOrchestrator';
 import { createTask, type Task } from '../../models/Task';
@@ -29,7 +32,7 @@ const UNCOMMITTED: SkillInfo = { ...skill('deploy-checklist'), source: 'workspac
  * the orchestrator shows it: where each runs, what it is told, whether its
  * tree is checked, and whether it keeps Merge all out.
  */
-function setup(opts: { isolation?: FakeWorktreeIsolation; config?: Partial<IConfig> } = {}) {
+function setup(opts: { isolation?: FakeWorktreeIsolation; config?: Partial<IConfig>; workspace?: string } = {}) {
   /** The roots each spawn read skills from. */
   const skillRoots: (readonly string[])[] = [];
   const isolation = opts.isolation ?? new FakeWorktreeIsolation();
@@ -59,7 +62,7 @@ function setup(opts: { isolation?: FakeWorktreeIsolation; config?: Partial<IConf
     output: new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } }),
     registry: new RunnerRegistry(),
     isolation,
-    workspaceRoot: () => '/repo',
+    workspaceRoot: () => opts.workspace ?? '/repo',
     workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
     skillsAt: (roots) => {
       skillRoots.push(roots);
@@ -239,6 +242,24 @@ describe('attempt kinds, as the orchestrator runs them', () => {
       const { cwd } = env.spawned('c1')[0];
       expect(env.skillRoots[0]).toEqual(['/repo', `${cwd}/api`, `${cwd}/web`]);
       expect(env.spawned('c1')[0].prompt).toContain('### Skill: tdd');
+    });
+
+    it('in a repo group run without isolation, skills are read from the group root, then each repo where the workspace holds it', async () => {
+      const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-shared-group-'));
+      try {
+        for (const repo of ['web', 'api']) fs.mkdirSync(path.join(workspace, repo, '.git'), { recursive: true });
+        const isolation = new FakeWorktreeIsolation();
+        isolation.availability = { active: false, reason: 'disabled' };
+        const env = setup({ isolation, workspace, config: { worktreeIsolation: false } });
+        env.orchestrator.loadPlan([change('c1', 1, { skills: ['tdd'] })]);
+
+        await env.orchestrator.approveReview();
+
+        expect(env.spawned('c1')[0].cwd).toBe(workspace);
+        expect(env.skillRoots[0]).toEqual([workspace, path.join(workspace, 'api'), path.join(workspace, 'web')]);
+      } finally {
+        fs.rmSync(workspace, { recursive: true, force: true });
+      }
     });
 
     it('a group task whose skill is missing names every folder it searched, the group root\'s included', async () => {

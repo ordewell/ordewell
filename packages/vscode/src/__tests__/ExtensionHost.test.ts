@@ -390,3 +390,33 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     expect(__panels[0].title).toBe('Task 1 · Parse JSON');
   });
 });
+
+describe('the task skill chips in a repo group', () => {
+  let h: ReturnType<typeof harness>;
+  let home: string;
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-host-home-'));
+    vi.stubEnv('HOME', home);
+    vi.stubEnv('USERPROFILE', home);
+    h = harness();
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    fs.rmSync(h.workspace, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  it('offers a task skill committed inside a repo of the group, as a spawn there reads it', async () => {
+    const skill = path.join(h.workspace, 'api', '.ordewell', 'skills', 'api-check');
+    fs.mkdirSync(path.join(h.workspace, 'api', '.git'), { recursive: true });
+    fs.mkdirSync(skill, { recursive: true });
+    fs.writeFileSync(path.join(skill, 'SKILL.md'), '---\nname: api-check\ndescription: Checks the API\napplies-to: task\n---\n\nbody');
+
+    await h.host.start();
+
+    expect(h.chat.provider.setTaskSkills).toHaveBeenLastCalledWith(
+      expect.arrayContaining([{ name: 'api-check', description: 'Checks the API' }]),
+    );
+  });
+});
