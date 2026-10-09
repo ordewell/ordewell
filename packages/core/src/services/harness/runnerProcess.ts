@@ -89,7 +89,7 @@ export class RunnerProcess {
       throw new ExecutableNotFoundError(command.command, PATH);
     }
     const workspace = await (this.deps.workspaceEnv ?? workspaceEnvOf)(cwd);
-    this.spawnEnv = runnerEnv(PATH, { ...workspace, ...command.env?.(workspace) });
+    this.spawnEnv = runnerEnv(PATH, workspace, command.env?.(workspace));
 
     const child = spawnInOwnGroup((detached) => this.deps.spawn(launch.file, launch.args, {
       env: this.spawnEnv,
