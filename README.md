@@ -7,7 +7,7 @@
 
 <p align="center">
   <strong>Task orchestration for coding agents.</strong><br>
-  One goal becomes an ordered plan of tasks, each on its own runner, model and branch.
+  Turn a goal into an editable plan. Run it with your coding agents. Review and merge.
 </p>
 
 <p align="center">
@@ -24,19 +24,13 @@
 </p>
 
 <p align="center">
-  <img src="assets/readme/hero-plan-to-run.gif" width="900" alt="A real run of Ordewell's terminal UI: a goal to add rate limiting, update the tests and document it is typed, the planner reads the repo and commits a four task plan, each task showing its runner, model, thinking effort and mode, then Claude Code, Codex and OpenCode each run one task at the same time and a verify task finishes the plan at 4/4. Sped up stretches are marked.">
-  <br>
-  <sub>A real run, sped up where marked. <a href="https://ordewell.ai/assets/demo.mp4">Watch the full 48 seconds</a>.</sub>
+  <img src="assets/readme/workflow.svg" width="900" alt="Describe your goal, review and edit the plan, run independent tasks in parallel with Claude Code, Codex and OpenCode, then review the diff and choose when to merge.">
 </p>
 
-Ordewell turns a goal into a plan you can read and change before anything runs. A
-planner researches your repository and asks about whatever you left vague. It then
-hands back a dependency graph of tasks, and each task names the coding agent, model
-and thinking effort it will use. Independent tasks run in parallel, each in its own
-git worktree. A task only counts as done when the agent reports it done — through
-Ordewell's own tool on the structured transport, or its completion marker in the
-output as the fallback — and nothing reaches your branch until you have reviewed
-the result.
+Describe what you want to build. Ordewell explores your repository, asks clarifying
+questions, and turns your goal into a plan you can read and edit. When you're ready,
+run it: independent tasks work in parallel, each on its own branch. Review the
+combined diff and choose when to merge it into your branch.
 
 Claude Code, Codex and OpenCode are supported out of the box, and can be mixed
 freely within one plan.
@@ -53,9 +47,8 @@ freely within one plan.
 - **Operations in the right place and order.** A deploy, a cloud CLI call or a
   push runs as an ops task in your own checkout, and waits until the change it
   depends on is merged into your branch.
-- **Verdicts from evidence.** Completion is decided by the runner's own done
-  signal — a tool call on the structured transport, or its completion marker as
-  the fallback — never by a model's opinion of its own work.
+- **Track each task.** Follow progress and see which tasks completed, failed or
+  need your attention.
 - **A planner that cannot write.** It reads, asks, and plans. Commands that would
   change your repository are refused.
 - **No extra API key.** A coding agent you already pay for can be the planner. An API
@@ -74,9 +67,7 @@ or run `code --install-extension ordewell.ordewell`. The extension bundles its o
 core and needs nothing from npm.
 
 **Requirements:** Node.js 20 or newer, at least one of Claude Code, Codex or
-OpenCode, and git for task isolation. tmux is optional: only tasks on a
-runner with no structured connector use it, to give each a terminal window you
-can open. On Windows, run the terminal UI under WSL.
+OpenCode, and git for task isolation. On Windows, run the terminal UI under WSL.
 
 ## Quick start
 
@@ -102,26 +93,26 @@ ordewell task-model 3 sonnet        # or just change its model
 ordewell task-deps 3 1,2            # make it wait for tasks 1 and 2
 ```
 
-## How it works
-
-1. **Plan.** The planner explores your workspace without modifying it, asks
-   clarifying questions, and produces an ordered list of tasks with dependencies.
-2. **Execute.** Each task starts a fresh coding agent session — in its own
-   worktree, or in your checkout for an ops task — given the results of the tasks
-   it depends on. Independent tasks run concurrently,
-   three at a time by default.
-3. **Verify.** A task passes when the agent reports it done — through Ordewell's
-   own tool on the structured transport, or its unique completion marker in the
-   output as the fallback. The exit code is kept as supporting evidence.
-4. **Land.** A passing task is merged into the run's integration branch. If the
-   merge conflicts, the task gets a chance to resolve it; if that fails, it waits for
-   you with the conflicting files named.
-5. **Hand off.** When the run finishes, review the diff, then merge it, discard it,
-   or clean up its worktrees.
+## See it in action
 
 <p align="center">
-  <img src="assets/readme/tui-parallel-loop.gif" width="620" alt="The plan pane during a real run: three independent tasks run at once on Claude Code, Codex and OpenCode, each ticks off as its completion marker appears, then the verify task runs and the plan reaches 4/4. Shown at 15x speed.">
+  <img src="assets/readme/hero-plan-to-run.gif" width="900" alt="A real run in Ordewell's terminal UI: a goal becomes a four-task plan, Claude Code, Codex and OpenCode run independent tasks in parallel, and a final verification task completes the plan. Sped up stretches are marked.">
+  <br>
+  <sub>A real run, sped up where marked. <a href="https://ordewell.ai/assets/demo.mp4">Watch the full 48 seconds</a>.</sub>
 </p>
+
+## How it works
+
+1. **Describe your goal.** The planner explores your workspace without modifying
+   it and asks clarifying questions.
+2. **Review the plan.** Read the tasks and their dependencies. Edit prompts, agent
+   assignments and models before running.
+3. **Run the tasks.** Each task starts a fresh coding agent session. Independent
+   tasks run in parallel; dependent tasks wait for the work they need. Code changes
+   stay on separate branches, and you can follow each task's progress.
+4. **Review and merge.** Ordewell combines the changes for your review. Read the
+   diff, then merge it into your branch or discard the run. If a task or a merge
+   needs your attention, Ordewell shows you where.
 
 Folders containing several repositories are handled as one workspace: each task
 gets a worktree of every repository and lands in all of them or none. See
@@ -137,7 +128,7 @@ planner or task skills, see the [skills guide](docs/skills.md).
 
 ## Where it's going
 
-- **Now:** take-over, opening a structured task in its runner's own terminal UI ([#58](https://github.com/ordewell/ordewell/issues/58)). The structured transport is the default and tmux is optional ([#61](https://github.com/ordewell/ordewell/issues/61)).
+- **Now:** take-over, opening a running task in its coding agent's own terminal UI ([#58](https://github.com/ordewell/ordewell/issues/58)).
 - **Next:** the planner keeps watching a run after you approve it, and suggests fixes when a task fails or gets stuck.
 - **Later:** the planner supervises a run on its own, within limits you set in advance.
 

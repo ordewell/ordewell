@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="500" viewBox="0 0 1600 500" font-family="Inter, Helvetica Neue, Arial, sans-serif">
+  <title>Goal, plan and run, review</title>
+  <desc>A goal to add API rate limiting becomes three parallel tasks: a rate limiter assigned to Claude Code, tests to Codex, and API docs to OpenCode. Their changes come together in a diff for review before merging.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 2 1 L 6 5 L 2 9" fill="none" stroke="#607787" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  <rect x="1" y="1" width="1598" height="498" rx="20" fill="#0d131a" stroke="#25303b"/>
+
+  <g fill="#55bbce" font-size="24" letter-spacing="3" text-anchor="middle">
+    <text x="248" y="89">GOAL</text>
+    <text x="793" y="89">PLAN &amp; RUN</text>
+    <text x="1373" y="89">REVIEW</text>
+  </g>
+
+  <!-- One shared path splits into isolated tasks and converges on the review. -->
+  <g fill="none" stroke="#354c5c" stroke-width="2">
+    <path d="M 420 269 H 464 C 516 269 510 173 564 173 H 600"/>
+    <path d="M 464 269 H 600"/>
+    <path d="M 464 269 C 516 269 510 365 564 365 H 600"/>
+    <path d="M 986 173 H 1020 C 1074 173 1068 269 1120 269"/>
+    <path d="M 986 269 H 1120"/>
+    <path d="M 986 365 H 1020 C 1074 365 1068 269 1120 269"/>
+    <path d="M 1120 269 H 1200" marker-end="url(#arrow)"/>
+  </g>
+  <g fill="#0d131a" stroke="#55bbce" stroke-width="2">
+    <circle cx="464" cy="269" r="5"/>
+    <circle cx="1120" cy="269" r="5"/>
+  </g>
+
+  <rect x="76" y="197" width="344" height="144" rx="12" fill="#151e28" stroke="#30404e"/>
+  <path d="M 102 225 l 7 6 l -7 6 M 118 237 H 133" fill="none" stroke="#55bbce" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <g fill="#eef3f7" font-size="30" font-weight="500">
+    <text x="102" y="280">Add rate limiting</text>
+    <text x="102" y="316">to the API</text>
+  </g>
+
+  <g fill="#151e28" stroke="#30404e">
+    <rect x="600" y="132" width="386" height="82" rx="12"/>
+    <rect x="600" y="228" width="386" height="82" rx="12"/>
+    <rect x="600" y="324" width="386" height="82" rx="12"/>
+  </g>
+  <g fill="#eef3f7" font-size="26" font-weight="500">
+    <text x="626" y="166">Rate limiter</text>
+    <text x="626" y="262">Tests</text>
+    <text x="626" y="358">API docs</text>
+  </g>
+  <circle cx="631" cy="190" r="4" fill="#c99773"/>
+  <circle cx="631" cy="286" r="4" fill="#849ecb"/>
+  <circle cx="631" cy="382" r="4" fill="#82b9a6"/>
+  <g fill="#a0afbd" font-size="21">
+    <text x="646" y="197">Claude Code</text>
+    <text x="646" y="293">Codex</text>
+    <text x="646" y="389">OpenCode</text>
+  </g>
+  <g fill="none" stroke="#77b5a5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 938 169 l 6 6 l 11 -12"/>
+    <path d="M 938 265 l 6 6 l 11 -12"/>
+    <path d="M 938 361 l 6 6 l 11 -12"/>
+  </g>
+
+  <rect x="1222" y="157" width="302" height="224" rx="12" fill="#151e28" stroke="#30404e"/>
+  <g fill="none" stroke="#607787" stroke-width="2" stroke-linecap="round">
+    <path d="M 1248 185 H 1328 M 1248 197 H 1296"/>
+  </g>
+  <rect x="1246" y="217" width="254" height="30" rx="4" fill="#30232b"/>
+  <rect x="1246" y="251" width="254" height="30" rx="4" fill="#1b302e"/>
+  <g fill="none" stroke-width="2" stroke-linecap="round">
+    <path d="M 1260 232 H 1270 M 1284 232 H 1410" stroke="#bd8793"/>
+    <path d="M 1260 266 H 1270 M 1265 261 V 271 M 1284 266 H 1458" stroke="#77b5a5"/>
+  </g>
+  <path d="M 1246 302 H 1500" stroke="#2a3946"/>
+  <rect x="1387" y="319" width="113" height="38" rx="7" fill="#1a303a" stroke="#3b7282"/>
+  <text x="1443" y="345" fill="#b9e7ef" font-size="22" text-anchor="middle">Merge</text>
+</svg>
