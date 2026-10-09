@@ -8,7 +8,6 @@ import { StructuredRunner } from '../StructuredRunner';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { createTask } from '../../models/Task';
 import type { Verdict } from '../../models/Task';
-import { isStructuredSession } from '../../interfaces/ITerminalRunner';
 import { fakeSpawn, fixture } from './harnessTestKit';
 
 describe('VerdictEngine over recorded structured output', () => {
@@ -25,7 +24,7 @@ describe('VerdictEngine over recorded structured output', () => {
     const task = createTask({ id: 't1', title: 'Only' });
     const session = await runner.spawn({ taskId: 't1', runner: 'claude-code', mode: 'acceptEdits', prompt: 'Do it', cwd: '/repo', registry: new RunnerRegistry() });
     engine.watch(task, session);
-    if (!isStructuredSession(session)) throw new Error('expected structured session');
+
     await new Promise<void>((resolve) => session.onTurnEnd(() => resolve()));
     expect(verdicts).toEqual([]);
     expect(checkpoints).toEqual([]);

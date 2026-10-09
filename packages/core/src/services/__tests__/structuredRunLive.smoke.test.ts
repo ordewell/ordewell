@@ -77,7 +77,7 @@ describe.runIf(live)('structured run — live', () => {
       const first = taskOf(session, 'live-1')!;
       expect(first.verdict?.outcome).toBe('pass');
       expect(first.verdict?.checks.find((c) => c.name === 'task_complete')?.passed).toBe(true);
-      expect(first.transport).toMatchObject({ kind: 'structured', nativeSessionId: expect.any(String) });
+      expect(first.runnerSessionId).toEqual(expect.any(String));
       // The summary is whatever the runner's task_complete call reported
       // (ADR-0022), worded by the model, so the run is checked by carrying it.
       const summary = first.outputSummary?.logTail?.trim().split('\n')[0] ?? '';

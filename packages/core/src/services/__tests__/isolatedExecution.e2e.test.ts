@@ -7,12 +7,12 @@ import { TaskOrchestrator } from '../TaskOrchestrator';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
-import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
+import type { IRunner } from '../../interfaces/IRunner';
 import type { IsolationHandoff } from '../../interfaces/IWorktreeIsolation';
 import type { SessionMessage } from '../SessionMessage';
 import type { Session } from '../createSession';
 import * as sessionStore from '../../utils/sessionStore';
-import { fakeConfig, FakeStructuredSession } from '../../testing';
+import { fakeConfig, FakeRunnerSession } from '../../testing';
 import { fakeNotification, makeSession } from './sessionTestKit';
 
 const hasGit = (() => {
@@ -58,9 +58,9 @@ function repo(root = tempDir(), files: Record<string, string> = {}): string {
  */
 function writingRunner(files: Record<string, { write: string[]; needs?: string[] }>) {
   const sawPredecessor: Record<string, boolean> = {};
-  const runner: ITerminalRunner = {
+  const runner: IRunner = {
     spawn: vi.fn(async (opts) => {
-      const session = new FakeStructuredSession(`s-${opts.taskId}`, opts.taskId);
+      const session = new FakeRunnerSession(`s-${opts.taskId}`, opts.taskId);
       const job = files[opts.taskId];
       setTimeout(() => {
         if (job.needs) sawPredecessor[opts.taskId] = job.needs.every((file) => existsSync(join(opts.cwd!, file)));
@@ -90,7 +90,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
       resolvePath: async () => process.env.PATH ?? '',
     });
     const output = new BufferedTaskOutputSource();
-    const orchestrator = TaskOrchestrator.compose({ config: fakeConfig(), notifications: fakeNotification(), terminalRunner: runner, output, isolation, workspaceRoot: () => root });
+    const orchestrator = TaskOrchestrator.compose({ config: fakeConfig(), notifications: fakeNotification(), runner, output, isolation, workspaceRoot: () => root });
     let handoff: IsolationHandoff | undefined;
     orchestrator.subscribe({ onIsolationHandoff: (h) => { handoff = h; } });
     orchestrator.loadPlan(tasks);
@@ -131,7 +131,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     });
     const isolation = createWorktreeIsolation({ config: fakeConfig({ worktreeIsolation: true }), resolvePath: async () => process.env.PATH ?? '' });
     const output = new BufferedTaskOutputSource();
-    const orchestrator = TaskOrchestrator.compose({ config: fakeConfig({ maxParallelSessions: 3 }), notifications: fakeNotification(), terminalRunner: runner, output, isolation, workspaceRoot: () => dir });
+    const orchestrator = TaskOrchestrator.compose({ config: fakeConfig({ maxParallelSessions: 3 }), notifications: fakeNotification(), runner, output, isolation, workspaceRoot: () => dir });
     let handoff: IsolationHandoff | undefined;
     orchestrator.subscribe({ onIsolationHandoff: (h) => { handoff = h; } });
     orchestrator.loadPlan(tasks);
@@ -174,7 +174,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
       const tasks = [createTask({ id, order: 1, title: `Write ${file}`, prompt: `write ${file}` })];
       const { runner } = writingRunner({ [id]: { write: [file] } });
       const output = new BufferedTaskOutputSource();
-      const orchestrator = TaskOrchestrator.compose({ config: fakeConfig(), notifications: fakeNotification(), terminalRunner: runner, output, isolation, workspaceRoot: () => root });
+      const orchestrator = TaskOrchestrator.compose({ config: fakeConfig(), notifications: fakeNotification(), runner, output, isolation, workspaceRoot: () => root });
       let handoff: IsolationHandoff | undefined;
       orchestrator.subscribe({ onIsolationHandoff: (h) => { handoff = h; } });
       orchestrator.loadPlan(tasks);
@@ -282,11 +282,11 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
    */
   function actingRunner(files: Record<string, string>, hold: (taskId: string, n: number) => boolean, jobFor: (taskId: string, n: number) => RepairJob) {
     const spawns: Array<{ taskId: string; cwd: string; prompt: string }> = [];
-    const runner: ITerminalRunner = {
+    const runner: IRunner = {
       spawn: vi.fn(async (opts) => {
         const n = spawns.filter((s) => s.taskId === opts.taskId).length;
         spawns.push({ taskId: opts.taskId, cwd: opts.cwd, prompt: opts.prompt });
-        const session = new FakeStructuredSession(`s-${opts.taskId}-${n}`, opts.taskId);
+        const session = new FakeRunnerSession(`s-${opts.taskId}-${n}`, opts.taskId);
         setTimeout(() => {
           if (hold(opts.taskId, n)) return;
           const job = jobFor(opts.taskId, n);
@@ -347,7 +347,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     const first = repairingRunner({ t1: 'shared.txt' }, () => undefined);
     const isolation = createWorktreeIsolation({ config: fakeConfig({ worktreeIsolation: true }), resolvePath: async () => process.env.PATH ?? '' });
     const output = new BufferedTaskOutputSource();
-    const orchestrator = TaskOrchestrator.compose({ config: fakeConfig(), notifications: fakeNotification(), terminalRunner: first.runner, output, isolation, workspaceRoot: () => root });
+    const orchestrator = TaskOrchestrator.compose({ config: fakeConfig(), notifications: fakeNotification(), runner: first.runner, output, isolation, workspaceRoot: () => root });
     let handoff: IsolationHandoff | undefined;
     orchestrator.subscribe({ onIsolationHandoff: (h) => { handoff = h; } });
     orchestrator.loadPlan([tasks[0]]);
@@ -365,7 +365,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     const notices: string[] = [];
     const nots = fakeNotification();
     (['info', 'warn', 'error'] as const).forEach((level) => (nots[level] as ReturnType<typeof vi.fn>).mockImplementation((m: string) => notices.push(`${level}: ${m}`)));
-    const second = TaskOrchestrator.compose({ config: fakeConfig({ conflictRepairAttempts: 2, maxParallelSessions: 2 }), notifications: nots, terminalRunner: runner, output, isolation, workspaceRoot: () => root });
+    const second = TaskOrchestrator.compose({ config: fakeConfig({ conflictRepairAttempts: 2, maxParallelSessions: 2 }), notifications: nots, runner, output, isolation, workspaceRoot: () => root });
     let secondHandoff: IsolationHandoff | undefined;
     second.subscribe({ onIsolationHandoff: (h) => { secondHandoff = h; } });
     second.loadPlan([
@@ -405,7 +405,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     const first = repairingRunner({ t1: 'shared.txt' }, () => undefined);
     const isolation = createWorktreeIsolation({ config: fakeConfig({ worktreeIsolation: true }), resolvePath: async () => process.env.PATH ?? '' });
     const output = new BufferedTaskOutputSource();
-    const orchestrator = TaskOrchestrator.compose({ config: fakeConfig(), notifications: fakeNotification(), terminalRunner: first.runner, output, isolation, workspaceRoot: () => root });
+    const orchestrator = TaskOrchestrator.compose({ config: fakeConfig(), notifications: fakeNotification(), runner: first.runner, output, isolation, workspaceRoot: () => root });
     let handoff: IsolationHandoff | undefined;
     orchestrator.subscribe({ onIsolationHandoff: (h) => { handoff = h; } });
     orchestrator.loadPlan([tasks[0]]);
@@ -416,7 +416,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     // The "repair" emits the marker but never merges the integration tip in: the ancestry check must refuse it.
     const job: RepairJob = { merge: false };
     const { runner, spawns } = repairingRunner({ t3: 'shared.txt', t2: 'shared.txt', t4: 'follow.txt' }, () => job);
-    const second = TaskOrchestrator.compose({ config: fakeConfig({ conflictRepairAttempts: 2, maxParallelSessions: 2 }), notifications: fakeNotification(), terminalRunner: runner, output, isolation, workspaceRoot: () => root });
+    const second = TaskOrchestrator.compose({ config: fakeConfig({ conflictRepairAttempts: 2, maxParallelSessions: 2 }), notifications: fakeNotification(), runner, output, isolation, workspaceRoot: () => root });
     second.loadPlan([
       createTask({ id: 't1', order: 1, title: 'Take the shared file', prompt: 'write shared.txt', status: 'completed' }),
       tasks[1],

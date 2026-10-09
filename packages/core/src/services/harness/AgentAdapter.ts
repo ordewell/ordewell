@@ -119,7 +119,7 @@ export interface PlannerStartOptions extends AgentStartCommon {
 
 /**
  * What a runner manifest says the task's mode and effort mean (ADR-0001),
- * resolved by the same code terminal tasks use — see `resolveTaskRunnerFlags`.
+ * resolved from the runner manifest — see `resolveTaskRunnerFlags`.
  * The adapter adds only its protocol flags around these.
  */
 export interface TaskRunnerFlags {

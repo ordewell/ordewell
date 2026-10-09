@@ -119,7 +119,7 @@ async function main() {
   const orchestrator = core.TaskOrchestrator.compose({
     config,
     notifications,
-    terminalRunner: runner,
+    runner: runner,
     registry,
     workspaceRoot: () => workspace,
   });

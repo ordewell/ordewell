@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { createSession, type Session, RunnerRegistry, BufferedTaskOutputSource, createTask, loadSession, saveSession } from '@ordewell/core';
-import type { IAiService, ITerminalRunner, LegacyPlanState, ModelResolver } from '@ordewell/core';
+import type { IAiService, IRunner, LegacyPlanState, ModelResolver } from '@ordewell/core';
 import { fakeConfig, fakeFileSystem } from '@ordewell/core/testing';
 import { forkConversation, rewindConversation, compactConversation, type ConversationDeps } from '../conversation';
 
@@ -43,7 +43,7 @@ function makeSession(workspace: string): Session {
     hasActiveConversation: () => false,
     reset: () => {},
   };
-  const runner = { spawn: vi.fn(), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 } as unknown as ITerminalRunner;
+  const runner = { spawn: vi.fn(), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 } as unknown as IRunner;
   return createSession({
     config: fakeConfig(),
     notifications: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), confirm: vi.fn().mockResolvedValue(undefined) },

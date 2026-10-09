@@ -4,12 +4,12 @@ import { TaskOrchestrator } from '../TaskOrchestrator';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import { createTask } from '../../models/Task';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
-import { fakeConfig, FakeStructuredSession, FakeTerminalSession, flushMicrotasks } from '../../testing';
+import { fakeConfig, FakeRunnerSession, flushMicrotasks } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 import type { AgentEvent, AgentStartOptions, TaskModeAgentAdapter } from '../harness/AgentAdapter';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
-import { isStructuredSession, type ITerminalRunner, type ITerminalSession, type StructuredEvent, type StructuredTurnEnd } from '../../interfaces/ITerminalRunner';
+import type { IRunner, IRunnerSession, StructuredEvent, StructuredTurnEnd } from '../../interfaces/IRunner';
 
 /**
  * Messages that reach a running structured task between tool calls
@@ -126,8 +126,7 @@ function runnerOf<A extends TurnEndAdapter>(make: () => A) {
   return { runner, adapters };
 }
 
-function observe(session: ITerminalSession) {
-  if (!isStructuredSession(session)) throw new Error('not a structured session');
+function observe(session: IRunnerSession) {
   const events: StructuredEvent[] = [];
   const turnEnds: StructuredTurnEnd[] = [];
   const statesAtTurnEnd: string[] = [];
@@ -427,15 +426,15 @@ describe('a checkpoint answer typed at the task (ADR-0023)', () => {
 
 describe('the attempt\'s verdict when a message is read mid-turn', () => {
   function scheduled() {
-    const session = new FakeStructuredSession();
+    const session = new FakeRunnerSession();
     const runner = {
       spawn: async () => session,
       stop: () => session.kill(),
       stopAll: () => session.kill(),
       activeCount: 1,
-    } satisfies ITerminalRunner;
+    } satisfies IRunner;
     const orchestrator = TaskOrchestrator.compose({
-      config: fakeConfig(), notifications: fakeNotification(), terminalRunner: runner,
+      config: fakeConfig(), notifications: fakeNotification(), runner,
       output: new BufferedTaskOutputSource(),
       registry: new RunnerRegistry(), workspaceRoot: () => '/repo',
       workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
@@ -614,15 +613,15 @@ describe('force send', () => {
 });
 
 describe('force send through the orchestrator', () => {
-  function orchestratorFor(session: ITerminalSession) {
+  function orchestratorFor(session: IRunnerSession) {
     const runner = {
       spawn: async () => session,
       stop: () => session.kill(),
       stopAll: () => session.kill(),
       activeCount: 1,
-    } satisfies ITerminalRunner;
+    } satisfies IRunner;
     const orchestrator = TaskOrchestrator.compose({
-      config: fakeConfig(), notifications: fakeNotification(), terminalRunner: runner,
+      config: fakeConfig(), notifications: fakeNotification(), runner,
       output: new BufferedTaskOutputSource(),
       registry: new RunnerRegistry(), workspaceRoot: () => '/repo',
       workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
@@ -632,7 +631,7 @@ describe('force send through the orchestrator', () => {
   }
 
   function scheduled() {
-    const session = new FakeStructuredSession();
+    const session = new FakeRunnerSession();
     return { orchestrator: orchestratorFor(session), session };
   }
 
@@ -679,9 +678,8 @@ describe('force send through the orchestrator', () => {
     orchestrator.stop();
   });
 
-  it('refuses a session that is not structured, saying there is no turn', async () => {
-    const orchestrator = orchestratorFor(new FakeTerminalSession());
-    await orchestrator.forceStartTask('t1');
+  it('refuses a task that is not running, saying there is no turn', async () => {
+    const orchestrator = orchestratorFor(new FakeRunnerSession());
     expect(() => orchestrator.forceSendTaskMessage('t1', 'now')).toThrow(/is not running, so there is no turn to send a message to/);
     expect(() => orchestrator.forceSendQueuedTaskMessage('t1', 'msg-1')).toThrow(/is not running/);
   });

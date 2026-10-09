@@ -1,4 +1,4 @@
-import type { ITerminalSession } from './ITerminalRunner';
+import type { IRunnerSession } from './IRunner';
 
 export interface LiveTailOptions {
   maxLines: number;
@@ -20,7 +20,7 @@ export interface LiveTail {
  */
 export interface TaskOutputSource {
   /** Start capturing a session; replaces any earlier capture of the task. */
-  attach(taskId: string, session: ITerminalSession): void;
+  attach(taskId: string, session: IRunnerSession): void;
   /** Stop capturing the task's session; what was captured stays readable. */
   detach(taskId: string): void;
   /** Drop every capture (a new plan reuses task ids). */

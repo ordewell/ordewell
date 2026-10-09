@@ -13,10 +13,10 @@ import {
   OpenAiService,
   type ConversationTurn,
   type IConfig,
-  type ITerminalRunner,
+  type IRunner,
   type LegacyPlanState,
 } from '@ordewell/core';
-import { FakeStructuredSession } from '@ordewell/core/testing';
+import { FakeRunnerSession } from '@ordewell/core/testing';
 import { createApp } from '../../../web/server/app';
 import { createRequestListener } from '../../../web/server/nodeAdapter';
 import { OrchestratorPool } from '../../../web/server/pool/orchestratorPool';
@@ -53,10 +53,10 @@ function inertResolver(): ModelResolver {
 }
 
 /** Tasks that start and never finish, so a run stays live until the test ends it. */
-function holdingRunner(): ITerminalRunner {
+function holdingRunner(): IRunner {
   return {
     activeCount: 0,
-    spawn: vi.fn(async () => new FakeStructuredSession()),
+    spawn: vi.fn(async () => new FakeRunnerSession()),
     stop: vi.fn(),
     stopAll: vi.fn(),
   };

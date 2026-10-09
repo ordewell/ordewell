@@ -36,7 +36,7 @@ import type { AiProvider, IConfig } from '../interfaces/IConfig';
 import type { IFileSystem } from '../interfaces/IFileSystem';
 import type { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { INotification } from '../interfaces/INotification';
-import type { ITerminalRunner } from '../interfaces/ITerminalRunner';
+import type { IRunner } from '../interfaces/IRunner';
 import type { TaskOutputSource } from '../interfaces/TaskOutputSource';
 import type { IsolationMergeResult, IsolationView, IWorktreeIsolation } from '../interfaces/IWorktreeIsolation';
 import { migratePlanStateIsolation } from './isolationRecord';
@@ -107,7 +107,7 @@ export type SaveSession = (plan: LegacyPlanState, goal: string, workspace: strin
 export interface SessionDeps {
   config: IConfig;
   notifications: INotification;
-  runner: ITerminalRunner;
+  runner: IRunner;
   registry: RunnerRegistry;
   /** Resolves the workspace root for the orchestrator (lazy — VS Code can change it). */
   workspaceRoot: () => string;
@@ -244,7 +244,7 @@ export function createSession(deps: SessionDeps): Session {
   const orchestrator = TaskOrchestrator.compose({
     config: deps.config,
     notifications: deps.notifications,
-    terminalRunner: taskLogs.wrap(runnerApprovals.wrap(deps.runner)),
+    runner: taskLogs.wrap(runnerApprovals.wrap(deps.runner)),
     store,
     output: deps.taskOutput,
     isolation: deps.isolation,

@@ -20,7 +20,7 @@ async function runPlan(tasks: Task[], runner: string, timeoutMs: number) {
   const orchestrator = TaskOrchestrator.compose({
     config: fakeConfig({ enabledRunners: [runner] }),
     notifications: { info: () => {}, warn: () => {}, error: () => {}, confirm: async () => undefined },
-    terminalRunner: structured,
+    runner: structured,
     registry: new RunnerRegistry(),
     workspaceRoot: () => workspace,
   });

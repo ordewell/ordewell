@@ -9,7 +9,7 @@ import type { SpawnFn } from '../harness/AgentAdapter';
 import { StructuredRunner } from '../StructuredRunner';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
-import type { ITerminalSession } from '../../interfaces/ITerminalRunner';
+import type { IRunnerSession } from '../../interfaces/IRunner';
 import { makeSession, taskOf } from './sessionTestKit';
 
 /**
@@ -39,7 +39,7 @@ function liveSession(dir: string) {
   };
   const router = new StructuredRunner({ process: { spawn } });
   const requests: RunnerSpawnOptions[] = [];
-  const attempts: ITerminalSession[] = [];
+  const attempts: IRunnerSession[] = [];
   const runner = {
     get activeCount() { return router.activeCount; },
     spawn: async (opts: RunnerSpawnOptions) => { requests.push(opts); const attempt = await router.spawn(opts); attempts.push(attempt); return attempt; },
@@ -72,7 +72,7 @@ describe.runIf(live)('continue — live', () => {
       })), 'Continue', dir);
       await session.executePlan();
       await vi.waitFor(() => expect(taskOf(session, 'live-1')?.status).toBe('completed'), { timeout: TIMEOUT_MS, interval: 500 });
-      const saved = taskOf(session, 'live-1')!.transport?.nativeSessionId;
+      const saved = taskOf(session, 'live-1')!.runnerSessionId;
       expect(saved).toBeTruthy();
       await vi.waitFor(() => expect(children.every(exited)).toBe(true), { timeout: 10_000 });
 
@@ -91,7 +91,7 @@ describe.runIf(live)('continue — live', () => {
       // the reply itself is in the continued attempt's output.
       expect(attempts.at(-1)!.getOutput()).toMatch(/The word was PELICAN/i);
       expect(attempts.at(-1)!.getOutput()).not.toContain('The secret word is PELICAN');
-      expect(continued.transport?.nativeSessionId).toBeTruthy();
+      expect(continued.runnerSessionId).toBeTruthy();
       await vi.waitFor(() => expect(children.every(exited)).toBe(true), { timeout: 10_000 });
     } finally {
       session.destroy();
@@ -105,7 +105,7 @@ describe.runIf(live)('continue — live', () => {
     try {
       session.loadPlan(planOf({
         ...createTask({ id: 'live-2', order: 1, title: 'Gone', taskMode: 'acceptEdits', assignedModel, prompt: 'unused', status: 'completed' }),
-        transport: { kind: 'structured', nativeSessionId: randomUUID() },
+        runnerSessionId: randomUUID(),
       }), 'Continue', dir);
 
       await session.continueTask('live-2', 'Reply with only the word: ok');
@@ -114,7 +114,7 @@ describe.runIf(live)('continue — live', () => {
       const failed = taskOf(session, 'live-2')!;
       expect(failed.outputSummary?.reviewReason).toMatch(/Could not continue task "Gone": .*saved session\. Retry starts it afresh\./);
       expect(failed.outputSummary?.logTail).toContain('No conversation found');
-      expect(failed.transport?.nativeSessionId).toBeUndefined();
+      expect(failed.runnerSessionId).toBeUndefined();
       expect(children).toHaveLength(1);
       await vi.waitFor(() => expect(exited(children[0])).toBe(true), { timeout: 10_000 });
     } finally {

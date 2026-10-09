@@ -4,7 +4,7 @@ import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { ModelResolver } from '../ModelResolver';
 import type { IAiService } from '../AiService';
 import type { INotification } from '../../interfaces/INotification';
-import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
+import type { IRunner } from '../../interfaces/IRunner';
 import type { IFileSystem } from '../../interfaces/IFileSystem';
 import type { SkillsService } from '../SkillsService';
 import type { TaskOutputSource } from '../../interfaces/TaskOutputSource';
@@ -14,11 +14,11 @@ import { flattenTasks, type Task } from '../../models/Task';
 import type { TaskLogEvent } from '../../models/TaskLog';
 import type { TaskLogFile, TaskLogLocation } from '../../utils/taskLogStore';
 
-import { fakeConfig, FakeStructuredSession, FakeTerminalSession } from '../../testing';
+import { fakeConfig, FakeRunnerSession } from '../../testing';
 
 export const testWorkspace = process.cwd();
 
-export { fakeConfig, FakeStructuredSession, FakeTerminalSession };
+export { fakeConfig, FakeRunnerSession };
 
 export function fakeNotification(): INotification {
   return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), confirm: vi.fn().mockResolvedValue(undefined) };
@@ -46,7 +46,7 @@ export interface SessionOverrides {
   fsAdapter?: IFileSystem;
   settings?: SessionDeps['settings'];
   sessionId?: string;
-  runner?: ITerminalRunner;
+  runner?: IRunner;
   /** Fakes go through the constructor seam — Partial so a test only stubs the calls it expects. */
   aiService?: Partial<IAiService>;
   planner?: Partial<SessionPlanner>;
@@ -92,11 +92,11 @@ export function saves(session: Session): Mock<SaveSession> {
 /** A Session over fully faked deps, built through the real composition root. */
 export function makeSession(overrides: SessionOverrides = {}): Session {
   const runner = overrides.runner ?? {
-    spawn: vi.fn().mockResolvedValue({ id: 's1', taskId: '', onOutput: vi.fn(), onExit: vi.fn(), kill: vi.fn(), getOutput: () => '', write: vi.fn() }),
+    spawn: vi.fn(async ({ taskId }: Parameters<IRunner['spawn']>[0]) => new FakeRunnerSession('s1', taskId)),
     stop: vi.fn(),
     stopAll: vi.fn(),
     activeCount: 0,
-  } as unknown as ITerminalRunner;
+  } satisfies IRunner;
 
   const save = vi.fn<SaveSession>();
   const session = createSession({

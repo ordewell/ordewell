@@ -10,10 +10,10 @@ import type { SessionMessage } from '../SessionMessage';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { EMPTY_TASK_LOG, reduceTaskLog, replayTaskLog, type TaskLogView } from '../../conversation/taskLog';
 import type { TaskLogEvent } from '../../models/TaskLog';
-import { isStructuredSession, type ITerminalRunner, type ITerminalSession } from '../../interfaces/ITerminalRunner';
+import type { IRunner, IRunnerSession } from '../../interfaces/IRunner';
 import { listTaskLogAttempts, readTaskLog, type TaskLogLocation } from '../../utils/taskLogStore';
 import { sessionDataDir } from '../../utils/sessionStore';
-import { FakeStructuredSession } from '../../testing';
+import { FakeRunnerSession } from '../../testing';
 import { claudeTurnEndQueue, fakeSpawn, fixture, type ScriptedReply } from './harnessTestKit';
 
 /**
@@ -37,7 +37,7 @@ beforeEach(() => {
 });
 afterEach(() => { fs.rmSync(baseDir, { recursive: true, force: true }); });
 
-function recording(replies: ScriptedReply[], wrap: (runner: ITerminalRunner) => ITerminalRunner = (r) => r) {
+function recording(replies: ScriptedReply[], wrap: (runner: IRunner) => IRunner = (r) => r) {
   const spawned = fakeSpawn(replies);
   const structured = new StructuredRunner({
     process: { spawn: spawned.spawn, resolvePath: async () => '/usr/bin', platform: 'linux', isDirectory: () => true, exists: () => true },
@@ -49,7 +49,7 @@ function recording(replies: ScriptedReply[], wrap: (runner: ITerminalRunner) => 
   const runner = recorder.wrap(wrap(structured));
   const spawn = async (mode = 'acceptEdits') => {
     const session = await runner.spawn({ taskId: TASK, runner: 'claude-code', prompt: 'Do the task', cwd: '/repo', registry: new RunnerRegistry(), mode });
-    if (!isStructuredSession(session)) throw new Error('expected a structured session');
+
     return session;
   };
   /** What a surface folding every `task_log` of one attempt would draw. */
@@ -59,7 +59,7 @@ function recording(replies: ScriptedReply[], wrap: (runner: ITerminalRunner) => 
   return { spawned, sent, spawn, live, runner };
 }
 
-function turnEnds(session: ITerminalSession & { onTurnEnd(listener: () => void): void }, count: number): Promise<void> {
+function turnEnds(session: IRunnerSession, count: number): Promise<void> {
   let seen = 0;
   return new Promise<void>((resolve) => session.onTurnEnd(() => { seen += 1; if (seen === count) resolve(); }));
 }
@@ -171,12 +171,12 @@ describe('every attempt of a task', () => {
 
 describe('a log that cannot be created', () => {
   it('still streams the attempt, unnumbered, and warns once rather than on every batch', async () => {
-    const session = new FakeStructuredSession('s1', TASK);
+    const session = new FakeRunnerSession('s1', TASK);
     const sent: SessionMessage[] = [];
     const warn = vi.fn();
     const open = vi.fn(() => { throw new Error('EACCES: permission denied'); });
     const recorder = new TaskLogRecorder({ broadcast: (m) => sent.push(m), location: () => where, open, flushMs: 1, logger: { warn } });
-    const inner: ITerminalRunner = { spawn: vi.fn(async () => session), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 };
+    const inner: IRunner = { spawn: vi.fn(async () => session), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 };
     await recorder.wrap(inner).spawn({ taskId: TASK, runner: 'claude-code', prompt: 'Do it', cwd: '/repo' });
 
     session.emitEvent({ type: 'assistant_text', text: 'Done.' });
@@ -240,7 +240,7 @@ describe('a message read mid-turn in the saved task log (ADR-0023)', () => {
     const sent: SessionMessage[] = [];
     const recorder = new TaskLogRecorder({ broadcast: (m) => sent.push(m), location: () => where, flushMs: 1 });
     const session = await recorder.wrap(structured).spawn({ taskId: TASK, runner: 'codex', prompt: 'Do the task', cwd: '/repo', registry: new RunnerRegistry(), mode: 'fullAccess' });
-    if (!isStructuredSession(session)) throw new Error('expected a structured session');
+
     const ended = turnEnds(session, 1);
     await vi.waitFor(() => expect(sent.some((m) => m.type === 'task_log' && m.events.some((e) => e.type === 'tool_call'))).toBe(true));
 

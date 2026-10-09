@@ -44,7 +44,7 @@ import { WebConfig } from '../adapters/WebConfig';
 import { scanWorkspaces as scanWorkspacesImpl } from '../utils/workspaceScanner';
 import { PoolFileSystem } from '../adapters/PoolFileSystem';
 import { PoolAwareRunner } from '../adapters/PoolAwareRunner';
-import type { ApprovalAnswer, RunnerRegistry as CoreRunnerRegistry, ITerminalRunner } from '@ordewell/core';
+import type { ApprovalAnswer, RunnerRegistry as CoreRunnerRegistry, IRunner } from '@ordewell/core';
 
 /** A fork the pool has adopted: addressable at once, its plan read back from the file it was written to. */
 export interface AdoptedFork {
@@ -58,7 +58,7 @@ export interface OrchestratorPoolDeps {
    * Where every plan's tasks run (ADR-0018), shared across sessions behind
    * each plan's `PoolAwareRunner`. Defaulted to a real one; tests inject a fake.
    */
-  runner?: ITerminalRunner;
+  runner?: IRunner;
   /**
    * Overrides the pool's own `ModelResolver`. Left undefined, behavior is
    * unchanged; tests inject one built with fake exec/fetch impls so a
@@ -76,7 +76,7 @@ export class OrchestratorPool {
   private cachedProviderLists: Record<string, string[]> | undefined;
   private settingsService = new SettingsService();
   private plannerModelMemory = new PlannerModelMemory(this.settingsService);
-  private runner: ITerminalRunner;
+  private runner: IRunner;
 
   constructor(deps: OrchestratorPoolDeps = {}) {
     const pluginNotice = removedPluginNotice();

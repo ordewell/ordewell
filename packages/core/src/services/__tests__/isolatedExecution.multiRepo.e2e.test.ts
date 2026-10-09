@@ -9,9 +9,9 @@ import type { Session } from '../createSession';
 import type { ConversationTurn, IAiService } from '../AiService';
 import type { SessionMessage } from '../SessionMessage';
 import { createTask, type ConversationMessage, type LegacyPlanState, type Task } from '../../models/Task';
-import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
+import type { IRunner } from '../../interfaces/IRunner';
 import type { IsolationHandoff, IsolationRun, TaskIsolation } from '../../interfaces/IWorktreeIsolation';
-import { fakeConfig, FakeStructuredSession, makeSession, taskOf, saves } from './sessionTestKit';
+import { fakeConfig, FakeRunnerSession, makeSession, taskOf, saves } from './sessionTestKit';
 
 const hasGit = (() => {
   try { execFileSync('git', ['--version'], { stdio: 'ignore' }); return true; } catch { return false; }
@@ -92,23 +92,23 @@ function scriptedAgent(jobFor: (taskId: string, title: string) => Job) {
   const spawned: { taskId: string; cwd: string }[] = [];
   const said = new Set<string>();
   const errors: unknown[] = [];
-  const runner: ITerminalRunner = {
+  const runner: IRunner = {
     spawn: vi.fn(async (opts) => {
       spawned.push({ taskId: opts.taskId, cwd: opts.cwd });
-      const terminal = new FakeStructuredSession(`s${spawned.length}`, opts.taskId);
+      const runnerSession = new FakeRunnerSession(`s${spawned.length}`, opts.taskId);
       const job = jobFor(opts.taskId, opts.title ?? '');
       const finish = () => {
         try {
           for (const [file, content] of Object.entries(job.write ?? {})) writeFileSync(join(opts.cwd, file), content);
           job.act?.(opts.cwd);
-          terminal.reportComplete({ status: 'done', summary: job.answer ?? 'Done.' });
+          runnerSession.reportComplete({ status: 'done', summary: job.answer ?? 'Done.' });
         } catch (err) {
           errors.push(err);
         }
       };
       setTimeout(() => {
         if (job.say) {
-          terminal.emitOutput(`${job.say}\n`);
+          runnerSession.emitOutput(`${job.say}\n`);
           said.add(opts.taskId);
         }
         const poll = setInterval(() => {
@@ -117,7 +117,7 @@ function scriptedAgent(jobFor: (taskId: string, title: string) => Job) {
           finish();
         }, 10);
       }, 5);
-      return terminal;
+      return runnerSession;
     }),
     stop: vi.fn(),
     stopAll: vi.fn(),

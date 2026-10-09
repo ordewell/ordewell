@@ -1,5 +1,5 @@
 import type { ApprovalDecision } from '../interfaces/IApproval';
-import type { StructuredEvent, StructuredTurnEnd } from '../interfaces/ITerminalRunner';
+import type { StructuredEvent, StructuredTurnEnd } from '../interfaces/IRunner';
 import type { SubagentOutcome, TaskSkillNotice, TaskSkillSnapshot } from './Task';
 import type { UsageRecord } from './Usage';
 

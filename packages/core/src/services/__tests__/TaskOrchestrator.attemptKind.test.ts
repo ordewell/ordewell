@@ -6,11 +6,11 @@ import { TaskOrchestrator, TaskControlError } from '../TaskOrchestrator';
 import { createTask, type Task } from '../../models/Task';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
-import { fakeConfig, FakeStructuredSession, FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
+import { fakeConfig, FakeRunnerSession, FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 import type { IConfig } from '../../interfaces/IConfig';
 import type { IsolationMergeResult } from '../../interfaces/IWorktreeIsolation';
-import type { ITerminalRunner, ITerminalSession } from '../../interfaces/ITerminalRunner';
+import type { IRunner, IRunnerSession } from '../../interfaces/IRunner';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 import type { SkillInfo } from '../SkillsService';
 
@@ -36,27 +36,27 @@ function setup(opts: { isolation?: FakeWorktreeIsolation; config?: Partial<IConf
   /** The roots each spawn read skills from. */
   const skillRoots: (readonly string[])[] = [];
   const isolation = opts.isolation ?? new FakeWorktreeIsolation();
-  const sessions: FakeStructuredSession[] = [];
+  const sessions: FakeRunnerSession[] = [];
   const requests: RunnerSpawnOptions[] = [];
   /** Spawns that wait to be let through, by task id. */
   const holds = new Map<string, Promise<void>>();
   const runner = {
-    spawn: vi.fn(async (o: RunnerSpawnOptions): Promise<ITerminalSession> => {
+    spawn: vi.fn(async (o: RunnerSpawnOptions): Promise<IRunnerSession> => {
       requests.push(o);
       await holds.get(o.taskId);
       const id = `s${sessions.length + 1}`;
-      const session = new FakeStructuredSession(id, o.taskId, o.resumeSessionId ?? `native-${o.taskId}-${sessions.length + 1}`);
+      const session = new FakeRunnerSession(id, o.taskId, o.resumeSessionId ?? `native-${o.taskId}-${sessions.length + 1}`);
       sessions.push(session);
       return session;
     }),
     stop: vi.fn(),
     stopAll: vi.fn(),
     activeCount: 0,
-  } satisfies ITerminalRunner;
+  } satisfies IRunner;
   const orchestrator = TaskOrchestrator.compose({
     config: fakeConfig({ worktreeIsolation: true, ...opts.config }),
     notifications: fakeNotification(),
-    terminalRunner: runner,
+    runner,
     output: new BufferedTaskOutputSource(),
     registry: new RunnerRegistry(),
     isolation,

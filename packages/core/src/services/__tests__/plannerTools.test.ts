@@ -13,8 +13,8 @@ import { surfacePlan, type SessionMessage } from '../SessionMessage';
 import type { SkillInfo, SkillsService } from '../SkillsService';
 import { createTask, type DiscoveredModel, type Task } from '../../models/Task';
 import { openTaskLog } from '../../utils/taskLogStore';
-import { FakeTerminalSession, makeSession, saves } from './sessionTestKit';
-import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
+import { FakeRunnerSession, makeSession, saves } from './sessionTestKit';
+import type { IRunner } from '../../interfaces/IRunner';
 import { fakeConfig, fakeFileSystem } from '../../testing';
 import { respondingSpawn, planJson, type FakeAgentProcess, type FakeSpawnResult } from './harnessTestKit';
 import { plannerToolHandler, PLANNER_TURN_ENDED, type PlannerToolsHost } from '../plannerTools';
@@ -216,7 +216,7 @@ describe('a planner the server did not reach', () => {
   });
 });
 /** A planning session on a real harness planner, whose settings the test rewrites the way a settings write would. */
-function plannerSession(claude: FakeSpawnResult, initial: Partial<SessionRuntimeSettings> = {}, { runner, skills = [], skillsService }: { runner?: ITerminalRunner; skills?: SkillInfo[]; skillsService?: Pick<SkillsService, 'findSkill' | 'listSkills'> } = {}) {
+function plannerSession(claude: FakeSpawnResult, initial: Partial<SessionRuntimeSettings> = {}, { runner, skills = [], skillsService }: { runner?: IRunner; skills?: SkillInfo[]; skillsService?: Pick<SkillsService, 'findSkill' | 'listSkills'> } = {}) {
   const server = newServer();
   let settings: SessionRuntimeSettings = { enabledRunners: ['claude-code'], ...initial };
   const ai = service(claude, server);
@@ -707,7 +707,7 @@ const TWO_TASKS = [
 ];
 
 /** A conversation with a committed two-task plan, whose every later reply is `second`. */
-async function planThen(second: (mcp: Client | null, message: string) => Promise<string>, opts: { runner?: ITerminalRunner; skills?: SkillInfo[] } & Partial<SessionRuntimeSettings> = {}) {
+async function planThen(second: (mcp: Client | null, message: string) => Promise<string>, opts: { runner?: IRunner; skills?: SkillInfo[] } & Partial<SessionRuntimeSettings> = {}) {
   const { runner, skills, ...settings } = opts;
   let planned = false;
   const planner = plannerSession(fakeClaude({
@@ -729,18 +729,18 @@ const landed = ({ session, broadcast }: ReturnType<typeof plannerSession>) => ({
 });
 
 /** A started run on a plan of two tasks: `a` running behind `sessions[0]`, `b` waiting on it. */
-async function runningPlan(second: Parameters<typeof planThen>[0], opts: { sessions?: FakeTerminalSession[] } = {}) {
+async function runningPlan(second: Parameters<typeof planThen>[0], opts: { sessions?: FakeRunnerSession[] } = {}) {
   const { sessions = [], ...rest } = opts;
   const runner = {
     spawn: vi.fn(async ({ taskId }: { taskId: string }) => {
-      const session = new FakeTerminalSession(`s-${taskId}`, taskId);
+      const session = new FakeRunnerSession(`s-${taskId}`, taskId);
       sessions.push(session);
       return session;
     }),
     stop: vi.fn(),
     stopAll: vi.fn(),
     activeCount: 0,
-  } as unknown as ITerminalRunner;
+  } as unknown as IRunner;
   const planner = await planThen(second, { ...rest, runner });
   await planner.session.executePlan();
   return planner;
@@ -1025,7 +1025,7 @@ describe('task_query', () => {
 
 describe('task_output', () => {
   it('reads the live tail of a running task, and pages on from the offset it reports', async () => {
-    const sessions: FakeTerminalSession[] = [];
+    const sessions: FakeRunnerSession[] = [];
     const answers: unknown[] = [];
     const { session } = await runningPlan(async (mcp) => {
       answers.push((await call(mcp!, 'task_output', { task: '#1', lines: 2 })).body);
@@ -1045,7 +1045,7 @@ describe('task_output', () => {
   });
 
   it('cuts a count above the cap to the cap, as the envelope does', async () => {
-    const sessions: FakeTerminalSession[] = [];
+    const sessions: FakeRunnerSession[] = [];
     let answer: { output: string } | undefined;
     const { session } = await runningPlan(async (mcp) => {
       answer = (await call(mcp!, 'task_output', { task: '#1', lines: 5000 })).body as { output: string };

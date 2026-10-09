@@ -117,7 +117,7 @@ function typeCoherenceCheck(target: Task, changes: Partial<Task>): TaskEditCheck
 /**
  * Whether a task may become an ops task, or stop being one (ADR-0020). Only a
  * top-level AI task can be ops, and the flag decides where the task runs, so
- * once it has started it is fixed, like its transport.
+ * once it has started it is fixed, like its runner session.
  */
 function opsCheck(tasks: readonly Task[], target: Task, changes: Partial<Task>): TaskEditCheck | null {
   if (!('ops' in changes) || !!changes.ops === !!target.ops) return null;

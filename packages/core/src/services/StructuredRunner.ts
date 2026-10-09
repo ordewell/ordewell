@@ -2,19 +2,18 @@ import { McpAttachError } from './harness/ordewellBinding';
 import { EventEmitter } from 'events';
 import { spawn as nodeSpawn } from 'child_process';
 import type {
-  ITerminalSession,
+  IRunnerSession,
   QueuedTaskMessage,
   StructuredEvent,
-  StructuredSessionCapability,
   StructuredTurnEnd,
-} from '../interfaces/ITerminalRunner';
+} from '../interfaces/IRunner';
 import type { ApprovalDecision } from '../interfaces/IApproval';
 import { checkpointReply, type CheckpointAnswer, type TaskCompleteArgs } from './mcp/tools';
 import { sharedMcpServer, type McpCredential, type OrdewellMcpServer, type TaskTokenScope } from './mcp/OrdewellMcpServer';
 import { mcpClientConfig } from './mcp/clientConfig';
 import type { ResearchToolType } from '../models/Task';
 import { resolveTaskRunnerFlags } from '../plugins/resolveArgs';
-import { AbstractRunner, AbstractTerminalSession, type RunnerSpawnOptions } from './AbstractRunner';
+import { AbstractRunner, AbstractRunnerSession, type RunnerSpawnOptions } from './AbstractRunner';
 import type { AgentEvent, AgentProcessDeps, TaskModeAgentAdapter, TaskStartOptions } from './harness/AgentAdapter';
 import { mapAgentTool, normalizeAgentArgs } from './harness/agentTools';
 import { createTaskAdapter } from './harness/connectors';
@@ -168,15 +167,13 @@ interface SessionLaunch {
 
 /**
  * One task driven over its runner's programmatic protocol (ADR-0018). It *is*
- * an `ITerminalSession`, so everything downstream of `onOutput` is unchanged;
- * what a terminal cannot do sits on {@link StructuredSessionCapability}.
+ * an `IRunnerSession`, with plain output and structured events.
  *
  * Ordewell owns the message queue (M1). A message sent mid-turn is handed to a
  * runner that can take one at its next step (ADR-0023); otherwise it waits for
  * the turn to end rather than being typed into a runner that is busy.
  */
-export class StructuredSession extends AbstractTerminalSession implements StructuredSessionCapability {
-  readonly transport = 'structured' as const;
+export class StructuredSession extends AbstractRunnerSession {
 
   private adapter: TaskModeAgentAdapter | null = null;
   private adapterStarted = false;
@@ -755,7 +752,7 @@ export class StructuredRunner extends AbstractRunner<StructuredSession> {
     this.mcp = deps.mcp ?? sharedMcpServer();
   }
 
-  async spawn(opts: RunnerSpawnOptions): Promise<ITerminalSession> {
+  async spawn(opts: RunnerSpawnOptions): Promise<IRunnerSession> {
     const manifest = opts.registry?.get(opts.runner)?.manifest;
     if (!manifest) throw new Error(`No runner manifest is registered for "${opts.runner}".`);
 
@@ -769,7 +766,7 @@ export class StructuredRunner extends AbstractRunner<StructuredSession> {
         fetch: globalThis.fetch,
         ...this.processDeps,
         // Already resolved by the caller (ADR-0016); resolving it again here
-        // could disagree with what a terminal task in the same run sees.
+        // could disagree with the other tasks in the same run.
         workspaceEnv: async () => env,
       },
       createAdapter: this.createAdapter,

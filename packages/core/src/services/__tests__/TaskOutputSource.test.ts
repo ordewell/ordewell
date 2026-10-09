@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
-import { FakeStructuredSession, FakeTerminalSession } from '../../testing';
+import { FakeRunnerSession } from '../../testing';
 
 describe('BufferedTaskOutputSource', () => {
   describe('finalText', () => {
     it('is the summary the runner reported through task_complete (ADR-0022, V4)', () => {
       const source = new BufferedTaskOutputSource();
-      const session = new FakeStructuredSession('s1', 'ta');
+      const session = new FakeRunnerSession('s1', 'ta');
       source.attach('ta', session);
       session.emitOutput('the screen\n');
 
@@ -17,10 +17,10 @@ describe('BufferedTaskOutputSource', () => {
 
     it('reads a retried task\'s summary from its new session only', () => {
       const source = new BufferedTaskOutputSource();
-      const first = new FakeStructuredSession('s1', 'ta');
+      const first = new FakeRunnerSession('s1', 'ta');
       source.attach('ta', first);
       first.reportComplete({ status: 'failed', summary: 'first try', reason: 'no' });
-      const second = new FakeStructuredSession('s2', 'ta');
+      const second = new FakeRunnerSession('s2', 'ta');
       source.attach('ta', second);
       second.emitOutput('second screen\n');
 
@@ -29,7 +29,7 @@ describe('BufferedTaskOutputSource', () => {
 
     it('falls back to what the latest turn said, escapes and control characters removed', () => {
       const source = new BufferedTaskOutputSource();
-      const session = new FakeStructuredSession('s1', 't1');
+      const session = new FakeRunnerSession('s1', 't1');
       source.attach('t1', session);
       session.emitOutput('first turn\n');
       session.emitEvent({ type: 'turn_start', text: 'go on' });
@@ -40,7 +40,7 @@ describe('BufferedTaskOutputSource', () => {
 
     it('drops a summary reported before a later turn started', () => {
       const source = new BufferedTaskOutputSource();
-      const session = new FakeStructuredSession('s1', 't1');
+      const session = new FakeRunnerSession('s1', 't1');
       source.attach('t1', session);
       session.reportComplete({ status: 'blocked', summary: 'needs a key', reason: 'no key' });
       session.emitEvent({ type: 'turn_start', text: 'here is the key' });
@@ -62,7 +62,7 @@ describe('BufferedTaskOutputSource', () => {
 
     it('renders the last maxLines clean, without ANSI', () => {
       const source = new BufferedTaskOutputSource();
-      const session = new FakeTerminalSession('s1', 't1');
+      const session = new FakeRunnerSession('s1', 't1');
       source.attach('t1', session);
       session.emitOutput('\x1b[32mone\x1b[0m\ntwo\nthree\n');
 
@@ -71,7 +71,7 @@ describe('BufferedTaskOutputSource', () => {
 
     it('returns only what followed a previous nextOffset', () => {
       const source = new BufferedTaskOutputSource();
-      const session = new FakeTerminalSession('s1', 't1');
+      const session = new FakeRunnerSession('s1', 't1');
       source.attach('t1', session);
       session.emitOutput('first\n');
       const first = source.liveTail('t1', { maxLines: 50 });
@@ -86,7 +86,7 @@ describe('BufferedTaskOutputSource', () => {
 
     it('keeps offsets absolute after old output is dropped from the bounded buffer', () => {
       const source = new BufferedTaskOutputSource({ maxBufferChars: 20 });
-      const session = new FakeTerminalSession('s1', 't1');
+      const session = new FakeRunnerSession('s1', 't1');
       source.attach('t1', session);
       for (let i = 0; i < 10; i++) session.emitOutput(`line-${i}\n`);
 
@@ -98,7 +98,7 @@ describe('BufferedTaskOutputSource', () => {
 
     it('stops running on exit and ignores output after detach', () => {
       const source = new BufferedTaskOutputSource();
-      const session = new FakeTerminalSession('s1', 't1');
+      const session = new FakeRunnerSession('s1', 't1');
       source.attach('t1', session);
       session.emitOutput('work\n');
       source.detach('t1');
@@ -106,7 +106,7 @@ describe('BufferedTaskOutputSource', () => {
 
       expect(source.liveTail('t1', { maxLines: 5 })).toEqual({ text: 'work', nextOffset: 5, running: false });
 
-      const exited = new FakeTerminalSession('s2', 't2');
+      const exited = new FakeRunnerSession('s2', 't2');
       source.attach('t2', exited);
       exited.emitExit(0);
       expect(source.liveTail('t2', { maxLines: 5 })?.running).toBe(false);
@@ -114,10 +114,10 @@ describe('BufferedTaskOutputSource', () => {
 
     it('reads a retried task from its new session only', () => {
       const source = new BufferedTaskOutputSource();
-      const first = new FakeTerminalSession('s1', 't1');
+      const first = new FakeRunnerSession('s1', 't1');
       source.attach('t1', first);
       first.emitOutput('attempt one\n');
-      const second = new FakeTerminalSession('s2', 't1');
+      const second = new FakeRunnerSession('s2', 't1');
       source.attach('t1', second);
       second.emitOutput('attempt two\n');
       first.emitOutput('late output from attempt one\n');

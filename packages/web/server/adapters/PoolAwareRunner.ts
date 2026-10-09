@@ -1,7 +1,7 @@
-import type { ITerminalRunner, ITerminalSession, RunnerSpawnOptions } from '@ordewell/core';
+import type { IRunner, IRunnerSession, RunnerSpawnOptions } from '@ordewell/core';
 import type { SessionBroadcaster } from '@ordewell/core';
 
-export class PoolAwareRunner implements ITerminalRunner {
+export class PoolAwareRunner implements IRunner {
   /**
    * Sessions this plan spawned. The inner runner is shared by every plan in
    * the pool, so "stop everything" and "how many are running" must be
@@ -13,12 +13,12 @@ export class PoolAwareRunner implements ITerminalRunner {
   constructor(
     private sessionId: string,
     private broadcast: SessionBroadcaster,
-    private inner: ITerminalRunner,
+    private inner: IRunner,
   ) {}
 
   get activeCount(): number { return this.owned.size; }
 
-  async spawn(opts: RunnerSpawnOptions): Promise<ITerminalSession> {
+  async spawn(opts: RunnerSpawnOptions): Promise<IRunnerSession> {
     const session = await this.inner.spawn({ ...opts, planSessionId: this.sessionId });
     this.owned.add(session.id);
     session.onExit(() => this.owned.delete(session.id));

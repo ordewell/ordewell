@@ -5,7 +5,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import {
   createTask, RunnerRegistry,
-  type AiProvider, type DiscoveredModel, type ITerminalRunner, type LegacyPlanState,
+  type AiProvider, type DiscoveredModel, type IRunner, type LegacyPlanState,
   type ModelResolver, type PlannerModelMemory, type RunnerInstallation,
   type Session, type SessionDeps, type SettingsService,
 } from '@ordewell/core';
@@ -221,7 +221,7 @@ function harness(overrides: {
     runnerInstallation: installation as unknown as RunnerInstallation,
     fsAdapter: { getWorkspaceRoot: () => workspace } as unknown as VsCodeFileSystem,
     notifications: {} as unknown as VsCodeNotification,
-    terminalRunner: { stopAll: vi.fn() } as unknown as ITerminalRunner,
+    runner: { stopAll: vi.fn() } as unknown as IRunner,
     settingsService: settings as unknown as SettingsService,
     plannerModelMemory: { remember: vi.fn(), recall: vi.fn(() => ({ model: '', effort: '', source: 'default' })) } as unknown as PlannerModelMemory,
     modelResolver: resolver as unknown as ModelResolver,
@@ -365,7 +365,7 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
   });
 
   it('persists and stops runners on dispose', async () => {
-    const stopAll = h.services.terminalRunner.stopAll as unknown as ReturnType<typeof vi.fn>;
+    const stopAll = h.services.runner.stopAll as unknown as ReturnType<typeof vi.fn>;
     await h.host.start();
     h.chat.messages.fire({ type: 'sendMessage', text: 'build a parser', typed: true });
     await vi.waitFor(() => expect(h.session.spies.startPlanning).toHaveBeenCalled());

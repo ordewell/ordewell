@@ -64,13 +64,6 @@ export interface TaskModelAssignment {
 
 export type RunnerId = string;
 
-/** How a task's latest attempt was driven (ADR-0018); set once one has started. */
-export interface TaskTransport {
-  kind: 'structured';
-  /** The runner's own session id, once the attempt ends: what a continue resumes (K1). */
-  nativeSessionId?: string;
-}
-
 /**
  * Bring loaded tasks to the structured-only shape, in place. A task saved
  * while the terminal transport existed may say it ran there, and why; neither
@@ -80,9 +73,12 @@ export interface TaskTransport {
  */
 export function migrateLoadedTasks(tasks: readonly Task[]): void {
   for (const task of tasks) {
-    const saved = task.transport as { kind?: unknown; nativeSessionId?: unknown } | undefined;
-    if (saved?.kind !== 'structured') delete task.transport;
-    else task.transport = typeof saved.nativeSessionId === 'string' ? { kind: 'structured', nativeSessionId: saved.nativeSessionId } : { kind: 'structured' };
+    if (typeof task.runnerSessionId !== 'string') delete task.runnerSessionId;
+    const legacy = task as Task & { transport?: { kind?: unknown; nativeSessionId?: unknown } };
+    if (!task.runnerSessionId && legacy.transport?.kind === 'structured' && typeof legacy.transport.nativeSessionId === 'string') {
+      task.runnerSessionId = legacy.transport.nativeSessionId;
+    }
+    delete legacy.transport;
     delete (task as { completionMarker?: unknown }).completionMarker;
     migrateLoadedTasks(task.subtasks ?? []);
   }
@@ -123,7 +119,8 @@ export interface Task {
   autonomy?: 'AFK' | 'HITL';
   sliceType?: 'HITL' | 'AFK';
   userStoriesCovered?: string[];
-  transport?: TaskTransport;
+  /** The runner's saved session for a later continue; cleared when a fresh attempt starts. */
+  runnerSessionId?: string;
   /** Set only while `status` is `awaiting_user`, and not always then — a usage-limit pause has none. */
   awaitingReason?: AwaitingReason;
   /**
@@ -802,9 +799,9 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
         status: prior?.status ?? 'pending',
         verdict: prior?.verdict,
         outputSummary: prior?.outputSummary,
-        transport: prior?.transport,
+        runnerSessionId: prior?.runnerSessionId,
         attemptSkills: prior?.attemptSkills,
-        // Where a task that has run ran is fixed, like its transport (ADR-0020).
+        // Where a task that has run ran is fixed, like its runner session (ADR-0020).
         ...(prior?.status === 'failed' ? { ops: prior.ops } : {}),
         forcedPastGate: prior?.forcedPastGate,
         subtasks: overlay(t.subtasks ?? [], prior?.subtasks ?? []),
@@ -823,7 +820,7 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
 }
 
 /** What only execution reads; {@link keepExecutionState} puts it back on whatever a planner returns. */
-const EXECUTION_ONLY = ['attemptSkills', 'transport', 'awaitingReason', 'forcedPastGate', 'outputSummary'] as const satisfies readonly (keyof Task)[];
+const EXECUTION_ONLY = ['attemptSkills', 'runnerSessionId', 'awaitingReason', 'forcedPastGate', 'outputSummary'] as const satisfies readonly (keyof Task)[];
 
 export type PlannerTaskView = Omit<Task, typeof EXECUTION_ONLY[number] | 'subtasks'> & { subtasks: PlannerTaskView[] };
 

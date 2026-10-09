@@ -3,7 +3,7 @@ import * as path from 'path';
 import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, QueuedMessage, RunnerId, SkillLoad, DEFAULT_RUNNERS, flattenTasksWithParents, taskOrderLabel } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
 import { INotification } from '../interfaces/INotification';
-import { isStructuredSession, type ITerminalRunner, type ITerminalSession, type QueuedTaskMessage, type StructuredSessionCapability } from '../interfaces/ITerminalRunner';
+import type { IRunner, IRunnerSession, QueuedTaskMessage } from '../interfaces/IRunner';
 import { summarizeOutput } from './promptAugment';
 import { VerdictEngine } from './VerdictEngine';
 import { BufferedTaskOutputSource } from './BufferedTaskOutputSource';
@@ -108,7 +108,7 @@ interface TaskAttempt {
    * landing says so.
    */
   phase: AttemptPhase;
-  session: ITerminalSession | null;
+  session: IRunnerSession | null;
   readonly runner: string;
   /** Null until {@link attemptCwd} settles. */
   cwd: string | null;
@@ -154,7 +154,7 @@ export interface TaskAttemptSnapshot {
 export interface TaskOrchestratorDeps {
   config: IConfig;
   notifications: INotification;
-  terminalRunner: ITerminalRunner;
+  runner: IRunner;
   store: PlanStore;
   output: TaskOutputSource;
   /** The plan's isolation run and the open run's lifecycle (ADR-0013). */
@@ -180,7 +180,7 @@ export interface TaskOrchestratorDeps {
 export interface TaskOrchestratorOptions {
   config: IConfig;
   notifications: INotification;
-  terminalRunner: ITerminalRunner;
+  runner: IRunner;
   store?: PlanStore;
   output?: TaskOutputSource;
   isolation?: IWorktreeIsolation;
@@ -204,7 +204,7 @@ export interface TaskOrchestratorOptions {
 export class TaskOrchestrator {
   private config: IConfig;
   private notifications: INotification;
-  private terminalRunner: ITerminalRunner;
+  private runner: IRunner;
   private store: PlanStore;
   private output: TaskOutputSource;
   private attempts = new Map<string, TaskAttempt>();
@@ -266,7 +266,7 @@ export class TaskOrchestrator {
   constructor(deps: TaskOrchestratorDeps) {
     this.config = deps.config;
     this.notifications = deps.notifications;
-    this.terminalRunner = deps.terminalRunner;
+    this.runner = deps.runner;
     this.store = deps.store;
     this.output = deps.output;
     this.runs = deps.runs;
@@ -328,7 +328,7 @@ export class TaskOrchestrator {
     const orchestrator = new TaskOrchestrator({
       config: options.config,
       notifications: options.notifications,
-      terminalRunner: options.terminalRunner,
+      runner: options.runner,
       store,
       output,
       runs,
@@ -441,12 +441,12 @@ export class TaskOrchestrator {
     taskId: string,
     text: string,
     action: 'message' | 'force',
-    send: (session: StructuredSessionCapability, message: string) => string,
+    send: (session: IRunnerSession, message: string) => string,
   ): string {
     const message = text.trim();
     if (!message) throw new TaskControlError('A message to a task cannot be empty.');
     const task = this.store.get(taskId);
-    const session = this.structuredSession(taskId, action);
+    const session = this.runnerSession(taskId, action);
     if (task?.status === 'awaiting_user' && task.awaitingReason !== 'input') {
       throw new TaskControlError(`Task "${task.title}" is at a checkpoint: approve or reject it instead.`);
     }
@@ -458,35 +458,35 @@ export class TaskOrchestrator {
 
   /** Force send a message still queued behind the running turn; false once the runner has it. */
   forceSendQueuedTaskMessage(taskId: string, id: string): boolean {
-    const sent = this.structuredSession(taskId, 'force').forceSendQueued(id);
+    const sent = this.runnerSession(taskId, 'force').forceSendQueued(id);
     if (sent) this.emit('onTaskChanged');
     return sent;
   }
 
   /** Take back a message still queued behind a turn; false once it was delivered. */
   removeQueuedTaskMessage(taskId: string, id: string): boolean {
-    const removed = this.structuredSession(taskId, 'message').removeQueued(id);
+    const removed = this.runnerSession(taskId, 'message').removeQueued(id);
     if (removed) this.emit('onTaskChanged');
     return removed;
   }
 
   /** Stop a structured task's running turn; it then waits for input like any turn that ends without a `task_complete` call. */
   async interruptTask(taskId: string): Promise<void> {
-    await this.structuredSession(taskId, 'interrupt').interrupt();
+    await this.runnerSession(taskId, 'interrupt').interrupt();
   }
 
   /** What is waiting for a structured task's turn to end; empty for any other task. */
   getQueuedTaskMessages(taskId: string): QueuedTaskMessage[] {
     const session = this.attempts.get(taskId)?.session;
-    return session && isStructuredSession(session) ? session.queued() : [];
+    return session?.queued() ?? [];
   }
 
-  private structuredSession(taskId: string, action: keyof typeof CONTROL_WORDS): StructuredSessionCapability {
+  private runnerSession(taskId: string, action: keyof typeof CONTROL_WORDS): IRunnerSession {
     const task = this.store.get(taskId);
     if (!task) throw new TaskControlError(`No task ${taskId} in this plan.`);
     const attempt = this.attempts.get(taskId);
     const session = attempt?.session;
-    if (!attempt || !session || !isStructuredSession(session) || attempt.phase !== 'running' || attempt.decided) {
+    if (!attempt || !session || attempt.phase !== 'running' || attempt.decided) {
       throw new TaskControlError(`Task "${task.title}" is not running, so there is no turn to ${CONTROL_WORDS[action]}.`);
     }
     return session;
@@ -498,7 +498,7 @@ export class TaskOrchestrator {
    * same turn already has it waiting, or a queued message went straight out —
    * the session never passes through idle then, so nothing flickers.
    */
-  private onTurnEnd(taskId: string, attempt: TaskAttempt, session: ITerminalSession & StructuredSessionCapability): void {
+  private onTurnEnd(taskId: string, attempt: TaskAttempt, session: IRunnerSession): void {
     if (this.attempts.get(taskId) !== attempt || attempt.phase !== 'running' || attempt.decided) return;
     if (session.turnState() === 'working') {
       this.emit('onTaskChanged');
@@ -717,7 +717,7 @@ export class TaskOrchestrator {
     this.haltedByFailure = false;
     this.running = false;
     this.planStatus = 'approved';
-    this.terminalRunner.stopAll();
+    this.runner.stopAll();
     // Interrupted work is kept like a failed attempt's: inspectable, and off
     // `active` so a crash-recovery prune does not sweep it away. A stopped
     // repair did not land, so its task waits on the user as its conflict did;
@@ -1441,7 +1441,7 @@ export class TaskOrchestrator {
         previousAttempt: (taskId) => this.opsPreviousAttempt(taskId),
       });
       const env = await this.envForTask(cwd);
-      const session = await this.terminalRunner.spawn({
+      const session = await this.runner.spawn({
         taskId: task.id,
         runner: attempt.runner,
         prompt: finalPrompt,
@@ -1470,14 +1470,14 @@ export class TaskOrchestrator {
       }
       attempt.phase = 'running';
       attempt.session = session;
-      this.store.setTaskTransport(task.id, { kind: 'structured' });
+      this.store.setTaskRunnerSessionId(task.id, undefined);
       if (takesSkills(kind)) this.store.setTaskAttemptSkills(task.id, [...attempt.skills]);
 
       // Attached before the verifier, so the summary of the call that settles
       // the attempt is captured before its verdict asks for the final text.
       this.output.attach(task.id, session);
       this.verifier.watch(task, session);
-      if (isStructuredSession(session)) session.onTurnEnd(() => this.onTurnEnd(task.id, attempt, session));
+      session.onTurnEnd(() => this.onTurnEnd(task.id, attempt, session));
       return true;
     } catch (err) {
       if (this.attempts.get(task.id) !== attempt) {
@@ -1566,7 +1566,7 @@ export class TaskOrchestrator {
    */
   private unresumed(attempt: TaskAttempt): boolean {
     const session = attempt.session;
-    return attempt.kind.kind === 'continuation' && session !== null && isStructuredSession(session) && !session.nativeSessionId();
+    return attempt.kind.kind === 'continuation' && session !== null && !session.nativeSessionId();
   }
 
   /**
@@ -1574,7 +1574,7 @@ export class TaskOrchestrator {
    * and take back the claim it made. Only the claim — whatever ended the
    * attempt may have decided the task since (mark complete, cancel, retry).
    */
-  private abandonSpawn(task: Task, attempt: TaskAttempt, session?: ITerminalSession): void {
+  private abandonSpawn(task: Task, attempt: TaskAttempt, session?: IRunnerSession): void {
     session?.kill();
     if (this.attempts.has(task.id) || this.store.get(task.id)?.status !== 'in_progress') return;
     if (attempt.kind.kind === 'repair') this.store.markAwaitingUser(task.id, 'conflict');
@@ -1621,20 +1621,18 @@ export class TaskOrchestrator {
     this.attempts.delete(taskId);
     if (attempt) this.output.detach(taskId);
     const session = attempt?.session ?? null;
-    if (session && isStructuredSession(session)) this.saveNativeSession(taskId, session.nativeSessionId());
+    if (session) this.saveNativeSession(taskId, session.nativeSessionId());
     if (stopsRunner(reason)) {
       const task = this.store.get(taskId);
       if (task) this.verifier.clear(task);
-      if (session) this.terminalRunner.stop(session.id);
+      if (session) this.runner.stop(session.id);
     }
     return attempt;
   }
 
   /** Kept on the task once the attempt ends, so a continue can resume it after a reload (ADR-0018, K1). */
   private saveNativeSession(taskId: string, nativeSessionId: string | null): void {
-    const recorded = this.store.get(taskId)?.transport;
-    if (!nativeSessionId || !recorded) return;
-    this.store.setTaskTransport(taskId, { ...recorded, nativeSessionId });
+    if (nativeSessionId) this.store.setTaskRunnerSessionId(taskId, nativeSessionId);
   }
 
   private endAllAttempts(reason: 'stop' | 'load'): TaskAttempt[] {

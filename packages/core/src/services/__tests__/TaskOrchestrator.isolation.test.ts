@@ -1,21 +1,21 @@
 import { describe, it, expect, vi } from 'vitest';
 import { TaskOrchestrator } from '../TaskOrchestrator';
 import { createTask, type Task } from '../../models/Task';
-import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
+import type { IRunner } from '../../interfaces/IRunner';
 import type { IConfig } from '../../interfaces/IConfig';
 import type { IsolationAvailability, IsolationMergeResult, RepairEvidence } from '../../interfaces/IWorktreeIsolation';
-import { fakeConfig, FakeStructuredSession, FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
+import { fakeConfig, FakeRunnerSession, FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 
 function sessionRunner() {
-  const sessions: FakeStructuredSession[] = [];
-  const spawn = vi.fn(async (opts: Parameters<ITerminalRunner['spawn']>[0]) => {
-    const session = new FakeStructuredSession(`s${sessions.length + 1}`, opts.taskId);
+  const sessions: FakeRunnerSession[] = [];
+  const spawn = vi.fn(async (opts: Parameters<IRunner['spawn']>[0]) => {
+    const session = new FakeRunnerSession(`s${sessions.length + 1}`, opts.taskId);
     sessions.push(session);
     return session;
   });
-  const runner: ITerminalRunner = { spawn, stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 };
+  const runner: IRunner = { spawn, stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 };
   return { sessions, spawn, runner };
 }
 
@@ -27,7 +27,7 @@ function setup(opts: { isolation?: FakeWorktreeIsolation; workspace?: string; co
   const orchestrator = TaskOrchestrator.compose({
     config: fakeConfig(opts.config),
     notifications,
-    terminalRunner: runner,
+    runner,
     output,
     isolation,
     workspaceRoot: () => opts.workspace ?? '/repo',
@@ -1407,7 +1407,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
     const output = new BufferedTaskOutputSource();
     const isolation = new FakeWorktreeIsolation();
     const { sessions, runner } = sessionRunner();
-    const orchestrator = TaskOrchestrator.compose({ config: fakeConfig(), notifications: fakeNotification(), terminalRunner: runner, output, isolation });
+    const orchestrator = TaskOrchestrator.compose({ config: fakeConfig(), notifications: fakeNotification(), runner, output, isolation });
     const t1 = task('t1', 1);
     orchestrator.loadPlan([t1]);
     await orchestrator.approveReview();

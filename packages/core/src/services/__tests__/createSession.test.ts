@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createTask, type LegacyPlanState } from '../../models/Task';
 import type { SkillInfo } from '../SkillsService';
-import { makeSession, FakeStructuredSession, fakeConfig, taskOf, queue, saves } from './sessionTestKit';
+import { makeSession, FakeRunnerSession, fakeConfig, taskOf, queue, saves } from './sessionTestKit';
 import { scriptedAdapter, fakeMcpServer } from './harnessTestKit';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
-import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
+import type { IRunner } from '../../interfaces/IRunner';
 import { parsePlanJson } from '../PlanValidator';
 import { PlannerTurnStoppedError } from '../PlannerConversation';
 import type { Session } from '../createSession';
@@ -325,17 +325,17 @@ describe('processQueuedMessages', () => {
   });
 
   it('applies a queued edit and resumes fan-out without any surface asking it to', async () => {
-    const sessions: FakeStructuredSession[] = [];
+    const sessions: FakeRunnerSession[] = [];
     const runner = {
       spawn: vi.fn().mockImplementation(() => {
-        const s = new FakeStructuredSession(`s${sessions.length + 1}`, `t${sessions.length + 1}`);
+        const s = new FakeRunnerSession(`s${sessions.length + 1}`, `t${sessions.length + 1}`);
         sessions.push(s);
         return Promise.resolve(s);
       }),
       stop: vi.fn(),
       stopAll: vi.fn(),
       activeCount: 0,
-    } as unknown as ITerminalRunner;
+    } as unknown as IRunner;
 
     const t1 = createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' });
     const t2 = createTask({ id: 't2', order: 2, title: 'Second', prompt: 'do second', dependencies: ['t1'] });
@@ -390,17 +390,17 @@ describe('processQueuedMessages while it drains', () => {
   }
 
   function recordingRunner() {
-    const sessions: FakeStructuredSession[] = [];
+    const sessions: FakeRunnerSession[] = [];
     const runner = {
       spawn: vi.fn().mockImplementation((opts: { taskId: string }) => {
-        const s = new FakeStructuredSession(`s${sessions.length + 1}`, opts.taskId);
+        const s = new FakeRunnerSession(`s${sessions.length + 1}`, opts.taskId);
         sessions.push(s);
         return Promise.resolve(s);
       }),
       stop: vi.fn(),
       stopAll: vi.fn(),
       activeCount: 0,
-    } as unknown as ITerminalRunner;
+    } as unknown as IRunner;
     const spawnedIds = () => (runner.spawn as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => (c[0] as { taskId: string }).taskId);
     return { runner, sessions, spawnedIds };
   }
@@ -522,13 +522,13 @@ describe('processQueuedMessages while it drains', () => {
 
 describe('Session phase transitions', () => {
   it('Execute Plan spawns an AI task when planner JSON omits prompt', async () => {
-    const terminal = new FakeStructuredSession('terminal-1', 't1');
+    const runnerSession = new FakeRunnerSession('runnerSession-1', 't1');
     const runner = {
-      spawn: vi.fn().mockResolvedValue(terminal),
+      spawn: vi.fn().mockResolvedValue(runnerSession),
       stop: vi.fn(),
       stopAll: vi.fn(),
       activeCount: 0,
-    } satisfies ITerminalRunner;
+    } satisfies IRunner;
     const session = makeSession({ runner });
     const tasks = parsePlanJson(JSON.stringify({
       tasks: [{
@@ -558,13 +558,13 @@ describe('Session phase transitions', () => {
   });
 
   it('Execute Plan resumes at the first incomplete task and preserves completed dependencies', async () => {
-    const terminal = new FakeStructuredSession('terminal-2', 't2');
+    const runnerSession = new FakeRunnerSession('runnerSession-2', 't2');
     const runner = {
-      spawn: vi.fn().mockResolvedValue(terminal),
+      spawn: vi.fn().mockResolvedValue(runnerSession),
       stop: vi.fn(),
       stopAll: vi.fn(),
       activeCount: 0,
-    } satisfies ITerminalRunner;
+    } satisfies IRunner;
     const session = makeSession({ runner });
     const plan: LegacyPlanState = {
       tasks: [
@@ -586,13 +586,13 @@ describe('Session phase transitions', () => {
   });
 
   it('Run Task keeps the session busy until the marker and blocks Execute Plan meanwhile', async () => {
-    const terminal = new FakeStructuredSession('terminal-1', 't1');
+    const runnerSession = new FakeRunnerSession('runnerSession-1', 't1');
     const runner = {
-      spawn: vi.fn().mockResolvedValue(terminal),
+      spawn: vi.fn().mockResolvedValue(runnerSession),
       stop: vi.fn(),
       stopAll: vi.fn(),
       activeCount: 0,
-    } satisfies ITerminalRunner;
+    } satisfies IRunner;
     const session = makeSession({ runner });
     const plan: LegacyPlanState = {
       tasks: [
@@ -613,7 +613,7 @@ describe('Session phase transitions', () => {
     expect(taskOf(session, 't2')?.status).toBe('pending');
     await expect(session.executePlan()).rejects.toThrow('Session already executing');
 
-    terminal.reportComplete({ status: 'done', summary: '' });
+    runnerSession.reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(session.isExecuting).toBe(false));
 
     expect(taskOf(session, 't1')?.status).toBe('completed');
@@ -622,8 +622,8 @@ describe('Session phase transitions', () => {
   });
 
   it("captures a finished task's reported answer", async () => {
-    const terminal = new FakeStructuredSession('terminal-1', 't1');
-    const runner = { spawn: vi.fn().mockResolvedValue(terminal), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 } satisfies ITerminalRunner;
+    const runnerSession = new FakeRunnerSession('runnerSession-1', 't1');
+    const runner = { spawn: vi.fn().mockResolvedValue(runnerSession), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 } satisfies IRunner;
     const taskOutput = new BufferedTaskOutputSource();
     const session = makeSession({ runner, taskOutput });
     session.loadPlan({
@@ -635,7 +635,7 @@ describe('Session phase transitions', () => {
     }, 'Test', '/repo');
     await session.runTask('t1');
 
-    terminal.reportComplete({ status: 'done', summary: 'answer from the runner' });
+    runnerSession.reportComplete({ status: 'done', summary: 'answer from the runner' });
     await vi.waitFor(() => expect(taskOf(session, 't1')?.outputSummary?.logTail).toBe('answer from the runner'));
   });
 
@@ -654,13 +654,13 @@ describe('Session phase transitions', () => {
       };
     }
 
-    function spyRunner(): ITerminalRunner & { spawn: ReturnType<typeof vi.fn> } {
+    function spyRunner(): IRunner & { spawn: ReturnType<typeof vi.fn> } {
       return {
-        spawn: vi.fn().mockImplementation((opts: { taskId: string }) => Promise.resolve(new FakeStructuredSession(`term-${opts.taskId}`, opts.taskId))),
+        spawn: vi.fn().mockImplementation((opts: { taskId: string }) => Promise.resolve(new FakeRunnerSession(`term-${opts.taskId}`, opts.taskId))),
         stop: vi.fn(),
         stopAll: vi.fn(),
         activeCount: 0,
-      } as unknown as ITerminalRunner & { spawn: ReturnType<typeof vi.fn> };
+      } as unknown as IRunner & { spawn: ReturnType<typeof vi.fn> };
     }
 
     it.each([
@@ -752,18 +752,18 @@ describe('Session phase transitions', () => {
 });
 
 describe('currentPlanState — the live plan a surface refreshes from', () => {
-  function twoParallel(): { session: Session; sessions: FakeStructuredSession[] } {
-    const sessions: FakeStructuredSession[] = [];
+  function twoParallel(): { session: Session; sessions: FakeRunnerSession[] } {
+    const sessions: FakeRunnerSession[] = [];
     const runner = {
       spawn: vi.fn().mockImplementation((req: { taskId: string }) => {
-        const s = new FakeStructuredSession(`s-${req.taskId}`, req.taskId);
+        const s = new FakeRunnerSession(`s-${req.taskId}`, req.taskId);
         sessions.push(s);
         return Promise.resolve(s);
       }),
       stop: vi.fn(),
       stopAll: vi.fn(),
       activeCount: 0,
-    } as unknown as ITerminalRunner;
+    } as unknown as IRunner;
 
     const session = makeSession({ runner });
     session.loadPlan(
@@ -859,11 +859,11 @@ describe('planState.tasks — written from the store, never shared with it', () 
   it('is current by the time a status_update is broadcast', async () => {
     const seen: (string | undefined)[] = [];
     const runner = {
-      spawn: vi.fn().mockImplementation((req: { taskId: string }) => Promise.resolve(new FakeStructuredSession(`s-${req.taskId}`, req.taskId))),
+      spawn: vi.fn().mockImplementation((req: { taskId: string }) => Promise.resolve(new FakeRunnerSession(`s-${req.taskId}`, req.taskId))),
       stop: vi.fn(),
       stopAll: vi.fn(),
       activeCount: 0,
-    } as unknown as ITerminalRunner;
+    } as unknown as IRunner;
     const session: Session = makeSession({
       runner,
       broadcast: vi.fn((msg: { type: string }) => {
@@ -1591,13 +1591,13 @@ describe('idleSince on the status_update broadcast', () => {
   });
 
   it('round-trips idleSince from the verifier through SerializedTaskStatus on status_update, and clears it on resume', async () => {
-    const fakeSession = new FakeStructuredSession('s1', 't1');
+    const fakeSession = new FakeRunnerSession('s1', 't1');
     const runner = {
       spawn: vi.fn().mockResolvedValue(fakeSession),
       stop: vi.fn(),
       stopAll: vi.fn(),
       activeCount: 0,
-    } as unknown as ITerminalRunner;
+    } as unknown as IRunner;
 
     const broadcast = vi.fn();
     const session = makeSession({ broadcast, runner });
@@ -1631,17 +1631,17 @@ describe('idleSince on the status_update broadcast', () => {
 
 describe('saving a run as its tasks settle', () => {
   function twoTaskRun() {
-    const terminals: FakeStructuredSession[] = [];
+    const runnerSessions: FakeRunnerSession[] = [];
     const runner = {
       spawn: vi.fn().mockImplementation((req: { taskId: string }) => {
-        const t = new FakeStructuredSession(`s-${req.taskId}`, req.taskId);
-        terminals.push(t);
+        const t = new FakeRunnerSession(`s-${req.taskId}`, req.taskId);
+        runnerSessions.push(t);
         return Promise.resolve(t);
       }),
       stop: vi.fn(),
       stopAll: vi.fn(),
       activeCount: 0,
-    } as unknown as ITerminalRunner;
+    } as unknown as IRunner;
     // Each save and each announcement, tagged with t1's status as it was then.
     const order: string[] = [];
     const saveSession = vi.fn((plan: LegacyPlanState) => {
@@ -1662,18 +1662,18 @@ describe('saving a run as its tasks settle', () => {
       runners: ['claude-code'],
       lastUpdated: new Date().toISOString(),
     }, 'Test', '/repo', { persist: false });
-    const terminal = (taskId: string) => terminals.find((t) => t.taskId === taskId)!;
-    return { session, saveSession, order, terminal };
+    const runnerSession = (taskId: string) => runnerSessions.find((t) => t.taskId === taskId)!;
+    return { session, saveSession, order, runnerSession };
   }
 
   it('saves a task\'s verdict the moment it lands, before announcing it, while the run goes on', async () => {
-    const { session, saveSession, order, terminal } = twoTaskRun();
+    const { session, saveSession, order, runnerSession } = twoTaskRun();
     await session.executePlan();
     saveSession.mockClear();
     order.length = 0;
 
-    terminal('t1').reportComplete({ status: 'done', summary: '' });
-    terminal('t1').emitExit(0);
+    runnerSession('t1').reportComplete({ status: 'done', summary: '' });
+    runnerSession('t1').emitExit(0);
 
     await vi.waitFor(() => expect(order).toContain('save:completed'));
     expect(order.indexOf('save:completed')).toBeLessThan(order.indexOf('status:completed'));
@@ -1682,21 +1682,21 @@ describe('saving a run as its tasks settle', () => {
   });
 
   it('saves a failed verdict as well', async () => {
-    const { session, saveSession, terminal } = twoTaskRun();
+    const { session, saveSession, runnerSession } = twoTaskRun();
     await session.executePlan();
     saveSession.mockClear();
 
-    terminal('t1').emitExit(1);
+    runnerSession('t1').emitExit(1);
 
     await vi.waitFor(() => expect(saveSession.mock.calls.some(([p]) => p.tasks.find((t) => t.id === 't1')!.status === 'failed')).toBe(true));
   });
 
   it('does not save on a status change that settles nothing', async () => {
-    const { session, saveSession, terminal } = twoTaskRun();
+    const { session, saveSession, runnerSession } = twoTaskRun();
     await session.executePlan();
     saveSession.mockClear();
 
-    terminal('t1').emitOutput('still working');
+    runnerSession('t1').emitOutput('still working');
 
     expect(saveSession).not.toHaveBeenCalled();
   });

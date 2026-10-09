@@ -17,7 +17,7 @@ import { SecretStore } from './adapters/SecretStore';
 import type { VsCodeConfig } from './adapters/VsCodeConfig';
 import type { VsCodeFileSystem } from './adapters/VsCodeFileSystem';
 import type { VsCodeNotification } from './adapters/VsCodeNotification';
-import type { ITerminalRunner, RunnerInstallation, RunnerRegistry, ModelResolver, SettingsService, PlannerModelMemory } from '@ordewell/core';
+import type { IRunner, RunnerInstallation, RunnerRegistry, ModelResolver, SettingsService, PlannerModelMemory } from '@ordewell/core';
 
 // A VS Code layout preference, not a run setting: it lives in globalState rather
 // than SettingsService, whose file the CLI and web surfaces also read.
@@ -49,7 +49,7 @@ export interface ExtensionServices {
   runnerInstallation: RunnerInstallation;
   fsAdapter: VsCodeFileSystem;
   notifications: VsCodeNotification;
-  terminalRunner: ITerminalRunner;
+  runner: IRunner;
   settingsService: SettingsService;
   plannerModelMemory: PlannerModelMemory;
   modelResolver: ModelResolver;
@@ -108,7 +108,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     runnerRegistry: services.runnerRegistry,
     config: services.config,
     fsAdapter: services.fsAdapter,
-    terminalRunner: services.terminalRunner,
+    runner: services.runner,
     notifications: services.notifications,
     getCurrentPlan: () => state.plan,
     setCurrentPlan: (plan) => { state.plan = plan; },
@@ -134,7 +134,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
   sessionCell.current = (services.sessionFactory ?? createSession)({
     config: services.config,
     notifications: services.notifications,
-    runner: services.terminalRunner,
+    runner: services.runner,
     registry: services.runnerRegistry,
     workspaceRoot: () => services.fsAdapter.getWorkspaceRoot(),
     fsAdapter: services.fsAdapter,
@@ -347,7 +347,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     log('Ordewell deactivating...');
     taskLogs.dispose();
     persistState(persistenceDeps());
-    services.terminalRunner.stopAll();
+    services.runner.stopAll();
     log('Ordewell deactivated');
   }
 

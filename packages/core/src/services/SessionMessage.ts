@@ -4,7 +4,7 @@ import type { TaskLogEvent } from '../models/TaskLog';
 import type { ApprovalKind } from '../interfaces/IApproval';
 import type { ApprovalSource } from './ApprovalPolicy';
 import type { IsolationHandoff, IsolationMergeResult, TaskIsolation } from '../interfaces/IWorktreeIsolation';
-import type { QueuedTaskMessage } from '../interfaces/ITerminalRunner';
+import type { QueuedTaskMessage } from '../interfaces/IRunner';
 import { canContinue } from './continuation';
 import { skillLoadNotice, surfaceStep } from '../conversation/records';
 
@@ -80,10 +80,10 @@ export type SerializedQueuedMessage = Omit<QueuedMessage, 'skills'> & { skills?:
 
 /**
  * A task as a surface is sent it: its attempt's skills are notices, whole in
- * the session only, and its transport stays there too — no surface shows it,
+ * the session only, and its runner session id stays there too — no surface shows it,
  * and only a continue reads the runner's own session id.
  */
-export type SurfaceTask<T extends Task = Task> = Omit<T, 'attemptSkills' | 'subtasks' | 'transport'> & {
+export type SurfaceTask<T extends Task = Task> = Omit<T, 'attemptSkills' | 'subtasks' | 'runnerSessionId'> & {
   attemptSkills?: TaskSkillNotice[];
   subtasks: SurfaceTask[];
 };
@@ -340,7 +340,7 @@ function surfaceQueued(queued: LegacyPlanState['queuedMessages']): SerializedQue
   return queued?.map(({ skills, ...m }) => (skills ? { ...m, skills: skills.map(skillLoadNotice) } : m));
 }
 
-function surfaceTask<T extends Task>({ attemptSkills, subtasks, transport: _transport, ...task }: T): SurfaceTask<T> {
+function surfaceTask<T extends Task>({ attemptSkills, subtasks, runnerSessionId: _runnerSessionId, ...task }: T): SurfaceTask<T> {
   return {
     ...task,
     ...(attemptSkills ? { attemptSkills: attemptSkills.map(({ name, source, path }): TaskSkillNotice => ({ name, source, path })) } : {}),

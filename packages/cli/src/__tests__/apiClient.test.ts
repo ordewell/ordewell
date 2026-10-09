@@ -333,7 +333,7 @@ describe('ApiClient — adopting a saved session', () => {
         res.setHeader('Content-Type', 'application/json');
         if (req.url?.endsWith('/interrupt')) {
           res.statusCode = 400;
-          return res.end(JSON.stringify({ error: 'Task "Only" runs in a terminal' }));
+          return res.end(JSON.stringify({ error: 'Task "Only" is not running' }));
         }
         res.end(JSON.stringify(req.method === 'DELETE' ? { removed: true } : { id: 'msg-1' }));
       });
@@ -343,7 +343,7 @@ describe('ApiClient — adopting a saved session', () => {
 
     expect(await client.sendTaskMessage('s1', 't1', 'use Postgres')).toEqual({ id: 'msg-1' });
     expect(await client.removeQueuedTaskMessage('s1', 't1', 'msg-1')).toEqual({ removed: true });
-    await expect(client.interruptTask('s1', 't1')).rejects.toThrow('runs in a terminal');
+    await expect(client.interruptTask('s1', 't1')).rejects.toThrow('is not running');
 
     expect(hits).toEqual([
       'POST /api/plans/s1/tasks/t1/messages {"text":"use Postgres"}',
@@ -362,7 +362,7 @@ describe('ApiClient — adopting a saved session', () => {
         res.setHeader('Content-Type', 'application/json');
         if (req.url?.includes('/t2/')) {
           res.statusCode = 400;
-          return res.end(JSON.stringify({ error: 'Task "Two" runs in a terminal, which cannot take a message sent now' }));
+          return res.end(JSON.stringify({ error: 'Task "Two" is not running, so there is no turn to send a message to' }));
         }
         res.end(JSON.stringify(req.url?.endsWith('/messages/now') ? { id: 'msg-3' } : { sent: true }));
       });
@@ -372,7 +372,7 @@ describe('ApiClient — adopting a saved session', () => {
 
     expect(await client.forceSendTaskMessage('s1', 't1', 'stop now')).toEqual({ id: 'msg-3' });
     expect(await client.forceSendQueuedTaskMessage('s1', 't1', 'msg-2')).toEqual({ sent: true });
-    await expect(client.forceSendTaskMessage('s1', 't2', 'stop now')).rejects.toThrow('cannot take a message sent now');
+    await expect(client.forceSendTaskMessage('s1', 't2', 'stop now')).rejects.toThrow('no turn to send a message to');
 
     expect(hits.slice(0, 2)).toEqual([
       'POST /api/plans/s1/tasks/t1/messages/now {"text":"stop now"}',
@@ -390,7 +390,7 @@ describe('ApiClient — adopting a saved session', () => {
         res.setHeader('Content-Type', 'application/json');
         if (req.url?.includes('/t2/')) {
           res.statusCode = 400;
-          return res.end(JSON.stringify({ error: 'Task "Two" cannot be continued: it ran in a terminal' }));
+          return res.end(JSON.stringify({ error: 'Task "Two" cannot be continued: its runner left no saved session to resume' }));
         }
         res.end(JSON.stringify({ ok: true }));
       });

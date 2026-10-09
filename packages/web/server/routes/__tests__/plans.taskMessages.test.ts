@@ -85,8 +85,8 @@ describe('talking to a structured task over the daemon (ADR-0018, M1)', () => {
     expect(forceSendQueuedTaskMessage).toHaveBeenCalledWith('t1', 'msg-2');
   });
 
-  it('answers a force send to a terminal task with 400 and the reason', async () => {
-    const refusal = new TaskControlError('Task "Only" runs in a terminal, which cannot take a message sent now from Ordewell: use its terminal instead.');
+  it('answers a force send to a task that is not running with 400 and the reason', async () => {
+    const refusal = new TaskControlError('Task "Only" is not running, so there is no turn to send a message to.');
     const app = appFor({
       forceSendTaskMessage: () => { throw refusal; },
       forceSendQueuedTaskMessage: () => { throw refusal; },
@@ -101,8 +101,8 @@ describe('talking to a structured task over the daemon (ADR-0018, M1)', () => {
     }
   });
 
-  it('answers a refusal — a terminal task, say — with 400 and the reason', async () => {
-    const refusal = new TaskControlError('Task "Only" runs in a terminal, which cannot take a message from Ordewell: use its terminal instead.');
+  it('answers a refusal for a task that is not running with 400 and the reason', async () => {
+    const refusal = new TaskControlError('Task "Only" is not running, so there is no turn to send a message to.');
     const app = appFor({
       sendTaskMessage: () => { throw refusal; },
       removeQueuedTaskMessage: () => { throw refusal; },
