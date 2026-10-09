@@ -80,7 +80,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - The terminal transport and its tmux requirement.
 - Plugin runners and `ordewell plugins`.
 - `ordewell terminal`, TUI `/terminal` and `t`, and the Structured/Terminal
-  badges. Use `/task <id>` to open the task log.
+  badges. Press Enter on a task in the TUI plan pane to open its task log.
 - The completion marker; only an attempt-bound `task_complete` call completes
   a task.
 - The `verify` and `tdd` mode toggles, and the `ordewell tdd` and `ordewell

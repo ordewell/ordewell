@@ -107,7 +107,7 @@ and completion evidence.
   the TUI and a badge on the VS Code card. Cancel, stop and retry deny pending
   requests, so nothing is left hanging. The supervisor (#28) can answer through
   the same seam later; nothing assumes a human is the only answerer.
-- **Surfaces (V1, #57).** In the TUI, `/task <id>` on a task
+- **Surfaces (V1, #57).** In the TUI, Enter on a task in the plan pane
   swaps the chat pane to the task view: a distinct accent colour, a state
   header, a `→ Task N` composer label, and Esc to return. In VS Code each task
   has an editor tab opened on demand ("Open log"); it never opens
@@ -185,3 +185,4 @@ transport is retained for take-over.
 - 2026-10-06 — M1 per ADR-0023: messages reach a running turn between tool calls, the turn-end queue as the fallback, force send.
 - 2026-10-09 — the `runnerTransport` setting and its surfaces removed; a saved plan pinned to `terminal` loads as structured and the field is dropped.
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
+- 2026-10-10 — the TUI task-log surface corrected to Enter on a task in the plan pane.

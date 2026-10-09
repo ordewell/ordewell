@@ -37,9 +37,9 @@ coding-agent session, both task runners and coding-agent planners.**
   and mode settings; terminal-only invocation fields are absent. Leftover
   manifests in `~/.ordewell/plugins/` are ignored, with one notice at host
   startup. No unknown runner is silently routed to a terminal.
-- Task logs are the inspection surface: `/task <id>` in the TUI and Open log in
-  VS Code. `ordewell terminal`, `/terminal`, `t` and Structured/Terminal badges
-  are removed. tmux is not required.
+- Task logs are the inspection surface: Enter on a task in the TUI's plan pane,
+  and Open log in VS Code. `ordewell terminal`, `/terminal`, `t` and
+  Structured/Terminal badges are removed. tmux is not required.
 
 API planners keep their existing validated JSON plan, edit and query envelopes;
 these are not completion-marker fallbacks. This decision does not widen the
@@ -127,3 +127,4 @@ tmux; the TUI remains unverified on native Windows (ADR-0010).
 ## History
 
 - 2026-10-09 — accepted and implemented.
+- 2026-10-10 — the TUI task-log surface corrected to Enter on a task in the plan pane.

@@ -1168,7 +1168,8 @@ asked for would drift the plan without telling either side.
 planner reaches the same reads as the `task_query` and `task_output` tools
 (*Planner token*, ADR-0022), which answer the same fields from the same live
 state and spend the same per-turn budget; this envelope is the fallback for an
-API planner and for a harness planner the server did not attach to. The per-turn
+API planner. A harness planner must attach its Ordewell tools — respawned once,
+then failed before any prompt is sent (ADR-0025) — so it has no envelope path. The per-turn
 plan block is short-fields-only by design (title, status, runner, model, mode,
 deps — never a task's `prompt`, `userSteps`, `verdict`, `outputSummary`, or
 `userStoriesCovered`), so a query is how the planner reads what the block
@@ -1253,8 +1254,10 @@ leaves it answering from memory rather than from the repository. A harness
 planner also gets the *Planner token* and its tools (ADR-0022): `list_runners`
 and `list_models` read the live catalog, `task_query` and `task_output` read
 tasks, and `submit_plan`/`edit_plan` are the only writes, all pre-authorized.
-Where the server did not attach, the planner keeps the prompt and the JSON
-plan, `taskOps` and `taskQuery` envelopes.
+A harness planner that cannot attach its tools is respawned once and, if that
+also fails, the planner turn fails before any prompt is sent (ADR-0025); it
+never falls back to a prompt-and-JSON-envelope path. API planners use the
+validated plan, `taskOps` and `taskQuery` envelopes instead of this server.
 *Avoid:* "CLI provider" — the thing on the other end is not a vendor. Do not
 call the coding agent a "provider" in prose; it is a runner being used as the
 planner.
