@@ -83,8 +83,8 @@ describe('a repo group\'s skill catalog, before any task runs', () => {
     const request = ai.startConversation.mock.calls[0][0] as ConversationRequest;
     expect(request.skills?.map((s) => s.name)).toEqual(expect.arrayContaining(['api-check', 'web-plan', 'web-draft']));
     expect(session.planState?.conversationHistory?.filter((m) => m.kind === 'skill_load').map((m) => m.skill?.name)).toEqual(['api-check', 'web-plan']);
-    expect(request.goal).toContain('web-plan body');
-    expect(request.goal).toContain('The user asks to use task skill "api-check"');
+    expect(request.initialMessage).toContain('web-plan body');
+    expect(request.initialMessage).toContain('The user asks to use task skill "api-check"');
   });
 
   it('checks a chip edit on a restored session against the repos from the first edit, the commit check included', async () => {

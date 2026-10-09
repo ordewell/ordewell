@@ -49,6 +49,7 @@ export interface PlanResult {
   plan: SurfacePlanState;
   models?: GeneratePlanResponse['models'];
   modelsByRunner?: GeneratePlanResponse['modelsByRunner'];
+  notes?: string[];
 }
 
 /** How a merge of the run into the user's checkout went, and on anything but `merged`, which repo stopped it. */
@@ -235,12 +236,12 @@ export class ApiClient {
     workspace?: string,
     sessionId: string = mintSessionId(),
   ): Promise<PlanResult> {
-    const { plan, models, modelsByRunner } = await this.call<GeneratePlanResponse>('POST', `/api/plans/${sessionId}/generate`, 'Plan generation failed', {
+    const { plan, models, modelsByRunner, notes } = await this.call<GeneratePlanResponse>('POST', `/api/plans/${sessionId}/generate`, 'Plan generation failed', {
       goal,
       runners: runners || undefined,
       workspace,
     });
-    return { sessionId, plan, models, modelsByRunner };
+    return { sessionId, plan, models, modelsByRunner, ...(notes ? { notes } : {}) };
   }
 
   /**

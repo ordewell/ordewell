@@ -128,7 +128,9 @@ describe('task skills a user names', () => {
     const entry = session.planState?.conversationHistory?.find((m) => m.kind === 'skill_load');
     expect(entry).toMatchObject({ content: '/tdd will be attached to fitting tasks', skill: attach });
     expect(turnStarts(broadcast)[0].skills).toEqual([expect.objectContaining({ name: 'tdd', attaches: { description: 'Test-first development' } })]);
-    const goal = (ai.startConversation.mock.calls[0][0] as ConversationRequest).goal;
+    const opening = ai.startConversation.mock.calls[0][0] as ConversationRequest;
+    expect(opening.goal).toBe('/tdd build the cache');
+    const goal = opening.initialMessage;
     expect(goal).toContain('attach it to the tasks it fits');
     expect(goal).not.toContain('TDD BODY');
   });
@@ -210,8 +212,10 @@ describe('skill invocation in a session', () => {
       skills: [{ invokedBy: 'user', name: 'grilling', source: 'global', path: '/skills/grilling/SKILL.md' }],
     })]);
     const request = ai.startConversation.mock.calls[0][0] as ConversationRequest;
-    expect(request.goal).toContain('# Grilling\n\nBody.');
-    expect(request.goal).toContain('/grilling design the cache');
+    expect(request.goal).toBe('/grilling design the cache');
+    expect(request.initialMessage).toBe(plannerMessage('/grilling design the cache', [
+      { invokedBy: 'user', name: 'grilling', source: 'global', path: '/skills/grilling/SKILL.md', content: '# Grilling\n\nBody.' },
+    ]));
   });
 
   it('titles the saved session with the verbatim goal', async () => {
@@ -291,7 +295,7 @@ describe('skill invocation in a session', () => {
     expect(replayed.some((m) => m === '/grilling skill loaded')).toBe(false);
   });
 
-  it('replays the opening skill into the resumed planner goal', async () => {
+  it('replays the opening skill in the resumed transcript, and the goal verbatim', async () => {
     const files: Record<string, string> = { grilling: 'GRILL v1' };
     const skills: Pick<SkillsService, 'findSkill'> = { findSkill: (n) => (files[n] ? skill(n, files[n]) : undefined) };
     const first = makeSession({ skillsService: skills, aiService: liveAi() });
@@ -304,9 +308,11 @@ describe('skill invocation in a session', () => {
     reloaded.loadPlan(saved, '/grilling the cache', process.cwd(), { persist: false });
     await reloaded.continueConversation('next');
 
-    const goal = (ai.startConversation.mock.calls[0][0] as ConversationRequest).goal;
-    expect(goal).toContain('GRILL v1');
-    expect(goal).not.toContain('GRILL v2');
+    const request = ai.startConversation.mock.calls[0][0] as ConversationRequest;
+    expect(request.goal).toBe('/grilling the cache');
+    const replayed = (request.priorHistory ?? []).map((m) => m.content).join('\n');
+    expect(replayed).toContain('GRILL v1');
+    expect(replayed).not.toContain('GRILL v2');
   });
 
   it('rewinds to the verbatim message, cutting its skill loads with it', async () => {

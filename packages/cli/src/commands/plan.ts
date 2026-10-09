@@ -33,6 +33,13 @@ function lastPlannerMessage(plan: PlanBody): string {
   return '(the planner returned no plan and no message)';
 }
 
+/** The host's notes on the plan the conversation committed last, a skill check's warnings among them. */
+function commitNotes(plan: PlanBody): string[] {
+  const history = ('conversationHistory' in plan && plan.conversationHistory) || [];
+  const marker = history.map((e) => e.kind).lastIndexOf('plan_generated');
+  return marker < 0 ? [] : history.slice(marker + 1).filter((e) => e.kind === 'system').map((e) => e.content);
+}
+
 /** Answers for planner questions. `null` means stdin is exhausted — no answer is coming. */
 export interface Reader {
   ask(question: string): Promise<string | null>;
@@ -242,6 +249,7 @@ export async function handlePlan(
     await stream.ready;
     let plan: PlanBody;
     let models: DiscoveredModel[] = [];
+    let notes: string[] = [];
 
     if (oneShot) {
       const result = await withSpinner('Researching codebase and building task plan', () =>
@@ -249,6 +257,7 @@ export async function handlePlan(
       );
       plan = result.plan;
       models = result.models ?? [];
+      notes = result.notes ?? [];
     } else {
       plan = await withSpinner('Researching codebase and building task plan', () =>
         api.startConversation(sessionId, goal, runners, workspace),
@@ -283,6 +292,7 @@ export async function handlePlan(
         plan = await withSpinner('Thinking', () => api.sendConversationMessage(sessionId, reply));
       }
       reader?.close();
+      notes = commitNotes(plan);
     }
 
     closeStream();
@@ -290,6 +300,7 @@ export async function handlePlan(
     process.stderr.write('\n');
 
     printPlan(plan, sessionId, runners, models);
+    for (const note of notes) console.log(`\n${note}`);
     saveLastSession(sessionId, goal, runnersOf(plan, runners), workspace);
     console.log(`\n  Run 'ordewell run' to execute, 'ordewell status' to inspect, or 'ordewell tui' for the full UI.`);
   } catch (err) {

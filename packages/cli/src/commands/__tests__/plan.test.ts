@@ -118,6 +118,31 @@ describe('handlePlan', () => {
     srv.close();
   });
 
+  it('--no-chat prints the skill check\'s warnings after the plan', async () => {
+    const note = 'Skill check:\n- Task "Do the thing": skill "later" not found';
+    const srv = await planServer({ '/generate': { plan: COMMITTED, models: [], notes: [note] } }, []);
+    const { handlePlan } = await import('../plan');
+    const { stdout } = await capture(() =>
+      handlePlan(['--goal', 'ship it', '--workspace', '/tmp', '--no-chat'], { api: new ApiClient(srv.port) }),
+    );
+    expect(stdout.indexOf(note)).toBeGreaterThan(stdout.indexOf('Do the thing'));
+    srv.close();
+  });
+
+  it('prints the skill check\'s warnings on the plan a conversation committed, and none from earlier commits', async () => {
+    const note = (name: string) => ({ role: 'assistant', content: `Skill check:\n- Task "Do the thing": skill "${name}" not found`, timestamp: '2026-01-01T00:00:00Z', kind: 'system' });
+    const marker = { role: 'assistant', content: 'Plan generated with 1 task.', timestamp: '2026-01-01T00:00:00Z', kind: 'plan_generated' };
+    const plan = { ...COMMITTED, conversationHistory: [marker, note('old'), marker, note('later')] };
+    const srv = await planServer({ '/converse/start': { plan } }, []);
+    const { handlePlan } = await import('../plan');
+    const { stdout } = await capture(() =>
+      handlePlan(['--goal', 'ship it', '--workspace', '/tmp'], { api: new ApiClient(srv.port) }),
+    );
+    expect(stdout).toContain('skill "later" not found');
+    expect(stdout).not.toContain('skill "old" not found');
+    srv.close();
+  });
+
   it('--no-chat counts the tasks of the stored plan state the one-shot endpoint answers with', async () => {
     const hits: string[] = [];
     const stored = { pendingTasks: COMMITTED.tasks, executionLog: [], runners: ['claude-code'] };

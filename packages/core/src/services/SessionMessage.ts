@@ -6,7 +6,7 @@ import type { ApprovalSource } from './ApprovalPolicy';
 import type { IsolationHandoff, IsolationMergeResult, TaskIsolation } from '../interfaces/IWorktreeIsolation';
 import type { QueuedTaskMessage } from '../interfaces/ITerminalRunner';
 import { canContinue } from './continuation';
-import { skillLoadNotice } from '../conversation/records';
+import { skillLoadNotice, surfaceStep } from '../conversation/records';
 
 export type SerializedTaskStatus = {
   id: string;
@@ -348,6 +348,7 @@ export function surfacePlan(plan: LegacyPlanState): SurfacePlan {
     tasks: plan.tasks.map(surfaceTask),
     conversationHistory: surfaceConversation(plan.conversationHistory),
     queuedMessages: surfaceQueued(plan.queuedMessages),
+    researchLog: plan.researchLog?.map((e) => ('type' in e ? e : surfaceStep(e))),
   };
 }
 

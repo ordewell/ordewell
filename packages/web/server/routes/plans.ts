@@ -42,7 +42,10 @@ export function plansRoute(pool: OrchestratorPool) {
       const runnerList: string[] = Array.isArray(runners) ? runners : (runners ? [runners] : (queryRunners ? queryRunners.split(',').map(s => s.trim()).filter(Boolean) : pool.getRunnerState().enabledRunners));
       const plan = await pool.generatePlan(c.req.param('sessionId'), goal, runnerList, ws, model, { allowInit });
       const { models, modelsByRunner } = await pool.getProviderModels();
-      return c.json({ plan: surfacePlanState(plan), models, modelsByRunner } satisfies GeneratePlanResponse);
+      const notes = (pool.session(c.req.param('sessionId')).planState?.conversationHistory ?? [])
+        .filter((e) => e.kind === 'system')
+        .map((e) => e.content);
+      return c.json({ plan: surfacePlanState(plan), models, modelsByRunner, ...(notes.length > 0 ? { notes } : {}) } satisfies GeneratePlanResponse);
     } catch (err) {
       return failure(c, err, 'generate', { message: 'Plan generation failed' });
     }

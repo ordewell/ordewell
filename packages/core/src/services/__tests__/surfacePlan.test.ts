@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createEmptyPlan, createTask, type PlanState, type SkillLoad, type Task, type TaskSkillSnapshot } from '../../models/Task';
+import { createEmptyPlan, createTask, type PlanState, type ResearchStep, type SkillLoad, type Task, type TaskSkillSnapshot } from '../../models/Task';
 import { surfacePlan, surfacePlanState } from '../SessionMessage';
 
 const BODY = 'Ask hard questions.';
@@ -48,5 +48,28 @@ describe('surfacePlanState', () => {
       expect(JSON.stringify(out)).not.toContain(BODY);
       expect(out.pendingTasks[0].attemptSkills).toEqual([{ name: 'tdd', source: 'workspace', path: snapshot.path }]);
     }
+  });
+});
+
+describe('a load_skill step on the surface', () => {
+  const step = (overrides: Partial<ResearchStep>): ResearchStep => ({
+    id: 's1', tool: 'agent_tool', args: '{"name":"grilling"}', result: BODY, success: true, outcome: 'success', timestamp: '2026-01-01T00:00:00Z', ...overrides,
+  });
+
+  it.each(['mcp__ordewell__load_skill', 'ordewell_load_skill', 'load_skill'])('says which skill %s loaded, never its body, in a saved plan\'s log', (toolLabel) => {
+    const raw = { ...createEmptyPlan(), researchLog: [step({ toolLabel })] };
+
+    const out = surfacePlan(raw);
+
+    expect(out.researchLog).toEqual([step({ toolLabel, result: 'Loaded skill grilling.' })]);
+    expect(raw.researchLog[0].result).toBe(BODY);
+  });
+
+  it('keeps a refused load\'s answer and every other tool\'s result', () => {
+    const refused = step({ toolLabel: 'mcp__ordewell__load_skill', result: 'Skill "x" cannot be loaded by the planner.', success: false, outcome: 'failure' });
+    const read = step({ tool: 'read_file', toolLabel: 'Read', args: '{"path":"SKILL.md"}' });
+    const prompt = { id: 'u1', type: 'user_prompt' as const, content: 'go', timestamp: '2026-01-01T00:00:00Z' };
+
+    expect(surfacePlan({ ...createEmptyPlan(), researchLog: [refused, read, prompt] }).researchLog).toEqual([refused, read, prompt]);
   });
 });
