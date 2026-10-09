@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createTask, type LegacyPlanState } from '../../models/Task';
-import { makeSession, testWorkspace, saves } from './sessionTestKit';
+import { makeSession, testWorkspace, saves, FakeRunnerSession } from './sessionTestKit';
 import type { ModelResolver } from '../ModelResolver';
-import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
+import type { IRunner } from '../../interfaces/IRunner';
 
 function planWith(runners: string[] = ['claude-code']): LegacyPlanState {
   return {
@@ -133,10 +133,10 @@ describe('Session.setTaskRunner', () => {
   });
 
   it('spawns the new runner when the task is run without an intervening plan reload', async () => {
-    const spawn = vi.fn().mockResolvedValue({ id: 's1', taskId: 't1', onOutput: vi.fn(), onExit: vi.fn(), kill: vi.fn(), getOutput: () => '', write: vi.fn() });
+    const spawn = vi.fn().mockResolvedValue(new FakeRunnerSession('s1', 't1'));
     const session = makeSession({
       modelResolver: resolverFor(CODEX_CATALOG),
-      runner: { spawn, stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 } as unknown as ITerminalRunner,
+      runner: { spawn, stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 } as unknown as IRunner,
     });
     session.loadPlan(planWith(['claude-code']), 'goal', testWorkspace, { persist: false });
 

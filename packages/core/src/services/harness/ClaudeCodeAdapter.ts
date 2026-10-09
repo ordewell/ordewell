@@ -296,8 +296,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   /**
    * A task's run: the manifest decides what its mode and effort mean
    * (ADR-0001), and this adds only the protocol around them. No tool list and
-   * no system prompt — the task's prompt is its first turn, as on the terminal
-   * transport. `--permission-prompt-tool stdio` routes the questions the mode
+   * no system prompt — the task's prompt is its first turn. `--permission-prompt-tool stdio` routes the questions the mode
    * leaves open to the control channel, where the adapter must answer them;
    * without it `-p` refuses them silently and nothing can ever surface one.
    */

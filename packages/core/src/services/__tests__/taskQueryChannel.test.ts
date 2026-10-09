@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createTask, type LegacyPlanState } from '../../models/Task';
-import { makeSession, testWorkspace, FakeTerminalSession } from './sessionTestKit';
+import { makeSession, testWorkspace, FakeRunnerSession } from './sessionTestKit';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import type { ConversationTurn } from '../AiService';
 
@@ -313,7 +313,7 @@ describe('the task-query read channel', () => {
   // the VS Code task card reads — so both planner backends see what a user sees.
   it('answers an output read for a running task from the live capture, then pages from its offset', async () => {
     const taskOutput = new BufferedTaskOutputSource();
-    let capture: FakeTerminalSession | null = null;
+    let capture: FakeRunnerSession | null = null;
     const continueConversation = vi.fn()
       .mockResolvedValueOnce(read({ tasks: ['#2'], fields: ['output'] }))
       .mockImplementationOnce(async () => {
@@ -329,7 +329,7 @@ describe('the task-query read channel', () => {
 
     // Adopting a plan resets the captures (a new plan reuses task ids), so the
     // fake capture attaches after load, the way a spawned runner would.
-    capture = new FakeTerminalSession('s1', 'b');
+    capture = new FakeRunnerSession('s1', 'b');
     taskOutput.attach('b', capture);
     capture.emitOutput('first\n');
 

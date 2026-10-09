@@ -5,7 +5,7 @@ import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
 import { CODEX_MANIFEST } from '../../plugins/builtin/codex.manifest';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { StructuredRunner } from '../StructuredRunner';
-import { isStructuredSession, type StructuredEvent } from '../../interfaces/ITerminalRunner';
+import type { StructuredEvent } from '../../interfaces/IRunner';
 import { mcpClientConfig } from '../mcp';
 import { modeIds, fakeSpawn, fixture, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
 
@@ -686,7 +686,7 @@ describe('a Codex task on the structured transport', () => {
   it('writes tool lines and the whole marker to the plain-text channel, and sends the prompt as the first turn', async () => {
     const { runner, spawned } = codexRunner([...handshake(), fixture('codex', 'task-turn')]);
     const session = await runner.spawn(spawnOptions);
-    if (!isStructuredSession(session)) throw new Error('not a structured session');
+
     const chunks: string[] = [];
     session.onOutput((text) => chunks.push(text));
     await new Promise<void>((resolve) => session.onTurnEnd(() => resolve()));
@@ -702,7 +702,7 @@ describe('a Codex task on the structured transport', () => {
   it('answers an approval by the session\'s own id with the JSON-RPC id Codex asked under', async () => {
     const { runner, spawned } = codexRunner(handshake());
     const session = await runner.spawn(spawnOptions);
-    if (!isStructuredSession(session)) throw new Error('not a structured session');
+
     const events: StructuredEvent[] = [];
     session.onEvent((e) => events.push(e));
     await until(() => sentNamed(spawned.processes[0].written, 'turn/start').length > 0);
@@ -1050,7 +1050,7 @@ describe('a Codex task taking a message mid-turn on the structured transport', (
     const { spawned, processDeps } = deps(handshake());
     const runner = new StructuredRunner({ process: processDeps });
     const session = await runner.spawn({ taskId: 'task-0012-steer', runner: 'codex', prompt: 'Fix sum', modelId: 'gpt-5.5', mode: 'fullAccess', cwd: '/repo', registry: new RunnerRegistry() });
-    if (!isStructuredSession(session)) throw new Error('not a structured session');
+
     const events: StructuredEvent[] = [];
     session.onEvent((e) => events.push(e));
     await until(() => sentNamed(spawned.processes[0].written, 'turn/start').length > 0);
@@ -1085,7 +1085,7 @@ describe('a Codex task taking a message mid-turn on the structured transport', (
     const { spawned, processDeps } = deps(handshake());
     const runner = new StructuredRunner({ process: processDeps });
     const session = await runner.spawn({ taskId: 'task-0012-steer', runner: 'codex', prompt: 'Fix sum', modelId: 'gpt-5.5', mode: 'fullAccess', cwd: '/repo', registry: new RunnerRegistry() });
-    if (!isStructuredSession(session)) throw new Error('not a structured session');
+
     await until(() => sentNamed(spawned.processes[0].written, 'turn/start').length > 0);
     const proc = spawned.processes[0];
     proc.emitStdout(turnStarted('turn-a'));

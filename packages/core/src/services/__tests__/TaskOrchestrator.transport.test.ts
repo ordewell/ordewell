@@ -6,40 +6,34 @@ import { createTask, type LegacyPlanState } from '../../models/Task';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import { serializeTaskStatus, surfacePlan } from '../SessionMessage';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
-import { fakeConfig, FakeStructuredSession, flushMicrotasks } from '../../testing';
+import { fakeConfig, FakeRunnerSession, flushMicrotasks } from '../../testing';
 import { fakeNotification, makeSession, saves, taskOf } from './sessionTestKit';
-import type { ITerminalRunner, ITerminalSession } from '../../interfaces/ITerminalRunner';
+import type { IRunner, IRunnerSession } from '../../interfaces/IRunner';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 
-/**
- * A structured session for Claude Code, a plain one for any other runner —
- * enough to tell the two apart. Records what each spawn asked for.
- */
 function routingRunner() {
-  const sessions: FakeStructuredSession[] = [];
+  const sessions: FakeRunnerSession[] = [];
   const requests: RunnerSpawnOptions[] = [];
   const runner = {
-    spawn: vi.fn(async (opts: RunnerSpawnOptions): Promise<ITerminalSession> => {
+    spawn: vi.fn(async (opts: RunnerSpawnOptions): Promise<IRunnerSession> => {
       requests.push(opts);
       const id = `s${sessions.length + 1}`;
-      const session = opts.runner === 'claude-code'
-        ? new FakeStructuredSession(id, opts.taskId, `native-${opts.taskId}`)
-        : new FakeStructuredSession(id, opts.taskId);
+      const session = new FakeRunnerSession(id, opts.taskId, `native-${opts.taskId}`);
       sessions.push(session);
       return session;
     }),
     stop: vi.fn(),
     stopAll: vi.fn(),
     activeCount: 0,
-  } satisfies ITerminalRunner;
+  } satisfies IRunner;
   return { runner, sessions, requests };
 }
 
-function orchestratorWith(runner: ITerminalRunner, notifications = fakeNotification()) {
+function orchestratorWith(runner: IRunner, notifications = fakeNotification()) {
   return TaskOrchestrator.compose({
     config: fakeConfig(),
     notifications,
-    terminalRunner: runner,
+    runner,
     output: new BufferedTaskOutputSource(),
     registry: new RunnerRegistry(),
     workspaceRoot: () => '/repo',
@@ -50,7 +44,7 @@ function orchestratorWith(runner: ITerminalRunner, notifications = fakeNotificat
 const settle = () => flushMicrotasks(50);
 
 describe('the structured transport, the only one', () => {
-  it('is what every task of a run and every later run is recorded on', async () => {
+  it('runs every task and starts a fresh runner session on retry', async () => {
     const { runner, sessions, requests } = routingRunner();
     const orchestrator = orchestratorWith(runner);
     orchestrator.loadPlan([
@@ -68,8 +62,8 @@ describe('the structured transport, the only one', () => {
     await settle();
 
     expect(requests).toHaveLength(3);
-    expect(orchestrator.storeInstance.get('t1')!.transport?.kind).toBe('structured');
-    expect(orchestrator.storeInstance.get('t2')!.transport?.kind).toBe('structured');
+    expect(orchestrator.storeInstance.get('t1')!.runnerSessionId).toBe('native-t1');
+    expect(orchestrator.storeInstance.get('t2')!.runnerSessionId).toBeUndefined();
   });
 
   it('runs a saved plan that an older build pinned to the terminal structured, and stops saving the pin', async () => {
@@ -89,20 +83,20 @@ describe('the structured transport, the only one', () => {
     await session.executePlan();
 
     await vi.waitFor(() => expect(requests).toHaveLength(1));
-    expect(taskOf(session, 't1')?.transport).toEqual({ kind: 'structured' });
+    expect(taskOf(session, 't1')).not.toHaveProperty('transport');
   });
 });
 
-describe('recording the transport on the task', () => {
-  it('records transport server-side without sending it on the status wire', async () => {
+describe('recording the runner session on the task', () => {
+  it('clears a saved runner session when a fresh attempt starts', async () => {
     const { runner } = routingRunner();
     const orchestrator = orchestratorWith(runner);
-    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
+    orchestrator.loadPlan([{ ...createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' }), runnerSessionId: 'previous-session' }]);
 
     await orchestrator.forceStartTask('t1');
 
     const task = orchestrator.storeInstance.get('t1')!;
-    expect(task.transport).toEqual({ kind: 'structured' });
+    expect(task.runnerSessionId).toBeUndefined();
     expect(serializeTaskStatus(task)).not.toHaveProperty('transport');
   });
 
@@ -116,8 +110,8 @@ describe('recording the transport on the task', () => {
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
 
     const task = orchestrator.storeInstance.get('t1')!;
-    expect(task.transport?.nativeSessionId).toBe('native-t1');
-    expect(surfacePlan({ tasks: [task], generatedAt: '', status: 'approved', runners: ['claude-code'], lastUpdated: '' }).tasks[0]).not.toHaveProperty('transport');
+    expect(task.runnerSessionId).toBe('native-t1');
+    expect(surfacePlan({ tasks: [task], generatedAt: '', status: 'approved', runners: ['claude-code'], lastUpdated: '' }).tasks[0]).not.toHaveProperty('runnerSessionId');
   });
 });
 
@@ -133,7 +127,7 @@ describe('a runner with no structured connector', () => {
     expect(runner.spawn).not.toHaveBeenCalled();
     const task = orchestrator.storeInstance.get('t1')!;
     expect(task.status).toBe('pending');
-    expect(task.transport).toBeUndefined();
+    expect(task.runnerSessionId).toBeUndefined();
     expect(notifications.error).toHaveBeenCalledWith(expect.stringContaining('my-plugin has no structured connector, so Ordewell cannot run its tasks'));
   });
 });
@@ -163,7 +157,7 @@ describe('ending a structured attempt', () => {
     sessions[0].reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
 
-    expect(orchestrator.storeInstance.get('t1')!.transport).toEqual({ kind: 'structured', nativeSessionId: 'native-t1' });
+    expect(orchestrator.storeInstance.get('t1')!.runnerSessionId).toBe('native-t1');
   });
 });
 
@@ -203,7 +197,7 @@ describe('completing through task_complete (ADR-0022)', () => {
     const orchestrator = orchestratorWith(runner);
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
     await orchestrator.forceStartTask('t1');
-    const session = sessions[0] as FakeStructuredSession;
+    const session = sessions[0] as FakeRunnerSession;
     session.emitOutput('a screen of work\n');
 
     session.reportComplete({ status: 'done', summary: 'Added the parser and its tests.' });
@@ -221,7 +215,7 @@ describe('completing through task_complete (ADR-0022)', () => {
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
     await orchestrator.forceStartTask('t1');
 
-    (sessions[0] as FakeStructuredSession).reportComplete({ status: 'blocked', summary: 'Nothing changed.', reason: 'the schema file is missing' });
+    (sessions[0] as FakeRunnerSession).reportComplete({ status: 'blocked', summary: 'Nothing changed.', reason: 'the schema file is missing' });
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('failed'));
 
     expect(orchestrator.storeInstance.get('t1')!.verdict?.reason).toContain('the schema file is missing');
@@ -240,7 +234,7 @@ describe('checkpointing through the checkpoint tool (ADR-0022, V5)', () => {
     const events: Array<{ taskId: string; taskTitle: string; summary: string }> = [];
     orchestrator.subscribe({ onCheckpoint: (data) => events.push(data) });
     await orchestrator.forceStartTask('t1');
-    const session = sessions[0] as FakeStructuredSession;
+    const session = sessions[0] as FakeRunnerSession;
     return { orchestrator, session, events, requests };
   }
 

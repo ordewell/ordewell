@@ -2,17 +2,7 @@ import type { AgentEvent } from '../services/harness/AgentAdapter';
 import type { CheckpointAnswer, TaskCompleteArgs } from '../services/mcp/tools';
 import type { ApprovalDecision } from './IApproval';
 import type { TaskSkillSnapshot } from '../models/Task';
-
-export interface ITerminalSession {
-  id: string;
-  taskId: string;
-  onOutput(callback: (text: string) => void): void;
-  onExit(callback: (code: number) => void): void;
-  kill(): void;
-  getOutput(): string;
-  write(text: string): void;
-}
-
+import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 /** How a structured turn ended. `failed` carries the agent's own words in the preceding `error` event. */
 export type StructuredTurnEnd = 'completed' | 'interrupted' | 'failed';
 
@@ -56,13 +46,14 @@ export interface QueuedTaskMessage {
   forced?: boolean;
 }
 
-/**
- * What a session driven over its runner's protocol can do that a terminal
- * cannot (ADR-0018, S2). Optional: callers feature-detect it with
- * {@link isStructuredSession}, and code that does not look behaves as it did.
- */
-export interface StructuredSessionCapability {
-  readonly transport: 'structured';
+export interface IRunnerSession {
+  id: string;
+  taskId: string;
+  onOutput(callback: (text: string) => void): void;
+  onExit(callback: (code: number) => void): void;
+  kill(): void;
+  getOutput(): string;
+  write(text: string): void;
   /** `working` while a turn runs; `idle` between turns, waiting for a message. */
   turnState(): 'working' | 'idle';
   onTurnEnd(listener: (reason: StructuredTurnEnd) => void): void;
@@ -112,13 +103,7 @@ export interface StructuredSessionCapability {
   onToolCheckpoint(handler: (question: string, signal: AbortSignal) => Promise<CheckpointAnswer>): void;
 }
 
-export function isStructuredSession(session: ITerminalSession): session is ITerminalSession & StructuredSessionCapability {
-  return (session as Partial<StructuredSessionCapability>).transport === 'structured';
-}
-
-import type { RunnerRegistry } from '../plugins/RunnerRegistry';
-
-export interface ITerminalRunner {
+export interface IRunner {
   spawn(opts: {
     taskId: string;
     runner: string;
@@ -157,7 +142,7 @@ export interface ITerminalRunner {
     skills?: readonly TaskSkillSnapshot[];
     /** Something the user should know about how the spawn went that did not stop it — a respawn, most often. */
     onNotice?: (message: string) => void;
-  }): Promise<ITerminalSession>;
+  }): Promise<IRunnerSession>;
 
   stop(sessionId: string): void;
   stopAll(): void;

@@ -153,7 +153,7 @@ describe('the task-log registry (ADR-0018, V1)', () => {
   it('says so when the runner already had the message it was asked to send now, and shows a refusal', () => {
     const h = harness();
     h.session.forceSendQueuedTaskMessage.mockReturnValue(false);
-    h.session.forceSendTaskMessage.mockImplementation(() => { throw new Error('Task runs in a terminal, which cannot take a message sent now from Ordewell.'); });
+    h.session.forceSendTaskMessage.mockImplementation(() => { throw new Error('Task is not running, so there is no turn to send a message to.'); });
     h.registry.open('t1');
     __panels[0].__receive({ type: 'ready' });
     __panels[0].webview.postMessage.mockClear();
@@ -163,7 +163,7 @@ describe('the task-log registry (ADR-0018, V1)', () => {
 
     expect(posted(__panels[0])).toEqual([
       { type: 'showError', error: expect.stringMatching(/runner already has that message/) },
-      { type: 'showError', error: expect.stringMatching(/cannot take a message sent now/) },
+      { type: 'showError', error: expect.stringMatching(/no turn to send a message to/) },
     ]);
   });
 
@@ -213,7 +213,7 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     __panels[0].webview.postMessage.mockClear();
 
     h.task.status = 'completed';
-    h.task.transport = { kind: 'structured', nativeSessionId: 'sess-1' };
+    h.task.runnerSessionId = 'sess-1';
     h.registry.receive({ type: 'status_update', tasks: [] });
 
     expect(posted(__panels[0]).find((m) => m.type === 'status')).toMatchObject({ status: { continuable: true } });
@@ -222,7 +222,7 @@ describe('the task-log registry (ADR-0018, V1)', () => {
   it('continues the task through the Session and follows the new attempt, even from an earlier one', async () => {
     const h = harness({ 1: attemptOne, 2: attemptTwo });
     h.task.status = 'completed';
-    h.task.transport = { kind: 'structured', nativeSessionId: 'sess-1' };
+    h.task.runnerSessionId = 'sess-1';
     h.registry.open('t1');
     __panels[0].__receive({ type: 'ready' });
     __panels[0].__receive({ type: 'selectAttempt', attempt: 1 });
@@ -237,13 +237,13 @@ describe('the task-log registry (ADR-0018, V1)', () => {
 
   it('shows the Session’s refusal of a continue', async () => {
     const h = harness();
-    h.session.continueTask.mockImplementation(async () => { throw new Error('Task "Parse JSON" cannot be continued: it ran in a terminal.'); });
+    h.session.continueTask.mockImplementation(async () => { throw new Error('Task "Parse JSON" cannot be continued: its runner left no saved session to resume.'); });
     h.registry.open('t1');
     __panels[0].__receive({ type: 'ready' });
 
     __panels[0].__receive({ type: 'continueTask', text: 'more' });
 
-    await vi.waitFor(() => expect(posted(__panels[0])).toContainEqual({ type: 'showError', error: 'Task "Parse JSON" cannot be continued: it ran in a terminal.' }));
+    await vi.waitFor(() => expect(posted(__panels[0])).toContainEqual({ type: 'showError', error: 'Task "Parse JSON" cannot be continued: its runner left no saved session to resume.' }));
   });
 
   it('says the task waits for approval while its runner has a request open, and counts only its own', () => {

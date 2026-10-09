@@ -96,8 +96,7 @@ export function permissionReply<K extends string>(decision: ApprovalDecision, ke
 
 /**
  * Whether a task's mode answers every request the way `opencode run --auto`
- * does: its manifest sets `approvals: auto` — `build`, which the terminal
- * transport runs with `--auto`.
+ * does: its manifest sets `approvals: auto` for `build`.
  */
 export function autoApproves(task: TaskStartOptions): boolean {
   return task.flags.modeSettings.approvals === 'auto';
@@ -208,7 +207,7 @@ export class OpenCodePermissions {
   /**
    * A task's request. Under a mode whose manifest sets `approvals: auto` it is
    * answered at once with what `opencode run --auto` answers, so the same plan
-   * behaves the same on both transports (ADR-0001), and announced already
+   * follows the manifest (ADR-0001), and announced already
    * decided so the log still shows it. Any other mode leaves it open for an
    * approval card.
    */

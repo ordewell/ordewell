@@ -398,6 +398,23 @@ describe('sessionStore', () => {
     });
   });
 
+  it('round-trips saved runner sessions for tasks and subtasks without a transport record', () => {
+    const plan = createEmptyPlan();
+    plan.tasks = [{ ...createTask({
+      id: 't1', title: 'Parent', status: 'completed',
+      subtasks: [{ ...createTask({ id: 't2', title: 'Child', status: 'failed' }), runnerSessionId: 'child-session' }],
+    }), runnerSessionId: 'parent-session' }];
+    const saved = saveSession(plan, 'Goal', tmpDir);
+
+    const task = loadSession(saved.id, tmpDir)!.plan.tasks[0];
+
+    expect(task.runnerSessionId).toBe('parent-session');
+    expect(task.subtasks![0].runnerSessionId).toBe('child-session');
+    expect(canContinue(task)).toBe(true);
+    expect(canContinue(task.subtasks![0])).toBe(true);
+    expect(JSON.stringify(task)).not.toContain('transport');
+  });
+
   describe('a session saved while the terminal transport existed', () => {
     const FIXTURE = path.join(__dirname, 'fixtures', 'terminal-transport-session.json');
 
@@ -411,11 +428,14 @@ describe('sessionStore', () => {
     it('drops what a task said about running in a terminal, subtasks included', () => {
       const [t1, t2, t3] = loadFixture().plan.tasks;
 
+      expect(t1).not.toHaveProperty('transport');
+      expect(t2).not.toHaveProperty('runnerSessionId');
+      expect(t2.subtasks![0]).not.toHaveProperty('runnerSessionId');
       expect(t2).not.toHaveProperty('transport');
       expect(t2.subtasks![0]).not.toHaveProperty('transport');
       expect(t3).not.toHaveProperty('transport');
       expect(JSON.stringify(loadFixture().plan)).not.toMatch(/"terminal"|fallback/);
-      expect(t1.transport).toEqual({ kind: 'structured', nativeSessionId: 'sess-1' });
+      expect(t1.runnerSessionId).toBe('sess-1');
     });
 
     it('drops the completion marker id every task carried then, subtasks included', () => {

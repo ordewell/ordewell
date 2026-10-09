@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { createSession, flattenTasks, loadSession, RunnerRegistry, BufferedTaskOutputSource, createTask } from '@ordewell/core';
-import type { IAiService, ITerminalRunner, LegacyPlanState, ModelResolver, Session, SessionMessage } from '@ordewell/core';
+import type { IAiService, IRunner, LegacyPlanState, ModelResolver, Session, SessionMessage } from '@ordewell/core';
 import { fakeConfig, fakeFileSystem } from '@ordewell/core/testing';
 import { ChatViewProvider } from '../../providers/ChatViewProvider';
 import type { HostToWebview, WebviewToHost } from '../../shared/protocol';
@@ -41,7 +41,7 @@ function harness(aiService: Partial<IAiService> = { hasActiveConversation: () =>
   const posts: HostToWebview[] = [];
   const chatProvider = new ChatViewProvider({ toString: () => 'file:///ext' } as unknown as vscode.Uri);
   chatProvider.postMessage = (msg) => { posts.push(msg); };
-  const runner = { spawn: vi.fn(), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 } as unknown as ITerminalRunner;
+  const runner = { spawn: vi.fn(), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 } as unknown as IRunner;
   const session = createSession({
     config: fakeConfig(),
     notifications: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), confirm: vi.fn().mockResolvedValue(undefined) },
@@ -67,7 +67,7 @@ function harness(aiService: Partial<IAiService> = { hasActiveConversation: () =>
     runnerRegistry: new RunnerRegistry(),
     config: { aiProvider: 'openrouter', apiKey: 'sk-test', planningModel: 'some/model', enabledRunners: ['claude-code'] } as unknown as WebviewRouterDeps['config'],
     fsAdapter: { getWorkspaceRoot: () => workspace } as unknown as WebviewRouterDeps['fsAdapter'],
-    terminalRunner: { stopAll: vi.fn() } as unknown as WebviewRouterDeps['terminalRunner'],
+    runner: { stopAll: vi.fn() } as unknown as WebviewRouterDeps['runner'],
     notifications: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), confirm: vi.fn() },
     getCurrentPlan: () => current,
     setCurrentPlan: (p) => { current = p; },

@@ -9,8 +9,8 @@ import type { SessionRuntimeSettings } from '../createSession';
 import type { DiscoveredModel } from '../../models/Task';
 import type { SessionMessage } from '../SessionMessage';
 import { createTask } from '../../models/Task';
-import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
-import { FakeTerminalSession, fakeConfig, makeSession } from './sessionTestKit';
+import type { IRunner } from '../../interfaces/IRunner';
+import { FakeRunnerSession, fakeConfig, makeSession } from './sessionTestKit';
 
 /**
  * The opt-in live check for the Claude Code planner's Ordewell tools
@@ -117,17 +117,17 @@ describe.runIf(live)('Claude Code planner tools — live', () => {
     cleanup.push(() => ai.reset());
 
     const toolCalls: string[] = [];
-    const sessions: FakeTerminalSession[] = [];
+    const sessions: FakeRunnerSession[] = [];
     const runner = {
       spawn: vi.fn(async ({ taskId }: { taskId: string }) => {
-        const session = new FakeTerminalSession(`s-${taskId}`, taskId);
+        const session = new FakeRunnerSession(`s-${taskId}`, taskId);
         sessions.push(session);
         return session;
       }),
       stop: vi.fn(),
       stopAll: vi.fn(),
       activeCount: 0,
-    } as unknown as ITerminalRunner;
+    } as unknown as IRunner;
     const session = makeSession({
       config,
       aiService: ai,

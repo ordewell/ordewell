@@ -1,10 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createTask, type ConversationMessage, type LegacyPlanState, type Task } from '../../models/Task';
-import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
+import type { IRunner } from '../../interfaces/IRunner';
 import type { SessionMessage, SessionNotice } from '../SessionMessage';
 import type { SkillInfo } from '../SkillsService';
 import type { ModifyDuringExecutionRequest } from '../Planner';
-import { FakeTerminalSession, makeSession, saves, testWorkspace, taskOf } from './sessionTestKit';
+import { FakeRunnerSession, makeSession, saves, testWorkspace, taskOf } from './sessionTestKit';
 
 function skill(name: string, appliesTo: SkillInfo['appliesTo'], content = `${name} body`): SkillInfo {
   const path = `/home/u/.ordewell/skills/${name}/SKILL.md`;
@@ -133,13 +133,13 @@ describe('task skills checked where a planner reply lands', () => {
 });
 
 describe('a mid-run edit queued behind a running task', () => {
-  function runner(): ITerminalRunner {
+  function runner(): IRunner {
     return {
-      spawn: vi.fn(async ({ taskId }: { taskId: string }) => new FakeTerminalSession(`s-${taskId}`, taskId)),
+      spawn: vi.fn(async ({ taskId }: { taskId: string }) => new FakeRunnerSession(`s-${taskId}`, taskId)),
       stop: vi.fn(),
       stopAll: vi.fn(),
       activeCount: 0,
-    } as unknown as ITerminalRunner;
+    } as unknown as IRunner;
   }
 
   async function queued(modify: (req: ModifyDuringExecutionRequest) => Promise<{ pendingTasks: Task[]; message: string; skillWarnings?: string[] }>, onNotice?: (notice: SessionNotice) => void) {

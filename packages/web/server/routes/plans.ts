@@ -109,8 +109,8 @@ export function plansRoute(pool: OrchestratorPool) {
     });
   }
 
-  // Talking to a structured task (ADR-0018, M1). A terminal task, or one not
-  // running, is refused with the reason rather than typed at. Force send
+  // Talking to a task (ADR-0018, M1). A task not running is refused with
+  // the reason. Force send
   // (ADR-0023, F1) is the same request: it interrupts the running turn and
   // delivers this message next, ahead of anything queued.
   const messageHandler = (send: (session: ReturnType<typeof pool.session>, taskId: string, text: string) => string) => async (c: Context<Env, '/:sessionId/tasks/:taskId/messages'>) => {

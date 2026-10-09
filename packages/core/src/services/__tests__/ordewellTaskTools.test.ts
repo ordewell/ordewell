@@ -69,7 +69,7 @@ function rig() {
   const orchestrator = TaskOrchestrator.compose({
     config: fakeConfig(),
     notifications: fakeNotification(),
-    terminalRunner: runner,
+    runner,
     output: new BufferedTaskOutputSource(),
     registry: new RunnerRegistry(),
     workspaceRoot: () => '/repo',

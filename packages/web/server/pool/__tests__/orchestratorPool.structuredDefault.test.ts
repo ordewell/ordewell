@@ -3,8 +3,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { Hono } from 'hono';
-import { saveSession, type ITerminalRunner, type LegacyPlanState, type RunnerSpawnOptions } from '@ordewell/core';
-import { FakeStructuredSession } from '@ordewell/core/testing';
+import { saveSession, type IRunner, type LegacyPlanState, type RunnerSpawnOptions } from '@ordewell/core';
+import { FakeRunnerSession } from '@ordewell/core/testing';
 import { OrchestratorPool } from '../orchestratorPool';
 import { settingsRoute } from '../../routes/settings';
 
@@ -31,10 +31,10 @@ describe('OrchestratorPool after the transport setting was removed', () => {
   });
 
   function runners() {
-    const structured: FakeStructuredSession[] = [];
-    const structuredRunner: ITerminalRunner = {
+    const structured: FakeRunnerSession[] = [];
+    const structuredRunner: IRunner = {
       spawn: vi.fn(async (opts: RunnerSpawnOptions) => {
-        const session = new FakeStructuredSession(`s${structured.length + 1}`, opts.taskId);
+        const session = new FakeRunnerSession(`s${structured.length + 1}`, opts.taskId);
         structured.push(session);
         return session;
       }),

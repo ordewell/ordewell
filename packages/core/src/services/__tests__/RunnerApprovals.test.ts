@@ -3,9 +3,9 @@ import { RunnerApprovals } from '../RunnerApprovals';
 import { PendingApprovals } from '../PendingApprovals';
 import type { SessionMessage } from '../SessionMessage';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
-import type { ITerminalRunner, ITerminalSession } from '../../interfaces/ITerminalRunner';
+import type { IRunner, IRunnerSession } from '../../interfaces/IRunner';
 import { createTask, type LegacyPlanState } from '../../models/Task';
-import { FakeStructuredSession, FakeTerminalSession } from '../../testing';
+import { FakeRunnerSession } from '../../testing';
 import { makeSession, taskOf } from './sessionTestKit';
 import { StructuredRunner } from '../StructuredRunner';
 import { TaskLogRecorder } from '../TaskLogRecorder';
@@ -23,7 +23,7 @@ const spawnOpts = { taskId: 't1', runner: 'claude-code', prompt: 'Do it', cwd: '
 const WRITE = { file_path: '/repo/a.txt', content: 'a' };
 const SUGGESTIONS = [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }];
 
-function handing(session: ITerminalSession): ITerminalRunner & { stop: ReturnType<typeof vi.fn>; stopAll: ReturnType<typeof vi.fn> } {
+function handing(session: IRunnerSession): IRunner & { stop: ReturnType<typeof vi.fn>; stopAll: ReturnType<typeof vi.fn> } {
   return { spawn: vi.fn(async () => session), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 };
 }
 
@@ -31,7 +31,7 @@ describe('RunnerApprovals', () => {
   async function bridged() {
     const approvals = new PendingApprovals({ timeoutMs: 10 });
     const bridge = new RunnerApprovals(approvals);
-    const task = new FakeStructuredSession('s1', 't1');
+    const task = new FakeRunnerSession('s1', 't1');
     const inner = handing(task);
     const runner = bridge.wrap(inner);
     await runner.spawn(spawnOpts);
@@ -130,9 +130,9 @@ describe('RunnerApprovals', () => {
     expect(approvals.outstanding()).toEqual([]);
   });
 
-  it('leaves a terminal-transport session alone', async () => {
+  it('keeps an attempt with no permission requests free of approvals', async () => {
     const approvals = new PendingApprovals();
-    const session = new FakeTerminalSession('s1', 't1');
+    const session = new FakeRunnerSession('s1', 't1');
     const inner = handing(session);
     expect(await new RunnerApprovals(approvals).wrap(inner).spawn(spawnOpts)).toBe(session);
     expect(approvals.outstanding()).toEqual([]);
@@ -151,10 +151,10 @@ describe('a session\'s runner approvals', () => {
   }
 
   async function running() {
-    const sessions: FakeStructuredSession[] = [];
-    const runner: ITerminalRunner & { stop: ReturnType<typeof vi.fn>; stopAll: ReturnType<typeof vi.fn> } = {
+    const sessions: FakeRunnerSession[] = [];
+    const runner: IRunner & { stop: ReturnType<typeof vi.fn>; stopAll: ReturnType<typeof vi.fn> } = {
       spawn: vi.fn(async (opts: RunnerSpawnOptions) => {
-        const session = new FakeStructuredSession(`s${sessions.length + 1}`, opts.taskId);
+        const session = new FakeRunnerSession(`s${sessions.length + 1}`, opts.taskId);
         sessions.push(session);
         return session;
       }),

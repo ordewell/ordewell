@@ -228,7 +228,7 @@ export class TaskLogPanel {
     };
   }
 
-  // A refusal (a terminal task, a task not running) is the Session's answer,
+  // A refusal (a task not running) is the Session's answer,
   // shown in the panel rather than swallowed by an unhandled rejection.
   private control(run: () => void): void {
     try {

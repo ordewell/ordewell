@@ -5,46 +5,44 @@ import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import { serializeTaskStatus } from '../SessionMessage';
 import { continuability } from '../continuation';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
-import { fakeConfig, FakeStructuredSession, FakeWorktreeIsolation } from '../../testing';
+import { fakeConfig, FakeRunnerSession, FakeWorktreeIsolation } from '../../testing';
 import { fakeNotification, makeSession, saves } from './sessionTestKit';
 import type { LegacyPlanState } from '../../models/Task';
-import type { ITerminalRunner, ITerminalSession } from '../../interfaces/ITerminalRunner';
+import type { IRunner, IRunnerSession } from '../../interfaces/IRunner';
 import type { IWorktreeIsolation } from '../../interfaces/IWorktreeIsolation';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 
 /**
- * A structured Claude Code session, a plain one for any other runner.
+ * Runner sessions with controllable resume behavior.
  * `resumes` says what a resumed spawn's runner announces — the session it
  * took up, or null for one it could not find.
  */
 function routingRunner(opts: { resumes?: (id: string) => string | null } = {}) {
-  const sessions: FakeStructuredSession[] = [];
+  const sessions: FakeRunnerSession[] = [];
   const requests: RunnerSpawnOptions[] = [];
   const runner = {
-    spawn: vi.fn(async (o: RunnerSpawnOptions): Promise<ITerminalSession> => {
+    spawn: vi.fn(async (o: RunnerSpawnOptions): Promise<IRunnerSession> => {
       requests.push(o);
       const id = `s${sessions.length + 1}`;
       const native = o.resumeSessionId ? (opts.resumes ?? ((resumed) => resumed))(o.resumeSessionId) : `native-${o.taskId}-${sessions.length + 1}`;
-      const session = o.runner === 'claude-code'
-        ? new FakeStructuredSession(id, o.taskId, native)
-        : new FakeStructuredSession(id, o.taskId);
+      const session = new FakeRunnerSession(id, o.taskId, native);
       sessions.push(session);
       return session;
     }),
     stop: vi.fn(),
     stopAll: vi.fn(),
     activeCount: 0,
-  } satisfies ITerminalRunner;
+  } satisfies IRunner;
   return { runner, sessions, requests };
 }
 
-function setup(opts: { runner?: ITerminalRunner; isolation?: IWorktreeIsolation; resumes?: (id: string) => string | null } = {}) {
+function setup(opts: { runner?: IRunner; isolation?: IWorktreeIsolation; resumes?: (id: string) => string | null } = {}) {
   const routed = routingRunner({ resumes: opts.resumes });
   const notifications = fakeNotification();
   const orchestrator = TaskOrchestrator.compose({
     config: fakeConfig({ worktreeIsolation: opts.isolation !== undefined }),
     notifications,
-    terminalRunner: opts.runner ?? routed.runner,
+    runner: opts.runner ?? routed.runner,
     output: new BufferedTaskOutputSource(),
     registry: new RunnerRegistry(),
     isolation: opts.isolation,
@@ -71,32 +69,32 @@ async function completedStructured(h: ReturnType<typeof setup>): Promise<void> {
 }
 
 describe('which tasks can be continued (ADR-0018, K1)', () => {
-  const structured = { kind: 'structured' as const, nativeSessionId: 'sess-1' };
+  const savedSessionId = 'sess-1';
 
   it('a completed or failed task that ran structured and saved its session', () => {
-    expect(continuability(plan({ status: 'completed', transport: structured }))).toEqual({ ok: true, sessionId: 'sess-1' });
-    expect(continuability(plan({ status: 'failed', transport: structured }))).toEqual({ ok: true, sessionId: 'sess-1' });
+    expect(continuability(plan({ status: 'completed', runnerSessionId: savedSessionId }))).toEqual({ ok: true, sessionId: 'sess-1' });
+    expect(continuability(plan({ status: 'failed', runnerSessionId: savedSessionId }))).toEqual({ ok: true, sessionId: 'sess-1' });
   });
 
   it('not a conflict, which its repair resolves', () => {
-    const verdict = continuability(plan({ status: 'awaiting_user', awaitingReason: 'conflict', transport: structured }));
+    const verdict = continuability(plan({ status: 'awaiting_user', awaitingReason: 'conflict', runnerSessionId: savedSessionId }));
     expect(verdict).toEqual({ ok: false, reason: expect.stringContaining('merge conflict') });
   });
 
   it('not a task with no saved session', () => {
     expect(continuability(plan({ status: 'completed' }))).toEqual({ ok: false, reason: expect.stringContaining('no saved session') });
-    expect(continuability(plan({ status: 'failed', transport: { kind: 'structured' } }))).toEqual({ ok: false, reason: expect.stringContaining('no saved session') });
+    expect(continuability(plan({ status: 'failed', runnerSessionId: undefined }))).toEqual({ ok: false, reason: expect.stringContaining('no saved session') });
   });
 
   it('not a task still running, waiting, or never run, nor a user task', () => {
     for (const status of ['pending', 'in_progress', 'awaiting_user', 'blocked'] as const) {
-      expect(continuability(plan({ status, transport: structured })).ok).toBe(false);
+      expect(continuability(plan({ status, runnerSessionId: savedSessionId })).ok).toBe(false);
     }
-    expect(continuability(plan({ type: 'user', status: 'completed', transport: structured })).ok).toBe(false);
+    expect(continuability(plan({ type: 'user', status: 'completed', runnerSessionId: savedSessionId })).ok).toBe(false);
   });
 
   it('is on the task\'s status for surfaces, without the session id itself', () => {
-    const status = serializeTaskStatus(plan({ status: 'completed', transport: structured }));
+    const status = serializeTaskStatus(plan({ status: 'completed', runnerSessionId: savedSessionId }));
     expect(status.continuable).toBe(true);
     expect(JSON.stringify(status)).not.toContain('sess-1');
     expect(serializeTaskStatus(plan({ status: 'completed' }))).not.toHaveProperty('continuable');
@@ -135,7 +133,7 @@ describe('TaskOrchestrator.continueTask', () => {
     expect(h.task('t1').verdict?.outcome).toBe('pass');
     expect(h.task('t1').outputSummary?.logTail).toContain('Arrays handled too.');
     expect(h.task('t1').outputSummary?.logTail).not.toContain('Parsed objects.');
-    expect(h.task('t1').transport).toEqual({ kind: 'structured', nativeSessionId: 'native-t1-1' });
+    expect(h.task('t1').runnerSessionId).toBe('native-t1-1');
   });
 
   it('continues a failed task, and a continued turn that ends without a task_complete call waits for input', async () => {
@@ -146,7 +144,7 @@ describe('TaskOrchestrator.continueTask', () => {
     await vi.waitFor(() => expect(h.task('t1').status).toBe('failed'));
 
     await h.orchestrator.continueTask('t1', 'the tests need Node 22');
-    (h.sessions[1] as FakeStructuredSession).emitTurnEnd('completed');
+    (h.sessions[1] as FakeRunnerSession).emitTurnEnd('completed');
 
     expect(h.task('t1')).toMatchObject({ status: 'awaiting_user', awaitingReason: 'input' });
   });
@@ -188,7 +186,7 @@ describe('TaskOrchestrator.continueTask', () => {
   it('refuses a conflict, a task with no saved session and an unfinished one with the reason', async () => {
     const h = setup();
     h.orchestrator.loadPlan([
-      plan({ status: 'awaiting_user', awaitingReason: 'conflict', transport: { kind: 'structured', nativeSessionId: 'sess-1' } }),
+      plan({ status: 'awaiting_user', awaitingReason: 'conflict', runnerSessionId: 'sess-1' }),
       createTask({ id: 't2', order: 2, title: 'Unsaved', prompt: 'two', status: 'completed' }),
       createTask({ id: 't3', order: 3, title: 'Pending', prompt: 'three' }),
     ]);
@@ -202,7 +200,7 @@ describe('TaskOrchestrator.continueTask', () => {
 
   it('fails a task whose runner now has no structured connector, without reaching the runner', async () => {
     const h = setup();
-    h.orchestrator.loadPlan([plan({ status: 'completed', assignedRunner: 'my-plugin', transport: { kind: 'structured', nativeSessionId: 'sess-1' } })], ['my-plugin']);
+    h.orchestrator.loadPlan([plan({ status: 'completed', assignedRunner: 'my-plugin', runnerSessionId: 'sess-1' })], ['my-plugin']);
 
     await h.orchestrator.continueTask('t1', 'go on');
 
@@ -219,7 +217,7 @@ describe('a continue whose session cannot be resumed', () => {
     await completedStructured(h);
 
     await h.orchestrator.continueTask('t1', 'also handle arrays');
-    const resumed = h.sessions[1] as FakeStructuredSession;
+    const resumed = h.sessions[1] as FakeRunnerSession;
     resumed.emitOutput('No conversation found with session ID: native-t1-1\n');
     resumed.emitTurnEnd('failed');
 
@@ -242,9 +240,9 @@ describe('a continue whose session cannot be resumed', () => {
       stop: vi.fn(),
       stopAll: vi.fn(),
       activeCount: 0,
-    } satisfies ITerminalRunner;
+    } satisfies IRunner;
     const h = setup({ runner: failing });
-    h.orchestrator.loadPlan([plan({ status: 'completed', transport: { kind: 'structured', nativeSessionId: 'sess-1' } })]);
+    h.orchestrator.loadPlan([plan({ status: 'completed', runnerSessionId: 'sess-1' })]);
 
     await h.orchestrator.continueTask('t1', 'go on');
 

@@ -1,4 +1,4 @@
-import { isStructuredSession, type ITerminalRunner, type ITerminalSession, type StructuredSessionCapability } from '../interfaces/ITerminalRunner';
+import type { IRunner, IRunnerSession } from '../interfaces/IRunner';
 import { defaultLogger, type ILogger } from '../interfaces/ILogger';
 import { coalesceTaskLog, taskLogForSurface, toTaskLogEvent, type TaskLogEvent } from '../models/TaskLog';
 import { openTaskLog, type TaskLogFile, type TaskLogLocation } from '../utils/taskLogStore';
@@ -26,8 +26,7 @@ export interface TaskLogRecorderDeps {
  * batches, so what a surface saw live and what it reloads are one sequence.
  *
  * It sits around the runner rather than inside the orchestrator, which stays
- * unaware of logs; a terminal-transport session has no event stream and is
- * passed through untouched.
+ * unaware of logs.
  */
 export class TaskLogRecorder {
   private readonly open: (location: TaskLogLocation, taskId: string) => TaskLogFile;
@@ -40,13 +39,13 @@ export class TaskLogRecorder {
     this.logger = deps.logger ?? defaultLogger;
   }
 
-  wrap(runner: ITerminalRunner): ITerminalRunner {
+  wrap(runner: IRunner): IRunner {
     return {
       spawn: async (opts) => {
         const session = await runner.spawn(opts);
         // Before returning: the first turn's events are emitted on the next
         // macrotask, and a listener attached later would miss them.
-        if (isStructuredSession(session)) this.record(opts.taskId, session, opts.skills);
+        this.record(opts.taskId, session, opts.skills);
         return session;
       },
       stop: (sessionId) => runner.stop(sessionId),
@@ -56,7 +55,7 @@ export class TaskLogRecorder {
   }
 
   /** Start a new attempt's log for `session`, opening with the skills it was given, and keep it until the session exits. */
-  record(taskId: string, session: ITerminalSession & StructuredSessionCapability, skills: readonly TaskSkillSnapshot[] = []): void {
+  record(taskId: string, session: IRunnerSession, skills: readonly TaskSkillSnapshot[] = []): void {
     let file: TaskLogFile | null;
     try {
       file = this.open(this.deps.location(), taskId);

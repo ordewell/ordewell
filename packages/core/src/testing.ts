@@ -1,6 +1,6 @@
 import type { IConfig } from './interfaces/IConfig';
 import type { IFileSystem, ToolOutcome } from './interfaces/IFileSystem';
-import type { ITerminalSession, QueuedTaskMessage, StructuredEvent, StructuredSessionCapability, StructuredTurnEnd } from './interfaces/ITerminalRunner';
+import type { IRunnerSession, QueuedTaskMessage, StructuredEvent, StructuredTurnEnd } from './interfaces/IRunner';
 import type { ApprovalDecision } from './interfaces/IApproval';
 import type { CheckpointAnswer, TaskCompleteArgs } from './services/mcp/tools';
 import type {
@@ -86,39 +86,13 @@ export function fakeFileSystem(overrides: Partial<IFileSystem> = {}): IFileSyste
   };
 }
 
-export class FakeTerminalSession implements ITerminalSession {
+export class FakeRunnerSession implements IRunnerSession {
   private outputCbs: Array<(text: string) => void> = [];
   private exitCbs: Array<(code: number) => void> = [];
   output = '';
   written: string[] = [];
   killed = false;
 
-  constructor(public id = 's1', public taskId = 't1') {}
-
-  onOutput(cb: (text: string) => void): void { this.outputCbs.push(cb); }
-  onExit(cb: (code: number) => void): void { this.exitCbs.push(cb); }
-  kill(): void { this.killed = true; }
-  getOutput(): string { return this.output; }
-  write(text: string): void { this.written.push(text); }
-
-  emitOutput(text: string): void {
-    this.output += text;
-    for (const cb of this.outputCbs) cb(text);
-  }
-  emitExit(code: number): void {
-    for (const cb of this.exitCbs) cb(code);
-  }
-}
-
-/**
- * A {@link FakeTerminalSession} that is feature-detected as structured
- * (ADR-0018): the turn, queue and native-session calls a test drives, with
- * no protocol behind them. It queues and delivers as `StructuredSession`
- * does — a message to an idle session starts a turn at once, one sent
- * mid-turn goes out as that turn ends, without passing through idle.
- */
-export class FakeStructuredSession extends FakeTerminalSession implements StructuredSessionCapability {
-  readonly transport = 'structured' as const;
   state: 'working' | 'idle' = 'working';
   messages: QueuedTaskMessage[] = [];
   /** Every message a turn was started with, in order. */
@@ -130,12 +104,22 @@ export class FakeStructuredSession extends FakeTerminalSession implements Struct
   private completeCbs: Array<(report: TaskCompleteArgs) => void> = [];
   private checkpointHandler: ((question: string, signal: AbortSignal) => Promise<CheckpointAnswer>) | null = null;
 
-  constructor(id = 's1', taskId = 't1', public sessionId: string | null = 'native-1') {
-    super(id, taskId);
-  }
+  constructor(public id = 's1', public taskId = 't1', public sessionId: string | null = 'native-1') {}
 
-  override write(text: string): void {
-    super.write(text);
+  onOutput(cb: (text: string) => void): void { this.outputCbs.push(cb); }
+  onExit(cb: (code: number) => void): void { this.exitCbs.push(cb); }
+  kill(): void { this.killed = true; }
+  getOutput(): string { return this.output; }
+
+  emitOutput(text: string): void {
+    this.output += text;
+    for (const cb of this.outputCbs) cb(text);
+  }
+  emitExit(code: number): void {
+    for (const cb of this.exitCbs) cb(code);
+  }
+  write(text: string): void {
+    this.written.push(text);
     const message = text.trim();
     if (message) this.sendMessage(message);
   }

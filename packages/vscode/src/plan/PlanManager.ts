@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import {
   Session, LegacyPlanState, Task, flattenTasks, RunnerId, DiscoveredModel, enabledRunners,
   saveState, clearState, ModelResolver, RunnerRegistry, isCliProvider, taskStartedNotice,
-  createEmptyPlan, markRequestFor, pastGateConfirmation, titledRefs, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type ITerminalRunner, type TaskRowAction,
+  createEmptyPlan, markRequestFor, pastGateConfirmation, titledRefs, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner, type TaskRowAction,
 } from '@ordewell/core';
 import type { TaskDraft, TaskEdit } from '../shared/protocol';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
@@ -19,7 +19,7 @@ export interface PlanManagerDeps {
   runnerRegistry: RunnerRegistry;
   config: VsCodeConfig;
   fsAdapter: VsCodeFileSystem;
-  terminalRunner: ITerminalRunner;
+  runner: IRunner;
   notifications: INotification;
   getCurrentPlan: () => LegacyPlanState;
   setCurrentPlan: (plan: LegacyPlanState) => void;
@@ -209,7 +209,7 @@ export async function handleApprovePlan(deps: PlanManagerDeps): Promise<void> {
   if (deps.session.isExecuting) {
     deps.log('Stopping existing orchestrator run before approving new plan');
     deps.session.stopExecution();
-    deps.terminalRunner.stopAll();
+    deps.runner.stopAll();
   }
   const plan = deps.getCurrentPlan();
   plan.status = 'approved';
@@ -348,8 +348,7 @@ export function handleCheckpointAnswer(taskId: string, approved: boolean, reason
 }
 
 /**
- * Talking to a structured task (ADR-0018, M1). A refusal — a terminal task, or
- * one not running — is the Session's answer, shown rather than swallowed.
+ * Talking to a task (ADR-0018, M1). A refusal — one not running — is the Session's answer, shown rather than swallowed.
  */
 export async function handleTaskControl(
   control:
@@ -390,11 +389,11 @@ export function handleStopPlanning(deps: PlanManagerDeps): void {
  * view and the saved state.
  */
 export function handleNewSession(deps: Pick<PlanManagerDeps,
-  'session' | 'chatProvider' | 'terminalRunner' | 'fsAdapter' | 'setCurrentPlan' | 'setCurrentGoal' | 'log'>): void {
+  'session' | 'chatProvider' | 'runner' | 'fsAdapter' | 'setCurrentPlan' | 'setCurrentGoal' | 'log'>): void {
   // Abandons the planner turn in flight: it settles as discarded, which is
   // not reported into the new session.
   deps.session.reset();
-  deps.terminalRunner.stopAll();
+  deps.runner.stopAll();
   deps.setCurrentPlan(createEmptyPlan());
   deps.setCurrentGoal('');
   deps.chatProvider.setState('empty');
@@ -456,7 +455,7 @@ export async function handleSystemCommand(
       break;
     case 'stopExecution':
       deps.session.stopExecution();
-      deps.terminalRunner.stopAll();
+      deps.runner.stopAll();
       deps.chatProvider.setState('planDraft');
       break;
   }

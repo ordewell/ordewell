@@ -41,7 +41,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       fsAdapter: new VsCodeFileSystem(),
       notifications: new VsCodeNotification(),
       // Tasks run on the structured transport (ADR-0018) as plain child processes.
-      terminalRunner: new StructuredRunner(),
+      runner: new StructuredRunner(),
       settingsService,
       plannerModelMemory: new PlannerModelMemory(settingsService),
       modelResolver: new ModelResolver(runnerRegistry, config),

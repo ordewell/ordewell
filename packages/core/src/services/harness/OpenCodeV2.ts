@@ -21,7 +21,7 @@ const PLANNER_RULES: SessionRule[] = [
   { action: 'question', resource: '*', effect: 'deny' },
   { action: 'edit', resource: '*', effect: 'deny' },
 ];
-/** A task asks its user in plain text for now, as it does on every transport. */
+/** A task asks its user in plain text for now, through its runner session. */
 const TASK_RULES: SessionRule[] = [{ action: 'question', resource: '*', effect: 'deny' }];
 
 interface V2Model {

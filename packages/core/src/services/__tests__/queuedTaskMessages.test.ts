@@ -4,24 +4,24 @@ import { TaskOrchestrator } from '../TaskOrchestrator';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import { createTask } from '../../models/Task';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
-import { fakeConfig, FakeStructuredSession, flushMicrotasks } from '../../testing';
+import { fakeConfig, FakeRunnerSession, flushMicrotasks } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 import { claudeTurnEndQueue, fakeSpawn, scriptedAdapter } from './harnessTestKit';
-import { isStructuredSession, type ITerminalRunner, type StructuredEvent } from '../../interfaces/ITerminalRunner';
+import type { IRunner, StructuredEvent } from '../../interfaces/IRunner';
 
 const runners: StructuredRunner[] = [];
 afterEach(() => { for (const runner of runners.splice(0)) runner.stopAll(); });
 
 function scheduled() {
-  const session = new FakeStructuredSession();
+  const session = new FakeRunnerSession();
   const runner = {
     spawn: async () => session,
     stop: () => session.kill(),
     stopAll: () => session.kill(),
     activeCount: 1,
-  } satisfies ITerminalRunner;
+  } satisfies IRunner;
   const orchestrator = TaskOrchestrator.compose({
-    config: fakeConfig(), notifications: fakeNotification(), terminalRunner: runner,
+    config: fakeConfig(), notifications: fakeNotification(), runner,
     output: new BufferedTaskOutputSource(),
     registry: new RunnerRegistry(), workspaceRoot: () => '/repo',
     workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
@@ -137,7 +137,7 @@ describe('messages that cannot be delivered', () => {
     });
     runners.push(runner);
     const session = await runner.spawn({ taskId: 't1', runner: 'claude-code', prompt: 'Do it', cwd: '/repo', registry: new RunnerRegistry() });
-    if (!isStructuredSession(session)) throw new Error('expected structured');
+
     const events: StructuredEvent[] = [];
     session.onEvent((event) => events.push(event));
     await vi.waitFor(() => expect(spawned.processes[0].written).toHaveLength(2));
@@ -173,7 +173,7 @@ describe('a failed structured turn with queued messages', () => {
     } });
     runners.push(runner);
     const session = await runner.spawn({ taskId: 't1', runner: 'claude-code', prompt: 'Do it', cwd: '/repo', registry: new RunnerRegistry() });
-    if (!isStructuredSession(session)) throw new Error('expected structured');
+
     const events: StructuredEvent[] = [];
     session.onEvent((event) => events.push(event));
     await vi.waitFor(() => expect(events).toContainEqual({ type: 'turn_start', text: 'Do it' }));

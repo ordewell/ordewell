@@ -7,7 +7,7 @@ import {
   listSessions, loadSession,
   SettingsService,
   type AiProvider,
-  type ITerminalRunner,
+  type IRunner,
 } from '@ordewell/core';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
 import { replayIsolation } from '../plan/isolation';
@@ -25,7 +25,7 @@ export interface CommandDeps {
   modelResolver: ModelResolver;
   config: VsCodeConfig;
   fsAdapter: VsCodeFileSystem;
-  terminalRunner: ITerminalRunner;
+  runner: IRunner;
   settingsService: SettingsService;
   secretStore: SecretStore;
   getCurrentPlan: () => LegacyPlanState;
@@ -68,7 +68,7 @@ function applyLoadedSession(
   deps: CommandDeps,
 ): boolean {
   deps.session.stopExecution();
-  deps.terminalRunner.stopAll();
+  deps.runner.stopAll();
   try {
     deps.session.loadPlan(loaded.plan, loaded.meta.goal, deps.fsAdapter.getWorkspaceRoot(), { sessionId: loaded.meta.id });
   } catch (err) {
@@ -367,7 +367,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         // Full core reset so the cleared plan can't resurface from the
         // Session's PlanStore or a still-live planner conversation.
         deps.session.reset();
-        deps.terminalRunner.stopAll();
+        deps.runner.stopAll();
         deps.setCurrentPlan(createEmptyPlan());
         deps.chatProvider.setState('empty');
         deps.chatProvider.conversation.reset();

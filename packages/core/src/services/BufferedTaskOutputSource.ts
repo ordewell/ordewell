@@ -1,4 +1,4 @@
-import { isStructuredSession, type ITerminalSession } from '../interfaces/ITerminalRunner';
+import type { IRunnerSession } from '../interfaces/IRunner';
 import type { LiveTail, LiveTailOptions, TaskOutputSource } from '../interfaces/TaskOutputSource';
 import { outputLines } from '../conversation/format';
 
@@ -7,7 +7,7 @@ const DEFAULT_MAX_BUFFER_CHARS = 256 * 1024;
 const CUT_SEARCH_CHARS = 4096;
 
 interface Capture {
-  readonly session: ITerminalSession;
+  readonly session: IRunnerSession;
   raw: string;
   /** Characters discarded from the front of `raw` to keep it bounded. */
   dropped: number;
@@ -31,7 +31,7 @@ export class BufferedTaskOutputSource implements TaskOutputSource {
     this.maxBufferChars = opts.maxBufferChars ?? DEFAULT_MAX_BUFFER_CHARS;
   }
 
-  attach(taskId: string, session: ITerminalSession): void {
+  attach(taskId: string, session: IRunnerSession): void {
     const capture: Capture = { session, raw: '', dropped: 0, attached: true, exited: false };
     this.captures.set(taskId, capture);
     session.onOutput((text) => {
@@ -40,18 +40,16 @@ export class BufferedTaskOutputSource implements TaskOutputSource {
     session.onExit(() => {
       capture.exited = true;
     });
-    if (isStructuredSession(session)) {
-      session.onEvent((event) => {
-        // A message read mid-turn starts the account of the work afresh, as a new turn does (ADR-0023).
-        if (capture.attached && (event.type === 'turn_start' || event.type === 'message_delivered')) {
-          capture.reported = undefined;
-          capture.turnStart = capture.dropped + capture.raw.length;
-        }
-      });
-      session.onTaskComplete(({ summary }) => {
-        if (capture.attached) capture.reported = summary.trim() || undefined;
-      });
-    }
+    session.onEvent((event) => {
+      // A message read mid-turn starts the account of the work afresh, as a new turn does (ADR-0023).
+      if (capture.attached && (event.type === 'turn_start' || event.type === 'message_delivered')) {
+        capture.reported = undefined;
+        capture.turnStart = capture.dropped + capture.raw.length;
+      }
+    });
+    session.onTaskComplete(({ summary }) => {
+      if (capture.attached) capture.reported = summary.trim() || undefined;
+    });
   }
 
   detach(taskId: string): void {

@@ -1,30 +1,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { VerdictEngine } from '../VerdictEngine';
 import { createTask, type Task, type Verdict } from '../../models/Task';
-import { FakeStructuredSession, flushMicrotasks } from '../../testing';
+import { FakeRunnerSession, flushMicrotasks } from '../../testing';
 
 const buildTask = (extra: Partial<Task> = {}): Task =>
   createTask({ id: 't1', title: 'do thing', taskMode: 'build', ...extra });
 
-/** A controllable fake session: captures the onOutput/onExit callbacks so a test
- *  can drive them, and records kill calls. Mirrors ITerminalSession's shape. */
 function fakeSession(initialOutput = '') {
-  let output = initialOutput;
-  let onOutputCb: ((text: string) => void) | undefined;
-  let onExitCb: ((code: number) => void) | undefined;
-  return {
-    id: 's1',
-    taskId: 't1',
-    onOutput: vi.fn((cb: (text: string) => void) => { onOutputCb = cb; }),
-    onExit: vi.fn((cb: (code: number) => void) => { onExitCb = cb; }),
-    kill: vi.fn(),
-    getOutput: vi.fn(() => output),
-    write: vi.fn(),
-    emit(text: string) { output += text; onOutputCb?.(text); },
-    exit(code: number) { onExitCb?.(code); },
-    get onOutputCb() { return onOutputCb; },
-    get onExitCb() { return onExitCb; },
-  };
+  const session = new FakeRunnerSession();
+  session.output = initialOutput;
+  return Object.assign(session, {
+    onOutput: vi.fn(session.onOutput.bind(session)),
+    onExit: vi.fn(session.onExit.bind(session)),
+    kill: vi.fn(session.kill.bind(session)),
+    emit: session.emitOutput.bind(session),
+    exit: session.emitExit.bind(session),
+  });
 }
 
 describe('VerdictEngine', () => {
@@ -83,7 +74,7 @@ describe('VerdictEngine', () => {
       const engine = new VerdictEngine();
       const raised: Array<{ taskId: string; summary: string }> = [];
       engine.onCheckpoint((taskId, summary) => raised.push({ taskId, summary }));
-      const session = new FakeStructuredSession();
+      const session = new FakeRunnerSession();
       const attempt = engine.watch(buildTask(), session);
       return { engine, raised, session, attempt };
     }
@@ -138,7 +129,7 @@ describe('VerdictEngine', () => {
 
     it('refuses a call from an attempt that is no longer the task\'s current one', async () => {
       const { engine, raised, session } = watched();
-      engine.watch(buildTask(), new FakeStructuredSession('s2'));
+      engine.watch(buildTask(), new FakeRunnerSession('s2'));
 
       await expect(session.callCheckpoint('late')).resolves.toMatchObject({ kind: 'withdrawn' });
       expect(raised).toEqual([]);
@@ -198,7 +189,7 @@ describe('VerdictEngine', () => {
       const engine = new VerdictEngine();
       const verdicts: Array<{ taskId: string; verdict: Verdict }> = [];
       engine.onVerdict((taskId, verdict) => verdicts.push({ taskId, verdict }));
-      const session = new FakeStructuredSession();
+      const session = new FakeRunnerSession();
       const attempt = engine.watch(buildTask(), session);
       return { engine, verdicts, session, attempt };
     }
@@ -231,7 +222,7 @@ describe('VerdictEngine', () => {
 
     it('ignores a call for an attempt that is no longer the task\'s current one', () => {
       const { engine, verdicts, attempt } = watched();
-      const next = engine.watch(buildTask(), new FakeStructuredSession('s2'));
+      const next = engine.watch(buildTask(), new FakeRunnerSession('s2'));
 
       engine.signalComplete('t1', attempt, { status: 'done', summary: 'old' });
       expect(verdicts).toEqual([]);
@@ -292,7 +283,7 @@ describe('VerdictEngine', () => {
       const engine = new VerdictEngine();
       const verdicts: string[] = [];
       engine.onVerdict((_id, v) => verdicts.push(v.outcome));
-      const session = new FakeStructuredSession();
+      const session = new FakeRunnerSession();
 
       engine.watch(buildTask(), session);
       session.reportComplete({ status: 'done', summary: 'did it' });
@@ -310,7 +301,7 @@ describe('VerdictEngine', () => {
       const engine = new VerdictEngine();
       const verdicts: string[] = [];
       engine.onVerdict((_id, v) => verdicts.push(v.outcome));
-      const session = new FakeStructuredSession();
+      const session = new FakeRunnerSession();
 
       const task = buildTask();
       engine.watch(task, session);
@@ -333,7 +324,7 @@ describe('VerdictEngine', () => {
       engine.clear(task);
 
       // Second session — fresh watch
-      const session2 = new FakeStructuredSession('s2');
+      const session2 = new FakeRunnerSession('s2');
       engine.watch(task, session2);
       session2.reportComplete({ status: 'done', summary: 'did it' });
       session2.emitExit(0);
@@ -442,7 +433,7 @@ describe('VerdictEngine', () => {
 
     it('still flags silence during a running structured turn', () => {
       const engine = new VerdictEngine();
-      const session = new FakeStructuredSession();
+      const session = new FakeRunnerSession();
       engine.watch(buildTask(), session);
 
       session.emitOutput('› Bash(npm test)\n');
@@ -453,7 +444,7 @@ describe('VerdictEngine', () => {
 
     it('does not flag a paused task, and resumes watching when its next turn starts', () => {
       const engine = new VerdictEngine();
-      const session = new FakeStructuredSession();
+      const session = new FakeRunnerSession();
       engine.watch(buildTask(), session);
       session.emitOutput('working\n');
       session.emitTurnEnd('completed');
@@ -471,7 +462,7 @@ describe('VerdictEngine', () => {
       const engine = new VerdictEngine();
       const idleEvents: (string | null)[] = [];
       engine.onIdleChange((_id, idleSince) => idleEvents.push(idleSince));
-      const session = new FakeStructuredSession();
+      const session = new FakeRunnerSession();
       engine.watch(buildTask(), session);
       session.emitOutput('working\n');
       vi.advanceTimersByTime(60_000);
@@ -484,7 +475,7 @@ describe('VerdictEngine', () => {
 
     it('keeps a checkpoint quiet until it is answered', () => {
       const engine = new VerdictEngine();
-      const session = new FakeStructuredSession();
+      const session = new FakeRunnerSession();
       engine.watch(buildTask(), session);
       void session.callCheckpoint('ok?');
 
@@ -498,7 +489,7 @@ describe('VerdictEngine', () => {
     });
     it('does not flag a task waiting on a tool approval, and resumes once the last one is answered', () => {
       const engine = new VerdictEngine();
-      const session = new FakeStructuredSession();
+      const session = new FakeRunnerSession();
       engine.watch(buildTask(), session);
       session.emitOutput('working\n');
 
@@ -520,7 +511,7 @@ describe('VerdictEngine', () => {
       const engine = new VerdictEngine();
       const idleEvents: (string | null)[] = [];
       engine.onIdleChange((_id, idleSince) => idleEvents.push(idleSince));
-      const session = new FakeStructuredSession();
+      const session = new FakeRunnerSession();
       engine.watch(buildTask(), session);
       session.emitOutput('working\n');
       vi.advanceTimersByTime(60_000);
@@ -533,7 +524,7 @@ describe('VerdictEngine', () => {
 
     it('keeps watching through a request the task mode already answered', () => {
       const engine = new VerdictEngine();
-      const session = new FakeStructuredSession();
+      const session = new FakeRunnerSession();
       engine.watch(buildTask(), session);
       session.emitOutput('working\n');
 
@@ -545,7 +536,7 @@ describe('VerdictEngine', () => {
 
     it('stays quiet while a checkpoint still waits, though an approval was answered', () => {
       const engine = new VerdictEngine();
-      const session = new FakeStructuredSession();
+      const session = new FakeRunnerSession();
       engine.watch(buildTask(), session);
       session.requestPermission('p1', 'Bash', { command: 'npm test' });
       engine.pauseIdle('t1');
@@ -563,7 +554,7 @@ describe('VerdictEngine', () => {
       const verdicts: string[] = [];
       engine.onVerdict((_id, v) => verdicts.push(v.outcome));
 
-      const sessionA = new FakeStructuredSession('sa', 'a');
+      const sessionA = new FakeRunnerSession('sa', 'a');
       engine.watch(buildTask({ id: 'a' }), sessionA);
       sessionA.reportComplete({ status: 'done', summary: 'did it' });
 
@@ -580,8 +571,8 @@ describe('VerdictEngine', () => {
       const engine = new VerdictEngine();
       const verdicts: string[] = [];
       engine.onVerdict((_id, v) => verdicts.push(v.outcome));
-      const before = new FakeStructuredSession('s1');
-      const after = new FakeStructuredSession('s2');
+      const before = new FakeRunnerSession('s1');
+      const after = new FakeRunnerSession('s2');
 
       engine.watch(buildTask(), before);
       engine.reset();

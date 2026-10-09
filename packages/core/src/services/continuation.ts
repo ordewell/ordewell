@@ -15,8 +15,8 @@ export function continuability(task: Task): Continuability {
     return refuse('its work is waiting on a merge conflict. Resolve or repair the conflict instead.');
   }
   if (task.status !== 'completed' && task.status !== 'failed') return refuse('only a completed or failed task can be.');
-  if (!task.transport?.nativeSessionId) return refuse('its runner left no saved session to resume. Use Retry instead.');
-  return { ok: true, sessionId: task.transport.nativeSessionId };
+  if (!task.runnerSessionId) return refuse('its runner left no saved session to resume. Use Retry instead.');
+  return { ok: true, sessionId: task.runnerSessionId };
 }
 
 export function canContinue(task: Task): boolean {

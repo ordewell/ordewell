@@ -4,7 +4,7 @@ import { join } from 'path';
 import { describe, it, expect, vi } from 'vitest';
 import { StructuredRunner } from '../StructuredRunner';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
-import { isStructuredSession, type ITerminalSession, type StructuredEvent, type StructuredTurnEnd } from '../../interfaces/ITerminalRunner';
+import type { IRunnerSession, StructuredEvent, StructuredTurnEnd } from '../../interfaces/IRunner';
 import { VerdictEngine } from '../VerdictEngine';
 import { composeAugmentedPrompt } from '../promptAugment';
 import { createTask, type Verdict } from '../../models/Task';
@@ -37,8 +37,7 @@ const model = process.env.ORDEWELL_LIVE_MODEL ?? 'haiku';
 const autoModel = process.env.ORDEWELL_LIVE_AUTO_MODEL ?? model;
 const TIMEOUT_MS = 180_000;
 
-function turnEnds(session: ITerminalSession) {
-  if (!isStructuredSession(session)) throw new Error('not a structured session');
+function turnEnds(session: IRunnerSession) {
   const ends: StructuredTurnEnd[] = [];
   const reports: string[] = [];
   session.onTaskComplete(({ status }) => reports.push(status));
@@ -334,7 +333,7 @@ describe.runIf(live)('structured transport — live smoke', () => {
         attempt: 1,
       });
       const events: StructuredEvent[] = [];
-      if (!isStructuredSession(session)) throw new Error('not a structured session');
+
       session.onEvent((event) => events.push(event));
       engine.watch(task, session);
 

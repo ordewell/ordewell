@@ -473,19 +473,13 @@ frames; how a turn is streamed, how a permission request is answered, how a
 child session is tied to the call that spawned it (held until named, then
 replayed tagged with that subagent) and how a turn is settled are one
 implementation, so a behaviour fixed for one version is fixed for both.
-*Avoid:* "transport" alone for this — **Transport** above is terminal vs
-structured, and OpenCode's HTTP protocol is only one way a runner is driven
-structured.
+*Avoid:* "transport" alone for this — **Transport** is the runner session
+contract, and OpenCode's HTTP protocol is one implementation of it.
 
-**Transport** (`terminal | structured`) — how Ordewell drives
-a task's runner (ADR-0018). *Terminal*: a TUI in tmux, or a headless one-shot
-process, read through its screen and written to with keystrokes (ADR-0007).
-*Structured*: the runner's programmatic protocol, with events in and messages
-out. Structured is always chosen; there is no transport setting. Routed per
-task by connector availability: a runner with no task-mode connector runs on
-the terminal transport, and surfaces say so and why. tmux is needed only by the
-terminal transport, to give a task a terminal window; without it those tasks
-run headless and the first one says what is missing.
+**Transport** — how Ordewell drives a task's runner: its programmatic
+protocol, with structured events in and messages out. Every `IRunnerSession`
+has this contract; runners without a task connector cannot run tasks. There
+is no transport setting, discriminator or terminal fallback.
 *Avoid:* "mode" (that is permission mode, ADR-0001), "backend", "provider".
 
 **Waiting for input** — a structured task whose turn ended without the done
@@ -646,24 +640,31 @@ verdict. Only `done` passes; `blocked` and `failed` carry their reason. The
 explicit signal bound to the attempt, not a judgement anyone weighs), and
 "tool verdict" (the tool produces no verdict).
 
-**Spawn toolkit** — the pure OS/shell policy behind the runner adapters
-(`core/src/utils/shell.ts`): ANSI stripping (`stripAnsi`), POSIX/PowerShell
-quoting, the login-shell invocation (`buildShellInvocation`), and the
-`script`-based PTY wrap (`wrapWithPty`). Three adapters consume it —
-`HeadlessRunner` (core; every OS touchpoint injectable via
-`HeadlessRunnerDeps`), `VsCodeTerminalRunner`, `PoolAwareRunner` (web,
-composes HeadlessRunner and must conform to the full `ITerminalRunner`
-interface, including per-session `stop`). Tests hit the pure functions and the
-injected seams, never a real PTY.
-*Avoid:* re-declaring quoting/ANSI helpers inside an adapter — that
-duplication is exactly what this module deleted.
+**Spawn toolkit** — the shared process policy behind the runner adapters:
+`planDirectLaunch` (`utils/launch.ts`), runner environment cleanup
+(`services/harness/runnerEnv.ts`), and process-group launch and disposal
+(`utils/processTree.ts`). `StructuredRunner` drives the connectors through
+these seams; `PoolAwareRunner` (web) wraps it behind the full `IRunner`
+interface, including per-session `stop`. `utils/shell.ts` retains the shared
+ANSI stripping helper (`stripAnsi`). Tests hit the pure functions and injected
+process seams.
+*Avoid:* re-declaring launch, environment or process helpers inside an adapter.
+
+**Runner interface** (`IRunner`, `interfaces/IRunner.ts`) — spawns one
+`IRunnerSession` per task attempt and owns stopping sessions and counting
+active ones. Every session supplies its turn state, structured events, message
+queue, interrupt, approvals, native session id and task tools alongside plain
+output and exit notifications. `AbstractRunner` and `AbstractRunnerSession`
+share lifecycle plumbing; `FakeRunnerSession` is the test seam. Structured
+methods are mandatory, with no optional capability or transport discriminator.
+*Avoid:* "terminal runner", "terminal session" for these interfaces.
 
 **Task attempt** (`TaskAttempt`, inside TaskOrchestrator) — one run of one
 task, from the moment the scheduler claims it to the moment it ends. It holds
 everything that has to die with the run: the attempt number, the phase
 (`starting` while the async spawn is in flight, `running` once the runner is
 up, `integrating` while *Landing* settles its verdict), the live
-`ITerminalSession`, and the runner, working directory and start
+`IRunnerSession`, and the runner, working directory and start
 time the transcript reader needs at verdict time — plus its *attempt kind* and,
 in an isolated run, whether that directory is its worktree and the landing in
 flight. The orchestrator keeps one
@@ -703,9 +704,8 @@ state that ends with the run; put it on the attempt.
 is: `change`, `ops`, `repair` (a *conflict repair*, ADR-0015) or `continuation`
 (a *Continue*, ADR-0018, which carries whether its task is ops). Everything that
 differs between attempts is read from it, never from loose flags: where the
-attempt runs (`attemptCwd`), the transport (`attemptTransport` — a continue is
-always structured), the prompt (`attemptPrompt`), whether the run decides to
-isolate when it starts (`decidesIsolation` — not for work in the checkout),
+attempt runs (`attemptCwd`), the prompt (`attemptPrompt`), whether the run
+decides to isolate when it starts (`decidesIsolation` — not for work in the checkout),
 whether the workspace's tracked files are compared across it (`checksTree` —
 ops work in the checkout, which can be caught writing but not stopped), and
 whether it keeps *Merge all* out (`mergeExcludes`, the one rule both the
@@ -729,7 +729,7 @@ atomic *landing*. An *ops task* runs at the workspace root instead, and a run
 decides whether it isolates when its first change task starts, so a run of only
 ops tasks never asks. The
 Runner is only ever handed a `cwd` (ADR-0007) — git never enters
-`ITerminalRunner`, `RunnerRegistry` or a runner adapter.
+`IRunner`, `RunnerRegistry` or a runner adapter.
 *Avoid:* "sandbox" (an OS-level runner sandbox is a separate concern, ADR-0011),
 "clone" (a worktree shares the repository's object store).
 
@@ -1369,7 +1369,7 @@ generation its `watch` was given, and generations come from one counter that
 VS Code terminal, a tmux exit seen on the next poll) cannot speak for the task's
 next attempt. The old two-branch `verifyTask` function and the marker tracking
 that used to live in `TaskOrchestrator` are its *implementation*, not its
-interface; a fake `ITerminalSession` is the test seam.
+interface; a fake `IRunnerSession` is the test seam.
 *Avoid:* "the verifier", "TaskVerifier" (the old shallow pass-through, now
 deleted) — use VerdictEngine.
 

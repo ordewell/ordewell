@@ -83,7 +83,7 @@ async function asking() {
   });
   runners.push(runner);
   const orchestrator = TaskOrchestrator.compose({
-    config: fakeConfig(), notifications: fakeNotification(), terminalRunner: runner,
+    config: fakeConfig(), notifications: fakeNotification(), runner,
     output: new BufferedTaskOutputSource(),
     registry: new RunnerRegistry(), workspaceRoot: () => '/repo',
     workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),

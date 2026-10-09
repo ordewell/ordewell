@@ -1,5 +1,5 @@
 import { isRunnerApproval, type ApprovalRequest } from '../interfaces/IApproval';
-import { isStructuredSession, type ITerminalRunner, type ITerminalSession, type StructuredEvent, type StructuredSessionCapability } from '../interfaces/ITerminalRunner';
+import type { IRunner, IRunnerSession, StructuredEvent } from '../interfaces/IRunner';
 import { runnerToolSubject } from '../conversation/taskLog';
 import type { PendingApprovals } from './PendingApprovals';
 
@@ -33,13 +33,13 @@ export class RunnerApprovals {
 
   constructor(private readonly approvals: PendingApprovals) {}
 
-  wrap(runner: ITerminalRunner): ITerminalRunner {
+  wrap(runner: IRunner): IRunner {
     return {
       spawn: async (opts) => {
         const session = await runner.spawn(opts);
         // Before returning, as the task log does: the first turn's events are
         // emitted on the next macrotask.
-        if (isStructuredSession(session)) this.watch(opts.taskId, session);
+        this.watch(opts.taskId, session);
         return session;
       },
       stop: (sessionId) => {
@@ -59,7 +59,7 @@ export class RunnerApprovals {
     return this.approvals.outstanding().filter((p) => isRunnerApproval(p.request) && p.request.taskId === taskId).length;
   }
 
-  private watch(taskId: string, session: ITerminalSession & StructuredSessionCapability): void {
+  private watch(taskId: string, session: IRunnerSession): void {
     const open = new Set<string>();
     this.open.set(session.id, open);
     session.onEvent((event) => {

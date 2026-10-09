@@ -1,5 +1,5 @@
 import type { Task, Verdict, VerificationCheck } from '../models/Task';
-import { isStructuredSession, type ITerminalSession, type StructuredSessionCapability } from '../interfaces/ITerminalRunner';
+import type { IRunnerSession } from '../interfaces/IRunner';
 import type { CheckpointAnswer, TaskCompleteArgs } from './mcp/tools';
 
 export type VerdictListener = (taskId: string, verdict: Verdict) => void;
@@ -15,7 +15,7 @@ const IDLE_TIMEOUT_MS = 60_000;
 
 export class VerdictEngine {
   private pendingVerdicts = new Map<string, Verdict>();
-  private structuredSessions = new Map<string, ITerminalSession & StructuredSessionCapability>();
+  private sessions = new Map<string, IRunnerSession>();
   private listeners: VerdictListener[] = [];
   private checkpointListeners: CheckpointListener[] = [];
   private withdrawnListeners: CheckpointWithdrawnListener[] = [];
@@ -137,37 +137,35 @@ export class VerdictEngine {
    *
    * Returns the attempt's generation, what {@link signalComplete} is checked against.
    */
-  watch(task: Task, session: ITerminalSession): number {
+  watch(task: Task, session: IRunnerSession): number {
     const gen = this.bumpGeneration(task.id);
     session.onOutput(() => {
       if (this.generations.get(task.id) === gen) this.touchIdle(task.id, gen);
     });
-    if (isStructuredSession(session)) {
-      this.structuredSessions.set(task.id, session);
-      session.onTurnEnd(() => {
-        if (this.generations.get(task.id) !== gen) return;
-        // The call lives inside the turn that made it. A runner cut short by an
-        // interrupt does not always cancel it, and left open it would refuse the next one.
-        this.callWentAway(task.id, 'the turn it was asked in has ended.');
-        // A queued follow-up supersedes this turn's evidence without ending the attempt.
-        const pending = this.pendingVerdicts.get(task.id);
-        this.pendingVerdicts.delete(task.id);
-        if (session.turnState() === 'idle' && pending) this.publishVerdict(task.id, pending);
-      });
-      session.onEvent((event) => {
-        if (this.generations.get(task.id) !== gen) return;
-        if (event.type === 'turn_start') {
-          this.supersede(task.id);
-          this.resumeIdle(task.id);
-        }
-        // Read mid-turn, a message voids what the runner reported before it just as a new turn does (ADR-0023).
-        else if (event.type === 'message_delivered') this.supersede(task.id);
-        else if (event.type === 'permission_request' && !event.decided) this.approvalOpened(task.id, event.id);
-        else if (event.type === 'permission_decided' || event.type === 'permission_withdrawn') this.approvalClosed(task.id, event.id, gen);
-      });
-      session.onTaskComplete((report) => this.signalComplete(task.id, gen, report));
-      session.onToolCheckpoint((question, signal) => this.raiseCheckpoint(task.id, gen, question, signal));
-    }
+    this.sessions.set(task.id, session);
+    session.onTurnEnd(() => {
+      if (this.generations.get(task.id) !== gen) return;
+      // The call lives inside the turn that made it. A runner cut short by an
+      // interrupt does not always cancel it, and left open it would refuse the next one.
+      this.callWentAway(task.id, 'the turn it was asked in has ended.');
+      // A queued follow-up supersedes this turn's evidence without ending the attempt.
+      const pending = this.pendingVerdicts.get(task.id);
+      this.pendingVerdicts.delete(task.id);
+      if (session.turnState() === 'idle' && pending) this.publishVerdict(task.id, pending);
+    });
+    session.onEvent((event) => {
+      if (this.generations.get(task.id) !== gen) return;
+      if (event.type === 'turn_start') {
+        this.supersede(task.id);
+        this.resumeIdle(task.id);
+      }
+      // Read mid-turn, a message voids what the runner reported before it just as a new turn does (ADR-0023).
+      else if (event.type === 'message_delivered') this.supersede(task.id);
+      else if (event.type === 'permission_request' && !event.decided) this.approvalOpened(task.id, event.id);
+      else if (event.type === 'permission_decided' || event.type === 'permission_withdrawn') this.approvalClosed(task.id, event.id, gen);
+    });
+    session.onTaskComplete((report) => this.signalComplete(task.id, gen, report));
+    session.onToolCheckpoint((question, signal) => this.raiseCheckpoint(task.id, gen, question, signal));
     session.onExit((exitCode: number) => {
       if (this.generations.get(task.id) !== gen) return;
       this.forget(task.id);
@@ -194,7 +192,7 @@ export class VerdictEngine {
 
   private acceptVerdict(taskId: string, verdict: Verdict): void {
     if (this.pendingVerdicts.has(taskId)) return;
-    if (this.structuredSessions.get(taskId)?.queued().length) {
+    if (this.sessions.get(taskId)?.queued().length) {
       this.pendingVerdicts.set(taskId, verdict);
       return;
     }
@@ -276,7 +274,7 @@ export class VerdictEngine {
 
   private forget(taskId: string): void {
     this.pendingVerdicts.delete(taskId);
-    this.structuredSessions.delete(taskId);
+    this.sessions.delete(taskId);
     this.withdrawToolCheckpoint(taskId);
     this.checkpointQuestions.delete(taskId);
     this.idlePaused.delete(taskId);
@@ -316,7 +314,7 @@ export class VerdictEngine {
   /** Drop all tracking state (used on stop / loadPlan). */
   reset(): void {
     this.pendingVerdicts.clear();
-    this.structuredSessions.clear();
+    this.sessions.clear();
     for (const taskId of [...this.toolCheckpoints.keys()]) this.withdrawToolCheckpoint(taskId);
     this.checkpointQuestions.clear();
     for (const timer of this.idleTimers.values()) clearTimeout(timer);

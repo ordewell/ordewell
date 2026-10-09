@@ -1,10 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { PoolAwareRunner } from '../PoolAwareRunner';
-import type { ITerminalRunner } from '@ordewell/core';
-import { FakeTerminalSession } from '@ordewell/core/testing';
+import type { IRunner } from '@ordewell/core';
+import { FakeRunnerSession } from '@ordewell/core/testing';
 
-function fakeInnerRunner(): ITerminalRunner & { _session: FakeTerminalSession } {
-  const session = new FakeTerminalSession();
+function fakeInnerRunner(): IRunner & { _session: FakeRunnerSession } {
+  const session = new FakeRunnerSession();
   return {
     activeCount: 0,
     spawn: vi.fn().mockResolvedValue(session),
@@ -114,7 +114,7 @@ describe('PoolAwareRunner', () => {
       cwd: '/tmp',
     });
 
-    const emitSession = session as FakeTerminalSession;
+    const emitSession = session as FakeRunnerSession;
     emitSession.emitOutput('hello world');
     emitSession.emitOutput('more output');
 

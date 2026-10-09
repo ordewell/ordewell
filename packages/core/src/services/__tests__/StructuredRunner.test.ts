@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { StructuredRunner } from '../StructuredRunner';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
-import { isStructuredSession, type ITerminalSession, type StructuredEvent, type StructuredTurnEnd } from '../../interfaces/ITerminalRunner';
+import type { IRunnerSession, StructuredEvent, StructuredTurnEnd } from '../../interfaces/IRunner';
 import type { AgentEvent, SpawnFn, AgentStartOptions, TaskModeAgentAdapter, TaskStartOptions } from '../harness/AgentAdapter';
 import type { OrdewellMcpServer } from '../mcp/OrdewellMcpServer';
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
@@ -48,8 +48,7 @@ function options(overrides: Partial<RunnerSpawnOptions> = {}): RunnerSpawnOption
 }
 
 /** Everything a session reports, in order, plus a way to wait for the next turn end. */
-function observe(session: ITerminalSession) {
-  if (!isStructuredSession(session)) throw new Error('not a structured session');
+function observe(session: IRunnerSession) {
   const chunks: string[] = [];
   const events: StructuredEvent[] = [];
   const turnEnds: StructuredTurnEnd[] = [];
