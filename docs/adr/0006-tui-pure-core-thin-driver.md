@@ -2,13 +2,13 @@
 
 **Status:** accepted
 
-Ordewell had the VS Code extension and a per-command CLI, but no interactive terminal client. `ordewell plan` is one-shot and line-oriented: it cannot show a live plan pane, cannot toggle a skill mid-session, and every model/key/allowlist change is a separate process invocation. Issue #24 asked for a TUI with the extension's capabilities.
+Ordewell had the VS Code extension and a per-command CLI, but no interactive terminal client. `ordewell plan` is one-shot and line-oriented: it cannot show a live plan pane, cannot load a skill into the conversation or set a task's skills, and every model/key/allowlist change is a separate process invocation. Issue #24 asked for a TUI with the extension's capabilities.
 
 We decided to build `ordewell tui` as a **pure state core** (`state`, `reducer`, `render`, `slash`, `editor`, `keys`, `ansi`) with a **thin, untested driver** (`terminal.ts`, `index.ts`) at the edge, talking to the daemon (`packages/web`, an HTTP + WebSocket server with no frontend, whose clients are the CLI and the TUI). The reducer returns `{ state, effects }`; a separate executor (`effects.ts`) turns those effects into `ApiClient` calls and feeds results back as actions.
 
 ## Key properties
 
-- **Effects as data, not calls (E1).** `reduce(state, action)` never performs I/O; it returns an `Effect[]` the runtime executes. Every command — skill toggles, model selection, provider keys, allowlists, runner toggles, task control — is asserted against the effect list with no network, no daemon, and no terminal. This is what makes the parity surface testable at all.
+- **Effects as data, not calls (E1).** `reduce(state, action)` never performs I/O; it returns an `Effect[]` the runtime executes. Every command — loading a skill, setting a task's skills, model selection, provider keys, allowlists, runner toggles, task control — is asserted against the effect list with no network, no daemon, and no terminal. This is what makes the parity surface testable at all.
 - **`render(state)` returns exactly `rows` lines (R1).** Layout is a pure function of state, so geometry, clipping, wrapping, scrolling and overlay content are unit-asserted. Width is measured with an ANSI- and wide-glyph-aware `width()`, not `String.length` — CJK and emoji otherwise shift every column to their right.
 - **No new dependencies (D1).** The hand-rolled renderer is small and buys exact-frame tests.
 - **The daemon is the TUI's single seam (S1).** The TUI holds no orchestration logic; it consumes `SessionMessage` over the daemon's websocket. The VS Code extension does not use the daemon: it constructs core's `Session` in-process and relays its messages over VS Code's webview messaging. What keeps the two in step is that both hosts run the same core `Session` — the daemon one per session in `OrchestratorPool`, the extension one for the window — and that a session planned in the terminal opens unchanged in VS Code through the saved-session store in `.ordewell/sessions/`, which both read and write through core. The one deviation is `skip`, which the daemon has no endpoint for — the extension implements it as "mark complete and tick", and the TUI matches that rather than inventing different semantics.
@@ -42,3 +42,4 @@ We decided to build `ordewell tui` as a **pure state core** (`state`, `reducer`,
 - 2026-07-31 — accepted.
 - 2026-09-24 — the record corrected: the VS Code extension never used the daemon, and there is no web UI; the decision stands on the shared core `Session` and session store.
 - 2026-09-27 — the chat pane draws ADR-0017's blocks; ctrl+o, double-Esc and Esc-unsend.
+- 2026-10-09 — skill toggles replaced by skills (ADR-0024); the Context and E1 wording follows.

@@ -26,10 +26,8 @@ protocol instead of a screen and a keyboard.
 
 - **Structured always; no transport setting (S1).** A task whose runner has a
   structured connector always runs structured. There is no setting, command or
-  toggle to choose the transport. A saved plan that still carries a pinned
-  `terminal` runs structured too, and the old field is dropped when the plan is
-  loaded. The plan, not a live setting, says what runs (ADR-0001), and the
-  route is decided per task (S3).
+  toggle to choose the transport. The plan, not a live setting, says what runs
+  (ADR-0001), and the route is decided per task (S3).
 - **Drop-in shape (S2).** A structured session *is* an
   `ITerminalRunner`/`ITerminalSession`, the way `TmuxRunner` was added
   (ADR-0007 T1), so `VerdictEngine`, `TaskOutputSource`, `PoolAwareRunner` and
@@ -180,8 +178,9 @@ protocol instead of a screen and a keyboard.
 - **Keep the TUI and add side channels** — runner hooks such as Claude Code's
   `Stop`/`PreToolUse`, OpenCode's local server, Codex `notify`. The plumbing
   differs per runner and is weakest for Codex, and sending a message would
-  still mean typing keystrokes. The TUI is not lost either: `terminal` stays
-  available, and take-over (#58) brings it back for structured tasks.
+  still mean typing keystrokes. The TUI is not lost either: take-over (#58)
+  brings it back for structured tasks, and the terminal transport remains the
+  fallback for a runner with no connector.
 - **ACP for every agent.** ADR-0009 rejected it as the only transport; still
   worth checking for the long tail.
 - **Replace `ITerminalSession` with a turn-based interface everywhere.** Too
@@ -194,8 +193,8 @@ protocol instead of a screen and a keyboard.
 - **`awaiting_user` for approvals too.** Status churn and a plan save on every
   request, for something that does not end the turn.
 - **Per-task transport** (a setting on each task). The plan would carry a
-  choice the user makes once per run anyway; per-task *routing* by connector
-  availability (S3) covers the real need.
+  transport field on every task for the user to maintain; per-task *routing* by
+  connector availability (S3) covers the real need.
 - **Structured as an opt-in, terminal the default.** It shipped that way, marked
   experimental, until structured matched terminal on a parity checklist (done
   detection, approvals, log view, a connector for every built-in runner). Once
@@ -223,4 +222,4 @@ protocol instead of a screen and a keyboard.
 - 2026-10-02 — the OpenCode connector (#55); structured the default, terminal the fallback, tmux optional (#61).
 - 2026-10-04 — the OpenCode connector speaks the 2.x API as well as 1.x.
 - 2026-10-06 — M1 per ADR-0023: messages reach a running turn between tool calls, the turn-end queue as the fallback, force send.
-- 2026-10-09 — the `runnerTransport` setting and its surfaces removed.
+- 2026-10-09 — the `runnerTransport` setting and its surfaces removed; a saved plan pinned to `terminal` loads as structured and the field is dropped.
