@@ -1,0 +1,71 @@
+{
+  "meta": {
+    "id": "session-0f1e2d3c4b5a6978",
+    "goal": "Add a JSON parser",
+    "runners": ["claude-code", "my-plugin"],
+    "taskCount": 3,
+    "status": "running",
+    "createdAt": "2026-10-05T09:00:00.000Z",
+    "updatedAt": "2026-10-05T09:30:00.000Z"
+  },
+  "plan": {
+    "tasks": [
+      {
+        "id": "t1",
+        "order": 1,
+        "title": "Parse objects",
+        "prompt": "parse objects",
+        "type": "ai",
+        "status": "completed",
+        "dependencies": [],
+        "assignedRunner": "claude-code",
+        "completionMarker": "mk-1",
+        "transport": { "kind": "structured", "nativeSessionId": "sess-1" },
+        "subtasks": []
+      },
+      {
+        "id": "t2",
+        "order": 2,
+        "title": "Parse arrays",
+        "prompt": "parse arrays",
+        "type": "ai",
+        "status": "completed",
+        "dependencies": ["t1"],
+        "assignedRunner": "my-plugin",
+        "completionMarker": "mk-2",
+        "transport": { "kind": "terminal", "fallback": "no structured connector for my-plugin yet" },
+        "subtasks": [
+          {
+            "id": "t2a",
+            "order": 1,
+            "title": "Nested arrays",
+            "prompt": "nested arrays",
+            "type": "ai",
+            "status": "failed",
+            "dependencies": [],
+            "assignedRunner": "my-plugin",
+            "completionMarker": "mk-2a",
+            "transport": { "kind": "terminal", "fallback": "this surface cannot run structured tasks" },
+            "subtasks": []
+          }
+        ]
+      },
+      {
+        "id": "t3",
+        "order": 3,
+        "title": "Document it",
+        "prompt": "document it",
+        "type": "ai",
+        "status": "pending",
+        "dependencies": ["t2"],
+        "assignedRunner": "claude-code",
+        "completionMarker": "mk-3",
+        "subtasks": []
+      }
+    ],
+    "generatedAt": "2026-10-05T09:00:00.000Z",
+    "status": "running",
+    "runners": ["claude-code", "my-plugin"],
+    "lastUpdated": "2026-10-05T09:30:00.000Z"
+  }
+}

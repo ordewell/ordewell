@@ -24,7 +24,7 @@ export interface RunnerConnector {
 /**
  * The runners Ordewell drives over their own protocols, by runner id. Being
  * here is what gives a runner a task-mode connector and a harness planner; a
- * runner that is not here runs its tasks on the terminal transport.
+ * runner that is not here cannot run tasks at all.
  */
 export const CONNECTORS: Readonly<Record<string, RunnerConnector>> = {
   'claude-code': { create: (deps) => new ClaudeCodeAdapter(deps), ordewellTools: CLAUDE_ORDEWELL },
@@ -42,7 +42,7 @@ export function createPlannerAdapter(runner: string, deps: AgentProcessDeps): Ag
   return connectorFor(runner)?.create(deps) ?? null;
 }
 
-/** Whether a runner's tasks can run on the structured transport (ADR-0018, S3). */
+/** Whether Ordewell can run a runner's tasks (ADR-0018, S3). */
 export function supportsTaskMode(runner: string): boolean {
   return connectorFor(runner) !== undefined;
 }

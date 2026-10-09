@@ -6,16 +6,18 @@ import { serializeTaskStatus, type SessionMessage } from '../SessionMessage';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { fakeConfig, FakeStructuredSession, FakeTerminalSession, flushMicrotasks } from '../../testing';
 import { fakeNotification, makeSession, saves, taskOf } from './sessionTestKit';
-import type { ITerminalRunner, ITerminalSession, RunnerTransport } from '../../interfaces/ITerminalRunner';
+import type { ITerminalRunner, ITerminalSession } from '../../interfaces/ITerminalRunner';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 
-/** Structured sessions for a structured plan, terminal ones otherwise — the fakes, driven by hand. */
-function setup(transport: RunnerTransport = 'structured') {
+/** Structured sessions, or plain ones that only report through the marker — the fakes, driven by hand. */
+type SessionKind = 'structured' | 'plain';
+
+function setup(kind: SessionKind = 'structured') {
   const sessions: FakeTerminalSession[] = [];
   const runner = {
     spawn: vi.fn(async (opts: RunnerSpawnOptions): Promise<ITerminalSession> => {
       const id = `s${sessions.length + 1}`;
-      const session = opts.transport === 'structured' ? new FakeStructuredSession(id, opts.taskId) : new FakeTerminalSession(id, opts.taskId);
+      const session = kind === 'structured' ? new FakeStructuredSession(id, opts.taskId) : new FakeTerminalSession(id, opts.taskId);
       sessions.push(session);
       return session;
     }),
@@ -31,7 +33,6 @@ function setup(transport: RunnerTransport = 'structured') {
     registry: new RunnerRegistry(),
     workspaceRoot: () => '/repo',
     workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
-    transport,
   });
   /** Every status the task passed through, as each `onTaskChanged` saw it. */
   const seen: string[] = [];
@@ -46,8 +47,8 @@ function setup(transport: RunnerTransport = 'structured') {
   return { orchestrator, sessions, seen, settled };
 }
 
-async function started(transport: RunnerTransport = 'structured', extra: Partial<Task> = {}) {
-  const env = setup(transport);
+async function started(kind: SessionKind = 'structured', extra: Partial<Task> = {}) {
+  const env = setup(kind);
   env.orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', completionMarker: 'mk-1', ...extra })]);
   await env.orchestrator.forceStartTask('t1');
   const session = env.sessions[0];
@@ -189,18 +190,18 @@ describe('interrupting a structured task', () => {
   });
 });
 
-describe('talking to a task the structured transport does not drive', () => {
-  it('refuses all three calls for a terminal task, saying why', async () => {
-    const { orchestrator, session } = await started('terminal');
+describe('talking to a task whose session is not structured', () => {
+  it('refuses all three calls, saying there is no turn', async () => {
+    const { orchestrator, session } = await started('plain');
 
     for (const call of [
       () => orchestrator.sendTaskMessage('t1', 'hello'),
       () => orchestrator.removeQueuedTaskMessage('t1', 'msg-1'),
     ]) {
       expect(call).toThrow(TaskControlError);
-      expect(call).toThrow(/terminal/);
+      expect(call).toThrow(/no turn/);
     }
-    await expect(orchestrator.interruptTask('t1')).rejects.toThrow(/terminal/);
+    await expect(orchestrator.interruptTask('t1')).rejects.toThrow(/no turn/);
     expect(session.written).toEqual([]);
     expect(orchestrator.getQueuedTaskMessages('t1')).toEqual([]);
   });
@@ -264,9 +265,9 @@ describe('the saved reason, cleared on every way out of waiting', () => {
   });
 });
 
-describe('a terminal task keeps its checkpoint reason', () => {
-  it('marks a terminal checkpoint as one, and approve clears it', async () => {
-    const { orchestrator, session } = await started('terminal');
+describe('a marker checkpoint keeps its reason', () => {
+  it('marks a marker checkpoint as one, and approve clears it', async () => {
+    const { orchestrator, session } = await started('plain');
 
     session.emitOutput('<<<ORDEWELL_CHECKPOINT: ok?>>>');
     expect(task(orchestrator)).toMatchObject({ status: 'awaiting_user', awaitingReason: 'checkpoint' });
@@ -277,7 +278,7 @@ describe('a terminal task keeps its checkpoint reason', () => {
   });
 
   it('does not answer a checkpoint no runner is left to hear', async () => {
-    const { orchestrator } = setup('terminal');
+    const { orchestrator } = setup('plain');
     orchestrator.loadPlan([{ ...createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', status: 'awaiting_user' }), awaitingReason: 'checkpoint' }]);
 
     orchestrator.approveCheckpoint('t1');

@@ -24,8 +24,8 @@ describe('what an awaiting task waits on, on its row', () => {
     expect(plain(planState({ tasks: [task({ awaitingReason })] }))).toContain(`${label} · claude-code`);
   });
 
-  it('shows the reason on a terminal task too', () => {
-    const out = plain(planState({ tasks: [task({ awaitingReason: 'checkpoint', transport: { kind: 'terminal', fallback: 'no structured connector for Codex yet' } })] }));
+  it('shows the reason on a structured task too', () => {
+    const out = plain(planState({ tasks: [task({ awaitingReason: 'checkpoint', transport: { kind: 'structured' } })] }));
     expect(out).toContain('checkpoint · claude-code');
   });
 

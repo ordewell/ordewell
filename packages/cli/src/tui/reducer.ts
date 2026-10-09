@@ -371,7 +371,7 @@ function reduceAction(state: TuiState, action: Action): Step {
 
 /** The run indicator after a task-status change: a run is active only while a task is. */
 function sameTransport(a: TaskTransportView | undefined, b: TaskTransportView | undefined): boolean {
-  return a?.kind === b?.kind && a?.fallback === b?.fallback;
+  return a?.kind === b?.kind;
 }
 
 function sameList(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {

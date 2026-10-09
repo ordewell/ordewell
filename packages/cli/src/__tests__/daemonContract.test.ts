@@ -84,7 +84,7 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
     vi.spyOn(OpenAiService.prototype, 'startConversation').mockResolvedValue(TEXT);
     vi.spyOn(GeminiService.prototype, 'startConversation').mockResolvedValue(TEXT);
 
-    pool = new OrchestratorPool({ modelResolver: inertResolver(), runner: holdingRunner(), structuredRunner: holdingRunner() });
+    pool = new OrchestratorPool({ modelResolver: inertResolver(), runner: holdingRunner() });
     server = http.createServer();
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const port = (server.address() as AddressInfo).port;

@@ -1,6 +1,5 @@
 import { readFileSync } from 'fs';
-import type { AgentProcessDeps } from '../harness/AgentAdapter';
-import type { SpawnFn } from '../HeadlessRunner';
+import type { AgentProcessDeps, SpawnFn } from '../harness/AgentAdapter';
 import { fakeSpawn, fixture, respondingSpawn, sseResponse, type FakeEventStream, type FakeSpawnResult } from './harnessTestKit';
 
 /**

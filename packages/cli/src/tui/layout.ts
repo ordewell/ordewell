@@ -647,8 +647,6 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   const meta = [activity, runner, structured ? 'structured' : '', model].filter(Boolean).join(' · ');
   if (meta) lines.push(style.grey(truncate(`${bodyPad}${meta}`, cols)));
   if (skills) lines.push(style.grey(truncate(`${bodyPad}skills: ${skills}`, cols)));
-  // Asked for structured and did not get it: said on the row, never silently.
-  if (task.transport?.fallback) lines.push(style.yellow(truncate(`${bodyPad}terminal: ${task.transport.fallback}`, cols)));
   if (effort || mode) lines.push(style.grey(truncate(`${bodyPad}${[effort, mode].filter(Boolean).join(' · ')}`, cols)));
   // The one isolation state that needs the user; every other stays out of the
   // row and shows only in the expanded detail below.

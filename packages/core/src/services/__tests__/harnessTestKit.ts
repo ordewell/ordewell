@@ -2,15 +2,14 @@ import { EventEmitter } from 'events';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import type { ChildProcess } from 'child_process';
-import type { SpawnFn } from '../HeadlessRunner';
-import type { AgentAdapterFactory, AgentEvent, AgentProcessDeps, TaskModeAgentAdapter } from '../harness/AgentAdapter';
+import type { AgentAdapterFactory, AgentEvent, AgentProcessDeps, SpawnFn, TaskModeAgentAdapter } from '../harness/AgentAdapter';
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
 import { createTaskAdapter } from '../harness/connectors';
 import type { RunnerPluginManifest } from '../../plugins/types';
 
 /**
  * The one test seam for harness planners (ADR-0009): a fake process boundary,
- * injected the way `HeadlessRunnerDeps` injects its `spawnImpl`.
+ * injected as {@link AgentProcessDeps}' `spawn`.
  *
  * Driving the service through this exercises adapter parsing, event mapping,
  * reply classification and the repair loop as a single observable behavior —

@@ -1,13 +1,12 @@
 import * as fsSync from 'fs';
 import * as path from 'path';
-import { buildShellInvocation } from './shell';
 import { augmentedPath } from './shellPath';
 
 /**
  * How a runner or planner CLI is started on this operating system.
  *
- * Every surface that starts an external agent — the VS Code terminal, the
- * headless runner, each harness-planner adapter, Codex model discovery — asks
+ * Every surface that starts an external agent — each harness adapter, as a
+ * planner or a task's runner, and Codex model discovery — asks
  * this module rather than deciding for itself. Before it existed, four call
  * sites each did `spawn('claude', args)`, which is correct on POSIX (execvp
  * searches PATH) and broken on Windows, where CreateProcess performs no PATHEXT
@@ -38,8 +37,7 @@ import { augmentedPath } from './shellPath';
  * there — embedded newlines, backticks, `%VAR%` — is verified on a Windows host.
  *
  * POSIX behavior is deliberately identity. `planDirectLaunch` hands back the
- * command and args untouched, and `planShellLaunch` produces exactly the
- * `bash -lc` invocation it always did, so nothing about macOS or Linux changes.
+ * command and args untouched, so nothing about macOS or Linux changes.
  * All of the machinery below is reached only when `platform === 'win32'`.
  */
 
@@ -86,14 +84,13 @@ export const CMD_EXE_MAX_COMMAND_LINE = 8191;
 export const WINDOWS_MAX_COMMAND_LINE = 32767;
 
 export interface LaunchPlan {
-  /** The executable handed to `spawn()` or `vscode.window.createTerminal`. */
+  /** The executable handed to `spawn()`. */
   file: string;
   /** Arguments for `file`. Pass verbatim when {@link verbatim} is set. */
   args: string[];
   /**
    * Windows batch route only: `args` is already a quoted command line and must
-   * not be re-quoted. Maps to `windowsVerbatimArguments` for `spawn`, and to
-   * the string form of `shellArgs` for a VS Code terminal.
+   * not be re-quoted. Maps to `windowsVerbatimArguments` for `spawn`.
    */
   verbatim?: boolean;
 }
@@ -451,26 +448,4 @@ export async function planDirectLaunch(
   // Only the batch route declines for a line break, so exhausting the loop means
   // every candidate was that route.
   throw new EmbeddedNewlineError(command);
-}
-
-/**
- * How to start `command` for a surface that hands an executable and arguments
- * to a terminal — the VS Code runner today, a Windows TUI later.
- *
- * On POSIX this is the login shell, unchanged: `bash -lc` runs the user's
- * profile, which is how nvm/volta/asdf-managed runner binaries resolve at all.
- * Windows has no login-shell equivalent (its PATH comes from the registry and
- * is already inherited), so it takes the direct route instead. That is not just
- * a simplification: it means the runner's own exit code is the terminal's exit
- * code, rather than a `$LASTEXITCODE` that PowerShell propagates unreliably —
- * and the exit code is half of what {@link VerdictEngine} judges a task on.
- */
-export async function planShellLaunch(
-  command: string,
-  args: string[],
-  deps: LaunchDeps = {},
-): Promise<LaunchPlan> {
-  if ((deps.platform ?? process.platform) === 'win32') return planDirectLaunch(command, args, deps);
-  const { shellPath, shellArgs } = buildShellInvocation(command, args);
-  return { file: shellPath, args: shellArgs };
 }

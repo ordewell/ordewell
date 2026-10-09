@@ -149,41 +149,7 @@ export function createFakeWebviewPanel(viewType: string, title: string): FakeWeb
   return panel;
 }
 
-
-export interface FakePseudoterminal {
-  onDidWrite: (listener: (data: string) => void) => { dispose(): void };
-  onDidClose?: (listener: (code: number) => void) => { dispose(): void };
-  open(dimensions?: { columns: number; rows: number }): void | Promise<void>;
-  close(): void;
-  handleInput?(data: string): void;
-  setDimensions?(dimensions: { columns: number; rows: number }): void;
-}
-
-export interface FakeTerminal {
-  name: string;
-  pty: FakePseudoterminal;
-  show: ReturnType<typeof vi.fn>;
-  dispose: ReturnType<typeof vi.fn>;
-}
-
-/** Terminals created via `window.createTerminal`, in creation order. */
-export const __terminals: FakeTerminal[] = [];
-
-export function __resetTerminals(): void {
-  __terminals.length = 0;
-}
-
 export const window = {
-  createTerminal: vi.fn((options: { name: string; pty: FakePseudoterminal }) => {
-    const terminal: FakeTerminal = {
-      name: options.name,
-      pty: options.pty,
-      show: vi.fn(),
-      dispose: vi.fn(() => options.pty.close()),
-    };
-    __terminals.push(terminal);
-    return terminal;
-  }) as never,
   showQuickPick: vi.fn() as never,
   withProgress: vi.fn() as never,
   showWarningMessage: vi.fn() as never,

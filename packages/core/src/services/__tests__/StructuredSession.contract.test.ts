@@ -471,13 +471,12 @@ describe('answering a runner\'s request', () => {
 });
 
 describe('the structured capability is detected, never assumed', () => {
-  it('is present on a structured session and absent from a terminal one', async () => {
+  it('is present on a structured session and absent from a plain one', async () => {
     const { runner } = byHand();
     const session = await runner.spawn(options());
     expect(isStructuredSession(session)).toBe(true);
     expect(isStructuredSession(new FakeStructuredSession())).toBe(true);
     expect(isStructuredSession(new FakeTerminalSession('s1', 't1'))).toBe(false);
-    expect(isStructuredSession(Object.assign(new FakeTerminalSession('s2', 't1'), { transport: 'terminal' }))).toBe(false);
     session.kill();
   });
 });

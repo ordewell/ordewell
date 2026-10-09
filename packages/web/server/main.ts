@@ -4,7 +4,6 @@ import { createRequestListener } from './nodeAdapter';
 import { OrchestratorPool } from './pool/orchestratorPool';
 import { createServer } from 'http';
 import { clearDaemonToken, mintDaemonToken, StructuredRunner } from '@ordewell/core';
-import { startTerminalHost } from './adapters/TerminalHost';
 
 const args = process.argv.slice(2);
 let port = 3742;
@@ -23,20 +22,14 @@ if (portIdx !== -1 && args[portIdx + 1]) {
 const watchParentIdx = args.indexOf('--watch-parent');
 const watchParentPid = watchParentIdx !== -1 ? parseInt(args[watchParentIdx + 1], 10) : undefined;
 
-// Terminal-transport tasks run in a real tmux window (so `ordewell tui` can
-// open a genuine interactive terminal on them) whenever tmux is on the host;
-// otherwise they fall back to the headless-per-session runner (see
-// OrchestratorPool's `runner` dep) and the first such run says so.
-const { runner: tmuxRunner, advice: terminalAdvice } = startTerminalHost(port);
-
 // Minted before the socket is listening, so no request can arrive before there
 // is a token to check it against.
 const { token, file: tokenFile } = mintDaemonToken(port);
 const admission = { port, token, tokenFile };
 
-// Tasks of a plan run on the structured transport (ADR-0018) are plain child
-// processes: no tmux, so one runner serves every plan whatever the host has.
-const pool = new OrchestratorPool({ runner: tmuxRunner, terminalAdvice, structuredRunner: new StructuredRunner() });
+// Tasks run on the structured transport (ADR-0018) as plain child processes,
+// so one runner serves every plan whatever the host has.
+const pool = new OrchestratorPool({ runner: new StructuredRunner() });
 const app = createApp(pool, admission);
 
 // Warm the model caches at startup (same as the VS Code extension's activation
@@ -56,12 +49,9 @@ server.listen(port, '127.0.0.1', () => {
   console.error(`[web] Ordewell API server: http://localhost:${port}`);
 });
 
-async function shutdown(): Promise<void> {
+function shutdown(): void {
   clearDaemonToken(port);
   pool.destroyAll();
-  // The one cleanup guarantee against leaked tmux processes: killing the
-  // shared session takes every window (and whatever's running in it) with it.
-  if (tmuxRunner) await tmuxRunner.killSession().catch(() => {});
   server.close();
   process.exit(0);
 }

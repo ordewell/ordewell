@@ -685,8 +685,7 @@ export class StructuredSession extends AbstractTerminalSession implements Struct
 /**
  * The structured transport (ADR-0018): a task's runner as a plain child
  * process speaking its protocol — no tmux, no `script` (W2). Only runners
- * with a task-mode connector can be spawned here; routing the rest to the
- * terminal transport is the caller's decision, not a silent downgrade here.
+ * with a task-mode connector can be spawned here.
  */
 export class StructuredRunner extends AbstractRunner<StructuredSession> {
   private spawnCount = 0;

@@ -46,7 +46,7 @@ export interface TaskView {
   subtasks?: TaskView[];
 }
 
-export type TaskTransportView = Pick<TaskTransport, 'kind' | 'fallback'>;
+export type TaskTransportView = Pick<TaskTransport, 'kind'>;
 
 /** Where a task's isolated work stands (ADR-0013); `none` is a task with no worktree in a run that has some. */
 export type TaskIsolationState = 'none' | 'active' | 'integrated' | 'conflict' | 'repairing' | 'kept';

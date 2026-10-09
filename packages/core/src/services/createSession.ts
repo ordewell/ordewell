@@ -1188,8 +1188,7 @@ export class Session {
 
   /**
    * Force send (ADR-0023, F1): interrupt the task's running turn and deliver
-   * this message next. Throws `TaskControlError` where a plain message would,
-   * and for a task on the terminal transport.
+   * this message next. Throws `TaskControlError` where a plain message would.
    */
   forceSendTaskMessage(taskId: string, text: string): string {
     return this.saved(() => this.orchestrator.forceSendTaskMessage(taskId, text), { background: true });

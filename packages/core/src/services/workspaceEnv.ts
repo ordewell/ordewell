@@ -82,7 +82,7 @@ export async function resolveWorkspaceEnv(cwd: string, overrides: Partial<Worksp
   }
 
   for (const [key, value] of Object.entries(collected)) {
-    // Keys reach a shell's `env K=V` prefix on the tmux path; only names pass.
+    // Only names pass: a key is handed on as an environment variable name.
     if (!KEY.test(key)) continue;
     if (REFUSED.has(key) || key.toUpperCase() === 'PATH') result.refused.push(key);
     else result.env[key] = value;

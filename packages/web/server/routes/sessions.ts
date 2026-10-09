@@ -79,8 +79,8 @@ export function sessionsRoute(pool: OrchestratorPool) {
     return c.json({ ok } satisfies OkResponse);
   });
 
-  // Stops the orchestrator (killing every tmux window it spawned) and drops
-  // the in-memory planner conversation. No-op if already closed/unregistered.
+  // Stops the orchestrator (killing every runner it spawned) and drops the
+  // in-memory planner conversation. No-op if already closed/unregistered.
   router.post('/:id/close', (c) => {
     pool.destroy(c.req.param('id'));
     return c.json({ ok: true } satisfies OkResponse);

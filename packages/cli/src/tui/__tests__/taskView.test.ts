@@ -66,7 +66,7 @@ describe('opening and closing the task view', () => {
   });
 
   it('a terminal task still opens its OS terminal', () => {
-    const terminal = initialState({ sessionId: 's1', focus: 'plan', tasks: [task({ transport: { kind: 'terminal' } })] });
+    const terminal = initialState({ sessionId: 's1', focus: 'plan', tasks: [task({ transport: undefined })] });
     expect(reduce(terminal, { type: 'key', key: key('char', 't') }).effects).toEqual([
       { type: 'openTaskTerminal', sessionId: 's1', taskId: 't1' },
     ]);

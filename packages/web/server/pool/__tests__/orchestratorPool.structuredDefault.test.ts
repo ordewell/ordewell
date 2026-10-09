@@ -42,8 +42,7 @@ describe('OrchestratorPool after the transport setting was removed', () => {
       stopAll: vi.fn(),
       activeCount: 0,
     };
-    const runner: ITerminalRunner = { spawn: vi.fn().mockRejectedValue(new Error('terminal runner unused')), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 };
-    return { runner, structuredRunner, structured };
+    return { runner: structuredRunner, structured };
   }
 
   it('reports neither removed setting, and a PATCH of either changes nothing', async () => {
@@ -63,8 +62,8 @@ describe('OrchestratorPool after the transport setting was removed', () => {
   });
 
   it('runs a saved plan pinned to the terminal on the structured transport', async () => {
-    const { runner, structuredRunner, structured } = runners();
-    const pool = new OrchestratorPool({ runner, structuredRunner });
+    const { runner, structured } = runners();
+    const pool = new OrchestratorPool({ runner });
     const plan = {
       status: 'approved',
       runners: ['claude-code'],
@@ -80,7 +79,5 @@ describe('OrchestratorPool after the transport setting was removed', () => {
     await pool.session(meta.id).runTask('t1');
 
     await vi.waitFor(() => expect(structured).toHaveLength(1));
-    expect(runner.spawn).not.toHaveBeenCalled();
-    expect(vi.mocked(structuredRunner.spawn).mock.calls[0][0].transport).toBe('structured');
   });
 });

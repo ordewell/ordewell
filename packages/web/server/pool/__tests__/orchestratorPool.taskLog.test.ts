@@ -50,8 +50,7 @@ describe('OrchestratorPool task logs', () => {
       stopAll: vi.fn(),
       activeCount: 0,
     };
-    const runner: ITerminalRunner = { spawn: vi.fn().mockRejectedValue(new Error('terminal runner unused')), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 };
-    const pool = new OrchestratorPool({ runner, structuredRunner });
+    const pool = new OrchestratorPool({ runner: structuredRunner });
     const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-tasklog');
     pool.adoptSavedSession(meta.id, workspace);
     const sent: string[] = [];
