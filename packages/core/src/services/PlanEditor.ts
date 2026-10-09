@@ -57,6 +57,8 @@ export class PlanEditor {
   private readonly plannerTools: () => boolean;
   private readonly taskSkills: () => SkillLookup;
   private readonly notice: PlanEditorDeps['notice'];
+  /** Each task's latest {@link updateTask}, which the next edit to that task waits behind. */
+  private readonly taskEdits = new Map<string, Promise<unknown>>();
 
   constructor(deps: PlanEditorDeps) {
     this.store = deps.store;
@@ -82,8 +84,22 @@ export class PlanEditor {
    * falls through to the no-op `store.update` below instead of throwing.
    * Attached skills meet the rule a planner's do: a planner skill is refused,
    * a name not found yet only warns.
+   *
+   * Edits to one task commit in call order: the skill check waits on git, so
+   * two quick chip edits (`[a]` then `[a, b]`) could otherwise land the first
+   * one last.
    */
-  async updateTask(taskId: string, changes: Partial<Task>): Promise<LegacyPlanState | null> {
+  updateTask(taskId: string, changes: Partial<Task>): Promise<LegacyPlanState | null> {
+    const edit = (this.taskEdits.get(taskId) ?? Promise.resolve()).then(() => this.applyTaskUpdate(taskId, changes));
+    const settled = edit.catch(() => {});
+    this.taskEdits.set(taskId, settled);
+    void settled.then(() => {
+      if (this.taskEdits.get(taskId) === settled) this.taskEdits.delete(taskId);
+    });
+    return edit;
+  }
+
+  private async applyTaskUpdate(taskId: string, changes: Partial<Task>): Promise<LegacyPlanState | null> {
     if ('ops' in changes) changes = { ...changes, ops: opsFlag(changes.ops) };
     const typedSkills = changes.skills;
     if ('skills' in changes) changes = { ...changes, skills: skillNames(changes.skills) };

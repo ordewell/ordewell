@@ -19,6 +19,8 @@ import type { McpToolReply, PlannerToolHandler } from './mcp';
  */
 export interface PlannerToolsHost {
   skills(): readonly SkillInfo[];
+  /** The open planner turn's id: a call hands its plan or edit only to the turn it was made in. */
+  turnId(): string | undefined;
   recordSkillLoad(skill: SkillLoad): boolean;
   /** Enabled runners, their modes and their allowlisted models, as of now. */
   liveCatalog(): Promise<TaskQueryCatalog>;
@@ -39,6 +41,13 @@ export interface PlannerToolsHost {
   /** The catalog a plan's tasks will see where they run, which attached skill names are checked against. */
   taskSkills(): SkillLookup;
 }
+
+/**
+ * Refused when the turn a call was made in ends while the call waits on a
+ * catalog or skill check: the next turn would settle on a plan or edit it
+ * never asked for.
+ */
+export const PLANNER_TURN_ENDED = 'The planning turn this call was made in has ended, so nothing was submitted.';
 
 /** What an edit made through the tool came to. `queued`: the turn parks it behind the running batch, so nothing was checked. */
 export type PlanEditOutcome =
@@ -104,10 +113,12 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
     },
 
     async submitPlan({ tasks }) {
+      const turn = host.turnId();
       const catalog = await host.liveCatalog();
       const result = validatePlanTasks({ tasks }, catalog.runners, catalog.modes, catalog.autonomousDefault);
       if (!result.ok) return { isError: true, text: JSON.stringify({ ok: false, errors: result.errors, enabledRunners: catalog.runners }) };
       const skills = await checkPlanSkills(result.tasks, host.taskSkills());
+      if (host.turnId() !== turn) return { isError: true, text: JSON.stringify({ ok: false, errors: [{ field: 'tasks', message: PLANNER_TURN_ENDED }] }) };
       if (skills.errors.length > 0) {
         return { isError: true, text: JSON.stringify({ ok: false, errors: skills.errors.map((e) => ({ ...e, field: 'skills' })) }) };
       }
@@ -159,7 +170,9 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
     async editPlan({ ops }) {
       // The applier checks each op's fields one by one, so a loose shape is its to refuse.
       const taskOps = ops as unknown as TaskOp[];
+      const turn = host.turnId();
       const skills = await checkOpSkills(taskOps, host.taskSkills());
+      if (host.turnId() !== turn) return { isError: true, text: JSON.stringify({ ok: false, errors: [opError(PLANNER_TURN_ENDED)] }) };
       if (skills.errors.length > 0) return { isError: true, text: JSON.stringify({ ok: false, errors: skills.errors.map((e) => opError(e.message)) }) };
       const outcome = await host.editPlan(taskOps);
       if (!outcome.ok) return { isError: true, text: JSON.stringify({ ok: false, errors: outcome.errors.map(opError) }) };

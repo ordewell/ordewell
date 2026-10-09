@@ -4,6 +4,7 @@ import type { SessionMessage } from '../SessionMessage';
 import type { ConversationTurn, IAiService } from '../AiService';
 import { ConversationBusyError, ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnStoppedError, type PlannerConversationHost } from '../PlannerConversation';
 import type { SaveSession } from '../createSession';
+import type { SkillInfo } from '../SkillsService';
 import { makeSession, testWorkspace, queue } from './sessionTestKit';
 
 function dialoguePlan(): LegacyPlanState {
@@ -919,5 +920,71 @@ describe('PlannerConversation planner turn', () => {
     const err = await turn.catch((e: unknown) => e);
     expect(err).toBeInstanceOf(PlannerTurnDiscardedError);
     expect(err).toMatchObject({ cause: boom });
+  });
+
+  describe('across the skill check before an edit lands', () => {
+    /** A lookup whose git check the test releases, so a stop or plan swap can land while it waits. */
+    function heldSkillCheck(host: PlannerConversationHost) {
+      let release: () => void = () => {};
+      const asked = vi.fn();
+      const skill: SkillInfo = {
+        name: 'tdd', description: 'tdd', metadata: { name: 'tdd', description: 'tdd' }, content: '', path: '/g/tdd/SKILL.md', source: 'global', appliesTo: 'task', modelInvocable: false, userInvocable: true,
+      };
+      host.taskSkills = () => ({
+        findSkill: (name) => (name === 'tdd' ? skill : undefined),
+        searchedDirs: () => [],
+        uncommitted: () => new Promise((resolve) => {
+          asked();
+          release = () => resolve(new Map());
+        }),
+      });
+      vi.mocked(host.validateOps).mockReturnValue({ ok: true, tasks: [], errors: [], summary: ['#1 skills'] });
+      return { asked, release: () => release() };
+    }
+
+    const opsTurn: ConversationTurn = { kind: 'task_ops', ops: [{ op: 'update', taskId: '#1', changes: { skills: ['tdd'] } }], text: '', researchLog: [] };
+    const planTurn: ConversationTurn = { kind: 'plan', tasks: [createTask({ id: 'n1', order: 1, title: 'New', skills: ['tdd'] })], text: '', researchLog: [] };
+
+    for (const [label, reply] of [['task edit', opsTurn], ['whole plan', planTurn]] as const) {
+      it(`drops a ${label} whose plan was swapped out while the check ran`, async () => {
+        const { ai, calls } = heldBackend();
+        const { conversation, host, state } = fakeHost(ai, threeTurnPlan());
+        const check = heldSkillCheck(host);
+
+        const turn = conversation.reply('Use tdd');
+        await vi.waitFor(() => expect(calls).toHaveLength(1));
+        calls[0].finish(reply);
+        await vi.waitFor(() => expect(check.asked).toHaveBeenCalled());
+        state.plan = dialoguePlan();
+        check.release();
+
+        await expect(turn).rejects.toThrow(PlannerTurnDiscardedError);
+        expect(host.validateOps).not.toHaveBeenCalled();
+        expect(host.adoptTasks).not.toHaveBeenCalled();
+        expect(state.persists).toBe(0);
+        expect(vi.mocked(host.broadcast).mock.calls.map(([m]) => m.type)).not.toContain('planner_message');
+        expect(host.broadcastPlan).not.toHaveBeenCalled();
+      });
+
+      it(`drops a ${label} when the turn is stopped while the check ran`, async () => {
+        const { ai, calls } = heldBackend();
+        const { conversation, host, state } = fakeHost(ai, threeTurnPlan());
+        const before = state.plan!.conversationHistory;
+        const check = heldSkillCheck(host);
+
+        const turn = conversation.reply('Use tdd');
+        await vi.waitFor(() => expect(calls).toHaveLength(1));
+        calls[0].finish(reply);
+        await vi.waitFor(() => expect(check.asked).toHaveBeenCalled());
+        conversation.stopTurn();
+        check.release();
+
+        await expect(turn).rejects.toThrow(PlannerTurnStoppedError);
+        expect(host.adoptTasks).not.toHaveBeenCalled();
+        expect(state.persists).toBe(0);
+        expect(state.plan!.conversationHistory).toBe(before);
+        expect(ended(host).at(-1)?.outcome).toBe('stopped');
+      });
+    }
   });
 });

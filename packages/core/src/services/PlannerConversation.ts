@@ -229,7 +229,7 @@ export class PlannerTurnStoppedError extends Error {
  * original is kept as the cause, since the turn may also have failed for real.
  */
 function interrupted(planner: PlannerTurn, err: unknown): unknown {
-  if (err instanceof PlannerTurnDiscardedError) return err;
+  if (err instanceof PlannerTurnDiscardedError || err instanceof PlannerTurnStoppedError) return err;
   if (planner.abandoned) return new PlannerTurnDiscardedError({ cause: err });
   if (planner.signal.aborted) return new PlannerTurnStoppedError({ cause: err });
   return err;
@@ -758,6 +758,18 @@ export class PlannerConversation {
   }
 
   /**
+   * {@link assertCurrent} on the far side of an await that precedes a plan
+   * mutation: the skill check waits on git, and a stop, rewind or session
+   * switch in that window drops the edit instead of landing it on whatever
+   * plan is current by then. A stop counts here because nothing has landed
+   * yet — the user asked for the turn to end before it changed the plan.
+   */
+  private assertStillCurrent(userTurn: UserTurn): void {
+    this.assertCurrent(userTurn);
+    if (userTurn.signal.aborted) throw new PlannerTurnStoppedError();
+  }
+
+  /**
    * A live conversation is only safe to continue in-place when it also
    * matches the model/effort configured right now — a harness planner's
    * running process was spawned with the old one baked in and cannot pick up
@@ -959,6 +971,7 @@ export class PlannerConversation {
       interpret: async (t) => {
         if (t.kind === 'plan') {
           const skills = await checkPlanSkills(t.tasks, this.host.taskSkills());
+          this.assertStillCurrent(userTurn);
           if (skills.errors.length === 0) return { done: { turn: t, skillWarnings: skills.warnings } };
           const errors = skills.errors.map((e) => e.message);
           if (!ai.hasActiveConversation() || signal.aborted) return { done: invalidPlan(errors, t.researchLog) };
@@ -966,7 +979,7 @@ export class PlannerConversation {
         }
         if (t.kind !== 'task_ops') return { done: { turn: t } };
         this.assertCurrent(userTurn, t);
-        const applied = await this.applyTaskOps(t, stream.turnId);
+        const applied = await this.applyTaskOps(t, userTurn);
         if ('plan' in applied) return { done: { plan: applied.plan } };
         // No live conversation (or an abort) means no corrective re-send is
         // possible — surface the failure instead of retrying into the void.
@@ -998,9 +1011,11 @@ export class PlannerConversation {
   }
 
   /** Validate + commit a task_ops turn atomically. Returns the errors on rejection (plan untouched). */
-  private async applyTaskOps(turn: Extract<ConversationTurn, { kind: 'task_ops' }>, turnId: string): Promise<{ plan: LegacyPlanState } | { errors: string[] }> {
+  private async applyTaskOps(turn: Extract<ConversationTurn, { kind: 'task_ops' }>, userTurn: UserTurn): Promise<{ plan: LegacyPlanState } | { errors: string[] }> {
     this.requirePlan();
+    const { turnId } = userTurn.stream;
     const skills = await checkOpSkills(turn.ops, this.host.taskSkills());
+    this.assertStillCurrent(userTurn);
     if (skills.errors.length > 0) return { errors: skills.errors.map((e) => e.message) };
     const result = this.host.validateOps(turn.ops);
     if (!result.ok) return { errors: result.errors };

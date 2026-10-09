@@ -5,6 +5,7 @@ import { PlanStore } from '../PlanStore';
 import type { RunnerCatalog } from '../TaskRetarget';
 import type { SessionMessage } from '../SessionMessage';
 import type { SkillInfo } from '../SkillsService';
+import type { SkillLookup } from '../taskSkills';
 import type { IsolationRun } from '../../interfaces/IWorktreeIsolation';
 import { createTask, type DiscoveredModel, type LegacyPlanState, type RunnerId, type Task } from '../../models/Task';
 
@@ -36,7 +37,7 @@ function tasks(): Task[] {
  * is the session's contract in miniature — the op runs, and only a change is
  * saved and announced — so what the editor hands it is all that is asserted.
  */
-function setup(opts: { plan?: boolean; allowlist?: Partial<Record<RunnerId, string[]>>; catalogs?: Record<RunnerId, RunnerCatalog>; run?: IsolationRun | null; skills?: SkillInfo[] } = {}) {
+function setup(opts: { plan?: boolean; allowlist?: Partial<Record<RunnerId, string[]>>; catalogs?: Record<RunnerId, RunnerCatalog>; run?: IsolationRun | null; skills?: SkillInfo[]; uncommitted?: SkillLookup['uncommitted'] } = {}) {
   const store = new PlanStore();
   const now = '2026-01-01T00:00:00Z';
   const plan: LegacyPlanState | null = opts.plan === false ? null : { tasks: [], generatedAt: now, status: 'approved', runners: ['claude-code'], lastUpdated: now };
@@ -76,7 +77,7 @@ function setup(opts: { plan?: boolean; allowlist?: Partial<Record<RunnerId, stri
     runs,
     broadcast: (m) => { sent.push(m); events.push(m.type); },
     plannerTools,
-    taskSkills: () => ({ findSkill: (name) => opts.skills?.find((s) => s.name === name), searchedDirs: () => [] }),
+    taskSkills: () => ({ findSkill: (name) => opts.skills?.find((s) => s.name === name), searchedDirs: () => [], uncommitted: opts.uncommitted }),
     notice,
   });
   const task = (id: string) => store.get(id);
@@ -84,10 +85,11 @@ function setup(opts: { plan?: boolean; allowlist?: Partial<Record<RunnerId, stri
 }
 
 describe('PlanEditor.updateTask', () => {
+  const skill = (name: string, appliesTo: SkillInfo['appliesTo']): SkillInfo => ({
+    name, description: name, metadata: { name, description: name }, content: '', path: `/g/${name}/SKILL.md`, source: 'global', appliesTo, modelInvocable: false, userInvocable: true,
+  });
+
   it('refuses a planner skill on a task and warns, once the edit lands, about a name not found', async () => {
-    const skill = (name: string, appliesTo: SkillInfo['appliesTo']): SkillInfo => ({
-      name, description: name, metadata: { name, description: name }, content: '', path: `/g/${name}/SKILL.md`, source: 'global', appliesTo, modelInvocable: false, userInvocable: true,
-    });
     const { editor, task, notice, mutate } = setup({ skills: [skill('tdd', 'task'), skill('grilling', 'planner')] });
 
     await expect(editor.updateTask('t2', { skills: ['tdd', 'grilling'] })).rejects.toThrow(PlanEditError);
@@ -96,6 +98,40 @@ describe('PlanEditor.updateTask', () => {
     await editor.updateTask('t2', { skills: ['tdd', 'later'] });
     expect(task('t2')!.skills).toEqual(['tdd', 'later']);
     expect(notice).toHaveBeenCalledWith('warn', expect.stringContaining('Task "Build": skill "later" not found'));
+  });
+
+  // The git check behind each edit can answer out of order: the first edit's
+  // is released last here, and must still not overwrite the second.
+  it('commits two quick skill edits to one task in the order they were made', async () => {
+    const pending: (() => void)[] = [];
+    const { editor, task, sent } = setup({
+      skills: [skill('a', 'task'), skill('b', 'task')],
+      uncommitted: () => new Promise((resolve) => pending.push(() => resolve(new Map()))),
+    });
+    const releaseNewest = async () => {
+      await vi.waitFor(() => expect(pending.length).toBeGreaterThan(0));
+      pending.pop()!();
+    };
+
+    const first = editor.updateTask('t2', { skills: ['a'] });
+    const second = editor.updateTask('t2', { skills: ['a', 'b'] });
+    await releaseNewest();
+    await releaseNewest();
+    await Promise.all([first, second]);
+
+    expect(sent.map((m) => m.type === 'task_updated' && m.changes.skills)).toEqual([['a'], ['a', 'b']]);
+    expect(task('t2')!.skills).toEqual(['a', 'b']);
+  });
+
+  it('runs the next edit to a task after one that was refused', async () => {
+    const { editor, task } = setup({ skills: [skill('a', 'task'), skill('grilling', 'planner')] });
+
+    const refused = editor.updateTask('t2', { skills: ['grilling'] });
+    const next = editor.updateTask('t2', { skills: ['a'] });
+
+    await expect(refused).rejects.toThrow(PlanEditError);
+    await next;
+    expect(task('t2')!.skills).toEqual(['a']);
   });
 
   it('lands a patch, announces it as task_updated, then reschedules', async () => {
