@@ -14,14 +14,10 @@ export interface UserSettings {
 }
 
 /**
- * Where the user's toggles live. `ORDEWELL_SETTINGS_PATH` overrides it so several
- * Ordewell processes on one machine can hold *different* settings at the same
- * time. Without it the file is a single shared mutable global: the benchmark
- * harness runs parallel lanes that each pin the mode toggles, and because
- * `getAll()` re-reads whenever the mtime moves, a lane needing a toggle
- * `true` would silently plan with `false` the moment another lane pinned its
- * own — turning an A/B of that toggle into a comparison of one condition
- * against itself.
+ * The model allowlist, remembered planner models and enabled runners are shared
+ * across processes by default. `ORDEWELL_SETTINGS_PATH` lets independent runs
+ * use separate files: otherwise a write in one run would change another's
+ * settings when `getAll()` detects the new mtime.
  */
 export function getSettingsPath(): string {
   const override = process.env.ORDEWELL_SETTINGS_PATH;
@@ -135,7 +131,7 @@ export class SettingsService {
   }
 
   private load(): UserSettings {
-    // A pre-`.ordewell` install keeps its toggles in the old config dir; lift
+    // A pre-`.ordewell` install keeps its settings in the old config dir; lift
     // them once before reading so the first read already sees the moved file.
     migrateOldConfigDir();
     try {

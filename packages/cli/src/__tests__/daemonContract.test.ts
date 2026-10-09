@@ -321,12 +321,6 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
       expect(err.status).toBe(400);
     });
 
-    it('refuses a command now that no mode toggle is left to run', async () => {
-      const err = await refusal(client.sendCommand('verify', { action: 'off' }));
-
-      expect(err.status).toBe(404);
-    });
-
     it('reads the runners the daemon offers', async () => {
       const { runners, orchestratorModel } = await client.getRunners();
 

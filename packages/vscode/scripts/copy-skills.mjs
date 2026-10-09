@@ -1,4 +1,4 @@
-// Built-in skills (grilling, to-spec) are markdown, not code, so tsup never
+// Built-in skills are markdown, not code, so tsup never
 // bundles them into dist/extension.js. The .vsix ships no node_modules (see
 // .vscodeignore), so this copies them to packages/vscode/skills/ — a sibling
 // of dist/ — where builtinSkillsDir() in @ordewell/core expects to find them

@@ -90,36 +90,6 @@ describe('ApiClient', () => {
     expect(fromB[0].id).toBe('server-b');
   });
 
-  it('getCommands returns command list', async () => {
-    const srv = await startCustomServer((_req, res) => {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ commands: [{ name: 'verify', description: 'Toggle verification' }] }));
-    });
-    servers.push(srv);
-    const client = new ApiClient(srv.port);
-    const result = await client.getCommands();
-    expect(result.commands).toHaveLength(1);
-    expect(result.commands[0].name).toBe('verify');
-  });
-
-  it('sendCommand posts to /api/commands/:name', async () => {
-    const srv = await startCustomServer((req, res) => {
-      let body = '';
-      req.on('data', (chunk) => { body += chunk; });
-      req.on('end', () => {
-        expect(req.url).toBe('/api/commands/verify');
-        const parsed = JSON.parse(body);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, settings: { maxParallel: parsed.args.action === 'off' ? 1 : 3 } }));
-      });
-    });
-    servers.push(srv);
-    const client = new ApiClient(srv.port);
-    const result = await client.sendCommand('verify', { action: 'off' });
-    expect(result.ok).toBe(true);
-    expect(result.settings?.maxParallel).toBe(1);
-  });
-
   it('generatePlan posts to the caller-provided sessionId instead of minting its own', async () => {
     let requestedUrl = '';
     const srv = await startCustomServer((req, res) => {

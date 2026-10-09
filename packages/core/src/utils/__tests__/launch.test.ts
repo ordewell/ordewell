@@ -200,6 +200,7 @@ describe('planDirectLaunch on Windows', () => {
     expect(err).toBeInstanceOf(CommandLineTooLongError);
     expect(err.message).not.toContain('native executable');
     expect(err.message).toContain('Shorten the task prompt');
+    expect(err.message).toContain('detach some task skills');
   });
 });
 

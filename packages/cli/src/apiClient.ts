@@ -6,8 +6,6 @@ import type {
   AdoptSessionResponse,
   ApprovalAnswer,
   CancelPlanningResponse,
-  CommandResponse,
-  CommandsResponse,
   ConversationCompactResponse,
   ConversationForkResponse,
   ConversationRewindResponse,
@@ -649,14 +647,6 @@ export class ApiClient {
       // Best-effort progress display — a broken WS never blocks plan generation.
     });
     return { ready, close: () => socket.close() };
-  }
-
-  getCommands(): Promise<CommandsResponse> {
-    return this.call('GET', '/api/commands', 'Failed to fetch commands');
-  }
-
-  sendCommand(name: string, args: Record<string, string> = {}): Promise<CommandResponse> {
-    return this.call('POST', `/api/commands/${name}`, `Command ${name} failed`, { args });
   }
 
   getSettings(): Promise<SettingsResponse> {
