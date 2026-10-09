@@ -73,7 +73,7 @@ The session is done when the frontier is empty: every branch of the design tree 
 
 beforeEach(() => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-skills-global-'));
-  workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-skills-local-'));
+  workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-skills-workspace-'));
   h.builtinDir = builtinFixture();
 });
 
@@ -93,21 +93,28 @@ describe('SkillsService', () => {
       expect(skill!.source).toBe('global');
     });
 
-    it('local .ordewell/skills overrides a global skill with the same name', () => {
+    it('a global skill wins over a workspace skill with the same name', () => {
       writeSkill(path.join(home, '.ordewell', 'skills'), 'grilling', {
         name: 'grilling',
         description: 'Global',
       }, 'Global body.');
       writeSkill(path.join(workspaceRoot, '.ordewell', 'skills'), 'grilling', {
         name: 'grilling',
-        description: 'Local',
-      }, 'Local body.');
+        description: 'Workspace',
+      }, 'Workspace body.');
       const svc = createSkillsService(workspaceRoot);
       const skill = svc.findSkill('grilling');
       expect(skill).toBeDefined();
-      expect(skill!.description).toBe('Local');
-      expect(skill!.source).toBe('local');
-      expect(skill!.content).toBe('Local body.');
+      expect(skill!.description).toBe('Global');
+      expect(skill!.source).toBe('global');
+      expect(skill!.content).toBe('Global body.');
+    });
+
+    it('finds a workspace-only skill', () => {
+      writeSkill(path.join(workspaceRoot, '.ordewell', 'skills'), 'mine', { name: 'mine' }, 'Mine.');
+      const skill = createSkillsService(workspaceRoot).findSkill('mine');
+      expect(skill!.source).toBe('workspace');
+      expect(skill!.content).toBe('Mine.');
     });
 
     it('returns undefined for a missing skill', () => {
@@ -129,14 +136,80 @@ describe('SkillsService', () => {
     });
   });
 
+  describe('frontmatter', () => {
+    const find = (fm: Record<string, unknown>) => {
+      writeSkill(path.join(workspaceRoot, '.ordewell', 'skills'), 'probe', { name: 'probe', ...fm }, 'Body.');
+      return createSkillsService(workspaceRoot).findSkill('probe')!;
+    };
+
+    it('defaults to a planner skill both the user and the model may invoke', () => {
+      const skill = find({});
+      expect(skill.appliesTo).toBe('planner');
+      expect(skill.modelInvocable).toBe(true);
+      expect(skill.userInvocable).toBe(true);
+    });
+
+    it('reads applies-to: task', () => {
+      expect(find({ 'applies-to': 'task' }).appliesTo).toBe('task');
+      expect(find({ 'applies-to': 'planner' }).appliesTo).toBe('planner');
+    });
+
+    it('treats an unknown applies-to as planner', () => {
+      expect(find({ 'applies-to': 'everything' }).appliesTo).toBe('planner');
+    });
+
+    it('disable-model-invocation: true makes a skill user-only', () => {
+      const skill = find({ 'disable-model-invocation': true });
+      expect(skill.modelInvocable).toBe(false);
+      expect(skill.userInvocable).toBe(true);
+    });
+
+    it('user-invocable: false makes a skill model-only', () => {
+      const skill = find({ 'user-invocable': false });
+      expect(skill.userInvocable).toBe(false);
+      expect(skill.modelInvocable).toBe(true);
+    });
+
+    it('accepts quoted values', () => {
+      const skill = find({ 'applies-to': 'task', 'user-invocable': 'false' });
+      expect(skill.appliesTo).toBe('task');
+      expect(skill.userInvocable).toBe(false);
+    });
+  });
+
   describe('listSkills', () => {
-    it('lists skills from both global and local dirs', () => {
+    it('lists skills from both global and workspace dirs', () => {
       writeSkill(path.join(home, '.ordewell', 'skills'), 'grilling', { name: 'grilling', description: 'G' }, 'Global.');
       writeSkill(path.join(home, '.ordewell', 'skills'), 'to-spec', { name: 'to-spec', description: 'S' }, 'Global spec.');
-      writeSkill(path.join(workspaceRoot, '.ordewell', 'skills'), 'local-only', { name: 'local-only', description: 'L' }, 'Local.');
+      writeSkill(path.join(workspaceRoot, '.ordewell', 'skills'), 'workspace-only', { name: 'workspace-only', description: 'W' }, 'Workspace.');
       const svc = createSkillsService(workspaceRoot);
       const names = svc.listSkills().map((s) => s.name).sort();
-      expect(names).toEqual(['grilling', 'improve-codebase-architecture', 'local-only', 'to-spec']);
+      expect(names).toEqual(['grilling', 'improve-codebase-architecture', 'to-spec', 'workspace-only']);
+    });
+
+    it('skips a workspace skill a global one shadows and reports it', () => {
+      const globalFile = writeSkill(path.join(home, '.ordewell', 'skills'), 'mine', { name: 'mine', description: 'Global' }, 'Global.');
+      const workspaceFile = writeSkill(path.join(workspaceRoot, '.ordewell', 'skills'), 'mine', { name: 'mine', description: 'Workspace' }, 'Workspace.');
+      const svc = createSkillsService(workspaceRoot);
+      const mine = svc.listSkills().filter((s) => s.name === 'mine');
+      expect(mine.map((s) => [s.source, s.path])).toEqual([['global', globalFile]]);
+      const shadowed = svc.listShadowed();
+      expect(shadowed.map((s) => [s.skill.name, s.skill.source, s.skill.path, s.shadowedBy.path])).toEqual([
+        ['mine', 'workspace', workspaceFile, globalFile],
+      ]);
+    });
+
+    it('a workspace copy of a built-in is shadowed by the seeded global one', () => {
+      writeSkill(path.join(workspaceRoot, '.ordewell', 'skills'), 'grilling', { name: 'grilling', description: 'Vendored' }, 'Vendored.');
+      const svc = createSkillsService(workspaceRoot);
+      expect(svc.listSkills().find((s) => s.name === 'grilling')!.source).toBe('global');
+      expect(svc.listShadowed().map((s) => s.skill.name)).toEqual(['grilling']);
+    });
+
+    it('reports nothing shadowed without a clash', () => {
+      writeSkill(path.join(workspaceRoot, '.ordewell', 'skills'), 'mine', { name: 'mine' }, 'Mine.');
+      expect(createSkillsService(workspaceRoot).listShadowed()).toEqual([]);
+      expect(createSkillsService().listShadowed()).toEqual([]);
     });
 
     it('seeds built-in skills into the global dir when no user skills exist', () => {
@@ -192,15 +265,36 @@ describe('SkillsService', () => {
       expect(names).toEqual(['grilling', 'improve-codebase-architecture', 'my-skill', 'to-spec']);
     });
 
-    it('does not prune a retired-name skill vendored locally', () => {
+    it('does not prune a retired-name skill vendored in the workspace', () => {
       writeSkill(path.join(workspaceRoot, '.ordewell', 'skills'), 'grill-me', {
         name: 'grill-me',
-        description: 'Vendored locally',
-      }, 'Local body.');
+        description: 'Vendored in the workspace',
+      }, 'Workspace body.');
       const svc = createSkillsService(workspaceRoot);
       const names = svc.listSkills().map((s) => s.name).sort();
       expect(names).toContain('grill-me');
       expect(fs.existsSync(path.join(workspaceRoot, '.ordewell', 'skills', 'grill-me', 'SKILL.md'))).toBe(true);
+    });
+  });
+
+  describe('forRoot', () => {
+    it('reads workspace skills from the given root, keeping the global ones', () => {
+      const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-skills-worktree-'));
+      writeSkill(path.join(home, '.ordewell', 'skills'), 'shared', { name: 'shared' }, 'Global.');
+      writeSkill(path.join(workspaceRoot, '.ordewell', 'skills'), 'main-only', { name: 'main-only' }, 'Main.');
+      const worktreeFile = writeSkill(path.join(worktree, '.ordewell', 'skills'), 'task-only', { name: 'task-only', 'applies-to': 'task' }, 'Task.');
+      writeSkill(path.join(worktree, '.ordewell', 'skills'), 'shared', { name: 'shared' }, 'Shadowed.');
+
+      const scoped = createSkillsService(workspaceRoot).forRoot(worktree);
+      const names = scoped.listSkills().map((s) => s.name);
+      expect(names).toContain('task-only');
+      expect(names).toContain('shared');
+      expect(names).not.toContain('main-only');
+      expect(scoped.findSkill('task-only')!.path).toBe(worktreeFile);
+      expect(scoped.findSkill('task-only')!.appliesTo).toBe('task');
+      expect(scoped.findSkill('main-only')).toBeUndefined();
+      expect(scoped.findSkill('shared')!.content).toBe('Global.');
+      expect(scoped.listShadowed().map((s) => s.skill.name)).toEqual(['shared']);
     });
   });
 

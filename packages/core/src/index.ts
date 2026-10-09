@@ -96,6 +96,9 @@ export {
   BUILTIN_SKILL_NAMES,
   type SkillInfo,
   type SkillMetadata,
+  type SkillAppliesTo,
+  type SkillSource,
+  type ShadowedSkill,
 } from './services/SkillsService';
 export { globalDataDir, migrateOldConfigDir } from './utils/globalDataDir';
 export { writePrivateFile, ensurePrivateDir } from './utils/privateFile';
