@@ -44,6 +44,20 @@ describe('a message that loads a skill', () => {
     expect(document.querySelector('.chat-msg-user + .chat-msg-skill-load')).toBeTruthy();
   });
 
+  it('shows planner attribution live and on reload, without marking a user token', () => {
+    const skill: SkillLoadNotice = { ...grilling, invokedBy: 'planner' };
+    host.session(turnStarted('/grilling goal'), { type: 'planner_skill_loaded', turnId: TURN, skill });
+    expect(notices()).toEqual(['● grilling skill loaded by planner · ~/.ordewell/skills/grilling/SKILL.md']);
+    expect(marked()).toEqual([]);
+    act(() => host.provider.conversation.reload({ conversationHistory: [
+      { role: 'user', content: '/grilling goal', timestamp: 't1' },
+      { role: 'assistant', content: 'grilling skill loaded by planner', timestamp: 't2', kind: 'skill_load', skill: { ...skill, content: 'HIDDEN BODY' } },
+    ] }));
+    expect(notices()).toEqual(['● grilling skill loaded by planner · ~/.ordewell/skills/grilling/SKILL.md']);
+    expect(marked()).toEqual([]);
+    expect(document.body.textContent).not.toContain('HIDDEN BODY');
+  });
+
   it('marks the token that loaded the skill, and not a repeat or one that loaded nothing', () => {
     host.session(turnStarted('/grilling it, /grilling again and /nope', [grilling]));
 

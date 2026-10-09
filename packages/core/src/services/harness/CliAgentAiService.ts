@@ -203,7 +203,7 @@ export class CliAgentAiService implements IAiService {
         systemPrompt: buildConversationSystemPrompt(
           req.goal, contextStr, req.modelsByRunner, req.runners, req.runnerModes,
           req.autonomousDefault ?? true,
-          { harness: true, isolatedExecution: req.isolatedExecution, plannerTools: true },
+          { harness: true, isolatedExecution: req.isolatedExecution, plannerTools: true, plannerSkills: req.plannerTools.skills?.() },
         ),
       }
       : undefined;

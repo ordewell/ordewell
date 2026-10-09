@@ -10,6 +10,7 @@ import { isCliProvider } from './ProviderRegistry';
 import { CliAgentAiService, type CliAgentAiServiceDeps } from './harness/CliAgentAiService';
 import type { IsolatedExecution, PlannerModes } from './plannerModes';
 import type { PlannerToolHandler } from './mcp';
+import type { SkillInfo } from './SkillsService';
 
 /**
  * The planner tools a session offers its conversation (ADR-0022). A backend
@@ -19,6 +20,7 @@ import type { PlannerToolHandler } from './mcp';
 export interface PlannerToolsOffer {
   sessionId: string;
   handler: PlannerToolHandler;
+  skills?: () => readonly SkillInfo[];
 }
 
 /**

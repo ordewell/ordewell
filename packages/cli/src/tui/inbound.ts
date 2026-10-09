@@ -44,6 +44,7 @@ type ConversationMessage = Extract<
   {
     type:
       | 'planner_message' | 'planner_turn_started' | 'planner_turn_ended' | 'planner_text_delta' | 'planner_thinking_delta'
+      | 'planner_skill_loaded'
       | 'planner_text_retracted' | 'plan_token' | 'plan_generated' | 'research_step' | 'research_step_done'
       | 'subagent_started' | 'subagent_finished' | 'planner_usage' | 'planner_liveness'
       | 'approval_request' | 'approval_settled' | 'approval_decided';
@@ -55,6 +56,7 @@ type LifecycleMessage = Exclude<SessionMessage, ConversationMessage> | SessionNo
 
 const CONVERSATION_TYPES: ReadonlySet<string> = new Set<ConversationMessage['type']>([
   'planner_message', 'planner_turn_started', 'planner_turn_ended', 'planner_text_delta', 'planner_thinking_delta',
+  'planner_skill_loaded',
   'planner_text_retracted', 'plan_token', 'plan_generated', 'research_step', 'research_step_done',
   'subagent_started', 'subagent_finished', 'planner_usage', 'planner_liveness',
   'approval_request', 'approval_settled', 'approval_decided',
