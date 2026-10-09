@@ -260,12 +260,19 @@ export class OrchestratorPool {
     // very call meant to establish the new provider.
     const switchedToProvider: AiProvider | undefined =
       incomingAiProvider && incomingAiProvider !== providerBefore ? (incomingAiProvider as AiProvider) : undefined;
+    const requestedModel = envChanges?.ORCHESTRATOR_MODEL ?? changes.orchestratorModel;
+    const explicitModel = typeof requestedModel === 'string' && requestedModel.trim().length > 0;
     // Read the incoming provider's catalog now, before the env-touched refresh
     // below clears the resolver's cache — recall must judge the memory against
     // what was already discovered, not force a fresh (async) discovery here.
-    const switchRecall = switchedToProvider
+    const switchRecall = switchedToProvider && !explicitModel
       ? this.plannerModelMemory.recall(switchedToProvider, this.plannerCatalogFor(switchedToProvider))
       : undefined;
+
+    if (switchedToProvider && explicitModel &&
+        typeof changes.plannerThinkingEffort !== 'string' && envChanges?.ORDEWELL_PLANNER_EFFORT === undefined) {
+      process.env.ORDEWELL_PLANNER_EFFORT = '';
+    }
 
     if (typeof changes.orchestratorModel === 'string') {
       process.env.ORCHESTRATOR_MODEL = changes.orchestratorModel;
@@ -300,12 +307,8 @@ export class OrchestratorPool {
       }
     }
 
-    // A planner switch resolves through memory rather than whatever the
-    // client's env carried for the model/effort — an older client still sends
-    // a blind `ORCHESTRATOR_MODEL: ''` clear here, and even a current one
-    // should land on the model this provider was last using, not nothing.
-    // Applied after the env loop above so it overrides that clear rather than
-    // being overwritten by it.
+    // Legacy clients send a blank model on switch; recall fills that clear,
+    // but must never replace an explicit model chosen in the same request.
     if (switchRecall) {
       process.env.ORCHESTRATOR_MODEL = switchRecall.model;
       process.env.ORDEWELL_PLANNER_EFFORT = switchRecall.effort;
@@ -329,8 +332,8 @@ export class OrchestratorPool {
     // arrives either as a top-level field (a vendor model, `ordewell model
     // set`) or through env (`ordewell planner-effort`, the TUI's effort
     // picker send ORDEWELL_PLANNER_EFFORT this way) — both are a real pick,
-    // never the switch's own env, which always carries AI_PROVIDER too.
-    const envCarriesModelOrEffort = envChanges?.AI_PROVIDER === undefined &&
+    // including a switch with an explicit model, but never its legacy clear.
+    const envCarriesModelOrEffort = (envChanges?.AI_PROVIDER === undefined || explicitModel) &&
       (typeof envChanges?.ORCHESTRATOR_MODEL === 'string' || typeof envChanges?.ORDEWELL_PLANNER_EFFORT === 'string');
     if (typeof changes.orchestratorModel === 'string' || typeof changes.plannerThinkingEffort === 'string' || envCarriesModelOrEffort) {
       const rememberProvider = switchedToProvider ?? new WebConfig({

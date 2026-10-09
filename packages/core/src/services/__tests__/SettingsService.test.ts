@@ -170,6 +170,12 @@ describe('SettingsService', () => {
       });
     });
 
+    it('preserves a replacement planner model and effort across restart', () => {
+      service.setPlannerModel('codex', { model: 'old-model' });
+      service.setPlannerModel('codex', { model: 'new-model', effort: 'high' });
+      expect(new SettingsService(tempFile).getPlannerModel('codex')).toEqual({ model: 'new-model', effort: 'high' });
+    });
+
     it('clearing the last entry collapses plannerModels back to absent', () => {
       service.setPlannerModel('claude-code', { model: 'claude-haiku-4-5' });
       service.setPlannerModel('claude-code', undefined);
