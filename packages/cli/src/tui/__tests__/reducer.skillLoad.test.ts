@@ -36,6 +36,19 @@ afterEach(() => {
 });
 
 describe('a message that loads a skill', () => {
+  it('shows a planner load live and on reload without highlighting a user token', () => {
+    const skill: SkillLoadNotice = { ...grilling, invokedBy: 'planner' };
+    const live = hear(sent('goal', []), { type: 'planner_skill_loaded', turnId: 't1', skill });
+    expect(rowsFrom(live, '❯', 2)).toEqual(['❯ goal', '● grilling skill loaded by planner · ~/.ordewell/skills/grilling/SKILL.md']);
+    const history: ConversationMessage[] = [
+      { role: 'user', content: 'goal', timestamp: 't1' },
+      { role: 'assistant', content: 'grilling skill loaded by planner', timestamp: 't2', kind: 'skill_load', skill: { ...skill, content: 'HIDDEN BODY' } },
+    ];
+    const { state } = reduce(initialState({ rows: 60, cols: 80, sessionId: 's1' }), { type: 'chatRestored', history, sessionId: 's1' });
+    expect(rowsFrom(state, '❯', 2)).toEqual(rowsFrom(live, '❯', 2));
+    expect(render(state).map(stripAnsi).join('\n')).not.toContain('HIDDEN BODY');
+  });
+
   it('shows the message once, as typed, with the load notice right under it', () => {
     const state = sent('/grilling the cache design', [grilling]);
 

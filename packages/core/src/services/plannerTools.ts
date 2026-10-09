@@ -1,4 +1,6 @@
-import { flattenTasks, type RunnerId, type Task, type Verdict } from '../models/Task';
+import { flattenTasks, type RunnerId, type SkillLoad, type Task, type Verdict } from '../models/Task';
+import type { SkillInfo } from './SkillsService';
+import { modelInvocablePlannerSkills, snapshotSkill } from './skillInvocation';
 import { autonomyLevelLabel, filteredBuildModes, resolveDefaultMode } from './ModeResolver';
 import { validatePlanTasks } from './PlanValidator';
 import {
@@ -15,6 +17,8 @@ import type { McpToolReply, PlannerToolHandler } from './mcp';
  * against is what its submission is checked against (L2, L3).
  */
 export interface PlannerToolsHost {
+  skills(): readonly SkillInfo[];
+  recordSkillLoad(skill: SkillLoad): boolean;
   /** Enabled runners, their modes and their allowlisted models, as of now. */
   liveCatalog(): Promise<TaskQueryCatalog>;
   /** The assignments a commit of these tasks would land, under the allowlist in force (ADR-0003). */
@@ -53,6 +57,18 @@ export function runnersOf(tasks: readonly Task[]): RunnerId[] {
 
 export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
   return {
+    async loadSkill({ name }) {
+      const skills = modelInvocablePlannerSkills(host.skills());
+      const skill = skills.find((s) => s.name === name);
+      if (!skill) {
+        return { isError: true, text: `Skill "${name}" cannot be loaded by the planner. Loadable skills: ${skills.map((s) => s.name).join(', ') || '(none)'}.` };
+      }
+      if (!host.recordSkillLoad(snapshotSkill(skill, 'planner'))) {
+        return { isError: true, text: 'No planning turn is open to load a skill.' };
+      }
+      return { text: skill.content };
+    },
+
     async listRunners() {
       const catalog = await host.liveCatalog();
       return answer({

@@ -30,6 +30,7 @@ describe('the stop rule', () => {
     const after = follow([
       delta('ght, arriving late'),
       { type: 'research_step', tool: 'read_file', args: '{"path":"a.ts"}', turnId: TURN },
+      { type: 'planner_skill_loaded', turnId: TURN, skill: { invokedBy: 'planner', name: 'grilling', source: 'global', path: '/skills/grilling/SKILL.md' } },
       { type: 'planner_message', content: 'Half a thought, arriving late', timestamp: '', turnId: TURN },
       { type: 'planner_turn_ended', turnId: TURN, outcome: 'stopped' },
     ], stopped);

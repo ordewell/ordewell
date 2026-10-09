@@ -408,6 +408,8 @@ export class Session {
   private readonly conversation: PlannerConversation;
   private readonly editor: PlanEditor;
   private readonly plannerTools: PlannerToolHandler = plannerToolHandler({
+    skills: () => this.skillsService.listSkills(),
+    recordSkillLoad: (skill) => this.conversation.recordPlannerSkill(skill),
     liveCatalog: () => this.liveCatalog(),
     coerce: (tasks, runners) => coerceAssignments(tasks, this.catalog.allowlist(), runners, this.catalog.models()),
     submitPlan: (tasks, runners) => this.submitPlanFromTool(tasks, runners),
@@ -891,7 +893,7 @@ export class Session {
       contextWindow: this.modelResolver.contextWindowFor?.(this.config.orchestratorModel),
       fs: this.fsAdapter,
       fetcher: this.fetcher,
-      plannerTools: { sessionId: this.sessionId, handler: this.plannerTools },
+      plannerTools: { sessionId: this.sessionId, handler: this.plannerTools, skills: () => this.skillsService.listSkills() },
     };
   }
 
@@ -1439,4 +1441,3 @@ export class Session {
 
   get aiServiceInstance(): IAiService { return this.aiService(); }
 }
-

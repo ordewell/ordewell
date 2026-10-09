@@ -4,6 +4,8 @@ import { buildModeGuide, filteredBuildModes, type RunnerModeInfo } from './ModeR
 import { DEFAULT_PLANNER_MODES, modesFor, type IsolatedExecution, type PlannerModes } from './plannerModes';
 import { TASK_QUERY_PROTOCOL, TASK_READ_TOOLS_PROTOCOL } from './TaskQuery';
 import { SELF_REPO } from './isolationRecord';
+import type { SkillInfo } from './SkillsService';
+import { modelInvocablePlannerSkills } from './skillInvocation';
 
 export function buildResearchToolsPrompt(): string {
   const lines = [
@@ -120,6 +122,7 @@ export interface ConversationVariant {
   harness?: boolean;
   /** The planner reads the catalog and submits the plan through Ordewell's MCP tools (ADR-0022), not the JSON envelope. */
   plannerTools?: boolean;
+  plannerSkills?: readonly SkillInfo[];
   /** Every AI task gets its own worktree (ADR-0013), so file overlap no longer forces an order; of every repo of a group (ADR-0014). */
   isolatedExecution?: IsolatedExecution;
 }
@@ -251,6 +254,7 @@ function buildConversationBody(
     '',
     researchPhaseBlock(variant.harness ?? false),
     '',
+    ...(tools ? ['Ordewell skills load only through load_skill; do not use the native Skill tool or read skill files directly.', ...plannerSkillsBlock(variant.plannerSkills ?? []), ''] : []),
     'OUTLINE PHASE:',
     `- When you are ready to propose a plan, first show a prose outline. DO NOT jump straight to ${tools ? 'submit_plan' : 'JSON'}.`,
     '- Format: a numbered list describing each vertical tracer-bullet slice, with the files/layers each slice touches.',
@@ -343,6 +347,15 @@ function buildConversationBody(
     context ? `PROJECT CONTEXT:\n${context}\n` : '',
     `USER GOAL: ${goal}`,
   ].join('\n');
+}
+
+function plannerSkillsBlock(skills: readonly SkillInfo[]): string[] {
+  const loadable = modelInvocablePlannerSkills(skills);
+  return loadable.length === 0 ? [] : [
+    'ORDEWELL PLANNER SKILLS:',
+    'Call load_skill(name) when one of these skills would help:',
+    ...loadable.map((skill) => `- ${skill.name}: ${skill.description}`),
+  ];
 }
 
 const RESEARCH_SECTION = [

@@ -314,7 +314,7 @@ export interface ConversationMessage {
  * was deleted.
  */
 export interface SkillLoad {
-  invokedBy: 'user';
+  invokedBy: 'user' | 'planner';
   name: string;
   source: SkillSource;
   /** The SKILL.md that won, home-abbreviated (`~/...`): which copy loaded is what a reader needs from it. */

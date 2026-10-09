@@ -4,8 +4,37 @@ import type { RepoGroupLayout } from '../../interfaces/IWorktreeIsolation';
 import { createTask, type DiscoveredModel, type RunnerId } from '../../models/Task';
 
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from '../plannerModes';
+import type { SkillInfo } from '../SkillsService';
 
 const modes = (over: Partial<PlannerModes> = {}): PlannerModes => ({ ...DEFAULT_PLANNER_MODES, ...over });
+
+describe('model-invocable planner skill catalog', () => {
+  const skill = (name: string, extra: Partial<SkillInfo> = {}): SkillInfo => ({
+    name, description: `${name} description`, content: 'SECRET BODY', metadata: { name, description: '' },
+    source: 'global', path: `/skills/${name}/SKILL.md`, appliesTo: 'planner', modelInvocable: true, userInvocable: false, ...extra,
+  });
+  const skills = [skill('review-plan'), skill('task-only', { appliesTo: 'task' }), skill('user-only', { modelInvocable: false })];
+  const prompt = (plannerTools: boolean, plannerSkills = skills) => buildConversationSystemPrompt(
+    'goal', '', {}, ['claude-code'], undefined, true, { plannerTools, plannerSkills },
+  );
+
+  it('advertises only loadable names and descriptions with the tools attached', () => {
+    const text = prompt(true);
+    expect(text).toContain('ORDEWELL PLANNER SKILLS:');
+    expect(text).toContain('- review-plan: review-plan description');
+    expect(text).toContain('Ordewell skills load only through load_skill');
+    expect(text).not.toMatch(/task-only|user-only|SECRET BODY|\/skills\//);
+  });
+
+  it('omits the catalog and tool instructions when no tools attached', () => {
+    expect(prompt(false)).not.toMatch(/ORDEWELL PLANNER SKILLS|review-plan|load_skill/);
+  });
+
+  it('omits the catalog when no model-invocable planner skills exist', () => {
+    expect(prompt(true, skills.slice(1))).not.toContain('ORDEWELL PLANNER SKILLS:');
+    expect(prompt(true, [])).not.toContain('ORDEWELL PLANNER SKILLS:');
+  });
+});
 
 describe('buildConversationSystemPrompt slice rules', () => {
   it('sizes slices to a fresh context window, prefactors first, and allows expand-contract for wide refactors', () => {

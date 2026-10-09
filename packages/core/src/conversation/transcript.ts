@@ -32,7 +32,7 @@ function loadsAfter(entries: readonly ConversationMessage[], index: number): Ski
   const loads: SkillLoad[] = [];
   for (let i = index + 1; i < entries.length && entries[i].kind === 'skill_load'; i++) {
     const { skill } = entries[i];
-    if (skill) loads.push(skill);
+    if (skill?.invokedBy === 'user') loads.push(skill);
   }
   return loads;
 }

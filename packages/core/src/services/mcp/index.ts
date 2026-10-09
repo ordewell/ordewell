@@ -14,6 +14,7 @@ export type {
   CheckpointAnswer,
   ListRunnersArgs,
   ListModelsArgs,
+  LoadSkillArgs,
   SubmitPlanArgs,
   EditPlanArgs,
   TaskQueryArgs,
