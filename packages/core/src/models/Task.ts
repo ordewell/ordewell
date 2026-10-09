@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { PlanIsolation } from '../interfaces/IWorktreeIsolation';
 import type { RunnerTransport } from '../interfaces/ITerminalRunner';
 import type { PlannerUsage, UsageRecord, UsageTotals } from './Usage';
+import type { SkillSource } from '../services/SkillsService';
 
 export interface UserStep {
   order: number;
@@ -315,7 +316,7 @@ export interface ConversationMessage {
 export interface SkillLoad {
   invokedBy: 'user';
   name: string;
-  source: 'global' | 'local';
+  source: SkillSource;
   /** The SKILL.md that won, home-abbreviated (`~/...`): which copy loaded is what a reader needs from it. */
   path: string;
   content: string;

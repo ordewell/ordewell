@@ -111,7 +111,8 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     expect(git(root, 'symbolic-ref', '--short', 'HEAD')).toBe('main');
     expect(existsSync(join(root, 'a.txt'))).toBe(false);
     expect(existsSync(join(root, 'b.txt'))).toBe(false);
-    expect(git(root, 'status', '--porcelain')).toBe('');
+    // The state dir's own ignore file is meant to be committed (it carves out .ordewell/skills); nothing else may show.
+    expect(git(root, 'status', '--porcelain', '--untracked-files=all')).toBe('?? .ordewell/.gitignore');
     expect(git(root, 'worktree', 'list', '--porcelain').split('\n').filter((l) => l.startsWith('worktree '))).toHaveLength(1);
   }, 30_000);
 

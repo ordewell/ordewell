@@ -7,7 +7,7 @@ import { plannerMessage, plannerTranscript, resolveSkillInvocation } from '../sk
 import type { ConversationRequest } from '../AiService';
 
 function skill(name: string, content: string, path = `/skills/${name}/SKILL.md`): SkillInfo {
-  return { name, description: name, metadata: { name, description: name }, content, path, source: 'global' };
+  return { name, description: name, metadata: { name, description: name }, content, path, source: 'global', appliesTo: 'planner', modelInvocable: true, userInvocable: true };
 }
 
 /** Backed by a live map, so a test can edit or delete a SKILL.md after it was loaded. */

@@ -146,7 +146,7 @@ describe('fromTranscript after a live session', () => {
       broadcast: (msg) => sent.push(msg),
       skillsService: {
         findSkill: (name) => (bodies[name]
-          ? { name, description: '', metadata: { name, description: '' }, content: bodies[name], path: `/skills/${name}/SKILL.md`, source: 'global' }
+          ? { name, description: '', metadata: { name, description: '' }, content: bodies[name], path: `/skills/${name}/SKILL.md`, source: 'global', appliesTo: 'planner', modelInvocable: true, userInvocable: true }
           : undefined),
       },
       aiService: {

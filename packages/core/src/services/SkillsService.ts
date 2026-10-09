@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import { STATE_DIR } from '../utils/fsHelpers';
 import { globalDataDir } from '../utils/globalDataDir';
 import { builtinSkillsDir } from './builtinSkills';
 
@@ -28,6 +29,12 @@ export interface SkillMetadata {
   disableModelInvocation?: boolean;
 }
 
+/** Who a skill is for: the planner's conversation, or a runner's task prompt. */
+export type SkillAppliesTo = 'planner' | 'task';
+
+/** `global` is ~/.ordewell/skills/ (built-in seeds included); `workspace` is <root>/.ordewell/skills/. */
+export type SkillSource = 'global' | 'workspace';
+
 export interface SkillInfo {
   name: string;
   description: string;
@@ -36,17 +43,30 @@ export interface SkillInfo {
   content: string;
   /** Absolute path to the SKILL.md file */
   path: string;
-  /** Whether this came from global (~/.ordewell/skills/) or local (.ordewell/skills/) */
-  source: 'global' | 'local';
+  source: SkillSource;
+  /** Frontmatter `applies-to`; absent or unrecognised reads as `planner`. */
+  appliesTo: SkillAppliesTo;
+  /** False when frontmatter sets `disable-model-invocation: true`. */
+  modelInvocable: boolean;
+  /** Frontmatter `user-invocable`; false makes the skill model-only. */
+  userInvocable: boolean;
+}
+
+/** A workspace skill hidden because a global skill has the same name. */
+export interface ShadowedSkill {
+  skill: SkillInfo;
+  shadowedBy: SkillInfo;
 }
 
 interface Frontmatter {
   name?: string;
   description?: string;
   'disable-model-invocation'?: boolean;
+  'user-invocable'?: boolean;
+  'applies-to'?: string;
 }
 
-function parseSkillFile(filePath: string, name: string, source: 'global' | 'local'): SkillInfo | undefined {
+function parseSkillFile(filePath: string, name: string, source: SkillSource): SkillInfo | undefined {
   const raw = fs.readFileSync(filePath, 'utf8');
 
   const frontmatter: Frontmatter = {};
@@ -60,11 +80,13 @@ function parseSkillFile(filePath: string, name: string, source: 'global' | 'loca
         const idx = line.indexOf(':');
         if (idx === -1) continue;
         const key = line.slice(0, idx).trim();
-        const value = line.slice(idx + 1).trim();
+        const value = line.slice(idx + 1).trim().replace(/^"|"$/g, '');
         if (key === 'disable-model-invocation') {
           frontmatter[key] = value === 'true';
-        } else if (key === 'name' || key === 'description') {
-          frontmatter[key] = value.replace(/^"|"$/g, '');
+        } else if (key === 'user-invocable') {
+          frontmatter[key] = value !== 'false';
+        } else if (key === 'name' || key === 'description' || key === 'applies-to') {
+          frontmatter[key] = value;
         }
       }
       content = raw.slice(end + 4).replace(/^\n+/, '');
@@ -79,7 +101,17 @@ function parseSkillFile(filePath: string, name: string, source: 'global' | 'loca
       : {}),
   };
 
-  return { name, description: metadata.description, metadata, content, path: filePath, source };
+  return {
+    name,
+    description: metadata.description,
+    metadata,
+    content,
+    path: filePath,
+    source,
+    appliesTo: frontmatter['applies-to'] === 'task' ? 'task' : 'planner',
+    modelInvocable: frontmatter['disable-model-invocation'] !== true,
+    userInvocable: frontmatter['user-invocable'] !== false,
+  };
 }
 
 function copyDirSync(src: string, dest: string): void {
@@ -101,7 +133,7 @@ function fileHash(file: string): string | undefined {
   }
 }
 
-function readDir(dir: string, source: 'global' | 'local'): SkillInfo[] {
+function readDir(dir: string, source: SkillSource): SkillInfo[] {
   if (!fs.existsSync(dir)) return [];
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   const skills: SkillInfo[] = [];
@@ -118,8 +150,16 @@ function readDir(dir: string, source: 'global' | 'local'): SkillInfo[] {
 export class SkillsService {
   constructor(private workspaceRoot?: string) {}
 
-  private localDir(): string | undefined {
-    return this.workspaceRoot ? path.join(this.workspaceRoot, '.ordewell', 'skills') : undefined;
+  /**
+   * The same global skills, with the workspace ones read from `root` instead —
+   * a task's worktree, whose `.ordewell/skills/` is its own committed copy.
+   */
+  forRoot(root: string): SkillsService {
+    return new SkillsService(root);
+  }
+
+  private workspaceDir(): string | undefined {
+    return this.workspaceRoot ? path.join(this.workspaceRoot, STATE_DIR, 'skills') : undefined;
   }
 
   private globalDir(): string {
@@ -234,30 +274,46 @@ export class SkillsService {
   findSkill(name: string): SkillInfo | undefined {
     this.pruneRetired();
     if ((BUILTIN_SKILL_NAMES as readonly string[]).includes(name)) this.seed(name);
-    const localDir = this.localDir();
-    if (localDir) {
-      const localFile = path.join(localDir, name, 'SKILL.md');
-      if (fs.existsSync(localFile)) return parseSkillFile(localFile, name, 'local');
-    }
     const globalFile = path.join(this.globalDir(), name, 'SKILL.md');
     if (fs.existsSync(globalFile)) return parseSkillFile(globalFile, name, 'global');
+    const workspaceDir = this.workspaceDir();
+    if (workspaceDir) {
+      const workspaceFile = path.join(workspaceDir, name, 'SKILL.md');
+      if (fs.existsSync(workspaceFile)) return parseSkillFile(workspaceFile, name, 'workspace');
+    }
     return undefined;
   }
 
   listSkills(): SkillInfo[] {
+    return this.catalog().skills;
+  }
+
+  /** Workspace skills skipped by `listSkills` and `findSkill` because a global one has the same name. */
+  listShadowed(): ShadowedSkill[] {
+    return this.catalog().shadowed;
+  }
+
+  /**
+   * Global wins a name clash: a repository's committed skill must not be able
+   * to silently replace one the user installed, built-ins included.
+   */
+  private catalog(): { skills: SkillInfo[]; shadowed: ShadowedSkill[] } {
     this.pruneRetired();
     for (const name of BUILTIN_SKILL_NAMES) this.seed(name);
     const byName = new Map<string, SkillInfo>();
     for (const skill of readDir(this.globalDir(), 'global')) {
       byName.set(skill.name, skill);
     }
-    const localDir = this.localDir();
-    if (localDir) {
-      for (const skill of readDir(localDir, 'local')) {
-        byName.set(skill.name, skill);
+    const shadowed: ShadowedSkill[] = [];
+    const workspaceDir = this.workspaceDir();
+    if (workspaceDir) {
+      for (const skill of readDir(workspaceDir, 'workspace')) {
+        const global = byName.get(skill.name);
+        if (global) shadowed.push({ skill, shadowedBy: global });
+        else byName.set(skill.name, skill);
       }
     }
-    return [...byName.values()];
+    return { skills: [...byName.values()], shadowed };
   }
 
   getSkillContent(name: string): string | undefined {
