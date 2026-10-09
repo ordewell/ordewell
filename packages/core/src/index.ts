@@ -182,8 +182,6 @@ export {
   researchShellWarning,
 } from './services/researchShell';
 export type { ResearchShell, ResearchShellDeps, ShellDialect } from './services/researchShell';
-export { tmuxSessionName, tmuxSocketName, tmuxWindowName, hasTmux } from './utils/tmux';
-export type { ProbeFn } from './utils/tmux';
 export { clipboardCopyCommand } from './utils/clipboard';
 export type { HasBinFn } from './utils/clipboard';
 export { RunnerRegistry } from './plugins/RunnerRegistry';
