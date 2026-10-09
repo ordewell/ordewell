@@ -23,7 +23,8 @@ describe('model-invocable planner skill catalog', () => {
     expect(text).toContain('ORDEWELL PLANNER SKILLS:');
     expect(text).toContain('- review-plan: review-plan description');
     expect(text).toContain('Ordewell skills load only through load_skill');
-    expect(text).not.toMatch(/task-only|user-only|SECRET BODY|\/skills\//);
+    expect(text).not.toMatch(/user-only|SECRET BODY|\/skills\/[a-z-]+\/SKILL\.md/);
+    expect(text.split('ORDEWELL PLANNER SKILLS:')[1].split('\n\n')[0]).not.toContain('task-only');
   });
 
   it('omits the catalog and tool instructions when no tools attached', () => {
@@ -33,6 +34,39 @@ describe('model-invocable planner skill catalog', () => {
   it('omits the catalog when no model-invocable planner skills exist', () => {
     expect(prompt(true, skills.slice(1))).not.toContain('ORDEWELL PLANNER SKILLS:');
     expect(prompt(true, [])).not.toContain('ORDEWELL PLANNER SKILLS:');
+  });
+});
+
+describe('task skill catalog', () => {
+  const skill = (name: string, extra: Partial<SkillInfo> = {}): SkillInfo => ({
+    name, description: `${name} description`, content: 'SECRET BODY', metadata: { name, description: '' },
+    source: 'global', path: `/skills/${name}/SKILL.md`, appliesTo: 'task', modelInvocable: true, userInvocable: true, ...extra,
+  });
+  const prompt = (plannerSkills: SkillInfo[], plannerTools = true) => buildConversationSystemPrompt(
+    'goal', '', {}, ['claude-code'], undefined, true, { plannerTools, plannerSkills },
+  );
+
+  it('lists model-invocable task skills with a never-blanket-attach instruction', () => {
+    const text = prompt([skill('pr-style'), skill('tdd', { modelInvocable: false }), skill('review', { appliesTo: 'planner' })]);
+    expect(text).toContain('- pr-style: pr-style description');
+    expect(text).toContain('only where its description says it applies');
+    expect(text).toContain('Never attach a skill to every task');
+    const catalog = text.slice(text.indexOf('Task skills you may attach:'), text.indexOf('DEPENDENCY & PARALLELISM:'));
+    expect(catalog).not.toMatch(/tdd|review|SECRET BODY/);
+  });
+
+  it('omits the catalog when no task skill is model-invocable, as with the built-ins', () => {
+    for (const text of [prompt([]), prompt([skill('tdd', { modelInvocable: false })]), prompt([])]) {
+      expect(text).not.toContain('Task skills you may attach:');
+    }
+  });
+
+  it('documents the skills field, and a dependency creating the skill, with or without a catalog', () => {
+    for (const text of [prompt([]), prompt([], false), prompt([skill('pr-style')])]) {
+      expect(text).toContain('"skills": ["task-skill-name"]');
+      expect(text).toContain('a task it depends on creates');
+      expect(text).toContain('accepted with a warning');
+    }
   });
 });
 

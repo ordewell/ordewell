@@ -73,9 +73,11 @@ function skillPaintedLines(text: string, skills: readonly string[], room: number
 
 /** The path gives way first: it is the part a reader can do without. */
 function skillLoadLine(block: SkillLoadBlock, cols: number): string {
-  const head = block.invokedBy === 'planner'
-    ? `● ${sanitize(block.name)} skill loaded by planner · `
-    : `● /${sanitize(block.name)} skill loaded · `;
+  const head = block.attaches
+    ? `● /${sanitize(block.name)} will be attached to fitting tasks · `
+    : block.invokedBy === 'planner'
+      ? `● ${sanitize(block.name)} skill loaded by planner · `
+      : `● /${sanitize(block.name)} skill loaded · `;
   const line = truncate(`${head}${truncatePath(sanitize(block.path), Math.max(1, cols - width(head)))}`, cols);
   return `${style.green('●')}${style.grey(line.slice(1))}`;
 }

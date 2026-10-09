@@ -21,6 +21,7 @@ interface SlashSuggestion {
 export interface SkillEntry {
   name: string;
   description: string;
+  appliesTo?: 'planner' | 'task';
 }
 
 interface ModelOption {
@@ -119,7 +120,7 @@ function matchesSearch(s: SlashSuggestion, term: string): boolean {
 }
 
 function toSkillSuggestion(skill: SkillEntry): SlashSuggestion {
-  return { label: `/${skill.name}`, detail: skill.description, insertText: `/${skill.name}`, kind: 'skill' };
+  return { label: `/${skill.name}`, detail: skill.appliesTo === 'task' ? `task skill · ${skill.description}` : skill.description, insertText: `/${skill.name}`, kind: 'skill' };
 }
 
 /**

@@ -18,8 +18,17 @@ export function modelInvocablePlannerSkills(skills: readonly SkillInfo[]): Skill
   return skills.filter((skill) => skill.appliesTo === 'planner' && skill.modelInvocable);
 }
 
+export function modelInvocableTaskSkills(skills: readonly SkillInfo[]): SkillInfo[] {
+  return skills.filter((skill) => skill.appliesTo === 'task' && skill.modelInvocable);
+}
+
 export function snapshotSkill(skill: SkillInfo, invokedBy: SkillLoad['invokedBy'], home = os.homedir()): SkillLoad {
   return { invokedBy, name: skill.name, source: skill.source, path: homeAbbreviated(skill.path, home), content: skill.content };
+}
+
+/** A task skill the user named: the planner is told to attach it, never given its body. */
+function attachSkill(skill: SkillInfo, home: string): SkillLoad {
+  return { ...snapshotSkill(skill, 'user', home), content: '', attaches: { description: skill.description } };
 }
 
 /**
@@ -30,7 +39,8 @@ export function snapshotSkill(skill: SkillInfo, invokedBy: SkillLoad['invokedBy'
  * Every distinct skill named loads, once, in the order first named. A token
  * naming no skill is plain text, wherever it stands — a whole message of
  * `/unknown` included: embedded in a sentence it is as likely to be incidental
- * text (a path, an example command) as a typo'd invocation.
+ * text (a path, an example command) as a typo'd invocation. So is one naming
+ * a skill with `user-invocable: false`, which only the model may invoke.
  */
 export function resolveSkillInvocation(
   text: string,
@@ -39,19 +49,19 @@ export function resolveSkillInvocation(
 ): SkillInvocation {
   const skills = skillTokens(text).flatMap(({ name }): SkillLoad[] => {
     const skill = skillsService.findSkill(name);
-    return skill
-      ? [snapshotSkill(skill, 'user', home)]
-      : [];
+    if (!skill?.userInvocable) return [];
+    return [skill.appliesTo === 'task' ? attachSkill(skill, home) : snapshotSkill(skill, 'user', home)];
   });
   return { text, skills };
 }
 
-export function skillLoadNotice({ invokedBy, name, source, path: file }: SkillLoad): SkillLoadNotice {
-  return { invokedBy, name, source, path: file };
+export function skillLoadNotice({ invokedBy, name, source, path: file, attaches }: SkillLoad): SkillLoadNotice {
+  return { invokedBy, name, source, path: file, ...(attaches ? { attaches } : {}) };
 }
 
 /** A skill-load entry's `content`: the line a reader of the bare transcript sees, never what the planner is sent. */
 export function skillLoadLabel(skill: SkillLoad): string {
+  if (skill.attaches) return `/${skill.name} will be attached to fitting tasks`;
   return skill.invokedBy === 'planner' ? `${skill.name} skill loaded by planner` : `/${skill.name} skill loaded`;
 }
 
@@ -61,16 +71,27 @@ export function skillLoadLabel(skill: SkillLoad): string {
  * live send and for a replay of the transcript, so a resumed conversation
  * hands the planner what the live one did.
  */
-export function plannerMessage(text: string, skills: readonly SkillLoad[]): string {
-  if (skills.length === 0) return text;
+export function plannerMessage(text: string, loads: readonly SkillLoad[]): string {
+  if (loads.length === 0) return text;
+  const skills = loads.filter((s) => !s.attaches);
+  const attached = loads.filter((s) => s.attaches);
   return [
-    `The user invoked ${skills.map((s) => `/${s.name}`).join(', ')} in the message below. Follow ${skills.length === 1 ? 'this skill' : 'these skills'}:`,
-    ...skills.map(skillBlock),
+    ...(skills.length === 0 ? [] : [
+      `The user invoked ${skills.map((s) => `/${s.name}`).join(', ')} in the message below. Follow ${skills.length === 1 ? 'this skill' : 'these skills'}:`,
+      ...skills.map(skillBlock),
+    ]),
+    ...attached.map(attachDirective),
     text,
   ].join('\n\n');
 }
 
+function attachDirective({ name, attaches }: SkillLoad): string {
+  const description = attaches?.description.trim();
+  return `The user asks to use task skill "${name}"${description ? ` (${description})` : ''}; attach it to the tasks it fits.`;
+}
+
 function skillBlock(skill: SkillLoad): string {
+  if (skill.attaches) return attachDirective(skill);
   return `<skill name="${skill.name}">\n${skill.content.trim()}\n</skill>`;
 }
 

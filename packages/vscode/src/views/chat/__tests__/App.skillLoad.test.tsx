@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { render, fireEvent, act } from '@testing-library/react';
 import type { ConversationMessage, SessionMessage, SkillLoadNotice } from '@ordewell/core';
 import App from '../App';
-import { api, hostBridge, rowKinds } from './hostBridge';
+import { api, hostBridge, post, rowKinds } from './hostBridge';
 
 const TURN = 'turn-1';
 const grilling: SkillLoadNotice = { invokedBy: 'user', name: 'grilling', source: 'global', path: '~/.ordewell/skills/grilling/SKILL.md' };
@@ -74,6 +74,25 @@ describe('a message that loads a skill', () => {
   });
 });
 
+describe('a task skill the user named', () => {
+  const tdd: SkillLoadNotice = { invokedBy: 'user', name: 'tdd', source: 'global', path: '~/.ordewell/skills/tdd/SKILL.md', attaches: { description: 'Test first' } };
+  const notice = '● /tdd will be attached to fitting tasks · ~/.ordewell/skills/tdd/SKILL.md';
+
+  it('shows the attach notice under the message live and on reload', () => {
+    render(<App />);
+    const host = hostBridge();
+    host.session(turnStarted('use /tdd here', [tdd]));
+    expect(notices()).toEqual([notice]);
+    expect(marked()).toEqual(['/tdd']);
+
+    act(() => host.provider.conversation.reload({ conversationHistory: [
+      { role: 'user', content: 'use /tdd here', timestamp: 't1' },
+      { role: 'user', content: '/tdd will be attached to fitting tasks', timestamp: 't1', kind: 'skill_load', skill: { ...tdd, content: '' } },
+    ] }));
+    expect(notices()).toEqual([notice]);
+  });
+});
+
 describe('a reloaded session', () => {
   let host: ReturnType<typeof hostBridge>;
   beforeEach(() => {
@@ -100,5 +119,20 @@ describe('a reloaded session', () => {
 
     expect(userBubbles()).toEqual(['# Grilling body']);
     expect(notices()).toEqual([]);
+  });
+});
+
+describe('the / suggestion menu', () => {
+  it('marks a task skill and offers planner skills as they are', () => {
+    render(<App />);
+    hostBridge();
+    post({ type: 'setSkills', skills: [
+      { name: 'grilling', description: 'Grill the plan', appliesTo: 'planner' },
+      { name: 'tdd', description: 'Test first', appliesTo: 'task' },
+    ] });
+    fireEvent.change(textarea(), { target: { value: '/' } });
+
+    const items = [...document.querySelectorAll('.slash-suggestion-item.skill')].map((el) => el.textContent);
+    expect(items).toEqual(['/grillingGrill the plan', '/tddtask skill · Test first']);
   });
 });

@@ -278,7 +278,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
   function sendSkills(): void {
     try {
       const skills = createSkillsService(services.fsAdapter.getWorkspaceRoot()).listSkills();
-      services.chatProvider.setSkills(skills.map((s) => ({ name: s.name, description: s.description })));
+      services.chatProvider.setSkills(skills.filter((s) => s.userInvocable).map((s) => ({ name: s.name, description: s.description, appliesTo: s.appliesTo })));
     } catch (err) {
       log(`Failed to list skills: ${err instanceof Error ? err.message : String(err)}`);
     }
