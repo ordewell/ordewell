@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { ConversationRequest, ConversationTurn, IAiService } from './AiService';
-import { reEmitPlanPrompt, repairLoop, taskOpsRejectedPrompt } from './PlanRepair';
+import { reEmitPlanPrompt, repairLoop, resubmitEditPrompt, resubmitPlanPrompt, taskOpsRejectedPrompt } from './PlanRepair';
 import { renderTaskQueryAnswer, taskQuerySignature, TASK_QUERY_ANSWER_OR_OPS, TASK_QUERY_REMINDER, TASK_READ_TOOLS_REMINDER, type LiveOutputLookup, type TaskQuery, type TaskQueryCatalog } from './TaskQuery';
 import { taskOpsProtocol, refMatchesTask, taskOpRefs, type ApplyTaskOpsResult, type TaskOp } from './TaskOps';
 import { resolveDefaultMode } from './ModeResolver';
@@ -961,6 +961,8 @@ export class PlannerConversation {
     type Settled = { plan: LegacyPlanState } | { turn: CommitTurn; skillWarnings?: string[] };
     const { signal, stream } = userTurn;
     const ai = this.host.aiService();
+    // A planner with tools submits through them alone, so its correctives ask for a tool call, not JSON.
+    const tools = ai.plannerToolsAttached?.() ?? false;
     const invalidOps = (errors: string[], researchLog: ConversationTurn['researchLog']): Settled => ({
       turn: {
         kind: 'message',
@@ -990,7 +992,7 @@ export class PlannerConversation {
           if (skills.errors.length === 0) return { done: { turn: t, skillWarnings: skills.warnings } };
           const errors = skills.errors.map((e) => e.message);
           if (!ai.hasActiveConversation() || signal.aborted) return { done: invalidPlan(errors, t.researchLog) };
-          return { retry: { errors, corrective: reEmitPlanPrompt(errors.join('; ')) } };
+          return { retry: { errors, corrective: tools ? resubmitPlanPrompt(errors) : reEmitPlanPrompt(errors.join('; ')) } };
         }
         if (t.kind !== 'task_ops') return { done: { turn: t } };
         this.assertCurrent(userTurn, t);
@@ -1001,7 +1003,7 @@ export class PlannerConversation {
         if (!ai.hasActiveConversation() || signal.aborted) {
           return { done: invalidOps(applied.errors, t.researchLog) };
         }
-        return { retry: { errors: applied.errors, corrective: taskOpsRejectedPrompt(applied.errors) } };
+        return { retry: { errors: applied.errors, corrective: (tools ? resubmitEditPrompt : taskOpsRejectedPrompt)(applied.errors) } };
       },
       maxRepairs: 2,
       onExhausted: ({ reply, errors }) => (reply.kind === 'plan' ? invalidPlan : invalidOps)(errors, reply.researchLog),

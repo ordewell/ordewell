@@ -9,7 +9,6 @@ import {
   type ResearchStep,
   type RunnerId,
   type LegacyPlanState,
-  plannerTaskView,
   DEFAULT_RUNNERS,
 } from '../../models/Task';
 import { addUsage, type UsageTotals } from '../../models/Usage';
@@ -23,8 +22,10 @@ import {
   buildPlanWithResults,
   buildModifyPlanPrompt,
 } from '../PlanPrompts';
-import { generatePlanWithRepair } from '../PlanRepair';
+import { repairLoop, resubmitPlanPrompt } from '../PlanRepair';
 import { validatePlanTasks } from '../PlanValidator';
+import { checkPlanSkills, type SkillLookup } from '../taskSkills';
+import { PLANNER_TURN_ENDED } from '../plannerTools';
 import { settleReply, type ReplyAttempt } from '../settleReply';
 import { ReplySplitter } from '../replyStream';
 import { redactSecrets } from '../../utils/redactSecrets';
@@ -73,7 +74,20 @@ interface OneShotCatalog {
   modelsByRunner?: Partial<Record<RunnerId, DiscoveredModel[]>>;
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>;
   autonomousDefault?: boolean;
+  /** Where the plan's tasks look their skills up; a submission attaching a planner skill is refused. */
+  taskSkills?: SkillLookup;
 }
+
+/** One one-shot agent session: the plan its accepted submit_plan call recorded, if any, and why its last refused one was refused. */
+interface OneShot {
+  tasks?: Task[];
+  refused: string[];
+  text: string;
+  researchLog: ResearchLogEntry[];
+}
+
+/** One-shot sessions a plan may take: the first, and one corrective after it ends without an accepted submission. */
+const ONE_SHOT_ATTEMPTS = 2;
 
 /** One completed harness turn, before classification. */
 interface HarnessTurn {
@@ -93,8 +107,8 @@ interface HarnessTurn {
  * `GeminiService`. It deliberately does **not** extend {@link BaseAiService}:
  * that class's body is Ordewell executing research tools on a model's behalf,
  * which is precisely the part a coding agent replaces. What it reuses instead
- * is everything above the transport — `settleReply` (reply classification
- * and the bounded corrective retries), `parsePlanJson`, the `ResearchProgress` events the
+ * is everything above the transport — `settleReply` (the empty-reply nudge
+ * and the turn's settling), the plan validator, the `ResearchProgress` events the
  * four surfaces already render. That is why this backend reaches VS Code, the
  * web UI, the CLI and the TUI without any of them learning a coding agent is
  * on the other end.
@@ -112,7 +126,7 @@ export class CliAgentAiService implements IAiService {
    * every session boundary — nothing from one goal may reach the next.
    */
   private lastNativeSessionId: string | null = null;
-  private conversation: { startOptions: PlannerStartOptions; tools: PlannerToolsOffer; runners: RunnerId[]; runnerModes?: Record<RunnerId, RunnerModeInfo[]>; autonomousDefault?: boolean } | null = null;
+  private conversation: { startOptions: PlannerStartOptions; tools: PlannerToolsOffer } | null = null;
   private readonly mcpServer: OrdewellMcpServer | undefined;
   /** The planner token the running process was spawned with; revoked with the process (ADR-0022, A3). */
   private plannerToken: string | null = null;
@@ -204,13 +218,7 @@ export class CliAgentAiService implements IAiService {
     const tools = req.plannerTools;
     await this.startAdapter(startOptions, tools);
 
-    this.conversation = {
-      startOptions,
-      tools,
-      runners: req.runners,
-      runnerModes: req.runnerModes,
-      autonomousDefault: req.autonomousDefault,
-    };
+    this.conversation = { startOptions, tools };
 
     // A reloaded session replays its transcript instead of re-running the
     // research the agent already paid for. The agent gets it as context, not
@@ -258,7 +266,6 @@ export class CliAgentAiService implements IAiService {
     onProgress: (progress: ResearchProgress) => void,
     signal?: AbortSignal,
   ): Promise<ConversationTurn> {
-    const conversation = this.conversation!;
     this.activeAbort = abortScope(signal);
     const combined = this.activeAbort.signal;
     let agentWaits = 0;
@@ -291,20 +298,18 @@ export class CliAgentAiService implements IAiService {
     };
 
     try {
+      // No `classify`: this planner plans only through Ordewell's tools
+      // (ADR-0025), so its reply is prose whatever JSON it shows, and a plan
+      // or edit lands only from a submission the conversation accepted.
       const turn = await settleReply({
         message,
         send,
-        classify: { runners: conversation.runners, runnerModes: conversation.runnerModes, autonomousDefault: conversation.autonomousDefault },
         onProgress,
         signal: combined,
         // `runTurn` folds every run of text the agent's turn produced into its
         // reply, a tool call's earlier segment included.
         replyJoinsSegments: true,
       });
-      // A committed plan closes the conversation, matching the API backend:
-      // post-plan chat re-enters through `startConversation` with the plan's
-      // own transcript rather than inheriting this session's context.
-      if (turn.kind === 'plan') this.conversation = null;
       return turn;
     } finally {
       this.activeAbort = null;
@@ -573,13 +578,37 @@ export class CliAgentAiService implements IAiService {
   // --- One-shot paths (CLI `plan --goal`, web REST, plan modification) ---
 
   /**
-   * A single agent session that answers one prompt and exits. Used by every
-   * non-conversational entry point; the plan is parsed from the reply text by
-   * the same extractor the conversational path uses. Its envelope streams to
-   * the plan display, as a vendor planner's one-shot does, and the prose
-   * around it is not streamed at all, since no turn is open to show it in.
+   * A plan from one-shot agent sessions: only what a submit_plan call
+   * accepted, never the reply text, so a plan the tool refused cannot come
+   * back in as the JSON the agent echoed. A session that ends without an
+   * accepted call is followed by one corrective session, then fails.
    */
-  private async oneShot(prompt: string, catalog: OneShotCatalog, onProgress?: (p: ResearchProgress) => void, signal?: AbortSignal): Promise<{ text: string; researchLog: ResearchLogEntry[] }> {
+  private async submittedPlan(prompt: string, catalog: OneShotCatalog, onProgress?: (p: ResearchProgress) => void, signal?: AbortSignal): Promise<{ tasks: Task[]; text: string; researchLog: ResearchLogEntry[] }> {
+    const researchLog: ResearchLogEntry[] = [];
+    return repairLoop<OneShot, { tasks: Task[]; text: string; researchLog: ResearchLogEntry[] }>({
+      first: () => this.oneShot(prompt, catalog, onProgress, signal),
+      resend: (corrective) => this.oneShot(`${prompt}\n\n${corrective}`, catalog, onProgress, signal),
+      interpret: (shot) => {
+        researchLog.push(...shot.researchLog);
+        if (signal?.aborted) throw new Error('Plan generation was stopped.');
+        if (shot.tasks) return { done: { tasks: shot.tasks, text: shot.text, researchLog } };
+        const errors = shot.refused.length > 0 ? shot.refused : ['the agent ended its turn without calling submit_plan'];
+        return { retry: { errors, corrective: resubmitPlanPrompt(errors) } };
+      },
+      maxRepairs: ONE_SHOT_ATTEMPTS - 1,
+      onExhausted: ({ errors }) => {
+        throw new Error(`The ${this.runner} planner produced no plan: no submit_plan call was accepted (${errors.join('; ')}).`);
+      },
+    });
+  }
+
+  /**
+   * A single agent session that answers one prompt and exits. Used by every
+   * non-conversational entry point. A plan-shaped envelope in its text
+   * streams to the plan display, as a vendor planner's one-shot does, and the
+   * prose around it is not streamed at all, since no turn is open to show it in.
+   */
+  private async oneShot(prompt: string, catalog: OneShotCatalog, onProgress?: (p: ResearchProgress) => void, signal?: AbortSignal): Promise<OneShot> {
     const previous = this.adapter;
     const previousConversation = this.conversation;
     const previousSessionId = this.lastNativeSessionId;
@@ -587,7 +616,14 @@ export class CliAgentAiService implements IAiService {
     this.adapter = null;
     this.plannerToken = null;
 
-    let submitted: string | undefined;
+    let submitted: Task[] | undefined;
+    let refused: string[] = [];
+    // A call still waiting on the skill check when the session ends must not record a plan nobody reads.
+    let ended = false;
+    const refuse = (errors: string[]) => {
+      refused = errors;
+      return { text: errors.join('\n'), isError: true };
+    };
     const tools: PlannerToolsOffer = {
       sessionId: uuidv4(),
       handler: {
@@ -595,9 +631,19 @@ export class CliAgentAiService implements IAiService {
         listModels: async ({ runner }) => ({ text: JSON.stringify({ runner, models: catalog.modelsByRunner?.[runner] ?? [] }) }),
         submitPlan: async ({ tasks }) => {
           const result = validatePlanTasks({ tasks }, catalog.runners, catalog.runnerModes, catalog.autonomousDefault);
-          if (!result.ok) return { text: result.errors.map((error) => error.message).join('\n'), isError: true };
-          submitted = JSON.stringify({ tasks: result.tasks.map(plannerTaskView) });
-          return { text: 'Plan recorded. End your turn now.' };
+          if (!result.ok) return refuse(result.errors.map((error) => error.message));
+          const skills = catalog.taskSkills ? await checkPlanSkills(result.tasks, catalog.taskSkills) : undefined;
+          if (ended || signal?.aborted) return { text: PLANNER_TURN_ENDED, isError: true };
+          if (skills && skills.errors.length > 0) return refuse(skills.errors.map((error) => error.message));
+          submitted = result.tasks;
+          refused = [];
+          return {
+            text: JSON.stringify({
+              ok: true,
+              ...(skills && skills.warnings.length > 0 ? { warnings: skills.warnings } : {}),
+              next: 'Plan recorded. End your turn now.',
+            }),
+          };
         },
       },
     };
@@ -616,11 +662,7 @@ export class CliAgentAiService implements IAiService {
     let oneShotAdapter: AgentAdapter | null = null;
     try {
       oneShotAdapter = await this.startAdapter(startOptions, tools);
-      this.conversation = {
-        startOptions,
-        tools,
-        runners: catalog.runners,
-      };
+      this.conversation = { startOptions, tools };
       const splitter = new ReplySplitter();
       const turn = await this.runTurn(
         'Follow the instructions in your system prompt and produce the plan now.',
@@ -632,8 +674,9 @@ export class CliAgentAiService implements IAiService {
         signal,
       );
       if (turn.error) throw new Error(turn.error);
-      return { text: submitted ?? turn.text, researchLog: turn.researchLog };
+      return { tasks: submitted, refused, text: turn.text, researchLog: turn.researchLog };
     } finally {
+      ended = true;
       // A one-shot never leaves a process behind, and never disturbs a
       // conversational session that happened to be open around it — including
       // when its own agent failed to start, which happens before there is
@@ -662,21 +705,13 @@ export class CliAgentAiService implements IAiService {
     signal?: AbortSignal,
   ): Promise<{ tasks: Task[]; researchLog: ResearchLogEntry[]; researchResults: string }> {
     const contextStr = await collectResearchContext(fs, runners);
-    const researchLog: ResearchLogEntry[] = [
-      { id: `up-${Date.now()}`, type: 'user_prompt', content: userDescription, timestamp: new Date().toISOString() },
-    ];
-    let lastText = '';
-    const tasks = await generatePlanWithRepair(
-      async (repairHint) => {
-        const prompt = buildPlanWithResults(userDescription, contextStr, '', modelsByRunner, runners, runnerModes, modes);
-        const result = await this.oneShot(repairHint ? `${prompt}\n\n${repairHint}` : prompt, { runners, modelsByRunner, runnerModes, autonomousDefault: modes.autonomousDefault }, onProgress, signal);
-        researchLog.push(...result.researchLog);
-        lastText = result.text;
-        return result.text;
-      },
-      runners, 2, runnerModes, modes.autonomousDefault,
-    );
-    return { tasks, researchLog, researchResults: lastText };
+    const prompt = buildPlanWithResults(userDescription, contextStr, '', modelsByRunner, runners, runnerModes, modes);
+    const plan = await this.submittedPlan(prompt, oneShotCatalog(runners, modelsByRunner, runnerModes, modes), onProgress, signal);
+    return {
+      tasks: plan.tasks,
+      researchLog: [{ id: `up-${Date.now()}`, type: 'user_prompt', content: userDescription, timestamp: new Date().toISOString() }, ...plan.researchLog],
+      researchResults: plan.text,
+    };
   }
 
   async generatePlanDirect(
@@ -691,18 +726,13 @@ export class CliAgentAiService implements IAiService {
     signal?: AbortSignal,
   ): Promise<Task[]> {
     const prompt = buildPlanWithResults(userDescription, '', '', modelsByRunner, runners, runnerModes, modes);
-    return generatePlanWithRepair(
-      async (repairHint) => {
-        const result = await this.oneShot(
-          repairHint ? `${prompt}\n\n${repairHint}` : prompt,
-          { runners, modelsByRunner, runnerModes, autonomousDefault: modes.autonomousDefault },
-          (p) => { if (p.type === 'plan_token' && p.planToken) onToken?.(p.planToken); },
-          signal,
-        );
-        return result.text;
-      },
-      runners, 2, runnerModes, modes.autonomousDefault,
+    const plan = await this.submittedPlan(
+      prompt,
+      oneShotCatalog(runners, modelsByRunner, runnerModes, modes),
+      (p) => { if (p.type === 'plan_token' && p.planToken) onToken?.(p.planToken); },
+      signal,
     );
+    return plan.tasks;
   }
 
   async modifyPlan(
@@ -718,14 +748,8 @@ export class CliAgentAiService implements IAiService {
   ): Promise<{ tasks: Task[] }> {
     const prompt = buildModifyPlanPrompt(existingPlan, userRequest, modelsByRunner, undefined, runnerModes, modes.autonomousDefault);
     try {
-      const tasks = await generatePlanWithRepair(
-        async (repairHint) => {
-          const result = await this.oneShot(repairHint ? `${prompt}\n\n${repairHint}` : prompt, { runners: existingPlan.runners, modelsByRunner, runnerModes, autonomousDefault: modes.autonomousDefault }, onProgress, signal);
-          return result.text;
-        },
-        existingPlan.runners, 2, runnerModes, modes.autonomousDefault,
-      );
-      return { tasks };
+      const plan = await this.submittedPlan(prompt, oneShotCatalog(existingPlan.runners, modelsByRunner, runnerModes, modes), onProgress, signal);
+      return { tasks: plan.tasks };
     } catch (err) {
       throw new Error(`Plan modification failed: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -737,12 +761,15 @@ export class CliAgentAiService implements IAiService {
     runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
     autonomousDefault = true,
   ): Promise<Task[]> {
-    return generatePlanWithRepair(
-      async (repairHint) => {
-        const result = await this.oneShot(repairHint ? `${prompt}\n\n${repairHint}` : prompt, { runners, runnerModes, autonomousDefault });
-        return result.text;
-      },
-      runners, 2, runnerModes, autonomousDefault,
-    );
+    return (await this.submittedPlan(prompt, { runners, runnerModes, autonomousDefault })).tasks;
   }
+}
+
+function oneShotCatalog(
+  runners: RunnerId[],
+  modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>>,
+  runnerModes: Record<RunnerId, RunnerModeInfo[]> | undefined,
+  modes: PlannerModes,
+): OneShotCatalog {
+  return { runners, modelsByRunner, runnerModes, autonomousDefault: modes.autonomousDefault, taskSkills: modes.taskSkills };
 }

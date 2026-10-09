@@ -87,6 +87,20 @@ export function reEmitPlanPrompt(detail: string): string {
   return `Your plan JSON could not be committed: ${detail}. Re-emit the COMPLETE corrected plan as a single {"${PLAN_ENVELOPE_KEY}":[...]} JSON object — every task included, no prose, no code fences.`;
 }
 
+/**
+ * A planner that submits through Ordewell's tools ended without an accepted
+ * plan, or one it submitted was refused: call the tool again. A plan written
+ * in its reply is never read (ADR-0025), so asking for JSON would be ignored.
+ */
+export function resubmitPlanPrompt(errors: string[]): string {
+  return `No plan was recorded: ${errors.join('; ')}. Call submit_plan with the COMPLETE corrected plan. A plan written in your reply is not read.`;
+}
+
+/** A tool planner's task edit was refused as its turn settled: correct it through edit_plan. */
+export function resubmitEditPrompt(errors: string[]): string {
+  return `Those task edits were rejected:\n- ${errors.join('\n- ')}\nCall edit_plan with the corrected edits, or reply in prose if something is unclear. Edits written in your reply are not read.`;
+}
+
 /** A plan emission was truncated mid-JSON; the caller may also have compacted the history to free input context. */
 export function truncatedPlanReEmitPrompt(historyCompacted: boolean): string {
   return (historyCompacted

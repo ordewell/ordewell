@@ -231,3 +231,28 @@ describe('settleReply', () => {
     expect(m.timeline).toEqual(['send', 'text_retracted', 'send', 'text_retracted', 'send', 'text_retracted', 'send']);
   });
 });
+
+describe('settleReply for a planner that submits only through tools', () => {
+  it.each([
+    ['a plan', PLAN_JSON],
+    ['a botched plan', BROKEN_PLAN],
+    ['task edits', JSON.stringify({ taskOps: [{ op: 'remove', taskId: '#1' }] })],
+    ['a read', JSON.stringify({ taskQuery: { tasks: ['#1'] } })],
+  ])('settles %s in the reply as prose, sending nothing back', async (_what, text) => {
+    const m = model(reply(text), reply('never asked for'));
+
+    const turn = await settleReply(m.opts({ classify: undefined }));
+
+    expect(turn).toEqual({ kind: 'message', text, researchLog: [] });
+    expect(m.sent).toHaveLength(1);
+  });
+
+  it('nudges an empty reply toward the tool, not the plan JSON', async () => {
+    const m = model(reply(''), reply('Which store?'));
+
+    await settleReply(m.opts({ classify: undefined }));
+
+    expect(m.sent[1]).toContain('submit the plan with submit_plan');
+    expect(m.sent[1]).not.toContain('plan JSON');
+  });
+});

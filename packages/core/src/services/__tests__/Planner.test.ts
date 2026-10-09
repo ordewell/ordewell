@@ -5,6 +5,7 @@ import type { IAiService } from '../AiService';
 import { fakeConfig } from '../../testing';
 import { DEFAULT_PLANNER_MODES } from '../plannerModes';
 import type { SkillLookup } from '../taskSkills';
+import { parsePlanJson } from '../PlanValidator';
 
 function discoveredModel(modelId: string, label?: string): DiscoveredModel {
   return { modelId, modelLabel: label ?? modelId, variants: [] };
@@ -336,6 +337,67 @@ describe('Planner', () => {
       expect(retry).toMatch(/Task "a": "grilling" is a planner skill/);
       expect(result.pendingTasks[0].skills).toEqual(['later']);
       expect(result.skillWarnings).toEqual([expect.stringContaining('Task "a": skill "later" not found')]);
+    });
+
+    it('warns about names the rewrite asked for but no skill could have, though assignment coercion copies the task', async () => {
+      const aiService = fakeAiService();
+      (aiService.sendPlanningPrompt as import("vitest").Mock).mockResolvedValueOnce(parsePlanJson(JSON.stringify({ tasks: [{
+        id: 't1', order: 1, title: 'a', description: 'd', prompt: 'p', autonomy: 'AFK', sliceType: 'AFK', assignedRunner: 'claude-code', skills: ['Not Ok'],
+        subtasks: [{ id: 't1a', order: 1, title: 'a1', description: 'd', type: 'ai', skills: ['No Good'] }],
+      }] }), ['claude-code']));
+
+      const result = await new Planner(fakeConfig(), aiService).modifyDuringExecution({
+        ...request([]),
+        modelsByRunner: { 'claude-code': [discoveredModel('sonnet')] },
+      });
+
+      expect(result.pendingTasks[0].assignedModel?.modelId).toBe('sonnet');
+      expect(result.skillWarnings).toEqual([
+        expect.stringContaining('Task "a": "Not Ok" is not a valid skill name'),
+        expect.stringContaining('Task "a1": "No Good" is not a valid skill name'),
+      ]);
+    });
+  });
+
+  describe('generate and task skills', () => {
+    const grilling = { name: 'grilling', description: '', metadata: { name: 'grilling', description: '' }, content: '', path: '/g/grilling/SKILL.md', source: 'global' as const, appliesTo: 'planner' as const, modelInvocable: false, userInvocable: true };
+    const lookup: SkillLookup = { findSkill: (name) => (name === 'grilling' ? grilling : undefined), searchedDirs: () => [] };
+    const generate = (aiService: IAiService, signal?: AbortSignal) => new Planner(fakeConfig(), aiService).generate({
+      goal: 'g', runners: ['claude-code'], modelsByRunner: { 'claude-code': [discoveredModel('sonnet')] }, signal,
+      modes: { ...DEFAULT_PLANNER_MODES, taskSkills: lookup },
+    });
+
+    it('refuses a plan with a planner skill on a task rather than returning it', async () => {
+      const aiService = fakeAiService();
+      (aiService.generatePlanDirect as import("vitest").Mock).mockResolvedValue([createTask({ id: 't1', title: 'a', skills: ['grilling'] })]);
+
+      await expect(generate(aiService)).rejects.toThrow(/Task "a": "grilling" is a planner skill/);
+    });
+
+    it('returns names not found, or no skill could have, as warnings beside the plan', async () => {
+      const aiService = fakeAiService();
+      (aiService.generatePlanDirect as import("vitest").Mock).mockResolvedValue(parsePlanJson(JSON.stringify({ tasks: [{
+        id: 't1', order: 1, title: 'a', description: 'd', prompt: 'p', autonomy: 'AFK', sliceType: 'AFK', assignedRunner: 'claude-code', skills: ['later', '-bad'],
+      }] }), ['claude-code']));
+
+      const plan = await generate(aiService);
+
+      expect(plan.tasks[0].skills).toEqual(['later']);
+      expect(plan.skillWarnings).toEqual([
+        expect.stringContaining('Task "a": "-bad" is not a valid skill name'),
+        expect.stringContaining('Task "a": skill "later" not found'),
+      ]);
+    });
+
+    it('lands nothing when stopped during the skill check', async () => {
+      const aiService = fakeAiService();
+      const controller = new AbortController();
+      (aiService.generatePlanDirect as import("vitest").Mock).mockImplementation(async () => {
+        controller.abort();
+        return [createTask({ id: 't1', title: 'a', skills: ['later'] })];
+      });
+
+      await expect(generate(aiService, controller.signal)).rejects.toThrow(/stopped/);
     });
   });
 

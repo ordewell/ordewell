@@ -5,6 +5,7 @@ import type { SessionMessage, SessionNotice } from '../SessionMessage';
 import type { SkillInfo } from '../SkillsService';
 import type { ModifyDuringExecutionRequest } from '../Planner';
 import { FakeRunnerSession, makeSession, saves, testWorkspace, taskOf } from './sessionTestKit';
+import { parsePlanJson } from '../PlanValidator';
 
 function skill(name: string, appliesTo: SkillInfo['appliesTo'], content = `${name} body`): SkillInfo {
   const path = `/home/u/.ordewell/skills/${name}/SKILL.md`;
@@ -79,25 +80,65 @@ describe('task skills checked where a planner reply lands', () => {
     expect(generated.at(-1)?.plan.conversationHistory?.at(-1)).toEqual(note);
   });
 
-  it('records a one-shot plan\'s skill warnings in its transcript and as a notice', async () => {
+  // What the planner submitted, as parsing saw it: the check reports what parsing had to drop.
+  const parsedPlan = (subtaskSkills: unknown[]) => parsePlanJson(JSON.stringify({
+    tasks: [
+      { id: 'a', order: 1, title: 'Make it', description: 'd', prompt: 'p', assignedRunner: 'claude-code', autonomy: 'AFK', sliceType: 'AFK' },
+      {
+        id: 'b', order: 2, title: 'Use it', description: 'd', prompt: 'p', dependencies: ['a'], assignedRunner: 'claude-code', autonomy: 'AFK', sliceType: 'AFK',
+        subtasks: [{ id: 'b1', order: 1, title: 'Wire it', description: 'd', type: 'ai', skills: subtaskSkills }],
+      },
+    ],
+  }), ['claude-code']);
+
+  it('lands a one-shot plan with a warning for a nested name not found or not valid, each name attached once', async () => {
     const onNotice = vi.fn<(notice: SessionNotice) => void>();
-    const generate = vi.fn(async (): Promise<LegacyPlanState> => ({
-      ...twoTaskPlan(),
-      conversationHistory: undefined,
-      tasks: [
-        createTask({ id: 'a', order: 1, title: 'Make it', prompt: 'p', assignedRunner: 'claude-code' }),
-        createTask({ id: 'b', order: 2, title: 'Use it', prompt: 'p', dependencies: ['a'], assignedRunner: 'claude-code', skills: ['later', 'grilling'] }),
-      ],
-    }));
-    const session = makeSession({ skillsService, onNotice, planner: { generate } });
+    const generatePlanDirect = vi.fn(async () => parsedPlan(['Bad Name!', 'TDD', 'tdd', 'later']));
+    const session = makeSession({ skillsService, onNotice, aiService: { generatePlanDirect } });
 
     await session.generatePlan('make and use a skill', ['claude-code']);
 
+    expect(taskOf(session, 'b1')!.skills).toEqual(['tdd', 'later']);
     const note = skillCheckNote(session.planState?.conversationHistory);
-    expect(note?.content).toContain('- Task "Use it": skill "later" not found');
-    expect(note?.content).toContain('- Task "Use it": "grilling" is a planner skill');
+    expect(note?.content).toContain('- Task "Wire it": "Bad Name!" is not a valid skill name');
+    expect(note?.content).toContain('- Task "Wire it": skill "later" not found');
     expect(saves(session).mock.calls.at(-1)![0].conversationHistory).toContainEqual(note);
-    expect(onNotice).toHaveBeenCalledWith({ type: 'notice', level: 'warn', message: expect.stringContaining('Task "Use it": skill "later" not found') });
+    expect(onNotice.mock.calls.map(([n]) => [n.level, n.message])).toEqual([
+      ['warn', expect.stringContaining('"Bad Name!" is not a valid skill name')],
+      ['warn', expect.stringContaining('skill "later" not found')],
+    ]);
+  });
+
+  it('refuses a one-shot plan attaching a planner skill to a subtask, and loads, saves and broadcasts none of it', async () => {
+    const onNotice = vi.fn<(notice: SessionNotice) => void>();
+    const broadcast = vi.fn<(message: SessionMessage) => void>();
+    const generatePlanDirect = vi.fn(async () => parsedPlan(['tdd', 'grilling']));
+    const session = makeSession({ skillsService, onNotice, broadcast, aiService: { generatePlanDirect } });
+
+    await expect(session.generatePlan('make and use a skill', ['claude-code'])).rejects.toThrow(/Task "Wire it": "grilling" is a planner skill/);
+
+    expect(session.planTasks).toEqual([]);
+    expect(saves(session)).not.toHaveBeenCalled();
+    expect(broadcast.mock.calls.filter(([m]) => m.type === 'plan_generated')).toEqual([]);
+    expect(onNotice).not.toHaveBeenCalled();
+  });
+
+  it('warns about a name an API planner\'s envelope plan could not attach, as it was written', async () => {
+    const onNotice = vi.fn<(notice: SessionNotice) => void>();
+    const tasks = parsedPlan(['Bad Name!', 'pr-style']);
+    const session = makeSession({
+      skillsService,
+      onNotice,
+      aiService: { startConversation: vi.fn().mockResolvedValue({ kind: 'plan', tasks, text: '', researchLog: [] }), hasActiveConversation: () => true },
+    });
+
+    await session.startPlanning('add a cache', ['claude-code']);
+
+    expect(taskOf(session, 'b1')!.skills).toEqual(['pr-style']);
+    expect(skillCheckNote(session.planState?.conversationHistory)?.content).toBe(
+      'Skill check:\n- Task "Wire it": "Bad Name!" is not a valid skill name (lowercase letters, digits, "-" and "_", starting with a letter or digit), so it was not attached.',
+    );
+    expect(onNotice).toHaveBeenCalledWith({ type: 'notice', level: 'warn', message: expect.stringContaining('"Bad Name!" is not a valid skill name') });
   });
 
   it('refuses envelope task ops attaching a planner skill through the repair loop, then lands the corrected ones with a notice', async () => {

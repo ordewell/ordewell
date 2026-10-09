@@ -20,7 +20,7 @@ import { plannerModesFrom } from './plannerModes';
 import type { UserSettings } from './SettingsService';
 import { SkillsService } from './SkillsService';
 import { plannerMessage, resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
-import { checkPlanSkills, plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
+import { plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
 import type { MergeGateView, SessionBroadcaster, SessionNotice } from './SessionMessage';
 import { SessionEventRelay } from './SessionEventRelay';
 import { saveSession } from '../utils/sessionStore';
@@ -706,9 +706,9 @@ export class Session {
     return this.conversation.hold(options?.signal, async (turn) => {
       const { modelsByRunner, runnerModes } = await this.catalog.planning(chosenRunners);
       const settings = this.settingsFn();
-      const modes = { ...plannerModesFrom(this.config.autonomousMode), isolatedExecution: await this.runs.plannerLayout() };
+      const modes = { ...plannerModesFrom(this.config.autonomousMode), isolatedExecution: await this.runs.plannerLayout(), taskSkills: this.workspaceSkills() };
 
-      const plan = await this.planner.generate({
+      const { skillWarnings = [], ...plan } = await this.planner.generate({
         goal,
         runners: chosenRunners,
         modelsByRunner,
@@ -721,11 +721,7 @@ export class Session {
         perRunnerAllowlist: settings.modelAllowlist,
         modes,
       });
-      // No repair loop here to send a planner skill back, so it is reported
-      // with the names not found rather than refused.
-      const skills = await checkPlanSkills(plan.tasks, this.workspaceSkills());
       if (turn.abandoned) throw new PlannerTurnDiscardedError();
-      const skillWarnings = [...skills.errors.map((e) => e.message), ...skills.warnings];
 
       this.plan = plan;
       this.saved(() => {

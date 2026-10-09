@@ -1,4 +1,5 @@
 import type { RepoGroupLayout } from '../interfaces/IWorktreeIsolation';
+import type { SkillLookup } from './taskSkills';
 
 /**
  * Where the run's tasks will work: `false` in the shared workspace root;
@@ -11,6 +12,13 @@ export interface PlannerModes {
   autonomousDefault: boolean;
   /** Not a toggle: a fact about the run. */
   isolatedExecution: IsolatedExecution;
+  /**
+   * Where the run's tasks will look their skills up (ADR-0024), also a fact
+   * about the run. A plan attaching a planner skill is refused against it,
+   * and a coding agent's submit_plan call is refused in its turn rather than
+   * accepted and then failed. Absent: the plan is not checked.
+   */
+  taskSkills?: SkillLookup;
 }
 
 export const DEFAULT_PLANNER_MODES: PlannerModes = {

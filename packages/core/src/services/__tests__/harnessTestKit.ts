@@ -6,7 +6,7 @@ import type { AgentAdapterFactory, AgentEvent, AgentProcessDeps, SpawnFn, TaskMo
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
 import { createTaskAdapter } from '../harness/connectors';
 import type { RunnerManifest } from '../../plugins/types';
-import type { McpCredential, OrdewellMcpServer } from '../mcp';
+import type { McpCredential, OrdewellMcpServer, PlannerToolHandler } from '../mcp';
 
 /**
  * The one test seam for harness planners (ADR-0009): a fake process boundary,
@@ -215,9 +215,17 @@ function reportCodexStartup(chunk: string, proc: FakeAgentProcess): void {
  * An Ordewell MCP server that issues tokens without listening: what a planner
  * or a task is handed when the test is not about the server itself.
  */
-export function fakeMcpServer(): OrdewellMcpServer & { readonly issued: string[]; readonly revoked: string[] } {
+export type FakeMcpServer = OrdewellMcpServer & {
+  readonly issued: string[];
+  readonly revoked: string[];
+  /** The handler each planner token was issued with, in order: what a fake agent's tool calls reach. */
+  readonly plannerHandlers: PlannerToolHandler[];
+};
+
+export function fakeMcpServer(): FakeMcpServer {
   const issued: string[] = [];
   const revoked: string[] = [];
+  const plannerHandlers: PlannerToolHandler[] = [];
   const issue = async (): Promise<McpCredential> => {
     const token = `tok-${issued.length + 1}`;
     issued.push(token);
@@ -226,11 +234,15 @@ export function fakeMcpServer(): OrdewellMcpServer & { readonly issued: string[]
   const server = {
     issued,
     revoked,
+    plannerHandlers,
     issueTaskToken: issue,
-    issuePlannerToken: issue,
+    issuePlannerToken: async (_scope: unknown, handler: PlannerToolHandler = {}) => {
+      plannerHandlers.push(handler);
+      return issue();
+    },
     revoke: (token: string) => { revoked.push(token); },
   };
-  return server as unknown as OrdewellMcpServer & { readonly issued: string[]; readonly revoked: string[] };
+  return server as unknown as FakeMcpServer;
 }
 
 /**

@@ -5,7 +5,10 @@ import { fakeConfig, fakeFileSystem } from '../../testing';
 import type { IConfig } from '../../interfaces/IConfig';
 import type { ConversationRequest } from '../AiService';
 import type { ResearchProgress, ResearchStep } from '../../models/Task';
-import { fakeMcpServer, fakeSpawn, fixture, openCodeFixture, planJson, scriptedAdapter, sseResponse, type FakeAgentProcess, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
+import { fakeMcpServer, fakeSpawn, fixture, openCodeFixture, planJson, scriptedAdapter, sseResponse, type FakeAgentProcess, type FakeMcpServer, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
+import type { McpToolReply, SubmitPlanArgs } from '../mcp/tools';
+import type { SkillLookup } from '../taskSkills';
+import type { SkillInfo } from '../SkillsService';
 import type { AgentEvent } from '../harness/AgentAdapter';
 import { addPlannerUsage, plannerContextFill } from '../../models/Usage';
 import { TurnStream } from '../replyStream';
@@ -23,6 +26,7 @@ function service(
   replies: ScriptedReply[],
   overrides: Partial<IConfig> = {},
   spawnOptions: FakeSpawnOptions = {},
+  mcp: FakeMcpServer = fakeMcpServer(),
 ) {
   const spawned = fakeSpawn(replies, spawnOptions);
   const config = fakeConfig({ aiProvider: provider, ...overrides });
@@ -40,10 +44,35 @@ function service(
       // filesystem — the workspace and the agent binary are both fictional.
       isDirectory: () => true,
       exists: () => true,
-      mcpServer: fakeMcpServer(),
+      mcpServer: mcp,
     },
   );
   return { svc, spawned, config };
+}
+
+/**
+ * A one-shot agent turn that calls submit_plan with `tasks` through the
+ * handler the service issued its token with, then ends on `reply`. Each
+ * call's answer goes to `answers`.
+ */
+function submitting(mcp: FakeMcpServer, tasks: unknown, reply: string, answers: McpToolReply[] = []): ScriptedReply {
+  return (_written, proc) => {
+    void mcp.plannerHandlers.at(-1)!.submitPlan!({ tasks: tasks as SubmitPlanArgs['tasks'] }, { signal: new AbortController().signal })
+      .then((answer) => {
+        answers.push(answer);
+        proc.emitStdout(reply);
+      });
+  };
+}
+
+const planTasks = (runner = 'claude-code'): unknown => (JSON.parse(planJson(runner)) as { tasks: unknown }).tasks;
+/** A Claude Code turn whose whole reply is `text`. */
+function claudeSays(text: string): string {
+  return [
+    { type: 'system', subtype: 'init', session_id: 'sess-says', cwd: '/repo', permissionMode: 'plan' },
+    { type: 'assistant', session_id: 'sess-says', message: { id: 'msg_says', role: 'assistant', content: text ? [{ type: 'text', text }] : [] } },
+    { type: 'result', subtype: 'success', session_id: 'sess-says', is_error: false, result: text },
+  ].map((line) => `${JSON.stringify(line)}\n`).join('');
 }
 
 function request(overrides: Partial<ConversationRequest> = {}): ConversationRequest {
@@ -200,31 +229,19 @@ describe('CliAgentAiService — Claude Code', () => {
     );
   });
 
-  it('commits a plan emitted as text through the existing parser', async () => {
-    const { svc } = service('claude-code', [fixture('claude-code', 'plan', { PLAN: planJson() })]);
+  // It plans through Ordewell's tools alone (ADR-0025): a plan, an edit or a
+  // read written in its reply is something it said, never something it did.
+  it.each([
+    ['a plan', planJson()],
+    ['task edits', JSON.stringify({ taskOps: [{ op: 'update', taskId: '#1', changes: { title: 'x' } }] })],
+    ['a read', JSON.stringify({ taskQuery: { tasks: ['#2'], catalog: true } })],
+  ])('returns %s written in its reply as prose, and keeps the conversation open', async (_what, text) => {
+    const { svc, spawned } = service('claude-code', [claudeSays(text)]);
     const turn = await svc.startConversation(request());
 
-    expect(turn.kind).toBe('plan');
-    if (turn.kind !== 'plan') throw new Error('expected a plan');
-    expect(turn.tasks).toHaveLength(1);
-    expect(turn.tasks[0].title).toBe('Add the thing');
-    // A committed plan closes the conversation, like the API backend.
-    expect(svc.hasActiveConversation()).toBe(false);
-  });
-
-  // The read channel is a text envelope precisely so it works here, where
-  // Ordewell owns no tool loop to register a tool on (ADR-0009).
-  it('hands a task-query read up as its own turn kind', async () => {
-    const query = JSON.stringify({ taskQuery: { tasks: ['#2'], catalog: true } });
-    const { svc } = service('claude-code', [fixture('claude-code', 'plan', { PLAN: query })]);
-    const turn = await svc.startConversation(request());
-
-    expect(turn.kind).toBe('task_query');
-    if (turn.kind !== 'task_query') throw new Error('expected a read');
-    expect(turn.query.tasks).toEqual(['#2']);
-    expect(turn.query.catalog).toBe(true);
-    // A read settles nothing, so the conversation stays open for the answer.
+    expect(turn).toMatchObject({ kind: 'message', text });
     expect(svc.hasActiveConversation()).toBe(true);
+    expect(writes(spawned.processes[0])).toHaveLength(1);
   });
 
   // Claude Code auto-backgrounds an `Agent` call and ends the turn on "I'll
@@ -289,32 +306,22 @@ describe('CliAgentAiService — Claude Code', () => {
     expect(events.filter((e) => e.type === 'tool_call')).toHaveLength(0);
   });
 
-  it('repairs a botched plan with a bounded corrective re-emit', async () => {
-    const { svc, spawned } = service('claude-code', [
-      fixture('claude-code', 'broken-plan'),
-      fixture('claude-code', 'plan', { PLAN: planJson() }),
-    ]);
-    const turn = await svc.startConversation(request());
-
-    expect(turn.kind).toBe('plan');
-    // Two user messages went in: the goal, then the corrective re-emit. The
-    // fixture's plan is cut off mid-object, so the re-emit asks for a terser
-    // plan, as on the API backend — and claims no trim, since the agent's
-    // context is its own.
-    const sent = writes(spawned.processes[0]);
-    expect(sent).toHaveLength(2);
-    expect(sent[1]).toContain('cut off by the output length limit');
-    expect(sent[1]).not.toContain('trimmed');
-  });
-
-  it('degrades to prose when the repair budget is exhausted', async () => {
-    const broken = fixture('claude-code', 'broken-plan');
-    const { svc, spawned } = service('claude-code', [broken, broken, broken]);
+  it('never sends a botched plan in its reply back to be re-emitted', async () => {
+    const { svc, spawned } = service('claude-code', [fixture('claude-code', 'broken-plan'), fixture('claude-code', 'prose')]);
     const turn = await svc.startConversation(request());
 
     expect(turn.kind).toBe('message');
-    // One goal + two corrective re-emits, then it stops asking.
-    expect(writes(spawned.processes[0])).toHaveLength(3);
+    expect(writes(spawned.processes[0])).toHaveLength(1);
+  });
+
+  it('nudges an empty reply toward submit_plan, not plan JSON', async () => {
+    const { svc, spawned } = service('claude-code', [claudeSays(''), fixture('claude-code', 'prose')]);
+    await svc.startConversation(request());
+
+    const sent = writes(spawned.processes[0]);
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toContain('submit the plan with submit_plan');
+    expect(sent[1]).not.toContain('plan JSON');
   });
 
   it('denies any permission the agent asks for and records it as denied', async () => {
@@ -562,7 +569,7 @@ describe('CliAgentAiService — streamed events (#47)', () => {
     expect(steps.map((step) => [step.toolCallId, step.subagentId])).toEqual([['c1', 'sa1'], ['task-1', undefined]]);
   });
 
-  it('takes back an attempt the JSON repair discards before the corrected re-emit', async () => {
+  it('settles a reply that looks like a botched plan as prose, with no corrective re-emit', async () => {
     const broken = '{"tasks":[{"id":"t1","order":1,"title":"A","description":"d","type":"ai","dependencies":[],"subtasks":[]}]}';
     const svc = scripted(
       [{ type: 'assistant_text', text: broken }, { type: 'turn_end' }],
@@ -572,8 +579,9 @@ describe('CliAgentAiService — streamed events (#47)', () => {
 
     const turn = await svc.startConversation(request({ onProgress }));
 
-    expect(turn.kind).toBe('plan');
-    expect(events.map((e) => e.type)).toEqual(['text_delta', 'text_retracted', 'text_delta']);
+    expect(turn).toMatchObject({ kind: 'message', text: broken });
+    // Taken back only because the settled message replaces the streamed segments, as for any prose reply.
+    expect(events.map((e) => e.type)).toEqual(['text_delta', 'text_retracted']);
   });
 
   it('takes back what an empty reply streamed before nudging the agent', async () => {
@@ -666,11 +674,11 @@ describe('CliAgentAiService — Codex', () => {
     expect(thinking[0].text).toBe('Checking how the planner is wired.');
   });
 
-  it('commits a plan emitted in an agent_message', async () => {
+  it('returns a plan in an agent_message as prose', async () => {
     const { svc } = service('codex', [...codexHandshake(), fixture('codex', 'plan', { PLAN: planJson('codex') })]);
     const turn = await svc.startConversation(request({ runners: ['codex'] }));
 
-    expect(turn.kind).toBe('plan');
+    expect(turn).toMatchObject({ kind: 'message', text: planJson('codex') });
   });
 
   it('declines a file-change approval rather than letting the planner write', async () => {
@@ -1025,14 +1033,14 @@ describe('CliAgentAiService — OpenCode', () => {
     expect(events.find((e) => e.type === 'tool_result')?.step?.outcome).toBe('success');
   });
 
-  it('commits a plan carried in a text part', async () => {
+  it('returns a plan carried in a text part as prose', async () => {
     const { svc } = openCodeService((url) => {
       if (url.endsWith('/session')) return { id: 'ses_opencode_2' };
       return { info: { id: 'msg_a' }, parts: [{ id: 'prt_1', messageID: 'msg_a', type: 'text', text: planJson('opencode') }] };
     });
 
     const turn = await svc.startConversation(request({ runners: ['opencode'] }));
-    expect(turn.kind).toBe('plan');
+    expect(turn).toMatchObject({ kind: 'message', text: planJson('opencode') });
   });
 
   it('never lets the echoed user message into the planner reply', async () => {
@@ -1295,8 +1303,10 @@ describe('CliAgentAiService — OpenCode', () => {
  * credentials, which is what makes them CI's coverage of this backend.
  */
 describe('CliAgentAiService — one-shot plan generation', () => {
-  it('generates a validated plan through a Claude Code session that does not outlive it', async () => {
-    const { svc, spawned } = service('claude-code', [fixture('claude-code', 'plan', { PLAN: planJson() })]);
+  it('generates the plan its submit_plan call recorded, through a Claude Code session that does not outlive it', async () => {
+    const mcp = fakeMcpServer();
+    const answers: McpToolReply[] = [];
+    const { svc, spawned } = service('claude-code', [submitting(mcp, planTasks(), claudeSays('Submitted the plan.'), answers)], {}, {}, mcp);
     const result = await svc.researchAndPlan(
       'Add the thing',
       ['claude-code'],
@@ -1305,6 +1315,7 @@ describe('CliAgentAiService — one-shot plan generation', () => {
       () => {},
     );
 
+    expect(answers.map((a) => a.isError ?? false)).toEqual([false]);
     expect(result.tasks).toHaveLength(1);
     expect(result.tasks[0].assignedRunner).toBe('claude-code');
     expect(result.researchLog[0]).toMatchObject({ type: 'user_prompt', content: 'Add the thing' });
@@ -1313,10 +1324,11 @@ describe('CliAgentAiService — one-shot plan generation', () => {
   });
 
   // The plan display a vendor planner's one-shot feeds token by token. The
-  // agent's narration around the envelope is prose, which a one-shot does not
-  // stream.
-  it('streams the plan envelope to the plan display, and nothing of the narration', async () => {
+  // agent's narration around an envelope is prose, which a one-shot does not
+  // stream; the plan itself is the one submit_plan recorded.
+  it('streams an envelope in the reply to the plan display, and nothing of the narration', async () => {
     const plan = planJson();
+    const mcp = fakeMcpServer();
     const svc = new CliAgentAiService(fakeConfig({ aiProvider: 'claude-code' }), {
       createAdapter: scriptedAdapter([[
         { type: 'assistant_text', text: 'Here is the plan.' },
@@ -1328,21 +1340,78 @@ describe('CliAgentAiService — one-shot plan generation', () => {
         { type: 'turn_end' },
       ]]),
       workspaceRoot: () => '/repo',
+      mcpServer: mcp,
     });
     const tokens: string[] = [];
+    const generating = svc.generatePlanDirect('Add the thing', ['claude-code'], {}, (token) => tokens.push(token));
+    await vi.waitFor(() => expect(mcp.plannerHandlers).toHaveLength(1));
+    await mcp.plannerHandlers[0].submitPlan!({ tasks: planTasks() as SubmitPlanArgs['tasks'] }, { signal: new AbortController().signal });
 
-    const tasks = await svc.generatePlanDirect('Add the thing', ['claude-code'], {}, (token) => tokens.push(token));
-
-    expect(tasks).toHaveLength(1);
+    expect(await generating).toHaveLength(1);
     expect(tokens.join('')).toBe(plan);
   });
 
-  it('generates a validated plan through a Codex session', async () => {
-    const { svc, spawned } = service('codex', [...codexHandshake(), fixture('codex', 'plan', { PLAN: planJson('codex') })]);
+  it('generates the plan its submit_plan call recorded through a Codex session', async () => {
+    const mcp = fakeMcpServer();
+    const { svc, spawned } = service('codex', [...codexHandshake(), submitting(mcp, planTasks('codex'), fixture('codex', 'plan', { PLAN: 'Submitted.' }))], {}, {}, mcp);
     const tasks = await svc.sendPlanningPrompt('Plan the thing', ['codex']);
 
     expect(tasks).toHaveLength(1);
     expect(spawned.processes[0].killed).toBe(true);
+  });
+
+  // The reply text has no authority: a plan the agent writes out, or echoes
+  // after submit_plan refused it, is never read back in as the plan.
+  it('fails clearly when no submit_plan call is accepted, after one corrective session, and never reads the reply\'s JSON', async () => {
+    const { svc, spawned } = service('claude-code', [claudeSays(planJson()), claudeSays(planJson())]);
+
+    await expect(svc.sendPlanningPrompt('Plan the thing', ['claude-code'])).rejects.toThrow(/claude-code planner produced no plan: no submit_plan call was accepted/);
+    expect(spawned.processes).toHaveLength(2);
+    expect(spawned.lastArgs().join('\n')).toContain('the agent ended its turn without calling submit_plan. Call submit_plan with the COMPLETE corrected plan');
+    expect(spawned.processes.every((p) => p.killed)).toBe(true);
+  });
+
+  it('ignores the plan JSON an agent echoes after its submission was refused, and corrects through submit_plan', async () => {
+    const mcp = fakeMcpServer();
+    const answers: McpToolReply[] = [];
+    const bad = [{ ...(planTasks() as Record<string, unknown>[])[0], assignedRunner: 'bogus' }];
+    const { svc, spawned } = service('claude-code', [
+      submitting(mcp, bad, claudeSays(planJson()), answers),
+      submitting(mcp, planTasks(), claudeSays('Fixed and submitted.'), answers),
+    ], {}, {}, mcp);
+
+    const tasks = await svc.sendPlanningPrompt('Plan the thing', ['claude-code']);
+
+    expect(answers.map((a) => a.isError ?? false)).toEqual([true, false]);
+    const corrective = spawned.lastArgs().join('\n');
+    expect(corrective).toContain('invalid assignedRunner');
+    expect(corrective).toContain('A plan written in your reply is not read');
+    expect(tasks[0].assignedRunner).toBe('claude-code');
+  });
+
+  it('refuses a submission attaching a planner skill in the agent\'s turn, and warns about names it cannot attach', async () => {
+    const plannerSkill = { name: 'grilling', appliesTo: 'planner', path: '/home/u/.ordewell/skills/grilling/SKILL.md' } as SkillInfo;
+    const taskSkills: SkillLookup = { findSkill: (name) => (name === 'grilling' ? plannerSkill : undefined), searchedDirs: () => [] };
+    const nested = (skills: unknown[]) => [{ ...(planTasks() as Record<string, unknown>[])[0], subtasks: [{ id: 's1', order: 1, title: 'Sub', description: 'd', type: 'ai', skills }] }];
+    const mcp = fakeMcpServer();
+    const answers: McpToolReply[] = [];
+    const { svc } = service('claude-code', [
+      submitting(mcp, nested(['grilling']), claudeSays('Submitted.'), answers),
+      submitting(mcp, nested(['Bad Name!', 'Later', 'later']), claudeSays('Submitted again.'), answers),
+    ], {}, {}, mcp);
+
+    const tasks = await svc.generatePlanDirect('Plan', ['claude-code'], {}, undefined, undefined, undefined, undefined, { autonomousDefault: true, isolatedExecution: false, taskSkills });
+
+    expect(answers[0]).toEqual({ isError: true, text: expect.stringContaining('Task "Sub": "grilling" is a planner skill') });
+    expect(JSON.parse(answers[1].text)).toEqual({
+      ok: true,
+      warnings: [
+        expect.stringContaining('Task "Sub": "Bad Name!" is not a valid skill name'),
+        expect.stringContaining('Task "Sub": skill "later" not found'),
+      ],
+      next: expect.any(String),
+    });
+    expect(tasks[0].subtasks[0].skills).toEqual(['later']);
   });
 
   it('surfaces a one-shot agent failure instead of returning an empty plan', async () => {
@@ -1361,14 +1430,15 @@ describe('CliAgentAiService — one-shot plan generation', () => {
     // hint would restart the chat into a plan-generation session that never
     // shared its goal.
     const controller = new AbortController();
+    const mcp = fakeMcpServer();
     const { svc, spawned } = service('claude-code', [
       (_written, proc) => {
         proc.emitStdout('{"type":"system","subtype":"init","session_id":"sess-chat"}\n');
         controller.abort();
       },
-      '{"type":"system","subtype":"init","session_id":"sess-oneshot"}\n' + fixture('claude-code', 'plan', { PLAN: planJson() }),
+      submitting(mcp, planTasks(), '{"type":"system","subtype":"init","session_id":"sess-oneshot"}\n' + claudeSays('Submitted.')),
       fixture('claude-code', 'prose'),
-    ]);
+    ], {}, {}, mcp);
     await svc.startConversation(request({ signal: controller.signal }));
     await svc.sendPlanningPrompt('Plan the thing', ['claude-code']);
     await svc.continueConversation('Carry on', () => {});
@@ -1584,19 +1654,16 @@ describe('CliAgentAiService — Claude Code partial messages, usage and subagent
 });
 
 describe('CliAgentAiService — resource lifecycle', () => {
-  it('kills the agent process after a committed plan closed the conversation', async () => {
-    // The leak this guards: a committed plan nulls the conversation while the
-    // adapter still holds a live agent process, so a host that gated `reset()`
-    // on `hasActiveConversation()` disposed nothing.
-    const { svc, spawned } = service('claude-code', [fixture('claude-code', 'plan', { PLAN: planJson() })]);
-    const turn = await svc.startConversation(request());
-
-    expect(turn.kind).toBe('plan');
-    expect(svc.hasActiveConversation()).toBe(false);
+  it('kills the agent process on reset whether or not a conversation is still held', async () => {
+    // The leak this guards: an agent process can outlive its conversation, so
+    // a host that gated `reset()` on `hasActiveConversation()` disposed nothing.
+    const { svc, spawned } = service('claude-code', [fixture('claude-code', 'prose')]);
+    await svc.startConversation(request());
     expect(spawned.processes[0].killed).toBe(false);
 
     svc.reset();
     expect(spawned.processes[0].killed).toBe(true);
+    expect(svc.hasActiveConversation()).toBe(false);
   });
 
   it('is idempotent, so callers never have to gate it', async () => {
