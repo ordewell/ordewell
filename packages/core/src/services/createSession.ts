@@ -2,7 +2,7 @@ import { createAiService, type IAiService } from './AiService';
 import { applyTaskOps, type TaskOp } from './TaskOps';
 import type { TaskQueryCatalog } from './TaskQuery';
 import { SessionCatalog } from './SessionCatalog';
-import { plannerToolHandler, runnersOf, type PlanEditOutcome } from './plannerTools';
+import { plannerToolHandler, runnersOf, PLANNER_TURN_ENDED, type PlanEditOutcome } from './plannerTools';
 import { sharedMcpServer, type OrdewellMcpServer, type PlannerToolHandler } from './mcp';
 import { ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, type ConversationCompaction, type ConversationOpening, type PlannerConversationHost, type PlannerSubmission, type RewindTarget } from './PlannerConversation';
 import { forkPlanState, type ForkedDialogue } from './conversationFork';
@@ -403,6 +403,7 @@ export class Session {
   private readonly editor: PlanEditor;
   private readonly plannerTools: PlannerToolHandler = plannerToolHandler({
     skills: () => this.workspaceSkills().listSkills(),
+    turnId: () => this.conversation.currentTurnId,
     recordSkillLoad: (skill) => this.conversation.recordPlannerSkill(skill),
     liveCatalog: () => this.liveCatalog(),
     coerce: (tasks, runners) => coerceAssignments(tasks, this.catalog.allowlist(), runners, this.catalog.models()),
@@ -845,9 +846,11 @@ export class Session {
    */
   private async editPlanFromTool(ops: TaskOp[]): Promise<PlanEditOutcome> {
     const refuse = (message: string): PlanEditOutcome => ({ ok: false, errors: [message] });
+    const turn = this.conversation.currentTurnId;
     // The held batch is read after this await, so two calls made in parallel
     // join one batch instead of one replacing the other.
     const catalog = await this.liveCatalog();
+    if (this.conversation.currentTurnId !== turn) return refuse(PLANNER_TURN_ENDED);
     if (!this.plan || this.store.planTasks.length === 0) return refuse('There is no plan to edit yet: submit one with submit_plan.');
     const held = this.conversation.pendingOps();
     if (!held) return refuse('A whole plan was submitted in this reply and replaces the plan when it ends: make the edit in your next reply.');

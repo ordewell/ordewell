@@ -7,7 +7,28 @@ import { createSkillsService, workspaceSkillRoots } from '../SkillsService';
 let home = '';
 let workspaceRoot = '';
 
-const h = vi.hoisted(() => ({ builtinDir: '' }));
+const h = vi.hoisted(() => ({ builtinDir: '', caseInsensitive: false }));
+
+// What macOS and Windows do by default, switched on per test: a path opens a
+// folder whatever the case it is written in.
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs')>();
+  const fold = <P>(p: P): P => {
+    if (!h.caseInsensitive || typeof p !== 'string' || !path.isAbsolute(p)) return p;
+    let at = path.parse(p).root;
+    for (const part of p.slice(at.length).split(path.sep).filter(Boolean)) {
+      const match = actual.existsSync(path.join(at, part))
+        ? part
+        : (actual.existsSync(at) ? actual.readdirSync(at) : []).find((e) => e.toLowerCase() === part.toLowerCase());
+      if (!match) return p;
+      at = path.join(at, match);
+    }
+    return at as P;
+  };
+  const readFileSync = (file: Parameters<typeof actual.readFileSync>[0], ...rest: unknown[]): unknown =>
+    (actual.readFileSync as (...args: unknown[]) => unknown)(fold(file), ...rest);
+  return { ...actual, existsSync: (p: fs.PathLike) => actual.existsSync(fold(p)), readFileSync };
+});
 
 vi.mock('os', async (importOriginal) => {
   const actual = await importOriginal<typeof import('os')>();
@@ -426,6 +447,24 @@ describe('SkillsService', () => {
         { name: 'pr.review', path: dotted, source: 'workspace', reason: expect.stringMatching(/^not a valid skill name/) },
       ]);
       expect(svc.readCatalog().invalid.map((s) => s.name)).toEqual(['PR-Review', 'pr.review']);
+    });
+  });
+
+  describe('on a case-insensitive filesystem', () => {
+    it('finds a skill only under its exact folder name, agreeing with the catalog', () => {
+      const workspaceSkills = path.join(workspaceRoot, '.ordewell', 'skills');
+      const upper = writeSkill(workspaceSkills, 'Review', { name: 'Review', 'applies-to': 'task' }, 'Upper.');
+      writeSkill(workspaceSkills, 'kept', { name: 'kept' }, 'Kept.');
+      h.caseInsensitive = true;
+      try {
+        const svc = createSkillsService(workspaceRoot);
+
+        expect(svc.findSkill('review')).toBeUndefined();
+        expect(svc.listInvalid().map((s) => s.path)).toEqual([upper]);
+        expect(svc.findSkill('kept')?.content).toBe('Kept.');
+      } finally {
+        h.caseInsensitive = false;
+      }
     });
   });
 

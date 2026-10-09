@@ -19,6 +19,8 @@ import { runnerModesFrom } from '../ModeResolver';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { fakeConfig, fakeFileSystem } from '../../testing';
 import { respondingSpawn, type FakeAgentProcess, type FakeSpawnResult } from './harnessTestKit';
+import { plannerToolHandler, PLANNER_TURN_ENDED, type PlannerToolsHost } from '../plannerTools';
+import type { SubmitPlanArgs } from '../mcp/tools';
 
 /**
  * The Ordewell MCP server reaching the Claude Code planner (ADR-0022): the
@@ -1099,5 +1101,64 @@ describe('task_output', () => {
     await session.continueConversation('look at #9');
 
     expect(answer).toEqual({ isError: true, body: { ok: false, error: 'No task matches "#9" in the current plan.' } });
+  });
+});
+
+describe('a submission whose planner turn ends while its skill check runs', () => {
+  const context = { signal: new AbortController().signal };
+
+  /** A host whose git check the test releases, with the open turn swapped while it waits. */
+  function heldHost() {
+    const state = { turn: 'turn-1' as string | undefined, release: () => {} };
+    const asked = vi.fn();
+    const tdd: SkillInfo = {
+      name: 'tdd', description: 'tdd', metadata: { name: 'tdd', description: 'tdd' }, content: '', path: '/g/tdd/SKILL.md', source: 'global', appliesTo: 'task', modelInvocable: false, userInvocable: true,
+    };
+    const host: PlannerToolsHost = {
+      skills: () => [],
+      turnId: () => state.turn,
+      recordSkillLoad: () => false,
+      liveCatalog: async () => ({ runners: ['claude-code'], models: { 'claude-code': [{ modelId: 'claude-sonnet-4', modelLabel: 'Sonnet', variants: [] }] }, modes: {}, autonomousDefault: true }),
+      coerce: (tasks) => [...tasks],
+      submitPlan: vi.fn(() => true),
+      editPlan: vi.fn(async () => ({ ok: true as const, summary: [], queued: false })),
+      tasks: () => [],
+      read: async (_signature, answerRead) => ({ status: 'answered', value: await answerRead(), landNow: false }),
+      liveOutput: () => null,
+      lastAttempt: () => null,
+      taskSkills: () => ({
+        findSkill: (name) => (name === 'tdd' ? tdd : undefined),
+        searchedDirs: () => [],
+        uncommitted: () => new Promise((resolve) => {
+          asked();
+          state.release = () => resolve(new Map());
+        }),
+      }),
+    };
+    return { host, state, asked, handler: plannerToolHandler(host) };
+  }
+
+  it('hands submit_plan\'s plan to no turn, rather than to the one opened since', async () => {
+    const { host, state, asked, handler } = heldHost();
+
+    const call = handler.submitPlan!({ tasks: [planTask('a', 1, 'claude-code', 'claude-sonnet-4', { skills: ['tdd'] })] } as SubmitPlanArgs, context);
+    await vi.waitFor(() => expect(asked).toHaveBeenCalled());
+    state.turn = 'turn-2';
+    state.release();
+
+    expect(await call).toEqual({ isError: true, text: expect.stringContaining(PLANNER_TURN_ENDED) });
+    expect(host.submitPlan).not.toHaveBeenCalled();
+  });
+
+  it('hands edit_plan\'s ops to no turn, rather than to the one opened since', async () => {
+    const { host, state, asked, handler } = heldHost();
+
+    const call = handler.editPlan!({ ops: [{ op: 'update', taskId: '#1', changes: { skills: ['tdd'] } }] }, context);
+    await vi.waitFor(() => expect(asked).toHaveBeenCalled());
+    state.turn = undefined;
+    state.release();
+
+    expect(await call).toEqual({ isError: true, text: expect.stringContaining(PLANNER_TURN_ENDED) });
+    expect(host.editPlan).not.toHaveBeenCalled();
   });
 });

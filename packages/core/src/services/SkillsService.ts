@@ -208,6 +208,23 @@ function readDir(dir: string, source: SkillSource): { skills: SkillInfo[]; inval
   return { skills, invalid };
 }
 
+/**
+ * `name`'s SKILL.md in `dir`, matched against the folder names as listed: a
+ * case-insensitive filesystem would open `TDD/` for `tdd`, a folder
+ * {@link readDir} reports as invalid, and lookup must agree with the catalog.
+ */
+function skillFileIn(dir: string, name: string): string | undefined {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return undefined;
+  }
+  if (!entries.some((entry) => entry.isDirectory() && entry.name === name)) return undefined;
+  const skillFile = path.join(dir, name, 'SKILL.md');
+  return fs.existsSync(skillFile) ? skillFile : undefined;
+}
+
 export function skillsDirOf(root: string): string {
   return path.join(root, STATE_DIR, 'skills');
 }
@@ -356,11 +373,11 @@ export class SkillsService {
     if (!isSkillName(name)) return undefined;
     this.pruneRetired();
     if ((BUILTIN_SKILL_NAMES as readonly string[]).includes(name)) this.seed(name);
-    const globalFile = path.join(this.globalDir(), name, 'SKILL.md');
-    if (fs.existsSync(globalFile)) return parseSkillFile(globalFile, name, 'global');
+    const globalFile = skillFileIn(this.globalDir(), name);
+    if (globalFile) return parseSkillFile(globalFile, name, 'global');
     for (const workspaceDir of this.workspaceDirs()) {
-      const workspaceFile = path.join(workspaceDir, name, 'SKILL.md');
-      if (fs.existsSync(workspaceFile)) return parseSkillFile(workspaceFile, name, 'workspace');
+      const workspaceFile = skillFileIn(workspaceDir, name);
+      if (workspaceFile) return parseSkillFile(workspaceFile, name, 'workspace');
     }
     return undefined;
   }
