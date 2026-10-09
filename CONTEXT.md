@@ -378,33 +378,45 @@ prose, and after the user agrees writes the full markdown wrapped in
 *Avoid:* "PrdArtifact", "PRD status machine" — deleted; the PRD is a message
 plus a saved file, not a typed state.
 
-**Mode toggle (grilling / PRD / TDD / verify)** — a
-per-pool user setting whose *only* effect is a prompt block injected into the
-planner system prompt (`PlanPrompts.ts`) or into a runner task's prompt
-(`promptAugment.ts`). Skills live inside Ordewell as these injected prompt
-blocks; Ordewell never ships, reads, or references runner-native skill
-mechanisms (`.claude/skills`, OpenCode plugins, etc.) to deliver them.
-Research subagents (the `spawn_research_agent` tool, see ADR-0005) are
-always-on for the planner — not a mode toggle.
-The set is data, in `plannerModes.ts`: each toggle carries its id, its settings
-key, its runtime key, and the **scopes** that honour it (`chat` / `one-shot` /
-`task`). Every field is load-bearing, not documentation — `modesFor(scope,
-modes)` clears what a path cannot honour, `plannerRuntimeToggles(settings)`
-reads the whole set off disk under the names a Session expects, and the
-planner-facing booleans travel as one `PlannerModes` value rather than a
-positional tail. A toggle's disk and runtime names (`verify` / `verificationEnabled`)
-therefore meet in one row. Its *display* name does not yet: the webview still
-hand-writes the labels and passes them as positional booleans
-(`setSkillToggles`, called from `ExtensionHost.ts` and `PlannerSelection.ts`), which is the next seam to fold in. Grilling and PRD are `chat` only because
-both interview the user and the one-shot prompt states there is nobody to ask.
-Before scopes existed, a toggle used to be silently dropped by the one-shot
-planner while every surface still displayed it as ON, and nothing distinguished
-that from a deliberate omission.
-*Avoid:* "skill file", "slash command" for these — those are runner-side
-concepts; in Ordewell a skill is a toggle plus its prompt block. Do not add a
-toggle as another boolean parameter, and do not hand-map its settings key to its
-runtime key when building `SessionRuntimeSettings`: add a row to `MODE_TOGGLES`
-and a field to `PlannerModes`.
+**Skill** — a folder with a `SKILL.md` (the Agent Skills format) read by one
+loader (`SkillsService`), and the only thing Ordewell calls a skill (ADR-0024).
+Frontmatter carries `name`, `description`, `applies-to: planner | task`
+(default `planner`) and Claude Code's `disable-model-invocation` and
+`user-invocable` (unmarked = both). It lives in one of two scopes: **global**
+`~/.ordewell/skills/` (built-in seeds plus the user's own; tasks never write
+it) or **workspace** `.ordewell/skills/` (committed, so it reaches worktrees
+through git). On a name clash global wins and the workspace copy is reported
+as shadowed. Every built-in is user-only. Ordewell never ships, reads, or
+references runner-native skill mechanisms (`.claude/skills`, OpenCode plugins,
+etc.) to deliver a skill. Research subagents (`spawn_research_agent`, ADR-0005)
+are always-on for the planner, not a skill.
+*Avoid:* "mode toggle", "skill toggle" — the `grilling`/`prd`/`tdd`/`verify`
+settings toggles are gone; "skill file", "slash command" for these — those are
+runner-side concepts.
+
+**Planner skill** — a skill with `applies-to: planner`: instructions for the
+planning conversation. The user loads it with `/name`; the message text stays
+as typed and the planner is sent the body beside it. A model-invocable one can
+also be loaded by the planner through the `load_skill` MCP tool, which is
+tool-only: the catalog appears in the prompt only when tools are attached.
+*Avoid:* "mode", "persona".
+
+**Task skill** — a skill with `applies-to: task`: instructions for a runner
+working one task. It reaches a runner only by being named in the task's
+`skills` in the plan; Ordewell injects its body into the task prompt at spawn,
+for any runner, and snapshots it on the attempt. Unresolved names are a warning
+at submit and a failed start before the runner is spawned. `/name` on a task
+skill is a directive to the planner to attach it, not a load. The built-in
+`tdd` is one; TDD is no longer applied to every task.
+*Avoid:* "task toggle", "augmentation" for the skill itself.
+
+**Skill-load entry** (`SkillLoad`) — the transcript entry recording that a skill
+was loaded into the planner conversation: invoker (`user` or `planner`), name,
+scope, path, and a snapshot of the body as loaded, so a resume, fork or rewind
+replays what the live conversation was given. Surfaces show it as a one-line
+notice with the path. For a task skill named by `/name` it carries no body, only
+the directive to attach.
+*Avoid:* "skill message", "skill event".
 
 **Executor / Runner** — an external coding-agent CLI (Claude Code, Codex,
 OpenCode, or a plugin) that runs *one task* in its own session. Identity and
@@ -461,14 +473,14 @@ implementation, so a behaviour fixed for one version is fixed for both.
 structured, and OpenCode's HTTP protocol is only one way a runner is driven
 structured.
 
-**Transport** (`runnerTransport: terminal | structured`) — how Ordewell drives
+**Transport** (`terminal | structured`) — how Ordewell drives
 a task's runner (ADR-0018). *Terminal*: a TUI in tmux, or a headless one-shot
 process, read through its screen and written to with keystrokes (ADR-0007).
 *Structured*: the runner's programmatic protocol, with events in and messages
-out. A setting, default `structured` (`/transport terminal` goes back), copied
-onto the plan when a run starts, so a change applies from the next run. Routed
-per task by connector availability: a runner with no task-mode connector runs
-on the terminal transport, and surfaces say so and why. tmux is needed only by
+out. Structured is always chosen; there is no transport setting any more (the
+setting, pill, `/transport` and `ordewell transport` were removed, ADR-0018).
+Routed per task by connector availability: a runner with no task-mode
+connector runs on the terminal transport, and surfaces say so and why. tmux is needed only by
 the terminal transport, to give a task a terminal window; without it those
 tasks run headless and the first one says what is missing.
 *Avoid:* "mode" (that is permission mode, ADR-0001), "backend", "provider".
