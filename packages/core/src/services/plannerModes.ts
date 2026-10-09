@@ -1,11 +1,6 @@
 import type { RepoGroupLayout } from '../interfaces/IWorktreeIsolation';
 
 /**
- * The planner-facing mode set for one operation. Replaces the boolean tail that
- * every planner signature used to carry positionally — where a thirteenth
- * parameter was the only place left to put a new toggle.
- */
-/**
  * Where the run's tasks will work: `false` in the shared workspace root;
  * otherwise each in its own worktree of every repo of the group (ADR-0013,
  * ADR-0014), which is what decides if tasks on the same file must be ordered.

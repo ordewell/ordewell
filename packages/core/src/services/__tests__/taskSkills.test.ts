@@ -2,9 +2,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { execFileSync } from 'child_process';
 import { createTask, keepExecutionState, skillNames } from '../../models/Task';
 import { createSkillsService } from '../SkillsService';
-import { checkOpSkills, checkPlanSkills, resolveTaskSkills, TaskSkillsError } from '../taskSkills';
+import { checkOpSkills, checkPlanSkills, plannedSkillLookup, resolveTaskSkills, TaskSkillsError } from '../taskSkills';
 import { parsePlanJson } from '../PlanValidator';
 import { applyTaskOps } from '../TaskOps';
 import { PlanStore } from '../PlanStore';
@@ -64,7 +65,8 @@ describe('resolveTaskSkills', () => {
     writeSkill(globalSkills(), 'tdd', 'task', 'RED, GREEN.');
 
     expect(() => resolveTaskSkills({ title: 'Ship', skills: ['tdd', 'a', 'b'] }, createSkillsService(worktree))).toThrow(
-      `Task "Ship" did not start: skills "a" and "b" not found in ${globalSkills()} or ${skillsOf(worktree)}.`,
+      `Task "Ship" did not start: skills "a" and "b" not found in ${globalSkills()} or ${skillsOf(worktree)}`
+      + ' (a workspace skill reaches a task\'s worktree only once committed: commit its .ordewell/skills/ folder so task worktrees receive it).',
     );
   });
 
@@ -127,6 +129,89 @@ describe('checking a plan\'s skills against the catalog', () => {
 
     expect(result.errors.map((e) => e.message)).toEqual([expect.stringMatching(/^op 2 \(split\): "grilling" is a planner skill/)]);
     expect(result.warnings).toEqual([expect.stringMatching(/^op 2 \(split\): skill "later" not found/)]);
+  });
+});
+
+describe('checking a plan against the folders its tasks will read', () => {
+  const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, stdio: 'ignore' });
+  const repo = (dir: string) => {
+    fs.mkdirSync(dir, { recursive: true });
+    git(dir, 'init', '-q');
+    git(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init');
+  };
+  const commit = (dir: string, file: string) => {
+    git(dir, 'add', '-f', file);
+    git(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'skill');
+  };
+  const at = (roots: readonly string[]) => createSkillsService(workspace).forRoot(roots);
+  const plan = (...skills: string[]) => [createTask({ id: 'a', title: 'A', skills })];
+
+  it('warns that an uncommitted workspace skill will not reach task worktrees, and not about a committed one', () => {
+    repo(workspace);
+    writeSkill(skillsOf(workspace), 'draft', 'task', 'x');
+    writeSkill(skillsOf(workspace), 'staged', 'task', 'x');
+    writeSkill(skillsOf(workspace), 'kept', 'task', 'x');
+    commit(workspace, '.ordewell/skills/kept/SKILL.md');
+    git(workspace, 'add', '-f', '.ordewell/skills/staged/SKILL.md');
+
+    const result = checkPlanSkills(plan('draft', 'staged', 'kept'), plannedSkillLookup(at, workspace, { repos: ['.'], shared: [] }));
+
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual([
+      'Task "A": skill "draft" is not committed; commit .ordewell/skills/draft so task worktrees receive it.',
+      'Task "A": skill "staged" is not committed; commit .ordewell/skills/staged so task worktrees receive it.',
+    ]);
+  });
+
+  it('warns about a git-ignored workspace skill, and about one in an edit batch', () => {
+    repo(workspace);
+    fs.writeFileSync(path.join(workspace, '.gitignore'), '.ordewell/\n');
+    writeSkill(skillsOf(workspace), 'ignored', 'task', 'x');
+
+    const result = checkOpSkills([{ op: 'update', taskId: '#1', changes: { skills: ['ignored'] } }], plannedSkillLookup(at, workspace, { repos: ['.'], shared: [] }));
+
+    expect(result.warnings).toEqual(['op 1 (update): skill "ignored" is not committed; commit .ordewell/skills/ignored so task worktrees receive it.']);
+  });
+
+  it('says nothing about commits when tasks run in the workspace itself', () => {
+    repo(workspace);
+    writeSkill(skillsOf(workspace), 'draft', 'task', 'x');
+
+    expect(checkPlanSkills(plan('draft'), plannedSkillLookup(at, workspace, false))).toEqual({ errors: [], warnings: [] });
+  });
+
+  it('says nothing about a global skill', () => {
+    repo(workspace);
+    writeSkill(globalSkills(), 'tdd', 'task', 'x');
+
+    expect(checkPlanSkills(plan('tdd'), plannedSkillLookup(at, workspace, { repos: ['.'], shared: [] })).warnings).toEqual([]);
+  });
+
+  it('in a repo group, finds a repo\'s skill and names the folder to commit in that repo; the group root\'s own needs none', () => {
+    repo(path.join(workspace, 'api'));
+    repo(path.join(workspace, 'web'));
+    writeSkill(skillsOf(workspace), 'root-skill', 'task', 'x');
+    writeSkill(skillsOf(path.join(workspace, 'web')), 'web-draft', 'task', 'x');
+    writeSkill(skillsOf(path.join(workspace, 'api')), 'api-kept', 'task', 'x');
+    commit(path.join(workspace, 'api'), '.ordewell/skills/api-kept/SKILL.md');
+    const layout = { repos: ['api', 'web'], shared: [] };
+
+    const result = checkPlanSkills(plan('root-skill', 'web-draft', 'api-kept', 'later'), plannedSkillLookup(at, workspace, layout));
+
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual([
+      'Task "A": skill "web-draft" is not committed; commit web/.ordewell/skills/web-draft so task worktrees receive it.',
+      expect.stringMatching(/^Task "A": skill "later" not found/),
+    ]);
+  });
+
+  it('in a repo group run in the workspace, reads only the workspace root\'s folder, as a spawn there does', () => {
+    writeSkill(skillsOf(path.join(workspace, 'api')), 'api-skill', 'task', 'x');
+
+    const lookup = plannedSkillLookup(at, workspace, false);
+
+    expect(lookup.findSkill('api-skill')).toBeUndefined();
+    expect(lookup.searchedDirs()).toEqual([globalSkills(), skillsOf(workspace)]);
   });
 });
 

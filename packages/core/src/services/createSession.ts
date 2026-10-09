@@ -20,6 +20,7 @@ import { plannerModesFrom } from './plannerModes';
 import type { UserSettings } from './SettingsService';
 import { SkillsService } from './SkillsService';
 import { plannerMessage, resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
+import { plannedSkillLookup, type SkillLookup } from './taskSkills';
 import type { MergeGateView, SessionBroadcaster, SessionNotice } from './SessionMessage';
 import { SessionEventRelay } from './SessionEventRelay';
 import { saveSession } from '../utils/sessionStore';
@@ -62,7 +63,6 @@ export interface SessionRuntimeSettings {
   /** Absent means the user never chose, and `config.enabledRunners` (the host's defaults) decides. */
   enabledRunners?: RunnerId[];
 }
-
 
 /** Calls an ops retry is told about; earlier ones are counted, not listed (ADR-0020). */
 const OPS_RETRY_DIGEST_CALLS = 20;
@@ -254,7 +254,7 @@ export function createSession(deps: SessionDeps): Session {
     isolation: deps.isolation,
     registry: deps.registry,
     workspaceRoot: deps.workspaceRoot,
-    skillsAt: (root) => (deps.skillsService ?? new SkillsService(root)).forRoot(root),
+    skillsAt: (roots) => (deps.skillsService ?? new SkillsService(roots)).forRoot(roots),
     previousAttemptFromLog: (taskId) => lastAttemptDigest(session.taskLogLocation, taskId),
   });
   const usage = new PlannerUsageLedger();
@@ -348,7 +348,7 @@ export interface SessionParts {
   approvals: PendingApprovals;
   approvalPolicy: ApprovalPolicy;
   fetcher: IWebFetcher;
-  skillsService: Pick<SkillsService, 'findSkill' | 'listSkills' | 'searchedDirs'>;
+  skillsService: Pick<SkillsService, 'findSkill' | 'listSkills' | 'searchedDirs' | 'forRoot'>;
   saveSession: SaveSession;
   /** The conversation's host is the Session itself, so only the Session can make it. */
   conversation: (host: PlannerConversationHost) => PlannerConversation;
@@ -398,7 +398,7 @@ export class Session {
   private unsubObserver: (() => void) | null;
   private readonly hostSessionId?: string;
   private currentSessionId: string;
-  private readonly skillsService: Pick<SkillsService, 'findSkill' | 'listSkills' | 'searchedDirs'>;
+  private readonly skillsService: Pick<SkillsService, 'findSkill' | 'listSkills' | 'searchedDirs' | 'forRoot'>;
   private readonly conversation: PlannerConversation;
   private readonly editor: PlanEditor;
   private readonly plannerTools: PlannerToolHandler = plannerToolHandler({
@@ -412,7 +412,7 @@ export class Session {
     read: (signature, answer) => this.conversation.read(signature, answer),
     liveOutput: (taskId, opts) => this.orchestrator.getLiveOutput(taskId, opts),
     lastAttempt: (taskId) => lastAttemptDigest(this.taskLogLocation, taskId),
-    taskSkills: () => this.skillsService,
+    taskSkills: () => this.taskSkills(),
   });
 
   constructor(parts: SessionParts) {
@@ -454,7 +454,7 @@ export class Session {
       broadcast: (msg) => this.broadcast(msg),
       broadcastPlan: (turnId) => this.events.planGenerated(this.plan, this.goal, turnId),
       validateOps: (ops) => applyTaskOps(this.store.planTasks, ops, this.plan!.runners, this.catalog.edit()),
-      taskSkills: () => this.skillsService,
+      taskSkills: () => this.taskSkills(),
       notice: (level, message) => this.notice(level, message),
       adoptTasks: (tasks, how) => this.adoptPlannerTasks(tasks, how),
       capturePrd: (text) => this.capturePrd(text),
@@ -479,7 +479,7 @@ export class Session {
       runs: this.runs,
       broadcast: (msg) => this.broadcast(msg),
       plannerTools: () => this.aiService().plannerToolsAttached?.() ?? false,
-      taskSkills: () => this.skillsService,
+      taskSkills: () => this.taskSkills(),
       notice: (level, message) => this.notice(level, message),
     });
 
@@ -880,6 +880,16 @@ export class Session {
     return resolveSkillInvocation(text, this.skillsService);
   }
 
+  /** Task skills as the planner was told the run's layout, so every validation path checks the same roots. */
+  private taskSkills(): SkillLookup {
+    return plannedSkillLookup((roots) => this.skillsAt(roots), this.workspace, this.runs.lastPlannerLayout);
+  }
+
+  /** The catalog over workspace `roots`; the workspace root alone is the session's own. */
+  private skillsAt(roots: readonly string[]): SkillLookup {
+    return roots.length === 1 && roots[0] === this.workspace ? this.skillsService : this.skillsService.forRoot(roots);
+  }
+
   private async conversationOpening(runners: RunnerId[]): Promise<ConversationOpening> {
     const { filteredModels, runnerModes } = await this.catalog.planning(runners);
     return {
@@ -1107,7 +1117,7 @@ export class Session {
         autonomousDefault: this.config.autonomousMode,
         perRunnerAllowlist: modelAllowlist,
         isolatedExecution: await this.runs.plannerLayout(),
-        skills: this.skillsService,
+        skills: this.taskSkills(),
       });
       if (stale()) return;
 

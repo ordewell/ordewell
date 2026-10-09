@@ -86,4 +86,24 @@ describe('fromTranscript', () => {
       { type: 'message', role: 'planner', text: 'Question?', streaming: false },
     ]);
   });
+
+  it('shows the notice under a kept message of a condensed conversation, with no chip on the summary', () => {
+    const skill = { invokedBy: 'user' as const, name: 'grilling', source: 'global' as const, path: '~/.ordewell/skills/grilling/SKILL.md', content: 'HIDDEN BODY' };
+    const history: ConversationMessage[] = [
+      { role: 'assistant', content: 'Conversation condensed.', timestamp: '2026-09-27T12:00:00.000Z', kind: 'compaction' },
+      { role: 'user', content: '/grilling and tests?', timestamp: '2026-09-27T11:00:00.000Z' },
+      { role: 'user', content: '/grilling skill loaded', timestamp: '2026-09-27T11:00:00.000Z', kind: 'skill_load', skill },
+      { role: 'assistant', content: 'Vitest.', timestamp: '2026-09-27T11:00:09.000Z' },
+    ];
+
+    const blocks = unkeyed(fromTranscript(history, []).blocks);
+
+    expect(blocks).toEqual([
+      { type: 'message', role: 'system', text: 'Conversation condensed.', streaming: false },
+      { type: 'message', role: 'user', text: '/grilling and tests?', streaming: false, skills: ['grilling'] },
+      { type: 'skill_load', invokedBy: 'user', name: 'grilling', source: 'global', path: '~/.ordewell/skills/grilling/SKILL.md' },
+      { type: 'message', role: 'planner', text: 'Vitest.', streaming: false },
+    ]);
+    expect(JSON.stringify(blocks)).not.toContain('HIDDEN BODY');
+  });
 });

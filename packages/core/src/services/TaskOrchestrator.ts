@@ -28,7 +28,7 @@ import {
   type AttemptKind, type Continuation,
 } from './attemptKind';
 import { resolveTaskSkills, TaskSkillsError, type SkillLookup } from './taskSkills';
-import { SkillsService } from './SkillsService';
+import { SkillsService, workspaceSkillRoots } from './SkillsService';
 import { capConflictFiles } from './conflictFiles';
 import { resolveWorkspaceEnv, type WorkspaceEnv } from './workspaceEnv';
 import { givesCompletionTool, routeTransport } from './TransportRouter';
@@ -166,8 +166,8 @@ export interface TaskOrchestratorDeps {
   workspaceRoot: () => string;
   /** The workspace's own variables for a task's cwd (ADR-0016). */
   workspaceEnv: (cwd: string) => Promise<WorkspaceEnv>;
-  /** The skill catalog at a root — a task's worktree, or the workspace root — read at each spawn. */
-  skillsAt: (root: string) => SkillLookup;
+  /** The skill catalog over workspace roots, as {@link workspaceSkillRoots} orders them — read at each spawn. */
+  skillsAt: (roots: readonly string[]) => SkillLookup;
   /**
    * What a fresh attempt asks its runner for (ADR-0018). Hosts take the
    * structured default; `routeTransport` still sends a runner with no
@@ -193,7 +193,7 @@ export interface TaskOrchestratorOptions {
   registry?: RunnerRegistry | null;
   workspaceRoot?: () => string;
   workspaceEnv?: (cwd: string) => Promise<WorkspaceEnv>;
-  skillsAt?: (root: string) => SkillLookup;
+  skillsAt?: (roots: readonly string[]) => SkillLookup;
   /** Tests whose fake sessions emit only the completion marker ask for `terminal`. */
   transport?: RunnerTransport;
   previousAttemptFromLog?: (taskId: string) => string | null;
@@ -270,7 +270,7 @@ export class TaskOrchestrator {
   private registry: RunnerRegistry | null;
   private workspaceRootFn: () => string;
   private observers: OrchestratorObserver[] = [];
-  private skillsAt: (root: string) => SkillLookup;
+  private skillsAt: (roots: readonly string[]) => SkillLookup;
   private transport: RunnerTransport;
   private previousAttemptFromLog: (taskId: string) => string | null;
 
@@ -349,7 +349,7 @@ export class TaskOrchestrator {
       registry: options.registry ?? null,
       workspaceRoot,
       workspaceEnv: options.workspaceEnv ?? ((cwd) => resolveWorkspaceEnv(cwd)),
-      skillsAt: options.skillsAt ?? ((root) => new SkillsService(root)),
+      skillsAt: options.skillsAt ?? ((roots) => new SkillsService(roots)),
       transport: options.transport ?? 'structured',
       previousAttemptFromLog: options.previousAttemptFromLog ?? (() => null),
     });
@@ -1454,7 +1454,7 @@ export class TaskOrchestrator {
       }
       // Read where the attempt runs: a skill an earlier task committed is in
       // this worktree only once that task's work has landed.
-      if (takesSkills(kind) && task.skills?.length) attempt.skills = resolveTaskSkills(task, this.skillsAt(cwd));
+      if (takesSkills(kind) && task.skills?.length) attempt.skills = resolveTaskSkills(task, this.skillsAt(this.skillRoots(cwd)));
       const transport = attemptTransport(kind, this.transport);
       const completionTool = givesCompletionTool(transport, attempt.runner, this.registry);
       const finalPrompt = attemptPrompt(kind, {
@@ -1484,6 +1484,7 @@ export class TaskOrchestrator {
         transport,
         resumeSessionId: kind.kind === 'continuation' ? kind.resumeSessionId : undefined,
         attempt: attempt.attempt,
+        ...(attempt.skills.length > 0 ? { skills: attempt.skills } : {}),
       });
 
       // Stop/load/cancel can end the attempt while the async adapter is
@@ -1542,6 +1543,8 @@ export class TaskOrchestrator {
       if (err instanceof TaskSkillsError) {
         // Running without a skill the plan attached would be a silent rewrite
         // of the plan (ADR-0001): the task fails, saying what was missing.
+        // An earlier attempt's snapshot would read as what this one was given.
+        this.store.setTaskAttemptSkills(task.id, undefined);
         this.store.markFailed(task.id);
         this.store.setTaskOutputSummary(task.id, summarizeOutput(err.message, ''));
         await this.runs.release(task.id, { keep: false });
@@ -1562,6 +1565,16 @@ export class TaskOrchestrator {
       await this.tick();
       return false;
     }
+  }
+
+  /**
+   * The roots whose `.ordewell/skills/` an attempt at `cwd` reads: in an
+   * isolated repo group, `cwd` holds one worktree per repo and no folder of
+   * its own (ADR-0014); anywhere else, `cwd` itself.
+   */
+  private skillRoots(cwd: string): string[] {
+    const run = this.runs.isolating ? this.runs.current : null;
+    return workspaceSkillRoots(this.workspaceRootFn(), run ? run.repos.map((r) => r.path) : [], cwd);
   }
 
   /**

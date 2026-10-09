@@ -36,7 +36,7 @@ export interface PlannerToolsHost {
   liveOutput: LiveOutputLookup;
   /** What a task's newest saved attempt did, or null when it left nothing to report. */
   lastAttempt(taskId: string): string | null;
-  /** The skill catalog of the workspace root, which attached skill names are checked against. */
+  /** The catalog a plan's tasks will see where they run, which attached skill names are checked against. */
   taskSkills(): SkillLookup;
 }
 

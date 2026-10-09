@@ -200,6 +200,21 @@ describe('planning', () => {
     expect(heard(h.actions).map((m) => m.type === 'planner_message' && m.content)).toEqual(['Looking into it.', 'Which database?']);
   });
 
+  it('backfills the last spoken reply, not a skill-load entry that follows it', async () => {
+    const skill = { invokedBy: 'planner' as const, name: 'review-plan', source: 'global' as const, path: '~/s', content: 'BODY' };
+    const h = streaming(async () => ({
+      tasks: [],
+      conversationHistory: [
+        { role: 'assistant', content: 'Which database?' },
+        { role: 'assistant', content: 'review-plan skill loaded by planner', kind: 'skill_load', skill },
+      ],
+    }), 'sendConversationMessage');
+
+    await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'x' }, h.deps);
+
+    expect(heard(h.actions).map((m) => m.type === 'planner_message' && m.content)).toEqual(['Which database?']);
+  });
+
   it('joins a burst of one stream\'s deltas into a single action', async () => {
     vi.useFakeTimers();
     try {

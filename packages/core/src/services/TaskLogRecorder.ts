@@ -2,6 +2,7 @@ import { isStructuredSession, type ITerminalRunner, type ITerminalSession, type 
 import { defaultLogger, type ILogger } from '../interfaces/ILogger';
 import { coalesceTaskLog, toTaskLogEvent, type TaskLogEvent } from '../models/TaskLog';
 import { openTaskLog, type TaskLogFile, type TaskLogLocation } from '../utils/taskLogStore';
+import type { TaskSkillSnapshot } from '../models/Task';
 import type { SessionBroadcaster } from './SessionMessage';
 
 /** Long enough to gather a burst of deltas into one message, short enough to read as live. */
@@ -45,7 +46,7 @@ export class TaskLogRecorder {
         const session = await runner.spawn(opts);
         // Before returning: the first turn's events are emitted on the next
         // macrotask, and a listener attached later would miss them.
-        if (isStructuredSession(session)) this.record(opts.taskId, session);
+        if (isStructuredSession(session)) this.record(opts.taskId, session, opts.skills);
         return session;
       },
       stop: (sessionId) => runner.stop(sessionId),
@@ -54,8 +55,8 @@ export class TaskLogRecorder {
     };
   }
 
-  /** Start a new attempt's log for `session` and keep it until the session exits. */
-  record(taskId: string, session: ITerminalSession & StructuredSessionCapability): void {
+  /** Start a new attempt's log for `session`, opening with the skills it was given, and keep it until the session exits. */
+  record(taskId: string, session: ITerminalSession & StructuredSessionCapability, skills: readonly TaskSkillSnapshot[] = []): void {
     let file: TaskLogFile | null;
     try {
       file = this.open(this.deps.location(), taskId);
@@ -64,7 +65,7 @@ export class TaskLogRecorder {
       file = null;
     }
     const attempt = file?.attempt ?? 0;
-    let pending: TaskLogEvent[] = [];
+    let pending: TaskLogEvent[] = skills.length > 0 ? [{ type: 'task_skills', skills: [...skills] }] : [];
     let timer: ReturnType<typeof setTimeout> | null = null;
     let writeFailed = false;
 

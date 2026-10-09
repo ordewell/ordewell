@@ -56,6 +56,27 @@ describe('TaskLogRecorder', () => {
     expect(file.saved).toEqual(expected);
   });
 
+  it('opens each attempt\'s log with the skills that attempt was given, shown as one line', async () => {
+    const skills = [{ name: 'tdd', source: 'global' as const, path: '/g/tdd/SKILL.md', content: 'RED, GREEN.' }];
+    const first = memoryFile(1);
+    const second = memoryFile(2);
+    const files = [first, second];
+    const recorder = new TaskLogRecorder({ broadcast: vi.fn(), location: () => ({ baseDir: '/ws', sessionId: 'sess' }), open: () => files.shift()! });
+
+    const a = new FakeStructuredSession('s1', 't1');
+    await recorder.wrap(handing(a)).spawn({ ...spawnOpts, skills });
+    a.emitEvent({ type: 'turn_start', text: 'Do it' });
+    vi.advanceTimersByTime(60);
+    const b = new FakeStructuredSession('s2', 't1');
+    await recorder.wrap(handing(b)).spawn(spawnOpts);
+    b.emitEvent({ type: 'turn_start', text: 'Do it' });
+    vi.advanceTimersByTime(60);
+
+    expect(first.saved).toEqual([{ type: 'task_skills', skills }, { type: 'turn_start', message: 'Do it' }]);
+    expect(second.saved).toEqual([{ type: 'turn_start', message: 'Do it' }]);
+    expect(replayTaskLog(first.saved).blocks[0]).toMatchObject({ type: 'message', role: 'system', text: 'Skills: tdd (/g/tdd/SKILL.md)' });
+  });
+
   it('sends a turn’s end at once, without waiting out the batch', async () => {
     const session = new FakeStructuredSession('s1', 't1');
     const sent: SessionMessage[] = [];

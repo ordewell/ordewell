@@ -220,10 +220,6 @@ export interface CommandsResponse {
   commands: CommandDescriptor[];
 }
 
-export interface CommandResponse extends OkResponse {
-  settings: SettingsResponse;
-}
-
 export interface WorkspacesResponse {
   workspaces: string[];
 }

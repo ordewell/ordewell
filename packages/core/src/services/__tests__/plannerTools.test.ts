@@ -373,8 +373,10 @@ describe('load_skill', () => {
     resumed.loadPlan(fork, 'goal', process.cwd(), { persist: false });
     await resumed.continueConversation('next');
     const request = ai.startConversation.mock.calls[0][0] as ConversationRequest;
-    expect(request.priorHistory!.map((entry) => entry.content)).toContain('<skill name="review-plan">\nreview-plan BODY v1\n</skill>');
-    expect(request.priorHistory!.map((entry) => entry.content)).toContain('<skill name="review-plan">\nreview-plan BODY v2\n</skill>');
+    const context = (body: string) => `(skill loaded via load_skill)\n\n<skill name="review-plan">\n${body}\n</skill>`;
+    const replayed = request.priorHistory!.map((entry) => [entry.role, entry.content]);
+    expect(replayed).toContainEqual(['user', context('review-plan BODY v1')]);
+    expect(replayed).toContainEqual(['user', context('review-plan BODY v2')]);
     expect(request.goal).toBe('goal');
     expect(request.priorHistory!.some((entry) => entry.content.includes('The user invoked'))).toBe(false);
   });

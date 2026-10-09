@@ -27,8 +27,8 @@ const CATALOG = new Map([['tdd', skill('tdd')], ['grilling', skill('grilling', '
  * tree is checked, and whether it keeps Merge all out.
  */
 function setup(opts: { isolation?: FakeWorktreeIsolation; config?: Partial<IConfig> } = {}) {
-  /** Every root a spawn read skills from. */
-  const skillRoots: string[] = [];
+  /** The roots each spawn read skills from. */
+  const skillRoots: (readonly string[])[] = [];
   const isolation = opts.isolation ?? new FakeWorktreeIsolation();
   const sessions: FakeTerminalSession[] = [];
   const requests: RunnerSpawnOptions[] = [];
@@ -58,9 +58,9 @@ function setup(opts: { isolation?: FakeWorktreeIsolation; config?: Partial<IConf
     isolation,
     workspaceRoot: () => '/repo',
     workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
-    skillsAt: (root) => {
-      skillRoots.push(root);
-      return { findSkill: (name) => CATALOG.get(name), searchedDirs: () => ['/g', `${root}/.ordewell/skills`] };
+    skillsAt: (roots) => {
+      skillRoots.push(roots);
+      return { findSkill: (name) => CATALOG.get(name), searchedDirs: () => ['/g', ...roots.map((root) => `${root}/.ordewell/skills`)] };
     },
   });
   const notices: string[] = [];
@@ -217,10 +217,68 @@ describe('attempt kinds, as the orchestrator runs them', () => {
       expect(request.prompt).toContain('## Task skills');
       expect(request.prompt).toContain('### Skill: tdd\n\ntdd body.');
       expect(request.prompt).not.toContain('## Previous attempt');
-      expect(env.skillRoots).toEqual([request.cwd]);
+      expect(env.skillRoots).toEqual([[request.cwd]]);
       const snapshot = [{ name: 'tdd', source: 'global', path: '/g/tdd/SKILL.md', content: 'tdd body.' }];
       expect(env.orchestrator.storeInstance.get('c1')!.attemptSkills).toEqual(snapshot);
       expect(env.orchestrator.getAttempt('c1')!.skills).toEqual(snapshot);
+    });
+
+    it('in a repo group, skills are read from the group root, then each repo\'s worktree in layout order', async () => {
+      const isolation = new FakeWorktreeIsolation();
+      isolation.repos = ['api', 'web'];
+      const env = setup({ isolation });
+      env.orchestrator.loadPlan([change('c1', 1, { skills: ['tdd'] }), opsTask('o1', 2, { skills: ['tdd'] })]);
+
+      await env.orchestrator.approveReview();
+
+      const { cwd } = env.spawned('c1')[0];
+      expect(env.skillRoots[0]).toEqual(['/repo', `${cwd}/api`, `${cwd}/web`]);
+      expect(env.spawned('c1')[0].prompt).toContain('### Skill: tdd');
+    });
+
+    it('a group task whose skill is missing names every folder it searched, the group root\'s included', async () => {
+      const isolation = new FakeWorktreeIsolation();
+      isolation.repos = ['api', 'web'];
+      const env = setup({ isolation });
+      env.orchestrator.loadPlan([change('c1', 1, { skills: ['deploy-checklist'] })]);
+
+      await env.orchestrator.approveReview();
+
+      await vi.waitFor(() => expect(env.status('c1')).toBe('failed'));
+      const reason = env.orchestrator.storeInstance.get('c1')!.outputSummary!.reviewReason;
+      expect(reason).toContain('/repo/.ordewell/skills or /fake-worktrees/run1/1-c1/api/.ordewell/skills or /fake-worktrees/run1/1-c1/web/.ordewell/skills');
+      expect(reason).toContain('commit .ordewell/skills/deploy-checklist so task worktrees receive it');
+    });
+
+    it('hands the attempt\'s skills to what wraps the runner, so its log can record them', async () => {
+      const env = setup();
+      env.orchestrator.loadPlan([change('c1', 1, { skills: ['tdd'] }), change('c2', 2)]);
+
+      await env.orchestrator.approveReview();
+      await env.orchestrator.forceStartTask('c2');
+
+      expect(env.spawned('c1')[0].skills).toEqual([{ name: 'tdd', source: 'global', path: '/g/tdd/SKILL.md', content: 'tdd body.' }]);
+      expect(env.spawned('c2')[0]).not.toHaveProperty('skills');
+    });
+
+    it('a retry whose skill has gone fails without the earlier attempt\'s snapshot beside it', async () => {
+      const env = setup();
+      const c1 = change('c1', 1, { skills: ['tdd'] });
+      env.orchestrator.loadPlan([c1]);
+      await env.orchestrator.approveReview();
+      expect(env.orchestrator.storeInstance.get('c1')!.attemptSkills).toHaveLength(1);
+
+      const tdd = CATALOG.get('tdd')!;
+      CATALOG.delete('tdd');
+      try {
+        await env.orchestrator.retryTask('c1');
+        await vi.waitFor(() => expect(env.status('c1')).toBe('failed'));
+      } finally {
+        CATALOG.set('tdd', tdd);
+      }
+
+      expect(env.spawned('c1')).toHaveLength(1);
+      expect(env.orchestrator.storeInstance.get('c1')!.attemptSkills).toBeUndefined();
     });
 
     it('a task without skills is told none', async () => {

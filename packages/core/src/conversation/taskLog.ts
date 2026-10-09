@@ -250,6 +250,7 @@ function unqueueMessage(view: TaskLogView, { messageId }: { messageId: string })
  */
 export function reduceTaskLog(view: TaskLogView, event: TaskLogEvent): TaskLogView {
   switch (event.type) {
+    case 'task_skills': return append(view, (id) => settledMessage(id, 'system', `Skills: ${event.skills.map((s) => `${s.name} (${s.path})`).join(', ')}`));
     case 'turn_start': return startTurn(view, event);
     case 'turn_end': return endTurn(view, event);
     case 'text_delta': return agentTextDelta(view, event.text);

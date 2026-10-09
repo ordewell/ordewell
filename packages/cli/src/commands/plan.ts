@@ -28,7 +28,7 @@ function hasCommittedPlan(plan: PlanBody): boolean {
 function lastPlannerMessage(plan: PlanBody): string {
   const history = ('conversationHistory' in plan && plan.conversationHistory) || [];
   for (let i = history.length - 1; i >= 0; i--) {
-    if (history[i].role === 'assistant') return history[i].content;
+    if (history[i].role === 'assistant' && history[i].kind !== 'skill_load') return history[i].content;
   }
   return '(the planner returned no plan and no message)';
 }
