@@ -19,6 +19,7 @@ import { coerceAssignments } from './ModelAllowlistResolver';
 import { plannerModesFrom, plannerRuntimeToggles } from './plannerModes';
 import type { UserSettings } from './SettingsService';
 import { SkillsService } from './SkillsService';
+import { resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
 import type { MergeGateView, SessionBroadcaster, SessionNotice } from './SessionMessage';
 import { SessionEventRelay } from './SessionEventRelay';
 import { saveSession } from '../utils/sessionStore';
@@ -92,58 +93,6 @@ export function sessionRuntimeSettings(settings: UserSettings): SessionRuntimeSe
     runnerTransport: settings.runnerTransport,
     enabledRunners: settings.enabledRunners,
   };
-}
-
-/**
- * A `/skill-name` token anywhere in a message: whitespace (or string start)
- * before it, a lowercase-led name, optional trailing punctuation that isn't
- * part of the name, then whitespace (or string end). The punctuation group
- * is what lets "/grilling," resolve as "grilling" with the comma kept intact
- * in the output.
- */
-const SKILL_TOKEN = /(^|\s)\/([a-z][a-z0-9_-]*)([,.!?;:]*)(?=\s|$)/gi;
-
-/**
- * Resolve `/skill-name` invocations to their skill's markdown content. Pure
- * and exported so surfaces and verification can drive substitution without a
- * full Session.
- *
- * A message that is *only* `/skill-name` keeps the legacy whole-message
- * behaviour: an unknown skill becomes a notice naming what IS available,
- * instead of a bare slash token a runner would mis-resolve in its own skills
- * directory. Anywhere else in a message, a matching token is spliced in place
- * (surrounding text is untouched); a token that doesn't name a real skill is
- * left as plain text rather than raising a notice, since embedded in a
- * sentence it's as likely to be incidental text (a path, an example command)
- * as a typo'd invocation. The same skill name repeated only expands its first
- * occurrence — later repeats stay literal.
- */
-export function resolveSkillInvocation(
-  text: string,
-  skillsService: Pick<SkillsService, 'findSkill' | 'listSkills'>,
-): string {
-  const bareMatch = text.trim().match(/^\/([a-z][a-z0-9_-]*)$/im);
-  if (bareMatch) {
-    const skillName = bareMatch[1].toLowerCase();
-    const skill = skillsService.findSkill(skillName);
-    if (!skill) {
-      const available = typeof skillsService.listSkills === 'function'
-        ? skillsService.listSkills().map((s) => s.name).join(', ')
-        : '';
-      return `Unknown skill: ${skillName}. Available skills: ${available}`;
-    }
-    return skill.content;
-  }
-
-  const expanded = new Set<string>();
-  return text.replace(SKILL_TOKEN, (full, lead: string, name: string, punct: string) => {
-    const skillName = name.toLowerCase();
-    if (expanded.has(skillName)) return full;
-    const skill = skillsService.findSkill(skillName);
-    if (!skill) return full;
-    expanded.add(skillName);
-    return `${lead}${skill.content}${punct}`;
-  });
 }
 
 /** Where a fork landed: the new session's id, and what adopting it needs. */
@@ -803,7 +752,7 @@ export class Session {
    */
   async startPlanning(goal: string, runners: RunnerId[], options?: GeneratePlanOptions): Promise<LegacyPlanState> {
     this.plan = null;
-    this.goal = this.resolveSkillInvocation(goal);
+    this.goal = goal;
     this.remintSessionId();
     this.beginFreshPlan();
     const enabled = this.catalog.enabledRunners();
@@ -813,7 +762,7 @@ export class Session {
     const now = new Date().toISOString();
     this.plan = { tasks: [], generatedAt: now, status: 'draft', runners: chosenRunners, lastUpdated: now };
 
-    return this.conversation.start(this.goal, () => this.conversationOpening(chosenRunners), options?.signal);
+    return this.conversation.start(this.resolveSkillInvocation(goal), () => this.conversationOpening(chosenRunners), options?.signal);
   }
 
   /**
@@ -825,10 +774,7 @@ export class Session {
     // A turn that failed before persist leaves its runs unflushed; drop them so
     // the next turn's log cannot absorb a previous turn's uncommitted activity.
     this.events.dropSubagentRuns();
-    return this.conversation.reply(this.resolveSkillInvocation(userMessage), {
-      signal: options?.signal,
-      verbatim: userMessage,
-    });
+    return this.conversation.reply(this.resolveSkillInvocation(userMessage), { signal: options?.signal });
   }
 
   /**
@@ -934,14 +880,12 @@ export class Session {
   }
 
   /**
-   * Intercept a skill invocation (/skill-name) and substitute the skill's
-   * markdown content BEFORE the message reaches the planner. Prevents runners
-   * (Claude Code, OpenCode) from trying to resolve the skill in their own
-   * directory instead of .ordewell/skills/. An unknown skill is surfaced to
-   * the planner as a notice naming what IS available, rather than passing a
-   * bare /unknown through to be mis-resolved.
+   * The skills a message's `/skill-name` tokens load, snapshotted here so the
+   * planner gets Ordewell's skill rather than a runner (Claude Code, OpenCode)
+   * resolving the token in its own skills directory. The message stays as
+   * typed.
    */
-  private resolveSkillInvocation(text: string): string {
+  private resolveSkillInvocation(text: string): SkillInvocation {
     return resolveSkillInvocation(text, this.skillsService);
   }
 

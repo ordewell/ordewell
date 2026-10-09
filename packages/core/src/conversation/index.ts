@@ -1,6 +1,6 @@
 export type {
   DisplayBlock, DiffStat, MessageBlock, MessageRole, ThinkingDisplayBlock, ToolBlock, ToolHeadline, ToolStatus, SubagentBlock, SubagentChild,
-  SubagentStatus, ApprovalBlock, ApprovalStatus, PlanBlock, PlanMarkerStatus, UsageBlock,
+  SubagentStatus, ApprovalBlock, ApprovalStatus, PlanBlock, PlanMarkerStatus, SkillLoadBlock, UsageBlock,
 } from './blocks';
 export { EMPTY_CONVERSATION, reduceConversation } from './reduce';
 export type { ConversationInput, ConversationView, LocalEntry } from './reduce';
@@ -16,3 +16,5 @@ export { NO_TURN, followTurn, stopTurn } from './turnGate';
 export type { TurnGate, GatedConversation } from './turnGate';
 export { hasHiddenDetail } from './detail';
 export { taskStartedNotice } from './notices';
+export { skillTokens, loadedSkillTokens } from './skillTokens';
+export type { SkillToken } from './skillTokens';

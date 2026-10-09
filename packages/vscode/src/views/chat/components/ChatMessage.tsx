@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import type {
-  ApprovalBlock, ApprovalDecision, ApprovalKind, ApprovalSource, DisplayBlock, MessageBlock, PlanBlock, SubagentBlock, SubagentStatus,
+  ApprovalBlock, ApprovalDecision, ApprovalKind, ApprovalSource, DisplayBlock, MessageBlock, PlanBlock, SkillLoadBlock, SubagentBlock, SubagentStatus,
   ThinkingDisplayBlock, ToolBlock, ToolStatus, DiffRow, DiffStat,
 } from '@ordewell/core';
-import { diffRows, diffSummary, outputLines, outputPreview } from '@ordewell/core/plan-utils';
+import { diffRows, diffSummary, loadedSkillTokens, outputLines, outputPreview } from '@ordewell/core/plan-utils';
 
 /*
  * The planner conversation (#51 display blocks) as the webview draws it.
@@ -47,7 +47,7 @@ export default function ChatMessage({ block }: { block: MessageBlock }) {
     return (
       <div className="chat-msg chat-msg-user">
         <div className="chat-msg-bubble">
-          <div className="chat-msg-content">{block.text}</div>
+          <div className="chat-msg-content">{block.skills ? <SkillMarkedText text={block.text} skills={block.skills} /> : block.text}</div>
         </div>
       </div>
     );
@@ -58,6 +58,28 @@ export default function ChatMessage({ block }: { block: MessageBlock }) {
         <div className="chat-msg-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(block.text.trim()) }} />
         {block.streaming && <span className="chat-msg-cursor" aria-hidden="true" />}
       </div>
+    </div>
+  );
+}
+
+/** The user's text with each `/name` that loaded a skill marked, as the composer marks one being typed. */
+function SkillMarkedText({ text, skills }: { text: string; skills: readonly string[] }) {
+  const parts: React.ReactNode[] = [];
+  let at = 0;
+  for (const token of loadedSkillTokens(text, skills)) {
+    parts.push(text.slice(at, token.start), <mark key={token.start} className="skill-token">{text.slice(token.start, token.end)}</mark>);
+    at = token.end;
+  }
+  parts.push(text.slice(at));
+  return <>{parts}</>;
+}
+
+function SkillLoadNotice({ block }: { block: SkillLoadBlock }) {
+  return (
+    <div className="chat-msg chat-msg-system chat-msg-skill-load">
+      <span className="chat-msg-content">
+        <span className="skill-load-mark">●</span> /{block.name} skill loaded · <bdi className="skill-load-path" title={block.path}>{block.path}</bdi>
+      </span>
     </div>
   );
 }
@@ -314,6 +336,8 @@ function Block({
       return <SubagentCard block={block} expanded={expanded} />;
     case 'plan':
       return <PlanMarker block={block} onShowPlan={onShowPlan} />;
+    case 'skill_load':
+      return <SkillLoadNotice block={block} />;
     case 'approval':
       return block.kind === 'runner_tool'
         ? <RunnerApprovalCard block={block} onAnswer={onAnswerApproval} />

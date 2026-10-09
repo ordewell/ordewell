@@ -1,4 +1,4 @@
-import type { ResearchStepOutcome, SubagentOutcome } from '../models/Task';
+import type { ResearchStepOutcome, SkillLoadNotice, SubagentOutcome } from '../models/Task';
 import type { UsageTotals } from '../models/Usage';
 import type { ApprovalKind } from '../interfaces/IApproval';
 import type { ApprovalSource } from '../services/ApprovalPolicy';
@@ -10,7 +10,7 @@ import type { ApprovalSource } from '../services/ApprovalPolicy';
  * the block exists, so a surface can key its own UI state on it — whether a
  * block is expanded is that UI state, and deliberately not part of a block.
  */
-export type DisplayBlock = MessageBlock | ThinkingDisplayBlock | ToolBlock | SubagentBlock | ApprovalBlock | PlanBlock | UsageBlock;
+export type DisplayBlock = MessageBlock | ThinkingDisplayBlock | ToolBlock | SubagentBlock | ApprovalBlock | PlanBlock | SkillLoadBlock | UsageBlock;
 
 /** `agent` is a task runner speaking in a structured task's log (ADR-0018); the planner is `planner`. */
 export type MessageRole = 'user' | 'planner' | 'agent' | 'system' | 'error';
@@ -29,6 +29,8 @@ export interface MessageBlock {
    * it is the final segment, and never saved to the transcript.
    */
   segmentId?: string;
+  /** A user's message: the skills its `/name` tokens loaded, for a surface to mark those tokens (see `loadedSkillTokens`). */
+  skills?: readonly string[];
 }
 
 export interface ThinkingDisplayBlock {
@@ -140,6 +142,13 @@ export interface PlanBlock {
   turnId?: string;
   /** While building: the segment whose envelope is streaming, which a retraction of that segment takes back. */
   segmentId?: string;
+}
+
+/** A skill loaded into the conversation: one line naming it and the SKILL.md that won. Its body is never shown. */
+export interface SkillLoadBlock extends SkillLoadNotice {
+  type: 'skill_load';
+  id: string;
+  turnId?: string;
 }
 
 /** The token line. There is at most one, and it is always the last block. */

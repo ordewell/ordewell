@@ -1,7 +1,7 @@
-import type { ConversationMessage, ResearchLogEntry, ResearchStep, SubagentLogEntry } from '../models/Task';
+import type { ConversationMessage, ResearchLogEntry, ResearchStep, SkillLoad, SubagentLogEntry } from '../models/Task';
 import { isMeasured, usageLine, type PlannerUsage } from '../models/Usage';
 import type { DisplayBlock } from './blocks';
-import { planMarker, settledMessage, subagentBlock, toolFromStep, usageBlock } from './records';
+import { planMarker, settledMessage, skillLoadBlock, subagentBlock, toolFromStep, usageBlock, userMessage } from './records';
 import type { ConversationView } from './reduce';
 
 /** One top-level block before it has an id, and where it falls in time. */
@@ -16,10 +16,31 @@ const USER = 0;
 const RESEARCH = 1;
 const SETTLED = 2;
 
-function fromEntry(entry: ConversationMessage): Placed['build'] {
+/** `loaded`: the skills the entries after a user's message say it loaded. */
+function fromEntry(entry: ConversationMessage, loaded: readonly SkillLoad[] = []): Placed['build'] {
   if (entry.kind === 'plan_generated') return (id) => ({ type: 'plan', id: id(), text: '', ...planMarker(entry.content) });
+  if (entry.kind === 'skill_load' && entry.skill) {
+    const { skill } = entry;
+    return (id) => skillLoadBlock(id(), skill);
+  }
+  if (entry.role === 'user' && !entry.kind) return (id) => userMessage(id(), entry.content, loaded);
   const role = entry.kind === 'system' || entry.kind === 'compaction' ? 'system' : entry.role === 'user' ? 'user' : 'planner';
   return (id) => settledMessage(id(), role, entry.content);
+}
+
+function loadsAfter(entries: readonly ConversationMessage[], index: number): SkillLoad[] {
+  const loads: SkillLoad[] = [];
+  for (let i = index + 1; i < entries.length && entries[i].kind === 'skill_load'; i++) {
+    const { skill } = entries[i];
+    if (skill) loads.push(skill);
+  }
+  return loads;
+}
+
+// A skill load ranks with the message that caused it: same time, same rank,
+// and the stable sort keeps it right under the message.
+function rankOf(entry: ConversationMessage): number {
+  return entry.role === 'user' && (!entry.kind || entry.kind === 'skill_load') ? USER : SETTLED;
 }
 
 function spawnBrief(step: ResearchStep): string | undefined {
@@ -106,7 +127,7 @@ export function fromTranscript(
   const cutoff = compacted ? (kept[0]?.timestamp ?? compacted.timestamp) : '';
 
   const placed: Placed[] = [
-    ...kept.map((entry) => ({ at: entry.timestamp, rank: entry.role === 'user' && !entry.kind ? USER : SETTLED, build: fromEntry(entry) })),
+    ...kept.map((entry, i) => ({ at: entry.timestamp, rank: rankOf(entry), build: fromEntry(entry, loadsAfter(kept, i)) })),
     ...research(researchLog ?? []).filter((item) => item.at >= cutoff),
   ];
   placed.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.rank - b.rank));

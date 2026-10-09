@@ -153,8 +153,8 @@ const TRAILING_PUNCT = /[,.!?;:]+$/;
 
 /**
  * Every `/word` token in `text`, bounded by whitespace or the string edges —
- * the same shape `resolveSkillInvocation` (core) splices against, so a token
- * the TUI offers to complete or highlights is exactly one core will expand.
+ * the same shape `resolveSkillInvocation` (core) resolves, so a token the TUI
+ * offers to complete or highlights is exactly one core will load.
  */
 export function slashTokens(text: string): SlashToken[] {
   const tokens: SlashToken[] = [];
@@ -182,8 +182,8 @@ export function activeToken(text: string, cursor: number): SlashToken | null {
 
 /**
  * Whether `name` names a *discovered* skill exactly, or is a live prefix of
- * one — never a built-in, since only a discovered skill's content is ever
- * spliced into a message (see resolveSkillInvocation in core).
+ * one — never a built-in, since only a discovered skill is ever loaded by a
+ * token in a message (see resolveSkillInvocation in core).
  */
 export function skillMatchKind(name: string): 'exact' | 'prefix' | null {
   if (name.length === 0) return null;
@@ -198,7 +198,7 @@ export function skillMatchKind(name: string): 'exact' | 'prefix' | null {
  * Commands matching a token being composed at `token.start`: the combined
  * built-in+skill list at the very start of the buffer (unchanged contract —
  * `completions` above), skills only anywhere else, since a mid-prompt token
- * only ever expands into a discovered skill's content, never a built-in.
+ * only ever loads a discovered skill, never a built-in.
  */
 export function tokenCompletions(token: SlashToken): SlashCommand[] {
   const pool = token.start === 0 ? [...SLASH_COMMANDS, ...skillCommands] : skillCommands;

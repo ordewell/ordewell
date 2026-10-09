@@ -363,4 +363,42 @@ describe('reduceConversation', () => {
       expect(view.blocks[1].id).toBe(first.blocks[0].id);
     });
   });
+  describe('skill loads', () => {
+    const grilling = { invokedBy: 'user', name: 'grilling', source: 'global', path: '~/.ordewell/skills/grilling/SKILL.md' } as const;
+
+    it('adopts the sent line as typed, marks its skill tokens and puts each load right under it', () => {
+      const view = play([
+        { type: 'local_entry', role: 'user', text: '/grilling the cache' },
+        { type: 'planner_turn_started', turnId: 't1', prompt: '/grilling the cache', skills: [grilling] },
+      ]);
+      expect(unkeyed(view.blocks)).toEqual([
+        { type: 'message', role: 'user', text: '/grilling the cache', streaming: false, turnId: 't1', skills: ['grilling'] },
+        { type: 'skill_load', invokedBy: 'user', name: 'grilling', source: 'global', path: '~/.ordewell/skills/grilling/SKILL.md', turnId: 't1' },
+      ]);
+      expect(new Set(view.blocks.map((b) => b.id)).size).toBe(2);
+    });
+
+    it('places the loads under the adopted line even when a notice landed after it', () => {
+      const view = play([
+        { type: 'local_entry', role: 'user', text: '/grilling it' },
+        { type: 'local_entry', role: 'system', text: 'a notice' },
+        { type: 'planner_turn_started', turnId: 't1', prompt: '/grilling it', skills: [grilling] },
+      ]);
+      expect(view.blocks.map((b) => b.type === 'message' ? b.role : b.type)).toEqual(['user', 'skill_load', 'system']);
+    });
+
+    it('shows a turn with no loads as before', () => {
+      const view = play([{ type: 'planner_turn_started', turnId: 't1', prompt: '/nope' }]);
+      expect(unkeyed(view.blocks)).toEqual([{ type: 'message', role: 'user', text: '/nope', streaming: false, turnId: 't1' }]);
+    });
+
+    it('takes nothing from a rebroadcast transcript\'s skill-load entries', () => {
+      const view = play([{ type: 'planner_turn_started', turnId: 't1', prompt: '/grilling it', skills: [grilling] }]);
+      const next = reduceConversation(view, planSnapshot([
+        { role: 'user', content: '/grilling it', timestamp: '2026-09-27T10:00:00.000Z' },
+        { role: 'user', content: '/grilling skill loaded', timestamp: '2026-09-27T10:00:00.000Z', kind: 'skill_load', skill: { ...grilling, content: 'GRILL' } },
+      ]));
+      expect(next.blocks).toEqual(view.blocks);
+    });
+  });
 });

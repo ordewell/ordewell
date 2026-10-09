@@ -229,10 +229,10 @@ function renderStatus(state: TuiState, cols: number): string {
  * character-by-character prefix match while composing, not just an exact
  * name, and never a built-in (those keep their plain styling). Trailing
  * punctuation on a token is left uncoloured even when the name before it
- * matches, mirroring how resolveSkillInvocation keeps it outside the splice.
+ * matches, mirroring how resolveSkillInvocation keeps it out of the name.
  * A skill name repeated verbatim only highlights its first occurrence —
- * resolveSkillInvocation only expands that one, so nothing here should look
- * "recognized" that substitution then leaves untouched.
+ * the skill loads once, so nothing here should look "recognized" that
+ * resolution then leaves as plain text.
  */
 function highlightSpans(text: string): Array<{ start: number; end: number }> {
   const spans: Array<{ start: number; end: number }> = [];

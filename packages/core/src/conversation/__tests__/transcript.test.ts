@@ -76,4 +76,14 @@ describe('fromTranscript', () => {
     ]);
     expect(new Set(updated.blocks.map((b) => b.id)).size).toBe(4);
   });
+  it('shows a legacy message whose skill was spliced in as it was saved', () => {
+    const history: ConversationMessage[] = [
+      { role: 'user', content: '# Grilling\n\nThe whole SKILL.md', timestamp: '2026-09-27T10:00:00.000Z' },
+      { role: 'assistant', content: 'Question?', timestamp: '2026-09-27T10:00:05.000Z' },
+    ];
+    expect(unkeyed(fromTranscript(history, []).blocks)).toEqual([
+      { type: 'message', role: 'user', text: '# Grilling\n\nThe whole SKILL.md', streaming: false },
+      { type: 'message', role: 'planner', text: 'Question?', streaming: false },
+    ]);
+  });
 });
