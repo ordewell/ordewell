@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { fakeConfig, fakeFileSystem } from '../../testing';
 import type { AgentAdapter, AgentEvent, AgentStartOptions } from '../harness/AgentAdapter';
-import { planJson, scriptedAdapter } from './harnessTestKit';
+import { planJson, scriptedAdapter, fakeMcpServer } from './harnessTestKit';
 
 /**
  * The planner's read-only boundary (ADR-0008/0009) survives the task-mode
@@ -23,6 +23,7 @@ function recordingService(turns: AgentEvent[][]) {
       return { ...adapter, start: async (opts) => { starts.push(opts); } };
     },
     workspaceRoot: () => '/repo',
+    mcpServer: fakeMcpServer(),
   });
   return { svc, starts };
 }
@@ -34,7 +35,7 @@ describe('CliAgentAiService start boundary', () => {
       [{ type: 'error', message: 'claude exited' }],
       [{ type: 'assistant_text', text: 'Redis it is.' }, { type: 'turn_end' }],
     ]);
-    await svc.startConversation({ goal: 'Add a cache', runners: ['claude-code'], modelsByRunner: {}, fs: fakeFileSystem(), onProgress: () => {} });
+    await svc.startConversation({ plannerTools: { sessionId: 's1', handler: {} }, goal: 'Add a cache', runners: ['claude-code'], modelsByRunner: {}, fs: fakeFileSystem(), onProgress: () => {} });
     await svc.continueConversation('Redis', () => {});
     await svc.continueConversation('Go on', () => {});
     expect(starts.length).toBeGreaterThanOrEqual(2);

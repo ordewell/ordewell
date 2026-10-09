@@ -1,10 +1,6 @@
-import type { RunnerTransport } from '../interfaces/ITerminalRunner';
-
 /**
  * What a stopped runner says about why it stopped, and what ending an attempt
- * does to the runner it leaves behind. TaskOrchestrator acts on the answers;
- * the only terminal touch here is the stop callback a {@link LingeringRunners}
- * is handed.
+ * does to the runner it leaves behind. TaskOrchestrator acts on the answers.
  */
 
 /**
@@ -14,8 +10,8 @@ import type { RunnerTransport } from '../interfaces/ITerminalRunner';
 export type RunnerStop = 'usage-limit' | 'stopped';
 
 /**
- * What a runner says when its account, not the task, ran out. A marker-less
- * stop that names a limit is retryable once the limit resets, so it pauses the
+ * What a runner says when its account, not the task, ran out. A stop with no
+ * `task_complete` call that names a limit is retryable once the limit resets, so it pauses the
  * task instead of failing it. Deliberately narrow: a false positive would leave
  * a genuinely broken task waiting on the user forever, and the words below are
  * the ones the runners print for this and nothing else.
@@ -34,46 +30,11 @@ export function classifyRunnerStop(output: string): RunnerStop {
 export type AttemptEnd = 'verdict' | 'cancel' | 'release' | 'complete' | 'retry' | 'spawn-failed' | 'stop' | 'load';
 
 /**
- * A verdict leaves a terminal runner up so its screen stays readable. Every
- * other reason lets it go — cancel, complete, retry and a failed spawn stop it
- * here, while stop and load reset every runner at once.
- */
-export function keepsTerminalReadable(reason: AttemptEnd, transport: RunnerTransport): boolean {
-  return reason === 'verdict' && transport === 'terminal';
-}
-
-/**
  * Whether ending an attempt with this reason has to stop its own runner now.
- * A structured runner also ends on its verdict (ADR-0018, L1): its log lives
- * in Ordewell, and whatever it did after the verdict would go unverified.
+ * A verdict ends it too (ADR-0018, L1): its log lives in Ordewell, and
+ * whatever it did after the verdict would go unverified. Stop and load reset
+ * every runner at once instead.
  */
-export function stopsRunner(reason: AttemptEnd, transport: RunnerTransport): boolean {
-  if (reason === 'verdict') return transport === 'structured';
-  return reason === 'cancel' || reason === 'release' || reason === 'complete' || reason === 'retry' || reason === 'spawn-failed';
-}
-
-/**
- * The runner a verdict left open, by task. It stays so the user can read the
- * agent's output or keep talking to it — but only while its worktree does: once
- * that is removed the agent sits in a deleted directory, and a newer attempt in
- * the same worktree would share it with a second agent. Without this, every
- * task of every run left one agent process running until the daemon stopped.
- */
-export class LingeringRunners {
-  private readonly sessions = new Map<string, string>();
-
-  constructor(private readonly stop: (sessionId: string) => void) {}
-
-  /** Keep a task's runner up for reading until its worktree goes or a newer attempt claims it. */
-  remember(taskId: string, sessionId: string): void {
-    this.sessions.set(taskId, sessionId);
-  }
-
-  /** Let a task's lingering runner go; a task without one is a no-op. */
-  close(taskId: string): void {
-    const sessionId = this.sessions.get(taskId);
-    if (sessionId === undefined) return;
-    this.sessions.delete(taskId);
-    this.stop(sessionId);
-  }
+export function stopsRunner(reason: AttemptEnd): boolean {
+  return reason !== 'stop' && reason !== 'load';
 }

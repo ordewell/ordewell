@@ -154,7 +154,6 @@ describe('coerceAssignments', () => {
     subtasks: [],
     assignedRunner: 'opencode' as const,
     assignedModel: { modelId, modelLabel: modelId, thinkingEffort },
-    completionMarker: '',
   });
 
   it('rewrites out-of-allowlist modelId to allowlist[0] and wipes thinkingEffort', () => {
@@ -174,7 +173,6 @@ describe('coerceAssignments', () => {
       dependencies: [], subtasks: [],
       assignedRunner: 'claude-code' as const,
       assignedModel: { modelId: 'claude-sonnet-4-5', modelLabel: 'Sonnet' },
-      completionMarker: '',
     }];
     const modelsByRunner = {
       'claude-code': [{ modelId: 'claude-sonnet-4-5', modelLabel: 'Sonnet', variants: [] }],
@@ -208,7 +206,6 @@ describe('coerceAssignments', () => {
       dependencies: [], subtasks: [],
       assignedRunner: 'opencode' as const,
       assignedModel: { modelId: 'stray', modelLabel: 'stray' },
-      completionMarker: '',
     }];
     const allowlist = { opencode: ['allowed'] };
 
@@ -243,7 +240,6 @@ describe('coerceAssignments', () => {
       dependencies: [], subtasks: [],
       assignedRunner: 'claude-code' as const,
       assignedModel: { modelId: 'claude-sonnet-4', modelLabel: 'Claude Sonnet 4' },
-      completionMarker: '',
     }];
     const allowlist = { opencode: ['deepseek-v4-flash'] };
 
@@ -260,7 +256,6 @@ describe('coerceAssignments', () => {
       dependencies: [], subtasks: [],
       assignedRunner: 'claude-code' as const,
       assignedModel: { modelId: 'claude-sonnet-4', modelLabel: 'Claude Sonnet 4' },
-      completionMarker: '',
     }];
     const allowlist = { opencode: ['deepseek-v4-flash'] };
 
@@ -276,7 +271,6 @@ describe('coerceAssignments', () => {
       type: 'ai' as const, status: 'pending' as const,
       dependencies: [], subtasks: [],
       assignedRunner: 'opencode' as const,
-      completionMarker: '',
     };
     const tasks = [task];
     const allowlist = { opencode: ['allowed'] };
@@ -291,7 +285,6 @@ describe('coerceAssignments', () => {
       type: 'ai' as const, status: 'pending' as const,
       dependencies: [], subtasks: [],
       assignedRunner: 'opencode' as const,
-      completionMarker: '',
     };
     const modelsByRunner = {
       opencode: [{ modelId: 'discovered-a', modelLabel: 'Discovered A', variants: [] }],
@@ -307,7 +300,6 @@ describe('coerceAssignments', () => {
       type: 'ai' as const, status: 'pending' as const,
       dependencies: [], subtasks: [],
       assignedRunner: 'opencode' as const,
-      completionMarker: '',
     };
 
     const result = coerceAssignments([task], {});

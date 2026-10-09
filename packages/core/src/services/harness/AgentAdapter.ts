@@ -1,4 +1,4 @@
-import type { SpawnFn } from '../HeadlessRunner';
+import type { ChildProcess } from 'child_process';
 import type { SubagentOutcome } from '../../models/Task';
 import type { UsageRecord } from '../../models/Usage';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
@@ -119,7 +119,7 @@ export interface PlannerStartOptions extends AgentStartCommon {
 
 /**
  * What a runner manifest says the task's mode and effort mean (ADR-0001),
- * resolved by the same code terminal tasks use — see `resolveTaskRunnerFlags`.
+ * resolved from the runner manifest — see `resolveTaskRunnerFlags`.
  * The adapter adds only its protocol flags around these.
  */
 export interface TaskRunnerFlags {
@@ -127,7 +127,7 @@ export interface TaskRunnerFlags {
   permissionMode: string;
   /** The task's raw effort id, present only alongside a model. Each adapter maps it to its own protocol. */
   effort?: string;
-  /** The manifest's further settings for the task's mode, by setting name — see `PluginFeatures.modeSettings`. */
+  /** The manifest's further settings for the task's mode, by setting name — see `RunnerFeatures.modeSettings`. */
   modeSettings: Record<string, string>;
 }
 
@@ -138,9 +138,9 @@ export interface TaskStartOptions extends AgentStartCommon {
   mode: string;
   flags: TaskRunnerFlags;
   /**
-   * The Ordewell MCP server and this attempt's token (ADR-0022). An adapter
-   * that can inject it does, with its tools pre-approved; one that cannot
-   * ignores it, and the task completes by its marker.
+   * The Ordewell MCP server and this attempt's token (ADR-0022), injected
+   * with its tools pre-approved. A task is never started without it: its
+   * `task_complete` call is how it reports it is done.
    */
   mcp?: McpClientConfig;
 }
@@ -155,7 +155,7 @@ export type AgentStartOptions = PlannerStartOptions | TaskStartOptions;
 /** A runner asked to start in task mode that has no task-mode connector yet. */
 export class TaskModeUnsupportedError extends Error {
   constructor(readonly runner: string) {
-    super(`${runner} has no structured task connector yet; its tasks run on the terminal transport.`);
+    super(`${runner} has no structured task connector, so Ordewell cannot run its tasks.`);
     this.name = 'TaskModeUnsupportedError';
   }
 }
@@ -189,15 +189,16 @@ export interface AgentAdapter {
   dispose(): void;
 
   /**
-   * Whether the Ordewell MCP server passed in {@link PlannerStartOptions.mcp}
-   * is connected, as the runner itself reports it (ADR-0022, S4). Absent on an
-   * adapter that cannot inject the server at all.
+   * Whether the Ordewell MCP server passed in the start options' `mcp` is
+   * connected, as the runner itself reports it (ADR-0022, S4). Absent on an
+   * adapter that cannot inject the server at all, which cannot run tasks.
    */
   mcpAttached?(): Promise<boolean>;
 }
 
 /** What an adapter adds to run a task rather than a planner (ADR-0018). */
 export interface TaskModeAgentAdapter extends AgentAdapter {
+  mcpAttached(): Promise<boolean>;
   /**
    * Ask the running turn to stop, keeping the process and its session. Resolves
    * true once the agent acknowledged it; the turn then ends with
@@ -209,7 +210,7 @@ export interface TaskModeAgentAdapter extends AgentAdapter {
    * Registers the listener for what the agent does after a turn has ended and
    * before the next message — a turn it opens itself when background work
    * finishes, most often. Without one that output is dropped, which is right
-   * for a planner and wrong for a task, whose marker may be said there.
+   * for a planner and wrong for a task, which may report completion there.
    */
   onOutOfTurn?(listener: (event: AgentEvent) => void): void;
   /** Registers a listener for the process ending, for any reason. Fires at most once. */
@@ -231,9 +232,23 @@ export interface TaskModeAgentAdapter extends AgentAdapter {
   answerPermission(id: string, decision: ApprovalDecision): boolean;
 }
 
+export type SpawnFn = (
+  command: string,
+  args: string[],
+  options: {
+    env: NodeJS.ProcessEnv;
+    stdio: Array<'pipe' | 'ignore'>;
+    cwd: string;
+    /** Set by the Windows batch route, where `args` is already a quoted command line. */
+    windowsVerbatimArguments?: boolean;
+    /** Set on POSIX so the runner leads its own process group (see `spawnInOwnGroup`). */
+    detached?: boolean;
+  },
+) => ChildProcess;
+
 /**
- * The single injected boundary between Ordewell and the operating system —
- * the same pattern `HeadlessRunnerDeps` uses for task execution. Tests feed
+ * The single injected boundary between Ordewell and the operating system.
+ * Tests feed
  * recorded agent output through `spawn` (and, for HTTP-transport agents,
  * `fetch`) so one test exercises adapter parsing, event mapping, reply
  * classification and the repair loop as a single observable behavior.

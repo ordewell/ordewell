@@ -8,7 +8,7 @@ The planner was told to keep parallel tasks on different files, but that is
 advice to a model, not a boundary: it costs parallelism when two useful tasks
 touch one file and get serialized by an invented dependency, and it fails
 silently when they overlap anyway. Runner B rewrites the file Runner A just
-changed, A's completion marker still appears, and A verifies `pass` against a
+changed, A's attempt-bound completion call still appears, and A verifies `pass` against a
 tree that no longer holds A's work. There is no per-task record of what changed,
 no way to undo one task, and — because Runners write straight into the user's
 tree — nothing stops a run trampling uncommitted work.
@@ -28,10 +28,10 @@ everything below applies per repo of the group.
 ### Key properties
 
 - **One seam, and it is not the runner's.** A Runner is handed a `cwd` and
-  nothing more (ADR-0007). Git never enters `ITerminalRunner`, `RunnerRegistry`
+  nothing more (ADR-0025). Git never enters `IRunner`, `RunnerRegistry`
   or a runner adapter, so Claude Code, Codex and OpenCode cannot produce three
   different git behaviors. The module is injected into the orchestrator the way
-  `ITerminalRunner` and `PlanStore` are; scheduling tests use
+  `IRunner` and `PlanStore` are; scheduling tests use
   `FakeWorktreeIsolation`, and git behavior is tested against real temporary
   repositories asserting porcelain state — worktrees listed, branch contents,
   files present — never command lines.
@@ -94,9 +94,8 @@ everything below applies per repo of the group.
   `awaiting_user` with its verdict `pass`, its worktree and branch kept (the
   record is `failed`, which surfaces show as `kept`) and the error naming what
   git stopped on; Mark complete lands it once the cause is fixed. Other ready
-  tasks go on starting either way; only a failed *verdict* — no marker — halts
-  the run. The work is finished, its marker the evidence, and it sits intact in
-  its worktree.
+  tasks go on starting either way; only a failed *verdict* halts the run. The work is finished, its completion call the evidence, and it sits
+  intact in its worktree.
 - **What happens to a worktree.** `merged` removes the task's worktree and branch
   and keeps its record, which is what the handoff's `landed` list is read from.
   A failed verdict, a stop and a cancel keep the worktree (`keep: true`) — a
@@ -240,12 +239,10 @@ everything below applies per repo of the group.
   original, word for word. A dirty tree counts as *not* isolating: the user may
   still choose to run without isolation, and the ordering rule is the safe one
   then.
-- **Transcripts in a worktree.** Claude Code names its transcript directory
-  after the cwd with every non-alphanumeric turned into `-`, keeping the first
-  200 characters and appending a hash of the full path when it is longer — which
-  a worktree path reaches sooner than a workspace root. The reader matches that
-  rule and takes every directory with the kept prefix as a candidate; the
-  completion marker decides.
+- **Output belongs to the attempt.** The completion call supplies the durable
+  summary; the captured plain-output tail is the fallback for summary text.
+  No transcript-directory search determines completion or binds an output to
+  a worktree (ADR-0025).
 - **A checkpoint needs a live attempt.** A conflicted task is `awaiting_user`
   like a checkpoint is. Approving or rejecting a checkpoint with no attempt
   behind it is ignored, so a conflicted task is never put back to `in_progress`
@@ -317,7 +314,7 @@ everything below applies per repo of the group.
   ops task needs no worktree, so a run of only ops tasks would be parked on a
   dirty tree for nothing.
 - **A failed landing fails the task and halts the run.** It did, until
-  2026-09-28. Rejected: a red X contradicts the completion marker, and halting
+  2026-09-28. Rejected: a red X contradicts the attempt-bound completion call, and halting
   stops every other task over one git problem the user has to fix anyway.
 - **Cancel removes the worktree.** It did at first. Rejected: a runner is often
   cancelled because it looked stuck after finishing, and removal took the
@@ -366,3 +363,4 @@ everything below applies per repo of the group.
   task, and Merge all can run mid-run (ADR-0020).
 - 2026-10-03 — a blocked run's execution stream stays open for the ops tasks still running; the choice's stream replaces it.
 - 2026-10-09 — `.ordewell/skills/` committed and reaching worktrees through git (ADR-0024).
+- 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).

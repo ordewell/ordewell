@@ -4,29 +4,29 @@ import { TaskOrchestrator } from '../TaskOrchestrator';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import { createTask } from '../../models/Task';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
-import { fakeConfig, FakeStructuredSession, flushMicrotasks } from '../../testing';
+import { fakeConfig, FakeRunnerSession, flushMicrotasks } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 import { claudeTurnEndQueue, fakeSpawn, scriptedAdapter } from './harnessTestKit';
-import { isStructuredSession, type ITerminalRunner, type StructuredEvent } from '../../interfaces/ITerminalRunner';
+import type { IRunner, StructuredEvent } from '../../interfaces/IRunner';
 
 const runners: StructuredRunner[] = [];
 afterEach(() => { for (const runner of runners.splice(0)) runner.stopAll(); });
 
 function scheduled() {
-  const session = new FakeStructuredSession();
+  const session = new FakeRunnerSession();
   const runner = {
     spawn: async () => session,
     stop: () => session.kill(),
     stopAll: () => session.kill(),
     activeCount: 1,
-  } satisfies ITerminalRunner;
+  } satisfies IRunner;
   const orchestrator = TaskOrchestrator.compose({
-    config: fakeConfig(), notifications: fakeNotification(), terminalRunner: runner,
-    output: new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } }),
+    config: fakeConfig(), notifications: fakeNotification(), runner,
+    output: new BufferedTaskOutputSource(),
     registry: new RunnerRegistry(), workspaceRoot: () => '/repo',
     workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
   });
-  orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Queued task', prompt: 'Do it', completionMarker: 'mk-1' })]);
+  orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Queued task', prompt: 'Do it' })]);
   return { orchestrator, session };
 }
 
@@ -80,7 +80,7 @@ describe('queued task messages before settlement', () => {
     const { orchestrator, session } = scheduled();
     await orchestrator.forceStartTask('t1');
     orchestrator.sendTaskMessage('t1', 'Please check again');
-    session.emitOutput('<<<ORDEWELL_DONE_mk-1>>>');
+    session.reportComplete({ status: 'done', summary: '' });
     session.emitTurnEnd('completed');
     session.emitOutput('I have a question');
     session.emitTurnEnd('completed');
@@ -90,14 +90,14 @@ describe('queued task messages before settlement', () => {
     orchestrator.stop();
   });
 
-  it('uses only the follow-up turn when a marker supersedes a completion call', async () => {
+  it('uses only the follow-up turn when a completion call supersedes the previous report', async () => {
     const { orchestrator, session } = scheduled();
     await orchestrator.forceStartTask('t1');
     session.emitOutput('Original work\n');
     orchestrator.sendTaskMessage('t1', 'Also add tests');
     session.reportComplete({ status: 'done', summary: 'Original summary' });
     session.emitTurnEnd('completed');
-    session.emitOutput('Work with tests\n<<<ORDEWELL_DONE_mk-1>>>');
+    session.reportComplete({ status: 'done', summary: 'Work with tests' });
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')?.status).toBe('completed'));
     expect(orchestrator.storeInstance.get('t1')?.outputSummary?.logTail).toBe('Work with tests');
   });
@@ -120,7 +120,7 @@ describe('queued task messages before settlement', () => {
     session.reportComplete({ status: 'done', summary: 'Old turn' });
     await orchestrator.retryTask('t1');
     session.reportComplete({ status: 'done', summary: 'Late old report' });
-    session.emitOutput('<<<ORDEWELL_DONE_mk-1>>>');
+    session.reportComplete({ status: 'done', summary: '' });
     await flushMicrotasks(50);
     expect(orchestrator.storeInstance.get('t1')?.status).toBe('pending');
     expect(orchestrator.storeInstance.get('t1')?.verdict).toBeUndefined();
@@ -137,17 +137,17 @@ describe('messages that cannot be delivered', () => {
     });
     runners.push(runner);
     const session = await runner.spawn({ taskId: 't1', runner: 'claude-code', prompt: 'Do it', cwd: '/repo', registry: new RunnerRegistry() });
-    if (!isStructuredSession(session)) throw new Error('expected structured');
+
     const events: StructuredEvent[] = [];
     session.onEvent((event) => events.push(event));
-    await vi.waitFor(() => expect(spawned.processes[0].written).toHaveLength(1));
+    await vi.waitFor(() => expect(spawned.processes[0].written).toHaveLength(2));
     const id = session.sendMessage('Please do not lose this');
     if (ending === 'kill') session.kill();
     else spawned.processes[0].exit(1);
     await flushMicrotasks(50);
     expect(events).toContainEqual({ type: 'message_undelivered', messageId: id, text: 'Please do not lose this' });
     expect(session.queued()).toEqual([]);
-    expect(spawned.processes[0].written).toHaveLength(1);
+    expect(spawned.processes[0].written).toHaveLength(2);
   });
 });
 
@@ -165,6 +165,7 @@ describe('a failed structured turn with queued messages', () => {
           await new Promise<void>((resolve) => { end = resolve; });
           await scripted.send(text, onEvent, signal);
         },
+        mcpAttached: async () => true,
         interrupt: async () => false,
         onProcessExit: () => {},
         answerPermission: () => false,
@@ -172,7 +173,7 @@ describe('a failed structured turn with queued messages', () => {
     } });
     runners.push(runner);
     const session = await runner.spawn({ taskId: 't1', runner: 'claude-code', prompt: 'Do it', cwd: '/repo', registry: new RunnerRegistry() });
-    if (!isStructuredSession(session)) throw new Error('expected structured');
+
     const events: StructuredEvent[] = [];
     session.onEvent((event) => events.push(event));
     await vi.waitFor(() => expect(events).toContainEqual({ type: 'turn_start', text: 'Do it' }));

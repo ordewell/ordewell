@@ -306,7 +306,7 @@ export function taskSkillsCommand(state: TuiState, args: string[]): Step {
     if (args.length < 2) return openTaskSkillsPicker(state, task);
     if (task.type !== 'ai') return fail(state, 'Manual tasks do not run an executor, so they take no skills.');
     const value = args.slice(1).join(' ');
-    const names = value.toLowerCase() === 'none' ? [] : [...new Set(value.split(/[,\s]+/).filter(Boolean))];
+    const names = value.toLowerCase() === 'none' ? [] : [...new Set(value.toLowerCase().split(/[,\s]+/).filter(Boolean))];
     const unknown = names.filter((name) => !state.taskSkills.some((s) => s.name === name));
     if (unknown.length > 0) {
       return fail(state, `No task skill named ${unknown.map((n) => `"${n}"`).join(', ')}. Task skills: ${state.taskSkills.map((s) => s.name).join(', ') || 'none'}.`);

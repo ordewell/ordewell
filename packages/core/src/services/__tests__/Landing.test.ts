@@ -7,14 +7,14 @@ import { fakeConfig, FakeWorktreeIsolation } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 
 const task = (id: string, order: number, over: Partial<Task> = {}): Task =>
-  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, completionMarker: `mk-${id}`, ...over });
+  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, ...over });
 
 const verdict = (outcome: Verdict['outcome'], reason: string): Verdict => ({ outcome, reason, checks: [], decidedAt: '2026-09-28T00:00:00.000Z' });
 const passed = verdict('pass', 'Completion marker found');
 
 async function setup(opts: { isolation?: FakeWorktreeIsolation; conflictRepairAttempts?: number; tasks?: Task[] } = {}) {
   const isolation = opts.isolation ?? new FakeWorktreeIsolation();
-  const listener: IsolationRunListener = { changed: vi.fn(), blocked: vi.fn(), handoff: vi.fn(), notice: vi.fn(), releasing: vi.fn() };
+  const listener: IsolationRunListener = { changed: vi.fn(), blocked: vi.fn(), handoff: vi.fn(), notice: vi.fn() };
   const config = fakeConfig({ conflictRepairAttempts: opts.conflictRepairAttempts ?? 2 });
   const runs = new IsolationRunController({ isolation, config, notifications: fakeNotification(), workspaceRoot: () => '/repo', listener, liveTasks: () => new Set() });
   const store = new PlanStore();

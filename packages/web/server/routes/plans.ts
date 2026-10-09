@@ -42,7 +42,10 @@ export function plansRoute(pool: OrchestratorPool) {
       const runnerList: string[] = Array.isArray(runners) ? runners : (runners ? [runners] : (queryRunners ? queryRunners.split(',').map(s => s.trim()).filter(Boolean) : pool.getRunnerState().enabledRunners));
       const plan = await pool.generatePlan(c.req.param('sessionId'), goal, runnerList, ws, model, { allowInit });
       const { models, modelsByRunner } = await pool.getProviderModels();
-      return c.json({ plan: surfacePlanState(plan), models, modelsByRunner } satisfies GeneratePlanResponse);
+      const notes = (pool.session(c.req.param('sessionId')).planState?.conversationHistory ?? [])
+        .filter((e) => e.kind === 'system')
+        .map((e) => e.content);
+      return c.json({ plan: surfacePlanState(plan), models, modelsByRunner, ...(notes.length > 0 ? { notes } : {}) } satisfies GeneratePlanResponse);
     } catch (err) {
       return failure(c, err, 'generate', { message: 'Plan generation failed' });
     }
@@ -106,8 +109,8 @@ export function plansRoute(pool: OrchestratorPool) {
     });
   }
 
-  // Talking to a structured task (ADR-0018, M1). A terminal task, or one not
-  // running, is refused with the reason rather than typed at. Force send
+  // Talking to a task (ADR-0018, M1). A task not running is refused with
+  // the reason. Force send
   // (ADR-0023, F1) is the same request: it interrupts the running turn and
   // delivers this message next, ahead of anything queued.
   const messageHandler = (send: (session: ReturnType<typeof pool.session>, taskId: string, text: string) => string) => async (c: Context<Env, '/:sessionId/tasks/:taskId/messages'>) => {

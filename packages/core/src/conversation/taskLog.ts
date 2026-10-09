@@ -1,4 +1,4 @@
-import type { QueuedTaskMessage, StructuredTurnEnd } from '../interfaces/ITerminalRunner';
+import type { QueuedTaskMessage, StructuredTurnEnd } from '../interfaces/IRunner';
 import type { TaskLogEvent } from '../models/TaskLog';
 import { addPlannerUsage, isMeasured, usageLine, type PlannerUsage } from '../models/Usage';
 import { mapAgentTool, normalizeAgentArgs } from '../services/harness/agentTools';

@@ -1,10 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
-import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
-import type { SessionNotice } from '../SessionMessage';
+import { createTask, type ConversationMessage, type LegacyPlanState, type Task } from '../../models/Task';
+import type { IRunner } from '../../interfaces/IRunner';
+import type { SessionMessage, SessionNotice } from '../SessionMessage';
 import type { SkillInfo } from '../SkillsService';
 import type { ModifyDuringExecutionRequest } from '../Planner';
-import { FakeTerminalSession, makeSession, testWorkspace, taskOf } from './sessionTestKit';
+import { FakeRunnerSession, makeSession, saves, testWorkspace, taskOf } from './sessionTestKit';
 
 function skill(name: string, appliesTo: SkillInfo['appliesTo'], content = `${name} body`): SkillInfo {
   const path = `/home/u/.ordewell/skills/${name}/SKILL.md`;
@@ -31,6 +31,9 @@ function twoTaskPlan(): LegacyPlanState {
   };
 }
 
+const skillCheckNote = (history: ConversationMessage[] | undefined) =>
+  history?.find((m) => m.kind === 'system' && m.content.startsWith('Skill check:'));
+
 const opsTurn = (ops: unknown[]) => ({ kind: 'task_ops', ops, text: '', researchLog: [] });
 
 describe('what the planner sees of a task\'s skills', () => {
@@ -52,6 +55,7 @@ describe('what the planner sees of a task\'s skills', () => {
 describe('task skills checked where a planner reply lands', () => {
   it('sends an envelope plan naming a planner skill back, and lands a corrected one with a notice for a name not found', async () => {
     const onNotice = vi.fn<(notice: SessionNotice) => void>();
+    const broadcast = vi.fn<(message: SessionMessage) => void>();
     const planned = (skills: string[]) => ({
       kind: 'plan', text: '', researchLog: [],
       tasks: [createTask({ id: 't1', order: 1, title: 'Cache', prompt: 'p', assignedRunner: 'claude-code', autonomy: 'AFK', sliceType: 'AFK', skills })],
@@ -60,6 +64,7 @@ describe('task skills checked where a planner reply lands', () => {
     const session = makeSession({
       skillsService,
       onNotice,
+      broadcast,
       aiService: { startConversation: vi.fn().mockResolvedValue(planned(['grilling'])), continueConversation, hasActiveConversation: () => true },
     });
 
@@ -68,6 +73,31 @@ describe('task skills checked where a planner reply lands', () => {
     expect(continueConversation.mock.calls[0][0]).toMatch(/Task "Cache": "grilling" is a planner skill/);
     expect(session.planTasks[0].skills).toEqual(['tdd', 'later']);
     expect(onNotice).toHaveBeenCalledWith({ type: 'notice', level: 'warn', message: expect.stringContaining('Task "Cache": skill "later" not found') });
+    const note = skillCheckNote(session.planState?.conversationHistory);
+    expect(note?.content).toMatch(/^Skill check:\n- Task "Cache": skill "later" not found/);
+    const generated = broadcast.mock.calls.map(([m]) => m).filter((m) => m.type === 'plan_generated');
+    expect(generated.at(-1)?.plan.conversationHistory?.at(-1)).toEqual(note);
+  });
+
+  it('records a one-shot plan\'s skill warnings in its transcript and as a notice', async () => {
+    const onNotice = vi.fn<(notice: SessionNotice) => void>();
+    const generate = vi.fn(async (): Promise<LegacyPlanState> => ({
+      ...twoTaskPlan(),
+      conversationHistory: undefined,
+      tasks: [
+        createTask({ id: 'a', order: 1, title: 'Make it', prompt: 'p', assignedRunner: 'claude-code' }),
+        createTask({ id: 'b', order: 2, title: 'Use it', prompt: 'p', dependencies: ['a'], assignedRunner: 'claude-code', skills: ['later', 'grilling'] }),
+      ],
+    }));
+    const session = makeSession({ skillsService, onNotice, planner: { generate } });
+
+    await session.generatePlan('make and use a skill', ['claude-code']);
+
+    const note = skillCheckNote(session.planState?.conversationHistory);
+    expect(note?.content).toContain('- Task "Use it": skill "later" not found');
+    expect(note?.content).toContain('- Task "Use it": "grilling" is a planner skill');
+    expect(saves(session).mock.calls.at(-1)![0].conversationHistory).toContainEqual(note);
+    expect(onNotice).toHaveBeenCalledWith({ type: 'notice', level: 'warn', message: expect.stringContaining('Task "Use it": skill "later" not found') });
   });
 
   it('refuses envelope task ops attaching a planner skill through the repair loop, then lands the corrected ones with a notice', async () => {
@@ -85,6 +115,7 @@ describe('task skills checked where a planner reply lands', () => {
     expect(onNotice.mock.calls.map(([n]) => [n.level, n.message])).toEqual([
       ['warn', expect.stringContaining('op 1 (update): skill "later" not found')],
     ]);
+    expect(skillCheckNote(session.planState?.conversationHistory)?.content).toContain('- op 1 (update): skill "later" not found');
   });
 
   it('refuses a chip edit naming a planner skill, and warns about one not found', async () => {
@@ -102,13 +133,13 @@ describe('task skills checked where a planner reply lands', () => {
 });
 
 describe('a mid-run edit queued behind a running task', () => {
-  function runner(): ITerminalRunner {
+  function runner(): IRunner {
     return {
-      spawn: vi.fn(async ({ taskId }: { taskId: string }) => new FakeTerminalSession(`s-${taskId}`, taskId)),
+      spawn: vi.fn(async ({ taskId }: { taskId: string }) => new FakeRunnerSession(`s-${taskId}`, taskId)),
       stop: vi.fn(),
       stopAll: vi.fn(),
       activeCount: 0,
-    } as unknown as ITerminalRunner;
+    } as unknown as IRunner;
   }
 
   async function queued(modify: (req: ModifyDuringExecutionRequest) => Promise<{ pendingTasks: Task[]; message: string; skillWarnings?: string[] }>, onNotice?: (notice: SessionNotice) => void) {
@@ -145,8 +176,9 @@ describe('a mid-run edit queued behind a running task', () => {
 
   it('tells the user about skills the rewrite names but that are not found', async () => {
     const onNotice = vi.fn<(notice: SessionNotice) => void>();
-    await queued(async ({ pendingTasks }) => ({ pendingTasks, message: 'ok', skillWarnings: ['Task "Build": skill "later" not found'] }), onNotice);
+    const { session } = await queued(async ({ pendingTasks }) => ({ pendingTasks, message: 'ok', skillWarnings: ['Task "Build": skill "later" not found'] }), onNotice);
 
     expect(onNotice).toHaveBeenCalledWith({ type: 'notice', level: 'warn', message: 'Task "Build": skill "later" not found' });
+    expect(skillCheckNote(session.planState?.conversationHistory)?.content).toBe('Skill check:\n- Task "Build": skill "later" not found');
   });
 });

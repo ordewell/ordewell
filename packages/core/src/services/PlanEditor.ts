@@ -190,7 +190,7 @@ export class PlanEditor {
 
   /**
    * Delete one task. A running task is cancelled first: the plan can drop it
-   * either way, but nothing can reach its runner afterwards — the tmux session
+   * either way, but nothing can reach its runner afterwards — the process
    * outlives the plan and the orchestrator keeps counting it as active. The
    * planner-driven path refuses instead (see `applyTaskOps`); a user
    * deleting their own task means it.

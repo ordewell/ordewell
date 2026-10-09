@@ -4,7 +4,7 @@ import { join } from 'path';
 import { describe, it, expect, vi } from 'vitest';
 import { StructuredRunner } from '../StructuredRunner';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
-import { isStructuredSession, type ITerminalSession, type StructuredEvent, type StructuredTurnEnd } from '../../interfaces/ITerminalRunner';
+import type { IRunnerSession, StructuredEvent, StructuredTurnEnd } from '../../interfaces/IRunner';
 import { VerdictEngine } from '../VerdictEngine';
 import { composeAugmentedPrompt } from '../promptAugment';
 import { createTask, type Verdict } from '../../models/Task';
@@ -18,7 +18,7 @@ import { createTask, type Verdict } from '../../models/Task';
  *
  * It runs in a throwaway directory under `acceptEdits`, on the cheapest model
  * unless ORDEWELL_LIVE_MODEL says otherwise. What it asserts is the transport:
- * the marker reaches `onOutput` whole, a tool call becomes one line, a soft
+ * completion is reported through a tool, tool output becomes one line, a soft
  * interrupt ends the turn without ending the task, a turn is not closed
  * while background work is still running, and a task completes through the
  * `task_complete` tool without an approval, and a `checkpoint` call stays
@@ -37,29 +37,30 @@ const model = process.env.ORDEWELL_LIVE_MODEL ?? 'haiku';
 const autoModel = process.env.ORDEWELL_LIVE_AUTO_MODEL ?? model;
 const TIMEOUT_MS = 180_000;
 
-function turnEnds(session: ITerminalSession) {
-  if (!isStructuredSession(session)) throw new Error('not a structured session');
+function turnEnds(session: IRunnerSession) {
   const ends: StructuredTurnEnd[] = [];
+  const reports: string[] = [];
+  session.onTaskComplete(({ status }) => reports.push(status));
   let waiter: (() => void) | null = null;
   session.onTurnEnd((reason) => { ends.push(reason); waiter?.(); waiter = null; });
   return {
     session,
     ends,
+    reports,
     next: () => new Promise<void>((resolve) => { waiter = resolve; }),
   };
 }
 
 describe.runIf(live)('structured transport — live smoke', () => {
-  it('runs a Claude Code task turn and reports its marker whole', async () => {
+  it('runs a Claude Code task turn and reports completion through the tool', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ordewell-structured-'));
     writeFileSync(join(dir, 'README.md'), 'hello\n');
     const runner = new StructuredRunner();
-    const marker = '<<<ORDEWELL_DONE_live-smoke>>>';
     try {
       const session = await runner.spawn({
         taskId: 'live-smoke',
         runner: 'claude-code',
-        prompt: 'Run `cat README.md` with the Bash tool. Then print one final line containing only the completion marker. Build it by writing `<<<ORDEWELL_` immediately followed by `DONE_live-smoke>>>` with nothing between the two parts.',
+        prompt: 'Run `cat README.md` with the Bash tool. Then call task_complete with status done and a short summary.',
         modelId: model,
         mode: 'acceptEdits',
         cwd: dir,
@@ -73,7 +74,7 @@ describe.runIf(live)('structured transport — live smoke', () => {
 
       await turns.next();
       expect(turns.ends).toEqual(['completed']);
-      expect(chunks.some((chunk) => chunk.includes(marker)), session.getOutput()).toBe(true);
+      expect(turns.reports).toEqual(['done']);
       expect(session.getOutput()).toMatch(/› Bash\(cat README\.md\)/);
       expect(turns.session.nativeSessionId()).toBeTruthy();
 
@@ -87,16 +88,15 @@ describe.runIf(live)('structured transport — live smoke', () => {
     }
   }, TIMEOUT_MS);
 
-  it('keeps the turn open while background work runs, and reports a marker said after it', async () => {
+  it('keeps the turn open while background work runs, and reports completion after it', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ordewell-structured-'));
     const runner = new StructuredRunner();
-    const marker = '<<<ORDEWELL_DONE_live-background>>>';
     try {
       const startedAt = Date.now();
       const session = await runner.spawn({
         taskId: 'live-background',
         runner: 'claude-code',
-        prompt: 'Start `sleep 20 && echo BG-DONE` as a background shell with the Bash tool (run_in_background). Wait for it to finish and read its output. Only then print one final line containing only the completion marker. Build it by writing `<<<ORDEWELL_` immediately followed by `DONE_live-background>>>` with nothing between the two parts.',
+        prompt: 'Start `sleep 20 && echo BG-DONE` as a background shell with the Bash tool (run_in_background). Wait for it to finish and read its output. Only then call task_complete with status done and a short summary.',
         modelId: model,
         mode: 'acceptEdits',
         cwd: dir,
@@ -109,11 +109,11 @@ describe.runIf(live)('structured transport — live smoke', () => {
       await turns.next();
       // Long enough that the 20s sleep, not a quick reply, is what held it.
       expect(Date.now() - startedAt).toBeGreaterThanOrEqual(15_000);
-      expect(chunks.some((chunk) => chunk.includes(marker)), session.getOutput()).toBe(true);
+      expect(turns.reports).toEqual(['done']);
       // Nothing straggles in after the turn, and no second turn ends.
       await new Promise((resolve) => setTimeout(resolve, 3000));
       expect(turns.ends).toEqual(['completed']);
-      expect(chunks.filter((chunk) => chunk.includes(marker))).toHaveLength(1);
+      expect(turns.reports).toEqual(['done']);
     } finally {
       runner.stopAll();
       rmSync(dir, { recursive: true, force: true });
@@ -123,12 +123,11 @@ describe.runIf(live)('structured transport — live smoke', () => {
   it('runs a task under auto mode, or skips with the reason the run gave', async (ctx) => {
     const dir = mkdtempSync(join(tmpdir(), 'ordewell-structured-'));
     const runner = new StructuredRunner();
-    const marker = '<<<ORDEWELL_DONE_live-auto>>>';
     try {
       const session = await runner.spawn({
         taskId: 'live-auto',
         runner: 'claude-code',
-        prompt: 'Write a file named hello.txt containing the single word hello. Then print one final line containing only the completion marker. Build it by writing `<<<ORDEWELL_` immediately followed by `DONE_live-auto>>>` with nothing between the two parts.',
+        prompt: 'Write a file named hello.txt containing the single word hello. Then call task_complete with status done and a short summary.',
         modelId: autoModel,
         mode: 'auto',
         cwd: dir,
@@ -144,7 +143,7 @@ describe.runIf(live)('structured transport — live smoke', () => {
         return;
       }
       expect(turns.ends).toEqual(['completed']);
-      expect(session.getOutput(), session.getOutput()).toContain(marker);
+      expect(turns.reports).toEqual(['done']);
       expect(existsSync(join(dir, 'hello.txt'))).toBe(true);
       expect(readFileSync(join(dir, 'hello.txt'), 'utf8')).toContain('hello');
     } finally {
@@ -275,14 +274,14 @@ describe.runIf(live)('structured transport — live smoke', () => {
   it('completes a task through task_complete in default mode, with nothing asked of a person (ADR-0022)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ordewell-structured-'));
     const runner = new StructuredRunner();
-    const task = createTask({ id: 'live-tool', title: 'Multiply', prompt: 'Work out 17 * 23 and state the result.', taskMode: 'default', completionMarker: 'live-tool' });
+    const task = createTask({ id: 'live-tool', title: 'Multiply', prompt: 'Work out 17 * 23 and state the result.', taskMode: 'default' });
     const engine = new VerdictEngine();
     const verdict = new Promise<Verdict>((resolve) => engine.onVerdict((_taskId, v) => resolve(v)));
     try {
       const session = await runner.spawn({
         taskId: task.id,
         runner: 'claude-code',
-        prompt: composeAugmentedPrompt(task, [task], { completionTool: true }),
+        prompt: composeAugmentedPrompt(task, [task], {  }),
         modelId: model,
         mode: 'default',
         cwd: dir,
@@ -313,7 +312,7 @@ describe.runIf(live)('structured transport — live smoke', () => {
   it('holds a checkpoint tool call open until it is answered, and returns the answer (ADR-0022, V5)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ordewell-structured-'));
     const runner = new StructuredRunner();
-    const task = createTask({ id: 'live-checkpoint', title: 'Ask', prompt: 'Your task: call the checkpoint tool with the question "Shall I proceed with the migration?", then state exactly what the result was. Whatever it is, do not call the checkpoint tool a second time.', taskMode: 'default', completionMarker: 'live-checkpoint', autonomy: 'HITL' });
+    const task = createTask({ id: 'live-checkpoint', title: 'Ask', prompt: 'Your task: call the checkpoint tool with the question "Shall I proceed with the migration?", then state exactly what the result was. Whatever it is, do not call the checkpoint tool a second time.', taskMode: 'default', autonomy: 'HITL' });
     const engine = new VerdictEngine();
     const verdict = new Promise<Verdict>((resolve) => engine.onVerdict((_taskId, v) => resolve(v)));
     const asked: string[] = [];
@@ -326,7 +325,7 @@ describe.runIf(live)('structured transport — live smoke', () => {
       const session = await runner.spawn({
         taskId: task.id,
         runner: 'claude-code',
-        prompt: composeAugmentedPrompt(task, [task], { completionTool: true }),
+        prompt: composeAugmentedPrompt(task, [task], {  }),
         modelId: model,
         mode: 'default',
         cwd: dir,
@@ -334,7 +333,7 @@ describe.runIf(live)('structured transport — live smoke', () => {
         attempt: 1,
       });
       const events: StructuredEvent[] = [];
-      if (!isStructuredSession(session)) throw new Error('not a structured session');
+
       session.onEvent((event) => events.push(event));
       engine.watch(task, session);
 

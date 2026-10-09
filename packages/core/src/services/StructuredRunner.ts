@@ -1,22 +1,22 @@
+import { McpAttachError } from './harness/ordewellBinding';
 import { EventEmitter } from 'events';
 import { spawn as nodeSpawn } from 'child_process';
 import type {
-  ITerminalSession,
+  IRunnerSession,
   QueuedTaskMessage,
   StructuredEvent,
-  StructuredSessionCapability,
   StructuredTurnEnd,
-} from '../interfaces/ITerminalRunner';
+} from '../interfaces/IRunner';
 import type { ApprovalDecision } from '../interfaces/IApproval';
 import { checkpointReply, type CheckpointAnswer, type TaskCompleteArgs } from './mcp/tools';
-import { sharedMcpServer, type OrdewellMcpServer, type TaskTokenScope } from './mcp/OrdewellMcpServer';
+import { sharedMcpServer, type McpCredential, type OrdewellMcpServer, type TaskTokenScope } from './mcp/OrdewellMcpServer';
 import { mcpClientConfig } from './mcp/clientConfig';
 import type { ResearchToolType } from '../models/Task';
 import { resolveTaskRunnerFlags } from '../plugins/resolveArgs';
-import { AbstractRunner, AbstractTerminalSession, type RunnerSpawnOptions } from './AbstractRunner';
+import { AbstractRunner, AbstractRunnerSession, type RunnerSpawnOptions } from './AbstractRunner';
 import type { AgentEvent, AgentProcessDeps, TaskModeAgentAdapter, TaskStartOptions } from './harness/AgentAdapter';
 import { mapAgentTool, normalizeAgentArgs } from './harness/agentTools';
-import { createTaskAdapter, takesOrdewellTools } from './harness/connectors';
+import { createTaskAdapter } from './harness/connectors';
 import { settleWithin } from './harness/settleWithin';
 
 /** How long a soft interrupt may take before the runner is killed and resumed instead. */
@@ -71,13 +71,12 @@ function toolLine(name: string, args: Record<string, unknown>): string {
 }
 
 /**
- * The plain-text channel (ADR-0018, O1a): what `VerdictEngine`, the planner's
- * live read and the fallback summary see. Deliberately lossy — no JSON, no
- * ANSI, subagents left out.
+ * The plain-text channel (ADR-0018, O1a): what the planner's live read and
+ * the fallback summary see. Deliberately lossy — no JSON, no ANSI, subagents
+ * left out.
  *
- * Deltas are held back until a line completes or their block ends, so a
- * marker streamed as `<<<ORDE` + `WELL_DONE…` is written as one piece: a
- * reader scanning each chunk still sees it whole.
+ * Deltas are held back until a line completes or their block ends, so output
+ * is written a line at a time rather than a token at a time.
  */
 class PlainTextChannel {
   private pending = '';
@@ -161,24 +160,25 @@ interface SessionLaunch {
   createAdapter: (runner: string, deps: AgentProcessDeps) => TaskModeAgentAdapter;
   startOptions: TaskStartOptions;
   interruptGraceMs: number;
-  /** Where this attempt's task tools are served, when its runner takes them (ADR-0022). */
-  tools?: { server: OrdewellMcpServer; scope: TaskTokenScope };
+  /** Where this attempt's task tools are served (ADR-0022). */
+  tools: { server: OrdewellMcpServer; scope: TaskTokenScope };
+  onNotice?: (message: string) => void;
 }
 
 /**
  * One task driven over its runner's programmatic protocol (ADR-0018). It *is*
- * an `ITerminalSession`, so everything downstream of `onOutput` is unchanged;
- * what a terminal cannot do sits on {@link StructuredSessionCapability}.
+ * an `IRunnerSession`, with plain output and structured events.
  *
  * Ordewell owns the message queue (M1). A message sent mid-turn is handed to a
  * runner that can take one at its next step (ADR-0023); otherwise it waits for
  * the turn to end rather than being typed into a runner that is busy.
  */
-export class StructuredSession extends AbstractTerminalSession implements StructuredSessionCapability {
-  readonly transport = 'structured' as const;
+export class StructuredSession extends AbstractRunnerSession {
 
   private adapter: TaskModeAgentAdapter | null = null;
   private adapterStarted = false;
+  private adapterAttached = false;
+  private startupExit: number | null = null;
   /** Bumped whenever the adapter is replaced, so the old one's late events and exit are ignored. */
   private generation = 0;
   private output = '';
@@ -213,15 +213,14 @@ export class StructuredSession extends AbstractTerminalSession implements Struct
     });
   }
 
-  /** Start the runner and send the task's prompt as its first turn. */
+  /**
+   * Start the runner with the attempt's tools attached and send the task's
+   * prompt as its first turn. `task_complete` is the only way a task reports
+   * it is done, so a runner without the tools is never sent the task: it is
+   * killed and respawned once, and a second failure fails the start.
+   */
   async start(prompt: string): Promise<void> {
-    await this.issueTools();
-    try {
-      await this.startAdapter(this.startOptions);
-    } catch (err) {
-      this.revokeTools();
-      throw err;
-    }
+    await this.startAttached(this.launch.startOptions);
     // Callers attach their listeners once `spawn` resolves, so the first turn
     // waits for that or its opening events reach nobody. Working already, so
     // a message sent in the meantime queues behind the prompt.
@@ -240,14 +239,25 @@ export class StructuredSession extends AbstractTerminalSession implements Struct
   }
 
   /**
-   * A server that cannot start costs the task its tools, not its run: the
-   * prompt still teaches the marker (ADR-0022, S2).
+   * One spawn of the runner on a fresh token. Null once the runner reports
+   * the server connected — or once the session ended meanwhile, which leaves
+   * nothing to start; otherwise why not, with the process killed and the
+   * token revoked. A runner that cannot be spawned at all throws instead:
+   * spawning it again would fail the same way.
    */
-  private async issueTools(): Promise<void> {
-    const tools = this.launch.tools;
-    if (!tools) return;
+  private async startAttached(opts: TaskStartOptions): Promise<void> {
+    const first = await this.startWithTools(opts);
+    if (!first) return;
+    this.launch.onNotice?.(`${this.launch.runner} started without Ordewell's tools (${first}); respawning once.`);
+    const second = await this.startWithTools(opts);
+    if (second) throw new McpAttachError(`Could not start ${this.launch.runner} with Ordewell's tools, so the task was not sent to it. First spawn: ${first}. Respawn: ${second}.`);
+  }
+
+  private async startWithTools(opts: TaskStartOptions): Promise<string | null> {
+    const { server, scope } = this.launch.tools;
+    let credential: McpCredential;
     try {
-      const credential = await tools.server.issueTaskToken(tools.scope, {
+      credential = await server.issueTaskToken(scope, {
         taskComplete: async (report) => {
           this.structuredEmitter.emit('taskComplete', report);
           return { text: 'Recorded. End your turn now.' };
@@ -257,20 +267,45 @@ export class StructuredSession extends AbstractTerminalSession implements Struct
           return checkpointReply(await this.checkpointHandler(question, signal));
         },
       });
-      if (this.exited) {
-        tools.server.revoke(credential.token);
-        return;
-      }
-      this.toolToken = credential.token;
-      this.startOptions = { ...this.startOptions, mcp: mcpClientConfig(credential) };
     } catch (err) {
-      console.error(`[structured] No Ordewell tools for task ${this.taskId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+      return `Ordewell's MCP server could not issue a token (${err instanceof Error ? err.message : String(err)})`;
     }
+    if (this.exited) {
+      server.revoke(credential.token);
+      return null;
+    }
+    this.toolToken = credential.token;
+    this.startOptions = { ...opts, mcp: mcpClientConfig(credential) };
+    try {
+      await this.startAdapter(this.startOptions);
+    } catch (err) {
+      this.revokeTools();
+      throw err;
+    }
+    const adapter = this.adapter;
+    if (this.exited || !adapter) return null;
+    let attachFailure = `${this.launch.runner} did not report Ordewell's MCP server connected`;
+    try {
+      const attached = await adapter.mcpAttached();
+      if (attached && this.startupExit === null) {
+        this.adapterAttached = true;
+        return null;
+      }
+      if (this.startupExit !== null) attachFailure += ` (process exited with code ${this.startupExit})`;
+    } catch (err) {
+      attachFailure = `${this.launch.runner} could not check Ordewell's MCP attach state (${err instanceof Error ? err.message : String(err)})`;
+    }
+    if (this.exited) return null;
+    // Its exit is this session's doing, not the end of the attempt.
+    this.generation += 1;
+    adapter.dispose();
+    this.revokeTools();
+    return attachFailure;
   }
 
   private revokeTools(): void {
     if (this.toolToken === null) return;
-    this.launch.tools?.server.revoke(this.toolToken);
+    this.launch.tools.server.revoke(this.toolToken);
     this.toolToken = null;
   }
 
@@ -447,11 +482,15 @@ export class StructuredSession extends AbstractTerminalSession implements Struct
     const resumeSessionId = this.nativeSessionId() ?? this.startOptions.resumeSessionId;
     this.generation += 1;
     turn.abort.abort();
-    if (this.adapter) this.withdrawPermissions(this.adapter);
+    if (this.adapter) {
+      this.withdrawPermissions(this.adapter);
+      this.adapter.dispose();
+    }
     // The killed process takes what it was handed with it; the queue still has the messages.
     for (const message of this.queue) this.requeue(message);
     try {
-      await this.startAdapter({ ...this.startOptions, resumeSessionId });
+      this.revokeTools();
+      await this.startAttached({ ...this.startOptions, resumeSessionId });
     } catch (err) {
       this.text.line(`Could not restart ${this.launch.runner} after the interrupt: ${err instanceof Error ? err.message : String(err)}`);
       this.withdrawPermissions();
@@ -466,8 +505,15 @@ export class StructuredSession extends AbstractTerminalSession implements Struct
     const adapter = this.launch.createAdapter(this.launch.runner, this.launch.deps);
     this.adapter = adapter;
     this.adapterStarted = false;
+    this.adapterAttached = false;
+    this.startupExit = null;
     const generation = this.generation;
-    await adapter.start(opts);
+    try {
+      await adapter.start(opts);
+    } catch (err) {
+      adapter.dispose();
+      throw err;
+    }
     this.adapterStarted = true;
     if (this.exited || generation !== this.generation) {
       adapter.dispose();
@@ -476,6 +522,10 @@ export class StructuredSession extends AbstractTerminalSession implements Struct
     adapter.onOutOfTurn?.((event) => this.handleOutOfTurn(adapter, generation, event));
     adapter.onProcessExit((code) => {
       if (generation !== this.generation) return;
+      if (!this.adapterAttached) {
+        this.startupExit = code;
+        return;
+      }
       this.lastSessionId = adapter.nativeSessionId() ?? this.lastSessionId;
       this.withdrawPermissions();
       this.baseHandleExit(code);
@@ -685,8 +735,7 @@ export class StructuredSession extends AbstractTerminalSession implements Struct
 /**
  * The structured transport (ADR-0018): a task's runner as a plain child
  * process speaking its protocol — no tmux, no `script` (W2). Only runners
- * with a task-mode connector can be spawned here; routing the rest to the
- * terminal transport is the caller's decision, not a silent downgrade here.
+ * with a task-mode connector can be spawned here.
  */
 export class StructuredRunner extends AbstractRunner<StructuredSession> {
   private spawnCount = 0;
@@ -703,7 +752,7 @@ export class StructuredRunner extends AbstractRunner<StructuredSession> {
     this.mcp = deps.mcp ?? sharedMcpServer();
   }
 
-  async spawn(opts: RunnerSpawnOptions): Promise<ITerminalSession> {
+  async spawn(opts: RunnerSpawnOptions): Promise<IRunnerSession> {
     const manifest = opts.registry?.get(opts.runner)?.manifest;
     if (!manifest) throw new Error(`No runner manifest is registered for "${opts.runner}".`);
 
@@ -717,7 +766,7 @@ export class StructuredRunner extends AbstractRunner<StructuredSession> {
         fetch: globalThis.fetch,
         ...this.processDeps,
         // Already resolved by the caller (ADR-0016); resolving it again here
-        // could disagree with what a terminal task in the same run sees.
+        // could disagree with the other tasks in the same run.
         workspaceEnv: async () => env,
       },
       createAdapter: this.createAdapter,
@@ -730,9 +779,8 @@ export class StructuredRunner extends AbstractRunner<StructuredSession> {
         resumeSessionId: opts.resumeSessionId,
       },
       interruptGraceMs: this.interruptGraceMs,
-      ...(takesOrdewellTools(opts.runner)
-        ? { tools: { server: this.mcp, scope: { sessionId: opts.planSessionId ?? '', taskId: opts.taskId, attempt: opts.attempt ?? 1 } } }
-        : {}),
+      tools: { server: this.mcp, scope: { sessionId: opts.planSessionId ?? '', taskId: opts.taskId, attempt: opts.attempt ?? 1 } },
+      onNotice: opts.onNotice,
     });
 
     console.error(`[structured] Starting ${opts.runner} [${opts.mode ?? 'default'}] (${opts.modelId || 'default'}) for task ${opts.taskId.slice(0, 8)}`);
@@ -740,6 +788,7 @@ export class StructuredRunner extends AbstractRunner<StructuredSession> {
     try {
       await session.start(opts.prompt);
     } catch (err) {
+      session.kill();
       this.sessions.delete(id);
       throw err;
     }

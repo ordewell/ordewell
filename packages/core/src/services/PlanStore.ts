@@ -100,7 +100,7 @@ export class PlanStore {
     // Completed tasks survive a reload so a half-finished plan resumes the
     // remainder (their output summaries still feed dependents). Failed tasks
     // get a fresh chance. In-progress is left alone — load() also runs while
-    // a task's terminal session is live (forceStartTask); orphaned in_progress
+    // a task's runner session is live (forceStartTask); orphaned in_progress
     // from a saved session is normalized at the disk-load boundary instead.
     for (const task of this._allTasks) {
       if (task.status === 'failed') task.status = 'pending';
@@ -336,9 +336,9 @@ export class PlanStore {
     if (task) task.outputSummary = summary;
   }
 
-  setTaskTransport(id: string, transport: Task['transport']): void {
+  setTaskRunnerSessionId(id: string, runnerSessionId: string | undefined): void {
     const task = this._taskMap.get(id);
-    if (task) task.transport = transport;
+    if (task) task.runnerSessionId = runnerSessionId;
   }
 
   setTaskAttemptSkills(id: string, skills: Task['attemptSkills']): void {

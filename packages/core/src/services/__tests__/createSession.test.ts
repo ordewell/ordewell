@@ -1,16 +1,15 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createTask, type LegacyPlanState } from '../../models/Task';
 import type { SkillInfo } from '../SkillsService';
-import { makeSession, FakeTerminalSession, fakeConfig, taskOf, queue, saves } from './sessionTestKit';
-import { scriptedAdapter } from './harnessTestKit';
+import { makeSession, FakeRunnerSession, fakeConfig, taskOf, queue, saves } from './sessionTestKit';
+import { scriptedAdapter, fakeMcpServer } from './harnessTestKit';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
-import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
+import type { IRunner } from '../../interfaces/IRunner';
 import { parsePlanJson } from '../PlanValidator';
 import { PlannerTurnStoppedError } from '../PlannerConversation';
 import type { Session } from '../createSession';
 import type { SessionMessage } from '../SessionMessage';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
-import type { TranscriptQuery } from '../../interfaces/TaskOutputSource';
 import { reduceConversation, EMPTY_CONVERSATION } from '../../conversation';
 import { flushMicrotasks } from '../../testing';
 
@@ -326,20 +325,20 @@ describe('processQueuedMessages', () => {
   });
 
   it('applies a queued edit and resumes fan-out without any surface asking it to', async () => {
-    const sessions: FakeTerminalSession[] = [];
+    const sessions: FakeRunnerSession[] = [];
     const runner = {
       spawn: vi.fn().mockImplementation(() => {
-        const s = new FakeTerminalSession(`s${sessions.length + 1}`, `t${sessions.length + 1}`);
+        const s = new FakeRunnerSession(`s${sessions.length + 1}`, `t${sessions.length + 1}`);
         sessions.push(s);
         return Promise.resolve(s);
       }),
       stop: vi.fn(),
       stopAll: vi.fn(),
       activeCount: 0,
-    } as unknown as ITerminalRunner;
+    } as unknown as IRunner;
 
-    const t1 = createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first', completionMarker: 'mk-1' });
-    const t2 = createTask({ id: 't2', order: 2, title: 'Second', prompt: 'do second', dependencies: ['t1'], completionMarker: 'mk-2' });
+    const t1 = createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' });
+    const t2 = createTask({ id: 't2', order: 2, title: 'Second', prompt: 'do second', dependencies: ['t1'] });
     const planner = {
       modifyDuringExecution: vi.fn().mockResolvedValue({
         // The full plan with t1 already completed so the store rebuild keeps
@@ -370,7 +369,8 @@ describe('processQueuedMessages', () => {
     // scheduler parks instead of spawning t2, and the Session drains the queue
     // on its own — no surface is wired to do it.
     queue(session, 'an edit');
-    sessions[0].emitOutput('Done.\n<<<ORDEWELL_DONE_mk-1>>>');
+    sessions[0].emitOutput('Done.\n');
+    sessions[0].reportComplete({ status: 'done', summary: '' });
     sessions[0].emitExit(0);
 
     await vi.waitFor(() => expect(runner.spawn).toHaveBeenCalledTimes(2));
@@ -390,17 +390,17 @@ describe('processQueuedMessages while it drains', () => {
   }
 
   function recordingRunner() {
-    const sessions: FakeTerminalSession[] = [];
+    const sessions: FakeRunnerSession[] = [];
     const runner = {
       spawn: vi.fn().mockImplementation((opts: { taskId: string }) => {
-        const s = new FakeTerminalSession(`s${sessions.length + 1}`, opts.taskId);
+        const s = new FakeRunnerSession(`s${sessions.length + 1}`, opts.taskId);
         sessions.push(s);
         return Promise.resolve(s);
       }),
       stop: vi.fn(),
       stopAll: vi.fn(),
       activeCount: 0,
-    } as unknown as ITerminalRunner;
+    } as unknown as IRunner;
     const spawnedIds = () => (runner.spawn as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => (c[0] as { taskId: string }).taskId);
     return { runner, sessions, spawnedIds };
   }
@@ -415,16 +415,16 @@ describe('processQueuedMessages while it drains', () => {
 
   it('keeps the scheduler paused until the planner has answered', async () => {
     const { runner, sessions, spawnedIds } = recordingRunner();
-    const t1 = createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first', completionMarker: 'mk-1' });
+    const t1 = createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' });
     const u1 = createTask({ id: 'u1', order: 2, title: 'Sign off', type: 'user', userSteps: [{ order: 1, instruction: 'look', completed: false }] });
-    const t2 = createTask({ id: 't2', order: 3, title: 'Second', prompt: 'do second', dependencies: ['t1'], completionMarker: 'mk-2' });
+    const t2 = createTask({ id: 't2', order: 3, title: 'Second', prompt: 'do second', dependencies: ['t1'] });
     const answer = held<{ pendingTasks: LegacyPlanState['tasks']; message: string }>();
     const planner = { modifyDuringExecution: vi.fn().mockReturnValue(answer.promise) };
     const session = makeSession({ runner, planner });
     session.loadPlan(plan([t1, u1, t2]), 'Test', '/repo');
     await session.executePlan();
     queue(session, 'rename the second task');
-    sessions[0].emitOutput('<<<ORDEWELL_DONE_mk-1>>>');
+    sessions[0].reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(taskOf(session, 't1')!.status).toBe('completed'));
 
     const draining = session.processQueuedMessages();
@@ -522,13 +522,13 @@ describe('processQueuedMessages while it drains', () => {
 
 describe('Session phase transitions', () => {
   it('Execute Plan spawns an AI task when planner JSON omits prompt', async () => {
-    const terminal = new FakeTerminalSession('terminal-1', 't1');
+    const runnerSession = new FakeRunnerSession('runnerSession-1', 't1');
     const runner = {
-      spawn: vi.fn().mockResolvedValue(terminal),
+      spawn: vi.fn().mockResolvedValue(runnerSession),
       stop: vi.fn(),
       stopAll: vi.fn(),
       activeCount: 0,
-    } satisfies ITerminalRunner;
+    } satisfies IRunner;
     const session = makeSession({ runner });
     const tasks = parsePlanJson(JSON.stringify({
       tasks: [{
@@ -558,13 +558,13 @@ describe('Session phase transitions', () => {
   });
 
   it('Execute Plan resumes at the first incomplete task and preserves completed dependencies', async () => {
-    const terminal = new FakeTerminalSession('terminal-2', 't2');
+    const runnerSession = new FakeRunnerSession('runnerSession-2', 't2');
     const runner = {
-      spawn: vi.fn().mockResolvedValue(terminal),
+      spawn: vi.fn().mockResolvedValue(runnerSession),
       stop: vi.fn(),
       stopAll: vi.fn(),
       activeCount: 0,
-    } satisfies ITerminalRunner;
+    } satisfies IRunner;
     const session = makeSession({ runner });
     const plan: LegacyPlanState = {
       tasks: [
@@ -586,17 +586,17 @@ describe('Session phase transitions', () => {
   });
 
   it('Run Task keeps the session busy until the marker and blocks Execute Plan meanwhile', async () => {
-    const terminal = new FakeTerminalSession('terminal-1', 't1');
+    const runnerSession = new FakeRunnerSession('runnerSession-1', 't1');
     const runner = {
-      spawn: vi.fn().mockResolvedValue(terminal),
+      spawn: vi.fn().mockResolvedValue(runnerSession),
       stop: vi.fn(),
       stopAll: vi.fn(),
       activeCount: 0,
-    } satisfies ITerminalRunner;
+    } satisfies IRunner;
     const session = makeSession({ runner });
     const plan: LegacyPlanState = {
       tasks: [
-        createTask({ id: 't1', order: 1, title: 'Run only me', prompt: 'one', completionMarker: 'mk-1' }),
+        createTask({ id: 't1', order: 1, title: 'Run only me', prompt: 'one' }),
         createTask({ id: 't2', order: 2, title: 'Leave pending', prompt: 'two' }),
       ],
       generatedAt: new Date().toISOString(),
@@ -613,7 +613,7 @@ describe('Session phase transitions', () => {
     expect(taskOf(session, 't2')?.status).toBe('pending');
     await expect(session.executePlan()).rejects.toThrow('Session already executing');
 
-    terminal.emitOutput('<<<ORDEWELL_DONE_mk-1>>>');
+    runnerSession.reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(session.isExecuting).toBe(false));
 
     expect(taskOf(session, 't1')?.status).toBe('completed');
@@ -621,16 +621,13 @@ describe('Session phase transitions', () => {
     expect(runner.spawn).toHaveBeenCalledOnce();
   });
 
-  it("reads a finished task's answer through the injected output source, never the real home", async () => {
-    const terminal = new FakeTerminalSession('terminal-1', 't1');
-    const runner = { spawn: vi.fn().mockResolvedValue(terminal), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 } satisfies ITerminalRunner;
-    const queries: TranscriptQuery[] = [];
-    const taskOutput = new BufferedTaskOutputSource({
-      transcripts: { finalAssistantText: async (q) => { queries.push(q); return 'answer from the transcript'; } },
-    });
+  it("captures a finished task's reported answer", async () => {
+    const runnerSession = new FakeRunnerSession('runnerSession-1', 't1');
+    const runner = { spawn: vi.fn().mockResolvedValue(runnerSession), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 } satisfies IRunner;
+    const taskOutput = new BufferedTaskOutputSource();
     const session = makeSession({ runner, taskOutput });
     session.loadPlan({
-      tasks: [createTask({ id: 't1', order: 1, title: 'Only', prompt: 'one', completionMarker: 'mk-1' })],
+      tasks: [createTask({ id: 't1', order: 1, title: 'Only', prompt: 'one' })],
       generatedAt: new Date().toISOString(),
       status: 'draft',
       runners: ['claude-code'],
@@ -638,19 +635,17 @@ describe('Session phase transitions', () => {
     }, 'Test', '/repo');
     await session.runTask('t1');
 
-    terminal.emitOutput('<<<ORDEWELL_DONE_mk-1>>>');
-    await vi.waitFor(() => expect(taskOf(session, 't1')?.outputSummary?.logTail).toBe('answer from the transcript'));
-
-    expect(queries).toEqual([expect.objectContaining({ runner: 'claude-code', marker: 'mk-1' })]);
+    runnerSession.reportComplete({ status: 'done', summary: 'answer from the runner' });
+    await vi.waitFor(() => expect(taskOf(session, 't1')?.outputSummary?.logTail).toBe('answer from the runner'));
   });
 
   describe('every spawn path composes the same augmented prompt', () => {
     function threeTaskPlan(): LegacyPlanState {
       return {
         tasks: [
-          createTask({ id: 't1', order: 1, title: 'First', prompt: 'one', completionMarker: 'mk-1' }),
-          createTask({ id: 't2', order: 2, title: 'Second', prompt: 'two', completionMarker: 'mk-2' }),
-          createTask({ id: 't3', order: 3, title: 'Third', prompt: 'three', completionMarker: 'mk-3' }),
+          createTask({ id: 't1', order: 1, title: 'First', prompt: 'one' }),
+          createTask({ id: 't2', order: 2, title: 'Second', prompt: 'two' }),
+          createTask({ id: 't3', order: 3, title: 'Third', prompt: 'three' }),
         ],
         generatedAt: new Date().toISOString(),
         status: 'draft',
@@ -659,20 +654,20 @@ describe('Session phase transitions', () => {
       };
     }
 
-    function spyRunner(): ITerminalRunner & { spawn: ReturnType<typeof vi.fn> } {
+    function spyRunner(): IRunner & { spawn: ReturnType<typeof vi.fn> } {
       return {
-        spawn: vi.fn().mockImplementation((opts: { taskId: string }) => Promise.resolve(new FakeTerminalSession(`term-${opts.taskId}`, opts.taskId))),
+        spawn: vi.fn().mockImplementation((opts: { taskId: string }) => Promise.resolve(new FakeRunnerSession(`term-${opts.taskId}`, opts.taskId))),
         stop: vi.fn(),
         stopAll: vi.fn(),
         activeCount: 0,
-      } as unknown as ITerminalRunner & { spawn: ReturnType<typeof vi.fn> };
+      } as unknown as IRunner & { spawn: ReturnType<typeof vi.fn> };
     }
 
     it.each([
       ['executePlan', (s: Session) => s.executePlan()],
       ['runTask', (s: Session) => s.runTask('t1')],
       ['forceStartTask', (s: Session) => s.forceStartTask('t1')],
-    ])('%s carries the plan map and the completion marker', async (_name, start) => {
+    ])('%s carries the plan map and the completion tool', async (_name, start) => {
       const runner = spyRunner();
       const session = makeSession({ runner });
       session.loadPlan(threeTaskPlan(), 'Test', '/repo');
@@ -682,7 +677,7 @@ describe('Session phase transitions', () => {
       const prompt = runner.spawn.mock.calls.find((c) => c[0].taskId === 't1')![0].prompt as string;
       expect(prompt).toContain('← you are here');
       expect(prompt).toContain('1. [NOW    ] First');
-      expect(prompt).toContain('DONE_mk-1>>>');
+      expect(prompt).toContain('task_complete');
       expect(prompt).not.toContain('## Task skills');
     });
 
@@ -757,26 +752,26 @@ describe('Session phase transitions', () => {
 });
 
 describe('currentPlanState — the live plan a surface refreshes from', () => {
-  function twoParallel(): { session: Session; sessions: FakeTerminalSession[] } {
-    const sessions: FakeTerminalSession[] = [];
+  function twoParallel(): { session: Session; sessions: FakeRunnerSession[] } {
+    const sessions: FakeRunnerSession[] = [];
     const runner = {
       spawn: vi.fn().mockImplementation((req: { taskId: string }) => {
-        const s = new FakeTerminalSession(`s-${req.taskId}`, req.taskId);
+        const s = new FakeRunnerSession(`s-${req.taskId}`, req.taskId);
         sessions.push(s);
         return Promise.resolve(s);
       }),
       stop: vi.fn(),
       stopAll: vi.fn(),
       activeCount: 0,
-    } as unknown as ITerminalRunner;
+    } as unknown as IRunner;
 
     const session = makeSession({ runner });
     session.loadPlan(
       {
         tasks: [
-          createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first', completionMarker: 'mk-1' }),
-          createTask({ id: 't2', order: 2, title: 'Second', prompt: 'do second', completionMarker: 'mk-2' }),
-          createTask({ id: 't3', order: 3, title: 'Third', prompt: 'do third', dependencies: ['t1'], completionMarker: 'mk-3' }),
+          createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' }),
+          createTask({ id: 't2', order: 2, title: 'Second', prompt: 'do second' }),
+          createTask({ id: 't3', order: 3, title: 'Third', prompt: 'do third', dependencies: ['t1'] }),
         ],
         generatedAt: new Date().toISOString(),
         status: 'approved',
@@ -864,18 +859,18 @@ describe('planState.tasks — written from the store, never shared with it', () 
   it('is current by the time a status_update is broadcast', async () => {
     const seen: (string | undefined)[] = [];
     const runner = {
-      spawn: vi.fn().mockImplementation((req: { taskId: string }) => Promise.resolve(new FakeTerminalSession(`s-${req.taskId}`, req.taskId))),
+      spawn: vi.fn().mockImplementation((req: { taskId: string }) => Promise.resolve(new FakeRunnerSession(`s-${req.taskId}`, req.taskId))),
       stop: vi.fn(),
       stopAll: vi.fn(),
       activeCount: 0,
-    } as unknown as ITerminalRunner;
+    } as unknown as IRunner;
     const session: Session = makeSession({
       runner,
       broadcast: vi.fn((msg: { type: string }) => {
         if (msg.type === 'status_update') seen.push(session.planState?.tasks[0].status);
       }),
     });
-    session.loadPlan(planOf([createTask({ id: 't1', order: 1, title: 'First', prompt: 'p', completionMarker: 'mk-1' })]), 'Test', '/repo');
+    session.loadPlan(planOf([createTask({ id: 't1', order: 1, title: 'First', prompt: 'p' })]), 'Test', '/repo');
 
     await session.executePlan();
 
@@ -1161,6 +1156,7 @@ describe('session id stability (persist seam)', () => {
       const cli = new CliAgentAiService(
         fakeConfig({ aiProvider: 'claude-code' }),
         {
+          mcpServer: fakeMcpServer(),
           createAdapter: scriptedAdapter([[
             { type: 'subagent_started', subagentId: 'sa1', brief: 'find the cache', model: 'haiku' },
             { type: 'tool_call', id: 'c1', name: 'Grep', args: { pattern: 'cache' }, subagentId: 'sa1' },
@@ -1201,6 +1197,7 @@ describe('session id stability (persist seam)', () => {
       const cli = new CliAgentAiService(
         fakeConfig({ aiProvider: 'claude-code' }),
         {
+          mcpServer: fakeMcpServer(),
           createAdapter: scriptedAdapter([[
             { type: 'assistant_text_delta', text: 'Looking. ' },
             { type: 'tool_call', id: 'c1', name: 'Grep', args: { pattern: 'cache' } },
@@ -1237,6 +1234,7 @@ describe('session id stability (persist seam)', () => {
       const cli = new CliAgentAiService(
         fakeConfig({ aiProvider: 'claude-code' }),
         {
+          mcpServer: fakeMcpServer(),
           createAdapter: scriptedAdapter([[
             { type: 'thinking_delta', text: 'Grep for ' },
             { type: 'thinking_delta', text: 'the cache.' },
@@ -1593,13 +1591,13 @@ describe('idleSince on the status_update broadcast', () => {
   });
 
   it('round-trips idleSince from the verifier through SerializedTaskStatus on status_update, and clears it on resume', async () => {
-    const fakeSession = new FakeTerminalSession('s1', 't1');
+    const fakeSession = new FakeRunnerSession('s1', 't1');
     const runner = {
       spawn: vi.fn().mockResolvedValue(fakeSession),
       stop: vi.fn(),
       stopAll: vi.fn(),
       activeCount: 0,
-    } as unknown as ITerminalRunner;
+    } as unknown as IRunner;
 
     const broadcast = vi.fn();
     const session = makeSession({ broadcast, runner });
@@ -1633,17 +1631,17 @@ describe('idleSince on the status_update broadcast', () => {
 
 describe('saving a run as its tasks settle', () => {
   function twoTaskRun() {
-    const terminals: FakeTerminalSession[] = [];
+    const runnerSessions: FakeRunnerSession[] = [];
     const runner = {
       spawn: vi.fn().mockImplementation((req: { taskId: string }) => {
-        const t = new FakeTerminalSession(`s-${req.taskId}`, req.taskId);
-        terminals.push(t);
+        const t = new FakeRunnerSession(`s-${req.taskId}`, req.taskId);
+        runnerSessions.push(t);
         return Promise.resolve(t);
       }),
       stop: vi.fn(),
       stopAll: vi.fn(),
       activeCount: 0,
-    } as unknown as ITerminalRunner;
+    } as unknown as IRunner;
     // Each save and each announcement, tagged with t1's status as it was then.
     const order: string[] = [];
     const saveSession = vi.fn((plan: LegacyPlanState) => {
@@ -1656,26 +1654,26 @@ describe('saving a run as its tasks settle', () => {
     const session = makeSession({ runner, broadcast, saveSession });
     session.loadPlan({
       tasks: [
-        createTask({ id: 't1', order: 1, title: 'First', prompt: 'a', completionMarker: 'mk-1' }),
-        createTask({ id: 't2', order: 2, title: 'Second', prompt: 'b', completionMarker: 'mk-2' }),
+        createTask({ id: 't1', order: 1, title: 'First', prompt: 'a' }),
+        createTask({ id: 't2', order: 2, title: 'Second', prompt: 'b' }),
       ],
       generatedAt: new Date().toISOString(),
       status: 'approved',
       runners: ['claude-code'],
       lastUpdated: new Date().toISOString(),
     }, 'Test', '/repo', { persist: false });
-    const terminal = (taskId: string) => terminals.find((t) => t.taskId === taskId)!;
-    return { session, saveSession, order, terminal };
+    const runnerSession = (taskId: string) => runnerSessions.find((t) => t.taskId === taskId)!;
+    return { session, saveSession, order, runnerSession };
   }
 
   it('saves a task\'s verdict the moment it lands, before announcing it, while the run goes on', async () => {
-    const { session, saveSession, order, terminal } = twoTaskRun();
+    const { session, saveSession, order, runnerSession } = twoTaskRun();
     await session.executePlan();
     saveSession.mockClear();
     order.length = 0;
 
-    terminal('t1').emitOutput('<<<ORDEWELL_DONE_mk-1>>>');
-    terminal('t1').emitExit(0);
+    runnerSession('t1').reportComplete({ status: 'done', summary: '' });
+    runnerSession('t1').emitExit(0);
 
     await vi.waitFor(() => expect(order).toContain('save:completed'));
     expect(order.indexOf('save:completed')).toBeLessThan(order.indexOf('status:completed'));
@@ -1684,21 +1682,21 @@ describe('saving a run as its tasks settle', () => {
   });
 
   it('saves a failed verdict as well', async () => {
-    const { session, saveSession, terminal } = twoTaskRun();
+    const { session, saveSession, runnerSession } = twoTaskRun();
     await session.executePlan();
     saveSession.mockClear();
 
-    terminal('t1').emitExit(1);
+    runnerSession('t1').emitExit(1);
 
     await vi.waitFor(() => expect(saveSession.mock.calls.some(([p]) => p.tasks.find((t) => t.id === 't1')!.status === 'failed')).toBe(true));
   });
 
   it('does not save on a status change that settles nothing', async () => {
-    const { session, saveSession, terminal } = twoTaskRun();
+    const { session, saveSession, runnerSession } = twoTaskRun();
     await session.executePlan();
     saveSession.mockClear();
 
-    terminal('t1').emitOutput('still working');
+    runnerSession('t1').emitOutput('still working');
 
     expect(saveSession).not.toHaveBeenCalled();
   });

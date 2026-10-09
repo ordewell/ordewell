@@ -18,12 +18,12 @@ function groupModels(models: DiscoveredModel[]): Map<string, DiscoveredModel[]> 
 }
 
 export async function configureModelAllowlist(
-  pluginRegistry: RunnerRegistry,
+  runnerRegistry: RunnerRegistry,
   modelResolver: ModelResolver,
   settingsService: SettingsService,
   win: Pick<typeof vscode.window, 'showQuickPick' | 'withProgress' | 'showWarningMessage'> = vscode.window,
 ): Promise<void> {
-  const runners = pluginRegistry.list();
+  const runners = runnerRegistry.list();
   const runnerItems = runners.map((r) => ({
     label: r.manifest.displayName,
     description: r.manifest.name,

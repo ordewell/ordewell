@@ -12,7 +12,6 @@ function setup(isolation = new FakeWorktreeIsolation()) {
     blocked: vi.fn(),
     handoff: vi.fn(),
     notice: vi.fn(),
-    releasing: vi.fn(),
   };
   const notifications = fakeNotification();
   /** Tasks the plan has live: an attempt running, or in progress or waiting on the user. */
@@ -22,7 +21,7 @@ function setup(isolation = new FakeWorktreeIsolation()) {
 }
 
 const task = (id: string, order: number): Task =>
-  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, completionMarker: `mk-${id}` });
+  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}` });
 
 const ops = (isolation: FakeWorktreeIsolation) => isolation.calls.map((c) => c.op);
 
@@ -312,7 +311,7 @@ describe('IsolationRunController', () => {
     });
 
     it('forgets a settled run once everything merged into the checked-out branch', async () => {
-      const { runs, listener } = setup();
+      const { runs } = setup();
       await runs.decide(async () => undefined);
       await runs.attemptCwd(task('t1', 1), { repair: false });
       await runs.integrate(task('t1', 1));
@@ -320,7 +319,6 @@ describe('IsolationRunController', () => {
 
       expect(await runs.merge()).toEqual({ outcome: 'merged' });
 
-      expect(listener.releasing).toHaveBeenCalledWith(['t1']);
       expect(runs.current).toBeNull();
       expect(runs.planIsolation).toBeNull();
     });
@@ -340,12 +338,11 @@ describe('IsolationRunController', () => {
     }
 
     it('keeps the run after Merge all while a task still holds work that has not landed', async () => {
-      const { runs, isolation, listener, notifications } = await closedRun('kept');
+      const { runs, isolation, notifications } = await closedRun('kept');
 
       expect(await runs.merge()).toEqual({ outcome: 'merged' });
 
       expect(ops(isolation)).not.toContain('discard');
-      expect(listener.releasing).not.toHaveBeenCalled();
       expect(runs.taskIsolation('t2')).toMatchObject({ state: 'kept' });
       expect(notifications.info).toHaveBeenCalledWith('The run is not cleared up: Task "Task t2" holds work that has not landed, so its worktree stays, and so do the run\'s branches.');
     });
@@ -362,14 +359,13 @@ describe('IsolationRunController', () => {
     });
 
     it.each(['cleanup', 'discard'] as const)('refuses %s while a task of the run is live, removing nothing', async (action) => {
-      const { runs, isolation, live, listener } = await closedRun('active');
+      const { runs, isolation, live } = await closedRun('active');
       live.add('t2');
 
       await expect(runs[action]()).rejects.toThrow(PlanEditError);
       await expect(runs[action]()).rejects.toThrow('Task "Task t2" is still running or waiting on you, so its worktree stays.');
 
       expect(ops(isolation)).not.toContain('discard');
-      expect(listener.releasing).not.toHaveBeenCalled();
       expect(runs.current).not.toBeNull();
     });
 
@@ -445,27 +441,25 @@ describe('IsolationRunController', () => {
   });
 
   describe('release', () => {
-    it('removes a worktree the task no longer needs, after whatever runs in it', async () => {
+    it('removes a worktree the task no longer needs', async () => {
       const { runs, isolation, listener } = setup();
       await runs.decide(async () => undefined);
       await runs.attemptCwd(task('t1', 1), { repair: false });
 
       await runs.release('t1', { keep: false });
 
-      expect(listener.releasing).toHaveBeenCalledWith(['t1']);
       expect(isolation.calls).toContainEqual({ op: 'release', taskId: 't1', keep: false });
       expect(runs.taskIsolation('t1')).toEqual({ state: 'none' });
       expect(listener.changed).toHaveBeenCalled();
     });
 
-    it('keeps a worktree for inspection without closing what runs in it', async () => {
-      const { runs, listener } = setup();
+    it('keeps a worktree for inspection', async () => {
+      const { runs } = setup();
       await runs.decide(async () => undefined);
       await runs.attemptCwd(task('t1', 1), { repair: false });
 
       await runs.release('t1', { keep: true });
 
-      expect(listener.releasing).not.toHaveBeenCalled();
       expect(runs.taskIsolation('t1')).toMatchObject({ state: 'kept' });
     });
 
@@ -486,13 +480,12 @@ describe('IsolationRunController', () => {
     });
 
     it('does nothing for a task the run has no record of', async () => {
-      const { runs, isolation, listener } = setup();
+      const { runs, isolation } = setup();
       await runs.decide(async () => undefined);
 
       await runs.release('ghost', { keep: false });
 
       expect(isolation.taskIdsFor('release')).toEqual([]);
-      expect(listener.releasing).not.toHaveBeenCalled();
     });
   });
 

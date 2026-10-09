@@ -5,7 +5,7 @@ import * as fsSync from 'fs';
 import * as osMod from 'os';
 import { DiscoveredModel } from '../models/Task';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
-import type { RunnerPluginManifest, DiscoveryCommand, ApiDiscoveryConfig, ApiAuthMethod } from '../plugins/types';
+import type { RunnerManifest, DiscoveryCommand, ApiDiscoveryConfig, ApiAuthMethod } from '../plugins/types';
 import { augmentedPath, withPath } from '../utils/shellPath';
 import { globalDataDir } from '../utils/globalDataDir';
 import { planDirectLaunch } from '../utils/launch';
@@ -280,7 +280,7 @@ export async function discoverGeminiModels(apiKey: string, baseUrl?: string, fet
   }
 }
 
-function applyVariants(models: DiscoveredModel[], manifest: RunnerPluginManifest): DiscoveredModel[] {
+function applyVariants(models: DiscoveredModel[], manifest: RunnerManifest): DiscoveredModel[] {
   const variants = manifest.modelDiscovery.variants;
   if (!variants || variants.length === 0) return models;
   // Only fill in models whose variants are empty (e.g. --help parsing or
@@ -343,7 +343,7 @@ async function discoverFromApi(
     if (!response.ok) return null;
     const data = await response.json();
     const text = JSON.stringify(data);
-    return parseModelOutput(text, config.parser, {} as RunnerPluginManifest);
+    return parseModelOutput(text, config.parser, {} as RunnerManifest);
   } catch {
     return null;
   }
@@ -449,7 +449,7 @@ function parseAnthropicModels(stdout: string): DiscoveredModel[] {
   }
 }
 
-async function discoverFromCommand(manifest: RunnerPluginManifest, execImpl: ExecImpl): Promise<{ models: DiscoveredModel[]; fromFallback: boolean }> {
+async function discoverFromCommand(manifest: RunnerManifest, execImpl: ExecImpl): Promise<{ models: DiscoveredModel[]; fromFallback: boolean }> {
   const discovery = manifest.modelDiscovery;
   const commands: DiscoveryCommand[] = discovery.discoveryCommands ?? [
     { command: discovery.command!, args: discovery.args || [], parser: discovery.parser || 'line-by-line' },
@@ -459,7 +459,7 @@ async function discoverFromCommand(manifest: RunnerPluginManifest, execImpl: Exe
     for (const cmd of commands) {
       try {
         // Generous timeout: a cold runner CLI may spawn its server, install
-        // plugins, and fetch its catalog on first invocation after boot.
+        // extensions, and fetch its catalog on first invocation after boot.
         const { stdout } = await execImpl(`${cmd.command} ${cmd.args.join(' ')}`, { timeout: 45000 });
         const models = parseModelOutput(stdout, cmd.parser || 'line-by-line', manifest);
         if (models.length > 0) return applyVariants(mergeCanonicalAliases(models, manifest), manifest);
@@ -487,7 +487,7 @@ async function discoverFromCommand(manifest: RunnerPluginManifest, execImpl: Exe
  * contracts that the CLI's help text omits (e.g. Claude's 'haiku') are always
  * offered. Only applies when `canonicalAliases` is declared.
  */
-function mergeCanonicalAliases(discovered: DiscoveredModel[], manifest: RunnerPluginManifest): DiscoveredModel[] {
+function mergeCanonicalAliases(discovered: DiscoveredModel[], manifest: RunnerManifest): DiscoveredModel[] {
   const canonical = manifest.modelDiscovery.canonicalAliases;
   if (!canonical || canonical.length === 0) return discovered;
   const seen = new Set(discovered.map((m) => m.modelId));
@@ -502,10 +502,7 @@ function mergeCanonicalAliases(discovered: DiscoveredModel[], manifest: RunnerPl
   return gaps.length > 0 ? [...discovered, ...gaps] : discovered;
 }
 
-function buildFallbackModels(manifest: RunnerPluginManifest): DiscoveredModel[] {
-  // Prefer canonicalAliases (stable CLI contracts, e.g. Claude's opus/sonnet/
-  // haiku) when declared; fall back to the generic fallbackModels list for
-  // user plugins that have no canonical alias concept.
+function buildFallbackModels(manifest: RunnerManifest): DiscoveredModel[] {
   const list = manifest.modelDiscovery.canonicalAliases ?? manifest.modelDiscovery.fallbackModels ?? [];
   return list.map((m) => ({
     modelId: m.modelId,
@@ -515,7 +512,7 @@ function buildFallbackModels(manifest: RunnerPluginManifest): DiscoveredModel[] 
   }));
 }
 
-function parseModelOutput(stdout: string, parser: string, manifest: RunnerPluginManifest): DiscoveredModel[] {
+function parseModelOutput(stdout: string, parser: string, manifest: RunnerManifest): DiscoveredModel[] {
   switch (parser) {
     case 'claude-help':
       return parseClaudeHelp(stdout);
@@ -596,7 +593,7 @@ function parseClaudeHelp(stdout: string): DiscoveredModel[] {
   return models;
 }
 
-function parseOpencodeModels(stdout: string, manifest: RunnerPluginManifest): DiscoveredModel[] {
+function parseOpencodeModels(stdout: string, manifest: RunnerManifest): DiscoveredModel[] {
   // The CLI output is the source of truth: accept ANY `provider/model` line
   // (custom providers included) rather than a hand-listed charset. Structure
   // required: a plain provider segment (no colon — excludes URLs), a slash,
@@ -646,7 +643,7 @@ function parseOpencodeModels(stdout: string, manifest: RunnerPluginManifest): Di
  * Per-model variants are extracted directly from the JSON; models with no
  * variants get an empty array (the old static manifest variants are NOT applied).
  */
-function parseOpencodeModelsVerbose(stdout: string, manifest: RunnerPluginManifest): DiscoveredModel[] {
+function parseOpencodeModelsVerbose(stdout: string, manifest: RunnerManifest): DiscoveredModel[] {
   // Ensure trailing newline so the last model-id line is always captured by the split regex.
   // The CLI output is the source of truth: accept ANY `provider/model` id line
   // (custom providers, uppercase, version pins, multi-segment models). The only
@@ -727,7 +724,7 @@ function parseLineByLine(stdout: string): DiscoveredModel[] {
     });
 }
 
-function parseJson(stdout: string, manifest: RunnerPluginManifest): DiscoveredModel[] {
+function parseJson(stdout: string, manifest: RunnerManifest): DiscoveredModel[] {
   try {
     let data = JSON.parse(stdout);
     const jsonPath = manifest.modelDiscovery.jsonPath;
@@ -831,7 +828,7 @@ export class ModelDiscovery {
    * null when both fail so `discover()` falls through to the remaining
    * methods.
    */
-  private async discoverFromAppServer(manifest: RunnerPluginManifest): Promise<DiscoveredModel[] | null> {
+  private async discoverFromAppServer(manifest: RunnerManifest): Promise<DiscoveredModel[] | null> {
     const config = manifest.modelDiscovery.appServer;
     if (!config) return null;
 

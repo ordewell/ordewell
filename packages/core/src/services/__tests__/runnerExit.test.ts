@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import { classifyRunnerStop, keepsTerminalReadable, stopsRunner, LingeringRunners, type AttemptEnd } from '../runnerExit';
+import { describe, it, expect } from 'vitest';
+import { classifyRunnerStop, stopsRunner, type AttemptEnd } from '../runnerExit';
 
 describe('classifyRunnerStop', () => {
   it.each([
@@ -29,60 +29,12 @@ describe('classifyRunnerStop', () => {
 describe('attempt-end disposition', () => {
   const reasons: AttemptEnd[] = ['verdict', 'cancel', 'release', 'complete', 'retry', 'spawn-failed', 'stop', 'load'];
 
-  it('keeps a terminal readable only on a verdict', () => {
-    expect(reasons.filter((r) => keepsTerminalReadable(r, 'terminal'))).toEqual(['verdict']);
-  });
-
-  it('stops a terminal runner for the reasons that end only that attempt', () => {
-    expect(reasons.filter((r) => stopsRunner(r, 'terminal'))).toEqual(['cancel', 'release', 'complete', 'retry', 'spawn-failed']);
-  });
-
-  it('never keeps a structured runner, and stops it on its verdict too', () => {
-    expect(reasons.filter((r) => keepsTerminalReadable(r, 'structured'))).toEqual([]);
-    expect(reasons.filter((r) => stopsRunner(r, 'structured'))).toEqual(['verdict', 'cancel', 'release', 'complete', 'retry', 'spawn-failed']);
+  it('stops the runner for every reason that ends only that attempt, its verdict included', () => {
+    expect(reasons.filter((r) => stopsRunner(r))).toEqual(['verdict', 'cancel', 'release', 'complete', 'retry', 'spawn-failed']);
   });
 
   it('leaves stop and load to the whole-run reset', () => {
-    for (const transport of ['terminal', 'structured'] as const) {
-      expect(keepsTerminalReadable('stop', transport)).toBe(false);
-      expect(stopsRunner('stop', transport)).toBe(false);
-      expect(keepsTerminalReadable('load', transport)).toBe(false);
-      expect(stopsRunner('load', transport)).toBe(false);
-    }
-  });
-});
-
-describe('LingeringRunners', () => {
-  it('remembers a runner and stops it on close, once', () => {
-    const stop = vi.fn();
-    const lingering = new LingeringRunners(stop);
-
-    lingering.remember('t1', 's1');
-    lingering.close('t1');
-    lingering.close('t1');
-
-    expect(stop).toHaveBeenCalledTimes(1);
-    expect(stop).toHaveBeenCalledWith('s1');
-  });
-
-  it('keeps only the latest runner of a task that spawned again', () => {
-    const stop = vi.fn();
-    const lingering = new LingeringRunners(stop);
-
-    lingering.remember('t1', 's1');
-    lingering.remember('t1', 's2');
-    lingering.close('t1');
-
-    expect(stop).toHaveBeenCalledTimes(1);
-    expect(stop).toHaveBeenCalledWith('s2');
-  });
-
-  it('is a no-op for a task with no lingering runner', () => {
-    const stop = vi.fn();
-    const lingering = new LingeringRunners(stop);
-
-    lingering.close('never-ran');
-
-    expect(stop).not.toHaveBeenCalled();
+    expect(stopsRunner('stop')).toBe(false);
+    expect(stopsRunner('load')).toBe(false);
   });
 });

@@ -9,10 +9,10 @@ import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { EMPTY_TASK_LOG, reduceTaskLog, replayTaskLog } from '../../conversation/taskLog';
 import { toTaskLogEvent, type TaskLogEvent } from '../../models/TaskLog';
 import { createTask, type LegacyPlanState } from '../../models/Task';
-import { isStructuredSession, type ITerminalRunner, type ITerminalSession, type RunnerTransport } from '../../interfaces/ITerminalRunner';
+import type { IRunner, IRunnerSession } from '../../interfaces/IRunner';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 import { listTaskLogAttempts, readTaskLog, type TaskLogFile } from '../../utils/taskLogStore';
-import { FakeStructuredSession, FakeTerminalSession } from '../../testing';
+import { FakeRunnerSession } from '../../testing';
 import { fakeSpawn, fixture } from './harnessTestKit';
 import { makeSession, memoryTaskLogs } from './sessionTestKit';
 
@@ -23,7 +23,7 @@ function taskLogs(messages: SessionMessage[]): TaskLogMessage[] {
 }
 
 /** A runner that hands back the session a test made, whatever it asked for. */
-function handing(session: ITerminalSession): ITerminalRunner {
+function handing(session: IRunnerSession): IRunner {
   return { spawn: vi.fn(async () => session), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 };
 }
 
@@ -39,7 +39,7 @@ describe('TaskLogRecorder', () => {
   afterEach(() => { vi.useRealTimers(); });
 
   it('saves and streams each batch of events together, deltas merged', async () => {
-    const session = new FakeStructuredSession('s1', 't1');
+    const session = new FakeRunnerSession('s1', 't1');
     const file = memoryFile();
     const sent: SessionMessage[] = [];
     const recorder = new TaskLogRecorder({ broadcast: (m) => sent.push(m), location: () => ({ baseDir: '/ws', sessionId: 'sess' }), open: () => file });
@@ -64,11 +64,11 @@ describe('TaskLogRecorder', () => {
     const sent: SessionMessage[] = [];
     const recorder = new TaskLogRecorder({ broadcast: (m) => sent.push(m), location: () => ({ baseDir: '/ws', sessionId: 'sess' }), open: () => files.shift()! });
 
-    const a = new FakeStructuredSession('s1', 't1');
+    const a = new FakeRunnerSession('s1', 't1');
     await recorder.wrap(handing(a)).spawn({ ...spawnOpts, skills });
     a.emitEvent({ type: 'turn_start', text: 'Do it' });
     vi.advanceTimersByTime(60);
-    const b = new FakeStructuredSession('s2', 't1');
+    const b = new FakeRunnerSession('s2', 't1');
     await recorder.wrap(handing(b)).spawn(spawnOpts);
     b.emitEvent({ type: 'turn_start', text: 'Do it' });
     vi.advanceTimersByTime(60);
@@ -81,7 +81,7 @@ describe('TaskLogRecorder', () => {
   });
 
   it('sends a turn’s end at once, without waiting out the batch', async () => {
-    const session = new FakeStructuredSession('s1', 't1');
+    const session = new FakeRunnerSession('s1', 't1');
     const sent: SessionMessage[] = [];
     const recorder = new TaskLogRecorder({ broadcast: (m) => sent.push(m), location: () => ({ baseDir: '/ws', sessionId: 'sess' }), open: () => memoryFile() });
     await recorder.wrap(handing(session)).spawn(spawnOpts);
@@ -92,7 +92,7 @@ describe('TaskLogRecorder', () => {
   });
 
   it('flushes what is left when the session exits', async () => {
-    const session = new FakeStructuredSession('s1', 't1');
+    const session = new FakeRunnerSession('s1', 't1');
     const file = memoryFile();
     const recorder = new TaskLogRecorder({ broadcast: vi.fn(), location: () => ({ baseDir: '/ws', sessionId: 'sess' }), open: () => file });
     await recorder.wrap(handing(session)).spawn(spawnOpts);
@@ -102,7 +102,7 @@ describe('TaskLogRecorder', () => {
   });
 
   it('keeps streaming when the log cannot be saved', async () => {
-    const session = new FakeStructuredSession('s1', 't1');
+    const session = new FakeRunnerSession('s1', 't1');
     const sent: SessionMessage[] = [];
     const warn = vi.fn();
     const recorder = new TaskLogRecorder({
@@ -119,16 +119,16 @@ describe('TaskLogRecorder', () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it('leaves a terminal-transport session alone: no file, no task_log', async () => {
-    const session = new FakeTerminalSession('s1', 't1');
-    const open = vi.fn();
+  it('records every runner session, keeping plain output off the event log', async () => {
+    const session = new FakeRunnerSession('s1', 't1');
+    const open = vi.fn(() => memoryFile(1));
     const sent: SessionMessage[] = [];
     const recorder = new TaskLogRecorder({ broadcast: (m) => sent.push(m), location: () => ({ baseDir: '/ws', sessionId: 'sess' }), open });
     const spawned = await recorder.wrap(handing(session)).spawn(spawnOpts);
     session.emitOutput('hello');
     session.emitExit(0);
     expect(spawned).toBe(session);
-    expect(open).not.toHaveBeenCalled();
+    expect(open).toHaveBeenCalledWith({ baseDir: '/ws', sessionId: 'sess' }, 't1');
     expect(sent).toEqual([]);
   });
 
@@ -140,7 +140,7 @@ describe('TaskLogRecorder', () => {
       location: () => ({ baseDir: '/ws', sessionId: 'sess' }),
       open: (_where, taskId) => { opened.push(taskId); n += 1; return memoryFile(n); },
     });
-    const inner: ITerminalRunner = { spawn: vi.fn(async (o: RunnerSpawnOptions) => new FakeStructuredSession('s', o.taskId)), stop: vi.fn(), stopAll: vi.fn(), activeCount: 2 };
+    const inner: IRunner = { spawn: vi.fn(async (o: RunnerSpawnOptions) => new FakeRunnerSession('s', o.taskId)), stop: vi.fn(), stopAll: vi.fn(), activeCount: 2 };
     const runner = recorder.wrap(inner);
     await runner.spawn(spawnOpts);
     await runner.spawn(spawnOpts);
@@ -168,7 +168,7 @@ describe('a structured run through the real Claude adapter', () => {
     const recorder = new TaskLogRecorder({ broadcast: (m) => sent.push(m), location: () => where, flushMs: 1 });
     const raw: TaskLogEvent[] = [];
     const session = await recorder.wrap(structured).spawn({ ...spawnOpts, taskId: 'task-live', registry: new RunnerRegistry(), mode });
-    if (!isStructuredSession(session)) throw new Error('expected a structured session');
+
     session.onEvent((e) => { const entry = toTaskLogEvent(e); if (entry) raw.push(entry); });
     await new Promise<void>((resolve) => session.onTurnEnd(() => resolve()));
     session.kill();
@@ -202,7 +202,7 @@ describe('a structured run through the real Claude adapter', () => {
 describe('a session’s task logs', () => {
   function plan(): LegacyPlanState {
     return {
-      tasks: [createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', assignedRunner: 'claude-code', completionMarker: 'mk-1' })],
+      tasks: [createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', assignedRunner: 'claude-code' })],
       generatedAt: new Date().toISOString(),
       status: 'approved',
       runners: ['claude-code'],
@@ -210,11 +210,11 @@ describe('a session’s task logs', () => {
     };
   }
 
-  function runnerFor(transport: RunnerTransport) {
-    const sessions: FakeTerminalSession[] = [];
-    const runner: ITerminalRunner = {
+  function runnerFor() {
+    const sessions: FakeRunnerSession[] = [];
+    const runner: IRunner = {
       spawn: vi.fn(async (opts: RunnerSpawnOptions) => {
-        const session = transport === 'structured' ? new FakeStructuredSession('s1', opts.taskId) : new FakeTerminalSession('s1', opts.taskId);
+        const session = new FakeRunnerSession('s1', opts.taskId);
         sessions.push(session);
         return session;
       }),
@@ -226,14 +226,14 @@ describe('a session’s task logs', () => {
   }
 
   it('broadcasts a structured task’s events on the session’s own seam, and saves them under its attempt', async () => {
-    const { runner, sessions } = runnerFor('structured');
+    const { runner, sessions } = runnerFor();
     const sent: SessionMessage[] = [];
     const files = memoryTaskLogs();
     const session = makeSession({ runner, broadcast: (m) => sent.push(m), openTaskLog: files });
     session.loadPlan(plan(), 'Goal', '/repo');
     await session.executePlan();
 
-    const task = sessions[0] as FakeStructuredSession;
+    const task = sessions[0] as FakeRunnerSession;
     task.emitEvent({ type: 'turn_start', text: 'do it' });
     task.emitEvent({ type: 'turn_end', reason: 'completed' });
 
@@ -242,19 +242,20 @@ describe('a session’s task logs', () => {
     expect(files.files.get('t1')).toEqual([[{ type: 'turn_start', message: 'do it' }, { type: 'turn_end', reason: 'completed' }]]);
   });
 
-  it('keeps no log for a terminal-transport task', async () => {
-    const { runner, sessions } = runnerFor('terminal');
+  it('opens an attempt log even when the runner emits only plain output', async () => {
+    const { runner, sessions } = runnerFor();
     const sent: SessionMessage[] = [];
     const files = memoryTaskLogs();
     const session = makeSession({ runner, broadcast: (m) => sent.push(m), openTaskLog: files });
     session.loadPlan(plan(), 'Goal', '/repo');
     await session.executePlan();
     sessions[0].emitOutput('working…');
-    sessions[0].emitOutput('<<<ORDEWELL_DONE_mk-1>>>');
+    session.markTaskComplete('t1');
 
     await vi.waitFor(() => expect(sent.some((m) => m.type === 'status_update' && m.tasks[0]?.status === 'completed')).toBe(true));
     expect(taskLogs(sent)).toEqual([]);
-    expect(files.files.size).toBe(0);
+    expect(files.files.size).toBe(1);
+    expect(files.files.get('t1')).toEqual([[]]);
   });
 
   it('reads a task’s saved attempts back from where it wrote them', () => {

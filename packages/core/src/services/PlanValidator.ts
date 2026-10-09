@@ -140,7 +140,7 @@ export function looksLikePlanAttempt(raw: string): boolean {
  * recursive slice contract then rejected the whole plan. Inheriting invents no
  * information: an `ai` sub-step of an AFK slice is AFK. Deliberately NOT a
  * blanket `'AFK'` default, which would silently strip a human gate the planner
- * intended (`sliceType` is what puts ORDEWELL_CHECKPOINT in the runner prompt,
+ * intended (`sliceType` is what puts the checkpoint instructions in the runner prompt,
  * and subtasks are schedulable — PlanStore.rebuild flattens them into
  * _allTasks). `type: 'user'` subtasks inherit nothing and must still declare
  * HITL themselves.

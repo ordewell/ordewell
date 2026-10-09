@@ -20,7 +20,7 @@ import { plannerModesFrom } from './plannerModes';
 import type { UserSettings } from './SettingsService';
 import { SkillsService } from './SkillsService';
 import { plannerMessage, resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
-import { plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
+import { checkPlanSkills, plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
 import type { MergeGateView, SessionBroadcaster, SessionNotice } from './SessionMessage';
 import { SessionEventRelay } from './SessionEventRelay';
 import { saveSession } from '../utils/sessionStore';
@@ -36,7 +36,7 @@ import type { AiProvider, IConfig } from '../interfaces/IConfig';
 import type { IFileSystem } from '../interfaces/IFileSystem';
 import type { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { INotification } from '../interfaces/INotification';
-import type { ITerminalRunner } from '../interfaces/ITerminalRunner';
+import type { IRunner } from '../interfaces/IRunner';
 import type { TaskOutputSource } from '../interfaces/TaskOutputSource';
 import type { IsolationMergeResult, IsolationView, IWorktreeIsolation } from '../interfaces/IWorktreeIsolation';
 import { migratePlanStateIsolation } from './isolationRecord';
@@ -107,7 +107,7 @@ export type SaveSession = (plan: LegacyPlanState, goal: string, workspace: strin
 export interface SessionDeps {
   config: IConfig;
   notifications: INotification;
-  runner: ITerminalRunner;
+  runner: IRunner;
   registry: RunnerRegistry;
   /** Resolves the workspace root for the orchestrator (lazy — VS Code can change it). */
   workspaceRoot: () => string;
@@ -140,11 +140,7 @@ export interface SessionDeps {
    * over the session's workspace root.
    */
   skillsService?: SkillsService;
-  /**
-   * Where a task's output and final answer are read. Defaults to the agents'
-   * own transcripts under the user's home; tests inject one that never
-   * touches the disk.
-   */
+  /** Where a task's output and final answer are read. */
   taskOutput?: TaskOutputSource;
   /**
    * Git worktree isolation (ADR-0013). Defaults to git itself, gated by
@@ -248,7 +244,7 @@ export function createSession(deps: SessionDeps): Session {
   const orchestrator = TaskOrchestrator.compose({
     config: deps.config,
     notifications: deps.notifications,
-    terminalRunner: taskLogs.wrap(runnerApprovals.wrap(deps.runner)),
+    runner: taskLogs.wrap(runnerApprovals.wrap(deps.runner)),
     store,
     output: deps.taskOutput,
     isolation: deps.isolation,
@@ -725,14 +721,20 @@ export class Session {
         perRunnerAllowlist: settings.modelAllowlist,
         modes,
       });
+      // No repair loop here to send a planner skill back, so it is reported
+      // with the names not found rather than refused.
+      const skills = await checkPlanSkills(plan.tasks, this.workspaceSkills());
       if (turn.abandoned) throw new PlannerTurnDiscardedError();
+      const skillWarnings = [...skills.errors.map((e) => e.message), ...skills.warnings];
 
       this.plan = plan;
       this.saved(() => {
+        this.conversation.recordSkillWarnings(skillWarnings, plan.generatedAt);
         this.orchestrator.loadPlan(plan.tasks, plan.runners);
         this.store.resetForRun({ preserveCompleted: false });
       });
       this.events.planGenerated(this.plan, this.goal);
+      for (const warning of skillWarnings) this.notice('warn', warning);
       return plan;
     });
   }
@@ -1133,6 +1135,7 @@ export class Session {
         const tasks = keepExecutionState(this.store.planTasks, result.pendingTasks);
         this.orchestrator.reconcilePlan(tasks, this.plan!.runners);
         this.conversation.recordQueuedEdits(texts, tasks.length);
+        this.conversation.recordSkillWarnings(result.skillWarnings ?? []);
         return true;
       });
       for (const warning of result.skillWarnings ?? []) this.notice('warn', warning);
@@ -1188,8 +1191,7 @@ export class Session {
 
   /**
    * Force send (ADR-0023, F1): interrupt the task's running turn and deliver
-   * this message next. Throws `TaskControlError` where a plain message would,
-   * and for a task on the terminal transport.
+   * this message next. Throws `TaskControlError` where a plain message would.
    */
   forceSendTaskMessage(taskId: string, text: string): string {
     return this.saved(() => this.orchestrator.forceSendTaskMessage(taskId, text), { background: true });

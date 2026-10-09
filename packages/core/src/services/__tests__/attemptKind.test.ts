@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
-  attemptCwd, attemptPrompt, attemptTransport, checksTree, classifyAttempt, decidesIsolation, mergeExcludes,
+  attemptCwd, attemptPrompt, checksTree, classifyAttempt, decidesIsolation, mergeExcludes,
   type AttemptKind, type AttemptPromptSources,
 } from '../attemptKind';
 import { createTask, opsFlag, inheritedOps } from '../../models/Task';
@@ -34,12 +34,12 @@ describe('classifyAttempt', () => {
 });
 
 describe('what each kind decides', () => {
-  const table: Array<[string, { mergeExcludes: boolean; decidesIsolation: boolean; checksTree: boolean; transport: string; cwd: string }]> = [
-    ['change', { mergeExcludes: false, decidesIsolation: true, checksTree: false, transport: 'terminal', cwd: 'run' }],
-    ['ops', { mergeExcludes: true, decidesIsolation: false, checksTree: true, transport: 'terminal', cwd: 'workspace' }],
-    ['repair', { mergeExcludes: false, decidesIsolation: true, checksTree: false, transport: 'terminal', cwd: 'kept' }],
-    ['continued change', { mergeExcludes: false, decidesIsolation: true, checksTree: false, transport: 'structured', cwd: 'run' }],
-    ['continued ops', { mergeExcludes: true, decidesIsolation: false, checksTree: true, transport: 'structured', cwd: 'workspace' }],
+  const table: Array<[string, { mergeExcludes: boolean; decidesIsolation: boolean; checksTree: boolean; cwd: string }]> = [
+    ['change', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'run' }],
+    ['ops', { mergeExcludes: true, decidesIsolation: false, checksTree: true, cwd: 'workspace' }],
+    ['repair', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'kept' }],
+    ['continued change', { mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'run' }],
+    ['continued ops', { mergeExcludes: true, decidesIsolation: false, checksTree: true, cwd: 'workspace' }],
   ];
 
   it.each(table)('a %s attempt', async (name, expected) => {
@@ -55,16 +55,9 @@ describe('what each kind decides', () => {
       mergeExcludes: mergeExcludes(kind),
       decidesIsolation: decidesIsolation(kind),
       checksTree: checksTree(kind),
-      transport: attemptTransport(kind, 'terminal'),
       cwd: place.cwd,
     }).toEqual(expected);
     expect(runs.attemptCwd.mock.calls.length + runs.workspaceCwd.mock.calls.length).toBe(1);
-  });
-
-  it('uses the requested transport for every kind but a continue, which is always structured', () => {
-    expect(attemptTransport(KINDS.change, 'structured')).toBe('structured');
-    expect(attemptTransport(KINDS.ops, 'terminal')).toBe('terminal');
-    expect(attemptTransport(KINDS['continued change'], 'terminal')).toBe('structured');
   });
 });
 
@@ -86,13 +79,12 @@ describe('mergeExcludes: the one rule Merge all and ops work share (ADR-0020)', 
 });
 
 describe('attemptPrompt', () => {
-  const task = createTask({ id: 't1', title: 'Deploy', prompt: 'ORIGINAL BODY', completionMarker: 'mk-1' });
+  const task = createTask({ id: 't1', title: 'Deploy', prompt: 'ORIGINAL BODY' });
 
   function sources(): AttemptPromptSources & { repairPrompt: ReturnType<typeof vi.fn>; previousAttempt: ReturnType<typeof vi.fn> } {
     return {
       task,
       plan: [task],
-      completionTool: false,
       planMapEnabled: false,
       skills: [{ name: 'tdd', source: 'global', path: '/g/tdd/SKILL.md', content: 'RED then GREEN.' }],
       repairPrompt: vi.fn(() => 'MERGE THE INTEGRATION BRANCH'),
@@ -115,7 +107,7 @@ describe('attemptPrompt', () => {
 
     for (const text of expected.has) expect(prompt).toContain(text);
     for (const text of expected.lacks) expect(prompt).not.toContain(text);
-    expect(prompt).toContain('`DONE_mk-1>>>`');
+    expect(prompt).toContain('task_complete');
     if (KINDS[name].kind === 'continuation') expect(prompt.startsWith(`${resume.message}\n`)).toBe(true);
     for (const source of ['repairPrompt', 'previousAttempt'] as const) {
       expect(src[source].mock.calls.length > 0, source).toBe(expected.reads.includes(source));

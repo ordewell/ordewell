@@ -2,11 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { makeSession, FakeTerminalSession, taskOf, saves } from './sessionTestKit';
+import { makeSession, FakeRunnerSession, taskOf, saves } from './sessionTestKit';
 import { FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
 import * as sessionStore from '../../utils/sessionStore';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
-import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
+import type { IRunner } from '../../interfaces/IRunner';
 import type { SessionMessage, SessionNotice } from '../SessionMessage';
 import type { IsolationMergeResult } from '../../interfaces/IWorktreeIsolation';
 import type { ConversationTurn, IAiService } from '../AiService';
@@ -15,17 +15,17 @@ import { PlanEditError } from '../PlanEditError';
 import { TaskControlError } from '../TaskOrchestrator';
 
 function runner() {
-  const sessions: FakeTerminalSession[] = [];
-  const spawn = vi.fn(async (opts: Parameters<ITerminalRunner['spawn']>[0]) => {
-    const session = new FakeTerminalSession(`s${sessions.length + 1}`, opts.taskId);
+  const sessions: FakeRunnerSession[] = [];
+  const spawn = vi.fn(async (opts: Parameters<IRunner['spawn']>[0]) => {
+    const session = new FakeRunnerSession(`s${sessions.length + 1}`, opts.taskId);
     sessions.push(session);
     return session;
   });
-  return { sessions, spawn, runner: { spawn, stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 } as ITerminalRunner };
+  return { sessions, spawn, runner: { spawn, stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 } as IRunner };
 }
 
 const task = (id: string, order: number, over: Partial<Task> = {}) =>
-  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, completionMarker: `mk-${id}`, ...over });
+  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, ...over });
 
 function plan(tasks: Task[]): LegacyPlanState {
   const now = new Date().toISOString();
@@ -37,7 +37,7 @@ function setup(isolation = new FakeWorktreeIsolation(), aiService?: Partial<IAiS
   const notices: SessionNotice[] = [];
   const r = runner();
   const session = makeSession({ runner: r.runner, isolation, aiService, broadcast: (m) => messages.push(m), onNotice: (n) => notices.push(n) });
-  const pass = (t: Task) => r.sessions.find((s) => s.taskId === t.id)!.emitOutput(`<<<ORDEWELL_DONE_${t.completionMarker}>>>`);
+  const pass = (t: Task) => r.sessions.find((s) => s.taskId === t.id)!.reportComplete({ status: 'done', summary: '' });
   const lastStatus = () => [...messages].reverse().find((m): m is Extract<SessionMessage, { type: 'status_update' }> => m.type === 'status_update');
   return { session, isolation, messages, notices, pass, lastStatus, ...r };
 }
@@ -85,7 +85,7 @@ describe('Session with worktree isolation', () => {
 
     await session.executePlan();
 
-    expect(Object.keys(lastStatus()!.tasks[0]).sort()).toEqual(['id', 'idleSince', 'status', 'transport', 'verdict']);
+    expect(Object.keys(lastStatus()!.tasks[0]).sort()).toEqual(['id', 'idleSince', 'status', 'verdict']);
   });
 
   it('broadcasts the handoff before execution completes and persists the run with the plan', async () => {

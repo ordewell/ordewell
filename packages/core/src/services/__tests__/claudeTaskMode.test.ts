@@ -5,7 +5,7 @@ import { CodexAdapter } from '../harness/CodexAdapter';
 import { OpenCodeAdapter } from '../harness/OpenCodeAdapter';
 import { TaskModeUnsupportedError, type AgentEvent, type AgentProcessDeps, type AgentStartOptions, type TaskStartOptions } from '../harness/AgentAdapter';
 import { supportsTaskMode, createTaskAdapter } from '../harness/connectors';
-import { resolveArgs, resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
+import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
 import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest';
 import { mcpClientConfig } from '../mcp';
 import { modeIds, fakeSpawn, fixture, claudeSteerRecording, type ScriptedReply } from './harnessTestKit';
@@ -53,7 +53,7 @@ async function until(condition: () => boolean): Promise<void> {
 }
 
 describe('ClaudeCodeAdapter start switch', () => {
-  it('starts a planner with exactly the read-only flags it always had', async () => {
+  it('starts a planner without native plan mode or shell tools', async () => {
     const { spawned, processDeps } = deps([]);
     const adapter = new ClaudeCodeAdapter(processDeps);
     await adapter.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN', model: 'sonnet', effort: 'high', resumeSessionId: 'sess-1' });
@@ -64,8 +64,8 @@ describe('ClaudeCodeAdapter start switch', () => {
       '--output-format', 'stream-json',
       '--verbose',
       '--include-partial-messages',
-      '--permission-mode', 'plan',
-      '--disallowedTools', 'Edit,Write,MultiEdit,NotebookEdit,KillShell',
+      '--permission-mode', 'dontAsk',
+      '--disallowedTools', 'Edit,Write,MultiEdit,NotebookEdit,KillShell,Bash,PowerShell,EnterPlanMode,ExitPlanMode',
       '--append-system-prompt', 'PLAN',
       '--model', 'sonnet',
       '--effort', 'high',
@@ -80,14 +80,16 @@ describe('ClaudeCodeAdapter start switch', () => {
     // Task fields smuggled onto a planner start: nothing on the planner path reads them.
     ['a task\'s bypass mode and flags', { mode: 'bypassPermissions', flags: { permissionMode: 'bypassPermissions', effort: 'max', modeSettings: {} } }],
     ['the legacy build alias a task resolves to acceptEdits', { mode: 'build', flags: { permissionMode: 'acceptEdits', modeSettings: {} } }],
+    // Native plan mode lets Bash write its plan file outside the workspace.
+    ['a task\'s native plan mode', { mode: 'plan', flags: { permissionMode: 'plan', modeSettings: {} } }],
   ])('starts a planner read-only whatever else its start carries: %s', async (_label, extra) => {
     const { spawned, processDeps } = deps([]);
     const adapter = new ClaudeCodeAdapter(processDeps);
     await adapter.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN', ...extra } as unknown as AgentStartOptions);
     const args = spawned.lastArgs();
 
-    expect(args.flatMap((arg, i) => (arg === '--permission-mode' ? [args[i + 1]] : []))).toEqual(['plan']);
-    expect(args[args.indexOf('--disallowedTools') + 1].split(',')).toEqual(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'KillShell']);
+    expect(args.flatMap((arg, i) => (arg === '--permission-mode' ? [args[i + 1]] : []))).toEqual(['dontAsk']);
+    expect(args[args.indexOf('--disallowedTools') + 1].split(',')).toEqual(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'KillShell', 'Bash', 'PowerShell', 'EnterPlanMode', 'ExitPlanMode']);
     for (const flag of ['--permission-prompt-tool', '--dangerously-skip-permissions', 'acceptEdits', 'bypassPermissions']) {
       expect(args).not.toContain(flag);
     }
@@ -173,14 +175,7 @@ describe('ClaudeCodeAdapter task argv for every effort and mode', () => {
     ]);
   });
 
-  it.each(cases)('runs under the terminal template\'s flags: mode $mode, effort $effort, model $model', async ({ mode, effort, model }) => {
-    const terminal = resolveArgs(CLAUDE_CODE_MANIFEST, { prompt: 'go', mode, model, thinkingEffort: effort }).args;
-    const structured = await taskArgs(mode, model, effort);
-    const valueOf = (args: string[], flag: string) => (args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined);
-    for (const flag of ['--permission-mode', '--thinking', '--effort', '--model']) {
-      expect(valueOf(structured, flag)).toBe(valueOf(terminal, flag));
-    }
-  });
+
 });
 
 describe('task mode support', () => {
@@ -195,7 +190,7 @@ describe('task mode support', () => {
 
   it('refuses a runner without a connector with a typed error', () => {
     expect(() => createTaskAdapter('my-plugin', deps([]).processDeps)).toThrow(TaskModeUnsupportedError);
-    expect(() => createTaskAdapter('my-plugin', deps([]).processDeps)).toThrow('my-plugin has no structured task connector yet');
+    expect(() => createTaskAdapter('my-plugin', deps([]).processDeps)).toThrow('my-plugin has no structured task connector');
   });
 });
 

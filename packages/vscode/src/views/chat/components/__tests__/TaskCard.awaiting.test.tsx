@@ -8,7 +8,7 @@ import type { Task } from '@ordewell/core';
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
     id: 't1', order: 1, title: 'Test task', description: 'A task', type: 'ai', status: 'awaiting_user',
-    dependencies: [], subtasks: [], assignedRunner: 'claude-code', completionMarker: 'm1', taskMode: 'build',
+    dependencies: [], subtasks: [], assignedRunner: 'claude-code', taskMode: 'build',
     ...overrides,
   };
 }
@@ -46,7 +46,7 @@ describe('what an awaiting task waits on (ADR-0018, W1)', () => {
 
   it('badges a task whose runner waits on an approval, and the badge opens its log (A1)', () => {
     const opened: string[] = [];
-    render(<TaskCard task={makeTask({ status: 'in_progress', transport: { kind: 'structured' } })} models={[]} isExecuting
+    render(<TaskCard task={makeTask({ status: 'in_progress', runnerSessionId: undefined })} models={[]} isExecuting
       awaitingApproval={1} onOpenLog={(id) => opened.push(id)} />);
     fireEvent.click(screen.getByText('Waiting for approval', { selector: '.task-approval-badge' }));
     expect(opened).toEqual(['t1']);
@@ -55,7 +55,7 @@ describe('what an awaiting task waits on (ADR-0018, W1)', () => {
   });
 
   it('shows no approval badge when nothing waits', () => {
-    render(<TaskCard task={makeTask({ status: 'in_progress', transport: { kind: 'structured' } })} models={[]} isExecuting />);
+    render(<TaskCard task={makeTask({ status: 'in_progress', runnerSessionId: undefined })} models={[]} isExecuting />);
     expect(document.querySelector('.task-approval-badge')).toBeNull();
   });
 });

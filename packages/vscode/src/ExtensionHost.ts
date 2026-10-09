@@ -17,7 +17,7 @@ import { SecretStore } from './adapters/SecretStore';
 import type { VsCodeConfig } from './adapters/VsCodeConfig';
 import type { VsCodeFileSystem } from './adapters/VsCodeFileSystem';
 import type { VsCodeNotification } from './adapters/VsCodeNotification';
-import type { ITerminalRunner, RunnerInstallation, RunnerRegistry, ModelResolver, SettingsService, PlannerModelMemory } from '@ordewell/core';
+import type { IRunner, RunnerInstallation, RunnerRegistry, ModelResolver, SettingsService, PlannerModelMemory } from '@ordewell/core';
 
 // A VS Code layout preference, not a run setting: it lives in globalState rather
 // than SettingsService, whose file the CLI and web surfaces also read.
@@ -45,11 +45,11 @@ export interface ExtensionServices {
   outputChannel: vscode.OutputChannel;
   secretStore: SecretStore;
   config: VsCodeConfig;
-  pluginRegistry: RunnerRegistry;
+  runnerRegistry: RunnerRegistry;
   runnerInstallation: RunnerInstallation;
   fsAdapter: VsCodeFileSystem;
   notifications: VsCodeNotification;
-  terminalRunner: ITerminalRunner;
+  runner: IRunner;
   settingsService: SettingsService;
   plannerModelMemory: PlannerModelMemory;
   modelResolver: ModelResolver;
@@ -105,10 +105,10 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     get session(): Session { return requireSession(); },
     chatProvider: services.chatProvider,
     modelResolver: services.modelResolver,
-    pluginRegistry: services.pluginRegistry,
+    runnerRegistry: services.runnerRegistry,
     config: services.config,
     fsAdapter: services.fsAdapter,
-    terminalRunner: services.terminalRunner,
+    runner: services.runner,
     notifications: services.notifications,
     getCurrentPlan: () => state.plan,
     setCurrentPlan: (plan) => { state.plan = plan; },
@@ -134,8 +134,8 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
   sessionCell.current = (services.sessionFactory ?? createSession)({
     config: services.config,
     notifications: services.notifications,
-    runner: services.terminalRunner,
-    registry: services.pluginRegistry,
+    runner: services.runner,
+    registry: services.runnerRegistry,
     workspaceRoot: () => services.fsAdapter.getWorkspaceRoot(),
     fsAdapter: services.fsAdapter,
     // A panel is a second surface on the same session: it sees the event first
@@ -161,7 +161,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
   const discovery = new ModelDiscovery({
     vscodeApi,
     config: services.config,
-    pluginRegistry: services.pluginRegistry,
+    runnerRegistry: services.runnerRegistry,
     runnerInstallation: services.runnerInstallation,
     modelResolver: services.modelResolver,
     chatProvider: services.chatProvider,
@@ -223,10 +223,10 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
         refreshRunnerModels: () => services.modelResolver.refreshRunnerModels(),
         modelsForRunners: (runners: string[]) => services.modelResolver.modelsForRunners(runners),
       },
-      pluginRegistry: {
-        get: (id: string) => services.pluginRegistry.get(id),
-        getManifest: (id: string) => services.pluginRegistry.getManifest(id),
-        list: () => services.pluginRegistry.list(),
+      runnerRegistry: {
+        get: (id: string) => services.runnerRegistry.get(id),
+        getManifest: (id: string) => services.runnerRegistry.getManifest(id),
+        list: () => services.runnerRegistry.list(),
       },
       chatProvider: services.chatProvider,
       settingsService: services.settingsService,
@@ -347,7 +347,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     log('Ordewell deactivating...');
     taskLogs.dispose();
     persistState(persistenceDeps());
-    services.terminalRunner.stopAll();
+    services.runner.stopAll();
     log('Ordewell deactivated');
   }
 

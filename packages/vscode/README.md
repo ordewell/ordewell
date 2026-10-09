@@ -19,8 +19,7 @@ runs, then review the result before it reaches your branch.
   lands on one integration branch. A handoff card at the end lets you review the
   diff, merge it, or discard it.
 - **Verdicts from evidence.** A task completes when the runner reports it done —
-  through Ordewell's own tool, or its completion marker in the output as the
-  fallback.
+  through an attempt-bound `task_complete` call.
 - **No extra API key.** Claude Code, Codex or OpenCode can be the planner, using the
   subscription you already have.
 

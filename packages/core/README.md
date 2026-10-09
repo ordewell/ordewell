@@ -20,9 +20,9 @@ npm install @ordewell/core
 | `PlanStore` | All plan-shaped state: the task tree, status sets, runner set |
 | `Planner` | The read-only model that researches a repo and emits the plan |
 | `TaskOrchestrator` | Pure scheduler — dependency order and parallelism |
-| `VerdictEngine` | Completion verification — the marker or the runner's `task_complete` call; the model is never the tie-breaker |
+| `VerdictEngine` | Completion verification — the runner's attempt-bound `task_complete` call; the model is never the tie-breaker |
 | `ModelResolver` / `ModeResolver` | Per-task model routing and mode resolution |
-| `RunnerRegistry` | Built-in runners plus the plugin manifest engine |
+| `RunnerRegistry` | Built-in runner manifests |
 
 Skills (`SkillsService`) are described in
 [Writing skills](https://github.com/ordewell/ordewell/blob/main/docs/skills.md).

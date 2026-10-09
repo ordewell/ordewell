@@ -32,9 +32,9 @@ const MCP_STATUS_POLL_MS = 200;
  * one: it blocks the turn on an answer from a user who is not watching, and the
  * message POST then never returns — an absent answer has to mean denial, not a
  * hung planner. The rest are the write tools, withheld for the same reason
- * {@link ClaudeCodeAdapter} names them despite `--permission-mode plan`: the
- * `plan` agent already refuses them, and a future default must not quietly
- * hand the planner an edit.
+ * {@link ClaudeCodeAdapter} names them despite its read-only mode: the
+ * `plan` agent refuses them everywhere but its own plan files, and a future
+ * default must not quietly hand the planner an edit.
  */
 const DISABLED_TOOLS: Record<string, boolean> = {
   question: false,
@@ -554,8 +554,8 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
   /**
    * Whatever of the turn's own messages the stream missed. Each part is
    * emitted once, so a turn the stream saw whole adds nothing here; one that
-   * lost its last text part still reaches the plain-text channel, where the
-   * done marker is looked for.
+   * lost its last text part still reaches the plain-text channel, which a
+   * summary falls back to.
    */
   private async readBack(turn: TurnState, onEvent: (e: AgentEvent) => void): Promise<void> {
     const messages = await this.json<OpenCodeMessageResponse[]>('GET', `/session/${this.sessionId}/message`).catch(() => null);

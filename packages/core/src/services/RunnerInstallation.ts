@@ -74,9 +74,7 @@ export class RunnerInstallation {
    * typing a real goal is the failure this exists to prevent.
    *
    * "Usable" is deliberately shallow: the binary answers `--version`, and the
-   * runner has a connector to plan over. Plugin runners have none yet: a
-   * manifest-level planner capability, so a plugin can declare itself
-   * plannable, is a follow-up. Whether the user's subscription is
+   * runner has a connector to plan over. Whether the user's subscription is
    * live cannot be known without spending a turn on it, so an expired login
    * surfaces where it actually bites — as the agent's own error text on the
    * first turn.

@@ -1,95 +1,25 @@
-
-export interface RunnerPluginManifest {
+export interface RunnerManifest {
   name: string;
   displayName: string;
-  description: string;
-  version: string;
-  author?: string;
-  homepage?: string;
-
-  runner: PluginRunnerDef;
-  features: PluginFeatures;
-  modelDiscovery: PluginModelDiscovery;
+  runner: { command: string };
+  features: RunnerFeatures;
+  modelDiscovery: RunnerModelDiscovery;
   contextFile?: string;
   contextFileAltPath?: string;
-  modes?: PluginMode[];
+  modes?: RunnerMode[];
 }
 
-export interface PluginRunnerDef {
-  command: string;
-  argsTemplate: string[];
-  promptInArgs: boolean;
-  env?: Record<string, string>;
-  /** When true, the runner requires a PTY. HeadlessRunner wraps with `script` to allocate one. */
-  requiresTty?: boolean;
-  /**
-   * True when this runner's interactive prompt flag (e.g. opencode's
-   * `--prompt`) only pre-fills its TUI's composer instead of running it, so a
-   * surface driving that TUI unattended must send an explicit Enter after
-   * launch. Only takes effect while the resolved invocation is interactive —
-   * see `RunnerInvocation.submitPromptKey`.
-   */
-  submitPromptKey?: boolean;
-  /**
-   * Screens the agent can stop on before starting the task, waiting for a
-   * human — a folder-trust or permission-mode confirmation. Ordewell never
-   * answers one; seeing it, the task's user is told where to.
-   */
-  blockingPrompts?: BlockingPrompt[];
-  /**
-   * The command lines a later major version of the runner takes instead of
-   * `argsTemplate`/`env`, for a runner whose CLI changed shape between majors.
-   * The one with the highest `minMajor` the installed version reaches wins; an
-   * install whose version cannot be read keeps the base template.
-   */
-  versioned?: VersionedInvocation[];
-}
-
-export interface VersionedInvocation {
-  minMajor: number;
-  argsTemplate: string[];
-  env?: Record<string, string>;
-}
-
-export interface BlockingPrompt {
-  /** Text the prompt shows; matched ignoring case and whitespace. */
-  phrase: string;
-  /** Completes "<runner> is asking …", e.g. "whether to trust this folder". */
-  asks: string;
-}
-
-export interface PluginFeatures {
-  modelSelection: boolean;
-  thinkingEffort: boolean;
-  planMode: boolean;
-  planModeFlag: string;
-  buildModeFlag?: string;
-  /** Flag appended when headless mode is on, so the agent never prompts for permission (e.g. Claude's --dangerously-skip-permissions). */
-  headlessFlag?: string;
-  thinkingFlag?: string;
-  thinkingValueEnabled?: string;
-  thinkingValueDisabled?: string;
-  thinkingValueAdaptive?: string;
-  /** Maps mode IDs to the CLI --permission-mode value. Used by {{feature:permissionModeVal}}. */
+export interface RunnerFeatures {
   permissionModeValues?: Record<string, string>;
-  /**
-   * Further per-mode settings for runners whose permission story has more than
-   * one axis (Codex: sandbox, approval policy, approvals reviewer). Keyed by
-   * setting name, then by mode id; a mode a map does not name leaves that
-   * setting to the runner's own default. Codex declares `approvalPolicy`
-   * (`-a` / `approval_policy`) and `approvalsReviewer` (`approvals_reviewer`);
-   * the terminal template reads them too, through `{{feature:approvalPolicyVal}}`
-   * and the `*Config` tokens.
-   */
   modeSettings?: Record<string, Record<string, string>>;
 }
 
-export type PluginParser = 'claude-help' | 'opencode-models' | 'opencode-models-verbose' | 'anthropic-models' | 'line-by-line' | 'json' | 'json-table';
+export type ModelDiscoveryParser = 'claude-help' | 'opencode-models' | 'opencode-models-verbose' | 'anthropic-models' | 'line-by-line' | 'json' | 'json-table';
 
 export interface DiscoveryCommand {
   command: string;
   args: string[];
-  parser?: PluginParser;
+  parser?: ModelDiscoveryParser;
 }
 
 export type ApiAuthMethod =
@@ -100,14 +30,14 @@ export interface ApiDiscoveryConfig {
   url: string;
   headers?: Record<string, string>;
   auth: ApiAuthMethod[];
-  parser: PluginParser;
+  parser: ModelDiscoveryParser;
 }
 
-export interface PluginModelDiscovery {
+export interface RunnerModelDiscovery {
   method: 'command' | 'hardcoded';
   command?: string;
   args?: string[];
-  parser?: PluginParser;
+  parser?: ModelDiscoveryParser;
   jsonPath?: string;
   /**
    * Stdio JSON-RPC discovery (Codex `app-server`): spawn the command, send
@@ -118,7 +48,7 @@ export interface PluginModelDiscovery {
    */
   appServer?: { command: string; args: string[]; cacheFile?: string };
   /**
-   * Optional last-resort list for user plugins whose CLI cannot enumerate
+   * Optional last-resort list for a CLI that cannot enumerate
    * models. Used only when command discovery fails entirely or the CLI is
    * unavailable. Built-in manifests must NOT use this: anything listed here is
    * shown to the user as available even when it isn't.
@@ -146,7 +76,7 @@ export interface PluginModelDiscovery {
   discoveryCommands?: DiscoveryCommand[];
 }
 
-export interface PluginMode {
+export interface RunnerMode {
   id: string;
   label: string;
   description: string;
@@ -158,74 +88,6 @@ export interface PluginMode {
   safe?: boolean;
 }
 
-export interface PluginEntry {
-  manifest: RunnerPluginManifest;
-  source: 'builtin' | 'user';
-  installPath?: string;
-}
-
-export interface ResolveContext {
-  prompt: string;
-  model?: string;
-  thinkingEffort?: string;
-  /** All variant ids the assigned model offers — lets {{opencodeVariantConfig}} disable the non-chosen ones. */
-  modelVariants?: string[];
-  mode: string;
-  /**
-   * Autonomy axis: when true, resolve {{if headless}} blocks and the
-   * {{feature:headless}} token so the agent never stops to ask for permission.
-   * True for every orchestrated task run — nobody is watching the terminal on
-   * Ordewell's behalf — independently of the session *shape* below.
-   */
-  headless?: boolean;
-  /**
-   * Session-shape axis: true when the runner is launched onto a real TTY the
-   * user can attach to (a tmux window, a VS Code pseudoterminal), so the
-   * runner's own TUI should come up rather than its non-interactive
-   * subcommand. Defaults to `!headless` for callers that predate the split.
-   */
-  interactive?: boolean;
-  /** The task's working directory — needed by runners whose autonomy flags name a path. */
-  cwd?: string;
-  /** The installed runner's `--version`, read only for a manifest with `versioned` invocations. */
-  runnerVersion?: string;
-}
-
-export interface RunnerInvocation {
-  command: string;
-  args: string[];
-  env: Record<string, string>;
-  promptInArgs: boolean;
-  /** True when a surface running this invocation on a real TTY must send an explicit Enter once the process starts. */
-  submitPromptKey: boolean;
-}
-
-/**
- * Persistent storage seam for plugin manifests. The RunnerRegistry delegates
- * all filesystem operations to this interface so the plugin lifecycle is
- * testable without real I/O.
- */
-export interface IPluginStore {
-  /** Path to the user plugins directory (~/.ordewell/plugins/). */
-  getUserPluginsDir(): string;
-  /** List subdirectory names inside the user plugins directory. */
-  listUserPluginDirs(): string[];
-  /** List entry names directly inside a directory. Returns [] when unreadable. */
-  listDir(dir: string): string[];
-  /** Read and parse a manifest.json from pluginDir. Returns null on failure. */
-  loadManifest(pluginDir: string): RunnerPluginManifest | null;
-  /** Recursively copy sourceDir to destDir. */
-  copyDir(sourceDir: string, destDir: string): void;
-  /** Recursively remove a directory. */
-  removeDir(dir: string): void;
-  /** Ensure a directory exists (mkdir -p). */
-  ensureDir(dir: string): void;
-  /** Write a text file. */
-  writeFile(filePath: string, content: string): void;
-  /** Read a UTF-8 text file. Returns null on ENOENT or read error. */
-  readFile(filePath: string): string | null;
-  /** True if path exists and is a directory. */
-  dirExists(path: string): boolean;
-  /** True if path exists. */
-  exists(path: string): boolean;
+export interface RunnerEntry {
+  manifest: RunnerManifest;
 }

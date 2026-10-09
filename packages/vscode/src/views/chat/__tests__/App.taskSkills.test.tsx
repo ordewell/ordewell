@@ -13,7 +13,7 @@ function send(msg: unknown) {
 
 const task = (over: Record<string, unknown>) => ({
   description: '', type: 'ai' as const, status: 'pending' as const, dependencies: [], subtasks: [],
-  assignedRunner: 'claude-code', taskMode: 'build', completionMarker: 'm', ...over,
+  assignedRunner: 'claude-code', taskMode: 'build', ...over,
 });
 
 const plan = (tasks: unknown[]) => ({

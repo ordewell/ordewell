@@ -5,7 +5,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import {
   createTask, RunnerRegistry,
-  type AiProvider, type DiscoveredModel, type LegacyPlanState,
+  type AiProvider, type DiscoveredModel, type IRunner, type LegacyPlanState,
   type ModelResolver, type PlannerModelMemory, type RunnerInstallation,
   type Session, type SessionDeps, type SettingsService,
 } from '@ordewell/core';
@@ -15,7 +15,6 @@ import type { SecretStore, ApiProvider } from '../adapters/SecretStore';
 import type { VsCodeConfig } from '../adapters/VsCodeConfig';
 import type { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
 import type { VsCodeNotification } from '../adapters/VsCodeNotification';
-import type { VsCodeTerminalRunner } from '../adapters/VsCodeTerminalRunner';
 import type { WebviewToHost } from '../shared/protocol';
 import { __panels, __resetPanels } from '../test/vscode.mock';
 
@@ -206,7 +205,7 @@ function harness(overrides: {
   const sessionDeps: { current?: SessionDeps } = {};
   const resolver = overrides.modelResolver ?? fakeResolver();
   const installation = overrides.runnerInstallation ?? fakeRunnerInstallation(['claude-code']);
-  const pluginRegistry = new RunnerRegistry();
+  const runnerRegistry = new RunnerRegistry();
   const stored = new Map<string, unknown>();
   const globalState = {
     get: (key: string) => stored.get(key),
@@ -218,11 +217,11 @@ function harness(overrides: {
     outputChannel: { appendLine: vi.fn() } as unknown as vscode.OutputChannel,
     secretStore: { set: vi.fn(), get: vi.fn() } as unknown as SecretStore,
     config: config.config,
-    pluginRegistry,
+    runnerRegistry,
     runnerInstallation: installation as unknown as RunnerInstallation,
     fsAdapter: { getWorkspaceRoot: () => workspace } as unknown as VsCodeFileSystem,
     notifications: {} as unknown as VsCodeNotification,
-    terminalRunner: { stopAll: vi.fn() } as unknown as VsCodeTerminalRunner,
+    runner: { stopAll: vi.fn() } as unknown as IRunner,
     settingsService: settings as unknown as SettingsService,
     plannerModelMemory: { remember: vi.fn(), recall: vi.fn(() => ({ model: '', effort: '', source: 'default' })) } as unknown as PlannerModelMemory,
     modelResolver: resolver as unknown as ModelResolver,
@@ -366,7 +365,7 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
   });
 
   it('persists and stops runners on dispose', async () => {
-    const stopAll = h.services.terminalRunner.stopAll as unknown as ReturnType<typeof vi.fn>;
+    const stopAll = h.services.runner.stopAll as unknown as ReturnType<typeof vi.fn>;
     await h.host.start();
     h.chat.messages.fire({ type: 'sendMessage', text: 'build a parser', typed: true });
     await vi.waitFor(() => expect(h.session.spies.startPlanning).toHaveBeenCalled());

@@ -13,18 +13,14 @@ import type { OrdewellToolBinding } from './ordewellBinding';
  */
 export interface RunnerConnector {
   create(deps: AgentProcessDeps): TaskModeAgentAdapter;
-  /**
-   * How the adapter hands its runner the Ordewell MCP server (ADR-0022).
-   * Absent: the runner is never given it, and its tasks complete by marker and
-   * its planner submits by envelope.
-   */
-  ordewellTools?: OrdewellToolBinding;
+  /** How the adapter hands its runner the Ordewell MCP server (ADR-0022), without which it can neither run a task nor plan. */
+  ordewellTools: OrdewellToolBinding;
 }
 
 /**
  * The runners Ordewell drives over their own protocols, by runner id. Being
  * here is what gives a runner a task-mode connector and a harness planner; a
- * runner that is not here runs its tasks on the terminal transport.
+ * runner that is not here cannot run tasks at all.
  */
 export const CONNECTORS: Readonly<Record<string, RunnerConnector>> = {
   'claude-code': { create: (deps) => new ClaudeCodeAdapter(deps), ordewellTools: CLAUDE_ORDEWELL },
@@ -32,7 +28,7 @@ export const CONNECTORS: Readonly<Record<string, RunnerConnector>> = {
   opencode: { create: (deps) => new OpenCodeAdapter(deps), ordewellTools: OPENCODE_ORDEWELL },
 };
 
-/** The connector for a runner id; undefined for one without (a plugin runner, or `toString`). */
+/** The connector for a runner id; undefined for an unknown id (including `toString`). */
 export function connectorFor(runner: string): RunnerConnector | undefined {
   return Object.hasOwn(CONNECTORS, runner) ? CONNECTORS[runner] : undefined;
 }
@@ -42,14 +38,9 @@ export function createPlannerAdapter(runner: string, deps: AgentProcessDeps): Ag
   return connectorFor(runner)?.create(deps) ?? null;
 }
 
-/** Whether a runner's tasks can run on the structured transport (ADR-0018, S3). */
+/** Whether Ordewell can run a runner's tasks (ADR-0018, S3). */
 export function supportsTaskMode(runner: string): boolean {
   return connectorFor(runner) !== undefined;
-}
-
-/** Whether a structured task on this runner is given the Ordewell task tools (ADR-0022). */
-export function takesOrdewellTools(runner: string): boolean {
-  return connectorFor(runner)?.ordewellTools !== undefined;
 }
 
 /** The adapter that drives one task. Throws {@link TaskModeUnsupportedError} for a runner without a connector. */

@@ -6,16 +6,15 @@ import { VerdictEngine } from '../VerdictEngine';
 import { createTask, type Verdict } from '../../models/Task';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
-import { isStructuredSession, type ITerminalSession, type StructuredEvent, type StructuredTurnEnd } from '../../interfaces/ITerminalRunner';
+import type { IRunnerSession, StructuredEvent, StructuredTurnEnd } from '../../interfaces/IRunner';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, TaskModeAgentAdapter } from '../harness/AgentAdapter';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
-import { FakeStructuredSession, FakeTerminalSession } from '../../testing';
 import { OrdewellMcpServer, type CheckpointAnswer, type McpClientConfig } from '../mcp';
 import { claudeSteerRecording, fakeSpawn, fixture, sseResponse, type FakeAgentProcess, type FakeEventStream, type ScriptedReply } from './harnessTestKit';
 
 /**
- * The `ITerminalSession` contract a structured task keeps (ADR-0018, O1a/S2):
- * what `onOutput` carries, where the done marker lands, and how the session
+ * The `IRunnerSession` contract a structured task keeps (ADR-0018, O1a/S2):
+ * what `onOutput` carries, how completion calls arrive, and how the session
  * behaves when its runner fails, is killed mid-start or ignores an interrupt.
  *
  * Recorded transcripts drive the real Claude Code adapter where one exists;
@@ -27,6 +26,7 @@ type Turn = { onEvent: (event: AgentEvent) => void; resolve: () => void; reject:
 
 /** A task adapter driven by hand: each `send` stays open until the test ends it. */
 class HandAdapter implements TaskModeAgentAdapter {
+  async mcpAttached(): Promise<boolean> { return true; }
   readonly agentId = 'claude-code';
   readonly starts: AgentStartOptions[] = [];
   readonly sent: string[] = [];
@@ -131,8 +131,7 @@ async function until(condition: () => boolean): Promise<void> {
   if (!condition()) throw new Error('condition never held');
 }
 
-function observe(session: ITerminalSession) {
-  if (!isStructuredSession(session)) throw new Error('not a structured session');
+function observe(session: IRunnerSession) {
   const chunks: string[] = [];
   const events: StructuredEvent[] = [];
   const turnEnds: StructuredTurnEnd[] = [];
@@ -470,18 +469,6 @@ describe('answering a runner\'s request', () => {
   });
 });
 
-describe('the structured capability is detected, never assumed', () => {
-  it('is present on a structured session and absent from a terminal one', async () => {
-    const { runner } = byHand();
-    const session = await runner.spawn(options());
-    expect(isStructuredSession(session)).toBe(true);
-    expect(isStructuredSession(new FakeStructuredSession())).toBe(true);
-    expect(isStructuredSession(new FakeTerminalSession('s1', 't1'))).toBe(false);
-    expect(isStructuredSession(Object.assign(new FakeTerminalSession('s2', 't1'), { transport: 'terminal' }))).toBe(false);
-    session.kill();
-  });
-});
-
 describe('the Ordewell task tools (ADR-0022)', () => {
   const servers: OrdewellMcpServer[] = [];
   const clients: Client[] = [];
@@ -525,7 +512,7 @@ describe('the Ordewell task tools (ADR-0022)', () => {
   it('gives a Claude Code task the server, and its task_complete call reaches the session', async () => {
     const { runner, adapters } = served();
     const session = await runner.spawn(options({ attempt: 2 }));
-    if (!isStructuredSession(session)) throw new Error('not a structured session');
+
     const reports: unknown[] = [];
     session.onTaskComplete((report) => reports.push(report));
 
@@ -540,11 +527,11 @@ describe('the Ordewell task tools (ADR-0022)', () => {
   it('delivers a queued final-turn message before settling, with the same task token valid for the next report', async () => {
     const { runner, adapters } = served();
     const session = await runner.spawn(options());
-    if (!isStructuredSession(session)) throw new Error('not a structured session');
+
     const engine = new VerdictEngine();
     const verdicts: Verdict[] = [];
     engine.onVerdict((_id, verdict) => { verdicts.push(verdict); session.kill(); });
-    engine.watch(createTask({ id: session.taskId, completionMarker: 'mk-1' }), session);
+    engine.watch(createTask({ id: session.taskId }), session);
     await until(() => adapters[0].sent.length === 1);
     session.sendMessage('Also add tests');
     const client = await connect(servedConfig(adapters[0]));
@@ -564,7 +551,7 @@ describe('the Ordewell task tools (ADR-0022)', () => {
   it('holds a checkpoint call open until the session answers it, and returns the answer', async () => {
     const { runner, adapters } = served();
     const session = await runner.spawn(options());
-    if (!isStructuredSession(session)) throw new Error('not a structured session');
+
     const asked: string[] = [];
     let answer!: (a: CheckpointAnswer) => void;
     session.onToolCheckpoint((question) => {
@@ -596,7 +583,7 @@ describe('the Ordewell task tools (ADR-0022)', () => {
   it('ends a waiting checkpoint call with a refusal when the session is killed', async () => {
     const { runner, adapters } = served();
     const session = await runner.spawn(options());
-    if (!isStructuredSession(session)) throw new Error('not a structured session');
+
     let asked = false;
     session.onToolCheckpoint((_question, signal) => new Promise<CheckpointAnswer>((resolve) => {
       asked = true;
@@ -611,16 +598,18 @@ describe('the Ordewell task tools (ADR-0022)', () => {
     expect(await call).toMatchObject({ isError: true, content: [{ type: 'text', text: expect.stringContaining('withdrawn') }] });
   });
 
-  it('keeps the server across a restart after an ignored interrupt', async () => {
+  it('reissues the token and checks attachment after an ignored interrupt', async () => {
     const { runner, adapters } = served((adapter) => { adapter.interruptAnswer = 'ignore'; });
     const session = await runner.spawn(options());
-    if (!isStructuredSession(session)) throw new Error('not a structured session');
+
     await until(() => adapters[0].sent.length === 1);
 
     await session.interrupt();
 
     expect(adapters).toHaveLength(2);
-    expect(adapters[1].starts[0]).toMatchObject({ mcp: servedConfig(adapters[0]) });
+    expect(servedConfig(adapters[1]).url).toBe(servedConfig(adapters[0]).url);
+    expect(servedConfig(adapters[1]).headers).not.toEqual(servedConfig(adapters[0]).headers);
+    await expect(connect(servedConfig(adapters[0]))).rejects.toThrow();
     session.kill();
   });
 
@@ -652,13 +641,13 @@ describe('the Ordewell task tools (ADR-0022)', () => {
     await expect(connect(servedConfig(adapters[0]))).rejects.toThrow();
   });
 
-  it('gives a runner whose connector cannot inject it no server', async () => {
+  it('hands every task adapter the required server', async () => {
     const { runner, adapters } = served();
     // Every built-in runner is given the server, so this is a plugin runner.
     const plugin = { get: () => registry.get('claude-code') } as unknown as RunnerRegistry;
     const session = await runner.spawn(options({ runner: 'other-runner', registry: plugin }));
 
-    expect(adapters[0].starts[0]).not.toHaveProperty('mcp');
+    expect(adapters[0].starts[0]).toHaveProperty('mcp');
     session.kill();
   });
 });
@@ -766,6 +755,7 @@ describe('a message sent mid-turn (ADR-0023)', () => {
       if (path === '/event') { const { response, stream } = sseResponse(init); streams.push(stream); return response; }
       if (path === '/session' && method === 'POST') return answer({ id: sessionId });
       if (path === '/session/status') return answer({});
+      if (path === '/mcp') return answer({ ordewell: { status: 'connected' } });
       if (path.endsWith('/prompt_async')) {
         prompts.push(typeof init?.body === 'string' ? JSON.parse(init.body) as { messageID?: string } : {});
         return answer(null, 204);

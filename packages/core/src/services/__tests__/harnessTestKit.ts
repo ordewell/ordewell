@@ -2,15 +2,15 @@ import { EventEmitter } from 'events';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import type { ChildProcess } from 'child_process';
-import type { SpawnFn } from '../HeadlessRunner';
-import type { AgentAdapterFactory, AgentEvent, AgentProcessDeps, TaskModeAgentAdapter } from '../harness/AgentAdapter';
+import type { AgentAdapterFactory, AgentEvent, AgentProcessDeps, SpawnFn, TaskModeAgentAdapter } from '../harness/AgentAdapter';
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
 import { createTaskAdapter } from '../harness/connectors';
-import type { RunnerPluginManifest } from '../../plugins/types';
+import type { RunnerManifest } from '../../plugins/types';
+import type { McpCredential, OrdewellMcpServer } from '../mcp';
 
 /**
  * The one test seam for harness planners (ADR-0009): a fake process boundary,
- * injected the way `HeadlessRunnerDeps` injects its `spawnImpl`.
+ * injected as {@link AgentProcessDeps}' `spawn`.
  *
  * Driving the service through this exercises adapter parsing, event mapping,
  * reply classification and the repair loop as a single observable behavior —
@@ -52,6 +52,7 @@ export interface FakeSpawnResult {
 }
 
 export interface FakeSpawnOptions {
+  autoMcpAttached?: boolean;
   /**
    * Answers the sandbox capability probe Codex runs before its handshake
    * (`codex sandbox … /bin/true`). Given the probe's argv, return the exit code
@@ -171,12 +172,65 @@ function spawner(onWrite: (written: string, proc: FakeAgentProcess, args: string
  */
 export function fakeSpawn(replies: ScriptedReply[], options: FakeSpawnOptions = {}): FakeSpawnResult {
   const queue = [...replies];
-  return spawner((chunk, proc) => {
+  return spawner((chunk, proc, args) => {
+    if (answeredAttachCheck(chunk, proc, args)) return;
     const reply = queue.shift();
-    if (reply === undefined) return;
-    if (typeof reply === 'function') reply(chunk, proc);
-    else proc.emitStdout(reply);
+    if (reply !== undefined) {
+      if (typeof reply === 'function') reply(chunk, proc);
+      else proc.emitStdout(reply);
+    }
+    if (options.autoMcpAttached !== false) reportCodexStartup(chunk, proc);
   }, options);
+}
+
+/**
+ * Claude Code's `mcp_status` check, answered as the CLI would: the Ordewell
+ * server connected when the process was handed one. Every task, and every
+ * planner given tools, asks before its first turn (ADR-0022, S4), so the
+ * check does not take a scripted reply.
+ */
+function answeredAttachCheck(chunk: string, proc: FakeAgentProcess, args: string[]): boolean {
+  let msg: { type?: string; request_id?: string; request?: { subtype?: string } };
+  try { msg = JSON.parse(chunk) as typeof msg; } catch { return false; }
+  if (msg.type !== 'control_request' || msg.request?.subtype !== 'mcp_status') return false;
+  const mcpServers = args.includes('--mcp-config') ? [{ name: 'ordewell', status: 'connected' }] : [];
+  proc.emitStdout(`${JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id, response: { mcpServers } } })}\n`);
+  return true;
+}
+
+/**
+ * Codex's startup report for the Ordewell server, sent as the app-server does
+ * once a thread that was handed it opens: connected. A notification, so it
+ * takes no scripted reply.
+ */
+function reportCodexStartup(chunk: string, proc: FakeAgentProcess): void {
+  let msg: { method?: string; params?: { config?: { mcp_servers?: Record<string, unknown> } } };
+  try { msg = JSON.parse(chunk) as typeof msg; } catch { return; }
+  if (msg.method !== 'thread/start' && msg.method !== 'thread/resume') return;
+  if (!msg.params?.config?.mcp_servers?.ordewell) return;
+  queueMicrotask(() => proc.emitStdout(`${JSON.stringify({ method: 'mcpServer/startupStatus/updated', params: { name: 'ordewell', status: 'ready' } })}\n`));
+}
+
+/**
+ * An Ordewell MCP server that issues tokens without listening: what a planner
+ * or a task is handed when the test is not about the server itself.
+ */
+export function fakeMcpServer(): OrdewellMcpServer & { readonly issued: string[]; readonly revoked: string[] } {
+  const issued: string[] = [];
+  const revoked: string[] = [];
+  const issue = async (): Promise<McpCredential> => {
+    const token = `tok-${issued.length + 1}`;
+    issued.push(token);
+    return { url: 'http://127.0.0.1:1/mcp', token };
+  };
+  const server = {
+    issued,
+    revoked,
+    issueTaskToken: issue,
+    issuePlannerToken: issue,
+    revoke: (token: string) => { revoked.push(token); },
+  };
+  return server as unknown as OrdewellMcpServer & { readonly issued: string[]; readonly revoked: string[] };
 }
 
 /**
@@ -248,6 +302,7 @@ export function scriptedAdapter(turns: AgentEvent[][], agentId = 'claude-code'):
     },
     nativeSessionId: () => null,
     dispose: () => {},
+    mcpAttached: async () => true,
   });
 }
 
@@ -364,7 +419,7 @@ export function sseResponse(init?: RequestInit, chunks: string[] = []): { respon
 }
 
 /** Every mode a runner offers, so a per-mode test cannot quietly run over none. */
-export function modeIds(manifest: RunnerPluginManifest): string[] {
+export function modeIds(manifest: RunnerManifest): string[] {
   const ids = (manifest.modes ?? []).map((mode) => mode.id);
   if (ids.length === 0) throw new Error(`${manifest.name} lists no modes`);
   return ids;

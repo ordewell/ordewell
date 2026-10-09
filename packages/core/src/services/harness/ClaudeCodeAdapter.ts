@@ -12,11 +12,16 @@ import { settleWithin } from './settleWithin';
 import { awaitAttach, type OrdewellToolRole } from './ordewellBinding';
 
 /**
- * Tools a planning Claude Code session may use. `--permission-mode plan`
- * already refuses edits; naming the write tools explicitly means a future
- * permission-mode change cannot quietly hand the planner a `Write` (T1).
+ * Native plan mode permits Bash writes to its plan file, and `dontAsk` still
+ * honors saved shell allow rules. Withhold shell tools and native plan-mode
+ * transitions as well as direct edits so neither can reopen that write path.
  */
-const DISALLOWED_TOOLS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'KillShell'];
+const DISALLOWED_TOOLS = [
+  'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'KillShell',
+  'Bash', 'PowerShell', 'EnterPlanMode', 'ExitPlanMode',
+];
+
+const PLANNER_PERMISSION_MODE = 'dontAsk';
 
 /**
  * `AskUserQuestion` reaches us as a tool request whose allow must carry the
@@ -247,7 +252,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * A task's turn whose `result` arrived while background work was still open.
    * The CLI reports that result when the model stops talking, then opens a turn
    * of its own when the work finishes; a turn ended at the first result would
-   * lose everything said after it, the completion marker included.
+   * lose everything done after it, the `task_complete` call included.
    */
   private resultHeld = false;
   private followOnTimer: ReturnType<typeof setTimeout> | null = null;
@@ -269,7 +274,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     const args = [
       ...PROTOCOL_ARGS,
       // The read-only guarantee, enforced at spawn rather than by prompt.
-      '--permission-mode', 'plan',
+      '--permission-mode', PLANNER_PERMISSION_MODE,
       '--disallowedTools', DISALLOWED_TOOLS.join(','),
       '--append-system-prompt', opts.systemPrompt,
     ];
@@ -291,8 +296,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   /**
    * A task's run: the manifest decides what its mode and effort mean
    * (ADR-0001), and this adds only the protocol around them. No tool list and
-   * no system prompt — the task's prompt is its first turn, as on the terminal
-   * transport. `--permission-prompt-tool stdio` routes the questions the mode
+   * no system prompt — the task's prompt is its first turn. `--permission-prompt-tool stdio` routes the questions the mode
    * leaves open to the control channel, where the adapter must answer them;
    * without it `-p` refuses them silently and nothing can ever surface one.
    */

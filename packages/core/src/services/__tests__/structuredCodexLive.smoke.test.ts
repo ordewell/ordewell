@@ -4,7 +4,7 @@ import { join } from 'path';
 import { describe, it, expect, afterAll } from 'vitest';
 import { StructuredRunner } from '../StructuredRunner';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
-import { isStructuredSession, type ITerminalSession, type StructuredEvent, type StructuredTurnEnd } from '../../interfaces/ITerminalRunner';
+import type { IRunnerSession, StructuredEvent, StructuredTurnEnd } from '../../interfaces/IRunner';
 import { VerdictEngine } from '../VerdictEngine';
 import { composeAugmentedPrompt } from '../promptAugment';
 import { createTask, type Verdict } from '../../models/Task';
@@ -28,12 +28,12 @@ const live = (process.env.ORDEWELL_LIVE_AGENTS ?? '').split(',').map((s) => s.tr
 // gpt-5.4-mini is not in this account's catalog; luna is the cheapest listed.
 const model = process.env.ORDEWELL_LIVE_MODEL ?? 'gpt-5.6-luna';
 const TIMEOUT_MS = 180_000;
-const MARKER_PROMPT = 'Then print one final line containing only the completion marker. Build it by writing `<<<ORDEWELL_` immediately followed by `DONE_live-codex>>>` with nothing between the two parts.';
-const marker = '<<<ORDEWELL_DONE_live-codex>>>';
+const COMPLETION_PROMPT = 'Then call task_complete with status done and a short summary.';
 
-function turnEnds(session: ITerminalSession) {
-  if (!isStructuredSession(session)) throw new Error('not a structured session');
+function turnEnds(session: IRunnerSession) {
   const ends: StructuredTurnEnd[] = [];
+  const reports: string[] = [];
+  session.onTaskComplete(({ status }) => reports.push(status));
   const events: StructuredEvent[] = [];
   let waiter: (() => void) | null = null;
   session.onTurnEnd((reason) => { ends.push(reason); waiter?.(); waiter = null; });
@@ -41,6 +41,7 @@ function turnEnds(session: ITerminalSession) {
   return {
     session,
     ends,
+    reports,
     events,
     next: () => new Promise<void>((resolve) => { waiter = resolve; }),
   };
@@ -65,11 +66,11 @@ describe.runIf(live)('structured transport, Codex — live smoke', () => {
   const dirFor = () => { const dir = mkdtempSync(join(tmpdir(), 'ordewell-structured-codex-')); dirs.push(dir); return dir; };
   afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
 
-  it('full auto: writes a file, reports its marker whole, one shell line, one completed turn', async () => {
+  it('full auto: writes a file, reports completion through the tool, one shell line, one completed turn', async () => {
     const dir = dirFor();
     const runner = new StructuredRunner();
     try {
-      const session = await spawnTask(runner, dir, 'live-codex-full', `Run a shell command that writes the text hi into hello.txt. ${MARKER_PROMPT}`, 'fullAccess');
+      const session = await spawnTask(runner, dir, 'live-codex-full', `Run a shell command that writes the text hi into hello.txt. ${COMPLETION_PROMPT}`, 'fullAccess');
       const turns = turnEnds(session);
       const chunks: string[] = [];
       session.onOutput((text) => chunks.push(text));
@@ -78,7 +79,7 @@ describe.runIf(live)('structured transport, Codex — live smoke', () => {
       expect(turns.ends).toEqual(['completed']);
       expect(existsSync(join(dir, 'hello.txt')), session.getOutput()).toBe(true);
       expect(readFileSync(join(dir, 'hello.txt'), 'utf8')).toContain('hi');
-      expect(chunks.some((chunk) => chunk.includes(marker)), session.getOutput()).toBe(true);
+      expect(turns.reports).toEqual(['done']);
       expect(session.getOutput().match(/^› shell\(/gm) ?? []).toHaveLength(1);
     } finally { runner.stopAll(); }
   }, TIMEOUT_MS);
@@ -87,13 +88,13 @@ describe.runIf(live)('structured transport, Codex — live smoke', () => {
     const dir = dirFor();
     const own = new StructuredRunner();
     try {
-      const session = await spawnTask(own, dir, 'live-codex-auto', `Run a shell command that writes the text hi into hello.txt. ${MARKER_PROMPT}`, 'agent');
+      const session = await spawnTask(own, dir, 'live-codex-auto', `Run a shell command that writes the text hi into hello.txt. ${COMPLETION_PROMPT}`, 'agent');
       const turns = turnEnds(session);
       await turns.next();
       expect(turns.ends, session.getOutput()).toEqual(['completed']);
       expect(turns.events.filter((e) => e.type === 'permission_request')).toEqual([]);
       expect(existsSync(join(dir, 'hello.txt')), session.getOutput()).toBe(true);
-      expect(session.getOutput()).toContain(marker);
+      expect(turns.reports).toEqual(['done']);
     } finally { own.stopAll(); }
   }, TIMEOUT_MS);
 
@@ -195,14 +196,14 @@ describe.runIf(live)('structured transport, Codex — live smoke', () => {
   it('completes a task through task_complete, with nothing asked of a person (ADR-0022)', async () => {
     const dir = dirFor();
     const runner = new StructuredRunner();
-    const task = createTask({ id: 'live-codex-tool', title: 'Multiply', prompt: 'Work out 17 * 23 and state the result.', taskMode: 'fullAccess', completionMarker: 'live-codex-tool' });
+    const task = createTask({ id: 'live-codex-tool', title: 'Multiply', prompt: 'Work out 17 * 23 and state the result.', taskMode: 'fullAccess' });
     const engine = new VerdictEngine();
     const verdict = new Promise<Verdict>((resolve) => engine.onVerdict((_taskId, v) => resolve(v)));
     try {
       const session = await runner.spawn({
         taskId: task.id,
         runner: 'codex',
-        prompt: composeAugmentedPrompt(task, [task], { completionTool: true }),
+        prompt: composeAugmentedPrompt(task, [task], {  }),
         modelId: model,
         thinkingEffort: 'low',
         mode: 'fullAccess',
@@ -229,7 +230,7 @@ describe.runIf(live)('structured transport, Codex — live smoke', () => {
   it('holds a checkpoint tool call open past Codex\'s default tool timeout, and returns the answer (ADR-0022, V5)', async () => {
     const dir = dirFor();
     const runner = new StructuredRunner();
-    const task = createTask({ id: 'live-codex-checkpoint', title: 'Ask', prompt: 'Your task: call the checkpoint tool with the question "Shall I proceed with the migration?", then state exactly what the result was. Do not call the checkpoint tool a second time.', taskMode: 'fullAccess', completionMarker: 'live-codex-checkpoint', autonomy: 'HITL' });
+    const task = createTask({ id: 'live-codex-checkpoint', title: 'Ask', prompt: 'Your task: call the checkpoint tool with the question "Shall I proceed with the migration?", then state exactly what the result was. Do not call the checkpoint tool a second time.', taskMode: 'fullAccess', autonomy: 'HITL' });
     const engine = new VerdictEngine();
     const verdict = new Promise<Verdict>((resolve) => engine.onVerdict((_taskId, v) => resolve(v)));
     const asked: string[] = [];
@@ -242,7 +243,7 @@ describe.runIf(live)('structured transport, Codex — live smoke', () => {
       const session = await runner.spawn({
         taskId: task.id,
         runner: 'codex',
-        prompt: composeAugmentedPrompt(task, [task], { completionTool: true }),
+        prompt: composeAugmentedPrompt(task, [task], {  }),
         modelId: model,
         thinkingEffort: 'low',
         mode: 'fullAccess',

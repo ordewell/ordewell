@@ -93,6 +93,8 @@ export interface ModelsResponse {
 /** One-shot planning answers in the phase-tagged shape a saved session is read back in. */
 export interface GeneratePlanResponse extends Pick<ModelsResponse, 'models' | 'modelsByRunner'> {
   plan: SurfacePlanState;
+  /** The host notes the plan's transcript records, a skill check's warnings among them, which the phase-tagged plan does not carry. */
+  notes?: string[];
 }
 
 export interface ExecuteResponse {

@@ -9,12 +9,12 @@ import type { SessionRuntimeSettings } from '../createSession';
 import type { DiscoveredModel } from '../../models/Task';
 import type { SessionMessage } from '../SessionMessage';
 import { createTask } from '../../models/Task';
-import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
-import { FakeTerminalSession, fakeConfig, makeSession } from './sessionTestKit';
+import type { IRunner } from '../../interfaces/IRunner';
+import { FakeRunnerSession, fakeConfig, makeSession } from './sessionTestKit';
 
 /**
  * The opt-in live check for the Claude Code planner's Ordewell tools
- * (ADR-0022): the real CLI in plan mode, the real server, a real Session.
+ * (ADR-0022): the real CLI in planner mode, the real server, a real Session.
  *
  *   ORDEWELL_LIVE_AGENTS=claude-code npx vitest run --root packages/core plannerToolsLive
  *   ORDEWELL_LIVE_AGENTS=codex       npx vitest run --root packages/core plannerToolsLive
@@ -36,8 +36,8 @@ import { FakeTerminalSession, fakeConfig, makeSession } from './sessionTestKit';
 const liveAgents = (process.env.ORDEWELL_LIVE_AGENTS ?? '').split(',').map((s) => s.trim());
 const live = liveAgents.includes('claude-code');
 const liveCodex = liveAgents.includes('codex');
-// The `haiku` alias runs Sonnet under `--permission-mode plan`, which the
-// planner spawns with; the full id is honoured.
+// A full id, not the `haiku` alias: under `--permission-mode plan` the alias
+// has run Sonnet, and a task may still spawn in that mode.
 const claudeModel = process.env.ORDEWELL_LIVE_MODEL ?? 'claude-haiku-4-5-20251001';
 const codexModel = process.env.ORDEWELL_LIVE_MODEL ?? 'gpt-5.6-luna';
 
@@ -117,17 +117,17 @@ describe.runIf(live)('Claude Code planner tools — live', () => {
     cleanup.push(() => ai.reset());
 
     const toolCalls: string[] = [];
-    const sessions: FakeTerminalSession[] = [];
+    const sessions: FakeRunnerSession[] = [];
     const runner = {
       spawn: vi.fn(async ({ taskId }: { taskId: string }) => {
-        const session = new FakeTerminalSession(`s-${taskId}`, taskId);
+        const session = new FakeRunnerSession(`s-${taskId}`, taskId);
         sessions.push(session);
         return session;
       }),
       stop: vi.fn(),
       stopAll: vi.fn(),
       activeCount: 0,
-    } as unknown as ITerminalRunner;
+    } as unknown as IRunner;
     const session = makeSession({
       config,
       aiService: ai,

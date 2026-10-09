@@ -2,8 +2,6 @@
 
 **Status:** accepted
 
-*Pending (2026-10-05):* [ADR-0022](0022-ordewell-mcp-server.md) adopts "Ordewell as an MCP server", deferred below, for plan submission and the planner's reads.
-
 Every path into Ordewell's planner runs through an LLM vendor the user must sign
 up for separately. `createAiService` branches on `aiProvider` across 26
 vendor entries, and every one of them resolves an API key. Meanwhile the same
@@ -19,7 +17,10 @@ then go get a third-party API key before you can plan anything.
 ## Decision
 
 **A coding agent may serve as the planner, as a second transport behind the
-existing `IAiService` seam.**
+existing `IAiService` seam.** Its Ordewell MCP tools must attach before the
+planning prompt is sent: check after spawn, respawn once, then fail on a second
+attach failure (ADR-0025). Plan submission, edits and reads use the injected
+tools (ADR-0022); API planners retain their JSON envelopes.
 
 The plan contract does not move. `classifyPlannerReply`, `PlanRepair`,
 `PlanValidator`, `ResearchProgress`, `ConversationTurn` and the four surfaces
@@ -30,9 +31,9 @@ per-agent adapter:
 
 | agent | transport (verified against the installed CLI) | read-only mode |
 |---|---|---|
-| Claude Code | `-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages` | `--permission-mode plan` + `--disallowedTools Edit,Write,…` |
+| Claude Code | `-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages` | `--permission-mode dontAsk` + direct edit, shell and native plan-mode tools disallowed (ADR-0008) |
 | Codex | `app-server` stdio JSON-RPC: `initialize` → `thread/start` → `turn/start` | `sandbox: read-only`, `approvalPolicy: never` |
-| OpenCode | `serve` (headless HTTP) + SSE event stream — 1.x `/event`, 2.x `/api/event` | `agent: plan`, plus rules denying `question` and `edit` on 2.x |
+| OpenCode | `serve` (headless HTTP) + SSE event stream — 1.x `/event`, 2.x `/api/event` | `agent: plan`, plus rules denying `question` and `edit` on 2.x; shell writes are not confined (ADR-0008) |
 
 Three details in that table were corrected during implementation, against the
 binaries themselves rather than against memory:
@@ -59,9 +60,9 @@ binaries themselves rather than against memory:
   `session.execution.succeeded`, `failed` or `interrupted` frame, with
   `/api/session/active` behind the stream for a dropped frame. A prompt has no
   system field, so the planner prompt is a session instruction entry; the
-  read-only guarantee is the plan agent plus deny rules for `question` and
-  `edit`. The adapter takes a server for 2.x when `/api/info` names a version,
-  and speaks the 1.x protocol otherwise.
+  direct edit controls are the plan agent plus deny rules for `question` and
+  `edit`; these do not enforce read-only shell execution (ADR-0008). The adapter
+  takes a server for 2.x when `/api/info` names a version, and speaks the 1.x protocol otherwise.
   Letting the echo through put the user's goal in the planner's reply — and a
   goal quoting JSON would then have been parsed as the plan.
 
@@ -71,18 +72,21 @@ model's behalf, which is precisely what a coding agent replaces.
 
 ## Key properties
 
-- **The planner cannot mutate the workspace.** The planner path always spawns
-  an adapter in its agent's read-only mode. Adapters also have a task mode, for
-  the structured transport ([ADR-0018](0018-structured-runner-transport.md)),
+- **Mutation belongs to task runners.** Claude planners deny direct edit and
+  shell tools and native plan-mode transitions, using `dontAsk`; Codex planners
+  use an OS read-only sandbox with approvals disabled. OpenCode uses its plan
+  agent and edit-tool denials, which leave a shell enforcement gap (ADR-0008).
+  Adapters also have a task mode, for the structured transport
+  ([ADR-0018](0018-structured-runner-transport.md)),
   whose permission mode and effort come from the runner manifest; it is an
   explicit start switch the planner path never passes, and tests assert it. The
-  planner's spawn is read-only, and any permission request that still arrives is
-  auto-denied and surfaced as a `refused` step. ADR-0008's envelope does not
-  apply — `commandPolicy`, `BaseFileSystem` confinement and the `IApproval` seam
+  planner's permission requests that still arrive are auto-denied and surfaced
+  as a `refused` step. ADR-0008's envelope does not apply — `commandPolicy`, `BaseFileSystem` confinement and the `IApproval` seam
   are all bypassed, because the agent brings its own tools and its own approval
   machinery. What survives is the *invariant*, not the mechanism: mutation
-  belongs to the runners, and an absent answer is a denial. Enforced by the mode
-  flag at spawn, not by prompt instruction.
+  belongs to the runners, and an absent answer is a denial. Enforcement comes
+  from fixed spawn controls and tool denials, not prompt instructions; native
+  plan mode alone cannot supply the invariant.
   Read-only mode covers what the agent *does*; it does not cover what the agent
   can *ask for*, and three of those turned out to hang a turn indefinitely
   rather than fail it. Each is answered, not ignored: OpenCode's `question` tool
@@ -97,9 +101,8 @@ model's behalf, which is precisely what a coding agent replaces.
 - **The plan arrives as text, through the existing parser.** The final
   assistant message carries the `{"tasks":[…]}` object; last-candidate
   extraction and the two-attempt repair loop handle it exactly as they do for a
-  budget model on OpenRouter. Nothing is written to disk by the agent, which is
-  what lets the no-mutation guarantee hold — a file handoff would require granting workspace writes to
-  the one component the architecture says must never have them.
+  budget model on OpenRouter. The plan needs no file handoff: granting a
+  filesystem write to the planner would violate the no-mutation invariant.
 - **One live process per planner session.** Spawned at
   `startConversation`, fed each turn over stdio, disposed by `Session.reset()`.
   Follow-up messages and corrective re-emits reuse warm context rather than
@@ -196,14 +199,11 @@ this backend should understand they are trading speed for not holding a key.
 
 ## Considered options
 
-- **ACP for every agent.** AionUI's model: one Agent Client Protocol
-  client, N agents. Rejected as the v1 transport. Only OpenCode ships an ACP
-  server (`opencode acp`); Claude Code and Codex require third-party adapter
-  packages spawned over npx, reintroducing exactly the install step this feature
-  exists to remove, on a dependency chain we do not control. Kept as a *fourth
-  adapter* behind the same interface, where it earns its keep on the long tail
-  (Gemini CLI, Qwen, Cursor) rather than on the three agents Ordewell already
-  ships manifests for.
+- **ACP for every agent immediately.** Deferred: the built-in agents already
+  have native connectors without extra adapter installations.
+  [ADR-0025](0025-structured-only-runners.md) records a generic ACP connector
+  as the expected successor for third-party harnesses, with the protocol gaps
+  that must be addressed before adoption.
 - **One-shot respawn per turn.** Spawn with `--resume`/`exec resume`/
   `--session` each message, exit after. Trivial lifecycle, nothing to leak.
   Rejected: 1–3s cold start on every message *including each corrective
@@ -218,12 +218,11 @@ this backend should understand they are trading speed for not holding a key.
   mode into a write-capable one to solve a problem the existing repair loop
   already handles. Available later as a fallback if truncation proves real, at
   the cost of the no-mutation guarantee.
-- **Ordewell as an MCP server now.** `submit_plan` / `apply_task_ops` /
-  `ask_user` as tools, registered with all three CLIs — the plan arrives as
-  validated structured input and "question or commit?" stops being a parsing
-  problem. Genuinely the right end state, and deferred rather than rejected:
-  there is no MCP code anywhere in the repo today, so it is a stdio JSON-RPC
-  server plus per-CLI registration standing between the user and the first plan.
+- **Plan submission only through reply parsing.** Previously adopted while
+  MCP injection was absent; rejected for coding-agent planners because the
+  server now supplies validated submission and read tools (ADR-0022). API
+  planners retain envelopes. Coding-agent planners must attach their tools,
+  with one respawn before failing (ADR-0025).
 - **A separate `plannerBackend` setting.** See above — better typing, worse
   product, more UI.
 - **Implicit planner = the first selected runner.** A single "plan with my
@@ -263,3 +262,5 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-09-29 — adapters gain a task mode for the structured transport (ADR-0018); the planner path stays read-only.
 - 2026-10-04 — OpenCode 2.x supported beside 1.x.
 - 2026-10-09 — harness planners get skills through the unified loader (ADR-0024): `/name`, `load_skill`, task skills.
+- 2026-10-09 — Claude planners use `dontAsk` with edit, shell and native plan-mode tools denied; OpenCode shell limitations are made explicit (ADR-0008).
+- 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).

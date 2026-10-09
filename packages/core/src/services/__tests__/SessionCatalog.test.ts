@@ -23,7 +23,9 @@ function setup(opts: {
   };
   const catalog = new SessionCatalog({
     config: { enabledRunners: ['claude-code', 'codex'], autonomousMode: true },
-    registry: { getManifest: (id: string) => ({ id, modes: MODES }) as unknown as ReturnType<SessionCatalogDeps['registry']['getManifest']> },
+    registry: { getManifest: (id: string) => ['claude-code', 'codex', 'opencode'].includes(id)
+      ? { name: id, displayName: id, runner: { command: id }, features: {}, modelDiscovery: { method: 'hardcoded' }, modes: MODES }
+      : undefined },
     modelResolver: resolver,
     settings: () => settings,
     planRunners: () => planRunners,
@@ -45,6 +47,13 @@ describe('SessionCatalog enabled runners and allowlist', () => {
 
     setSettings({ enabledRunners: ['codex'] });
     expect(catalog.enabledRunners()).toEqual(['codex']);
+  });
+
+  it('excludes retired runner ids from settings and a saved plan catalog', () => {
+    const { catalog } = setup({ settings: { enabledRunners: ['retired-runner', 'codex'] } });
+    expect(catalog.enabledRunners()).toEqual(['codex']);
+    expect(catalog.queryCatalog(['retired-runner', 'claude-code']).runners).toEqual(['claude-code']);
+    expect(catalog.queryCatalog(['retired-runner']).modes).toEqual({});
   });
 
   it('reads the allowlist live, and unset means no restriction', () => {

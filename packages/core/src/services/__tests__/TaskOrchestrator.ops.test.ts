@@ -1,26 +1,26 @@
 import { describe, it, expect, vi } from 'vitest';
 import { TaskOrchestrator, TaskControlError } from '../TaskOrchestrator';
 import { createTask, type Task } from '../../models/Task';
-import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
+import type { IRunner } from '../../interfaces/IRunner';
 import type { IsolationHandoff } from '../../interfaces/IWorktreeIsolation';
-import { fakeConfig, FakeTerminalSession, FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
+import { fakeConfig, FakeRunnerSession, FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 
 function setup(isolation = new FakeWorktreeIsolation()) {
-  const sessions: FakeTerminalSession[] = [];
-  const spawn = vi.fn(async (opts: Parameters<ITerminalRunner['spawn']>[0]) => {
-    const session = new FakeTerminalSession(`s${sessions.length + 1}`, opts.taskId);
+  const sessions: FakeRunnerSession[] = [];
+  const spawn = vi.fn(async (opts: Parameters<IRunner['spawn']>[0]) => {
+    const session = new FakeRunnerSession(`s${sessions.length + 1}`, opts.taskId);
     sessions.push(session);
     return session;
   });
-  const runner: ITerminalRunner = { spawn, stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 };
+  const runner: IRunner = { spawn, stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 };
   const notifications = fakeNotification();
   const orchestrator = TaskOrchestrator.compose({
     config: fakeConfig(),
     notifications,
-    terminalRunner: runner,
-    output: new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } }),
+    runner,
+    output: new BufferedTaskOutputSource(),
     isolation,
     workspaceRoot: () => '/repo',
   });
@@ -32,13 +32,13 @@ function setup(isolation = new FakeWorktreeIsolation()) {
   });
   const spawned = (taskId: string) => spawn.mock.calls.filter(([o]) => o.taskId === taskId).map(([o]) => o);
   const latest = (taskId: string) => sessions.filter((s) => s.taskId === taskId).at(-1)!;
-  const pass = (task: Task) => latest(task.id).emitOutput(`<<<ORDEWELL_DONE_${task.completionMarker}>>>`);
+  const pass = (task: Task) => latest(task.id).reportComplete({ status: 'done', summary: '' });
   const status = (taskId: string) => orchestrator.storeInstance.get(taskId)!.status;
   return { orchestrator, isolation, spawn, spawned, latest, pass, status, notifications, notices, handoffs };
 }
 
 const change = (id: string, order: number, over: Partial<Task> = {}) =>
-  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, completionMarker: `mk-${id}`, ...over });
+  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, ...over });
 const ops = (id: string, order: number, over: Partial<Task> = {}) => change(id, order, { ops: true, ...over });
 
 describe('TaskOrchestrator: ops tasks and merge gates (ADR-0020)', () => {

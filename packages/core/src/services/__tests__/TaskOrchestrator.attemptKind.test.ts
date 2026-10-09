@@ -6,11 +6,11 @@ import { TaskOrchestrator, TaskControlError } from '../TaskOrchestrator';
 import { createTask, type Task } from '../../models/Task';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
-import { fakeConfig, FakeStructuredSession, FakeTerminalSession, FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
+import { fakeConfig, FakeRunnerSession, FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 import type { IConfig } from '../../interfaces/IConfig';
 import type { IsolationMergeResult } from '../../interfaces/IWorktreeIsolation';
-import type { ITerminalRunner, ITerminalSession } from '../../interfaces/ITerminalRunner';
+import type { IRunner, IRunnerSession } from '../../interfaces/IRunner';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 import type { SkillInfo } from '../SkillsService';
 
@@ -36,30 +36,28 @@ function setup(opts: { isolation?: FakeWorktreeIsolation; config?: Partial<IConf
   /** The roots each spawn read skills from. */
   const skillRoots: (readonly string[])[] = [];
   const isolation = opts.isolation ?? new FakeWorktreeIsolation();
-  const sessions: FakeTerminalSession[] = [];
+  const sessions: FakeRunnerSession[] = [];
   const requests: RunnerSpawnOptions[] = [];
   /** Spawns that wait to be let through, by task id. */
   const holds = new Map<string, Promise<void>>();
   const runner = {
-    spawn: vi.fn(async (o: RunnerSpawnOptions): Promise<ITerminalSession> => {
+    spawn: vi.fn(async (o: RunnerSpawnOptions): Promise<IRunnerSession> => {
       requests.push(o);
       await holds.get(o.taskId);
       const id = `s${sessions.length + 1}`;
-      const session = o.transport === 'structured'
-        ? new FakeStructuredSession(id, o.taskId, o.resumeSessionId ?? `native-${o.taskId}-${sessions.length + 1}`)
-        : new FakeTerminalSession(id, o.taskId);
+      const session = new FakeRunnerSession(id, o.taskId, o.resumeSessionId ?? `native-${o.taskId}-${sessions.length + 1}`);
       sessions.push(session);
       return session;
     }),
     stop: vi.fn(),
     stopAll: vi.fn(),
     activeCount: 0,
-  } satisfies ITerminalRunner;
+  } satisfies IRunner;
   const orchestrator = TaskOrchestrator.compose({
     config: fakeConfig({ worktreeIsolation: true, ...opts.config }),
     notifications: fakeNotification(),
-    terminalRunner: runner,
-    output: new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } }),
+    runner,
+    output: new BufferedTaskOutputSource(),
     registry: new RunnerRegistry(),
     isolation,
     workspaceRoot: () => opts.workspace ?? '/repo',
@@ -75,7 +73,7 @@ function setup(opts: { isolation?: FakeWorktreeIsolation; config?: Partial<IConf
   orchestrator.subscribe({ onIsolationNotice: ({ message }) => notices.push(message) });
   const spawned = (taskId: string) => requests.filter((r) => r.taskId === taskId);
   const latest = (taskId: string) => sessions.filter((s) => s.taskId === taskId).at(-1)!;
-  const pass = (task: Task) => latest(task.id).emitOutput(`<<<ORDEWELL_DONE_${task.completionMarker}>>>`);
+  const pass = (task: Task) => latest(task.id).reportComplete({ status: 'done', summary: '' });
   const status = (taskId: string) => orchestrator.storeInstance.get(taskId)!.status;
   const ops = () => isolation.calls.map((c) => c.op);
   const hold = (taskId: string): (() => void) => {
@@ -87,7 +85,7 @@ function setup(opts: { isolation?: FakeWorktreeIsolation; config?: Partial<IConf
 }
 
 const change = (id: string, order: number, over: Partial<Task> = {}) =>
-  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, completionMarker: `mk-${id}`, ...over });
+  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, ...over });
 const opsTask = (id: string, order: number, over: Partial<Task> = {}) => change(id, order, { ops: true, ...over });
 
 /** Run a task to a pass on its own, so it can be continued. */
@@ -148,7 +146,7 @@ describe('attempt kinds, as the orchestrator runs them', () => {
 
       await env.orchestrator.continueTask('c1', 'one more thing');
 
-      expect(env.spawned('c1')[1]).toMatchObject({ cwd: '/fake-worktrees/run1/1-c1', transport: 'structured' });
+      expect(env.spawned('c1')[1]).toMatchObject({ cwd: '/fake-worktrees/run1/1-c1' });
       expect(env.isolation.taskIdsFor('prepare')).toEqual(['c1', 'c1']);
     });
 
@@ -160,7 +158,7 @@ describe('attempt kinds, as the orchestrator runs them', () => {
 
       await env.orchestrator.continueTask('o1', 'check the pipeline again');
 
-      expect(env.spawned('o1')[1]).toMatchObject({ cwd: '/repo', transport: 'structured' });
+      expect(env.spawned('o1')[1]).toMatchObject({ cwd: '/repo' });
       expect(env.isolation.taskIdsFor('prepare')).toEqual([]);
     });
   });

@@ -1,21 +1,21 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
-import { FakeTerminalSession, makeSession, testWorkspace, taskOf, saves } from './sessionTestKit';
-import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
+import { FakeRunnerSession, makeSession, testWorkspace, taskOf, saves } from './sessionTestKit';
+import type { IRunner } from '../../interfaces/IRunner';
 import type { ModelResolver } from '../ModelResolver';
 import type { SessionMessage } from '../SessionMessage';
 
 /** A runner double that records the order tasks were spawned in. */
-function recordingRunner(spawned: string[]): ITerminalRunner {
+function recordingRunner(spawned: string[]): IRunner {
   return {
     spawn: vi.fn(async ({ taskId }: { taskId: string }) => {
       spawned.push(taskId);
-      return new FakeTerminalSession(`s-${taskId}`, taskId);
+      return new FakeRunnerSession(`s-${taskId}`, taskId);
     }),
     stop: vi.fn(),
     stopAll: vi.fn(),
     activeCount: 0,
-  } as unknown as ITerminalRunner;
+  } as unknown as IRunner;
 }
 
 function planWithTasks(): LegacyPlanState {

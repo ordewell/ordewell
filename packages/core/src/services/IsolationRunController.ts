@@ -42,11 +42,6 @@ export interface IsolationRunListener {
   handoff(handoff: IsolationHandoff): void;
   /** Already said through the notifications; also for a surface that shows no toasts. */
   notice(level: IsolationNoticeLevel, message: string): void;
-  /**
-   * These tasks' worktrees are about to be removed. An agent left running in
-   * one would sit in a deleted directory, so it has to go first.
-   */
-  releasing(taskIds: string[]): void;
 }
 
 export interface IsolationRunControllerDeps {
@@ -391,7 +386,6 @@ export class IsolationRunController {
     await landing;
     const run = this.run;
     if (!run?.tasks[taskId]) return;
-    if (!opts.keep) this.listener.releasing([taskId]);
     try {
       this.report(await this.isolation.release(run, taskId, opts));
     } catch (err) {
@@ -538,7 +532,6 @@ export class IsolationRunController {
   async cleanup(): Promise<void> {
     const run = this.requireRun();
     this.refuseWhileLive(run);
-    this.listener.releasing(Object.keys(run.tasks));
     this.report(await this.isolation.discard(run, { integration: 'keep' }));
     this.listener.changed();
   }
@@ -550,7 +543,6 @@ export class IsolationRunController {
   async discard(): Promise<void> {
     const run = this.requireRun();
     this.refuseWhileLive(run);
-    this.listener.releasing(Object.keys(run.tasks));
     this.report(await this.isolation.discard(run, { integration: 'delete' }));
     this.forget();
   }
@@ -586,7 +578,6 @@ export class IsolationRunController {
       this.tell('info', `The run is not cleared up: ${why.join(', and ')}, so ${one ? 'its worktree stays' : 'their worktrees stay'}, and so do the run's branches.`);
       return;
     }
-    this.listener.releasing(Object.keys(run.tasks));
     try {
       this.report(await this.isolation.discard(run, { integration: 'delete-merged' }));
     } catch (err) {

@@ -340,21 +340,21 @@ describe('plan pane', () => {
     expect(press(s, 'up').state.selectedTask).toBe(0);
   });
 
-  it('enter expands the selected task, seeding an editable prompt draft', () => {
-    const expanded = press(planned, 'enter').state;
+  it('right expands the selected task, seeding an editable prompt draft', () => {
+    const expanded = press(planned, 'right').state;
     expect(expanded.expandedTaskId).toBe('a');
     expect(expanded.taskEditor?.text).toBe('First');
   });
 
   it('escape collapses the expanded task without saving', () => {
-    const expanded = press(planned, 'enter').state;
+    const expanded = press(planned, 'right').state;
     const collapsed = press(expanded, 'escape').state;
     expect(collapsed.expandedTaskId).toBeNull();
     expect(collapsed.taskEditor).toBeNull();
   });
 
-  it('enter again saves the edited prompt and collapses', () => {
-    const expanded = press(planned, 'enter').state;
+  it('enter saves the edited prompt and collapses', () => {
+    const expanded = press(planned, 'right').state;
     const typed = press(expanded, 'char', '!').state;
     expect(typed.taskEditor?.text).toBe('First!');
     const saved = press(typed, 'enter');
@@ -366,7 +366,7 @@ describe('plan pane', () => {
   });
 
   it('up/down while a task is expanded neither collapses it nor moves the list cursor (mouse wheel arrives as arrow keys)', () => {
-    const expanded = press(planned, 'enter').state;
+    const expanded = press(planned, 'right').state;
     const scrolledDown = press(expanded, 'down').state;
     expect(scrolledDown.expandedTaskId).toBe('a');
     expect(scrolledDown.selectedTask).toBe(0);
@@ -376,7 +376,7 @@ describe('plan pane', () => {
   });
 
   it('scrollup in plan pane does NOT collapse the expanded task', () => {
-    const expanded = press(tallPlan(), 'enter').state;
+    const expanded = press(tallPlan(), 'right').state;
     expect(expanded.expandedTaskId).toBe('t0');
     const scrolledDown = press(expanded, 'scrolldown').state;
     const scrolled = press(scrolledDown, 'scrollup').state;
@@ -385,7 +385,7 @@ describe('plan pane', () => {
   });
 
   it('shift-enter in the task editor inserts a newline without committing', () => {
-    const expanded = press(planned, 'enter').state;
+    const expanded = press(planned, 'right').state;
     const result = press(expanded, 'shift-enter');
     expect(result.state.taskEditor?.text).toBe('First\n');
     expect(result.state.expandedTaskId).toBe('a');
@@ -393,7 +393,7 @@ describe('plan pane', () => {
   });
 
   it('shift-enter at cursor in middle of text in task editor inserts newline at cursor', () => {
-    const expanded = press(planned, 'enter').state;
+    const expanded = press(planned, 'right').state;
     const moved = { ...expanded, taskEditor: { ...expanded.taskEditor!, cursor: 2 } };
     const result = press(moved, 'shift-enter');
     expect(result.state.taskEditor?.text).toBe('Fi\nrst');
@@ -402,7 +402,7 @@ describe('plan pane', () => {
   });
 
   it('alt-enter in the task editor also inserts a newline without committing', () => {
-    const expanded = press(planned, 'enter').state;
+    const expanded = press(planned, 'right').state;
     const result = press(expanded, 'alt-enter');
     expect(result.state.taskEditor?.text).toBe('First\n');
     expect(result.state.expandedTaskId).toBe('a');
@@ -424,7 +424,7 @@ describe('plan pane', () => {
     // Wide enough that the plan pane is actually rendered — at cols: 20 it is
     // suppressed entirely, so the wrap width under test would be degenerate.
     const state = initialState({ sessionId: 's1', tasks: longTasks, focus: 'plan', cols: 80 });
-    const expanded = press(state, 'enter').state;
+    const expanded = press(state, 'right').state;
     const startCursor = expanded.taskEditor!.cursor;
     expect(startCursor).toBe(expanded.taskEditor!.text.length);
 
@@ -437,7 +437,7 @@ describe('plan pane', () => {
   });
 
   it('pageup/pagedown scroll the plan pane while a task is expanded', () => {
-    const expanded = press(tallPlan(), 'enter').state;
+    const expanded = press(tallPlan(), 'right').state;
     const paged = press(expanded, 'pagedown').state;
     expect(paged.expandedTaskId).toBe('t0');
     expect(paged.planScroll!).toBeGreaterThan(0);
@@ -613,10 +613,10 @@ describe('plan pane', () => {
     expect(asked.state.overlay).toMatchObject({ kind: 'confirm', action: { kind: 'remove-task', taskId: 'a' } });
   });
 
-  it('t opens a terminal on the selected task', () => {
+  it('enter opens the log on the selected task', () => {
     const s = { ...planned, selectedTask: 1 };
-    expect(press(s, 'char', 't').effects).toEqual([
-      { type: 'openTaskTerminal', sessionId: 's1', taskId: 'b' },
+    expect(press(s, 'enter').effects).toEqual([
+      { type: 'openTaskLog', sessionId: 's1', taskId: 'b' },
     ]);
   });
 

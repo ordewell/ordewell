@@ -2,41 +2,7 @@ import type { AgentEvent } from '../services/harness/AgentAdapter';
 import type { CheckpointAnswer, TaskCompleteArgs } from '../services/mcp/tools';
 import type { ApprovalDecision } from './IApproval';
 import type { TaskSkillSnapshot } from '../models/Task';
-
-export interface ITerminalSession {
-  id: string;
-  taskId: string;
-  onOutput(callback: (text: string) => void): void;
-  onExit(callback: (code: number) => void): void;
-  kill(): void;
-  getOutput(): string;
-  write(text: string): void;
-  /**
-   * True when the session runs the agent as a raw-mode TUI (a real PTY for the
-   * VS Code terminal, a tmux window). Such a surface submits an input line on
-   * the Enter keystroke (`\r`), so a synchronized resume token terminated with
-   * `\n` only types the line and never sends it. A line-oriented piped session
-   * (`defaultInteractive = false`) leaves this false and accepts `\n`.
-   */
-  readonly interactive?: boolean;
-  /**
-   * Optional transport-level control channel: PTY resize requests for a session
-   * whose runner renders a TUI. Absent on transports without a resizable PTY
-   * (a plain piped subprocess); surfaces must feature-detect before calling.
-   */
-  writeControl?(text: string): void;
-}
-
-/**
- * How Ordewell drives a task's runner (ADR-0018): through its screen and
- * keyboard, or through its programmatic protocol.
- */
-export type RunnerTransport = 'terminal' | 'structured';
-
-export function isRunnerTransport(value: unknown): value is RunnerTransport {
-  return value === 'terminal' || value === 'structured';
-}
-
+import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 /** How a structured turn ended. `failed` carries the agent's own words in the preceding `error` event. */
 export type StructuredTurnEnd = 'completed' | 'interrupted' | 'failed';
 
@@ -80,13 +46,14 @@ export interface QueuedTaskMessage {
   forced?: boolean;
 }
 
-/**
- * What a session driven over its runner's protocol can do that a terminal
- * cannot (ADR-0018, S2). Optional: callers feature-detect it with
- * {@link isStructuredSession}, and code that does not look behaves as it did.
- */
-export interface StructuredSessionCapability {
-  readonly transport: 'structured';
+export interface IRunnerSession {
+  id: string;
+  taskId: string;
+  onOutput(callback: (text: string) => void): void;
+  onExit(callback: (code: number) => void): void;
+  kill(): void;
+  getOutput(): string;
+  write(text: string): void;
   /** `working` while a turn runs; `idle` between turns, waiting for a message. */
   turnState(): 'working' | 'idle';
   onTurnEnd(listener: (reason: StructuredTurnEnd) => void): void;
@@ -125,7 +92,7 @@ export interface StructuredSessionCapability {
   answerPermission(id: string, decision: ApprovalDecision): boolean;
   /**
    * The runner's `task_complete` calls on this attempt's token (ADR-0022):
-   * completion evidence beside the marker, for `VerdictEngine` to weigh.
+   * the only completion evidence, for `VerdictEngine` to weigh.
    */
   onTaskComplete(listener: (report: TaskCompleteArgs) => void): void;
   /**
@@ -136,13 +103,7 @@ export interface StructuredSessionCapability {
   onToolCheckpoint(handler: (question: string, signal: AbortSignal) => Promise<CheckpointAnswer>): void;
 }
 
-export function isStructuredSession(session: ITerminalSession): session is ITerminalSession & StructuredSessionCapability {
-  return (session as Partial<StructuredSessionCapability>).transport === 'structured';
-}
-
-import type { RunnerRegistry } from '../plugins/RunnerRegistry';
-
-export interface ITerminalRunner {
+export interface IRunner {
   spawn(opts: {
     taskId: string;
     runner: string;
@@ -151,7 +112,6 @@ export interface ITerminalRunner {
     thinkingEffort?: string;
     modelVariants?: string[];
     mode?: string;
-    headless?: boolean;
     cwd: string;
     registry?: RunnerRegistry;
     /** Task order and title — surfaces use these to label task_started/output events. */
@@ -159,8 +119,8 @@ export interface ITerminalRunner {
     title?: string;
     /**
      * The owning plan session. Task ids are only unique within one plan, so
-     * transports that key OS resources by task (tmux windows, log files) need
-     * this to keep two plans' identically named tasks apart.
+     * a runner that keys anything by task (the attempt's MCP token) needs this
+     * to keep two plans' identically named tasks apart.
      */
     planSessionId?: string;
     /**
@@ -168,16 +128,7 @@ export interface ITerminalRunner {
      * manifest's env still wins over them.
      */
     env?: Record<string, string>;
-    /**
-     * The transport the plan asks for (ADR-0018, S1). A router decides per
-     * task whether the runner can honour it; any other runner ignores it.
-     */
-    transport?: RunnerTransport;
-    /**
-     * The runner's own session to continue in (ADR-0018, K1). Only the
-     * structured transport can honour it; a terminal session comes back fresh,
-     * which is why a continue refuses one.
-     */
+    /** The runner's own session to continue in (ADR-0018, K1). */
     resumeSessionId?: string;
     /**
      * Which run of the task this is, from 1. A structured runner binds the
@@ -189,7 +140,9 @@ export interface ITerminalRunner {
      * attempt. Runners ignore it; it is for what wraps one to record (task logs).
      */
     skills?: readonly TaskSkillSnapshot[];
-  }): Promise<ITerminalSession>;
+    /** Something the user should know about how the spawn went that did not stop it — a respawn, most often. */
+    onNotice?: (message: string) => void;
+  }): Promise<IRunnerSession>;
 
   stop(sessionId: string): void;
   stopAll(): void;

@@ -4474,26 +4474,6 @@ body {
   color: var(--orange);
 }
 
-.task-transport-badge {
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 3px;
-  margin-left: 6px;
-  font-weight: 500;
-  flex-shrink: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  background: var(--purple-subtle);
-  color: var(--purple);
-}
-
-.task-transport-badge.fallback {
-  background: var(--orange-subtle);
-  color: var(--orange);
-}
-
 .task-isolation-repaired-note {
   color: var(--orange);
 }

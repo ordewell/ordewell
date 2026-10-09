@@ -1,5 +1,12 @@
 import { ORDEWELL_MCP_SERVER_NAME, PLANNER_TOOLS, TASK_TOOLS } from '../mcp';
 
+export class McpAttachError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'McpAttachError';
+  }
+}
+
 /** Which token's tools a runner is handed (ADR-0022, A1). */
 export type OrdewellToolRole = 'task' | 'planner';
 

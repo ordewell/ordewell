@@ -1,43 +1,13 @@
-import type { RunnerPluginManifest } from '../types';
+import type { RunnerManifest } from '../types';
 
-export const CLAUDE_CODE_MANIFEST: RunnerPluginManifest = {
+export const CLAUDE_CODE_MANIFEST: RunnerManifest = {
   name: 'claude-code',
   displayName: 'Claude Code',
-  description: 'Anthropic Claude Code - AI coding assistant in your terminal',
-  version: '1.0.0',
 
-  runner: {
-    command: 'claude',
-    argsTemplate: [
-      '{{if model}}', '--model', '{{model}}', '{{/if}}',
-      '{{if thinking}}', '{{feature:thinkingFlags}}', '{{/if}}',
-      '--permission-mode', '{{feature:permissionModeVal}}',
-      '{{if headless}}', '{{feature:headless}}', '{{/if}}',
-      '{{prompt}}',
-    ],
-    promptInArgs: true,
-    // Interactive sessions show these even with --dangerously-skip-permissions:
-    // a folder Claude Code has never been trusted in (a fresh clone, or a repo
-    // only ever planned in headlessly), and the first Bypass Permissions run.
-    blockingPrompts: [
-      { phrase: 'Is this a project you created or one you trust', asks: 'whether to trust the task\'s folder' },
-      { phrase: 'Do you trust the files in this folder', asks: 'whether to trust the task\'s folder' },
-      { phrase: 'running in Bypass Permissions mode', asks: 'you to accept Bypass Permissions mode' },
-    ],
-  },
+  runner: { command: 'claude' },
 
   features: {
-    modelSelection: true,
-    thinkingEffort: true,
-    planMode: true,
-    planModeFlag: '--permission-mode',
-    headlessFlag: '--dangerously-skip-permissions',
-    thinkingFlag: '--thinking',
-    thinkingValueEnabled: 'enabled',
-    thinkingValueDisabled: 'disabled',
-    thinkingValueAdaptive: 'adaptive',
     permissionModeValues: {
-      // Map mode IDs to --permission-mode CLI values
       'default': 'default',
       'auto': 'auto',
       'acceptEdits': 'acceptEdits',

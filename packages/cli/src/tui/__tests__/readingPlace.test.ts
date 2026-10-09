@@ -58,7 +58,7 @@ describe('a task view while its log streams', () => {
     sessionId: 's1',
     focus: 'chat',
     scroll,
-    tasks: [{ id: 't1', order: 1, title: 'Do it', type: 'ai', status: 'in_progress', dependencies: [], transport: { kind: 'structured' } }],
+    tasks: [{ id: 't1', order: 1, title: 'Do it', type: 'ai', status: 'in_progress', dependencies: [] }],
     taskView: {
       taskId: 't1', view: replayTaskLog([{ type: 'turn_start', message: 'go' }, ...lines(0, 60)]),
       attempts: [1], attempt: 1, pending: [], loaded: true, followLatest: true, queuedIndex: 0,

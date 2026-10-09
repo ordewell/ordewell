@@ -21,7 +21,7 @@ export * from './interfaces/IConfig';
 export { BaseConfig, normalizeGeminiModel } from './interfaces/BaseConfig';
 export { EnvConfig } from './interfaces/EnvConfig';
 export * from './interfaces/INotification';
-export * from './interfaces/ITerminalRunner';
+export * from './interfaces/IRunner';
 export * from './interfaces/IWorktreeIsolation';
 export { describeMergeResult } from './services/mergeResultNotice';
 export { createWorktreeIsolation } from './services/GitWorktreeIsolation';
@@ -66,7 +66,7 @@ export type { IAiService, ConversationRequest, ConversationTurn } from './servic
 export { CliAgentAiService } from './services/harness/CliAgentAiService';
 export type { CliAgentAiServiceDeps } from './services/harness/CliAgentAiService';
 export { LineBuffer, TaskModeUnsupportedError } from './services/harness/AgentAdapter';
-export type { AgentAdapter, AgentEvent, AgentStartOptions, PlannerStartOptions, TaskStartOptions, TaskRunnerFlags, TaskModeAgentAdapter, AgentProcessDeps, AgentAdapterFactory } from './services/harness/AgentAdapter';
+export type { SpawnFn, AgentAdapter, AgentEvent, AgentStartOptions, PlannerStartOptions, TaskStartOptions, TaskRunnerFlags, TaskModeAgentAdapter, AgentProcessDeps, AgentAdapterFactory } from './services/harness/AgentAdapter';
 export { supportsTaskMode, createTaskAdapter } from './services/harness/connectors';
 export { StdioAgentAdapter } from './services/harness/StdioAgentAdapter';
 export type { SpawnSpec } from './services/harness/StdioAgentAdapter';
@@ -127,7 +127,6 @@ export { VerdictEngine } from './services/VerdictEngine';
 export type { VerdictListener, CheckpointListener } from './services/VerdictEngine';
 export * from './interfaces/TaskOutputSource';
 export { BufferedTaskOutputSource } from './services/BufferedTaskOutputSource';
-export { HomeTranscriptReader } from './services/transcriptCapture';
 export * from './services/ModeResolver';
 export * from './services/ModelAllowlistResolver';
 export * from './services/TaskRetarget';
@@ -136,17 +135,11 @@ export * from './services/JsonExtractor';
 export * from './services/PartialPlanParser';
 export * from './services/PlanValidator';
 export * from './services/PlanRepair';
-export * from './services/buildRunnerArgs';
 export * from './services/promptAugment';
-export { HeadlessRunner, HeadlessSession } from './services/HeadlessRunner';
-export type { HeadlessRunnerDeps, PreparedLaunch, RunnerSpawnOptions } from './services/HeadlessRunner';
-export { TmuxRunner } from './services/TmuxRunner';
-export type { TmuxRunnerDeps, ExecFileFn } from './services/TmuxRunner';
-export { AbstractTerminalSession, AbstractRunner } from './services/AbstractRunner';
+export { AbstractRunnerSession, AbstractRunner } from './services/AbstractRunner';
+export type { RunnerSpawnOptions } from './services/AbstractRunner';
 export { StructuredRunner, StructuredSession } from './services/StructuredRunner';
 export type { StructuredRunnerDeps } from './services/StructuredRunner';
-export { TransportRouter, routeTransport } from './services/TransportRouter';
-export type { TransportRoute } from './services/TransportRouter';
 export { continuability, canContinue } from './services/continuation';
 export type { Continuability } from './services/continuation';
 export { TaskLogRecorder } from './services/TaskLogRecorder';
@@ -155,7 +148,6 @@ export * from './services/mcp';
 export * from './utils/shell';
 export {
   planDirectLaunch,
-  planShellLaunch,
   windowsCommandLine,
   CommandLineTooLongError,
   EmbeddedNewlineError,
@@ -190,19 +182,16 @@ export {
   researchShellWarning,
 } from './services/researchShell';
 export type { ResearchShell, ResearchShellDeps, ShellDialect } from './services/researchShell';
-export { tmuxSessionName, tmuxSocketName, tmuxWindowName, hasTmux, clipboardCopyCommand } from './utils/tmux';
-export type { ProbeFn, HasBinFn } from './utils/tmux';
-export { RunnerRegistry, isReservedRunnerName } from './plugins/RunnerRegistry';
-export type { PluginCloneFn } from './plugins/RunnerRegistry';
-export { FsPluginStore } from './plugins/FsPluginStore';
-export { isValidManifest } from './plugins/manifestValidation';
-export { isPlainPluginName, assertPlainPluginName, resolvePluginInstallDir, PLUGIN_NAME_PATTERN } from './plugins/pluginNames';
-export { assertInstallablePluginUrl, classifyPluginSource, ALLOWED_PLUGIN_HOSTS } from './plugins/pluginSource';
-export type { PluginSource } from './plugins/pluginSource';
-export { resolveArgs, resolveTaskRunnerFlags } from './plugins/resolveArgs';
+export { tmuxSessionName, tmuxSocketName, tmuxWindowName, hasTmux } from './utils/tmux';
+export type { ProbeFn } from './utils/tmux';
+export { clipboardCopyCommand } from './utils/clipboard';
+export type { HasBinFn } from './utils/clipboard';
+export { RunnerRegistry } from './plugins/RunnerRegistry';
+export { removedPluginNotice } from './plugins/removedPluginNotice';
+export { resolveTaskRunnerFlags } from './plugins/resolveArgs';
 export { CLAUDE_CODE_MANIFEST } from './plugins/builtin/claude-code.manifest';
 export { OPENCODE_MANIFEST } from './plugins/builtin/opencode.manifest';
-export type { RunnerPluginManifest, RunnerInvocation, PluginEntry, ResolveContext, IPluginStore, PluginRunnerDef, BlockingPrompt, PluginFeatures, PluginModelDiscovery, PluginMode, DiscoveryCommand } from './plugins/types';
+export type { RunnerManifest, RunnerEntry, RunnerFeatures, RunnerModelDiscovery, RunnerMode, DiscoveryCommand } from './plugins/types';
 export * from './utils/fsHelpers';
 export * from './utils/stateStore';
 export * from './utils/sessionStore';

@@ -59,7 +59,6 @@ function task(order: number, title: string): Task {
     dependencies: [],
     subtasks: [],
     assignedRunner: 'claude-code',
-    completionMarker: 'DONE',
   };
 }
 
@@ -2616,7 +2615,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
         }
         const { stdout, stderr } = await execFileAsync(file, args, { cwd: opts.cwd, env: opts.env });
         return { stdout: String(stdout), stderr: String(stderr) };
-      };
+  };
       const iso = create({ config: fakeConfig({ worktreeIsolation: true }), execFileImpl: exec });
       const earlier = await iso.startRun(dir);
       await iso.discard(earlier, { integration: 'keep' });

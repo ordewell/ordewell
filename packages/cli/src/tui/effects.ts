@@ -35,7 +35,7 @@ export type OrdewellApi = Pick<ApiClient,
 export interface EffectDeps {
   api: OrdewellApi;
   workspace: string;
-  /** The local daemon's port — also the tmux session a task's terminal lives in. */
+  /** The local daemon's port. */
   port: number;
   dispatch(action: Action): void;
   newSessionId(): string;
@@ -50,8 +50,6 @@ export interface EffectDeps {
    * onward, with no way back short of quitting.
    */
   reviveDaemon(): Promise<boolean>;
-  /** Opens a real OS terminal attached to a task's tmux window, if it has one. */
-  openTerminal(sessionId: string, taskId: string): Promise<{ ok: boolean; message: string }>;
   /** Hands the mouse to the app (wheel events) or back to the terminal (drag-select). */
   setMouseCapture(enabled: boolean): void;
   /**
@@ -275,19 +273,6 @@ async function perform(effect: Effect, deps: EffectDeps): Promise<void> {
       if (effect.answer === 'approve') await api.approveTaskCheckpoint(effect.sessionId, effect.taskId);
       else await api.rejectTaskCheckpoint(effect.sessionId, effect.taskId, effect.reason);
       return;
-
-    // A task with a saved log ran structured, whatever its `transport` says
-    // after a reload; it has no tmux window, so open the log rather than fail.
-    case 'openTaskTerminal': {
-      const saved = await api.getTaskLogAttempts(effect.sessionId, effect.taskId, workspace).catch(() => []);
-      if (saved.length > 0) {
-        dispatch({ type: 'taskViewRequested', sessionId: effect.sessionId, taskId: effect.taskId });
-        return;
-      }
-      const result = await deps.openTerminal(effect.sessionId, effect.taskId);
-      dispatch(result.ok ? { type: 'notice', message: result.message } : { type: 'failed', message: result.message });
-      return;
-    }
 
     // The saved log is read off disk (ADR-0018, P1) so the view opens with the
     // task's history; the live `task_log` stream then catches it up in place.

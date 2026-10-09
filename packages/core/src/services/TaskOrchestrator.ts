@@ -1,8 +1,9 @@
+import { McpAttachError } from './harness/ordewellBinding';
 import * as path from 'path';
 import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, QueuedMessage, RunnerId, SkillLoad, DEFAULT_RUNNERS, flattenTasksWithParents, taskOrderLabel } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
 import { INotification } from '../interfaces/INotification';
-import { isStructuredSession, type ITerminalRunner, type ITerminalSession, type QueuedTaskMessage, type RunnerTransport, type StructuredSessionCapability } from '../interfaces/ITerminalRunner';
+import type { IRunner, IRunnerSession, QueuedTaskMessage } from '../interfaces/IRunner';
 import { summarizeOutput } from './promptAugment';
 import { VerdictEngine } from './VerdictEngine';
 import { BufferedTaskOutputSource } from './BufferedTaskOutputSource';
@@ -19,19 +20,18 @@ import { createWorktreeIsolation } from './GitWorktreeIsolation';
 import { SELF_REPO } from './isolationRecord';
 import { IsolationRunController } from './IsolationRunController';
 import { completesTask, Landing, type LandingMessage, type LandingOutcome, type UnlandedOutcome } from './Landing';
-import { watchBlockingPrompts } from './blockingPrompts';
-import { classifyRunnerStop, keepsTerminalReadable, stopsRunner, LingeringRunners, type AttemptEnd } from './runnerExit';
+import { classifyRunnerStop, stopsRunner, type AttemptEnd } from './runnerExit';
 import { MessageQueue } from './MessageQueue';
 import { mergeGate, selectReadyTasks, type Readiness } from './readiness';
 import {
-  attemptCwd, attemptPrompt, attemptTransport, checksTree, classifyAttempt, decidesIsolation, mergeExcludes, takesSkills,
+  attemptCwd, attemptPrompt, checksTree, classifyAttempt, decidesIsolation, mergeExcludes, takesSkills,
   type AttemptKind, type Continuation,
 } from './attemptKind';
 import { resolveTaskSkills, TaskSkillsError, type SkillLookup } from './taskSkills';
 import { SkillsService, workspaceSkillRoots } from './SkillsService';
 import { capConflictFiles } from './conflictFiles';
 import { resolveWorkspaceEnv, type WorkspaceEnv } from './workspaceEnv';
-import { givesCompletionTool, routeTransport } from './TransportRouter';
+import { supportsTaskMode } from './harness/connectors';
 import { continuability } from './continuation';
 import { quotedList } from '../utils/quotedList';
 import type { MergeGateView } from './SessionMessage';
@@ -73,8 +73,8 @@ export interface OrchestratorObserver {
 }
 
 /**
- * A message or interrupt a task cannot take: it is not running, it runs on the
- * terminal transport, or it is waiting on something a message does not answer.
+ * A message or interrupt a task cannot take: it is not running, or it is
+ * waiting on something a message does not answer.
  * The request is wrong, not the orchestrator, so a surface says why.
  */
 export class TaskControlError extends Error {
@@ -84,11 +84,11 @@ export class TaskControlError extends Error {
   }
 }
 
-/** How a refused {@link TaskControlError} names what was asked: "no turn to …", "cannot take … from Ordewell". */
+/** How a refused {@link TaskControlError} names what was asked: "no turn to …". */
 const CONTROL_WORDS = {
-  message: { noTurn: 'send a message to', terminal: 'a message' },
-  interrupt: { noTurn: 'interrupt', terminal: 'an interrupt' },
-  force: { noTurn: 'send a message to', terminal: 'a message sent now' },
+  message: 'send a message to',
+  interrupt: 'interrupt',
+  force: 'send a message to',
 } as const;
 
 /**
@@ -108,7 +108,7 @@ interface TaskAttempt {
    * landing says so.
    */
   phase: AttemptPhase;
-  session: ITerminalSession | null;
+  session: IRunnerSession | null;
   readonly runner: string;
   /** Null until {@link attemptCwd} settles. */
   cwd: string | null;
@@ -123,8 +123,8 @@ interface TaskAttempt {
   readonly startedAt: string;
   /**
    * Set as its verdict arrives, before the verdict is applied: the turn that
-   * carried the marker ends while the verdict is still settling, and must not
-   * read as waiting for input.
+   * called `task_complete` ends while the verdict is still settling, and must
+   * not read as waiting for input.
    */
   decided: boolean;
   /** The task skills put in this attempt's prompt, as read from where it runs. */
@@ -154,7 +154,7 @@ export interface TaskAttemptSnapshot {
 export interface TaskOrchestratorDeps {
   config: IConfig;
   notifications: INotification;
-  terminalRunner: ITerminalRunner;
+  runner: IRunner;
   store: PlanStore;
   output: TaskOutputSource;
   /** The plan's isolation run and the open run's lifecycle (ADR-0013). */
@@ -168,12 +168,6 @@ export interface TaskOrchestratorDeps {
   workspaceEnv: (cwd: string) => Promise<WorkspaceEnv>;
   /** The skill catalog over workspace roots, as {@link workspaceSkillRoots} orders them — read at each spawn. */
   skillsAt: (roots: readonly string[]) => SkillLookup;
-  /**
-   * What a fresh attempt asks its runner for (ADR-0018). Hosts take the
-   * structured default; `routeTransport` still sends a runner with no
-   * connector to the terminal.
-   */
-  transport: RunnerTransport;
   /** What the task's last saved attempt did, or null when it left no log (ADR-0020). */
   previousAttemptFromLog: (taskId: string) => string | null;
 }
@@ -186,7 +180,7 @@ export interface TaskOrchestratorDeps {
 export interface TaskOrchestratorOptions {
   config: IConfig;
   notifications: INotification;
-  terminalRunner: ITerminalRunner;
+  runner: IRunner;
   store?: PlanStore;
   output?: TaskOutputSource;
   isolation?: IWorktreeIsolation;
@@ -194,8 +188,6 @@ export interface TaskOrchestratorOptions {
   workspaceRoot?: () => string;
   workspaceEnv?: (cwd: string) => Promise<WorkspaceEnv>;
   skillsAt?: (roots: readonly string[]) => SkillLookup;
-  /** Tests whose fake sessions emit only the completion marker ask for `terminal`. */
-  transport?: RunnerTransport;
   previousAttemptFromLog?: (taskId: string) => string | null;
 }
 
@@ -205,14 +197,14 @@ export interface TaskOrchestratorOptions {
  * All task-shaped state — the plan tree, the flat index, the completed set
  * — lives in {@link PlanStore}, injected at construction. The orchestrator
  * calls `store.markCompleted(id)` / `store.markFailed(id)` instead of mutating
- * task state directly. A task completes only after the runner emits its
- * per-task completion marker; process exit without that evidence is a visible
- * failure and does not unblock dependent work.
+ * task state directly. A task completes only after the runner reports it done
+ * through `task_complete` on its attempt's token; process exit without that
+ * evidence is a visible failure and does not unblock dependent work.
  */
 export class TaskOrchestrator {
   private config: IConfig;
   private notifications: INotification;
-  private terminalRunner: ITerminalRunner;
+  private runner: IRunner;
   private store: PlanStore;
   private output: TaskOutputSource;
   private attempts = new Map<string, TaskAttempt>();
@@ -228,8 +220,6 @@ export class TaskOrchestrator {
    */
   private retryCounts = new Map<string, number>();
   private spawnCounts = new Map<string, number>();
-  /** The terminal a verdict left open, by task; see {@link LingeringRunners}. */
-  private lingering = new LingeringRunners((sessionId) => this.terminalRunner.stop(sessionId));
   /**
    * A full-plan run a failure paused. Retrying the failed task is the explicit
    * resume the pause waits for — without this a retry only reset the task to
@@ -271,13 +261,12 @@ export class TaskOrchestrator {
   private workspaceRootFn: () => string;
   private observers: OrchestratorObserver[] = [];
   private skillsAt: (roots: readonly string[]) => SkillLookup;
-  private transport: RunnerTransport;
   private previousAttemptFromLog: (taskId: string) => string | null;
 
   constructor(deps: TaskOrchestratorDeps) {
     this.config = deps.config;
     this.notifications = deps.notifications;
-    this.terminalRunner = deps.terminalRunner;
+    this.runner = deps.runner;
     this.store = deps.store;
     this.output = deps.output;
     this.runs = deps.runs;
@@ -286,7 +275,6 @@ export class TaskOrchestrator {
     this.workspaceRootFn = deps.workspaceRoot;
     this.workspaceEnv = deps.workspaceEnv;
     this.skillsAt = deps.skillsAt;
-    this.transport = deps.transport;
     this.previousAttemptFromLog = deps.previousAttemptFromLog;
 
     this.store.onMutate = () => this.emit('onTaskChanged');
@@ -312,7 +300,7 @@ export class TaskOrchestrator {
   /**
    * The composition root: resolves every optional collaborator and wires the
    * isolation listener that the constructor cannot, because it needs the
-   * instance's own (private) emit and lingering seams. Nothing else in the
+   * instance's own (private) emit seam. Nothing else in the
    * codebase constructs an orchestrator, so this is the one place defaults
    * live — a host or test supplies what it cares about and gets the rest.
    */
@@ -333,7 +321,6 @@ export class TaskOrchestrator {
         blocked: (repos) => orchestrator.emit('onIsolationBlocked', { reason: 'dirty', repos }),
         handoff: (handoff) => orchestrator.emit('onIsolationHandoff', handoff),
         notice: (level, message) => orchestrator.emit('onIsolationNotice', { level, message }),
-        releasing: (taskIds) => { for (const taskId of taskIds) orchestrator.lingering.close(taskId); },
       },
       liveTasks: (): ReadonlySet<string> => orchestrator.liveTaskIds(),
     });
@@ -341,7 +328,7 @@ export class TaskOrchestrator {
     const orchestrator = new TaskOrchestrator({
       config: options.config,
       notifications: options.notifications,
-      terminalRunner: options.terminalRunner,
+      runner: options.runner,
       store,
       output,
       runs,
@@ -350,7 +337,6 @@ export class TaskOrchestrator {
       workspaceRoot,
       workspaceEnv: options.workspaceEnv ?? ((cwd) => resolveWorkspaceEnv(cwd)),
       skillsAt: options.skillsAt ?? ((roots) => new SkillsService(roots)),
-      transport: options.transport ?? 'structured',
       previousAttemptFromLog: options.previousAttemptFromLog ?? (() => null),
     });
     return orchestrator;
@@ -363,7 +349,7 @@ export class TaskOrchestrator {
 
   /**
    * What an ops retry is told about the attempt before. The saved log is read
-   * whether or not the session was reloaded, so both behave alike; the terminal
+   * whether or not the session was reloaded, so both behave alike; the output
    * buffer is the fallback for a runner that has no log. A reload clears the
    * attempt count along with the buffer, so a retry made since is what says
    * there was an attempt to report on.
@@ -455,12 +441,12 @@ export class TaskOrchestrator {
     taskId: string,
     text: string,
     action: 'message' | 'force',
-    send: (session: StructuredSessionCapability, message: string) => string,
+    send: (session: IRunnerSession, message: string) => string,
   ): string {
     const message = text.trim();
     if (!message) throw new TaskControlError('A message to a task cannot be empty.');
     const task = this.store.get(taskId);
-    const session = this.structuredSession(taskId, action);
+    const session = this.runnerSession(taskId, action);
     if (task?.status === 'awaiting_user' && task.awaitingReason !== 'input') {
       throw new TaskControlError(`Task "${task.title}" is at a checkpoint: approve or reject it instead.`);
     }
@@ -472,51 +458,47 @@ export class TaskOrchestrator {
 
   /** Force send a message still queued behind the running turn; false once the runner has it. */
   forceSendQueuedTaskMessage(taskId: string, id: string): boolean {
-    const sent = this.structuredSession(taskId, 'force').forceSendQueued(id);
+    const sent = this.runnerSession(taskId, 'force').forceSendQueued(id);
     if (sent) this.emit('onTaskChanged');
     return sent;
   }
 
   /** Take back a message still queued behind a turn; false once it was delivered. */
   removeQueuedTaskMessage(taskId: string, id: string): boolean {
-    const removed = this.structuredSession(taskId, 'message').removeQueued(id);
+    const removed = this.runnerSession(taskId, 'message').removeQueued(id);
     if (removed) this.emit('onTaskChanged');
     return removed;
   }
 
-  /** Stop a structured task's running turn; it then waits for input like any turn that ends without its marker. */
+  /** Stop a structured task's running turn; it then waits for input like any turn that ends without a `task_complete` call. */
   async interruptTask(taskId: string): Promise<void> {
-    await this.structuredSession(taskId, 'interrupt').interrupt();
+    await this.runnerSession(taskId, 'interrupt').interrupt();
   }
 
   /** What is waiting for a structured task's turn to end; empty for any other task. */
   getQueuedTaskMessages(taskId: string): QueuedTaskMessage[] {
     const session = this.attempts.get(taskId)?.session;
-    return session && isStructuredSession(session) ? session.queued() : [];
+    return session?.queued() ?? [];
   }
 
-  private structuredSession(taskId: string, action: keyof typeof CONTROL_WORDS): StructuredSessionCapability {
+  private runnerSession(taskId: string, action: keyof typeof CONTROL_WORDS): IRunnerSession {
     const task = this.store.get(taskId);
     if (!task) throw new TaskControlError(`No task ${taskId} in this plan.`);
     const attempt = this.attempts.get(taskId);
     const session = attempt?.session;
-    const words = CONTROL_WORDS[action];
     if (!attempt || !session || attempt.phase !== 'running' || attempt.decided) {
-      throw new TaskControlError(`Task "${task.title}" is not running, so there is no turn to ${words.noTurn}.`);
-    }
-    if (!isStructuredSession(session)) {
-      throw new TaskControlError(`Task "${task.title}" runs in a terminal, which cannot take ${words.terminal} from Ordewell: use its terminal instead.`);
+      throw new TaskControlError(`Task "${task.title}" is not running, so there is no turn to ${CONTROL_WORDS[action]}.`);
     }
     return session;
   }
 
   /**
-   * A structured turn that ended without the done marker (ADR-0018, W1). No
+   * A structured turn that ended without a `task_complete` call (ADR-0018, W1). No
    * verdict is guessed: the task waits for input, unless a checkpoint in the
    * same turn already has it waiting, or a queued message went straight out —
    * the session never passes through idle then, so nothing flickers.
    */
-  private onTurnEnd(taskId: string, attempt: TaskAttempt, session: ITerminalSession & StructuredSessionCapability): void {
+  private onTurnEnd(taskId: string, attempt: TaskAttempt, session: IRunnerSession): void {
     if (this.attempts.get(taskId) !== attempt || attempt.phase !== 'running' || attempt.decided) return;
     if (session.turnState() === 'working') {
       this.emit('onTaskChanged');
@@ -525,7 +507,7 @@ export class TaskOrchestrator {
     if (this.store.get(taskId)?.status !== 'in_progress') return;
     if (this.unresumed(attempt)) {
       // There is no session to wait in. Ending the runner hands the attempt to
-      // its verdict, which fails it for want of the marker.
+      // its verdict, which fails it for want of a `task_complete` call.
       session.kill();
       return;
     }
@@ -636,14 +618,6 @@ export class TaskOrchestrator {
     return mergeGate(task, this.store, this.runs);
   }
 
-  private watchBlockingPrompts(task: Task, attempt: TaskAttempt, session: ITerminalSession): void {
-    const manifest = this.registry?.get(attempt.runner)?.manifest;
-    watchBlockingPrompts(session, manifest?.runner.blockingPrompts ?? [], (prompt) => {
-      if (this.attempts.get(task.id) !== attempt) return;
-      this.notifications.warn(`Task "${task.title}" is waiting for you: ${manifest?.displayName ?? attempt.runner} is asking ${prompt.asks}. Answer it in the task's terminal.`);
-    });
-  }
-
   queueMessage(text: string, skills?: readonly SkillLoad[]): void {
     this.messageQueue.enqueue(text, skills);
     this.emit('onTaskChanged');
@@ -743,7 +717,7 @@ export class TaskOrchestrator {
     this.haltedByFailure = false;
     this.running = false;
     this.planStatus = 'approved';
-    this.terminalRunner.stopAll();
+    this.runner.stopAll();
     // Interrupted work is kept like a failed attempt's: inspectable, and off
     // `active` so a crash-recovery prune does not sweep it away. A stopped
     // repair did not land, so its task waits on the user as its conflict did;
@@ -876,14 +850,12 @@ export class TaskOrchestrator {
     console.error(`[TaskOrchestrator] Prompt preview: ${(task.prompt ?? '').slice(0, 200)}`);
     if (attempt.kind.kind === 'repair') return this.settleRepair(task, attempt, verdict);
 
-    // The terminal stays the source of truth for the verdict itself; this only
-    // changes what gets summarized for downstream consumers.
-    const doneToken = `<<<ORDEWELL_DONE_${task.completionMarker}>>>`;
-    const summary = await this.output.finalText({ ...attempt, completionMarker: task.completionMarker }, doneToken);
-    // The attempt stays live across the read, so a cancel, retry, mark
-    // complete, stop or plan load in that window ends it — and has decided the
-    // task since. A stale verdict must not overwrite that decision.
+    // A verdict can arrive inside whatever ended the runner: a stop kills every
+    // session before it ends their attempts. Applied a tick later, it finds
+    // such an attempt ended and leaves the task as that left it.
+    await Promise.resolve();
     if (this.attempts.get(taskId) !== attempt) return;
+    const summary = this.output.finalText(taskId);
     const landing = verdict.outcome === 'pass' ? await this.land(attempt, () => this.landing.landPassed(task, attempt)) : null;
     const changedFiles = landing && checksTree(attempt.kind) ? await this.runs.filesChangedSince(attempt.snapshot) : [];
     const unresumedReason = this.unresumed(attempt) ? unresumedMessage(task, `${attempt.runner} could not find its saved session`) : null;
@@ -899,13 +871,13 @@ export class TaskOrchestrator {
     } else if (landing) {
       await this.applyLanding(task, landing, () => this.notifications.info(`Task "${task.title}" completed.`));
     } else if (classifyRunnerStop(attempt.session?.getOutput() ?? '') === 'usage-limit') {
-      // No marker, but what stopped the runner was its account rather than the
+      // No completion call, but what stopped the runner was its account rather than the
       // work. Failing would paint a red X on a task the user can simply retry,
       // and spawning more tasks would only spend the same exhausted limit, so
       // the task pauses and the run holds until the user resumes it.
       this.store.markAwaitingUser(taskId);
       this.haltOnFailure();
-      this.tell('warn', `Task "${task.title}" stopped before its completion marker: ${attempt.runner} hit its usage limit. Retry it once the limit resets${attempt.worktree ? ' — its worktree is kept' : ''}.`);
+      this.tell('warn', `Task "${task.title}" stopped before it reported completion: ${attempt.runner} hit its usage limit. Retry it once the limit resets${attempt.worktree ? ' — its worktree is kept' : ''}.`);
       if (attempt.worktree) await this.runs.release(taskId, { keep: true });
     } else {
       this.store.markFailed(taskId);
@@ -1195,9 +1167,6 @@ export class TaskOrchestrator {
     if (!task) throw new TaskControlError(`No task ${taskId} in this plan.`);
     const eligible = continuability(task);
     if (!eligible.ok) throw new TaskControlError(eligible.reason);
-    const runner = this.store.resolveTaskRunner(task);
-    const route = routeTransport('structured', runner, this.registry);
-    if (route.transport !== 'structured') throw new TaskControlError(`Task "${task.title}" cannot be continued: ${route.fallback}. Use Retry instead.`);
     if (!(await this.openFor(taskId, () => this.continueTask(taskId, message)))) return;
     // The run may have started it while opening; the claim below must be the only one.
     if (this.attempts.has(taskId) || !continuability(task).ok) return;
@@ -1440,6 +1409,12 @@ export class TaskOrchestrator {
   private async spawnAttempt(task: Task, attempt: TaskAttempt): Promise<boolean> {
     try {
       const { kind } = attempt;
+      // Nothing can drive a runner without a structured connector, so it is
+      // refused before a worktree is made for it.
+      if (!supportsTaskMode(attempt.runner)) {
+        const name = this.registry?.get(attempt.runner)?.manifest.displayName ?? attempt.runner;
+        throw new Error(`${name} has no structured connector, so Ordewell cannot run its tasks. Assign the task to Claude Code, Codex or OpenCode.`);
+      }
       const { cwd, worktree } = await attemptCwd(kind, task, this.runs);
       attempt.cwd = cwd;
       attempt.worktree = worktree;
@@ -1457,20 +1432,16 @@ export class TaskOrchestrator {
       if (takesSkills(kind) && task.skills?.length) {
         attempt.skills = resolveTaskSkills(task, this.skillsAt(this.skillRoots(cwd)), worktree ? (name) => this.uncommittedSkillFolder(name) : undefined);
       }
-      const transport = attemptTransport(kind, this.transport);
-      const completionTool = givesCompletionTool(transport, attempt.runner, this.registry);
       const finalPrompt = attemptPrompt(kind, {
         task,
         plan: this.store.planTasks,
-        completionTool,
         planMapEnabled: this.config.planMapEnabled,
         skills: attempt.skills,
         repairPrompt: (t) => this.landing.repairPrompt(t),
         previousAttempt: (taskId) => this.opsPreviousAttempt(taskId),
       });
-      this.lingering.close(task.id);
       const env = await this.envForTask(cwd);
-      const session = await this.terminalRunner.spawn({
+      const session = await this.runner.spawn({
         taskId: task.id,
         runner: attempt.runner,
         prompt: finalPrompt,
@@ -1483,10 +1454,10 @@ export class TaskOrchestrator {
         order: task.order,
         title: task.title,
         env,
-        transport,
         resumeSessionId: kind.kind === 'continuation' ? kind.resumeSessionId : undefined,
         attempt: attempt.attempt,
         ...(attempt.skills.length > 0 ? { skills: attempt.skills } : {}),
+        onNotice: (message) => this.tell('warn', `Task "${task.title}": ${message}`),
       });
 
       // Stop/load/cancel can end the attempt while the async adapter is
@@ -1497,23 +1468,16 @@ export class TaskOrchestrator {
         this.abandonSpawn(task, attempt, session);
         return false;
       }
-      if (kind.kind === 'continuation' && !isStructuredSession(session)) {
-        // A terminal session ignored the resume and started fresh, with none of
-        // what the message refers to.
-        session.kill();
-        throw new Error(routeTransport(transport, attempt.runner, this.registry).fallback ?? 'this surface cannot run structured tasks');
-      }
       attempt.phase = 'running';
       attempt.session = session;
-      this.recordTransport(task, attempt, transport, session);
+      this.store.setTaskRunnerSessionId(task.id, undefined);
       if (takesSkills(kind)) this.store.setTaskAttemptSkills(task.id, [...attempt.skills]);
 
-      // Attached before the verifier so the chunk that carries the marker is
-      // captured before that chunk's verdict asks for the final text.
+      // Attached before the verifier, so the summary of the call that settles
+      // the attempt is captured before its verdict asks for the final text.
       this.output.attach(task.id, session);
       this.verifier.watch(task, session);
-      if (isStructuredSession(session)) session.onTurnEnd(() => this.onTurnEnd(task.id, attempt, session));
-      this.watchBlockingPrompts(task, attempt, session);
+      session.onTurnEnd(() => this.onTurnEnd(task.id, attempt, session));
       return true;
     } catch (err) {
       if (this.attempts.get(task.id) !== attempt) {
@@ -1557,6 +1521,17 @@ export class TaskOrchestrator {
         await this.tick();
         return false;
       }
+      if (err instanceof McpAttachError) {
+        this.store.markFailed(task.id);
+        this.store.setTaskOutputSummary(task.id, summarizeOutput(err.message, err.message));
+        await this.runs.release(task.id, { keep: true });
+        this.haltOnFailure();
+        this.tell('error', err.message);
+        this.emit('onTaskSettled', { taskId: task.id });
+        this.emit('onTaskChanged');
+        await this.tick();
+        return false;
+      }
       // Couldn't spawn — the task was never executed, so it stays "to do".
       // Held out of auto-scheduling to avoid a spawn-throw retry loop.
       this.store.markPending(task.id);
@@ -1586,31 +1561,12 @@ export class TaskOrchestrator {
   }
 
   /**
-   * Say on the task how this attempt is driven, when it asked for the
-   * structured transport; a terminal request records nothing. A structured
-   * request that came back a terminal session is a fallback, and says why —
-   * a host without a router included — never a silent downgrade.
-   */
-  private recordTransport(task: Task, attempt: TaskAttempt, requested: RunnerTransport, session: ITerminalSession): void {
-    if (requested !== 'structured') {
-      this.store.setTaskTransport(task.id, undefined);
-      return;
-    }
-    if (isStructuredSession(session)) {
-      this.store.setTaskTransport(task.id, { kind: 'structured' });
-      return;
-    }
-    const fallback = routeTransport(requested, attempt.runner, this.registry).fallback ?? 'this surface cannot run structured tasks';
-    this.store.setTaskTransport(task.id, { kind: 'terminal', fallback });
-  }
-
-  /**
    * A continue whose runner never announced the session it was told to
    * resume. Nothing was continued, and nothing fresh was started in its place.
    */
   private unresumed(attempt: TaskAttempt): boolean {
     const session = attempt.session;
-    return attempt.kind.kind === 'continuation' && session !== null && isStructuredSession(session) && !session.nativeSessionId();
+    return attempt.kind.kind === 'continuation' && session !== null && !session.nativeSessionId();
   }
 
   /**
@@ -1618,7 +1574,7 @@ export class TaskOrchestrator {
    * and take back the claim it made. Only the claim — whatever ended the
    * attempt may have decided the task since (mark complete, cancel, retry).
    */
-  private abandonSpawn(task: Task, attempt: TaskAttempt, session?: ITerminalSession): void {
+  private abandonSpawn(task: Task, attempt: TaskAttempt, session?: IRunnerSession): void {
     session?.kill();
     if (this.attempts.has(task.id) || this.store.get(task.id)?.status !== 'in_progress') return;
     if (attempt.kind.kind === 'repair') this.store.markAwaitingUser(task.id, 'conflict');
@@ -1654,35 +1610,29 @@ export class TaskOrchestrator {
    * it receives for an attempt that is no longer current).
    *
    * A user interruption also bumps the verifier's generation *before* stopping
-   * the runner: some runners (e.g. tmux) fire onExit synchronously from
+   * the runner: a runner may fire onExit synchronously from
    * stop(), and if that exit reaches VerdictEngine under the still-valid
    * generation it delivers a verdict that marks the task 'completed' for one
-   * tick — long enough for the scheduler to start a dependent task. A verdict
-   * leaves a terminal runner up so its screen stays readable (a structured one
-   * ends), and stop/load reset the whole verifier themselves.
+   * tick — long enough for the scheduler to start a dependent task. Stop and
+   * load reset the whole verifier themselves.
    */
   private endAttempt(taskId: string, reason: AttemptEnd): TaskAttempt | undefined {
     const attempt = this.attempts.get(taskId);
     this.attempts.delete(taskId);
     if (attempt) this.output.detach(taskId);
     const session = attempt?.session ?? null;
-    const structured = session !== null && isStructuredSession(session);
-    const transport: RunnerTransport = structured ? 'structured' : 'terminal';
-    if (structured) this.saveNativeSession(taskId, session.nativeSessionId());
-    if (session && keepsTerminalReadable(reason, transport)) this.lingering.remember(taskId, session.id);
-    if (stopsRunner(reason, transport)) {
+    if (session) this.saveNativeSession(taskId, session.nativeSessionId());
+    if (stopsRunner(reason)) {
       const task = this.store.get(taskId);
       if (task) this.verifier.clear(task);
-      if (session) this.terminalRunner.stop(session.id);
+      if (session) this.runner.stop(session.id);
     }
     return attempt;
   }
 
   /** Kept on the task once the attempt ends, so a continue can resume it after a reload (ADR-0018, K1). */
   private saveNativeSession(taskId: string, nativeSessionId: string | null): void {
-    const recorded = this.store.get(taskId)?.transport;
-    if (!nativeSessionId || recorded?.kind !== 'structured') return;
-    this.store.setTaskTransport(taskId, { ...recorded, nativeSessionId });
+    if (nativeSessionId) this.store.setTaskRunnerSessionId(taskId, nativeSessionId);
   }
 
   private endAllAttempts(reason: 'stop' | 'load'): TaskAttempt[] {

@@ -7,7 +7,7 @@ import {
   listSessions, loadSession,
   SettingsService,
   type AiProvider,
-  type ITerminalRunner,
+  type IRunner,
 } from '@ordewell/core';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
 import { replayIsolation } from '../plan/isolation';
@@ -21,11 +21,11 @@ import { confirmPastGate, handleNewSession, plannerPreflightError } from '../pla
 export interface CommandDeps {
   session: Session;
   chatProvider: ChatViewProvider;
-  pluginRegistry: RunnerRegistry;
+  runnerRegistry: RunnerRegistry;
   modelResolver: ModelResolver;
   config: VsCodeConfig;
   fsAdapter: VsCodeFileSystem;
-  terminalRunner: ITerminalRunner;
+  runner: IRunner;
   settingsService: SettingsService;
   secretStore: SecretStore;
   getCurrentPlan: () => LegacyPlanState;
@@ -68,7 +68,7 @@ function applyLoadedSession(
   deps: CommandDeps,
 ): boolean {
   deps.session.stopExecution();
-  deps.terminalRunner.stopAll();
+  deps.runner.stopAll();
   try {
     deps.session.loadPlan(loaded.plan, loaded.meta.goal, deps.fsAdapter.getWorkspaceRoot(), { sessionId: loaded.meta.id });
   } catch (err) {
@@ -99,7 +99,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
     vscode.commands.registerCommand('ordewell.toggleRunner', async (runnerArg?: string) => {
       let target = runnerArg;
       if (!target) {
-        const runners = deps.pluginRegistry.list();
+        const runners = deps.runnerRegistry.list();
         const enabled = deps.config.enabledRunners;
         const items = runners.map((r) => ({
           label: `${r.manifest.displayName}: ${enabled.includes(r.manifest.name) ? 'ON' : 'OFF'}`,
@@ -147,7 +147,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
       if (typeValue === 'ai') {
         prompt = await vscode.window.showInputBox({ prompt: 'AI Prompt', placeHolder: 'Detailed instructions for the AI assistant' });
         const defaultRunner = plan.runners[0] ?? 'claude-code';
-        const manifest = deps.pluginRegistry.getManifest(defaultRunner);
+        const manifest = deps.runnerRegistry.getManifest(defaultRunner);
         const runnerModes = manifest?.modes ?? [];
 
         if (runnerModes.length > 0) {
@@ -367,7 +367,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
         // Full core reset so the cleared plan can't resurface from the
         // Session's PlanStore or a still-live planner conversation.
         deps.session.reset();
-        deps.terminalRunner.stopAll();
+        deps.runner.stopAll();
         deps.setCurrentPlan(createEmptyPlan());
         deps.chatProvider.setState('empty');
         deps.chatProvider.conversation.reset();
@@ -459,7 +459,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
   );
   context.subscriptions.push(
     vscode.commands.registerCommand('ordewell.configureModelAllowlist', async () => {
-      await configureModelAllowlist(deps.pluginRegistry, deps.modelResolver, deps.settingsService);
+      await configureModelAllowlist(deps.runnerRegistry, deps.modelResolver, deps.settingsService);
     }),
   );
 }

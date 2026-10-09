@@ -1,6 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { PlanIsolation } from '../interfaces/IWorktreeIsolation';
-import type { RunnerTransport } from '../interfaces/ITerminalRunner';
 import type { PlannerUsage, UsageRecord, UsageTotals } from './Usage';
 import type { SkillSource } from '../services/SkillsService';
 import { SKILL_NAME_PATTERN } from '../conversation/skillTokens';
@@ -11,7 +10,7 @@ export interface UserStep {
   completed: boolean;
 }
 
-/** One deterministic signal gathered while verifying a completed task. */
+/** One deterministic signal gathered while verifying a completed task. `completion_marker` is only in verdicts saved before completion was reported through `task_complete` alone. */
 export interface VerificationCheck {
   name: 'exit_code' | 'completion_marker' | 'task_complete' | 'manual';
   passed: boolean;
@@ -40,7 +39,7 @@ export type TaskMode = string;
 
 /**
  * Why an `awaiting_user` task waits (ADR-0018, W1): a structured turn that
- * ended without the done marker, a checkpoint question, work that did not
+ * ended without a `task_complete` call, a checkpoint question, work that did not
  * land, or an ops task that changed tracked files (ADR-0020). Saved, so no
  * surface has to guess it from whether an attempt is live.
  */
@@ -66,16 +65,23 @@ export interface TaskModelAssignment {
 export type RunnerId = string;
 
 /**
- * How a task's latest attempt was driven (ADR-0018). Recorded only when its
- * plan asked for the structured transport, so a terminal plan's tasks carry
- * nothing new.
+ * Bring loaded tasks to the structured-only shape, in place. A task saved
+ * while the terminal transport existed may say it ran there, and why; neither
+ * means anything now, and such a task left no session to continue. Its
+ * completion marker id went with the text markers: completion is reported
+ * only through `task_complete`.
  */
-export interface TaskTransport {
-  kind: RunnerTransport;
-  /** Why a plan that asked for structured ran this task on the terminal — never a silent downgrade (S3). */
-  fallback?: string;
-  /** The runner's own session id of a structured attempt, once it ends: what a continue resumes (K1). */
-  nativeSessionId?: string;
+export function migrateLoadedTasks(tasks: readonly Task[]): void {
+  for (const task of tasks) {
+    if (typeof task.runnerSessionId !== 'string') delete task.runnerSessionId;
+    const legacy = task as Task & { transport?: { kind?: unknown; nativeSessionId?: unknown } };
+    if (!task.runnerSessionId && legacy.transport?.kind === 'structured' && typeof legacy.transport.nativeSessionId === 'string') {
+      task.runnerSessionId = legacy.transport.nativeSessionId;
+    }
+    delete legacy.transport;
+    delete (task as { completionMarker?: unknown }).completionMarker;
+    migrateLoadedTasks(task.subtasks ?? []);
+  }
 }
 
 /**
@@ -110,11 +116,11 @@ export interface Task {
   assignedRunner: RunnerId;
   thinkingEffort?: string;
   taskMode?: TaskMode;
-  completionMarker: string;
   autonomy?: 'AFK' | 'HITL';
   sliceType?: 'HITL' | 'AFK';
   userStoriesCovered?: string[];
-  transport?: TaskTransport;
+  /** The runner's saved session for a later continue; cleared when a fresh attempt starts. */
+  runnerSessionId?: string;
   /** Set only while `status` is `awaiting_user`, and not always then — a usage-limit pause has none. */
   awaitingReason?: AwaitingReason;
   /**
@@ -606,7 +612,6 @@ export function createTask(overrides: Partial<Task> = {}): Task {
     assignedRunner: overrides.assignedRunner ?? 'claude-code',
     thinkingEffort: overrides.thinkingEffort,
     taskMode: overrides.taskMode ?? 'build',
-    completionMarker: overrides.completionMarker ?? uuidv4(),
     autonomy: overrides.autonomy,
     sliceType: overrides.sliceType,
     userStoriesCovered: overrides.userStoriesCovered,
@@ -713,9 +718,6 @@ export function migrateTask(task: Record<string, unknown>): Task {
   if (!task.thinkingEffort) {
     task.thinkingEffort = undefined;
   }
-  if (!task.completionMarker) {
-    task.completionMarker = uuidv4();
-  }
   if (task.verdict && task.verification) {
     delete task.verification;
   }
@@ -797,9 +799,9 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
         status: prior?.status ?? 'pending',
         verdict: prior?.verdict,
         outputSummary: prior?.outputSummary,
-        transport: prior?.transport,
+        runnerSessionId: prior?.runnerSessionId,
         attemptSkills: prior?.attemptSkills,
-        // Where a task that has run ran is fixed, like its transport (ADR-0020).
+        // Where a task that has run ran is fixed, like its runner session (ADR-0020).
         ...(prior?.status === 'failed' ? { ops: prior.ops } : {}),
         forcedPastGate: prior?.forcedPastGate,
         subtasks: overlay(t.subtasks ?? [], prior?.subtasks ?? []),
@@ -818,7 +820,7 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
 }
 
 /** What only execution reads; {@link keepExecutionState} puts it back on whatever a planner returns. */
-const EXECUTION_ONLY = ['attemptSkills', 'transport', 'awaitingReason', 'completionMarker', 'forcedPastGate', 'outputSummary'] as const satisfies readonly (keyof Task)[];
+const EXECUTION_ONLY = ['attemptSkills', 'runnerSessionId', 'awaitingReason', 'forcedPastGate', 'outputSummary'] as const satisfies readonly (keyof Task)[];
 
 export type PlannerTaskView = Omit<Task, typeof EXECUTION_ONLY[number] | 'subtasks'> & { subtasks: PlannerTaskView[] };
 

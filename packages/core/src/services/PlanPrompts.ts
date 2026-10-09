@@ -118,10 +118,12 @@ function researchPhaseBlock(harnessMode: boolean): string {
  * choices: they change what the prompt can promise, not what it asks for.
  */
 export interface ConversationVariant {
-  /** Harness planner (ADR-0009): the agent owns its own tools and research budget. */
+  /**
+   * Harness planner (ADR-0009): the agent owns its own tools and research
+   * budget, and reads the catalog and submits the plan through Ordewell's MCP
+   * tools (ADR-0022). An API planner speaks the JSON envelopes instead.
+   */
   harness?: boolean;
-  /** The planner reads the catalog and submits the plan through Ordewell's MCP tools (ADR-0022), not the JSON envelope. */
-  plannerTools?: boolean;
   /** The skill catalog: task skills it can attach on every path, planner skills it can load only with tools. */
   skills?: readonly SkillInfo[];
   /** Every AI task gets its own worktree (ADR-0013), so file overlap no longer forces an order; of every repo of a group (ADR-0014). */
@@ -241,7 +243,7 @@ function buildConversationBody(
   modeExamples: string,
   variant: ConversationVariant,
 ): string {
-  const tools = variant.plannerTools ?? false;
+  const tools = variant.harness ?? false;
   return [
     `You are Ordewell's project planner. You explore the codebase, ask concise clarifying questions grounded in your findings, and produce structured task plans ${tools ? 'through the submit_plan tool' : 'as JSON'}. Be direct: avoid unnecessary preamble, summaries, or explanations unless the user asks for detail.`,
     '',
@@ -253,7 +255,7 @@ function buildConversationBody(
       ? '4. After the user confirms the outline, call list_runners and list_models, then submit the final task plan with submit_plan.'
       : '4. After the user confirms the outline, emit the final task plan as a JSON object with a "tasks" array.',
     '',
-    researchPhaseBlock(variant.harness ?? false),
+    researchPhaseBlock(tools),
     '',
     ...(tools ? ['Ordewell skills load only through load_skill; do not use the native Skill tool or read skill files directly.', ...plannerSkillsBlock(variant.skills ?? []), ''] : []),
     'OUTLINE PHASE:',
@@ -342,9 +344,7 @@ function buildConversationBody(
       ? 'Use each runner\'s default mode from list_runners unless the task needs a different mode it lists. Avoid "plan" (read-only) unless the user asked for analysis only.'
       : modeGuide,
     '',
-    // The envelope is shared by both variants on purpose: a harness planner
-    // Ordewell could not hand tools to speaks the same protocol as an
-    // API-backed one (ADR-0009). One it did hand them to reads through them.
+    // An API planner has no MCP client, so it reads through the envelope (ADR-0012).
     ...(tools ? TASK_READ_TOOLS_PROTOCOL : TASK_QUERY_PROTOCOL),
     '',
     context ? `PROJECT CONTEXT:\n${context}\n` : '',
@@ -859,7 +859,7 @@ export function buildConflictRepairPrompt(
     return [
       `Task #${task.order} "${task.title}" passed, but merging its branch \`${branch}\` into \`${integrationBranch}\` conflicted${files.length > 0 ? ` in ${files.join(', ')}` : ''}. None of its work has landed yet.`,
       `This is the task's own worktree, on \`${branch}\`, with its work committed. Run \`git merge --no-edit ${integrationBranch}\` here and ${resolve} Never drop either side wholesale, and never abort the merge or reset it away.`,
-      'Build and test the result the way this project does, commit the merge, and only then print the completion marker.',
+      'Build and test the result the way this project does, commit the merge, and only then call `task_complete`.',
       '',
       asked,
     ].join('\n');
@@ -868,7 +868,7 @@ export function buildConflictRepairPrompt(
   return [
     `Task #${task.order} "${task.title}" passed, but landing its branch \`${branch}\` on \`${integrationBranch}\` conflicted in ${stoppedIn}${files.length > 0 ? ` (${files.join(', ')})` : ''}. A task lands in every repository it changed or in none, so none of its work has landed yet.`,
     `This is the task's own workspace, with each repository at its usual path on \`${branch}\` and the task's work committed. In each repository the task changed — ${repos.join(', ')} — run \`git merge --no-edit ${integrationBranch}\` inside that repository's directory, and ${resolve} Never drop either side wholesale, and never abort a merge or reset it away.`,
-    'Build and test the result the way this project does, commit the merge in each repository, and only then print the completion marker.',
+    'Build and test the result the way this project does, commit the merge in each repository, and only then call `task_complete`.',
     '',
     asked,
   ].join('\n');

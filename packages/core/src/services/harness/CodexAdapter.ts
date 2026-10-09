@@ -391,7 +391,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     if (opts?.kind === 'task') {
       // What the mode means is the manifest's (ADR-0001); this only spells it
       // in the protocol. No `developerInstructions`: the task prompt is the
-      // first turn, as on the terminal transport.
+      // first turn.
       const { approvalPolicy, approvalsReviewer } = opts.flags.modeSettings;
       return {
         ...common,

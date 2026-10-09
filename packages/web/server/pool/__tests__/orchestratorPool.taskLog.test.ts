@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { readTaskLog, saveSession, type ITerminalRunner, type LegacyPlanState, type RunnerSpawnOptions } from '@ordewell/core';
-import { FakeStructuredSession } from '@ordewell/core/testing';
+import { readTaskLog, saveSession, type IRunner, type LegacyPlanState, type RunnerSpawnOptions } from '@ordewell/core';
+import { FakeRunnerSession } from '@ordewell/core/testing';
 import { OrchestratorPool } from '../orchestratorPool';
 
 function savedPlan(): LegacyPlanState {
@@ -39,10 +39,10 @@ describe('OrchestratorPool task logs', () => {
   });
 
   it('streams a structured task’s events as task_log frames and saves them beside the session', async () => {
-    const sessions: FakeStructuredSession[] = [];
-    const structuredRunner: ITerminalRunner = {
+    const sessions: FakeRunnerSession[] = [];
+    const structuredRunner: IRunner = {
       spawn: vi.fn(async (opts: RunnerSpawnOptions) => {
-        const session = new FakeStructuredSession(`s${sessions.length + 1}`, opts.taskId);
+        const session = new FakeRunnerSession(`s${sessions.length + 1}`, opts.taskId);
         sessions.push(session);
         return session;
       }),
@@ -50,8 +50,7 @@ describe('OrchestratorPool task logs', () => {
       stopAll: vi.fn(),
       activeCount: 0,
     };
-    const runner: ITerminalRunner = { spawn: vi.fn().mockRejectedValue(new Error('terminal runner unused')), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 };
-    const pool = new OrchestratorPool({ runner, structuredRunner });
+    const pool = new OrchestratorPool({ runner: structuredRunner });
     const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-tasklog');
     pool.adoptSavedSession(meta.id, workspace);
     const sent: string[] = [];

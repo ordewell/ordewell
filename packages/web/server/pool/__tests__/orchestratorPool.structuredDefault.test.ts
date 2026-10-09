@@ -3,8 +3,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { Hono } from 'hono';
-import { saveSession, type ITerminalRunner, type LegacyPlanState, type RunnerSpawnOptions } from '@ordewell/core';
-import { FakeStructuredSession } from '@ordewell/core/testing';
+import { saveSession, type IRunner, type LegacyPlanState, type RunnerSpawnOptions } from '@ordewell/core';
+import { FakeRunnerSession } from '@ordewell/core/testing';
 import { OrchestratorPool } from '../orchestratorPool';
 import { settingsRoute } from '../../routes/settings';
 
@@ -31,10 +31,10 @@ describe('OrchestratorPool after the transport setting was removed', () => {
   });
 
   function runners() {
-    const structured: FakeStructuredSession[] = [];
-    const structuredRunner: ITerminalRunner = {
+    const structured: FakeRunnerSession[] = [];
+    const structuredRunner: IRunner = {
       spawn: vi.fn(async (opts: RunnerSpawnOptions) => {
-        const session = new FakeStructuredSession(`s${structured.length + 1}`, opts.taskId);
+        const session = new FakeRunnerSession(`s${structured.length + 1}`, opts.taskId);
         structured.push(session);
         return session;
       }),
@@ -42,8 +42,7 @@ describe('OrchestratorPool after the transport setting was removed', () => {
       stopAll: vi.fn(),
       activeCount: 0,
     };
-    const runner: ITerminalRunner = { spawn: vi.fn().mockRejectedValue(new Error('terminal runner unused')), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 };
-    return { runner, structuredRunner, structured };
+    return { runner: structuredRunner, structured };
   }
 
   it('reports neither removed setting, and a PATCH of either changes nothing', async () => {
@@ -63,8 +62,8 @@ describe('OrchestratorPool after the transport setting was removed', () => {
   });
 
   it('runs a saved plan pinned to the terminal on the structured transport', async () => {
-    const { runner, structuredRunner, structured } = runners();
-    const pool = new OrchestratorPool({ runner, structuredRunner });
+    const { runner, structured } = runners();
+    const pool = new OrchestratorPool({ runner });
     const plan = {
       status: 'approved',
       runners: ['claude-code'],
@@ -80,7 +79,5 @@ describe('OrchestratorPool after the transport setting was removed', () => {
     await pool.session(meta.id).runTask('t1');
 
     await vi.waitFor(() => expect(structured).toHaveLength(1));
-    expect(runner.spawn).not.toHaveBeenCalled();
-    expect(vi.mocked(structuredRunner.spawn).mock.calls[0][0].transport).toBe('structured');
   });
 });

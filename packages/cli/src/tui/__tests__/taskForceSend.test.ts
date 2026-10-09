@@ -16,7 +16,7 @@ import type { TaskLogState, TaskView, TuiState } from '../state';
 
 const task = (over: Partial<TaskView> = {}): TaskView => ({
   id: 't1', order: 2, title: 'Refactor PlanStore', type: 'ai', status: 'in_progress', dependencies: [], assignedRunner: 'claude-code',
-  transport: { kind: 'structured' }, ...over,
+  ...over,
 });
 
 const log = (events: TaskLogEvent[], queuedIndex = 0): TaskLogState => ({

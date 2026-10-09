@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   planDirectLaunch,
-  planShellLaunch,
   windowsCommandLine,
   isExecutableResolved,
   ExecutableNotFoundError,
@@ -333,24 +332,6 @@ describe('windowsCommandLine', () => {
 
   it('renders an empty argument as an empty quoted string', () => {
     expect(windowsCommandLine('c.cmd', [''])).toBe('c.cmd ""');
-  });
-});
-
-describe('planShellLaunch', () => {
-  it('produces the POSIX login shell unchanged', async () => {
-    const plan = await planShellLaunch('claude', ['-p', `it's`], { platform: 'linux' });
-    expect(plan.file).toBe('/bin/bash');
-    expect(plan.args[0]).toBe('-lc');
-    expect(plan.args[1]).toBe(`'claude' '-p' 'it'\\''s'`);
-  });
-
-  // Windows has no login shell to emulate, and going direct means the runner's
-  // own exit code is the terminal's exit code — half of what VerdictEngine
-  // judges a task on, rather than a $LASTEXITCODE PowerShell may not propagate.
-  it('starts the runner directly on Windows instead of through a shell', async () => {
-    const plan = await planShellLaunch('claude', ['-p', 'go'], win(['C:\\tools\\claude.exe']));
-    expect(plan.file).toBe('C:\\tools\\claude.exe');
-    expect(plan.args).toEqual(['-p', 'go']);
   });
 });
 

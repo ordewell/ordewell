@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createTask, type LegacyPlanState } from '../../models/Task';
-import { FakeTerminalSession, makeSession, testWorkspace, taskOf, saves } from './sessionTestKit';
+import { FakeRunnerSession, makeSession, testWorkspace, taskOf, saves } from './sessionTestKit';
 import { PlanStore } from '../PlanStore';
 import type { ModelResolver } from '../ModelResolver';
-import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
+import type { IRunner } from '../../interfaces/IRunner';
 
 /** One AI task, so a removal leaves the scheduler with nothing else to spawn. */
 function soloPlan(): LegacyPlanState {
@@ -36,20 +36,20 @@ function pausedOnUserTask(): LegacyPlanState {
 }
 
 /** A runner double that records what it spawned and what it was told to stop. */
-function recordingRunner(): ITerminalRunner & { spawned: string[]; stopped: string[] } {
+function recordingRunner(): IRunner & { spawned: string[]; stopped: string[] } {
   const spawned: string[] = [];
   const stopped: string[] = [];
   return {
     spawn: vi.fn(async ({ taskId }: { taskId: string }) => {
       spawned.push(taskId);
-      return new FakeTerminalSession(`s-${taskId}`, taskId);
+      return new FakeRunnerSession(`s-${taskId}`, taskId);
     }),
     stop: vi.fn((sessionId: string) => { stopped.push(sessionId); }),
     stopAll: vi.fn(),
     activeCount: 0,
     spawned,
     stopped,
-  } as unknown as ITerminalRunner & { spawned: string[]; stopped: string[] };
+  } as unknown as IRunner & { spawned: string[]; stopped: string[] };
 }
 
 function planWith(runners: string[] = ['claude-code']): LegacyPlanState {

@@ -9,6 +9,7 @@ import {
   type SessionRuntimeSettings,
   ModelResolver,
   RunnerRegistry,
+  removedPluginNotice,
   RunnerInstallation,
   listSessions,
   loadSession,
@@ -37,16 +38,13 @@ import {
   PROVIDER_CREDENTIAL_ENV,
   type AiProvider,
   type PlannerModelCandidate,
-  HeadlessRunner,
   StructuredRunner,
-  TransportRouter,
 } from '@ordewell/core';
 import { WebConfig } from '../adapters/WebConfig';
 import { scanWorkspaces as scanWorkspacesImpl } from '../utils/workspaceScanner';
 import { PoolFileSystem } from '../adapters/PoolFileSystem';
 import { PoolAwareRunner } from '../adapters/PoolAwareRunner';
-import { AdvisingRunner } from '../adapters/TerminalHost';
-import type { ApprovalAnswer, RunnerRegistry as CoreRunnerRegistry, ITerminalRunner } from '@ordewell/core';
+import type { ApprovalAnswer, RunnerRegistry as CoreRunnerRegistry, IRunner } from '@ordewell/core';
 
 /** A fork the pool has adopted: addressable at once, its plan read back from the file it was written to. */
 export interface AdoptedFork {
@@ -57,19 +55,10 @@ export interface AdoptedFork {
 
 export interface OrchestratorPoolDeps {
   /**
-   * Shared across every session instead of each `PoolAwareRunner` defaulting
-   * to its own `HeadlessRunner` — needed so a tmux-backed runner's one
-   * session/many-windows lifecycle outlives any single planning session.
-   * Left undefined, behavior is unchanged from before this existed.
+   * Where every plan's tasks run (ADR-0018), shared across sessions behind
+   * each plan's `PoolAwareRunner`. Defaulted to a real one; tests inject a fake.
    */
-  runner?: ITerminalRunner;
-  /**
-   * Where a task on the structured transport runs (ADR-0018). Shared like
-   * `runner`, and defaulted to a real one; tests inject a fake.
-   */
-  structuredRunner?: ITerminalRunner;
-  /** What a plan's first terminal-transport task tells the user the host lacks; structured tasks never trigger it. */
-  terminalAdvice?: string;
+  runner?: IRunner;
   /**
    * Overrides the pool's own `ModelResolver`. Left undefined, behavior is
    * unchanged; tests inject one built with fake exec/fetch impls so a
@@ -81,20 +70,18 @@ export interface OrchestratorPoolDeps {
 export class OrchestratorPool {
   private sessions = new Map<string, Session>();
   private clients = new Map<string, Set<WebSocket>>();
-  private registry: CoreRunnerRegistry = (() => { const r = new RunnerRegistry(); r.loadUserPlugins(); return r; })();
+  private registry: CoreRunnerRegistry = new RunnerRegistry();
   private modelResolver: ModelResolver;
   private runnerInstallation = new RunnerInstallation(this.registry);
   private cachedProviderLists: Record<string, string[]> | undefined;
   private settingsService = new SettingsService();
   private plannerModelMemory = new PlannerModelMemory(this.settingsService);
-  private sharedRunner?: ITerminalRunner;
-  private structuredRunner: ITerminalRunner;
-  private terminalAdvice?: string;
+  private runner: IRunner;
 
   constructor(deps: OrchestratorPoolDeps = {}) {
-    this.sharedRunner = deps.runner;
-    this.structuredRunner = deps.structuredRunner ?? new StructuredRunner();
-    this.terminalAdvice = deps.terminalAdvice;
+    const pluginNotice = removedPluginNotice();
+    if (pluginNotice) console.warn(pluginNotice);
+    this.runner = deps.runner ?? new StructuredRunner();
     this.modelResolver = deps.modelResolver ?? new ModelResolver(this.registry, new WebConfig());
   }
 
@@ -171,16 +158,7 @@ export class OrchestratorPool {
     });
     const fsAdapter = new PoolFileSystem(workspace);
     const broadcast = (msg: SessionMessage) => this.broadcast(sessionId, msg);
-    // The router sits under the per-plan wrapper, so a plan's /stop still
-    // reaches only its own tasks, on either transport.
-    const terminal = this.sharedRunner ?? new HeadlessRunner();
-    const router = new TransportRouter({
-      terminal: this.terminalAdvice
-        ? new AdvisingRunner(terminal, this.terminalAdvice, (message) => this.broadcast(sessionId, { type: 'notice', level: 'warn', message }))
-        : terminal,
-      structured: this.structuredRunner,
-    });
-    const runner = new PoolAwareRunner(sessionId, broadcast, router);
+    const runner = new PoolAwareRunner(sessionId, broadcast, this.runner);
     return createSession({
       config,
       notifications: { info() {}, warn() {}, error() {}, async confirm() { return undefined; } },
@@ -282,12 +260,19 @@ export class OrchestratorPool {
     // very call meant to establish the new provider.
     const switchedToProvider: AiProvider | undefined =
       incomingAiProvider && incomingAiProvider !== providerBefore ? (incomingAiProvider as AiProvider) : undefined;
+    const requestedModel = envChanges?.ORCHESTRATOR_MODEL ?? changes.orchestratorModel;
+    const explicitModel = typeof requestedModel === 'string' && requestedModel.trim().length > 0;
     // Read the incoming provider's catalog now, before the env-touched refresh
     // below clears the resolver's cache — recall must judge the memory against
     // what was already discovered, not force a fresh (async) discovery here.
-    const switchRecall = switchedToProvider
+    const switchRecall = switchedToProvider && !explicitModel
       ? this.plannerModelMemory.recall(switchedToProvider, this.plannerCatalogFor(switchedToProvider))
       : undefined;
+
+    if (switchedToProvider && explicitModel &&
+        typeof changes.plannerThinkingEffort !== 'string' && envChanges?.ORDEWELL_PLANNER_EFFORT === undefined) {
+      process.env.ORDEWELL_PLANNER_EFFORT = '';
+    }
 
     if (typeof changes.orchestratorModel === 'string') {
       process.env.ORCHESTRATOR_MODEL = changes.orchestratorModel;
@@ -322,12 +307,8 @@ export class OrchestratorPool {
       }
     }
 
-    // A planner switch resolves through memory rather than whatever the
-    // client's env carried for the model/effort — an older client still sends
-    // a blind `ORCHESTRATOR_MODEL: ''` clear here, and even a current one
-    // should land on the model this provider was last using, not nothing.
-    // Applied after the env loop above so it overrides that clear rather than
-    // being overwritten by it.
+    // Legacy clients send a blank model on switch; recall fills that clear,
+    // but must never replace an explicit model chosen in the same request.
     if (switchRecall) {
       process.env.ORCHESTRATOR_MODEL = switchRecall.model;
       process.env.ORDEWELL_PLANNER_EFFORT = switchRecall.effort;
@@ -351,8 +332,8 @@ export class OrchestratorPool {
     // arrives either as a top-level field (a vendor model, `ordewell model
     // set`) or through env (`ordewell planner-effort`, the TUI's effort
     // picker send ORDEWELL_PLANNER_EFFORT this way) — both are a real pick,
-    // never the switch's own env, which always carries AI_PROVIDER too.
-    const envCarriesModelOrEffort = envChanges?.AI_PROVIDER === undefined &&
+    // including a switch with an explicit model, but never its legacy clear.
+    const envCarriesModelOrEffort = (envChanges?.AI_PROVIDER === undefined || explicitModel) &&
       (typeof envChanges?.ORCHESTRATOR_MODEL === 'string' || typeof envChanges?.ORDEWELL_PLANNER_EFFORT === 'string');
     if (typeof changes.orchestratorModel === 'string' || typeof changes.plannerThinkingEffort === 'string' || envCarriesModelOrEffort) {
       const rememberProvider = switchedToProvider ?? new WebConfig({
@@ -437,11 +418,11 @@ export class OrchestratorPool {
   async getInstalledRunners(): Promise<RunnersResponse['runners']> {
     const config = new WebConfig({ enabledRunners: this.enabledRunnerOverride() });
     const enabled = new Set(config.enabledRunners);
-    const plugins = this.registry.list();
+    const runners = this.registry.list();
     const installedIds = new Set(
-      await this.runnerInstallation.filterInstalled(plugins.map((p) => p.manifest.name)),
+      await this.runnerInstallation.filterInstalled(runners.map((p) => p.manifest.name)),
     );
-    return plugins
+    return runners
       .filter((p) => installedIds.has(p.manifest.name))
       .map((p) => ({
         id: p.manifest.name,

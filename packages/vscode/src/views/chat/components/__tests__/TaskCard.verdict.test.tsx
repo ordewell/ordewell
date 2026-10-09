@@ -6,7 +6,7 @@ import type { Task } from '@ordewell/core';
 
 const manuallyCompleted: Task = {
   id: 't1', order: 1, title: 'Test task', description: 'A task', type: 'ai', status: 'completed',
-  dependencies: [], subtasks: [], assignedRunner: 'claude-code', completionMarker: 'm1', taskMode: 'build',
+  dependencies: [], subtasks: [], assignedRunner: 'claude-code', taskMode: 'build',
   verdict: {
     outcome: 'pass', reason: 'Marked complete by the user', decidedAt: '',
     checks: [{ name: 'manual', passed: true, skipped: false, detail: 'Task was manually marked complete by the user.' }],

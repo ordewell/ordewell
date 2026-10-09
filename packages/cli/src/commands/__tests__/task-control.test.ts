@@ -130,7 +130,7 @@ describe('task control commands', () => {
         res.setHeader('Content-Type', 'application/json');
         if (req.url?.includes('/sessions/')) return res.end(JSON.stringify(PLAN));
         res.statusCode = 400;
-        res.end(JSON.stringify({ error: 'Task "Third" cannot be continued: it ran in a terminal, so there is no saved session to resume. Use Retry instead.' }));
+        res.end(JSON.stringify({ error: 'Task "Third" cannot be continued: its runner left no saved session to resume. Use Retry instead.' }));
       });
     });
     const { handleContinue } = await import('../task-control');

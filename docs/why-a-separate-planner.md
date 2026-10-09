@@ -17,7 +17,7 @@ I split the problem in two instead:
 1. **A planner** — a cheap, fast model that *only* researches the repo (read-only) and emits a
    structured plan: an ordered list of tasks, a dependency graph, and a per-task assignment of
    *which model*, *how much thinking effort*, and *build-vs-plan mode* each task should run with.
-2. **Executors** — the actual coding agents (Claude Code, OpenCode, or any CLI via a plugin) that
+2. **Executors** — the actual coding agents (Claude Code, Codex or OpenCode through structured connectors) that
    each run *one* task, in their own session, with the model the planner picked for that task.
 
 The planner never writes code. The executors never plan the whole job. This note is about why that
@@ -108,8 +108,10 @@ being a global dial and becomes a scheduling decision:
 - A docs or config task → cheap model, low effort, and `testingStrategy: none`.
 - A security-sensitive refactor → strong model, high effort, with an inline verification command
   appended to its own prompt.
-- An analysis-only task → `taskMode: plan`, which passes the runner's read-only flag
-  (`--permission-mode plan` for Claude, `--agent plan` for OpenCode) so it physically cannot edit.
+- An analysis-only task → `taskMode: plan`, which selects the runner's native
+  planning mode. Task modes are distinct from the harness planner's stricter
+  controls; native planning modes can permit plan-file writes. See
+  [ADR-0008](adr/0008-planner-exploration-envelope.md).
 
 The planner is making a portfolio decision across the whole job, not a single global setting. That's
 only expressible because the plan is a list of independently-parameterized tasks instead of one

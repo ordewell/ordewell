@@ -22,11 +22,16 @@ const TUI_ONLY: Record<string, string> = {
 
 /** CLI-only commands: a daemon, a wizard or a catalog has no slash equivalent. */
 const CLI_ONLY = [
-  'web', 'setup', 'plugins', 'models', 'skills', 'tui', 'status',
+  'web', 'setup', 'models', 'skills', 'tui', 'status',
   'stop-server', 'run-task', 'mark-complete', 'plan',
 ];
 
 describe('CLI ↔ TUI command parity', () => {
+  it('has no terminal command on either surface', () => {
+    expect(Object.keys(COMMANDS)).not.toContain('terminal');
+    expect(SLASH_COMMANDS.map((command) => command.name)).not.toContain('terminal');
+  });
+
   it.each(SLASH_COMMANDS.filter((c) => !(c.name in TUI_ONLY)).map((c) => c.name))(
     'exposes /%s as a subcommand',
     (name) => {

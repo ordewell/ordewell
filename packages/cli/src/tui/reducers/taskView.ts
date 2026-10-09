@@ -6,10 +6,10 @@ import { say } from '../transcript';
 import { step, type Step, type Action } from './shared';
 
 /*
- * The chat pane swapped for one structured task's log (ADR-0018, V1). Opening
+ * The chat pane swapped for one task's log (ADR-0018, V1). Opening
  * reads the saved log so the view has its history; the live `task_log` stream
  * then folds into the same core view, deduped against what the file already
- * held. Terminal tasks never reach here — they keep their OS terminal.
+ * held.
  */
 
 /** Open a task's log in the chat pane, reading its latest saved attempt first. */
@@ -28,16 +28,6 @@ export function openTaskView(state: TuiState, sessionId: string, taskId: string)
   };
   // Focus the composer: the task view's whole point is talking to the runner.
   return step({ ...state, taskView, focus: 'chat', scroll: 0 }, [{ type: 'openTaskLog', sessionId, taskId }]);
-}
-
-/**
- * `t` and `/terminal` on a structured task open its view; every other task
- * still opens its own terminal, exactly as before.
- */
-export function openTaskTerminalOrView(state: TuiState, sessionId: string, taskId: string): Step {
-  const task = findTask(state.tasks, taskId);
-  if (task?.transport?.kind === 'structured') return openTaskView(state, sessionId, taskId);
-  return step(state, [{ type: 'openTaskTerminal', sessionId, taskId }]);
 }
 
 /**
@@ -116,20 +106,19 @@ export function announceApprovals(state: TuiState, action: Extract<Action, { typ
   if (state.taskView?.taskId === action.taskId) return state;
   const task = findTask(state.tasks, action.taskId);
   const spoken = action.events.reduce((s, event) => (event.type === 'approval_requested'
-    ? say(s, 'system', `· Task ${task?.order ?? '?'} waits for approval: ${runnerToolSubject(event.tool, event.args)} — t on it, then ctrl-y to allow or ctrl-g to deny`)
+    ? say(s, 'system', `· Task ${task?.order ?? '?'} waits for approval: ${runnerToolSubject(event.tool, event.args)} — enter on it, then ctrl-y to allow or ctrl-g to deny`)
     : s), state);
   return spoken !== state ? { ...spoken, scroll: state.scroll } : spoken;
 }
 
 /**
  * A task's checkpoint question, said in the chat pane wherever the user is:
- * the first line of it, and where the whole of it can be answered. A task with
- * no view of its own is answered by `/checkpoint`.
+ * the first line of it, and where the whole of it can be answered.
  */
 export function announceCheckpoint(state: TuiState, action: Extract<Action, { type: 'taskCheckpoint' }>): TuiState {
   const task = findTask(state.tasks, action.taskId) ?? state.tasks.find((t) => t.title === action.title);
   const label = task ? `Task ${task.order}` : action.title;
-  const where = task?.transport?.kind === 'structured' ? 't on it to answer' : `/checkpoint ${task?.order ?? '<id>'} approve|reject to answer`;
+  const where = 'enter on it to answer';
   const spoken = say(state, 'system', `· ${label} asks: ${truncateCheckpointSummary(action.summary)} — ${where}`);
   return { ...spoken, scroll: state.scroll };
 }

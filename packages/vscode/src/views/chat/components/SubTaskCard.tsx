@@ -33,7 +33,7 @@ interface SubTaskCardProps {
   onMarkComplete?: (taskId: string) => void;
   onMarkIncomplete?: (taskId: string) => void;
   onRunTask?: (taskId: string) => void;
-  /** Open (or focus) this structured subtask's log tab (ADR-0018, V1). */
+  /** Open (or focus) this subtask's log tab (ADR-0018, V1). */
   onOpenLog?: (taskId: string) => void;
 }
 
@@ -61,7 +61,6 @@ export default function SubTaskCard({ task, parentTask, models, modes, runners, 
   const runnerAbbrev = effectiveRunner ? (RUNNER_ABBREV[effectiveRunner] ?? effectiveRunner.slice(0, 2).toUpperCase()) : null;
   const row = taskRowView(task, { parent: parentTask, placement: 'subtask' });
   const status = statusBadge(row);
-  const isStructured = task.transport?.kind === 'structured';
 
   const handlePromptSave = () => {
     if (editingPrompt !== null && editingPrompt !== task.prompt) {
@@ -85,7 +84,7 @@ export default function SubTaskCard({ task, parentTask, models, modes, runners, 
         </span>
         <span className="subtask-title-text">{task.title}</span>
 
-        {isStructured && onOpenLog && (
+        {onOpenLog && (
           <button type="button" className="task-log-open-btn"
             onClick={(e) => { e.stopPropagation(); onOpenLog(task.id); }}
             title="Open this task's log in an editor tab">

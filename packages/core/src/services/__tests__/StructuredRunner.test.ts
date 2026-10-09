@@ -1,13 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { StructuredRunner } from '../StructuredRunner';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
-import { HeadlessSession } from '../HeadlessRunner';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
-import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest';
-import { isStructuredSession, type ITerminalSession, type StructuredEvent, type StructuredTurnEnd } from '../../interfaces/ITerminalRunner';
-import { TaskModeUnsupportedError, type AgentEvent, type AgentStartOptions, type TaskModeAgentAdapter } from '../harness/AgentAdapter';
+import type { IRunnerSession, StructuredEvent, StructuredTurnEnd } from '../../interfaces/IRunner';
+import type { AgentEvent, SpawnFn, AgentStartOptions, TaskModeAgentAdapter, TaskStartOptions } from '../harness/AgentAdapter';
+import type { OrdewellMcpServer } from '../mcp/OrdewellMcpServer';
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
-import type { SpawnFn } from '../HeadlessRunner';
 import { claudeTurnEndQueue, fakeSpawn, fixture, type FakeSpawnResult, type ScriptedReply } from './harnessTestKit';
 
 /**
@@ -50,8 +48,7 @@ function options(overrides: Partial<RunnerSpawnOptions> = {}): RunnerSpawnOption
 }
 
 /** Everything a session reports, in order, plus a way to wait for the next turn end. */
-function observe(session: ITerminalSession) {
-  if (!isStructuredSession(session)) throw new Error('not a structured session');
+function observe(session: IRunnerSession) {
   const chunks: string[] = [];
   const events: StructuredEvent[] = [];
   const turnEnds: StructuredTurnEnd[] = [];
@@ -93,7 +90,12 @@ async function until(condition: () => boolean): Promise<void> {
  * first. A test that acts on the first turn waits until it was sent.
  */
 async function firstTurn(spawned: FakeSpawnResult): Promise<void> {
-  await until(() => (spawned.processes[0]?.written.length ?? 0) > 0);
+  await until(() => userTurns(spawned.processes[0]?.written ?? []).length > 0);
+}
+
+/** What the session wrote to the runner after the attach check every spawn opens with. */
+function afterAttachCheck(written: string[]): string[] {
+  return written.filter((line) => !line.includes('"subtype":"mcp_status"'));
 }
 
 describe('StructuredRunner out-of-turn output', () => {
@@ -186,9 +188,9 @@ describe('StructuredRunner spawn', () => {
   it.each([
     ['adaptive', 'sonnet', ['--thinking', 'adaptive']],
     ['max', 'sonnet', ['--thinking', 'enabled', '--effort', 'max']],
-    // Same gate as the terminal template: effort only rides with a model.
+    // Effort only rides with a model.
     ['high', undefined, []],
-  ])('maps effort %s (model %s) the way the terminal transport does', async (thinkingEffort, modelId, expected) => {
+  ])('maps effort %s (model %s) the way the manifest does', async (thinkingEffort, modelId, expected) => {
     const { runner, spawned } = harness([]);
     const session = await runner.spawn(options({ thinkingEffort, modelId }));
     const args = spawned.lastArgs();
@@ -229,25 +231,19 @@ describe('StructuredRunner spawn', () => {
     expect(spawns[0].cwd).toBe('/repo');
     expect(spawns[0].env.DATABASE_URL).toBe('postgres://local');
     expect(userTurns(spawned.processes[0].written)).toEqual(['Do the task']);
-    expect(session.interactive).toBeUndefined();
     session.kill();
   });
 
-  it('refuses a runner without a task-mode connector', async () => {
+  it('refuses an unknown runner before spawning a process', async () => {
     const { runner, spawned } = harness([]);
-    const withPlugin = new class extends RunnerRegistry {
-      override get(id: string) {
-        return id === 'my-plugin' ? { manifest: { ...CLAUDE_CODE_MANIFEST, name: 'my-plugin' }, source: 'user' as const } : super.get(id);
-      }
-    }();
-    await expect(runner.spawn(options({ runner: 'my-plugin', registry: withPlugin }))).rejects.toBeInstanceOf(TaskModeUnsupportedError);
+    await expect(runner.spawn(options({ runner: 'removed-runner' }))).rejects.toThrow('No runner manifest is registered for "removed-runner".');
     expect(spawned.processes).toHaveLength(0);
     expect(runner.activeCount).toBe(0);
   });
 });
 
 describe('StructuredSession output', () => {
-  it('writes the done marker whole even though it streamed in four deltas, after one line per tool call', async () => {
+  it('writes a line whole even though it streamed in four deltas, after one line per tool call', async () => {
     const { runner } = harness([fixture('claude-code', 'task-marker')]);
     const turn = observe(await runner.spawn(options()));
     await turn.nextTurnEnd();
@@ -261,15 +257,7 @@ describe('StructuredSession output', () => {
     turn.session.kill();
   });
 
-  it('writes a checkpoint marker whole', async () => {
-    const { runner } = harness([fixture('claude-code', 'task-checkpoint')]);
-    const turn = observe(await runner.spawn(options()));
-    await turn.nextTurnEnd();
-    expect(turn.chunks.some((chunk) => /<<<ORDEWELL_CHECKPOINT:\s*about to delete README\.md>>>/.test(chunk))).toBe(true);
-    turn.session.kill();
-  });
-
-  it('ends a turn without a marker as a completed turn, and waits', async () => {
+  it('ends a turn without a task_complete call as a completed turn, and waits', async () => {
     const { runner } = harness([fixture('claude-code', 'task-no-marker')]);
     const turn = observe(await runner.spawn(options()));
     await turn.nextTurnEnd();
@@ -320,7 +308,7 @@ describe('StructuredSession output', () => {
 
     expect(turn.session.answerPermission(id, { decision: 'allow' })).toBe(true);
     expect(turn.events).toContainEqual({ type: 'permission_decided', id, decision: { decision: 'allow' } });
-    const answer = JSON.parse(spawned.processes[0].written[1]) as { response: { request_id: string } };
+    const answer = JSON.parse(afterAttachCheck(spawned.processes[0].written)[1]) as { response: { request_id: string } };
     expect(answer.response.request_id).toBe('9a948184-6792-4049-85b1-3e837387f618');
     expect(turn.session.answerPermission(id, { decision: 'deny' })).toBe(false);
     turn.session.kill();
@@ -338,6 +326,7 @@ describe('StructuredSession output', () => {
       interrupt: async () => true,
       onProcessExit: () => {},
       answerPermission: (id) => { answered.push(id); return true; },
+      mcpAttached: async () => true,
     };
     const runner = new StructuredRunner({ createAdapter: () => adapter });
     const turn = observe(await runner.spawn(options({ runner: 'opencode', mode: 'build' })));
@@ -471,7 +460,7 @@ describe('StructuredSession interrupt', () => {
     expect(turn.turnEnds).toEqual(['interrupted']);
     expect(turn.session.turnState()).toBe('idle');
     expect(spawned.processes).toHaveLength(1);
-    expect(JSON.parse(spawned.processes[0].written[1])).toMatchObject({ type: 'control_request', request: { subtype: 'interrupt' } });
+    expect(JSON.parse(afterAttachCheck(spawned.processes[0].written)[1])).toMatchObject({ type: 'control_request', request: { subtype: 'interrupt' } });
 
     turn.session.sendMessage('Say only: ok');
     await turn.nextTurnEnd();
@@ -517,7 +506,7 @@ describe('StructuredSession interrupt', () => {
     const turn = observe(await runner.spawn(options()));
     await turn.nextTurnEnd();
     await turn.session.interrupt();
-    expect(spawned.processes[0].written).toHaveLength(1);
+    expect(afterAttachCheck(spawned.processes[0].written)).toHaveLength(1);
     expect(turn.turnEnds).toEqual(['completed']);
     turn.session.kill();
   });
@@ -547,8 +536,100 @@ describe('StructuredSession exit', () => {
     expect(turn.turnEnds).toEqual(['failed']);
     expect(turn.session.getOutput()).toContain('fatal: out of credits');
   });
+});
 
-  it('is not a structured session when it is a terminal one', () => {
-    expect(isStructuredSession(new HeadlessSession('h', 't', (() => { throw new Error('unused'); }) as SpawnFn))).toBe(false);
+describe('StructuredRunner: tools or nothing (ADR-0022)', () => {
+  /** One fake process per spawn, its attach report scripted; the server records what it issued and took back. */
+  function attaching(reports: boolean[], { issueFails = 0 }: { issueFails?: number } = {}) {
+    const adapters: Array<{ sent: string[]; disposed: boolean; mcp?: TaskStartOptions['mcp'] }> = [];
+    const issued: string[] = [];
+    const revoked: string[] = [];
+    let failures = issueFails;
+    const server = {
+      issueTaskToken: async () => {
+        if (failures > 0) {
+          failures -= 1;
+          throw new Error('listen EADDRINUSE');
+        }
+        const token = `tok-${issued.length + 1}`;
+        issued.push(token);
+        return { url: 'http://127.0.0.1:1/mcp', token };
+      },
+      revoke: (token: string) => { revoked.push(token); },
+    } as unknown as OrdewellMcpServer;
+    const createAdapter = (): TaskModeAgentAdapter => {
+      const record: (typeof adapters)[number] = { sent: [], disposed: false };
+      const attached = reports[adapters.length] ?? false;
+      adapters.push(record);
+      return {
+        agentId: 'claude-code',
+        start: async (opts) => { if (opts.kind === 'task') record.mcp = opts.mcp; },
+        send: async (message) => { record.sent.push(message); },
+        nativeSessionId: () => null,
+        dispose: () => { record.disposed = true; },
+        interrupt: async () => true,
+        onProcessExit: () => {},
+        answerPermission: () => false,
+        mcpAttached: async () => attached,
+      };
+    };
+    const notices: string[] = [];
+    const runner = new StructuredRunner({ createAdapter, mcp: server });
+    const spawn = () => runner.spawn(options({ onNotice: (message) => notices.push(message) }));
+    return { runner, spawn, adapters, issued, revoked, notices };
+  }
+
+  it('sends the prompt to the first process when the runner reports the server connected', async () => {
+    const env = attaching([true]);
+    const session = await env.spawn();
+    await until(() => env.adapters[0].sent.length > 0);
+
+    expect(env.adapters).toHaveLength(1);
+    expect(env.adapters[0].mcp?.headers.Authorization).toContain('tok-1');
+    expect(env.adapters[0].sent).toEqual(['Do the task']);
+    expect(env.notices).toEqual([]);
+    session.kill();
+  });
+
+  it('kills a process that did not attach and respawns once, on a fresh token, saying so', async () => {
+    const env = attaching([false, true]);
+    const session = await env.spawn();
+    await until(() => env.adapters[1]?.sent.length > 0);
+
+    expect(env.adapters).toHaveLength(2);
+    expect(env.adapters[0]).toMatchObject({ disposed: true, sent: [] });
+    expect(env.revoked).toContain('tok-1');
+    expect(env.adapters[1].mcp?.headers.Authorization).toContain('tok-2');
+    expect(env.adapters[1].sent).toEqual(['Do the task']);
+    expect(env.runner.activeCount).toBe(1);
+    expect(env.notices).toHaveLength(1);
+    expect(env.notices[0]).toContain('claude-code started without Ordewell\'s tools');
+    expect(env.notices[0]).toContain('did not report Ordewell\'s MCP server connected');
+    session.kill();
+  });
+
+  it('respawns once when the server could not issue a token', async () => {
+    const env = attaching([true], { issueFails: 1 });
+    const session = await env.spawn();
+    await until(() => env.adapters[0]?.sent.length > 0);
+
+    expect(env.adapters).toHaveLength(1);
+    expect(env.notices[0]).toContain('could not issue a token (listen EADDRINUSE)');
+    session.kill();
+  });
+
+  it('fails the start when the respawn does not attach either, with nothing sent and nothing left running', async () => {
+    const env = attaching([false, false]);
+
+    await expect(env.spawn()).rejects.toThrow(
+      'Could not start claude-code with Ordewell\'s tools, so the task was not sent to it. First spawn: claude-code did not report Ordewell\'s MCP server connected. Respawn: claude-code did not report Ordewell\'s MCP server connected.',
+    );
+    await tick();
+
+    expect(env.adapters).toHaveLength(2);
+    expect(env.adapters.every((a) => a.disposed && a.sent.length === 0)).toBe(true);
+    expect(env.revoked).toEqual(['tok-1', 'tok-2']);
+    expect(env.runner.activeCount).toBe(0);
+    expect(env.notices).toHaveLength(1);
   });
 });

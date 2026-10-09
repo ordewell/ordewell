@@ -3,11 +3,12 @@
  * End-to-end execution-pipeline driver.
  *
  * Tests the full plan -> execute -> verify -> advance loop against the REAL
- * core stack (TaskOrchestrator + VerdictEngine + HeadlessRunner). No mocks for
- * the orchestrator or verifier — only the agent runner is faked or real.
+ * core stack (TaskOrchestrator + VerdictEngine + StructuredRunner). No mocks for
+ * the orchestrator or verifier — only the agent CLI is faked or real.
  *
  * Modes (toggle with --runner):
- *   --runner fake      Deterministic fake-runner shell script (no LLM, no key).
+ *   --runner fake      The built-in claude-code connector driving the fake
+ *                      `claude` in fake-claude/ (first on PATH; no LLM, no key).
  *   --runner opencode  Real opencode sessions with DeepSeek V4 Flash.
  *
  * The plan has 3 tasks: A and B run in parallel (no deps), C depends on A.
@@ -46,7 +47,16 @@ if (RUNNER === 'opencode' && !process.env.OPENROUTER_API_KEY) {
   process.exit(2);
 }
 
-const RUNNER_ID = RUNNER === 'fake' ? 'fake-runner' : 'opencode';
+const RUNNER_ID = RUNNER === 'fake' ? 'claude-code' : 'opencode';
+
+// Before the first spawn: the runner environment is built from this PATH, so
+// the fake shadows any real `claude` the machine has.
+if (RUNNER === 'fake') {
+  process.env.PATH = [path.join(__dirname, 'fake-claude'), process.env.PATH].filter(Boolean).join(path.delimiter);
+}
+
+// What the fake `claude` reads from a prompt (see fake-claude/fake-claude.mjs).
+const cue = (spec) => `<fake-claude>${JSON.stringify(spec)}</fake-claude>`;
 
 // ---------- dummy workspace ----------
 function makeDummyWorkspace() {
@@ -55,32 +65,6 @@ function makeDummyWorkspace() {
   fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'src', 'index.ts'), 'export function main() { return 42; }\n');
   return dir;
-}
-
-// ---------- fake runner manifest (in-memory, no install needed) ----------
-function fakeRunnerManifest() {
-  const runSh = path.join(__dirname, 'fake-runner', 'run.sh');
-  return {
-    name: 'fake-runner',
-    displayName: 'Fake Runner',
-    description: 'Deterministic fake agent for end-to-end pipeline testing',
-    version: '0.1.0',
-    runner: {
-      command: 'bash',
-      argsTemplate: [runSh, '{{prompt}}'],
-      promptInArgs: true,
-    },
-    features: {
-      modelSelection: false,
-      thinkingEffort: false,
-      planMode: false,
-      planModeFlag: '',
-    },
-    modelDiscovery: {
-      method: 'hardcoded',
-      fallbackModels: [{ modelId: 'fake', modelLabel: 'Fake' }],
-    },
-  };
 }
 
 // ---------- config ----------
@@ -123,16 +107,11 @@ async function main() {
   const workspace = makeDummyWorkspace();
   console.log(`Dummy workspace: ${workspace}`);
 
-  // Set up registry
+  // claude-code and opencode are builtins in RunnerRegistry
   const registry = new core.RunnerRegistry();
-  if (RUNNER === 'fake') {
-    // Inject fake-runner manifest directly (bypasses filesystem install)
-    registry.plugins.set('fake-runner', { manifest: fakeRunnerManifest(), source: 'builtin' });
-  }
-  // opencode is already a builtin in RunnerRegistry
 
-  // Set up real HeadlessRunner (same one the web server uses)
-  const runner = new core.HeadlessRunner();
+  // The runner every host hands a structured task to
+  const runner = new core.StructuredRunner();
 
   // Set up orchestrator with real config/notifications/runner
   const config = makeConfig(RUNNER_ID);
@@ -140,7 +119,7 @@ async function main() {
   const orchestrator = core.TaskOrchestrator.compose({
     config,
     notifications,
-    terminalRunner: runner,
+    runner: runner,
     registry,
     workspaceRoot: () => workspace,
   });
@@ -159,22 +138,22 @@ async function main() {
   // Build a plan: A and B parallel (no deps), C depends on A
   const modelAssignment = RUNNER === 'opencode'
     ? { modelId: MODEL_ID, modelLabel: 'DeepSeek V4 Flash' }
-    : { modelId: 'fake', modelLabel: 'Fake' };
+    : { modelId: 'fake-claude', modelLabel: 'Fake Claude' };
 
   const tasks = [
     core.createTask({
       id: 'A', order: 1, title: 'Task A (parallel)',
-      prompt: 'Create a file called A.txt in the workspace root with the text "hello from A".',
+      prompt: `Create a file called A.txt in the workspace root with the text "hello from A".${RUNNER === 'fake' ? cue({ delayMs: 400, write: { 'A.txt': 'hello from A' } }) : ''}`,
       assignedRunner: RUNNER_ID, assignedModel: modelAssignment, taskMode: 'build',
     }),
     core.createTask({
       id: 'B', order: 2, title: 'Task B (parallel)',
-      prompt: 'Create a file called B.txt in the workspace root with the text "hello from B".',
+      prompt: `Create a file called B.txt in the workspace root with the text "hello from B".${RUNNER === 'fake' ? cue({ delayMs: 400, write: { 'B.txt': 'hello from B' } }) : ''}`,
       assignedRunner: RUNNER_ID, assignedModel: modelAssignment, taskMode: 'build',
     }),
     core.createTask({
       id: 'C', order: 3, title: 'Task C (depends on A)',
-      prompt: 'Read the file A.txt and create C.txt with its contents reversed.',
+      prompt: `Read the file A.txt and create C.txt with its contents reversed.${RUNNER === 'fake' ? cue({ write: { 'C.txt': 'A morf olleh' } }) : ''}`,
       dependencies: ['A'],
       assignedRunner: RUNNER_ID, assignedModel: modelAssignment, taskMode: 'build',
     }),
@@ -230,7 +209,8 @@ async function main() {
     ['Task C in execution log with pass verdict', () => log.some(e => e.id === 'C' && e.verdict?.outcome === 'pass')],
     ['Execution completed (auto-advance worked)', () => executionComplete],
     ['All 3 tasks in execution log', () => log.length === 3],
-    ['No tasks left in plan (all archived)', () => orchestrator.storeInstance.planTasks.length === 0],
+    // The plan keeps its tasks after a run; completion is their status, not their absence.
+    ['Every plan task is completed', () => orchestrator.storeInstance.planTasks.every(t => t.status === 'completed')],
     ['Orchestrator is no longer running', () => !orchestrator.isRunning],
   ];
 

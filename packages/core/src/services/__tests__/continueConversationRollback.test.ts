@@ -1,19 +1,19 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createTask, type LegacyPlanState } from '../../models/Task';
-import { FakeTerminalSession, makeSession, saves, testWorkspace } from './sessionTestKit';
-import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
+import { FakeRunnerSession, makeSession, saves, testWorkspace } from './sessionTestKit';
+import type { IRunner } from '../../interfaces/IRunner';
 
 /** A runner double that records the order tasks were spawned in. */
-function recordingRunner(spawned: string[]): ITerminalRunner {
+function recordingRunner(spawned: string[]): IRunner {
   return {
     spawn: vi.fn(async ({ taskId }: { taskId: string }) => {
       spawned.push(taskId);
-      return new FakeTerminalSession(`s-${taskId}`, taskId);
+      return new FakeRunnerSession(`s-${taskId}`, taskId);
     }),
     stop: vi.fn(),
     stopAll: vi.fn(),
     activeCount: 0,
-  } as unknown as ITerminalRunner;
+  } as unknown as IRunner;
 }
 
 function dialoguePlan(): LegacyPlanState {
@@ -136,17 +136,17 @@ describe('continueConversation rollback when a task settles mid-turn', () => {
   // with it. That save is not the turn landing: a turn that then fails still
   // takes its message back out, and the undo reaches disk too.
   it('rolls back the failed turn in memory and on disk', async () => {
-    const live = new Map<string, FakeTerminalSession>();
+    const live = new Map<string, FakeRunnerSession>();
     const runner = {
       spawn: vi.fn(async ({ taskId }: { taskId: string }) => {
-        const s = new FakeTerminalSession(`s-${taskId}`, taskId);
+        const s = new FakeRunnerSession(`s-${taskId}`, taskId);
         live.set(taskId, s);
         return s;
       }),
       stop: vi.fn(),
       stopAll: vi.fn(),
       activeCount: 0,
-    } as unknown as ITerminalRunner;
+    } as unknown as IRunner;
     let finishTask = (): void => {};
     const session = makeSession({
       runner,
@@ -166,8 +166,8 @@ describe('continueConversation rollback when a task settles mid-turn', () => {
     session.loadPlan(plan, 'build me a parser', testWorkspace, { persist: false });
     await session.executePlan();
     finishTask = () => {
-      const marker = session.planTasks[0].completionMarker;
-      live.get('a')!.emitOutput(`<<<ORDEWELL_DONE_${marker}>>>\n`);
+      live.get('a')!.reportComplete({ status: 'done', summary: '' });
+      live.get('a')!.emitOutput(`\n`);
       live.get('a')!.emitExit(0);
     };
 

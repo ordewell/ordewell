@@ -5,7 +5,6 @@ import { handleStop } from './stop';
 import { handleWeb } from './web';
 import { handleModels } from './models';
 import { handleSetup } from './setup';
-import { handlePlugins } from './plugins';
 import { handleSkills } from './skills';
 import { handleAllowlist } from './allowlist';
 import { handleMarkComplete, handleSkip, handleUncomplete } from './mark-complete';
@@ -21,7 +20,6 @@ import { handleParallel } from './parallel';
 import { handleKey } from './key';
 import { handleAuto, handleRefresh, handleRunners } from './runners';
 import { handleApprove } from './approve';
-import { handleTerminal } from './terminal';
 import {
   handleTaskDeps, handleTaskEffort, handleTaskMode, handleTaskModel, handleTaskOps, handleTaskRunner, handleTaskSkills,
 } from './task-assign';
@@ -54,7 +52,6 @@ export const COMMANDS: Record<string, (args: string[]) => Promise<void> | void> 
   auto: handleAuto,
   refresh: handleRefresh,
   setup: handleSetup,
-  plugins: handlePlugins,
   skills: handleSkills,
   'mark-complete': handleMarkComplete,
   complete: handleMarkComplete,
@@ -75,7 +72,6 @@ export const COMMANDS: Record<string, (args: string[]) => Promise<void> | void> 
   'task-deps': handleTaskDeps,
   'task-skills': handleTaskSkills,
   'task-ops': handleTaskOps,
-  terminal: handleTerminal,
   'sessions': handleSessions,
   fork: handleFork,
   compact: handleCompact,

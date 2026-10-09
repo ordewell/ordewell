@@ -41,7 +41,7 @@ function deepMerge(base: Record<string, unknown>, over: Record<string, unknown>)
  * The `OPENCODE_CONFIG_CONTENT` for a process given the Ordewell server: the
  * remote server entry with its token header, and an allow rule so a call never
  * waits on a person (ADR-0022, S3). Deep-merged over `existing`, which a
- * terminal manifest or a workspace variable may already have set. Null when
+ * runner manifest or a workspace variable may already have set. Null when
  * `existing` is not a JSON object — it cannot be merged, and replacing it would
  * silently drop whatever it carried, so the caller runs without the server.
  */

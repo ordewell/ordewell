@@ -232,35 +232,24 @@ describe('composeAugmentedPrompt', () => {
   });
 
   it('returns the base prompt verbatim when there are no augmentations to add', () => {
-    const a = createTask({ id: 'a', order: 1, title: 'A', prompt: 'solo', completionMarker: 'mk-a' });
+    const a = createTask({ id: 'a', order: 1, title: 'A', prompt: 'solo' });
     const b = createTask({ id: 'b', order: 2, title: 'B', prompt: 'pb' });
     // <3 tasks → no plan map. No deps → no prior outputs.
     const out = composeAugmentedPrompt(a, [a, b]);
-    expect(out).toContain('DONE_mk-a>>>');
     expect(out.startsWith('solo\n\nWhen you')).toBe(true);
   });
 
-  it('appends a completion marker instruction with the task UUID', () => {
+  it('asks for a task_complete call, and teaches no text marker', () => {
     const a = createTask({ id: 'a', order: 1, title: 'A', prompt: 'do work' });
     const b = createTask({ id: 'b', order: 2, title: 'B', prompt: 'pb' });
-    const c = createTask({ id: 'c', order: 3, title: 'C', prompt: 'pc', completionMarker: 'marker-uuid-123' });
+    const c = createTask({ id: 'c', order: 3, title: 'C', prompt: 'pc' });
 
     const out = composeAugmentedPrompt(c, [a, b, c]);
-    expect(out).toContain('<<<ORDEWELL_');
-    expect(out).toContain('DONE_marker-uuid-123>>>');
-    expect(out).toContain('When you have fully completed this task');
+    expect(out).toContain('When you have fully completed this task, call the `task_complete` tool with status `done`');
+    expect(out).toContain('`blocked` or `failed`');
+    expect(out).not.toContain('ORDEWELL');
+    expect(out).not.toContain('marker');
   });
-
-  it('never contains the assembled completion token — TUIs echo the prompt and the watcher scans terminal output', () => {
-    const a = createTask({ id: 'a', order: 1, title: 'A', prompt: 'do work', completionMarker: 'mk-echo' });
-    const b = createTask({ id: 'b', order: 2, title: 'B', prompt: 'pb' });
-
-    const out = composeAugmentedPrompt(a, [a, b]);
-    expect(out).not.toContain('<<<ORDEWELL_DONE_mk-echo>>>');
-    // even after whitespace collapsing (terminal soft-wrap flattening)
-    expect(out.replace(/\s+/g, '')).not.toContain('<<<ORDEWELL_DONE_mk-echo>>>');
-  });
-
   const TDD: TaskSkillSnapshot = { name: 'tdd', source: 'global', path: '/g/tdd/SKILL.md', content: 'RED then GREEN.\n' };
 
   it('puts each attached skill body in the prompt, framed with its name', () => {
@@ -294,56 +283,10 @@ describe('composeAugmentedPrompt', () => {
     ];
     const out = composeAugmentedPrompt(tasks[0], tasks);
     expect(out).toContain('## Human-in-the-loop checkpoints');
-    expect(out).toContain('<<<ORDEWELL_');
-    expect(out).toContain('CHECKPOINT:');
-    expect(out).toContain('ORDEWELL_CONTINUE');
-  });
-
-  it('never contains an assembled checkpoint token — an echoed prompt would checkpoint the task on spawn', () => {
-    const tasks = [
-      createTask({ id: 'a', order: 1, title: 'A', prompt: 'do work', autonomy: 'HITL' }),
-      createTask({ id: 'b', order: 2, title: 'B', prompt: 'pb' }),
-      createTask({ id: 'c', order: 3, title: 'C', prompt: 'pc' }),
-    ];
-    const out = composeAugmentedPrompt(tasks[0], tasks, { skills: [TDD] });
-    const checkpoint = /<<<ORDEWELL_CHECKPOINT:\s*(.*?)>>>/gs;
-    expect(out).not.toMatch(checkpoint);
-    // and after the soft-wrap flattening the watcher also scans
-    expect(out.replace(/\s+/g, '')).not.toMatch(checkpoint);
-  });
-
-  it('defuses marker tokens carried in a predecessor output tail', () => {
-    const dep = createTask({ id: 'a', order: 1, title: 'A', prompt: 'pa' });
-    dep.outputSummary = {
-      reviewReason: 'done after <<<ORDEWELL_CHECKPOINT: ask the user>>>',
-      logTail: 'final line: <<<ORDEWELL_DONE_mk-a>>>',
-      capturedAt: '2026-01-01T00:00:00.000Z',
-    };
-    const task = createTask({ id: 'b', order: 2, title: 'B', prompt: 'pb', dependencies: ['a'] });
-
-    const out = composeAugmentedPrompt(task, [dep, task]);
-    expect(out).not.toMatch(/<<<ORDEWELL_CHECKPOINT:\s*(.*?)>>>/gs);
-    expect(out).not.toContain('<<<ORDEWELL_DONE_mk-a>>>');
-    // the text is still readable — only the token opener is broken
-    expect(out).toContain('<<<ORDEWELL-CHECKPOINT: ask the user>>>');
-    expect(out).toContain('<<<ORDEWELL-DONE>>>');
-  });
-
-  // A transcript is bound to its task by the marker id its prompt carries, so a
-  // dependent's transcript must not carry its predecessor's: a re-run of the
-  // predecessor would otherwise take the dependent's answer as its own.
-  it("never carries a predecessor's completion marker id into a dependent's prompt", () => {
-    const dep = createTask({ id: 'a', order: 1, title: 'A', prompt: 'pa', completionMarker: '0f6c2a1e-mk-a' });
-    dep.outputSummary = {
-      reviewReason: 'Verified: completion marker detected in agent output.',
-      logTail: 'All done.\n<<<ORDEWELL_DONE_0f6c2a1e-mk-a>>>',
-      capturedAt: '2026-01-01T00:00:00.000Z',
-    };
-    const task = createTask({ id: 'b', order: 2, title: 'B', prompt: 'pb', dependencies: ['a'], completionMarker: 'mk-b' });
-
-    const out = composeAugmentedPrompt(task, [dep, task]);
-    expect(out).toContain('All done.');
-    expect(out).not.toContain('0f6c2a1e-mk-a');
+    expect(out).toContain('Call the `checkpoint` tool');
+    expect(out).toContain('`continue`');
+    expect(out).toContain('`rejected:`');
+    expect(out).not.toContain('ORDEWELL');
   });
 
   it('includes checkpoint instructions for HITL tasks (sliceType=HITL)', () => {
@@ -394,74 +337,18 @@ describe('composeAugmentedPrompt', () => {
   });
 });
 
-describe('the completion instruction where the task_complete tool is given (ADR-0022)', () => {
-  const a = createTask({ id: 'a', order: 1, title: 'A', prompt: 'do work', completionMarker: 'mk-tool' });
-  const b = createTask({ id: 'b', order: 2, title: 'B', prompt: 'pb' });
-
-  it('asks for the tool call first, and for the marker in two halves as the fallback', () => {
-    const out = composeAugmentedPrompt(a, [a, b], { completionTool: true });
-
-    expect(out).toContain('call the `task_complete` tool with status `done`');
-    expect(out).toContain('`blocked` or `failed`');
-    expect(out.indexOf('task_complete')).toBeLessThan(out.indexOf('DONE_mk-tool>>>'));
-    expect(out).toContain('`<<<ORDEWELL_` immediately followed by `DONE_mk-tool>>>`');
-    expect(out).not.toContain('<<<ORDEWELL_DONE_mk-tool>>>');
-  });
-
-  it('names no tool where none is given', () => {
-    expect(composeAugmentedPrompt(a, [a, b])).not.toContain('task_complete');
-    expect(composeContinuationPrompt(a, 'go on')).not.toContain('task_complete');
-  });
-
-  it('asks a continued task for the tool call too', () => {
-    const out = composeContinuationPrompt(a, 'go on', { completionTool: true });
-
-    expect(out).toContain('call the `task_complete` tool with status `done`');
-    expect(out).toContain('`<<<ORDEWELL_` immediately followed by `DONE_mk-tool>>>`');
-  });
-});
-
-describe('the checkpoint instruction where the checkpoint tool is given (ADR-0022, V5)', () => {
-  const a = createTask({ id: 'a', order: 1, title: 'A', prompt: 'do work', completionMarker: 'mk-tool', autonomy: 'HITL' });
-
-  it('asks for the tool call first, and for the marker in two halves as the fallback', () => {
-    const out = composeAugmentedPrompt(a, [a], { completionTool: true });
-
-    expect(out).toContain('## Human-in-the-loop checkpoints');
-    expect(out).toContain('Call the `checkpoint` tool');
-    expect(out).toContain('`continue`');
-    expect(out).toContain('`rejected:`');
-    expect(out.indexOf('Call the `checkpoint` tool')).toBeLessThan(out.indexOf('`<<<ORDEWELL_` immediately followed by `CHECKPOINT:`'));
-    expect(out).not.toMatch(/<<<ORDEWELL_CHECKPOINT/);
-  });
-
-  it('teaches only the marker where no tool is given', () => {
-    expect(composeAugmentedPrompt(a, [a])).not.toContain('`checkpoint` tool');
-    expect(composeContinuationPrompt(a, 'go on')).not.toContain('`checkpoint` tool');
-  });
-
-  it('reminds a continued task of the tool, with the marker as the fallback', () => {
-    const out = composeContinuationPrompt(a, 'go on', { completionTool: true });
-
-    expect(out).toContain('call the `checkpoint` tool');
-    expect(out).toContain('`<<<ORDEWELL_` immediately followed by `CHECKPOINT:`');
-    expect(out).not.toContain('<<<ORDEWELL_CHECKPOINT');
-  });
-});
-
 describe('composeContinuationPrompt (ADR-0018, K1)', () => {
-  const task = createTask({ id: 't1', order: 1, title: 'Parse JSON', prompt: 'ORIGINAL PROMPT BODY', completionMarker: 'mk-1' });
+  const task = createTask({ id: 't1', order: 1, title: 'Parse JSON', prompt: 'ORIGINAL PROMPT BODY' });
 
-  it('leads with the user\'s message and ends with the task\'s own done marker, in two halves', () => {
+  it('leads with the user\'s message and ends asking for a task_complete call', () => {
     const prompt = composeContinuationPrompt(task, '  also handle arrays \n');
 
     expect(prompt.startsWith('also handle arrays\n')).toBe(true);
     expect(prompt).toContain('continuing this task in the same session');
     expect(prompt).toContain('recreated from the integration branch');
-    expect(prompt.endsWith('`<<<ORDEWELL_` immediately followed by `DONE_mk-1>>>` — joined into a single unbroken token, with no space, quote, or any other character between the two parts.')).toBe(true);
-    expect(prompt).not.toContain('<<<ORDEWELL_DONE_mk-1>>>');
+    expect(prompt).toContain('call the `task_complete` tool with status `done`');
+    expect(prompt).not.toContain('ORDEWELL');
   });
-
   it('does not resend the original prompt, the plan map or the prior outputs the session already holds', () => {
     const dep = createTask({ id: 't0', order: 0, title: 'Setup', status: 'completed', outputSummary: { reviewReason: 'ok', logTail: 'SETUP OUTPUT', capturedAt: '' } });
     const prompt = composeContinuationPrompt({ ...task, dependencies: ['t0'] }, 'go on');
@@ -479,19 +366,18 @@ describe('composeContinuationPrompt (ADR-0018, K1)', () => {
     expect(prompt).not.toContain('recreated from the integration branch');
   });
 
-  it('reminds a HITL task of the checkpoint protocol, without a literal checkpoint marker', () => {
+  it('reminds a HITL task of the checkpoint tool', () => {
     const plain = composeContinuationPrompt(task, 'go on');
     const hitl = composeContinuationPrompt({ ...task, autonomy: 'HITL' }, 'go on');
 
-    expect(plain).not.toContain('CHECKPOINT');
-    expect(hitl).toContain('`<<<ORDEWELL_` immediately followed by `CHECKPOINT:`');
-    expect(hitl).toContain('ORDEWELL_CONTINUE or ORDEWELL_REJECT');
-    expect(hitl).not.toContain('<<<ORDEWELL_CHECKPOINT');
+    expect(plain).not.toContain('`checkpoint` tool');
+    expect(hitl).toContain('call the `checkpoint` tool: its result is `continue` or `rejected: <why>`');
+    expect(hitl).not.toContain('ORDEWELL');
   });
 });
 
 describe('composeAugmentedPrompt — an ops task\'s previous attempt (ADR-0020)', () => {
-  const task = createTask({ id: 'o1', order: 1, title: 'Deploy', prompt: 'deploy it', completionMarker: 'mk-o1', ops: true });
+  const task = createTask({ id: 'o1', order: 1, title: 'Deploy', prompt: 'deploy it', ops: true });
 
   it('carries the last attempt\'s output and asks to check what exists before acting', () => {
     const prompt = composeAugmentedPrompt(task, [task], { previousAttempt: 'created rg-dev\n' });
@@ -499,12 +385,6 @@ describe('composeAugmentedPrompt — an ops task\'s previous attempt (ADR-0020)'
     expect(prompt).toContain('## Previous attempt');
     expect(prompt).toContain('check what already exists');
     expect(prompt).toContain('  created rg-dev');
-  });
-
-  it('defuses a done marker the last attempt printed, so the retry cannot pass on it', () => {
-    const prompt = composeAugmentedPrompt(task, [task], { previousAttempt: 'almost <<<ORDEWELL_DONE_mk-o1>>>' });
-
-    expect(prompt.split('## Previous attempt')[1]).not.toContain('<<<ORDEWELL_DONE_mk-o1>>>');
   });
 
   it('says so when the last attempt printed nothing, and adds nothing on a first attempt', () => {

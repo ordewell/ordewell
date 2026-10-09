@@ -4,12 +4,12 @@ import { TaskOrchestrator } from '../TaskOrchestrator';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import { createTask } from '../../models/Task';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
-import { fakeConfig, FakeStructuredSession, FakeTerminalSession, flushMicrotasks } from '../../testing';
+import { fakeConfig, FakeRunnerSession, flushMicrotasks } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 import type { AgentEvent, AgentStartOptions, TaskModeAgentAdapter } from '../harness/AgentAdapter';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
-import { isStructuredSession, type ITerminalRunner, type ITerminalSession, type StructuredEvent, type StructuredTurnEnd } from '../../interfaces/ITerminalRunner';
+import type { IRunner, IRunnerSession, StructuredEvent, StructuredTurnEnd } from '../../interfaces/IRunner';
 
 /**
  * Messages that reach a running structured task between tool calls
@@ -23,6 +23,7 @@ type SteerAnswer = 'accept' | 'refuse' | 'throw' | 'hold';
 
 /** A task adapter with no mid-turn delivery: each `send` stays open until the test ends it. */
 class TurnEndAdapter implements TaskModeAgentAdapter {
+  async mcpAttached(): Promise<boolean> { return true; }
   readonly agentId: string = 'claude-code';
   readonly sent: string[] = [];
   interruptAnswer: 'ack' | 'ignore' | 'hold' = 'ack';
@@ -125,8 +126,7 @@ function runnerOf<A extends TurnEndAdapter>(make: () => A) {
   return { runner, adapters };
 }
 
-function observe(session: ITerminalSession) {
-  if (!isStructuredSession(session)) throw new Error('not a structured session');
+function observe(session: IRunnerSession) {
   const events: StructuredEvent[] = [];
   const turnEnds: StructuredTurnEnd[] = [];
   const statesAtTurnEnd: string[] = [];
@@ -426,20 +426,20 @@ describe('a checkpoint answer typed at the task (ADR-0023)', () => {
 
 describe('the attempt\'s verdict when a message is read mid-turn', () => {
   function scheduled() {
-    const session = new FakeStructuredSession();
+    const session = new FakeRunnerSession();
     const runner = {
       spawn: async () => session,
       stop: () => session.kill(),
       stopAll: () => session.kill(),
       activeCount: 1,
-    } satisfies ITerminalRunner;
+    } satisfies IRunner;
     const orchestrator = TaskOrchestrator.compose({
-      config: fakeConfig(), notifications: fakeNotification(), terminalRunner: runner,
-      output: new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } }),
+      config: fakeConfig(), notifications: fakeNotification(), runner,
+      output: new BufferedTaskOutputSource(),
       registry: new RunnerRegistry(), workspaceRoot: () => '/repo',
       workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
     });
-    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Steered task', prompt: 'Do it', completionMarker: 'mk-1' })]);
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Steered task', prompt: 'Do it' })]);
     return { orchestrator, session };
   }
 
@@ -471,16 +471,16 @@ describe('the attempt\'s verdict when a message is read mid-turn', () => {
     orchestrator.stop();
   });
 
-  it('counts the marker the runner prints after the message, not the one before', async () => {
+  it('counts only the completion call after the message is delivered', async () => {
     const { orchestrator, session } = scheduled();
     await orchestrator.forceStartTask('t1');
     const id = orchestrator.sendTaskMessage('t1', 'Also add tests');
-    session.emitOutput('Original work\n<<<ORDEWELL_DONE_mk-1>>>\n');
+    session.reportComplete({ status: 'done', summary: 'Original work' });
     await flushMicrotasks(50);
     expect(orchestrator.storeInstance.get('t1')?.status).toBe('in_progress');
 
     session.deliverMidTurn(id);
-    session.emitOutput('Work with tests\n<<<ORDEWELL_DONE_mk-1>>>');
+    session.reportComplete({ status: 'done', summary: 'Work with tests' });
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')?.status).toBe('completed'));
     expect(orchestrator.storeInstance.get('t1')?.outputSummary?.logTail).toBe('Work with tests');
   });
@@ -613,25 +613,25 @@ describe('force send', () => {
 });
 
 describe('force send through the orchestrator', () => {
-  function orchestratorFor(session: ITerminalSession) {
+  function orchestratorFor(session: IRunnerSession) {
     const runner = {
       spawn: async () => session,
       stop: () => session.kill(),
       stopAll: () => session.kill(),
       activeCount: 1,
-    } satisfies ITerminalRunner;
+    } satisfies IRunner;
     const orchestrator = TaskOrchestrator.compose({
-      config: fakeConfig(), notifications: fakeNotification(), terminalRunner: runner,
-      output: new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } }),
+      config: fakeConfig(), notifications: fakeNotification(), runner,
+      output: new BufferedTaskOutputSource(),
       registry: new RunnerRegistry(), workspaceRoot: () => '/repo',
       workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
     });
-    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Forced task', prompt: 'Do it', completionMarker: 'mk-1' })]);
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Forced task', prompt: 'Do it' })]);
     return orchestrator;
   }
 
   function scheduled() {
-    const session = new FakeStructuredSession();
+    const session = new FakeRunnerSession();
     return { orchestrator: orchestratorFor(session), session };
   }
 
@@ -678,10 +678,9 @@ describe('force send through the orchestrator', () => {
     orchestrator.stop();
   });
 
-  it('refuses a task on the terminal transport, saying so', async () => {
-    const orchestrator = orchestratorFor(new FakeTerminalSession());
-    await orchestrator.forceStartTask('t1');
-    expect(() => orchestrator.forceSendTaskMessage('t1', 'now')).toThrow(/runs in a terminal, which cannot take a message sent now/);
-    expect(() => orchestrator.forceSendQueuedTaskMessage('t1', 'msg-1')).toThrow(/runs in a terminal/);
+  it('refuses a task that is not running, saying there is no turn', async () => {
+    const orchestrator = orchestratorFor(new FakeRunnerSession());
+    expect(() => orchestrator.forceSendTaskMessage('t1', 'now')).toThrow(/is not running, so there is no turn to send a message to/);
+    expect(() => orchestrator.forceSendQueuedTaskMessage('t1', 'msg-1')).toThrow(/is not running/);
   });
 });

@@ -31,7 +31,7 @@ const CATALOG = {
   orchestratorModels: [],
 };
 
-async function fakeDaemon(): Promise<{ port: number; close: () => void; sent: Recorded[] }> {
+async function fakeDaemon(plan = PLAN): Promise<{ port: number; close: () => void; sent: Recorded[] }> {
   const sent: Recorded[] = [];
   const server = http.createServer((req, res) => {
     let raw = '';
@@ -48,7 +48,7 @@ async function fakeDaemon(): Promise<{ port: number; close: () => void; sent: Re
         return json({ runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }, { id: 'codex', name: 'Codex', enabled: true }], headless: false, orchestratorModel: '' });
       }
       if (req.url?.includes('/api/sessions/')) {
-        return json({ meta: { id: 'session-1', goal: 'g', runners: [], taskCount: 3, status: 'planned', createdAt: '', updatedAt: '' }, plan: PLAN });
+        return json({ meta: { id: 'session-1', goal: 'g', runners: [], taskCount: 3, status: 'planned', createdAt: '', updatedAt: '' }, plan });
       }
       return json({ ok: true });
     });
@@ -253,6 +253,33 @@ describe('ordewell task-skills', () => {
     fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: zz-house-style\ndescription: House style\napplies-to: task\nuser-invocable: false\n---\nBody\n');
     return dir;
   }
+
+  it('lists unresolved attached names even with no task skills in the workspace', async () => {
+    const d = await fakeDaemon({ tasks: PLAN.tasks.map((t) => ({ ...t, skills: ['zz-not-created'] })) });
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'task-skills-empty-'));
+    try {
+      const { handleTaskSkills } = await import('../task-assign');
+      const { stdout } = await capture(() => handleTaskSkills([...SESSION, '--workspace', ws, '2'], new ApiClient(d.port)));
+      expect(stdout).toContain('* zz-not-created (not found)');
+      expect(updates(d.sent)).toEqual([]);
+    } finally {
+      d.close();
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it('lowercases and deduplicates names before lookup', async () => {
+    const d = await fakeDaemon();
+    const ws = workspaceWithSkill();
+    try {
+      const { handleTaskSkills } = await import('../task-assign');
+      await capture(() => handleTaskSkills([...SESSION, '--workspace', ws, '2', 'ZZ-HOUSE-STYLE,zz-house-style'], new ApiClient(d.port)));
+      expect(updates(d.sent)[0]?.body).toEqual({ skills: ['zz-house-style'] });
+    } finally {
+      d.close();
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
 
   it('keeps every unquoted skill name after the task id', async () => {
     const d = await fakeDaemon();

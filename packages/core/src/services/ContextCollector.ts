@@ -53,13 +53,13 @@ export class ContextCollector {
     const aiflowResult = await this.readIfExists('ORDEWELL.md');
     if (aiflowResult) context.aiflowContext = aiflowResult.output.slice(0, ORDEWELL_CONTEXT_MAX);
 
-    const plugin = this.registry?.getManifest(runner);
-    if (plugin?.contextFile) {
-      const configResult = await this.readIfExists(plugin.contextFile)
-        || (plugin.contextFileAltPath ? await this.readIfExists(plugin.contextFileAltPath) : null);
+    const manifest = this.registry?.getManifest(runner);
+    if (manifest?.contextFile) {
+      const configResult = await this.readIfExists(manifest.contextFile)
+        || (manifest.contextFileAltPath ? await this.readIfExists(manifest.contextFileAltPath) : null);
       if (configResult) {
         context.agentConfig = configResult.output;
-        context.agentConfigPath = plugin.contextFile;
+        context.agentConfigPath = manifest.contextFile;
       }
     }
 

@@ -1,5 +1,7 @@
 import type { DiffStat, ToolHeadline } from './blocks';
-import { ANSI_OR_CTRL_RE } from '../services/terminalRender';
+
+// eslint-disable-next-line no-control-regex
+const ANSI_OR_CTRL_RE = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[()][AB012]|\x1b[=>]|[\x00-\x08\x0b-\x1f\x7f]/g;
 
 /**
  * How a command row names an Ordewell research tool. A harness planner's call
