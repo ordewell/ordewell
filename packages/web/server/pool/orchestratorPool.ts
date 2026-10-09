@@ -9,6 +9,7 @@ import {
   type SessionRuntimeSettings,
   ModelResolver,
   RunnerRegistry,
+  removedPluginNotice,
   RunnerInstallation,
   listSessions,
   loadSession,
@@ -81,7 +82,7 @@ export interface OrchestratorPoolDeps {
 export class OrchestratorPool {
   private sessions = new Map<string, Session>();
   private clients = new Map<string, Set<WebSocket>>();
-  private registry: CoreRunnerRegistry = (() => { const r = new RunnerRegistry(); r.loadUserPlugins(); return r; })();
+  private registry: CoreRunnerRegistry = new RunnerRegistry();
   private modelResolver: ModelResolver;
   private runnerInstallation = new RunnerInstallation(this.registry);
   private cachedProviderLists: Record<string, string[]> | undefined;
@@ -92,6 +93,8 @@ export class OrchestratorPool {
   private terminalAdvice?: string;
 
   constructor(deps: OrchestratorPoolDeps = {}) {
+    const pluginNotice = removedPluginNotice();
+    if (pluginNotice) console.warn(pluginNotice);
     this.sharedRunner = deps.runner;
     this.structuredRunner = deps.structuredRunner ?? new StructuredRunner();
     this.terminalAdvice = deps.terminalAdvice;
@@ -437,11 +440,11 @@ export class OrchestratorPool {
   async getInstalledRunners(): Promise<RunnersResponse['runners']> {
     const config = new WebConfig({ enabledRunners: this.enabledRunnerOverride() });
     const enabled = new Set(config.enabledRunners);
-    const plugins = this.registry.list();
+    const runners = this.registry.list();
     const installedIds = new Set(
-      await this.runnerInstallation.filterInstalled(plugins.map((p) => p.manifest.name)),
+      await this.runnerInstallation.filterInstalled(runners.map((p) => p.manifest.name)),
     );
-    return plugins
+    return runners
       .filter((p) => installedIds.has(p.manifest.name))
       .map((p) => ({
         id: p.manifest.name,

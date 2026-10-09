@@ -9,6 +9,7 @@ import { defineConfig } from 'tsup';
  * is the only shape esbuild's `define` accepts.
  */
 export default defineConfig({
+  removeNodeProtocol: false,
   esbuildOptions(options, context) {
     if (context.format === 'cjs') {
       options.define = {

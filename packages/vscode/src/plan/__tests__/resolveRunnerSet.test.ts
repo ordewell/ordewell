@@ -15,7 +15,7 @@ function depsWith(enabledRunners: RunnerId[], planRunners: RunnerId[] = ['claude
   };
   return {
     config: { enabledRunners } as unknown as VsCodeConfig,
-    pluginRegistry: {
+    runnerRegistry: {
       get: (id: string) => id === 'claude-code' || id === 'opencode',
     } as unknown as RunnerRegistry,
     chatProvider: { showError: () => {} } as unknown as ChatViewProvider,

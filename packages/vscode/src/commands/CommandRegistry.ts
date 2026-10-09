@@ -21,7 +21,7 @@ import { confirmPastGate, handleNewSession, plannerPreflightError } from '../pla
 export interface CommandDeps {
   session: Session;
   chatProvider: ChatViewProvider;
-  pluginRegistry: RunnerRegistry;
+  runnerRegistry: RunnerRegistry;
   modelResolver: ModelResolver;
   config: VsCodeConfig;
   fsAdapter: VsCodeFileSystem;
@@ -99,7 +99,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
     vscode.commands.registerCommand('ordewell.toggleRunner', async (runnerArg?: string) => {
       let target = runnerArg;
       if (!target) {
-        const runners = deps.pluginRegistry.list();
+        const runners = deps.runnerRegistry.list();
         const enabled = deps.config.enabledRunners;
         const items = runners.map((r) => ({
           label: `${r.manifest.displayName}: ${enabled.includes(r.manifest.name) ? 'ON' : 'OFF'}`,
@@ -147,7 +147,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
       if (typeValue === 'ai') {
         prompt = await vscode.window.showInputBox({ prompt: 'AI Prompt', placeHolder: 'Detailed instructions for the AI assistant' });
         const defaultRunner = plan.runners[0] ?? 'claude-code';
-        const manifest = deps.pluginRegistry.getManifest(defaultRunner);
+        const manifest = deps.runnerRegistry.getManifest(defaultRunner);
         const runnerModes = manifest?.modes ?? [];
 
         if (runnerModes.length > 0) {
@@ -459,7 +459,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
   );
   context.subscriptions.push(
     vscode.commands.registerCommand('ordewell.configureModelAllowlist', async () => {
-      await configureModelAllowlist(deps.pluginRegistry, deps.modelResolver, deps.settingsService);
+      await configureModelAllowlist(deps.runnerRegistry, deps.modelResolver, deps.settingsService);
     }),
   );
 }

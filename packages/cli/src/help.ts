@@ -58,7 +58,6 @@ Planner, models and runners:
 Other:
   ordewell web                    Start the API server (foreground; --daemon for background)
   ordewell setup                  Interactive first-run setup wizard
-  ordewell plugins list|install|remove|create   Manage runner plugins
   ordewell skills                 List installed skills and shadowed workspace duplicates
   ordewell --help               Show this help
   ordewell --version            Print the installed version (alias: version, -v)

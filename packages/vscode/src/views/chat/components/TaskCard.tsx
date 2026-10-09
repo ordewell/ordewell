@@ -174,7 +174,7 @@ const DEFAULT_MODES: RunnerMode[] = [
 /**
  * The runner list a task's picker offers. The task's own runner is always in it,
  * even when missing from the installed set (uninstalled since planning, or a
- * plugin discovery didn't see): a select that dropped it would fall back to
+ * model discovery didn't see): a select that dropped it would fall back to
  * displaying some other runner and misreport what the task will be spawned on.
  */
 export function runnerOptionsFor(runners: RunnerOption[] | undefined, assignedRunner: string): RunnerOption[] {

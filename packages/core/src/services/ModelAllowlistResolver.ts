@@ -9,7 +9,7 @@ import type { DiscoveredModel, RunnerId, Task } from '../models/Task';
  * allowlisted for Claude Code does not limit it — it points it at something it
  * cannot spawn, and the plan only dies once a task is already running. But
  * "this runner didn't list it" is not enough to call an id wrong: discovery can
- * be stale, and a plugin runner may have no list at all. What settles it is
+ * be stale or return no list at all. What settles it is
  * whether *another* runner listed the id. So:
  *
  * - listed for this runner → keep;
