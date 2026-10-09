@@ -8,7 +8,7 @@ import {
   handleSendMessage, handleSplitPlan, handleStopPlanning, handleSystemCommand, handleTaskControl, handleTaskEdit, type PlanManagerDeps,
 } from './PlanManager';
 
-/** What the extension itself answers: the catalog, the planner choice and the skill toggles — none of it a plan action. */
+/** What the extension itself answers: the catalog, the planner choice and the task skills — none of it a plan action. */
 export interface ExtensionHandlers {
   ready(): void;
   refreshModels(): void;

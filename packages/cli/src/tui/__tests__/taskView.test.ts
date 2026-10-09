@@ -296,6 +296,28 @@ describe('the task view draws as a runner, not the planner', () => {
   });
 });
 
+describe('an unknown /name in the task view', () => {
+  const unknown = (state: TuiState) => {
+    const result = run('/retyr', state);
+    expect(result.effects).toEqual([]);
+    expect(messagesOf(result.state).at(-1)?.text).toContain('Unknown command: /retyr');
+    return result;
+  };
+
+  it('does not continue a finished task', () => {
+    unknown(opened({ focus: 'chat', tasks: [task({ status: 'completed', transport: { kind: 'structured' }, continuable: true })] }));
+  });
+
+  it('is not delivered to a running task', () => {
+    unknown(opened({ focus: 'chat' }));
+  });
+
+  it('is still passed through in planner chat', () => {
+    const { effects } = run('/retyr', initialState({ sessionId: 's1', focus: 'chat' }));
+    expect(effects).toEqual([{ type: 'sendMessage', sessionId: 's1', message: '/retyr' }]);
+  });
+});
+
 describe('continuing a finished task (ADR-0018, K1)', () => {
   const finished = (over: Partial<TaskView> = {}) =>
     opened({ focus: 'chat', tasks: [task({ status: 'completed', transport: { kind: 'structured' }, continuable: true, ...over })] });
