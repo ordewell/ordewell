@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
+## [Unreleased]
+
+### Added
+
+- **Skills, unified.** Planner skills and task skills are now one thing: a
+  `SKILL.md` folder (the Agent Skills format) with `applies-to: planner | task`
+  (default `planner`) and Claude Code's `disable-model-invocation` and
+  `user-invocable` fields. Skills live in `~/.ordewell/skills/` (global, written
+  by you) or in a workspace's `.ordewell/skills/`, which is now committed to
+  git (the `.ordewell/.gitignore` carves it out) and so reaches every task
+  worktree; a task can write a skill there for later tasks. On a name clash the
+  global skill wins and the workspace copy is reported as shadowed. All
+  built-in skills are user-only. See [docs/skills.md](docs/skills.md) and
+  [ADR-0024](docs/adr/0024-unified-skills.md).
+- **Task skills.** The planner attaches a skill to a task or subtask, and
+  Ordewell puts its text in that task's prompt when it starts, so it works on
+  every runner. Skills are chips on task cards in the TUI and VS Code, editable
+  until the task runs. A name that does not exist yet is a warning when a plan
+  is submitted; if it still does not resolve at start, the task fails before
+  its runner is spawned. The skills an attempt was given are recorded on it.
+- **`tdd` is a task skill.** `/tdd` asks the planner to attach it to the tasks
+  it fits.
+- **The planner can load skills itself.** A planner with tools attached sees
+  the model-invocable planner skills and loads one with the `load_skill` tool.
+- **`ordewell skills`** lists the skills a workspace sees, with scope,
+  `applies-to`, who can invoke each, and any shadowed copy; `--json` for
+  scripts.
+
+### Changed
+
+- **`/name` keeps your text.** The message is sent as you typed it, with the
+  skill's instructions beside it. The conversation records a snapshot of the
+  skill as loaded and shows a one-line notice with its path. A `/word` that
+  names no skill is plain text.
+- **TDD is no longer applied to every task by default.** The `tdd` toggle is
+  gone; use `/tdd` or attach the skill to the tasks that need it.
+
+### Removed
+
+- The `verify` and `tdd` mode toggles.
+- The runner-transport setting, its pill, `/transport` and `ordewell
+  transport`. Structured is always chosen; the terminal transport remains only
+  as the fallback for runners without a connector
+  ([ADR-0018](docs/adr/0018-structured-runner-transport.md)).
+
 ## [0.7.2] — 2026-10-07
 
 ### Security

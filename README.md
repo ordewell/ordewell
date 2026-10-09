@@ -132,7 +132,8 @@ gets a worktree of every repository and lands in all of them or none. See
 The [documentation](https://ordewell.ai/docs) covers the planner options, skills,
 commands, configuration and platform notes. Design decisions, including the options
 that were rejected, are recorded as [architecture decision records](docs/adr/), and
-[CONTEXT.md](CONTEXT.md) defines the project's vocabulary.
+[CONTEXT.md](CONTEXT.md) defines the project's vocabulary. To write your own
+planner or task skills, see the [skills guide](docs/skills.md).
 
 ## Where it's going
 
@@ -150,7 +151,7 @@ build order and project layout, and report security issues through
 
 ## Acknowledgements
 
-The grilling, spec and architecture skills, along with TDD task augmentation, are
+The grilling, spec, architecture and TDD skills are
 adapted from [Matt Pocock's skills](https://github.com/mattpocock/skills) (MIT).
 
 ## License

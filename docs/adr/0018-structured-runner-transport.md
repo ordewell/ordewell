@@ -223,3 +223,4 @@ protocol instead of a screen and a keyboard.
 - 2026-10-02 — the OpenCode connector (#55); structured the default, terminal the fallback, tmux optional (#61).
 - 2026-10-04 — the OpenCode connector speaks the 2.x API as well as 1.x.
 - 2026-10-06 — M1 per ADR-0023: messages reach a running turn between tool calls, the turn-end queue as the fallback, force send.
+- 2026-10-09 — amendment: the `runnerTransport` setting (S1) and its surfaces — the pill, `/transport` and `ordewell transport` — are removed. Structured is always chosen; terminal remains only as the fallback for runners without a connector, pending a separate removal effort.
