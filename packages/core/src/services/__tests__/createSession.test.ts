@@ -688,14 +688,14 @@ describe('Session phase transitions', () => {
 
     it('gives a task the skills attached to it, read from where it runs', async () => {
       const runner = spyRunner();
-      const roots: string[] = [];
+      const roots: (string | readonly string[])[] = [];
       const tdd: SkillInfo = {
         name: 'tdd', description: 'test-first', metadata: { name: 'tdd', description: 'test-first' },
         content: 'RED then GREEN.', path: '/home/u/.ordewell/skills/tdd/SKILL.md', source: 'global',
         appliesTo: 'task', modelInvocable: false, userInvocable: true,
       };
       const lookup = { findSkill: (name: string) => (name === 'tdd' ? tdd : undefined), listSkills: () => [tdd], searchedDirs: () => [] };
-      const skillsService = { ...lookup, forRoot: (root: string) => { roots.push(root); return lookup; } };
+      const skillsService = { ...lookup, forRoot: (root: string | readonly string[]) => { roots.push(root); return lookup; } };
       const session = makeSession({ runner, skillsService });
       const plan = threeTaskPlan();
       plan.tasks[0].skills = ['tdd'];
@@ -704,7 +704,7 @@ describe('Session phase transitions', () => {
       await session.runTask('t1');
 
       expect(runner.spawn.mock.calls[0][0].prompt).toContain('### Skill: tdd\n\nRED then GREEN.');
-      expect(roots).toEqual([runner.spawn.mock.calls[0][0].cwd]);
+      expect(roots).toEqual([[runner.spawn.mock.calls[0][0].cwd]]);
       expect(taskOf(session, 't1')?.attemptSkills).toEqual([{ name: 'tdd', source: 'global', path: tdd.path, content: 'RED then GREEN.' }]);
     });
   });

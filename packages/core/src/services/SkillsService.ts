@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { STATE_DIR } from '../utils/fsHelpers';
+import { SELF_REPO } from './isolationRecord';
 import { globalDataDir } from '../utils/globalDataDir';
 import { builtinSkillsDir } from './builtinSkills';
 
@@ -32,7 +33,7 @@ export interface SkillMetadata {
 /** Who a skill is for: the planner's conversation, or a runner's task prompt. */
 export type SkillAppliesTo = 'planner' | 'task';
 
-/** `global` is ~/.ordewell/skills/ (built-in seeds included); `workspace` is <root>/.ordewell/skills/. */
+/** `global` is ~/.ordewell/skills/ (built-in seeds included); `workspace` is a `.ordewell/skills/` of the workspace's (see {@link workspaceSkillRoots}). */
 export type SkillSource = 'global' | 'workspace';
 
 export interface SkillInfo {
@@ -52,7 +53,7 @@ export interface SkillInfo {
   userInvocable: boolean;
 }
 
-/** A workspace skill hidden because a global skill has the same name. */
+/** A workspace skill hidden because a global skill, or a workspace one read before it, has the same name. */
 export interface ShadowedSkill {
   skill: SkillInfo;
   shadowedBy: SkillInfo;
@@ -66,32 +67,68 @@ interface Frontmatter {
   'applies-to'?: string;
 }
 
+/**
+ * A SKILL.md's text with what an editor or a checkout may add stripped: a
+ * UTF-8 BOM, and the CRLF line ends git's autocrlf gives a committed skill on
+ * Windows — either one would hide the frontmatter.
+ */
+function readSkillText(filePath: string): string {
+  return fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
+}
+
+/**
+ * A frontmatter scalar as YAML reads the common cases: a quoted value is
+ * what is inside its quotes, `''` and `\"` unescaped, and an unquoted one
+ * ends before ` # comment`.
+ */
+function scalar(raw: string): string {
+  const value = raw.trim();
+  const single = /^'((?:[^']|'')*)'/.exec(value);
+  if (single) return single[1].replace(/''/g, "'");
+  const double = /^"((?:[^"\\]|\\.)*)"/.exec(value);
+  if (double) return double[1].replace(/\\(["\\])/g, '$1');
+  return value.replace(/\s+#.*$/, '');
+}
+
+/** YAML 1.1's spellings of a boolean, any case; undefined for anything else. */
+function boolean(value: string): boolean | undefined {
+  const lower = value.toLowerCase();
+  if (lower === 'true' || lower === 'yes' || lower === 'on') return true;
+  if (lower === 'false' || lower === 'no' || lower === 'off') return false;
+  return undefined;
+}
+
+/** The frontmatter's `key: value` lines and the body after it; null when the file has none. */
+function splitFrontmatter(raw: string): { fields: Map<string, string>; body: string } | null {
+  if (!raw.startsWith('---\n')) return null;
+  const end = raw.indexOf('\n---', 4);
+  if (end === -1) return null;
+  const fields = new Map<string, string>();
+  for (const line of raw.slice(4, end).split('\n')) {
+    const idx = line.indexOf(':');
+    if (idx === -1) continue;
+    fields.set(line.slice(0, idx).trim(), scalar(line.slice(idx + 1)));
+  }
+  return { fields, body: raw.slice(end + 4).replace(/^\n+/, '') };
+}
+
 function parseSkillFile(filePath: string, name: string, source: SkillSource): SkillInfo | undefined {
-  const raw = fs.readFileSync(filePath, 'utf8');
-
+  const raw = readSkillText(filePath);
+  const split = splitFrontmatter(raw);
   const frontmatter: Frontmatter = {};
-  let content = raw;
-
-  if (raw.startsWith('---\n')) {
-    const end = raw.indexOf('\n---', 4);
-    if (end !== -1) {
-      const fmText = raw.slice(4, end);
-      for (const line of fmText.split('\n')) {
-        const idx = line.indexOf(':');
-        if (idx === -1) continue;
-        const key = line.slice(0, idx).trim();
-        const value = line.slice(idx + 1).trim().replace(/^"|"$/g, '');
-        if (key === 'disable-model-invocation') {
-          frontmatter[key] = value === 'true';
-        } else if (key === 'user-invocable') {
-          frontmatter[key] = value !== 'false';
-        } else if (key === 'name' || key === 'description' || key === 'applies-to') {
-          frontmatter[key] = value;
-        }
-      }
-      content = raw.slice(end + 4).replace(/^\n+/, '');
+  if (split) {
+    const { fields } = split;
+    for (const key of ['name', 'description', 'applies-to'] as const) {
+      const value = fields.get(key);
+      if (value !== undefined) frontmatter[key] = value;
+    }
+    for (const key of ['disable-model-invocation', 'user-invocable'] as const) {
+      const value = fields.get(key);
+      const flag = value === undefined ? undefined : boolean(value);
+      if (flag !== undefined) frontmatter[key] = flag;
     }
   }
+  const content = split ? split.body : raw;
 
   const metadata: SkillMetadata = {
     name: frontmatter.name ?? name,
@@ -108,7 +145,7 @@ function parseSkillFile(filePath: string, name: string, source: SkillSource): Sk
     content,
     path: filePath,
     source,
-    appliesTo: frontmatter['applies-to'] === 'task' ? 'task' : 'planner',
+    appliesTo: frontmatter['applies-to']?.toLowerCase() === 'task' ? 'task' : 'planner',
     modelInvocable: frontmatter['disable-model-invocation'] !== true,
     userInvocable: frontmatter['user-invocable'] !== false,
   };
@@ -147,25 +184,47 @@ function readDir(dir: string, source: SkillSource): SkillInfo[] {
   return skills;
 }
 
+export function skillsDirOf(root: string): string {
+  return path.join(root, STATE_DIR, 'skills');
+}
+
+/**
+ * The roots whose `.ordewell/skills/` hold a workspace's skills, in the order
+ * they win (global wins over all of them). A workspace that is one repository
+ * (`.`) reads its own, as checked out at `checkout`. A repo group (ADR-0014)
+ * has no repository at its root: the group root's own folder comes first —
+ * the user writes it, it is in no repo, so it is always read from the main
+ * checkout — then each repo's committed folder as checked out under
+ * `checkout`, in layout order.
+ */
+export function workspaceSkillRoots(workspaceRoot: string, repos: readonly string[], checkout = workspaceRoot): string[] {
+  if (repos.length === 0 || repos.includes(SELF_REPO)) return [checkout];
+  return [workspaceRoot, ...repos.map((repo) => path.join(checkout, repo))];
+}
+
 export class SkillsService {
-  constructor(private workspaceRoot?: string) {}
+  private readonly workspaceRoots: readonly string[];
+
+  /** `workspaceRoots` in the order they win, as {@link workspaceSkillRoots} gives them. */
+  constructor(workspaceRoots?: string | readonly string[]) {
+    this.workspaceRoots = workspaceRoots === undefined ? [] : typeof workspaceRoots === 'string' ? [workspaceRoots] : [...workspaceRoots];
+  }
 
   /**
-   * The same global skills, with the workspace ones read from `root` instead —
-   * a task's worktree, whose `.ordewell/skills/` is its own committed copy.
+   * The same global skills, with the workspace ones read from `roots` instead —
+   * a task's worktrees, whose `.ordewell/skills/` are their own committed copies.
    */
-  forRoot(root: string): SkillsService {
-    return new SkillsService(root);
+  forRoot(roots: string | readonly string[]): SkillsService {
+    return new SkillsService(roots);
   }
 
   /** Where {@link findSkill} looks, in the order it looks — global first. */
   searchedDirs(): string[] {
-    const workspaceDir = this.workspaceDir();
-    return workspaceDir ? [this.globalDir(), workspaceDir] : [this.globalDir()];
+    return [this.globalDir(), ...this.workspaceDirs()];
   }
 
-  private workspaceDir(): string | undefined {
-    return this.workspaceRoot ? path.join(this.workspaceRoot, STATE_DIR, 'skills') : undefined;
+  private workspaceDirs(): string[] {
+    return this.workspaceRoots.map(skillsDirOf);
   }
 
   private globalDir(): string {
@@ -248,20 +307,11 @@ export class SkillsService {
 
     let raw: string;
     try {
-      raw = fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8');
+      raw = readSkillText(path.join(dir, 'SKILL.md'));
     } catch {
       return false;
     }
-    if (!raw.startsWith('---\n')) return false;
-    const end = raw.indexOf('\n---', 4);
-    if (end === -1) return false;
-    for (const line of raw.slice(4, end).split('\n')) {
-      const idx = line.indexOf(':');
-      if (idx === -1) continue;
-      const key = line.slice(0, idx).trim();
-      if (key === 'name') return line.slice(idx + 1).trim().replace(/^"|"$/g, '') === expectedName;
-    }
-    return false;
+    return splitFrontmatter(raw)?.fields.get('name') === expectedName;
   }
 
   private pruneRetired(): void {
@@ -282,8 +332,7 @@ export class SkillsService {
     if ((BUILTIN_SKILL_NAMES as readonly string[]).includes(name)) this.seed(name);
     const globalFile = path.join(this.globalDir(), name, 'SKILL.md');
     if (fs.existsSync(globalFile)) return parseSkillFile(globalFile, name, 'global');
-    const workspaceDir = this.workspaceDir();
-    if (workspaceDir) {
+    for (const workspaceDir of this.workspaceDirs()) {
       const workspaceFile = path.join(workspaceDir, name, 'SKILL.md');
       if (fs.existsSync(workspaceFile)) return parseSkillFile(workspaceFile, name, 'workspace');
     }
@@ -294,14 +343,15 @@ export class SkillsService {
     return this.catalog().skills;
   }
 
-  /** Workspace skills skipped by `listSkills` and `findSkill` because a global one has the same name. */
+  /** Workspace skills skipped by `listSkills` and `findSkill` because one that wins has the same name. */
   listShadowed(): ShadowedSkill[] {
     return this.catalog().shadowed;
   }
 
   /**
    * Global wins a name clash: a repository's committed skill must not be able
-   * to silently replace one the user installed, built-ins included.
+   * to silently replace one the user installed, built-ins included. Among
+   * workspace folders the first read wins, the same way.
    */
   private catalog(): { skills: SkillInfo[]; shadowed: ShadowedSkill[] } {
     this.pruneRetired();
@@ -316,11 +366,10 @@ export class SkillsService {
       byName.set(skill.name, skill);
     }
     const shadowed: ShadowedSkill[] = [];
-    const workspaceDir = this.workspaceDir();
-    if (workspaceDir) {
+    for (const workspaceDir of this.workspaceDirs()) {
       for (const skill of readDir(workspaceDir, 'workspace')) {
-        const global = byName.get(skill.name);
-        if (global) shadowed.push({ skill, shadowedBy: global });
+        const winner = byName.get(skill.name);
+        if (winner) shadowed.push({ skill, shadowedBy: winner });
         else byName.set(skill.name, skill);
       }
     }

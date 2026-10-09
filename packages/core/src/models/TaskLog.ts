@@ -1,6 +1,6 @@
 import type { ApprovalDecision } from '../interfaces/IApproval';
 import type { StructuredEvent, StructuredTurnEnd } from '../interfaces/ITerminalRunner';
-import type { SubagentOutcome } from './Task';
+import type { SubagentOutcome, TaskSkillSnapshot } from './Task';
 import type { UsageRecord } from './Usage';
 
 /**
@@ -13,6 +13,8 @@ import type { UsageRecord } from './Usage';
  * without a format version.
  */
 export type TaskLogEvent =
+  /** The task skills this attempt's prompt carried, as read at its spawn (ADR-0024): first in its log. */
+  | { type: 'task_skills'; skills: TaskSkillSnapshot[] }
   /** A turn began by delivering `message`; `messageId` names it when it had been queued, `forced` when it was force sent. */
   | { type: 'turn_start'; message: string; messageId?: string; forced?: boolean }
   | { type: 'turn_end'; reason: StructuredTurnEnd }

@@ -439,7 +439,9 @@ describe('TaskOrchestrator with worktree isolation', () => {
       const isolation = new FakeWorktreeIsolation();
       isolation.availability = { active: true, repos: ['api', 'web'], shared: ['NOTES.md'] };
       const { orchestrator } = setup({ isolation, workspace: '/group' });
+      expect(orchestrator.runs.lastPlannerLayout).toBe(false);
       expect(await orchestrator.runs.plannerLayout()).toEqual({ repos: ['api', 'web'], shared: ['NOTES.md'] });
+      expect(orchestrator.runs.lastPlannerLayout).toEqual({ repos: ['api', 'web'], shared: ['NOTES.md'] });
 
       isolation.repos = ['api', 'web', 'infra'];
       isolation.shared = ['design'];

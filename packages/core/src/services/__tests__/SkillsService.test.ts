@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { createSkillsService } from '../SkillsService';
+import { createSkillsService, workspaceSkillRoots } from '../SkillsService';
 
 let home = '';
 let workspaceRoot = '';
@@ -176,6 +176,49 @@ describe('SkillsService', () => {
       expect(skill.appliesTo).toBe('task');
       expect(skill.userInvocable).toBe(false);
     });
+
+    const raw = (text: string) => {
+      const dir = path.join(workspaceRoot, '.ordewell', 'skills', 'probe');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'SKILL.md'), text);
+      return createSkillsService(workspaceRoot).findSkill('probe')!;
+    };
+
+    it('reads a SKILL.md checked out with CRLF line ends', () => {
+      const skill = raw('---\r\nname: probe\r\ndescription: Deploy steps\r\napplies-to: task\r\n---\r\n\r\nCheck the pipeline.\r\n');
+      expect(skill.appliesTo).toBe('task');
+      expect(skill.description).toBe('Deploy steps');
+      expect(skill.content).toBe('Check the pipeline.\n');
+    });
+
+    it('reads a SKILL.md that starts with a UTF-8 BOM', () => {
+      const skill = raw('\uFEFF---\nname: probe\napplies-to: task\n---\n\nBody.');
+      expect(skill.appliesTo).toBe('task');
+      expect(skill.content).toBe('Body.');
+    });
+
+    it('strips single quotes as well as double', () => {
+      const skill = raw(`---\nname: probe\ndescription: 'It''s quoted'\napplies-to: 'task'\n---\nBody.`);
+      expect(skill.appliesTo).toBe('task');
+      expect(skill.description).toBe("It's quoted");
+    });
+
+    it('reads booleans in any case, and YAML 1.1\'s yes/no', () => {
+      expect(raw('---\ndisable-model-invocation: True\n---\nBody.').modelInvocable).toBe(false);
+      expect(raw('---\ndisable-model-invocation: YES\n---\nBody.').modelInvocable).toBe(false);
+      expect(raw('---\nuser-invocable: False\n---\nBody.').userInvocable).toBe(false);
+      expect(raw('---\nuser-invocable: no\n---\nBody.').userInvocable).toBe(false);
+      expect(raw('---\ndisable-model-invocation: maybe\n---\nBody.').modelInvocable).toBe(true);
+    });
+
+    it('drops a trailing comment, but not a # inside a word or quotes', () => {
+      const skill = raw('---\nname: probe\ndescription: Use for C# code # who it is for\napplies-to: task # the runner gets it\nuser-invocable: false  # model-only\n---\nBody.');
+      expect(skill.description).toBe('Use for C# code');
+      expect(skill.appliesTo).toBe('task');
+      expect(skill.userInvocable).toBe(false);
+      expect(raw('---\ndescription: "a # b" # note\n---\nBody.').description).toBe('a # b');
+      expect(raw('---\ndescription: "say \\"hi\\""\n---\nBody.').description).toBe('say "hi"');
+    });
   });
 
   describe('listSkills', () => {
@@ -296,6 +339,43 @@ describe('SkillsService', () => {
       expect(scoped.findSkill('main-only')).toBeUndefined();
       expect(scoped.findSkill('shared')!.content).toBe('Global.');
       expect(scoped.listShadowed().map((s) => s.skill.name)).toEqual(['shared']);
+    });
+  });
+
+  describe('a repo group\'s workspace folders', () => {
+    it('are the group root\'s own, then each repo\'s where it is checked out, in layout order', () => {
+      expect(workspaceSkillRoots('/ws', ['api', 'web'], '/ws/.ordewell/worktrees/r/1-t')).toEqual([
+        '/ws', path.join('/ws/.ordewell/worktrees/r/1-t', 'api'), path.join('/ws/.ordewell/worktrees/r/1-t', 'web'),
+      ]);
+      expect(workspaceSkillRoots('/ws', ['api', 'web'])).toEqual(['/ws', path.join('/ws', 'api'), path.join('/ws', 'web')]);
+      expect(workspaceSkillRoots('/ws', ['.'], '/wt')).toEqual(['/wt']);
+      expect(workspaceSkillRoots('/ws', [], '/wt')).toEqual(['/wt']);
+    });
+
+    it('lose to global, and the group root wins over the repos, which win in order; each loser is reported shadowed', () => {
+      const api = path.join(workspaceRoot, 'api');
+      const web = path.join(workspaceRoot, 'web');
+      const skills = (root: string) => path.join(root, '.ordewell', 'skills');
+      writeSkill(path.join(home, '.ordewell', 'skills'), 'everywhere', { name: 'everywhere' }, 'Global.');
+      for (const root of [workspaceRoot, api, web]) writeSkill(skills(root), 'everywhere', { name: 'everywhere' }, 'Workspace.');
+      const rootFile = writeSkill(skills(workspaceRoot), 'root-and-repo', { name: 'root-and-repo' }, 'Root.');
+      const apiOnRepo = writeSkill(skills(api), 'root-and-repo', { name: 'root-and-repo' }, 'Api.');
+      const apiFile = writeSkill(skills(api), 'repos', { name: 'repos' }, 'Api.');
+      const webOnRepos = writeSkill(skills(web), 'repos', { name: 'repos' }, 'Web.');
+      const webFile = writeSkill(skills(web), 'web-only', { name: 'web-only' }, 'Web.');
+
+      const svc = createSkillsService(workspaceRoot).forRoot(workspaceSkillRoots(workspaceRoot, ['api', 'web']));
+
+      expect(svc.searchedDirs()).toEqual([path.join(home, '.ordewell', 'skills'), skills(workspaceRoot), skills(api), skills(web)]);
+      expect(svc.findSkill('everywhere')!.source).toBe('global');
+      expect(svc.findSkill('root-and-repo')!.path).toBe(rootFile);
+      expect(svc.findSkill('repos')!.path).toBe(apiFile);
+      expect(svc.findSkill('web-only')!.path).toBe(webFile);
+      const shadowed = svc.listShadowed().map((s) => [s.skill.path, s.shadowedBy.path]);
+      expect(shadowed).toContainEqual([apiOnRepo, rootFile]);
+      expect(shadowed).toContainEqual([webOnRepos, apiFile]);
+      expect(shadowed.filter(([p]) => p.includes(`${path.sep}everywhere${path.sep}`))).toHaveLength(3);
+      expect(svc.listSkills().find((s) => s.name === 'repos')!.path).toBe(apiFile);
     });
   });
 

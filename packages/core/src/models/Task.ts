@@ -84,7 +84,7 @@ export interface TaskTransport {
  */
 export interface TaskSkillSnapshot {
   name: string;
-  source: 'global' | 'workspace';
+  source: SkillSource;
   path: string;
   content: string;
 }
