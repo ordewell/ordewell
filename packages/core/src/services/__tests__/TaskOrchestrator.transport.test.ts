@@ -93,7 +93,7 @@ describe('the structured transport, asked for by default', () => {
 });
 
 describe('recording the transport on the task', () => {
-  it('records a structured task, and says so on its status', async () => {
+  it('records transport server-side without sending it on the status wire', async () => {
     const { runner } = routingRunner();
     const orchestrator = orchestratorWith('structured', runner);
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
@@ -102,7 +102,7 @@ describe('recording the transport on the task', () => {
 
     const task = orchestrator.storeInstance.get('t1')!;
     expect(task.transport).toEqual({ kind: 'structured' });
-    expect(serializeTaskStatus(task).transport).toEqual({ kind: 'structured' });
+    expect(serializeTaskStatus(task)).not.toHaveProperty('transport');
   });
 
   it('records the fallback and its reason for a runner with no connector', async () => {
@@ -113,7 +113,7 @@ describe('recording the transport on the task', () => {
     await orchestrator.forceStartTask('t1');
 
     const status = serializeTaskStatus(orchestrator.storeInstance.get('t1')!);
-    expect(status.transport).toEqual({ kind: 'terminal', fallback: 'no structured connector for my-plugin yet' });
+    expect(status).not.toHaveProperty('transport');
   });
 
   it('names a host that cannot run structured tasks as the reason, never falling back silently', async () => {

@@ -459,7 +459,7 @@ describe('SkillsService', () => {
         const svc = createSkillsService(workspaceRoot);
 
         expect(svc.findSkill('review')).toBeUndefined();
-        expect(svc.listInvalid().map((s) => s.path)).toEqual([upper]);
+        expect(svc.readCatalog().invalid.map((s) => s.path)).toEqual([upper]);
         expect(svc.findSkill('kept')?.content).toBe('Kept.');
       } finally {
         h.caseInsensitive = false;

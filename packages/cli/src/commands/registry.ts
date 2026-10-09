@@ -21,7 +21,6 @@ import { handleParallel } from './parallel';
 import { handleKey } from './key';
 import { handleAuto, handleRefresh, handleRunners } from './runners';
 import { handleApprove } from './approve';
-import { handleTerminal } from './terminal';
 import {
   handleTaskDeps, handleTaskEffort, handleTaskMode, handleTaskModel, handleTaskOps, handleTaskRunner, handleTaskSkills,
 } from './task-assign';
@@ -75,7 +74,6 @@ export const COMMANDS: Record<string, (args: string[]) => Promise<void> | void> 
   'task-deps': handleTaskDeps,
   'task-skills': handleTaskSkills,
   'task-ops': handleTaskOps,
-  terminal: handleTerminal,
   'sessions': handleSessions,
   fork: handleFork,
   compact: handleCompact,

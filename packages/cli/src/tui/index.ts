@@ -7,7 +7,6 @@ import { createApp } from './app';
 import { runEffect } from './effects';
 import { registerSkillCommands } from './slash';
 import { openTerminal } from './terminal';
-import { openTaskTerminal } from './terminalLauncher';
 
 /**
  * `ordewell tui` — the full-screen terminal client. By default each launch
@@ -85,7 +84,6 @@ export async function handleTui(subArgs: string[]): Promise<void> {
           writeEnvVar(findEnvFile(), key, value);
           process.env[key] = value;
         },
-        openTerminal: (sessionId, taskId) => openTaskTerminal(port, sessionId, taskId),
         setMouseCapture: (enabled) => terminal?.setMouse(enabled),
         // The alt screen is up with the cursor hidden, so an OSC 52 write shows
         // nothing — the terminal reads it and answers by taking the clipboard.
@@ -103,7 +101,7 @@ export async function handleTui(subArgs: string[]): Promise<void> {
       }),
     onExit: () => shutdown(0),
     // The same pointer `ordewell plan` leaves, so `ordewell handoff`,
-    // `terminal <n>` and the other one-shot commands act on the session this
+    // The one-shot commands act on the session this
     // TUI is showing instead of saying there is none.
     onSessionChange: (sessionId, state) => {
       try {

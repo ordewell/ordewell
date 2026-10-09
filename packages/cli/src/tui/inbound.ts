@@ -341,7 +341,6 @@ function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionI
           status: String(task.status),
           idleSince: task.idleSince ?? null,
           isolation: task.isolation,
-          transport: task.transport,
           awaitingReason: isAwaitingReason(task.awaitingReason) ? task.awaitingReason : undefined,
           ...(typeof task.checkpoint === 'string' && task.checkpoint ? { checkpoint: sanitize(task.checkpoint) } : {}),
           ...(task.continuable ? { continuable: true } : {}),

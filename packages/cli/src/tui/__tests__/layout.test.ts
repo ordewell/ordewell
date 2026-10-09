@@ -137,7 +137,7 @@ describe('plan pane — an absolute offset that follows the selection by default
 });
 
 describe('expanded task editor — the same one offset', () => {
-  const expanded = (): TuiState => press(planState({ selectedTask: 0 }), 'enter').state;
+  const expanded = (): TuiState => press(planState({ selectedTask: 0 }), 'right').state;
 
   it('scrolls the pane, not the prompt text, and moves on the first notch back', () => {
     const bottom = repeat(expanded(), 'pagedown', 20);

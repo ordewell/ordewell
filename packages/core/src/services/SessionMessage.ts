@@ -1,4 +1,4 @@
-import type { AwaitingReason, ConversationMessage, LegacyPlanState, PlanState, QueuedMessage, ResearchStep, RunnerId, SkillLoadNotice, SubagentOutcome, Task, TaskSkillNotice, TaskSnapshot, TaskTransport, Verdict } from '../models/Task';
+import type { AwaitingReason, ConversationMessage, LegacyPlanState, PlanState, QueuedMessage, ResearchStep, RunnerId, SkillLoadNotice, SubagentOutcome, Task, TaskSkillNotice, TaskSnapshot, Verdict } from '../models/Task';
 import type { UsageTotals } from '../models/Usage';
 import type { TaskLogEvent } from '../models/TaskLog';
 import type { ApprovalKind } from '../interfaces/IApproval';
@@ -16,8 +16,6 @@ export type SerializedTaskStatus = {
   idleSince?: string | null;
   /** Absent unless the plan has an isolation run, so a shared-root plan's updates are unchanged. */
   isolation?: TaskIsolation;
-  /** Absent unless the task's plan asked for the structured transport (ADR-0018): what it ran on, or why it fell back. */
-  transport?: Pick<TaskTransport, 'kind' | 'fallback'>;
   /** What an `awaiting_user` task waits on, when it was saved (ADR-0018, W1). */
   awaitingReason?: AwaitingReason;
   /** The whole question of the checkpoint the task waits at; absent when it waits at none. */
@@ -214,7 +212,7 @@ export type SessionMessage =
    * A structured task's log as it happens (ADR-0018, P1): the next events of
    * the task's attempt `attempt`, in order — the same ones appended to that
    * attempt's file, so a surface folding these and one replaying the file
-   * draw the same blocks. Terminal-transport tasks send none.
+   * draw the same blocks.
    */
   | { type: 'task_log'; taskId: string; attempt: number; events: TaskLogEvent[] }
   // A run did not start because tracked files are modified. It waits for the
@@ -317,7 +315,6 @@ export function serializeTaskStatus(
       : null,
     idleSince,
     ...(isolation ? { isolation } : {}),
-    ...(t.transport ? { transport: t.transport.fallback ? { kind: t.transport.kind, fallback: t.transport.fallback } : { kind: t.transport.kind } } : {}),
     ...(t.status === 'awaiting_user' && t.awaitingReason ? { awaitingReason: t.awaitingReason } : {}),
     ...(t.status === 'awaiting_user' && t.awaitingReason === 'checkpoint' && checkpoint ? { checkpoint } : {}),
     ...(queued.length > 0 ? { queued: queued.map((m) => ({ ...m })) } : {}),

@@ -27,6 +27,11 @@ const CLI_ONLY = [
 ];
 
 describe('CLI ↔ TUI command parity', () => {
+  it('has no terminal command on either surface', () => {
+    expect(Object.keys(COMMANDS)).not.toContain('terminal');
+    expect(SLASH_COMMANDS.map((command) => command.name)).not.toContain('terminal');
+  });
+
   it.each(SLASH_COMMANDS.filter((c) => !(c.name in TUI_ONLY)).map((c) => c.name))(
     'exposes /%s as a subcommand',
     (name) => {

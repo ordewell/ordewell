@@ -8,7 +8,7 @@ import { modelsForRunner } from '../taskAssignment';
 import { say } from '../transcript';
 import { DEFAULT_EFFORT, picker, pickerItemsFor, plannerEffortItems, plannerItems, providerErrorHint } from './pickers';
 import { taskActionEffect } from './planPane';
-import { answerCheckpoint, continueTaskStep, openTaskTerminalOrView } from './taskView';
+import { answerCheckpoint, continueTaskStep } from './taskView';
 import {
   addTask, confirmForceStartPastGate, openTaskDepsPicker, taskCommand, taskOpsCommand, taskEffortCommand, taskModeCommand, taskModelCommand, taskRunnerCommand, taskSkillsCommand,
 } from './taskEdits';
@@ -104,8 +104,6 @@ export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step
       return taskCommand(state, args[0], (sessionId, taskId) =>
         step(state, [{ type: 'removeTask', sessionId, taskId }]),
       );
-    case 'terminal':
-      return taskCommand(state, args[0], (sessionId, taskId) => openTaskTerminalOrView(state, sessionId, taskId));
     case 'continue':
       return taskCommand(state, args[0], (sessionId, taskId) => {
         const text = args.slice(1).join(' ').trim();
