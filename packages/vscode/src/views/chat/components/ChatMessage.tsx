@@ -74,11 +74,16 @@ function SkillMarkedText({ text, skills }: { text: string; skills: readonly stri
   return <>{parts}</>;
 }
 
+function skillLoadText(block: SkillLoadBlock): string {
+  if (block.attaches) return `/${block.name} will be attached to fitting tasks`;
+  return block.invokedBy === 'planner' ? `${block.name} skill loaded by planner` : `/${block.name} skill loaded`;
+}
+
 function SkillLoadNotice({ block }: { block: SkillLoadBlock }) {
   return (
     <div className="chat-msg chat-msg-system chat-msg-skill-load">
       <span className="chat-msg-content">
-        <span className="skill-load-mark">●</span> {block.invokedBy === 'planner' ? `${block.name} skill loaded by planner` : `/${block.name} skill loaded`} · <bdi className="skill-load-path" title={block.path}>{block.path}</bdi>
+        <span className="skill-load-mark">●</span> {skillLoadText(block)} · <bdi className="skill-load-path" title={block.path}>{block.path}</bdi>
       </span>
     </div>
   );

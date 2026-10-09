@@ -3,17 +3,17 @@ import { makeSession, saves } from './sessionTestKit';
 import type { SkillsService, SkillInfo } from '../SkillsService';
 import type { SessionMessage } from '../SessionMessage';
 import type { ConversationMessage, LegacyPlanState, SkillLoad } from '../../models/Task';
-import { plannerMessage, plannerTranscript, resolveSkillInvocation } from '../skillInvocation';
+import { plannerMessage, plannerTranscript, resolveSkillInvocation, skillLoadLabel, skillLoadNotice } from '../skillInvocation';
 import type { ConversationRequest } from '../AiService';
 
-function skill(name: string, content: string, path = `/skills/${name}/SKILL.md`): SkillInfo {
-  return { name, description: name, metadata: { name, description: name }, content, path, source: 'global', appliesTo: 'planner', modelInvocable: true, userInvocable: true };
+function skill(name: string, content: string, path = `/skills/${name}/SKILL.md`, extra: Partial<SkillInfo> = {}): SkillInfo {
+  return { name, description: name, metadata: { name, description: name }, content, path, source: 'global', appliesTo: 'planner', modelInvocable: true, userInvocable: true, ...extra };
 }
 
 /** Backed by a live map, so a test can edit or delete a SKILL.md after it was loaded. */
-function fakeSkillsService(map: Record<string, string>): Pick<SkillsService, 'findSkill'> {
+function fakeSkillsService(map: Record<string, string>, extra: Record<string, Partial<SkillInfo>> = {}): Pick<SkillsService, 'findSkill'> {
   return {
-    findSkill: (n: string) => (map[n] ? skill(n, map[n]) : undefined),
+    findSkill: (n: string) => (map[n] ? skill(n, map[n], undefined, extra[n]) : undefined),
   };
 }
 
@@ -64,6 +64,72 @@ describe('resolveSkillInvocation', () => {
     home.findSkill = (n) => skill(n, 'BODY', '/home/me/.ordewell/skills/grilling/SKILL.md');
     expect(resolveSkillInvocation('/grilling', home, '/home/me').skills[0].path).toBe('~/.ordewell/skills/grilling/SKILL.md');
     expect(resolveSkillInvocation('/grilling', home, '/home/m').skills[0].path).toBe('/home/me/.ordewell/skills/grilling/SKILL.md');
+  });
+});
+
+describe('task skills a user names', () => {
+  const skills = fakeSkillsService(
+    { grilling: 'GRILL', tdd: 'TDD BODY', hidden: 'HIDDEN', 'task-hidden': 'TH' },
+    { tdd: { appliesTo: 'task', description: 'Test-first development', userInvocable: true, modelInvocable: false }, hidden: { userInvocable: false }, 'task-hidden': { appliesTo: 'task', userInvocable: false } },
+  );
+  const resolve = (text: string) => resolveSkillInvocation(text, skills, '/home/me');
+  const attach: SkillLoad = { invokedBy: 'user', name: 'tdd', source: 'global', path: '/skills/tdd/SKILL.md', content: '', attaches: { description: 'Test-first development' } };
+
+  it('resolves to an attach entry without the body, even for a user-only skill', () => {
+    expect(resolve('use /tdd here').skills).toEqual([attach]);
+  });
+
+  it('gives the planner a directive instead of the body', () => {
+    const message = plannerMessage('use /tdd here', [attach]);
+    expect(message).toBe('The user asks to use task skill "tdd" (Test-first development); attach it to the tasks it fits.\n\nuse /tdd here');
+    expect(message).not.toContain('TDD BODY');
+  });
+
+  it('keeps a loaded planner skill and an attached task skill apart in one message', () => {
+    const grill = resolve('/grilling').skills[0];
+    const message = plannerMessage('/grilling /tdd', [grill, attach]);
+    expect(message).toContain('Follow this skill:');
+    expect(message).toContain('GRILL');
+    expect(message).toContain('task skill "tdd"');
+    expect(message.indexOf('GRILL')).toBeLessThan(message.indexOf('task skill'));
+  });
+
+  it('drops the parenthesis when the skill has no description', () => {
+    expect(plannerMessage('x', [{ ...attach, attaches: { description: '' } }])).toContain('task skill "tdd"; attach it');
+  });
+
+  it('labels the entry and its notice as an attachment', () => {
+    expect(skillLoadLabel(attach)).toBe('/tdd will be attached to fitting tasks');
+    expect(skillLoadNotice(attach)).toEqual({ invokedBy: 'user', name: 'tdd', source: 'global', path: '/skills/tdd/SKILL.md', attaches: { description: 'Test-first development' } });
+    expect(skillLoadNotice(attach)).not.toHaveProperty('content');
+  });
+
+  it('treats a token naming a user-invocable: false skill as plain text, of either kind', () => {
+    expect(resolve('/hidden and /task-hidden').skills).toEqual([]);
+  });
+
+  it('replays the directive from the transcript', () => {
+    const replayed = plannerTranscript([
+      { role: 'user', content: 'goal with /tdd', timestamp: 't' },
+      { role: 'user', content: skillLoadLabel(attach), timestamp: 't', kind: 'skill_load', skill: attach },
+      { role: 'assistant', content: 'ok', timestamp: 't' },
+    ]);
+    expect(replayed.map((m) => m.content)).toEqual([plannerMessage('goal with /tdd', [attach]), 'ok']);
+  });
+
+  it('is persisted and announced in a session without loading the body', async () => {
+    const ai = liveAi();
+    const broadcast = vi.fn();
+    const session = makeSession({ broadcast, skillsService: skills, aiService: ai });
+
+    await session.startPlanning('/tdd build the cache', ['claude-code']);
+
+    const entry = session.planState?.conversationHistory?.find((m) => m.kind === 'skill_load');
+    expect(entry).toMatchObject({ content: '/tdd will be attached to fitting tasks', skill: attach });
+    expect(turnStarts(broadcast)[0].skills).toEqual([expect.objectContaining({ name: 'tdd', attaches: { description: 'Test-first development' } })]);
+    const goal = (ai.startConversation.mock.calls[0][0] as ConversationRequest).goal;
+    expect(goal).toContain('attach it to the tasks it fits');
+    expect(goal).not.toContain('TDD BODY');
   });
 });
 

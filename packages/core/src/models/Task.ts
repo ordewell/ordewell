@@ -340,6 +340,12 @@ export interface SkillLoad {
   /** The SKILL.md that won, home-abbreviated (`~/...`): which copy loaded is what a reader needs from it. */
   path: string;
   content: string;
+  /**
+   * Set when the user named a task skill: it is not loaded into the planner's
+   * context, which is only told to attach it to the tasks it fits. `content`
+   * is empty; the description is what the planner's directive quotes.
+   */
+  attaches?: { description: string };
 }
 
 /** A skill load as a surface announces it — the body stays with the transcript. */

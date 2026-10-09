@@ -1,6 +1,7 @@
 import type { ConversationMessage, ResearchLogEntry, ResearchStep, SkillLoad, SubagentLogEntry } from '../models/Task';
 import { isMeasured, usageLine, type PlannerUsage } from '../models/Usage';
 import type { DisplayBlock } from './blocks';
+import { skillLoadNotice } from '../services/skillInvocation';
 import { planMarker, settledMessage, skillLoadBlock, subagentBlock, toolFromStep, usageBlock, userMessage } from './records';
 import type { ConversationView } from './reduce';
 
@@ -21,9 +22,9 @@ function fromEntry(entry: ConversationMessage, loaded: readonly SkillLoad[] = []
   if (entry.kind === 'plan_generated') return (id) => ({ type: 'plan', id: id(), text: '', ...planMarker(entry.content) });
   if (entry.kind === 'skill_load' && entry.skill) {
     const { skill } = entry;
-    return (id) => skillLoadBlock(id(), skill);
+    return (id) => skillLoadBlock(id(), skillLoadNotice(skill));
   }
-  if (entry.role === 'user' && !entry.kind) return (id) => userMessage(id(), entry.content, loaded);
+  if (entry.role === 'user' && !entry.kind) return (id) => userMessage(id(), entry.content, loaded.map(skillLoadNotice));
   const role = entry.kind === 'system' || entry.kind === 'compaction' ? 'system' : entry.role === 'user' ? 'user' : 'planner';
   return (id) => settledMessage(id(), role, entry.content);
 }

@@ -5,7 +5,7 @@ import { DEFAULT_PLANNER_MODES, type IsolatedExecution, type PlannerModes } from
 import { TASK_QUERY_PROTOCOL, TASK_READ_TOOLS_PROTOCOL } from './TaskQuery';
 import { SELF_REPO } from './isolationRecord';
 import type { SkillInfo } from './SkillsService';
-import { modelInvocablePlannerSkills } from './skillInvocation';
+import { modelInvocablePlannerSkills, modelInvocableTaskSkills } from './skillInvocation';
 
 export function buildResearchToolsPrompt(): string {
   const lines = [
@@ -122,6 +122,7 @@ export interface ConversationVariant {
   harness?: boolean;
   /** The planner reads the catalog and submits the plan through Ordewell's MCP tools (ADR-0022), not the JSON envelope. */
   plannerTools?: boolean;
+  /** The skill catalog the planner may be shown: planner skills it can load, and task skills it can attach. */
   plannerSkills?: readonly SkillInfo[];
   /** Every AI task gets its own worktree (ADR-0013), so file overlap no longer forces an order; of every repo of a group (ADR-0014). */
   isolatedExecution?: IsolatedExecution;
@@ -282,6 +283,7 @@ function buildConversationBody(
     '      "autonomy": "AFK|HITL",',
     '      "sliceType": "AFK|HITL",',
     '      "ops": true,',
+    '      "skills": ["task-skill-name"],',
     '      "userStoriesCovered": ["user story text"],',
     '      "subtasks": [{ "id": "sub-id-string", "order": 1, "title": "Sub-step title", "description": "What it accomplishes", "type": "ai", "dependencies": [], "prompt": "Detailed instructions", "autonomy": "AFK|HITL", "sliceType": "AFK|HITL", "subtasks": [] }]',
     '    }',
@@ -301,6 +303,7 @@ function buildConversationBody(
     '- User tasks (type "user") always have sliceType "HITL".',
     '- "sliceType" is REQUIRED on every task, and "autonomy" on every "ai" task, at every depth — a "subtasks" entry is a full task object with all the same required fields, not a bare label.',
     '',
+    ...taskSkillsSection(variant.plannerSkills ?? []),
     'DEPENDENCY & PARALLELISM:',
     '- Independent slices should have NO dependencies — they run in parallel.',
     '- Only add dependencies when a slice truly depends on artifacts another slice creates.',
@@ -355,6 +358,27 @@ function plannerSkillsBlock(skills: readonly SkillInfo[]): string[] {
     'ORDEWELL PLANNER SKILLS:',
     'Call load_skill(name) when one of these skills would help:',
     ...loadable.map((skill) => `- ${skill.name}: ${skill.description}`),
+  ];
+}
+
+/**
+ * The "skills" field is documented for every planner: a user can name a task
+ * skill with `/name` whether or not any is advertised. The catalog is the
+ * model-invocable ones only; with none, the planner attaches on request alone.
+ */
+function taskSkillsSection(skills: readonly SkillInfo[]): string[] {
+  const attachable = modelInvocableTaskSkills(skills);
+  return [
+    'TASK SKILLS:',
+    '- "skills" optionally lists task skills by name; their instructions are put in that task\'s prompt when it runs. Omit it on tasks that need none.',
+    '- A name that does not exist yet is accepted with a warning, so a task may name a skill that a task it depends on creates (.ordewell/skills/<name>/SKILL.md). Only skills with applies-to: task can be attached.',
+    '- When the user asks to use a task skill, attach it to the tasks it fits.',
+    ...(attachable.length === 0 ? [] : [
+      'Task skills you may attach:',
+      ...attachable.map((skill) => `- ${skill.name}: ${skill.description}`),
+      'Attach one of these to a task only where its description says it applies. Never attach a skill to every task by default.',
+    ]),
+    '',
   ];
 }
 

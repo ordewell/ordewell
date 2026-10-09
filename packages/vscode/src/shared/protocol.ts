@@ -187,7 +187,7 @@ export type HostToWebview =
   /** The remembered plan dock height in px; absent until the user first drags it. */
   | { type: 'planDockHeight'; height?: number }
   /** Discovered skills (global ~/.ordewell/skills/ + workspace .ordewell/skills/, workspace shadows global) for the /skill-name suggestion dropdown. */
-  | { type: 'setSkills'; skills: { name: string; description: string }[] }
+  | { type: 'setSkills'; skills: { name: string; description: string; appliesTo?: 'planner' | 'task' }[] }
   | { type: 'setConfiguredProviders'; providers: AiProvider[] }
   | { type: 'setModelOptions'; modelOptions: ModelOption[] }
   | { type: 'setModelsByRunner'; modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>> }

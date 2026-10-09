@@ -21,8 +21,8 @@ export function userMessage(id: string, text: string, skills: readonly SkillLoad
   return skills.length > 0 ? { ...block, skills: skills.map((s) => s.name) } : block;
 }
 
-export function skillLoadBlock(id: string, { invokedBy, name, source, path }: SkillLoadNotice, turnId?: string): SkillLoadBlock {
-  return { type: 'skill_load', id, invokedBy, name, source, path, ...(turnId ? { turnId } : {}) };
+export function skillLoadBlock(id: string, { invokedBy, name, source, path, attaches }: SkillLoadNotice, turnId?: string): SkillLoadBlock {
+  return { type: 'skill_load', id, invokedBy, name, source, path, ...(attaches ? { attaches } : {}), ...(turnId ? { turnId } : {}) };
 }
 
 type SubagentFields = Omit<SubagentBlock, 'type' | 'id' | 'toolCallId' | 'model' | 'usage' | 'turnId'>
