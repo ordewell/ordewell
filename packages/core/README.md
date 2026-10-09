@@ -24,6 +24,9 @@ npm install @ordewell/core
 | `ModelResolver` / `ModeResolver` | Per-task model routing and mode resolution |
 | `RunnerRegistry` | Built-in runners plus the plugin manifest engine |
 
+Skills (`SkillsService`) are described in
+[Writing skills](https://github.com/ordewell/ordewell/blob/main/docs/skills.md).
+
 Subpath exports: `@ordewell/core/parsing`, `/plan-utils`, `/testing`.
 
 ## Stability

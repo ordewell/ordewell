@@ -37,6 +37,10 @@ Each runner you want to use (Claude Code, Codex or OpenCode) must be installed a
 on your PATH. If a runner appears greyed out right after installing it, reload the
 window so the extension picks up the new PATH.
 
+Skills are `SKILL.md` folders: type `/name` in the panel to load one into the
+conversation, and attach task skills as chips on a task's card. See
+[Writing skills](https://github.com/ordewell/ordewell/blob/main/docs/skills.md).
+
 The Command Palette offers **Ordewell: Rewind Conversation**, **Fork
 Conversation**, **Compact Conversation** and **Set Parallel Tasks**, and isolation
 can be configured under `ordewell.worktreeIsolation` and related settings.

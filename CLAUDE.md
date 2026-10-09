@@ -49,7 +49,8 @@ compile against.
 
 ## Don't
 
-- Commit anything under `.ordewell/` — sessions persist there, it's gitignored,
-  and nothing in it is a fixture.
+- Commit anything under `.ordewell/` other than `.ordewell/skills/` (committed
+  by design, ADR-0024) and the generated `.ordewell/.gitignore` — sessions
+  persist there, it's gitignored, and nothing else in it is a fixture.
 - Reach for a new flag through several layers when a module seam is the real
   fix — raise the seam instead of widening signatures.

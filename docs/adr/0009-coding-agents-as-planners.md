@@ -122,12 +122,14 @@ model's behalf, which is precisely what a coding agent replaces.
   `baseInstructions` replaces its base prompt, which takes its description of
   its own tools with it — a planner that has forgotten it can read the workspace
   researches the goal with a web search.
-- **The mode toggles keep working, unmodified.** `PlanPrompts` gains a
-  harness variant that suppresses the tool-envelope and budget-countdown
-  sections while keeping the plan schema, runner/mode vocabulary, model catalog
-  and conversational protocol byte-identical. The toggles *are* the skills; a
-  forked prompt would mean every future toggle is written twice or silently
-  works on one backend only.
+- **Skills work unmodified.** `PlanPrompts` gains a harness variant that
+  suppresses the tool-envelope and budget-countdown sections while keeping the
+  plan schema, runner/mode vocabulary, model catalog and conversational
+  protocol byte-identical. A harness planner gets skills as every planner does
+  ([ADR-0024](0024-unified-skills.md)): `/name` beside the user's text, the
+  model-invocable ones through `load_skill`, and task skills attached in the
+  plan. A forked prompt would mean every future skill feature is written twice
+  or silently works on one backend only.
 - **The planner's own model is picked from the runner's catalog.**
   `ModelDiscovery` already returns per-runner `DiscoveredModel[]` with variants
   — Claude's aliases and adaptive/low→max efforts, Codex's `model/list` with

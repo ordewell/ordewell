@@ -21,7 +21,7 @@ my-skill/
 
 | Field | Meaning |
 | --- | --- |
-| `name` | The skill's name, used as `/name`. Defaults to the folder name. |
+| `name` | Should match the folder name. The **folder name** is the skill's identity: it is what you type as `/name`, what a plan lists, and what `ordewell skills` shows. |
 | `description` | What it does and when it applies. Models choose skills from this line, so state when it applies. |
 | `applies-to` | `planner` (the default) or `task`. |
 | `disable-model-invocation` | `true` means only you can invoke it. |
@@ -100,19 +100,35 @@ The planner is the only model that attaches them:
   to attach one only where the description says it applies.
 - Type `/name` for a task skill and the planner is told to attach it to the
   tasks it fits. Its body is not shown to the planner. For example, `/tdd`
-  asks for the built-in `tdd` skill. TDD is no longer applied to every task by
-  default.
-- Skills appear as chips on task and subtask cards in the TUI and VS Code. Add
-  or remove them there before the task runs; they are read-only while it runs.
+  asks for the built-in `tdd` skill. TDD applies to a task only when that skill
+  is attached.
+- In VS Code, skills appear as chips on task and subtask cards. Add or remove
+  them there; they are locked while the plan executes, like a task's model and
+  mode.
+- In the TUI, press `K` on a task, or type `/task-skills <id> [a,b|none]`.
+- From a shell, run `ordewell task-skills <id> [a,b|none]`. With no names it
+  lists the task skills and marks the attached ones.
+
+The TUI and CLI do not lock a running plan: an edit is saved to the plan and
+applies the next time the task spawns.
 
 When the task starts, Ordewell puts the skill's text into the task's prompt, so
 this works the same on every runner. The skills a task attempt was given are
-recorded on the attempt.
+recorded on the attempt and shown at the top of its task log.
 
 A plan may name a skill that does not exist yet, with a warning, because a
 task it depends on may create it. If the name still does not resolve when the
 task starts, the task fails before its runner is spawned, and the message lists
 the directories searched. Only `applies-to: task` skills can be attached.
+
+A workspace skill that exists but is not committed gets a warning too: tasks
+run in git worktrees, which receive only what is committed, so commit its
+`.ordewell/skills/<name>/` folder.
+
+In a multi-repo group, the group folder's own `.ordewell/skills/` is read in
+place and needs no commit. Each repo's committed `.ordewell/skills/` is read as
+checked out in the task's worktree. When names clash, global wins, then the
+group folder, then the repos in the order the group lists them.
 
 ## Tasks that create skills
 

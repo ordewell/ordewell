@@ -7,18 +7,20 @@
 Ordewell had two things called a skill. The planner's skills were `SKILL.md`
 files in `~/.ordewell/skills/`, seeded from the package (ADR-0021) and loaded
 by `/name`. The task-side skills were *toggles* (`tdd`, `verify`): a settings
-boolean whose only effect was a prompt block added to every task. The two
-shared a word and nothing else, so a team could not write a skill for its
-tasks, share one through git, or have the planner choose which tasks get one.
-`/name` also rewrote the user's message into the skill's body, so the
-transcript no longer showed what was typed.
+boolean whose only effect was a prompt block. `tdd` was added to every task;
+`verify` told the planner, in chat and one-shot planning alike, to append a
+final verification task. The two shared a word and nothing else, so a team
+could not write a skill for its tasks, share one through git, or have the
+planner choose which tasks get one. `/name` also rewrote the user's message
+into the skill's body, so the transcript no longer showed what was typed.
 
 ## Decision
 
 **One `SKILL.md` format and one loader serve every skill.** The format is the
 Agent Skills spec (agentskills.io): a folder with a `SKILL.md`, frontmatter,
-then instructions. Ordewell reads `name`, `description` and three fields of
-its own:
+then instructions. Ordewell reads `description` and three fields of its own; the
+**folder name is the skill's identity** (`/name`, the names in a plan,
+`ordewell skills`), and a frontmatter `name` should match it:
 
 - **`applies-to: planner | task`**, default `planner`. A planner skill is
   instructions for the planning conversation; a task skill is instructions for
@@ -59,9 +61,12 @@ shadowed rather than dropped silently.
   invokes task skills; it sees a catalog of model-invocable ones and is told to
   attach one only where its description says it applies.
 - **Ordewell injects the body into the task prompt at spawn**, so any harness
-  works and nothing is written into a runner's own skills directory. The
-  resolved skills are **snapshotted on the attempt**, so a retry or a read of
-  history shows what that attempt was given.
+  works and nothing is written into a runner's own skills directory. A fresh
+  attempt resolves the skills where it runs and **snapshots them**: the task
+  keeps the latest attempt's snapshot, and each attempt's task log opens with a
+  skills entry naming them and their paths, so history shows what that attempt
+  was given. A retry resolves again; a conflict repair and a continue add no
+  snapshot, since they resume work that already holds the skills.
 - Names are checked **leniently at submit, hard at spawn**. An unresolved name
   in a submitted plan or edit is a warning, because a task it depends on may
   create the skill in its worktree. A planner skill on a task is refused. At
@@ -70,15 +75,33 @@ shadowed rather than dropped silently.
   and which directories were searched.
 - `/tdd` on a task skill is a **directive to the planner**: the entry carries
   no body, and the planner is told to attach the skill to the tasks it fits.
-- Skills show as **editable chips** on task and subtask cards in the TUI and
-  VS Code, read-only while the task runs.
+- Skills show as **editable chips** on task and subtask cards in VS Code,
+  where they are locked while the plan executes (the same lock as model and
+  mode). The TUI sets them from the plan pane (`K`) or `/task-skills`, and the
+  CLI with `ordewell task-skills`; those are not locked, and an edit applies
+  the next time the task spawns.
 
-**Removed.** The `tdd` mode toggle (TDD is no longer applied to every task by
-default; attach the skill or use `/tdd`) and the `verify` toggle. The
-read-only `ordewell skills` command lists what a workspace sees.
+**No toggles.** Settings hold no skill switch. TDD applies to a task only when
+the `tdd` skill is attached, by the planner or by `/tdd`. The read-only
+`ordewell skills` command lists what a workspace sees.
 
-## Rejected
+**Workspace skills in a repo group** (ADR-0014). The group root is no
+repository, so its own `.ordewell/skills/` is read from the main checkout and
+never needs committing; each repo's committed folder is read as checked out in
+the task's worktree. Among workspace folders the group root's wins, then repos
+in layout order. A workspace skill attached to a task but not yet committed
+produces a warning at submit saying which folder to commit.
 
+## Considered options
+
+- **A `tdd` mode toggle** (TDD added to every task). It could not be chosen
+  per task, shared or edited by a team, and cost every task a block of prompt
+  it did not always need. Replaced by the `tdd` task skill.
+- **`verify` as a planner skill.** The toggle told the planner to append a final
+  verification task to every plan. Dropped outright, not migrated: Ordewell
+  already derives verdicts from the runner's completion evidence, and a team
+  that wants the behaviour can recreate it as a user `SKILL.md` in
+  `~/.ordewell/skills/` or `.ordewell/skills/` with no code change.
 - **Two separate systems** (a planner skill store and a task skill store).
   Two loaders, two formats and two precedence rules for one concept.
 - **A `.ordewell-skills/` folder at the workspace root.** A second place to
@@ -104,6 +127,11 @@ read-only `ordewell skills` command lists what a workspace sees.
 [ADR-0009](0009-coding-agents-as-planners.md) (harness planners get skills
 through the same tool), [ADR-0013](0013-worktree-isolation.md) (committed
 skills reach worktrees through git),
+[ADR-0014](0014-multi-repo-workspaces.md) (a repo group's skill folders),
 [ADR-0021](0021-built-in-skill-seeds-refresh.md) (seeds still refresh when
 unedited), [ADR-0022](0022-ordewell-mcp-server.md) (`load_skill` lives on that
 server).
+
+## History
+
+- 2026-10-09 — accepted: one format and loader; planner and task skills; the `tdd` and `verify` toggles dropped.
