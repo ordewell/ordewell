@@ -3,7 +3,7 @@ import { makeSession } from './sessionTestKit';
 import type { SkillsService, SkillInfo } from '../SkillsService';
 
 function skill(name: string, content: string): SkillInfo {
-  return { name, description: name, metadata: { name, description: name }, content, path: `/skills/${name}/SKILL.md`, source: 'global' };
+  return { name, description: name, metadata: { name, description: name }, content, path: `/skills/${name}/SKILL.md`, source: 'global', appliesTo: 'planner', modelInvocable: true, userInvocable: true };
 }
 
 function fakeSkillsService(map: Record<string, string>): Pick<SkillsService, 'findSkill'> {
