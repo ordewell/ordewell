@@ -7,7 +7,7 @@ import { fakeConfig, FakeWorktreeIsolation } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 
 const task = (id: string, order: number, over: Partial<Task> = {}): Task =>
-  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, completionMarker: `mk-${id}`, ...over });
+  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, ...over });
 
 const verdict = (outcome: Verdict['outcome'], reason: string): Verdict => ({ outcome, reason, checks: [], decidedAt: '2026-09-28T00:00:00.000Z' });
 const passed = verdict('pass', 'Completion marker found');

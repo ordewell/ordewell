@@ -138,9 +138,9 @@ export interface TaskStartOptions extends AgentStartCommon {
   mode: string;
   flags: TaskRunnerFlags;
   /**
-   * The Ordewell MCP server and this attempt's token (ADR-0022). An adapter
-   * that can inject it does, with its tools pre-approved; one that cannot
-   * ignores it, and the task completes by its marker.
+   * The Ordewell MCP server and this attempt's token (ADR-0022), injected
+   * with its tools pre-approved. A task is never started without it: its
+   * `task_complete` call is how it reports it is done.
    */
   mcp?: McpClientConfig;
 }
@@ -189,15 +189,16 @@ export interface AgentAdapter {
   dispose(): void;
 
   /**
-   * Whether the Ordewell MCP server passed in {@link PlannerStartOptions.mcp}
-   * is connected, as the runner itself reports it (ADR-0022, S4). Absent on an
-   * adapter that cannot inject the server at all.
+   * Whether the Ordewell MCP server passed in the start options' `mcp` is
+   * connected, as the runner itself reports it (ADR-0022, S4). Absent on an
+   * adapter that cannot inject the server at all, which cannot run tasks.
    */
   mcpAttached?(): Promise<boolean>;
 }
 
 /** What an adapter adds to run a task rather than a planner (ADR-0018). */
 export interface TaskModeAgentAdapter extends AgentAdapter {
+  mcpAttached(): Promise<boolean>;
   /**
    * Ask the running turn to stop, keeping the process and its session. Resolves
    * true once the agent acknowledged it; the turn then ends with
@@ -209,7 +210,7 @@ export interface TaskModeAgentAdapter extends AgentAdapter {
    * Registers the listener for what the agent does after a turn has ended and
    * before the next message — a turn it opens itself when background work
    * finishes, most often. Without one that output is dropped, which is right
-   * for a planner and wrong for a task, whose marker may be said there.
+   * for a planner and wrong for a task, which may report completion there.
    */
   onOutOfTurn?(listener: (event: AgentEvent) => void): void;
   /** Registers a listener for the process ending, for any reason. Fires at most once. */

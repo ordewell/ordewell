@@ -7,7 +7,6 @@ import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { StructuredRunner } from '../StructuredRunner';
 import { isStructuredSession, type StructuredEvent } from '../../interfaces/ITerminalRunner';
 import { mcpClientConfig } from '../mcp';
-import { takesOrdewellTools } from '../harness/connectors';
 import { modeIds, fakeSpawn, fixture, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
 
 /**
@@ -839,7 +838,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
     });
 
     it('is not attached when the process ends before saying', async () => {
-      const { spawned, processDeps } = deps(handshake());
+      const { spawned, processDeps } = deps(handshake(), { autoMcpAttached: false });
       const adapter = new CodexAdapter(processDeps);
       await adapter.start(taskStart('agent', { mcp }));
       const attached = adapter.mcpAttached();
@@ -899,7 +898,6 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
   });
 
   it('is a runner whose structured tasks are taught the tools', () => {
-    expect(takesOrdewellTools('codex')).toBe(true);
   });
 });
 

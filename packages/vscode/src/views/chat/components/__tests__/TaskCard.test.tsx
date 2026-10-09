@@ -15,7 +15,6 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     dependencies: [],
     subtasks: [],
     assignedRunner: 'claude-code',
-    completionMarker: 'm1',
     taskMode: 'build',
     ...overrides,
   };
@@ -205,7 +204,6 @@ describe('TaskCard — subtask order labels', () => {
             dependencies: [],
             subtasks: [],
             assignedRunner: 'claude-code',
-            completionMarker: 'm2',
             taskMode: 'build',
           }],
         })}
@@ -221,7 +219,7 @@ describe('TaskCard — a subtask on a different runner than its parent', () => {
   it('scopes the subtask\'s model dropdown to ITS OWN runner\'s catalog via modelsByRunner, not the parent\'s', () => {
     const subtask: Task = {
       id: 's1', order: 1, title: 'Subtask one', description: '', type: 'ai', status: 'pending',
-      dependencies: [], subtasks: [], assignedRunner: 'opencode', completionMarker: 'm2', taskMode: 'build',
+      dependencies: [], subtasks: [], assignedRunner: 'opencode', taskMode: 'build',
     };
     render(
       <TaskCard

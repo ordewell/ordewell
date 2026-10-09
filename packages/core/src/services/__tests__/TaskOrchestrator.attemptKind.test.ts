@@ -6,7 +6,7 @@ import { TaskOrchestrator, TaskControlError } from '../TaskOrchestrator';
 import { createTask, type Task } from '../../models/Task';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
-import { fakeConfig, FakeStructuredSession, FakeTerminalSession, FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
+import { fakeConfig, FakeStructuredSession, FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 import type { IConfig } from '../../interfaces/IConfig';
 import type { IsolationMergeResult } from '../../interfaces/IWorktreeIsolation';
@@ -36,7 +36,7 @@ function setup(opts: { isolation?: FakeWorktreeIsolation; config?: Partial<IConf
   /** The roots each spawn read skills from. */
   const skillRoots: (readonly string[])[] = [];
   const isolation = opts.isolation ?? new FakeWorktreeIsolation();
-  const sessions: FakeTerminalSession[] = [];
+  const sessions: FakeStructuredSession[] = [];
   const requests: RunnerSpawnOptions[] = [];
   /** Spawns that wait to be let through, by task id. */
   const holds = new Map<string, Promise<void>>();
@@ -57,7 +57,7 @@ function setup(opts: { isolation?: FakeWorktreeIsolation; config?: Partial<IConf
     config: fakeConfig({ worktreeIsolation: true, ...opts.config }),
     notifications: fakeNotification(),
     terminalRunner: runner,
-    output: new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } }),
+    output: new BufferedTaskOutputSource(),
     registry: new RunnerRegistry(),
     isolation,
     workspaceRoot: () => opts.workspace ?? '/repo',
@@ -73,7 +73,7 @@ function setup(opts: { isolation?: FakeWorktreeIsolation; config?: Partial<IConf
   orchestrator.subscribe({ onIsolationNotice: ({ message }) => notices.push(message) });
   const spawned = (taskId: string) => requests.filter((r) => r.taskId === taskId);
   const latest = (taskId: string) => sessions.filter((s) => s.taskId === taskId).at(-1)!;
-  const pass = (task: Task) => latest(task.id).emitOutput(`<<<ORDEWELL_DONE_${task.completionMarker}>>>`);
+  const pass = (task: Task) => latest(task.id).reportComplete({ status: 'done', summary: '' });
   const status = (taskId: string) => orchestrator.storeInstance.get(taskId)!.status;
   const ops = () => isolation.calls.map((c) => c.op);
   const hold = (taskId: string): (() => void) => {
@@ -85,7 +85,7 @@ function setup(opts: { isolation?: FakeWorktreeIsolation; config?: Partial<IConf
 }
 
 const change = (id: string, order: number, over: Partial<Task> = {}) =>
-  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, completionMarker: `mk-${id}`, ...over });
+  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, ...over });
 const opsTask = (id: string, order: number, over: Partial<Task> = {}) => change(id, order, { ops: true, ...over });
 
 /** Run a task to a pass on its own, so it can be continued. */

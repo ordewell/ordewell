@@ -79,13 +79,12 @@ describe('mergeExcludes: the one rule Merge all and ops work share (ADR-0020)', 
 });
 
 describe('attemptPrompt', () => {
-  const task = createTask({ id: 't1', title: 'Deploy', prompt: 'ORIGINAL BODY', completionMarker: 'mk-1' });
+  const task = createTask({ id: 't1', title: 'Deploy', prompt: 'ORIGINAL BODY' });
 
   function sources(): AttemptPromptSources & { repairPrompt: ReturnType<typeof vi.fn>; previousAttempt: ReturnType<typeof vi.fn> } {
     return {
       task,
       plan: [task],
-      completionTool: false,
       planMapEnabled: false,
       skills: [{ name: 'tdd', source: 'global', path: '/g/tdd/SKILL.md', content: 'RED then GREEN.' }],
       repairPrompt: vi.fn(() => 'MERGE THE INTEGRATION BRANCH'),
@@ -108,7 +107,7 @@ describe('attemptPrompt', () => {
 
     for (const text of expected.has) expect(prompt).toContain(text);
     for (const text of expected.lacks) expect(prompt).not.toContain(text);
-    expect(prompt).toContain('`DONE_mk-1>>>`');
+    expect(prompt).toContain('task_complete');
     if (KINDS[name].kind === 'continuation') expect(prompt.startsWith(`${resume.message}\n`)).toBe(true);
     for (const source of ['repairPrompt', 'previousAttempt'] as const) {
       expect(src[source].mock.calls.length > 0, source).toBe(expected.reads.includes(source));

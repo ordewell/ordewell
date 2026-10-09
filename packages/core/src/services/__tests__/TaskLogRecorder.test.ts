@@ -202,7 +202,7 @@ describe('a structured run through the real Claude adapter', () => {
 describe('a session’s task logs', () => {
   function plan(): LegacyPlanState {
     return {
-      tasks: [createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', assignedRunner: 'claude-code', completionMarker: 'mk-1' })],
+      tasks: [createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', assignedRunner: 'claude-code' })],
       generatedAt: new Date().toISOString(),
       status: 'approved',
       runners: ['claude-code'],
@@ -250,7 +250,7 @@ describe('a session’s task logs', () => {
     session.loadPlan(plan(), 'Goal', '/repo');
     await session.executePlan();
     sessions[0].emitOutput('working…');
-    sessions[0].emitOutput('<<<ORDEWELL_DONE_mk-1>>>');
+    session.markTaskComplete('t1');
 
     await vi.waitFor(() => expect(sent.some((m) => m.type === 'status_update' && m.tasks[0]?.status === 'completed')).toBe(true));
     expect(taskLogs(sent)).toEqual([]);

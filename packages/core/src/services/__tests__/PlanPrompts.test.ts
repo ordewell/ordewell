@@ -14,11 +14,11 @@ describe('model-invocable planner skill catalog', () => {
     source: 'global', path: `/skills/${name}/SKILL.md`, appliesTo: 'planner', modelInvocable: true, userInvocable: false, ...extra,
   });
   const skills = [skill('review-plan'), skill('task-only', { appliesTo: 'task' }), skill('user-only', { modelInvocable: false })];
-  const prompt = (plannerTools: boolean, plannerSkills = skills) => buildConversationSystemPrompt(
-    'goal', '', {}, ['claude-code'], undefined, true, { plannerTools, skills: plannerSkills },
+  const prompt = (harness: boolean, plannerSkills = skills) => buildConversationSystemPrompt(
+    'goal', '', {}, ['claude-code'], undefined, true, { harness, skills: plannerSkills },
   );
 
-  it('advertises only loadable names and descriptions with the tools attached', () => {
+  it('advertises only loadable names and descriptions to a harness planner', () => {
     const text = prompt(true);
     expect(text).toContain('ORDEWELL PLANNER SKILLS:');
     expect(text).toContain('- review-plan: review-plan description');
@@ -27,7 +27,7 @@ describe('model-invocable planner skill catalog', () => {
     expect(text.split('ORDEWELL PLANNER SKILLS:')[1].split('\n\n')[0]).not.toContain('task-only');
   });
 
-  it('omits the catalog and tool instructions when no tools attached', () => {
+  it('omits the catalog and tool instructions for an API planner, which has no tools', () => {
     expect(prompt(false)).not.toMatch(/ORDEWELL PLANNER SKILLS|review-plan|load_skill/);
   });
 
@@ -43,7 +43,7 @@ describe('task skill catalog', () => {
     source: 'global', path: `/skills/${name}/SKILL.md`, appliesTo: 'task', modelInvocable: true, userInvocable: true, ...extra,
   });
   const prompt = (plannerSkills: SkillInfo[], plannerTools = true) => buildConversationSystemPrompt(
-    'goal', '', {}, ['claude-code'], undefined, true, { plannerTools, skills: plannerSkills },
+    'goal', '', {}, ['claude-code'], undefined, true, { harness: plannerTools, skills: plannerSkills },
   );
 
   it('lists model-invocable task skills with a never-blanket-attach instruction', () => {
@@ -176,9 +176,12 @@ describe('buildConversationSystemPrompt harness variant (ADR-0009)', () => {
     expect(variant(false)).not.toMatch(/WAIT for their results inside this reply/);
   });
 
-  it('keeps the plan schema, runner vocabulary and model catalog byte-identical', () => {
+  it('keeps the plan schema and runner vocabulary, reading the model catalog through list_models', () => {
     const harness = variant(true);
-    for (const shared of ['"tasks"', 'assignedRunner', 'assignedModel', 'sliceType', 'VERTICAL SLICE PLANNING', 'Sonnet', 'PROJECT CONTEXT HERE',
+    expect(harness).not.toContain('Sonnet');
+    expect(harness).toContain('list_models');
+    expect(variant(false)).toContain('Sonnet');
+    for (const shared of ['"tasks"', 'assignedRunner', 'assignedModel', 'sliceType', 'VERTICAL SLICE PLANNING', 'PROJECT CONTEXT HERE',
       // A subtask is a full task object with the same required fields. Dropping
       // this from one variant is exactly how the requirement went unstated.
       'at every depth']) {
@@ -186,21 +189,19 @@ describe('buildConversationSystemPrompt harness variant (ADR-0009)', () => {
     }
   });
 
-  it('teaches the task-query read protocol to both variants, so the channel is not API-only', () => {
-    for (const prompt of [variant(true), variant(false)]) {
-      expect(prompt).toContain('"taskQuery"');
-      expect(prompt).toContain('"catalog"');
-      expect(prompt).toContain('"fields"');
-      // The point of the channel: read the body before rewriting it.
-      expect(prompt).toMatch(/prompt|description/);
-    }
-  });
-
-  it('differs from the API variant only in the research-phase block', () => {
-    const harness = variant(true);
+  it('teaches the API planner the task-query envelope, and the harness planner the task_query tool', () => {
     const api = variant(false);
-
-    expect(harness.replace(/RESEARCH PHASE:[\s\S]*?\n\n/, '')).toEqual(api.replace(/RESEARCH PHASE:[\s\S]*?\n\n/, ''));
+    expect(api).toContain('"taskQuery"');
+    expect(api).toContain('"catalog"');
+    expect(api).toContain('"fields"');
+    const harness = variant(true);
+    expect(harness).toContain('task_query');
+    expect(harness).not.toContain('"taskQuery"');
+  });
+  it('submits through submit_plan where the API variant emits the JSON envelope', () => {
+    expect(variant(true)).toContain('Submit the plan ONLY through submit_plan');
+    expect(variant(false)).toContain('Output ONLY the JSON object when committing the plan');
+    expect(variant(false)).not.toContain('submit_plan');
   });
 });
 
@@ -345,7 +346,7 @@ describe('the conflict repair prompt', () => {
     expect(buildConflictRepairPrompt(conflicted, conflict, 'ordewell/r1/integration')).toBe([
       'Task #3 "Edit both" passed, but merging its branch `ordewell/r1/3-edit-both` into `ordewell/r1/integration` conflicted in src/api.ts, src/client.ts. None of its work has landed yet.',
       'This is the task\'s own worktree, on `ordewell/r1/3-edit-both`, with its work committed. Run `git merge --no-edit ordewell/r1/integration` here and resolve every conflict so that both sides\' intent survives: keep the work already integrated and add what the task contributed. Never drop either side wholesale, and never abort the merge or reset it away.',
-      'Build and test the result the way this project does, commit the merge, and only then print the completion marker.',
+      'Build and test the result the way this project does, commit the merge, and only then call `task_complete`.',
       '',
       'What the task was asked to do:\nchange the API and its client',
     ].join('\n'));
@@ -364,7 +365,7 @@ describe('the conflict repair prompt', () => {
     expect(p).toMatch(/lands in every repository it changed or in none/);
     expect(p).toContain('In each repository the task changed — api, web — run `git merge --no-edit ordewell/r1/integration` inside that repository\'s directory');
     expect(p).toMatch(/Never drop either side wholesale, and never abort a merge or reset it away/);
-    expect(p).toContain('commit the merge in each repository, and only then print the completion marker');
+    expect(p).toContain('commit the merge in each repository, and only then call `task_complete`');
     expect(p).toContain('What the task was asked to do:\nchange the API and its client');
   });
 });

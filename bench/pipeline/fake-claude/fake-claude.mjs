@@ -7,8 +7,7 @@
  * the real binary. It speaks the `-p --input-format stream-json
  * --output-format stream-json` protocol as far as the adapter reads it, and
  * completes tasks the way a real agent does: by calling `task_complete` on the
- * Ordewell MCP server named in the `--mcp-config` file. It never prints the
- * text completion marker, so a pass can only come from the tool.
+ * Ordewell MCP server named in the `--mcp-config` file.
  *
  * A task steers it with a cue in its prompt:
  *   <fake-claude>{"delayMs":300,"write":{"A.txt":"hello"},"status":"blocked","reason":"why"}</fake-claude>

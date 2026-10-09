@@ -18,8 +18,8 @@ const task = (over: Record<string, unknown>) => ({
 
 const plan = {
   tasks: [
-    task({ id: 't1', order: 1, title: 'Bump the version', status: 'completed', completionMarker: 'm1' }),
-    task({ id: 'o2', order: 2, title: 'Redeploy on dev', dependencies: ['t1'], ops: true, completionMarker: 'm2', prompt: 'push and watch' }),
+    task({ id: 't1', order: 1, title: 'Bump the version', status: 'completed' }),
+    task({ id: 'o2', order: 2, title: 'Redeploy on dev', dependencies: ['t1'], ops: true, prompt: 'push and watch' }),
   ],
   generatedAt: new Date().toISOString(),
   status: 'draft' as const,

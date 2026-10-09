@@ -64,7 +64,6 @@ async function fakeClaudeCompletesThroughTheTool(): Promise<void> {
   const log = await runPlan([task], 'claude-code', FAKE_AGENT_TIMEOUT_MS);
   const verdict = log.find((entry) => entry.id === task.id)?.verdict;
   assert.strictEqual(verdict?.outcome, 'pass', `expected a pass verdict, got: ${JSON.stringify(verdict)}`);
-  // The fake never prints the completion marker, so only the tool call can have passed it.
   assert.ok(verdict?.reason.includes('task_complete'), `the pass did not come from task_complete: ${verdict?.reason}`);
   assert.ok(fs.existsSync(path.join(process.env.ORDEWELL_TEST_WORKSPACE!, PROBE_FILE)), `${PROBE_FILE} was never created`);
   console.log(`  ✓ fake claude did the work and the tool call reached a pass verdict — ${verdict?.reason}`);

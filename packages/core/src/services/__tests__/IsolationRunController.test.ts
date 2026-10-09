@@ -21,7 +21,7 @@ function setup(isolation = new FakeWorktreeIsolation()) {
 }
 
 const task = (id: string, order: number): Task =>
-  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, completionMarker: `mk-${id}` });
+  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}` });
 
 const ops = (isolation: FakeWorktreeIsolation) => isolation.calls.map((c) => c.op);
 

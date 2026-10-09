@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { makeSession, FakeTerminalSession, queue } from './sessionTestKit';
-import { fakeConfig, FakeStructuredSession, FakeWorktreeIsolation } from '../../testing';
+import { makeSession, FakeStructuredSession, queue } from './sessionTestKit';
+import { fakeConfig, FakeWorktreeIsolation } from '../../testing';
 import { createTask, flattenTasks, type LegacyPlanState, type Task } from '../../models/Task';
 import type { ITerminalRunner, ITerminalSession } from '../../interfaces/ITerminalRunner';
 import type { IConfig } from '../../interfaces/IConfig';
@@ -9,7 +9,7 @@ import type { Session, SessionPlanner } from '../createSession';
 import type { SessionMessage } from '../SessionMessage';
 
 const task = (id: string, order: number, over: Partial<Task> = {}) =>
-  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, completionMarker: `mk-${id}`, ...over });
+  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, ...over });
 
 function plan(tasks: Task[]): LegacyPlanState {
   const now = new Date().toISOString();
@@ -29,11 +29,11 @@ function setup(tasks: Task[], opts: {
   config?: IConfig;
   planner?: Partial<SessionPlanner>;
 } = {}) {
-  const terminals: FakeTerminalSession[] = [];
+  const terminals: FakeStructuredSession[] = [];
   const runner = {
     spawn: vi.fn(async (spawn: { taskId: string }) => {
       const id = `s${terminals.length + 1}`;
-      const t = opts.structured ? new FakeStructuredSession(id, spawn.taskId) : new FakeTerminalSession(id, spawn.taskId);
+      const t = opts.structured ? new FakeStructuredSession(id, spawn.taskId) : new FakeStructuredSession(id, spawn.taskId);
       terminals.push(t);
       return t;
     }),
@@ -155,7 +155,7 @@ describe('every user control saves before it announces', () => {
   it.each(['cleanupRun', 'discardRun'] as const)('%s of a settled run', async (control) => {
     const env = setup([task('t1', 1)]);
     await env.session.executePlan();
-    env.terminal('t1').emitOutput('<<<ORDEWELL_DONE_mk-t1>>>');
+    env.terminal('t1').reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(env.messages.map((m) => m.type)).toContain('execution_complete'));
 
     await expectSavedBeforeAnnounced(env, (s) => s[control]());
@@ -197,7 +197,7 @@ describe('every user control saves before it announces', () => {
   it('merge all mid-run, which starts the ops task waiting at its gate', async () => {
     const env = setup([task('t1', 1), task('o1', 2, { ops: true, dependencies: ['t1'] })]);
     await env.session.executePlan();
-    env.terminal('t1').emitOutput('<<<ORDEWELL_DONE_mk-t1>>>');
+    env.terminal('t1').reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(env.session.mergeGate('o1')).toEqual(['t1']));
 
     await expectSavedBeforeAnnounced(env, (s) => s.mergeRun());
@@ -215,7 +215,7 @@ describe('every user control saves before it announces', () => {
     queue(env.session, 'an edit');
 
     await expectSavedBeforeAnnounced(env, async () => {
-      env.terminal('t1').emitOutput('<<<ORDEWELL_DONE_mk-t1>>>');
+      env.terminal('t1').reportComplete({ status: 'done', summary: '' });
       await vi.waitFor(() => expect(env.session.planTasks[1].status).toBe('in_progress'));
     });
   });
@@ -253,7 +253,7 @@ describe("a user control's saves while it runs", () => {
     await expect(turn).rejects.toThrow('planner transport failed');
 
     expect(session.planState!.conversationHistory!.map((m) => m.content)).toEqual(['goal', 'Plan generated with 1 task.']);
-    spawns[0](new FakeTerminalSession('s1', 't1'));
+    spawns[0](new FakeStructuredSession('s1', 't1'));
     await starting;
   });
 });

@@ -10,7 +10,7 @@ export interface UserStep {
   completed: boolean;
 }
 
-/** One deterministic signal gathered while verifying a completed task. */
+/** One deterministic signal gathered while verifying a completed task. `completion_marker` is only in verdicts saved before completion was reported through `task_complete` alone. */
 export interface VerificationCheck {
   name: 'exit_code' | 'completion_marker' | 'task_complete' | 'manual';
   passed: boolean;
@@ -39,7 +39,7 @@ export type TaskMode = string;
 
 /**
  * Why an `awaiting_user` task waits (ADR-0018, W1): a structured turn that
- * ended without the done marker, a checkpoint question, work that did not
+ * ended without a `task_complete` call, a checkpoint question, work that did not
  * land, or an ops task that changed tracked files (ADR-0020). Saved, so no
  * surface has to guess it from whether an attempt is live.
  */
@@ -74,14 +74,17 @@ export interface TaskTransport {
 /**
  * Bring loaded tasks to the structured-only shape, in place. A task saved
  * while the terminal transport existed may say it ran there, and why; neither
- * means anything now, and such a task left no session to continue.
+ * means anything now, and such a task left no session to continue. Its
+ * completion marker id went with the text markers: completion is reported
+ * only through `task_complete`.
  */
-export function migrateTaskTransports(tasks: readonly Task[]): void {
+export function migrateLoadedTasks(tasks: readonly Task[]): void {
   for (const task of tasks) {
     const saved = task.transport as { kind?: unknown; nativeSessionId?: unknown } | undefined;
     if (saved?.kind !== 'structured') delete task.transport;
     else task.transport = typeof saved.nativeSessionId === 'string' ? { kind: 'structured', nativeSessionId: saved.nativeSessionId } : { kind: 'structured' };
-    migrateTaskTransports(task.subtasks ?? []);
+    delete (task as { completionMarker?: unknown }).completionMarker;
+    migrateLoadedTasks(task.subtasks ?? []);
   }
 }
 
@@ -117,7 +120,6 @@ export interface Task {
   assignedRunner: RunnerId;
   thinkingEffort?: string;
   taskMode?: TaskMode;
-  completionMarker: string;
   autonomy?: 'AFK' | 'HITL';
   sliceType?: 'HITL' | 'AFK';
   userStoriesCovered?: string[];
@@ -613,7 +615,6 @@ export function createTask(overrides: Partial<Task> = {}): Task {
     assignedRunner: overrides.assignedRunner ?? 'claude-code',
     thinkingEffort: overrides.thinkingEffort,
     taskMode: overrides.taskMode ?? 'build',
-    completionMarker: overrides.completionMarker ?? uuidv4(),
     autonomy: overrides.autonomy,
     sliceType: overrides.sliceType,
     userStoriesCovered: overrides.userStoriesCovered,
@@ -720,9 +721,6 @@ export function migrateTask(task: Record<string, unknown>): Task {
   if (!task.thinkingEffort) {
     task.thinkingEffort = undefined;
   }
-  if (!task.completionMarker) {
-    task.completionMarker = uuidv4();
-  }
   if (task.verdict && task.verification) {
     delete task.verification;
   }
@@ -825,7 +823,7 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
 }
 
 /** What only execution reads; {@link keepExecutionState} puts it back on whatever a planner returns. */
-const EXECUTION_ONLY = ['attemptSkills', 'transport', 'awaitingReason', 'completionMarker', 'forcedPastGate', 'outputSummary'] as const satisfies readonly (keyof Task)[];
+const EXECUTION_ONLY = ['attemptSkills', 'transport', 'awaitingReason', 'forcedPastGate', 'outputSummary'] as const satisfies readonly (keyof Task)[];
 
 export type PlannerTaskView = Omit<Task, typeof EXECUTION_ONLY[number] | 'subtasks'> & { subtasks: PlannerTaskView[] };
 

@@ -283,7 +283,7 @@ export class OpenCodeV2 {
   /**
    * Whatever of the turn's own replies the stream missed. A message whose text
    * the stream delivered adds nothing here; one that lost its text frames still
-   * reaches the plain-text channel, where the done marker is looked for.
+   * reaches the plain-text channel, which a summary falls back to.
    */
   private async readBack(state: TurnState, onEvent: (e: AgentEvent) => void): Promise<void> {
     const messages = await this.messages();

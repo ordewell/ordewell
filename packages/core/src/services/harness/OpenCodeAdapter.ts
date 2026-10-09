@@ -554,8 +554,8 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
   /**
    * Whatever of the turn's own messages the stream missed. Each part is
    * emitted once, so a turn the stream saw whole adds nothing here; one that
-   * lost its last text part still reaches the plain-text channel, where the
-   * done marker is looked for.
+   * lost its last text part still reaches the plain-text channel, which a
+   * summary falls back to.
    */
   private async readBack(turn: TurnState, onEvent: (e: AgentEvent) => void): Promise<void> {
     const messages = await this.json<OpenCodeMessageResponse[]>('GET', `/session/${this.sessionId}/message`).catch(() => null);

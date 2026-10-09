@@ -5,14 +5,13 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
-import { HomeTranscriptReader } from '../transcriptCapture';
 import type { Session } from '../createSession';
 import type { ConversationTurn, IAiService } from '../AiService';
 import type { SessionMessage } from '../SessionMessage';
 import { createTask, type ConversationMessage, type LegacyPlanState, type Task } from '../../models/Task';
 import type { ITerminalRunner } from '../../interfaces/ITerminalRunner';
 import type { IsolationHandoff, IsolationRun, TaskIsolation } from '../../interfaces/IWorktreeIsolation';
-import { fakeConfig, FakeTerminalSession, makeSession, taskOf, saves } from './sessionTestKit';
+import { fakeConfig, FakeStructuredSession, makeSession, taskOf, saves } from './sessionTestKit';
 
 const hasGit = (() => {
   try { execFileSync('git', ['--version'], { stdio: 'ignore' }); return true; } catch { return false; }
@@ -80,31 +79,29 @@ interface Job {
   until?: () => boolean;
   write?: Record<string, string>;
   act?: (cwd: string) => void;
-  /** The final answer, written to a Claude Code transcript for the cwd as Claude Code would. */
+  /** The summary the agent reports through task_complete. */
   answer?: string;
 }
 
 /**
  * A runner that does what a coding agent does, minus the model: works in the
- * directory it was handed, writes its transcript where Claude Code keeps it,
- * and prints the task's marker. An agent that throws is recorded, not raised
+ * directory it was handed and reports completion through task_complete. An agent that throws is recorded, not raised
  * out of a timer.
  */
-function scriptedAgent(home: string, session: () => Session, jobFor: (taskId: string, title: string) => Job) {
+function scriptedAgent(jobFor: (taskId: string, title: string) => Job) {
   const spawned: { taskId: string; cwd: string }[] = [];
   const said = new Set<string>();
   const errors: unknown[] = [];
   const runner: ITerminalRunner = {
     spawn: vi.fn(async (opts) => {
       spawned.push({ taskId: opts.taskId, cwd: opts.cwd });
-      const terminal = new FakeTerminalSession(`s${spawned.length}`, opts.taskId);
+      const terminal = new FakeStructuredSession(`s${spawned.length}`, opts.taskId);
       const job = jobFor(opts.taskId, opts.title ?? '');
       const finish = () => {
         try {
           for (const [file, content] of Object.entries(job.write ?? {})) writeFileSync(join(opts.cwd, file), content);
           job.act?.(opts.cwd);
-          if (job.answer) writeTranscript(home, opts.cwd, opts.prompt, job.answer);
-          terminal.emitOutput(`<<<ORDEWELL_DONE_${taskOf(session(), opts.taskId)!.completionMarker}>>>`);
+          terminal.reportComplete({ status: 'done', summary: job.answer ?? 'Done.' });
         } catch (err) {
           errors.push(err);
         }
@@ -127,16 +124,6 @@ function scriptedAgent(home: string, session: () => Session, jobFor: (taskId: st
     activeCount: 0,
   };
   return { runner, spawned, said, errors };
-}
-
-/** Claude Code's layout: `~/.claude/projects/<cwd with every non-alphanumeric as ->/<session>.jsonl`. */
-function writeTranscript(home: string, cwd: string, prompt: string, answer: string): void {
-  const dir = join(home, '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'));
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'session.jsonl'), [
-    JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt }] } }),
-    JSON.stringify({ type: 'assistant', isSidechain: false, message: { role: 'assistant', content: [{ type: 'text', text: answer }] } }),
-  ].join('\n'));
 }
 
 const talk = (...exchanges: [string, string][]): ConversationMessage[] => exchanges.flatMap(([user, reply], i) => [
@@ -167,16 +154,15 @@ function gitState(roots: Record<RepoName, string>) {
 
 function envFor(opts: { aiService?: Partial<IAiService> } = {}) {
   const { dir, roots, bases } = workspace();
-  const home = tempDir();
   const messages: SessionMessage[] = [];
   const jobs = new Map<string, Job>();
   let resolverJob: Job = {};
-  const agent = scriptedAgent(home, () => session, (taskId, title) => (title.startsWith('Resolve merge conflict') ? resolverJob : jobs.get(taskId) ?? {}));
+  const agent = scriptedAgent((taskId, title) => (title.startsWith('Resolve merge conflict') ? resolverJob : jobs.get(taskId) ?? {}));
   const session: Session = makeSession({
     config: fakeConfig({ maxParallelSessions: 3 }),
     runner: agent.runner,
     isolation: createWorktreeIsolation({ config: fakeConfig({ worktreeIsolation: true }), resolvePath: async () => process.env.PATH ?? '' }),
-    taskOutput: new BufferedTaskOutputSource({ transcripts: new HomeTranscriptReader({ homeDir: home }) }),
+    taskOutput: new BufferedTaskOutputSource(),
     workspaceRoot: () => dir,
     broadcast: (m) => messages.push(m),
     aiService: opts.aiService,
@@ -185,7 +171,7 @@ function envFor(opts: { aiService?: Partial<IAiService> } = {}) {
   const integration = () => run().repos[0].integrationBranch;
   const handoff = () => messages.find((m): m is Extract<SessionMessage, { type: 'isolation_handoff' }> => m.type === 'isolation_handoff');
   const setResolver = (job: Job) => { resolverJob = job; };
-  return { dir, roots, bases, home, messages, session: () => session, jobs, setResolver, agent, run, integration, handoff };
+  return { dir, roots, bases, messages, session: () => session, jobs, setResolver, agent, run, integration, handoff };
 }
 
 type Env = ReturnType<typeof envFor>;
@@ -370,7 +356,7 @@ describe.skipIf(!hasGit)('isolated execution over a folder of three repositories
     expect(readFileSync(join(roots.api, '.env'), 'utf8')).toBe('API_KEY=local\n');
   }, 60_000);
 
-  it('tells the planner the group, reads a task running in its task workspace by its live output, and summarises it from the transcript written there', async () => {
+  it('tells the planner the group, reads a task running in its task workspace by its live output, and summarises its completion report', async () => {
     const startConversation = vi.fn().mockResolvedValue(say('hi'));
     const continueConversation = vi.fn().mockResolvedValueOnce(read(['#1'])).mockResolvedValueOnce(say('ok'));
     const env = envFor({ aiService: { startConversation, continueConversation, hasActiveConversation: () => true } });

@@ -23,6 +23,7 @@ type SteerAnswer = 'accept' | 'refuse' | 'throw' | 'hold';
 
 /** A task adapter with no mid-turn delivery: each `send` stays open until the test ends it. */
 class TurnEndAdapter implements TaskModeAgentAdapter {
+  async mcpAttached(): Promise<boolean> { return true; }
   readonly agentId: string = 'claude-code';
   readonly sent: string[] = [];
   interruptAnswer: 'ack' | 'ignore' | 'hold' = 'ack';
@@ -435,11 +436,11 @@ describe('the attempt\'s verdict when a message is read mid-turn', () => {
     } satisfies ITerminalRunner;
     const orchestrator = TaskOrchestrator.compose({
       config: fakeConfig(), notifications: fakeNotification(), terminalRunner: runner,
-      output: new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } }),
+      output: new BufferedTaskOutputSource(),
       registry: new RunnerRegistry(), workspaceRoot: () => '/repo',
       workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
     });
-    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Steered task', prompt: 'Do it', completionMarker: 'mk-1' })]);
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Steered task', prompt: 'Do it' })]);
     return { orchestrator, session };
   }
 
@@ -471,16 +472,16 @@ describe('the attempt\'s verdict when a message is read mid-turn', () => {
     orchestrator.stop();
   });
 
-  it('counts the marker the runner prints after the message, not the one before', async () => {
+  it('counts only the completion call after the message is delivered', async () => {
     const { orchestrator, session } = scheduled();
     await orchestrator.forceStartTask('t1');
     const id = orchestrator.sendTaskMessage('t1', 'Also add tests');
-    session.emitOutput('Original work\n<<<ORDEWELL_DONE_mk-1>>>\n');
+    session.reportComplete({ status: 'done', summary: 'Original work' });
     await flushMicrotasks(50);
     expect(orchestrator.storeInstance.get('t1')?.status).toBe('in_progress');
 
     session.deliverMidTurn(id);
-    session.emitOutput('Work with tests\n<<<ORDEWELL_DONE_mk-1>>>');
+    session.reportComplete({ status: 'done', summary: 'Work with tests' });
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')?.status).toBe('completed'));
     expect(orchestrator.storeInstance.get('t1')?.outputSummary?.logTail).toBe('Work with tests');
   });
@@ -622,11 +623,11 @@ describe('force send through the orchestrator', () => {
     } satisfies ITerminalRunner;
     const orchestrator = TaskOrchestrator.compose({
       config: fakeConfig(), notifications: fakeNotification(), terminalRunner: runner,
-      output: new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } }),
+      output: new BufferedTaskOutputSource(),
       registry: new RunnerRegistry(), workspaceRoot: () => '/repo',
       workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
     });
-    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Forced task', prompt: 'Do it', completionMarker: 'mk-1' })]);
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Forced task', prompt: 'Do it' })]);
     return orchestrator;
   }
 

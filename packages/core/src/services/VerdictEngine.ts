@@ -1,6 +1,5 @@
 import type { Task, Verdict, VerificationCheck } from '../models/Task';
 import { isStructuredSession, type ITerminalSession, type StructuredSessionCapability } from '../interfaces/ITerminalRunner';
-import { flattenTerminalOutput, renderTerminalOutput } from './terminalRender';
 import type { CheckpointAnswer, TaskCompleteArgs } from './mcp/tools';
 
 export type VerdictListener = (taskId: string, verdict: Verdict) => void;
@@ -10,45 +9,19 @@ export type CheckpointWithdrawnListener = (taskId: string) => void;
 /** Fires on every idleSince transition (null→timestamp on silence, timestamp→null on resume/teardown). */
 export type IdleListener = (taskId: string, idleSince: string | null) => void;
 
-const CHECKPOINT_RE = /<<<ORDEWELL_CHECKPOINT:\s*(.*?)>>>/gs;
-
-function markerVisible(raw: string, doneToken: string): boolean {
-  return flattenTerminalOutput(raw).includes(doneToken)
-    || flattenTerminalOutput(renderTerminalOutput(raw)).includes(doneToken);
-}
-
-/** Only the tail of the output is flattened per chunk — markers are short and
- *  recent, and re-flattening an unbounded buffer on every write is O(n²). */
-const MARKER_SCAN_TAIL = 16384;
-
-/**
- * Unmatched text carried from one chunk's checkpoint scan into the next, so a
- * marker split across writes still assembles. A checkpoint summary is a short
- * question; an opening further back than this is abandoned, not pending.
- */
-const CHECKPOINT_CARRY = 2048;
-
 /** No output for this long marks a running task idle (advisory, UI-only). */
 const IDLE_TIMEOUT_MS = 60_000;
 
 
 export class VerdictEngine {
-  private markerSeen = new Set<string>();
   private pendingVerdicts = new Map<string, Verdict>();
   private structuredSessions = new Map<string, ITerminalSession & StructuredSessionCapability>();
-  private markerTails = new Map<string, string>();
-  private checkpointCarry = new Map<string, string>();
-  private pausedSessions = new Map<string, ITerminalSession>();
   private listeners: VerdictListener[] = [];
   private checkpointListeners: CheckpointListener[] = [];
   private withdrawnListeners: CheckpointWithdrawnListener[] = [];
-  /**
-   * The open `checkpoint` tool call per task (ADR-0022, V5): settling it is how
-   * an answer reaches a runner that asked through the tool, where the marker's
-   * answer is typed into the session instead.
-   */
+  /** The open `checkpoint` tool call per task (ADR-0022, V5): settling it is how an answer reaches the runner. */
   private toolCheckpoints = new Map<string, (answer: CheckpointAnswer) => void>();
-  /** The question a task's checkpoint asks, whole, for as long as it waits — by either route. */
+  /** The question a task's checkpoint asks, whole, for as long as it waits. */
   private checkpointQuestions = new Map<string, string>();
   private idleListeners: IdleListener[] = [];
   /**
@@ -140,17 +113,6 @@ export class VerdictEngine {
     }
   }
 
-  /**
-   * Submit a synchronized resume token to the paused session. An interactive
-   * TUI only accepts the Enter keystroke (`\r`) — a `\n` types the token into
-   * its composer without sending it, leaving the agent paused until a human
-   * presses Enter. A line-oriented piped session has no composer; it reads a
-   * `\n`-terminated line, and the leading newline flushes a partial line.
-   */
-  private resumeToken(session: ITerminalSession, line: string): string {
-    return session.interactive ? `${line}\r` : `\n${line}\n`;
-  }
-
   /** What a task's waiting checkpoint asks, untruncated; undefined when none waits. */
   getCheckpointQuestion(taskId: string): string | undefined {
     return this.checkpointQuestions.get(taskId);
@@ -159,58 +121,26 @@ export class VerdictEngine {
   approveCheckpoint(taskId: string): void {
     this.checkpointQuestions.delete(taskId);
     this.resumeIdle(taskId);
-    const toolCall = this.toolCheckpoints.get(taskId);
-    if (toolCall) {
-      toolCall({ kind: 'continue' });
-      return;
-    }
-    const session = this.pausedSessions.get(taskId);
-    if (session) {
-      session.write(this.resumeToken(session, 'ORDEWELL_CONTINUE'));
-      this.pausedSessions.delete(taskId);
-    }
+    this.toolCheckpoints.get(taskId)?.({ kind: 'continue' });
   }
 
   rejectCheckpoint(taskId: string, reason: string): void {
     this.checkpointQuestions.delete(taskId);
     this.resumeIdle(taskId);
-    const toolCall = this.toolCheckpoints.get(taskId);
-    if (toolCall) {
-      toolCall({ kind: 'rejected', reason });
-      return;
-    }
-    const session = this.pausedSessions.get(taskId);
-    if (session) {
-      session.write(this.resumeToken(session, `ORDEWELL_REJECT: ${reason}`));
-      this.pausedSessions.delete(taskId);
-    }
+    this.toolCheckpoints.get(taskId)?.({ kind: 'rejected', reason });
   }
 
   /**
-   * Attach to a spawned session: scan the output tail for the task's completion
-   * marker (delivering a verdict immediately while leaving interactive sessions
-   * open), scan for checkpoint markers, and on exit produce a failed verdict
-   * when the marker was never observed. A structured session's `task_complete`
-   * call is evidence too (ADR-0022, V2): whichever signal comes first decides.
+   * Attach to a spawned session. The runner's `task_complete` call on the
+   * attempt's token is the only completion evidence (ADR-0022, V2); a session
+   * that exits before one gets a failed verdict.
    *
    * Returns the attempt's generation, what {@link signalComplete} is checked against.
    */
   watch(task: Task, session: ITerminalSession): number {
-    const doneToken = `<<<ORDEWELL_DONE_${task.completionMarker}>>>`;
     const gen = this.bumpGeneration(task.id);
-    this.markerTails.set(task.id, '');
-    this.checkpointCarry.set(task.id, '');
-    session.onOutput((text: string) => {
-      if (this.generations.get(task.id) !== gen) return;
-      this.touchIdle(task.id, gen);
-      const tail = ((this.markerTails.get(task.id) ?? '') + text).slice(-MARKER_SCAN_TAIL);
-      this.markerTails.set(task.id, tail);
-      if (markerVisible(tail, doneToken)) {
-        this.markerSeen.add(task.id);
-        this.acceptVerdict(task.id, this.decide(task, 0));
-        return;
-      }
-      this.scanCheckpoints(task.id, session, text);
+    session.onOutput(() => {
+      if (this.generations.get(task.id) === gen) this.touchIdle(task.id, gen);
     });
     if (isStructuredSession(session)) {
       this.structuredSessions.set(task.id, session);
@@ -240,11 +170,8 @@ export class VerdictEngine {
     }
     session.onExit((exitCode: number) => {
       if (this.generations.get(task.id) !== gen) return;
-      // The raw tail, not session.getOutput(): runners strip ANSI from that
-      // buffer, which loses the cursor positioning a TUI-painted marker needs.
-      if (markerVisible(this.markerTails.get(task.id) ?? '', doneToken)) this.markerSeen.add(task.id);
       this.forget(task.id);
-      const verdict = this.decide(task, exitCode);
+      const verdict = exitVerdict(exitCode);
       for (const l of this.listeners) l(task.id, verdict);
     });
     return gen;
@@ -252,8 +179,8 @@ export class VerdictEngine {
 
   /**
    * The runner's own `task_complete` call (ADR-0022, V1/V3): settles the
-   * attempt exactly as the marker does, unless that attempt is no longer the
-   * task's current one or another signal already settled it.
+   * attempt, unless that attempt is no longer the task's current one or an
+   * earlier call already settled it.
    */
   signalComplete(taskId: string, generation: number, report: TaskCompleteArgs): void {
     if (this.generations.get(taskId) !== generation) return;
@@ -263,9 +190,6 @@ export class VerdictEngine {
   /** The runner was told something after its evidence so far, so only what it reports from here counts. */
   private supersede(taskId: string): void {
     this.pendingVerdicts.delete(taskId);
-    this.markerSeen.delete(taskId);
-    this.markerTails.set(taskId, '');
-    this.checkpointCarry.set(taskId, '');
   }
 
   private acceptVerdict(taskId: string, verdict: Verdict): void {
@@ -284,9 +208,8 @@ export class VerdictEngine {
   }
 
   /**
-   * The runner's `checkpoint` call (ADR-0022, V5): raised through the same
-   * listeners as the marker, so the task waits on the user the same way, and
-   * settled by {@link approveCheckpoint} or {@link rejectCheckpoint}. It is
+   * The runner's `checkpoint` call (ADR-0022, V5): the task waits on the
+   * user until it is settled by {@link approveCheckpoint} or {@link rejectCheckpoint}. It is
    * withdrawn, never left hanging, once the attempt is over or the call goes.
    */
   raiseCheckpoint(taskId: string, generation: number, question: string, signal: AbortSignal): Promise<CheckpointAnswer> {
@@ -345,19 +268,6 @@ export class VerdictEngine {
     this.touchIdle(taskId, gen);
   }
 
-  /** Scan only the new text plus the unmatched carry, so a long run stays linear. */
-  private scanCheckpoints(taskId: string, session: ITerminalSession, text: string): void {
-    const scan = (this.checkpointCarry.get(taskId) ?? '') + text;
-    let consumed = 0;
-    for (const match of scan.matchAll(CHECKPOINT_RE)) {
-      consumed = match.index + match[0].length;
-      this.pausedSessions.set(taskId, session);
-      this.checkpointQuestions.set(taskId, match[1].trim());
-      for (const l of this.checkpointListeners) l(taskId, match[1].trim());
-    }
-    this.checkpointCarry.set(taskId, scan.slice(consumed).slice(-CHECKPOINT_CARRY));
-  }
-
   private bumpGeneration(taskId: string): number {
     this.lastGeneration += 1;
     this.generations.set(taskId, this.lastGeneration);
@@ -367,9 +277,6 @@ export class VerdictEngine {
   private forget(taskId: string): void {
     this.pendingVerdicts.delete(taskId);
     this.structuredSessions.delete(taskId);
-    this.markerTails.delete(taskId);
-    this.checkpointCarry.delete(taskId);
-    this.pausedSessions.delete(taskId);
     this.withdrawToolCheckpoint(taskId);
     this.checkpointQuestions.delete(taskId);
     this.idlePaused.delete(taskId);
@@ -402,7 +309,6 @@ export class VerdictEngine {
 
   /** Drop a task's verification state and invalidate any callbacks still holding its generation. */
   private ceaseTracking(taskId: string): void {
-    this.markerSeen.delete(taskId);
     this.forget(taskId);
     this.bumpGeneration(taskId);
   }
@@ -411,10 +317,6 @@ export class VerdictEngine {
   reset(): void {
     this.pendingVerdicts.clear();
     this.structuredSessions.clear();
-    this.markerSeen.clear();
-    this.markerTails.clear();
-    this.checkpointCarry.clear();
-    this.pausedSessions.clear();
     for (const taskId of [...this.toolCheckpoints.keys()]) this.withdrawToolCheckpoint(taskId);
     this.checkpointQuestions.clear();
     for (const timer of this.idleTimers.values()) clearTimeout(timer);
@@ -424,57 +326,23 @@ export class VerdictEngine {
     this.openApprovals.clear();
     this.generations.clear();
   }
+}
 
-  private decide(task: Task, exitCode: number): Verdict {
-    const normalized = exitCode == null ? 0 : exitCode;
-    const markerWasSeen = this.markerSeen.has(task.id);
-    if (markerWasSeen) this.markerSeen.delete(task.id);
-
-    const checks: VerificationCheck[] = [];
-    if (markerWasSeen) {
-      checks.push({
-        name: 'completion_marker',
-        passed: true,
-        skipped: false,
-        detail: 'task completion marker was seen in agent output',
-      });
-      checks.push({
-        name: 'exit_code',
-        passed: true,
-        skipped: true,
-        detail: 'bypassed — completion marker was seen in agent output',
-      });
-      return {
-        outcome: 'pass',
-        reason: 'Verified: completion marker detected in agent output. Task completed successfully.',
-        checks,
-        decidedAt: new Date().toISOString(),
-      };
-    }
-
-    const exitOk = normalized === 0;
-    checks.push({
-      name: 'completion_marker',
-      passed: false,
-      skipped: false,
-      detail: 'agent exited before Ordewell detected the task completion marker',
-    });
-    checks.push({
-      name: 'exit_code',
-      passed: exitOk,
-      skipped: false,
-      detail: exitOk ? 'agent exited cleanly (code 0)' : `agent exited with code ${normalized}`,
-    });
-
-    return {
-      outcome: 'fail',
-      reason: exitOk
-        ? 'Failed verification: agent exited cleanly but did not emit the completion marker.'
-        : `Failed verification: completion marker missing; agent exited with code ${normalized}.`,
-      checks,
-      decidedAt: new Date().toISOString(),
-    };
-  }
+/** A runner that exited without reporting through `task_complete` did not finish, whatever its exit code. */
+function exitVerdict(exitCode: number): Verdict {
+  const normalized = exitCode == null ? 0 : exitCode;
+  const exitOk = normalized === 0;
+  return {
+    outcome: 'fail',
+    reason: exitOk
+      ? 'Failed verification: the runner exited cleanly but never called task_complete.'
+      : `Failed verification: the runner exited with code ${normalized} without calling task_complete.`,
+    checks: [
+      { name: 'task_complete', passed: false, skipped: false, detail: 'the runner exited before calling task_complete' },
+      { name: 'exit_code', passed: exitOk, skipped: false, detail: exitOk ? 'the runner exited cleanly (code 0)' : `the runner exited with code ${normalized}` },
+    ],
+    decidedAt: new Date().toISOString(),
+  };
 }
 
 function reportedVerdict(report: TaskCompleteArgs): Verdict {
@@ -484,12 +352,6 @@ function reportedVerdict(report: TaskCompleteArgs): Verdict {
       passed: report.status === 'done',
       skipped: false,
       detail: `the runner called task_complete with status "${report.status}"`,
-    },
-    {
-      name: 'completion_marker',
-      passed: report.status === 'done',
-      skipped: true,
-      detail: 'bypassed — the runner reported through task_complete',
     },
   ];
   const decidedAt = new Date().toISOString();

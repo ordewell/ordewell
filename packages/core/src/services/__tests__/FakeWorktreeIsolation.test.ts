@@ -4,7 +4,7 @@ import type { Task } from '../../models/Task';
 
 const task = (order: number): Task => ({
   id: `task-${order}`, order, title: `Task ${order}`, description: '', type: 'ai', status: 'approved',
-  dependencies: [], subtasks: [], assignedRunner: 'claude-code', completionMarker: 'DONE',
+  dependencies: [], subtasks: [], assignedRunner: 'claude-code',
 });
 
 describe('FakeWorktreeIsolation', () => {

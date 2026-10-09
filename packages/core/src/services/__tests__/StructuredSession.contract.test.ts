@@ -27,6 +27,7 @@ type Turn = { onEvent: (event: AgentEvent) => void; resolve: () => void; reject:
 
 /** A task adapter driven by hand: each `send` stays open until the test ends it. */
 class HandAdapter implements TaskModeAgentAdapter {
+  async mcpAttached(): Promise<boolean> { return true; }
   readonly agentId = 'claude-code';
   readonly starts: AgentStartOptions[] = [];
   readonly sent: string[] = [];
@@ -543,7 +544,7 @@ describe('the Ordewell task tools (ADR-0022)', () => {
     const engine = new VerdictEngine();
     const verdicts: Verdict[] = [];
     engine.onVerdict((_id, verdict) => { verdicts.push(verdict); session.kill(); });
-    engine.watch(createTask({ id: session.taskId, completionMarker: 'mk-1' }), session);
+    engine.watch(createTask({ id: session.taskId }), session);
     await until(() => adapters[0].sent.length === 1);
     session.sendMessage('Also add tests');
     const client = await connect(servedConfig(adapters[0]));
@@ -610,7 +611,7 @@ describe('the Ordewell task tools (ADR-0022)', () => {
     expect(await call).toMatchObject({ isError: true, content: [{ type: 'text', text: expect.stringContaining('withdrawn') }] });
   });
 
-  it('keeps the server across a restart after an ignored interrupt', async () => {
+  it('reissues the token and checks attachment after an ignored interrupt', async () => {
     const { runner, adapters } = served((adapter) => { adapter.interruptAnswer = 'ignore'; });
     const session = await runner.spawn(options());
     if (!isStructuredSession(session)) throw new Error('not a structured session');
@@ -619,7 +620,9 @@ describe('the Ordewell task tools (ADR-0022)', () => {
     await session.interrupt();
 
     expect(adapters).toHaveLength(2);
-    expect(adapters[1].starts[0]).toMatchObject({ mcp: servedConfig(adapters[0]) });
+    expect(servedConfig(adapters[1]).url).toBe(servedConfig(adapters[0]).url);
+    expect(servedConfig(adapters[1]).headers).not.toEqual(servedConfig(adapters[0]).headers);
+    await expect(connect(servedConfig(adapters[0]))).rejects.toThrow();
     session.kill();
   });
 
@@ -651,13 +654,13 @@ describe('the Ordewell task tools (ADR-0022)', () => {
     await expect(connect(servedConfig(adapters[0]))).rejects.toThrow();
   });
 
-  it('gives a runner whose connector cannot inject it no server', async () => {
+  it('hands every task adapter the required server', async () => {
     const { runner, adapters } = served();
     // Every built-in runner is given the server, so this is a plugin runner.
     const plugin = { get: () => registry.get('claude-code') } as unknown as RunnerRegistry;
     const session = await runner.spawn(options({ runner: 'other-runner', registry: plugin }));
 
-    expect(adapters[0].starts[0]).not.toHaveProperty('mcp');
+    expect(adapters[0].starts[0]).toHaveProperty('mcp');
     session.kill();
   });
 });
@@ -765,6 +768,7 @@ describe('a message sent mid-turn (ADR-0023)', () => {
       if (path === '/event') { const { response, stream } = sseResponse(init); streams.push(stream); return response; }
       if (path === '/session' && method === 'POST') return answer({ id: sessionId });
       if (path === '/session/status') return answer({});
+      if (path === '/mcp') return answer({ ordewell: { status: 'connected' } });
       if (path.endsWith('/prompt_async')) {
         prompts.push(typeof init?.body === 'string' ? JSON.parse(init.body) as { messageID?: string } : {});
         return answer(null, 204);

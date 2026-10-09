@@ -55,7 +55,7 @@ function makeSession(workspace: string): Session {
     modelResolver: { getCachedRunnerModels: () => [], modelsForRunners: vi.fn().mockResolvedValue({}) } as unknown as ModelResolver,
     settings: () => ({}),
     aiService: planner as IAiService,
-    taskOutput: new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } }),
+    taskOutput: new BufferedTaskOutputSource(),
   });
 }
 

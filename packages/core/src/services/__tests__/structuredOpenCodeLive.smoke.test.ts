@@ -26,19 +26,19 @@ const live = (process.env.ORDEWELL_LIVE_AGENTS ?? '').split(',').map((s) => s.tr
 const model = process.env.ORDEWELL_LIVE_MODEL ?? 'opencode-go/deepseek-v4.1-flash';
 const TIMEOUT_MS = 180_000;
 
-/** Built in two halves so a model that echoes its prompt cannot print the marker by accident. */
-const markerOf = (name: string) => `<<<ORDEWELL_DONE_${name}>>>`;
-const markerInstruction = (name: string) =>
-  `Then print one final line containing only the completion marker. Build it by writing \`<<<ORDEWELL_\` immediately followed by \`DONE_${name}>>>\` with nothing between the two parts.`;
+const completionInstruction = 'Then call task_complete with status done and a short summary.';
 
 function turnEnds(session: ITerminalSession) {
   if (!isStructuredSession(session)) throw new Error('not a structured session');
   const ends: StructuredTurnEnd[] = [];
+  const reports: string[] = [];
+  session.onTaskComplete(({ status }) => reports.push(status));
   let waiter: (() => void) | null = null;
   session.onTurnEnd((reason) => { ends.push(reason); waiter?.(); waiter = null; });
   return {
     session,
     ends,
+    reports,
     next: () => new Promise<void>((resolve) => { waiter = resolve; }),
   };
 }
@@ -74,18 +74,18 @@ function harness() {
 }
 
 describe.runIf(live)('structured transport — OpenCode live smoke', () => {
-  it('runs a build-mode task turn: writes a file, reports its marker whole, answers permissions itself', async () => {
+  it('runs a build-mode task turn: writes a file, reports completion through the tool, answers permissions itself', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ordewell-structured-oc-'));
     const { runner, spawn } = harness();
     try {
-      const { session, turns, events, chunks } = await spawn('oc-build', dir,
-        `Create a file named hello.txt in the current directory containing exactly: hi. ${markerInstruction('oc-build')}`);
+      const { session, turns, events } = await spawn('oc-build', dir,
+        `Create a file named hello.txt in the current directory containing exactly: hi. ${completionInstruction}`);
       await turns.next();
 
       expect(turns.ends, session.getOutput()).toEqual(['completed']);
       expect(existsSync(join(dir, 'hello.txt'))).toBe(true);
       expect(readFileSync(join(dir, 'hello.txt'), 'utf8')).toContain('hi');
-      expect(chunks.some((chunk) => chunk.includes(markerOf('oc-build'))), session.getOutput()).toBe(true);
+      expect(turns.reports).toEqual(['done']);
       expect(session.getOutput()).toMatch(/^› \S+/m);
 
       const asked = events.filter((e) => e.type === 'permission_request');
@@ -202,12 +202,12 @@ describe.runIf(live)('structured transport — OpenCode live smoke', () => {
     const { runner, spawn } = harness();
     try {
       const started = Date.now();
-      const { session, turns, chunks } = await spawn('oc-long', dir,
-        `Use the bash tool to run \`sleep 20\`. ${markerInstruction('oc-long')}`);
+      const { session, turns } = await spawn('oc-long', dir,
+        `Use the bash tool to run \`sleep 20\`. ${completionInstruction}`);
       await turns.next();
 
       expect(turns.ends, session.getOutput()).toEqual(['completed']);
-      expect(chunks.some((chunk) => chunk.includes(markerOf('oc-long')))).toBe(true);
+      expect(turns.reports).toEqual(['done']);
       expect(Date.now() - started).toBeLessThan(120_000);
     } finally {
       runner.stopAll();
@@ -238,11 +238,11 @@ describe.runIf(live)('structured transport — OpenCode live smoke', () => {
   it('completes a task through task_complete without asking anyone, outside the auto mode (ADR-0022)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ordewell-structured-oc-'));
     const { runner, spawn } = harness();
-    const task = createTask({ id: 'oc-tool', title: 'Multiply', prompt: 'Work out 17 * 23 and state the result.', taskMode: 'plan', completionMarker: 'oc-tool' });
+    const task = createTask({ id: 'oc-tool', title: 'Multiply', prompt: 'Work out 17 * 23 and state the result.', taskMode: 'plan' });
     const engine = new VerdictEngine();
     const verdict = new Promise<Verdict>((resolve) => engine.onVerdict((_taskId, v) => resolve(v)));
     try {
-      const { session, turns, events } = await spawn(task.id, dir, composeAugmentedPrompt(task, [task], { completionTool: true }), undefined, 'plan');
+      const { session, turns, events } = await spawn(task.id, dir, composeAugmentedPrompt(task, [task], {  }), undefined, 'plan');
       engine.watch(task, session);
 
       const decided = await verdict;
@@ -264,7 +264,7 @@ describe.runIf(live)('structured transport — OpenCode live smoke', () => {
   it('holds a checkpoint tool call open until it is answered, and returns the answer (ADR-0022, V5)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ordewell-structured-oc-'));
     const { runner, spawn } = harness();
-    const task = createTask({ id: 'oc-checkpoint', title: 'Ask', prompt: 'Your task: call the checkpoint tool with the question "Shall I proceed with the migration?", then state exactly what the result was. Whatever it is, do not call the checkpoint tool a second time.', taskMode: 'plan', completionMarker: 'oc-checkpoint', autonomy: 'HITL' });
+    const task = createTask({ id: 'oc-checkpoint', title: 'Ask', prompt: 'Your task: call the checkpoint tool with the question "Shall I proceed with the migration?", then state exactly what the result was. Whatever it is, do not call the checkpoint tool a second time.', taskMode: 'plan', autonomy: 'HITL' });
     const engine = new VerdictEngine();
     const verdict = new Promise<Verdict>((resolve) => engine.onVerdict((_taskId, v) => resolve(v)));
     const asked: string[] = [];
@@ -274,7 +274,7 @@ describe.runIf(live)('structured transport — OpenCode live smoke', () => {
       setTimeout(() => (asked.length === 1 ? engine.rejectCheckpoint(taskId, 'not today') : engine.approveCheckpoint(taskId)), 70_000);
     });
     try {
-      const { session, events } = await spawn(task.id, dir, composeAugmentedPrompt(task, [task], { completionTool: true }), undefined, 'plan');
+      const { session, events } = await spawn(task.id, dir, composeAugmentedPrompt(task, [task], {  }), undefined, 'plan');
       engine.watch(task, session);
 
       await verdict;

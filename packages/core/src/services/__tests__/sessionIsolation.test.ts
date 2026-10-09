@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { makeSession, FakeTerminalSession, taskOf, saves } from './sessionTestKit';
+import { makeSession, FakeStructuredSession, taskOf, saves } from './sessionTestKit';
 import { FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
 import * as sessionStore from '../../utils/sessionStore';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
@@ -15,9 +15,9 @@ import { PlanEditError } from '../PlanEditError';
 import { TaskControlError } from '../TaskOrchestrator';
 
 function runner() {
-  const sessions: FakeTerminalSession[] = [];
+  const sessions: FakeStructuredSession[] = [];
   const spawn = vi.fn(async (opts: Parameters<ITerminalRunner['spawn']>[0]) => {
-    const session = new FakeTerminalSession(`s${sessions.length + 1}`, opts.taskId);
+    const session = new FakeStructuredSession(`s${sessions.length + 1}`, opts.taskId);
     sessions.push(session);
     return session;
   });
@@ -25,7 +25,7 @@ function runner() {
 }
 
 const task = (id: string, order: number, over: Partial<Task> = {}) =>
-  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, completionMarker: `mk-${id}`, ...over });
+  createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, ...over });
 
 function plan(tasks: Task[]): LegacyPlanState {
   const now = new Date().toISOString();
@@ -37,7 +37,7 @@ function setup(isolation = new FakeWorktreeIsolation(), aiService?: Partial<IAiS
   const notices: SessionNotice[] = [];
   const r = runner();
   const session = makeSession({ runner: r.runner, isolation, aiService, broadcast: (m) => messages.push(m), onNotice: (n) => notices.push(n) });
-  const pass = (t: Task) => r.sessions.find((s) => s.taskId === t.id)!.emitOutput(`<<<ORDEWELL_DONE_${t.completionMarker}>>>`);
+  const pass = (t: Task) => r.sessions.find((s) => s.taskId === t.id)!.reportComplete({ status: 'done', summary: '' });
   const lastStatus = () => [...messages].reverse().find((m): m is Extract<SessionMessage, { type: 'status_update' }> => m.type === 'status_update');
   return { session, isolation, messages, notices, pass, lastStatus, ...r };
 }

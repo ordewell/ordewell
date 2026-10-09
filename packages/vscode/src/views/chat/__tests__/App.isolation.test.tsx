@@ -15,7 +15,7 @@ const plan = {
   tasks: [{
     id: 't1', order: 1, title: 'Add rate limiting', description: '', type: 'ai' as const,
     status: 'awaiting_user' as const, dependencies: [], subtasks: [], assignedRunner: 'claude-code',
-    completionMarker: 'm1', taskMode: 'build',
+    taskMode: 'build',
   }],
   generatedAt: new Date().toISOString(),
   status: 'draft' as const,

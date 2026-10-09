@@ -127,7 +127,6 @@ export { VerdictEngine } from './services/VerdictEngine';
 export type { VerdictListener, CheckpointListener } from './services/VerdictEngine';
 export * from './interfaces/TaskOutputSource';
 export { BufferedTaskOutputSource } from './services/BufferedTaskOutputSource';
-export { HomeTranscriptReader } from './services/transcriptCapture';
 export * from './services/ModeResolver';
 export * from './services/ModelAllowlistResolver';
 export * from './services/TaskRetarget';

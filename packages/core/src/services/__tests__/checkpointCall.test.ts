@@ -19,6 +19,7 @@ import type { ApprovalDecision } from '../../interfaces/IApproval';
  */
 
 class ScriptedAdapter implements TaskModeAgentAdapter {
+  async mcpAttached(): Promise<boolean> { return true; }
   readonly agentId = 'claude-code';
   readonly prompts: string[] = [];
   private turn: { onEvent: (event: AgentEvent) => void; resolve: () => void } | null = null;
@@ -66,7 +67,7 @@ const runners: StructuredRunner[] = [];
 afterEach(() => { for (const runner of runners.splice(0)) runner.stopAll(); });
 
 const task = (id: string, extra: Partial<Task> = {}) =>
-  createTask({ id, order: 1, title: `Task ${id}`, prompt: `do ${id}`, completionMarker: `mk-${id}`, autonomy: 'HITL', ...extra });
+  createTask({ id, order: 1, title: `Task ${id}`, prompt: `do ${id}`, autonomy: 'HITL', ...extra });
 
 async function asking() {
   const { server, handlers } = fakeServer();
@@ -83,7 +84,7 @@ async function asking() {
   runners.push(runner);
   const orchestrator = TaskOrchestrator.compose({
     config: fakeConfig(), notifications: fakeNotification(), terminalRunner: runner,
-    output: new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } }),
+    output: new BufferedTaskOutputSource(),
     registry: new RunnerRegistry(), workspaceRoot: () => '/repo',
     workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
   });

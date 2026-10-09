@@ -1,3 +1,4 @@
+import { McpAttachError } from './harness/ordewellBinding';
 import * as path from 'path';
 import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, QueuedMessage, RunnerId, SkillLoad, DEFAULT_RUNNERS, flattenTasksWithParents, taskOrderLabel } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
@@ -30,7 +31,7 @@ import { resolveTaskSkills, TaskSkillsError, type SkillLookup } from './taskSkil
 import { SkillsService, workspaceSkillRoots } from './SkillsService';
 import { capConflictFiles } from './conflictFiles';
 import { resolveWorkspaceEnv, type WorkspaceEnv } from './workspaceEnv';
-import { supportsTaskMode, takesOrdewellTools } from './harness/connectors';
+import { supportsTaskMode } from './harness/connectors';
 import { continuability } from './continuation';
 import { quotedList } from '../utils/quotedList';
 import type { MergeGateView } from './SessionMessage';
@@ -122,8 +123,8 @@ interface TaskAttempt {
   readonly startedAt: string;
   /**
    * Set as its verdict arrives, before the verdict is applied: the turn that
-   * carried the marker ends while the verdict is still settling, and must not
-   * read as waiting for input.
+   * called `task_complete` ends while the verdict is still settling, and must
+   * not read as waiting for input.
    */
   decided: boolean;
   /** The task skills put in this attempt's prompt, as read from where it runs. */
@@ -196,9 +197,9 @@ export interface TaskOrchestratorOptions {
  * All task-shaped state — the plan tree, the flat index, the completed set
  * — lives in {@link PlanStore}, injected at construction. The orchestrator
  * calls `store.markCompleted(id)` / `store.markFailed(id)` instead of mutating
- * task state directly. A task completes only after the runner emits its
- * per-task completion marker; process exit without that evidence is a visible
- * failure and does not unblock dependent work.
+ * task state directly. A task completes only after the runner reports it done
+ * through `task_complete` on its attempt's token; process exit without that
+ * evidence is a visible failure and does not unblock dependent work.
  */
 export class TaskOrchestrator {
   private config: IConfig;
@@ -469,7 +470,7 @@ export class TaskOrchestrator {
     return removed;
   }
 
-  /** Stop a structured task's running turn; it then waits for input like any turn that ends without its marker. */
+  /** Stop a structured task's running turn; it then waits for input like any turn that ends without a `task_complete` call. */
   async interruptTask(taskId: string): Promise<void> {
     await this.structuredSession(taskId, 'interrupt').interrupt();
   }
@@ -492,7 +493,7 @@ export class TaskOrchestrator {
   }
 
   /**
-   * A structured turn that ended without the done marker (ADR-0018, W1). No
+   * A structured turn that ended without a `task_complete` call (ADR-0018, W1). No
    * verdict is guessed: the task waits for input, unless a checkpoint in the
    * same turn already has it waiting, or a queued message went straight out —
    * the session never passes through idle then, so nothing flickers.
@@ -506,7 +507,7 @@ export class TaskOrchestrator {
     if (this.store.get(taskId)?.status !== 'in_progress') return;
     if (this.unresumed(attempt)) {
       // There is no session to wait in. Ending the runner hands the attempt to
-      // its verdict, which fails it for want of the marker.
+      // its verdict, which fails it for want of a `task_complete` call.
       session.kill();
       return;
     }
@@ -849,14 +850,12 @@ export class TaskOrchestrator {
     console.error(`[TaskOrchestrator] Prompt preview: ${(task.prompt ?? '').slice(0, 200)}`);
     if (attempt.kind.kind === 'repair') return this.settleRepair(task, attempt, verdict);
 
-    // The runner's own output stays the source of truth for the verdict itself;
-    // this only changes what gets summarized for downstream consumers.
-    const doneToken = `<<<ORDEWELL_DONE_${task.completionMarker}>>>`;
-    const summary = await this.output.finalText({ ...attempt, completionMarker: task.completionMarker }, doneToken);
-    // The attempt stays live across the read, so a cancel, retry, mark
-    // complete, stop or plan load in that window ends it — and has decided the
-    // task since. A stale verdict must not overwrite that decision.
+    // A verdict can arrive inside whatever ended the runner: a stop kills every
+    // session before it ends their attempts. Applied a tick later, it finds
+    // such an attempt ended and leaves the task as that left it.
+    await Promise.resolve();
     if (this.attempts.get(taskId) !== attempt) return;
+    const summary = this.output.finalText(taskId);
     const landing = verdict.outcome === 'pass' ? await this.land(attempt, () => this.landing.landPassed(task, attempt)) : null;
     const changedFiles = landing && checksTree(attempt.kind) ? await this.runs.filesChangedSince(attempt.snapshot) : [];
     const unresumedReason = this.unresumed(attempt) ? unresumedMessage(task, `${attempt.runner} could not find its saved session`) : null;
@@ -872,13 +871,13 @@ export class TaskOrchestrator {
     } else if (landing) {
       await this.applyLanding(task, landing, () => this.notifications.info(`Task "${task.title}" completed.`));
     } else if (classifyRunnerStop(attempt.session?.getOutput() ?? '') === 'usage-limit') {
-      // No marker, but what stopped the runner was its account rather than the
+      // No completion call, but what stopped the runner was its account rather than the
       // work. Failing would paint a red X on a task the user can simply retry,
       // and spawning more tasks would only spend the same exhausted limit, so
       // the task pauses and the run holds until the user resumes it.
       this.store.markAwaitingUser(taskId);
       this.haltOnFailure();
-      this.tell('warn', `Task "${task.title}" stopped before its completion marker: ${attempt.runner} hit its usage limit. Retry it once the limit resets${attempt.worktree ? ' — its worktree is kept' : ''}.`);
+      this.tell('warn', `Task "${task.title}" stopped before it reported completion: ${attempt.runner} hit its usage limit. Retry it once the limit resets${attempt.worktree ? ' — its worktree is kept' : ''}.`);
       if (attempt.worktree) await this.runs.release(taskId, { keep: true });
     } else {
       this.store.markFailed(taskId);
@@ -1433,11 +1432,9 @@ export class TaskOrchestrator {
       if (takesSkills(kind) && task.skills?.length) {
         attempt.skills = resolveTaskSkills(task, this.skillsAt(this.skillRoots(cwd)), worktree ? (name) => this.uncommittedSkillFolder(name) : undefined);
       }
-      const completionTool = takesOrdewellTools(attempt.runner);
       const finalPrompt = attemptPrompt(kind, {
         task,
         plan: this.store.planTasks,
-        completionTool,
         planMapEnabled: this.config.planMapEnabled,
         skills: attempt.skills,
         repairPrompt: (t) => this.landing.repairPrompt(t),
@@ -1460,6 +1457,7 @@ export class TaskOrchestrator {
         resumeSessionId: kind.kind === 'continuation' ? kind.resumeSessionId : undefined,
         attempt: attempt.attempt,
         ...(attempt.skills.length > 0 ? { skills: attempt.skills } : {}),
+        onNotice: (message) => this.tell('warn', `Task "${task.title}": ${message}`),
       });
 
       // Stop/load/cancel can end the attempt while the async adapter is
@@ -1475,8 +1473,8 @@ export class TaskOrchestrator {
       this.store.setTaskTransport(task.id, { kind: 'structured' });
       if (takesSkills(kind)) this.store.setTaskAttemptSkills(task.id, [...attempt.skills]);
 
-      // Attached before the verifier so the chunk that carries the marker is
-      // captured before that chunk's verdict asks for the final text.
+      // Attached before the verifier, so the summary of the call that settles
+      // the attempt is captured before its verdict asks for the final text.
       this.output.attach(task.id, session);
       this.verifier.watch(task, session);
       if (isStructuredSession(session)) session.onTurnEnd(() => this.onTurnEnd(task.id, attempt, session));
@@ -1516,6 +1514,17 @@ export class TaskOrchestrator {
         this.store.markFailed(task.id);
         this.store.setTaskOutputSummary(task.id, summarizeOutput(err.message, ''));
         await this.runs.release(task.id, { keep: false });
+        this.haltOnFailure();
+        this.tell('error', err.message);
+        this.emit('onTaskSettled', { taskId: task.id });
+        this.emit('onTaskChanged');
+        await this.tick();
+        return false;
+      }
+      if (err instanceof McpAttachError) {
+        this.store.markFailed(task.id);
+        this.store.setTaskOutputSummary(task.id, summarizeOutput(err.message, err.message));
+        await this.runs.release(task.id, { keep: true });
         this.haltOnFailure();
         this.tell('error', err.message);
         this.emit('onTaskSettled', { taskId: task.id });

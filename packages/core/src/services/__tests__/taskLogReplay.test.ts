@@ -78,7 +78,7 @@ describe('a multi-turn attempt, saved and replayed', () => {
     ]);
     const session = await run.spawn();
     const both = turnEnds(session, 2);
-    await vi.waitFor(() => expect(run.spawned.processes[0].written).toHaveLength(1));
+    await vi.waitFor(() => expect(run.spawned.processes[0].written).toHaveLength(2));
     const queued = session.sendMessage('Say only: ok');
     await session.interrupt();
     await both;
@@ -195,7 +195,7 @@ describe('undelivered messages in the saved task log', () => {
   it('replays the notice and removes each message from the queue after a kill', async () => {
     const run = recording([() => {}]);
     const session = await run.spawn();
-    await vi.waitFor(() => expect(run.spawned.processes[0].written).toHaveLength(1));
+    await vi.waitFor(() => expect(run.spawned.processes[0].written).toHaveLength(2));
     const first = session.sendMessage('use Postgres');
     const second = session.sendMessage('add tests');
     session.kill();

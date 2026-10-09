@@ -142,7 +142,7 @@ describe('RunnerApprovals', () => {
 describe('a session\'s runner approvals', () => {
   function plan(): LegacyPlanState {
     return {
-      tasks: [createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', assignedRunner: 'claude-code', completionMarker: 'mk-1' })],
+      tasks: [createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', assignedRunner: 'claude-code' })],
       generatedAt: new Date().toISOString(),
       status: 'approved',
       runners: ['claude-code'],
@@ -237,7 +237,7 @@ describe('a runner approval through the real Claude adapter', () => {
     expect(view().blocks.find((b) => b.type === 'approval')).toMatchObject({ approvalId: pending.id, status: 'pending', allowForTask: true, subject: 'Write(/repo/a.txt)' });
 
     approvals.resolve(pending.id, { decision: 'allow' });
-    expect(JSON.parse(spawned.processes[0].written[1])).toEqual({
+    expect(JSON.parse(spawned.processes[0].written[2])).toEqual({
       type: 'control_response',
       response: { subtype: 'success', request_id: '9a948184-6792-4049-85b1-3e837387f618', response: { behavior: 'allow', updatedInput: WRITE } },
     });
@@ -246,7 +246,7 @@ describe('a runner approval through the real Claude adapter', () => {
     // The next request is open when the attempt ends; stopping denies it first.
     await vi.waitFor(() => expect(approvals.outstanding()).toHaveLength(1));
     runner.stop(session.id);
-    const last = JSON.parse(spawned.processes[0].written[2]) as { response: { response: { behavior: string } } };
+    const last = JSON.parse(spawned.processes[0].written[3]) as { response: { response: { behavior: string } } };
     expect(last.response.response.behavior).toBe('deny');
     await vi.waitFor(() => expect(view().blocks.filter((b) => b.type === 'approval').map((b) => b.type === 'approval' && b.status)).toEqual(['granted', 'denied']));
   });

@@ -7,7 +7,7 @@ import type { Task, DiscoveredModel } from '@ordewell/core';
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
     id: 't1', order: 1, title: 'Setup', description: '', type: 'ai', status: 'pending',
-    dependencies: [], subtasks: [], assignedRunner: 'claude-code', completionMarker: 'm1',
+    dependencies: [], subtasks: [], assignedRunner: 'claude-code',
     ...overrides,
   };
 }

@@ -1,25 +1,13 @@
 import { isStructuredSession, type ITerminalSession } from '../interfaces/ITerminalRunner';
-import type {
-  LiveTail,
-  LiveTailOptions,
-  TaskOutputAttempt,
-  TaskOutputSource,
-  TranscriptReader,
-} from '../interfaces/TaskOutputSource';
-import { renderCleanCapture } from './terminalRender';
-import { defuseMarkers } from './promptAugment';
-import { HomeTranscriptReader } from './transcriptCapture';
+import type { LiveTail, LiveTailOptions, TaskOutputSource } from '../interfaces/TaskOutputSource';
+import { outputLines } from '../conversation/format';
 
-/**
- * Enough raw output for the render to recover the last screen of a TUI and a
- * summary tail of a headless run, without holding a long run's whole log.
- */
+/** Enough output for a summary tail and a live read, without holding a long run's whole log. */
 const DEFAULT_MAX_BUFFER_CHARS = 256 * 1024;
 const CUT_SEARCH_CHARS = 4096;
 
 interface Capture {
   readonly session: ITerminalSession;
-  /** Raw, un-stripped: the render needs the cursor escapes runners strip. */
   raw: string;
   /** Characters discarded from the front of `raw` to keep it bounded. */
   dropped: number;
@@ -30,18 +18,16 @@ interface Capture {
   turnStart?: number;
 }
 
-/**
- * Owns one bounded raw buffer per task attempt, fed from the attempt's
- * session, and reads final answers from the agent's transcript through an
- * injected {@link TranscriptReader}.
- */
+function clean(raw: string): string {
+  return outputLines(raw).map((line) => line.trimEnd()).join('\n').trim();
+}
+
+/** Owns one bounded output buffer per task attempt, fed from the attempt's session. */
 export class BufferedTaskOutputSource implements TaskOutputSource {
   private captures = new Map<string, Capture>();
-  private transcripts: TranscriptReader;
   private maxBufferChars: number;
 
-  constructor(opts: { transcripts?: TranscriptReader; maxBufferChars?: number } = {}) {
-    this.transcripts = opts.transcripts ?? new HomeTranscriptReader();
+  constructor(opts: { maxBufferChars?: number } = {}) {
     this.maxBufferChars = opts.maxBufferChars ?? DEFAULT_MAX_BUFFER_CHARS;
   }
 
@@ -78,27 +64,11 @@ export class BufferedTaskOutputSource implements TaskOutputSource {
     this.captures.clear();
   }
 
-  async finalText(attempt: TaskOutputAttempt, doneToken: string): Promise<string> {
-    // The runner's own account of its work comes first. Dependents quote it, so
-    // a marker in it must not settle them on this task's evidence.
-    const reported = this.captures.get(attempt.taskId)?.reported;
-    if (reported) return defuseMarkers(reported);
-    // The transcript is the agent's own structured record; the terminal
-    // render only reconstructs what a TUI painted, so it is the fallback.
-    if (attempt.cwd && attempt.completionMarker) {
-      const transcript = await this.transcripts.finalAssistantText({
-        runner: attempt.runner,
-        cwd: attempt.cwd,
-        startedAt: attempt.startedAt,
-        marker: attempt.completionMarker,
-      });
-      if (transcript) return transcript;
-    }
-    const capture = this.captures.get(attempt.taskId);
-    const raw = capture?.raw.slice(Math.max(0, (capture.turnStart ?? 0) - capture.dropped)) ?? '';
-    // A marker on the first painted row leaves nothing above the cut; the
-    // uncut render is still better than an empty summary.
-    return renderCleanCapture(raw, doneToken) || renderCleanCapture(raw);
+  finalText(taskId: string): string {
+    const capture = this.captures.get(taskId);
+    if (!capture) return '';
+    if (capture.reported) return capture.reported;
+    return clean(capture.raw.slice(Math.max(0, (capture.turnStart ?? 0) - capture.dropped)));
   }
 
   liveTail(taskId: string, opts: LiveTailOptions): LiveTail | null {
@@ -106,7 +76,7 @@ export class BufferedTaskOutputSource implements TaskOutputSource {
     if (!capture) return null;
     const total = capture.dropped + capture.raw.length;
     const from = Math.min(Math.max(0, (opts.sinceOffset ?? 0) - capture.dropped), capture.raw.length);
-    const lines = renderCleanCapture(capture.raw.slice(from)).split('\n');
+    const lines = clean(capture.raw.slice(from)).split('\n');
     const kept = opts.maxLines > 0 ? lines.slice(-opts.maxLines) : [];
     return {
       text: kept.join('\n'),
@@ -119,9 +89,9 @@ export class BufferedTaskOutputSource implements TaskOutputSource {
     capture.raw += text;
     const excess = capture.raw.length - this.maxBufferChars;
     if (excess <= 0) return;
-    // Cut on a nearby line boundary: a cut inside an escape sequence would
-    // render its parameters as text. A TUI that rarely emits newlines must not
-    // cost most of the buffer, hence the short search window.
+    // Cut on a nearby line boundary, so the oldest line kept is whole. Output
+    // that rarely breaks lines must not cost most of the buffer, hence the
+    // short search window.
     const newline = capture.raw.indexOf('\n', excess);
     const cut = newline >= 0 && newline - excess < CUT_SEARCH_CHARS && newline < capture.raw.length - 1 ? newline + 1 : excess;
     capture.raw = capture.raw.slice(cut);

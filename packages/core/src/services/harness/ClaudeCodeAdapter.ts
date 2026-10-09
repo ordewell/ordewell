@@ -252,7 +252,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * A task's turn whose `result` arrived while background work was still open.
    * The CLI reports that result when the model stops talking, then opens a turn
    * of its own when the work finishes; a turn ended at the first result would
-   * lose everything said after it, the completion marker included.
+   * lose everything done after it, the `task_complete` call included.
    */
   private resultHeld = false;
   private followOnTimer: ReturnType<typeof setTimeout> | null = null;

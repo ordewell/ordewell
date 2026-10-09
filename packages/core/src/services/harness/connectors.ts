@@ -13,12 +13,8 @@ import type { OrdewellToolBinding } from './ordewellBinding';
  */
 export interface RunnerConnector {
   create(deps: AgentProcessDeps): TaskModeAgentAdapter;
-  /**
-   * How the adapter hands its runner the Ordewell MCP server (ADR-0022).
-   * Absent: the runner is never given it, and its tasks complete by marker and
-   * its planner submits by envelope.
-   */
-  ordewellTools?: OrdewellToolBinding;
+  /** How the adapter hands its runner the Ordewell MCP server (ADR-0022), without which it can neither run a task nor plan. */
+  ordewellTools: OrdewellToolBinding;
 }
 
 /**
@@ -45,11 +41,6 @@ export function createPlannerAdapter(runner: string, deps: AgentProcessDeps): Ag
 /** Whether Ordewell can run a runner's tasks (ADR-0018, S3). */
 export function supportsTaskMode(runner: string): boolean {
   return connectorFor(runner) !== undefined;
-}
-
-/** Whether a structured task on this runner is given the Ordewell task tools (ADR-0022). */
-export function takesOrdewellTools(runner: string): boolean {
-  return connectorFor(runner)?.ordewellTools !== undefined;
 }
 
 /** The adapter that drives one task. Throws {@link TaskModeUnsupportedError} for a runner without a connector. */

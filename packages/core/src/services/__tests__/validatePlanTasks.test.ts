@@ -23,7 +23,7 @@ describe('validatePlanTasks', () => {
 /** The text path's verdict on the same object, in validatePlanTasks' shape. */
 function viaText(obj: unknown, runners: string[]) {
   try {
-    return { ok: true, tasks: withoutMarkers(parsePlanJson(JSON.stringify(obj), runners)) };
+    return { ok: true, tasks: parsePlanJson(JSON.stringify(obj), runners) };
   } catch (err) {
     return { ok: false, message: (err as Error).message };
   }
@@ -32,13 +32,8 @@ function viaText(obj: unknown, runners: string[]) {
 function viaObject(obj: unknown, runners: string[]) {
   const result = validatePlanTasks(obj, runners);
   return result.ok
-    ? { ok: true, tasks: withoutMarkers(result.tasks) }
+    ? { ok: true, tasks: result.tasks }
     : { ok: false, message: result.errors[0].message };
-}
-
-// Every task mints a fresh completion marker, so two parses of one plan never share them.
-function withoutMarkers<T extends { completionMarker?: string; subtasks: T[] }>(tasks: T[]): unknown[] {
-  return tasks.map(({ completionMarker: _, subtasks, ...rest }) => ({ ...rest, subtasks: withoutMarkers(subtasks) }));
 }
 
 describe('validatePlanTasks against the JSON envelope', () => {

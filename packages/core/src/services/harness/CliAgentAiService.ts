@@ -1,3 +1,4 @@
+import { McpAttachError } from './ordewellBinding';
 import { spawn as nodeSpawn } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -8,6 +9,7 @@ import {
   type ResearchStep,
   type RunnerId,
   type LegacyPlanState,
+  plannerTaskView,
   DEFAULT_RUNNERS,
 } from '../../models/Task';
 import { addUsage, type UsageTotals } from '../../models/Usage';
@@ -22,6 +24,7 @@ import {
   buildModifyPlanPrompt,
 } from '../PlanPrompts';
 import { generatePlanWithRepair } from '../PlanRepair';
+import { validatePlanTasks } from '../PlanValidator';
 import { settleReply, type ReplyAttempt } from '../settleReply';
 import { ReplySplitter } from '../replyStream';
 import { redactSecrets } from '../../utils/redactSecrets';
@@ -32,7 +35,7 @@ import type { AgentAdapter, AgentEvent, AgentProcessDeps, PlannerStartOptions } 
 import { createPlannerAdapter } from './connectors';
 import { mapAgentTool, normalizeAgentArgs } from './agentTools';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from '../plannerModes';
-import { mcpClientConfig, type McpCredential, type OrdewellMcpServer } from '../mcp';
+import { mcpClientConfig, sharedMcpServer, type McpCredential, type OrdewellMcpServer } from '../mcp';
 
 /**
  * How many times a turn that backgrounded a subagent may be asked to wait for
@@ -61,14 +64,15 @@ export interface CliAgentAiServiceDeps extends Partial<AgentProcessDeps> {
   createAdapter?: (runner: string, deps: AgentProcessDeps) => AgentAdapter | null;
   /** Workspace root the agent explores. Defaults to the host process's cwd. */
   workspaceRoot?: () => string;
-  /** Where a conversation's planner tools are served (ADR-0022). Absent: every planner gets the envelopes. */
+  /** Where a conversation's planner tools are served (ADR-0022). Absent: no conversation can start. */
   mcpServer?: OrdewellMcpServer;
 }
 
-/** A conversation's planner tools, and the system prompt that teaches them in place of the envelopes. */
-interface PlannerTools {
-  offer: PlannerToolsOffer;
-  systemPrompt: string;
+interface OneShotCatalog {
+  runners: RunnerId[];
+  modelsByRunner?: Partial<Record<RunnerId, DiscoveredModel[]>>;
+  runnerModes?: Record<RunnerId, RunnerModeInfo[]>;
+  autonomousDefault?: boolean;
 }
 
 /** One completed harness turn, before classification. */
@@ -108,12 +112,10 @@ export class CliAgentAiService implements IAiService {
    * every session boundary — nothing from one goal may reach the next.
    */
   private lastNativeSessionId: string | null = null;
-  private conversation: { startOptions: PlannerStartOptions; tools?: PlannerTools; runners: RunnerId[]; runnerModes?: Record<RunnerId, RunnerModeInfo[]>; autonomousDefault?: boolean } | null = null;
+  private conversation: { startOptions: PlannerStartOptions; tools: PlannerToolsOffer; runners: RunnerId[]; runnerModes?: Record<RunnerId, RunnerModeInfo[]>; autonomousDefault?: boolean } | null = null;
   private readonly mcpServer: OrdewellMcpServer | undefined;
   /** The planner token the running process was spawned with; revoked with the process (ADR-0022, A3). */
   private plannerToken: string | null = null;
-  /** Whether the running planner was spawned with its tools and the CLI reported them connected. */
-  private toolsAttached = false;
   private activeAbort: AbortController | null = null;
   /**
    * Every subagent this conversation has reported starting, and finishing.
@@ -136,7 +138,7 @@ export class CliAgentAiService implements IAiService {
     };
     this.makeAdapter = deps.createAdapter ?? createPlannerAdapter;
     this.workspaceRoot = deps.workspaceRoot ?? (() => process.cwd());
-    this.mcpServer = deps.mcpServer;
+    this.mcpServer = deps.mcpServer ?? sharedMcpServer();
   }
 
   hasActiveConversation(): boolean { return this.conversation !== null; }
@@ -155,8 +157,8 @@ export class CliAgentAiService implements IAiService {
       && this.conversation.startOptions.effort === this.config.plannerThinkingEffort;
   }
 
-  /** Whether this conversation's planner submits through the Ordewell MCP server rather than the envelopes. */
-  plannerToolsAttached(): boolean { return this.toolsAttached; }
+  /** Always: a conversation whose planner cannot reach the Ordewell MCP server fails to start rather than falling back to the envelopes. */
+  plannerToolsAttached(): boolean { return true; }
 
   /** The agent's own session id, a resumption hint only — Ordewell's transcript is authoritative (T4). */
   nativeSessionId(): string | null { return this.adapter?.nativeSessionId() ?? null; }
@@ -165,7 +167,6 @@ export class CliAgentAiService implements IAiService {
     this.activeAbort?.abort();
     this.activeAbort = null;
     this.disposeAdapter();
-    this.toolsAttached = false;
     // Session boundaries are hard (ADR-0008): the next goal must not resume
     // the previous goal's agent session.
     this.lastNativeSessionId = null;
@@ -178,6 +179,9 @@ export class CliAgentAiService implements IAiService {
 
   async startConversation(req: ConversationRequest): Promise<ConversationTurn> {
     this.reset();
+    if (!this.mcpServer || !req.plannerTools) {
+      throw new Error(`The ${this.runner} planner plans through Ordewell's MCP tools, and this session has no server to hand it.`);
+    }
 
     const contextStr = await collectResearchContext(req.fs, req.runners);
     const systemPrompt = buildConversationSystemPrompt(
@@ -197,17 +201,7 @@ export class CliAgentAiService implements IAiService {
       model: this.plannerModel(),
       effort: this.config.plannerThinkingEffort,
     };
-    const tools: PlannerTools | undefined = req.plannerTools && this.mcpServer
-      ? {
-        offer: req.plannerTools,
-        systemPrompt: buildConversationSystemPrompt(
-          req.goal, contextStr, req.modelsByRunner, req.runners, req.runnerModes,
-          req.autonomousDefault ?? true,
-          { harness: true, isolatedExecution: req.isolatedExecution, plannerTools: true, skills: req.skills },
-        ),
-      }
-      : undefined;
-
+    const tools = req.plannerTools;
     await this.startAdapter(startOptions, tools);
 
     this.conversation = {
@@ -495,45 +489,58 @@ export class CliAgentAiService implements IAiService {
    * type: the read-only boundary (ADR-0008/0009) cannot be crossed into task
    * mode from here without changing this signature.
    */
-  private async startAdapter(opts: PlannerStartOptions, tools?: PlannerTools): Promise<AgentAdapter> {
+  private async startAdapter(opts: PlannerStartOptions, tools: PlannerToolsOffer): Promise<AgentAdapter> {
+    // A planner that cannot reach its tools cannot submit a plan, so it is
+    // respawned once and never left to plan without them.
+    const first = await this.startWithTools(opts, tools);
+    if (typeof first !== 'string') return first;
+    const second = await this.startWithTools(opts, tools);
+    if (typeof second !== 'string') return second;
+    throw new McpAttachError(`Could not start the ${this.runner} planner with Ordewell's tools. First spawn: ${first}. Respawn: ${second}.`);
+  }
+
+  private newAdapter(): AgentAdapter {
     const adapter = this.makeAdapter(this.runner, this.processDeps);
     if (!adapter) throw new Error(`No planner adapter is available for "${this.runner}".`);
-    this.toolsAttached = false;
-    if (tools && this.mcpServer && adapter.mcpAttached) {
-      if (await this.startWithTools(adapter, opts, tools, this.mcpServer)) return adapter;
-      // Not connected: this process was told to submit through tools it
-      // cannot reach, so a fresh one is spawned with the envelopes instead.
-      return this.startAdapter(opts);
-    }
-    await adapter.start(opts);
-    this.adapter = adapter;
     return adapter;
   }
 
-  /** Spawn with the Ordewell server injected. False, with nothing left running, when it did not connect. */
-  private async startWithTools(adapter: AgentAdapter, opts: PlannerStartOptions, tools: PlannerTools, server: OrdewellMcpServer): Promise<boolean> {
+  /** One spawn with the Ordewell server injected: the adapter once the runner reports it connected, otherwise why not, with nothing left running. */
+  private async startWithTools(opts: PlannerStartOptions, tools: PlannerToolsOffer): Promise<AgentAdapter | string> {
+    const server = this.mcpServer;
+    if (!server) return 'no Ordewell MCP server was given';
+    const adapter = this.newAdapter();
+    if (!adapter.mcpAttached) {
+      adapter.dispose();
+      return `${this.runner} cannot be handed Ordewell's MCP server`;
+    }
     let credential: McpCredential;
     try {
-      credential = await server.issuePlannerToken({ sessionId: tools.offer.sessionId }, tools.offer.handler);
-    } catch {
-      return false;
+      credential = await server.issuePlannerToken({ sessionId: tools.sessionId }, tools.handler);
+    } catch (err) {
+      adapter.dispose();
+      return `Ordewell's MCP server could not issue a token (${err instanceof Error ? err.message : String(err)})`;
     }
     try {
-      await adapter.start({ ...opts, systemPrompt: tools.systemPrompt, mcp: mcpClientConfig(credential) });
-      if (await adapter.mcpAttached!()) {
-        this.adapter = adapter;
-        this.plannerToken = credential.token;
-        this.toolsAttached = true;
-        return true;
-      }
+      await adapter.start({ ...opts, mcp: mcpClientConfig(credential) });
     } catch (err) {
       adapter.dispose();
       server.revoke(credential.token);
       throw err;
     }
+    let failure = `${this.runner} did not report Ordewell's MCP server connected`;
+    try {
+      if (await adapter.mcpAttached()) {
+        this.adapter = adapter;
+        this.plannerToken = credential.token;
+        return adapter;
+      }
+    } catch (err) {
+      failure = `${this.runner} could not check Ordewell's MCP attach state (${err instanceof Error ? err.message : String(err)})`;
+    }
     adapter.dispose();
     server.revoke(credential.token);
-    return false;
+    return failure;
   }
 
   /** Kill the planner process, and with it the token it was spawned with. */
@@ -572,27 +579,47 @@ export class CliAgentAiService implements IAiService {
    * the plan display, as a vendor planner's one-shot does, and the prose
    * around it is not streamed at all, since no turn is open to show it in.
    */
-  private async oneShot(prompt: string, onProgress?: (p: ResearchProgress) => void, signal?: AbortSignal): Promise<{ text: string; researchLog: ResearchLogEntry[] }> {
+  private async oneShot(prompt: string, catalog: OneShotCatalog, onProgress?: (p: ResearchProgress) => void, signal?: AbortSignal): Promise<{ text: string; researchLog: ResearchLogEntry[] }> {
     const previous = this.adapter;
     const previousConversation = this.conversation;
     const previousSessionId = this.lastNativeSessionId;
-    const previousTools = { token: this.plannerToken, attached: this.toolsAttached };
+    const previousToken = this.plannerToken;
     this.adapter = null;
     this.plannerToken = null;
 
+    let submitted: string | undefined;
+    const tools: PlannerToolsOffer = {
+      sessionId: uuidv4(),
+      handler: {
+        listRunners: async () => ({ text: JSON.stringify({ runners: catalog.runners.map((id) => ({ id, modes: catalog.runnerModes?.[id] ?? [] })) }) }),
+        listModels: async ({ runner }) => ({ text: JSON.stringify({ runner, models: catalog.modelsByRunner?.[runner] ?? [] }) }),
+        submitPlan: async ({ tasks }) => {
+          const result = validatePlanTasks({ tasks }, catalog.runners, catalog.runnerModes, catalog.autonomousDefault);
+          if (!result.ok) return { text: result.errors.map((error) => error.message).join('\n'), isError: true };
+          submitted = JSON.stringify({ tasks: result.tasks.map(plannerTaskView) });
+          return { text: 'Plan recorded. End your turn now.' };
+        },
+      },
+    };
+    const toolPrompt = prompt
+      .replace('produces structured task plans as JSON', 'submits structured task plans through submit_plan')
+      .replace('Generate a task plan using this JSON format:', 'submit_plan takes a plan using this schema:')
+      .replace('Return the COMPLETE modified plan as a JSON object with a single "tasks" array.', 'Call submit_plan with the COMPLETE modified plan in its "tasks" array.')
+      .replaceAll('Do NOT wrap the JSON in markdown code blocks. Output ONLY the JSON object.', 'Submit the plan ONLY through submit_plan. Never write the plan as JSON in your reply.');
     const startOptions: PlannerStartOptions = {
       kind: 'planner',
       cwd: this.workspaceRoot(),
-      systemPrompt: prompt,
+      systemPrompt: `${toolPrompt}\nBefore submitting, call list_runners and list_models to check the available assignments.`,
       model: this.plannerModel(),
       effort: this.config.plannerThinkingEffort,
     };
     let oneShotAdapter: AgentAdapter | null = null;
     try {
-      oneShotAdapter = await this.startAdapter(startOptions);
+      oneShotAdapter = await this.startAdapter(startOptions, tools);
       this.conversation = {
         startOptions,
-        runners: [],
+        tools,
+        runners: catalog.runners,
       };
       const splitter = new ReplySplitter();
       const turn = await this.runTurn(
@@ -605,16 +632,16 @@ export class CliAgentAiService implements IAiService {
         signal,
       );
       if (turn.error) throw new Error(turn.error);
-      return { text: turn.text, researchLog: turn.researchLog };
+      return { text: submitted ?? turn.text, researchLog: turn.researchLog };
     } finally {
       // A one-shot never leaves a process behind, and never disturbs a
       // conversational session that happened to be open around it — including
       // when its own agent failed to start, which happens before there is
       // anything to dispose.
       oneShotAdapter?.dispose();
+      if (this.plannerToken) this.mcpServer?.revoke(this.plannerToken);
       this.adapter = previous;
-      this.plannerToken = previousTools.token;
-      this.toolsAttached = previousTools.attached;
+      this.plannerToken = previousToken;
       this.conversation = previousConversation;
       // The one-shot's own agent session must not become the conversation's
       // resume hint: restarting the chat into a plan-generation session would
@@ -642,7 +669,7 @@ export class CliAgentAiService implements IAiService {
     const tasks = await generatePlanWithRepair(
       async (repairHint) => {
         const prompt = buildPlanWithResults(userDescription, contextStr, '', modelsByRunner, runners, runnerModes, modes);
-        const result = await this.oneShot(repairHint ? `${prompt}\n\n${repairHint}` : prompt, onProgress, signal);
+        const result = await this.oneShot(repairHint ? `${prompt}\n\n${repairHint}` : prompt, { runners, modelsByRunner, runnerModes, autonomousDefault: modes.autonomousDefault }, onProgress, signal);
         researchLog.push(...result.researchLog);
         lastText = result.text;
         return result.text;
@@ -668,6 +695,7 @@ export class CliAgentAiService implements IAiService {
       async (repairHint) => {
         const result = await this.oneShot(
           repairHint ? `${prompt}\n\n${repairHint}` : prompt,
+          { runners, modelsByRunner, runnerModes, autonomousDefault: modes.autonomousDefault },
           (p) => { if (p.type === 'plan_token' && p.planToken) onToken?.(p.planToken); },
           signal,
         );
@@ -692,7 +720,7 @@ export class CliAgentAiService implements IAiService {
     try {
       const tasks = await generatePlanWithRepair(
         async (repairHint) => {
-          const result = await this.oneShot(repairHint ? `${prompt}\n\n${repairHint}` : prompt, onProgress, signal);
+          const result = await this.oneShot(repairHint ? `${prompt}\n\n${repairHint}` : prompt, { runners: existingPlan.runners, modelsByRunner, runnerModes, autonomousDefault: modes.autonomousDefault }, onProgress, signal);
           return result.text;
         },
         existingPlan.runners, 2, runnerModes, modes.autonomousDefault,
@@ -711,7 +739,7 @@ export class CliAgentAiService implements IAiService {
   ): Promise<Task[]> {
     return generatePlanWithRepair(
       async (repairHint) => {
-        const result = await this.oneShot(repairHint ? `${prompt}\n\n${repairHint}` : prompt);
+        const result = await this.oneShot(repairHint ? `${prompt}\n\n${repairHint}` : prompt, { runners, runnerModes, autonomousDefault });
         return result.text;
       },
       runners, 2, runnerModes, autonomousDefault,

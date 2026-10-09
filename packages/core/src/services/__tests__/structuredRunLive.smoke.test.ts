@@ -18,7 +18,7 @@ import { makeSession, taskOf } from './sessionTestKit';
  *
  *   ORDEWELL_LIVE_AGENTS=claude-code npx vitest run --root packages/core structuredRunLive
  *
- * What it asserts is the run: task 1 passes on its marker, its process ends
+ * What it asserts is the run: task 1 passes on its completion call, its process ends
  * with its verdict, and task 2's prompt carries task 1's summary.
  */
 
@@ -76,7 +76,7 @@ describe.runIf(live)('structured run — live', () => {
       await vi.waitFor(() => expect(taskOf(session, 'live-1')?.status).toBe('completed'), { timeout: TIMEOUT_MS, interval: 500 });
       const first = taskOf(session, 'live-1')!;
       expect(first.verdict?.outcome).toBe('pass');
-      expect(first.verdict?.checks.find((c) => c.name === 'completion_marker')?.passed).toBe(true);
+      expect(first.verdict?.checks.find((c) => c.name === 'task_complete')?.passed).toBe(true);
       expect(first.transport).toMatchObject({ kind: 'structured', nativeSessionId: expect.any(String) });
       // The summary is whatever the runner's task_complete call reported
       // (ADR-0022), worded by the model, so the run is checked by carrying it.
