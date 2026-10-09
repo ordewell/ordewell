@@ -10,7 +10,7 @@ anything a project sets for itself: a `CLAUDE_CONFIG_DIR` in a project's
 silently lost whenever Ordewell started anywhere but a shell already inside the
 project — a desktop launcher, a daemon running for another workspace, or a
 shell where direnv had blocked an edited `.envrc`. Agents then ran on the wrong
-account with nothing said. Runners also start through non-interactive shells,
+account with nothing said. Structured connectors launch runners directly,
 so the user's direnv hook never fires for them.
 
 ## Decision
@@ -36,9 +36,9 @@ Two sources, the second winning:
    `.ordewell/` is git-ignored by Ordewell; a file git nevertheless tracks is
    ignored with a warning.
 
-A runner manifest's own `env` still wins over both. The transcript reader looks
-for Claude Code sessions under the resolved `CLAUDE_CONFIG_DIR` as well as the
-daemon's and `~/.claude`, since that is where the agent now writes them.
+The connector's launch environment wins over both. Built-in manifests have
+no `env` field or terminal invocation templates (ADR-0025). Completion summaries
+come from `task_complete`; transcript discovery is not the completion path.
 
 ## Security
 
@@ -64,3 +64,7 @@ repository being planned:
   miss the planner, which is not spawned through a shell.
 - **Loading `.envrc` without direnv.** An `.envrc` is a shell script; running it
   outside direnv's allow model would execute repository code unasked.
+
+## History
+
+- 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).

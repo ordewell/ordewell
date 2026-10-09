@@ -2,8 +2,6 @@
 
 **Status:** accepted
 
-*Pending (2026-10-05):* [ADR-0022](0022-ordewell-mcp-server.md) adopts "Ordewell as an MCP server", deferred below, for plan submission and the planner's reads.
-
 Every path into Ordewell's planner runs through an LLM vendor the user must sign
 up for separately. `createAiService` branches on `aiProvider` across 26
 vendor entries, and every one of them resolves an API key. Meanwhile the same
@@ -19,7 +17,10 @@ then go get a third-party API key before you can plan anything.
 ## Decision
 
 **A coding agent may serve as the planner, as a second transport behind the
-existing `IAiService` seam.**
+existing `IAiService` seam.** Its Ordewell MCP tools must attach before the
+planning prompt is sent: check after spawn, respawn once, then fail on a second
+attach failure (ADR-0025). Plan submission, edits and reads use the injected
+tools (ADR-0022); API planners retain their JSON envelopes.
 
 The plan contract does not move. `classifyPlannerReply`, `PlanRepair`,
 `PlanValidator`, `ResearchProgress`, `ConversationTurn` and the four surfaces
@@ -198,14 +199,11 @@ this backend should understand they are trading speed for not holding a key.
 
 ## Considered options
 
-- **ACP for every agent.** AionUI's model: one Agent Client Protocol
-  client, N agents. Rejected as the v1 transport. Only OpenCode ships an ACP
-  server (`opencode acp`); Claude Code and Codex require third-party adapter
-  packages spawned over npx, reintroducing exactly the install step this feature
-  exists to remove, on a dependency chain we do not control. Kept as a *fourth
-  adapter* behind the same interface, where it earns its keep on the long tail
-  (Gemini CLI, Qwen, Cursor) rather than on the three agents Ordewell already
-  ships manifests for.
+- **ACP for every agent immediately.** Deferred: the built-in agents already
+  have native connectors without extra adapter installations.
+  [ADR-0025](0025-structured-only-runners.md) records a generic ACP connector
+  as the expected successor for third-party harnesses, with the protocol gaps
+  that must be addressed before adoption.
 - **One-shot respawn per turn.** Spawn with `--resume`/`exec resume`/
   `--session` each message, exit after. Trivial lifecycle, nothing to leak.
   Rejected: 1–3s cold start on every message *including each corrective
@@ -220,12 +218,11 @@ this backend should understand they are trading speed for not holding a key.
   mode into a write-capable one to solve a problem the existing repair loop
   already handles. Available later as a fallback if truncation proves real, at
   the cost of the no-mutation guarantee.
-- **Ordewell as an MCP server now.** `submit_plan` / `apply_task_ops` /
-  `ask_user` as tools, registered with all three CLIs — the plan arrives as
-  validated structured input and "question or commit?" stops being a parsing
-  problem. Genuinely the right end state, and deferred rather than rejected:
-  there is no MCP code anywhere in the repo today, so it is a stdio JSON-RPC
-  server plus per-CLI registration standing between the user and the first plan.
+- **Plan submission only through reply parsing.** Previously adopted while
+  MCP injection was absent; rejected for coding-agent planners because the
+  server now supplies validated submission and read tools (ADR-0022). API
+  planners retain envelopes. Coding-agent planners must attach their tools,
+  with one respawn before failing (ADR-0025).
 - **A separate `plannerBackend` setting.** See above — better typing, worse
   product, more UI.
 - **Implicit planner = the first selected runner.** A single "plan with my
@@ -266,3 +263,4 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-10-04 — OpenCode 2.x supported beside 1.x.
 - 2026-10-09 — harness planners get skills through the unified loader (ADR-0024): `/name`, `load_skill`, task skills.
 - 2026-10-09 — Claude planners use `dontAsk` with edit, shell and native plan-mode tools denied; OpenCode shell limitations are made explicit (ADR-0008).
+- 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).

@@ -65,8 +65,9 @@ their own repositories. The parts most worth your attention:
 - **Credential handling.** API keys are read from the environment and `.env`.
   Any path that writes a key to a log, an error message, a session file under
   `.ordewell/`, or a runner's argv is in scope.
-- **Plugin manifests.** Runner plugins are installed from URLs and describe how
-  to spawn a process. Injection through a manifest field is in scope.
+- **Built-in runner manifests and connectors.** Injection through launch,
+  mode, environment or discovery configuration is in scope. External plugin
+  manifests are ignored and are not loaded or executed.
 
 ## What is out of scope
 

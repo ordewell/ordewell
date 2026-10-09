@@ -17,7 +17,7 @@ I split the problem in two instead:
 1. **A planner** — a cheap, fast model that *only* researches the repo (read-only) and emits a
    structured plan: an ordered list of tasks, a dependency graph, and a per-task assignment of
    *which model*, *how much thinking effort*, and *build-vs-plan mode* each task should run with.
-2. **Executors** — the actual coding agents (Claude Code, OpenCode, or any CLI via a plugin) that
+2. **Executors** — the actual coding agents (Claude Code, Codex or OpenCode through structured connectors) that
    each run *one* task, in their own session, with the model the planner picked for that task.
 
 The planner never writes code. The executors never plan the whole job. This note is about why that

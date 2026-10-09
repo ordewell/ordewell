@@ -43,11 +43,9 @@ that reported itself healthy and then failed, in four places at once:
 
 ### 1. `utils/launch.ts` — how a CLI is started
 
-`planDirectLaunch` for `spawn` callers, `planShellLaunch` for surfaces that hand
-an executable to a terminal. Both are **identity on POSIX**: `planDirectLaunch`
-returns its input untouched (execvp already searches PATH, and a resolution step
-there is only a new way for a working install to break), and `planShellLaunch`
-produces the same `bash -lc` it always did.
+`planDirectLaunch` serves every `spawn` caller. It is **identity on POSIX**:
+its input is returned untouched because execvp already searches PATH. There
+is no terminal launch helper or runner terminal.
 
 The Windows branch resolves the command against PATH × PATHEXT across three
 routes, in the order that reaches a directly-spawnable file soonest: a native
@@ -81,10 +79,10 @@ So a `.ps1` sitting beside a too-long `.cmd` still raises.
 **A line break is different: the batch route cannot carry one at all.** cmd.exe
 reads its command line up to the first CR/LF and discards the rest — no error,
 exit code 0 — and quoting does not help. Every prompt Ordewell builds spans
-lines (`composeAugmentedPrompt` appends the completion-marker instruction after
+lines (`composeAugmentedPrompt` appends the `task_complete` instruction after
 a blank line, and the harness planners' system prompts share the seam), so a
-task would start with its opening paragraph only and no completion marker for
-`VerdictEngine` to find. So `planFor` disqualifies the batch route for a
+task would start with its opening paragraph only and no instruction to call
+`task_complete`. So `planFor` disqualifies the batch route for a
 multi-line argument, and — unlike overflow, a capacity judgement about a line
 cmd.exe would at least read — that disqualification **falls through to the next
 route**: a `.ps1` beside a `.cmd` is taken when the arguments span lines, and a
@@ -211,14 +209,10 @@ The **VS Code extension and the daemon work on native Windows**: harness
 planners (Claude Code, Codex, OpenCode), API-key planners, runner execution,
 model discovery, and the exploration envelope with its gate intact.
 
-The **TUI is not verified on Windows**, and this ADR does not change that. It is tmux-backed
-(ADR-0007) for its per-task terminal windows, and `hasTmux` feature-detects,
-so the requirement is declared rather than assumed; tmux is optional since
-structured became the default transport (ADR-0018). WSL remains the supported
-answer there. The launch and kill
-seams are platform-general, so a future non-tmux Windows TUI inherits them
-without new work — which is why they live in `core` and not in the VS Code
-adapter.
+The **TUI is not verified on Windows**. WSL remains the supported answer for
+that surface. Runner execution uses structured connectors and no longer needs
+tmux or per-task terminal windows (ADR-0025). The launch and kill seams are
+shared in core.
 
 Two things are **explicitly not claimed**:
 
@@ -251,3 +245,4 @@ measured on a Windows host; the rest has not been run on one.
 - 2026-07-31 — accepted, with an amendment from the first run on a Windows host (OpenCode installed by npm): the batch route's line-break truncation found and routed around, PowerShell `-File` fidelity measured.
 - 2026-10-07 — POSIX stop signals the runner's process group rather than the direct child.
 - 2026-10-09 — the system-prompt advice names task skills, the mode toggles being gone (ADR-0024).
+- 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).

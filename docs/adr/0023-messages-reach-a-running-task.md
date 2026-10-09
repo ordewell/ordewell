@@ -30,8 +30,8 @@ straight away.**
 ### Delivery
 
 - **A per-adapter optional capability (D1).** A task-mode adapter may offer
-  *deliver into the running turn*. It is feature-detected, like the rest of
-  ADR-0018's structured capability (S2); an adapter without it keeps the
+  *deliver into the running turn*. It is feature-detected, within the
+  mandatory session contract (ADR-0018, S2); an adapter without it keeps the
   turn-end queue, and nothing upstream changes for it.
 - **Handed over at once, delivered at the boundary (D2).** A message sent
   while a turn runs is passed to the runner immediately; the runner shows it
@@ -57,13 +57,13 @@ straight away.**
   Such a message is removable again. Turn-end delivery keeps ADR-0018's W1
   rule: the task stays `in_progress` with no flicker.
 - **A turn that ends with a message owed does not wait for input (D5).** If a
-  turn ends without the marker while a handed-over message is unacknowledged,
+  turn ends without a completion call while a handed-over message is unacknowledged,
   the runner is about to work on it (or Ordewell is about to send it), so the
   task does not become `awaiting_user` (W1) for that turn end. A turn the
   runner opens by itself for such a message is that message's turn, not
   background work (ADR-0018, B1).
 - **Completion evidence waits for the messages (D6).** A completion signal —
-  the `task_complete` call or the marker — that arrives while a message is
+  the `task_complete` call — that arrives while a message is
   still undelivered is held, not settled. If the turn then ends with nothing
   left to deliver, the held verdict is published. If the message is read
   mid-turn, or opens the next turn, the runner has been told something after
@@ -99,8 +99,7 @@ straight away.**
   `turn/interrupt`, OpenCode's abort, with kill-and-resume as the fallback.
   With no turn running, force send is a plain send. A message still waiting in
   Ordewell's queue can be force sent too; one already handed over cannot,
-  since the runner has it. The terminal transport refuses force send with the
-  reason. The surfaces: `ctrl-s` in the TUI task view (the composer text, or
+  since the runner has it. The surfaces: `ctrl-s` in the TUI task view (the composer text, or
   the selected queued message when the composer is empty), *Send now* and
   `Ctrl+Enter` in the VS Code task log, and `POST …/tasks/:task/messages/now`
   and `…/messages/:id/now` on the daemon.
@@ -237,9 +236,8 @@ interrupt (D4 covers it either way).
   short turns, but a task is one long turn, so a message would reach the
   runner when the task is already over. Rejected; it stays as the fallback.
 - **Keystroke injection into the runner's TUI.** Rejected in #28, for the
-  reasons ADR-0018 left the terminal transport: keystrokes cannot be promised
-  to land between turns, and #11 and #13 were bugs in exactly this path. The
-  terminal transport keeps turn-end-only, human-only messaging.
+  reasons ADR-0025 removed the terminal transport: keystrokes cannot be promised
+  to land between turns, and #11 and #13 were bugs in exactly this path.
 - **Hook-based injection.** A Claude Code `PostToolUse` hook returning
   `additionalContext`, injected per task with `--settings`, pulling the
   attempt's pending messages from the Ordewell MCP server with the task
@@ -289,3 +287,4 @@ interrupt (D4 covers it either way).
 
 - 2026-10-06 — proposed, with the per-runner probe above (Claude Code 2.1.291, Codex 0.160.0, OpenCode 1.18.34).
 - 2026-10-06 — accepted and implemented on Claude Code, Codex and OpenCode 1.x, force send on every surface; OpenCode 2.x keeps the turn-end queue. ADR-0018 M1 rewritten.
+- 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).

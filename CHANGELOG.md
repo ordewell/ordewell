@@ -29,9 +29,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   worktrees only get what is committed); if a name still does not resolve at
   start, the task fails before its runner is spawned. Skills are resolved where
   the task runs, so skills created by an earlier task in its worktree are found.
-  The skills an attempt was given are recorded on it and, for tasks on the
-  structured transport (the one that keeps a task log), shown at the top of its
-  task log. The planner sees and validates each task's skills on every planner
+  The skills an attempt was given are recorded on it and shown at the top of
+  its task log. The planner sees and validates each task's skills on every planner
   path, including the API-key planners and plan edits, and sees them in its plan
   view and in `task_query`.
 - **`tdd` is a task skill.** `/tdd` asks the planner to attach it to the tasks
@@ -53,6 +52,13 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
+- **Tools or nothing.** A task or coding-agent planner checks Ordewell's MCP
+  tools after spawn and respawns once if they cannot connect. A second attach
+  failure fails the task or planner turn before its prompt is sent.
+- **Checkpoints use the `checkpoint` tool only.** Text checkpoint markers are
+  no longer interpreted.
+- Leftover plugin manifests in `~/.ordewell/plugins/` are skipped, with one
+  notice at host startup.
 - **`/name` keeps your text.** The message is sent as you typed it, with the
   skill's instructions beside it. The conversation records a snapshot of the
   skill as loaded and shows a one-line notice with its path (shortened and
@@ -71,14 +77,19 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Removed
 
+- The terminal transport and its tmux requirement.
+- Plugin runners and `ordewell plugins`.
+- `ordewell terminal`, TUI `/terminal` and `t`, and the Structured/Terminal
+  badges. Use `/task <id>` to open the task log.
+- The completion marker; only an attempt-bound `task_complete` call completes
+  a task.
 - The `verify` and `tdd` mode toggles, and the `ordewell tdd` and `ordewell
   verify` commands with them, and `/tdd on|off` and `/verify on|off` in the
   TUI; `/tdd` is now the skill directive.
 - The runner-transport setting, its pill, `/transport` and `ordewell
-  transport`. Structured is always chosen; the terminal transport remains only
-  as the fallback for runners without a connector
-  ([ADR-0018](docs/adr/0018-structured-runner-transport.md)). A saved plan
-  that was pinned to the terminal transport now runs structured.
+  transport`. Runners are structured-only
+  ([ADR-0025](docs/adr/0025-structured-only-runners.md)). A saved plan pinned
+  to the terminal transport now runs structured.
 - **Daemon API:** `SettingsResponse` no longer carries `tdd`, `verification` or
   `runnerTransport`, and a settings update that sends them ignores them.
   `/api/commands` lists no commands, and `POST /api/commands/:name` answers

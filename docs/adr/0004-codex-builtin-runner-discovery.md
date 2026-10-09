@@ -32,17 +32,16 @@ falling back to hardcoded `fallbackModels` in the manifest.
   effort; the shared ladder gains the rung so `clampThinkingEffort` ranks it instead of
   snapping it away. Models without `ultra` still clamp a planner-emitted `ultra` down to
   `max` — per-model variants remain the truth.
-- **Reasoning effort has no dedicated CLI flag** — it is passed as
-  `-c model_reasoning_effort=<level>`, emitted by a new `{{feature:…}}` token in
-  `resolveArgs` (the `resolveClaudeThinkingFlags` precedent; whole-token substitution
-  means the template cannot inline `{{thinkingEffort}}` into a compound arg).
-- **Modes mirror Claude Code's shape**: `agent` (safe → `--sandbox workspace-write`),
-  `plan` (→ `--sandbox read-only`), `fullAccess` (autonomous → `--sandbox
-  danger-full-access`), mapped through `permissionModeValues`. Approvals are per
+- **Reasoning effort belongs to the connector.** `resolveTaskRunnerFlags`
+  carries the assigned effort, and the Codex connector puts it into the
+  app-server turn request. No terminal argument template is involved.
+- **Modes mirror Claude Code's shape**: `agent` (safe → `workspace-write`),
+  `plan` (→ `read-only`), `fullAccess` (autonomous →
+  `danger-full-access`), mapped through `permissionModeValues`. Approvals are per
   mode too (`features.modeSettings`): `agent` runs with approval policy `on-request`
   and the `auto_review` reviewer, `plan` and `fullAccess` with approvals `never`
-  (ADR-0001). `codex exec` has no `-a` flag, so a headless task takes the same values
-  as `-c approval_policy=…` and `-c approvals_reviewer=…`.
+  (ADR-0001). The connector supplies these through `thread/start` and
+  `thread/resume` (ADR-0025).
 
 ## Considered options
 
@@ -64,7 +63,7 @@ falling back to hardcoded `fallbackModels` in the manifest.
 
 ## Consequences
 
-- `PluginModelDiscovery` grows an app-server discovery description (command + list
+- `RunnerModelDiscovery` grows an app-server discovery description (command + list
   method) alongside `discoveryCommands`; only the codex manifest uses it.
 - `ModelDiscovery` gains the stdio JSON-RPC client behind an injectable seam and a
   cache-file reader; the chain is app-server → cache file → `fallbackModels`.
@@ -79,3 +78,4 @@ falling back to hardcoded `fallbackModels` in the manifest.
 
 - 2026-07-31 — accepted: sandbox-only modes, approvals `never`.
 - 2026-10-01 — approvals per mode; `agent` gains `on-request` with the auto reviewer (ADR-0001).
+- 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).

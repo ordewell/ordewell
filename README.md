@@ -137,7 +137,7 @@ planner or task skills, see the [skills guide](docs/skills.md).
 
 ## Where it's going
 
-- **Now:** take-over, opening a structured task in its runner's own terminal UI ([#58](https://github.com/ordewell/ordewell/issues/58)). The structured transport is the default and tmux is optional ([#61](https://github.com/ordewell/ordewell/issues/61)).
+- **Now:** take-over, opening a running task in its coding agent's own terminal UI ([#58](https://github.com/ordewell/ordewell/issues/58)).
 - **Next:** the planner keeps watching a run after you approve it, and suggests fixes when a task fails or gets stuck.
 - **Later:** the planner supervises a run on its own, within limits you set in advance.
 
