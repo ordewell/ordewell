@@ -72,7 +72,7 @@ describe('pane geometry', () => {
 
 describe('task editor caret, through the rendered frame', () => {
   it('moves up to the line the user can actually see above the caret', () => {
-    const expanded = press(taskState(), 'enter').state;
+    const expanded = press(taskState(), 'right').state;
     const room = taskEditorRoom(expanded);
 
     const before = cursorPosition(expanded.taskEditor!.text, expanded.taskEditor!.cursor, room);
@@ -86,7 +86,7 @@ describe('task editor caret, through the rendered frame', () => {
   });
 
   it('returns to where it started after up then down', () => {
-    const expanded = press(taskState(), 'enter').state;
+    const expanded = press(taskState(), 'right').state;
     const start = expanded.taskEditor!.cursor;
 
     const round = press(press(expanded, 'up').state, 'down').state;
@@ -130,7 +130,7 @@ describe('task editor caret, through the rendered frame', () => {
   });
 
   it('renders a frame whose rows never exceed the terminal width', () => {
-    const expanded = press(taskState(), 'enter').state;
+    const expanded = press(taskState(), 'right').state;
     const frame = render(expanded);
 
     expect(frame).toHaveLength(expanded.rows);

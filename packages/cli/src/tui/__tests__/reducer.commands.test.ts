@@ -20,7 +20,7 @@ const planned: Partial<TuiState> = {
 };
 
 describe('retired mode toggles', () => {
-  it.each(['/tdd on', '/verify on', '/transport terminal'])('%s is no longer a command and goes to the planner as typed', (line) => {
+  it.each(['/tdd on', '/verify on', '/transport terminal', '/terminal task-a'])('%s is no longer a command and goes to the planner as typed', (line) => {
     expect(run(line).effects).toEqual([{ type: 'startConversation', goal: line }]);
   });
 });
@@ -253,7 +253,6 @@ describe('task control', () => {
     ['/cancel task-a', { type: 'taskAction', sessionId: 'session-1', taskId: 'task-a', action: 'cancel' }],
     ['/force-start task-a', { type: 'taskAction', sessionId: 'session-1', taskId: 'task-a', action: 'force-start', watch: true }],
     ['/remove-task task-a', { type: 'removeTask', sessionId: 'session-1', taskId: 'task-a' }],
-    ['/terminal task-a', { type: 'openTaskTerminal', sessionId: 'session-1', taskId: 'task-a' }],
   ];
 
   it.each(cases)('%s targets the task', (text, effect) => {

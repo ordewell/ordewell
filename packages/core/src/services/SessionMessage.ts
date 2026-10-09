@@ -1,4 +1,4 @@
-import type { AwaitingReason, ConversationMessage, LegacyPlanState, PlanState, QueuedMessage, ResearchStep, RunnerId, SkillLoadNotice, SubagentOutcome, Task, TaskSkillNotice, TaskSnapshot, TaskTransport, Verdict } from '../models/Task';
+import type { AwaitingReason, ConversationMessage, LegacyPlanState, PlanState, QueuedMessage, ResearchStep, RunnerId, SkillLoadNotice, SubagentOutcome, Task, TaskSkillNotice, TaskSnapshot, Verdict } from '../models/Task';
 import type { UsageTotals } from '../models/Usage';
 import type { TaskLogEvent } from '../models/TaskLog';
 import type { ApprovalKind } from '../interfaces/IApproval';
@@ -16,8 +16,6 @@ export type SerializedTaskStatus = {
   idleSince?: string | null;
   /** Absent unless the plan has an isolation run, so a shared-root plan's updates are unchanged. */
   isolation?: TaskIsolation;
-  /** Absent until an attempt has started (ADR-0018). */
-  transport?: Pick<TaskTransport, 'kind'>;
   /** What an `awaiting_user` task waits on, when it was saved (ADR-0018, W1). */
   awaitingReason?: AwaitingReason;
   /** The whole question of the checkpoint the task waits at; absent when it waits at none. */
@@ -82,12 +80,11 @@ export type SerializedQueuedMessage = Omit<QueuedMessage, 'skills'> & { skills?:
 
 /**
  * A task as a surface is sent it: its attempt's skills are notices, whole in
- * the session only, and the runner's own session id stays there too — only a
- * continue reads it.
+ * the session only, and its transport stays there too — no surface shows it,
+ * and only a continue reads the runner's own session id.
  */
 export type SurfaceTask<T extends Task = Task> = Omit<T, 'attemptSkills' | 'subtasks' | 'transport'> & {
   attemptSkills?: TaskSkillNotice[];
-  transport?: Pick<TaskTransport, 'kind'>;
   subtasks: SurfaceTask[];
 };
 
@@ -325,7 +322,6 @@ export function serializeTaskStatus(
       : null,
     idleSince,
     ...(isolation ? { isolation } : {}),
-    ...(t.transport ? { transport: { kind: t.transport.kind } } : {}),
     ...(t.status === 'awaiting_user' && t.awaitingReason ? { awaitingReason: t.awaitingReason } : {}),
     ...(t.status === 'awaiting_user' && t.awaitingReason === 'checkpoint' && checkpoint ? { checkpoint } : {}),
     ...(queued.length > 0 ? { queued: queued.map((m) => ({ ...m })) } : {}),
@@ -344,11 +340,10 @@ function surfaceQueued(queued: LegacyPlanState['queuedMessages']): SerializedQue
   return queued?.map(({ skills, ...m }) => (skills ? { ...m, skills: skills.map(skillLoadNotice) } : m));
 }
 
-function surfaceTask<T extends Task>({ attemptSkills, subtasks, transport, ...task }: T): SurfaceTask<T> {
+function surfaceTask<T extends Task>({ attemptSkills, subtasks, transport: _transport, ...task }: T): SurfaceTask<T> {
   return {
     ...task,
     ...(attemptSkills ? { attemptSkills: attemptSkills.map(({ name, source, path }): TaskSkillNotice => ({ name, source, path })) } : {}),
-    ...(transport ? { transport: { kind: transport.kind } } : {}),
     subtasks: (subtasks ?? []).map(surfaceTask),
   };
 }

@@ -16,7 +16,7 @@ import type { WsEvent } from '../../apiClient';
 
 const task = (over: Partial<TaskView> = {}): TaskView => ({
   id: 't1', order: 2, title: 'Refactor PlanStore', type: 'ai', status: 'in_progress', dependencies: [], assignedRunner: 'claude-code',
-  transport: { kind: 'structured' }, ...over,
+  ...over,
 });
 
 const asked = (approvalId: string, allowForTask = true): TaskLogEvent => ({
@@ -129,7 +129,7 @@ describe('waiting for approval, from the daemon', () => {
     const base = initialState({ sessionId: 's1', focus: 'plan', rows: 20, cols: 180, tasks: [task()] });
     const waiting = reduce(base, update!).state;
     expect(waiting.tasks[0]).toMatchObject({ status: 'in_progress', awaitingApproval: 2 });
-    expect(plain(waiting)).toContain('waiting for approval (2) — t opens it');
+    expect(plain(waiting)).toContain('waiting for approval (2) — enter opens it');
 
     const answered = reduce(waiting, { type: 'tasksStatus', updates: { t1: { status: 'in_progress' } }, sessionId: 's1' }).state;
     expect(answered.tasks[0].awaitingApproval).toBeUndefined();
@@ -142,7 +142,7 @@ describe('the notice a request raises', () => {
   it('speaks in the planner chat, where the task view is not open', () => {
     const state = initialState({ sessionId: 's1', tasks: [task()] });
     const next = reduce(state, arrived([asked('ap-1')])).state;
-    expect(next.conversation.blocks.at(-1)).toMatchObject({ text: '· Task 2 waits for approval: Bash(npm test) — t on it, then ctrl-y to allow or ctrl-g to deny' });
+    expect(next.conversation.blocks.at(-1)).toMatchObject({ text: '· Task 2 waits for approval: Bash(npm test) — enter on it, then ctrl-y to allow or ctrl-g to deny' });
   });
 
   it('says nothing in the view already showing the card', () => {

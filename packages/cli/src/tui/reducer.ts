@@ -6,7 +6,7 @@ import { activeToken, findCommand, parseSlash, tokenCompletions } from './slash'
 import { applyKey, commit } from './editor';
 import { say, wiped } from './transcript';
 import { blockedPicker, clearIsolation, handoffArrived, isolationForPlan, sameIsolation, showDiff } from './handoff';
-import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, type GateView, type RunStatus, type TaskTransportView, type TaskView, type TuiState } from './state';
+import { continuesTask, findTask, isTaskRunning, planRows, plannerInFlight, type GateView, type RunStatus, type TaskView, type TuiState } from './state';
 import type { Key } from './keys';
 import { handleOverlayKey } from './reducers/overlays';
 import { handlePlanKey } from './reducers/planPane';
@@ -165,9 +165,6 @@ function reduceAction(state: TuiState, action: Action): Step {
         if (update === undefined) return t;
         const idleSince = update.idleSince ?? null;
         const isolation = update.isolation ?? t.isolation;
-        // Unlike isolation, every status carries the transport whole: absent
-        // means the task's latest attempt was not asked to run structured.
-        const transport = update.transport;
         const awaitingReason = update.awaitingReason;
         const checkpoint = update.checkpoint;
         const continuable = update.continuable === true;
@@ -176,12 +173,12 @@ function reduceAction(state: TuiState, action: Action): Step {
         const forcedPastGate = update.forcedPastGate;
         if (
           update.status !== t.status || idleSince !== (t.idleSince ?? null) || !sameIsolation(isolation, t.isolation)
-          || !sameTransport(transport, t.transport) || awaitingReason !== t.awaitingReason || checkpoint !== t.checkpoint
+          || awaitingReason !== t.awaitingReason || checkpoint !== t.checkpoint
           || continuable !== (t.continuable ?? false) || awaitingApproval !== t.awaitingApproval
           || !sameList(mergeGate, t.mergeGate) || !sameList(forcedPastGate, t.forcedPastGate)
         ) {
           changed = true;
-          return { ...t, status: update.status, idleSince, isolation, transport, awaitingReason, checkpoint, continuable, awaitingApproval, mergeGate, forcedPastGate };
+          return { ...t, status: update.status, idleSince, isolation, awaitingReason, checkpoint, continuable, awaitingApproval, mergeGate, forcedPastGate };
         }
         return t;
       });
@@ -367,11 +364,6 @@ function reduceAction(state: TuiState, action: Action): Step {
       if (!state.stopArmed || action.arm !== state.stopArmToken) return step(state);
       return step(disarmStop(state));
   }
-}
-
-/** The run indicator after a task-status change: a run is active only while a task is. */
-function sameTransport(a: TaskTransportView | undefined, b: TaskTransportView | undefined): boolean {
-  return a?.kind === b?.kind;
 }
 
 function sameList(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {

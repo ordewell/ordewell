@@ -55,7 +55,6 @@ function harness(api: Partial<OrdewellApi> = {}, over: Partial<EffectDeps> = {})
     dispatch: (action) => actions.push(action),
     newSessionId: () => 'session-new',
     setEnvVar: (key, value) => { env[key] = value; },
-    openTerminal: vi.fn().mockResolvedValue({ ok: true, message: 'Opened a terminal for this task.' }),
     setMouseCapture: vi.fn(),
     // Never the real probe or the real clipboard: the defaults would put test
     // fixtures on the developer's actual clipboard.
@@ -795,34 +794,7 @@ describe('task control', () => {
     expect(h.actions).toContainEqual({ type: 'notice', message: 'Effort updated.' });
   });
 
-  it('opens a terminal for a task and reports success as a notice', async () => {
-    const h = harness();
-    (h.deps.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, message: 'Opened a terminal for this task.' });
 
-    await runEffect({ type: 'openTaskTerminal', sessionId: 's1', taskId: 't1' }, h.deps);
-
-    expect(h.deps.openTerminal).toHaveBeenCalledWith('s1', 't1');
-    expect(h.actions).toContainEqual({ type: 'notice', message: 'Opened a terminal for this task.' });
-  });
-
-  it('opens the saved log instead when the task has one but no terminal', async () => {
-    const getTaskLogAttempts = vi.fn().mockResolvedValue([1]);
-    const h = harness({ getTaskLogAttempts } as Partial<OrdewellApi>);
-
-    await runEffect({ type: 'openTaskTerminal', sessionId: 's1', taskId: 't1' }, h.deps);
-
-    expect(h.deps.openTerminal).not.toHaveBeenCalled();
-    expect(h.actions).toContainEqual({ type: 'taskViewRequested', sessionId: 's1', taskId: 't1' });
-  });
-
-  it('surfaces a failed terminal open as an error, not a crash', async () => {
-    const h = harness();
-    (h.deps.openTerminal as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false, message: "This task has no live terminal and no saved log — it may still be pending." });
-
-    await runEffect({ type: 'openTaskTerminal', sessionId: 's1', taskId: 't1' }, h.deps);
-
-    expect(h.actions).toContainEqual({ type: 'failed', message: "This task has no live terminal and no saved log — it may still be pending." });
-  });
 });
 
 /**

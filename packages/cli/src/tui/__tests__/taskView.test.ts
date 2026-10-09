@@ -17,8 +17,8 @@ const task = (over: Partial<TaskView> = {}): TaskView => ({
   id: 't1', order: 1, title: 'Refactor PlanStore', type: 'ai', status: 'in_progress', dependencies: [], assignedRunner: 'claude-code', ...over,
 });
 
-const structured = (over: Partial<TuiState> = {}): TuiState =>
-  initialState({ sessionId: 's1', focus: 'plan', tasks: [task({ transport: { kind: 'structured' } })], ...over });
+const planned = (over: Partial<TuiState> = {}): TuiState =>
+  initialState({ sessionId: 's1', focus: 'plan', tasks: [task()], ...over });
 
 const events: TaskLogEvent[] = [
   { type: 'turn_start', message: 'Do the task' },
@@ -44,7 +44,7 @@ const notLoaded = (over: Partial<TaskLogState> = {}): TaskLogState =>
   loaded({ view: replayTaskLog([]), attempts: [], attempt: 0, loaded: false, ...over });
 
 const opened = (over: Partial<TuiState> = {}): TuiState =>
-  initialState({ sessionId: 's1', focus: 'chat', tasks: [task({ transport: { kind: 'structured' } })], taskView: loaded(), ...over });
+  initialState({ sessionId: 's1', focus: 'chat', tasks: [task()], taskView: loaded(), ...over });
 
 // eslint-disable-next-line no-control-regex
 const plain = (state: TuiState): string => render(state).join('\n').replace(/\x1b\[[0-9;]*m/g, '');
@@ -52,24 +52,28 @@ const accent = (state: TuiState): boolean => render(state).some((l) => l.include
 const key = (name: string, char?: string) => ({ name, ...(char ? { char } : {}) });
 
 describe('opening and closing the task view', () => {
-  it('t on a structured task opens it and reads the saved log', () => {
-    const { state, effects } = reduce(structured(), { type: 'key', key: key('char', 't') });
+  it('enter opens a task without transport info and reads the saved log', () => {
+    const { state, effects } = reduce(planned(), { type: 'key', key: key('enter') });
     expect(state.taskView?.taskId).toBe('t1');
     expect(state.focus).toBe('chat');
     expect(effects).toEqual([{ type: 'openTaskLog', sessionId: 's1', taskId: 't1' }]);
   });
 
-  it('/terminal on a structured task opens it too', () => {
-    const { state, effects } = run('/terminal 1', structured({ focus: 'chat' }));
-    expect(state.taskView?.taskId).toBe('t1');
-    expect(effects).toEqual([{ type: 'openTaskLog', sessionId: 's1', taskId: 't1' }]);
+  it('enter on a selected subtask opens its log', () => {
+    const base = planned({
+      expandedTaskId: 'parent', selectedTask: 1,
+      tasks: [task({ id: 'parent', subtasks: [task({ id: 'child' })] })],
+    });
+    const { state, effects } = reduce(base, { type: 'key', key: key('enter') });
+    expect(state.taskView?.taskId).toBe('child');
+    expect(effects).toEqual([{ type: 'openTaskLog', sessionId: 's1', taskId: 'child' }]);
   });
 
-  it('a terminal task still opens its OS terminal', () => {
-    const terminal = initialState({ sessionId: 's1', focus: 'plan', tasks: [task({ transport: undefined })] });
-    expect(reduce(terminal, { type: 'key', key: key('char', 't') }).effects).toEqual([
-      { type: 'openTaskTerminal', sessionId: 's1', taskId: 't1' },
-    ]);
+  it('t is no longer a plan shortcut', () => {
+    const base = planned();
+    const { state, effects } = reduce(base, { type: 'key', key: key('char', 't') });
+    expect(state).toBe(base);
+    expect(effects).toEqual([]);
   });
 
   it('esc clears a draft first, then closes back to the planner chat', () => {
@@ -248,7 +252,7 @@ describe('the task view draws as a runner, not the planner', () => {
 
   it('says what an awaiting task waits on', () => {
     const waiting = opened({
-      tasks: [task({ transport: { kind: 'structured' }, status: 'awaiting_user', awaitingReason: 'input' })],
+      tasks: [task({ status: 'awaiting_user', awaitingReason: 'input' })],
       taskView: loaded({ view: replayTaskLog([]) }),
     });
     expect(plain(waiting)).toContain('waiting for your input');
@@ -306,7 +310,7 @@ describe('an unknown /name in the task view', () => {
   };
 
   it('does not continue a finished task', () => {
-    unknown(opened({ focus: 'chat', tasks: [task({ status: 'completed', transport: { kind: 'structured' }, continuable: true })] }));
+    unknown(opened({ focus: 'chat', tasks: [task({ status: 'completed', continuable: true })] }));
   });
 
   it('is not delivered to a running task', () => {
@@ -335,7 +339,7 @@ describe('a skill name in the task view', () => {
 
 describe('continuing a finished task (ADR-0018, K1)', () => {
   const finished = (over: Partial<TaskView> = {}) =>
-    opened({ focus: 'chat', tasks: [task({ status: 'completed', transport: { kind: 'structured' }, continuable: true, ...over })] });
+    opened({ focus: 'chat', tasks: [task({ status: 'completed', continuable: true, ...over })] });
 
   it('labels the composer as a continue', () => {
     expect(plain(finished())).toContain('→ Continue task 1');
@@ -363,7 +367,7 @@ describe('continuing a finished task (ADR-0018, K1)', () => {
   });
 
   it('/continue <id> <message> opens the task\'s view and continues it', () => {
-    const planner = initialState({ sessionId: 's1', focus: 'chat', tasks: [task({ status: 'failed', transport: { kind: 'structured' }, continuable: true })] });
+    const planner = initialState({ sessionId: 's1', focus: 'chat', tasks: [task({ status: 'failed', continuable: true })] });
     const { state, effects } = run('/continue 1 the tests need Node 22', planner);
 
     expect(state.taskView?.taskId).toBe('t1');
@@ -380,10 +384,10 @@ describe('continuing a finished task (ADR-0018, K1)', () => {
   });
 
   it('keeps the continuable flag in step with the daemon\'s status', () => {
-    const base = initialState({ sessionId: 's1', tasks: [task({ status: 'completed', transport: { kind: 'structured' } })] });
-    const on = reduce(base, { type: 'tasksStatus', sessionId: 's1', updates: { t1: { status: 'completed', transport: { kind: 'structured' }, continuable: true } } }).state;
+    const base = initialState({ sessionId: 's1', tasks: [task({ status: 'completed' })] });
+    const on = reduce(base, { type: 'tasksStatus', sessionId: 's1', updates: { t1: { status: 'completed', continuable: true } } }).state;
     expect(on.tasks[0].continuable).toBe(true);
-    const off = reduce(on, { type: 'tasksStatus', sessionId: 's1', updates: { t1: { status: 'in_progress', transport: { kind: 'structured' } } } }).state;
+    const off = reduce(on, { type: 'tasksStatus', sessionId: 's1', updates: { t1: { status: 'in_progress' } } }).state;
     expect(off.tasks[0].continuable).toBe(false);
   });
 });
@@ -397,7 +401,7 @@ describe('the task view header says what the task is doing', () => {
     ['conflict', 'merge conflict'],
   ] as const)('an awaiting task waiting on %s reads "%s"', (awaitingReason, label) => {
     const waiting = opened({
-      tasks: [task({ transport: { kind: 'structured' }, status: 'awaiting_user', awaitingReason })],
+      tasks: [task({ status: 'awaiting_user', awaitingReason })],
       taskView: loaded({ view: replayTaskLog([]) }),
     });
     expect(header(waiting)).toContain(`→ Task 1 · Refactor PlanStore · claude-code · ${label}`);
@@ -405,7 +409,7 @@ describe('the task view header says what the task is doing', () => {
 
   it('a live turn reads as working, whatever reason is still saved', () => {
     const live = opened({
-      tasks: [task({ transport: { kind: 'structured' }, status: 'awaiting_user', awaitingReason: 'input' })],
+      tasks: [task({ status: 'awaiting_user', awaitingReason: 'input' })],
       taskView: loaded({ view: replayTaskLog([{ type: 'turn_start', message: 'go on' }]) }),
     });
     expect(header(live)).toContain('· working');
@@ -413,7 +417,7 @@ describe('the task view header says what the task is doing', () => {
   });
 
   it('a runner request waiting for an answer beats the live turn it stopped', () => {
-    const asking = opened({ tasks: [task({ transport: { kind: 'structured' }, awaitingApproval: 2 })] });
+    const asking = opened({ tasks: [task({ awaitingApproval: 2 })] });
     expect(header(asking)).toContain('· waiting for approval (2)');
   });
 

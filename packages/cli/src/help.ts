@@ -32,7 +32,6 @@ Tasks (<id> is an order number or a task ID):
   ordewell continue <id> <msg>    Continue a finished task in its saved runner session
   ordewell checkpoint <id> approve|reject [reason]  Answer the checkpoint a task waits at
   ordewell cancel <id>            Kill a running task
-  ordewell terminal <id>          Open a real terminal attached to a task's runner
 
 Per-task assignment (omit the value to list the options):
   ordewell task-runner <id> [runner]   Set a task's executor (re-picks its model, effort and mode)

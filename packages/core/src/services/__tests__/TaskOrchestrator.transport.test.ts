@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { TaskOrchestrator } from '../TaskOrchestrator';
 import { createTask, type LegacyPlanState } from '../../models/Task';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
-import { serializeTaskStatus } from '../SessionMessage';
+import { serializeTaskStatus, surfacePlan } from '../SessionMessage';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { fakeConfig, FakeStructuredSession, FakeTerminalSession, flushMicrotasks } from '../../testing';
 import { fakeNotification, makeSession, saves, taskOf } from './sessionTestKit';
@@ -92,7 +92,7 @@ describe('the structured transport, the only one', () => {
 });
 
 describe('recording the transport on the task', () => {
-  it('records a structured task, and says so on its status', async () => {
+  it('records transport server-side without sending it on the status wire', async () => {
     const { runner } = routingRunner();
     const orchestrator = orchestratorWith(runner);
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
@@ -101,7 +101,7 @@ describe('recording the transport on the task', () => {
 
     const task = orchestrator.storeInstance.get('t1')!;
     expect(task.transport).toEqual({ kind: 'structured' });
-    expect(serializeTaskStatus(task).transport).toEqual({ kind: 'structured' });
+    expect(serializeTaskStatus(task)).not.toHaveProperty('transport');
   });
 
   it('keeps the runner\'s own session id off a surface', async () => {
@@ -113,7 +113,9 @@ describe('recording the transport on the task', () => {
     sessions[0].emitOutput('<<<ORDEWELL_DONE_mk-1>>>');
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
 
-    expect(serializeTaskStatus(orchestrator.storeInstance.get('t1')!).transport).toEqual({ kind: 'structured' });
+    const task = orchestrator.storeInstance.get('t1')!;
+    expect(task.transport?.nativeSessionId).toBe('native-t1');
+    expect(surfacePlan({ tasks: [task], generatedAt: '', status: 'approved', runners: ['claude-code'], lastUpdated: '' }).tasks[0]).not.toHaveProperty('transport');
   });
 });
 

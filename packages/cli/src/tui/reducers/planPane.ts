@@ -4,7 +4,7 @@ import { taskEditorRoom } from '../geometry';
 import { findTask, planRows, selectedPlanRow, type TaskView, type TuiState } from '../state';
 import type { Key } from '../keys';
 import { scrollDelta, scrollPlan, settlePlan } from './pointer';
-import { openTaskTerminalOrView } from './taskView';
+import { openTaskView } from './taskView';
 import {
   addTask, confirmForceStartPastGate, confirmRemoveTask, openTaskDepsPicker, openTaskEffortPicker, openTaskModePicker, openTaskModelPicker,
   openTaskRunnerPicker, openTaskSkillsPicker, toggleTaskOps,
@@ -69,9 +69,10 @@ export function handlePlanKey(state: TuiState, key: Key): Step {
   const row = selectedPlanRow(state);
   if (!row) return step(state);
   const task = row.task;
-  if (key.name === 'enter' || key.name === 'right') {
-    // A parent's first enter only reveals its subtask rows — jumping straight
-    // to the editor would trap the cursor before it ever reaches them. Enter
+  if (key.name === 'enter' && state.sessionId) return openTaskView(state, state.sessionId, task.id);
+  if (key.name === 'right') {
+    // A parent's first right arrow only reveals its subtask rows — jumping straight
+    // to the editor would trap the cursor before it ever reaches them. Right
     // again on the still-selected parent, or on any row without subtasks,
     // opens the editor as before.
     const hasSubtasks = (task.subtasks?.length ?? 0) > 0;
@@ -101,7 +102,6 @@ export function handlePlanKey(state: TuiState, key: Key): Step {
   }
   if (key.char === 'O') return toggleTaskOps(state, task, row.parent !== null);
   if (key.char === 'd') return confirmRemoveTask(state, task);
-  if (key.char === 't') return openTaskTerminalOrView(state, state.sessionId, task.id);
   // Adds a task, so it is asked for by name — and only where a conflict exists.
   if (key.char === 'x' && task.isolation?.state === 'conflict') {
     return step(state, [{ type: 'resolveConflict', sessionId: state.sessionId, taskId: task.id }]);

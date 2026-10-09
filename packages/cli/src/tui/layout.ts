@@ -73,8 +73,8 @@ export function footerHints(state: TuiState): string[] {
     }
     return [
       ...(escHint ? [escHint] : []),
-      'enter expand', 'R runner', 'o model', 'e effort', 'M mode', 'D deps', 'K skills', 'O ops', 'f start',
-      'E run plan', 'S stop', 'c cancel', markHint, 's skip', 'a add', 'd remove', 't terminal', ...resolveHint,
+      '→ expand/edit', 'R runner', 'o model', 'e effort', 'M mode', 'D deps', 'K skills', 'O ops', 'f start',
+      'E run plan', 'S stop', 'c cancel', markHint, 's skip', 'a add', 'd remove', 'enter log', ...resolveHint,
       'pgup/pgdn scroll', 'tab chat',
     ];
   }
@@ -636,15 +636,14 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   const runner = task.assignedRunner ?? '';
   const bodyPad = parent ? '      ' : '    ';
   // "working" over an agent that has printed nothing for a minute hid the one
-  // case that needs the user: an agent stopped at a question in its terminal.
-  const structured = task.transport?.kind === 'structured';
+  // case that needs the user: an agent stopped at a question.
   const activity = row.approvals
-    ? `${inRow(row.approvals)} — t opens it`
+    ? `${inRow(row.approvals)} — enter opens it`
     : row.status === 'quiet'
-      ? (structured ? 'quiet' : 'quiet — t opens its terminal')
+      ? 'quiet'
       : row.running ? 'working' : row.awaiting ? inRow(row.awaiting) : '';
   const skills = (task.skills ?? []).join(' · ');
-  const meta = [activity, runner, structured ? 'structured' : '', model].filter(Boolean).join(' · ');
+  const meta = [activity, runner, model].filter(Boolean).join(' · ');
   if (meta) lines.push(style.grey(truncate(`${bodyPad}${meta}`, cols)));
   if (skills) lines.push(style.grey(truncate(`${bodyPad}skills: ${skills}`, cols)));
   if (effort || mode) lines.push(style.grey(truncate(`${bodyPad}${[effort, mode].filter(Boolean).join(' · ')}`, cols)));
@@ -784,7 +783,7 @@ export function helpLayout(rows: number, cols: number): HelpLayout {
   // view's keys run far past any width on a single one.
   body.push(
     '',
-    style.bold('In a task view (t or /terminal on a structured task)'),
+    style.bold('In a task view (enter on a task)'),
     style.grey('  ctrl-s sends now: interrupts the running step, then delivers the composer text — or, with it empty, the selected queued message'),
     style.grey('  ctrl-n/ctrl-p select a queued message · ctrl-r removes it · ctrl-x interrupts'),
     style.grey('  ctrl-y allows a tool request (its keys sit under it) · ctrl-t allows it for the task · ctrl-g denies it, with the composer text as the note'),
