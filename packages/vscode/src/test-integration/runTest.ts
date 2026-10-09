@@ -11,6 +11,9 @@ async function main(): Promise<void> {
     launchArgs: [workspace, '--disable-workspace-trust', '--skip-welcome', '--skip-release-notes'],
     extensionTestsEnv: {
       ORDEWELL_TEST_WORKSPACE: workspace,
+      // In the host's environment from launch: the PATH Ordewell spawns runners
+      // under is resolved once per process, so setting it later can be too late.
+      PATH: [path.resolve(__dirname, '../../../bench/pipeline/fake-claude'), process.env.PATH].filter(Boolean).join(path.delimiter),
       ORDEWELL_TEST_MODEL: process.env.ORDEWELL_TEST_MODEL,
       OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
     },
