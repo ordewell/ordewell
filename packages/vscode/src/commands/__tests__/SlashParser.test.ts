@@ -23,7 +23,7 @@ function makeDeps(overrides: Partial<SlashDeps> = {}): SlashDeps {
     },
     plannerBackends: async () => [],
     refreshPlannerState: async () => {},
-    pluginRegistry: { list: () => [], get: () => undefined, getManifest: () => undefined },
+    runnerRegistry: { list: () => [], get: () => undefined, getManifest: () => undefined },
     chatProvider: {} as SlashDeps['chatProvider'],
     settingsService: { getModelAllowlist: () => undefined, setModelAllowlist: () => {} },
     sendRunnerAndModels: async () => {},

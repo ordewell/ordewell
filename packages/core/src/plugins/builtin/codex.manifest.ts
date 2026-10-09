@@ -1,55 +1,13 @@
-import type { RunnerPluginManifest } from '../types';
+import type { RunnerManifest } from '../types';
 
-export const CODEX_MANIFEST: RunnerPluginManifest = {
+export const CODEX_MANIFEST: RunnerManifest = {
   name: 'codex',
   displayName: 'Codex',
-  description: 'OpenAI Codex CLI - AI coding agent in your terminal',
-  version: '1.0.0',
 
-  runner: {
-    command: 'codex',
-    // Headless surfaces (a piped subprocess) use the non-interactive `exec`
-    // subcommand (`--skip-git-repo-check`: task workspaces aren't always git
-    // repos, and exec hard-fails outside one by default); interactive surfaces
-    // (a tmux window, the VS Code terminal) launch the TUI with the prompt as
-    // its positional argument. Reasoning effort has no dedicated flag — it
-    // travels as a `-c` config override (see {{feature:reasoningEffortConfig}}).
-    // Both `exec` and the TUI accept `-m`, `-c`, and `--sandbox`.
-    //
-    // The two interactive-only entries restore what `exec` gives implicitly and
-    // the TUI does not: `exec` is non-interactive, so it can neither ask for
-    // command approval nor ask whether the directory is trusted. The TUI asks
-    // for both by default, and an orchestrated task has nobody to answer —
-    // without these it stalls on a menu instead of working. `-a` does not exist
-    // on `exec`, hence the shape gate rather than a `{{if headless}}` one.
-    //
-    // Approvals follow the mode. `agent` asks (`on-request`) and hands each
-    // request to Codex's `auto_review` subagent, so it stays unattended without
-    // an open sandbox; `exec` takes the same two values as `-c` overrides
-    // (`approval_policy`, `approvals_reviewer`; `-a` is the TUI's spelling), so
-    // both shapes run the mode the same way. A mode with policy `never` needs
-    // nothing on `exec`, which already implies it.
-    argsTemplate: [
-      '{{if headlessSession}}', 'exec', '--skip-git-repo-check', '{{/if}}',
-      '{{if interactive}}', '-a', '{{feature:approvalPolicyVal}}', '{{/if}}',
-      '{{if headlessSession}}', '{{feature:approvalPolicyConfig}}', '{{/if}}',
-      '{{feature:approvalsReviewerConfig}}',
-      '{{if projectTrust}}', '-c', '{{projectTrust}}', '{{/if}}',
-      '{{if model}}', '-m', '{{model}}', '{{/if}}',
-      '{{if thinking}}', '{{feature:reasoningEffortConfig}}', '{{/if}}',
-      '--sandbox', '{{feature:permissionModeVal}}',
-      '{{prompt}}',
-    ],
-    promptInArgs: true,
-  },
+  runner: { command: 'codex' },
 
   features: {
-    modelSelection: true,
-    thinkingEffort: true,
-    planMode: true,
-    planModeFlag: '--sandbox',
     permissionModeValues: {
-      // Map mode IDs to --sandbox CLI values; approvals ride beside them below.
       'agent': 'workspace-write',
       'plan': 'read-only',
       'fullAccess': 'danger-full-access',

@@ -5,7 +5,7 @@ import { CodexAdapter } from '../harness/CodexAdapter';
 import { OpenCodeAdapter } from '../harness/OpenCodeAdapter';
 import { TaskModeUnsupportedError, type AgentEvent, type AgentProcessDeps, type AgentStartOptions, type TaskStartOptions } from '../harness/AgentAdapter';
 import { supportsTaskMode, createTaskAdapter } from '../harness/connectors';
-import { resolveArgs, resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
+import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
 import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest';
 import { mcpClientConfig } from '../mcp';
 import { modeIds, fakeSpawn, fixture, claudeSteerRecording, type ScriptedReply } from './harnessTestKit';
@@ -173,14 +173,7 @@ describe('ClaudeCodeAdapter task argv for every effort and mode', () => {
     ]);
   });
 
-  it.each(cases)('runs under the terminal template\'s flags: mode $mode, effort $effort, model $model', async ({ mode, effort, model }) => {
-    const terminal = resolveArgs(CLAUDE_CODE_MANIFEST, { prompt: 'go', mode, model, thinkingEffort: effort }).args;
-    const structured = await taskArgs(mode, model, effort);
-    const valueOf = (args: string[], flag: string) => (args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined);
-    for (const flag of ['--permission-mode', '--thinking', '--effort', '--model']) {
-      expect(valueOf(structured, flag)).toBe(valueOf(terminal, flag));
-    }
-  });
+
 });
 
 describe('task mode support', () => {

@@ -8,7 +8,7 @@ export interface RunnerModeInfo {
   safe?: boolean;
 }
 
-/** The slice of RunnerRegistry this module needs — structural, so nothing here depends on the plugin layer. */
+/** The slice of RunnerRegistry this module needs — structural, so nothing here depends on the manifest layer. */
 export interface ManifestLookup {
   getManifest(runner: RunnerId): { modes?: RunnerModeInfo[] } | undefined;
 }

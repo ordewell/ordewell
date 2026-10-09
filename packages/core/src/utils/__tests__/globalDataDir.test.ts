@@ -49,7 +49,7 @@ describe('global data directory', () => {
     expect(fs.readFileSync(path.join(newDir, '.env'), 'utf8')).toBe('KEY=old\n');
   });
 
-  it('copies settings.json and the plugins dir from the legacy config dir', async () => {
+  it('copies settings.json but leaves retired runner files at the legacy location', async () => {
     vi.resetModules();
     const { migrateOldConfigDir, globalDataDir } = await import('../globalDataDir');
     const oldDir = path.join(home, '.config', 'ordewell');
@@ -61,6 +61,7 @@ describe('global data directory', () => {
 
     const newDir = globalDataDir();
     expect(fs.readFileSync(path.join(newDir, 'settings.json'), 'utf8')).toBe('{"someFeature":{"enabled":true}}');
-    expect(fs.readFileSync(path.join(newDir, 'plugins', 'my-runner', 'manifest.json'), 'utf8')).toBe('{"name":"x"}');
+    expect(fs.existsSync(path.join(newDir, 'plugins'))).toBe(false);
+    expect(fs.readFileSync(path.join(oldDir, 'plugins', 'my-runner', 'manifest.json'), 'utf8')).toBe('{"name":"x"}');
   });
 });
