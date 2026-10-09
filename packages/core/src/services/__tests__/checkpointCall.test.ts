@@ -86,7 +86,6 @@ async function asking() {
     output: new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } }),
     registry: new RunnerRegistry(), workspaceRoot: () => '/repo',
     workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
-    runnerTransport: () => 'structured',
   });
   orchestrator.loadPlan([task('t1')]);
   await orchestrator.forceStartTask('t1');

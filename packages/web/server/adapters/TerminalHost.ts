@@ -1,7 +1,7 @@
 import { hasTmux, TmuxRunner, type ITerminalRunner, type ITerminalSession, type RunnerSpawnOptions } from '@ordewell/core';
 
 export const TMUX_MISSING_ADVICE =
-  'tmux is not installed, so terminal-transport tasks run without a terminal window you can open or type into. Install tmux, or keep the structured transport (/transport structured).';
+  'tmux is not installed, so tasks on a runner with no structured connector run without a terminal window you can open or type into. Install tmux to get one.';
 
 export interface TerminalHostDeps {
   hasTmuxImpl?: () => boolean;

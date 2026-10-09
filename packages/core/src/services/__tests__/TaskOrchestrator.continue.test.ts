@@ -51,7 +51,6 @@ function setup(opts: { runner?: ITerminalRunner; isolation?: IWorktreeIsolation;
     isolation: opts.isolation,
     workspaceRoot: () => '/repo',
     workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
-    runnerTransport: () => 'structured',
   });
   const task = (id: string) => orchestrator.storeInstance.get(id)!;
   return { orchestrator, notifications, task, ...routed };
@@ -273,7 +272,7 @@ describe('a continue whose session cannot be resumed', () => {
 describe('Session.continueTask', () => {
   it('saves the continued attempt\'s start, so a reload does not show the old outcome', async () => {
     const { runner, sessions } = routingRunner();
-    const session = makeSession({ runner, settings: () => ({ tddEnabled: false, runnerTransport: 'structured' }) });
+    const session = makeSession({ runner, settings: () => ({ tddEnabled: false }) });
     const saved: LegacyPlanState = {
       tasks: [plan()],
       generatedAt: new Date().toISOString(),

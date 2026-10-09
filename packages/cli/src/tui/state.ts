@@ -1,4 +1,4 @@
-import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, NO_TURN, isTaskRunning, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type RunnerTransport, type TaskLogEvent, type TaskLogView, type TaskTransport, type TurnGate } from '@ordewell/core';
+import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, NO_TURN, isTaskRunning, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type PromptHold, type TaskLogEvent, type TaskLogView, type TaskTransport, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
 
 export type RunStatus = 'idle' | 'planning' | 'researching' | 'executing';
@@ -24,7 +24,7 @@ export interface TaskView {
   };
   /** Absent until the daemon reports a task's isolation; quiet in the pane unless there is a conflict. */
   isolation?: TaskIsolationView;
-  /** Absent unless the task's plan asked for the structured transport: what it ran on, or why it fell back. */
+  /** Absent until the task has run: what it ran on, or why it fell back to the terminal. */
   transport?: TaskTransportView;
   /** What an `awaiting_user` task waits on, when the daemon saved why. */
   awaitingReason?: AwaitingReason;
@@ -138,13 +138,13 @@ export interface ModelView {
 }
 
 /** The planner skills the VS Code webview exposes as toggles. */
-export const SKILL_IDS = ['tdd', 'verify'] as const;
+export const SKILL_IDS = ['tdd'] as const;
 export type SkillId = (typeof SKILL_IDS)[number];
 
 export type Skills = Record<SkillId, boolean>;
 
 export function noSkills(): Skills {
-  return { tdd: false, verify: false };
+  return { tdd: false };
 }
 
 export interface PickerItem {
@@ -387,8 +387,6 @@ export interface TuiState {
   configuredProviders: AiProvider[];
   allowlist: Record<string, string[]>;
   autonomous: boolean;
-  /** The `runnerTransport` setting (ADR-0018), as the daemon reports it. */
-  runnerTransport: RunnerTransport;
   /**
    * Whether the terminal's mouse is captured for wheel scrolling. On by
    * default; `/mouse off` hands it back when selecting text out of the
@@ -567,7 +565,6 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     configuredProviders: [],
     allowlist: {},
     autonomous: true,
-    runnerTransport: 'structured',
     mouseCapture: true,
     selection: null,
     workspace: process.cwd(),

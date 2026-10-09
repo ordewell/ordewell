@@ -454,7 +454,7 @@ describe('what the planner is told', () => {
 
     expect(attached).toBe(false);
     expect(systemPrompt(claude)).toBe(buildConversationSystemPrompt(
-      'add a cache', '', { 'claude-code': CATALOG['claude-code'] }, ['claude-code'], runnerModesFrom(new RunnerRegistry(), ['claude-code']), true, false,
+      'add a cache', '', { 'claude-code': CATALOG['claude-code'] }, ['claude-code'], runnerModesFrom(new RunnerRegistry(), ['claude-code']), true,
       { harness: true, isolatedExecution: undefined },
     ));
     expect(messages[1]).toContain('<available_models>\nclaude-code: claude-sonnet-4, claude-opus-4\n</available_models>');

@@ -94,10 +94,10 @@ export function attemptCwd(
 
 /**
  * A continue resumes a session only the structured transport can reach,
- * whatever the plan's latest run copied: the task already ran that way.
+ * whatever fresh attempts ask for: the task already ran that way.
  */
-export function attemptTransport(kind: AttemptKind, planTransport: RunnerTransport | null): RunnerTransport {
-  return kind.kind === 'continuation' ? 'structured' : planTransport ?? 'terminal';
+export function attemptTransport(kind: AttemptKind, requested: RunnerTransport): RunnerTransport {
+  return kind.kind === 'continuation' ? 'structured' : requested;
 }
 
 /** What an attempt's prompt is built from. The callbacks are read only for the kinds that need them. */

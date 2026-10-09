@@ -438,7 +438,6 @@ describe('the attempt\'s verdict when a message is read mid-turn', () => {
       output: new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } }),
       registry: new RunnerRegistry(), workspaceRoot: () => '/repo',
       workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
-      runnerTransport: () => 'structured',
     });
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Steered task', prompt: 'Do it', completionMarker: 'mk-1' })]);
     return { orchestrator, session };
@@ -626,7 +625,6 @@ describe('force send through the orchestrator', () => {
       output: new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } }),
       registry: new RunnerRegistry(), workspaceRoot: () => '/repo',
       workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
-      runnerTransport: () => 'structured',
     });
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Forced task', prompt: 'Do it', completionMarker: 'mk-1' })]);
     return orchestrator;

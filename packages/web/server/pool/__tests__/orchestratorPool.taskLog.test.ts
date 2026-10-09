@@ -10,7 +10,6 @@ function savedPlan(): LegacyPlanState {
   return {
     status: 'approved',
     runners: ['claude-code'],
-    runnerTransport: 'structured',
     generatedAt: '2026-09-29T10:00:00.000Z',
     tasks: [
       { id: 't1', order: 1, title: 'Add the limiter', type: 'ai', status: 'pending', description: 'd', dependencies: [], assignedRunner: 'claude-code', subtasks: [], prompt: 'do it' },
@@ -53,7 +52,6 @@ describe('OrchestratorPool task logs', () => {
     };
     const runner: ITerminalRunner = { spawn: vi.fn().mockRejectedValue(new Error('terminal runner unused')), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 };
     const pool = new OrchestratorPool({ runner, structuredRunner });
-    pool.updateSettings({ runnerTransport: 'structured' });
     const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-tasklog');
     pool.adoptSavedSession(meta.id, workspace);
     const sent: string[] = [];

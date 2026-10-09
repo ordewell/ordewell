@@ -163,8 +163,12 @@ export interface TaskOrchestratorDeps {
   workspaceEnv: (cwd: string) => Promise<WorkspaceEnv>;
   /** Read live at each spawn, so a toggle takes effect on the next task. */
   tddEnabled: () => boolean;
-  /** Read once as a run opens, never per spawn (ADR-0018, S1). */
-  runnerTransport: () => RunnerTransport;
+  /**
+   * What a fresh attempt asks its runner for (ADR-0018). Hosts take the
+   * structured default; `routeTransport` still sends a runner with no
+   * connector to the terminal.
+   */
+  transport: RunnerTransport;
   /** What the task's last saved attempt did, or null when it left no log (ADR-0020). */
   previousAttemptFromLog: (taskId: string) => string | null;
 }
@@ -185,7 +189,8 @@ export interface TaskOrchestratorOptions {
   workspaceRoot?: () => string;
   workspaceEnv?: (cwd: string) => Promise<WorkspaceEnv>;
   tddEnabled?: () => boolean;
-  runnerTransport?: () => RunnerTransport;
+  /** Tests whose fake sessions emit only the completion marker ask for `terminal`. */
+  transport?: RunnerTransport;
   previousAttemptFromLog?: (taskId: string) => string | null;
 }
 
@@ -261,14 +266,8 @@ export class TaskOrchestrator {
   private workspaceRootFn: () => string;
   private observers: OrchestratorObserver[] = [];
   private tddEnabled: () => boolean;
-  private readRunnerTransport: () => RunnerTransport;
+  private transport: RunnerTransport;
   private previousAttemptFromLog: (taskId: string) => string | null;
-  /**
-   * The setting as the latest run copied it when it opened. Every spawn of
-   * that run uses this, so flipping the setting mid-run changes the next run
-   * only — the plan, not a live setting, says what runs (ADR-0001).
-   */
-  private planTransport: RunnerTransport | null = null;
 
   constructor(deps: TaskOrchestratorDeps) {
     this.config = deps.config;
@@ -282,7 +281,7 @@ export class TaskOrchestrator {
     this.workspaceRootFn = deps.workspaceRoot;
     this.workspaceEnv = deps.workspaceEnv;
     this.tddEnabled = deps.tddEnabled;
-    this.readRunnerTransport = deps.runnerTransport;
+    this.transport = deps.transport;
     this.previousAttemptFromLog = deps.previousAttemptFromLog;
 
     this.store.onMutate = () => this.emit('onTaskChanged');
@@ -325,7 +324,6 @@ export class TaskOrchestrator {
       notifications: options.notifications,
       workspaceRoot,
       listener: {
-        opened: () => { orchestrator.planTransport = orchestrator.readRunnerTransport(); },
         changed: () => orchestrator.emit('onIsolationChanged'),
         blocked: (repos) => orchestrator.emit('onIsolationBlocked', { reason: 'dirty', repos }),
         handoff: (handoff) => orchestrator.emit('onIsolationHandoff', handoff),
@@ -347,7 +345,7 @@ export class TaskOrchestrator {
       workspaceRoot,
       workspaceEnv: options.workspaceEnv ?? ((cwd) => resolveWorkspaceEnv(cwd)),
       tddEnabled: options.tddEnabled ?? (() => false),
-      runnerTransport: options.runnerTransport ?? (() => 'terminal'),
+      transport: options.transport ?? 'structured',
       previousAttemptFromLog: options.previousAttemptFromLog ?? (() => null),
     });
     return orchestrator;
@@ -639,16 +637,6 @@ export class TaskOrchestrator {
       if (this.attempts.get(task.id) !== attempt) return;
       this.notifications.warn(`Task "${task.title}" is waiting for you: ${manifest?.displayName ?? attempt.runner} is asking ${prompt.asks}. Answer it in the task's terminal.`);
     });
-  }
-
-  /** The transport the plan's latest run copied from the setting; null before its first run. */
-  get runnerTransport(): RunnerTransport | null {
-    return this.planTransport;
-  }
-
-  /** Take over a saved plan's copied transport. The next run copies the setting afresh. */
-  adoptRunnerTransport(transport: RunnerTransport | null): void {
-    this.planTransport = transport;
   }
 
   queueMessage(text: string): void {
@@ -1458,7 +1446,7 @@ export class TaskOrchestrator {
         this.abandonSpawn(task, attempt);
         return false;
       }
-      const transport = attemptTransport(kind, this.planTransport);
+      const transport = attemptTransport(kind, this.transport);
       const completionTool = givesCompletionTool(transport, attempt.runner, this.registry);
       const finalPrompt = attemptPrompt(kind, {
         task,
@@ -1554,8 +1542,8 @@ export class TaskOrchestrator {
   }
 
   /**
-   * Say on the task how this attempt is driven, when its plan asked for the
-   * structured transport; a terminal plan's tasks record nothing. A structured
+   * Say on the task how this attempt is driven, when it asked for the
+   * structured transport; a terminal request records nothing. A structured
    * request that came back a terminal session is a fallback, and says why —
    * a host without a router included — never a silent downgrade.
    */

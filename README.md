@@ -74,9 +74,9 @@ or run `code --install-extension ordewell.ordewell`. The extension bundles its o
 core and needs nothing from npm.
 
 **Requirements:** Node.js 20 or newer, at least one of Claude Code, Codex or
-OpenCode, and git for task isolation. tmux is optional: only the terminal
-transport (`/transport terminal`) uses it, to give each task a terminal window
-you can open. On Windows, run the terminal UI under WSL.
+OpenCode, and git for task isolation. tmux is optional: only tasks on a
+runner with no structured connector use it, to give each a terminal window you
+can open. On Windows, run the terminal UI under WSL.
 
 ## Quick start
 

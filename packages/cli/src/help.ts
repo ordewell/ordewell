@@ -9,7 +9,7 @@ an id.
 Planning:
   ordewell                        Full-screen terminal UI (everything the VS Code extension does)
   ordewell tui                    The same thing, named — for scripts and aliases
-  ordewell plan --goal "text"     Plan a goal conversationally (honours verify)
+  ordewell plan --goal "text"     Plan a goal conversationally
   ordewell run                    Execute the last generated plan (streams status)
   ordewell approve                Sign off a plan paused for review, and continue it
   ordewell stop                   Stop execution of the last session (or --server)
@@ -50,14 +50,12 @@ Planner, models and runners:
   ordewell runners [<id> on|off]  Enable or disable runners (claude-code, opencode, codex)
   ordewell allowlist set|clear|show       Limit which models a runner may use
   ordewell auto [full|guarded]    Autonomy level for new sessions: Full or Guarded
-  ordewell transport [terminal|structured]   Structured (default) or terminal task transport, from the next run
   ordewell parallel [<n>]         How many AI tasks run at once (default 3; applies to a live run)
   ordewell refresh                Re-discover runners and model catalogs
   ordewell models                 List every provider's catalog (works without a server)
 
 Modes:
   ordewell tdd [on|off]         Toggle Test-Driven Development mode (or show status)
-  ordewell verify [on|off]    Toggle verification mode — adds a final evidence-based task that runs the full suite (or show status)
 
 Other:
   ordewell web                    Start the API server (foreground; --daemon for background)

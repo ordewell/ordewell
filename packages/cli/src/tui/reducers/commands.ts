@@ -1,5 +1,5 @@
 import {
-  ALL_PROVIDERS, EMPTY_CONVERSATION, EMPTY_HOLD, NO_TURN, PROVIDER_PRIORITY, autonomyLevelLabel, isRunnerTransport, parseAutonomyLevel, parseMaxParallel, runnerForProvider, type AiProvider,
+  ALL_PROVIDERS, EMPTY_CONVERSATION, EMPTY_HOLD, NO_TURN, PROVIDER_PRIORITY, autonomyLevelLabel, parseAutonomyLevel, parseMaxParallel, runnerForProvider, type AiProvider,
 } from '@ordewell/core';
 import { handoffCommand } from '../handoff';
 import { findCommand, type ParsedCommand } from '../slash';
@@ -65,8 +65,6 @@ export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step
       return runners(state, args);
     case 'auto':
       return setAutonomous(state, args[0]);
-    case 'transport':
-      return setTransport(state, args[0]);
     case 'parallel':
       return setMaxParallel(state, args[0]);
     case 'mouse':
@@ -423,13 +421,6 @@ function setAutonomous(state: TuiState, arg: string | undefined): Step {
   // Updated here, not from the effect: nothing round-trips this setting back
   // (it lives in .env), and a stale flag would freeze the toggle and the badge.
   return step({ ...state, autonomous: enabled }, [{ type: 'setAutonomous', enabled }]);
-}
-
-/** Like the toggles, a bare `/transport` flips it; the daemon says what it became. */
-function setTransport(state: TuiState, arg: string | undefined): Step {
-  const value = arg?.toLowerCase() ?? (state.runnerTransport === 'structured' ? 'terminal' : 'structured');
-  if (!isRunnerTransport(value)) return fail(state, 'Usage: /transport [terminal|structured]');
-  return step(state, [{ type: 'setTransport', transport: value }]);
 }
 
 /**

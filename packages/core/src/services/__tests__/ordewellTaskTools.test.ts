@@ -73,7 +73,6 @@ function rig() {
     registry: new RunnerRegistry(),
     workspaceRoot: () => '/repo',
     workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
-    runnerTransport: () => 'structured',
   });
   const get = (id: string): Task => orchestrator.storeInstance.get(id)!;
   return { orchestrator, adapters, server, get };

@@ -5,7 +5,7 @@ import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import { serializeTaskStatus } from '../SessionMessage';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { fakeConfig, FakeStructuredSession, FakeTerminalSession, flushMicrotasks } from '../../testing';
-import { fakeNotification, makeSession, saves } from './sessionTestKit';
+import { fakeNotification, makeSession, saves, taskOf } from './sessionTestKit';
 import type { ITerminalRunner, ITerminalSession, RunnerTransport } from '../../interfaces/ITerminalRunner';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 
@@ -34,7 +34,7 @@ function routingRunner() {
   return { runner, sessions, requests };
 }
 
-function orchestratorWith(setting: { value: RunnerTransport }, runner: ITerminalRunner) {
+function orchestratorWith(transport: RunnerTransport | undefined, runner: ITerminalRunner) {
   return TaskOrchestrator.compose({
     config: fakeConfig(),
     notifications: fakeNotification(),
@@ -43,82 +43,59 @@ function orchestratorWith(setting: { value: RunnerTransport }, runner: ITerminal
     registry: new RunnerRegistry(),
     workspaceRoot: () => '/repo',
     workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
-    runnerTransport: () => setting.value,
+    transport,
   });
 }
 
 const settle = () => flushMicrotasks(50);
 
-describe('the runnerTransport setting, copied when a run opens', () => {
-  it('holds for every task of the run, and a change mid-run waits for the next run', async () => {
-    const setting = { value: 'structured' as RunnerTransport };
+describe('the structured transport, asked for by default', () => {
+  it('is what every task of a run and every later run asks for', async () => {
     const { runner, sessions, requests } = routingRunner();
-    const orchestrator = orchestratorWith(setting, runner);
+    const orchestrator = orchestratorWith(undefined, runner);
     orchestrator.loadPlan([
       createTask({ id: 't1', order: 1, title: 'First', prompt: 'one', completionMarker: 'mk-1' }),
       createTask({ id: 't2', order: 2, title: 'Second', prompt: 'two', completionMarker: 'mk-2', dependencies: ['t1'] }),
     ]);
 
     await orchestrator.approveReview();
-    expect(orchestrator.runnerTransport).toBe('structured');
-    expect(requests[0].transport).toBe('structured');
-
-    setting.value = 'terminal';
     sessions[0].emitOutput('<<<ORDEWELL_DONE_mk-1>>>');
     await vi.waitFor(() => expect(requests).toHaveLength(2));
-    expect(requests[1].transport).toBe('structured');
-    expect(orchestrator.runnerTransport).toBe('structured');
-
     sessions[1].emitOutput('<<<ORDEWELL_DONE_mk-2>>>');
     await vi.waitFor(() => expect(orchestrator.status).toBe('completed'));
-
-    // The next run — here a manual run of one task — reads the setting afresh.
     await orchestrator.retryTask('t2');
     await orchestrator.runTask('t2');
     await settle();
-    expect(requests.at(-1)?.transport).toBe('terminal');
-    expect(orchestrator.runnerTransport).toBe('terminal');
+
+    expect(requests.map((r) => r.transport)).toEqual(['structured', 'structured', 'structured']);
   });
 
-  it('is copied by a force start that opens a run', async () => {
-    const setting = { value: 'structured' as RunnerTransport };
+  it('runs a saved plan that an older build pinned to the terminal structured, and stops saving the pin', async () => {
     const { runner, requests } = routingRunner();
-    const orchestrator = orchestratorWith(setting, runner);
-    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
-
-    await orchestrator.forceStartTask('t1');
-
-    expect(requests[0].transport).toBe('structured');
-    expect(orchestrator.runnerTransport).toBe('structured');
-  });
-
-  it('is persisted on the plan, and a setting changed mid-run does not rewrite it', async () => {
-    const settings = { tddEnabled: false, runnerTransport: 'structured' as RunnerTransport };
-    const { runner, sessions } = routingRunner();
-    const session = makeSession({ runner, settings: () => settings });
-    const plan: LegacyPlanState = {
+    const session = makeSession({ runner });
+    const plan = {
       tasks: [createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', completionMarker: 'mk-1' })],
       generatedAt: new Date().toISOString(),
       status: 'approved',
       runners: ['claude-code'],
       lastUpdated: new Date().toISOString(),
-    };
+      runnerTransport: 'terminal',
+    } as LegacyPlanState;
     session.loadPlan(plan, 'Goal', '/repo');
-    expect(saves(session).mock.lastCall?.[0].runnerTransport).toBeUndefined();
+    expect(saves(session).mock.lastCall?.[0]).not.toHaveProperty('runnerTransport');
 
     await session.executePlan();
-    settings.runnerTransport = 'terminal';
-    sessions[0].emitOutput('<<<ORDEWELL_DONE_mk-1>>>');
 
-    await vi.waitFor(() => expect(saves(session).mock.lastCall?.[0].tasks[0].status).toBe('completed'));
-    expect(saves(session).mock.lastCall?.[0].runnerTransport).toBe('structured');
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    expect(requests[0].transport).toBe('structured');
+    expect(taskOf(session, 't1')?.transport).toEqual({ kind: 'structured' });
   });
 });
 
 describe('recording the transport on the task', () => {
   it('records a structured task, and says so on its status', async () => {
     const { runner } = routingRunner();
-    const orchestrator = orchestratorWith({ value: 'structured' }, runner);
+    const orchestrator = orchestratorWith('structured', runner);
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
 
     await orchestrator.forceStartTask('t1');
@@ -130,7 +107,7 @@ describe('recording the transport on the task', () => {
 
   it('records the fallback and its reason for a runner with no connector', async () => {
     const { runner } = routingRunner();
-    const orchestrator = orchestratorWith({ value: 'structured' }, runner);
+    const orchestrator = orchestratorWith('structured', runner);
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', assignedRunner: 'my-plugin' })], ['my-plugin']);
 
     await orchestrator.forceStartTask('t1');
@@ -146,7 +123,7 @@ describe('recording the transport on the task', () => {
       stopAll: vi.fn(),
       activeCount: 0,
     } satisfies ITerminalRunner;
-    const orchestrator = orchestratorWith({ value: 'structured' }, runner);
+    const orchestrator = orchestratorWith('structured', runner);
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
 
     await orchestrator.forceStartTask('t1');
@@ -156,7 +133,7 @@ describe('recording the transport on the task', () => {
 
   it('records nothing on a terminal plan', async () => {
     const { runner } = routingRunner();
-    const orchestrator = orchestratorWith({ value: 'terminal' }, runner);
+    const orchestrator = orchestratorWith('terminal', runner);
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
 
     await orchestrator.forceStartTask('t1');
@@ -170,7 +147,7 @@ describe('recording the transport on the task', () => {
 describe('ending a structured attempt', () => {
   it('stops the structured session once its task passes, instead of leaving it running', async () => {
     const { runner, sessions } = routingRunner();
-    const orchestrator = orchestratorWith({ value: 'structured' }, runner);
+    const orchestrator = orchestratorWith('structured', runner);
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', completionMarker: 'mk-1' })]);
     await orchestrator.forceStartTask('t1');
 
@@ -183,7 +160,7 @@ describe('ending a structured attempt', () => {
 
   it('saves the runner\'s own session id on the task for a later continue', async () => {
     const { runner, sessions } = routingRunner();
-    const orchestrator = orchestratorWith({ value: 'structured' }, runner);
+    const orchestrator = orchestratorWith('structured', runner);
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', completionMarker: 'mk-1' })]);
     await orchestrator.forceStartTask('t1');
 
@@ -195,7 +172,7 @@ describe('ending a structured attempt', () => {
 
   it('leaves a terminal task\'s runner up after its pass, as before', async () => {
     const { runner, sessions } = routingRunner();
-    const orchestrator = orchestratorWith({ value: 'terminal' }, runner);
+    const orchestrator = orchestratorWith('terminal', runner);
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', completionMarker: 'mk-1' })]);
     await orchestrator.forceStartTask('t1');
 
@@ -209,7 +186,7 @@ describe('ending a structured attempt', () => {
 describe('completing through task_complete (ADR-0022)', () => {
   it('teaches the tool only to a structured task whose runner is given it', async () => {
     const { runner, requests } = routingRunner();
-    const orchestrator = orchestratorWith({ value: 'structured' }, runner);
+    const orchestrator = orchestratorWith('structured', runner);
     orchestrator.loadPlan([
       createTask({ id: 't1', order: 1, title: 'Claude', prompt: 'one' }),
       createTask({ id: 't2', order: 2, title: 'Codex', prompt: 'two', assignedRunner: 'codex' }),
@@ -227,7 +204,7 @@ describe('completing through task_complete (ADR-0022)', () => {
     expect(requests[3].prompt).not.toContain('task_complete');
 
     const terminal = routingRunner();
-    const onTerminal = orchestratorWith({ value: 'terminal' }, terminal.runner);
+    const onTerminal = orchestratorWith('terminal', terminal.runner);
     onTerminal.loadPlan([createTask({ id: 't1', order: 1, title: 'Claude', prompt: 'one' })]);
     await onTerminal.forceStartTask('t1');
     expect(terminal.requests[0].prompt).not.toContain('task_complete');
@@ -235,7 +212,7 @@ describe('completing through task_complete (ADR-0022)', () => {
 
   it('numbers each attempt it spawns', async () => {
     const { runner, sessions, requests } = routingRunner();
-    const orchestrator = orchestratorWith({ value: 'structured' }, runner);
+    const orchestrator = orchestratorWith('structured', runner);
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
     await orchestrator.forceStartTask('t1');
     sessions[0].emitExit(1);
@@ -250,7 +227,7 @@ describe('completing through task_complete (ADR-0022)', () => {
 
   it('passes a task on a done call, and hands its summary to dependents', async () => {
     const { runner, sessions } = routingRunner();
-    const orchestrator = orchestratorWith({ value: 'structured' }, runner);
+    const orchestrator = orchestratorWith('structured', runner);
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', completionMarker: 'mk-1' })]);
     await orchestrator.forceStartTask('t1');
     const session = sessions[0] as FakeStructuredSession;
@@ -267,7 +244,7 @@ describe('completing through task_complete (ADR-0022)', () => {
 
   it('fails a task on a blocked call, saying why', async () => {
     const { runner, sessions } = routingRunner();
-    const orchestrator = orchestratorWith({ value: 'structured' }, runner);
+    const orchestrator = orchestratorWith('structured', runner);
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', completionMarker: 'mk-1' })]);
     await orchestrator.forceStartTask('t1');
 
@@ -285,7 +262,7 @@ describe('checkpointing through the checkpoint tool (ADR-0022, V5)', () => {
 
   async function asking() {
     const { runner, sessions, requests } = routingRunner();
-    const orchestrator = orchestratorWith({ value: 'structured' }, runner);
+    const orchestrator = orchestratorWith('structured', runner);
     orchestrator.loadPlan(hitlPlan());
     const events: Array<{ taskId: string; taskTitle: string; summary: string }> = [];
     orchestrator.subscribe({ onCheckpoint: (data) => events.push(data) });

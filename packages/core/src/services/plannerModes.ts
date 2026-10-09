@@ -12,7 +12,7 @@ import type { RepoGroupLayout } from '../interfaces/IWorktreeIsolation';
  */
 
 /** The id a surface shows and a user types. Deliberately not the settings key. */
-export type ModeToggleId = 'tdd' | 'verify';
+export type ModeToggleId = 'tdd';
 
 /**
  * Where a toggle can take effect. `chat` is the conversation loop (ADR-0002),
@@ -31,27 +31,25 @@ type ToggleSettingsKey = {
 /** How the same toggle is named once a host has read it off disk. */
 export interface PlannerRuntimeToggles {
   tddEnabled: boolean;
-  verificationEnabled: boolean;
 }
 
 export interface ModeToggle {
   id: ModeToggleId;
-  /** Key in the persisted settings file. `verify` maps to `verification`. */
+  /** Key in the persisted settings file. */
   settingsKey: ToggleSettingsKey;
-  /** Key a host passes to the Session. `verify` on disk is `verificationEnabled` here. */
+  /** Key a host passes to the Session. `tdd` on disk is `tddEnabled` here. */
   runtimeKey: keyof PlannerRuntimeToggles;
   scopes: readonly ModeScope[];
 }
 
 export const MODE_TOGGLES: readonly ModeToggle[] = [
-  { id: 'verify', settingsKey: 'verification', runtimeKey: 'verificationEnabled', scopes: ['chat', 'one-shot'] },
   { id: 'tdd', settingsKey: 'tdd', runtimeKey: 'tddEnabled', scopes: ['task'] },
 ];
 
 /**
  * Read every toggle off the settings file under the name a Session expects.
  *
- * Both hosts used to hand-map `getVerification()` to `verificationEnabled` and
+ * Both hosts used to hand-map `getTdd()` to `tddEnabled` and
  * its siblings, in two identical blocks that nothing kept in step — which is
  * how a toggle came to have three unrelated names and how one of them got
  * dropped.
@@ -77,33 +75,24 @@ export type IsolatedExecution = false | RepoGroupLayout;
 
 export interface PlannerModes {
   autonomousDefault: boolean;
-  verification: boolean;
   /** Not a toggle: a fact about the run. */
   isolatedExecution: IsolatedExecution;
 }
 
 export const DEFAULT_PLANNER_MODES: PlannerModes = {
   autonomousDefault: true,
-  verification: false,
   isolatedExecution: false,
 };
 
-/** Read the toggles a planner cares about off whatever the settings callback returned. */
-export function plannerModesFrom(
-  settings: {
-    verificationEnabled?: boolean;
-  },
-  autonomousDefault: boolean,
-): PlannerModes {
+/** The planner mode set before the run's isolation is known. */
+export function plannerModesFrom(autonomousDefault: boolean): PlannerModes {
   return {
     autonomousDefault,
-    verification: settings.verificationEnabled ?? false,
     isolatedExecution: false,
   };
 }
 
 const MODE_FIELD: Record<ModeToggleId, keyof PlannerModes | null> = {
-  verify: 'verification',
   tdd: null,
 };
 

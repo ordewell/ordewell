@@ -6,7 +6,6 @@ import { sessionRuntimeSettings } from '../createSession';
 
 const all: PlannerModes = {
   autonomousDefault: true,
-  verification: true,
   isolatedExecution: { repos: ['api', 'web'], shared: ['NOTES.md'] },
 };
 
@@ -20,36 +19,25 @@ describe('mode toggle registry', () => {
     for (const toggle of MODE_TOGGLES) expect(toggle.scopes.length).toBeGreaterThan(0);
   });
 
-  it('keeps the one id that does not match its settings key declared in one place', () => {
-    // `verify` on every surface, `verification` on disk. The translation used to
-    // be hand-written in two files with a comment apologising for it.
-    const verify = MODE_TOGGLES.find((t) => t.id === 'verify');
-    expect(verify?.settingsKey).toBe('verification');
-  });
-
   const settings: UserSettings = {
     tdd: { enabled: true },
-    verification: { enabled: false },
-    runnerTransport: 'terminal',
   };
 
   it('reads every toggle off the settings file, under its runtime name', () => {
-    // Both hosts hand-mapped `getVerification()` to `verificationEnabled` and
+    // Both hosts hand-mapped `getTdd()` to `tddEnabled` and
     // friends, so a toggle had three names — one on disk, one at runtime, one
     // on screen — and nothing tied them together. This is the tie.
     expect(plannerRuntimeToggles(settings)).toEqual({
       tddEnabled: true,
-      verificationEnabled: false,
     });
   });
 
   it('carries the fields that are not toggles alongside them', () => {
     // What a host actually needs. Stopping at the toggles left both hosts
     // spreading and appending `modelAllowlist` by hand — the same shape twice.
-    expect(sessionRuntimeSettings({ ...settings, modelAllowlist: { opencode: ['a/b'] }, runnerTransport: 'structured', enabledRunners: ['codex'] })).toEqual({
+    expect(sessionRuntimeSettings({ ...settings, modelAllowlist: { opencode: ['a/b'] }, enabledRunners: ['codex'] })).toEqual({
       ...plannerRuntimeToggles(settings),
       modelAllowlist: { opencode: ['a/b'] },
-      runnerTransport: 'structured',
       enabledRunners: ['codex'],
     });
   });
@@ -62,13 +50,6 @@ describe('mode toggle registry', () => {
     expect(Object.keys(plannerRuntimeToggles(settings)).sort()).toEqual([...runtime].sort());
   });
 
-  it('drops verification outside the scopes it is declared for', () => {
-    // `verify` is declared for `chat` and `one-shot` only — a `task` scope
-    // (a runner task's own prompt) must not inherit it.
-    expect(modesFor('task', all).verification).toBe(false);
-    expect(modesFor('one-shot', all).verification).toBe(true);
-  });
-
   it('leaves the chat scope alone', () => {
     expect(modesFor('chat', all)).toEqual(all);
   });
@@ -78,7 +59,7 @@ describe('mode toggle registry', () => {
   });
 
   it('never invents a toggle the settings did not set', () => {
-    expect(plannerModesFrom({}, true)).toEqual(DEFAULT_PLANNER_MODES);
+    expect(plannerModesFrom(true)).toEqual(DEFAULT_PLANNER_MODES);
   });
 });
 

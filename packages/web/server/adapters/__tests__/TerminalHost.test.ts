@@ -27,7 +27,7 @@ describe('startTerminalHost', () => {
 
   it('names what is unavailable and how to get it', () => {
     expect(TMUX_MISSING_ADVICE).toMatch(/install tmux/i);
-    expect(TMUX_MISSING_ADVICE).toMatch(/structured transport/i);
+    expect(TMUX_MISSING_ADVICE).toMatch(/no structured connector/i);
   });
 });
 

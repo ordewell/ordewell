@@ -50,7 +50,7 @@ describe.runIf(live)('structured run — live', () => {
     const session = makeSession({
       runner,
       workspaceRoot: () => dir,
-      settings: () => ({ tddEnabled: false, runnerTransport: 'structured' }),
+      settings: () => ({ tddEnabled: false }),
       taskOutput: new BufferedTaskOutputSource(),
     });
     const assignedModel = { modelId: model, modelLabel: model };
@@ -106,7 +106,7 @@ describe.runIf(live)('structured run — live', () => {
       runner: router,
       workspaceRoot: () => dir,
       broadcast: (m) => sent.push(m),
-      settings: () => ({ tddEnabled: false, runnerTransport: 'structured' }),
+      settings: () => ({ tddEnabled: false }),
       taskOutput: new BufferedTaskOutputSource(),
     });
     const plan: LegacyPlanState = {
@@ -156,7 +156,7 @@ describe.runIf(live)('structured run — live', () => {
       runner: router,
       workspaceRoot: () => dir,
       broadcast: (m) => sent.push(m),
-      settings: () => ({ tddEnabled: false, runnerTransport: 'structured' }),
+      settings: () => ({ tddEnabled: false }),
       taskOutput: new BufferedTaskOutputSource(),
     });
     const plan: LegacyPlanState = {

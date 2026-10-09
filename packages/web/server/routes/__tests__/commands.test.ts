@@ -6,7 +6,6 @@ function fakePool(initialSettings?: Record<string, unknown>): OrchestratorPool {
   let state = initialSettings ?? {
     orchestratorModel: '',
     tdd: { enabled: true },
-    verification: { enabled: false },
   };
   const pool = {
     getSettings: vi.fn(() => state),
@@ -42,12 +41,13 @@ describe('GET /api/commands', () => {
     }
   });
 
-  it('includes tdd and verify commands', async () => {
+  it('no longer offers the verify or transport commands', async () => {
     const res = await app.request('/api/commands', { method: 'GET' });
     const body = (await res.json()) as { commands: Array<{ name: string }> };
     const names = body.commands.map((c: { name: string }) => c.name);
     expect(names).toContain('tdd');
-    expect(names).toContain('verify');
+    expect(names).not.toContain('verify');
+    expect(names).not.toContain('transport');
   });
 });
 
@@ -88,43 +88,13 @@ describe('POST /api/commands/:name', () => {
     expect(body.settings.tdd.enabled).toBe(true);
   });
 
-  it('enables verification via the verify command', async () => {
-    const res = await app.request('/api/commands/verify', {
+  it.each(['verify', 'transport'])('refuses the removed %s command, changing nothing', async (name) => {
+    const res = await app.request(`/api/commands/${name}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ args: { action: 'on' } }),
     });
-    expect(res.status).toBe(200);
-    expect(pool.updateSettings).toHaveBeenCalledWith({ verification: { enabled: true } });
-  });
-
-  it('disables verification via the verify command', async () => {
-    const res = await app.request('/api/commands/verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ args: { action: 'off' } }),
-    });
-    expect(res.status).toBe(200);
-    expect(pool.updateSettings).toHaveBeenCalledWith({ verification: { enabled: false } });
-  });
-
-  it.each(['terminal', 'structured'])('sets the runner transport to %s via the transport command', async (action) => {
-    const res = await app.request('/api/commands/transport', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ args: { action } }),
-    });
-    expect(res.status).toBe(200);
-    expect(pool.updateSettings).toHaveBeenCalledWith({ runnerTransport: action });
-  });
-
-  it('refuses a transport that does not exist, changing nothing', async () => {
-    const res = await app.request('/api/commands/transport', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ args: { action: 'telepathy' } }),
-    });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(404);
     expect(pool.updateSettings).not.toHaveBeenCalled();
   });
 

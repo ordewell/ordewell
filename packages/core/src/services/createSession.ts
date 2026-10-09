@@ -34,7 +34,7 @@ import type { AiProvider, IConfig } from '../interfaces/IConfig';
 import type { IFileSystem } from '../interfaces/IFileSystem';
 import type { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { INotification } from '../interfaces/INotification';
-import type { ITerminalRunner, RunnerTransport } from '../interfaces/ITerminalRunner';
+import type { ITerminalRunner } from '../interfaces/ITerminalRunner';
 import type { TaskOutputSource } from '../interfaces/TaskOutputSource';
 import type { IsolationMergeResult, IsolationView, IWorktreeIsolation } from '../interfaces/IWorktreeIsolation';
 import { migratePlanStateIsolation } from './isolationRecord';
@@ -58,10 +58,7 @@ export type SessionPlanner = Pick<Planner, 'generate' | 'modifyDuringExecution'>
 /** Runtime prefs read live — may toggle between operations. */
 export interface SessionRuntimeSettings {
   tddEnabled: boolean;
-  verificationEnabled?: boolean;
   modelAllowlist?: Record<string, string[]>;
-  /** Read once as a run starts, never per spawn (ADR-0018, S1). Absent means terminal. */
-  runnerTransport?: RunnerTransport;
   /** Absent means the user never chose, and `config.enabledRunners` (the host's defaults) decides. */
   enabledRunners?: RunnerId[];
 }
@@ -89,7 +86,6 @@ export function sessionRuntimeSettings(settings: UserSettings): SessionRuntimeSe
   return {
     ...plannerRuntimeToggles(settings),
     modelAllowlist: settings.modelAllowlist,
-    runnerTransport: settings.runnerTransport,
     enabledRunners: settings.enabledRunners,
   };
 }
@@ -165,7 +161,7 @@ export type SaveSession = (plan: LegacyPlanState, goal: string, workspace: strin
  * Everything a delivery surface constructs to host a session. Structural config
  * (orchestratorModel, providerModelLists) is snapshotted inside `config` at
  * construction and never re-read from the environment. Runtime settings (tdd,
- * verification, enabled runners) are read live via the `settings` callback so a
+ * enabled runners) are read live via the `settings` callback so a
  * toggle between operations takes effect.
  */
 export interface SessionDeps {
@@ -183,7 +179,7 @@ export interface SessionDeps {
   onNotice?: (notice: SessionNotice) => void;
   /** Shared across sessions — sole producer of model catalogs and routing lists. */
   modelResolver: ModelResolver;
-  /** Live runtime settings (tdd, verification, enabled runners). Read at each operation that needs them. */
+  /** Live runtime settings (tdd, enabled runners). Read at each operation that needs them. */
   settings: () => SessionRuntimeSettings;
   /**
    * Host-assigned session id. When set, every persist writes under this id so
@@ -319,7 +315,6 @@ export function createSession(deps: SessionDeps): Session {
     registry: deps.registry,
     workspaceRoot: deps.workspaceRoot,
     tddEnabled: () => deps.settings().tddEnabled,
-    runnerTransport: () => deps.settings().runnerTransport ?? 'terminal',
     previousAttemptFromLog: (taskId) => lastAttemptDigest(session.taskLogLocation, taskId),
   });
   const usage = new PlannerUsageLedger();
@@ -640,7 +635,6 @@ export class Session {
     this.events.flushSubagentRuns(this.plan);
     this.syncPlanTasks();
     this.plan.isolation = this.runs.planIsolation ?? undefined;
-    this.plan.runnerTransport = this.orchestrator.runnerTransport ?? undefined;
     this.plan.plannerUsage = this.usage.snapshot();
     this.plan.lastUpdated = new Date().toISOString();
     this.save(this.plan, this.goal, this.workspace, this.currentSessionId);
@@ -674,7 +668,6 @@ export class Session {
     this.store.clearLog();
     this.orchestrator.loadPlan([]);
     void this.runs.adopt(null);
-    this.orchestrator.adoptRunnerTransport(null);
   }
 
   /**
@@ -765,11 +758,7 @@ export class Session {
     return this.conversation.hold(options?.signal, async (turn) => {
       const { modelsByRunner, runnerModes } = await this.catalog.planning(chosenRunners);
       const settings = this.settingsFn();
-      // Every planner toggle, not the two this path used to remember: `modesFor`
-      // drops the ones a one-shot run cannot honour, so a structural toggle like
-      // verify — which only appends a task — stops being silently lost between
-      // here and the prompt.
-      const modes = { ...plannerModesFrom(settings, this.config.autonomousMode), isolatedExecution: await this.runs.plannerLayout() };
+      const modes = { ...plannerModesFrom(this.config.autonomousMode), isolatedExecution: await this.runs.plannerLayout() };
 
       const plan = await this.planner.generate({
         goal,
@@ -952,7 +941,6 @@ export class Session {
       modelsByRunner: filteredModels,
       runnerModes,
       autonomousDefault: this.config.autonomousMode,
-      verificationEnabled: this.settingsFn().verificationEnabled ?? false,
       isolatedExecution: await this.runs.plannerLayout(),
       // The planner's own model window, when a cached catalog knows it, so the
       // usage line can show context fill (#49). Unknown stays absent.
@@ -1476,11 +1464,13 @@ export class Session {
     // store's copy; the adopted plan shows that result, not the caller's input.
     this.syncPlanTasks();
     migratePlanStateIsolation(plan);
+    // Older builds copied the since-removed transport setting onto the plan.
+    // Every plan now runs structured (ADR-0018), so the copy is not carried on.
+    delete (plan as { runnerTransport?: unknown }).runnerTransport;
     // The run record is taken synchronously; only the orphan prune is awaited
     // in the background, and git serializes it ahead of any worktree a run adds.
     if (adopting) {
       void this.runs.adopt(plan.isolation ?? null);
-      this.orchestrator.adoptRunnerTransport(plan.runnerTransport ?? null);
     }
     if (opts?.persist !== false) this.persist();
     // A reopened session shows its token line again without waiting for the

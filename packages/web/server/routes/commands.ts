@@ -5,12 +5,10 @@ import { refuse } from './errors';
 
 const COMMANDS: CommandDescriptor[] = [
   { name: 'tdd', description: 'Toggle Test-Driven Development mode (on|off|status)' },
-  { name: 'verify', description: 'Toggle verification mode — adds a final evidence-based verification task that runs the full suite (on|off|status)' },
-  { name: 'transport', description: 'Drive tasks through each runner\'s protocol (structured) or a terminal, from the next run (terminal|structured|status)' },
 ];
 
 /** Commands whose on/off writes a single boolean settings block, keyed by the command name. */
-const BOOLEAN_TOGGLES: Record<string, 'tdd' | 'verification'> = { tdd: 'tdd', verify: 'verification' };
+const BOOLEAN_TOGGLES: Record<string, 'tdd'> = { tdd: 'tdd' };
 
 export function commandsRoute(pool: OrchestratorPool) {
   const router = new Hono();
@@ -36,16 +34,6 @@ export function commandsRoute(pool: OrchestratorPool) {
         pool.updateSettings({ [toggle]: { enabled: true } });
       } else if (action === 'off') {
         pool.updateSettings({ [toggle]: { enabled: false } });
-      }
-      return c.json({ ok: true, settings: pool.getSettings() } satisfies CommandResponse);
-    }
-
-    if (name === 'transport') {
-      const action = args.action || 'status';
-      if (action === 'terminal' || action === 'structured') {
-        pool.updateSettings({ runnerTransport: action });
-      } else if (action !== 'status') {
-        return refuse(c, 400, `Unknown transport: ${action} (terminal|structured)`);
       }
       return c.json({ ok: true, settings: pool.getSettings() } satisfies CommandResponse);
     }

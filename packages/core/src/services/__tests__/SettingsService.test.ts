@@ -37,8 +37,6 @@ describe('SettingsService', () => {
   it('returns defaults when no settings file exists', () => {
     expect(service.getAll()).toEqual({
       tdd: { enabled: true },
-      verification: { enabled: false },
-      runnerTransport: 'structured',
     });
   });
 
@@ -53,13 +51,10 @@ describe('SettingsService', () => {
   it('reads existing settings from file', () => {
     fs.writeFileSync(tempFile, JSON.stringify({
       tdd: { enabled: false },
-      verification: { enabled: true },
     }));
     const s2 = new SettingsService(tempFile);
     expect(s2.getAll()).toEqual({
       tdd: { enabled: false },
-      verification: { enabled: true },
-      runnerTransport: 'structured',
     });
   });
 
@@ -85,18 +80,10 @@ describe('SettingsService', () => {
 
   it('persists changes to disk', () => {
     service.setTdd(false);
-    service.setVerification(true);
     const raw = JSON.parse(fs.readFileSync(tempFile, 'utf-8'));
     expect(raw).toEqual({
       tdd: { enabled: false },
-      verification: { enabled: true },
     });
-  });
-
-  it('getVerification returns the verification enabled state', () => {
-    expect(service.getVerification()).toBe(false);
-    service.setVerification(true);
-    expect(service.getVerification()).toBe(true);
   });
 
   it('getSettingsPath returns the path in the user data directory', () => {
@@ -135,10 +122,10 @@ describe('SettingsService', () => {
       try {
         const sa = new SettingsService(a.filePath);
         const sb = new SettingsService(b.filePath);
-        sa.setVerification(true);
-        sb.setVerification(false);
-        expect(sa.getVerification()).toBe(true);
-        expect(sb.getVerification()).toBe(false);
+        sa.setModelAllowlist('opencode', ['a']);
+        sb.setModelAllowlist('opencode', ['b']);
+        expect(sa.getModelAllowlist('opencode')).toEqual(['a']);
+        expect(sb.getModelAllowlist('opencode')).toEqual(['b']);
       } finally {
         cleanup(a.dir);
         cleanup(b.dir);
@@ -231,36 +218,15 @@ describe('SettingsService', () => {
     });
   });
 
-  describe('runnerTransport', () => {
-    it('defaults to the structured transport', () => {
-      expect(service.getRunnerTransport()).toBe('structured');
-    });
-
-    it('keeps an explicit terminal choice read from the file', () => {
-      fs.writeFileSync(tempFile, JSON.stringify({ tdd: { enabled: true }, runnerTransport: 'terminal' }));
+  describe('settings an older build wrote', () => {
+    it('loads an older file carrying the transport and verify settings, and drops them on the next write', () => {
+      fs.writeFileSync(tempFile, JSON.stringify({ tdd: { enabled: false }, verification: { enabled: true }, runnerTransport: 'terminal', enabledRunners: ['codex'] }));
       const s2 = new SettingsService(tempFile);
-      expect(s2.getRunnerTransport()).toBe('terminal');
-      s2.setTdd(false);
-      expect(JSON.parse(fs.readFileSync(tempFile, 'utf-8')).runnerTransport).toBe('terminal');
-      expect(new SettingsService(tempFile).getRunnerTransport()).toBe('terminal');
-    });
+      expect(s2.getAll()).toEqual({ tdd: { enabled: false }, enabledRunners: ['codex'] });
 
-    it('does not write the default back as if the user had chosen it', () => {
-      service.setTdd(false);
-      expect(JSON.parse(fs.readFileSync(tempFile, 'utf-8'))).not.toHaveProperty('runnerTransport');
-    });
+      s2.setTdd(true);
 
-    it('persists structured and reads it back in a new service', () => {
-      service.setRunnerTransport('structured');
-      expect(JSON.parse(fs.readFileSync(tempFile, 'utf-8')).runnerTransport).toBe('structured');
-      expect(new SettingsService(tempFile).getRunnerTransport()).toBe('structured');
-    });
-
-    it('reads an unknown value as the default, keeping the rest of the file', () => {
-      fs.writeFileSync(tempFile, JSON.stringify({ tdd: { enabled: false }, runnerTransport: 'telepathy' }));
-      const s2 = new SettingsService(tempFile);
-      expect(s2.getRunnerTransport()).toBe('structured');
-      expect(s2.getTdd()).toBe(false);
+      expect(JSON.parse(fs.readFileSync(tempFile, 'utf-8'))).toEqual({ tdd: { enabled: true }, enabledRunners: ['codex'] });
     });
   });
 
