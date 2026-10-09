@@ -1,5 +1,5 @@
 import * as path from 'path';
-import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, QueuedMessage, RunnerId, DEFAULT_RUNNERS, flattenTasksWithParents, taskOrderLabel } from '../models/Task';
+import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, QueuedMessage, RunnerId, SkillLoad, DEFAULT_RUNNERS, flattenTasksWithParents, taskOrderLabel } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
 import { INotification } from '../interfaces/INotification';
 import { isStructuredSession, type ITerminalRunner, type ITerminalSession, type QueuedTaskMessage, type RunnerTransport, type StructuredSessionCapability } from '../interfaces/ITerminalRunner';
@@ -644,8 +644,8 @@ export class TaskOrchestrator {
     });
   }
 
-  queueMessage(text: string): void {
-    this.messageQueue.enqueue(text);
+  queueMessage(text: string, skills?: readonly SkillLoad[]): void {
+    this.messageQueue.enqueue(text, skills);
     this.emit('onTaskChanged');
   }
 

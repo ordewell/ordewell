@@ -41,6 +41,19 @@ describe('parsing the output read', () => {
   });
 });
 
+describe('reading a task\'s skills', () => {
+  it('is a field of its own, so an edit can restate the whole list', () => {
+    expect(parseTaskQueryJson('{"taskQuery":{"tasks":["#1"],"fields":["skills"]}}').fields).toEqual(['skills']);
+    const plan = [createTask({ id: 'a', order: 1, title: 'Setup', skills: ['tdd', 'pr-style'] }), createTask({ id: 'b', order: 2, title: 'Build' })];
+
+    const answer = renderTaskQueryAnswer({ tasks: ['#1', '#2'], fields: ['skills'], catalog: false }, plan, catalog);
+
+    expect(answer).toContain('skills: tdd, pr-style');
+    expect(answer).toContain('skills: (none)');
+    expect(TASK_QUERY_PROTOCOL.join('\n')).toContain('"skills"');
+  });
+});
+
 describe('rendering the output read', () => {
   it('answers a running task with its clean tail, the resume offset, and a running marker', () => {
     const { asked, liveOutput } = fakeLive({ b: { text: 'compiling\nlinking', nextOffset: 1234, running: true } });

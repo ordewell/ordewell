@@ -20,7 +20,7 @@ import type { LiveTail, LiveTailOptions } from '../interfaces/TaskOutputSource';
 
 /** The long fields a query may ask for. Everything else is already in the plan block. */
 export const TASK_QUERY_FIELDS = [
-  'description', 'prompt', 'userSteps', 'verdict', 'outputSummary', 'userStoriesCovered', 'output',
+  'description', 'prompt', 'userSteps', 'verdict', 'outputSummary', 'userStoriesCovered', 'skills', 'output',
 ] as const;
 
 export type TaskQueryField = typeof TASK_QUERY_FIELDS[number];
@@ -198,7 +198,7 @@ export const TASK_QUERY_PROTOCOL: string[] = [
 export const TASK_READ_TOOLS_PROTOCOL: string[] = [
   'READING A TASK BEFORE YOU EDIT IT:',
   'The plan block you are shown each turn carries only short fields — it never contains a task\'s prompt, its user steps, or a completed task\'s verdict. Never rewrite a field you have not read. Read with these tools; they change nothing:',
-  '- task_query: "tasks" are one or more task references ("<id or #order>"). Ask for everything you need in ONE call. "fields" is optional (omit it to get description, prompt, userSteps, verdict, outputSummary and userStoriesCovered). "catalog": true also returns every runner with its models, thinking-effort variants and modes.',
+  '- task_query: "tasks" are one or more task references ("<id or #order>"). Ask for everything you need in ONE call. "fields" is optional (omit it to get description, prompt, userSteps, verdict, outputSummary, userStoriesCovered and skills). "catalog": true also returns every runner with its models, thinking-effort variants and modes.',
   '- task_output: the recent output of a task that is running right now — the way to diagnose a task that looks stuck mid-execution. "lines" (default 80, at most 400) sets how many; pass an answer\'s "nextOffset" back as "since" to read only what follows. A task that is not running answers with its verdict, output summary and a digest of its last attempt.',
   'Three reads per user message; after that every answer also tells you to land the turn, and after six they are refused. Do not ask the same question twice.',
   'Once a plan exists, change it with edit_plan — every turn shows you its operations. Never reply with taskOps or taskQuery JSON.',
@@ -297,6 +297,8 @@ function renderField(task: Task, field: TaskQueryField, ctx: OutputRenderContext
       if (stories.length === 0) return ['userStoriesCovered: (none)'];
       return ['userStoriesCovered:', ...stories.map((s) => `  - ${s}`)];
     }
+    case 'skills':
+      return [`skills: ${task.skills?.length ? task.skills.join(', ') : '(none)'}`];
     case 'output':
       return renderLiveOutput(task.id, ctx);
   }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildConflictRepairPrompt, buildConflictResolutionPrompt, buildConversationSystemPrompt, buildModifyDuringExecutionPrompt, buildResearchPrompt, buildResearchToolsPrompt, buildSubagentSystemPrompt } from '../PlanPrompts';
+import { buildConflictRepairPrompt, buildConflictResolutionPrompt, buildConversationSystemPrompt, buildModifyDuringExecutionPrompt, buildModifyPlanPrompt, buildResearchPrompt, buildResearchToolsPrompt, buildSubagentSystemPrompt } from '../PlanPrompts';
 import type { RepoGroupLayout } from '../../interfaces/IWorktreeIsolation';
 import { createTask, type DiscoveredModel, type RunnerId } from '../../models/Task';
 
@@ -15,7 +15,7 @@ describe('model-invocable planner skill catalog', () => {
   });
   const skills = [skill('review-plan'), skill('task-only', { appliesTo: 'task' }), skill('user-only', { modelInvocable: false })];
   const prompt = (plannerTools: boolean, plannerSkills = skills) => buildConversationSystemPrompt(
-    'goal', '', {}, ['claude-code'], undefined, true, { plannerTools, plannerSkills },
+    'goal', '', {}, ['claude-code'], undefined, true, { plannerTools, skills: plannerSkills },
   );
 
   it('advertises only loadable names and descriptions with the tools attached', () => {
@@ -43,7 +43,7 @@ describe('task skill catalog', () => {
     source: 'global', path: `/skills/${name}/SKILL.md`, appliesTo: 'task', modelInvocable: true, userInvocable: true, ...extra,
   });
   const prompt = (plannerSkills: SkillInfo[], plannerTools = true) => buildConversationSystemPrompt(
-    'goal', '', {}, ['claude-code'], undefined, true, { plannerTools, plannerSkills },
+    'goal', '', {}, ['claude-code'], undefined, true, { plannerTools, skills: plannerSkills },
   );
 
   it('lists model-invocable task skills with a never-blanket-attach instruction', () => {
@@ -67,6 +67,22 @@ describe('task skill catalog', () => {
       expect(text).toContain('a task it depends on creates');
       expect(text).toContain('accepted with a warning');
     }
+  });
+});
+
+describe('buildModifyPlanPrompt', () => {
+  it('shows the current plan without what only execution reads', () => {
+    const ran = {
+      ...createTask({ id: 'a', title: 'A', status: 'failed', skills: ['tdd'], subtasks: [createTask({ id: 'a1', title: 'A1' })] }),
+      attemptSkills: [{ name: 'tdd', source: 'global' as const, path: '/g/tdd/SKILL.md', content: 'WHOLE TDD BODY' }],
+      outputSummary: { reviewReason: 'r', logTail: 'LOG TAIL', capturedAt: '' },
+    };
+    const now = new Date().toISOString();
+
+    const prompt = buildModifyPlanPrompt({ tasks: [ran], generatedAt: now, status: 'approved', runners: ['claude-code'], lastUpdated: now }, 'restyle', {});
+
+    expect(prompt).toContain('"title": "A1"');
+    expect(prompt).not.toMatch(/WHOLE TDD BODY|LOG TAIL|attemptSkills|completionMarker/);
   });
 });
 

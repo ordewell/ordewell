@@ -1,4 +1,4 @@
-import { DiscoveredModel, RunnerId, type TaskSnapshot, type Task } from '../models/Task';
+import { DiscoveredModel, RunnerId, plannerTaskView, type TaskSnapshot, type Task } from '../models/Task';
 import type { LegacyPlanState } from '../models/Task';
 import { buildModeGuide, filteredBuildModes, type RunnerModeInfo } from './ModeResolver';
 import { DEFAULT_PLANNER_MODES, type IsolatedExecution, type PlannerModes } from './plannerModes';
@@ -122,8 +122,8 @@ export interface ConversationVariant {
   harness?: boolean;
   /** The planner reads the catalog and submits the plan through Ordewell's MCP tools (ADR-0022), not the JSON envelope. */
   plannerTools?: boolean;
-  /** The skill catalog the planner may be shown: planner skills it can load, and task skills it can attach. */
-  plannerSkills?: readonly SkillInfo[];
+  /** The skill catalog: task skills it can attach on every path, planner skills it can load only with tools. */
+  skills?: readonly SkillInfo[];
   /** Every AI task gets its own worktree (ADR-0013), so file overlap no longer forces an order; of every repo of a group (ADR-0014). */
   isolatedExecution?: IsolatedExecution;
 }
@@ -255,7 +255,7 @@ function buildConversationBody(
     '',
     researchPhaseBlock(variant.harness ?? false),
     '',
-    ...(tools ? ['Ordewell skills load only through load_skill; do not use the native Skill tool or read skill files directly.', ...plannerSkillsBlock(variant.plannerSkills ?? []), ''] : []),
+    ...(tools ? ['Ordewell skills load only through load_skill; do not use the native Skill tool or read skill files directly.', ...plannerSkillsBlock(variant.skills ?? []), ''] : []),
     'OUTLINE PHASE:',
     `- When you are ready to propose a plan, first show a prose outline. DO NOT jump straight to ${tools ? 'submit_plan' : 'JSON'}.`,
     '- Format: a numbered list describing each vertical tracer-bullet slice, with the files/layers each slice touches.',
@@ -303,7 +303,7 @@ function buildConversationBody(
     '- User tasks (type "user") always have sliceType "HITL".',
     '- "sliceType" is REQUIRED on every task, and "autonomy" on every "ai" task, at every depth — a "subtasks" entry is a full task object with all the same required fields, not a bare label.',
     '',
-    ...taskSkillsSection(variant.plannerSkills ?? []),
+    ...taskSkillsSection(variant.skills ?? []),
     'DEPENDENCY & PARALLELISM:',
     '- Independent slices should have NO dependencies — they run in parallel.',
     '- Only add dependencies when a slice truly depends on artifacts another slice creates.',
@@ -607,7 +607,7 @@ export function buildModifyPlanPrompt(
   autonomousDefault = true,
 ): string {
   const modelsJson = modelsJsonFor(modelsByRunner, existingPlan.runners);
-  const planJson = JSON.stringify(existingPlan.tasks, null, 2);
+  const planJson = JSON.stringify(existingPlan.tasks.map(plannerTaskView), null, 2);
   const aiflowBlock = aiflowContext
     ? `<aiflow_context>\n${aiflowContext}\n</aiflow_context>\n\n`
     : '';

@@ -223,6 +223,7 @@ function taskDetail(plan: readonly Task[], ref: string, fields: readonly TaskQue
     ...(wants('verdict') ? { verdict: verdictDetail(task.verdict) } : {}),
     ...(wants('outputSummary') ? { outputSummary: outputSummaryDetail(task) } : {}),
     ...(wants('userStoriesCovered') ? { userStoriesCovered: task.userStoriesCovered?.length ? task.userStoriesCovered : null } : {}),
+    ...(wants('skills') ? { skills: task.skills?.length ? task.skills : null } : {}),
   };
 }
 

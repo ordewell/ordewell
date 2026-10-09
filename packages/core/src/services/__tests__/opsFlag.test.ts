@@ -52,6 +52,8 @@ function editor(tasks = plan()) {
     runs: { current: null, linkResolver: () => undefined },
     broadcast: () => undefined,
     plannerTools: () => false,
+    taskSkills: () => ({ findSkill: () => undefined, searchedDirs: () => [] }),
+    notice: () => undefined,
   });
   return { store, edit };
 }

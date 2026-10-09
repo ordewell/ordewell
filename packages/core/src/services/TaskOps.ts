@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import {
   Task, RunnerId, flattenTasks,
   addTaskToPlan, removeTaskFromPlan, updateTaskInPlan, renumberTasks,
-  createTask, opsFlag, inheritedOps, skillNames,
+  createTask, opsFlag, inheritedOps, inheritedSkills, skillNames,
 } from '../models/Task';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_OPS_ENVELOPE_KEY } from './JsonExtractor';
 import { validateTaskEdit, checkModelAndModeValidity, type EditCatalog, type TaskEditActor, type TaskEditCheck } from './TaskEditValidator';
@@ -55,6 +55,7 @@ export function taskOpsProtocol(executionNote = '', tools = false): string[] {
     ...(tools ? ['edit_plan checks the batch when you call it and answers with what it will change, or with the error to fix — call it again in the same reply. The edit is applied when your reply ends; edits you make in one reply join one batch.'] : []),
     'Just declare the dependencies you want — display order is repaired for you afterwards, so a rewire or a newly added prerequisite never needs a "reorder" op. Only a task that is running or completed cannot be shifted, so an edit that would need one to move is rejected.' + executionNote,
     'Flipping "type" between "ai" and "user" is a content change, not just a label: an update to "user" needs "userSteps" in the SAME op, and an update to "ai" needs "prompt" in the SAME op — the model/mode/effort/autonomy fields (flipping to "user") or the userSteps (flipping to "ai") are cleared automatically.',
+    '"skills" in "changes" REPLACES the task\'s whole skill list. To add one, send the names the plan block shows in its skills:[...] plus the new one; to drop one, send the rest; [] removes them all.',
     '"rearm" puts a failed OR completed task back to pending — verdict and output summary are cleared, any dependents it had blocked are released, and it may carry field changes (e.g. a corrected "prompt") applied in the same op. A running task cannot be re-armed. Never rearm a task just to relabel it — only when it should actually run again.',
   ];
 }
@@ -580,7 +581,7 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
           autonomy: spec.autonomy ?? toMerge.find((t) => t.autonomy)?.autonomy,
           sliceType: spec.sliceType ?? toMerge.find((t) => t.sliceType)?.sliceType,
           ops: inheritedOps(toMerge, spec.ops),
-          skills: spec.skills ?? toMerge.flatMap((t) => t.skills ?? []),
+          skills: inheritedSkills(spec.skills, toMerge.flatMap((t) => t.skills ?? [])),
           userStoriesCovered: spec.userStoriesCovered ?? (toMerge.flatMap((t) => t.userStoriesCovered ?? []).length
             ? [...new Set(toMerge.flatMap((t) => t.userStoriesCovered ?? []))]
             : undefined),
@@ -641,7 +642,7 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
             autonomy: spec.autonomy ?? target.autonomy,
             sliceType: spec.sliceType ?? target.sliceType,
             ops: inheritedOps([target], spec.ops),
-            skills: spec.skills ?? target.skills,
+            skills: inheritedSkills(spec.skills, target.skills),
             userStoriesCovered: spec.userStoriesCovered ?? target.userStoriesCovered,
           });
           newTasks.push(nt);

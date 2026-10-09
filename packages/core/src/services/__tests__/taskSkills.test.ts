@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { execFileSync } from 'child_process';
-import { createTask, keepExecutionState } from '../../models/Task';
+import { createTask, keepExecutionState, skillNames } from '../../models/Task';
 import { createSkillsService } from '../SkillsService';
 import { checkOpSkills, checkPlanSkills, plannedSkillLookup, resolveTaskSkills, TaskSkillsError } from '../taskSkills';
 import { parsePlanJson } from '../PlanValidator';
@@ -89,6 +89,18 @@ describe('the built-in tdd skill', () => {
     expect(tdd?.description).toMatch(/not to verification-only, docs or ops tasks/);
     expect(tdd?.content).toContain('RED: Write ONE failing test');
     expect(fs.existsSync(path.join(globalSkills(), 'tdd', 'SKILL.md'))).toBe(true);
+  });
+});
+
+describe('finding a skill by name', () => {
+  it('never reads outside the skill dirs, whatever the name', () => {
+    writeSkill(home, 'outside', 'task', 'x');
+    fs.mkdirSync(globalSkills(), { recursive: true });
+    const lookup = createSkillsService(workspace);
+
+    expect(lookup.findSkill('../../outside')).toBeUndefined();
+    expect(lookup.findSkill('../../../' + path.basename(home) + '/outside')).toBeUndefined();
+    expect(lookup.findSkill(path.join(home, 'outside'))).toBeUndefined();
   });
 });
 
@@ -232,6 +244,27 @@ describe('the skills field', () => {
     expect(cleared.tasks[0].skills).toBeUndefined();
     expect(merged.tasks[0].skills).toEqual(['tdd', 'deploy']);
     expect(split.tasks.map((t) => [t.title, t.skills])).toEqual([['A', ['tdd']], ['B1', ['deploy']], ['B2', ['tdd']]]);
+  });
+
+  it('keeps what a merge or split inherits unless the edit names skills or clears them with []', () => {
+    const plan = [
+      createTask({ id: 'a', order: 1, title: 'A', prompt: 'a', skills: ['tdd'] }),
+      createTask({ id: 'b', order: 2, title: 'B', prompt: 'b', skills: ['deploy'] }),
+    ];
+    const merged = (skills: unknown) => applyTaskOps(plan, [{ op: 'merge', taskIds: ['#1', '#2'], merged: { title: 'AB', skills } as never }], ['claude-code']).tasks[0].skills;
+    const split = (skills: unknown) => applyTaskOps(plan, [{ op: 'split', taskId: '#2', parts: [{ title: 'B1', skills } as never, { title: 'B2' }] }], ['claude-code']).tasks[1].skills;
+    const store = new PlanStore();
+    store.load(plan, ['claude-code']);
+    store.split('b', [{ title: 'B1', skills: 'deploy' as never }, { title: 'B2', skills: [] }]);
+
+    expect([merged('tdd'), merged([7]), merged([]), merged(['docs'])]).toEqual([['tdd', 'deploy'], ['tdd', 'deploy'], undefined, ['docs']]);
+    expect([split('tdd'), split({}), split([]), split(['docs'])]).toEqual([['deploy'], ['deploy'], undefined, ['docs']]);
+    expect(store.planTasks.map((t) => t.skills)).toEqual([['tdd'], ['deploy'], undefined]);
+  });
+
+  it('keeps only names a skill could have, lower-cased as /name parses them', () => {
+    expect(skillNames(['TDD', '../../etc', '/abs', 'a/b', '..', '.hidden', 'pr_style-2', ' Docs '])).toEqual(['tdd', 'pr_style-2', 'docs']);
+    expect(skillNames(['../x'])).toBeUndefined();
   });
 
   it('survives a reload of the saved plan and travels on the wire', () => {

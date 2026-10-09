@@ -187,7 +187,7 @@ export class CliAgentAiService implements IAiService {
       req.runners,
       req.runnerModes,
       req.autonomousDefault ?? true,
-      { harness: true, isolatedExecution: req.isolatedExecution },
+      { harness: true, isolatedExecution: req.isolatedExecution, skills: req.skills },
     );
 
     const startOptions: PlannerStartOptions = {
@@ -203,7 +203,7 @@ export class CliAgentAiService implements IAiService {
         systemPrompt: buildConversationSystemPrompt(
           req.goal, contextStr, req.modelsByRunner, req.runners, req.runnerModes,
           req.autonomousDefault ?? true,
-          { harness: true, isolatedExecution: req.isolatedExecution, plannerTools: true, plannerSkills: req.plannerTools.skills?.() },
+          { harness: true, isolatedExecution: req.isolatedExecution, plannerTools: true, skills: req.skills },
         ),
       }
       : undefined;

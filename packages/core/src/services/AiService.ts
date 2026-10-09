@@ -20,7 +20,6 @@ import type { SkillInfo } from './SkillsService';
 export interface PlannerToolsOffer {
   sessionId: string;
   handler: PlannerToolHandler;
-  skills?: () => readonly SkillInfo[];
 }
 
 /**
@@ -59,6 +58,12 @@ export interface ConversationRequest {
    */
   initialMessage?: string;
   plannerTools?: PlannerToolsOffer;
+  /**
+   * The workspace's skill catalog. Every planner is shown the task skills it
+   * may attach; only one with tools is shown the planner skills, which load
+   * through `load_skill` alone (ADR-0024).
+   */
+  skills?: readonly SkillInfo[];
 }
 
 /**

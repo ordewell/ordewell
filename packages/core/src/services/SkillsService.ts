@@ -5,6 +5,7 @@ import { STATE_DIR } from '../utils/fsHelpers';
 import { SELF_REPO } from './isolationRecord';
 import { globalDataDir } from '../utils/globalDataDir';
 import { builtinSkillsDir } from './builtinSkills';
+import { isSkillName } from '../models/Task';
 
 export const BUILTIN_SKILL_NAMES = ['grilling', 'to-spec', 'improve-codebase-architecture', 'tdd'] as const;
 
@@ -327,7 +328,9 @@ export class SkillsService {
     }
   }
 
+  /** A name no skill could have resolves to nothing: it is joined into a path, so `../x` would read outside the skill dirs. */
   findSkill(name: string): SkillInfo | undefined {
+    if (!isSkillName(name)) return undefined;
     this.pruneRetired();
     if ((BUILTIN_SKILL_NAMES as readonly string[]).includes(name)) this.seed(name);
     const globalFile = path.join(this.globalDir(), name, 'SKILL.md');

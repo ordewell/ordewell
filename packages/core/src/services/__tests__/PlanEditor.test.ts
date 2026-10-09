@@ -4,6 +4,7 @@ import { PlanEditError } from '../PlanEditError';
 import { PlanStore } from '../PlanStore';
 import type { RunnerCatalog } from '../TaskRetarget';
 import type { SessionMessage } from '../SessionMessage';
+import type { SkillInfo } from '../SkillsService';
 import type { IsolationRun } from '../../interfaces/IWorktreeIsolation';
 import { createTask, type DiscoveredModel, type LegacyPlanState, type RunnerId, type Task } from '../../models/Task';
 
@@ -35,7 +36,7 @@ function tasks(): Task[] {
  * is the session's contract in miniature — the op runs, and only a change is
  * saved and announced — so what the editor hands it is all that is asserted.
  */
-function setup(opts: { plan?: boolean; allowlist?: Partial<Record<RunnerId, string[]>>; catalogs?: Record<RunnerId, RunnerCatalog>; run?: IsolationRun | null } = {}) {
+function setup(opts: { plan?: boolean; allowlist?: Partial<Record<RunnerId, string[]>>; catalogs?: Record<RunnerId, RunnerCatalog>; run?: IsolationRun | null; skills?: SkillInfo[] } = {}) {
   const store = new PlanStore();
   const now = '2026-01-01T00:00:00Z';
   const plan: LegacyPlanState | null = opts.plan === false ? null : { tasks: [], generatedAt: now, status: 'approved', runners: ['claude-code'], lastUpdated: now };
@@ -65,6 +66,7 @@ function setup(opts: { plan?: boolean; allowlist?: Partial<Record<RunnerId, stri
   };
   const runs = { current: opts.run ?? null, linkResolver: vi.fn() };
   const plannerTools = vi.fn(() => false);
+  const notice = vi.fn();
   const editor = new PlanEditor({
     store,
     plan: () => plan,
@@ -74,12 +76,28 @@ function setup(opts: { plan?: boolean; allowlist?: Partial<Record<RunnerId, stri
     runs,
     broadcast: (m) => { sent.push(m); events.push(m.type); },
     plannerTools,
+    taskSkills: () => ({ findSkill: (name) => opts.skills?.find((s) => s.name === name), searchedDirs: () => [] }),
+    notice,
   });
   const task = (id: string) => store.get(id);
-  return { editor, store, plan, events, sent, catalog, mutate, scheduler, runs, plannerTools, task };
+  return { editor, store, plan, events, sent, catalog, mutate, scheduler, runs, plannerTools, notice, task };
 }
 
 describe('PlanEditor.updateTask', () => {
+  it('refuses a planner skill on a task and warns, once the edit lands, about a name not found', async () => {
+    const skill = (name: string, appliesTo: SkillInfo['appliesTo']): SkillInfo => ({
+      name, description: name, metadata: { name, description: name }, content: '', path: `/g/${name}/SKILL.md`, source: 'global', appliesTo, modelInvocable: false, userInvocable: true,
+    });
+    const { editor, task, notice, mutate } = setup({ skills: [skill('tdd', 'task'), skill('grilling', 'planner')] });
+
+    await expect(editor.updateTask('t2', { skills: ['tdd', 'grilling'] })).rejects.toThrow(PlanEditError);
+    expect(mutate).not.toHaveBeenCalled();
+
+    await editor.updateTask('t2', { skills: ['tdd', 'later'] });
+    expect(task('t2')!.skills).toEqual(['tdd', 'later']);
+    expect(notice).toHaveBeenCalledWith('warn', expect.stringContaining('Task "Build": skill "later" not found'));
+  });
+
   it('lands a patch, announces it as task_updated, then reschedules', async () => {
     const { editor, events, sent, task } = setup();
 

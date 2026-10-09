@@ -1,4 +1,4 @@
-import type { QueuedMessage } from '../models/Task';
+import type { QueuedMessage, SkillLoad } from '../models/Task';
 
 /**
  * The follow-ups a user sends while a run executes, held until the scheduler
@@ -12,11 +12,12 @@ export class MessageQueue {
 
   get length(): number { return this.messages.length; }
 
-  enqueue(text: string): void {
+  enqueue(text: string, skills: readonly SkillLoad[] = []): void {
     this.messages.push({
       id: `q-${Date.now()}-${++this.seq}`,
       text,
       timestamp: new Date().toISOString(),
+      ...(skills.length > 0 ? { skills: [...skills] } : {}),
     });
   }
 

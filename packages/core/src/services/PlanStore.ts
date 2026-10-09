@@ -1,7 +1,7 @@
 import {
   Task, TaskSnapshot, TaskStatus, RunnerId, AwaitingReason, DEFAULT_RUNNERS, flattenTasks,
   addTaskToPlan, removeTaskFromPlan, updateTaskInPlan,
-  createTask, renumberTasks, opsFlag, inheritedOps,
+  createTask, renumberTasks, opsFlag, inheritedOps, inheritedSkills,
 } from '../models/Task';
 
 /** Deep copy of a task tree, down to the arrays the store rewrites. */
@@ -226,7 +226,7 @@ export class PlanStore {
         sliceType: spec.sliceType ?? original.sliceType,
         userStoriesCovered: spec.userStoriesCovered ?? original.userStoriesCovered,
         ops: inheritedOps([original], spec.ops),
-        skills: spec.skills ?? original.skills,
+        skills: inheritedSkills(spec.skills, original.skills),
       }));
     });
 

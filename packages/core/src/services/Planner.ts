@@ -1,4 +1,4 @@
-import { Task, TaskSnapshot, RunnerId, DiscoveredModel, ResearchLogEntry, ResearchProgress, LegacyPlanState, type ActiveTaskSession } from '../models/Task';
+import { Task, TaskSnapshot, RunnerId, DiscoveredModel, ResearchLogEntry, ResearchProgress, LegacyPlanState, plannerTaskView, type ActiveTaskSession } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
 import { IFileSystem } from '../interfaces/IFileSystem';
 import { IWebFetcher } from '../interfaces/IWebFetcher';
@@ -9,6 +9,7 @@ import { repairLoop, modifyValidationFeedback } from './PlanRepair';
 import { buildModifyDuringExecutionPrompt } from './PlanPrompts';
 import { filterModelsForPrompt, coerceAssignments } from './ModelAllowlistResolver';
 import { DEFAULT_PLANNER_MODES, type IsolatedExecution, type PlannerModes } from './plannerModes';
+import { checkPlanSkills, type SkillLookup } from './taskSkills';
 
 /**
  * `autonomousDefault` still arrives on its own — it is not a user toggle but a
@@ -62,11 +63,15 @@ export interface ModifyDuringExecutionRequest {
   perRunnerAllowlist?: Partial<Record<RunnerId, string[]>>;
   /** Where the run in force puts each task (ADR-0013, ADR-0014). */
   isolatedExecution?: IsolatedExecution;
+  /** The workspace root's skill catalog, which the rewritten tasks' skills are checked against. */
+  skills: SkillLookup;
 }
 
 export interface ModifyDuringExecutionResult {
   pendingTasks: Task[];
   message: string;
+  /** Skill names not found yet; the edit still lands, as a submitted plan's does. Absent means none. */
+  skillWarnings?: string[];
 }
 
 /**
@@ -153,7 +158,7 @@ export class Planner {
   }
 
   async modifyDuringExecution(req: ModifyDuringExecutionRequest): Promise<ModifyDuringExecutionResult> {
-    const pendingJson = JSON.stringify(req.pendingTasks, null, 2);
+    const pendingJson = JSON.stringify(req.pendingTasks.map(plannerTaskView), null, 2);
     const filteredModels = filterModelsForPrompt(req.modelsByRunner, req.perRunnerAllowlist ?? {});
     const allowlist = req.perRunnerAllowlist ?? {};
 
@@ -189,10 +194,12 @@ export class Planner {
           newPending: coerced,
           activeSessions: req.activeSessions,
         });
-        if (validation.valid) {
-          return { done: { pendingTasks: coerced, message: `Plan modified: ${coerced.length} pending task(s)` } };
+        const skills = checkPlanSkills(coerced, req.skills);
+        const errors = [...validation.errors, ...skills.errors.map((e) => e.message)];
+        if (errors.length === 0) {
+          return { done: { pendingTasks: coerced, message: `Plan modified: ${coerced.length} pending task(s)`, skillWarnings: skills.warnings } };
         }
-        return { retry: { errors: validation.errors, corrective: modifyValidationFeedback(validation.errors) } };
+        return { retry: { errors, corrective: modifyValidationFeedback(errors) } };
       },
       maxRepairs: 2,
       onExhausted: ({ errors }) => {
