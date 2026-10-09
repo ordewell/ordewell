@@ -1,6 +1,6 @@
 import type { ApprovalDecision } from '../interfaces/IApproval';
 import type { StructuredEvent, StructuredTurnEnd } from '../interfaces/ITerminalRunner';
-import type { SubagentOutcome, TaskSkillSnapshot } from './Task';
+import type { SubagentOutcome, TaskSkillNotice, TaskSkillSnapshot } from './Task';
 import type { UsageRecord } from './Usage';
 
 /**
@@ -13,8 +13,12 @@ import type { UsageRecord } from './Usage';
  * without a format version.
  */
 export type TaskLogEvent =
-  /** The task skills this attempt's prompt carried, as read at its spawn (ADR-0024): first in its log. */
-  | { type: 'task_skills'; skills: TaskSkillSnapshot[] }
+  /**
+   * The task skills this attempt's prompt carried, as read at its spawn
+   * (ADR-0024): first in its log. The file keeps their bodies; a surface is
+   * sent notices ({@link taskLogForSurface}).
+   */
+  | { type: 'task_skills'; skills: TaskSkillSnapshot[] | TaskSkillNotice[] }
   /** A turn began by delivering `message`; `messageId` names it when it had been queued, `forced` when it was force sent. */
   | { type: 'turn_start'; message: string; messageId?: string; forced?: boolean }
   | { type: 'turn_end'; reason: StructuredTurnEnd }
@@ -150,6 +154,13 @@ export function toTaskLogEvent(event: StructuredEvent): TaskLogEvent | null {
     case 'background_agent':
       return null;
   }
+}
+
+/** A log as a surface is sent it, live or read back: everything but the skills' bodies. */
+export function taskLogForSurface(events: readonly TaskLogEvent[]): TaskLogEvent[] {
+  return events.map((event): TaskLogEvent => event.type === 'task_skills'
+    ? { type: 'task_skills', skills: event.skills.map(({ name, source, path }): TaskSkillNotice => ({ name, source, path })) }
+    : event);
 }
 
 /**

@@ -4,6 +4,7 @@ import {
   listTaskLogAttempts,
   loadSessionPlanState,
   readTaskLog,
+  taskLogForSurface,
   type AdoptSessionResponse,
   type OkResponse,
   type SessionListResponse,
@@ -67,7 +68,7 @@ export function sessionsRoute(pool: OrchestratorPool) {
     const ws = c.req.query('workspace') || process.cwd();
     const attempt = Number(c.req.param('attempt'));
     if (!Number.isInteger(attempt) || attempt < 1) return refuse(c, 400, 'attempt must be a positive integer');
-    return c.json({ attempt, events: readTaskLog({ baseDir: ws, sessionId: c.req.param('id') }, c.req.param('taskId'), attempt) } satisfies TaskLogResponse);
+    return c.json({ attempt, events: taskLogForSurface(readTaskLog({ baseDir: ws, sessionId: c.req.param('id') }, c.req.param('taskId'), attempt)) } satisfies TaskLogResponse);
   });
 
   router.delete('/:id', (c) => {

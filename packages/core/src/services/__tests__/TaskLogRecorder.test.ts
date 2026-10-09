@@ -61,7 +61,8 @@ describe('TaskLogRecorder', () => {
     const first = memoryFile(1);
     const second = memoryFile(2);
     const files = [first, second];
-    const recorder = new TaskLogRecorder({ broadcast: vi.fn(), location: () => ({ baseDir: '/ws', sessionId: 'sess' }), open: () => files.shift()! });
+    const sent: SessionMessage[] = [];
+    const recorder = new TaskLogRecorder({ broadcast: (m) => sent.push(m), location: () => ({ baseDir: '/ws', sessionId: 'sess' }), open: () => files.shift()! });
 
     const a = new FakeStructuredSession('s1', 't1');
     await recorder.wrap(handing(a)).spawn({ ...spawnOpts, skills });
@@ -75,6 +76,8 @@ describe('TaskLogRecorder', () => {
     expect(first.saved).toEqual([{ type: 'task_skills', skills }, { type: 'turn_start', message: 'Do it' }]);
     expect(second.saved).toEqual([{ type: 'turn_start', message: 'Do it' }]);
     expect(replayTaskLog(first.saved).blocks[0]).toMatchObject({ type: 'message', role: 'system', text: 'Skills: tdd (/g/tdd/SKILL.md)' });
+    // The file keeps the body; a surface is told which skill, never what it says.
+    expect(taskLogs(sent)[0].events[0]).toEqual({ type: 'task_skills', skills: [{ name: 'tdd', source: 'global', path: '/g/tdd/SKILL.md' }] });
   });
 
   it('sends a turn’s end at once, without waiting out the batch', async () => {

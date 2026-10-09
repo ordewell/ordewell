@@ -55,7 +55,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   showError(error: string): void { this.postMessage({ type: 'showError', error }); }
   sendPlanUpdated(plan: LegacyPlanState): void { this._cachedPlan = plan; this.postMessage({ type: 'planUpdated', plan }); }
   /** Every plan edit waiting at the next batch boundary, so the chat can list (and withdraw) each one. */
-  showPendingPlanEdits(edits: PendingPlanEdit[]): void { this.postMessage({ type: 'pendingPlanEdits', edits }); }
+  showPendingPlanEdits(edits: readonly PendingPlanEdit[]): void {
+    // Narrowed by hand: a queued message also carries its skill loads, whose bodies never go to the webview.
+    this.postMessage({ type: 'pendingPlanEdits', edits: edits.map(({ id, text }) => ({ id, text })) });
+  }
   /** Live runner output for one task; the webview keeps the tail and renders it in that task's card. */
   sendTaskOutput(taskId: string, text: string): void { this.postMessage({ type: 'taskOutput', taskId, text }); }
   /** Advisory silence timestamp for one task; null clears the stalled indicator. */

@@ -1,6 +1,6 @@
 import { isStructuredSession, type ITerminalRunner, type ITerminalSession, type StructuredSessionCapability } from '../interfaces/ITerminalRunner';
 import { defaultLogger, type ILogger } from '../interfaces/ILogger';
-import { coalesceTaskLog, toTaskLogEvent, type TaskLogEvent } from '../models/TaskLog';
+import { coalesceTaskLog, taskLogForSurface, toTaskLogEvent, type TaskLogEvent } from '../models/TaskLog';
 import { openTaskLog, type TaskLogFile, type TaskLogLocation } from '../utils/taskLogStore';
 import type { TaskSkillSnapshot } from '../models/Task';
 import type { SessionBroadcaster } from './SessionMessage';
@@ -83,7 +83,7 @@ export class TaskLogRecorder {
           this.logger.warn('taskLog', `could not append to the log of task ${taskId}, attempt ${attempt}; it keeps streaming unsaved`, err);
         }
       }
-      this.deps.broadcast({ type: 'task_log', taskId, attempt, events });
+      this.deps.broadcast({ type: 'task_log', taskId, attempt, events: taskLogForSurface(events) });
     };
 
     session.onEvent((event) => {

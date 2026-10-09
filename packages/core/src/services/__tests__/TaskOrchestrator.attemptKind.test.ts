@@ -21,6 +21,9 @@ function skill(name: string, appliesTo: SkillInfo['appliesTo'] = 'task'): SkillI
 /** The global catalog every root sees in these tests; `grilling` is the planner skill. */
 const CATALOG = new Map([['tdd', skill('tdd')], ['grilling', skill('grilling', 'planner')]]);
 
+/** A workspace skill written in the main checkout's `api` repo and never committed: no worktree has it. */
+const UNCOMMITTED: SkillInfo = { ...skill('deploy-checklist'), source: 'workspace', path: '/repo/api/.ordewell/skills/deploy-checklist/SKILL.md' };
+
 /**
  * What differs between a change, an ops, a repair and a continued attempt, as
  * the orchestrator shows it: where each runs, what it is told, whether its
@@ -60,7 +63,9 @@ function setup(opts: { isolation?: FakeWorktreeIsolation; config?: Partial<IConf
     workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
     skillsAt: (roots) => {
       skillRoots.push(roots);
-      return { findSkill: (name) => CATALOG.get(name), searchedDirs: () => ['/g', ...roots.map((root) => `${root}/.ordewell/skills`)] };
+      const findSkill = (name: string) => CATALOG.get(name)
+        ?? (name === UNCOMMITTED.name && roots.some((root) => UNCOMMITTED.path === `${root}/.ordewell/skills/${name}/SKILL.md`) ? UNCOMMITTED : undefined);
+      return { findSkill, searchedDirs: () => ['/g', ...roots.map((root) => `${root}/.ordewell/skills`)] };
     },
   });
   const notices: string[] = [];
@@ -247,7 +252,21 @@ describe('attempt kinds, as the orchestrator runs them', () => {
       await vi.waitFor(() => expect(env.status('c1')).toBe('failed'));
       const reason = env.orchestrator.storeInstance.get('c1')!.outputSummary!.reviewReason;
       expect(reason).toContain('/repo/.ordewell/skills or /fake-worktrees/run1/1-c1/api/.ordewell/skills or /fake-worktrees/run1/1-c1/web/.ordewell/skills');
-      expect(reason).toContain('commit .ordewell/skills/deploy-checklist so task worktrees receive it');
+      expect(reason).toContain('commit api/.ordewell/skills/deploy-checklist so task worktrees receive it');
+    });
+
+    it('a task with no worktree whose skill is missing is not told to commit it', async () => {
+      const isolation = new FakeWorktreeIsolation();
+      isolation.repos = ['api', 'web'];
+      const env = setup({ isolation });
+      env.orchestrator.loadPlan([opsTask('o1', 1, { skills: ['nowhere'] })]);
+
+      await env.orchestrator.approveReview();
+
+      await vi.waitFor(() => expect(env.status('o1')).toBe('failed'));
+      const reason = env.orchestrator.storeInstance.get('o1')!.outputSummary!.reviewReason;
+      expect(reason).toContain('skill "nowhere" not found');
+      expect(reason).not.toContain('commit');
     });
 
     it('hands the attempt\'s skills to what wraps the runner, so its log can record them', async () => {

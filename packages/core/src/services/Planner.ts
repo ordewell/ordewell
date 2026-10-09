@@ -186,7 +186,7 @@ export class Planner {
     return repairLoop<Task[], ModifyDuringExecutionResult>({
       first: () => send(),
       resend: (corrective) => send(corrective),
-      interpret: (tasks) => {
+      interpret: async (tasks) => {
         const coerced = coerceAssignments(tasks.filter((t) => !finished.has(t.id)), allowlist, req.runners, req.modelsByRunner);
         const validation = validatePlanModification({
           executionLog: req.executionLog,
@@ -194,7 +194,7 @@ export class Planner {
           newPending: coerced,
           activeSessions: req.activeSessions,
         });
-        const skills = checkPlanSkills(coerced, req.skills);
+        const skills = await checkPlanSkills(coerced, req.skills);
         const errors = [...validation.errors, ...skills.errors.map((e) => e.message)];
         if (errors.length === 0) {
           return { done: { pendingTasks: coerced, message: `Plan modified: ${coerced.length} pending task(s)`, skillWarnings: skills.warnings } };

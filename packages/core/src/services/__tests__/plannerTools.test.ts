@@ -5,7 +5,7 @@ import { join } from 'path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
-import { OrdewellMcpServer } from '../mcp';
+import { OrdewellMcpServer, PLANNER_TOOLS } from '../mcp';
 import type { ConversationRequest } from '../AiService';
 import type { SessionRuntimeSettings } from '../createSession';
 import type { SessionMessage } from '../SessionMessage';
@@ -578,6 +578,10 @@ describe('the two routes to a plan', () => {
 });
 
 describe('what the planner is told', () => {
+  it('that task_query reads a task\'s attached skills too', () => {
+    expect(PLANNER_TOOLS.find((t) => t.name === 'task_query')?.description).toMatch(/\bskills\b/);
+  });
+
   const systemPrompt = (spawned: FakeSpawnResult) => {
     const args = spawned.lastArgs();
     return args[args.indexOf('--append-system-prompt') + 1];

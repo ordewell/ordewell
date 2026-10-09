@@ -956,9 +956,9 @@ export class PlannerConversation {
         stream.retract();
         return this.drainTaskQueries(await ai.continueConversation(corrective, stream.sink(), signal), userTurn);
       },
-      interpret: (t) => {
+      interpret: async (t) => {
         if (t.kind === 'plan') {
-          const skills = checkPlanSkills(t.tasks, this.host.taskSkills());
+          const skills = await checkPlanSkills(t.tasks, this.host.taskSkills());
           if (skills.errors.length === 0) return { done: { turn: t, skillWarnings: skills.warnings } };
           const errors = skills.errors.map((e) => e.message);
           if (!ai.hasActiveConversation() || signal.aborted) return { done: invalidPlan(errors, t.researchLog) };
@@ -966,7 +966,7 @@ export class PlannerConversation {
         }
         if (t.kind !== 'task_ops') return { done: { turn: t } };
         this.assertCurrent(userTurn, t);
-        const applied = this.applyTaskOps(t, stream.turnId);
+        const applied = await this.applyTaskOps(t, stream.turnId);
         if ('plan' in applied) return { done: { plan: applied.plan } };
         // No live conversation (or an abort) means no corrective re-send is
         // possible — surface the failure instead of retrying into the void.
@@ -998,9 +998,9 @@ export class PlannerConversation {
   }
 
   /** Validate + commit a task_ops turn atomically. Returns the errors on rejection (plan untouched). */
-  private applyTaskOps(turn: Extract<ConversationTurn, { kind: 'task_ops' }>, turnId: string): { plan: LegacyPlanState } | { errors: string[] } {
+  private async applyTaskOps(turn: Extract<ConversationTurn, { kind: 'task_ops' }>, turnId: string): Promise<{ plan: LegacyPlanState } | { errors: string[] }> {
     this.requirePlan();
-    const skills = checkOpSkills(turn.ops, this.host.taskSkills());
+    const skills = await checkOpSkills(turn.ops, this.host.taskSkills());
     if (skills.errors.length > 0) return { errors: skills.errors.map((e) => e.message) };
     const result = this.host.validateOps(turn.ops);
     if (!result.ok) return { errors: result.errors };

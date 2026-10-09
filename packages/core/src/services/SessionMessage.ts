@@ -1,4 +1,4 @@
-import type { AwaitingReason, LegacyPlanState, QueuedMessage, ResearchStep, RunnerId, SkillLoadNotice, SubagentOutcome, Task, TaskTransport, Verdict } from '../models/Task';
+import type { AwaitingReason, ConversationMessage, LegacyPlanState, QueuedMessage, ResearchStep, RunnerId, SkillLoadNotice, SubagentOutcome, Task, TaskTransport, Verdict } from '../models/Task';
 import type { UsageTotals } from '../models/Usage';
 import type { TaskLogEvent } from '../models/TaskLog';
 import type { ApprovalKind } from '../interfaces/IApproval';
@@ -6,6 +6,7 @@ import type { ApprovalSource } from './ApprovalPolicy';
 import type { IsolationHandoff, IsolationMergeResult, TaskIsolation } from '../interfaces/IWorktreeIsolation';
 import type { QueuedTaskMessage } from '../interfaces/ITerminalRunner';
 import { canContinue } from './continuation';
+import { skillLoadNotice } from '../conversation/records';
 
 export type SerializedTaskStatus = {
   id: string;
@@ -75,13 +76,17 @@ export type SerializedTask = {
   skills?: string[];
 };
 
+/** Skill loads go out as notices: their bodies are for the planner, and stay in the session. */
+export type SerializedConversationMessage = Omit<ConversationMessage, 'skill'> & { skill?: SkillLoadNotice };
+export type SerializedQueuedMessage = Omit<QueuedMessage, 'skills'> & { skills?: SkillLoadNotice[] };
+
 export type SerializedPlan = {
   tasks: SerializedTask[];
   runners: RunnerId[];
   generatedAt: string;
-  conversationHistory?: LegacyPlanState['conversationHistory'];
+  conversationHistory?: SerializedConversationMessage[];
   prdMarkdown?: string;
-  queuedMessages?: QueuedMessage[];
+  queuedMessages?: SerializedQueuedMessage[];
 };
 
 /** How a planner turn ended: the reply kind it settled on, a user stop, or a failure. */
@@ -313,9 +318,9 @@ export function serializePlan(plan: LegacyPlanState): SerializedPlan {
     tasks: plan.tasks.map(serializeTask),
     runners: plan.runners,
     generatedAt: plan.generatedAt,
-    conversationHistory: plan.conversationHistory,
+    conversationHistory: plan.conversationHistory?.map(({ skill, ...m }) => (skill ? { ...m, skill: skillLoadNotice(skill) } : m)),
     prdMarkdown: plan.prdMarkdown,
-    queuedMessages: plan.queuedMessages,
+    queuedMessages: plan.queuedMessages?.map(({ skills, ...m }) => (skills ? { ...m, skills: skills.map(skillLoadNotice) } : m)),
   };
 }
 

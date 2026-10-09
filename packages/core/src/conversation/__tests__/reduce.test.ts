@@ -396,7 +396,7 @@ describe('reduceConversation', () => {
       const view = play([{ type: 'planner_turn_started', turnId: 't1', prompt: '/grilling it', skills: [grilling] }]);
       const next = reduceConversation(view, planSnapshot([
         { role: 'user', content: '/grilling it', timestamp: '2026-09-27T10:00:00.000Z' },
-        { role: 'user', content: '/grilling skill loaded', timestamp: '2026-09-27T10:00:00.000Z', kind: 'skill_load', skill: { ...grilling, content: 'GRILL' } },
+        { role: 'user', content: '/grilling skill loaded', timestamp: '2026-09-27T10:00:00.000Z', kind: 'skill_load', skill: grilling },
       ]));
       expect(next.blocks).toEqual(view.blocks);
     });

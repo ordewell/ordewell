@@ -1,4 +1,5 @@
-import type { ConversationMessage, ResearchStep } from '../../../models/Task';
+import type { ResearchStep } from '../../../models/Task';
+import type { SerializedConversationMessage } from '../../../services/SessionMessage';
 import type { ConversationInput } from '../../reduce';
 
 /**
@@ -101,7 +102,7 @@ export const harnessSubagent: ConversationInput[] = [
  * transcript as it now stands — and the turn, when a planner turn's commit is
  * what it carries.
  */
-export function planSnapshot(conversationHistory: ConversationMessage[], taskCount = 0, turnId?: string): ConversationInput {
+export function planSnapshot(conversationHistory: SerializedConversationMessage[], taskCount = 0, turnId?: string): ConversationInput {
   const tasks = Array.from({ length: taskCount }, (_, i) => ({
     id: `task-${i + 1}`, order: i + 1, title: `Task ${i + 1}`, type: 'ai', description: '', dependencies: [], assignedRunner: 'claude-code',
     assignedModel: null, taskMode: 'build', prompt: null, subtasks: [], userSteps: undefined, thinkingEffort: undefined, autonomy: undefined,
