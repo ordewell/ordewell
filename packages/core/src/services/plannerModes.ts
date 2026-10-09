@@ -12,7 +12,7 @@ import type { RepoGroupLayout } from '../interfaces/IWorktreeIsolation';
  */
 
 /** The id a surface shows and a user types. Deliberately not the settings key. */
-export type ModeToggleId = 'tdd' | 'verify';
+export type ModeToggleId = 'verify';
 
 /**
  * Where a toggle can take effect. `chat` is the conversation loop (ADR-0002),
@@ -30,7 +30,6 @@ type ToggleSettingsKey = {
 
 /** How the same toggle is named once a host has read it off disk. */
 export interface PlannerRuntimeToggles {
-  tddEnabled: boolean;
   verificationEnabled: boolean;
 }
 
@@ -45,7 +44,6 @@ export interface ModeToggle {
 
 export const MODE_TOGGLES: readonly ModeToggle[] = [
   { id: 'verify', settingsKey: 'verification', runtimeKey: 'verificationEnabled', scopes: ['chat', 'one-shot'] },
-  { id: 'tdd', settingsKey: 'tdd', runtimeKey: 'tddEnabled', scopes: ['task'] },
 ];
 
 /**
@@ -104,7 +102,6 @@ export function plannerModesFrom(
 
 const MODE_FIELD: Record<ModeToggleId, keyof PlannerModes | null> = {
   verify: 'verification',
-  tdd: null,
 };
 
 /**

@@ -45,7 +45,7 @@ describe.runIf(live)('OpenCode planner tools — live', () => {
     const ai = new CliAgentAiService(config, { spawn, workspaceRoot: () => workspace, mcpServer: server });
     cleanup.push(() => ai.reset());
 
-    let settings: SessionRuntimeSettings = { tddEnabled: false, enabledRunners: ['opencode'] };
+    let settings: SessionRuntimeSettings = { enabledRunners: ['opencode'] };
     const toolCalls: string[] = [];
     const broadcast = vi.fn((msg: SessionMessage) => {
       if (msg.type === 'research_step' && msg.toolLabel) toolCalls.push(msg.toolLabel);

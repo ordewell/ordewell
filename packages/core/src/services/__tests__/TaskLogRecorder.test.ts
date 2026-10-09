@@ -205,7 +205,7 @@ describe('a session’s task logs', () => {
     const { runner, sessions } = runnerFor('structured');
     const sent: SessionMessage[] = [];
     const files = memoryTaskLogs();
-    const session = makeSession({ runner, broadcast: (m) => sent.push(m), settings: () => ({ tddEnabled: false, runnerTransport: 'structured' }), openTaskLog: files });
+    const session = makeSession({ runner, broadcast: (m) => sent.push(m), settings: () => ({ runnerTransport: 'structured' }), openTaskLog: files });
     session.loadPlan(plan(), 'Goal', '/repo');
     await session.executePlan();
 

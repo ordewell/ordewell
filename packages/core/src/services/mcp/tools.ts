@@ -55,6 +55,8 @@ const planTask = z.looseObject({
   sliceType: z.enum(['AFK', 'HITL']).optional(),
   ops: z.boolean().optional(),
   userStoriesCovered: z.array(z.string()).optional(),
+  skills: z.array(z.string()).optional()
+    .describe('Task skills (applies-to: task) by name; their bodies go in the runner\'s prompt. A subtask lists its own.'),
   subtasks: z.array(z.record(z.string(), z.unknown())).optional(),
 });
 

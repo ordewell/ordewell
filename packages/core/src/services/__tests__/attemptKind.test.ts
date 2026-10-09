@@ -88,23 +88,23 @@ describe('mergeExcludes: the one rule Merge all and ops work share (ADR-0020)', 
 describe('attemptPrompt', () => {
   const task = createTask({ id: 't1', title: 'Deploy', prompt: 'ORIGINAL BODY', completionMarker: 'mk-1' });
 
-  function sources(): AttemptPromptSources & { tddEnabled: ReturnType<typeof vi.fn>; repairPrompt: ReturnType<typeof vi.fn>; previousAttempt: ReturnType<typeof vi.fn> } {
+  function sources(): AttemptPromptSources & { repairPrompt: ReturnType<typeof vi.fn>; previousAttempt: ReturnType<typeof vi.fn> } {
     return {
       task,
       plan: [task],
       completionTool: false,
       planMapEnabled: false,
-      tddEnabled: vi.fn(() => true),
+      skills: [{ name: 'tdd', source: 'global', path: '/g/tdd/SKILL.md', content: 'RED then GREEN.' }],
       repairPrompt: vi.fn(() => 'MERGE THE INTEGRATION BRANCH'),
       previousAttempt: vi.fn(() => 'created resource group rg-dev'),
     };
   }
 
-  const table: Array<[string, { has: string[]; lacks: string[]; reads: Array<'tddEnabled' | 'repairPrompt' | 'previousAttempt'> }]> = [
-    ['change', { has: ['ORIGINAL BODY', '## Implementation workflow (TDD)'], lacks: ['## Previous attempt'], reads: ['tddEnabled'] }],
-    ['ops', { has: ['ORIGINAL BODY', '## Implementation workflow (TDD)', '## Previous attempt', 'created resource group rg-dev'], lacks: [], reads: ['tddEnabled', 'previousAttempt'] }],
-    ['repair', { has: ['MERGE THE INTEGRATION BRANCH'], lacks: ['ORIGINAL BODY', '## Implementation workflow (TDD)', '## Previous attempt'], reads: ['repairPrompt'] }],
-    ['continued change', { has: ['Your working directory was recreated'], lacks: ['ORIGINAL BODY', '## Implementation workflow (TDD)'], reads: [] }],
+  const table: Array<[string, { has: string[]; lacks: string[]; reads: Array<'repairPrompt' | 'previousAttempt'> }]> = [
+    ['change', { has: ['ORIGINAL BODY', '### Skill: tdd'], lacks: ['## Previous attempt'], reads: [] }],
+    ['ops', { has: ['ORIGINAL BODY', '### Skill: tdd', '## Previous attempt', 'created resource group rg-dev'], lacks: [], reads: ['previousAttempt'] }],
+    ['repair', { has: ['MERGE THE INTEGRATION BRANCH'], lacks: ['ORIGINAL BODY', '### Skill: tdd', '## Previous attempt'], reads: ['repairPrompt'] }],
+    ['continued change', { has: ['Your working directory was recreated'], lacks: ['ORIGINAL BODY', '### Skill: tdd'], reads: [] }],
     ['continued ops', { has: ['in the same checkout', 'was not undone'], lacks: ['ORIGINAL BODY', '## Previous attempt'], reads: [] }],
   ];
 
@@ -117,7 +117,7 @@ describe('attemptPrompt', () => {
     for (const text of expected.lacks) expect(prompt).not.toContain(text);
     expect(prompt).toContain('`DONE_mk-1>>>`');
     if (KINDS[name].kind === 'continuation') expect(prompt.startsWith(`${resume.message}\n`)).toBe(true);
-    for (const source of ['tddEnabled', 'repairPrompt', 'previousAttempt'] as const) {
+    for (const source of ['repairPrompt', 'previousAttempt'] as const) {
       expect(src[source].mock.calls.length > 0, source).toBe(expected.reads.includes(source));
     }
   });

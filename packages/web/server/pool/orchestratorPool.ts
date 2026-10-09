@@ -235,7 +235,6 @@ export class OrchestratorPool {
       // for a planner that is running at "high".
       plannerThinkingEffort: config.plannerThinkingEffort ?? '',
       maxParallel: config.maxParallelSessions,
-      tdd: userSettings.tdd,
       verification: userSettings.verification,
       modelAllowlist: userSettings.modelAllowlist,
       // The model remembered per planner backend (this task), so a surface can
@@ -299,9 +298,6 @@ export class OrchestratorPool {
     }
     if (typeof changes.plannerThinkingEffort === 'string') {
       process.env.ORDEWELL_PLANNER_EFFORT = changes.plannerThinkingEffort;
-    }
-    if (changes.tdd && typeof (changes.tdd as Record<string, unknown>).enabled === 'boolean') {
-      this.settingsService.setTdd((changes.tdd as Record<string, unknown>).enabled as boolean);
     }
     if (changes.verification && typeof (changes.verification as Record<string, unknown>).enabled === 'boolean') {
       this.settingsService.setVerification((changes.verification as Record<string, unknown>).enabled as boolean);

@@ -34,6 +34,7 @@ function builtinFixture(): string {
   writeSkill(dir, 'grilling', { name: 'grilling', description: 'Builtin G' }, 'Builtin grilling body.');
   writeSkill(dir, 'to-spec', { name: 'to-spec', description: 'Builtin S' }, 'Builtin spec body.');
   writeSkill(dir, 'improve-codebase-architecture', { name: 'improve-codebase-architecture', description: 'Builtin A' }, 'Builtin architecture body.');
+  writeSkill(dir, 'tdd', { name: 'tdd', description: 'Builtin T', 'applies-to': 'task', 'disable-model-invocation': true }, 'Builtin tdd body.');
   return dir;
 }
 
@@ -184,7 +185,7 @@ describe('SkillsService', () => {
       writeSkill(path.join(workspaceRoot, '.ordewell', 'skills'), 'workspace-only', { name: 'workspace-only', description: 'W' }, 'Workspace.');
       const svc = createSkillsService(workspaceRoot);
       const names = svc.listSkills().map((s) => s.name).sort();
-      expect(names).toEqual(['grilling', 'improve-codebase-architecture', 'to-spec', 'workspace-only']);
+      expect(names).toEqual(['grilling', 'improve-codebase-architecture', 'tdd', 'to-spec', 'workspace-only']);
     });
 
     it('skips a workspace skill a global one shadows and reports it', () => {
@@ -215,7 +216,7 @@ describe('SkillsService', () => {
     it('seeds built-in skills into the global dir when no user skills exist', () => {
       const svc = createSkillsService(workspaceRoot);
       const names = svc.listSkills().map((s) => s.name).sort();
-      expect(names).toEqual(['grilling', 'improve-codebase-architecture', 'to-spec']);
+      expect(names).toEqual(['grilling', 'improve-codebase-architecture', 'tdd', 'to-spec']);
     });
 
     it('prunes a stale grill-me seed left by an older build', () => {
@@ -225,7 +226,7 @@ describe('SkillsService', () => {
       }, 'Old grill-me body.');
       const svc = createSkillsService(workspaceRoot);
       const names = svc.listSkills().map((s) => s.name).sort();
-      expect(names).toEqual(['grilling', 'improve-codebase-architecture', 'to-spec']);
+      expect(names).toEqual(['grilling', 'improve-codebase-architecture', 'tdd', 'to-spec']);
       expect(fs.existsSync(path.join(home, '.ordewell', 'skills', 'grill-me'))).toBe(false);
     });
 
@@ -262,7 +263,7 @@ describe('SkillsService', () => {
       }, 'My body.');
       const svc = createSkillsService(workspaceRoot);
       const names = svc.listSkills().map((s) => s.name).sort();
-      expect(names).toEqual(['grilling', 'improve-codebase-architecture', 'my-skill', 'to-spec']);
+      expect(names).toEqual(['grilling', 'improve-codebase-architecture', 'my-skill', 'tdd', 'to-spec']);
     });
 
     it('does not prune a retired-name skill vendored in the workspace', () => {

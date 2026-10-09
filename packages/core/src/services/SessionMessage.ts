@@ -71,6 +71,8 @@ export type SerializedTask = {
   userStoriesCovered: Task['userStoriesCovered'];
   /** Set only on an ops task (ADR-0020). */
   ops?: true;
+  /** Task skills attached by name; absent when none. */
+  skills?: string[];
 };
 
 export type SerializedPlan = {
@@ -272,6 +274,7 @@ export function serializeTask(t: Task): SerializedTask {
     sliceType: t.sliceType || undefined,
     userStoriesCovered: t.userStoriesCovered || undefined,
     ...(t.ops ? { ops: true as const } : {}),
+    ...(t.skills?.length ? { skills: [...t.skills] } : {}),
   };
 }
 

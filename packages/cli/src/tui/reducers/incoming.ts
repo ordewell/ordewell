@@ -96,6 +96,7 @@ function toTaskView(t: Record<string, unknown>, index: number): TaskView {
           .map((s, i) => toTaskView(asRecord(s), i))
       : undefined,
     ...(t.ops === true ? { ops: true } : {}),
+    ...(Array.isArray(t.skills) && t.skills.length > 0 ? { skills: t.skills.map((name: unknown) => planLabel(name)) } : {}),
     ...(Array.isArray(t.forcedPastGate) && t.forcedPastGate.length > 0 ? { forcedPastGate: t.forcedPastGate.map((title: unknown) => planLabel(title)) } : {}),
   };
 }
@@ -108,7 +109,6 @@ const enabledFlag = (value: unknown): boolean | undefined =>
 export function applySettings(state: TuiState, settings: Partial<SettingsResponse>): TuiState {
   // The daemon names the verification skill `verification`; the TUI calls it `/verify`.
   const sources: Record<SkillId, unknown> = {
-    tdd: settings.tdd,
     verify: settings.verification,
   };
 

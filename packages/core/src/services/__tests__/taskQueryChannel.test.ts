@@ -179,7 +179,7 @@ describe('the task-query read channel', () => {
           ],
         }),
       },
-      settings: () => ({ tddEnabled: false, modelAllowlist: { 'claude-code': ['haiku'] } }),
+      settings: () => ({ modelAllowlist: { 'claude-code': ['haiku'] } }),
     });
 
     await session.startPlanning('goal', ['claude-code']);

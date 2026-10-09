@@ -47,7 +47,6 @@ export interface HostState {
   planner: { backends: PlannerBackend[]; provider: string; runner?: string; effort?: string };
   isReady: boolean;
   modelDiscoveryErrors: Record<string, string>;
-  tddEnabled: boolean;
   verifyEnabled: boolean;
   runnerTransport: RunnerTransport;
   skills: { name: string; description: string }[];
@@ -97,7 +96,6 @@ export const INITIAL_HOST_STATE: HostState = {
   planner: { backends: [], provider: '' },
   isReady: false,
   modelDiscoveryErrors: {},
-  tddEnabled: true,
   verifyEnabled: false,
   runnerTransport: 'structured',
   skills: [],
@@ -135,7 +133,6 @@ export type HostAction =
   | { type: 'patchReady'; ready: boolean }
   | { type: 'patchRunners'; runners: Updatable<RunnerId[]> }
   | { type: 'patchPendingEdits'; edits: Updatable<PendingPlanEdit[]> }
-  | { type: 'patchTddEnabled'; enabled: boolean }
   | { type: 'patchVerifyEnabled'; enabled: boolean }
   | { type: 'patchRunnerTransport'; transport: RunnerTransport }
   | { type: 'patchCheckpoint'; checkpoint: HostState['checkpoint'] }
@@ -216,9 +213,6 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'patchPendingEdits':
       return { ...state, pendingEdits: resolve(action.edits, state.pendingEdits) };
-
-    case 'patchTddEnabled':
-      return { ...state, tddEnabled: action.enabled };
 
     case 'patchVerifyEnabled':
       return { ...state, verifyEnabled: action.enabled };
@@ -364,7 +358,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'setSkillToggles':
       if (!action.toggles) return state;
-      return { ...state, tddEnabled: action.toggles.tdd ?? true, verifyEnabled: action.toggles.verify ?? false };
+      return { ...state, verifyEnabled: action.toggles.verify ?? false };
 
     case 'setSkills':
       return { ...state, skills: action.skills ?? [] };

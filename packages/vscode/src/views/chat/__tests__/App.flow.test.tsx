@@ -182,20 +182,10 @@ describe('chat plan flow', () => {
     expect(pill?.textContent?.includes('Claude Code')).toBeTruthy();
   });
 
-  it('renders TDD skill pill and toggles it via postMessage', () => {
-    api.postMessage.mockClear();
-
-    send({ type: 'setSkillToggles', toggles: { tdd: false, verify: false } });
-    const tddButton = Array.from(document.querySelectorAll('.skill-toggle-pill')).find(
-      (b) => b.textContent?.includes('TDD'),
-    ) as HTMLButtonElement;
-    expect(tddButton).toBeTruthy();
-    expect(tddButton.classList.contains('off')).toBeTruthy();
-
-    act(() => { fireEvent.click(tddButton); });
-    expect(api.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'toggleSkill', skillId: 'tdd', enabled: true }),
-    );
+  it('has no TDD pill: tdd is a skill attached to tasks, not a toggle', () => {
+    send({ type: 'setSkillToggles', toggles: { verify: false } });
+    const labels = Array.from(document.querySelectorAll('.skill-toggle-pill')).map((b) => b.textContent ?? '');
+    expect(labels.some((l) => l.includes('TDD'))).toBe(false);
   });
 
   it('renders the structured transport pill and sets it via postMessage', () => {

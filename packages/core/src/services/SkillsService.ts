@@ -5,7 +5,7 @@ import { STATE_DIR } from '../utils/fsHelpers';
 import { globalDataDir } from '../utils/globalDataDir';
 import { builtinSkillsDir } from './builtinSkills';
 
-export const BUILTIN_SKILL_NAMES = ['grilling', 'to-spec', 'improve-codebase-architecture'] as const;
+export const BUILTIN_SKILL_NAMES = ['grilling', 'to-spec', 'improve-codebase-architecture', 'tdd'] as const;
 
 /** Built-in skills that were renamed/removed; their stale seeds are pruned from ~/.ordewell/skills. */
 export const RETIRED_BUILTIN_SKILL_NAMES = ['grill-me'] as const;
@@ -156,6 +156,12 @@ export class SkillsService {
    */
   forRoot(root: string): SkillsService {
     return new SkillsService(root);
+  }
+
+  /** Where {@link findSkill} looks, in the order it looks — global first. */
+  searchedDirs(): string[] {
+    const workspaceDir = this.workspaceDir();
+    return workspaceDir ? [this.globalDir(), workspaceDir] : [this.globalDir()];
   }
 
   private workspaceDir(): string | undefined {

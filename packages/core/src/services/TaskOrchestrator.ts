@@ -1,5 +1,5 @@
 import * as path from 'path';
-import { Task, TaskSnapshot, Verdict, QueuedMessage, RunnerId, DEFAULT_RUNNERS, flattenTasksWithParents, taskOrderLabel } from '../models/Task';
+import { Task, TaskSkillSnapshot, TaskSnapshot, Verdict, QueuedMessage, RunnerId, DEFAULT_RUNNERS, flattenTasksWithParents, taskOrderLabel } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
 import { INotification } from '../interfaces/INotification';
 import { isStructuredSession, type ITerminalRunner, type ITerminalSession, type QueuedTaskMessage, type RunnerTransport, type StructuredSessionCapability } from '../interfaces/ITerminalRunner';
@@ -24,9 +24,11 @@ import { classifyRunnerStop, keepsTerminalReadable, stopsRunner, LingeringRunner
 import { MessageQueue } from './MessageQueue';
 import { mergeGate, selectReadyTasks, type Readiness } from './readiness';
 import {
-  attemptCwd, attemptPrompt, attemptTransport, checksTree, classifyAttempt, decidesIsolation, mergeExcludes,
+  attemptCwd, attemptPrompt, attemptTransport, checksTree, classifyAttempt, decidesIsolation, mergeExcludes, takesSkills,
   type AttemptKind, type Continuation,
 } from './attemptKind';
+import { resolveTaskSkills, TaskSkillsError, type SkillLookup } from './taskSkills';
+import { SkillsService } from './SkillsService';
 import { capConflictFiles } from './conflictFiles';
 import { resolveWorkspaceEnv, type WorkspaceEnv } from './workspaceEnv';
 import { givesCompletionTool, routeTransport } from './TransportRouter';
@@ -125,6 +127,8 @@ interface TaskAttempt {
    * read as waiting for input.
    */
   decided: boolean;
+  /** The task skills put in this attempt's prompt, as read from where it runs. */
+  skills: readonly TaskSkillSnapshot[];
 }
 
 type AttemptPhase = 'starting' | 'running' | 'integrating';
@@ -138,6 +142,7 @@ export interface TaskAttemptSnapshot {
   runner: string;
   cwd: string | null;
   startedAt: string;
+  skills: readonly TaskSkillSnapshot[];
 }
 
 /**
@@ -161,8 +166,8 @@ export interface TaskOrchestratorDeps {
   workspaceRoot: () => string;
   /** The workspace's own variables for a task's cwd (ADR-0016). */
   workspaceEnv: (cwd: string) => Promise<WorkspaceEnv>;
-  /** Read live at each spawn, so a toggle takes effect on the next task. */
-  tddEnabled: () => boolean;
+  /** The skill catalog at a root — a task's worktree, or the workspace root — read at each spawn. */
+  skillsAt: (root: string) => SkillLookup;
   /** Read once as a run opens, never per spawn (ADR-0018, S1). */
   runnerTransport: () => RunnerTransport;
   /** What the task's last saved attempt did, or null when it left no log (ADR-0020). */
@@ -184,7 +189,7 @@ export interface TaskOrchestratorOptions {
   registry?: RunnerRegistry | null;
   workspaceRoot?: () => string;
   workspaceEnv?: (cwd: string) => Promise<WorkspaceEnv>;
-  tddEnabled?: () => boolean;
+  skillsAt?: (root: string) => SkillLookup;
   runnerTransport?: () => RunnerTransport;
   previousAttemptFromLog?: (taskId: string) => string | null;
 }
@@ -260,7 +265,7 @@ export class TaskOrchestrator {
   private registry: RunnerRegistry | null;
   private workspaceRootFn: () => string;
   private observers: OrchestratorObserver[] = [];
-  private tddEnabled: () => boolean;
+  private skillsAt: (root: string) => SkillLookup;
   private readRunnerTransport: () => RunnerTransport;
   private previousAttemptFromLog: (taskId: string) => string | null;
   /**
@@ -281,7 +286,7 @@ export class TaskOrchestrator {
     this.registry = deps.registry;
     this.workspaceRootFn = deps.workspaceRoot;
     this.workspaceEnv = deps.workspaceEnv;
-    this.tddEnabled = deps.tddEnabled;
+    this.skillsAt = deps.skillsAt;
     this.readRunnerTransport = deps.runnerTransport;
     this.previousAttemptFromLog = deps.previousAttemptFromLog;
 
@@ -346,7 +351,7 @@ export class TaskOrchestrator {
       registry: options.registry ?? null,
       workspaceRoot,
       workspaceEnv: options.workspaceEnv ?? ((cwd) => resolveWorkspaceEnv(cwd)),
-      tddEnabled: options.tddEnabled ?? (() => false),
+      skillsAt: options.skillsAt ?? ((root) => new SkillsService(root)),
       runnerTransport: options.runnerTransport ?? (() => 'terminal'),
       previousAttemptFromLog: options.previousAttemptFromLog ?? (() => null),
     });
@@ -582,8 +587,8 @@ export class TaskOrchestrator {
   getAttempt(taskId: string): TaskAttemptSnapshot | undefined {
     const attempt = this.attempts.get(taskId);
     if (!attempt) return undefined;
-    const { taskId: id, attempt: n, phase, session, runner, cwd, startedAt } = attempt;
-    return { taskId: id, attempt: n, phase, sessionId: session?.id ?? null, runner, cwd, startedAt };
+    const { taskId: id, attempt: n, phase, session, runner, cwd, startedAt, skills } = attempt;
+    return { taskId: id, attempt: n, phase, sessionId: session?.id ?? null, runner, cwd, startedAt, skills };
   }
 
   get queuedCount(): number { return this.messageQueue.length; }
@@ -1415,6 +1420,7 @@ export class TaskOrchestrator {
       snapshot: null,
       startedAt: new Date().toISOString(),
       decided: false,
+      skills: [],
     };
     this.spawnCounts.set(task.id, attempt.attempt);
     this.attempts.set(task.id, attempt);
@@ -1458,6 +1464,9 @@ export class TaskOrchestrator {
         this.abandonSpawn(task, attempt);
         return false;
       }
+      // Read where the attempt runs: a skill an earlier task committed is in
+      // this worktree only once that task's work has landed.
+      if (takesSkills(kind) && task.skills?.length) attempt.skills = resolveTaskSkills(task, this.skillsAt(cwd));
       const transport = attemptTransport(kind, this.planTransport);
       const completionTool = givesCompletionTool(transport, attempt.runner, this.registry);
       const finalPrompt = attemptPrompt(kind, {
@@ -1465,7 +1474,7 @@ export class TaskOrchestrator {
         plan: this.store.planTasks,
         completionTool,
         planMapEnabled: this.config.planMapEnabled,
-        tddEnabled: () => this.tddEnabled(),
+        skills: attempt.skills,
         repairPrompt: (t) => this.landing.repairPrompt(t),
         previousAttempt: (taskId) => this.opsPreviousAttempt(taskId),
       });
@@ -1506,6 +1515,7 @@ export class TaskOrchestrator {
       attempt.phase = 'running';
       attempt.session = session;
       this.recordTransport(task, attempt, transport, session);
+      if (takesSkills(kind)) this.store.setTaskAttemptSkills(task.id, [...attempt.skills]);
 
       // Attached before the verifier so the chunk that carries the marker is
       // captured before that chunk's verdict asks for the final text.
@@ -1536,6 +1546,19 @@ export class TaskOrchestrator {
       if (attempt.kind.kind === 'repair') {
         this.store.markAwaitingUser(task.id, 'conflict');
         this.settleUnlanded(task, await this.landing.unrepaired(task, `could not start: ${err instanceof Error ? err.message : String(err)}`));
+        this.emit('onTaskSettled', { taskId: task.id });
+        this.emit('onTaskChanged');
+        await this.tick();
+        return false;
+      }
+      if (err instanceof TaskSkillsError) {
+        // Running without a skill the plan attached would be a silent rewrite
+        // of the plan (ADR-0001): the task fails, saying what was missing.
+        this.store.markFailed(task.id);
+        this.store.setTaskOutputSummary(task.id, summarizeOutput(err.message, ''));
+        await this.runs.release(task.id, { keep: false });
+        this.haltOnFailure();
+        this.tell('error', err.message);
         this.emit('onTaskSettled', { taskId: task.id });
         this.emit('onTaskChanged');
         await this.tick();

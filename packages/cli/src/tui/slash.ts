@@ -59,7 +59,6 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'refresh', usage: '/refresh', description: 'Re-discover runners and model catalogs', category: 'models' },
 
   // Skills
-  { name: 'tdd', usage: '/tdd [on|off]', description: 'Test-Driven Development mode', category: 'skills' },
   { name: 'verify', usage: '/verify [on|off]', description: 'Verification mode — final evidence-based task that runs the suite', category: 'skills' },
 
   // Sessions

@@ -143,8 +143,8 @@ describe('frame geometry', () => {
 
 describe('top bar', () => {
   it('marks which skills are on', () => {
-    const on = text({ skills: { ...initialState().skills, tdd: true } });
-    expect(on).toContain('tdd');
+    const on = text({ skills: { ...initialState().skills, verify: true } });
+    expect(on).toContain('● verify');
   });
 
   it('names the autonomy level, Full or Guarded', () => {
@@ -651,7 +651,7 @@ describe('overlays', () => {
 
   it('lists every command in the help sheet', () => {
     const out = text({ overlay: { kind: 'help' }, rows: 60 });
-    for (const name of ['/verify', '/allowlist', '/key', '/model', '/tdd']) {
+    for (const name of ['/verify', '/allowlist', '/key', '/model']) {
       expect(out).toContain(name);
     }
   });

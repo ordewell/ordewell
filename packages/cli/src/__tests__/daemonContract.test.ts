@@ -289,7 +289,7 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
       expect(settings).toMatchObject({
         aiProvider: 'openrouter',
         orchestratorModel: 'openrouter/auto',
-        tdd: { enabled: expect.any(Boolean) },
+        verification: { enabled: expect.any(Boolean) },
         runnerTransport: expect.stringMatching(/structured|terminal/),
       });
     });
@@ -302,9 +302,9 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
     });
 
     it('carries no recall for a write that left the planner alone', async () => {
-      const written = await client.updateSettings({ tdd: { enabled: false } });
+      const written = await client.updateSettings({ verification: { enabled: false } });
 
-      expect(written.tdd).toEqual({ enabled: false });
+      expect(written.verification).toEqual({ enabled: false });
       expect(written.switchRecall).toBeUndefined();
     });
 
@@ -321,10 +321,10 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
     });
 
     it('answers a command with the settings it left behind', async () => {
-      const result = await client.sendCommand('tdd', { action: 'off' });
+      const result = await client.sendCommand('verify', { action: 'off' });
 
       expect(result.ok).toBe(true);
-      expect(result.settings.tdd).toEqual({ enabled: false });
+      expect(result.settings.verification).toEqual({ enabled: false });
     });
 
     it('reads the runners the daemon offers', async () => {

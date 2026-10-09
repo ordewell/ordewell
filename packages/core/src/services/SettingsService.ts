@@ -4,7 +4,6 @@ import { globalDataDir, migrateOldConfigDir } from '../utils/globalDataDir';
 import { isRunnerTransport, type RunnerTransport } from '../interfaces/ITerminalRunner';
 
 export interface UserSettings {
-  tdd: { enabled: boolean };
   verification: { enabled: boolean };
   modelAllowlist?: Record<string, string[]>;
   /** Last model (and its thinking effort) the user chose for each planner backend, keyed by AiProvider id. */
@@ -22,7 +21,6 @@ export interface UserSettings {
 }
 
 const DEFAULTS: UserSettings = {
-  tdd: { enabled: true },
   verification: { enabled: false },
   runnerTransport: 'structured',
 };
@@ -96,16 +94,6 @@ export class SettingsService {
     } catch {
       return null;
     }
-  }
-
-  getTdd(): boolean {
-    return this.getAll().tdd.enabled;
-  }
-
-  setTdd(enabled: boolean): void {
-    this.getAll();
-    this.cache!.tdd.enabled = enabled;
-    this.persist();
   }
 
   getVerification(): boolean {
@@ -194,8 +182,9 @@ export class SettingsService {
       if (fs.existsSync(this.filePath)) {
         const raw = JSON.parse(fs.readFileSync(this.filePath, 'utf-8'));
         this.transportChosen = isRunnerTransport(raw.runnerTransport);
+        // Keys no longer read (`tdd`, now a task skill) are dropped here, so
+        // the next persist leaves them out of the file.
         const settings: UserSettings = {
-          tdd: { enabled: raw.tdd?.enabled ?? DEFAULTS.tdd.enabled },
           verification: { enabled: raw.verification?.enabled ?? DEFAULTS.verification.enabled },
           runnerTransport: isRunnerTransport(raw.runnerTransport) ? raw.runnerTransport : DEFAULTS.runnerTransport,
         };
@@ -214,7 +203,7 @@ export class SettingsService {
     } catch {
       // corrupted file — use defaults
     }
-    return { ...DEFAULTS, tdd: { ...DEFAULTS.tdd }, verification: { ...DEFAULTS.verification } };
+    return { ...DEFAULTS, verification: { ...DEFAULTS.verification } };
   }
 
   private persist(): void {

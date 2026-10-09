@@ -93,7 +93,7 @@ describe('the runnerTransport setting, copied when a run opens', () => {
   });
 
   it('is persisted on the plan, and a setting changed mid-run does not rewrite it', async () => {
-    const settings = { tddEnabled: false, runnerTransport: 'structured' as RunnerTransport };
+    const settings = { runnerTransport: 'structured' as RunnerTransport };
     const { runner, sessions } = routingRunner();
     const session = makeSession({ runner, settings: () => settings });
     const plan: LegacyPlanState = {

@@ -65,7 +65,7 @@ async function submitsThroughTools(provider: 'claude-code' | 'codex', model: str
   cleanup.push(() => ai.reset());
 
   const other = provider === 'claude-code' ? 'codex' : 'claude-code';
-  let settings: SessionRuntimeSettings = { tddEnabled: false, enabledRunners: [provider] };
+  let settings: SessionRuntimeSettings = { enabledRunners: [provider] };
   const toolCalls: string[] = [];
   const broadcast = vi.fn((msg: SessionMessage) => {
     if (msg.type === 'research_step' && msg.toolLabel) toolCalls.push(msg.toolLabel);
@@ -135,7 +135,7 @@ describe.runIf(live)('Claude Code planner tools — live', () => {
       runner,
       workspaceRoot: () => workspace,
       modelResolver: { modelsForRunners: vi.fn(async (runners: string[]) => Object.fromEntries(runners.map((r) => [r, CATALOG[r] ?? []]))) },
-      settings: () => ({ tddEnabled: false, enabledRunners: ['claude-code'] }),
+      settings: () => ({ enabledRunners: ['claude-code'] }),
       broadcast: (msg: SessionMessage) => {
         if (msg.type === 'research_step' && msg.toolLabel) toolCalls.push(msg.toolLabel);
       },

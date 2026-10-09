@@ -110,7 +110,6 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     fsAdapter: services.fsAdapter,
     terminalRunner: services.terminalRunner,
     notifications: services.notifications,
-    settingsService: services.settingsService,
     getCurrentPlan: () => state.plan,
     setCurrentPlan: (plan) => { state.plan = plan; },
     getCurrentGoal: () => state.goal,
@@ -248,7 +247,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
 
   function onWebviewReady(): void {
     services.chatProvider.resendAllState();
-    services.chatProvider.setSkillToggles(services.settingsService.getTdd(), services.settingsService.getVerification(), []);
+    services.chatProvider.setSkillToggles(services.settingsService.getVerification(), []);
     services.chatProvider.setRunnerTransport(services.settingsService.getRunnerTransport());
     services.chatProvider.setPlanDockHeight(services.context.globalState.get<number>(PLAN_DOCK_HEIGHT_KEY));
     sendSkills();

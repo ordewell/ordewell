@@ -28,7 +28,6 @@ describe('mode toggle registry', () => {
   });
 
   const settings: UserSettings = {
-    tdd: { enabled: true },
     verification: { enabled: false },
     runnerTransport: 'terminal',
   };
@@ -38,7 +37,6 @@ describe('mode toggle registry', () => {
     // friends, so a toggle had three names — one on disk, one at runtime, one
     // on screen — and nothing tied them together. This is the tie.
     expect(plannerRuntimeToggles(settings)).toEqual({
-      tddEnabled: true,
       verificationEnabled: false,
     });
   });

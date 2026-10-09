@@ -56,7 +56,6 @@ Planner, models and runners:
   ordewell models                 List every provider's catalog (works without a server)
 
 Modes:
-  ordewell tdd [on|off]         Toggle Test-Driven Development mode (or show status)
   ordewell verify [on|off]    Toggle verification mode — adds a final evidence-based task that runs the full suite (or show status)
 
 Other:

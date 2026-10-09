@@ -57,7 +57,6 @@ export type SessionPlanner = Pick<Planner, 'generate' | 'modifyDuringExecution'>
 
 /** Runtime prefs read live — may toggle between operations. */
 export interface SessionRuntimeSettings {
-  tddEnabled: boolean;
   verificationEnabled?: boolean;
   modelAllowlist?: Record<string, string[]>;
   /** Read once as a run starts, never per spawn (ADR-0018, S1). Absent means terminal. */
@@ -164,8 +163,8 @@ export type SaveSession = (plan: LegacyPlanState, goal: string, workspace: strin
 /**
  * Everything a delivery surface constructs to host a session. Structural config
  * (orchestratorModel, providerModelLists) is snapshotted inside `config` at
- * construction and never re-read from the environment. Runtime settings (tdd,
- * verification, enabled runners) are read live via the `settings` callback so a
+ * construction and never re-read from the environment. Runtime settings
+ * (verification, enabled runners) are read live via the `settings` callback so a
  * toggle between operations takes effect.
  */
 export interface SessionDeps {
@@ -183,7 +182,7 @@ export interface SessionDeps {
   onNotice?: (notice: SessionNotice) => void;
   /** Shared across sessions — sole producer of model catalogs and routing lists. */
   modelResolver: ModelResolver;
-  /** Live runtime settings (tdd, verification, enabled runners). Read at each operation that needs them. */
+  /** Live runtime settings (verification, enabled runners). Read at each operation that needs them. */
   settings: () => SessionRuntimeSettings;
   /**
    * Host-assigned session id. When set, every persist writes under this id so
@@ -318,7 +317,7 @@ export function createSession(deps: SessionDeps): Session {
     isolation: deps.isolation,
     registry: deps.registry,
     workspaceRoot: deps.workspaceRoot,
-    tddEnabled: () => deps.settings().tddEnabled,
+    skillsAt: (root) => (deps.skillsService ?? new SkillsService(root)).forRoot(root),
     runnerTransport: () => deps.settings().runnerTransport ?? 'terminal',
     previousAttemptFromLog: (taskId) => lastAttemptDigest(session.taskLogLocation, taskId),
   });
@@ -411,7 +410,7 @@ export interface SessionParts {
   approvals: PendingApprovals;
   approvalPolicy: ApprovalPolicy;
   fetcher: IWebFetcher;
-  skillsService: Pick<SkillsService, 'findSkill' | 'listSkills'>;
+  skillsService: Pick<SkillsService, 'findSkill' | 'listSkills' | 'searchedDirs'>;
   saveSession: SaveSession;
   /** The conversation's host is the Session itself, so only the Session can make it. */
   conversation: (host: PlannerConversationHost) => PlannerConversation;
@@ -460,7 +459,7 @@ export class Session {
   private unsubObserver: (() => void) | null;
   private readonly hostSessionId?: string;
   private currentSessionId: string;
-  private readonly skillsService: Pick<SkillsService, 'findSkill' | 'listSkills'>;
+  private readonly skillsService: Pick<SkillsService, 'findSkill' | 'listSkills' | 'searchedDirs'>;
   private readonly conversation: PlannerConversation;
   private readonly editor: PlanEditor;
   private readonly plannerTools: PlannerToolHandler = plannerToolHandler({
@@ -472,6 +471,7 @@ export class Session {
     read: (signature, answer) => this.conversation.read(signature, answer),
     liveOutput: (taskId, opts) => this.orchestrator.getLiveOutput(taskId, opts),
     lastAttempt: (taskId) => lastAttemptDigest(this.taskLogLocation, taskId),
+    skills: () => this.skillsService,
   });
 
   constructor(parts: SessionParts) {

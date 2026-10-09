@@ -329,7 +329,7 @@ describe('through the Session', () => {
       activeCount: 0,
     } satisfies ITerminalRunner;
     const broadcast = vi.fn<(msg: SessionMessage) => void>();
-    const session = makeSession({ runner, broadcast, settings: () => ({ tddEnabled: false, runnerTransport: 'structured' }) });
+    const session = makeSession({ runner, broadcast, settings: () => ({ runnerTransport: 'structured' }) });
     const plan: LegacyPlanState = {
       tasks: [createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', completionMarker: 'mk-1' })],
       generatedAt: new Date().toISOString(),

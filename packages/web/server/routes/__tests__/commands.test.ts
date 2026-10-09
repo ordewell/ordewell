@@ -5,8 +5,7 @@ import type { OrchestratorPool } from '../../pool/orchestratorPool';
 function fakePool(initialSettings?: Record<string, unknown>): OrchestratorPool {
   let state = initialSettings ?? {
     orchestratorModel: '',
-    tdd: { enabled: true },
-    verification: { enabled: false },
+    verification: { enabled: true },
   };
   const pool = {
     getSettings: vi.fn(() => state),
@@ -42,11 +41,11 @@ describe('GET /api/commands', () => {
     }
   });
 
-  it('includes tdd and verify commands', async () => {
+  it('includes verify, and no tdd toggle now that tdd is a task skill', async () => {
     const res = await app.request('/api/commands', { method: 'GET' });
     const body = (await res.json()) as { commands: Array<{ name: string }> };
     const names = body.commands.map((c: { name: string }) => c.name);
-    expect(names).toContain('tdd');
+    expect(names).not.toContain('tdd');
     expect(names).toContain('verify');
   });
 });
@@ -62,30 +61,28 @@ describe('POST /api/commands/:name', () => {
     app.route('/api/commands', commandsRoute(pool));
   });
 
-  it('disables tdd via command', async () => {
+  it('refuses the retired tdd toggle', async () => {
     const res = await app.request('/api/commands/tdd', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ args: { action: 'off' } }),
     });
 
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { settings: { tdd: { enabled: boolean } } };
-    expect(body.settings.tdd.enabled).toBe(false);
-    expect(pool.updateSettings).toHaveBeenCalledWith({ tdd: { enabled: false } });
+    expect(res.status).toBe(404);
+    expect(pool.updateSettings).not.toHaveBeenCalled();
   });
 
   it('returns current state when no action specified', async () => {
-    const res = await app.request('/api/commands/tdd', {
+    const res = await app.request('/api/commands/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ args: {} }),
     });
 
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: boolean; settings: { tdd: { enabled: boolean } } };
+    const body = (await res.json()) as { ok: boolean; settings: { verification: { enabled: boolean } } };
     expect(body.ok).toBe(true);
-    expect(body.settings.tdd.enabled).toBe(true);
+    expect(body.settings.verification.enabled).toBe(true);
   });
 
   it('enables verification via the verify command', async () => {

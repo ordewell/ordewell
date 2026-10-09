@@ -182,6 +182,7 @@ export class PlanStore {
       assignedModel: taskA.assignedModel,
       taskMode: taskA.taskMode,
       ops: inheritedOps([taskA, taskB]),
+      skills: [...(taskA.skills ?? []), ...(taskB.skills ?? [])],
       order: Math.min(taskA.order, taskB.order),
     });
 
@@ -225,6 +226,7 @@ export class PlanStore {
         sliceType: spec.sliceType ?? original.sliceType,
         userStoriesCovered: spec.userStoriesCovered ?? original.userStoriesCovered,
         ops: inheritedOps([original], spec.ops),
+        skills: spec.skills ?? original.skills,
       }));
     });
 
@@ -337,6 +339,11 @@ export class PlanStore {
   setTaskTransport(id: string, transport: Task['transport']): void {
     const task = this._taskMap.get(id);
     if (task) task.transport = transport;
+  }
+
+  setTaskAttemptSkills(id: string, skills: Task['attemptSkills']): void {
+    const task = this._taskMap.get(id);
+    if (task) task.attemptSkills = skills && skills.length > 0 ? skills : undefined;
   }
 
   /**

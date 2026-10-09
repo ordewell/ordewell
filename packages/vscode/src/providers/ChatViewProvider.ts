@@ -66,8 +66,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.postMessage({ type: 'setModels', models });
   }
   setRunners(runners: RunnerMeta[]): void { this.postMessage({ type: 'setRunners', runners }); }
-  setSkillToggles(tdd: boolean, verify: boolean, unavailable: string[] = []): void {
-    this.postMessage({ type: 'setSkillToggles', toggles: { tdd, verify }, unavailable });
+  setSkillToggles(verify: boolean, unavailable: string[] = []): void {
+    this.postMessage({ type: 'setSkillToggles', toggles: { verify }, unavailable });
   }
   setRunnerTransport(transport: RunnerTransport): void {
     this.postMessage({ type: 'runnerTransport', transport });

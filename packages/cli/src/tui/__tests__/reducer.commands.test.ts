@@ -20,21 +20,22 @@ const planned: Partial<TuiState> = {
 };
 
 describe('skills', () => {
-  it.each(['tdd', 'verify'])(
-    '/%s on turns the skill on through the daemon command API',
-    (skill) => {
-      expect(run(`/${skill} on`).effects).toEqual([{ type: 'command', name: skill, action: 'on' }]);
-    },
-  );
-
-  it('/tdd off turns the skill off', () => {
-    expect(run('/tdd off').effects).toEqual([{ type: 'command', name: 'tdd', action: 'off' }]);
+  it('/verify on turns the skill on through the daemon command API', () => {
+    expect(run('/verify on').effects).toEqual([{ type: 'command', name: 'verify', action: 'on' }]);
   });
 
-  it('a bare /tdd toggles whatever is currently set', () => {
-    const on = { skills: { ...initialState().skills, tdd: true } };
-    expect(run('/tdd', on).effects).toEqual([{ type: 'command', name: 'tdd', action: 'off' }]);
-    expect(run('/tdd').effects).toEqual([{ type: 'command', name: 'tdd', action: 'on' }]);
+  it('/verify off turns the skill off', () => {
+    expect(run('/verify off').effects).toEqual([{ type: 'command', name: 'verify', action: 'off' }]);
+  });
+
+  it('a bare /verify toggles whatever is currently set', () => {
+    const on = { skills: { ...initialState().skills, verify: true } };
+    expect(run('/verify', on).effects).toEqual([{ type: 'command', name: 'verify', action: 'off' }]);
+    expect(run('/verify').effects).toEqual([{ type: 'command', name: 'verify', action: 'on' }]);
+  });
+
+  it('/tdd is no longer a toggle', () => {
+    expect(run('/tdd on').effects).not.toContainEqual(expect.objectContaining({ type: 'command', name: 'tdd' }));
   });
 });
 

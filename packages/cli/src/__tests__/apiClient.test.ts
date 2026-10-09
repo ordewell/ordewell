@@ -93,13 +93,13 @@ describe('ApiClient', () => {
   it('getCommands returns command list', async () => {
     const srv = await startCustomServer((_req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ commands: [{ name: 'tdd', description: 'Toggle TDD' }] }));
+      res.end(JSON.stringify({ commands: [{ name: 'verify', description: 'Toggle verification' }] }));
     });
     servers.push(srv);
     const client = new ApiClient(srv.port);
     const result = await client.getCommands();
     expect(result.commands).toHaveLength(1);
-    expect(result.commands[0].name).toBe('tdd');
+    expect(result.commands[0].name).toBe('verify');
   });
 
   it('sendCommand posts to /api/commands/:name', async () => {
@@ -107,17 +107,17 @@ describe('ApiClient', () => {
       let body = '';
       req.on('data', (chunk) => { body += chunk; });
       req.on('end', () => {
-        expect(req.url).toBe('/api/commands/tdd');
+        expect(req.url).toBe('/api/commands/verify');
         const parsed = JSON.parse(body);
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, settings: { tdd: { enabled: parsed.args.action === 'off' ? false : true } } }));
+        res.end(JSON.stringify({ ok: true, settings: { verification: { enabled: parsed.args.action === 'off' ? false : true } } }));
       });
     });
     servers.push(srv);
     const client = new ApiClient(srv.port);
-    const result = await client.sendCommand('tdd', { action: 'off' });
+    const result = await client.sendCommand('verify', { action: 'off' });
     expect(result.ok).toBe(true);
-    expect(result.settings?.tdd).toEqual({ enabled: false });
+    expect(result.settings?.verification).toEqual({ enabled: false });
   });
 
   it('generatePlan posts to the caller-provided sessionId instead of minting its own', async () => {

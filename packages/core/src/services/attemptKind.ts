@@ -1,4 +1,4 @@
-import type { Task } from '../models/Task';
+import type { Task, TaskSkillSnapshot } from '../models/Task';
 import type { RunnerTransport } from '../interfaces/ITerminalRunner';
 import type { IsolationRunController } from './IsolationRunController';
 import type { RepairAttempt } from './Landing';
@@ -69,6 +69,15 @@ export function decidesIsolation(kind: AttemptKind): boolean {
 }
 
 /**
+ * Whether the attempt is given its task's skills: a fresh attempt is. A
+ * repair resolves a merge, not the task's work; a continue resumes a session
+ * that already holds them.
+ */
+export function takesSkills(kind: AttemptKind): boolean {
+  return kind.kind === 'change' || kind.kind === 'ops';
+}
+
+/**
  * Whether the workspace's tracked files are compared from the attempt's start
  * to its end (ADR-0020). A runner in the checkout cannot be stopped from
  * writing, only caught.
@@ -106,7 +115,8 @@ export interface AttemptPromptSources {
   plan: readonly Task[];
   completionTool: boolean;
   planMapEnabled?: boolean;
-  tddEnabled: () => boolean;
+  /** The task's skills, resolved where the attempt runs; a repair and a continue are given none. */
+  skills: readonly TaskSkillSnapshot[];
   /** What a repair is asked to do; read once its worktree has been reopened. */
   repairPrompt: (task: Task) => string;
   /** What an ops task's last attempt did. */
@@ -124,13 +134,13 @@ export function attemptPrompt(kind: AttemptKind, src: AttemptPromptSources): str
     case 'continuation':
       return composeContinuationPrompt(task, kind.message, { ops: kind.ops, completionTool });
     case 'repair':
-      // A merge to resolve is not new behaviour to drive test-first.
-      return composeAugmentedPrompt({ ...task, prompt: src.repairPrompt(task) }, plan, { planMapEnabled, tddEnabled: false, completionTool });
+      // A merge to resolve is not the task's own work, so its skills do not apply.
+      return composeAugmentedPrompt({ ...task, prompt: src.repairPrompt(task) }, plan, { planMapEnabled, completionTool });
     case 'ops':
       // Its effects outlive a failed attempt and are never rolled back, so
       // the next one is told what the last one did.
-      return composeAugmentedPrompt(task, plan, { planMapEnabled, tddEnabled: src.tddEnabled(), previousAttempt: src.previousAttempt(task.id), completionTool });
+      return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, previousAttempt: src.previousAttempt(task.id), completionTool });
     case 'change':
-      return composeAugmentedPrompt(task, plan, { planMapEnabled, tddEnabled: src.tddEnabled(), completionTool });
+      return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, completionTool });
   }
 }

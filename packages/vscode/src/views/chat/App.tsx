@@ -38,7 +38,7 @@ export default function App() {
   const {
     conversation, plan, isExecuting, isResearchActive, conversationBusy, error, models, modelsByRunner,
     runnerList, enabledRunnerIds, runners, pendingEdits, held, unsent, modesByRunner, modelConfig,
-    modelOptions, configuredProviders, planner, isReady, modelDiscoveryErrors, tddEnabled, verifyEnabled,
+    modelOptions, configuredProviders, planner, isReady, modelDiscoveryErrors, verifyEnabled,
     runnerTransport, skills, checkpoint, taskOutput, taskIdle, taskApprovals, taskIsolation, handoff,
     mergeResult, mergeGate, taskGates, dockExpanded, dockHeight,
   } = host;
@@ -49,7 +49,6 @@ export default function App() {
   const setIsReady = useCallback((v: boolean) => dispatch({ type: 'patchReady', ready: v }), []);
   const setRunners = useCallback((v: Updatable<RunnerId[]>) => dispatch({ type: 'patchRunners', runners: v }), []);
   const setPendingEdits = useCallback((v: Updatable<PendingPlanEdit[]>) => dispatch({ type: 'patchPendingEdits', edits: v }), []);
-  const setTddEnabled = useCallback((v: boolean) => dispatch({ type: 'patchTddEnabled', enabled: v }), []);
   const setVerifyEnabled = useCallback((v: boolean) => dispatch({ type: 'patchVerifyEnabled', enabled: v }), []);
   const setRunnerTransport = useCallback((v: RunnerTransport) => dispatch({ type: 'patchRunnerTransport', transport: v }), []);
   const setCheckpoint = useCallback((v: HostState['checkpoint']) => dispatch({ type: 'patchCheckpoint', checkpoint: v }), []);
@@ -377,16 +376,12 @@ export default function App() {
   }, [stopArmed, isResearchActive]);
 
   const handleToggleSkill = useCallback((skillId: string) => {
-    if (skillId === 'tdd') {
-      const next = !tddEnabled;
-      setTddEnabled(next);
-      vscode.postMessage({ type: 'toggleSkill', skillId, enabled: next });
-    } else if (skillId === 'verify') {
+    if (skillId === 'verify') {
       const next = !verifyEnabled;
       setVerifyEnabled(next);
       vscode.postMessage({ type: 'toggleSkill', skillId, enabled: next });
     }
-  }, [tddEnabled, verifyEnabled]);
+  }, [verifyEnabled]);
 
   const handleToggleTransport = useCallback(() => {
     const next: RunnerTransport = runnerTransport === 'structured' ? 'terminal' : 'structured';
@@ -779,10 +774,6 @@ export default function App() {
       </div>
 
       <div className="skill-bar">
-        <button className={`skill-toggle-pill ${tddEnabled ? 'on' : 'off'}`}
-          onClick={() => handleToggleSkill('tdd')} title="TDD: test-driven development prompt augmentation">
-          <span className="skill-toggle-dot" /> TDD
-        </button>
         <button className={`skill-toggle-pill ${verifyEnabled ? 'on' : 'off'}`}
           onClick={() => handleToggleSkill('verify')} title="Verify (run tests): adds a final evidence-based task that runs the full suite, writes missing spec checks, and must exit green">
           <span className="skill-toggle-dot" /> Verify

@@ -36,6 +36,8 @@ export interface TaskView {
   awaitingApproval?: number;
   /** An ops task (ADR-0020): it runs in the user's checkout, never a worktree. */
   ops?: boolean;
+  /** Task skills attached by name, put in the runner's prompt at spawn. */
+  skills?: string[];
   /** The dependencies whose work must be merged into the user's branch before this task can go on (ADR-0020). */
   mergeGate?: string[];
   /** The dependencies, by title, a force start went past the merge gate of. */
@@ -138,13 +140,13 @@ export interface ModelView {
 }
 
 /** The planner skills the VS Code webview exposes as toggles. */
-export const SKILL_IDS = ['tdd', 'verify'] as const;
+export const SKILL_IDS = ['verify'] as const;
 export type SkillId = (typeof SKILL_IDS)[number];
 
 export type Skills = Record<SkillId, boolean>;
 
 export function noSkills(): Skills {
-  return { tdd: false, verify: false };
+  return { verify: false };
 }
 
 export interface PickerItem {

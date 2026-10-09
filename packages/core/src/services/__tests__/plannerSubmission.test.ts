@@ -51,7 +51,7 @@ async function sessionAnswering(answer: (session: Session) => ConversationTurn) 
       hasActiveConversation: () => true,
     },
     modelResolver: { modelsForRunners: vi.fn().mockResolvedValue({ 'claude-code': discovered }) },
-    settings: () => ({ tddEnabled: false, modelAllowlist: { 'claude-code': ['claude-sonnet-4'] } }),
+    settings: () => ({ modelAllowlist: { 'claude-code': ['claude-sonnet-4'] } }),
     broadcast,
   });
   await session.startPlanning('add an endpoint', RUNNERS);

@@ -187,7 +187,7 @@ export type HostToWebview =
   | { type: 'setRunners'; runners: RunnerMeta[] }
   // `unavailable` lists toggles that have no meaning for the current planner
   // backend — hidden rather than silently ignored (ADR-0009, T8).
-  | { type: 'setSkillToggles'; toggles: { tdd: boolean; verify: boolean }; unavailable?: string[] }
+  | { type: 'setSkillToggles'; toggles: { verify: boolean }; unavailable?: string[] }
   | { type: 'runnerTransport'; transport: RunnerTransport }
   /** The remembered plan dock height in px; absent until the user first drags it. */
   | { type: 'planDockHeight'; height?: number }

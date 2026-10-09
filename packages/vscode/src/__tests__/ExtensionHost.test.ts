@@ -189,12 +189,9 @@ function fakeRunnerInstallation(installed: string[]) {
 }
 
 function fakeSettings() {
-  let tdd = false;
   let verification = false;
   let runnerTransport: RunnerTransport = 'structured';
   return {
-    getTdd: vi.fn(() => tdd),
-    setTdd: vi.fn((v: boolean) => { tdd = v; }),
     getVerification: vi.fn(() => verification),
     setVerification: vi.fn((v: boolean) => { verification = v; }),
     getRunnerTransport: vi.fn(() => runnerTransport),
@@ -266,7 +263,7 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
   });
 
   it("hands the session this window's enabled runners, read at each call", async () => {
-    h.settings.getAll.mockReturnValue({ tdd: { enabled: false }, verification: { enabled: false }, runnerTransport: 'structured', enabledRunners: ['opencode'] });
+    h.settings.getAll.mockReturnValue({ verification: { enabled: false }, runnerTransport: 'structured', enabledRunners: ['opencode'] });
     await h.config.config.update('enabledRunners', ['claude-code', 'codex']);
 
     expect(h.sessionDeps.current?.settings().enabledRunners).toEqual(['claude-code', 'codex']);

@@ -53,7 +53,6 @@ function makeOrchestrator(overrides: {
   registry?: RunnerRegistry;
   workspaceRoot?: () => string;
   workspaceEnv?: (cwd: string) => Promise<WorkspaceEnv>;
-  tddEnabled?: () => boolean;
   previousAttemptFromLog?: (taskId: string) => string | null;
 } = {}) {
   const config = fakeConfig(overrides.config);
@@ -68,7 +67,6 @@ function makeOrchestrator(overrides: {
     registry: overrides.registry,
     workspaceRoot: overrides.workspaceRoot ?? (() => '/repo'),
     workspaceEnv: overrides.workspaceEnv,
-    tddEnabled: overrides.tddEnabled,
     previousAttemptFromLog: overrides.previousAttemptFromLog,
   });
 }
@@ -1077,38 +1075,6 @@ describe('checkpoints', () => {
       orchestrator.rejectCheckpoint('t1', 'try again');
       expect(orchestrator.storeInstance.get('t1')!.status).toBe('in_progress');
       expect(sessions[0].written.length).toBeGreaterThan(0);
-    });
-
-    it('tddEnabled wires tdd config to verifier', async () => {
-      const tasks = [
-        createTask({ id: 'a', order: 1, title: 'A', prompt: 'do work' }),
-        createTask({ id: 'b', order: 2, title: 'B', prompt: 'pb' }),
-        createTask({ id: 'c', order: 3, title: 'C', prompt: 'pc' }),
-      ];
-      const { spawn } = sessionRunner();
-      const orchestrator = makeOrchestrator({ terminalRunner: { spawn }, tddEnabled: () => true });
-      orchestrator.loadPlan(tasks);
-
-      await orchestrator.forceStartTask('a');
-
-      expect(spawn).toHaveBeenCalledTimes(1);
-      expect(spawn.mock.calls[0][0].prompt).toContain('## Implementation workflow (TDD)');
-    });
-
-    it('tddEnabled=false omits TDD instructions', async () => {
-      const tasks = [
-        createTask({ id: 'a', order: 1, title: 'A', prompt: 'do work' }),
-        createTask({ id: 'b', order: 2, title: 'B', prompt: 'pb' }),
-        createTask({ id: 'c', order: 3, title: 'C', prompt: 'pc' }),
-      ];
-      const { spawn } = sessionRunner();
-      const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
-      orchestrator.loadPlan(tasks);
-
-      await orchestrator.forceStartTask('a');
-
-      expect(spawn).toHaveBeenCalledTimes(1);
-      expect(spawn.mock.calls[0][0].prompt).not.toContain('## Implementation workflow (TDD)');
     });
   });
 

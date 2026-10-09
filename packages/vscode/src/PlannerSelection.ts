@@ -59,7 +59,7 @@ export class PlannerSelection {
     await this.deps.config.update('plannerThinkingEffort', effort);
     this.deps.sendModelConfig();
     await this.sendState();
-    this.deps.chatProvider.setSkillToggles(this.deps.settingsService.getTdd(), this.deps.settingsService.getVerification(), []);
+    this.deps.chatProvider.setSkillToggles(this.deps.settingsService.getVerification(), []);
     this.deps.log(`Planner set to ${provider}`);
   }
 
@@ -87,8 +87,7 @@ export class PlannerSelection {
   }
 
   toggleSkill(skillId: string, enabled: boolean): void {
-    if (skillId === 'tdd') this.deps.settingsService.setTdd(enabled);
-    else if (skillId === 'verify') this.deps.settingsService.setVerification(enabled);
-    this.deps.chatProvider.setSkillToggles(this.deps.settingsService.getTdd(), this.deps.settingsService.getVerification(), []);
+    if (skillId === 'verify') this.deps.settingsService.setVerification(enabled);
+    this.deps.chatProvider.setSkillToggles(this.deps.settingsService.getVerification(), []);
   }
 }

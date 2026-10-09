@@ -4,13 +4,12 @@ import type { OrchestratorPool } from '../pool/orchestratorPool';
 import { refuse } from './errors';
 
 const COMMANDS: CommandDescriptor[] = [
-  { name: 'tdd', description: 'Toggle Test-Driven Development mode (on|off|status)' },
   { name: 'verify', description: 'Toggle verification mode — adds a final evidence-based verification task that runs the full suite (on|off|status)' },
   { name: 'transport', description: 'Drive tasks through each runner\'s protocol (structured) or a terminal, from the next run (terminal|structured|status)' },
 ];
 
 /** Commands whose on/off writes a single boolean settings block, keyed by the command name. */
-const BOOLEAN_TOGGLES: Record<string, 'tdd' | 'verification'> = { tdd: 'tdd', verify: 'verification' };
+const BOOLEAN_TOGGLES: Record<string, 'verification'> = { verify: 'verification' };
 
 export function commandsRoute(pool: OrchestratorPool) {
   const router = new Hono();

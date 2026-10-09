@@ -41,7 +41,7 @@ const SETUP = [
       ],
     },
   },
-  { post: { type: 'setSkillToggles', toggles: { tdd: true, verify: false } } },
+  { post: { type: 'setSkillToggles', toggles: { verify: false } } },
   { mark: 'empty' },
 ];
 

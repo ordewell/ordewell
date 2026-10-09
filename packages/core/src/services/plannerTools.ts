@@ -6,6 +6,7 @@ import {
   type LiveOutputLookup, type TaskQuery, type TaskQueryCatalog, type TaskQueryField,
 } from './TaskQuery';
 import type { TaskOp } from './TaskOps';
+import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
 import type { ToolRead } from './PlannerConversation';
 import type { McpToolReply, PlannerToolHandler } from './mcp';
 
@@ -31,6 +32,8 @@ export interface PlannerToolsHost {
   liveOutput: LiveOutputLookup;
   /** What a task's newest saved attempt did, or null when it left nothing to report. */
   lastAttempt(taskId: string): string | null;
+  /** The skill catalog of the workspace root, which attached skill names are checked against. */
+  skills(): SkillLookup;
 }
 
 /** What an edit made through the tool came to. `queued`: the turn parks it behind the running batch, so nothing was checked. */
@@ -88,6 +91,10 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       const catalog = await host.liveCatalog();
       const result = validatePlanTasks({ tasks }, catalog.runners, catalog.modes, catalog.autonomousDefault);
       if (!result.ok) return { isError: true, text: JSON.stringify({ ok: false, errors: result.errors, enabledRunners: catalog.runners }) };
+      const skills = checkPlanSkills(result.tasks, host.skills());
+      if (skills.errors.length > 0) {
+        return { isError: true, text: JSON.stringify({ ok: false, errors: skills.errors.map((e) => ({ ...e, field: 'skills' })) }) };
+      }
 
       const runners = runnersOf(result.tasks);
       const coerced = coercions(result.tasks, host.coerce(result.tasks, runners));
@@ -98,6 +105,7 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
         ok: true,
         tasks: result.tasks.length,
         coerced,
+        ...(skills.warnings.length > 0 ? { warnings: skills.warnings } : {}),
         next: 'The plan is committed when this reply ends. Tell the user briefly what you submitted; do not repeat the plan as JSON.',
       });
     },
@@ -134,12 +142,16 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
 
     async editPlan({ ops }) {
       // The applier checks each op's fields one by one, so a loose shape is its to refuse.
-      const outcome = await host.editPlan(ops as unknown as TaskOp[]);
+      const taskOps = ops as unknown as TaskOp[];
+      const skills = checkOpSkills(taskOps, host.skills());
+      if (skills.errors.length > 0) return { isError: true, text: JSON.stringify({ ok: false, errors: skills.errors.map((e) => opError(e.message)) }) };
+      const outcome = await host.editPlan(taskOps);
       if (!outcome.ok) return { isError: true, text: JSON.stringify({ ok: false, errors: outcome.errors.map(opError) }) };
       return answer({
         ok: true,
         summary: outcome.summary,
         queued: outcome.queued,
+        ...(skills.warnings.length > 0 ? { warnings: skills.warnings } : {}),
         next: outcome.queued
           ? 'A task you named is running, so the edit is parked and nothing was checked: it is applied between task batches, when the user\'s message comes back to you. Tell the user it is queued.'
           : 'The edit is applied when this reply ends, and the user is shown what changed. Tell them briefly; do not repeat it as JSON.',

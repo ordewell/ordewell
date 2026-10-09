@@ -6,7 +6,6 @@ import { handleWeb } from './web';
 import { handleModels } from './models';
 import { handleSetup } from './setup';
 import { handlePlugins } from './plugins';
-import { handleTdd } from './tdd';
 import { handleAllowlist } from './allowlist';
 import { handleVerify } from './verify';
 import { handleTransport } from './transport';
@@ -58,7 +57,6 @@ export const COMMANDS: Record<string, (args: string[]) => Promise<void> | void> 
   refresh: handleRefresh,
   setup: handleSetup,
   plugins: handlePlugins,
-  'tdd': handleTdd,
   'verify': handleVerify,
   'mark-complete': handleMarkComplete,
   complete: handleMarkComplete,
