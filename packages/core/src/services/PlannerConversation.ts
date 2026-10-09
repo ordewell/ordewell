@@ -10,7 +10,8 @@ import type { ForkedDialogue } from './conversationFork';
 import { condensedNotice, extractSummary, keptTail, summaryRequest } from './conversationSummary';
 import type { ConversationMessage, LegacyPlanState, ResearchLogEntry, ResearchProgress, RunnerId, SkillLoad, Task } from '../models/Task';
 import { flattenTasks, isUserMessage } from '../models/Task';
-import { plannerMessage, plannerTranscript, skillLoadLabel, skillLoadNotice, type SkillInvocation } from './skillInvocation';
+import { plannerMessage, plannerTranscript, skillLoadLabel, type SkillInvocation } from './skillInvocation';
+import { skillLoadNotice } from '../conversation/records';
 
 /**
  * Per-runner model cap for the always-on catalog block. Generous enough that

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createTask, type LegacyPlanState } from '../../models/Task';
+import { createTask, type ConversationMessage, type LegacyPlanState, type SkillLoad } from '../../models/Task';
 import type { SessionMessage } from '../SessionMessage';
 import type { ConversationTurn, IAiService } from '../AiService';
 import { ConversationBusyError, ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnStoppedError, type PlannerConversationHost } from '../PlannerConversation';
@@ -165,6 +165,17 @@ function threeTurnPlan(): LegacyPlanState {
   };
 }
 
+const grillLoad: SkillLoad = { invokedBy: 'user', name: 'grilling', source: 'global', path: '~/.ordewell/skills/grilling/SKILL.md', content: 'GRILL BODY' };
+const loadEntry = (timestamp: string): ConversationMessage => ({ role: 'user', content: '/grilling skill loaded', timestamp, kind: 'skill_load', skill: grillLoad });
+
+/** Each of the three user messages is followed by the skill it loaded. */
+function threeTurnPlanWithLoads(): LegacyPlanState {
+  const plan = threeTurnPlan();
+  const [u1, a1, u2, a2, u3, a3] = plan.conversationHistory!;
+  plan.conversationHistory = [u1, loadEntry('2026-01-01T00:00:00Z'), a1, u2, loadEntry('2026-01-01T00:00:02Z'), a2, u3, loadEntry('2026-01-01T00:00:04Z'), a3];
+  return plan;
+}
+
 describe('PlannerConversation cloneBefore', () => {
   it('copies the dialogue as it stood just before the chosen user message, with that message in full, touching nothing', () => {
     const ai = fakeAi();
@@ -245,6 +256,15 @@ describe('PlannerConversation clone', () => {
       ['up-1', '2026-01-01T00:00:00Z'], ['up-2', '2026-01-01T00:00:02Z'], ['up-3', '2026-01-01T00:00:04Z'],
     ]);
     expect(ai.reset).not.toHaveBeenCalled();
+  });
+
+  it('keeps the skill-load entries, with their snapshots, in the copy', () => {
+    const { conversation } = fakeHost(fakeAi(), threeTurnPlanWithLoads());
+
+    const loads = conversation.clone().conversationHistory.filter((m) => m.kind === 'skill_load');
+
+    expect(loads).toHaveLength(3);
+    expect(loads.every((m) => m.skill?.content === 'GRILL BODY')).toBe(true);
   });
 
   it('refuses while a planner turn is in flight', async () => {
@@ -634,6 +654,18 @@ describe('PlannerConversation after a compaction', () => {
 
     await expect(conversation.compact()).resolves.toBeDefined();
     await expect(conversation.compact()).rejects.toThrow(/too short/i);
+  });
+
+  it('keeps the skill loads of the exchanges it keeps, and drops those of the ones it condensed', async () => {
+    const ai = fakeAi({ continueConversation: vi.fn().mockResolvedValue(summaryTurn('s')) });
+    const { conversation } = fakeHost(ai, threeTurnPlanWithLoads());
+
+    const { keptMessages } = await conversation.compact();
+
+    expect(keptMessages).toBe(6);
+    expect(conversation.clone().conversationHistory.map((m) => m.kind ?? m.content)).toEqual([
+      'compaction', 'JSON only', 'skill_load', 'Streaming or not?', 'Streaming', 'skill_load', 'plan_generated',
+    ]);
   });
 
   it('is copied whole by a fork', async () => {

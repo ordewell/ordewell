@@ -3,7 +3,8 @@ import { makeSession, saves } from './sessionTestKit';
 import type { SkillsService, SkillInfo } from '../SkillsService';
 import type { SessionMessage } from '../SessionMessage';
 import type { ConversationMessage, LegacyPlanState, SkillLoad } from '../../models/Task';
-import { plannerMessage, plannerTranscript, resolveSkillInvocation, skillLoadLabel, skillLoadNotice } from '../skillInvocation';
+import { abbreviateHome, plannerMessage, plannerTranscript, resolveSkillInvocation, skillLoadLabel } from '../skillInvocation';
+import { skillLoadNotice } from '../../conversation/records';
 import type { ConversationRequest } from '../AiService';
 
 function skill(name: string, content: string, path = `/skills/${name}/SKILL.md`, extra: Partial<SkillInfo> = {}): SkillInfo {
@@ -133,6 +134,20 @@ describe('task skills a user names', () => {
   });
 });
 
+describe('abbreviateHome', () => {
+  it('writes a POSIX home as ~ and leaves other paths alone', () => {
+    expect(abbreviateHome('/home/ada/.ordewell/skills/a/SKILL.md', '/home/ada', 'linux')).toBe('~/.ordewell/skills/a/SKILL.md');
+    expect(abbreviateHome('/home/adam/x', '/home/ada', 'linux')).toBe('/home/adam/x');
+    expect(abbreviateHome('/srv/x', '', 'linux')).toBe('/srv/x');
+  });
+
+  it('matches a Windows home case-insensitively and renders / separators', () => {
+    expect(abbreviateHome('c:\\Users\\Ada\\.ordewell\\skills\\a\\SKILL.md', 'C:\\Users\\Ada', 'win32')).toBe('~/.ordewell/skills/a/SKILL.md');
+    expect(abbreviateHome('C:\\Users\\Adam\\x', 'C:\\Users\\Ada\\', 'win32')).toBe('C:/Users/Adam/x');
+    expect(abbreviateHome('D:\\work\\SKILL.md', 'C:\\Users\\Ada', 'win32')).toBe('D:/work/SKILL.md');
+  });
+});
+
 describe('plannerTranscript', () => {
   const load = (name: string, content: string): SkillLoad => ({ invokedBy: 'user', name, source: 'global', path: `~/s/${name}`, content });
   const entry = (role: ConversationMessage['role'], content: string, extra: Partial<ConversationMessage> = {}): ConversationMessage => ({ role, content, timestamp: 't', ...extra });
@@ -163,11 +178,12 @@ describe('plannerTranscript', () => {
       entry('assistant', 'review-plan skill loaded by planner', { kind: 'skill_load', skill: plannerSkill }),
       entry('assistant', 'Reviewed.'),
     ]);
-    expect(replayed.map((message) => message.content)).toEqual([
-      plannerMessage('/grilling goal', [userSkill]),
-      '<skill name="review-plan">\nREVIEW\n</skill>',
-      '<skill name="review-plan">\nREVIEW\n</skill>',
-      'Reviewed.',
+    const asContext = '(skill loaded via load_skill)\n\n<skill name="review-plan">\nREVIEW\n</skill>';
+    expect(replayed.map((message) => [message.role, message.content])).toEqual([
+      ['user', plannerMessage('/grilling goal', [userSkill])],
+      ['user', asContext],
+      ['user', asContext],
+      ['assistant', 'Reviewed.'],
     ]);
   });
 });

@@ -1,8 +1,7 @@
 import type { ConversationMessage, ResearchLogEntry, ResearchStep, SkillLoad, SubagentLogEntry } from '../models/Task';
 import { isMeasured, usageLine, type PlannerUsage } from '../models/Usage';
 import type { DisplayBlock } from './blocks';
-import { skillLoadNotice } from '../services/skillInvocation';
-import { planMarker, settledMessage, skillLoadBlock, subagentBlock, toolFromStep, usageBlock, userMessage } from './records';
+import { planMarker, settledMessage, skillLoadBlock, skillLoadNotice, subagentBlock, toolFromStep, usageBlock, userMessage } from './records';
 import type { ConversationView } from './reduce';
 
 /** One top-level block before it has an id, and where it falls in time. */

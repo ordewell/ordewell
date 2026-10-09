@@ -63,7 +63,6 @@ export interface SessionRuntimeSettings {
   enabledRunners?: RunnerId[];
 }
 
-
 /** Calls an ops retry is told about; earlier ones are counted, not listed (ADR-0020). */
 const OPS_RETRY_DIGEST_CALLS = 20;
 

@@ -78,12 +78,30 @@ describe('a message that loads a skill', () => {
     expect(notice.endsWith('/SKILL.md')).toBe(true);
   });
 
+  it('cuts a Windows-style path at a backslash boundary too', () => {
+    style.enabled = false;
+    const winSkill: SkillLoadNotice = { ...grilling, path: 'C:\\Users\\ada\\.ordewell\\skills\\grilling\\SKILL.md' };
+    const [, notice] = rowsFrom(sent('/grilling', [winSkill], 44), '❯', 2);
+
+    expect(notice).toMatch(/· …\\(?:[^\\]+\\)*SKILL\.md$/);
+  });
+
   it('shows a bare unknown /name as an ordinary message with no notice', () => {
     registerSkillCommands([{ name: 'nope', description: 'gone since' }]);
     const state = sent('/nope', []);
 
     expect(state.conversation.blocks.some((b) => b.type === 'skill_load')).toBe(false);
     expect(messagesOf(state).filter((m) => m.role === 'user').map((m) => m.text)).toEqual(['/nope']);
+  });
+});
+
+describe('a bare /name that nothing registers', () => {
+  it('is sent to the planner verbatim, with no unknown-command error', () => {
+    const { state, effects } = reduce(typing('/foo'), { type: 'key', key: { name: 'enter' } });
+
+    expect(effects).toEqual([{ type: 'startConversation', goal: '/foo' }]);
+    expect(messagesOf(state).map((m) => m.text)).toEqual(['/foo']);
+    expect(messagesOf(state).some((m) => m.text.includes('Unknown command'))).toBe(false);
   });
 });
 

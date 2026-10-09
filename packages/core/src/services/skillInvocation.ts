@@ -1,7 +1,6 @@
 import * as os from 'os';
-import * as path from 'path';
 import { skillTokens } from '../conversation/skillTokens';
-import { isUserMessage, type ConversationMessage, type SkillLoad, type SkillLoadNotice } from '../models/Task';
+import { isUserMessage, type ConversationMessage, type SkillLoad } from '../models/Task';
 import type { SkillInfo, SkillsService } from './SkillsService';
 
 /** A user's message as sent, and the skills its `/name` tokens load. */
@@ -10,8 +9,19 @@ export interface SkillInvocation {
   skills: SkillLoad[];
 }
 
-function homeAbbreviated(file: string, home: string): string {
-  return home && file.startsWith(home + path.sep) ? `~${file.slice(home.length)}` : file;
+/**
+ * A path with the home directory written `~`, for a notice or listing. On
+ * Windows the drive letter's case is not significant and the separators are
+ * rendered `/`, so the same skill reads alike wherever the session reloads.
+ */
+export function abbreviateHome(file: string, home: string = os.homedir(), platform: NodeJS.Platform = process.platform): string {
+  const win = platform === 'win32';
+  const normal = (p: string): string => (win ? p.replace(/\\/g, '/') : p);
+  const shown = normal(file);
+  const prefix = normal(home).replace(/\/+$/, '');
+  if (!prefix) return shown;
+  const inHome = win ? shown.toLowerCase().startsWith(`${prefix.toLowerCase()}/`) : shown.startsWith(`${prefix}/`);
+  return inHome ? `~${shown.slice(prefix.length)}` : shown;
 }
 
 export function modelInvocablePlannerSkills(skills: readonly SkillInfo[]): SkillInfo[] {
@@ -23,7 +33,7 @@ export function modelInvocableTaskSkills(skills: readonly SkillInfo[]): SkillInf
 }
 
 export function snapshotSkill(skill: SkillInfo, invokedBy: SkillLoad['invokedBy'], home = os.homedir()): SkillLoad {
-  return { invokedBy, name: skill.name, source: skill.source, path: homeAbbreviated(skill.path, home), content: skill.content };
+  return { invokedBy, name: skill.name, source: skill.source, path: abbreviateHome(skill.path, home), content: skill.content };
 }
 
 /** A task skill the user named: the planner is told to attach it, never given its body. */
@@ -33,8 +43,7 @@ function attachSkill(skill: SkillInfo, home: string): SkillLoad {
 
 /**
  * Resolve the `/skill-name` tokens in a message to snapshots of the skills they
- * name. Pure and exported so surfaces and verification can resolve without a
- * full Session. The text itself is never rewritten.
+ * name. Pure and exported so surfaces can resolve without a full Session. The text itself is never rewritten.
  *
  * Every distinct skill named loads, once, in the order first named. A token
  * naming no skill is plain text, wherever it stands — a whole message of
@@ -53,10 +62,6 @@ export function resolveSkillInvocation(
     return [skill.appliesTo === 'task' ? attachSkill(skill, home) : snapshotSkill(skill, 'user', home)];
   });
   return { text, skills };
-}
-
-export function skillLoadNotice({ invokedBy, name, source, path: file, attaches }: SkillLoad): SkillLoadNotice {
-  return { invokedBy, name, source, path: file, ...(attaches ? { attaches } : {}) };
 }
 
 /** A skill-load entry's `content`: the line a reader of the bare transcript sees, never what the planner is sent. */
@@ -85,6 +90,8 @@ export function plannerMessage(text: string, loads: readonly SkillLoad[]): strin
   ].join('\n\n');
 }
 
+const PLANNER_LOAD_PREAMBLE = '(skill loaded via load_skill)';
+
 function attachDirective({ name, attaches }: SkillLoad): string {
   const description = attaches?.description.trim();
   return `The user asks to use task skill "${name}"${description ? ` (${description})` : ''}; attach it to the tasks it fits.`;
@@ -110,7 +117,9 @@ export function plannerTranscript(history: readonly ConversationMessage[]): Conv
       const loads = entry.skill.invokedBy === 'user' ? loadsOf.get(owner) : undefined;
       if (loads) loads.push(entry.skill);
       else {
-        out.push({ role: entry.role, content: skillBlock(entry.skill), timestamp: entry.timestamp });
+        // Live, the body reached the planner as a tool result, not as its own
+        // words; a transcript has no tool-result role, so it replays as context.
+        out.push({ role: 'user', content: `${PLANNER_LOAD_PREAMBLE}\n\n${skillBlock(entry.skill)}`, timestamp: entry.timestamp });
         owner = -1;
       }
       continue;

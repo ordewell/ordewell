@@ -1,4 +1,4 @@
-import type { ResearchStep, ResearchStepOutcome, SkillLoadNotice } from '../models/Task';
+import type { ResearchStep, ResearchStepOutcome, SkillLoad, SkillLoadNotice } from '../models/Task';
 import type { UsageLine } from '../models/Usage';
 import type { MessageBlock, MessageRole, PlanMarkerStatus, SkillLoadBlock, SubagentBlock, ToolBlock, ToolStatus, UsageBlock } from './blocks';
 import { diffStat, outputLines, toolHeadline } from './format';
@@ -19,6 +19,11 @@ export function settledMessage(id: string, role: MessageRole, text: string, turn
 export function userMessage(id: string, text: string, skills: readonly SkillLoadNotice[], turnId?: string): MessageBlock {
   const block = settledMessage(id, 'user', text, turnId);
   return skills.length > 0 ? { ...block, skills: skills.map((s) => s.name) } : block;
+}
+
+/** What a surface is told of a load: everything but the body, which only the planner is sent. */
+export function skillLoadNotice({ invokedBy, name, source, path, attaches }: SkillLoad): SkillLoadNotice {
+  return { invokedBy, name, source, path, ...(attaches ? { attaches } : {}) };
 }
 
 export function skillLoadBlock(id: string, { invokedBy, name, source, path, attaches }: SkillLoadNotice, turnId?: string): SkillLoadBlock {

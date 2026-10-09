@@ -259,6 +259,26 @@ describe('handlePlan', () => {
     srv.close();
   });
 
+  it('prints the planner\'s question, not a skill-load entry that follows it, when stdin runs out', async () => {
+    const skill = { invokedBy: 'planner', name: 'review-plan', source: 'global', path: '~/s', content: 'BODY' };
+    const question = {
+      tasks: [],
+      conversationHistory: [
+        { role: 'assistant', content: 'Which database?' },
+        { role: 'assistant', content: 'review-plan skill loaded by planner', kind: 'skill_load', skill },
+      ],
+    };
+    const srv = await planServer({ '/converse/start': { plan: question } }, []);
+    const reader = { ask: async () => null, close: () => {} };
+    const { handlePlan } = await import('../plan');
+    const { stdout } = await capture(() =>
+      handlePlan(['--goal', 'ship it', '--workspace', '/tmp'], { api: new ApiClient(srv.port), reader }),
+    );
+    expect(stdout).toContain('Which database?');
+    expect(stdout).not.toContain('skill loaded by planner');
+    srv.close();
+  });
+
   it('aborts on /quit', async () => {
     const question = {
       tasks: [],
