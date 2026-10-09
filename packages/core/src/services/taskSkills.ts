@@ -1,9 +1,8 @@
-import { execFileSync } from 'child_process';
 import * as path from 'path';
 import { flattenTasks, isSkillName, skillNames, type Task, type TaskSkillSnapshot } from '../models/Task';
 import { skillsDirOf, workspaceSkillRoots, type SkillInfo, type SkillsService } from './SkillsService';
 import type { TaskOp } from './TaskOps';
-import { cleanEnv } from './gitExec';
+import { cleanEnv, execFileWithTimeout } from './gitExec';
 import { quotedList } from '../utils/quotedList';
 
 /**
@@ -16,10 +15,11 @@ import { quotedList } from '../utils/quotedList';
 /** Where a task's skill names are looked up: global first, then the workspace folders it reads. */
 export interface SkillLookup extends Pick<SkillsService, 'findSkill' | 'searchedDirs'> {
   /**
-   * Set when tasks get worktrees: for a workspace skill git will not carry
-   * into them, the folder to commit, relative to the workspace root.
+   * Set when tasks get worktrees: of `skills`, the workspace ones git will not
+   * carry into them, each SKILL.md path mapped to the folder to commit,
+   * relative to the workspace root.
    */
-  uncommitted?(skill: SkillInfo): string | undefined;
+  uncommitted?(skills: readonly SkillInfo[]): Promise<Map<string, string>>;
 }
 
 /** A lookup that can also list what it finds: what the planner's catalogs and `/name` read. */
@@ -75,38 +75,57 @@ function attached(value: unknown): Pick<SkillEntry, 'names' | 'dropped'> {
   return { names: skillNames(value) ?? [], dropped };
 }
 
-function check(entries: SkillEntry[], lookup: SkillLookup): SkillCheck {
-  const result: SkillCheck = { errors: [], warnings: [] };
+async function check(entries: SkillEntry[], lookup: SkillLookup): Promise<SkillCheck> {
+  const errors: SkillCheck['errors'] = [];
+  // Task skills hold their warning's place until one git call per repo says which are uncommitted.
+  const warnings: (string | { owner: string; skill: SkillInfo })[] = [];
   for (const { taskId, owner, names, dropped } of entries) {
-    for (const name of dropped ?? []) result.warnings.push(invalidNameWarning(owner, name));
+    for (const name of dropped ?? []) warnings.push(invalidNameWarning(owner, name));
     for (const name of names) {
       const skill = lookup.findSkill(name);
-      if (!skill) {
-        result.warnings.push(notFoundWarning(owner, name));
-        continue;
-      }
-      if (skill.appliesTo !== 'task') {
-        result.errors.push({ ...(taskId ? { taskId } : {}), message: plannerSkillMessage(owner, skill) });
-        continue;
-      }
-      const folder = lookup.uncommitted?.(skill);
-      if (folder) result.warnings.push(uncommittedWarning(owner, name, folder));
+      if (!skill) warnings.push(notFoundWarning(owner, name));
+      else if (skill.appliesTo !== 'task') errors.push({ ...(taskId ? { taskId } : {}), message: plannerSkillMessage(owner, skill) });
+      else warnings.push({ owner, skill });
     }
   }
-  return result;
+  const attached = warnings.flatMap((w) => (typeof w === 'string' ? [] : [w.skill]));
+  const folders = attached.length > 0 && lookup.uncommitted ? await lookup.uncommitted(attached) : new Map<string, string>();
+  return {
+    errors,
+    warnings: warnings.flatMap((w) => {
+      if (typeof w === 'string') return [w];
+      const folder = folders.get(w.skill.path);
+      return folder ? [uncommittedWarning(w.owner, w.skill.name, folder)] : [];
+    }),
+  };
 }
 
-/** Whether HEAD holds the file; null when git cannot say (no git, no repository, no commit yet). */
-function committedInHead(file: string): boolean | null {
-  try {
-    // ls-tree, not ls-files: a staged file is tracked, but a worktree is made from a commit.
-    const out = execFileSync('git', ['ls-tree', '--name-only', 'HEAD', '--', path.basename(file)], {
-      cwd: path.dirname(file), env: cleanEnv(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000, windowsHide: true,
-    });
-    return out.trim() !== '';
-  } catch {
-    return null;
+const runGit = execFileWithTimeout(10_000);
+
+/**
+ * Which of `files` HEAD holds, in one git call per skills folder (one per
+ * repository); a file is absent when git cannot say (no git, no repository,
+ * no commit yet).
+ */
+async function committedInHead(files: readonly string[]): Promise<Map<string, boolean>> {
+  const byDir = new Map<string, string[]>();
+  for (const file of new Set(files)) {
+    const dir = path.dirname(path.dirname(file));
+    byDir.set(dir, [...(byDir.get(dir) ?? []), file]);
   }
+  const result = new Map<string, boolean>();
+  await Promise.all([...byDir].map(async ([dir, inDir]) => {
+    const relative = (file: string) => path.relative(dir, file).split(path.sep).join('/');
+    try {
+      // ls-tree, not ls-files: a staged file is tracked, but a worktree is made from a commit.
+      const { stdout } = await runGit('git', ['ls-tree', '--name-only', 'HEAD', '--', ...inDir.map(relative)], { cwd: dir, env: cleanEnv() });
+      const listed = new Set(stdout.split('\n').map((line) => line.trim()).filter(Boolean));
+      for (const file of inDir) result.set(file, listed.has(relative(file)));
+    } catch {
+      // Unknown: no warning rather than a wrong one.
+    }
+  }));
+  return result;
 }
 
 /**
@@ -130,11 +149,12 @@ export function plannedSkillLookup(
     findSkill: (name) => lookup.findSkill(name),
     searchedDirs: () => lookup.searchedDirs(),
     listSkills: () => lookup.listSkills(),
-    uncommitted: (skill) => {
-      if (skill.source !== 'workspace') return undefined;
-      const folder = path.dirname(skill.path);
-      if (readInPlace && path.dirname(folder) === readInPlace) return undefined;
-      return committedInHead(skill.path) === false ? path.relative(workspaceRoot, folder).split(path.sep).join('/') : undefined;
+    uncommitted: async (skills) => {
+      const checked = skills.filter((skill) => skill.source === 'workspace' && !(readInPlace && path.dirname(path.dirname(skill.path)) === readInPlace));
+      const committed = await committedInHead(checked.map((skill) => skill.path));
+      return new Map(checked
+        .filter((skill) => committed.get(skill.path) === false)
+        .map((skill) => [skill.path, path.relative(workspaceRoot, path.dirname(skill.path)).split(path.sep).join('/')]));
     },
   };
 }
@@ -144,7 +164,7 @@ export function plannedSkillLookup(
  * created by a task the attaching one depends on, so it is only a warning; a
  * planner skill is never right on a task, so it is refused.
  */
-export function checkPlanSkills(tasks: readonly Task[], lookup: SkillLookup): SkillCheck {
+export function checkPlanSkills(tasks: readonly Task[], lookup: SkillLookup): Promise<SkillCheck> {
   return check(
     flattenTasks(tasks).map((t) => ({ taskId: t.id, owner: `Task "${t.title}"`, names: t.skills ?? [] })),
     lookup,
@@ -152,12 +172,12 @@ export function checkPlanSkills(tasks: readonly Task[], lookup: SkillLookup): Sk
 }
 
 /** A skill list set on one task by hand, as it was typed, held to the same rule. */
-export function checkTaskSkillsEdit(task: Pick<Task, 'id' | 'title'>, skills: unknown, lookup: SkillLookup): SkillCheck {
+export function checkTaskSkillsEdit(task: Pick<Task, 'id' | 'title'>, skills: unknown, lookup: SkillLookup): Promise<SkillCheck> {
   return check([{ taskId: task.id, owner: `Task "${task.title}"`, ...attached(skills) }], lookup);
 }
 
 /** The skill names an edit batch attaches, by op, held to the same rule as a submitted plan. */
-export function checkOpSkills(ops: readonly TaskOp[], lookup: SkillLookup): SkillCheck {
+export function checkOpSkills(ops: readonly TaskOp[], lookup: SkillLookup): Promise<SkillCheck> {
   const entries: SkillEntry[] = [];
   ops.forEach((op, i) => {
     const owner = `op ${i + 1} (${op.op})`;
@@ -195,9 +215,15 @@ export class TaskSkillsError extends Error {
  * Resolve a task's skills where it runs — its worktree's committed
  * `.ordewell/skills/` plus global — as the snapshot its attempt is given.
  * Throws {@link TaskSkillsError} naming every name that does not resolve to a
- * task skill and the directories searched.
+ * task skill and the directories searched. `uncommittedFolder`, set when the
+ * task runs in a worktree, names the folder to commit for a missing name the
+ * main checkout has.
  */
-export function resolveTaskSkills(task: Pick<Task, 'title' | 'skills'>, lookup: SkillLookup): TaskSkillSnapshot[] {
+export function resolveTaskSkills(
+  task: Pick<Task, 'title' | 'skills'>,
+  lookup: SkillLookup,
+  uncommittedFolder?: (name: string) => string | undefined,
+): TaskSkillSnapshot[] {
   const missing: string[] = [];
   const planner: SkillInfo[] = [];
   const resolved: TaskSkillSnapshot[] = [];
@@ -209,9 +235,12 @@ export function resolveTaskSkills(task: Pick<Task, 'title' | 'skills'>, lookup: 
   }
   const problems: string[] = [];
   if (missing.length > 0) {
+    const toCommit = uncommittedFolder ? missing.flatMap((name) => uncommittedFolder(name) ?? []) : [];
     problems.push(
       `${missing.length === 1 ? 'skill' : 'skills'} ${quotedList(missing)} not found in ${lookup.searchedDirs().join(' or ')}`
-      + ` (a workspace skill reaches a task's worktree only once committed: commit ${missing.length === 1 ? `.ordewell/skills/${missing[0]}` : 'its .ordewell/skills/ folder'} so task worktrees receive it)`,
+      + (toCommit.length > 0
+        ? ` (a workspace skill reaches a task's worktree only once committed: commit ${toCommit.join(', ')} so task worktrees receive ${toCommit.length === 1 ? 'it' : 'them'})`
+        : ''),
     );
   }
   for (const skill of planner) problems.push(`"${skill.name}" is a planner skill (applies-to: planner, ${skill.path}), not a task skill`);

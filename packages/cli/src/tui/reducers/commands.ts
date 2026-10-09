@@ -17,10 +17,11 @@ import { fail, step, withSession, type Effect, type Step, type TaskAction } from
 
 const KNOWN_PROVIDERS = Object.keys(ALL_PROVIDERS);
 
+export const unknownCommand = (state: TuiState, name: string): Step =>
+  fail(state, `Unknown command: /${name} — type /help to see what's available.`);
+
 export function runCommand(state: TuiState, { name, args }: ParsedCommand): Step {
-  if (!findCommand(name)) {
-    return fail(state, `Unknown command: /${name} — type /help to see what's available.`);
-  }
+  if (!findCommand(name)) return unknownCommand(state, name);
 
   switch (name) {
     case 'help':

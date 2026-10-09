@@ -1454,7 +1454,9 @@ export class TaskOrchestrator {
       }
       // Read where the attempt runs: a skill an earlier task committed is in
       // this worktree only once that task's work has landed.
-      if (takesSkills(kind) && task.skills?.length) attempt.skills = resolveTaskSkills(task, this.skillsAt(this.skillRoots(cwd)));
+      if (takesSkills(kind) && task.skills?.length) {
+        attempt.skills = resolveTaskSkills(task, this.skillsAt(this.skillRoots(cwd)), worktree ? (name) => this.uncommittedSkillFolder(name) : undefined);
+      }
       const transport = attemptTransport(kind, this.transport);
       const completionTool = givesCompletionTool(transport, attempt.runner, this.registry);
       const finalPrompt = attemptPrompt(kind, {
@@ -1565,6 +1567,13 @@ export class TaskOrchestrator {
       await this.tick();
       return false;
     }
+  }
+
+  /** For a skill the main checkout has, the folder a worktree only gets once it is committed. */
+  private uncommittedSkillFolder(name: string): string | undefined {
+    const root = this.workspaceRootFn();
+    const skill = this.skillsAt(this.skillRoots(root)).findSkill(name);
+    return skill?.source === 'workspace' ? path.relative(root, path.dirname(skill.path)).split(path.sep).join('/') : undefined;
   }
 
   /**

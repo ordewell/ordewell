@@ -88,7 +88,7 @@ export class PlanEditor {
     const typedSkills = changes.skills;
     if ('skills' in changes) changes = { ...changes, skills: skillNames(changes.skills) };
     const target = this.store.get(taskId);
-    const skills = 'skills' in changes && target ? checkTaskSkillsEdit(target, typedSkills, this.taskSkills()) : undefined;
+    const skills = 'skills' in changes && target ? await checkTaskSkillsEdit(target, typedSkills, this.taskSkills()) : undefined;
     if (skills?.errors.length) throw new PlanEditError(skills.errors.map((e) => e.message).join(' '));
     if ((changes.dependencies || changes.type || changes.assignedModel || changes.taskMode || 'ops' in changes) && target) {
       const check = validateTaskEdit('direct', this.store.planTasks, taskId, changes, this.catalog.edit());

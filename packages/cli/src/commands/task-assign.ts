@@ -21,13 +21,15 @@ async function withTask(
   usage: string,
   injectedApi: ApiClient | undefined,
   run: (api: ApiClient, sessionId: string, task: TaskView, tasks: TaskView[], value: string | undefined) => Promise<void>,
+  { joinValue = false }: { joinValue?: boolean } = {},
 ): Promise<void> {
   await withResolvedTask(subArgs, usage, injectedApi, async (api, sessionId, taskId, plan) => {
     const tasks = taskViews(plan);
     const task = tasks.find((t) => t.id === taskId);
     if (!task) fail(`Task not found in the plan: ${taskId}`);
     // The first positional is the task identifier itself; the value is the second.
-    const value = positionals(subArgs)[1];
+    const [, ...rest] = positionals(subArgs);
+    const value = joinValue ? (rest.join(' ') || undefined) : rest[0];
     await run(api, sessionId, task, tasks, value);
   });
 }
@@ -217,7 +219,7 @@ export async function handleTaskDeps(subArgs: string[], injectedApi?: ApiClient)
   });
 }
 
-const SKILLS_USAGE = 'Usage: ordewell task-skills <task-id-or-order> [<name,name,…>|none] [--session-id <id>] [--workspace <path>]';
+const SKILLS_USAGE = 'Usage: ordewell task-skills <task-id-or-order> [<name> [<name> …]|<name,name,…>|none] [--session-id <id>] [--workspace <path>]';
 
 export async function handleTaskSkills(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
   await withTask(subArgs, SKILLS_USAGE, injectedApi, async (api, sessionId, task, _tasks, value) => {
@@ -247,7 +249,7 @@ export async function handleTaskSkills(subArgs: string[], injectedApi?: ApiClien
     console.log(skills.length > 0
       ? `Task ${taskRef(task)} skills set to ${skills.join(', ')}.`
       : `Task ${taskRef(task)} has no skills attached.`);
-  });
+  }, { joinValue: true });
 }
 
 const OPS_USAGE = 'Usage: ordewell task-ops <task-id-or-order> [on|off] [--session-id <id>]';

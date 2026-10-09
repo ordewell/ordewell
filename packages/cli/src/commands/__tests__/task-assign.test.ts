@@ -254,6 +254,16 @@ describe('ordewell task-skills', () => {
     return dir;
   }
 
+  it('keeps every unquoted skill name after the task id', async () => {
+    const d = await fakeDaemon();
+    const ws = workspaceWithSkill();
+    fs.mkdirSync(path.join(ws, '.ordewell', 'skills', 'zz-other'), { recursive: true });
+    fs.writeFileSync(path.join(ws, '.ordewell', 'skills', 'zz-other', 'SKILL.md'), '---\nname: zz-other\ndescription: Other\napplies-to: task\n---\nBody\n');
+    const { handleTaskSkills } = await import('../task-assign');
+    await capture(() => handleTaskSkills([...SESSION, '--workspace', ws, '2', 'zz-other', 'zz-house-style'], new ApiClient(d.port)));
+    expect(updates(d.sent)[0].body).toEqual({ skills: ['zz-other', 'zz-house-style'] });
+  });
+
   it('attaches a task skill, user-only ones included', async () => {
     const d = await fakeDaemon();
     const ws = workspaceWithSkill();

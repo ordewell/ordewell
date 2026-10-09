@@ -213,7 +213,7 @@ export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     submitPlanInput, (h) => h.submitPlan?.bind(h), PLANNER_READ_ONLY),
   tool('edit_plan', 'Change the current plan with task operations: update, add, remove, reorder, merge, split or rearm.',
     editPlanInput, (h) => h.editPlan?.bind(h), PLANNER_READ_ONLY),
-  tool('task_query', 'Read the long fields of plan tasks that the plan summary leaves out (prompt, user steps, verdict, output summary), and optionally the live runner catalog. Read a task before you rewrite it.',
+  tool('task_query', 'Read the long fields of plan tasks that the plan summary leaves out (prompt, user steps, verdict, output summary, attached skills), and optionally the live runner catalog. Read a task before you rewrite it.',
     taskQueryInput, (h) => h.taskQuery?.bind(h), PLANNER_READ_ONLY),
   tool('task_output', "Read the recent output of a running task, to check what its runner is doing; paged by offset. A task that is not running answers with its verdict, output summary and a digest of its last attempt.",
     taskOutputInput, (h) => h.taskOutput?.bind(h), PLANNER_READ_ONLY),

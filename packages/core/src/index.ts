@@ -113,6 +113,8 @@ export type {
   SerializedTaskStatus,
   MergeGateView,
   SerializedPlan,
+  SerializedConversationMessage,
+  SerializedQueuedMessage,
 } from './services/SessionMessage';
 export { serializeTask, serializeTaskStatus, serializePlan, executionSummary, truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH } from './services/SessionMessage';
 export { summarizeToolCall, classifyOutcome } from './services/researchStepSummary';

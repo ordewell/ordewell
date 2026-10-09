@@ -77,7 +77,7 @@ Plan options:
   --goal "text"       Task description (required)
   --runner <id>       Runner to use (repeatable; default: all enabled runners)
   --workspace /path   Workspace directory (default: cwd)
-  --no-chat           One-shot plan; skips the planner dialogue (and its toggles)
+  --no-chat           One-shot plan; skips the planner dialogue
 
 Run options:
   --session-id <id>   Execute a specific session (default: last session)

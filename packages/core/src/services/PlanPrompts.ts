@@ -85,8 +85,8 @@ function buildModeExamplesForRunners(runners: RunnerId[]): string {
  *
  * Only this block and the tool-envelope appendix differ between the two: the
  * plan schema, the runner and mode vocabulary, the model catalog, the
- * conversational protocol and every mode-toggle block are shared verbatim. A
- * forked prompt would mean each future toggle gets written twice, or silently
+ * conversational protocol and the skill and mode blocks are shared verbatim. A
+ * forked prompt would mean each future block gets written twice, or silently
  * works on one backend only.
  */
 function researchPhaseBlock(harnessMode: boolean): string {
@@ -115,7 +115,7 @@ function researchPhaseBlock(harnessMode: boolean): string {
 
 /**
  * Facts about who plans and where tasks will run, as opposed to the user's
- * mode toggles: they change what the prompt can promise, not what it asks for.
+ * choices: they change what the prompt can promise, not what it asks for.
  */
 export interface ConversationVariant {
   /** Harness planner (ADR-0009): the agent owns its own tools and research budget. */
