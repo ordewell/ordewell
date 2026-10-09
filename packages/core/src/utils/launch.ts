@@ -156,7 +156,7 @@ export class CommandLineTooLongError extends Error {
           `and Ordewell will launch it directly, with no buffer in the way.`
         : `Cannot start "${command}" on Windows: its arguments are ${length} characters, over the ${limit}-character limit Windows places on any command line.\n\n` +
           `This is the OS ceiling rather than a shim's, so no reinstall avoids it. ` +
-          `Shorten the task prompt, or turn off some planner mode toggles — each one appends to the system prompt the runner is started with.`,
+          `Shorten the task prompt or detach some task skills to reduce the prompt the runner is started with.`,
     );
     this.name = 'CommandLineTooLongError';
   }

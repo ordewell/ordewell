@@ -94,7 +94,6 @@ function fakeDaemon() {
     closeSession: vi.fn(async () => ({ ok: true })),
     getSettings: vi.fn(async () => ({ orchestratorModel: 'deepseek/deepseek-v4-flash', aiProvider: 'openrouter' })),
     updateSettings: vi.fn(async (changes: Record<string, unknown>) => changes),
-    sendCommand: vi.fn(async () => ({ ok: true })),
     getRunners: vi.fn(async () => ({
       runners: [{ id: 'opencode', name: 'OpenCode', enabled: true }],
       orchestratorModel: 'deepseek/deepseek-v4-flash',
