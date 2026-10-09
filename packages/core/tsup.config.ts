@@ -9,6 +9,8 @@ import { defineConfig } from 'tsup';
  * is the only shape esbuild's `define` accepts.
  */
 export default defineConfig({
+  // `node:sqlite` has no unprefixed name: stripped to `sqlite`, its dynamic
+  // import names a package that does not exist and always fails.
   removeNodeProtocol: false,
   esbuildOptions(options, context) {
     if (context.format === 'cjs') {
