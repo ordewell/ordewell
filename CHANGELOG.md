@@ -27,9 +27,13 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   `K` or `/task-skills`. A name that does not exist yet is a warning when a
   plan is submitted, as is a workspace skill that is not committed (task
   worktrees only get what is committed); if a name still does not resolve at
-  start, the task fails before its runner is spawned. The skills an attempt was
-  given are recorded on it and shown at the top of its task log. The planner
-  sees each task's skills in its plan view and in `task_query`.
+  start, the task fails before its runner is spawned. Skills are resolved where
+  the task runs, so skills created by an earlier task in its worktree are found.
+  The skills an attempt was given are recorded on it and, for tasks on the
+  structured transport (the one that keeps a task log), shown at the top of its
+  task log. The planner sees and validates each task's skills on every planner
+  path, including the API-key planners and plan edits, and sees them in its plan
+  view and in `task_query`.
 - **`tdd` is a task skill.** `/tdd` asks the planner to attach it to the tasks
   it fits.
 - **The planner can load skills itself.** A planner with tools attached sees
@@ -38,34 +42,30 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   attaches task skills to a task; with no names it lists the task skills and
   marks the attached ones.
 - **`ordewell skills`** lists the skills a workspace sees, with scope,
-  `applies-to`, who can invoke each, and any shadowed copy; `--json` for
-  scripts.
+  `applies-to`, who can invoke each, any shadowed copy, and any skill folder
+  skipped for an invalid name (lowercase letters, digits, `-` and `_`, starting
+  with a letter or digit); `--json` for scripts.
+- **Skills in a multi-repo group.** A group root's own `.ordewell/skills/` is
+  read in place and each repo's committed folder is read as checked out (in the
+  task's worktree when it runs). The planner's catalog, `/name`, the chips,
+  `ordewell task-skills` and `ordewell skills` all see the same set; global
+  still wins.
 
 ### Changed
 
 - **`/name` keeps your text.** The message is sent as you typed it, with the
   skill's instructions beside it. The conversation records a snapshot of the
-  skill as loaded and shows a one-line notice with its path. A `/word` that
-  names no skill is plain text.
+  skill as loaded and shows a one-line notice with its path (shortened and
+  displayed correctly on Windows). A `/word` that names no skill is plain text:
+  in the TUI it goes to the planner as typed, where it used to be reported as an
+  unknown command.
 - **TDD is no longer applied to every task by default.** The `tdd` toggle is
   gone; use `/tdd` or attach the skill to the tasks that need it.
 
-- **Skills in a multi-repo group.** A group root's own `.ordewell/skills/` is
-  read in place and each repo's committed folder is read as checked out in the
-  task's worktree; global still wins.
-
 ### Fixed
 
-- A `/foo` typed in the TUI that is neither a built-in command nor a skill
-  (including the removed `/tdd on`, `/verify on` and `/transport`) now goes to
-  the planner as typed, instead of being handled as a command.
 - Skill files saved with CRLF line endings or a UTF-8 BOM (as git does for a
   committed skill on Windows) now load; their frontmatter was not read.
-- Skill notice paths on Windows are shortened and displayed correctly.
-- Task skills are resolved where the task runs, so runs on a repo group and
-  skills created by an earlier task in its worktree are found. The planner now
-  sees and validates task skills on every planner path, including the API-key
-  planners and plan edits.
 - A saved plan that was pinned to the terminal transport now runs structured.
 
 ### Removed

@@ -32,5 +32,5 @@ Tasks run in a **tmux window** instead of a piped subprocess (`TmuxRunner`, alon
 - 2026-07-31 — accepted: tmux automatic, no setting.
 - 2026-09-29 — the transport became a setting (ADR-0018); tmux stays automatic within the terminal transport.
 - 2026-10-02 — structured the default; the terminal transport, and tmux with it, a fallback.
-- 2026-10-09 — the transport setting removed; terminal is only the per-connector fallback (ADR-0018).
 - 2026-10-04 — a runner manifest may carry a command line per major version; OpenCode 2.x uses one.
+- 2026-10-09 — the transport setting removed; terminal is only the per-connector fallback (ADR-0018).

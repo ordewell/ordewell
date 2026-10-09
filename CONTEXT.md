@@ -371,10 +371,11 @@ it like a saved session, which replaces the extension's one in-process
 `Session` — so it asks first when a run is executing, since loading stops it.
 *Avoid:* "branch" — that word belongs to git and to worktree isolation.
 
-**PRD (prdMarkdown)** — a planner reply that wraps the full markdown in
-`ORDEWELL_PRD_START/END` markers (a PRD-writing skill such as `to-spec` asks
-for it); core saves it to `.scratch/<slug>/PRD.md` (the Matt Pocock to-prd
-convention) and keeps `prdMarkdown` on the plan.
+**PRD (prdMarkdown)** — a planner reply that wraps the full markdown in an
+`ORDEWELL_PRD_START/END` block (with a slug). Core saves it to
+`.scratch/<slug>/PRD.md` (the Matt Pocock to-prd convention) and keeps
+`prdMarkdown` on the plan. No built-in skill or prompt asks for the block; the
+`to-spec` skill writes its spec straight to `.ordewell/spec.md` instead.
 *Avoid:* "PrdArtifact", "PRD status machine" — deleted; the PRD is a message
 plus a saved file, not a typed state.
 

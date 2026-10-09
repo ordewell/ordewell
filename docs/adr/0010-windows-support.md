@@ -105,7 +105,7 @@ Windows paths are built with `path.win32` explicitly, not the host-flavoured
 off-platform it is what makes the behavior testable at all.
 
 **The cmd.exe buffer is a refusal, not a truncation.** A 12 KB
-`--append-system-prompt` (measured: 12,363 characters with every mode toggle on,
+`--append-system-prompt` (measured: 12,363 characters for the planner prompt,
 plus up to ~11 KB of collected context) does not fit, and Windows truncates
 rather than rejecting. A truncated system prompt makes the planner answer half a
 question confidently, which is exactly the silent success this repo refuses — so
@@ -118,7 +118,8 @@ ceiling rather than cmd.exe's, which is four times further away but truncates
 the same way — so it raises the same error, with a different message. The shim
 version says "install the native executable"; the OS-ceiling version says so
 explicitly *not*, because no reinstall moves that limit, and points at the task
-prompt and the mode toggles that append to the system prompt instead. Advice
+prompt and the task skills, whose text is added to the prompt
+([ADR-0024](0024-unified-skills.md)), instead. Advice
 that cannot work is worse than none.
 
 ### 2. `services/researchShell.ts` — which interpreter runs the planner's `bash`
@@ -249,3 +250,4 @@ measured on a Windows host; the rest has not been run on one.
 
 - 2026-07-31 — accepted, with an amendment from the first run on a Windows host (OpenCode installed by npm): the batch route's line-break truncation found and routed around, PowerShell `-File` fidelity measured.
 - 2026-10-07 — POSIX stop signals the runner's process group rather than the direct child.
+- 2026-10-09 — the system-prompt advice names task skills, the mode toggles being gone (ADR-0024).

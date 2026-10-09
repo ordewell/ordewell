@@ -27,6 +27,11 @@ my-skill/
 | `disable-model-invocation` | `true` means only you can invoke it. |
 | `user-invocable` | `false` means only a model can invoke it. |
 
+A skill's name is lowercase letters, digits, `-` and `_`, starting with a letter
+or digit. A folder whose name is anything else is skipped, not listed, and
+`ordewell skills` reports it; a plan that attaches such a name gets a warning
+and the name is dropped.
+
 Leave the two invocation fields out and both you and a model may invoke the
 skill. The built-in skills are all user-only.
 
@@ -114,7 +119,8 @@ applies the next time the task spawns.
 
 When the task starts, Ordewell puts the skill's text into the task's prompt, so
 this works the same on every runner. The skills a task attempt was given are
-recorded on the attempt and shown at the top of its task log.
+recorded on the attempt. For tasks run on a runner's structured transport, which
+is the one that keeps a task log, they are also shown at the top of the log.
 
 A plan may name a skill that does not exist yet, with a warning, because a
 task it depends on may create it. If the name still does not resolve when the
@@ -127,8 +133,10 @@ run in git worktrees, which receive only what is committed, so commit its
 
 In a multi-repo group, the group folder's own `.ordewell/skills/` is read in
 place and needs no commit. Each repo's committed `.ordewell/skills/` is read as
-checked out in the task's worktree. When names clash, global wins, then the
-group folder, then the repos in the order the group lists them.
+checked out in the task's worktree, or in the workspace when tasks run without
+worktrees. The planner's catalog, `/name`, the chips, `ordewell task-skills` and
+`ordewell skills` all list the same skills. When names clash, global wins, then
+the group folder, then the repos in the order the group lists them.
 
 ## Tasks that create skills
 
@@ -145,5 +153,6 @@ ordewell skills [--workspace /path] [--json]
 ```
 
 Prints each skill's name, scope, `applies-to`, who can invoke it, and the path
-to its `SKILL.md`, then any workspace skill shadowed by a global one. It only
-reads; it changes nothing.
+to its `SKILL.md`, then any workspace skill shadowed by a global one and any
+skill folder skipped for an invalid name (`shadowed` and `invalid` in `--json`).
+It only reads; it changes nothing.

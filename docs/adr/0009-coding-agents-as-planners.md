@@ -262,3 +262,4 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-09-27 — OpenCode streams the assistant's reply and reports usage, with the user's echo filtered by message id.
 - 2026-09-29 — adapters gain a task mode for the structured transport (ADR-0018); the planner path stays read-only.
 - 2026-10-04 — OpenCode 2.x supported beside 1.x.
+- 2026-10-09 — harness planners get skills through the unified loader (ADR-0024): `/name`, `load_skill`, task skills.

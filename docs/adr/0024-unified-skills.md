@@ -18,9 +18,13 @@ into the skill's body, so the transcript no longer showed what was typed.
 
 **One `SKILL.md` format and one loader serve every skill.** The format is the
 Agent Skills spec (agentskills.io): a folder with a `SKILL.md`, frontmatter,
-then instructions. Ordewell reads `description` and three fields of its own; the
-**folder name is the skill's identity** (`/name`, the names in a plan,
-`ordewell skills`), and a frontmatter `name` should match it:
+then instructions. Ordewell reads `name`, `description`, one field of its own
+(`applies-to`) and Claude Code's two invocation fields. The **folder name is the
+skill's identity** (`/name`, the names in a plan, `ordewell skills`), and a
+frontmatter `name` should match it. A name is lowercase letters, digits, `-` and
+`_`, starting with a letter or digit; a folder named otherwise is skipped and
+reported by `ordewell skills` rather than listed, and a plan that attaches such
+a name gets a warning:
 
 - **`applies-to: planner | task`**, default `planner`. A planner skill is
   instructions for the planning conversation; a task skill is instructions for
@@ -63,9 +67,9 @@ shadowed rather than dropped silently.
 - **Ordewell injects the body into the task prompt at spawn**, so any harness
   works and nothing is written into a runner's own skills directory. A fresh
   attempt resolves the skills where it runs and **snapshots them**: the task
-  keeps the latest attempt's snapshot, and each attempt's task log opens with a
-  skills entry naming them and their paths, so history shows what that attempt
-  was given. A retry resolves again; a conflict repair and a continue add no
+  keeps the latest attempt's snapshot, and on the structured transport, the one
+  that keeps a task log, each attempt's log opens with a skills entry naming
+  them and their paths, so history shows what that attempt was given. A retry resolves again; a conflict repair and a continue add no
   snapshot, since they resume work that already holds the skills.
 - Names are checked **leniently at submit, hard at spawn**. An unresolved name
   in a submitted plan or edit is a warning, because a task it depends on may
@@ -88,8 +92,10 @@ the `tdd` skill is attached, by the planner or by `/tdd`. The read-only
 **Workspace skills in a repo group** (ADR-0014). The group root is no
 repository, so its own `.ordewell/skills/` is read from the main checkout and
 never needs committing; each repo's committed folder is read as checked out in
-the task's worktree. Among workspace folders the group root's wins, then repos
-in layout order. A workspace skill attached to a task but not yet committed
+the task's worktree, or in the workspace when tasks run without worktrees. The
+planner's catalog, `/name`, the chips, `ordewell task-skills` and `ordewell
+skills` read the same folders, so they list the same skills. Among workspace
+folders the group root's wins, then repos in layout order. A workspace skill attached to a task but not yet committed
 produces a warning at submit saying which folder to commit.
 
 ## Considered options
