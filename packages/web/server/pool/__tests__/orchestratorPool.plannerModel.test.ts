@@ -132,6 +132,24 @@ describe('OrchestratorPool.updateSettings — planner model memory', () => {
     expect(result.orchestratorModel).toBe('opencode/model-y');
   });
 
+  it('replaces remembered model on a switch with an explicit env choice', () => {
+    new SettingsService().setPlannerModel('opencode', { model: 'opencode/model-x' });
+    process.env.AI_PROVIDER = 'claude-code';
+    process.env.ORDEWELL_PLANNER_EFFORT = 'high';
+
+    const result = pool.updateSettings({
+      env: { AI_PROVIDER: 'opencode', ORCHESTRATOR_MODEL: 'opencode/model-y' },
+    });
+
+    expect(result.orchestratorModel).toBe('opencode/model-y');
+    expect(result.plannerThinkingEffort).toBe('');
+    expect(result.switchRecall).toBeUndefined();
+    expect(new SettingsService().getPlannerModel('opencode')).toEqual({ model: 'opencode/model-y' });
+
+    pool.updateSettings({ env: { AI_PROVIDER: 'claude-code' } });
+    expect(pool.updateSettings({ env: { AI_PROVIDER: 'opencode' } }).orchestratorModel).toBe('opencode/model-y');
+  });
+
   it('selects the first catalog model when nothing is remembered for the provider', () => {
     process.env.AI_PROVIDER = 'claude-code';
     process.env.ORCHESTRATOR_MODEL = 'claude-a';
