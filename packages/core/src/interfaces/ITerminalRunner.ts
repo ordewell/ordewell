@@ -19,22 +19,6 @@ export interface ITerminalSession {
    * (`defaultInteractive = false`) leaves this false and accepts `\n`.
    */
   readonly interactive?: boolean;
-  /**
-   * Optional transport-level control channel: PTY resize requests for a session
-   * whose runner renders a TUI. Absent on transports without a resizable PTY
-   * (a plain piped subprocess); surfaces must feature-detect before calling.
-   */
-  writeControl?(text: string): void;
-}
-
-/**
- * How Ordewell drives a task's runner (ADR-0018): through its screen and
- * keyboard, or through its programmatic protocol.
- */
-export type RunnerTransport = 'terminal' | 'structured';
-
-export function isRunnerTransport(value: unknown): value is RunnerTransport {
-  return value === 'terminal' || value === 'structured';
 }
 
 /** How a structured turn ended. `failed` carries the agent's own words in the preceding `error` event. */
@@ -151,7 +135,6 @@ export interface ITerminalRunner {
     thinkingEffort?: string;
     modelVariants?: string[];
     mode?: string;
-    headless?: boolean;
     cwd: string;
     registry?: RunnerRegistry;
     /** Task order and title — surfaces use these to label task_started/output events. */
@@ -159,8 +142,8 @@ export interface ITerminalRunner {
     title?: string;
     /**
      * The owning plan session. Task ids are only unique within one plan, so
-     * transports that key OS resources by task (tmux windows, log files) need
-     * this to keep two plans' identically named tasks apart.
+     * a runner that keys anything by task (the attempt's MCP token) needs this
+     * to keep two plans' identically named tasks apart.
      */
     planSessionId?: string;
     /**
@@ -168,16 +151,7 @@ export interface ITerminalRunner {
      * manifest's env still wins over them.
      */
     env?: Record<string, string>;
-    /**
-     * The transport the plan asks for (ADR-0018, S1). A router decides per
-     * task whether the runner can honour it; any other runner ignores it.
-     */
-    transport?: RunnerTransport;
-    /**
-     * The runner's own session to continue in (ADR-0018, K1). Only the
-     * structured transport can honour it; a terminal session comes back fresh,
-     * which is why a continue refuses one.
-     */
+    /** The runner's own session to continue in (ADR-0018, K1). */
     resumeSessionId?: string;
     /**
      * Which run of the task this is, from 1. A structured runner binds the

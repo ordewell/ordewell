@@ -45,9 +45,7 @@ function setup(opts: { isolation?: FakeWorktreeIsolation; config?: Partial<IConf
       requests.push(o);
       await holds.get(o.taskId);
       const id = `s${sessions.length + 1}`;
-      const session = o.transport === 'structured'
-        ? new FakeStructuredSession(id, o.taskId, o.resumeSessionId ?? `native-${o.taskId}-${sessions.length + 1}`)
-        : new FakeTerminalSession(id, o.taskId);
+      const session = new FakeStructuredSession(id, o.taskId, o.resumeSessionId ?? `native-${o.taskId}-${sessions.length + 1}`);
       sessions.push(session);
       return session;
     }),
@@ -148,7 +146,7 @@ describe('attempt kinds, as the orchestrator runs them', () => {
 
       await env.orchestrator.continueTask('c1', 'one more thing');
 
-      expect(env.spawned('c1')[1]).toMatchObject({ cwd: '/fake-worktrees/run1/1-c1', transport: 'structured' });
+      expect(env.spawned('c1')[1]).toMatchObject({ cwd: '/fake-worktrees/run1/1-c1' });
       expect(env.isolation.taskIdsFor('prepare')).toEqual(['c1', 'c1']);
     });
 
@@ -160,7 +158,7 @@ describe('attempt kinds, as the orchestrator runs them', () => {
 
       await env.orchestrator.continueTask('o1', 'check the pipeline again');
 
-      expect(env.spawned('o1')[1]).toMatchObject({ cwd: '/repo', transport: 'structured' });
+      expect(env.spawned('o1')[1]).toMatchObject({ cwd: '/repo' });
       expect(env.isolation.taskIdsFor('prepare')).toEqual([]);
     });
   });

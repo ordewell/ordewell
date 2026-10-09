@@ -74,7 +74,7 @@ export class RunnerProcess {
     assertWorkspaceExists(cwd, { isDirectory: this.deps.isDirectory });
     const command = describe();
     const resolvePath = this.deps.resolvePath ?? augmentedPath;
-    // Same PATH treatment as model discovery and the headless runner: the
+    // Same PATH treatment as model discovery: the
     // binary must resolve wherever the user installed it, even under the
     // minimal PATH a GUI-launched host inherits.
     const PATH = await resolvePath();

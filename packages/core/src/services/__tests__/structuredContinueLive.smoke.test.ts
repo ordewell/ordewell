@@ -5,9 +5,8 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, it, expect, vi } from 'vitest';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
-import { HeadlessRunner, type SpawnFn } from '../HeadlessRunner';
+import type { SpawnFn } from '../harness/AgentAdapter';
 import { StructuredRunner } from '../StructuredRunner';
-import { TransportRouter } from '../TransportRouter';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 import type { ITerminalSession } from '../../interfaces/ITerminalRunner';
@@ -38,7 +37,7 @@ function liveSession(dir: string) {
     children.push(child);
     return child;
   };
-  const router = new TransportRouter({ terminal: new HeadlessRunner(), structured: new StructuredRunner({ process: { spawn } }) });
+  const router = new StructuredRunner({ process: { spawn } });
   const requests: RunnerSpawnOptions[] = [];
   const attempts: ITerminalSession[] = [];
   const runner = {
@@ -85,7 +84,7 @@ describe.runIf(live)('continue — live', () => {
       await vi.waitFor(() => expect(taskOf(session, 'live-1')?.status).toBe('completed'), { timeout: TIMEOUT_MS, interval: 500 });
 
       const continued = taskOf(session, 'live-1')!;
-      expect(requests.at(-1)).toMatchObject({ resumeSessionId: saved, transport: 'structured' });
+      expect(requests.at(-1)).toMatchObject({ resumeSessionId: saved });
       expect(requests.at(-1)!.prompt).not.toContain('Reply with exactly this sentence');
       expect(continued.verdict?.outcome).toBe('pass');
       // The log tail is the runner's task_complete summary, in its own words;

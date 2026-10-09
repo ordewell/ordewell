@@ -13,10 +13,9 @@ import type { IWorktreeIsolation } from '../../interfaces/IWorktreeIsolation';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 
 /**
- * A router's view of spawning: a structured Claude Code session for a
- * structured request, a terminal one otherwise. `resumes` says what a resumed
- * spawn's runner announces — the session it took up, or null for one it could
- * not find.
+ * A structured Claude Code session, a plain one for any other runner.
+ * `resumes` says what a resumed spawn's runner announces — the session it
+ * took up, or null for one it could not find.
  */
 function routingRunner(opts: { resumes?: (id: string) => string | null } = {}) {
   const sessions: FakeTerminalSession[] = [];
@@ -26,7 +25,7 @@ function routingRunner(opts: { resumes?: (id: string) => string | null } = {}) {
       requests.push(o);
       const id = `s${sessions.length + 1}`;
       const native = o.resumeSessionId ? (opts.resumes ?? ((resumed) => resumed))(o.resumeSessionId) : `native-${o.taskId}-${sessions.length + 1}`;
-      const session = o.transport === 'structured' && o.runner === 'claude-code'
+      const session = o.runner === 'claude-code'
         ? new FakeStructuredSession(id, o.taskId, native)
         : new FakeTerminalSession(id, o.taskId);
       sessions.push(session);
@@ -82,9 +81,8 @@ describe('which tasks can be continued (ADR-0018, K1)', () => {
     expect(verdict).toEqual({ ok: false, reason: expect.stringContaining('merge conflict') });
   });
 
-  it('not a task that ran in a terminal, nor one with no saved session', () => {
-    expect(continuability(plan({ status: 'completed' }))).toEqual({ ok: false, reason: expect.stringContaining('ran in a terminal') });
-    expect(continuability(plan({ status: 'completed', transport: { kind: 'terminal', fallback: 'no connector' } }))).toMatchObject({ ok: false });
+  it('not a task with no saved session', () => {
+    expect(continuability(plan({ status: 'completed' }))).toEqual({ ok: false, reason: expect.stringContaining('no saved session') });
     expect(continuability(plan({ status: 'failed', transport: { kind: 'structured' } }))).toEqual({ ok: false, reason: expect.stringContaining('no saved session') });
   });
 
@@ -112,7 +110,7 @@ describe('TaskOrchestrator.continueTask', () => {
     await h.orchestrator.continueTask('t1', '  also handle arrays  ');
 
     const request = h.requests.at(-1)!;
-    expect(request).toMatchObject({ transport: 'structured', resumeSessionId: 'native-t1-1', runner: 'claude-code' });
+    expect(request).toMatchObject({ resumeSessionId: 'native-t1-1', runner: 'claude-code' });
     expect(request.prompt.startsWith('also handle arrays\n')).toBe(true);
     expect(request.prompt).toContain('continuing this task in the same session');
     expect(request.prompt).toContain('`DONE_mk-1>>>`');
@@ -184,26 +182,29 @@ describe('TaskOrchestrator.continueTask', () => {
     expect(cwds[1]).toBe(cwds[0]);
   });
 
-  it('refuses a conflict, a terminal task and an unfinished one with the reason', async () => {
+  it('refuses a conflict, a task with no saved session and an unfinished one with the reason', async () => {
     const h = setup();
     h.orchestrator.loadPlan([
       plan({ status: 'awaiting_user', awaitingReason: 'conflict', transport: { kind: 'structured', nativeSessionId: 'sess-1' } }),
-      createTask({ id: 't2', order: 2, title: 'Terminal', prompt: 'two', status: 'completed' }),
+      createTask({ id: 't2', order: 2, title: 'Unsaved', prompt: 'two', status: 'completed' }),
       createTask({ id: 't3', order: 3, title: 'Pending', prompt: 'three' }),
     ]);
 
     await expect(h.orchestrator.continueTask('t1', 'go on')).rejects.toThrow(/merge conflict/);
-    await expect(h.orchestrator.continueTask('t2', 'go on')).rejects.toThrow(/ran in a terminal.*Retry/);
+    await expect(h.orchestrator.continueTask('t2', 'go on')).rejects.toThrow(/no saved session.*Retry/);
     await expect(h.orchestrator.continueTask('t3', 'go on')).rejects.toBeInstanceOf(TaskControlError);
     await expect(h.orchestrator.continueTask('t1', '   ')).rejects.toThrow(/cannot be empty/);
     expect(h.requests).toHaveLength(0);
   });
 
-  it('refuses a task whose runner now has no structured connector', async () => {
+  it('fails a task whose runner now has no structured connector, without reaching the runner', async () => {
     const h = setup();
     h.orchestrator.loadPlan([plan({ status: 'completed', assignedRunner: 'my-plugin', transport: { kind: 'structured', nativeSessionId: 'sess-1' } })], ['my-plugin']);
 
-    await expect(h.orchestrator.continueTask('t1', 'go on')).rejects.toThrow(/no structured connector for my-plugin yet.*Retry/);
+    await h.orchestrator.continueTask('t1', 'go on');
+
+    expect(h.task('t1').status).toBe('failed');
+    expect(h.notifications.error).toHaveBeenCalledWith(expect.stringContaining('could not start: my-plugin has no structured connector'));
     expect(h.requests).toHaveLength(0);
   });
 });
@@ -230,26 +231,6 @@ describe('a continue whose session cannot be resumed', () => {
     // Nothing was taken up, so there is nothing left to offer a continue of.
     expect(continuability(h.task('t1')).ok).toBe(false);
     expect(h.requests).toHaveLength(2);
-  });
-
-  it('fails the attempt rather than start a fresh session when the spawn comes back a terminal', async () => {
-    const terminalOnly = {
-      spawn: vi.fn(async (o: RunnerSpawnOptions) => new FakeTerminalSession('s1', o.taskId)),
-      stop: vi.fn(),
-      stopAll: vi.fn(),
-      activeCount: 0,
-    } satisfies ITerminalRunner;
-    const h = setup({ runner: terminalOnly });
-    h.orchestrator.loadPlan([plan({ status: 'completed', transport: { kind: 'structured', nativeSessionId: 'sess-1' } })]);
-
-    await h.orchestrator.continueTask('t1', 'go on');
-
-    const session = await terminalOnly.spawn.mock.results[0].value;
-    expect(session.killed).toBe(true);
-    expect(h.task('t1').status).toBe('failed');
-    expect(h.notifications.error).toHaveBeenCalledWith('Could not continue task "Parse JSON": could not start: this surface cannot run structured tasks. Retry starts it afresh.');
-    // A failure to start is no evidence the session is gone: it stays continuable.
-    expect(continuability(h.task('t1'))).toEqual({ ok: true, sessionId: 'sess-1' });
   });
 
   it('fails the attempt when the runner cannot be started at all', async () => {

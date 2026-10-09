@@ -2,17 +2,16 @@ import { describe, it, expect, vi } from 'vitest';
 import { TaskOrchestrator } from '../TaskOrchestrator';
 import { createTask, type LegacyPlanState } from '../../models/Task';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
-import { serializeTaskStatus } from '../SessionMessage';
+import { serializeTaskStatus, surfacePlan } from '../SessionMessage';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { fakeConfig, FakeStructuredSession, FakeTerminalSession, flushMicrotasks } from '../../testing';
 import { fakeNotification, makeSession, saves, taskOf } from './sessionTestKit';
-import type { ITerminalRunner, ITerminalSession, RunnerTransport } from '../../interfaces/ITerminalRunner';
+import type { ITerminalRunner, ITerminalSession } from '../../interfaces/ITerminalRunner';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 
 /**
- * The runner a {@link TransportRouter} would be: a structured session for a
- * structured request on Claude Code, a terminal one otherwise. Records what
- * each spawn asked for.
+ * A structured session for Claude Code, a plain one for any other runner —
+ * enough to tell the two apart. Records what each spawn asked for.
  */
 function routingRunner() {
   const sessions: FakeTerminalSession[] = [];
@@ -21,7 +20,7 @@ function routingRunner() {
     spawn: vi.fn(async (opts: RunnerSpawnOptions): Promise<ITerminalSession> => {
       requests.push(opts);
       const id = `s${sessions.length + 1}`;
-      const session = opts.transport === 'structured' && opts.runner === 'claude-code'
+      const session = opts.runner === 'claude-code'
         ? new FakeStructuredSession(id, opts.taskId, `native-${opts.taskId}`)
         : new FakeTerminalSession(id, opts.taskId);
       sessions.push(session);
@@ -34,25 +33,24 @@ function routingRunner() {
   return { runner, sessions, requests };
 }
 
-function orchestratorWith(transport: RunnerTransport | undefined, runner: ITerminalRunner) {
+function orchestratorWith(runner: ITerminalRunner, notifications = fakeNotification()) {
   return TaskOrchestrator.compose({
     config: fakeConfig(),
-    notifications: fakeNotification(),
+    notifications,
     terminalRunner: runner,
     output: new BufferedTaskOutputSource({ transcripts: { finalAssistantText: async () => null } }),
     registry: new RunnerRegistry(),
     workspaceRoot: () => '/repo',
     workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
-    transport,
   });
 }
 
 const settle = () => flushMicrotasks(50);
 
-describe('the structured transport, asked for by default', () => {
-  it('is what every task of a run and every later run asks for', async () => {
+describe('the structured transport, the only one', () => {
+  it('is what every task of a run and every later run is recorded on', async () => {
     const { runner, sessions, requests } = routingRunner();
-    const orchestrator = orchestratorWith(undefined, runner);
+    const orchestrator = orchestratorWith(runner);
     orchestrator.loadPlan([
       createTask({ id: 't1', order: 1, title: 'First', prompt: 'one', completionMarker: 'mk-1' }),
       createTask({ id: 't2', order: 2, title: 'Second', prompt: 'two', completionMarker: 'mk-2', dependencies: ['t1'] }),
@@ -67,7 +65,9 @@ describe('the structured transport, asked for by default', () => {
     await orchestrator.runTask('t2');
     await settle();
 
-    expect(requests.map((r) => r.transport)).toEqual(['structured', 'structured', 'structured']);
+    expect(requests).toHaveLength(3);
+    expect(orchestrator.storeInstance.get('t1')!.transport?.kind).toBe('structured');
+    expect(orchestrator.storeInstance.get('t2')!.transport?.kind).toBe('structured');
   });
 
   it('runs a saved plan that an older build pinned to the terminal structured, and stops saving the pin', async () => {
@@ -87,7 +87,6 @@ describe('the structured transport, asked for by default', () => {
     await session.executePlan();
 
     await vi.waitFor(() => expect(requests).toHaveLength(1));
-    expect(requests[0].transport).toBe('structured');
     expect(taskOf(session, 't1')?.transport).toEqual({ kind: 'structured' });
   });
 });
@@ -95,7 +94,7 @@ describe('the structured transport, asked for by default', () => {
 describe('recording the transport on the task', () => {
   it('records transport server-side without sending it on the status wire', async () => {
     const { runner } = routingRunner();
-    const orchestrator = orchestratorWith('structured', runner);
+    const orchestrator = orchestratorWith(runner);
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
 
     await orchestrator.forceStartTask('t1');
@@ -105,49 +104,42 @@ describe('recording the transport on the task', () => {
     expect(serializeTaskStatus(task)).not.toHaveProperty('transport');
   });
 
-  it('records the fallback and its reason for a runner with no connector', async () => {
+  it('keeps the runner\'s own session id off a surface', async () => {
+    const { runner, sessions } = routingRunner();
+    const orchestrator = orchestratorWith(runner);
+    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', completionMarker: 'mk-1' })]);
+    await orchestrator.forceStartTask('t1');
+
+    sessions[0].emitOutput('<<<ORDEWELL_DONE_mk-1>>>');
+    await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
+
+    const task = orchestrator.storeInstance.get('t1')!;
+    expect(task.transport?.nativeSessionId).toBe('native-t1');
+    expect(surfacePlan({ tasks: [task], generatedAt: '', status: 'approved', runners: ['claude-code'], lastUpdated: '' }).tasks[0]).not.toHaveProperty('transport');
+  });
+});
+
+describe('a runner with no structured connector', () => {
+  it('is refused at spawn, saying why, and never reaches the runner', async () => {
     const { runner } = routingRunner();
-    const orchestrator = orchestratorWith('structured', runner);
+    const notifications = fakeNotification();
+    const orchestrator = orchestratorWith(runner, notifications);
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', assignedRunner: 'my-plugin' })], ['my-plugin']);
 
     await orchestrator.forceStartTask('t1');
 
-    const status = serializeTaskStatus(orchestrator.storeInstance.get('t1')!);
-    expect(status).not.toHaveProperty('transport');
-  });
-
-  it('names a host that cannot run structured tasks as the reason, never falling back silently', async () => {
-    const runner = {
-      spawn: vi.fn(async (opts: RunnerSpawnOptions) => new FakeTerminalSession('s1', opts.taskId)),
-      stop: vi.fn(),
-      stopAll: vi.fn(),
-      activeCount: 0,
-    } satisfies ITerminalRunner;
-    const orchestrator = orchestratorWith('structured', runner);
-    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
-
-    await orchestrator.forceStartTask('t1');
-
-    expect(orchestrator.storeInstance.get('t1')!.transport).toEqual({ kind: 'terminal', fallback: 'this surface cannot run structured tasks' });
-  });
-
-  it('records nothing on a terminal plan', async () => {
-    const { runner } = routingRunner();
-    const orchestrator = orchestratorWith('terminal', runner);
-    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
-
-    await orchestrator.forceStartTask('t1');
-
+    expect(runner.spawn).not.toHaveBeenCalled();
     const task = orchestrator.storeInstance.get('t1')!;
+    expect(task.status).toBe('pending');
     expect(task.transport).toBeUndefined();
-    expect(serializeTaskStatus(task)).not.toHaveProperty('transport');
+    expect(notifications.error).toHaveBeenCalledWith(expect.stringContaining('my-plugin has no structured connector, so Ordewell cannot run its tasks'));
   });
 });
 
 describe('ending a structured attempt', () => {
   it('stops the structured session once its task passes, instead of leaving it running', async () => {
     const { runner, sessions } = routingRunner();
-    const orchestrator = orchestratorWith('structured', runner);
+    const orchestrator = orchestratorWith(runner);
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', completionMarker: 'mk-1' })]);
     await orchestrator.forceStartTask('t1');
 
@@ -160,7 +152,7 @@ describe('ending a structured attempt', () => {
 
   it('saves the runner\'s own session id on the task for a later continue', async () => {
     const { runner, sessions } = routingRunner();
-    const orchestrator = orchestratorWith('structured', runner);
+    const orchestrator = orchestratorWith(runner);
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', completionMarker: 'mk-1' })]);
     await orchestrator.forceStartTask('t1');
 
@@ -169,50 +161,27 @@ describe('ending a structured attempt', () => {
 
     expect(orchestrator.storeInstance.get('t1')!.transport).toEqual({ kind: 'structured', nativeSessionId: 'native-t1' });
   });
-
-  it('leaves a terminal task\'s runner up after its pass, as before', async () => {
-    const { runner, sessions } = routingRunner();
-    const orchestrator = orchestratorWith('terminal', runner);
-    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', completionMarker: 'mk-1' })]);
-    await orchestrator.forceStartTask('t1');
-
-    sessions[0].emitOutput('<<<ORDEWELL_DONE_mk-1>>>');
-    await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
-
-    expect(runner.stop).not.toHaveBeenCalled();
-  });
 });
 
 describe('completing through task_complete (ADR-0022)', () => {
-  it('teaches the tool only to a structured task whose runner is given it', async () => {
+  it('teaches the tool to every runner it is given to', async () => {
     const { runner, requests } = routingRunner();
-    const orchestrator = orchestratorWith('structured', runner);
+    const orchestrator = orchestratorWith(runner);
     orchestrator.loadPlan([
       createTask({ id: 't1', order: 1, title: 'Claude', prompt: 'one' }),
       createTask({ id: 't2', order: 2, title: 'Codex', prompt: 'two', assignedRunner: 'codex' }),
       createTask({ id: 't3', order: 3, title: 'OpenCode', prompt: 'three', assignedRunner: 'opencode' }),
-      createTask({ id: 't4', order: 4, title: 'Other', prompt: 'four', assignedRunner: 'other-runner' }),
-    ], ['claude-code', 'codex', 'opencode', 'other-runner']);
+    ], ['claude-code', 'codex', 'opencode']);
     await orchestrator.forceStartTask('t1');
     await orchestrator.forceStartTask('t2');
     await orchestrator.forceStartTask('t3');
-    await orchestrator.forceStartTask('t4');
 
-    expect(requests[0].prompt).toContain('`task_complete`');
-    expect(requests[1].prompt).toContain('`task_complete`');
-    expect(requests[2].prompt).toContain('`task_complete`');
-    expect(requests[3].prompt).not.toContain('task_complete');
-
-    const terminal = routingRunner();
-    const onTerminal = orchestratorWith('terminal', terminal.runner);
-    onTerminal.loadPlan([createTask({ id: 't1', order: 1, title: 'Claude', prompt: 'one' })]);
-    await onTerminal.forceStartTask('t1');
-    expect(terminal.requests[0].prompt).not.toContain('task_complete');
+    expect(requests.map((r) => r.prompt.includes('`task_complete`'))).toEqual([true, true, true]);
   });
 
   it('numbers each attempt it spawns', async () => {
     const { runner, sessions, requests } = routingRunner();
-    const orchestrator = orchestratorWith('structured', runner);
+    const orchestrator = orchestratorWith(runner);
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it' })]);
     await orchestrator.forceStartTask('t1');
     sessions[0].emitExit(1);
@@ -227,7 +196,7 @@ describe('completing through task_complete (ADR-0022)', () => {
 
   it('passes a task on a done call, and hands its summary to dependents', async () => {
     const { runner, sessions } = routingRunner();
-    const orchestrator = orchestratorWith('structured', runner);
+    const orchestrator = orchestratorWith(runner);
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', completionMarker: 'mk-1' })]);
     await orchestrator.forceStartTask('t1');
     const session = sessions[0] as FakeStructuredSession;
@@ -244,7 +213,7 @@ describe('completing through task_complete (ADR-0022)', () => {
 
   it('fails a task on a blocked call, saying why', async () => {
     const { runner, sessions } = routingRunner();
-    const orchestrator = orchestratorWith('structured', runner);
+    const orchestrator = orchestratorWith(runner);
     orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Only', prompt: 'do it', completionMarker: 'mk-1' })]);
     await orchestrator.forceStartTask('t1');
 
@@ -262,7 +231,7 @@ describe('checkpointing through the checkpoint tool (ADR-0022, V5)', () => {
 
   async function asking() {
     const { runner, sessions, requests } = routingRunner();
-    const orchestrator = orchestratorWith('structured', runner);
+    const orchestrator = orchestratorWith(runner);
     orchestrator.loadPlan(hitlPlan());
     const events: Array<{ taskId: string; taskTitle: string; summary: string }> = [];
     orchestrator.subscribe({ onCheckpoint: (data) => events.push(data) });

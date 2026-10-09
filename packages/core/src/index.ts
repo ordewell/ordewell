@@ -66,7 +66,7 @@ export type { IAiService, ConversationRequest, ConversationTurn } from './servic
 export { CliAgentAiService } from './services/harness/CliAgentAiService';
 export type { CliAgentAiServiceDeps } from './services/harness/CliAgentAiService';
 export { LineBuffer, TaskModeUnsupportedError } from './services/harness/AgentAdapter';
-export type { AgentAdapter, AgentEvent, AgentStartOptions, PlannerStartOptions, TaskStartOptions, TaskRunnerFlags, TaskModeAgentAdapter, AgentProcessDeps, AgentAdapterFactory } from './services/harness/AgentAdapter';
+export type { SpawnFn, AgentAdapter, AgentEvent, AgentStartOptions, PlannerStartOptions, TaskStartOptions, TaskRunnerFlags, TaskModeAgentAdapter, AgentProcessDeps, AgentAdapterFactory } from './services/harness/AgentAdapter';
 export { supportsTaskMode, createTaskAdapter } from './services/harness/connectors';
 export { StdioAgentAdapter } from './services/harness/StdioAgentAdapter';
 export type { SpawnSpec } from './services/harness/StdioAgentAdapter';
@@ -136,17 +136,11 @@ export * from './services/JsonExtractor';
 export * from './services/PartialPlanParser';
 export * from './services/PlanValidator';
 export * from './services/PlanRepair';
-export * from './services/buildRunnerArgs';
 export * from './services/promptAugment';
-export { HeadlessRunner, HeadlessSession } from './services/HeadlessRunner';
-export type { HeadlessRunnerDeps, PreparedLaunch, RunnerSpawnOptions } from './services/HeadlessRunner';
-export { TmuxRunner } from './services/TmuxRunner';
-export type { TmuxRunnerDeps, ExecFileFn } from './services/TmuxRunner';
 export { AbstractTerminalSession, AbstractRunner } from './services/AbstractRunner';
+export type { RunnerSpawnOptions } from './services/AbstractRunner';
 export { StructuredRunner, StructuredSession } from './services/StructuredRunner';
 export type { StructuredRunnerDeps } from './services/StructuredRunner';
-export { TransportRouter, routeTransport } from './services/TransportRouter';
-export type { TransportRoute } from './services/TransportRouter';
 export { continuability, canContinue } from './services/continuation';
 export type { Continuability } from './services/continuation';
 export { TaskLogRecorder } from './services/TaskLogRecorder';
@@ -155,7 +149,6 @@ export * from './services/mcp';
 export * from './utils/shell';
 export {
   planDirectLaunch,
-  planShellLaunch,
   windowsCommandLine,
   CommandLineTooLongError,
   EmbeddedNewlineError,
@@ -190,8 +183,10 @@ export {
   researchShellWarning,
 } from './services/researchShell';
 export type { ResearchShell, ResearchShellDeps, ShellDialect } from './services/researchShell';
-export { tmuxSessionName, tmuxSocketName, tmuxWindowName, hasTmux, clipboardCopyCommand } from './utils/tmux';
-export type { ProbeFn, HasBinFn } from './utils/tmux';
+export { tmuxSessionName, tmuxSocketName, tmuxWindowName, hasTmux } from './utils/tmux';
+export type { ProbeFn } from './utils/tmux';
+export { clipboardCopyCommand } from './utils/clipboard';
+export type { HasBinFn } from './utils/clipboard';
 export { RunnerRegistry } from './plugins/RunnerRegistry';
 export { removedPluginNotice } from './plugins/removedPluginNotice';
 export { resolveTaskRunnerFlags } from './plugins/resolveArgs';

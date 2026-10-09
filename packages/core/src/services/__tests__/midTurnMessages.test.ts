@@ -678,10 +678,10 @@ describe('force send through the orchestrator', () => {
     orchestrator.stop();
   });
 
-  it('refuses a task on the terminal transport, saying so', async () => {
+  it('refuses a session that is not structured, saying there is no turn', async () => {
     const orchestrator = orchestratorFor(new FakeTerminalSession());
     await orchestrator.forceStartTask('t1');
-    expect(() => orchestrator.forceSendTaskMessage('t1', 'now')).toThrow(/runs in a terminal, which cannot take a message sent now/);
-    expect(() => orchestrator.forceSendQueuedTaskMessage('t1', 'msg-1')).toThrow(/runs in a terminal/);
+    expect(() => orchestrator.forceSendTaskMessage('t1', 'now')).toThrow(/is not running, so there is no turn to send a message to/);
+    expect(() => orchestrator.forceSendQueuedTaskMessage('t1', 'msg-1')).toThrow(/is not running/);
   });
 });

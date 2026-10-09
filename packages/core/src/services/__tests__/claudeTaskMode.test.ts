@@ -188,7 +188,7 @@ describe('task mode support', () => {
 
   it('refuses a runner without a connector with a typed error', () => {
     expect(() => createTaskAdapter('my-plugin', deps([]).processDeps)).toThrow(TaskModeUnsupportedError);
-    expect(() => createTaskAdapter('my-plugin', deps([]).processDeps)).toThrow('my-plugin has no structured task connector yet');
+    expect(() => createTaskAdapter('my-plugin', deps([]).processDeps)).toThrow('my-plugin has no structured task connector');
   });
 });
 

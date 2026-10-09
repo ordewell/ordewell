@@ -9,7 +9,7 @@ import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { EMPTY_TASK_LOG, reduceTaskLog, replayTaskLog } from '../../conversation/taskLog';
 import { toTaskLogEvent, type TaskLogEvent } from '../../models/TaskLog';
 import { createTask, type LegacyPlanState } from '../../models/Task';
-import { isStructuredSession, type ITerminalRunner, type ITerminalSession, type RunnerTransport } from '../../interfaces/ITerminalRunner';
+import { isStructuredSession, type ITerminalRunner, type ITerminalSession } from '../../interfaces/ITerminalRunner';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 import { listTaskLogAttempts, readTaskLog, type TaskLogFile } from '../../utils/taskLogStore';
 import { FakeStructuredSession, FakeTerminalSession } from '../../testing';
@@ -210,11 +210,11 @@ describe('a session’s task logs', () => {
     };
   }
 
-  function runnerFor(transport: RunnerTransport) {
+  function runnerFor(kind: 'structured' | 'plain') {
     const sessions: FakeTerminalSession[] = [];
     const runner: ITerminalRunner = {
       spawn: vi.fn(async (opts: RunnerSpawnOptions) => {
-        const session = transport === 'structured' ? new FakeStructuredSession('s1', opts.taskId) : new FakeTerminalSession('s1', opts.taskId);
+        const session = kind === 'structured' ? new FakeStructuredSession('s1', opts.taskId) : new FakeTerminalSession('s1', opts.taskId);
         sessions.push(session);
         return session;
       }),
@@ -242,8 +242,8 @@ describe('a session’s task logs', () => {
     expect(files.files.get('t1')).toEqual([[{ type: 'turn_start', message: 'do it' }, { type: 'turn_end', reason: 'completed' }]]);
   });
 
-  it('keeps no log for a terminal-transport task', async () => {
-    const { runner, sessions } = runnerFor('terminal');
+  it('keeps no log for a session that is not structured', async () => {
+    const { runner, sessions } = runnerFor('plain');
     const sent: SessionMessage[] = [];
     const files = memoryTaskLogs();
     const session = makeSession({ runner, broadcast: (m) => sent.push(m), openTaskLog: files });

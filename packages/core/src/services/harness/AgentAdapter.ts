@@ -1,4 +1,4 @@
-import type { SpawnFn } from '../HeadlessRunner';
+import type { ChildProcess } from 'child_process';
 import type { SubagentOutcome } from '../../models/Task';
 import type { UsageRecord } from '../../models/Usage';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
@@ -155,7 +155,7 @@ export type AgentStartOptions = PlannerStartOptions | TaskStartOptions;
 /** A runner asked to start in task mode that has no task-mode connector yet. */
 export class TaskModeUnsupportedError extends Error {
   constructor(readonly runner: string) {
-    super(`${runner} has no structured task connector yet; its tasks run on the terminal transport.`);
+    super(`${runner} has no structured task connector, so Ordewell cannot run its tasks.`);
     this.name = 'TaskModeUnsupportedError';
   }
 }
@@ -231,9 +231,23 @@ export interface TaskModeAgentAdapter extends AgentAdapter {
   answerPermission(id: string, decision: ApprovalDecision): boolean;
 }
 
+export type SpawnFn = (
+  command: string,
+  args: string[],
+  options: {
+    env: NodeJS.ProcessEnv;
+    stdio: Array<'pipe' | 'ignore'>;
+    cwd: string;
+    /** Set by the Windows batch route, where `args` is already a quoted command line. */
+    windowsVerbatimArguments?: boolean;
+    /** Set on POSIX so the runner leads its own process group (see `spawnInOwnGroup`). */
+    detached?: boolean;
+  },
+) => ChildProcess;
+
 /**
- * The single injected boundary between Ordewell and the operating system —
- * the same pattern `HeadlessRunnerDeps` uses for task execution. Tests feed
+ * The single injected boundary between Ordewell and the operating system.
+ * Tests feed
  * recorded agent output through `spawn` (and, for HTTP-transport agents,
  * `fetch`) so one test exercises adapter parsing, event mapping, reply
  * classification and the repair loop as a single observable behavior.

@@ -1425,22 +1425,8 @@ describe('TaskOrchestrator with worktree isolation', () => {
     expect(orchestrator.storeInstance.get('t1')!.outputSummary?.logTail).toBe('answer from the worktree');
   });
 
-  describe('the terminals finished tasks leave open', () => {
-    it('stay open after a task lands, and close once Merge all has cleared the run', async () => {
-      const { orchestrator, pass, sessionFor, runner } = setup();
-      const t1 = task('t1', 1);
-      orchestrator.loadPlan([t1]);
-      await orchestrator.approveReview();
-      pass(t1);
-      await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
-      expect(runner.stop).not.toHaveBeenCalled();
-
-      await orchestrator.mergeRun();
-
-      expect(runner.stop).toHaveBeenCalledWith(sessionFor('t1')!.id);
-    });
-
-    it.each(['discard', 'cleanup'] as const)('close on %s', async (action) => {
+  describe('the agent a finished task leaves behind', () => {
+    it('stops on its verdict, so none is left in a worktree Merge all removes', async () => {
       const { orchestrator, pass, sessionFor, runner } = setup();
       const t1 = task('t1', 1);
       orchestrator.loadPlan([t1]);
@@ -1448,12 +1434,10 @@ describe('TaskOrchestrator with worktree isolation', () => {
       pass(t1);
       await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
 
-      await orchestrator.runs[action]();
-
       expect(runner.stop).toHaveBeenCalledWith(sessionFor('t1')!.id);
     });
 
-    it('close when a repair starts a new agent in the same worktree', async () => {
+    it('stops when a repair starts a new agent in the same worktree', async () => {
       const isolation = new FakeWorktreeIsolation();
       isolation.outcomes.set('t1', 'conflict');
       const { orchestrator, pass, spawn, sessions, runner } = setup({ isolation, config: { conflictRepairAttempts: 1 } });

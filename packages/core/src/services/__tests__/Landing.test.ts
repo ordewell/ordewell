@@ -14,7 +14,7 @@ const passed = verdict('pass', 'Completion marker found');
 
 async function setup(opts: { isolation?: FakeWorktreeIsolation; conflictRepairAttempts?: number; tasks?: Task[] } = {}) {
   const isolation = opts.isolation ?? new FakeWorktreeIsolation();
-  const listener: IsolationRunListener = { changed: vi.fn(), blocked: vi.fn(), handoff: vi.fn(), notice: vi.fn(), releasing: vi.fn() };
+  const listener: IsolationRunListener = { changed: vi.fn(), blocked: vi.fn(), handoff: vi.fn(), notice: vi.fn() };
   const config = fakeConfig({ conflictRepairAttempts: opts.conflictRepairAttempts ?? 2 });
   const runs = new IsolationRunController({ isolation, config, notifications: fakeNotification(), workspaceRoot: () => '/repo', listener, liveTasks: () => new Set() });
   const store = new PlanStore();

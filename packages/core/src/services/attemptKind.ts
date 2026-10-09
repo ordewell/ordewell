@@ -1,5 +1,4 @@
 import type { Task, TaskSkillSnapshot } from '../models/Task';
-import type { RunnerTransport } from '../interfaces/ITerminalRunner';
 import type { IsolationRunController } from './IsolationRunController';
 import type { RepairAttempt } from './Landing';
 import { composeAugmentedPrompt, composeContinuationPrompt } from './promptAugment';
@@ -99,14 +98,6 @@ export function attemptCwd(
 ): Promise<{ cwd: string; worktree: boolean }> {
   if (inCheckout(kind)) return runs.workspaceCwd(task);
   return runs.attemptCwd(task, { repair: kind.kind === 'repair' });
-}
-
-/**
- * A continue resumes a session only the structured transport can reach,
- * whatever fresh attempts ask for: the task already ran that way.
- */
-export function attemptTransport(kind: AttemptKind, requested: RunnerTransport): RunnerTransport {
-  return kind.kind === 'continuation' ? 'structured' : requested;
 }
 
 /** What an attempt's prompt is built from. The callbacks are read only for the kinds that need them. */

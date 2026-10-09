@@ -40,7 +40,7 @@ describe('PoolAwareRunner', () => {
     expect(runner.activeCount).toBe(0);
   });
 
-  it('tags every spawn with its plan session id so transports can scope task resources', async () => {
+  it('tags every spawn with its plan session id so the runner can scope task resources', async () => {
     const inner = fakeInnerRunner();
     const runner = new PoolAwareRunner('session-1', vi.fn(), inner);
     await runner.spawn({ taskId: 't1', runner: 'claude-code', prompt: 'test', cwd: '/tmp' });

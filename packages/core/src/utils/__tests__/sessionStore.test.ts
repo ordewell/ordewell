@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { saveSession, listSessions, loadSession, loadSessionPlanState, getLatestSession, deleteSession } from '../sessionStore';
+import { canContinue } from '../../services/continuation';
 import { createEmptyPlan, createTask } from '../../models/Task';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -394,6 +395,34 @@ describe('sessionStore', () => {
       const result = loadSessionPlanState(meta.id, tmpDir);
       expect(result).not.toBeNull();
       expect(result!.plan.history.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  describe('a session saved while the terminal transport existed', () => {
+    const FIXTURE = path.join(__dirname, 'fixtures', 'terminal-transport-session.json');
+
+    function loadFixture() {
+      const sessionsDir = path.join(tmpDir, '.ordewell', 'sessions');
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      fs.copyFileSync(FIXTURE, path.join(sessionsDir, 'session-0f1e2d3c4b5a6978.json'));
+      return loadSession('session-0f1e2d3c4b5a6978', tmpDir)!;
+    }
+
+    it('drops what a task said about running in a terminal, subtasks included', () => {
+      const [t1, t2, t3] = loadFixture().plan.tasks;
+
+      expect(t2).not.toHaveProperty('transport');
+      expect(t2.subtasks![0]).not.toHaveProperty('transport');
+      expect(t3).not.toHaveProperty('transport');
+      expect(JSON.stringify(loadFixture().plan)).not.toMatch(/"terminal"|fallback/);
+      expect(t1.transport).toEqual({ kind: 'structured', nativeSessionId: 'sess-1' });
+    });
+
+    it('keeps a structured task continuable, and leaves a terminal one to Retry', () => {
+      const [t1, t2] = loadFixture().plan.tasks;
+
+      expect(canContinue(t1)).toBe(true);
+      expect(canContinue(t2)).toBe(false);
     });
   });
 });

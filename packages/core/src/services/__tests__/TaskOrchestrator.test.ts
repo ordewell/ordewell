@@ -68,9 +68,6 @@ function makeOrchestrator(overrides: {
     workspaceRoot: overrides.workspaceRoot ?? (() => '/repo'),
     workspaceEnv: overrides.workspaceEnv,
     previousAttemptFromLog: overrides.previousAttemptFromLog,
-    // These fakes are terminal sessions that report through the completion
-    // marker, so they ask for what such a session is.
-    transport: 'terminal',
   });
 }
 
@@ -397,7 +394,7 @@ describe('TaskOrchestrator', () => {
 
       expect(spawn).toHaveBeenCalledTimes(1);
       const arg = spawn.mock.calls[0][0];
-      const expected = composeAugmentedPrompt(tasks[1], tasks, { planMapEnabled: true });
+      const expected = composeAugmentedPrompt(tasks[1], tasks, { planMapEnabled: true, completionTool: true });
       expect(arg.prompt).toBe(expected);
       // Regression: must carry plan-map context, not the bare prompt/title.
       expect(arg.prompt).not.toBe('do second');
@@ -1431,19 +1428,6 @@ describe('task attempts', () => {
     expect(warn.mock.calls[0][0]).toBe('direnv has blocked /repo/.envrc, so tasks start without its variables. Run `direnv allow` in /repo to use them.');
   });
 
-  it('tells the user when a task sits at a prompt its agent will not get past alone', async () => {
-    const { sessions, spawn } = sessionRunner();
-    const warn = vi.fn();
-    const orchestrator = makeOrchestrator({ terminalRunner: { spawn }, notifications: { warn }, registry: new RunnerRegistry() });
-    orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first', assignedRunner: 'claude-code' })]);
-    await orchestrator.approveReview();
-
-    sessions[0].emitOutput(' Quick safety check: Is this a project you created or one you trust?');
-
-    expect(warn).toHaveBeenCalledWith(`Task "First" is waiting for you: Claude Code is asking whether to trust the task's folder. Answer it in the task's terminal.`);
-    expect(orchestrator.storeInstance.get('t1')!.status).toBe('in_progress');
-  });
-
   it('retrying the task whose failure paused a full run resumes that run', async () => {
     const { sessions, spawn } = sessionRunner();
     const orchestrator = makeOrchestrator({ terminalRunner: { spawn } });
@@ -1661,7 +1645,7 @@ describe('task attempts', () => {
 });
 
 describe('TaskOrchestrator task output', () => {
-  /** Keeps getOutput() ANSI-stripped, the way HeadlessRunner and TmuxRunner do. */
+  /** Keeps getOutput() ANSI-stripped, the way a runner session keeps it. */
   class StrippingSession extends FakeTerminalSession {
     getOutput(): string { return stripAnsi(this.output); }
   }
@@ -1774,11 +1758,11 @@ describe('TaskOrchestrator — retrying an ops task (ADR-0020)', () => {
     expect(spawn.mock.calls[0][0].prompt).not.toContain('## Previous attempt');
   });
 
-  it('keeps the live terminal tail when a runner left no log', async () => {
+  it('keeps the live output tail when a runner left no log', async () => {
     const prompt = await retryAfterFailure({ previousAttemptFromLog: () => null, firstAttemptOutput: 'created rg-dev\n' });
 
     expect(prompt).toContain('  created rg-dev');
-    expect(prompt).not.toContain('not available');
+    expect(prompt).not.toContain('Its output is not available');
   });
 
   it('tells a change task\'s retry nothing about the attempt before', async () => {

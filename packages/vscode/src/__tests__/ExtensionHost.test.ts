@@ -5,7 +5,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import {
   createTask, RunnerRegistry,
-  type AiProvider, type DiscoveredModel, type LegacyPlanState,
+  type AiProvider, type DiscoveredModel, type ITerminalRunner, type LegacyPlanState,
   type ModelResolver, type PlannerModelMemory, type RunnerInstallation,
   type Session, type SessionDeps, type SettingsService,
 } from '@ordewell/core';
@@ -15,7 +15,6 @@ import type { SecretStore, ApiProvider } from '../adapters/SecretStore';
 import type { VsCodeConfig } from '../adapters/VsCodeConfig';
 import type { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
 import type { VsCodeNotification } from '../adapters/VsCodeNotification';
-import type { VsCodeTerminalRunner } from '../adapters/VsCodeTerminalRunner';
 import type { WebviewToHost } from '../shared/protocol';
 import { __panels, __resetPanels } from '../test/vscode.mock';
 
@@ -222,7 +221,7 @@ function harness(overrides: {
     runnerInstallation: installation as unknown as RunnerInstallation,
     fsAdapter: { getWorkspaceRoot: () => workspace } as unknown as VsCodeFileSystem,
     notifications: {} as unknown as VsCodeNotification,
-    terminalRunner: { stopAll: vi.fn() } as unknown as VsCodeTerminalRunner,
+    terminalRunner: { stopAll: vi.fn() } as unknown as ITerminalRunner,
     settingsService: settings as unknown as SettingsService,
     plannerModelMemory: { remember: vi.fn(), recall: vi.fn(() => ({ model: '', effort: '', source: 'default' })) } as unknown as PlannerModelMemory,
     modelResolver: resolver as unknown as ModelResolver,

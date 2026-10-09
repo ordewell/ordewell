@@ -4,9 +4,8 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, it, expect, vi } from 'vitest';
 import { createTask, type LegacyPlanState } from '../../models/Task';
-import { HeadlessRunner, type SpawnFn } from '../HeadlessRunner';
+import type { SpawnFn } from '../harness/AgentAdapter';
 import { StructuredRunner } from '../StructuredRunner';
-import { TransportRouter } from '../TransportRouter';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 import type { SessionMessage } from '../SessionMessage';
@@ -14,7 +13,7 @@ import { makeSession, taskOf } from './sessionTestKit';
 
 /**
  * A whole structured run, live (ADR-0018): a Session wired the way the hosts
- * wire it, the setting on `structured`, and two Claude Code tasks where the
+ * wire it, and two Claude Code tasks where the
  * second depends on the first. Gated like `structuredLive.smoke.test.ts`:
  *
  *   ORDEWELL_LIVE_AGENTS=claude-code npx vitest run --root packages/core structuredRunLive
@@ -39,7 +38,7 @@ describe.runIf(live)('structured run — live', () => {
       children.push(child);
       return child;
     };
-    const router = new TransportRouter({ terminal: new HeadlessRunner(), structured: new StructuredRunner({ process: { spawn } }) });
+    const router = new StructuredRunner({ process: { spawn } });
     const prompts = new Map<string, string>();
     const runner = {
       get activeCount() { return router.activeCount; },
@@ -99,7 +98,7 @@ describe.runIf(live)('structured run — live', () => {
   it('parks an Ask before edits task on its write until the request is answered (A1)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ordewell-structured-approval-'));
     writeFileSync(join(dir, 'package.json'), '{ "name": "structured-approval" }\n');
-    const router = new TransportRouter({ terminal: new HeadlessRunner(), structured: new StructuredRunner() });
+    const router = new StructuredRunner();
     const sent: SessionMessage[] = [];
     const session = makeSession({
       runner: router,
@@ -148,7 +147,7 @@ describe.runIf(live)('structured run — live', () => {
   it('hands a denial\'s note to the agent, and denies what is left when the task is cancelled (A1)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ordewell-structured-deny-'));
     writeFileSync(join(dir, 'package.json'), '{ "name": "structured-deny" }\n');
-    const router = new TransportRouter({ terminal: new HeadlessRunner(), structured: new StructuredRunner() });
+    const router = new StructuredRunner();
     const sent: SessionMessage[] = [];
     const session = makeSession({
       runner: router,

@@ -78,8 +78,15 @@ export type SerializedTask = {
 export type SerializedConversationMessage = Omit<ConversationMessage, 'skill'> & { skill?: SkillLoadNotice };
 export type SerializedQueuedMessage = Omit<QueuedMessage, 'skills'> & { skills?: SkillLoadNotice[] };
 
-/** A task as a surface is sent it: its attempt's skills are notices, whole in the session only. */
-export type SurfaceTask<T extends Task = Task> = Omit<T, 'attemptSkills' | 'subtasks'> & { attemptSkills?: TaskSkillNotice[]; subtasks: SurfaceTask[] };
+/**
+ * A task as a surface is sent it: its attempt's skills are notices, whole in
+ * the session only, and its transport stays there too — no surface shows it,
+ * and only a continue reads the runner's own session id.
+ */
+export type SurfaceTask<T extends Task = Task> = Omit<T, 'attemptSkills' | 'subtasks' | 'transport'> & {
+  attemptSkills?: TaskSkillNotice[];
+  subtasks: SurfaceTask[];
+};
 
 /** A plan as the daemon and the VS Code webview are sent it: the session's own state, minus every skill body. */
 export type SurfacePlan = Omit<LegacyPlanState, 'tasks' | 'conversationHistory' | 'queuedMessages'> & {
@@ -333,7 +340,7 @@ function surfaceQueued(queued: LegacyPlanState['queuedMessages']): SerializedQue
   return queued?.map(({ skills, ...m }) => (skills ? { ...m, skills: skills.map(skillLoadNotice) } : m));
 }
 
-function surfaceTask<T extends Task>({ attemptSkills, subtasks, ...task }: T): SurfaceTask<T> {
+function surfaceTask<T extends Task>({ attemptSkills, subtasks, transport: _transport, ...task }: T): SurfaceTask<T> {
   return {
     ...task,
     ...(attemptSkills ? { attemptSkills: attemptSkills.map(({ name, source, path }): TaskSkillNotice => ({ name, source, path })) } : {}),

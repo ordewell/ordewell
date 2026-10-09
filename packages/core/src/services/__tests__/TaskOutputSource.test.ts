@@ -20,7 +20,7 @@ const attemptOf = (taskId: string, completionMarker: string): TaskOutputAttempt 
 });
 const tokenOf = (marker: string) => `<<<ORDEWELL_DONE_${marker}>>>`;
 
-/** A runner session whose getOutput() is ANSI-stripped, as HeadlessRunner and TmuxRunner keep it. */
+/** A runner session whose getOutput() is ANSI-stripped, as a runner session keeps it. */
 class StrippingSession extends FakeTerminalSession {
   getOutput(): string { return stripAnsi(this.output); }
 }

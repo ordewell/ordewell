@@ -1,23 +1,20 @@
-import { HeadlessRunner, type ITerminalRunner, type ITerminalSession, type RunnerSpawnOptions } from '@ordewell/core';
+import type { ITerminalRunner, ITerminalSession, RunnerSpawnOptions } from '@ordewell/core';
 import type { SessionBroadcaster } from '@ordewell/core';
 
 export class PoolAwareRunner implements ITerminalRunner {
-  private inner: ITerminalRunner;
   /**
-   * Sessions this plan spawned. The inner runner may be shared by every plan
-   * in the pool (one tmux session per daemon), so "stop everything" and
-   * "how many are running" must be answered from this set, never delegated —
-   * delegating would let one plan's /stop kill another plan's tasks.
+   * Sessions this plan spawned. The inner runner is shared by every plan in
+   * the pool, so "stop everything" and "how many are running" must be
+   * answered from this set, never delegated — delegating would let one plan's
+   * /stop kill another plan's tasks.
    */
   private owned = new Set<string>();
 
   constructor(
     private sessionId: string,
     private broadcast: SessionBroadcaster,
-    inner?: ITerminalRunner,
-  ) {
-    this.inner = inner ?? new HeadlessRunner();
-  }
+    private inner: ITerminalRunner,
+  ) {}
 
   get activeCount(): number { return this.owned.size; }
 

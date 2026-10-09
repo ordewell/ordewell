@@ -1,6 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { PlanIsolation } from '../interfaces/IWorktreeIsolation';
-import type { RunnerTransport } from '../interfaces/ITerminalRunner';
 import type { PlannerUsage, UsageRecord, UsageTotals } from './Usage';
 import type { SkillSource } from '../services/SkillsService';
 import { SKILL_NAME_PATTERN } from '../conversation/skillTokens';
@@ -65,17 +64,25 @@ export interface TaskModelAssignment {
 
 export type RunnerId = string;
 
-/**
- * How a task's latest attempt was driven (ADR-0018). Recorded only when its
- * plan asked for the structured transport, so a terminal plan's tasks carry
- * nothing new.
- */
+/** How a task's latest attempt was driven (ADR-0018); set once one has started. */
 export interface TaskTransport {
-  kind: RunnerTransport;
-  /** Why a plan that asked for structured ran this task on the terminal — never a silent downgrade (S3). */
-  fallback?: string;
-  /** The runner's own session id of a structured attempt, once it ends: what a continue resumes (K1). */
+  kind: 'structured';
+  /** The runner's own session id, once the attempt ends: what a continue resumes (K1). */
   nativeSessionId?: string;
+}
+
+/**
+ * Bring loaded tasks to the structured-only shape, in place. A task saved
+ * while the terminal transport existed may say it ran there, and why; neither
+ * means anything now, and such a task left no session to continue.
+ */
+export function migrateTaskTransports(tasks: readonly Task[]): void {
+  for (const task of tasks) {
+    const saved = task.transport as { kind?: unknown; nativeSessionId?: unknown } | undefined;
+    if (saved?.kind !== 'structured') delete task.transport;
+    else task.transport = typeof saved.nativeSessionId === 'string' ? { kind: 'structured', nativeSessionId: saved.nativeSessionId } : { kind: 'structured' };
+    migrateTaskTransports(task.subtasks ?? []);
+  }
 }
 
 /**

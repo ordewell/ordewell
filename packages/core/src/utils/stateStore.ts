@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { LegacyPlanState } from '../models/Task';
+import { LegacyPlanState, migrateTaskTransports } from '../models/Task';
 import { defaultLogger, type ILogger } from '../interfaces/ILogger';
 import { getStateDir, ensureDir } from './fsHelpers';
 import { migratePlanStateIsolation } from '../services/isolationRecord';
@@ -31,6 +31,7 @@ export function loadState(baseDir?: string, logger: ILogger = defaultLogger): Le
     }
     const plan = parsed as LegacyPlanState;
     migratePlanStateIsolation(plan);
+    migrateTaskTransports(plan.tasks);
     return plan;
   } catch (err: unknown) {
     logger.warn('stateStore', `failed to load state from ${statePath}; falling back to empty state`, err);

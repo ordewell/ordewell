@@ -1,12 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { StructuredRunner } from '../StructuredRunner';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
-import { HeadlessSession } from '../HeadlessRunner';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { isStructuredSession, type ITerminalSession, type StructuredEvent, type StructuredTurnEnd } from '../../interfaces/ITerminalRunner';
-import type { AgentEvent, AgentStartOptions, TaskModeAgentAdapter } from '../harness/AgentAdapter';
+import type { AgentEvent, SpawnFn, AgentStartOptions, TaskModeAgentAdapter } from '../harness/AgentAdapter';
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
-import type { SpawnFn } from '../HeadlessRunner';
 import { claudeTurnEndQueue, fakeSpawn, fixture, type FakeSpawnResult, type ScriptedReply } from './harnessTestKit';
 
 /**
@@ -185,9 +183,9 @@ describe('StructuredRunner spawn', () => {
   it.each([
     ['adaptive', 'sonnet', ['--thinking', 'adaptive']],
     ['max', 'sonnet', ['--thinking', 'enabled', '--effort', 'max']],
-    // Same gate as the terminal template: effort only rides with a model.
+    // Effort only rides with a model.
     ['high', undefined, []],
-  ])('maps effort %s (model %s) the way the terminal transport does', async (thinkingEffort, modelId, expected) => {
+  ])('maps effort %s (model %s) the way the manifest does', async (thinkingEffort, modelId, expected) => {
     const { runner, spawned } = harness([]);
     const session = await runner.spawn(options({ thinkingEffort, modelId }));
     const args = spawned.lastArgs();
@@ -540,9 +538,5 @@ describe('StructuredSession exit', () => {
     expect(turn.exits).toEqual([1]);
     expect(turn.turnEnds).toEqual(['failed']);
     expect(turn.session.getOutput()).toContain('fatal: out of credits');
-  });
-
-  it('is not a structured session when it is a terminal one', () => {
-    expect(isStructuredSession(new HeadlessSession('h', 't', (() => { throw new Error('unused'); }) as SpawnFn))).toBe(false);
   });
 });

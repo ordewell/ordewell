@@ -1,7 +1,6 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as vscode from 'vscode';
 
 import { RunnerRegistry, StructuredRunner, TaskOrchestrator, createTask, type Task } from '@ordewell/core';
 import { fakeConfig } from '@ordewell/core/testing';
@@ -46,22 +45,6 @@ function waitFor(predicate: () => boolean, timeoutMs: number, what: string): Pro
       if (Date.now() - started > timeoutMs) { clearInterval(tick); reject(new Error(`timed out waiting for ${what}`)); }
     }, 200);
   });
-}
-
-/**
- * A development host enables proposed APIs, so their absence cannot be observed
- * here — which is precisely why the original bug survived every run. Simulate a
- * Marketplace install by making `onDidWriteTerminalData` fail the way it
- * effectively does there: any code reaching for it gets nothing usable.
- */
-function neutralizeProposedApi(): void {
-  const target = vscode.window as unknown as Record<string, unknown>;
-  const had = typeof target.onDidWriteTerminalData === 'function';
-  Object.defineProperty(target, 'onDidWriteTerminalData', {
-    configurable: true,
-    get() { throw new Error('onDidWriteTerminalData is a proposed API and does not resolve in a published extension'); },
-  });
-  console.log(`  ✓ proposed API neutralized (host had it: ${had})`);
 }
 
 async function fakeClaudeCompletesThroughTheTool(): Promise<void> {
@@ -111,9 +94,6 @@ async function realAgentReachesAPassVerdict(): Promise<void> {
 }
 
 export async function run(): Promise<void> {
-  console.log('\n=== simulating a Marketplace install ===');
-  neutralizeProposedApi();
-
   const scenarios: Array<[string, () => Promise<void>]> = [
     ['a fake claude on PATH completes through task_complete', fakeClaudeCompletesThroughTheTool],
     ['a real agent reaches a pass verdict', realAgentReachesAPassVerdict],
