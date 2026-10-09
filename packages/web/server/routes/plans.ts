@@ -1,6 +1,8 @@
 import { Hono, type Context, type Env } from 'hono';
 import {
   flattenTasks,
+  surfacePlan,
+  surfacePlanState,
   type ConversationCompactResponse,
   type ConversationForkResponse,
   type ConversationRewindResponse,
@@ -40,7 +42,7 @@ export function plansRoute(pool: OrchestratorPool) {
       const runnerList: string[] = Array.isArray(runners) ? runners : (runners ? [runners] : (queryRunners ? queryRunners.split(',').map(s => s.trim()).filter(Boolean) : pool.getRunnerState().enabledRunners));
       const plan = await pool.generatePlan(c.req.param('sessionId'), goal, runnerList, ws, model, { allowInit });
       const { models, modelsByRunner } = await pool.getProviderModels();
-      return c.json({ plan, models, modelsByRunner } satisfies GeneratePlanResponse);
+      return c.json({ plan: surfacePlanState(plan), models, modelsByRunner } satisfies GeneratePlanResponse);
     } catch (err) {
       return failure(c, err, 'generate', { message: 'Plan generation failed' });
     }
@@ -247,7 +249,7 @@ export function plansRoute(pool: OrchestratorPool) {
   router.post('/:sessionId/tasks/:taskId/resolve-conflict', async (c) => {
     try {
       const plan = await pool.session(c.req.param('sessionId')).resolveConflictAsTask(c.req.param('taskId'));
-      return c.json({ plan } satisfies ResolveConflictResponse);
+      return c.json({ plan: plan && surfacePlan(plan) } satisfies ResolveConflictResponse);
     } catch (err) {
       return failure(c, err, 'task edit');
     }
@@ -312,7 +314,7 @@ export function plansRoute(pool: OrchestratorPool) {
   router.post('/:sessionId/review/approve', async (c) => {
     try {
       const plan = await pool.session(c.req.param('sessionId')).approveReview();
-      return c.json({ plan } satisfies PlanResponse);
+      return c.json({ plan: surfacePlan(plan) } satisfies PlanResponse);
     } catch (err) {
       return failure(c, err, 'review approve');
     }
@@ -325,7 +327,7 @@ export function plansRoute(pool: OrchestratorPool) {
         return c.json({ error: 'taskIds array with at least two ids is required' }, 400);
       }
       const plan = await pool.session(c.req.param('sessionId')).requestMerge(taskIds);
-      return c.json({ plan } satisfies PlanResponse);
+      return c.json({ plan: surfacePlan(plan) } satisfies PlanResponse);
     } catch (err) {
       return failure(c, err, 'merge', { fallback: 400 });
     }
@@ -334,7 +336,7 @@ export function plansRoute(pool: OrchestratorPool) {
   router.post('/:sessionId/tasks/:taskId/split', async (c) => {
     try {
       const plan = await pool.session(c.req.param('sessionId')).requestSplit(c.req.param('taskId'));
-      return c.json({ plan } satisfies PlanResponse);
+      return c.json({ plan: surfacePlan(plan) } satisfies PlanResponse);
     } catch (err) {
       return failure(c, err, 'split', { fallback: 400 });
     }
@@ -350,7 +352,7 @@ export function plansRoute(pool: OrchestratorPool) {
       const ws = workspace || c.req.query('workspace') || process.cwd();
       const runnerList: string[] = Array.isArray(runners) ? runners : (runners ? [runners] : pool.getRunnerState().enabledRunners);
       const plan = await pool.startPlanning(c.req.param('sessionId'), goal, runnerList, ws, model, { allowInit });
-      return c.json({ plan } satisfies PlanResponse);
+      return c.json({ plan: surfacePlan(plan) } satisfies PlanResponse);
     } catch (err) {
       return failure(c, err, 'converse start', { message: 'Planning failed' });
     }
@@ -363,7 +365,7 @@ export function plansRoute(pool: OrchestratorPool) {
       const { message } = await c.req.json();
       if (!message) return c.json({ error: 'message is required' }, 400);
       const plan = await pool.continuePlanning(c.req.param('sessionId'), message);
-      return c.json({ plan } satisfies PlanResponse);
+      return c.json({ plan: surfacePlan(plan) } satisfies PlanResponse);
     } catch (err) {
       return failure(c, err, 'conversation message');
     }
@@ -374,7 +376,8 @@ export function plansRoute(pool: OrchestratorPool) {
   // just before a user message; the original session is left as it was.
   router.post('/:sessionId/conversation/fork', (c) => {
     try {
-      return c.json(pool.forkConversation(c.req.param('sessionId')) satisfies ConversationForkResponse);
+      const fork = pool.forkConversation(c.req.param('sessionId'));
+      return c.json({ ...fork, plan: surfacePlan(fork.plan) } satisfies ConversationForkResponse);
     } catch (err) {
       return failure(c, err, 'conversation edit');
     }
@@ -392,7 +395,8 @@ export function plansRoute(pool: OrchestratorPool) {
     try {
       const { index } = await c.req.json();
       if (!Number.isInteger(index) || index < 0) return c.json({ error: 'index must be a non-negative integer' }, 400);
-      return c.json(pool.rewindConversation(c.req.param('sessionId'), index) satisfies ConversationRewindResponse);
+      const rewound = pool.rewindConversation(c.req.param('sessionId'), index);
+      return c.json({ ...rewound, plan: surfacePlan(rewound.plan) } satisfies ConversationRewindResponse);
     } catch (err) {
       return failure(c, err, 'conversation edit');
     }
@@ -402,7 +406,8 @@ export function plansRoute(pool: OrchestratorPool) {
   // fail like one — a failure leaves the conversation exactly as it was.
   router.post('/:sessionId/conversation/compact', async (c) => {
     try {
-      return c.json(await pool.compactConversation(c.req.param('sessionId')) satisfies ConversationCompactResponse);
+      const compacted = await pool.compactConversation(c.req.param('sessionId'));
+      return c.json({ ...compacted, plan: surfacePlan(compacted.plan) } satisfies ConversationCompactResponse);
     } catch (err) {
       return failure(c, err, 'conversation edit');
     }

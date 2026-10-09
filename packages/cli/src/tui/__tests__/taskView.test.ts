@@ -1,8 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect } from 'vitest';
 import { replayTaskLog, type TaskLogEvent } from '@ordewell/core';
 import { width } from '../ansi';
 import { initialState, reduce } from '../reducer';
 import { render } from '../render';
+import { registerSkillCommands } from '../slash';
 import type { TaskLogState, TaskView, TuiState } from '../state';
 import { chatOf, messagesOf } from './chat';
 
@@ -315,6 +316,20 @@ describe('an unknown /name in the task view', () => {
   it('is still passed through in planner chat', () => {
     const { effects } = run('/retyr', initialState({ sessionId: 's1', focus: 'chat' }));
     expect(effects).toEqual([{ type: 'sendMessage', sessionId: 's1', message: '/retyr' }]);
+  });
+});
+
+describe('a skill name in the task view', () => {
+  beforeEach(() => registerSkillCommands([{ name: 'tdd', description: 'Test first', appliesTo: 'task', userInvocable: true }]));
+  afterEach(() => registerSkillCommands([]));
+
+  it('is refused with where task skills are set, not as an unknown command', () => {
+    const result = run('/tdd', opened({ focus: 'chat' }));
+    const text = messagesOf(result.state).at(-1)?.text;
+    expect(result.effects).toEqual([]);
+    expect(text).toContain("skills aren't loaded in a task's chat");
+    expect(text).toContain('/task-skills <id> <name>');
+    expect(text).not.toContain('Unknown command');
   });
 });
 

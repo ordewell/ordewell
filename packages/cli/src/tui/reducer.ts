@@ -11,7 +11,7 @@ import type { Key } from './keys';
 import { handleOverlayKey } from './reducers/overlays';
 import { handlePlanKey } from './reducers/planPane';
 import { announceApprovals, announceCheckpoint, continueTaskStep, handleTaskViewKey, openTaskView, taskLogAbandoned, taskLogArrived, taskLogLoaded } from './reducers/taskView';
-import { pickRewindTarget, runCommand, unknownCommand } from './reducers/commands';
+import { pickRewindTarget, runCommand, skillInTaskView, unknownCommand } from './reducers/commands';
 import { disarmStop, drainQueue, plannerEscape } from './reducers/turnQueue';
 import { applySettings, followSession, normalizeTasks, runLabel } from './reducers/incoming';
 import { refillPicker } from './reducers/pickers';
@@ -495,7 +495,7 @@ function submit(state: TuiState): Step {
   if (command) {
     const known = findCommand(command.name);
     if (known && known.source !== 'skill') return runCommand(cleared, command);
-    if (state.taskView) return unknownCommand(cleared, command.name);
+    if (state.taskView) return known ? skillInTaskView(cleared, command.name) : unknownCommand(cleared, command.name);
   }
 
   // The task view's composer talks to the runner, not the planner: the daemon

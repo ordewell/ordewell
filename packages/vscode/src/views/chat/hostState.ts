@@ -1,4 +1,4 @@
-import { type LegacyPlanState, type DiscoveredModel, type RunnerId, type IsolationHandoff, type IsolationMergeResult, type MergeGateView, type TaskIsolation, type AiProvider } from '@ordewell/core';
+import { type SurfacePlan, type DiscoveredModel, type RunnerId, type IsolationHandoff, type IsolationMergeResult, type MergeGateView, type TaskIsolation, type AiProvider } from '@ordewell/core';
 import { DEFAULT_RUNNERS, EMPTY_HOLD, type PromptHold } from '@ordewell/core/plan-utils';
 import type { HostToWebview, PendingPlanEdit, PlannerBackend, RunnerMeta } from '../../shared/protocol';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, type PatchedView } from '../../shared/conversationPatch';
@@ -24,7 +24,7 @@ export interface ModelOption {
 export interface HostState {
   /** The planner conversation, held by the host and patched in here (#53). */
   conversation: PatchedView;
-  plan: LegacyPlanState | null;
+  plan: SurfacePlan | null;
   isExecuting: boolean;
   isResearchActive: boolean;
   conversationBusy: boolean;
@@ -124,7 +124,7 @@ export type HostAction =
   | { type: 'resetSession'; kind: SessionResetKind }
   | { type: 'turnStopped' }
   | { type: 'turnRequested' }
-  | { type: 'patchPlan'; plan: Updatable<LegacyPlanState | null> }
+  | { type: 'patchPlan'; plan: Updatable<SurfacePlan | null> }
   | { type: 'patchResearchActive'; active: boolean }
   | { type: 'patchExecuting'; executing: boolean }
   | { type: 'patchError'; error: string }
@@ -226,7 +226,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'planUpdated': {
       if (state.stopped) return state;
-      const incoming: LegacyPlanState | null = action.plan ?? null;
+      const incoming: SurfacePlan | null = action.plan ?? null;
       let next: HostState = { ...state, plan: incoming };
       // Not a turn's end: a run's status tick arrives mid-turn too, and the
       // host's `plannerTurn` is what says a turn is over.

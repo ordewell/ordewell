@@ -14,7 +14,6 @@ import type {
   ExecuteResponse,
   ForceSendResponse,
   GeneratePlanResponse,
-  LegacyPlanState,
   IsolationDiffResponse,
   IsolationMergeResponse,
   MergeGateEntry,
@@ -22,7 +21,8 @@ import type {
   ModelsResponse,
   OkResponse,
   PlanResponse,
-  PlanState,
+  SurfacePlan,
+  SurfacePlanState,
   RemoveMessageResponse,
   ResolveConflictResponse,
   RewindTarget,
@@ -46,7 +46,7 @@ const DEFAULT_HTTP_TIMEOUT_MS = 15 * 60 * 1000;
 
 export interface PlanResult {
   sessionId: string;
-  plan: PlanState;
+  plan: SurfacePlanState;
   models?: GeneratePlanResponse['models'];
   modelsByRunner?: GeneratePlanResponse['modelsByRunner'];
 }
@@ -84,7 +84,7 @@ export class WorkspaceInitNeededError extends DaemonError {
  * state a saved session is read back in, or the session's plan itself. Which
  * one depends on the route, so a reader takes either.
  */
-export type PlanBody = PlanState | LegacyPlanState;
+export type PlanBody = SurfacePlanState | SurfacePlan;
 
 export type RunnerState = RunnersResponse['runners'][number];
 export type { RunnersResponse };

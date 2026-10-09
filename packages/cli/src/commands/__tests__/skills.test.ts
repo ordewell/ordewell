@@ -64,7 +64,7 @@ describe('ordewell skills', () => {
     expect(logs).toContainEqual(expect.stringMatching(/^disabled\s+global\s+planner\s+none\s+/));
     expect(logs.find((line) => line.startsWith('task-only'))).toMatch(/^task-only\s+workspace\s+task\s+user\s+/);
     expect(logs.find((line) => line.startsWith('task-only'))).toContain(taskPath);
-    expect(logs).toContain(`workspace skill "shared" shadowed by global · ${shadowedPath}`);
+    expect(logs).toContain(`workspace skill "shared" shadowed by the global copy at ~/.ordewell/skills/shared/SKILL.md · ${shadowedPath}`);
     expect(logs.filter((line) => line.startsWith('shared'))).toHaveLength(1);
   });
 
@@ -83,7 +83,7 @@ describe('ordewell skills', () => {
         { name: 'shared', scope: 'global', appliesTo: 'planner', invocation: 'both', path: '~/.ordewell/skills/shared/SKILL.md' },
         { name: 'selected-only', scope: 'workspace', appliesTo: 'task', invocation: 'both', path: skillPath },
       ],
-      shadowed: [{ name: 'shared', path: duplicatePath, shadowedBy: 'global' }],
+      shadowed: [{ name: 'shared', path: duplicatePath, shadowedBy: { scope: 'global', path: '~/.ordewell/skills/shared/SKILL.md' } }],
       invalid: [],
     });
   });
@@ -98,7 +98,10 @@ describe('ordewell skills', () => {
 
     const listed = JSON.parse(logs[0]);
     expect(listed.skills.map((s: { name: string; path: string }) => [s.name, s.path])).toEqual([['deploy', rootPath], ['api-check', apiPath]]);
-    expect(listed.shadowed).toEqual([{ name: 'deploy', path: shadowedPath, shadowedBy: 'workspace' }]);
+    expect(listed.shadowed).toEqual([{ name: 'deploy', path: shadowedPath, shadowedBy: { scope: 'workspace', path: rootPath } }]);
+
+    handleSkills([]);
+    expect(logs).toContain(`workspace skill "deploy" shadowed by the workspace copy at ${rootPath} · ${shadowedPath}`);
   });
 
   it('reports a skill folder whose name no skill can have, with the reason, and lists it nowhere else', () => {

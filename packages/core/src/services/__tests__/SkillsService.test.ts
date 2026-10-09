@@ -421,11 +421,10 @@ describe('SkillsService', () => {
       expect(svc.listSkills().map((s) => s.name)).not.toContain('pr.review');
       expect(svc.listSkills().map((s) => s.name)).not.toContain('PR-Review');
       expect(svc.findSkill('pr.review')).toBeUndefined();
-      expect(svc.listInvalid()).toEqual([
+      expect(svc.readCatalog().invalid).toEqual([
         { name: 'PR-Review', path: upper, source: 'global', reason: expect.stringMatching(/^not a valid skill name/) },
         { name: 'pr.review', path: dotted, source: 'workspace', reason: expect.stringMatching(/^not a valid skill name/) },
       ]);
-      expect(svc.readCatalog().invalid.map((s) => s.name)).toEqual(['PR-Review', 'pr.review']);
     });
   });
 

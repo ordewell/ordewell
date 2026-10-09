@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { AiProvider, LegacyPlanState, DiscoveredModel, RunnerId, TaskIsolation, IsolationHandoff, IsolationMergeResult, MergeGateView } from '@ordewell/core';
+import { surfacePlan, type AiProvider, type LegacyPlanState, type SurfacePlan, type DiscoveredModel, type RunnerId, type TaskIsolation, type IsolationHandoff, type IsolationMergeResult, type MergeGateView } from '@ordewell/core';
 import { ConversationViewHost, type SavedConversation } from '../ConversationViewHost';
 import { renderWebviewHtml } from './webviewHtml';
 import type { ChatState, HostToWebview, ModelOption, PendingPlanEdit, PlannerBackend, RunnerMeta, RunnerModeMeta, WebviewToHost } from '../shared/protocol';
@@ -53,7 +53,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
   setState(state: ChatState): void { this.postMessage({ type: 'setState', state }); }
   showError(error: string): void { this.postMessage({ type: 'showError', error }); }
-  sendPlanUpdated(plan: LegacyPlanState): void { this._cachedPlan = plan; this.postMessage({ type: 'planUpdated', plan }); }
+  /** The session's own plan stays with the extension host (it persists and resumes from there); the webview is sent it without skill bodies. */
+  sendPlanUpdated(plan: LegacyPlanState): void {
+    const forWebview = surfacePlan(plan);
+    this._cachedPlan = forWebview;
+    this.postMessage({ type: 'planUpdated', plan: forWebview });
+  }
   /** Every plan edit waiting at the next batch boundary, so the chat can list (and withdraw) each one. */
   showPendingPlanEdits(edits: readonly PendingPlanEdit[]): void {
     // Narrowed by hand: a queued message also carries its skill loads, whose bodies never go to the webview.
@@ -183,7 +188,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _configuredProviders: ApiProvider[] = [];
   private _modelDiscoveryErrors: Record<string, string> = {};
   private _plannerState: { backends: PlannerBackend[]; provider: string; runner?: string; effort?: string } | null = null;
-  private _cachedPlan: LegacyPlanState | null = null;
+  private _cachedPlan: SurfacePlan | null = null;
 
   /**
    * Re-send every cached piece of state to the webview. Safe to call once the
