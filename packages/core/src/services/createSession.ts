@@ -20,6 +20,7 @@ import { plannerModesFrom } from './plannerModes';
 import type { UserSettings } from './SettingsService';
 import { SkillsService } from './SkillsService';
 import { resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
+import { plannedSkillLookup, type SkillLookup } from './taskSkills';
 import type { MergeGateView, SessionBroadcaster, SessionNotice } from './SessionMessage';
 import { SessionEventRelay } from './SessionEventRelay';
 import { saveSession } from '../utils/sessionStore';
@@ -254,7 +255,7 @@ export function createSession(deps: SessionDeps): Session {
     isolation: deps.isolation,
     registry: deps.registry,
     workspaceRoot: deps.workspaceRoot,
-    skillsAt: (root) => (deps.skillsService ?? new SkillsService(root)).forRoot(root),
+    skillsAt: (roots) => (deps.skillsService ?? new SkillsService(roots)).forRoot(roots),
     previousAttemptFromLog: (taskId) => lastAttemptDigest(session.taskLogLocation, taskId),
   });
   const usage = new PlannerUsageLedger();
@@ -346,7 +347,7 @@ export interface SessionParts {
   approvals: PendingApprovals;
   approvalPolicy: ApprovalPolicy;
   fetcher: IWebFetcher;
-  skillsService: Pick<SkillsService, 'findSkill' | 'listSkills' | 'searchedDirs'>;
+  skillsService: Pick<SkillsService, 'findSkill' | 'listSkills' | 'searchedDirs' | 'forRoot'>;
   saveSession: SaveSession;
   /** The conversation's host is the Session itself, so only the Session can make it. */
   conversation: (host: PlannerConversationHost) => PlannerConversation;
@@ -395,7 +396,7 @@ export class Session {
   private unsubObserver: (() => void) | null;
   private readonly hostSessionId?: string;
   private currentSessionId: string;
-  private readonly skillsService: Pick<SkillsService, 'findSkill' | 'listSkills' | 'searchedDirs'>;
+  private readonly skillsService: Pick<SkillsService, 'findSkill' | 'listSkills' | 'searchedDirs' | 'forRoot'>;
   private readonly conversation: PlannerConversation;
   private readonly editor: PlanEditor;
   private readonly plannerTools: PlannerToolHandler = plannerToolHandler({
@@ -409,7 +410,7 @@ export class Session {
     read: (signature, answer) => this.conversation.read(signature, answer),
     liveOutput: (taskId, opts) => this.orchestrator.getLiveOutput(taskId, opts),
     lastAttempt: (taskId) => lastAttemptDigest(this.taskLogLocation, taskId),
-    taskSkills: () => this.skillsService,
+    taskSkills: () => plannedSkillLookup((roots) => this.skillsAt(roots), this.workspace, this.runs.lastPlannerLayout),
   });
 
   constructor(parts: SessionParts) {
@@ -870,6 +871,11 @@ export class Session {
    */
   private resolveSkillInvocation(text: string): SkillInvocation {
     return resolveSkillInvocation(text, this.skillsService);
+  }
+
+  /** The catalog over workspace `roots`; the workspace root alone is the session's own. */
+  private skillsAt(roots: readonly string[]): SkillLookup {
+    return roots.length === 1 && roots[0] === this.workspace ? this.skillsService : this.skillsService.forRoot(roots);
   }
 
   private async conversationOpening(runners: RunnerId[]): Promise<ConversationOpening> {

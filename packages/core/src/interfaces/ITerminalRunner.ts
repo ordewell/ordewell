@@ -1,6 +1,7 @@
 import type { AgentEvent } from '../services/harness/AgentAdapter';
 import type { CheckpointAnswer, TaskCompleteArgs } from '../services/mcp/tools';
 import type { ApprovalDecision } from './IApproval';
+import type { TaskSkillSnapshot } from '../models/Task';
 
 export interface ITerminalSession {
   id: string;
@@ -183,6 +184,11 @@ export interface ITerminalRunner {
      * attempt's MCP token to it (ADR-0022, A2).
      */
     attempt?: number;
+    /**
+     * The task skills already rendered into `prompt`, as resolved for this
+     * attempt. Runners ignore it; it is for what wraps one to record (task logs).
+     */
+    skills?: readonly TaskSkillSnapshot[];
   }): Promise<ITerminalSession>;
 
   stop(sessionId: string): void;

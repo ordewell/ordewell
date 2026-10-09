@@ -159,6 +159,7 @@ export class IsolationRunController {
   private blockedStart: (() => Promise<void>) | null = null;
   /** The dirty repos behind {@link blockedStart}, for the stash notice. */
   private blockedRepos: string[] = [];
+  private toldLayout: IsolatedExecution = false;
 
   constructor(deps: IsolationRunControllerDeps) {
     this.isolation = deps.isolation;
@@ -275,10 +276,17 @@ export class IsolationRunController {
    * the safe rule then.
    */
   async plannerLayout(): Promise<IsolatedExecution> {
-    if (this.decided) return this.isolating && this.run ? layoutOf(this.run) : false;
+    if (this.decided) return (this.toldLayout = this.isolating && this.run ? layoutOf(this.run) : false);
     const decision = await this.assess(this.workspaceRoot());
-    return decision.mode === 'isolated' ? decision.layout : false;
+    return (this.toldLayout = decision.mode === 'isolated' ? decision.layout : false);
   }
+
+  /**
+   * What {@link plannerLayout} last answered: the layout the planner was
+   * told, which its submissions are checked against — synchronously, inside
+   * the planner's turn. Not isolating until it has been asked.
+   */
+  get lastPlannerLayout(): IsolatedExecution { return this.toldLayout; }
 
   /**
    * Go on with the start a dirty tree turned away. `stash` puts the user's
