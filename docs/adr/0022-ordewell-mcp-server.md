@@ -44,7 +44,7 @@ did not attach.
 | token | bound to | tools |
 |---|---|---|
 | **Task token** | one session, one task, one attempt generation | `task_complete({status: 'done' \| 'blocked' \| 'failed', summary, reason?})`, `checkpoint({question})` |
-| **Planner token** | one session's planner conversation | `list_runners()`, `list_models({runner})`, `submit_plan({tasks})`, `edit_plan({ops})`, `task_query({...})`, `task_output({task, ...})` |
+| **Planner token** | one session's planner conversation | `list_runners()`, `list_models({runner})`, `submit_plan({tasks})`, `edit_plan({ops})`, `task_query({...})`, `task_output({task, ...})`, `load_skill({name})` (a model-invocable planner skill's instructions; [ADR-0024](0024-unified-skills.md)) |
 
 #37's runner-facing tools (`board_post`, `report`, …) join the task side later,
 on the same mechanism.
@@ -273,3 +273,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-05 — V5 amended: checked against Claude Code 2.1.289, its hard cap on a tool call is 1e8 ms, but an HTTP call silent for 300s is aborted. Progress notifications reset that, so the server heartbeats instead of the configuration raising a timeout.
 - 2026-10-05 — Codex checked against 0.160.0: the server is injected per thread (`mcp_servers.ordewell` in the thread config, token read from the environment), pre-authorized with `default_tools_approval_mode = "approve"`; a 200s `checkpoint` call survives on the heartbeat with no timeout raised. Codex keeps MCP tools out of the model's tool list, so a task thread's instructions say where to find them.
 - 2026-10-05 — OpenCode checked against 1.18.34: the server and an allow rule for `ordewell_*` go in `OPENCODE_CONFIG_CONTENT`, deep-merged over what is already there. A tool is named `ordewell_<tool>`. A `checkpoint` call held for 130s returned its answer, past the 5s `timeout` a remote entry defaults to and the MCP client's 60s request timeout, so no timeout is configured.
+- 2026-10-09 — `load_skill` added to the planner tools (ADR-0024).

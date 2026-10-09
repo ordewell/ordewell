@@ -371,17 +371,18 @@ it like a saved session, which replaces the extension's one in-process
 `Session` — so it asks first when a run is executing, since loading stops it.
 *Avoid:* "branch" — that word belongs to git and to worktree isolation.
 
-**PRD (prdMarkdown)** — with the PRD toggle on, the planner previews the PRD in
-prose, and after the user agrees writes the full markdown wrapped in
-`ORDEWELL_PRD_START/END` markers; core saves it to `.scratch/<slug>/PRD.md`
-(the Matt Pocock to-prd convention) and keeps `prdMarkdown` on the plan.
+**PRD (prdMarkdown)** — a planner reply that wraps the full markdown in
+`ORDEWELL_PRD_START/END` markers (a PRD-writing skill such as `to-spec` asks
+for it); core saves it to `.scratch/<slug>/PRD.md` (the Matt Pocock to-prd
+convention) and keeps `prdMarkdown` on the plan.
 *Avoid:* "PrdArtifact", "PRD status machine" — deleted; the PRD is a message
 plus a saved file, not a typed state.
 
 **Skill** — a folder with a `SKILL.md` (the Agent Skills format) read by one
 loader (`SkillsService`), and the only thing Ordewell calls a skill (ADR-0024).
-Frontmatter carries `name`, `description`, `applies-to: planner | task`
-(default `planner`) and Claude Code's `disable-model-invocation` and
+The folder name is the skill's identity (`/name`, the names in a plan,
+`ordewell skills`); frontmatter carries `name` (which should match the folder),
+`description`, `applies-to: planner | task` (default `planner`) and Claude Code's `disable-model-invocation` and
 `user-invocable` (unmarked = both). It lives in one of two scopes: **global**
 `~/.ordewell/skills/` (built-in seeds plus the user's own; tasks never write
 it) or **workspace** `.ordewell/skills/` (committed, so it reaches worktrees
@@ -390,9 +391,9 @@ as shadowed. Every built-in is user-only. Ordewell never ships, reads, or
 references runner-native skill mechanisms (`.claude/skills`, OpenCode plugins,
 etc.) to deliver a skill. Research subagents (`spawn_research_agent`, ADR-0005)
 are always-on for the planner, not a skill.
-*Avoid:* "mode toggle", "skill toggle" — the `grilling`/`prd`/`tdd`/`verify`
-settings toggles are gone; "skill file", "slash command" for these — those are
-runner-side concepts.
+*Avoid:* "mode toggle", "skill toggle" — a skill is chosen per message or per
+task, never switched on in settings; "skill file", "slash command" for these —
+those are runner-side concepts.
 
 **Planner skill** — a skill with `applies-to: planner`: instructions for the
 planning conversation. The user loads it with `/name`; the message text stays
@@ -405,9 +406,11 @@ tool-only: the catalog appears in the prompt only when tools are attached.
 working one task. It reaches a runner only by being named in the task's
 `skills` in the plan; Ordewell injects its body into the task prompt at spawn,
 for any runner, and snapshots it on the attempt. Unresolved names are a warning
-at submit and a failed start before the runner is spawned. `/name` on a task
-skill is a directive to the planner to attach it, not a load. The built-in
-`tdd` is one; TDD is no longer applied to every task.
+at submit and a failed start before the runner is spawned. A task's skills are
+listed in the planner's `<current_plan>` block and returned by `task_query`.
+`/name` on a task skill is a directive to the planner to attach it, not a
+load. The built-in `tdd` is one; TDD applies to a task only when the skill is
+attached.
 *Avoid:* "task toggle", "augmentation" for the skill itself.
 
 **Skill-load entry** (`SkillLoad`) — the transcript entry recording that a skill
@@ -477,12 +480,11 @@ structured.
 a task's runner (ADR-0018). *Terminal*: a TUI in tmux, or a headless one-shot
 process, read through its screen and written to with keystrokes (ADR-0007).
 *Structured*: the runner's programmatic protocol, with events in and messages
-out. Structured is always chosen; there is no transport setting any more (the
-setting, pill, `/transport` and `ordewell transport` were removed, ADR-0018).
-Routed per task by connector availability: a runner with no task-mode
-connector runs on the terminal transport, and surfaces say so and why. tmux is needed only by
-the terminal transport, to give a task a terminal window; without it those
-tasks run headless and the first one says what is missing.
+out. Structured is always chosen; there is no transport setting. Routed per
+task by connector availability: a runner with no task-mode connector runs on
+the terminal transport, and surfaces say so and why. tmux is needed only by the
+terminal transport, to give a task a terminal window; without it those tasks
+run headless and the first one says what is missing.
 *Avoid:* "mode" (that is permission mode, ADR-0001), "backend", "provider".
 
 **Waiting for input** — a structured task whose turn ended without the done

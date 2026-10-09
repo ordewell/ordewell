@@ -23,6 +23,9 @@ ordewell web --daemon   # background; logs to ~/.config/ordewell/server.log
 `/api/commands`, `/api/workspaces`, `/api/approvals`, plus a WebSocket stream
 for live planner and execution events.
 
+Skills are read by the planner and the task orchestrator, not served as a
+route; the format is in [Writing skills](https://github.com/ordewell/ordewell/blob/main/docs/skills.md).
+
 ## Security
 
 The server is **unauthenticated by design** and binds the loopback interface

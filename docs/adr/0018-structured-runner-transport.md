@@ -18,22 +18,18 @@ Claude Code was the reference runner; Codex (#54) and OpenCode (#55) followed.
 ## Decision
 
 **Task runners are driven through their programmatic protocol — the
-*structured* transport — by default. The terminal transport stays as the
-fallback.** A task on the structured transport is driven through its runner's
+*structured* transport. The terminal transport is only the fallback for a
+runner with no structured connector.** A task on the structured transport is driven through its runner's
 protocol instead of a screen and a keyboard.
 
 ## Key properties
 
-- **A setting, structured by default (S1).** `runnerTransport: terminal |
-  structured`, default `structured`. It is a global `UserSettings` field, copied
-  onto the plan when a run starts. Flipping it mid-run takes effect on the next
-  run — the same rule as ADR-0001, and for the same reason: the plan, not a
-  live setting, says what runs. An explicit choice is kept: a settings file that
-  stores `terminal` keeps it, and the default is never written back to the file,
-  so it never turns into a choice the user did not make. (A `terminal` written by
-  an older build, when it was the default, is indistinguishable from a deliberate
-  one and stays until `/transport structured`.) The way back is `/transport
-  terminal`, `ordewell transport terminal`, or the Structured toggle in VS Code.
+- **Structured always; no transport setting (S1).** A task whose runner has a
+  structured connector always runs structured. There is no setting, command or
+  toggle to choose the transport. A saved plan that still carries a pinned
+  `terminal` runs structured too, and the old field is dropped when the plan is
+  loaded. The plan, not a live setting, says what runs (ADR-0001), and the
+  route is decided per task (S3).
 - **Drop-in shape (S2).** A structured session *is* an
   `ITerminalRunner`/`ITerminalSession`, the way `TmuxRunner` was added
   (ADR-0007 T1), so `VerdictEngine`, `TaskOutputSource`, `PoolAwareRunner` and
@@ -42,7 +38,7 @@ protocol instead of a screen and a keyboard.
   detected today: send a message, interrupt, turn state, the event stream and
   the native session id. Code that does not look for the capability behaves as
   it did.
-- **Per-task routing (S3).** A task runs structured only if its runner has a
+- **Per-task routing (S3).** A task runs structured if its runner has a
   task-mode connector: Claude Code, Codex (`codex app-server`) and OpenCode
   (`opencode serve`) do. Any other runner, a plugin runner included, falls back
   to the terminal transport, and every surface shows the fallback and its
@@ -204,9 +200,13 @@ protocol instead of a screen and a keyboard.
   experimental, until structured matched terminal on a parity checklist (done
   detection, approvals, log view, a connector for every built-in runner). Once
   met, two first-class transports would have doubled every runner-facing
-  feature, so the default switched and terminal became the fallback.
-- **Reading the setting at every spawn.** A run would change transport
-  half-way through, against ADR-0001. It is read once when the run starts.
+  feature, so structured became the default and terminal the fallback.
+- **A user-facing transport setting** (`runnerTransport`, `/transport`,
+  `ordewell transport`, a Structured toggle). Shipped while structured was
+  maturing, then dropped: with a connector for every built-in runner, the
+  choice only let a user pin the path that gets bug fixes and no new features,
+  and a stored `terminal` from an older build was indistinguishable from a
+  deliberate one. Routing by connector availability (S3) covers the real need.
 - **A lingering process after pass.** Would mirror `LingeringRunners`, but the
   log lives in Ordewell and what the agent did after the verdict would be
   unverified.
@@ -223,4 +223,4 @@ protocol instead of a screen and a keyboard.
 - 2026-10-02 — the OpenCode connector (#55); structured the default, terminal the fallback, tmux optional (#61).
 - 2026-10-04 — the OpenCode connector speaks the 2.x API as well as 1.x.
 - 2026-10-06 — M1 per ADR-0023: messages reach a running turn between tool calls, the turn-end queue as the fallback, force send.
-- 2026-10-09 — amendment: the `runnerTransport` setting (S1) and its surfaces — the pill, `/transport` and `ordewell transport` — are removed. Structured is always chosen; terminal remains only as the fallback for runners without a connector, pending a separate removal effort.
+- 2026-10-09 — the `runnerTransport` setting and its surfaces removed.

@@ -125,13 +125,17 @@ everything below applies per repo of the group.
   `vendor`, `.venv`, `.env*`, `.envrc`, `.claude`, `.opencode`, `.codegraph` —
   are linked from the main worktree per repo, only where the checkout does not
   already provide the path, plus any `worktreeLinks` matches. `.ordewell/` is
-  never linked: Ordewell's session and skills state stays at the main root where
-  a runner cannot corrupt it. *Amended 2026-10-09:* `.ordewell/skills/` is
-  committed — the generated `.ordewell/.gitignore` ignores everything in the
-  state directory except itself and `skills/` — so a project's skills reach a
-  worktree through git, as its own checked-out copy. A runner only ever edits
-  that copy, which lands through the merge gate and the user's handoff merge;
-  the main root's state is still never written by a runner. The links are recorded, and the commit step keeps
+  never linked: Ordewell's session state stays at the main root where a runner
+  cannot corrupt it. `.ordewell/skills/` is the one committed part — the
+  generated `.ordewell/.gitignore` ignores everything in the state directory
+  except itself and `skills/` — so a project's skills reach a worktree through
+  git, as its own checked-out copy ([ADR-0024](0024-unified-skills.md)). A
+  runner only ever edits that copy, which lands through the merge gate and the
+  user's handoff merge; the main root's state is never written by a runner. In
+  a multi-repo group (ADR-0014) the group root is no repository, so its own
+  `.ordewell/skills/` is read from the main checkout and needs no commit, and
+  each repo's committed folder is read as checked out in the task's worktree.
+  The links are recorded, and the commit step keeps
   them out of the task's commit: an ignore rule such as `node_modules/` does not
   match a symlink, so without that they would be committed. A configured
   `worktreeSetupCommand` replaces the linking for a repo, run once per repo with
@@ -361,6 +365,4 @@ everything below applies per repo of the group.
   id; only change tasks are isolated, isolation is decided at the first change
   task, and Merge all can run mid-run (ADR-0020).
 - 2026-10-03 — a blocked run's execution stream stays open for the ops tasks still running; the choice's stream replaces it.
-- 2026-10-09 — `.ordewell/skills/` is committed and reaches worktrees through
-  git; `.ordewell/` is still never linked. An existing `.ordewell/.gitignore`
-  holding exactly the old `*` rule is upgraded; a customised one is left alone.
+- 2026-10-09 — `.ordewell/skills/` committed and reaching worktrees through git (ADR-0024).

@@ -38,6 +38,10 @@ ordewell handoff merge              # bring it onto your branch
 Run `ordewell --help` for the full list, or `ordewell setup` for guided
 configuration.
 
+Type `/name` in the conversation to load a skill, and use `ordewell skills` to
+list the ones a workspace sees and `ordewell task-skills` to attach them to a
+task. [Writing skills](https://github.com/ordewell/ordewell/blob/main/docs/skills.md) covers the format.
+
 This package also installs `@ordewell/web`, the local API server that the CLI and
 terminal UI talk to over `127.0.0.1`. It starts on demand.
 

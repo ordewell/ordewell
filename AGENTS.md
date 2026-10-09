@@ -78,4 +78,6 @@ node bench/live/drive-conversation.mjs
   ([ADR-0008](docs/adr/0008-planner-exploration-envelope.md)). Do not widen what
   it permits without an ADR.
 - Sessions persist to `.ordewell/` and are gitignored. Nothing there is a
-  fixture; do not commit it.
+  fixture; do not commit it. The exceptions are `.ordewell/skills/`, which is
+  committed by design (ADR-0024), and the generated `.ordewell/.gitignore` that
+  carves it out.
