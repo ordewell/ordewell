@@ -11,7 +11,7 @@ import type { Key } from './keys';
 import { handleOverlayKey } from './reducers/overlays';
 import { handlePlanKey } from './reducers/planPane';
 import { announceApprovals, announceCheckpoint, continueTaskStep, handleTaskViewKey, openTaskView, taskLogAbandoned, taskLogArrived, taskLogLoaded } from './reducers/taskView';
-import { pickRewindTarget, runCommand } from './reducers/commands';
+import { pickRewindTarget, runCommand, unknownCommand } from './reducers/commands';
 import { disarmStop, drainQueue, plannerEscape } from './reducers/turnQueue';
 import { applySettings, followSession, normalizeTasks, runLabel } from './reducers/incoming';
 import { refillPicker } from './reducers/pickers';
@@ -485,14 +485,17 @@ function submit(state: TuiState): Step {
 
   const cleared: TuiState = { ...state, editor: commit(state.editor) };
   const command = parseSlash(text);
-  // Only a built-in is dispatched here. A skill-backed or unregistered /name
-  // goes to the planner like any other message, literal /name and all, so the
-  // daemon's own skill resolution (see resolveSkillInvocation) loads
-  // Ordewell's skill before a coding-agent planner ever sees the token and
-  // tries to resolve it itself.
+  // Only a built-in is dispatched here. In planner chat a skill-backed or
+  // unregistered /name goes to the planner like any other message, literal
+  // /name and all, so the daemon's own skill resolution (see
+  // resolveSkillInvocation) loads Ordewell's skill before a coding-agent
+  // planner ever sees the token and tries to resolve it itself. The task
+  // view's composer has no such resolution: a mistyped /retyr there would
+  // continue a finished task or reach a running agent, so it is refused.
   if (command) {
     const known = findCommand(command.name);
     if (known && known.source !== 'skill') return runCommand(cleared, command);
+    if (state.taskView) return unknownCommand(cleared, command.name);
   }
 
   // The task view's composer talks to the runner, not the planner: the daemon
