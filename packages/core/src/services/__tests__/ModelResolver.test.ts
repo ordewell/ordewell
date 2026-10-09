@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { ModelResolver } from '../ModelResolver';
 import type { ExecImpl } from '../ModelDiscovery';
 import type { RunnerRegistry } from '../../plugins/RunnerRegistry';
-import type { RunnerPluginManifest } from '../../plugins/types';
+import type { RunnerManifest } from '../../plugins/types';
 import type { IConfig } from '../../interfaces/IConfig';
 import { resolveProvider, type ProviderModelLists } from '../ProviderRouting';
 import { getProviderMeta } from '../ProviderRegistry';
@@ -40,7 +40,7 @@ function fakeFetch(routes: Array<[string, unknown]>): typeof fetch {
   }) as typeof fetch;
 }
 
-function manifest(name: string, over: Partial<RunnerPluginManifest['modelDiscovery']> = {}): RunnerPluginManifest {
+function manifest(name: string, over: Partial<RunnerManifest['modelDiscovery']> = {}): RunnerManifest {
   return {
     name,
     displayName: name,
@@ -51,10 +51,10 @@ function manifest(name: string, over: Partial<RunnerPluginManifest['modelDiscove
       fallbackModels: [{ modelId: `${name}/fallback`, modelLabel: 'Fallback' }],
       ...over,
     },
-  } as unknown as RunnerPluginManifest;
+  } as unknown as RunnerManifest;
 }
 
-function fakeRegistry(manifests: Record<string, RunnerPluginManifest>): RunnerRegistry {
+function fakeRegistry(manifests: Record<string, RunnerManifest>): RunnerRegistry {
   return {
     getManifest: (id: string) => manifests[id],
   } as unknown as RunnerRegistry;

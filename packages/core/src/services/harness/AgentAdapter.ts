@@ -127,7 +127,7 @@ export interface TaskRunnerFlags {
   permissionMode: string;
   /** The task's raw effort id, present only alongside a model. Each adapter maps it to its own protocol. */
   effort?: string;
-  /** The manifest's further settings for the task's mode, by setting name — see `PluginFeatures.modeSettings`. */
+  /** The manifest's further settings for the task's mode, by setting name — see `RunnerFeatures.modeSettings`. */
   modeSettings: Record<string, string>;
 }
 

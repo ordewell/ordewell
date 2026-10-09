@@ -27,8 +27,7 @@ export interface RunnerCatalog {
  * models by the manifest's `preferredPatterns`; the mode is the catalog's
  * `defaultMode`).
  *
- * An empty catalog means discovery failed or the runner is a plugin we have no
- * list for — not that the runner offers nothing. That field is left out of the
+ * An empty catalog means discovery failed — not that the runner offers nothing. That field is left out of the
  * patch and the runner validates last, matching `coerceAssignments`.
  */
 export function runnerAssignment(

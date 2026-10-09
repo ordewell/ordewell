@@ -26,7 +26,7 @@ export interface SlashDeps {
   plannerBackends(): Promise<PlannerBackend[]>;
   /** Re-push planner provider/model/effort to the webview after a change. */
   refreshPlannerState(): Promise<void>;
-  pluginRegistry: { list(): { manifest: { displayName: string; name: string } }[]; get(id: string): { manifest: { displayName: string } } | undefined; getManifest(id: string): { modes?: { id: string; label: string; description: string; cliValue?: string }[] } | undefined; };
+  runnerRegistry: { list(): { manifest: { displayName: string; name: string } }[]; get(id: string): { manifest: { displayName: string } } | undefined; getManifest(id: string): { modes?: { id: string; label: string; description: string; cliValue?: string }[] } | undefined; };
   chatProvider: ChatViewProvider;
   settingsService: { getModelAllowlist(runner: string): string[] | undefined; setModelAllowlist(runner: string, ids: string[] | undefined): void; };
   sendRunnerAndModels(): Promise<void>;
@@ -263,7 +263,7 @@ export async function handleSlashCommand(text: string, deps: SlashDeps): Promise
   }
   if (cmd === '/allowlist') {
     await configureModelAllowlist(
-      deps.pluginRegistry as unknown as RunnerRegistry,
+      deps.runnerRegistry as unknown as RunnerRegistry,
       deps.modelResolver as unknown as ModelResolver,
       deps.settingsService as unknown as SettingsService,
     );
@@ -294,10 +294,10 @@ export async function handleSlashCommand(text: string, deps: SlashDeps): Promise
     return;
   }
   if (cmd === '/auto') {
-    const runners = enabledRunners(deps.config as unknown as IConfig).filter((r: string) => deps.pluginRegistry.get(r));
+    const runners = enabledRunners(deps.config as unknown as IConfig).filter((r: string) => deps.runnerRegistry.get(r));
     const modesByRunner: Record<string, RunnerModeInfo[]> = {};
     for (const r of runners) {
-      modesByRunner[r] = deps.pluginRegistry.getManifest(r)?.modes ?? [];
+      modesByRunner[r] = deps.runnerRegistry.getManifest(r)?.modes ?? [];
     }
     const direct = parseAutonomyLevel(args[0]);
     if (args[0] !== undefined && direct === null) {
