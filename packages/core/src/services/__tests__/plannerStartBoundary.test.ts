@@ -5,6 +5,7 @@ import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { fakeConfig, fakeFileSystem } from '../../testing';
 import type { AgentAdapter, AgentEvent, AgentStartOptions } from '../harness/AgentAdapter';
 import { planJson, scriptedAdapter, fakeMcpServer } from './harnessTestKit';
+import type { SubmitPlanArgs } from '../mcp/tools';
 
 /**
  * The planner's read-only boundary (ADR-0008/0009) survives the task-mode
@@ -14,16 +15,25 @@ import { planJson, scriptedAdapter, fakeMcpServer } from './harnessTestKit';
 
 const planTurn: AgentEvent[] = [{ type: 'assistant_text', text: planJson() }, { type: 'turn_end' }];
 
-function recordingService(turns: AgentEvent[][]) {
+/** `submits`: every turn calls submit_plan with the plan first, as a one-shot must for its plan to count. */
+function recordingService(turns: AgentEvent[][], { submits = false } = {}) {
   const starts: AgentStartOptions[] = [];
   const scripted = scriptedAdapter(turns);
+  const mcp = fakeMcpServer();
   const svc = new CliAgentAiService(fakeConfig({ aiProvider: 'claude-code' }), {
     createAdapter: (runner, deps): AgentAdapter => {
       const adapter = scripted(runner, deps)!;
-      return { ...adapter, start: async (opts) => { starts.push(opts); } };
+      return {
+        ...adapter,
+        start: async (opts) => { starts.push(opts); },
+        send: async (message, onEvent, signal, onLiveness) => {
+          if (submits) await mcp.plannerHandlers.at(-1)!.submitPlan!(JSON.parse(planJson()) as SubmitPlanArgs, { signal: new AbortController().signal });
+          return adapter.send(message, onEvent, signal, onLiveness);
+        },
+      };
     },
     workspaceRoot: () => '/repo',
-    mcpServer: fakeMcpServer(),
+    mcpServer: mcp,
   });
   return { svc, starts };
 }
@@ -43,7 +53,7 @@ describe('CliAgentAiService start boundary', () => {
   });
 
   it('starts a planner for every one-shot path', async () => {
-    const { svc, starts } = recordingService([planTurn, planTurn]);
+    const { svc, starts } = recordingService([planTurn, planTurn], { submits: true });
     await svc.researchAndPlan('Add a cache', ['claude-code'], {}, fakeFileSystem(), () => {});
     await svc.sendPlanningPrompt('Plan a cache', ['claude-code']);
     expect(starts).toHaveLength(2);

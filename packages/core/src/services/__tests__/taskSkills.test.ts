@@ -256,6 +256,28 @@ describe('the skills field', () => {
     expect(task.subtasks[1].skills).toEqual(['deploy']);
   });
 
+  it('keeps what parsing dropped for the plan check to warn about, subtasks included, and nothing for a task made in code', async () => {
+    const tasks = parsePlanJson(JSON.stringify({
+      tasks: [{
+        id: 'a', title: 'A', sliceType: 'AFK', autonomy: 'AFK', skills: ['Bad Name!', 'tdd'],
+        subtasks: [{ id: 'a1', title: 'A1', sliceType: 'AFK', autonomy: 'AFK', skills: ['ok_1', '-no', 7] }],
+      }],
+    }), ['claude-code']);
+    const lookup = { findSkill: () => undefined, searchedDirs: () => [] };
+
+    const { warnings } = await checkPlanSkills(tasks, lookup);
+    const fromCode = await checkPlanSkills([createTask({ id: 'b', title: 'B', skills: ['tdd'] })], lookup);
+
+    expect(warnings).toEqual([
+      expect.stringContaining('Task "A": "Bad Name!" is not a valid skill name'),
+      expect.stringContaining('Task "A": skill "tdd" not found'),
+      expect.stringContaining('Task "A1": "-no" is not a valid skill name'),
+      expect.stringContaining('Task "A1": skill "ok_1" not found'),
+    ]);
+    expect(tasks[0].subtasks[0].skills).toEqual(['ok_1']);
+    expect(fromCode.warnings).toEqual([expect.stringContaining('skill "tdd" not found')]);
+  });
+
   it('is changed, cleared, merged and split by plan edits', () => {
     const plan = [
       createTask({ id: 'a', order: 1, title: 'A', prompt: 'a', skills: ['tdd'] }),

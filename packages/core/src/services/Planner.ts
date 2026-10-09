@@ -38,6 +38,12 @@ export interface PlanRequest {
   modes?: PlannerModes;
 }
 
+/** A generated plan, and what its skill check warned about. */
+export interface GeneratedPlan extends LegacyPlanState {
+  /** Names not found yet, or no skill could have; the plan still lands. Absent means none, or not checked. */
+  skillWarnings?: string[];
+}
+
 export interface ModifyPlanRequest {
   existingPlan: LegacyPlanState;
   userRequest: string;
@@ -74,6 +80,14 @@ export interface ModifyDuringExecutionResult {
   skillWarnings?: string[];
 }
 
+/** A one-shot plan refused for the skills it attaches; nothing of it was loaded. */
+export class PlanSkillsError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PlanSkillsError';
+  }
+}
+
 /**
  * Owns one-shot plan generation and plan modification — the "planning is a
  * different workload from execution" thesis, as a module. The conversational
@@ -95,8 +109,12 @@ export class Planner {
 
   private get aiService(): IAiService { return this.resolveAiService(); }
 
-  /** One-shot plan generation for non-conversational surfaces. Never asks questions. */
-  async generate(req: PlanRequest): Promise<LegacyPlanState> {
+  /**
+   * One-shot plan generation for non-conversational surfaces. Never asks
+   * questions. A plan attaching a planner skill to a task is refused, not
+   * returned: there is no conversation to send it back through.
+   */
+  async generate(req: PlanRequest): Promise<GeneratedPlan> {
     const now = new Date().toISOString();
     let tasks: Task[];
     let researchLog: ResearchLogEntry[] | undefined;
@@ -132,6 +150,13 @@ export class Planner {
       );
     }
 
+    // Checked before coercion copies the tasks, which leaves behind what each one asked to attach.
+    const skills = req.modes?.taskSkills ? await checkPlanSkills(tasks, req.modes.taskSkills) : undefined;
+    if (skills && req.signal?.aborted) throw new Error('Plan generation was stopped.');
+    if (skills && skills.errors.length > 0) {
+      throw new PlanSkillsError(`The generated plan was refused: ${skills.errors.map((e) => e.message).join(' ')}`);
+    }
+
     return {
       tasks: coerceAssignments(tasks, req.perRunnerAllowlist ?? {}, req.runners, req.modelsByRunner),
       generatedAt: now,
@@ -139,6 +164,7 @@ export class Planner {
       runners: req.runners,
       lastUpdated: now,
       researchLog,
+      ...(skills && skills.warnings.length > 0 ? { skillWarnings: skills.warnings } : {}),
     };
   }
 
@@ -187,14 +213,16 @@ export class Planner {
       first: () => send(),
       resend: (corrective) => send(corrective),
       interpret: async (tasks) => {
-        const coerced = coerceAssignments(tasks.filter((t) => !finished.has(t.id)), allowlist, req.runners, req.modelsByRunner);
+        const kept = tasks.filter((t) => !finished.has(t.id));
+        const coerced = coerceAssignments(kept, allowlist, req.runners, req.modelsByRunner);
         const validation = validatePlanModification({
           executionLog: req.executionLog,
           oldPending: req.pendingTasks,
           newPending: coerced,
           activeSessions: req.activeSessions,
         });
-        const skills = await checkPlanSkills(coerced, req.skills);
+        // The parsed tasks, not the coerced copies: those no longer carry what each one asked to attach.
+        const skills = await checkPlanSkills(kept, req.skills);
         const errors = [...validation.errors, ...skills.errors.map((e) => e.message)];
         if (errors.length === 0) {
           return { done: { pendingTasks: coerced, message: `Plan modified: ${coerced.length} pending task(s)`, skillWarnings: skills.warnings } };

@@ -2,7 +2,7 @@ import type { ResearchLogEntry, ResearchProgress, ResearchStep, RunnerId } from 
 import type { ConversationTurn } from './AiService';
 import type { RunnerModeInfo } from './ModeResolver';
 import {
-  classifyPlannerReply, reEmitPlanPrompt, reEmitTaskOpsPrompt, reEmitTaskQueryPrompt, repairLoop, truncatedPlanReEmitPrompt,
+  classifyPlannerReply, type PlannerReplyClassification, reEmitPlanPrompt, reEmitTaskOpsPrompt, reEmitTaskQueryPrompt, repairLoop, truncatedPlanReEmitPrompt,
 } from './PlanRepair';
 
 /** Corrective re-emits a botched envelope is owed per turn, on every planner backend. */
@@ -31,7 +31,12 @@ export interface SettleReplyOptions {
   message: string;
   /** Send one message to the model and run the call to its reply. */
   send: (message: string) => Promise<ReplyAttempt>;
-  classify: { runners: RunnerId[]; runnerModes?: Record<RunnerId, RunnerModeInfo[]>; autonomousDefault?: boolean };
+  /**
+   * What a reply's plan, edit and read envelopes are checked against. Absent
+   * for a planner that plans only through Ordewell's tools (ADR-0025): its
+   * reply is prose whatever JSON it carries, and is never sent back to fix one.
+   */
+  classify?: { runners: RunnerId[]; runnerModes?: Record<RunnerId, RunnerModeInfo[]>; autonomousDefault?: boolean };
   onProgress: (progress: ResearchProgress) => void;
   signal?: AbortSignal;
 
@@ -83,7 +88,7 @@ export async function settleReply(opts: SettleReplyOptions): Promise<Conversatio
     if (attempt.text.trim() || attempt.aborted || attempt.failure !== undefined || nudged) return attempt;
     nudged = true;
     retract();
-    return send(emptyReplyNudge(deniedStep(attempt)));
+    return send(emptyReplyNudge(deniedStep(attempt), opts.classify !== undefined));
   };
 
   return repairLoop<ReplyAttempt, ConversationTurn>({
@@ -101,7 +106,7 @@ export async function settleReply(opts: SettleReplyOptions): Promise<Conversatio
       if (attempt.failure !== undefined) return { done: message(attempt.failure) };
       if (!attempt.text.trim()) return { done: message(emptyReplyReport(deniedStep(attempt))) };
 
-      const reply = classifyPlannerReply(attempt.text, opts.classify);
+      const reply: PlannerReplyClassification = opts.classify ? classifyPlannerReply(attempt.text, opts.classify) : { kind: 'prose' };
       switch (reply.kind) {
         case 'plan': return { done: { kind: 'plan', tasks: reply.tasks, text: said(attempt), researchLog } };
         case 'task_ops': return { done: { kind: 'task_ops', ops: reply.ops, text: said(attempt), researchLog } };
@@ -141,10 +146,10 @@ const stepName = (step: ResearchStep): string => step.toolLabel ?? step.tool;
 
 // The denial's own result says why, in its backend's terms: a harness planner
 // is refused anything but reading, an API planner's command can go unapproved.
-function emptyReplyNudge(denied: ResearchStep | undefined): string {
+function emptyReplyNudge(denied: ResearchStep | undefined, envelopes: boolean): string {
   return denied
     ? `Your last reply was empty after "${stepName(denied)}" was denied: ${denied.result} Do not retry it. Answer the user now with what you already know, or ask your next question.`
-    : 'Your last reply was empty. Respond to the user now: answer their last message directly, ask your next question, or emit the plan JSON.';
+    : `Your last reply was empty. Respond to the user now: answer their last message directly, ask your next question, or ${envelopes ? 'emit the plan JSON' : 'submit the plan with submit_plan'}.`;
 }
 
 function emptyReplyReport(denied: ResearchStep | undefined): string {

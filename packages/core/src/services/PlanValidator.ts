@@ -147,6 +147,19 @@ export function looksLikePlanAttempt(raw: string): boolean {
  */
 type InheritedSlice = { sliceType?: Task['sliceType']; autonomy?: Task['autonomy'] };
 
+/**
+ * What each parsed task asked to attach, as the planner wrote it. Kept beside
+ * the task rather than on it: {@link skillNames} drops a name no skill could
+ * have, and the plan's skill check still owes a warning for it. A copy of the
+ * task (assignment coercion) does not carry it, so check what was parsed.
+ */
+const skillsAsked = new WeakMap<Task, unknown[]>();
+
+/** The `skills` a parsed task was submitted with, before normalization; undefined for a task not parsed here. */
+export function requestedSkills(task: Task): readonly unknown[] | undefined {
+  return skillsAsked.get(task);
+}
+
 function parseTask(
   raw: Record<string, unknown>,
   runners: RunnerId[],
@@ -166,7 +179,7 @@ function parseTask(
   const sliceType = typeof raw.sliceType === 'string' && (raw.sliceType === 'HITL' || raw.sliceType === 'AFK')
     ? raw.sliceType
     : (taskType === 'ai' ? inherited?.sliceType : undefined);
-  return createTask({
+  const task = createTask({
     id: String(raw.id ?? ''),
     order: Number(raw.order ?? 0),
     title,
@@ -215,6 +228,8 @@ function parseTask(
     // Not inherited: a subtask's skills are its own.
     skills: skillNames(raw.skills),
   });
+  if (Array.isArray(raw.skills)) skillsAsked.set(task, raw.skills);
+  return task;
 }
 
 function verticalSliceErrors(tasks: Task[], parentTitle?: string): PlanTaskError[] {

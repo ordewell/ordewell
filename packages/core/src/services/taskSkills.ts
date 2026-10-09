@@ -2,6 +2,7 @@ import * as path from 'path';
 import { flattenTasks, isSkillName, skillNames, type Task, type TaskSkillSnapshot } from '../models/Task';
 import { skillsDirOf, workspaceSkillRoots, type SkillInfo, type SkillsService } from './SkillsService';
 import type { TaskOp } from './TaskOps';
+import { requestedSkills } from './PlanValidator';
 import { cleanEnv, execFileWithTimeout } from './gitExec';
 import { quotedList } from '../utils/quotedList';
 
@@ -160,13 +161,14 @@ export function plannedSkillLookup(
 }
 
 /**
- * A submitted plan's skills, checked leniently: a name missing now may be
- * created by a task the attaching one depends on, so it is only a warning; a
- * planner skill is never right on a task, so it is refused.
+ * A submitted plan's skills, subtasks included, checked leniently: a name
+ * missing now may be created by a task the attaching one depends on, so it is
+ * only a warning; a planner skill is never right on a task, so it is refused.
+ * A name parsing dropped is warned about as it was submitted.
  */
 export function checkPlanSkills(tasks: readonly Task[], lookup: SkillLookup): Promise<SkillCheck> {
   return check(
-    flattenTasks(tasks).map((t) => ({ taskId: t.id, owner: `Task "${t.title}"`, names: t.skills ?? [] })),
+    flattenTasks(tasks).map((t) => ({ taskId: t.id, owner: `Task "${t.title}"`, names: t.skills ?? [], dropped: attached(requestedSkills(t)).dropped })),
     lookup,
   );
 }

@@ -9,7 +9,7 @@ import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { OrdewellMcpServer, PLANNER_TOOLS } from '../mcp';
 import type { ConversationRequest } from '../AiService';
 import type { SessionRuntimeSettings } from '../createSession';
-import { surfacePlan, type SessionMessage } from '../SessionMessage';
+import { surfacePlan, type SessionMessage, type SessionNotice } from '../SessionMessage';
 import type { SkillInfo, SkillsService } from '../SkillsService';
 import { createTask, type DiscoveredModel, type Task } from '../../models/Task';
 import { openTaskLog } from '../../utils/taskLogStore';
@@ -216,7 +216,7 @@ describe('a planner the server did not reach', () => {
   });
 });
 /** A planning session on a real harness planner, whose settings the test rewrites the way a settings write would. */
-function plannerSession(claude: FakeSpawnResult, initial: Partial<SessionRuntimeSettings> = {}, { runner, skills = [], skillsService }: { runner?: IRunner; skills?: SkillInfo[]; skillsService?: Pick<SkillsService, 'findSkill' | 'listSkills'> } = {}) {
+function plannerSession(claude: FakeSpawnResult, initial: Partial<SessionRuntimeSettings> = {}, { runner, skills = [], skillsService, onNotice }: { runner?: IRunner; skills?: SkillInfo[]; skillsService?: Pick<SkillsService, 'findSkill' | 'listSkills'>; onNotice?: (notice: SessionNotice) => void } = {}) {
   const server = newServer();
   let settings: SessionRuntimeSettings = { enabledRunners: ['claude-code'], ...initial };
   const ai = service(claude, server);
@@ -231,6 +231,7 @@ function plannerSession(claude: FakeSpawnResult, initial: Partial<SessionRuntime
     },
     settings: () => settings,
     broadcast,
+    onNotice,
   });
   return {
     session,
@@ -596,8 +597,84 @@ describe('submit_plan with task skills', () => {
   });
 });
 
-describe('the two routes to a plan', () => {
-  it('commit the same plan for the same tasks: submit_plan, and the JSON envelope in the reply', async () => {
+describe('submit_plan with names it cannot attach', () => {
+  const withSubtaskSkills = (skills: unknown[]) => [
+    planTask('a', 1, 'claude-code', 'claude-sonnet-4', { subtasks: [planTask('a1', 1, 'claude-code', 'claude-sonnet-4', { skills })] }),
+  ];
+
+  it('warns about a nested name no skill could have, as written, in its answer, the transcript and a notice', async () => {
+    let submitted: { isError: boolean; body: unknown } | undefined;
+    const onNotice = vi.fn<(notice: SessionNotice) => void>();
+    const { session } = plannerSession(fakeClaude({
+      turn: async (mcp) => {
+        submitted = await call(mcp!, 'submit_plan', { tasks: withSubtaskSkills(['Bad Name!', ' TDD ', 'tdd', 'later']) });
+        return 'Submitted.';
+      },
+    }), {}, { skills: SKILLS, onNotice });
+
+    await session.startPlanning('add a cache', ['claude-code']);
+
+    const warnings = [
+      expect.stringMatching(/^Task "Task a1": "Bad Name!" is not a valid skill name .*so it was not attached\.$/),
+      expect.stringMatching(/^Task "Task a1": skill "later" not found/),
+    ];
+    expect((submitted?.body as { warnings: string[] }).warnings).toEqual(warnings);
+    expect(session.planTasks[0].subtasks[0].skills).toEqual(['tdd', 'later']);
+    const note = session.planState?.conversationHistory?.find((m) => m.kind === 'system' && m.content.startsWith('Skill check:'));
+    expect(note?.content).toContain('\n- Task "Task a1": "Bad Name!" is not a valid skill name');
+    expect(note?.content).toContain('\n- Task "Task a1": skill "later" not found');
+    expect(onNotice.mock.calls.map(([n]) => n.message)).toEqual(warnings);
+  });
+
+  it('refuses a planner skill on a subtask, and changes nothing of a plan already there', async () => {
+    let refused: { isError: boolean; body: unknown } | undefined;
+    const planner = await planThen(async (mcp) => {
+      refused = await call(mcp!, 'submit_plan', { tasks: withSubtaskSkills(['grilling']) });
+      return 'Submitted.';
+    }, { skills: SKILLS });
+    const before = landed(planner);
+
+    await planner.session.continueConversation('REPLAN NOW');
+
+    expect(refused).toEqual({
+      isError: true,
+      body: { ok: false, errors: [expect.objectContaining({ taskId: 'a1', field: 'skills', message: expect.stringContaining('Task "Task a1": "grilling" is a planner skill') })] },
+    });
+    expect(landed(planner)).toEqual({ ...before, last: 'Submitted.' });
+  });
+
+  it('commits nothing when a refused call is followed by the plan written out as JSON', async () => {
+    let refused: { isError: boolean; body: unknown } | undefined;
+    const echoed = JSON.stringify({ tasks: withSubtaskSkills(['tdd']) });
+    const planner = await planThen(async (mcp) => {
+      refused = await call(mcp!, 'submit_plan', { tasks: withSubtaskSkills(['grilling']) });
+      return `The tool refused it, so here it is:\n${echoed}`;
+    }, { skills: SKILLS });
+    const before = landed(planner);
+
+    await planner.session.continueConversation('REPLAN NOW');
+
+    expect(refused?.isError).toBe(true);
+    expect(landed(planner)).toEqual({ ...before, last: `The tool refused it, so here it is:\n${echoed}` });
+  });
+
+  it('lands the accepted plan when the reply after the call is prose with JSON in it', async () => {
+    const { session } = plannerSession(fakeClaude({
+      turn: async (mcp) => {
+        await call(mcp!, 'submit_plan', { tasks: TWO_TASKS });
+        return `Submitted. For reference the first task is ${JSON.stringify({ tasks: [planTask('z', 1, 'claude-code', 'claude-sonnet-4')] })}`;
+      },
+    }));
+
+    await session.startPlanning('add a cache', ['claude-code']);
+
+    expect(session.planTasks.map((t) => t.id)).toEqual(['a', 'b']);
+    expect(session.planState?.conversationHistory?.at(-1)?.kind).toBe('plan_generated');
+  });
+});
+
+describe('the one route to a plan', () => {
+  it('is submit_plan: the same tasks written as JSON in the reply are shown as prose and commit nothing', async () => {
     const tasks = [
       planTask('a', 1, 'claude-code', 'claude-sonnet-4'),
       planTask('b', 2, 'claude-code', 'claude-opus-4', { dependencies: ['a'], taskMode: 'default', assignedModel: { modelId: 'claude-opus-4', modelLabel: 'Opus', thinkingEffort: 'xhigh' } }),
@@ -609,19 +686,21 @@ describe('the two routes to a plan', () => {
         return 'Submitted the plan.';
       },
     }), settings);
-    const viaEnvelope = plannerSession(fakeClaude({ turn: async () => JSON.stringify({ tasks }) }), settings);
+    const asText = JSON.stringify({ tasks });
+    const textClaude = fakeClaude({ turn: async () => asText });
+    const viaText = plannerSession(textClaude, settings);
 
     await viaTool.session.startPlanning('add a cache', ['claude-code']);
-    await viaEnvelope.session.startPlanning('add a cache', ['claude-code']);
+    await viaText.session.startPlanning('add a cache', ['claude-code']);
 
-    const committed = ({ session, broadcast }: ReturnType<typeof plannerSession>) => ({
-      tasks: session.planTasks,
-      runners: session.planState?.runners,
-      last: session.planState?.conversationHistory?.at(-1)?.kind,
-      planBroadcasts: broadcast.mock.calls.filter(([m]) => m.type === 'plan_generated').length,
-    });
     expect(viaTool.session.planTasks).toHaveLength(2);
-    expect(committed(viaTool)).toEqual(committed(viaEnvelope));
+    expect(viaTool.session.planState?.conversationHistory?.at(-1)?.kind).toBe('plan_generated');
+    expect(viaText.session.planTasks).toEqual([]);
+    expect(viaText.session.planState?.conversationHistory?.at(-1)).toEqual(expect.objectContaining({ role: 'assistant', content: asText }));
+    expect(viaText.broadcast.mock.calls.filter(([m]) => m.type === 'plan_generated')).toHaveLength(0);
+    expect(viaText.broadcast.mock.calls.map(([m]) => m)).toContainEqual(expect.objectContaining({ type: 'planner_message', content: asText }));
+    // Nothing was sent back to be re-emitted: the reply is prose, not a botched envelope.
+    expect(textClaude.processes[0].written.filter((w) => w.includes('"type":"user"'))).toHaveLength(1);
   });
 });
 
@@ -668,7 +747,7 @@ describe('what the planner is told', () => {
           messages.push(message);
           if (planned) return 'Ok.';
           planned = true;
-          return JSON.stringify({ tasks: TWO_TASKS });
+          return submitted(_mcp, TWO_TASKS);
         },
       });
       const { session } = plannerSession(claude);
@@ -701,6 +780,13 @@ describe('what the planner is told', () => {
 
 });
 
+/** Submit `tasks` through the tool, as a coding-agent planner must, and say so in prose. */
+async function submitted(mcp: Client | null, tasks: unknown[]): Promise<string> {
+  const answer = await call(mcp!, 'submit_plan', { tasks });
+  if (answer.isError) throw new Error(`submit_plan refused: ${JSON.stringify(answer.body)}`);
+  return 'Submitted the plan.';
+}
+
 const TWO_TASKS = [
   planTask('a', 1, 'claude-code', 'claude-sonnet-4'),
   planTask('b', 2, 'claude-code', 'claude-sonnet-4', { dependencies: ['a'] }),
@@ -714,7 +800,7 @@ async function planThen(second: (mcp: Client | null, message: string) => Promise
     turn: async (mcp, message) => {
       if (planned) return second(mcp, message);
       planned = true;
-      return JSON.stringify({ tasks: TWO_TASKS });
+      return submitted(mcp, TWO_TASKS);
     },
   }), settings, { runner, skills });
   await planner.session.startPlanning('add a cache', ['claude-code']);
@@ -794,18 +880,32 @@ describe('edit_plan', () => {
     { op: 'add', task: { title: 'Docs', dependencies: ['#2'], assignedRunner: 'claude-code', assignedModel: { modelId: 'claude-sonnet-4', modelLabel: 'Claude Sonnet 4' } } },
   ];
 
-  it('commits the same edit as the same ops in a taskOps reply', async () => {
+  it('commits an edit made through it; the same ops as a taskOps reply are shown as prose and change nothing', async () => {
     const viaTool = await planThen(async (mcp) => {
       expect(await call(mcp!, 'edit_plan', { ops })).toEqual({ isError: false, body: expect.objectContaining({ ok: true }) });
       return 'Done.';
     });
-    const viaEnvelope = await planThen(async () => JSON.stringify({ taskOps: ops }));
+    const asText = JSON.stringify({ taskOps: ops });
+    const viaText = await planThen(async () => asText);
+    const before = landed(viaText);
 
     await viaTool.session.continueConversation('EDIT NOW');
-    await viaEnvelope.session.continueConversation('EDIT NOW');
+    await viaText.session.continueConversation('EDIT NOW');
 
     expect(viaTool.session.planTasks.map((t) => t.title)).toEqual(['Task a', 'Wire it in', 'Docs']);
-    expect(landed(viaTool)).toEqual(landed(viaEnvelope));
+    expect(landed(viaText)).toEqual({ ...before, last: asText });
+  });
+
+  it('lands an accepted edit when the reply after it is prose', async () => {
+    const planner = await planThen(async (mcp) => {
+      await call(mcp!, 'edit_plan', { ops: [{ op: 'update', taskId: '#2', changes: { title: 'Renamed' } }] });
+      return 'I renamed the second task. Here is roughly what changed: {"title": "Renamed"}';
+    });
+
+    await planner.session.continueConversation('EDIT NOW');
+
+    expect(planner.session.planTasks.map((t) => t.title)).toEqual(['Task a', 'Renamed']);
+    expect(landed(planner).last).toBe('Tasks updated:\n- Updated "Task b" (title)');
   });
 
   it('names what is wrong with each op and changes nothing', async () => {
@@ -880,22 +980,24 @@ describe('edit_plan', () => {
   });
 
   describe('while a task of the plan is running', () => {
-    it('queues an edit that reaches it, exactly as the envelope does, and says so', async () => {
+    it('queues an edit that reaches it, and says so; the same edit as a taskOps reply queues nothing', async () => {
       const edit = [{ op: 'update', taskId: '#1', changes: { title: 'Setup, renamed' } }];
       let answered: { isError: boolean; body: unknown } | undefined;
       const viaTool = await runningPlan(async (mcp) => {
         answered = await call(mcp!, 'edit_plan', { ops: edit });
         return 'Queued.';
       });
-      const viaEnvelope = await runningPlan(async () => JSON.stringify({ taskOps: edit }));
+      const viaText = await runningPlan(async () => JSON.stringify({ taskOps: edit }));
 
       await viaTool.session.continueConversation('EDIT NOW');
-      await viaEnvelope.session.continueConversation('EDIT NOW');
+      await viaText.session.continueConversation('EDIT NOW');
 
       expect(answered).toEqual({ isError: false, body: expect.objectContaining({ ok: true, queued: true }) });
       expect(viaTool.session.getQueuedMessages().map((m) => m.text)).toEqual(['EDIT NOW']);
-      expect(landed(viaTool)).toEqual(landed(viaEnvelope));
+      expect(landed(viaTool).last).toMatch(/queued your change/);
       expect(viaTool.session.planTasks[0].title).toBe('Task a');
+      expect(viaText.session.getQueuedMessages()).toEqual([]);
+      expect(landed(viaText).last).toBe(JSON.stringify({ taskOps: edit }));
     });
   });
 });
@@ -925,45 +1027,18 @@ describe('the read budget of a user message', () => {
     expect(noteOf(answers[7])).toBeUndefined();
   });
 
-  it('is shared with the taskQuery envelope: reads made either way are counted together', async () => {
-    const envelope = (ref: string) => JSON.stringify({ taskQuery: { tasks: [ref], fields: ['description'] } });
-    const answers: { isError: boolean; body: unknown }[] = [];
-    const envelopeAnswers: string[] = [];
-    let step = 0;
-    const { session } = await planThen(async (mcp, message) => {
-      step++;
-      if (step > 1) envelopeAnswers.push(message);
-      if (step === 1) return envelope('#1');
-      if (step === 2) return envelope('#2');
-      // Two envelope reads are spent: the third read, by tool, is the last that is not told to land.
-      answers.push(await call(mcp!, 'task_query', { tasks: ['#1'], fields: ['prompt'] }));
-      answers.push(await call(mcp!, 'task_query', { tasks: ['#2'], fields: ['prompt'] }));
-      return 'Read.';
+  it('is not spent by a taskQuery written in the reply, which is shown as prose and answered by nothing', async () => {
+    const asText = JSON.stringify({ taskQuery: { tasks: ['#1'], fields: ['description'] } });
+    const messages: string[] = [];
+    const planner = await planThen(async (_mcp, message) => {
+      messages.push(message);
+      return asText;
     });
 
-    await session.continueConversation('EDIT NOW');
+    await planner.session.continueConversation('EDIT NOW');
 
-    expect(envelopeAnswers[0]).not.toMatch(/You have now read everything/);
-    expect(answers.map(noteOf)).toEqual([undefined, expect.stringMatching(LAND)]);
-  });
-
-  it('is shared the other way: tool reads leave the envelope\'s answer told to land', async () => {
-    const envelopeAnswers: string[] = [];
-    let step = 0;
-    const { session } = await planThen(async (mcp, message) => {
-      step++;
-      if (step === 1) {
-        for (let n = 0; n < 3; n++) await call(mcp!, 'task_query', { tasks: [`#${n + 1}`] });
-        return JSON.stringify({ taskQuery: { tasks: ['#1'], fields: ['description'] } });
-      }
-      envelopeAnswers.push(message);
-      return 'Read.';
-    });
-
-    await session.continueConversation('EDIT NOW');
-
-    expect(envelopeAnswers).toHaveLength(1);
-    expect(envelopeAnswers[0]).toMatch(/You have now read everything you asked for\. Do not send another taskQuery/);
+    expect(messages).toHaveLength(1);
+    expect(landed(planner).last).toBe(asText);
   });
 });
 
@@ -976,7 +1051,7 @@ describe('task_query', () => {
   async function planAndRead(read: (mcp: Client) => Promise<void>) {
     const planner = plannerSession(fakeClaude({
       turn: async (mcp, message) => {
-        if (!message.includes('READ NOW')) return JSON.stringify({ tasks: longPlan });
+        if (!message.includes('READ NOW')) return submitted(mcp, longPlan);
         await read(mcp!);
         return 'Read it.';
       },
