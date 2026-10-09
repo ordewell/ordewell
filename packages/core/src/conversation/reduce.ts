@@ -2,7 +2,7 @@ import type { ResearchStep } from '../models/Task';
 import type { SessionMessage } from '../services/SessionMessage';
 import { isMeasured } from '../models/Usage';
 import type { DisplayBlock, MessageBlock, PlanBlock, ToolBlock } from './blocks';
-import { pendingTool, planMarker, settledMessage, settledTool, toolFromStep } from './records';
+import { pendingTool, planMarker, settledMessage, settledTool, skillLoadBlock, toolFromStep, userMessage } from './records';
 import {
   append, appendOutput, closeOpenBlocks, findLastIndex, laneBlocks, laneOf, laneAppend, laneReplace, replaceAt, sealLane, sealed, setUsageLine,
   think, updateSubagent, type BlockList,
@@ -58,15 +58,20 @@ function finalSegmentIndex(blocks: readonly DisplayBlock[], turnId: string, past
   return -1;
 }
 
-function openTurn(view: ConversationView, turnId: string, prompt: string): ConversationView {
+function openTurn(view: ConversationView, { turnId, prompt = '', skills = [] }: Message<'planner_turn_started'>): ConversationView {
   // A surface shows its user's prompt the moment it is sent; the turn that
   // answers it adopts that line rather than repeating it.
   const i = findLastIndex(view.blocks, (b) => b.type === 'message' && b.role === 'user');
   const sent = view.blocks[i];
-  if (sent?.type === 'message' && sent.turnId === undefined && sent.text === prompt) {
-    return { ...view, blocks: replaceAt(view.blocks, i, { ...sent, turnId }) };
-  }
-  return append(view, (id) => settledMessage(id, 'user', prompt, turnId));
+  const adopted = sent?.type === 'message' && sent.turnId === undefined && sent.text === prompt;
+  const said: ConversationView = adopted
+    ? { ...view, blocks: replaceAt(view.blocks, i, userMessage(sent.id, prompt, skills, turnId)) }
+    : append(view, (id) => userMessage(id, prompt, skills, turnId));
+  if (skills.length === 0) return said;
+  // Directly under the message that loaded them, wherever that line sits.
+  const at = adopted ? i + 1 : findLastIndex(said.blocks, (b) => b.type === 'message' && b.role === 'user') + 1;
+  const loads = skills.map((skill, n) => skillLoadBlock(`b${said.nextId + n}`, skill, turnId));
+  return { ...said, blocks: [...said.blocks.slice(0, at), ...loads, ...said.blocks.slice(at)], nextId: said.nextId + loads.length };
 }
 
 function streamText(view: ConversationView, { turnId, segmentId, text }: Message<'planner_text_delta'>): ConversationView {
@@ -249,7 +254,7 @@ export function reduceConversation(view: ConversationView, input: ConversationIn
     case 'local_entry':
       return append(view, (id) => settledMessage(id, input.role, input.text));
     case 'planner_turn_started':
-      return input.prompt === undefined ? view : openTurn(view, input.turnId, input.prompt);
+      return input.prompt === undefined ? view : openTurn(view, input);
     case 'planner_text_delta':
       return streamText(view, input);
     case 'planner_message':

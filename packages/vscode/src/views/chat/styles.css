@@ -229,6 +229,28 @@ body {
   color: #fff;
 }
 
+.chat-msg-user .chat-msg-content mark.skill-token {
+  background: color-mix(in srgb, #fff 22%, transparent);
+  color: inherit;
+  font-weight: 600;
+  border-radius: 4px;
+  padding: 0 2px;
+}
+
+/* Sits right under the bubble of the message that loaded it. */
+.chat-msg-skill-load {
+  padding-top: 0;
+  margin-top: -4px;
+}
+
+.chat-msg-skill-load .skill-load-mark {
+  color: var(--green);
+}
+
+.chat-msg-skill-load .skill-load-path {
+  font-family: var(--font-mono);
+}
+
 .chat-msg-content {
   font-size: 13px;
   line-height: 1.55;

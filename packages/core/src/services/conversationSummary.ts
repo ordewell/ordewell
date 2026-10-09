@@ -1,4 +1,4 @@
-import type { ConversationMessage } from '../models/Task';
+import { isUserMessage, type ConversationMessage } from '../models/Task';
 
 /**
  * User messages a compaction keeps verbatim, with the replies that follow
@@ -52,7 +52,7 @@ export function condensedNotice(summary: string): string {
  * nothing before it worth condensing.
  */
 export function keptTail(transcript: readonly ConversationMessage[]): ConversationMessage[] | null {
-  const userAt = transcript.flatMap((m, i) => (m.role === 'user' ? [i] : []));
+  const userAt = transcript.flatMap((m, i) => (isUserMessage(m) ? [i] : []));
   if (userAt.length <= KEPT_USER_MESSAGES) return null;
   return transcript.slice(userAt[userAt.length - KEPT_USER_MESSAGES]);
 }

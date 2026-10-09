@@ -138,4 +138,35 @@ describe('fromTranscript after a live session', () => {
     ]);
     expect(unkeyed(reloaded.blocks)).toEqual(savedSubset(play(sent).blocks));
   });
+
+  it('shows a message that loaded skills as typed, each load right under it, live and reloaded alike', async () => {
+    const sent: SessionMessage[] = [];
+    const bodies: Record<string, string> = { grilling: 'GRILL', 'to-spec': 'SPEC' };
+    const session = makeSession({
+      broadcast: (msg) => sent.push(msg),
+      skillsService: {
+        findSkill: (name) => (bodies[name]
+          ? { name, description: '', metadata: { name, description: '' }, content: bodies[name], path: `/skills/${name}/SKILL.md`, source: 'global', appliesTo: 'planner', modelInvocable: true, userInvocable: true }
+          : undefined),
+      },
+      aiService: {
+        startConversation: vi.fn(async (req: ConversationRequest) => firstTurn(req.onProgress)),
+        continueConversation: vi.fn(async (_message: string, onProgress: (progress: ResearchProgress) => void) => secondTurn(onProgress)),
+        hasActiveConversation: () => true,
+      },
+    });
+
+    await session.startPlanning('/grilling add persistence', ['claude-code']);
+    tick();
+    const plan = await session.continueConversation('use SQLite, /to-spec and /grilling');
+
+    const live = play(sent);
+    const reloaded = fromTranscript(plan.conversationHistory, plan.researchLog, plan.plannerUsage);
+    const shape = (b: DisplayBlock) => (b.type === 'message' ? `${b.role}:${b.text}:${(b.skills ?? []).join(',')}` : b.type === 'skill_load' ? `load:${b.name}` : b.type);
+    expect(reloaded.blocks.map(shape)).toEqual([
+      'user:/grilling add persistence:grilling', 'load:grilling', 'tool', 'subagent', 'planner:Which store: SQLite or Postgres?:',
+      'user:use SQLite, /to-spec and /grilling:to-spec,grilling', 'load:to-spec', 'load:grilling', 'tool', 'plan', 'usage',
+    ]);
+    expect(unkeyed(reloaded.blocks)).toEqual(savedSubset(live.blocks));
+  });
 });

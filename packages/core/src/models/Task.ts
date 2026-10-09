@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { PlanIsolation } from '../interfaces/IWorktreeIsolation';
 import type { RunnerTransport } from '../interfaces/ITerminalRunner';
 import type { PlannerUsage, UsageRecord, UsageTotals } from './Usage';
+import type { SkillSource } from '../services/SkillsService';
 
 export interface UserStep {
   order: number;
@@ -296,10 +297,37 @@ export interface ConversationMessage {
    * the plan was committed (the UI anchors the plan card there on restore);
    * 'system' is a host-injected notice; 'compaction' is the summary a
    * user-triggered compaction left in place of the earlier messages — always
-   * the transcript's first entry. Absent for ordinary chat turns, so
-   * sessions saved before markers existed degrade gracefully.
+   * the transcript's first entry. 'skill_load' is a skill loaded into the
+   * conversation, its snapshot in `skill`; one the user invoked follows the
+   * message that named it. Absent for ordinary chat turns, so sessions saved
+   * before markers existed degrade gracefully.
    */
-  kind?: 'plan_generated' | 'system' | 'compaction';
+  kind?: 'plan_generated' | 'system' | 'compaction' | 'skill_load';
+  /** Present exactly when `kind` is 'skill_load'. */
+  skill?: SkillLoad;
+}
+
+/**
+ * A skill's SKILL.md as it was when loaded into a planner conversation. A
+ * snapshot rather than a reference: a resumed, forked or rewound conversation
+ * replays the body the planner originally saw, even after the file changed or
+ * was deleted.
+ */
+export interface SkillLoad {
+  invokedBy: 'user';
+  name: string;
+  source: SkillSource;
+  /** The SKILL.md that won, home-abbreviated (`~/...`): which copy loaded is what a reader needs from it. */
+  path: string;
+  content: string;
+}
+
+/** A skill load as a surface announces it — the body stays with the transcript. */
+export type SkillLoadNotice = Omit<SkillLoad, 'content'>;
+
+/** A message the user sent, as opposed to a skill load their message caused. */
+export function isUserMessage(entry: ConversationMessage): boolean {
+  return entry.role === 'user' && entry.kind !== 'skill_load';
 }
 
 export interface QueuedMessage {

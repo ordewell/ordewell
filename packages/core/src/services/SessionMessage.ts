@@ -1,4 +1,4 @@
-import type { AwaitingReason, LegacyPlanState, QueuedMessage, ResearchStep, RunnerId, SubagentOutcome, Task, TaskTransport, Verdict } from '../models/Task';
+import type { AwaitingReason, LegacyPlanState, QueuedMessage, ResearchStep, RunnerId, SkillLoadNotice, SubagentOutcome, Task, TaskTransport, Verdict } from '../models/Task';
 import type { UsageTotals } from '../models/Usage';
 import type { TaskLogEvent } from '../models/TaskLog';
 import type { ApprovalKind } from '../interfaces/IApproval';
@@ -116,9 +116,10 @@ export type SessionMessage =
   /**
    * A planner turn began. Emitted once per turn by whoever runs the turn,
    * before any other message carrying its `turnId`. `prompt` is the user's
-   * message when the turn answers one.
+   * message, as typed, when the turn answers one; `skills` are what its
+   * `/name` tokens loaded, absent when none did.
    */
-  | { type: 'planner_turn_started'; turnId: string; prompt?: string }
+  | { type: 'planner_turn_started'; turnId: string; prompt?: string; skills?: SkillLoadNotice[] }
   /**
    * A planner turn is over; nothing more carries its `turnId`. Emitted exactly
    * once per `planner_turn_started`, stop and failure included, after the
