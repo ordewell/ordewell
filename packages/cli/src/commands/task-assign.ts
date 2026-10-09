@@ -1,4 +1,4 @@
-import { createSkillsService } from '@ordewell/core';
+import { createSkillsService, EnvConfig } from '@ordewell/core';
 import { canSetDependencies, dependencyCandidates, taskRef, titledTaskRef } from '@ordewell/core/plan-utils';
 import { assignedModelFor, effortsForTask, modelsForTask, modesForTask, runnerAccepts } from '../tui/taskAssignment';
 import type { TaskView } from '../tui/state';
@@ -223,7 +223,7 @@ export async function handleTaskSkills(subArgs: string[], injectedApi?: ApiClien
   await withTask(subArgs, SKILLS_USAGE, injectedApi, async (api, sessionId, task, _tasks, value) => {
     if (task.type !== 'ai') fail('Manual tasks do not run an executor, so they take no skills.');
     // User-only skills are included: attaching by hand is a user invocation.
-    const catalog = createSkillsService(flag(subArgs, '--workspace') || process.cwd())
+    const catalog = createSkillsService(flag(subArgs, '--workspace') || process.cwd(), new EnvConfig().workspaceRepos)
       .listSkills()
       .filter((s) => s.appliesTo === 'task');
 

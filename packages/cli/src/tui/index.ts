@@ -1,4 +1,4 @@
-import { assertWorkspaceExists, createSkillsService, mintSessionId } from '@ordewell/core';
+import { assertWorkspaceExists, createSkillsService, EnvConfig, mintSessionId } from '@ordewell/core';
 import { ensureDaemonOwned, findFreePort, resolvePort, stopDaemon } from '../daemon';
 import { ApiClient } from '../apiClient';
 import { flag, saveLastSession } from '../utils';
@@ -38,7 +38,7 @@ export async function handleTui(subArgs: string[]): Promise<void> {
   }
   // Skills become slash commands for this run: completions, Tab, and dispatch
   // all read from the one registry in slash.ts (registerSkillCommands).
-  const discoveredSkills = createSkillsService(workspace).listSkills();
+  const discoveredSkills = createSkillsService(workspace, new EnvConfig().workspaceRepos).listSkills();
   registerSkillCommands(discoveredSkills);
   // A user-only skill is still attachable by hand, so no userInvocable filter.
   const taskSkills = discoveredSkills

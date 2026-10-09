@@ -439,15 +439,14 @@ describe('TaskOrchestrator with worktree isolation', () => {
       const isolation = new FakeWorktreeIsolation();
       isolation.availability = { active: true, repos: ['api', 'web'], shared: ['NOTES.md'] };
       const { orchestrator } = setup({ isolation, workspace: '/group' });
-      expect(orchestrator.runs.lastPlannerLayout).toBe(false);
       expect(await orchestrator.runs.plannerLayout()).toEqual({ repos: ['api', 'web'], shared: ['NOTES.md'] });
-      expect(orchestrator.runs.lastPlannerLayout).toEqual({ repos: ['api', 'web'], shared: ['NOTES.md'] });
 
       isolation.repos = ['api', 'web', 'infra'];
       isolation.shared = ['design'];
       orchestrator.loadPlan([task('t1', 1)]);
       await orchestrator.approveReview();
       expect(await orchestrator.runs.plannerLayout()).toEqual({ repos: ['api', 'web', 'infra'], shared: ['design'] });
+      expect(orchestrator.runs.skillLayout()).toEqual({ repos: ['api', 'web', 'infra'], worktrees: true });
     });
 
     function group(configure: (isolation: FakeWorktreeIsolation) => void = () => undefined) {

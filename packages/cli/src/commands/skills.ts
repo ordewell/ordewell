@@ -1,4 +1,4 @@
-import { abbreviateHome, createSkillsService, type SkillInfo } from '@ordewell/core';
+import { abbreviateHome, createSkillsService, EnvConfig, type SkillInfo } from '@ordewell/core';
 import { resolve } from 'path';
 import { flag, hasFlag, positionals } from '../utils';
 import { fail } from './shared';
@@ -15,7 +15,7 @@ export function handleSkills(subArgs: string[]): void {
     fail('Usage: ordewell skills [--workspace /path] [--json]');
   }
   const workspace = resolve(flag(subArgs, '--workspace') || process.cwd());
-  const catalog = createSkillsService(workspace).readCatalog();
+  const catalog = createSkillsService(workspace, new EnvConfig().workspaceRepos).readCatalog();
   const skills = catalog.skills.map((skill) => ({
     name: skill.name,
     scope: skill.source,
@@ -28,13 +28,23 @@ export function handleSkills(subArgs: string[]): void {
     path: abbreviateHome(skill.path),
     shadowedBy: shadowedBy.source,
   }));
+  const invalid = catalog.invalid.map((skill) => ({
+    name: skill.name,
+    path: abbreviateHome(skill.path),
+    reason: skill.reason,
+  }));
 
   if (hasFlag(subArgs, '--json')) {
-    console.log(JSON.stringify({ skills, shadowed }, null, 2));
+    console.log(JSON.stringify({ skills, shadowed, invalid }, null, 2));
     return;
   }
+  const skipped = [
+    ...shadowed.map((skill) => `workspace skill "${skill.name}" shadowed by ${skill.shadowedBy} · ${skill.path}`),
+    ...invalid.map((skill) => `skill folder "${skill.name}" skipped: ${skill.reason} · ${skill.path}`),
+  ];
   if (skills.length === 0) {
     console.log('No skills installed.');
+    for (const line of skipped) console.log(line);
     return;
   }
 
@@ -44,10 +54,8 @@ export function handleSkills(subArgs: string[]): void {
   const format = (row: string[]) => row.map((cell, i) => i === row.length - 1 ? cell : cell.padEnd(widths[i])).join('  ');
   console.log(format(headers));
   for (const row of rows) console.log(format(row));
-  if (shadowed.length > 0) {
+  if (skipped.length > 0) {
     console.log('');
-    for (const skill of shadowed) {
-      console.log(`workspace skill "${skill.name}" shadowed by global · ${skill.path}`);
-    }
+    for (const line of skipped) console.log(line);
   }
 }

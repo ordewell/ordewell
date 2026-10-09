@@ -156,7 +156,7 @@ export interface PlannerConversationHost {
   broadcastPlan(turnId?: string): void;
   /** Validate a batch against live state. Pure — nothing is applied. */
   validateOps(ops: TaskOp[]): ApplyTaskOpsResult;
-  /** The workspace root's skill catalog, which the skills a plan or edit attaches are checked against. */
+  /** The workspace's skill catalog under its repo group's layout, which the skills a plan or edit attaches are checked against. */
   taskSkills(): SkillLookup;
   /** Tell the user something the transcript does not carry. */
   notice(level: SessionNotice['level'], message: string): void;

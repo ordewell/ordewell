@@ -1,10 +1,13 @@
+/** A name a skill can have, lower-cased: the one pattern for a `/name` token and for a skill folder. */
+export const SKILL_NAME_PATTERN = '[a-z0-9][a-z0-9_-]*';
+
 /**
  * A `/skill-name` token anywhere in a message: whitespace (or string start)
- * before it, a lowercase-led name, optional trailing punctuation that isn't
- * part of the name, then whitespace (or string end). The punctuation group is
- * what lets "/grilling," name "grilling".
+ * before it, a skill name in any case, optional trailing punctuation that
+ * isn't part of the name, then whitespace (or string end). The punctuation
+ * group is what lets "/grilling," name "grilling".
  */
-const SKILL_TOKEN = /(^|\s)\/([a-z][a-z0-9_-]*)([,.!?;:]*)(?=\s|$)/gi;
+const SKILL_TOKEN = new RegExp(`(^|\\s)\\/(${SKILL_NAME_PATTERN})([,.!?;:]*)(?=\\s|$)`, 'gi');
 
 /** Where a skill name is invoked: `start` is its `/`, `end` is just past the name, before any punctuation. */
 export interface SkillToken {

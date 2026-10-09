@@ -6,6 +6,7 @@ import { SELF_REPO } from './isolationRecord';
 import { globalDataDir } from '../utils/globalDataDir';
 import { builtinSkillsDir } from './builtinSkills';
 import { isSkillName } from '../models/Task';
+import { workspaceRepoGroup } from './repoGroup';
 
 export const BUILTIN_SKILL_NAMES = ['grilling', 'to-spec', 'improve-codebase-architecture', 'tdd'] as const;
 
@@ -58,6 +59,24 @@ export interface SkillInfo {
 export interface ShadowedSkill {
   skill: SkillInfo;
   shadowedBy: SkillInfo;
+}
+
+/** A skill folder no name can reach — `/name`, a plan and a spawn all use the folder name — so it is listed nowhere. */
+export interface InvalidSkill {
+  name: string;
+  /** Absolute path to the folder's SKILL.md. */
+  path: string;
+  source: SkillSource;
+  reason: string;
+}
+
+export const INVALID_SKILL_NAME_REASON = 'not a valid skill name: lowercase letters, digits, "-" and "_", starting with a letter or digit';
+
+/** A skills folder's catalog: what wins, what a winner hides, and the folders skipped for their name. */
+export interface SkillCatalog {
+  skills: SkillInfo[];
+  shadowed: ShadowedSkill[];
+  invalid: InvalidSkill[];
 }
 
 interface Frontmatter {
@@ -171,18 +190,22 @@ function fileHash(file: string): string | undefined {
   }
 }
 
-function readDir(dir: string, source: SkillSource): SkillInfo[] {
-  if (!fs.existsSync(dir)) return [];
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
+function readDir(dir: string, source: SkillSource): { skills: SkillInfo[]; invalid: InvalidSkill[] } {
   const skills: SkillInfo[] = [];
-  for (const entry of entries) {
+  const invalid: InvalidSkill[] = [];
+  if (!fs.existsSync(dir)) return { skills, invalid };
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const skillFile = path.join(dir, entry.name, 'SKILL.md');
     if (!fs.existsSync(skillFile)) continue;
+    if (!isSkillName(entry.name)) {
+      invalid.push({ name: entry.name, path: skillFile, source, reason: INVALID_SKILL_NAME_REASON });
+      continue;
+    }
     const parsed = parseSkillFile(skillFile, entry.name, source);
     if (parsed) skills.push(parsed);
   }
-  return skills;
+  return { skills, invalid };
 }
 
 export function skillsDirOf(root: string): string {
@@ -351,32 +374,41 @@ export class SkillsService {
     return this.catalog().shadowed;
   }
 
+  /** Skill folders skipped by `listSkills` and `findSkill` because their name is not one a skill can have. */
+  listInvalid(): InvalidSkill[] {
+    return this.catalog().invalid;
+  }
+
   /**
    * Global wins a name clash: a repository's committed skill must not be able
    * to silently replace one the user installed, built-ins included. Among
    * workspace folders the first read wins, the same way.
    */
-  private catalog(): { skills: SkillInfo[]; shadowed: ShadowedSkill[] } {
+  private catalog(): SkillCatalog {
     this.pruneRetired();
     for (const name of BUILTIN_SKILL_NAMES) this.seed(name);
     return this.readCatalog();
   }
 
   /** Inspect installed skills without seeding, refreshing or pruning global files. */
-  readCatalog(): { skills: SkillInfo[]; shadowed: ShadowedSkill[] } {
+  readCatalog(): SkillCatalog {
     const byName = new Map<string, SkillInfo>();
-    for (const skill of readDir(this.globalDir(), 'global')) {
+    const global = readDir(this.globalDir(), 'global');
+    for (const skill of global.skills) {
       byName.set(skill.name, skill);
     }
     const shadowed: ShadowedSkill[] = [];
+    const invalid = [...global.invalid];
     for (const workspaceDir of this.workspaceDirs()) {
-      for (const skill of readDir(workspaceDir, 'workspace')) {
+      const read = readDir(workspaceDir, 'workspace');
+      invalid.push(...read.invalid);
+      for (const skill of read.skills) {
         const winner = byName.get(skill.name);
         if (winner) shadowed.push({ skill, shadowedBy: winner });
         else byName.set(skill.name, skill);
       }
     }
-    return { skills: [...byName.values()], shadowed };
+    return { skills: [...byName.values()], shadowed, invalid };
   }
 
   getSkillContent(name: string): string | undefined {
@@ -384,6 +416,13 @@ export class SkillsService {
   }
 }
 
-export function createSkillsService(workspaceRoot?: string): SkillsService {
-  return new SkillsService(workspaceRoot);
+/**
+ * The skills a workspace sees outside any task — every listing, picker and
+ * catalog before a task worktree exists: global, then the folders a spawn
+ * reads (see {@link workspaceSkillRoots}), each repo's as checked out in the
+ * workspace. `workspaceRepos` is the setting that names a repo group.
+ */
+export function createSkillsService(workspaceRoot?: string, workspaceRepos: readonly string[] = []): SkillsService {
+  if (workspaceRoot === undefined) return new SkillsService();
+  return new SkillsService(workspaceSkillRoots(workspaceRoot, workspaceRepoGroup(workspaceRoot, workspaceRepos)));
 }

@@ -30,8 +30,9 @@ import { sanitizeSlug } from '../utils/prdStore';
 import { absorbRemoval, handoffOf, integrationBranchFor, noRemoval, repoRootOf, SELF_REPO } from './isolationRecord';
 import { defaultExecFile, git, tryGit, type GitExecFn, type GitInvoker, type GitResult } from './gitExec';
 import { IsolationLocks } from './isolationLocks';
-import { bootstrap, installDirs, isEnvFile, lexists, LINKED_ARTIFACTS, listDir, NEVER_SCANNED } from './worktreeBootstrap';
+import { bootstrap, installDirs, isEnvFile, lexists, LINKED_ARTIFACTS, listDir } from './worktreeBootstrap';
 import { linkPath } from './worktreeLink';
+import { childDirs, groupPaths, hasGitEntry } from './repoGroup';
 
 export type { GitExecFn } from './gitExec';
 
@@ -93,11 +94,6 @@ function isInside(parent: string, child: string): boolean {
   return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
-// A `.git` file rather than a directory marks a linked worktree or a submodule checkout.
-function hasGitEntry(dir: string): boolean {
-  return fs.existsSync(path.join(dir, '.git'));
-}
-
 function firstLine(text: string): string {
   return text.split(/\r?\n/, 1)[0].trim();
 }
@@ -157,14 +153,6 @@ function resolves(target: string): boolean {
 function inactive(reason: IsolationInactiveReason, repos: string[]): IsolationAvailability {
   const named = repos.filter((r) => r !== SELF_REPO);
   return named.length > 0 ? { active: false, reason, repos: named } : { active: false, reason };
-}
-
-/** A `workspaceRepos` entry as a group path, or null for one that is not below the workspace. */
-function groupPathOf(listed: string): string | null {
-  const slashed = listed.trim().replace(/\\/g, '/');
-  if (path.posix.isAbsolute(slashed) || path.win32.isAbsolute(slashed)) return null;
-  const rel = path.posix.normalize(slashed).replace(/\/+$/, '');
-  return rel === '' || rel === '.' || rel === '..' || rel.startsWith('../') ? null : rel;
 }
 
 /**
@@ -231,17 +219,8 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     // cwd may not exist; any failure here is "not a repository" as far as the caller can act on it.
     const toplevel = await this.tryGit(workspaceRoot, ['rev-parse', '--show-toplevel']);
     if (toplevel.ok) return { paths: [SELF_REPO], nested: await this.nestedRepos(workspaceRoot, toplevel.stdout.trim()) };
-    const paths = this.groupPaths(workspaceRoot);
+    const paths = groupPaths(workspaceRoot, this.deps.config.workspaceRepos);
     return paths.length > 0 ? { paths, nested: [] } : { refused: { active: false, reason: 'not-git' } };
-  }
-
-  private groupPaths(workspaceRoot: string): string[] {
-    const listed = this.deps.config.workspaceRepos;
-    if (listed.length === 0) return this.reposDirectlyIn(workspaceRoot);
-    const paths = listed
-      .map(groupPathOf)
-      .filter((rel): rel is string => rel !== null && hasGitEntry(path.join(workspaceRoot, rel)));
-    return [...new Set(paths)].sort();
   }
 
   private async committedRepos(workspaceRoot: string, paths: string[]): Promise<string[]> {
@@ -258,21 +237,6 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     return status.ok ? status.stdout.trim() !== '' : null;
   }
 
-  private reposDirectlyIn(dir: string): string[] {
-    return this.childDirs(dir).filter((name) => hasGitEntry(path.join(dir, name)));
-  }
-
-  private childDirs(dir: string): string[] {
-    try {
-      return fs.readdirSync(dir, { withFileTypes: true })
-        .filter((e) => e.isDirectory() && !NEVER_SCANNED.has(e.name))
-        .map((e) => e.name)
-        .sort();
-    } catch {
-      return [];
-    }
-  }
-
   /**
    * Repositories below the workspace that the outer repository does not own as
    * submodules. Isolating the outer one would leave them out of every task
@@ -283,7 +247,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   private async nestedRepos(workspaceRoot: string, toplevel: string): Promise<string[]> {
     const found: string[] = [];
     const walk = (rel: string, depth: number): void => {
-      for (const name of this.childDirs(path.join(workspaceRoot, rel))) {
+      for (const name of childDirs(path.join(workspaceRoot, rel))) {
         const child = rel ? `${rel}/${name}` : name;
         if (hasGitEntry(path.join(workspaceRoot, child))) found.push(child);
         else if (depth < NESTED_REPO_DEPTH) walk(child, depth + 1);

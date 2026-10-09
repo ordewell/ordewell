@@ -5,7 +5,7 @@ import * as os from 'os';
 import { execFileSync } from 'child_process';
 import { createTask, keepExecutionState, skillNames } from '../../models/Task';
 import { createSkillsService } from '../SkillsService';
-import { checkOpSkills, checkPlanSkills, plannedSkillLookup, resolveTaskSkills, TaskSkillsError } from '../taskSkills';
+import { checkOpSkills, checkPlanSkills, checkTaskSkillsEdit, plannedSkillLookup, resolveTaskSkills, TaskSkillsError } from '../taskSkills';
 import { parsePlanJson } from '../PlanValidator';
 import { applyTaskOps } from '../TaskOps';
 import { PlanStore } from '../PlanStore';
@@ -154,7 +154,7 @@ describe('checking a plan against the folders its tasks will read', () => {
     commit(workspace, '.ordewell/skills/kept/SKILL.md');
     git(workspace, 'add', '-f', '.ordewell/skills/staged/SKILL.md');
 
-    const result = checkPlanSkills(plan('draft', 'staged', 'kept'), plannedSkillLookup(at, workspace, { repos: ['.'], shared: [] }));
+    const result = checkPlanSkills(plan('draft', 'staged', 'kept'), plannedSkillLookup(at, workspace, { repos: ['.'], worktrees: true }));
 
     expect(result.errors).toEqual([]);
     expect(result.warnings).toEqual([
@@ -168,7 +168,7 @@ describe('checking a plan against the folders its tasks will read', () => {
     fs.writeFileSync(path.join(workspace, '.gitignore'), '.ordewell/\n');
     writeSkill(skillsOf(workspace), 'ignored', 'task', 'x');
 
-    const result = checkOpSkills([{ op: 'update', taskId: '#1', changes: { skills: ['ignored'] } }], plannedSkillLookup(at, workspace, { repos: ['.'], shared: [] }));
+    const result = checkOpSkills([{ op: 'update', taskId: '#1', changes: { skills: ['ignored'] } }], plannedSkillLookup(at, workspace, { repos: ['.'], worktrees: true }));
 
     expect(result.warnings).toEqual(['op 1 (update): skill "ignored" is not committed; commit .ordewell/skills/ignored so task worktrees receive it.']);
   });
@@ -177,14 +177,14 @@ describe('checking a plan against the folders its tasks will read', () => {
     repo(workspace);
     writeSkill(skillsOf(workspace), 'draft', 'task', 'x');
 
-    expect(checkPlanSkills(plan('draft'), plannedSkillLookup(at, workspace, false))).toEqual({ errors: [], warnings: [] });
+    expect(checkPlanSkills(plan('draft'), plannedSkillLookup(at, workspace, { repos: ['.'], worktrees: false }))).toEqual({ errors: [], warnings: [] });
   });
 
   it('says nothing about a global skill', () => {
     repo(workspace);
     writeSkill(globalSkills(), 'tdd', 'task', 'x');
 
-    expect(checkPlanSkills(plan('tdd'), plannedSkillLookup(at, workspace, { repos: ['.'], shared: [] })).warnings).toEqual([]);
+    expect(checkPlanSkills(plan('tdd'), plannedSkillLookup(at, workspace, { repos: ['.'], worktrees: true })).warnings).toEqual([]);
   });
 
   it('in a repo group, finds a repo\'s skill and names the folder to commit in that repo; the group root\'s own needs none', () => {
@@ -194,7 +194,7 @@ describe('checking a plan against the folders its tasks will read', () => {
     writeSkill(skillsOf(path.join(workspace, 'web')), 'web-draft', 'task', 'x');
     writeSkill(skillsOf(path.join(workspace, 'api')), 'api-kept', 'task', 'x');
     commit(path.join(workspace, 'api'), '.ordewell/skills/api-kept/SKILL.md');
-    const layout = { repos: ['api', 'web'], shared: [] };
+    const layout = { repos: ['api', 'web'], worktrees: true };
 
     const result = checkPlanSkills(plan('root-skill', 'web-draft', 'api-kept', 'later'), plannedSkillLookup(at, workspace, layout));
 
@@ -205,13 +205,16 @@ describe('checking a plan against the folders its tasks will read', () => {
     ]);
   });
 
-  it('in a repo group run in the workspace, reads only the workspace root\'s folder, as a spawn there does', () => {
+  it('in a repo group run in the workspace, reads each repo\'s folder there, as a spawn there does, and asks for no commit', () => {
+    repo(path.join(workspace, 'api'));
     writeSkill(skillsOf(path.join(workspace, 'api')), 'api-skill', 'task', 'x');
 
-    const lookup = plannedSkillLookup(at, workspace, false);
+    const lookup = plannedSkillLookup(at, workspace, { repos: ['api'], worktrees: false });
 
-    expect(lookup.findSkill('api-skill')).toBeUndefined();
-    expect(lookup.searchedDirs()).toEqual([globalSkills(), skillsOf(workspace)]);
+    expect(lookup.findSkill('api-skill')?.path).toBe(path.join(skillsOf(path.join(workspace, 'api')), 'api-skill', 'SKILL.md'));
+    expect(lookup.listSkills().map((s) => s.name)).toContain('api-skill');
+    expect(lookup.searchedDirs()).toEqual([globalSkills(), skillsOf(workspace), skillsOf(path.join(workspace, 'api'))]);
+    expect(checkPlanSkills(plan('api-skill'), lookup)).toEqual({ errors: [], warnings: [] });
   });
 });
 
@@ -285,5 +288,30 @@ describe('the skills field', () => {
     const [rewritten] = keepExecutionState([ran], [createTask({ id: 'a', title: 'A again', skills: ['tdd'] })]);
 
     expect(rewritten.attemptSkills).toEqual(snapshot);
+  });
+});
+
+describe('a name dropped as no skill\'s', () => {
+  const lookup = { findSkill: () => undefined, searchedDirs: () => [] };
+
+  it('is never dropped silently from a planner\'s edit: each one is a warning, the valid names still checked', () => {
+    const result = checkOpSkills([
+      { op: 'update', taskId: '#1', changes: { skills: ['pr.review', ' PR/x ', 'later', 7, ''] as never } },
+      { op: 'add', task: { title: 'C', skills: ['../up'] } },
+    ], lookup);
+
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual([
+      'op 1 (update): "pr.review" is not a valid skill name (lowercase letters, digits, "-" and "_", starting with a letter or digit), so it was not attached.',
+      'op 1 (update): "PR/x" is not a valid skill name (lowercase letters, digits, "-" and "_", starting with a letter or digit), so it was not attached.',
+      expect.stringMatching(/^op 1 \(update\): skill "later" not found/),
+      'op 2 (add): "../up" is not a valid skill name (lowercase letters, digits, "-" and "_", starting with a letter or digit), so it was not attached.',
+    ]);
+  });
+
+  it('is never dropped silently from a hand-set list either', () => {
+    expect(checkTaskSkillsEdit({ id: 'a', title: 'A' }, ['Pr.Review'], lookup).warnings).toEqual([
+      'Task "A": "Pr.Review" is not a valid skill name (lowercase letters, digits, "-" and "_", starting with a letter or digit), so it was not attached.',
+    ]);
   });
 });

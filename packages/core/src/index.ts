@@ -100,6 +100,8 @@ export {
   type SkillAppliesTo,
   type SkillSource,
   type ShadowedSkill,
+  type InvalidSkill,
+  type SkillCatalog,
 } from './services/SkillsService';
 export { globalDataDir, migrateOldConfigDir } from './utils/globalDataDir';
 export { writePrivateFile, ensurePrivateDir } from './utils/privateFile';

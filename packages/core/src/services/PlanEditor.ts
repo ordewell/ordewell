@@ -10,7 +10,7 @@ import type { PlanStore } from './PlanStore';
 import type { TaskOrchestrator } from './TaskOrchestrator';
 import type { IsolationRunController } from './IsolationRunController';
 import type { SessionBroadcaster, SessionNotice } from './SessionMessage';
-import { checkPlanSkills, type SkillLookup } from './taskSkills';
+import { checkTaskSkillsEdit, type SkillLookup } from './taskSkills';
 import { opsFlag, skillNames, type DiscoveredModel, type LegacyPlanState, type RunnerId, type Task } from '../models/Task';
 
 /** The catalogs an edit reads, as the session holds them at the moment of the edit. */
@@ -32,7 +32,7 @@ export interface PlanEditorDeps {
   broadcast: SessionBroadcaster;
   /** Whether the planner has Ordewell's tools, which changes how a merge or split is asked of it. */
   plannerTools: () => boolean;
-  /** The workspace root's skill catalog, which a hand-set skill list is checked against. */
+  /** The workspace's skill catalog under its repo group's layout, which a hand-set skill list is checked against. */
   taskSkills: () => SkillLookup;
   notice: (level: SessionNotice['level'], message: string) => void;
 }
@@ -85,11 +85,10 @@ export class PlanEditor {
    */
   async updateTask(taskId: string, changes: Partial<Task>): Promise<LegacyPlanState | null> {
     if ('ops' in changes) changes = { ...changes, ops: opsFlag(changes.ops) };
+    const typedSkills = changes.skills;
     if ('skills' in changes) changes = { ...changes, skills: skillNames(changes.skills) };
     const target = this.store.get(taskId);
-    const skills = changes.skills && target
-      ? checkPlanSkills([{ ...target, skills: changes.skills, subtasks: [] }], this.taskSkills())
-      : undefined;
+    const skills = 'skills' in changes && target ? checkTaskSkillsEdit(target, typedSkills, this.taskSkills()) : undefined;
     if (skills?.errors.length) throw new PlanEditError(skills.errors.map((e) => e.message).join(' '));
     if ((changes.dependencies || changes.type || changes.assignedModel || changes.taskMode || 'ops' in changes) && target) {
       const check = validateTaskEdit('direct', this.store.planTasks, taskId, changes, this.catalog.edit());

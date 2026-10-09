@@ -24,6 +24,8 @@ import { quotedList } from '../utils/quotedList';
 import { handoffOf, integrationBranchNameOf, layoutOf, SELF_REPO, taskIsolationOf } from './isolationRecord';
 import type { IsolatedExecution } from './plannerModes';
 import { PlanEditError } from './PlanEditError';
+import { workspaceRepoGroup } from './repoGroup';
+import type { SkillLayout } from './taskSkills';
 
 export type IsolationNoticeLevel = 'info' | 'warn' | 'error';
 
@@ -159,7 +161,6 @@ export class IsolationRunController {
   private blockedStart: (() => Promise<void>) | null = null;
   /** The dirty repos behind {@link blockedStart}, for the stash notice. */
   private blockedRepos: string[] = [];
-  private toldLayout: IsolatedExecution = false;
 
   constructor(deps: IsolationRunControllerDeps) {
     this.isolation = deps.isolation;
@@ -276,17 +277,26 @@ export class IsolationRunController {
    * the safe rule then.
    */
   async plannerLayout(): Promise<IsolatedExecution> {
-    if (this.decided) return (this.toldLayout = this.isolating && this.run ? layoutOf(this.run) : false);
+    if (this.decided) return this.isolating && this.run ? layoutOf(this.run) : false;
     const decision = await this.assess(this.workspaceRoot());
-    return (this.toldLayout = decision.mode === 'isolated' ? decision.layout : false);
+    return decision.mode === 'isolated' ? decision.layout : false;
   }
 
   /**
-   * What {@link plannerLayout} last answered: the layout the planner was
-   * told, which its submissions are checked against — synchronously, inside
-   * the planner's turn. Not isolating until it has been asked.
+   * Where the workspace's skills are read, and whether tasks get worktrees.
+   * Read synchronously inside a planner turn or a chip edit, so it comes from
+   * the files, not git or the planner's last layout: a restored session is
+   * right from its first edit. The run's repos while it isolates; otherwise
+   * the group the workspace holds, in worktrees unless isolation is off or
+   * this run chose to share the root.
    */
-  get lastPlannerLayout(): IsolatedExecution { return this.toldLayout; }
+  skillLayout(): SkillLayout {
+    if (this.isolating && this.run) return { repos: this.run.repos.map((r) => r.path), worktrees: true };
+    return {
+      repos: workspaceRepoGroup(this.workspaceRoot(), this.config.workspaceRepos),
+      worktrees: !this.decided && this.config.worktreeIsolation,
+    };
+  }
 
   /**
    * Go on with the start a dirty tree turned away. `stash` puts the user's
