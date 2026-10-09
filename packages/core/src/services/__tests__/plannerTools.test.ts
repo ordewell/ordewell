@@ -142,7 +142,7 @@ describe('the Claude Code planner with the Ordewell server injected', () => {
       'mcp__ordewell__edit_plan', 'mcp__ordewell__task_query', 'mcp__ordewell__task_output',
       'mcp__ordewell__load_skill',
     ]);
-    expect(args[args.indexOf('--permission-mode') + 1]).toBe('plan');
+    expect(args[args.indexOf('--permission-mode') + 1]).toBe('dontAsk');
   });
 });
 

@@ -316,8 +316,53 @@ Research subagents use the same resolution, so a chain that stays inside the
 workspace works for them and one that leaves it is refused, named by where it
 resolves rather than as written.
 
+## Harness planners and native plan files
+
+Harness planners bypass `commandPolicy`, `BaseFileSystem` and `IApproval`
+(ADR-0009). Their native permission controls must preserve the no-mutation
+invariant; a native plan file has no exception to it, inside or outside the
+workspace. Ordewell's plan is submitted through its validated plan tools or
+reply envelope (ADR-0022), not a runner-owned Markdown file.
+
+Claude Code planners use `--permission-mode dontAsk`, with `Edit`, `Write`,
+`MultiEdit`, `NotebookEdit`, `KillShell`, `Bash`, `PowerShell`, `EnterPlanMode`
+and `ExitPlanMode` disallowed. Direct file research through `Read`, `Grep` and
+`Glob` remains available. Shell research is withheld entirely: command-pattern
+denials cannot cover every spelling of a write, and `dontAsk` alone still
+honors saved permission allow rules. Bare tool denials take precedence over
+allow rules ([Claude Code permissions](https://code.claude.com/docs/en/permissions)).
+The same fixed flags apply to fresh and
+resumed planners, regardless of any task mode fields passed to the adapter.
+Task runners retain their manifest-selected modes.
+
+Native Claude plan mode is unsuitable for this boundary. Claude Code 2.1.295
+blocks a disallowed `Write` but permits a Bash heredoc to its native plan file,
+including under `CLAUDE_CONFIG_DIR` outside the workspace. `plansDirectory`
+changes where that file goes; moving it into the workspace still violates the
+no-mutation invariant. Denying the shell tools and the plan-mode transitions
+closes that route independently of the native plan-file exception.
+
+Codex planner threads use `sandbox: read-only` and `approvalPolicy: never`;
+permission requests are declined. This is OS-level enforcement for agent
+commands on supported hosts. Claude's tool denials are native CLI enforcement,
+not an OS sandbox or a prohibition on the CLI persisting its own session data.
+
+OpenCode's present controls do not establish the same shell guarantee: 1.x
+withholds edit tools per message, and 2.x denies `edit` at the session, but
+neither adapter explicitly denies shell writes. The installed 1.18.35 plan
+agent allows Bash and exempts its native plan files from its edit denial.
+This remains a gap requiring a separate OpenCode enforcement change; the plan
+agent's name and a model's refusal to write are not security evidence.
+
 ## Considered options
 
+- **Native Claude plan mode plus direct write-tool denials.** Rejected: its
+  native plan-file exception reaches Bash even when `Write` is disallowed.
+- **`dontAsk` alone, or a denylist of shell write patterns.** Rejected: saved
+  allow rules still authorize commands, and command text has too many ways to
+  express a write. Withholding shell tools is the accepted narrowing.
+- **Redirect native plans with `plansDirectory`.** Rejected: relocation still
+  grants the planner a filesystem write; Ordewell already owns the plan.
 - **Widen the `bash` allowlist (M1).** Rejected: it fixes the too-strict half and leaves the substring matching, the invisible `$(…)`, and the ungated path escape untouched.
 - **opencode-style LSP for structural lookups (M2).** Rejected. Its `packages/opencode/src/lsp/` is ~98 KB across 6 files, and `server.ts` is a toolchain installer — `go install gopls`, `gem install rubocop`, `dotnet tool install`, GitHub release downloads for zls/clangd/rust-analyzer — plus per-server initialize handshakes and index waits. `@ordewell/core` has three dependencies and is pinned as "pure TypeScript, zero UI deps"; making *planning*, the deliberately cheap half of the architecture, slower to start is the wrong trade. A planner needs to scope tasks ("defined here, used across ~14 files in 3 packages"), not prove rename-safety — that is the runner's job, and runners have their own tools.
 - **tree-sitter in-process (M3).** Rejected: per-language WASM grammars plus hand-written queries, a real dependency in a three-dep core, to get definitions that regex or optional `universal-ctags` already provide adequately.
@@ -339,3 +384,4 @@ resolves rather than as written.
 - 2026-10-07 — `!`, quote-aware substitution matching, stdin-fed interpreters, inline-code spellings, case-insensitive refusal, `+=` assignments.
 - 2026-10-07 — `${…}` in substitutions, `$'…'` escapes, here-document bodies, interpreter families, `deno eval`, `data:` URLs, PowerShell's positional command, cmd.exe command names.
 - 2026-10-07 — here-document skipping fails closed outside a provable `<<` (comment, `${…}`/`$[…]`, `(( ))`); cmd.exe command words holding `/` or `=` refuse and never scope to a bare drive, `call` unwrapped and `start` refused; interpreter families match a version or suffix.
+- 2026-10-09 — Claude harness planners deny shell tools and native plan-mode transitions; the OpenCode shell enforcement gap is recorded.

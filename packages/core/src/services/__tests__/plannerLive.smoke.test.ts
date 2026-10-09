@@ -31,8 +31,8 @@ const TIMEOUT_MS = 600_000;
  */
 const liveModel = process.env.ORDEWELL_LIVE_MODEL;
 const CHEAPEST: Record<'claude-code' | 'codex' | 'opencode', { model: string; effort?: string }> = {
-  // The `haiku` alias runs Sonnet under `--permission-mode plan`, which every
-  // planner spawns with; the full id is honoured.
+  // A full id, not the `haiku` alias: under `--permission-mode plan` the alias
+  // has run Sonnet, and a task may still spawn in that mode.
   'claude-code': { model: 'claude-haiku-4-5-20251001' },
   codex: { model: 'gpt-5.6-luna', effort: 'low' },
   opencode: { model: 'opencode-go/deepseek-v4.1-flash', effort: 'low' },
