@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import * as vscode from 'vscode';
 import { ChatViewProvider } from '../providers/ChatViewProvider';
-import type { DiscoveredModel } from '@ordewell/core';
+import { createEmptyPlan, createTask, type DiscoveredModel, type SkillLoad } from '@ordewell/core';
 
 vi.mock('vscode', () => ({
   EventEmitter: class {
@@ -98,6 +98,29 @@ describe('ChatViewProvider.showPendingPlanEdits', () => {
     provider.showPendingPlanEdits([{ id: 'q-1', text: 'also add tests' }]);
 
     expect(posted).toEqual([{ type: 'pendingPlanEdits', edits: [{ id: 'q-1', text: 'also add tests' }] }]);
+  });
+});
+
+describe('ChatViewProvider.sendPlanUpdated', () => {
+  const body = 'Ask hard questions. SECRET-BODY';
+  const load: SkillLoad = { invokedBy: 'user', name: 'grilling', source: 'global', path: '~/.ordewell/skills/grilling/SKILL.md', content: body };
+
+  it('sends the webview skill-load notices without bodies, and leaves the host\'s own plan whole', () => {
+    const { provider, posted } = providerWithCapture();
+    const plan = {
+      ...createEmptyPlan(),
+      tasks: [{ ...createTask({ id: 't1' }), attemptSkills: [{ name: 'tdd', source: 'global' as const, path: '~/.ordewell/skills/tdd/SKILL.md', content: body }] }],
+      conversationHistory: [{ role: 'user' as const, content: 'loaded', timestamp: '2026-01-01T00:00:00Z', kind: 'skill_load' as const, skill: load }],
+      queuedMessages: [{ id: 'q1', text: '/grilling go', timestamp: '2026-01-01T00:00:01Z', skills: [load] }],
+    };
+
+    provider.sendPlanUpdated(plan);
+
+    expect(JSON.stringify(posted)).not.toContain('SECRET-BODY');
+    expect(posted[0]).toMatchObject({ type: 'planUpdated', plan: { conversationHistory: [{ skill: { name: 'grilling' } }] } });
+    expect(plan.conversationHistory[0].skill.content).toBe(body);
+    expect(plan.queuedMessages[0].skills[0].content).toBe(body);
+    expect(plan.tasks[0].attemptSkills?.[0].content).toBe(body);
   });
 });
 

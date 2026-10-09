@@ -184,3 +184,39 @@ describe('GET /api/sessions/:id/tasks/:taskId/log', () => {
     expect((await app().request(`/api/sessions/s1/tasks/t1/log/zero${qs}`)).status).toBe(400);
   });
 });
+
+describe('skill bodies on the sessions routes', () => {
+  const BODY = 'SECRET-SKILL-BODY';
+  const attempt = { name: 'tdd', source: 'global', path: '~/.ordewell/skills/tdd/SKILL.md', content: BODY };
+  const load = { invokedBy: 'user', name: 'grilling', source: 'global', path: '~/.ordewell/skills/grilling/SKILL.md', content: BODY };
+  const appWith = (pool: OrchestratorPool): Hono => {
+    const app = new Hono();
+    app.route('/api/sessions', sessionsRoute(pool));
+    return app;
+  };
+
+  it('GET /:id sends task attempts as notices', async () => {
+    readSaved.mockReturnValue({ meta: { id: 's1' }, plan: { phase: 'planning', history: [], message: '', pendingTasks: [{ id: 't1', subtasks: [], attemptSkills: [attempt] }] } } as never);
+
+    const res = await appWith(fakePool()).request('/api/sessions/s1?workspace=/ws');
+
+    const text = await res.text();
+    expect(text).not.toContain(BODY);
+    expect(JSON.parse(text).plan.pendingTasks[0].attemptSkills).toEqual([{ name: 'tdd', source: 'global', path: attempt.path }]);
+  });
+
+  it('POST /:id/load sends the loaded plan with notices for its skill loads and queue', async () => {
+    const plan = {
+      tasks: [{ id: 't1', subtasks: [], attemptSkills: [attempt] }],
+      runners: [],
+      conversationHistory: [{ role: 'user', content: 'x', timestamp: 't', kind: 'skill_load', skill: load }],
+      queuedMessages: [{ id: 'q1', text: 'go', timestamp: 't', skills: [load] }],
+    };
+
+    const res = await appWith(fakePool({ adoptSavedSession: vi.fn().mockReturnValue(plan) } as Partial<OrchestratorPool>)).request('/api/sessions/s1/load?workspace=/ws', { method: 'POST' });
+
+    const text = await res.text();
+    expect(text).not.toContain(BODY);
+    expect(JSON.parse(text).plan.conversationHistory[0].skill).toEqual({ invokedBy: 'user', name: 'grilling', source: 'global', path: load.path });
+  });
+});

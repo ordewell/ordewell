@@ -4,6 +4,8 @@ import {
   listTaskLogAttempts,
   loadSessionPlanState,
   readTaskLog,
+  surfacePlan,
+  surfacePlanState,
   taskLogForSurface,
   type AdoptSessionResponse,
   type OkResponse,
@@ -35,7 +37,7 @@ export function sessionsRoute(pool: OrchestratorPool) {
     const id = c.req.param('id');
     const saved = loadSessionPlanState(id, ws);
     if (!saved) return refuse(c, 404, 'Session not found', 'session_not_found');
-    return c.json({ meta: saved.meta, plan: pool.getPlanState(id) ?? saved.plan } satisfies SessionResponse);
+    return c.json({ meta: saved.meta, plan: surfacePlanState(pool.getPlanState(id) ?? saved.plan) } satisfies SessionResponse);
   });
 
   /**
@@ -48,7 +50,7 @@ export function sessionsRoute(pool: OrchestratorPool) {
     try {
       const id = c.req.param('id');
       const plan = pool.adoptSavedSession(id, ws);
-      return c.json({ ok: true, plan, goal: pool.getGoal(id) } satisfies AdoptSessionResponse);
+      return c.json({ ok: true, plan: surfacePlan(plan), goal: pool.getGoal(id) } satisfies AdoptSessionResponse);
     } catch (err: unknown) {
       return failure(c, err, 'load session', { message: 'Failed to load session' });
     }

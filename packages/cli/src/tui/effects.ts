@@ -1,6 +1,6 @@
 import { execSync } from 'child_process';
 import {
-  ALL_PROVIDERS, autonomyLevelLabel, clipboardCopyCommand, isCliProvider, markRequestFor, newTaskFields, type AiProvider, type HasBinFn, type LegacyPlanState,
+  ALL_PROVIDERS, autonomyLevelLabel, clipboardCopyCommand, isCliProvider, markRequestFor, newTaskFields, type AiProvider, type HasBinFn, type SurfacePlan,
   type PlannerModelRecall,
 } from '@ordewell/core';
 import { describeConnectionRefused, isConnectionRefused } from '../daemon';
@@ -699,7 +699,7 @@ async function converse(deps: EffectDeps, sessionId: string, call: () => Promise
 
 /** The conversation a saved plan reopens with: its transcript, research log and token line. */
 function restoredChat(plan: unknown, sessionId: string): Action {
-  const saved = plan as Pick<LegacyPlanState, 'conversationHistory' | 'researchLog' | 'plannerUsage'> | null;
+  const saved = plan as Pick<SurfacePlan, 'conversationHistory' | 'researchLog' | 'plannerUsage'> | null;
   return {
     type: 'chatRestored',
     history: saved?.conversationHistory ?? [],
@@ -711,7 +711,7 @@ function restoredChat(plan: unknown, sessionId: string): Action {
 
 /** The settled reply a plan's transcript ends on, with the timestamp a socket copy of it would carry. */
 function lastAssistantMessage(plan: unknown): { content: string; timestamp?: string } | null {
-  const history = (plan as Pick<LegacyPlanState, 'conversationHistory'> | null)?.conversationHistory ?? [];
+  const history = (plan as Pick<SurfacePlan, 'conversationHistory'> | null)?.conversationHistory ?? [];
   for (let i = history.length - 1; i >= 0; i--) {
     if (history[i].role === 'assistant' && history[i].kind !== 'skill_load') {
       const { content, timestamp } = history[i];
@@ -723,7 +723,7 @@ function lastAssistantMessage(plan: unknown): { content: string; timestamp?: str
 
 /** The summary a compaction just made the transcript's first entry, if this plan came from one. */
 function compactionSummary(plan: unknown): { content: string; timestamp?: string } | null {
-  const history = (plan as Pick<LegacyPlanState, 'conversationHistory'> | null)?.conversationHistory ?? [];
+  const history = (plan as Pick<SurfacePlan, 'conversationHistory'> | null)?.conversationHistory ?? [];
   const entry = history.find((message) => message.kind === 'compaction');
   return entry ? { content: entry.content, ...(entry.timestamp ? { timestamp: entry.timestamp } : {}) } : null;
 }

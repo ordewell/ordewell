@@ -1,4 +1,5 @@
-import type { ConversationMessage, ResearchLogEntry, ResearchStep, SkillLoad, SubagentLogEntry } from '../models/Task';
+import type { ResearchLogEntry, ResearchStep, SkillLoadNotice, SubagentLogEntry } from '../models/Task';
+import type { SerializedConversationMessage } from '../services/SessionMessage';
 import { isMeasured, usageLine, type PlannerUsage } from '../models/Usage';
 import type { DisplayBlock } from './blocks';
 import { planMarker, settledMessage, skillLoadBlock, skillLoadNotice, subagentBlock, toolFromStep, usageBlock, userMessage } from './records';
@@ -17,7 +18,7 @@ const RESEARCH = 1;
 const SETTLED = 2;
 
 /** `loaded`: the skills the entries after a user's message say it loaded. */
-function fromEntry(entry: ConversationMessage, loaded: readonly SkillLoad[] = []): Placed['build'] {
+function fromEntry(entry: SerializedConversationMessage, loaded: readonly SkillLoadNotice[] = []): Placed['build'] {
   if (entry.kind === 'plan_generated') return (id) => ({ type: 'plan', id: id(), text: '', ...planMarker(entry.content) });
   if (entry.kind === 'skill_load' && entry.skill) {
     const { skill } = entry;
@@ -28,8 +29,8 @@ function fromEntry(entry: ConversationMessage, loaded: readonly SkillLoad[] = []
   return (id) => settledMessage(id(), role, entry.content);
 }
 
-function loadsAfter(entries: readonly ConversationMessage[], index: number): SkillLoad[] {
-  const loads: SkillLoad[] = [];
+function loadsAfter(entries: readonly SerializedConversationMessage[], index: number): SkillLoadNotice[] {
+  const loads: SkillLoadNotice[] = [];
   for (let i = index + 1; i < entries.length && entries[i].kind === 'skill_load'; i++) {
     const { skill } = entries[i];
     if (skill?.invokedBy === 'user') loads.push(skill);
@@ -39,7 +40,7 @@ function loadsAfter(entries: readonly ConversationMessage[], index: number): Ski
 
 // A skill load ranks with the message that caused it: same time, same rank,
 // and the stable sort keeps it right under the message.
-function rankOf(entry: ConversationMessage): number {
+function rankOf(entry: SerializedConversationMessage): number {
   return entry.role === 'user' && (!entry.kind || entry.kind === 'skill_load') ? USER : SETTLED;
 }
 
@@ -117,7 +118,7 @@ function research(log: readonly ResearchLogEntry[]): Placed[] {
  * a compaction's first kept message went with the turns it condensed.
  */
 export function fromTranscript(
-  conversationHistory: readonly ConversationMessage[] | undefined,
+  conversationHistory: readonly SerializedConversationMessage[] | undefined,
   researchLog: readonly ResearchLogEntry[] | undefined,
   plannerUsage?: PlannerUsage,
 ): ConversationView {

@@ -6,7 +6,7 @@ import type { OrchestratorPool } from '../../pool/orchestratorPool';
 
 function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
   const pool = {
-    generatePlan: vi.fn().mockResolvedValue({ tasks: [], runners: ['opencode'], generatedAt: new Date().toISOString() }),
+    generatePlan: vi.fn().mockResolvedValue({ phase: 'planning', history: [], message: '', pendingTasks: [] }),
     getProviderModels: vi.fn().mockResolvedValue({ models: [], modelsByRunner: {}, orchestratorModel: '', providers: [] }),
     ...overrides,
   } as unknown as OrchestratorPool;

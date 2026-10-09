@@ -2,8 +2,9 @@ import type { ApprovalDecision } from './interfaces/IApproval';
 import type { AiProvider } from './interfaces/IConfig';
 import type { IsolationMergeResult } from './interfaces/IWorktreeIsolation';
 import type { SessionMeta } from './models/Session';
-import type { DiscoveredModel, LegacyPlanState, PlanState } from './models/Task';
+import type { DiscoveredModel } from './models/Task';
 import type { PendingApproval } from './services/PendingApprovals';
+import type { SurfacePlan, SurfacePlanState } from './services/SessionMessage';
 import type { ConversationCompaction, RewindTarget } from './services/PlannerConversation';
 import type { PlannerModelRecall } from './services/PlannerModelMemory';
 import type { OrchestratorOption } from './services/ProviderRouting';
@@ -60,18 +61,19 @@ export interface OkResponse {
 }
 
 /**
- * A plan as the planner routes return it: the session's plan state itself, not
- * the `SerializedPlan` a websocket `plan_generated` carries. The two differ —
+ * A plan as the planner routes return it: the session's plan state, not the
+ * `SerializedPlan` a websocket `plan_generated` carries. The two differ —
  * this one holds raw tasks and the dialogue's bookkeeping — and a client that
- * reads either reads only the fields it needs.
+ * reads either reads only the fields it needs. Skill bodies stay in the
+ * session: loads and attempt snapshots arrive as notices.
  */
 export interface PlanResponse {
-  plan: LegacyPlanState;
+  plan: SurfacePlan;
 }
 
 /** `POST /plans/:id/resolve-conflict`: `null` when the session had no conflict to hand a resolver task. */
 export interface ResolveConflictResponse {
-  plan: LegacyPlanState | null;
+  plan: SurfacePlan | null;
 }
 
 /** What `GET /api/models` returns, and what the pool's provider discovery produces. */
@@ -90,7 +92,7 @@ export interface ModelsResponse {
 
 /** One-shot planning answers in the phase-tagged shape a saved session is read back in. */
 export interface GeneratePlanResponse extends Pick<ModelsResponse, 'models' | 'modelsByRunner'> {
-  plan: PlanState;
+  plan: SurfacePlanState;
 }
 
 export interface ExecuteResponse {
@@ -138,7 +140,7 @@ export type IsolationMergeResponse = IsolationMergeResult;
 export interface ConversationForkResponse {
   sessionId: string;
   goal: string;
-  plan: LegacyPlanState;
+  plan: SurfacePlan;
 }
 
 /** A fork made by a rewind, with the full text of the message it was made just before. */
@@ -170,11 +172,11 @@ export interface RunnersResponse {
 /** Sessions: a saved one comes off its file, a live one from the pool's store. */
 export interface SessionResponse {
   meta: SessionMeta;
-  plan: PlanState;
+  plan: SurfacePlanState;
 }
 
 export interface AdoptSessionResponse extends OkResponse {
-  plan: LegacyPlanState;
+  plan: SurfacePlan;
   goal: string;
 }
 

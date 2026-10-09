@@ -26,7 +26,7 @@ export function handleSkills(subArgs: string[]): void {
   const shadowed = catalog.shadowed.map(({ skill, shadowedBy }) => ({
     name: skill.name,
     path: abbreviateHome(skill.path),
-    shadowedBy: shadowedBy.source,
+    shadowedBy: { scope: shadowedBy.source, path: abbreviateHome(shadowedBy.path) },
   }));
   const invalid = catalog.invalid.map((skill) => ({
     name: skill.name,
@@ -39,7 +39,7 @@ export function handleSkills(subArgs: string[]): void {
     return;
   }
   const skipped = [
-    ...shadowed.map((skill) => `workspace skill "${skill.name}" shadowed by ${skill.shadowedBy} · ${skill.path}`),
+    ...shadowed.map((skill) => `workspace skill "${skill.name}" shadowed by the ${skill.shadowedBy.scope} copy at ${skill.shadowedBy.path} · ${skill.path}`),
     ...invalid.map((skill) => `skill folder "${skill.name}" skipped: ${skill.reason} · ${skill.path}`),
   ];
   if (skills.length === 0) {

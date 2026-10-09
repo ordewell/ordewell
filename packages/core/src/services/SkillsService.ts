@@ -391,11 +391,6 @@ export class SkillsService {
     return this.catalog().shadowed;
   }
 
-  /** Skill folders skipped by `listSkills` and `findSkill` because their name is not one a skill can have. */
-  listInvalid(): InvalidSkill[] {
-    return this.catalog().invalid;
-  }
-
   /**
    * Global wins a name clash: a repository's committed skill must not be able
    * to silently replace one the user installed, built-ins included. Among

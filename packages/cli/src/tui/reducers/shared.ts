@@ -1,4 +1,4 @@
-import type { AiProvider, ApprovalDecision, AwaitingReason, ConversationMessage, PlannerUsage, ResearchLogEntry, SessionMessage, SettingsResponse, TaskLogEvent } from '@ordewell/core';
+import type { AiProvider, ApprovalDecision, AwaitingReason, PlannerUsage, ResearchLogEntry, SerializedConversationMessage, SessionMessage, SettingsResponse, TaskLogEvent } from '@ordewell/core';
 import type { Key } from '../keys';
 import type {
   GateView, HandoffView, LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
@@ -100,7 +100,7 @@ export type Action =
   | { type: 'sessionStarted'; sessionId: string; goal: string }
   | { type: 'sessionCleared' }
   /** A saved session's records, which the conversation is rebuilt from as a reload would show it. */
-  | { type: 'chatRestored'; history: ConversationMessage[]; researchLog?: ResearchLogEntry[]; plannerUsage?: PlannerUsage; sessionId?: string }
+  | { type: 'chatRestored'; history: SerializedConversationMessage[]; researchLog?: ResearchLogEntry[]; plannerUsage?: PlannerUsage; sessionId?: string }
   | { type: 'planUpdated'; plan: unknown; sessionId?: string }
   /** One planner message from the session, as it came: core's conversation view decides what it shows. */
   | { type: 'sessionMessage'; message: SessionMessage; sessionId?: string }

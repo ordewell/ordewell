@@ -1,4 +1,4 @@
-import type { AwaitingReason, ConversationMessage, LegacyPlanState, QueuedMessage, ResearchStep, RunnerId, SkillLoadNotice, SubagentOutcome, Task, TaskTransport, Verdict } from '../models/Task';
+import type { AwaitingReason, ConversationMessage, LegacyPlanState, PlanState, QueuedMessage, ResearchStep, RunnerId, SkillLoadNotice, SubagentOutcome, Task, TaskSkillNotice, TaskSnapshot, TaskTransport, Verdict } from '../models/Task';
 import type { UsageTotals } from '../models/Usage';
 import type { TaskLogEvent } from '../models/TaskLog';
 import type { ApprovalKind } from '../interfaces/IApproval';
@@ -79,6 +79,21 @@ export type SerializedTask = {
 /** Skill loads go out as notices: their bodies are for the planner, and stay in the session. */
 export type SerializedConversationMessage = Omit<ConversationMessage, 'skill'> & { skill?: SkillLoadNotice };
 export type SerializedQueuedMessage = Omit<QueuedMessage, 'skills'> & { skills?: SkillLoadNotice[] };
+
+/** A task as a surface is sent it: its attempt's skills are notices, whole in the session only. */
+export type SurfaceTask<T extends Task = Task> = Omit<T, 'attemptSkills' | 'subtasks'> & { attemptSkills?: TaskSkillNotice[]; subtasks: SurfaceTask[] };
+
+/** A plan as the daemon and the VS Code webview are sent it: the session's own state, minus every skill body. */
+export type SurfacePlan = Omit<LegacyPlanState, 'tasks' | 'conversationHistory' | 'queuedMessages'> & {
+  tasks: SurfaceTask[];
+  conversationHistory?: SerializedConversationMessage[];
+  queuedMessages?: SerializedQueuedMessage[];
+};
+
+/** The phase-tagged shape of {@link SurfacePlan}. */
+export type SurfacePlanState =
+  | (Omit<Extract<PlanState, { phase: 'planning' }>, 'pendingTasks'> & { pendingTasks: SurfaceTask[] })
+  | (Omit<Extract<PlanState, { phase: 'executing' }>, 'pendingTasks' | 'executionLog'> & { pendingTasks: SurfaceTask[]; executionLog: SurfaceTask<TaskSnapshot>[] });
 
 export type SerializedPlan = {
   tasks: SerializedTask[];
@@ -313,14 +328,46 @@ export function serializeTaskStatus(
   };
 }
 
+function surfaceConversation(history: LegacyPlanState['conversationHistory']): SerializedConversationMessage[] | undefined {
+  return history?.map(({ skill, ...m }) => (skill ? { ...m, skill: skillLoadNotice(skill) } : m));
+}
+
+function surfaceQueued(queued: LegacyPlanState['queuedMessages']): SerializedQueuedMessage[] | undefined {
+  return queued?.map(({ skills, ...m }) => (skills ? { ...m, skills: skills.map(skillLoadNotice) } : m));
+}
+
+function surfaceTask<T extends Task>({ attemptSkills, subtasks, ...task }: T): SurfaceTask<T> {
+  return {
+    ...task,
+    ...(attemptSkills ? { attemptSkills: attemptSkills.map(({ name, source, path }): TaskSkillNotice => ({ name, source, path })) } : {}),
+    subtasks: (subtasks ?? []).map(surfaceTask),
+  };
+}
+
+/** The one place a plan's skill bodies come off before it leaves the session: every wire path that carries plan state goes through here. */
+export function surfacePlan(plan: LegacyPlanState): SurfacePlan {
+  return {
+    ...plan,
+    tasks: plan.tasks.map(surfaceTask),
+    conversationHistory: surfaceConversation(plan.conversationHistory),
+    queuedMessages: surfaceQueued(plan.queuedMessages),
+  };
+}
+
+export function surfacePlanState(state: PlanState): SurfacePlanState {
+  return state.phase === 'planning'
+    ? { ...state, pendingTasks: state.pendingTasks.map(surfaceTask) }
+    : { ...state, pendingTasks: state.pendingTasks.map(surfaceTask), executionLog: state.executionLog.map(surfaceTask) };
+}
+
 export function serializePlan(plan: LegacyPlanState): SerializedPlan {
   return {
     tasks: plan.tasks.map(serializeTask),
     runners: plan.runners,
     generatedAt: plan.generatedAt,
-    conversationHistory: plan.conversationHistory?.map(({ skill, ...m }) => (skill ? { ...m, skill: skillLoadNotice(skill) } : m)),
+    conversationHistory: surfaceConversation(plan.conversationHistory),
     prdMarkdown: plan.prdMarkdown,
-    queuedMessages: plan.queuedMessages?.map(({ skills, ...m }) => (skills ? { ...m, skills: skills.map(skillLoadNotice) } : m)),
+    queuedMessages: surfaceQueued(plan.queuedMessages),
   };
 }
 

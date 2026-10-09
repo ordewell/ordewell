@@ -1,5 +1,5 @@
 import type {
-  AiProvider, DisplayBlock, DiscoveredModel, IsolationHandoff, IsolationMergeResult, LegacyPlanState, MergeGateView, PromptHold, RunnerId,
+  AiProvider, DisplayBlock, DiscoveredModel, IsolationHandoff, IsolationMergeResult, MergeGateView, PromptHold, RunnerId, SurfacePlan,
   TaskIsolation, TaskModelAssignment,
 } from '@ordewell/core';
 
@@ -169,7 +169,7 @@ export type HostToWebview =
   | { type: 'plannerTurn'; active: boolean }
   /** The planner is working without producing anything visible; keeps the webview's watchdog quiet. */
   | { type: 'plannerLiveness' }
-  | { type: 'planUpdated'; plan: LegacyPlanState }
+  | { type: 'planUpdated'; plan: SurfacePlan }
   | { type: 'taskOutput'; taskId: string; text: string }
   | { type: 'taskIdle'; taskId: string; idleSince: string | null }
   /** How many of a structured task's runner requests wait for an answer (ADR-0018, A1); 0 clears the badge. */

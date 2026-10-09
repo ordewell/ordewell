@@ -115,8 +115,11 @@ export type {
   SerializedPlan,
   SerializedConversationMessage,
   SerializedQueuedMessage,
+  SurfaceTask,
+  SurfacePlan,
+  SurfacePlanState,
 } from './services/SessionMessage';
-export { serializeTask, serializeTaskStatus, serializePlan, executionSummary, truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH } from './services/SessionMessage';
+export { serializeTask, serializeTaskStatus, serializePlan, surfacePlan, surfacePlanState, executionSummary, truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH } from './services/SessionMessage';
 export { summarizeToolCall, classifyOutcome } from './services/researchStepSummary';
 export * from './conversation';
 export * from './taskRow';

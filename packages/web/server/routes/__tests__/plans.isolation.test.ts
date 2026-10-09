@@ -146,13 +146,13 @@ describe.each([
 
 describe('POST /:sessionId/tasks/:taskId/resolve-conflict', () => {
   it('adds the resolver task and answers the plan', async () => {
-    const resolveConflictAsTask = vi.fn().mockResolvedValue({ tasks: [{ id: 'resolver' }] });
+    const resolveConflictAsTask = vi.fn().mockResolvedValue({ tasks: [{ id: 'resolver', subtasks: [] }] });
     const app = appFor({ resolveConflictAsTask });
 
     const res = await post(app, 'tasks/t2/resolve-conflict');
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ plan: { tasks: [{ id: 'resolver' }] } });
+    expect(await res.json()).toEqual({ plan: { tasks: [{ id: 'resolver', subtasks: [] }] } });
     expect(resolveConflictAsTask).toHaveBeenCalledWith('t2');
   });
 
