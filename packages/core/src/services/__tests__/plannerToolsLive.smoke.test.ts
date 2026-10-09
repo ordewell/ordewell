@@ -14,7 +14,7 @@ import { FakeTerminalSession, fakeConfig, makeSession } from './sessionTestKit';
 
 /**
  * The opt-in live check for the Claude Code planner's Ordewell tools
- * (ADR-0022): the real CLI in plan mode, the real server, a real Session.
+ * (ADR-0022): the real CLI in planner mode, the real server, a real Session.
  *
  *   ORDEWELL_LIVE_AGENTS=claude-code npx vitest run --root packages/core plannerToolsLive
  *   ORDEWELL_LIVE_AGENTS=codex       npx vitest run --root packages/core plannerToolsLive
@@ -36,8 +36,8 @@ import { FakeTerminalSession, fakeConfig, makeSession } from './sessionTestKit';
 const liveAgents = (process.env.ORDEWELL_LIVE_AGENTS ?? '').split(',').map((s) => s.trim());
 const live = liveAgents.includes('claude-code');
 const liveCodex = liveAgents.includes('codex');
-// The `haiku` alias runs Sonnet under `--permission-mode plan`, which the
-// planner spawns with; the full id is honoured.
+// A full id, not the `haiku` alias: under `--permission-mode plan` the alias
+// has run Sonnet, and a task may still spawn in that mode.
 const claudeModel = process.env.ORDEWELL_LIVE_MODEL ?? 'claude-haiku-4-5-20251001';
 const codexModel = process.env.ORDEWELL_LIVE_MODEL ?? 'gpt-5.6-luna';
 

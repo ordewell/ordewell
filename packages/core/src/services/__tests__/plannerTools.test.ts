@@ -9,7 +9,7 @@ import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { OrdewellMcpServer, PLANNER_TOOLS } from '../mcp';
 import type { ConversationRequest } from '../AiService';
 import type { SessionRuntimeSettings } from '../createSession';
-import type { SessionMessage } from '../SessionMessage';
+import { surfacePlan, type SessionMessage } from '../SessionMessage';
 import type { SkillInfo, SkillsService } from '../SkillsService';
 import { createTask, type DiscoveredModel, type Task } from '../../models/Task';
 import { openTaskLog } from '../../utils/taskLogStore';
@@ -72,8 +72,8 @@ function reply(proc: FakeAgentProcess, text: string): void {
 interface FakeClaude {
   /** What the CLI's own `mcp_status` reports for the Ordewell server; a list says it per spawn, in order. */
   status?: 'connected' | 'failed' | Array<'connected' | 'failed'>;
-  /** One user turn: what it does with the injected server (absent when none was injected), and the reply text. */
-  turn?: (mcp: Client | null, message: string) => Promise<string>;
+  /** One user turn: what it does with the injected server (absent when none was injected), and the reply text. `emit` writes a stream-json line ahead of the reply. */
+  turn?: (mcp: Client | null, message: string, emit: (event: unknown) => void) => Promise<string>;
 }
 
 function fakeClaude({ status: reported = 'connected', turn = async () => 'What should it do?' }: FakeClaude = {}): FakeSpawnResult {
@@ -89,7 +89,7 @@ function fakeClaude({ status: reported = 'connected', turn = async () => 'What s
     if (msg.type !== 'user') return;
     void (async () => {
       const mcp = injectedServer(args) && status === 'connected' ? await connectAs(args) : null;
-      return turn(mcp, msg.message?.content[0]?.text ?? '');
+      return turn(mcp, msg.message?.content[0]?.text ?? '', (event) => proc.emitStdout(line(event)));
     })().then(
       (text) => reply(proc, text),
       (err: unknown) => reply(proc, `The fake planner failed: ${err instanceof Error ? err.message : String(err)}`),
@@ -143,7 +143,7 @@ describe('the Claude Code planner with the Ordewell server injected', () => {
       'mcp__ordewell__edit_plan', 'mcp__ordewell__task_query', 'mcp__ordewell__task_output',
       'mcp__ordewell__load_skill',
     ]);
-    expect(args[args.indexOf('--permission-mode') + 1]).toBe('plan');
+    expect(args[args.indexOf('--permission-mode') + 1]).toBe('dontAsk');
   });
 });
 
@@ -317,6 +317,45 @@ describe('load_skill', () => {
     expect(broadcast.mock.calls.map(([msg]) => msg).filter((msg) => msg.type === 'planner_skill_loaded')).toEqual([
       { type: 'planner_skill_loaded', turnId: expect.any(String), skill: { invokedBy: 'planner', name: skill.name, source: 'global', path: skill.path } },
     ]);
+  });
+
+  it('opens on a user-invoked skill with the goal verbatim in the system prompt and the body only in the first message', async () => {
+    const skill = plannerSkill('review-plan', { userInvocable: true });
+    const messages: string[] = [];
+    const claude = fakeClaude({ turn: async (_mcp, message) => { messages.push(message); return 'Reviewed.'; } });
+    const { session } = plannerSession(claude, {}, { skillsService: skillCatalog(new Map([[skill.name, skill]])) });
+
+    await session.startPlanning('/review-plan the cache', ['claude-code']);
+
+    const args = claude.lastArgs();
+    const prompt = args[args.indexOf('--append-system-prompt') + 1];
+    expect(prompt).toContain('USER GOAL: /review-plan the cache');
+    expect(prompt).not.toContain(skill.content);
+    expect(messages).toHaveLength(1);
+    expect(messages[0].split(skill.content)).toHaveLength(2);
+    expect(messages[0].endsWith('/review-plan the cache')).toBe(true);
+  });
+
+  it('keeps the loaded body off the step a surface is sent, live and in the plan, while the snapshot holds it', async () => {
+    const skill = plannerSkill('review-plan');
+    const files = new Map([[skill.name, skill]]);
+    const { session, broadcast } = plannerSession(fakeClaude({ turn: async (mcp, _message, emit) => {
+      const { text } = await loadSkill(mcp!, skill.name);
+      emit({ type: 'assistant', session_id: 'sess-1', message: { id: 'm0', content: [{ type: 'tool_use', id: 'tu1', name: 'mcp__ordewell__load_skill', input: { name: skill.name } }] } });
+      emit({ type: 'user', session_id: 'sess-1', message: { content: [{ type: 'tool_result', tool_use_id: 'tu1', content: [{ type: 'text', text }] }] } });
+      return 'I reviewed the plan.';
+    } }), {}, { skillsService: skillCatalog(files) });
+
+    await session.startPlanning('goal', ['claude-code']);
+
+    const done = broadcast.mock.calls.map(([msg]) => msg).filter((msg) => msg.type === 'research_step_done');
+    expect(done).toEqual([expect.objectContaining({ step: expect.objectContaining({ toolLabel: 'mcp__ordewell__load_skill', result: 'Loaded skill review-plan.' }) })]);
+    expect(JSON.stringify(broadcast.mock.calls)).not.toContain(skill.content);
+    expect(JSON.stringify(surfacePlan(session.planState!))).not.toContain(skill.content);
+    expect(JSON.stringify(session.currentPlanState)).not.toContain(skill.content);
+    const saved = saves(session).mock.calls.at(-1)![0];
+    expect(saved.researchLog).toContainEqual(expect.objectContaining({ toolLabel: 'mcp__ordewell__load_skill', result: 'Loaded skill review-plan.' }));
+    expect(saved.conversationHistory!.find((entry) => entry.kind === 'skill_load')!.skill!.content).toBe(skill.content);
   });
 
   it.each(['missing', 'task-only', 'user-only', '../outside', '/absolute/path'])('refuses %s and lists only currently loadable names', async (name) => {

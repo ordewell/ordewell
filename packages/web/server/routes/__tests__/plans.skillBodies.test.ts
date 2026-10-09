@@ -14,6 +14,10 @@ function planWithBodies(): LegacyPlanState {
     tasks: [{ ...createTask({ id: 't1' }), attemptSkills: [{ name: 'tdd', source: 'global', path: '~/.ordewell/skills/tdd/SKILL.md', content: BODY }] }],
     conversationHistory: [{ role: 'user', content: 'loaded', timestamp: '2026-01-01T00:00:00Z', kind: 'skill_load', skill: load }],
     queuedMessages: [{ id: 'q1', text: '/grilling go', timestamp: '2026-01-01T00:00:01Z', skills: [load] }],
+    researchLog: [{
+      id: 'rs1', tool: 'agent_tool', toolLabel: 'mcp__ordewell__load_skill', args: '{"name":"grilling"}',
+      result: BODY, success: true, outcome: 'success', timestamp: '2026-01-01T00:00:02Z',
+    }],
   };
 }
 
@@ -67,5 +71,23 @@ describe('plan routes keep skill bodies off the wire', () => {
     ['generate', { goal: 'g', runners: ['claude-code'], workspace: '/ws' }],
   ])('POST %s', async (route, body) => {
     await expectNoBodies(await post(appFor(pool), route, body));
+  });
+});
+
+describe('POST generate', () => {
+  it('answers with the notes the one-shot plan\'s transcript records', async () => {
+    const plan: LegacyPlanState = {
+      ...createEmptyPlan(),
+      conversationHistory: [{ role: 'assistant', content: 'Skill check:\n- Task "A": skill "later" not found', timestamp: '2026-01-01T00:00:00Z', kind: 'system' }],
+    };
+    const pool = {
+      session: () => ({ planState: plan }),
+      generatePlan: async (): Promise<PlanState> => ({ phase: 'planning', history: [], message: '', pendingTasks: [] }),
+      getProviderModels: async () => ({ models: [], modelsByRunner: {} }),
+    };
+
+    const res = await post(appFor(pool), 'generate', { goal: 'g', runners: ['claude-code'], workspace: '/ws' });
+
+    expect(((await res.json()) as { notes?: string[] }).notes).toEqual(['Skill check:\n- Task "A": skill "later" not found']);
   });
 });

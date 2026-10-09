@@ -83,17 +83,18 @@ describe('CliAgentAiService — Claude Code', () => {
     expect(turn.text).toContain('in-process or Redis');
   });
 
-  it('spawns read-only: plan permission mode, write tools disallowed', async () => {
+  it('spawns read-only: dontAsk permission mode, write tools disallowed', async () => {
     const { svc, spawned } = service('claude-code', [fixture('claude-code', 'prose')]);
     await svc.startConversation(request());
 
     const args = spawned.lastArgs();
     expect(spawned.lastCommand()).toBe('claude');
     expect(args).toContain('--permission-mode');
-    expect(args[args.indexOf('--permission-mode') + 1]).toBe('plan');
+    expect(args[args.indexOf('--permission-mode') + 1]).toBe('dontAsk');
     const disallowed = args[args.indexOf('--disallowedTools') + 1];
     expect(disallowed).toContain('Write');
     expect(disallowed).toContain('Edit');
+    expect(disallowed.split(',')).toEqual(expect.arrayContaining(['Bash', 'PowerShell', 'EnterPlanMode', 'ExitPlanMode']));
   });
 
   it('passes the planner model and effort from config', async () => {

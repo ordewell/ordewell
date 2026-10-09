@@ -45,7 +45,14 @@ describe('task skills picker (K)', () => {
   it('keeps an attached skill the catalog does not list, so confirming does not detach it', () => {
     const state = planPane({ tasks: [task({ skills: ['made-by-earlier-task'] })] });
 
-    expect(pickerOf(press(state, 'char', 'K').state).items.map((i) => i.id)).toContain('made-by-earlier-task');
+    expect(pickerOf(press(state, 'char', 'K').state).items).toContainEqual({ id: 'made-by-earlier-task', label: 'made-by-earlier-task (not found)', detail: 'not found in the catalog' });
+  });
+
+  it('offers unresolved attachments when the task skill catalog is empty', () => {
+    const state = planPane({ taskSkills: [], tasks: [task({ skills: ['not-created'] })] });
+    const picker = pickerOf(runSlash(state, '/task-skills 1').state);
+    expect(picker.items.map((item) => item.label)).toEqual(['not-created (not found)']);
+    expect(picker.chosen).toEqual(['not-created']);
   });
 
   it('commits the whole selection through updateTask on enter', () => {
@@ -88,7 +95,7 @@ describe('/task-skills', () => {
   });
 
   it('sets the named skills', () => {
-    const done = runSlash(planPane(), '/task-skills 2 tdd,api-conventions');
+    const done = runSlash(planPane(), '/task-skills 2 TDD,API-CONVENTIONS tdd');
 
     expect(done.effects).toMatchObject([
       { type: 'updateTask', taskId: 't2', changes: { skills: ['tdd', 'api-conventions'] } },
@@ -112,9 +119,9 @@ describe('/task-skills', () => {
 describe('plan row', () => {
   it('lists attached skills compactly under the task', async () => {
     const { render } = await import('../render');
-    const text = render(planPane({ tasks: [task({ skills: ['tdd', 'api-conventions'], subtasks: [task({ id: 's1', order: 1, title: 'Sub', skills: ['tdd'] })] })] }))
+    const text = render(planPane({ cols: 160, tasks: [task({ skills: ['tdd', 'made-by-earlier-task'], subtasks: [task({ id: 's1', order: 1, title: 'Sub', skills: ['tdd'] })] })] }))
       .join('\n').replace(/\x1b\[[0-9;]*m/g, ''); // eslint-disable-line no-control-regex
 
-    expect(text).toContain('skills: tdd · api-conventions');
+    expect(text).toContain('skills: tdd · made-by-earlier-task');
   });
 });

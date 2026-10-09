@@ -235,11 +235,14 @@ export async function handleTaskSkills(subArgs: string[], injectedApi?: ApiClien
       for (const s of catalog) {
         console.log(`  ${task.skills?.includes(s.name) ? '*' : ' '} ${s.name}${s.description ? `  ${s.description}` : ''}`);
       }
+      for (const name of task.skills ?? []) {
+        if (!catalog.some((s) => s.name === name)) console.log(`  * ${name} (not found)`);
+      }
       console.log(`\n  * = attached. ${SKILLS_USAGE}`);
       return;
     }
 
-    const skills = value.toLowerCase() === 'none' ? [] : [...new Set(value.split(/[,\s]+/).filter(Boolean))];
+    const skills = value.toLowerCase() === 'none' ? [] : [...new Set(value.toLowerCase().split(/[,\s]+/).filter(Boolean))];
     const unknown = skills.filter((name) => !catalog.some((s) => s.name === name));
     if (unknown.length > 0) {
       fail(`No task skill named ${unknown.map((n) => `"${n}"`).join(', ')}.`, `Task skills: ${catalog.map((s) => s.name).join(', ') || 'none'}`);

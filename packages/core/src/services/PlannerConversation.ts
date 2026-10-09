@@ -11,7 +11,7 @@ import { condensedNotice, extractSummary, keptTail, summaryRequest } from './con
 import type { ConversationMessage, LegacyPlanState, ResearchLogEntry, ResearchProgress, RunnerId, SkillLoad, Task } from '../models/Task';
 import { flattenTasks, isUserMessage } from '../models/Task';
 import { plannerMessage, plannerTranscript, skillLoadLabel, type SkillInvocation } from './skillInvocation';
-import { skillLoadNotice } from '../conversation/records';
+import { skillLoadNotice, surfaceStep } from '../conversation/records';
 import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
 
 /**
@@ -633,6 +633,17 @@ export class PlannerConversation {
   }
 
   /**
+   * What the skill check of a landed plan or edit warned about, kept in the
+   * transcript so every surface shows it, on reload too, and not only the
+   * planner that may have read it in a tool result. Call inside the host's
+   * mutation ritual, so the broadcast plan carries it.
+   */
+  recordSkillWarnings(warnings: readonly string[], timestamp?: string): void {
+    if (warnings.length === 0) return;
+    this.append('assistant', ['Skill check:', ...warnings.map((w) => `- ${w}`)].join('\n'), { kind: 'system', timestamp });
+  }
+
+  /**
    * Queued edits the between-batches drain could not apply. Recorded so the
    * transcript does not go on promising a change that never landed. Call
    * inside the host's mutation ritual.
@@ -656,7 +667,10 @@ export class PlannerConversation {
       this.recordUser(goal, new Date().toISOString());
       const turn = await this.host.aiService().startConversation({
         ...opening,
-        goal: plannerMessage(goal.text, goal.skills),
+        // The system prompt's goal is the text as typed; skill bodies ride the
+        // first message alone, so the planner holds each one once.
+        goal: goal.text,
+        initialMessage: plannerMessage(goal.text, goal.skills),
         onProgress: userTurn.stream.sink(),
         signal: userTurn.signal,
       });
@@ -832,7 +846,8 @@ export class PlannerConversation {
 
   private recordResearch(entries: ResearchLogEntry[]): void {
     const plan = this.host.plan();
-    if (plan) plan.researchLog = [...(plan.researchLog ?? []), ...entries];
+    // A `load_skill` body is kept by its skill-load entry, never by the trace.
+    if (plan) plan.researchLog = [...(plan.researchLog ?? []), ...entries.map((e) => ('type' in e ? e : surfaceStep(e)))];
   }
 
   /**
@@ -850,9 +865,9 @@ export class PlannerConversation {
     const runners = this.requirePlan().runners;
     const opening = await this.host.opening(runners);
     const replayed = plannerTranscript(priorHistory);
-    // The opening message as the planner first saw it — skill bodies included,
-    // as `start` composed it — unless a compaction has since condensed it away.
-    const opener = priorHistory[0] && isUserMessage(priorHistory[0]) ? replayed[0].content : undefined;
+    // The opening message as typed, unless a compaction has since condensed it
+    // away. Its skill bodies replay with it in the transcript, not in the goal.
+    const opener = priorHistory[0] && isUserMessage(priorHistory[0]) ? priorHistory[0].content : undefined;
     const goal = opener || this.host.goal() || message;
     // Explicit rather than left to each backend's start: a replay begins from
     // the transcript alone, which for a harness planner means its native
@@ -1000,7 +1015,7 @@ export class PlannerConversation {
       return { plan: settled.plan, outcome: 'task_ops' };
     }
     this.assertCurrent(userTurn, settled.turn);
-    const plan = this.commit(settled.turn, stream.turnId);
+    const plan = this.commit(settled.turn, stream.turnId, settled.skillWarnings ?? []);
     this.warnSkills(settled.skillWarnings ?? []);
     return { plan, outcome: settled.turn.kind };
   }
@@ -1027,6 +1042,7 @@ export class PlannerConversation {
         this.recordResearch(turn.researchLog);
         this.host.adoptTasks(result.tasks, 'edit');
         this.append('assistant', content, { timestamp: now });
+        this.recordSkillWarnings(skills.warnings, now);
         return true;
       },
       () => {
@@ -1039,7 +1055,7 @@ export class PlannerConversation {
   }
 
   /** Commit a settled (non-task_ops) turn through the host's mutation ritual. */
-  private commit(turn: CommitTurn, turnId: string): LegacyPlanState {
+  private commit(turn: CommitTurn, turnId: string, skillWarnings: readonly string[]): LegacyPlanState {
     this.requirePlan();
     const now = new Date().toISOString();
 
@@ -1051,6 +1067,7 @@ export class PlannerConversation {
         this.host.capturePrd(turn.text);
         const count = this.host.adoptTasks(turn.tasks, 'commit');
         this.append('assistant', `Plan generated with ${count} task${count === 1 ? '' : 's'}.`, { timestamp: now, kind: 'plan_generated' });
+        this.recordSkillWarnings(skillWarnings, now);
         return true;
       }, () => this.host.broadcastPlan(turnId))!;
     }

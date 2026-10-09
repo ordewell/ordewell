@@ -20,7 +20,7 @@ import { plannerModesFrom } from './plannerModes';
 import type { UserSettings } from './SettingsService';
 import { SkillsService } from './SkillsService';
 import { plannerMessage, resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
-import { plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
+import { checkPlanSkills, plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
 import type { MergeGateView, SessionBroadcaster, SessionNotice } from './SessionMessage';
 import { SessionEventRelay } from './SessionEventRelay';
 import { saveSession } from '../utils/sessionStore';
@@ -721,14 +721,20 @@ export class Session {
         perRunnerAllowlist: settings.modelAllowlist,
         modes,
       });
+      // No repair loop here to send a planner skill back, so it is reported
+      // with the names not found rather than refused.
+      const skills = await checkPlanSkills(plan.tasks, this.workspaceSkills());
       if (turn.abandoned) throw new PlannerTurnDiscardedError();
+      const skillWarnings = [...skills.errors.map((e) => e.message), ...skills.warnings];
 
       this.plan = plan;
       this.saved(() => {
+        this.conversation.recordSkillWarnings(skillWarnings, plan.generatedAt);
         this.orchestrator.loadPlan(plan.tasks, plan.runners);
         this.store.resetForRun({ preserveCompleted: false });
       });
       this.events.planGenerated(this.plan, this.goal);
+      for (const warning of skillWarnings) this.notice('warn', warning);
       return plan;
     });
   }
@@ -1129,6 +1135,7 @@ export class Session {
         const tasks = keepExecutionState(this.store.planTasks, result.pendingTasks);
         this.orchestrator.reconcilePlan(tasks, this.plan!.runners);
         this.conversation.recordQueuedEdits(texts, tasks.length);
+        this.conversation.recordSkillWarnings(result.skillWarnings ?? []);
         return true;
       });
       for (const warning of result.skillWarnings ?? []) this.notice('warn', warning);

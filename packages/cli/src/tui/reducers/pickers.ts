@@ -156,7 +156,7 @@ export function pickerItemsFor(state: TuiState, action: PickerState['action']): 
       ...state.taskSkills.map((s) => ({ id: s.name, label: s.name, detail: s.description || undefined })),
       // Attached but not in the catalog (created by an earlier task's worktree): keep it
       // selectable so confirming the picker does not silently detach it.
-      ...(task.skills ?? []).filter((name) => !known.has(name)).map((name) => ({ id: name, label: name, detail: 'not found in the catalog' })),
+      ...(task.skills ?? []).filter((name) => !known.has(name)).map((name) => ({ id: name, label: `${name} (not found)`, detail: 'not found in the catalog' })),
     ];
   }
   if (action.kind === 'set-task-mode') {

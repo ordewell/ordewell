@@ -8,6 +8,7 @@ function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
   const pool = {
     generatePlan: vi.fn().mockResolvedValue({ phase: 'planning', history: [], message: '', pendingTasks: [] }),
     getProviderModels: vi.fn().mockResolvedValue({ models: [], modelsByRunner: {}, orchestratorModel: '', providers: [] }),
+    session: vi.fn().mockReturnValue({ planState: null }),
     ...overrides,
   } as unknown as OrchestratorPool;
   return pool;

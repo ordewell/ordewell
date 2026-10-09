@@ -12,11 +12,16 @@ import { settleWithin } from './settleWithin';
 import { awaitAttach, type OrdewellToolRole } from './ordewellBinding';
 
 /**
- * Tools a planning Claude Code session may use. `--permission-mode plan`
- * already refuses edits; naming the write tools explicitly means a future
- * permission-mode change cannot quietly hand the planner a `Write` (T1).
+ * Native plan mode permits Bash writes to its plan file, and `dontAsk` still
+ * honors saved shell allow rules. Withhold shell tools and native plan-mode
+ * transitions as well as direct edits so neither can reopen that write path.
  */
-const DISALLOWED_TOOLS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'KillShell'];
+const DISALLOWED_TOOLS = [
+  'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'KillShell',
+  'Bash', 'PowerShell', 'EnterPlanMode', 'ExitPlanMode',
+];
+
+const PLANNER_PERMISSION_MODE = 'dontAsk';
 
 /**
  * `AskUserQuestion` reaches us as a tool request whose allow must carry the
@@ -269,7 +274,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     const args = [
       ...PROTOCOL_ARGS,
       // The read-only guarantee, enforced at spawn rather than by prompt.
-      '--permission-mode', 'plan',
+      '--permission-mode', PLANNER_PERMISSION_MODE,
       '--disallowedTools', DISALLOWED_TOOLS.join(','),
       '--append-system-prompt', opts.systemPrompt,
     ];

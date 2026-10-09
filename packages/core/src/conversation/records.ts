@@ -26,6 +26,30 @@ export function skillLoadNotice({ invokedBy, name, source, path, attaches }: Ski
   return { invokedBy, name, source, path, ...(attaches ? { attaches } : {}) };
 }
 
+/** `load_skill` as each harness names it: bare, `mcp__ordewell__load_skill`, `ordewell_load_skill`. */
+const LOAD_SKILL_TOOL = /(?:^|_)load_skill$/;
+
+/**
+ * A research step as a surface is sent it. A `load_skill` result is a skill's
+ * body, which only the planner is sent; the session keeps it in the skill-load
+ * entry, so the step need only say which skill loaded.
+ */
+export function surfaceStep(step: ResearchStep): ResearchStep {
+  if (!step.success || !LOAD_SKILL_TOOL.test(step.toolLabel ?? step.tool)) return step;
+  const name = loadedSkillName(step.args);
+  return { ...step, result: name ? `Loaded skill ${name}.` : 'Loaded a skill.' };
+}
+
+function loadedSkillName(args: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(args);
+    const name = typeof parsed === 'object' && parsed !== null && 'name' in parsed ? parsed.name : undefined;
+    return typeof name === 'string' ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function skillLoadBlock(id: string, { invokedBy, name, source, path, attaches }: SkillLoadNotice, turnId?: string): SkillLoadBlock {
   return { type: 'skill_load', id, invokedBy, name, source, path, ...(attaches ? { attaches } : {}), ...(turnId ? { turnId } : {}) };
 }
