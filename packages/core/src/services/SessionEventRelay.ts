@@ -10,6 +10,7 @@ import {
   type SessionBroadcaster,
   type SessionNotice,
 } from './SessionMessage';
+import { surfaceStep } from '../conversation/records';
 import type { LegacyPlanState, ResearchLogEntry, ResearchProgress, ResearchStep, SubagentLogEntry } from '../models/Task';
 
 export interface SessionEventRelayDeps {
@@ -187,7 +188,7 @@ export class SessionEventRelay {
           // Child steps carry their subagent on the step itself; the initiating
           // spawn step does not, so it stays a plain parent step.
           if (progress.step.subagentId) this.subagentRun(progress.step.subagentId).steps.push(progress.step);
-          this.broadcast({ type: 'research_step_done', step: progress.step, subagentId, turnId });
+          this.broadcast({ type: 'research_step_done', step: surfaceStep(progress.step), subagentId, turnId });
         }
         return;
       case 'text_delta':
