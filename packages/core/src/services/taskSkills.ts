@@ -178,6 +178,21 @@ export function checkTaskSkillsEdit(task: Pick<Task, 'id' | 'title'>, skills: un
   return check([{ taskId: task.id, owner: `Task "${task.title}"`, ...attached(skills) }], lookup);
 }
 
+/**
+ * The subtasks an added task brings, at every depth, each named by its path
+ * under the op so an error points at the descendant, not the task it hangs on.
+ */
+function subtaskEntries(owner: string, spec: Partial<Task> | undefined, path: string[] = []): SkillEntry[] {
+  const subtasks: unknown = spec?.subtasks;
+  if (!Array.isArray(subtasks)) return [];
+  return subtasks.flatMap((sub: unknown, i) => {
+    if (typeof sub !== 'object' || sub === null) return [];
+    const child = sub as Partial<Task>;
+    const at = [...path, typeof child.title === 'string' && child.title.trim() ? `"${child.title}"` : `#${i + 1}`];
+    return [{ owner: `${owner}: subtask ${at.join(' > ')}`, ...attached(child.skills) }, ...subtaskEntries(owner, child, at)];
+  });
+}
+
 /** The skill names an edit batch attaches, by op, held to the same rule as a submitted plan. */
 export function checkOpSkills(ops: readonly TaskOp[], lookup: SkillLookup): Promise<SkillCheck> {
   const entries: SkillEntry[] = [];
@@ -191,6 +206,8 @@ export function checkOpSkills(ops: readonly TaskOp[], lookup: SkillLookup): Prom
         break;
       case 'add':
         add(op.task);
+        // Only an add keeps its spec's subtasks; merge and split build theirs from named fields, and update drops the field.
+        entries.push(...subtaskEntries(owner, op.task));
         break;
       case 'merge':
         add(op.merged);

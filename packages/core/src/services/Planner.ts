@@ -187,6 +187,8 @@ export class Planner {
     const pendingJson = JSON.stringify(req.pendingTasks.map(plannerTaskView), null, 2);
     const filteredModels = filterModelsForPrompt(req.modelsByRunner, req.perRunnerAllowlist ?? {});
     const allowlist = req.perRunnerAllowlist ?? {};
+    // A coding agent submits through submit_plan and its reply is never read, so it is never asked for JSON.
+    const tools = this.aiService.plannerToolsAttached?.() ?? false;
 
     const basePrompt = buildModifyDuringExecutionPrompt(
       req.executionLog,
@@ -196,6 +198,7 @@ export class Planner {
       req.runners,
       req.runnerModes,
       { autonomousDefault: req.autonomousDefault ?? true, isolatedExecution: req.isolatedExecution ?? false },
+      tools,
     );
     const send = (corrective?: string) => this.aiService.sendPlanningPrompt(
       corrective ? basePrompt + corrective : basePrompt,
@@ -227,7 +230,7 @@ export class Planner {
         if (errors.length === 0) {
           return { done: { pendingTasks: coerced, message: `Plan modified: ${coerced.length} pending task(s)`, skillWarnings: skills.warnings } };
         }
-        return { retry: { errors, corrective: modifyValidationFeedback(errors) } };
+        return { retry: { errors, corrective: modifyValidationFeedback(errors, tools) } };
       },
       maxRepairs: 2,
       onExhausted: ({ errors }) => {

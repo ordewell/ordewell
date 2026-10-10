@@ -858,6 +858,49 @@ describe('edit_plan with task skills', () => {
   });
 });
 
+describe('edit_plan adding a task with subtasks', () => {
+  const sub = (title: string, skills: unknown[], subtasks: unknown[] = []) => ({ ...createTask({ title }), subtasks, skills });
+
+  it('refuses a whole batch when a descendant carries a planner skill, naming it, then lands nested names with their warnings', async () => {
+    const answers: { isError: boolean; body: unknown }[] = [];
+    let between: string[] = [];
+    const planner = await planThen(async (mcp) => {
+      answers.push(await call(mcp!, 'edit_plan', {
+        ops: [
+          { op: 'update', taskId: '#1', changes: { title: 'Renamed' } },
+          { op: 'add', task: { title: 'Docs', subtasks: [sub('Child', ['tdd'], [sub('Deep', ['grilling'])])] } },
+        ],
+      }));
+      between = planner.session.planTasks.map((t) => t.title);
+      answers.push(await call(mcp!, 'edit_plan', {
+        ops: [{ op: 'add', task: { title: 'Docs', subtasks: [sub('Child', ['tdd', 'Bad Name!'], [sub('Deep', ['later'])])] } }],
+      }));
+      return 'Done.';
+    }, { skills: SKILLS });
+
+    await planner.session.continueConversation('EDIT NOW');
+
+    expect(answers[0]).toEqual({
+      isError: true,
+      body: {
+        ok: false,
+        errors: [{ op: 2, kind: 'add', message: expect.stringMatching(/^subtask "Child" > "Deep": "grilling" is a planner skill/) }],
+      },
+    });
+    expect(between).toEqual(['Task a', 'Task b']);
+    expect(answers[1].isError).toBe(false);
+    expect((answers[1].body as { warnings: string[] }).warnings).toEqual([
+      expect.stringMatching(/^op 1 \(add\): subtask "Child": "Bad Name!" is not a valid skill name/),
+      expect.stringMatching(/^op 1 \(add\): subtask "Child" > "Deep": skill "later" not found/),
+    ]);
+    expect(planner.session.planTasks.map((t) => t.title)).toEqual(['Task a', 'Task b', 'Docs']);
+    const docs = planner.session.planTasks[2];
+    expect(docs.skills).toBeUndefined();
+    expect(docs.subtasks[0].skills).toEqual(['tdd']);
+    expect(docs.subtasks[0].subtasks[0].skills).toEqual(['later']);
+  });
+});
+
 describe('task_query with task skills', () => {
   it('reads a task\'s skills, null when it has none', async () => {
     let read: { isError: boolean; body: unknown } | undefined;

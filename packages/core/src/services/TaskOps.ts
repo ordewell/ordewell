@@ -197,6 +197,25 @@ function updatableChanges(raw: Partial<Task> | undefined): Partial<Task> {
   return changes;
 }
 
+/**
+ * An added task's subtasks, kept as given but with their skills stored as a
+ * task's are: the edit's skill check warned that a name no skill could have
+ * was not attached, so it must not be.
+ */
+function withSkillNames(subtasks: Task[] | undefined): Task[] | undefined {
+  if (!Array.isArray(subtasks)) return subtasks;
+  return subtasks.map((sub: unknown) => {
+    if (typeof sub !== 'object' || sub === null) return sub as Task;
+    const { skills, ...rest } = sub as Task;
+    const names = skillNames(skills);
+    return {
+      ...rest,
+      ...(names ? { skills: names } : {}),
+      ...('subtasks' in rest ? { subtasks: withSkillNames(rest.subtasks) as Task[] } : {}),
+    };
+  });
+}
+
 function findInTasks(tasks: Task[], id: string): Task | undefined {
   return flattenTasks(tasks).find((t) => t.id === id);
 }
@@ -511,6 +530,7 @@ export function applyTaskOps(currentTasks: readonly Task[], ops: TaskOp[], runne
         const newId = uuidv4();
         tasks = addTaskToPlan(tasks, {
           ...spec,
+          subtasks: withSkillNames(spec.subtasks),
           id: newId,
           dependencies: ids,
           assignedRunner: runner,

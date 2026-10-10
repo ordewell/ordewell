@@ -123,15 +123,17 @@ export function taskOpsRejectedPrompt(errors: string[]): string {
   return `Those task edits were rejected:\n- ${errors.join('\n- ')}\nRe-emit a corrected {"${TASK_OPS_ENVELOPE_KEY}":[...]} JSON object, or reply in prose if something is unclear.`;
 }
 
-/** A modified plan failed validation during execution: full re-prompt feedback block. */
-export function modifyValidationFeedback(errors: string[]): string {
+/** A modified plan failed validation during execution: full re-prompt feedback block, asking for the planner's own transport. */
+export function modifyValidationFeedback(errors: string[], tools = false): string {
   return [
     '',
     '=== VALIDATION ERRORS FROM PREVIOUS ATTEMPT ===',
     'Your previous plan modification was rejected by validation. Fix these issues:',
     ...errors.map((e, i) => `${i + 1}. ${e}`),
     '',
-    'Resubmit the corrected plan. Do NOT wrap in markdown code blocks.',
+    tools
+      ? 'Call submit_plan with the COMPLETE corrected pending tasks. A plan written in your reply is not read.'
+      : 'Resubmit the corrected plan. Do NOT wrap in markdown code blocks.',
   ].join('\n');
 }
 

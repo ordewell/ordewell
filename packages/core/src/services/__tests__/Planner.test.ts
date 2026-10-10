@@ -256,6 +256,23 @@ describe('Planner', () => {
       expect(result.pendingTasks[0].id).toBe('t1');
     });
 
+    it('asks an API planner for the JSON envelope, in the prompt and its corrective, and never for submit_plan', async () => {
+      const aiService = fakeAiService();
+      (aiService.sendPlanningPrompt as import("vitest").Mock)
+        .mockResolvedValueOnce([createTask({ id: 't1', title: 'a', dependencies: ['nonexistent'] })])
+        .mockResolvedValueOnce([createTask({ id: 't1', title: 'a' })]);
+
+      await new Planner(fakeConfig(), aiService).modifyDuringExecution({
+        executionLog: [], pendingTasks: [], activeSessions: new Map(), userMessage: 'create a task', modelsByRunner: {}, runners: ['claude-code'], skills: noSkills,
+      });
+
+      const [first, retry] = (aiService.sendPlanningPrompt as import("vitest").Mock).mock.calls.map(([prompt]) => prompt as string);
+      expect(first).toContain('Return the COMPLETE modified pending tasks as a JSON object with a single "tasks" array.');
+      expect(first).toContain('Output ONLY the JSON object.');
+      expect(retry).toContain('Resubmit the corrected plan. Do NOT wrap in markdown code blocks.');
+      expect(`${first}${retry}`).not.toContain('submit_plan');
+    });
+
     it('throws after exhausting retry attempts', async () => {
       const invalid = createTask({ id: 't1', title: 'a', dependencies: ['nonexistent'] });
 

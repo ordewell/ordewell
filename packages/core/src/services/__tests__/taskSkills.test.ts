@@ -154,6 +154,49 @@ describe('checking a plan\'s skills against the catalog', () => {
   });
 });
 
+describe('checking the subtasks an edit adds', () => {
+  it('refuses a planner skill on an added task\'s subtask, naming the subtask', async () => {
+    writeSkill(globalSkills(), 'grilling', 'planner', 'x');
+    const result = await checkOpSkills([
+      { op: 'add', task: { title: 'Parent', subtasks: [{ title: 'Child', skills: ['grilling'], subtasks: [] }] as never } },
+    ], createSkillsService(workspace));
+
+    expect(result.errors.map((e) => e.message)).toEqual([expect.stringMatching(/^op 1 \(add\): subtask "Child": "grilling" is a planner skill/)]);
+  });
+
+  it('reaches every depth, and warns about a descendant\'s missing and malformed names as written', async () => {
+    writeSkill(globalSkills(), 'grilling', 'planner', 'x');
+    writeSkill(globalSkills(), 'tdd', 'task', 'x');
+    const result = await checkOpSkills([
+      {
+        op: 'add',
+        task: {
+          title: 'Parent',
+          skills: ['tdd'],
+          subtasks: [{ title: 'Child', skills: ['Bad Name!', 'later'], subtasks: [{ skills: ['grilling'] }] }],
+        } as never,
+      },
+    ], createSkillsService(workspace));
+
+    expect(result.errors.map((e) => e.message)).toEqual([expect.stringMatching(/^op 1 \(add\): subtask "Child" > #1: "grilling" is a planner skill/)]);
+    expect(result.warnings).toEqual([
+      'op 1 (add): subtask "Child": "Bad Name!" is not a valid skill name (lowercase letters, digits, "-" and "_", starting with a letter or digit), so it was not attached.',
+      expect.stringMatching(/^op 1 \(add\): subtask "Child": skill "later" not found/),
+    ]);
+  });
+
+  it('holds a parent and its subtasks to their own lists', async () => {
+    writeSkill(globalSkills(), 'grilling', 'planner', 'x');
+    writeSkill(globalSkills(), 'tdd', 'task', 'x');
+    const result = await checkOpSkills([
+      { op: 'add', task: { title: 'Parent', skills: ['grilling'], subtasks: [{ title: 'Child', skills: ['tdd'] }, { title: 'Bare' }] as never } },
+    ], createSkillsService(workspace));
+
+    expect(result.errors.map((e) => e.message)).toEqual([expect.stringMatching(/^op 1 \(add\): "grilling" is a planner skill/)]);
+    expect(result.warnings).toEqual([]);
+  });
+});
+
 describe('checking a plan against the folders its tasks will read', () => {
   const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, stdio: 'ignore' });
   const repo = (dir: string) => {
