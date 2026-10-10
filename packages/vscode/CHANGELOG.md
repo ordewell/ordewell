@@ -1,5 +1,12 @@
 # Change Log
 
+## [Unreleased]
+
+### Changed
+
+- Up to five AI tasks now run at once by default, up from three
+  (`ordewell.maxParallelSessions`).
+
 ## [0.8.0] — 2026-10-10
 
 ### Security
