@@ -1,5 +1,5 @@
 /** How many AI tasks may run at once: `ORDEWELL_MAX_PARALLEL`, `/parallel`, `ordewell.maxParallelSessions`. */
-export const DEFAULT_MAX_PARALLEL = 3;
+export const DEFAULT_MAX_PARALLEL = 5;
 
 /**
  * A usable limit from what a user typed or a setting holds: any whole number

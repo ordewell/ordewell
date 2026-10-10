@@ -15,7 +15,7 @@
 ## Problem Statement
 
 When an Ordewell plan runs, every task is executed by its **Runner** in the
-same working directory — the workspace root. `maxParallelSessions` (default 3)
+same working directory — the workspace root. `maxParallelSessions` (default 5)
 means several runners can be editing that one tree at once. The planner is
 instructed to keep parallel tasks on different files, but that is advice to a
 model, not an enforced boundary, and it costs parallelism: two genuinely
