@@ -1,5 +1,29 @@
 # Change Log
 
+## [0.9.0] — 2026-10-10
+
+### Security
+
+- **One research envelope for every planner.** Claude Code, Codex and OpenCode
+  planners research under the same rules as the API planner; file writes are
+  refused in every mode.
+- **The planner's approval settings are user settings only**, so a
+  repository's `.vscode/settings.json` cannot widen them.
+
+### Added
+
+- **Harness planners run commands and use your MCP tools**, approved like the
+  API planner's research.
+- **Planner allowlist** (`ordewell.plannerAllowlist`), with a built-in list of
+  read-only commands and MCP tools (`ordewell.plannerAllowlistDefaults`).
+- **`ordewell.plannerApprovals`**: `auto` (default) asks you in Guarded and
+  runs only the allowlist in Full; or `ask`, `allowlist`, `allow`.
+
+### Fixed
+
+- Planners and tasks start again on OpenCode 2, and tasks find
+  `task_complete` there.
+
 ## [0.8.1] — 2026-10-10
 
 ### Changed
