@@ -40,7 +40,7 @@ check(testMe && testMe.source === 'global', 'findSkill("test-me") reports global
 const override = svc.findSkill('override-me');
 check(override !== undefined, 'findSkill("override-me") returns a skill');
 check(override && override.content === overrideBody, 'findSkill("override-me") returns the local content');
-check(override && override.source === 'local', 'findSkill("override-me") reports local source');
+check(override && override.source === 'workspace', 'findSkill("override-me") reports workspace source');
 
 check(svc.findSkill('nonexistent') === undefined, 'findSkill("nonexistent") returns undefined');
 
