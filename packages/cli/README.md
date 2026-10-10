@@ -12,10 +12,8 @@ npm install -g @ordewell/cli        # or: npm install -g ordewell
 ```
 
 **Requirements:** Node.js 20 or newer, at least one of Claude Code, Codex or
-OpenCode, and git for task isolation. Runners use structured connectors and
-require Ordewell's MCP tools; no tmux is needed. Linux, macOS and Windows are
-supported; the terminal UI remains unverified on native Windows, so use WSL
-for that surface.
+OpenCode, and git for task isolation. Linux, macOS and Windows are supported;
+on Windows, run the terminal UI under WSL.
 
 ## Usage
 

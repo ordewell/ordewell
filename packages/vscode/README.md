@@ -12,14 +12,16 @@ runs, then review the result before it reaches your branch.
   mode. Change any of them, add or remove tasks, and rewire dependencies without
   losing completed work.
 - **A planner that talks back.** It researches your workspace without modifying it,
-  asks when your goal is vague, and its final message is the plan.
+  asks when your goal is vague, and then hands you the plan.
 - **The right model for each task.** Assignments are made across the whole plan and
   shown to you before anything runs.
 - **Isolated execution.** Each task works in its own git worktree, and passing work
   lands on one integration branch. A handoff card at the end lets you review the
   diff, merge it, or discard it.
-- **Verdicts from evidence.** A task completes when the runner reports it done —
-  through an attempt-bound `task_complete` call.
+- **Skills your team shares.** Write a skill once and commit it. The planner
+  attaches it to the tasks it fits, and it shows as a chip on each task card.
+- **Done means reported.** A task completes when its agent reports it done through
+  Ordewell's own tools, never because a model thinks the work looks finished.
 - **No extra API key.** Claude Code, Codex or OpenCode can be the planner, using the
   subscription you already have.
 

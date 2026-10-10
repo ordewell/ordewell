@@ -5,7 +5,7 @@ dependencies, shared by the CLI, the terminal UI, the VS Code extension and the
 local API server.
 
 This package is published so those surfaces can depend on it. It has no CLI of
-its own — if you want to *use* Ordewell, install
+its own. If you want to *use* Ordewell, install
 **[@ordewell/cli](https://www.npmjs.com/package/@ordewell/cli)** instead.
 
 ```bash
@@ -16,11 +16,11 @@ npm install @ordewell/core
 
 | Module | Responsibility |
 | --- | --- |
-| `Session` | One plan's full lifecycle — generation, execution, mutation, persistence |
+| `Session` | One plan's full lifecycle: generation, execution, mutation, persistence |
 | `PlanStore` | All plan-shaped state: the task tree, status sets, runner set |
 | `Planner` | The read-only model that researches a repo and emits the plan |
-| `TaskOrchestrator` | Pure scheduler — dependency order and parallelism |
-| `VerdictEngine` | Completion verification — the runner's attempt-bound `task_complete` call; the model is never the tie-breaker |
+| `TaskOrchestrator` | Pure scheduler: dependency order and parallelism |
+| `VerdictEngine` | Completion verification from the runner's attempt-bound `task_complete` call; the model is never the tie-breaker |
 | `ModelResolver` / `ModeResolver` | Per-task model routing and mode resolution |
 | `RunnerRegistry` | Built-in runner manifests |
 
@@ -32,7 +32,7 @@ Subpath exports: `@ordewell/core/parsing`, `/plan-utils`, `/testing`.
 ## Stability
 
 Pre-1.0. The surfaces in this monorepo are the intended consumers, and the API
-changes with them — pin an exact version if you depend on it directly.
+changes with them. Pin an exact version if you depend on it directly.
 
 The domain vocabulary these names come from is defined in
 [CONTEXT.md](https://github.com/ordewell/ordewell/blob/main/CONTEXT.md).
