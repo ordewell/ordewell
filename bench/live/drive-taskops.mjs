@@ -23,9 +23,13 @@ const config = {
   enabledRunners: ['claude-code'], maxParallelSessions: 3,
   researchEnabled: false, researchMaxSteps: 6, researchMaxFileSize: 100_000,
   openAiBaseUrl: 'https://openrouter.ai/api/v1', openAiApiKey: KEY, sttModel: '',
-  orchestratorModel: MODEL, geminiModel: '',
+  openaiCompatibleBaseUrl: '', openaiCompatibleApiKey: '',
+  orchestratorModel: MODEL, geminiModel: '', researchSubagentModel: '',
   planMapEnabled: true, openrouterKey: KEY, geminiKey: '',
-  autonomousMode: true, setProviderModelLists: () => {},
+  autonomousMode: true, worktreeIsolation: false,
+  workspaceRepos: [], worktreeLinks: [], conflictRepairAttempts: 0,
+  approvalMode: 'allow', approvalPreApproved: [],
+  setProviderModelLists: () => {},
   getProviderBaseUrl: () => 'https://openrouter.ai/api/v1', getProviderApiKey: () => KEY,
 };
 const ok = (output) => ({ success: true, output, truncated: false });

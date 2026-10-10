@@ -116,10 +116,9 @@ versions in lockstep.
 - **Deep modules.** One module owns one concept end to end, with a narrow
   interface. If you find yourself threading a flag through four layers, the seam
   is in the wrong place — say so in the issue.
-- **Verdicts come from evidence.** A task completes when the runner reports it
-  done: a `task_complete` call bound to the attempt's token on the structured
-  transport, or its completion marker in the output as the fallback. Never make
-  the model the tie-breaker.
+- **Verdicts come from evidence.** A task completes when the runner calls
+  `task_complete` bound to the attempt's token. Never make the model the
+  tie-breaker.
 
 ## Pull requests
 
