@@ -31,6 +31,7 @@ function headerEnv(mcp: McpClientConfig): Record<string, string> {
 }
 
 const COUNT_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
+const countOf = (names: string[]) => COUNT_WORDS[names.length] ?? String(names.length);
 const quoted = (names: string[]) => listed(names.map((name) => `\`${name}\``));
 
 export const CODEX_ORDEWELL: CodexOrdewellBinding = {
@@ -65,7 +66,7 @@ export const CODEX_ORDEWELL: CodexOrdewellBinding = {
   taskInstructions() {
     const tools = ordewellToolNames('task');
     return [
-      `This task has ${COUNT_WORDS[tools.length] ?? tools.length} tools from the \`${ORDEWELL_MCP_SERVER_NAME}\` MCP server: ${quoted(tools)}.`,
+      `This task has ${countOf(tools)} tools from the \`${ORDEWELL_MCP_SERVER_NAME}\` MCP server: ${quoted(tools)}.`,
       `They are not in your tool list up front. Find them with the tool discovery you have (the \`exec\` tool's \`ALL_TOOLS\` list) and call them by their full names, ${quoted(this.toolNames('task'))}.`,
       `Look for them before you finish; the task is reported complete through \`${TASK_COMPLETE_TOOL}\`.`,
     ].join(' ');
@@ -80,7 +81,7 @@ export const CODEX_ORDEWELL: CodexOrdewellBinding = {
   plannerInstructions() {
     const tools = ordewellToolNames('planner');
     return [
-      `You have ${COUNT_WORDS[tools.length] ?? tools.length} tools from the \`${ORDEWELL_MCP_SERVER_NAME}\` MCP server: ${quoted(tools)}.`,
+      `You have ${countOf(tools)} tools from the \`${ORDEWELL_MCP_SERVER_NAME}\` MCP server: ${quoted(tools)}.`,
       `They are not in your tool list up front. Find them with the tool discovery you have (the \`exec\` tool's \`ALL_TOOLS\` list) and call them by their full names, ${quoted(this.toolNames('planner'))}.`,
       `Run shell commands with \`${this.toolName('run_command')}\`, not your own shell: yours is sandboxed without network, so git remotes, gh and cloud CLIs fail there.`,
     ].join(' ');

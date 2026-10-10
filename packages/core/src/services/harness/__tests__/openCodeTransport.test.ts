@@ -441,6 +441,13 @@ describe('openCodePlannerAsk', () => {
     expect(openCodePlannerAsk('external_directory', { patterns: ['/opt/data/*'] }, servers)).toEqual({ kind: 'path', path: '/opt/data', directory: true });
   });
 
+  it('falls back to the request\'s pattern, and takes a request that names nothing for one it cannot approve', () => {
+    expect(openCodePlannerAsk('webfetch', { patterns: ['https://example.com/a'] }, servers)).toEqual({ kind: 'fetch', url: 'https://example.com/a' });
+    expect(openCodePlannerAsk('external_directory', { metadata: { parentDir: '/srv' } }, servers)).toEqual({ kind: 'path', path: '/srv', directory: true });
+    expect(openCodePlannerAsk('webfetch', {}, servers)).toEqual({ kind: 'other' });
+    expect(openCodePlannerAsk('external_directory', {}, servers)).toEqual({ kind: 'other' });
+  });
+
   it('names an MCP tool by the longest server it starts with', () => {
     expect(openCodePlannerAsk('todoist_beta_find-tasks', {}, servers)).toEqual({ kind: 'mcp', scope: 'todoist_beta_find-tasks', tool: 'find-tasks', server: 'todoist_beta' });
     expect(openCodePlannerAsk('todoist_add-tasks', {}, servers)).toEqual({ kind: 'mcp', scope: 'todoist_add-tasks', tool: 'add-tasks', server: 'todoist' });
