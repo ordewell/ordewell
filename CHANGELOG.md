@@ -6,6 +6,67 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
+## [0.9.0] — 2026-10-10
+
+### Security
+
+- **One research envelope for every planner.** Claude Code, Codex and OpenCode
+  planners now research under the same rules as the API planner: read-only
+  commands run, anything else is decided by your approval mode, and file
+  writes are refused in every mode
+  ([ADR-0026](docs/adr/0026-one-envelope-for-every-planner.md)). An OpenCode
+  planner no longer runs its own shell, subagents or any tool its user
+  configuration allows; its permission policy is now Ordewell's alone.
+- **A program named by its path no longer runs unasked.** `./cat README.md`
+  ran a file the repository could ship under that name without a prompt. A
+  path-named program now always asks, and approving `gh` does not approve
+  `./bin/gh`.
+- **The planner's approval settings cannot come from a repository.**
+  `ordewell.plannerApprovals`, `ordewell.plannerAllowlist` and
+  `ordewell.plannerAllowlistDefaults` are user settings only, and
+  `ORDEWELL_APPROVAL_DEFAULTS` joins the approval variables refused from a
+  workspace's environment files.
+
+### Added
+
+- **`run_command` for harness planners.** A Claude Code, Codex or OpenCode
+  planner runs shell commands through Ordewell, so it can read issues, cloud
+  resources or cluster state (`gh issue list`, `az vm list`,
+  `kubectl get pods`) during research.
+- **Your MCP tools in planning.** A harness planner can use the MCP servers you
+  configured, such as an issue tracker or a todo list. Each tool is approved
+  like a command; read-only tools on the allowlist run without asking.
+- **Planner allowlist.** Standing approvals for planner research: command
+  rules (`gh issue list`, `gcloud * * list`), MCP tool rules (`mcp:find-*`)
+  and path or URL patterns, with `!` exclusions that always win. A built-in
+  list covers read-only commands for GitHub, GitLab, Jira, Azure, Google
+  Cloud, AWS and other clouds, Kubernetes, Docker and Podman, installed
+  packages and local processes, plus MCP tools whose names start with a read
+  verb. Set it with `ordewell.plannerAllowlist` or `ORDEWELL_APPROVAL_ALLOW`,
+  and turn the built-in list off with `ordewell.plannerAllowlistDefaults` or
+  `ORDEWELL_APPROVAL_DEFAULTS=false`.
+- **Approval modes tied to autonomy.** `ordewell.plannerApprovals` /
+  `ORDEWELL_APPROVAL_MODE`: `auto` (default) asks you in Guarded and, in Full,
+  runs only the allowlist and refuses the rest without waiting on anyone, so
+  the plan carries the change as an ops task instead. `ask`, `allowlist` and
+  `allow` set it explicitly.
+
+### Changed
+
+- A Claude Code planner runs in Claude Code's `default` permission mode, with
+  its tool requests answered by Ordewell, instead of `dontAsk`. A Codex
+  planner asks before a user MCP tool instead of failing it.
+- A command whose words the shell globs or computes, or that a leading
+  `VAR=value` redirects, is never covered by an allowlist rule.
+
+### Fixed
+
+- **OpenCode 2.x.** Ordewell recognises OpenCode 2's MCP status, so planners
+  and tasks start on it again, and lists its own tools outside OpenCode 2's
+  code mode, so tasks find `task_complete` and `checkpoint`. The planner's
+  policy also covers OpenCode 2's renamed `shell` and `subagent` tools and its
+  `browser` tool.
+
 ## [0.8.1] — 2026-10-10
 
 ### Changed
