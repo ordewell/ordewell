@@ -44,11 +44,15 @@ freely within one plan.
 - **Isolated execution.** Every task that changes code works on its own branch.
   Passing work lands on one integration branch in plan order, and you choose when
   to merge it.
+- **Skills your team shares.** Write down how your team works once, as a skill in
+  your repository. The planner attaches it to the tasks it fits, whichever agent
+  runs them.
 - **Operations in the right place and order.** A deploy, a cloud CLI call or a
   push runs as an ops task in your own checkout, and waits until the change it
   depends on is merged into your branch.
-- **Track each task.** Follow progress and see which tasks completed, failed or
-  need your attention.
+- **Done means reported.** A task finishes when its agent reports it done through
+  Ordewell's own tools, never because a model thinks the work looks finished. You
+  see which tasks passed, failed or need you, and can read each one's log live.
 - **A planner that cannot write.** It reads, asks, and plans. Commands that would
   change your repository are refused.
 - **No extra API key.** A coding agent you already pay for can be the planner. An API
@@ -63,8 +67,9 @@ npm install -g ordewell
 ```
 
 For VS Code, install [Ordewell from the Marketplace](https://marketplace.visualstudio.com/items?itemName=ordewell.ordewell)
-or run `code --install-extension ordewell.ordewell`. The extension bundles its own
-core and needs nothing from npm.
+or run `code --install-extension ordewell.ordewell`. In Cursor, Windsurf or VSCodium,
+get it from [Open VSX](https://open-vsx.org/extension/ordewell/ordewell). The
+extension bundles its own core and needs nothing from npm.
 
 **Requirements:** Node.js 20 or newer, at least one of Claude Code, Codex or
 OpenCode, and git for task isolation. On Windows, run the terminal UI under WSL.

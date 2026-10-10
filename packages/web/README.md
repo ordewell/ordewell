@@ -1,6 +1,6 @@
 # @ordewell/web
 
-The local API server for **[Ordewell](https://ordewell.ai)** — a Hono HTTP +
+The local API server for **[Ordewell](https://ordewell.ai)**: a Hono HTTP +
 WebSocket daemon bound to `127.0.0.1:3742` that the Ordewell CLI, terminal UI
 and VS Code extension all drive.
 
@@ -8,7 +8,7 @@ and VS Code extension all drive.
 port in a browser will show you an API response, not a dashboard. A browser UI
 may come later; it does not exist today.
 
-You almost certainly do not need to install this directly —
+You almost certainly do not need to install this directly.
 [@ordewell/cli](https://www.npmjs.com/package/@ordewell/cli) depends on it and
 starts it on demand.
 
@@ -31,7 +31,7 @@ route; the format is in [Writing skills](https://github.com/ordewell/ordewell/bl
 The server is **unauthenticated by design** and binds the loopback interface
 only, on the assumption that local access is trusted. Do not expose it to a
 network. If you find a way to reach it off-host, or from a browser page, that's
-a vulnerability — see
+a vulnerability; see
 [SECURITY.md](https://github.com/ordewell/ordewell/blob/main/SECURITY.md).
 
 Licensed under the [Apache License 2.0](./LICENSE).
