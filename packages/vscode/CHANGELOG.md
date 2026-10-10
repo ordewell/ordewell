@@ -1,11 +1,13 @@
 # Change Log
 
-## [Unreleased]
+## [0.8.1] — 2026-10-10
 
 ### Changed
 
 - Up to five AI tasks now run at once by default, up from three
   (`ordewell.maxParallelSessions`).
+- The extension's README is refreshed for 0.8: skills, reported completion,
+  and Open VSX for Cursor, Windsurf and VSCodium.
 
 ## [0.8.0] — 2026-10-10
 
