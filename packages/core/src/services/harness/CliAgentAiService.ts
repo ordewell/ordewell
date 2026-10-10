@@ -647,15 +647,10 @@ export class CliAgentAiService implements IAiService {
         },
       },
     };
-    const toolPrompt = prompt
-      .replace('produces structured task plans as JSON', 'submits structured task plans through submit_plan')
-      .replace('Generate a task plan using this JSON format:', 'submit_plan takes a plan using this schema:')
-      .replace('Return the COMPLETE modified plan as a JSON object with a single "tasks" array.', 'Call submit_plan with the COMPLETE modified plan in its "tasks" array.')
-      .replaceAll('Do NOT wrap the JSON in markdown code blocks. Output ONLY the JSON object.', 'Submit the plan ONLY through submit_plan. Never write the plan as JSON in your reply.');
     const startOptions: PlannerStartOptions = {
       kind: 'planner',
       cwd: this.workspaceRoot(),
-      systemPrompt: `${toolPrompt}\nBefore submitting, call list_runners and list_models to check the available assignments.`,
+      systemPrompt: `${prompt}\nBefore submitting, call list_runners and list_models to check the available assignments.`,
       model: this.plannerModel(),
       effort: this.config.plannerThinkingEffort,
     };
@@ -705,7 +700,7 @@ export class CliAgentAiService implements IAiService {
     signal?: AbortSignal,
   ): Promise<{ tasks: Task[]; researchLog: ResearchLogEntry[]; researchResults: string }> {
     const contextStr = await collectResearchContext(fs, runners);
-    const prompt = buildPlanWithResults(userDescription, contextStr, '', modelsByRunner, runners, runnerModes, modes);
+    const prompt = buildPlanWithResults(userDescription, contextStr, '', modelsByRunner, runners, runnerModes, modes, true);
     const plan = await this.submittedPlan(prompt, oneShotCatalog(runners, modelsByRunner, runnerModes, modes), onProgress, signal);
     return {
       tasks: plan.tasks,
@@ -725,7 +720,7 @@ export class CliAgentAiService implements IAiService {
     modes: PlannerModes = DEFAULT_PLANNER_MODES,
     signal?: AbortSignal,
   ): Promise<Task[]> {
-    const prompt = buildPlanWithResults(userDescription, '', '', modelsByRunner, runners, runnerModes, modes);
+    const prompt = buildPlanWithResults(userDescription, '', '', modelsByRunner, runners, runnerModes, modes, true);
     const plan = await this.submittedPlan(
       prompt,
       oneShotCatalog(runners, modelsByRunner, runnerModes, modes),
@@ -746,7 +741,7 @@ export class CliAgentAiService implements IAiService {
     modes: PlannerModes = DEFAULT_PLANNER_MODES,
     signal?: AbortSignal,
   ): Promise<{ tasks: Task[] }> {
-    const prompt = buildModifyPlanPrompt(existingPlan, userRequest, modelsByRunner, undefined, runnerModes, modes.autonomousDefault);
+    const prompt = buildModifyPlanPrompt(existingPlan, userRequest, modelsByRunner, undefined, runnerModes, modes.autonomousDefault, true);
     try {
       const plan = await this.submittedPlan(prompt, oneShotCatalog(existingPlan.runners, modelsByRunner, runnerModes, modes), onProgress, signal);
       return { tasks: plan.tasks };

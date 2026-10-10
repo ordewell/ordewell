@@ -401,12 +401,23 @@ const ONE_SHOT_INSTRUCTIONS = [
   '',
 ].join('\n');
 
-function corePlannerPrompt(isolatedExecution: IsolatedExecution): string {
+/**
+ * The one-shot prompts' last word on output, per transport: an API planner
+ * emits the plan as its reply, a coding agent submits it through submit_plan
+ * and its reply is never read (ADR-0025).
+ */
+function submitInstruction(tools: boolean): string {
+  return tools
+    ? 'Submit the plan ONLY through submit_plan. Never write the plan as JSON in your reply.'
+    : 'Do NOT wrap the JSON in markdown code blocks. Output ONLY the JSON object.';
+}
+
+function corePlannerPrompt(isolatedExecution: IsolatedExecution, tools = false): string {
   return [
-  'You are a software project planner that produces structured task plans as JSON.',
+  `You are a software project planner that ${tools ? 'submits structured task plans through submit_plan' : 'produces structured task plans as JSON'}.`,
   'Given a user\'s goal, create an ordered list of tasks that accomplish it.',
   '',
-  'Generate a task plan using this JSON format:',
+  tools ? 'submit_plan takes a plan using this schema:' : 'Generate a task plan using this JSON format:',
   '',
   '{',
   '  "tasks": [',
@@ -469,16 +480,16 @@ function corePlannerPrompt(isolatedExecution: IsolatedExecution): string {
   '- Reference existing patterns and hooks found in the codebase (e.g. "Use the existing useLocalStorage hook from src/hooks/useLocalStorage.ts").',
   ...(isolatedExecution ? [] : [OVERLAP_AVOIDANCE_RULE]),
   '',
-  'Do NOT wrap the JSON in markdown code blocks. Output ONLY the JSON object.',
+  submitInstruction(tools),
   ].join('\n');
 }
 
 /** The one-shot planner's core rules for tasks that share the workspace root. */
 export const CORE_PLANNER_PROMPT = corePlannerPrompt(false);
 
-function getPlanTemplate(isolatedExecution: IsolatedExecution): string {
+function getPlanTemplate(isolatedExecution: IsolatedExecution, tools: boolean): string {
   return [
-    corePlannerPrompt(isolatedExecution),
+    corePlannerPrompt(isolatedExecution, tools),
     '',
     '{{RESEARCH_SECTION}}',
     'MODEL ASSIGNMENT:',
@@ -547,9 +558,10 @@ function buildPlanPromptBase(
   includeResearchSection: boolean,
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
   modes: PlannerModes = DEFAULT_PLANNER_MODES,
+  tools = false,
 ): string {
   const { autonomousDefault } = modes;
-  const template = getPlanTemplate(modes.isolatedExecution);
+  const template = getPlanTemplate(modes.isolatedExecution, tools);
   const researchReplacement = includeResearchSection ? RESEARCH_SECTION : '';
   const modelsJson = modelsJsonFor(modelsByRunner, runners);
 
@@ -594,8 +606,9 @@ export function buildPlanWithResults(
   runners: RunnerId[],
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
   modes: PlannerModes = DEFAULT_PLANNER_MODES,
+  tools = false,
 ): string {
-  return buildPlanPromptBase(userGoal, context, researchResults, modelsByRunner, runners, false, runnerModes, modes);
+  return buildPlanPromptBase(userGoal, context, researchResults, modelsByRunner, runners, false, runnerModes, modes, tools);
 }
 
 export function buildModifyPlanPrompt(
@@ -605,6 +618,7 @@ export function buildModifyPlanPrompt(
   aiflowContext?: string,
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
   autonomousDefault = true,
+  tools = false,
 ): string {
   const modelsJson = modelsJsonFor(modelsByRunner, existingPlan.runners);
   const planJson = JSON.stringify(existingPlan.tasks.map(plannerTaskView), null, 2);
@@ -627,7 +641,9 @@ export function buildModifyPlanPrompt(
     userRequest,
     '',
     'Modify the plan according to the user request. You may add, remove, reorder, or change any task properties.',
-    'Return the COMPLETE modified plan as a JSON object with a single "tasks" array.',
+    tools
+      ? 'Call submit_plan with the COMPLETE modified plan in its "tasks" array.'
+      : 'Return the COMPLETE modified plan as a JSON object with a single "tasks" array.',
     '',
     'RULES:',
     '- For each task, preserve these exact fields: id, order, title, description, type, status, dependencies, prompt, userSteps, subtasks, assignedModel, thinkingEffort, taskMode.',
@@ -643,7 +659,7 @@ export function buildModifyPlanPrompt(
     '- Renumber task "order" fields sequentially starting from 1 after insertions or deletions.',
     '- When adding new tasks, assign appropriate models and thinking efforts based on complexity.',
     ...(modeGuide ? ['', modeGuide] : []),
-    '- Do NOT wrap the JSON in markdown code blocks. Output ONLY the JSON object.',
+    `- ${submitInstruction(tools)}`,
   ].join('\n');
 }
 
@@ -731,13 +747,14 @@ export function buildModifyDuringExecutionPrompt(
   runners: RunnerId[],
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
   modes: Pick<PlannerModes, 'autonomousDefault' | 'isolatedExecution'> = DEFAULT_PLANNER_MODES,
+  tools = false,
 ): string {
   const execLogBlock = executionLogBlock(executionLog);
   const rulesBlock = pendingEditRulesBlock();
   const modelBlock = modelContextBlock(modelsByRunner, runners, runnerModes, modes.autonomousDefault);
 
   const sections = [
-    corePlannerPrompt(modes.isolatedExecution),
+    corePlannerPrompt(modes.isolatedExecution, tools),
     '',
     'You are modifying a plan that is currently executing. Some tasks have already been completed or failed.',
     '',
@@ -757,7 +774,9 @@ export function buildModifyDuringExecutionPrompt(
   sections.push('USER REQUEST:');
   sections.push(userMessage);
   sections.push('');
-  sections.push('Return the COMPLETE modified pending tasks as a JSON object with a single "tasks" array. Include all pending tasks, not just the modified ones.\nDo NOT wrap the JSON in markdown code blocks. Output ONLY the JSON object.');
+  sections.push(`${tools
+    ? 'Call submit_plan with the COMPLETE modified pending tasks in its "tasks" array.'
+    : 'Return the COMPLETE modified pending tasks as a JSON object with a single "tasks" array.'} Include all pending tasks, not just the modified ones.\n${submitInstruction(tools)}`);
 
   return sections.join('\n');
 }

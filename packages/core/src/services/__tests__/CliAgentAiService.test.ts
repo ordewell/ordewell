@@ -12,6 +12,8 @@ import type { SkillInfo } from '../SkillsService';
 import type { AgentEvent } from '../harness/AgentAdapter';
 import { addPlannerUsage, plannerContextFill } from '../../models/Usage';
 import { TurnStream } from '../replyStream';
+import { Planner } from '../Planner';
+import { createTask } from '../../models/Task';
 
 /**
  * Harness planners, driven through the one seam the design commits to: the
@@ -1445,6 +1447,55 @@ describe('CliAgentAiService — one-shot plan generation', () => {
 
     const args = spawned.lastArgs();
     expect(args[args.indexOf('--resume') + 1]).toBe('sess-chat');
+  });
+});
+
+describe('CliAgentAiService — a running plan modified through a coding agent', () => {
+  // A queued mid-run edit (Planner.modifyDuringExecution) reaches the agent
+  // as a one-shot: every prompt it gets must ask for submit_plan, since a
+  // plan written in its reply is never read.
+  it('asks for submit_plan in the system prompt and every corrective, and lands only an accepted submission', async () => {
+    const mcp = fakeMcpServer();
+    const answers: McpToolReply[] = [];
+    const systemPrompts: string[] = [];
+    const recordingPrompt = (reply: ScriptedReply): ScriptedReply => (written, proc) => {
+      const args = spawned.lastArgs();
+      systemPrompts.push(args[args.indexOf('--append-system-prompt') + 1]);
+      if (typeof reply === 'function') reply(written, proc);
+      else proc.emitStdout(reply);
+    };
+    const running = (planTasks() as Record<string, unknown>[])[0];
+    const { svc, spawned } = service('claude-code', [
+      recordingPrompt(claudeSays(planJson())),
+      recordingPrompt(submitting(mcp, [{ ...running, prompt: 'rewritten while it runs' }], claudeSays('Submitted.'), answers)),
+      recordingPrompt(submitting(mcp, planTasks(), claudeSays('Submitted again.'), answers)),
+    ], {}, {}, mcp);
+    const inProgress = createTask({ ...(running as object), status: 'in_progress' });
+
+    const result = await new Planner(fakeConfig({ aiProvider: 'claude-code' }), svc).modifyDuringExecution({
+      executionLog: [],
+      pendingTasks: [inProgress],
+      activeSessions: new Map(),
+      userMessage: 'keep going',
+      modelsByRunner: { 'claude-code': [{ modelId: 'sonnet', modelLabel: 'Sonnet', variants: [] }] },
+      runners: ['claude-code'],
+      skills: { findSkill: () => undefined, searchedDirs: () => [] },
+    });
+
+    expect(systemPrompts).toHaveLength(3);
+    for (const prompt of systemPrompts) {
+      expect(prompt).toContain('Call submit_plan with the COMPLETE modified pending tasks in its "tasks" array.');
+      expect(prompt).toContain('Submit the plan ONLY through submit_plan. Never write the plan as JSON in your reply.');
+      expect(prompt).not.toMatch(/as a JSON object|Output ONLY the JSON object|Generate a task plan using this JSON format/);
+    }
+    // The agent's own corrective after a reply with no submission, then the planner's after one it refused.
+    expect(systemPrompts[1]).toContain('the agent ended its turn without calling submit_plan. Call submit_plan with the COMPLETE corrected plan');
+    expect(systemPrompts[2]).toContain('In-progress task "Add the thing" was modified in the new plan');
+    expect(systemPrompts[2]).toContain('Call submit_plan with the COMPLETE corrected pending tasks. A plan written in your reply is not read.');
+    expect(systemPrompts[2]).not.toContain('Do NOT wrap in markdown code blocks');
+    expect(answers.map((a) => a.isError ?? false)).toEqual([false, false]);
+    expect(result.pendingTasks.map((t) => [t.id, t.prompt])).toEqual([['task-1', 'Add the thing to src/thing.ts']]);
+    expect(spawned.processes.every((p) => p.killed)).toBe(true);
   });
 });
 

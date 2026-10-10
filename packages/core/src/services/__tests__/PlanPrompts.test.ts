@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildConflictRepairPrompt, buildConflictResolutionPrompt, buildConversationSystemPrompt, buildModifyDuringExecutionPrompt, buildModifyPlanPrompt, buildResearchPrompt, buildResearchToolsPrompt, buildSubagentSystemPrompt } from '../PlanPrompts';
+import { buildConflictRepairPrompt, buildConflictResolutionPrompt, buildConversationSystemPrompt, buildModifyDuringExecutionPrompt, buildModifyPlanPrompt, buildPlanWithResults, buildResearchPrompt, buildResearchToolsPrompt, buildSubagentSystemPrompt } from '../PlanPrompts';
 import type { RepoGroupLayout } from '../../interfaces/IWorktreeIsolation';
 import { createTask, type DiscoveredModel, type RunnerId } from '../../models/Task';
 
@@ -83,6 +83,30 @@ describe('buildModifyPlanPrompt', () => {
 
     expect(prompt).toContain('"title": "A1"');
     expect(prompt).not.toMatch(/WHOLE TDD BODY|LOG TAIL|attemptSkills|completionMarker/);
+  });
+});
+
+describe('the one-shot prompts, per transport', () => {
+  const now = new Date().toISOString();
+  const plan = { tasks: [createTask({ id: 'a', title: 'A' })], generatedAt: now, status: 'approved' as const, runners: ['claude-code' as RunnerId], lastUpdated: now };
+  const prompts = (tools: boolean) => [
+    buildPlanWithResults('goal', '', '', {}, ['claude-code'], undefined, DEFAULT_PLANNER_MODES, tools),
+    buildModifyPlanPrompt(plan, 'restyle', {}, undefined, undefined, true, tools),
+    buildModifyDuringExecutionPrompt([], '[]', 'add a task', {}, ['claude-code'], undefined, DEFAULT_PLANNER_MODES, tools),
+  ];
+
+  it('ask a coding agent for submit_plan and never for JSON in its reply', () => {
+    for (const prompt of prompts(true)) {
+      expect(prompt).toContain('Submit the plan ONLY through submit_plan. Never write the plan as JSON in your reply.');
+      expect(prompt).not.toMatch(/as JSON\.|as a JSON object|Output ONLY the JSON object|JSON format/);
+    }
+  });
+
+  it('ask an API planner for the JSON envelope and never for submit_plan', () => {
+    for (const prompt of prompts(false)) {
+      expect(prompt).toContain('Output ONLY the JSON object.');
+      expect(prompt).not.toContain('submit_plan');
+    }
   });
 });
 

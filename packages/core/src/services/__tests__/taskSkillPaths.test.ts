@@ -159,6 +159,38 @@ describe('task skills checked where a planner reply lands', () => {
     expect(skillCheckNote(session.planState?.conversationHistory)?.content).toContain('- op 1 (update): skill "later" not found');
   });
 
+  it('refuses a mixed envelope batch whose added task carries a planner skill on a subtask, changing nothing, then lands the corrected nested names', async () => {
+    const onNotice = vi.fn<(notice: SessionNotice) => void>();
+    const sub = (title: string, skills: unknown[], subtasks: unknown[] = []): unknown => ({ ...createTask({ title }), subtasks, skills });
+    const batch = (child: unknown) => [
+      { op: 'update', taskId: '#1', changes: { title: 'Renamed' } },
+      { op: 'add', task: { title: 'Docs', skills: ['tdd'], subtasks: [child] } },
+    ];
+    let between: string[] = [];
+    const continueConversation = vi.fn()
+      .mockResolvedValueOnce(opsTurn(batch(sub('Wire', ['grilling']))))
+      .mockImplementationOnce(async () => {
+        between = session.planTasks.map((t) => t.title);
+        return opsTurn(batch(sub('Wire', ['pr-style', 'Bad Name!', 'later'], [sub('Deep', ['tdd'])])));
+      });
+    const session = makeSession({ skillsService, onNotice, aiService: { continueConversation, hasActiveConversation: () => true } });
+    session.loadPlan(twoTaskPlan(), 'build it', testWorkspace, { persist: false });
+
+    await session.continueConversation('document it');
+
+    expect(continueConversation.mock.calls[1][0]).toMatch(/op 2 \(add\): subtask "Wire": "grilling" is a planner skill/);
+    expect(between).toEqual(['Setup', 'Build']);
+    const docs = session.planTasks.find((t) => t.title === 'Docs')!;
+    expect(session.planTasks[0].title).toBe('Renamed');
+    expect(docs.skills).toEqual(['tdd']);
+    expect(docs.subtasks[0].skills).toEqual(['pr-style', 'later']);
+    expect(docs.subtasks[0].subtasks[0].skills).toEqual(['tdd']);
+    expect(onNotice.mock.calls.map(([n]) => n.message)).toEqual([
+      expect.stringMatching(/^op 2 \(add\): subtask "Wire": "Bad Name!" is not a valid skill name/),
+      expect.stringMatching(/^op 2 \(add\): subtask "Wire": skill "later" not found/),
+    ]);
+  });
+
   it('refuses a chip edit naming a planner skill, and warns about one not found', async () => {
     const onNotice = vi.fn<(notice: SessionNotice) => void>();
     const session = makeSession({ skillsService, onNotice });

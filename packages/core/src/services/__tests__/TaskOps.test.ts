@@ -838,3 +838,22 @@ describe('applyTaskOps — the ops flag (ADR-0020)', () => {
     expect(res.tasks[2].ops).toBeUndefined();
   });
 });
+
+describe('applyTaskOps — an added task\'s subtask skills', () => {
+  // A subtask is a full task object; its skills arrive as the planner wrote them.
+  const sub = (title: string, skills?: unknown[], subtasks: Task[] = []) => ({ ...createTask({ title }), subtasks, ...(skills ? { skills } : {}) }) as Task;
+
+  it('stores them as a task\'s are, at every depth, each independent of its parent\'s', () => {
+    const res = applyTaskOps(samplePlan(), [{
+      op: 'add',
+      task: { title: 'Docs', skills: ['tdd'], subtasks: [sub('Child', [' Deploy ', 'Bad Name!'], [sub('Grandchild', ['LATER', 7])]), sub('Bare')] },
+    }], ['claude-code']);
+
+    expect(res.ok).toBe(true);
+    const added = res.tasks[3];
+    expect(added.skills).toEqual(['tdd']);
+    expect(added.subtasks.map((s) => s.skills)).toEqual([['deploy'], undefined]);
+    expect(added.subtasks[0].subtasks[0].skills).toEqual(['later']);
+    expect('skills' in added.subtasks[1]).toBe(false);
+  });
+});
