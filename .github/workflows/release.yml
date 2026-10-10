@@ -35,18 +35,27 @@ jobs:
           npm test
 
       # npm reads the token from .npmrc; setup-node writes it from NODE_AUTH_TOKEN.
+      # A package already at this version is skipped, so a release stopped
+      # partway can be re-run: npm never takes a version twice.
       - name: Publish npm packages (dependency order)
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           v="${GITHUB_REF_NAME#v}"
-          npm publish -w packages/core
+          publish() {
+            if npm view "$1@$v" version >/dev/null 2>&1; then
+              echo "$1@$v is already published; skipping"
+            else
+              (cd "$2" && npm publish)
+            fi
+          }
+          publish @ordewell/core packages/core
           node .github/workflows/wait-for-npm.mjs @ordewell/core "$v"
-          npm publish -w packages/web
+          publish @ordewell/web packages/web
           node .github/workflows/wait-for-npm.mjs @ordewell/web "$v"
-          npm publish -w packages/cli
+          publish @ordewell/cli packages/cli
           node .github/workflows/wait-for-npm.mjs @ordewell/cli "$v"
-          cd packages/cli-alias && npm publish
+          publish ordewell packages/cli-alias
 
   vscode-publish:
     runs-on: ubuntu-latest
@@ -75,11 +84,11 @@ jobs:
       - name: Publish to Marketplace
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: npx vsce publish --packagePath packages/vscode/*.vsix
+        run: npx vsce publish --packagePath packages/vscode/*.vsix --skip-duplicate
 
       # Same .vsix as the Marketplace, so Open VSX (Cursor, VSCodium, Windsurf) never
-      # lags a release. --skip-duplicate keeps a re-pushed tag, or a version already
-      # published by hand, from failing the job.
+      # lags a release. --skip-duplicate here and on the Marketplace keeps a
+      # re-pushed tag, or a version already published by hand, from failing the job.
       - name: Publish to Open VSX
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
