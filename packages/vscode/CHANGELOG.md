@@ -1,5 +1,42 @@
 # Change Log
 
+## [0.8.0] — 2026-10-10
+
+### Security
+
+- **A Claude Code planner can no longer write through its native plan file.**
+  It now researches with `Read`, `Grep` and `Glob` only; shell tools and
+  Claude Code's plan-mode transitions are withheld.
+- **A runner never inherits another Ordewell's MCP credential** when Ordewell
+  runs inside another Ordewell's task.
+
+### Added
+
+- **Skills, unified.** Planner skills and task skills are one `SKILL.md`
+  format, in `~/.ordewell/skills/` or a workspace's committed
+  `.ordewell/skills/`. The planner can attach a skill to a task or subtask, and
+  its text goes into that task's prompt on every runner.
+- **Skill chips on task and subtask cards.** Add or remove a task's skills
+  from the card; they lock while the plan executes, like its model and mode.
+- **`/tdd` is a skill.** It asks the planner to attach `tdd` to the tasks it
+  fits, instead of applying TDD to every task.
+
+### Changed
+
+- **`/name` keeps your text.** The message is sent as typed, with the skill's
+  instructions beside it, and the chat shows which skill was loaded.
+- **Tools or nothing.** A task or coding-agent planner whose Ordewell tools
+  cannot connect is respawned once, then fails before its prompt is sent.
+- **A coding-agent planner plans through tools only**; plan JSON in its reply
+  is not taken as a plan.
+
+### Removed
+
+- The terminal transport, its tmux requirement, the Structured toggle and the
+  Structured/Terminal badges. Every runner is driven through its own protocol.
+- The `verify` and `tdd` toggles. Use `/tdd` or attach the skill to a task.
+- Plugin runners.
+
 ## [0.7.2] — 2026-10-07
 
 ### Security

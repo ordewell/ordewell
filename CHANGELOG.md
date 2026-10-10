@@ -6,7 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
-## [Unreleased]
+## [0.8.0] — 2026-10-10
+
+### Security
+
+- **A Claude Code planner can no longer write through its native plan file.**
+  Claude Code's plan mode let a Bash heredoc write its own plan file, inside or
+  outside the workspace, even with `Write` disallowed. A Claude Code planner
+  now runs under `--permission-mode dontAsk` with `Bash`, `PowerShell`,
+  `EnterPlanMode` and `ExitPlanMode` withheld alongside the edit tools, on
+  fresh and resumed sessions alike. It researches with `Read`, `Grep` and
+  `Glob`; it no longer runs shell commands
+  ([ADR-0008](docs/adr/0008-planner-exploration-envelope.md)).
+- **A runner never inherits another Ordewell's MCP credential.** When Ordewell
+  runs inside a task of another Ordewell, `ORDEWELL_MCP_TOKEN_*` variables from
+  the host or workspace environment are dropped, and a parent's server entry
+  and allow rule are removed from an inherited `OPENCODE_CONFIG_CONTENT`. Only
+  the attempt's own launch variables carry a token.
 
 ### Added
 
@@ -57,6 +73,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   failure fails the task or planner turn before its prompt is sent.
 - **Checkpoints use the `checkpoint` tool only.** Text checkpoint markers are
   no longer interpreted.
+- **A coding-agent planner plans through tools only.** A Claude Code, Codex or
+  OpenCode planner's plan or edit lands only from an accepted `submit_plan` or
+  `edit_plan` call; plan JSON in its reply is prose. A one-shot planning
+  session that ends without an accepted submission gets one corrective
+  session, then fails with the reasons its calls were refused.
 - Leftover plugin manifests in `~/.ordewell/plugins/` are skipped, with one
   notice at host startup.
 - **`/name` keeps your text.** The message is sent as you typed it, with the
