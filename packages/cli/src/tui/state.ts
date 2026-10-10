@@ -207,7 +207,7 @@ export function visibleItems(picker: PickerState): PickerItem[] {
 /** A planner approval prompt awaiting a yes/no. Mirrors the daemon's SessionMessage. */
 export interface ApprovalRequestView {
   id: string;
-  kind: 'external_path' | 'shell_command' | 'url_fetch';
+  kind: 'external_path' | 'shell_command' | 'url_fetch' | 'mcp_tool';
   subject: string;
   scope: string;
   detail?: string;

@@ -129,6 +129,13 @@ Environment:
   ORCHESTRATOR_MODEL         Default: deepseek/deepseek-v4-flash
   OPENROUTER_BASE_URL        Default: https://openrouter.ai/api/v1
   ORDEWELL_AUTONOMOUS_MODE   true: Full, false: Guarded, for new sessions (see "ordewell auto")
+  ORDEWELL_APPROVAL_MODE     What the planner may run beyond read-only commands: auto (default:
+                             Guarded asks, Full runs only the allowlist), ask, allowlist or allow.
+                             File writes are always refused
+  ORDEWELL_APPROVAL_ALLOW    Extra allowlist entries, comma-separated: "gh issue list",
+                             "gcloud * * list", "mcp:find-*", "https://docs.example.com/*";
+                             a leading ! excludes
+  ORDEWELL_APPROVAL_DEFAULTS false: drop the built-in read-only allowlist
   ORDEWELL_PORT              Daemon port CLI commands target (default: 3742)
   ORDEWELL_DIRENV            false: agents skip the project's direnv .envrc
   ORDEWELL_RESEARCH_ENABLED  true (default) or false

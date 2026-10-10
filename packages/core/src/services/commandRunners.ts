@@ -334,7 +334,7 @@ function unwrapXargs(seg: Segment, dialect: Dialect): { seg: Segment } | { reaso
   if (replace && tokens[0].includes(replace)) {
     return { reason: `"xargs" substitutes its input into "${tokens[0]}", so the input decides which program runs. Name the program directly.` };
   }
-  return { seg: { ...toSegment(tokens, false, dialect), expandable: seg.expandable } };
+  return { seg: { ...toSegment(tokens, false, dialect), expandable: seg.expandable, globbed: seg.globbed } };
 }
 
 /**
@@ -345,7 +345,7 @@ function unwrapXargs(seg: Segment, dialect: Dialect): { seg: Segment } | { reaso
  * Termination is structural: every peel consumes at least the wrapper's own
  * binary token.
  *
- * `piped`, `stdinRedirected` and `expandable` carry through, so piping into a wrapped interpreter
+ * `piped`, `stdinRedirected`, `expandable` and `globbed` carry through, so piping into a wrapped interpreter
  * is still a pipe into an interpreter, and a wrapped command whose arguments
  * are not fully visible still cannot take the silent fast path.
  */
@@ -393,7 +393,7 @@ export function unwrap(seg: Segment, dialect: Dialect): Unwrapped {
     wrappers.push(current.binary);
     const inner = toSegment(scan.tokens, current.piped, dialect);
     assignments.push(...inner.assignments);
-    current = { ...inner, assignments: [], expandable: current.expandable, stdinRedirected: current.stdinRedirected };
+    current = { ...inner, assignments: [], expandable: current.expandable, globbed: current.globbed, stdinRedirected: current.stdinRedirected };
   }
 
   return { seg: { ...current, assignments }, wrappers, runner };

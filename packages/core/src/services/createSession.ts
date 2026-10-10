@@ -9,7 +9,8 @@ import { forkPlanState, type ForkedDialogue } from './conversationFork';
 import { Planner } from './Planner';
 import { TaskOrchestrator, type OrchestratorObserver } from './TaskOrchestrator';
 import { PlanStore } from './PlanStore';
-import { ApprovalPolicy } from './ApprovalPolicy';
+import { ApprovalPolicy, effectiveApprovalMode } from './ApprovalPolicy';
+import { DEFAULT_PLANNER_ALLOWLIST } from './plannerAllowlist';
 import { PendingApprovals, type PendingApproval } from './PendingApprovals';
 import { RunnerApprovals } from './RunnerApprovals';
 import { approvalScopes, isRunnerApproval, type ApprovalAnswer, type ApprovalRequest } from '../interfaces/IApproval';
@@ -261,8 +262,9 @@ export function createSession(deps: SessionDeps): Session {
   });
 
   const approvalPolicy = new ApprovalPolicy({
-    mode: deps.config.approvalMode,
-    preApproved: deps.config.approvalPreApproved,
+    // Read per request, so a change of autonomy level or allowlist applies to the next call.
+    mode: () => effectiveApprovalMode(deps.config.approvalMode, deps.config.autonomousMode),
+    preApproved: () => [...(deps.config.approvalDefaults ? DEFAULT_PLANNER_ALLOWLIST : []), ...deps.config.approvalPreApproved],
     ask: (req) => approvals.ask(req),
     // The interactive path (`asked`) already broadcasts approval_request +
     // approval_settled; only the silent sources need a signal, or a
@@ -410,6 +412,7 @@ export class Session {
     liveOutput: (taskId, opts) => this.orchestrator.getLiveOutput(taskId, opts),
     lastAttempt: (taskId) => lastAttemptDigest(this.taskLogLocation, taskId),
     taskSkills: () => this.workspaceSkills(),
+    runCommand: (command, signal) => this.fsAdapter.bash(command, signal),
   });
 
   constructor(parts: SessionParts) {
@@ -908,6 +911,7 @@ export class Session {
       contextWindow: this.modelResolver.contextWindowFor?.(this.config.orchestratorModel),
       fs: this.fsAdapter,
       fetcher: this.fetcher,
+      approval: this.approvalPolicy,
       plannerTools: { sessionId: this.sessionId, handler: this.plannerTools },
       skills: this.workspaceSkills().listSkills(),
     };

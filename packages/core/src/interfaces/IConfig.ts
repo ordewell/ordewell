@@ -1,5 +1,5 @@
 import type { RunnerId } from '../models/Task';
-import type { ApprovalMode } from '../services/ApprovalPolicy';
+import type { ApprovalModeSetting } from '../services/ApprovalPolicy';
 import type { ProviderModelLists } from '../services/ProviderRouting';
 
 /**
@@ -79,13 +79,16 @@ export interface IConfig {
 
   /**
    * What to do when planner research reaches outside its default envelope — an
-   * out-of-workspace path, or a shell command beyond the auto-allowed read-only
-   * set. `ask` prompts the user (and denies where no surface can prompt, such as
-   * headless runs); `allow` and `deny` skip the prompt entirely.
+   * out-of-workspace path, a shell command beyond the auto-allowed read-only
+   * set, an MCP tool. `ask` prompts the user (and denies where no surface can
+   * prompt, such as headless runs); `allow` and `deny` skip the prompt
+   * entirely; `auto` follows {@link autonomousMode} (ADR-0026).
    */
-  approvalMode: ApprovalMode;
-  /** Scopes granted up front, so CI and power users never see a prompt. Trailing `*` matches by prefix. */
+  approvalMode: ApprovalModeSetting;
+  /** Allowlist entries granted up front, beside the defaults (ADR-0026, `plannerAllowlist.ts`). */
   approvalPreApproved: string[];
+  /** Whether the built-in allowlist of read-only command families and MCP tools applies. */
+  approvalDefaults: boolean;
 
   /** Get the base URL for an OpenAI-compatible provider. */
   getProviderBaseUrl(provider: AiProvider): string;

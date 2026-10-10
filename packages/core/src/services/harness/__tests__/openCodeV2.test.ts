@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { OpenCodeAdapter } from '../OpenCodeAdapter';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, SpawnFn, TaskStartOptions } from '../AgentAdapter';
 import { fakeSpawn, sseResponse, type FakeEventStream } from '../../__tests__/harnessTestKit';
+import { OPENCODE_PLANNER_PERMISSION } from '../openCodeOrdewell';
 
 /**
  * OpenCode 2.x (`opencode serve`, the `/api` surface), recorded at v2.0.22: a
@@ -150,7 +151,7 @@ describe('OpenCode 2.x — start', () => {
     adapter.dispose();
   });
 
-  it('creates the planner session read-only: plan agent, model, and the question and edit rules', async () => {
+  it('creates the planner session read-only: plan agent, model, and Ordewell\'s permission policy', async () => {
     const server = fakeServer();
     const { adapter } = await start(server, plannerStart({ effort: 'high' }));
 
@@ -158,10 +159,7 @@ describe('OpenCode 2.x — start', () => {
     expect(created?.body).toEqual({
       agent: 'plan',
       model: { providerID: 'opencode-go', id: 'deepseek-v4.1-flash', variant: 'high' },
-      permissions: [
-        { action: 'question', resource: '*', effect: 'deny' },
-        { action: 'edit', resource: '*', effect: 'deny' },
-      ],
+      permissions: Object.entries(OPENCODE_PLANNER_PERMISSION).map(([action, effect]) => ({ action, resource: '*', effect })),
     });
     const prompt = server.requests.find((r) => r.method === 'PUT');
     expect(prompt?.path).toBe(`/api/experimental/session/${SES}/instructions/entries/ordewell-planner`);
@@ -395,7 +393,7 @@ describe('OpenCode 2.x — permission requests', () => {
     adapter.dispose();
   });
 
-  it('always refuses a planner\'s request, whatever its start carries, and announces it', async () => {
+  it('holds a planner\'s request for its envelope, whatever its start carries, and replies with its answer', async () => {
     const server = fakeServer();
     const { adapter } = await start(server, plannerStart({ mode: 'build', flags: { permissionMode: 'build', modeSettings: { approvals: 'auto' } } }));
     const events: AgentEvent[] = [];
@@ -404,13 +402,49 @@ describe('OpenCode 2.x — permission requests', () => {
     await until(() => server.requests.some((r) => r.path.endsWith('/prompt')));
     stream.push(started());
     stream.push(permissionAsk('per_1'));
+    await until(() => events.some((e) => e.type === 'permission_request'));
+    expect(server.requests.some((r) => r.path.endsWith('/permission/per_1/reply'))).toBe(false);
+    expect(events.find((e) => e.type === 'permission_request')).not.toHaveProperty('decided');
+    expect(adapter.answerPermission('per_1', { decision: 'deny' })).toBe(true);
     await until(() => server.requests.some((r) => r.path.endsWith('/permission/per_1/reply')));
     stream.push(succeeded());
     await turn;
 
     expect(server.requests.find((r) => r.path.endsWith('/permission/per_1/reply'))?.body).toEqual({ decision: 'reject' });
-    expect(events.find((e) => e.type === 'permission_request')).not.toHaveProperty('decided');
     expect(adapter.answerPermission('per_1', { decision: 'allow' })).toBe(false);
+    adapter.dispose();
+  });
+});
+
+describe('OpenCode 2.x — MCP servers', () => {
+  it('lists Ordewell\'s tools as tools of their own, not inside code mode\'s `execute`', async () => {
+    const server = fakeServer();
+    const { adapter } = await start(server, taskStart({ mcp: { name: 'ordewell', url: 'http://127.0.0.1:1/mcp', headers: { authorization: 'Bearer t' } } }));
+
+    const replaced = server.requests.find((r) => r.method === 'PUT' && r.path === '/api/experimental/mcp/ordewell');
+    expect(replaced?.body).toEqual({ config: { type: 'remote', url: 'http://127.0.0.1:1/mcp', headers: { authorization: 'Bearer t' }, codemode: false } });
+    expect(server.requests.indexOf(replaced!)).toBeLessThan(server.requests.findIndex((r) => r.path === '/api/session'));
+    adapter.dispose();
+  });
+
+  it('reads the attach state from /api/mcp, and takes a planner request for a listed server\'s tool as that tool', async () => {
+    const server = fakeServer({
+      'GET /api/mcp': () => ({ data: [{ name: 'ordewell', status: { status: 'connected' } }, { name: 'todoist', status: { status: 'connected' } }] }),
+    });
+    const { adapter } = await start(server, plannerStart({ mcp: { name: 'ordewell', url: 'http://127.0.0.1:1/mcp', headers: {} } }));
+    expect(await adapter.mcpAttached()).toBe(true);
+
+    const events: AgentEvent[] = [];
+    void adapter.send('go', (e) => events.push(e));
+    const stream = await server.stream();
+    await until(() => server.requests.some((r) => r.path.endsWith('/prompt')));
+    stream.push(started());
+    stream.push({ type: 'permission.asked', data: { id: 'per_1', sessionID: SES, action: 'todoist_find-tasks', resources: ['*'] } });
+    stream.push({ type: 'permission.asked', data: { id: 'per_2', sessionID: SES, action: 'shell', resources: ['ls'] } });
+    await until(() => events.filter((e) => e.type === 'permission_request').length === 2);
+
+    const asks = events.flatMap((e) => (e.type === 'permission_request' ? [e.ask] : []));
+    expect(asks).toEqual([{ kind: 'mcp', scope: 'todoist_find-tasks', tool: 'find-tasks', server: 'todoist' }, { kind: 'other' }]);
     adapter.dispose();
   });
 });

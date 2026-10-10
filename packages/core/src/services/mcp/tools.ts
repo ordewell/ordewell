@@ -28,6 +28,10 @@ const listModelsInput = z.object({
   runner: z.string().min(1).describe('A runner id from list_runners.'),
 });
 
+const runCommandInput = z.object({
+  command: z.string().min(1).describe('One shell command line, run from the workspace root.'),
+});
+
 const loadSkillInput = z.object({
   name: z.string().min(1).describe('The name of an Ordewell planner skill to load.'),
 });
@@ -102,6 +106,7 @@ export type CheckpointArgs = z.infer<typeof checkpointInput>;
 export type ListRunnersArgs = z.infer<typeof listRunnersInput>;
 export type ListModelsArgs = z.infer<typeof listModelsInput>;
 export type LoadSkillArgs = z.infer<typeof loadSkillInput>;
+export type RunCommandArgs = z.infer<typeof runCommandInput>;
 export type SubmitPlanArgs = z.infer<typeof submitPlanInput>;
 export type EditPlanArgs = z.infer<typeof editPlanInput>;
 export type TaskQueryArgs = z.infer<typeof taskQueryInput>;
@@ -146,6 +151,7 @@ export interface TaskToolHandler {
 
 export interface PlannerToolHandler {
   loadSkill?: Run<LoadSkillArgs>;
+  runCommand?: Run<RunCommandArgs>;
   listRunners?: Run<ListRunnersArgs>;
   listModels?: Run<ListModelsArgs>;
   submitPlan?: Run<SubmitPlanArgs>;
@@ -196,11 +202,11 @@ export const TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
 ];
 
 /**
- * Claude Code's plan mode refuses an MCP tool that does not declare itself
- * read-only, pre-allowed or not, and the harness planner runs in plan mode.
- * True of the workspace for every planner tool: `submit_plan` and `edit_plan`
- * write only Ordewell's plan, through the same validation as the envelopes
- * (ADR-0022, P1/P2).
+ * A harness plan mode refuses an MCP tool that does not declare itself
+ * read-only, pre-allowed or not. True of the workspace for every planner tool:
+ * `submit_plan` and `edit_plan` write only Ordewell's plan, through the same
+ * validation as the envelopes (ADR-0022, P1/P2), and `run_command` refuses
+ * every write the classifier sees (ADR-0026).
  */
 const PLANNER_READ_ONLY = { readOnlyHint: true };
 
@@ -217,6 +223,8 @@ export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     taskQueryInput, (h) => h.taskQuery?.bind(h), PLANNER_READ_ONLY),
   tool('task_output', "Read the recent output of a running task, to check what its runner is doing; paged by offset. A task that is not running answers with its verdict, output summary and a digest of its last attempt.",
     taskOutputInput, (h) => h.taskOutput?.bind(h), PLANNER_READ_ONLY),
+  tool('run_command', 'Run a shell command for research: git, gh, az, kubectl, the project\'s own tooling, anything you need to look at. Read-only commands run at once; others ask the user, once per command family; commands that write files are refused. Use it instead of a shell of your own.',
+    runCommandInput, (h) => h.runCommand?.bind(h), PLANNER_READ_ONLY),
   tool('load_skill', 'Load an Ordewell planner skill by name. Returns its instructions; only model-invocable planner skills can be loaded.',
     loadSkillInput, (h) => h.loadSkill?.bind(h), PLANNER_READ_ONLY),
 ];

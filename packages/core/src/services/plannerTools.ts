@@ -11,6 +11,7 @@ import type { TaskOp } from './TaskOps';
 import { checkOpSkills, checkPlanSkills, type SkillLookup } from './taskSkills';
 import type { ToolRead } from './PlannerConversation';
 import type { McpToolReply, PlannerToolHandler } from './mcp';
+import type { ToolOutcome } from '../interfaces/IFileSystem';
 
 /**
  * The session side of the planner's catalog and submission tools (ADR-0022):
@@ -40,6 +41,8 @@ export interface PlannerToolsHost {
   lastAttempt(taskId: string): string | null;
   /** The catalog a plan's tasks will see where they run, which attached skill names are checked against. */
   taskSkills(): SkillLookup;
+  /** The planner's research shell: classified, confined and approved as the API planner's `bash` is (ADR-0026). */
+  runCommand(command: string, signal: AbortSignal): Promise<ToolOutcome>;
 }
 
 /**
@@ -79,6 +82,11 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
         return { isError: true, text: 'No planning turn is open to load a skill.' };
       }
       return { text: skill.content };
+    },
+
+    async runCommand({ command }, { signal }) {
+      const outcome = await host.runCommand(command, signal);
+      return { text: outcome.output || (outcome.success ? '(no output)' : 'The command failed with no output.'), ...(outcome.success ? {} : { isError: true }) };
     },
 
     async listRunners() {

@@ -624,12 +624,27 @@ token is narrower than a session), "attempt id", "API key".
 **Planner token** — the credential that binds one session's harness planner
 conversation to the *Ordewell MCP server*. It lists only the planner tools:
 `list_runners`, `list_models`, `task_query`, `task_output` and `load_skill`,
-which read Ordewell state and the planner skill catalog, and `submit_plan` and
-`edit_plan`, the only writes, which
+which read Ordewell state and the planner skill catalog; `run_command`, the
+planner's research shell, inside the planner's envelope (ADR-0026); and
+`submit_plan` and `edit_plan`, the only writes, which
 go through the same validation and commit path as the plan and `taskOps`
 envelopes. Revoked when the planner process is disposed.
 *Avoid:* "session token", "admin token", and describing the planner as
 write-capable — it writes nothing but the plan, and only through validation.
+
+**Planner allowlist** — the planner's standing approvals (ADR-0026): command
+rules (`gh issue list`, `gcloud * * list`), MCP tool rules (`mcp:find-*`) and
+scope patterns, with `!` exclusions that always win. What it covers runs
+without asking anyone, in every *approval mode*; file writes are refused
+whatever it says. The built-in list holds read-only families only.
+*Avoid:* "whitelist", "pre-approved scopes" for the rules (a rule names an
+operation by its words, a scope is what one approval remembers).
+
+**Approval mode** — what happens to a planner request the *planner allowlist*
+does not cover: `ask` the user, refuse it (`allowlist`), or run it (`allow`).
+The default, `auto`, follows the autonomy level: Guarded asks, Full refuses
+and the plan carries the change as an *ops task*.
+*Avoid:* conflating it with a task's mode or the autonomy level itself.
 
 **Completion call** — a `task_complete({status, summary, reason?})` call made
 with a task's *task token*: the only runner completion evidence. It is handed

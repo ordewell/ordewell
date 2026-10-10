@@ -86,9 +86,10 @@ ADR-0008 stay as they are.
   fewer prompts or more `auto` commands. Relaxing the classifier because a
   sandbox exists would widen ADR-0008's envelope, and that needs its own ADR,
   which would also have to account for the platforms where B5 applies.
-- **Scope (B8).** This covers the shell behind the API planner's `bash` tool and
-  its research subagents. Harness planners keep their own read-only modes
-  (ADR-0009), and runners are scoped by their mode (ADR-0001).
+- **Scope (B8).** This covers the shell behind the API planner's `bash` tool,
+  its research subagents, and the harness planners' `run_command`, which is the
+  same shell ([ADR-0026](0026-one-envelope-for-every-planner.md)). Runners are
+  scoped by their mode (ADR-0001).
 
 ## Considered options
 

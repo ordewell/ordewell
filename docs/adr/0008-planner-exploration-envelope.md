@@ -318,19 +318,22 @@ resolves rather than as written.
 
 ## Harness planners and native plan files
 
-Harness planners bypass `commandPolicy`, `BaseFileSystem` and `IApproval`
-(ADR-0009). Their native permission controls must preserve the no-mutation
-invariant; a native plan file has no exception to it, inside or outside the
-workspace. Ordewell's plan is submitted through its validated plan tools or
-reply envelope (ADR-0022), not a runner-owned Markdown file.
+Harness planners research inside this envelope too
+([ADR-0026](0026-one-envelope-for-every-planner.md)): their commands run
+through the Ordewell server's `run_command`, which is this file's `bash`, and
+the Claude planner's own tool requests reach `IApproval`. Their native
+permission controls must still preserve the no-mutation invariant; a native
+plan file has no exception to it, inside or outside the workspace. Ordewell's
+plan is submitted through its validated plan tools or reply envelope
+(ADR-0022), not a runner-owned Markdown file.
 
-Claude Code planners use `--permission-mode dontAsk`, with `Edit`, `Write`,
-`MultiEdit`, `NotebookEdit`, `KillShell`, `Bash`, `PowerShell`, `EnterPlanMode`
-and `ExitPlanMode` disallowed. Direct file research through `Read`, `Grep` and
-`Glob` remains available. Shell research is withheld entirely: command-pattern
-denials cannot cover every spelling of a write, and `dontAsk` alone still
-honors saved permission allow rules. Bare tool denials take precedence over
-allow rules ([Claude Code permissions](https://code.claude.com/docs/en/permissions)).
+Claude Code planners run in `default` mode with `--permission-prompt-tool
+stdio`, with `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `KillShell`, `Bash`,
+`PowerShell`, `EnterPlanMode` and `ExitPlanMode` disallowed. Direct file
+research through `Read`, `Grep` and `Glob` remains available. The native shell
+is withheld entirely: command-pattern denials cannot cover every spelling of a
+write, and saved permission allow rules run commands without asking. Bare tool
+denials take precedence over allow rules ([Claude Code permissions](https://code.claude.com/docs/en/permissions)).
 The same fixed flags apply to fresh and
 resumed planners, regardless of any task mode fields passed to the adapter.
 Task runners retain their manifest-selected modes.
@@ -347,12 +350,10 @@ permission requests are declined. This is OS-level enforcement for agent
 commands on supported hosts. Claude's tool denials are native CLI enforcement,
 not an OS sandbox or a prohibition on the CLI persisting its own session data.
 
-OpenCode's present controls do not establish the same shell guarantee: 1.x
-withholds edit tools per message, and 2.x denies `edit` at the session, but
-neither adapter explicitly denies shell writes. The installed 1.18.35 plan
-agent allows Bash and exempts its native plan files from its edit denial.
-This remains a gap requiring a separate OpenCode enforcement change; the plan
-agent's name and a model's refusal to write are not security evidence.
+OpenCode's planner shell gap is closed by ADR-0026: its `bash` and `task`
+tools are withheld, and its server runs under Ordewell's own permission
+policy, which denies every write and shell tool. The plan agent's name and a
+model's refusal to write were never security evidence.
 
 ## Considered options
 
@@ -385,3 +386,4 @@ agent's name and a model's refusal to write are not security evidence.
 - 2026-10-07 — `${…}` in substitutions, `$'…'` escapes, here-document bodies, interpreter families, `deno eval`, `data:` URLs, PowerShell's positional command, cmd.exe command names.
 - 2026-10-07 — here-document skipping fails closed outside a provable `<<` (comment, `${…}`/`$[…]`, `(( ))`); cmd.exe command words holding `/` or `=` refuse and never scope to a bare drive, `call` unwrapped and `start` refused; interpreter families match a version or suffix.
 - 2026-10-09 — Claude harness planners deny shell tools and native plan-mode transitions; the OpenCode shell enforcement gap is recorded.
+- 2026-10-10 — harness planners research inside this envelope through `run_command`, every planner's own requests reach `IApproval`, and pre-approved entries become allowlist rules with a mode tied to autonomy (ADR-0026).

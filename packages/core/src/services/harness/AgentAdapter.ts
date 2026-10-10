@@ -51,17 +51,19 @@ export type AgentEvent =
   | { type: 'subagent_started'; subagentId: string; brief: string; model?: string }
   | { type: 'subagent_finished'; subagentId: string; outcome: SubagentOutcome; digest: string }
   /**
-   * The agent asked to do something its mode does not cover. A planner always
-   * auto-denies it (T1) — a planner that can mutate is not a planner — and the
-   * adapter answers so the turn does not hang. A task's request stays open
-   * until {@link TaskModeAgentAdapter.answerPermission} (ADR-0018, A1).
+   * The agent asked to do something its mode does not cover. Without
+   * `decided` the request stays open until {@link AgentAdapter.answerPermission}:
+   * a task's for a person (ADR-0018, A1), a planner's for the planner's
+   * envelope (ADR-0026). An adapter that cannot hold a planner's request open
+   * denies it itself and says so in `decided`, so the turn does not hang.
    *
    * `input` and `suggestions` are the raw request; `suggestions` are the
    * agent's own session-scoped grants, what "Allow for this task" answers with.
-   * `decided` marks a request the task's mode already answered — the adapter
-   * replied as the manifest says that mode does — so it is shown, never asked.
+   * `decided` marks a request already answered — by the adapter, as the
+   * manifest says the task's mode does, or as a denial — so it is shown, never asked.
+   * `ask` is what a planner's open request is for, in the envelope's terms.
    */
-  | { type: 'permission_request'; id: string; name: string; detail: string; input?: Record<string, unknown>; suggestions?: unknown[]; toolUseId?: string; decided?: ApprovalDecision }
+  | { type: 'permission_request'; id: string; name: string; detail: string; input?: Record<string, unknown>; suggestions?: unknown[]; toolUseId?: string; decided?: ApprovalDecision; ask?: PlannerAsk }
   /** The agent withdrew an open request — an interrupt cancels the call it was for. It takes no answer now. */
   | { type: 'permission_cancelled'; id: string }
   /**
@@ -92,6 +94,18 @@ export type AgentEvent =
   | { type: 'message_dropped'; id: string }
   /** The turn failed. Carries the agent's own words — never a Ordewell paraphrase. */
   | { type: 'error'; message: string };
+
+/**
+ * What a planner's permission request is for, read from the runner's own
+ * request by its adapter, so one envelope decides it whichever runner asked
+ * (ADR-0026). `other` is anything the envelope never grants a planner.
+ */
+export type PlannerAsk =
+  /** `scope` is the tool's full name as the runner reports it; `tool` its own name, without the server. */
+  | { kind: 'mcp'; scope: string; tool: string; server?: string }
+  | { kind: 'fetch'; url: string }
+  | { kind: 'path'; path: string; directory: boolean }
+  | { kind: 'other' };
 
 interface AgentStartCommon {
   /** Workspace root. The agent works from here and, in read-only mode, cannot leave it. */
@@ -194,6 +208,13 @@ export interface AgentAdapter {
    * adapter that cannot inject the server at all, which cannot run tasks.
    */
   mcpAttached?(): Promise<boolean>;
+
+  /**
+   * Answer an open `permission_request`. False when the id is not open — it
+   * was answered, cancelled, or never asked. Absent on an adapter that leaves
+   * no planner request open.
+   */
+  answerPermission?(id: string, decision: ApprovalDecision): boolean;
 }
 
 /** What an adapter adds to run a task rather than a planner (ADR-0018). */
@@ -225,10 +246,6 @@ export interface TaskModeAgentAdapter extends AgentAdapter {
    * mid-turn.
    */
   steer?(id: string, text: string): Promise<boolean>;
-  /**
-   * Answer an open `permission_request`. False when the id is not open — it
-   * was answered, cancelled, or never asked.
-   */
   answerPermission(id: string, decision: ApprovalDecision): boolean;
 }
 

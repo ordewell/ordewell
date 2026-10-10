@@ -285,6 +285,8 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
   private readonly interruptedTurnIds = new Set<string>();
   /** A task's approval requests still waiting for an answer, by the request id as a string. */
   private readonly openPermissions = new Map<string, { requestId: number | string; method: string; params: Record<string, unknown> }>();
+  /** The tool each MCP server's latest call is for, which names the tool an approval asks about when its question does not. */
+  private readonly mcpCallsInProgress = new Map<string, string>();
   /**
    * The files each in-flight `fileChange` item touches. Its approval request
    * names only the item, and a person deciding needs to see the files.
@@ -405,14 +407,18 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     return {
       ...common,
       sandbox: 'read-only',
-      approvalPolicy: 'never',
+      // `on-request`, so a user's MCP tool reaches the planner's envelope as an approval
+      // (ADR-0026); under `never` Codex fails the call without asking. Commands and file
+      // changes it asks about are still declined: the sandbox holds, and commands go
+      // through Ordewell's `run_command`.
+      approvalPolicy: 'on-request',
       ...threadConfig,
       // `developerInstructions` layers on top of Codex's own base prompt, the
       // way Claude Code's `--append-system-prompt` does. `baseInstructions`
       // replaces it — which takes Codex's description of its own tools with
       // it, and a planner that has forgotten it can read the workspace
       // answers from a web search instead.
-      developerInstructions: opts?.systemPrompt,
+      developerInstructions: [opts?.systemPrompt, opts?.mcp ? CODEX_ORDEWELL.plannerInstructions() : ''].filter(Boolean).join('\n\n') || undefined,
     };
   }
 
@@ -522,7 +528,8 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     if (!open || !this.process) return false;
     this.openPermissions.delete(id);
     this.rpc.respond(open.requestId, TASK_APPROVALS[open.method].answer(decision.decision, open.params));
-    const note = decision.decision === 'deny' ? decision.note?.trim() : undefined;
+    // A planner's denial note is the envelope's, not a person's message, and stays out of its thread.
+    const note = decision.decision === 'deny' && this.role === 'task' ? decision.note?.trim() : undefined;
     if (note && this.turn?.id) this.requestSteer(this.turn.id, note);
     return true;
   }
@@ -838,10 +845,12 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
    */
   private answerServerRequest(msg: RpcMessage, emit: (e: AgentEvent) => void): void {
     const method = msg.method!;
-    if (CODEX_ORDEWELL.isOrdewellAsk({ method, params: msg.params ?? {} })) {
+    const params = msg.params ?? {};
+    if (CODEX_ORDEWELL.isOrdewellAsk({ method, params })) {
       this.rpc.respond(msg.id!, { action: 'accept', content: {} });
       return;
     }
+    if (this.holdMcpToolApproval(msg, method, params, emit)) return;
     const result = DECLINE_RESULTS[method];
     if (result) {
       this.rpc.respond(msg.id!, result);
@@ -854,7 +863,29 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
       id: String(msg.id ?? ''),
       name: method.split('/').pop() ?? method,
       detail: JSON.stringify(msg.params ?? {}),
+      decided: { decision: 'deny' },
     });
+  }
+
+  /**
+   * A planner's approval for a tool of the user's own MCP server, held for the
+   * planner's envelope to answer (ADR-0026). Codex names the server; the tool
+   * is in its question, or else the call it last started on that server.
+   */
+  private holdMcpToolApproval(msg: RpcMessage, method: string, params: Record<string, unknown>, emit: (e: AgentEvent) => void): boolean {
+    if (method !== 'mcpServer/elicitation/request') return false;
+    const meta = params._meta as { codex_approval_kind?: unknown; tool_params?: unknown } | undefined;
+    const server = params.serverName;
+    if (meta?.codex_approval_kind !== 'mcp_tool_call' || typeof server !== 'string') return false;
+    const asked = typeof params.message === 'string' ? /run tool "([^"]+)"/.exec(params.message)?.[1] : undefined;
+    const tool = asked ?? this.mcpCallsInProgress.get(server);
+    if (!tool) return false;
+    const id = String(msg.id);
+    const input = typeof meta.tool_params === 'object' && meta.tool_params !== null ? meta.tool_params as Record<string, unknown> : {};
+    const scope = `mcp__${server}__${tool}`;
+    this.openPermissions.set(id, { requestId: msg.id!, method, params });
+    emit({ type: 'permission_request', id, name: scope, detail: JSON.stringify(input), input, ask: { kind: 'mcp', scope, tool, server } });
+    return true;
   }
 
   /** A tool item entering `inProgress` — announce the call so the timeline moves. */
@@ -868,6 +899,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         emit({ type: 'tool_call', id: item.id, name: 'shell', args: { command: item.command, cwd: item.cwd }, ...(subagentId ? { subagentId } : {}) });
         return;
       case 'mcpToolCall':
+        if (item.server && item.tool) this.mcpCallsInProgress.set(item.server, item.tool);
         emit({ type: 'tool_call', id: item.id, name: shownToolName(item), args: item.arguments ?? {}, ...(subagentId ? { subagentId } : {}) });
         return;
       case 'dynamicToolCall':

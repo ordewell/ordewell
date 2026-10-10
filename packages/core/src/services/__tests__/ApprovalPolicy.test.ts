@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ApprovalPolicy } from '../ApprovalPolicy';
+import { ApprovalPolicy, effectiveApprovalMode, parseApprovalModeSetting, type ApprovalMode } from '../ApprovalPolicy';
+import { DEFAULT_PLANNER_ALLOWLIST } from '../plannerAllowlist';
 import { PendingApprovals } from '../PendingApprovals';
 import { classifyCommand } from '../commandPolicy';
 import type { ApprovalRequest } from '../../interfaces/IApproval';
@@ -388,5 +389,55 @@ describe('PendingApprovals decisions (ADR-0018, A1)', () => {
     expect(pending.outstanding().map((p) => p.id)).toEqual(['r']);
     pending.clear();
     expect(await runner).toEqual({ decision: 'deny' });
+  });
+});
+
+describe('ApprovalPolicy — the planner allowlist (ADR-0026)', () => {
+  const tool = (name: string): ApprovalRequest => ({ kind: 'mcp_tool', subject: name, scope: `mcp__todoist__${name}`, tool: name });
+
+  it('runs an MCP tool that reads without asking, and asks about one that writes', async () => {
+    const ask = vi.fn().mockResolvedValue(false);
+    const policy = new ApprovalPolicy({ ask, preApproved: DEFAULT_PLANNER_ALLOWLIST });
+
+    expect(await policy.request(tool('find-tasks'))).toBe(true);
+    expect(await policy.request(tool('add-tasks'))).toBe(false);
+    expect(ask).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes a command the classifier found covered as pre-approved, but never the outside directory it touches', async () => {
+    const ask = vi.fn().mockResolvedValue(false);
+    const policy = new ApprovalPolicy({ ask, preApproved: [] });
+
+    expect(await policy.request({ kind: 'shell_command', subject: 'gh issue list', scope: 'gh issue list', allowedBy: 'gh issue list' })).toBe(true);
+    expect(await policy.request({ kind: 'shell_command', subject: 'gh issue view -R x /opt/a', scope: 'gh issue view', scopes: ['gh issue view', '/opt/*'], allowedBy: 'gh issue view' })).toBe(false);
+    expect(ask).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the mode and the entries afresh on every request', async () => {
+    let mode: ApprovalMode = 'deny';
+    let entries: string[] = [];
+    const policy = new ApprovalPolicy({ mode: () => mode, preApproved: () => entries });
+
+    expect(await policy.request(req())).toBe(false);
+    entries = ['npm test'];
+    expect(await policy.request(req({ scope: 'npm test', subject: 'npm test --silent' }))).toBe(true);
+    mode = 'allow';
+    expect(await policy.request(req({ scope: 'az vm list', subject: 'az vm list' }))).toBe(true);
+  });
+});
+
+describe('the configured approval mode', () => {
+  it('follows the autonomy level when it is auto, and is otherwise what it says', () => {
+    expect(effectiveApprovalMode('auto', true)).toBe('deny');
+    expect(effectiveApprovalMode('auto', false)).toBe('ask');
+    expect(effectiveApprovalMode('ask', true)).toBe('ask');
+    expect(effectiveApprovalMode('allow', false)).toBe('allow');
+  });
+
+  it('reads allowlist as deny, and anything unknown as auto', () => {
+    expect(parseApprovalModeSetting('allowlist')).toBe('deny');
+    expect(parseApprovalModeSetting(' Ask ')).toBe('ask');
+    expect(parseApprovalModeSetting(undefined)).toBe('auto');
+    expect(parseApprovalModeSetting('whatever')).toBe('auto');
   });
 });

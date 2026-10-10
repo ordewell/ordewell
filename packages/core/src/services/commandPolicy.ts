@@ -47,6 +47,7 @@ import { SHELL_STATE_COMMANDS, dialectFor, lexAll, literalCdTarget, type Segment
 import { REFUSED_RUNNERS, XARGS_TARGETS, unwrap } from './commandRunners';
 import { FLAG_POLICY, UNIVERSAL_FLAGS, flagLabel, matchFlag, scanFlags, subcommandOf, takesNextToken, valueFlagIn } from './flagPolicy';
 import { AWK_FAMILY, SED_FAMILY, awkProgramArgs, awkRefusal, sedProgramArgs, sedRefusal } from './filterPrograms';
+import { commandAllowedBy, type PlannerAllowlist } from './plannerAllowlist';
 
 export type { Dialect } from './shellLexer';
 
@@ -275,6 +276,8 @@ export interface CommandPolicyOptions {
    * stops being navigation the classifier can follow.
    */
   cdpathSet?: boolean;
+  /** The planner's standing approvals (ADR-0026); an `ask` command they cover carries {@link CommandClassification.allowedBy}. */
+  allow?: PlannerAllowlist;
 }
 
 export type CommandTier = 'auto' | 'ask' | 'refuse';
@@ -285,6 +288,8 @@ export interface CommandClassification {
   scope: string;
   /** Populated for `refuse`: why, in a sentence the model can act on. */
   reason?: string;
+  /** For `ask`: the allowlist rule that pre-approves every part of the command that needed asking. */
+  allowedBy?: string;
 }
 
 
@@ -498,14 +503,16 @@ const SCOPE_LEAD_ARGS = 2;
  * the flag tables change.
  */
 function scopeFor(seg: Segment): string {
-  if (!MULTIPLEXERS.includes(seg.binary.toLowerCase())) return seg.binary;
+  // A program named by its path keeps the path: a grant for `gh` is not one for the repository's `./bin/gh`.
+  const name = seg.binaryPath ?? seg.binary;
+  if (!MULTIPLEXERS.includes(seg.binary.toLowerCase())) return name;
   const lead: string[] = [];
   for (const arg of seg.args) {
     if (arg.startsWith('-')) break;
     lead.push(arg);
     if (lead.length === SCOPE_LEAD_ARGS) break;
   }
-  return [seg.binary, ...lead].join(' ');
+  return [name, ...lead].join(' ');
 }
 
 function isAuto(seg: Segment, opts: CommandPolicyOptions): boolean {
@@ -516,6 +523,8 @@ function isAuto(seg: Segment, opts: CommandPolicyOptions): boolean {
   // directory the root contains.
   if (seg.binary === 'cd') return !opts.cdpathSet && !seg.cdSteered && literalCdTarget(seg) !== undefined;
   if (!AUTO_COMMANDS.includes(seg.binary)) return false;
+  // `./cat` is whatever file the repository ships under that name, not `cat`.
+  if (seg.binaryPath !== undefined) return false;
   // `x=/etc/passwd; cat $x` gives `cat` the lone argument `$x`, which
   // `pathLikeArgs`/`looksLikePath` cannot see is a path at all — the shell
   // resolves it to whatever the variable holds. An auto-tier command whose
@@ -827,5 +836,24 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
   // never covers `xargs cat`.
   const scope = [...new Set(nonAuto.map((u) => (u.runner ? `${u.runner} ${scopeFor(u.seg)}` : scopeFor(u.seg))))]
     .sort().join(' + ');
-  return { tier: 'ask', scope };
+  const allowedBy = opts.allow ? allowlistRule(nonAuto, opts.allow) : undefined;
+  return { tier: 'ask', scope, ...(allowedBy ? { allowedBy } : {}) };
+}
+
+/**
+ * The rule covering every part of a command that asks, or undefined. A part
+ * is never covered when the words a rule is matched against are not what
+ * would run: a runner appends words, the shell computes or globs them, a
+ * leading assignment redirects the program (`GH_HOST=… gh issue list` sends
+ * the token elsewhere), or a path names a file in place of the program.
+ */
+function allowlistRule(parts: { seg: Segment; runner?: string }[], allow: PlannerAllowlist): string | undefined {
+  const rules: string[] = [];
+  for (const { seg, runner } of parts) {
+    if (runner || seg.expandable || seg.globbed || seg.binaryPath !== undefined || seg.assignments.length > 0) return undefined;
+    const rule = commandAllowedBy(allow, { binary: seg.binary, args: seg.args, scopeWords: scopeFor(seg).split(' ').length - 1 });
+    if (!rule) return undefined;
+    rules.push(rule);
+  }
+  return [...new Set(rules)].join(' + ');
 }

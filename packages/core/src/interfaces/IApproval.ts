@@ -1,3 +1,5 @@
+import type { PlannerAllowlist } from '../services/plannerAllowlist';
+
 /**
  * The planner's single approval seam. Every capability that reaches beyond the
  * default read-only, in-workspace envelope — a path outside the workspace root,
@@ -14,9 +16,11 @@
 /**
  * `runner_tool` is a task runner's own tool request (ADR-0018, A1): it waits
  * for an answer as long as it takes, and never passes through the planner's
- * policy — the runner's mode already decided it needed asking.
+ * policy — the runner's mode already decided it needed asking. `mcp_tool` is
+ * a harness planner reaching for an MCP tool the user configured (ADR-0026),
+ * scoped to that one tool.
  */
-export type ApprovalKind = 'external_path' | 'shell_command' | 'url_fetch' | 'runner_tool';
+export type ApprovalKind = 'external_path' | 'shell_command' | 'url_fetch' | 'mcp_tool' | 'runner_tool';
 
 export interface ApprovalRequest {
   kind: ApprovalKind;
@@ -39,6 +43,14 @@ export interface ApprovalRequest {
   taskId?: string;
   /** "Allow for this task" can be offered: the runner proposed its own session-scoped grant. */
   allowForTask?: boolean;
+  /**
+   * The allowlist rule the command classifier found covering every part of a
+   * `shell_command` that asks (ADR-0026). It settles `scope`, never the
+   * outside directories in `scopes`.
+   */
+  allowedBy?: string;
+  /** For `mcp_tool`: the tool's own name, without its server, which allowlist tool rules match. */
+  tool?: string;
 }
 
 /**
@@ -73,6 +85,8 @@ export function isRunnerApproval(request: ApprovalRequest): boolean {
 
 export interface IApproval {
   request(req: ApprovalRequest): Promise<boolean>;
+  /** The standing approvals a command is classified against, when this approval has any (ADR-0026). */
+  allowlist?(): PlannerAllowlist;
 }
 
 /** Denies everything. The safe default when a surface wires no approval channel. */

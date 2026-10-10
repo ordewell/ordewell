@@ -15,6 +15,8 @@ export interface CodexOrdewellBinding extends OrdewellToolBinding<CodexAsk> {
   threadServers(mcp: McpClientConfig): Record<string, unknown>;
   /** What a task thread's instructions say about the tools. */
   taskInstructions(): string;
+  /** What a planner thread's instructions add about the tools (ADR-0026). */
+  plannerInstructions(): string;
 }
 
 /**
@@ -66,6 +68,21 @@ export const CODEX_ORDEWELL: CodexOrdewellBinding = {
       `This task has ${COUNT_WORDS[tools.length] ?? tools.length} tools from the \`${ORDEWELL_MCP_SERVER_NAME}\` MCP server: ${quoted(tools)}.`,
       `They are not in your tool list up front. Find them with the tool discovery you have (the \`exec\` tool's \`ALL_TOOLS\` list) and call them by their full names, ${quoted(this.toolNames('task'))}.`,
       `Look for them before you finish; the task is reported complete through \`${TASK_COMPLETE_TOOL}\`.`,
+    ].join(' ');
+  },
+
+  /**
+   * The same discovery note for a planner, which also needs to know that its
+   * commands go through `run_command`: Codex's own shell is sandboxed without
+   * network, so `gh` or a cloud CLI fails there, and a model that tried its
+   * shell first concludes the command cannot run.
+   */
+  plannerInstructions() {
+    const tools = ordewellToolNames('planner');
+    return [
+      `You have ${COUNT_WORDS[tools.length] ?? tools.length} tools from the \`${ORDEWELL_MCP_SERVER_NAME}\` MCP server: ${quoted(tools)}.`,
+      `They are not in your tool list up front. Find them with the tool discovery you have (the \`exec\` tool's \`ALL_TOOLS\` list) and call them by their full names, ${quoted(this.toolNames('planner'))}.`,
+      `Run shell commands with \`${this.toolName('run_command')}\`, not your own shell: yours is sandboxed without network, so git remotes, gh and cloud CLIs fail there.`,
     ].join(' ');
   },
 };

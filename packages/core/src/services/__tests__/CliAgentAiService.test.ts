@@ -10,6 +10,7 @@ import type { McpToolReply, SubmitPlanArgs } from '../mcp/tools';
 import type { SkillLookup } from '../taskSkills';
 import type { SkillInfo } from '../SkillsService';
 import type { AgentEvent } from '../harness/AgentAdapter';
+import type { ApprovalRequest } from '../../interfaces/IApproval';
 import { addPlannerUsage, plannerContextFill } from '../../models/Usage';
 import { TurnStream } from '../replyStream';
 import { Planner } from '../Planner';
@@ -100,6 +101,47 @@ function collector() {
   return { events, onProgress: (p: ResearchProgress) => events.push(p) };
 }
 
+/**
+ * A Claude Code turn that calls `tool`, waits on the control channel as the
+ * CLI does, and returns the answer as the tool's result before replying
+ * `reply`. `turns` repeats it for the corrective turns an empty reply draws.
+ */
+function reachingFor(tool: string, input: Record<string, unknown>, server?: string, reply = 'Done.', turns = 1): ScriptedReply[] {
+  const line = (value: unknown) => `${JSON.stringify(value)}\n`;
+  const onUserTurn: ScriptedReply = (written, proc) => {
+    if (!written.includes('"type":"user"')) return;
+    proc.emitStdout([
+      line({ type: 'system', subtype: 'init', session_id: 'sess-reach', cwd: '/repo', permissionMode: 'default' }),
+      line({ type: 'assistant', session_id: 'sess-reach', message: { id: 'msg_reach', role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_reach', name: tool, input }] } }),
+      line({
+        type: 'control_request', request_id: 'req_reach',
+        request: { subtype: 'can_use_tool', tool_name: tool, input, tool_use_id: 'toolu_reach', ...(server ? { mcp_server: { name: server } } : {}) },
+      }),
+    ].join(''));
+  };
+  const onAnswer: ScriptedReply = (written, proc) => {
+    if (!written.includes('"type":"control_response"')) return onUserTurn(written, proc);
+    const answer = (JSON.parse(written) as { response: { response: { behavior: string; message?: string } } }).response.response;
+    const denied = answer.behavior === 'deny';
+    proc.emitStdout([
+      line({ type: 'user', session_id: 'sess-reach', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_reach', content: denied ? answer.message : 'ok', is_error: denied }] } }),
+      line({ type: 'assistant', session_id: 'sess-reach', message: { id: 'msg_reply', role: 'assistant', content: reply ? [{ type: 'text', text: reply }] : [] } }),
+      line({ type: 'result', subtype: 'success', session_id: 'sess-reach', is_error: false, result: reply }),
+    ].join(''));
+  };
+  return Array.from({ length: turns * 2 }, () => onAnswer);
+}
+
+/** The behavior the service answered the scripted request with. */
+function controlAnswer(proc: FakeAgentProcess): Record<string, unknown> | undefined {
+  const line = proc.written.find((w) => w.includes('"type":"control_response"') && w.includes('req_reach'));
+  return line ? (JSON.parse(line) as { response: { response: Record<string, unknown> } }).response.response : undefined;
+}
+
+function approvalSpy(grant: boolean) {
+  return { request: vi.fn(async (_req: ApprovalRequest) => grant) };
+}
+
 /** Codex needs its two handshake replies before any turn can be scripted. */
 function codexHandshake(): ScriptedReply[] {
   return [fixture('codex', 'handshake'), fixture('codex', 'new-conversation')];
@@ -114,14 +156,15 @@ describe('CliAgentAiService — Claude Code', () => {
     expect(turn.text).toContain('in-process or Redis');
   });
 
-  it('spawns read-only: dontAsk permission mode, write tools disallowed', async () => {
+  it('spawns read-only: write and shell tools disallowed, what the mode leaves open routed to Ordewell', async () => {
     const { svc, spawned } = service('claude-code', [fixture('claude-code', 'prose')]);
     await svc.startConversation(request());
 
     const args = spawned.lastArgs();
     expect(spawned.lastCommand()).toBe('claude');
     expect(args).toContain('--permission-mode');
-    expect(args[args.indexOf('--permission-mode') + 1]).toBe('dontAsk');
+    expect(args[args.indexOf('--permission-mode') + 1]).toBe('default');
+    expect(args[args.indexOf('--permission-prompt-tool') + 1]).toBe('stdio');
     const disallowed = args[args.indexOf('--disallowedTools') + 1];
     expect(disallowed).toContain('Write');
     expect(disallowed).toContain('Edit');
@@ -326,17 +369,48 @@ describe('CliAgentAiService — Claude Code', () => {
     expect(sent[1]).not.toContain('plan JSON');
   });
 
-  it('denies any permission the agent asks for and records it as denied', async () => {
-    const { svc, spawned } = service('claude-code', [fixture('claude-code', 'permission')]);
+  it('denies a write the agent reaches for, in its own words, and records the call as denied', async () => {
+    const { svc, spawned } = service('claude-code', reachingFor('Write', { file_path: '/repo/a.txt', content: 'a' }));
     const { events, onProgress } = collector();
-    const turn = await svc.startConversation(request({ onProgress }));
+    const turn = await svc.startConversation(request({ onProgress, approval: approvalSpy(true) }));
 
     const denied = events.find((e) => e.type === 'tool_result' && e.step?.outcome === 'denied');
     expect(denied?.step?.toolLabel).toBe('Write');
     expect(denied?.step?.result).toContain('read-only');
     // The refusal is answered on the control channel, or the agent stalls.
-    expect(spawned.processes[0].written.join('')).toContain('"behavior":"deny"');
+    expect(controlAnswer(spawned.processes[0])).toMatchObject({ behavior: 'deny' });
     expect(turn.kind).toBe('message');
+  });
+
+  it('asks before an MCP tool the user configured, scoped to that one tool, and lets it run once approved', async () => {
+    const approval = approvalSpy(true);
+    const { svc, spawned } = service('claude-code', reachingFor('mcp__claude_ai_Todoist__find-tasks', { filter: 'today' }, 'claude.ai Todoist'));
+    await svc.startConversation(request({ approval }));
+
+    expect(approval.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mcp_tool', scope: 'mcp__claude_ai_Todoist__find-tasks' }));
+    expect(approval.request.mock.calls[0][0].subject).toContain('claude.ai Todoist');
+    expect(controlAnswer(spawned.processes[0])).toEqual({ behavior: 'allow', updatedInput: { filter: 'today' } });
+  });
+
+  it('denies an MCP tool nobody can approve', async () => {
+    const { svc, spawned } = service('claude-code', reachingFor('mcp__claude_ai_Todoist__find-tasks', {}));
+    await svc.startConversation(request());
+
+    expect(controlAnswer(spawned.processes[0])).toMatchObject({ behavior: 'deny' });
+  });
+
+  it('asks before a read outside the workspace, and not for one inside it', async () => {
+    const outside = approvalSpy(false);
+    const { svc: outsideSvc, spawned: outsideSpawn } = service('claude-code', reachingFor('Read', { file_path: '/etc/hosts' }));
+    await outsideSvc.startConversation(request({ approval: outside }));
+    expect(outside.request).toHaveBeenCalledWith(expect.objectContaining({ kind: 'external_path', subject: '/etc/hosts' }));
+    expect(controlAnswer(outsideSpawn.processes[0])).toMatchObject({ behavior: 'deny' });
+
+    const inside = approvalSpy(false);
+    const { svc: insideSvc, spawned: insideSpawn } = service('claude-code', reachingFor('Read', { file_path: '/repo/src/a.ts' }));
+    await insideSvc.startConversation(request({ approval: inside }));
+    expect(inside.request).not.toHaveBeenCalled();
+    expect(controlAnswer(insideSpawn.processes[0])).toMatchObject({ behavior: 'allow' });
   });
 
   it('surfaces a mid-turn process death as a visible chat error', async () => {
@@ -461,18 +535,7 @@ describe('CliAgentAiService — Claude Code', () => {
   it('names the refused tool when the agent ends its turn without replying', async () => {
     // Agents can stop on a refusal and say nothing. "Empty reply" told the user
     // nothing they could act on; the denial is the actual reason.
-    const denialOnly = [
-      '{"type":"system","subtype":"init","session_id":"sess-claude-9"}',
-      '{"type":"control_request","request_id":"req_09","request":{"subtype":"can_use_tool","tool_name":"Write","input":{"file_path":"/etc/hosts"}}}',
-      '{"type":"result","subtype":"success","session_id":"sess-claude-9","is_error":false,"result":""}',
-      '',
-    ].join('\n');
-    // The control-channel denial is itself a write, so replies are keyed to the
-    // user turns rather than to the write count.
-    const onUserTurn: ScriptedReply = (written, proc) => {
-      if (written.includes('"type":"user"')) proc.emitStdout(denialOnly);
-    };
-    const { svc } = service('claude-code', [onUserTurn, onUserTurn, onUserTurn, onUserTurn]);
+    const { svc } = service('claude-code', reachingFor('Write', { file_path: '/etc/hosts' }, undefined, '', 4));
     const turn = await svc.startConversation(request());
 
     expect(turn.kind).toBe('message');
@@ -657,11 +720,11 @@ describe('CliAgentAiService — Codex', () => {
     const call = events.find((e) => e.type === 'tool_call');
     expect(call?.tool).toBe('bash');
     expect(events.find((e) => e.type === 'tool_result')?.step?.outcome).toBe('success');
-    // The thread is opened read-only, with approvals never asked for.
+    // The thread is opened read-only, its approvals asked of Ordewell (ADR-0026).
     const threadStart = JSON.parse(spawned.processes[0].written[1]);
     expect(threadStart.method).toBe('thread/start');
     expect(threadStart.params.sandbox).toBe('read-only');
-    expect(threadStart.params.approvalPolicy).toBe('never');
+    expect(threadStart.params.approvalPolicy).toBe('on-request');
   });
 
   it('flattens reasoning blocks and drops the empty ones the real CLI emits', async () => {

@@ -235,6 +235,7 @@ const APPROVAL_KIND: Record<ApprovalKind, string> = {
   shell_command: 'Run a command',
   url_fetch: 'Fetch a URL',
   external_path: 'Read outside the workspace',
+  mcp_tool: 'Use an MCP tool',
   runner_tool: 'Use a tool',
 };
 

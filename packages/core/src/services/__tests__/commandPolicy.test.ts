@@ -773,6 +773,12 @@ describe('a grant covers the command that was approved, not its family', () => {
   // satisfy each other.
   const scopeOf = (cmd: string) => classifyCommand(cmd).scope;
 
+  it('keeps a program named by its path apart from the one on PATH, and never runs it unasked', () => {
+    expect(scopeOf('./bin/gh issue list')).toBe('./bin/gh issue list');
+    expect(scopeOf('./bin/gh issue list')).not.toBe(scopeOf('gh issue list'));
+    expect(classifyCommand('./cat README.md').tier).toBe('ask');
+  });
+
   it('scopes the package manager per script, so one script does not authorise another', () => {
     expect(scopeOf('npm run test')).toBe('npm run test');
     expect(scopeOf('npm run postinstall')).toBe('npm run postinstall');

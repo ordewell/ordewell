@@ -105,7 +105,8 @@ describe.runIf(live)('structured transport — OpenCode live smoke', () => {
       const url = baseUrl();
       expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
 
-      const response = await globalThis.fetch(`${url}/session`);
+      // An API path on both versions: on 2.x a bare `/session` is the web app's page, not the API.
+      const response = await globalThis.fetch(`${url}/api/session`);
       expect(response.status).toBe(401);
       await turns.next();
     } finally {

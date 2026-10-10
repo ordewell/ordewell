@@ -98,13 +98,17 @@ describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
     adapter.dispose();
   });
 
-  it('denies a planner\'s request to write, and announces it', async () => {
+  it('never lets a planner write on its own: it denies the request, or holds it for the envelope to deny', async () => {
     const { fake, adapter, events } = await opened(runner, plannerStart);
 
-    expect(await fake.askWrite()).toBe('deny');
+    const answer = fake.askWrite();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     const announced = events.filter((e) => e.type === 'permission_request');
     expect(announced).toHaveLength(1);
-    expect(announced[0]).not.toHaveProperty('decided');
+    const request = announced[0] as Extract<AgentEvent, { type: 'permission_request' }>;
+    if (request.decided) expect(request.decided).toEqual({ decision: 'deny' });
+    else expect(adapter.answerPermission?.(request.id, { decision: 'deny' })).toBe(true);
+    expect(await answer).toBe('deny');
     adapter.dispose();
   });
 

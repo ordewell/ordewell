@@ -206,7 +206,8 @@ export abstract class BaseFileSystem implements IFileSystem {
    * directory the next command names.
    */
   async bash(command: string, signal?: AbortSignal): Promise<ToolOutcome> {
-    const { tier, scope, reason } = classifyCommand(command, this.policyOptions());
+    const allow = this.approval.allowlist?.();
+    const { tier, scope, reason, allowedBy } = classifyCommand(command, { ...this.policyOptions(), ...(allow ? { allow } : {}) });
 
     if (tier === 'refuse') {
       return { success: false, output: `Command refused: ${reason}`, truncated: false };
@@ -223,6 +224,7 @@ export abstract class BaseFileSystem implements IFileSystem {
         subject: asks ? command : outside[0].abs,
         scope: scopes[0],
         ...(scopes.length > 1 ? { scopes } : {}),
+        ...(asks && allowedBy ? { allowedBy } : {}),
         detail: outside.length > 0
           ? `Planner research wants to run "${command}", which touches ${touched}, outside the workspace (${root}).`
           : `Planner research wants to run: ${command}`,
@@ -232,7 +234,7 @@ export abstract class BaseFileSystem implements IFileSystem {
           success: false,
           output: outside.length > 0
             ? `Access denied: "${command}" touches ${touched}, outside the workspace root (${root}), and was not approved. Keep research inside the workspace, or ask the user to approve this location.`
-            : `Command not approved: ${command}\nIt is outside the auto-allowed read-only set (${scope}). Continue with the read-only research tools, or ask the user to approve it.`,
+            : `Command not approved: ${command}\nIt is outside the auto-allowed read-only set and the planner allowlist (${scope}). Continue without it. If it would change something outside the repository, add it to the plan as an ops task; if it only reads, ask the user to approve it or add it to the planner allowlist.`,
           truncated: false,
         };
       }

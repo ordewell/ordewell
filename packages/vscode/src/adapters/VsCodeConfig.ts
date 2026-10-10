@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { AiProvider, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, parseMaxParallel, normalizeGeminiModel, resolveProvider, ALL_PROVIDERS, getProviderMeta, configuredProviders } from '@ordewell/core';
+import { AiProvider, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, parseMaxParallel, normalizeGeminiModel, resolveProvider, ALL_PROVIDERS, getProviderMeta, configuredProviders, parseApprovalModeSetting } from '@ordewell/core';
 import type { ProviderModelLists } from '@ordewell/core';
 import { SecretStore, type ApiProvider, type SecretKey } from './SecretStore';
 
@@ -228,6 +228,15 @@ export class VsCodeConfig extends BaseConfig {
   get researchMaxSteps() { return this.config.get<number>('researchMaxSteps', 48); }
   get researchMaxFileSize() { return this.config.get<number>('researchMaxFileSize', 10); }
   get autonomousMode() { return this.config.get<boolean>('autonomousMode', true); }
+  get approvalMode() {
+    if (process.env.ORDEWELL_APPROVAL_MODE !== undefined) return super.approvalMode;
+    return parseApprovalModeSetting(this.config.get<string>('plannerApprovals', 'auto'));
+  }
+  get approvalPreApproved() { return [...(this.stringList('plannerAllowlist') ?? []), ...super.approvalPreApproved]; }
+  get approvalDefaults() {
+    if (process.env.ORDEWELL_APPROVAL_DEFAULTS !== undefined) return super.approvalDefaults;
+    return this.config.get<boolean>('plannerAllowlistDefaults', true);
+  }
   get worktreeIsolation() {
     if (process.env.ORDEWELL_WORKTREE_ISOLATION !== undefined) return super.worktreeIsolation;
     return this.config.get<boolean>('worktreeIsolation', true);
