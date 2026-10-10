@@ -106,6 +106,19 @@ describe('the environment a runner starts under', () => {
     adapter.dispose();
   });
 
+  it.each(adapters)('%s leaves a parent Ordewell\'s OpenCode server behind, from the host and the workspace alike', async (_label, start) => {
+    const parent = { type: 'remote', url: 'http://127.0.0.1:4999/mcp', headers: { Authorization: 'Bearer parent-synthetic' } };
+    vi.stubEnv('OPENCODE_CONFIG_CONTENT', JSON.stringify({ model: 'host/model', mcp: { ordewell: parent }, permission: { 'ordewell_*': 'allow' } }));
+    const workspace = { Opencode_Config_Content: JSON.stringify({ model: 'workspace/model', mcp: { ordewell: parent, other: { type: 'local', command: ['x'] } } }) };
+    const spawned = fakeSpawn([]);
+    const envs: NodeJS.ProcessEnv[] = [];
+    const adapter = await start(spawned, deps(spawned, workspace, envs));
+    expect(Object.values(envs[0]).some((value) => value?.includes('parent-synthetic'))).toBe(false);
+    expect(JSON.parse(envs[0].OPENCODE_CONFIG_CONTENT ?? 'null')).toEqual({ model: 'host/model' });
+    expect(JSON.parse(envs[0].Opencode_Config_Content ?? 'null')).toEqual({ model: 'workspace/model', mcp: { other: { type: 'local', command: ['x'] } } });
+    adapter.dispose();
+  });
+
   it.each(adapters)('%s starts its runner as the leader of a process group, so Stop reaches what it starts', async (_label, start) => {
     const spawned = fakeSpawn([]);
     const detached: Array<boolean | undefined> = [];

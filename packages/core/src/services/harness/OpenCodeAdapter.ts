@@ -2,7 +2,7 @@ import type { ChildProcess } from 'child_process';
 import { randomBytes } from 'crypto';
 import { RunnerProcess } from './runnerProcess';
 import { OpenCodeV2 } from './OpenCodeV2';
-import { OPENCODE_ORDEWELL } from './openCodeOrdewell';
+import { OPENCODE_CONFIG_VARIABLE, OPENCODE_ORDEWELL } from './openCodeOrdewell';
 import { awaitAttach } from './ordewellBinding';
 import type { McpClientConfig } from '../mcp';
 import { hunksOf, markedLines } from './fileDiff';
@@ -307,13 +307,13 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
       args: ['serve', '--hostname', '127.0.0.1', '--port', '0'],
       env: (workspaceEnv: Record<string, string>) => {
         // The token rides in the server's environment, not its argv (ADR-0022, A5).
-        const ordewellConfig = opts.mcp ? OPENCODE_ORDEWELL.configContent(workspaceEnv.OPENCODE_CONFIG_CONTENT ?? process.env.OPENCODE_CONFIG_CONTENT, opts.mcp) : null;
+        const ordewellConfig = opts.mcp ? OPENCODE_ORDEWELL.configContent(workspaceEnv[OPENCODE_CONFIG_VARIABLE] ?? process.env[OPENCODE_CONFIG_VARIABLE], opts.mcp) : null;
         if (opts.mcp && ordewellConfig === null) {
           console.error('[opencode] OPENCODE_CONFIG_CONTENT is not a JSON object, so the Ordewell tools were not injected.');
         }
         this.ordewell = ordewellConfig === null ? null : opts.mcp ?? null;
         return {
-          ...(ordewellConfig === null ? {} : { OPENCODE_CONFIG_CONTENT: ordewellConfig }),
+          ...(ordewellConfig === null ? {} : { [OPENCODE_CONFIG_VARIABLE]: ordewellConfig }),
           OPENCODE_SERVER_USERNAME: SERVER_USERNAME,
           OPENCODE_SERVER_PASSWORD: password,
         };

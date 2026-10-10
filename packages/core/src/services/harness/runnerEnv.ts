@@ -1,4 +1,5 @@
 import { withPath } from '../../utils/shellPath';
+import { OPENCODE_CONFIG_VARIABLE, withoutParentOrdewell } from './openCodeOrdewell';
 
 /**
  * Host variables a runner must not inherit. A host started from inside a
@@ -21,11 +22,18 @@ export const MCP_TOKEN_VARIABLE_PREFIX = 'ORDEWELL_MCP_TOKEN_';
 // Windows variable names are case-insensitive.
 const isHostOnly = (key: string) => HOST_ONLY.has(key.toUpperCase());
 const isMcpToken = (key: string) => key.toUpperCase().startsWith(MCP_TOKEN_VARIABLE_PREFIX);
+const isOpenCodeConfig = (key: string) => key.toUpperCase() === OPENCODE_CONFIG_VARIABLE;
 
-function without<T>(source: Record<string, T>, drop: (key: string) => boolean): Record<string, T> {
-  const kept: Record<string, T> = {};
+/**
+ * `source` minus what `drop` names, and with an OpenCode configuration
+ * stripped of any parent Ordewell's server: the same credential as a token,
+ * carried in a variable every harness hands on to what it runs.
+ */
+function inherited(source: Record<string, string | undefined>, drop: (key: string) => boolean): Record<string, string> {
+  const kept: Record<string, string> = {};
   for (const [key, value] of Object.entries(source)) {
-    if (!drop(key)) kept[key] = value;
+    if (value === undefined || drop(key)) continue;
+    kept[key] = isOpenCodeConfig(key) ? withoutParentOrdewell(value) : value;
   }
   return kept;
 }
@@ -35,12 +43,13 @@ function without<T>(source: Record<string, T>, drop: (key: string) => boolean): 
  * {@link HOST_ONLY} and any MCP token; then the workspace's own variables
  * (ADR-0016), which still win if they set a host-only one on purpose but never
  * supply a token; then the adapter's `launch` variables, the only source of one.
+ * Neither inherited source keeps a parent Ordewell's OpenCode server entry.
  */
 export function runnerEnv(
   resolvedPath: string,
   workspace: Record<string, string> = {},
   launch: Record<string, string> = {},
 ): NodeJS.ProcessEnv {
-  const host = without(process.env, (key) => isHostOnly(key) || isMcpToken(key));
-  return withPath(host, resolvedPath, { ...without(workspace, isMcpToken), ...launch });
+  const host = inherited(process.env, (key) => isHostOnly(key) || isMcpToken(key));
+  return withPath(host, resolvedPath, { ...inherited(workspace, isMcpToken), ...launch });
 }

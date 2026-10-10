@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { OpenCodeAdapter } from '../OpenCodeAdapter';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, SpawnFn, TaskStartOptions } from '../AgentAdapter';
 import { mcpClientConfig } from '../../mcp';
@@ -778,6 +778,10 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
   const ordewell = { type: 'remote', url: 'http://127.0.0.1:4555/mcp', headers: { Authorization: 'Bearer tok-secret' }, enabled: true };
   const configOf = (env: NodeJS.ProcessEnv) => JSON.parse(env.OPENCODE_CONFIG_CONTENT ?? 'null') as unknown;
 
+  // A host running inside OpenCode carries its own configuration, which a child rightly keeps.
+  beforeEach(() => { vi.stubEnv('OPENCODE_CONFIG_CONTENT', undefined); });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
   it('hands a task the server and an allow rule for its tools through the environment, never the command line', async () => {
     const { adapter, spawned, env } = await startTask(fakeServer(), taskStart({ mcp }));
 
@@ -812,6 +816,101 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
 
     expect(env.OPENCODE_CONFIG_CONTENT).toBeUndefined();
     adapter.dispose();
+  });
+
+  describe('under a host that is itself an Ordewell runner\'s child', () => {
+    const parentEntry = {
+      type: 'remote',
+      url: 'http://127.0.0.1:4999/mcp',
+      headers: { Authorization: 'Bearer parent-synthetic', 'X-Parent-Session': 'parent-synthetic-session' },
+      oauth: { clientId: 'parent-synthetic-client' },
+      timeout: 1,
+      enabled: true,
+    };
+    const unrelated = {
+      model: 'anthropic/claude-sonnet-4',
+      mcp: { other: { type: 'local', command: ['x'] } },
+      permission: { bash: { '*': 'allow' } },
+      agent: { build: { permission: { edit: 'ask' } } },
+    };
+    const parentConfig = (own: typeof unrelated | Record<string, never> = unrelated) => JSON.stringify({
+      ...own,
+      mcp: { ...('mcp' in own ? own.mcp : {}), ordewell: parentEntry },
+      permission: { ...('permission' in own ? own.permission : {}), 'ordewell_*': 'allow' },
+    });
+    const carriesParent = (env: NodeJS.ProcessEnv) => Object.values(env).some((value) => value?.includes('parent-synthetic'));
+
+    it('keeps the parent\'s other settings but not its server when given none', async () => {
+      vi.stubEnv('OPENCODE_CONFIG_CONTENT', parentConfig());
+      const { adapter, env } = await startTask(fakeServer());
+
+      expect(configOf(env)).toEqual(unrelated);
+      expect(carriesParent(env)).toBe(false);
+      adapter.dispose();
+    });
+
+    it('leaves an empty configuration when the parent\'s held only its server', async () => {
+      vi.stubEnv('OPENCODE_CONFIG_CONTENT', parentConfig({}));
+      const { adapter, env } = await startTask(fakeServer());
+
+      expect(configOf(env)).toEqual({});
+      adapter.dispose();
+    });
+
+    it('keeps a workspace\'s emptied configuration in place of the host\'s', async () => {
+      vi.stubEnv('OPENCODE_CONFIG_CONTENT', JSON.stringify({ model: 'host/model' }));
+      const { adapter, env } = await startTask(fakeServer(), taskStart(), { OPENCODE_CONFIG_CONTENT: parentConfig({}) });
+
+      expect(configOf(env)).toEqual({});
+      expect(carriesParent(env)).toBe(false);
+      adapter.dispose();
+    });
+
+    it('passes an unrelated configuration on untouched', async () => {
+      const own = '{ "model": "anthropic/claude-sonnet-4" }';
+      vi.stubEnv('OPENCODE_CONFIG_CONTENT', own);
+      const { adapter, env } = await startTask(fakeServer());
+
+      expect(env.OPENCODE_CONFIG_CONTENT).toBe(own);
+      adapter.dispose();
+    });
+
+    it('installs the fresh server whole, with none of the parent entry\'s headers or options', async () => {
+      vi.stubEnv('OPENCODE_CONFIG_CONTENT', parentConfig());
+      const { adapter, env } = await startTask(fakeServer({ 'GET /mcp': () => ({ ordewell: { status: 'connected' } }) }), taskStart({ mcp }));
+
+      expect(configOf(env)).toEqual({
+        ...unrelated,
+        mcp: { ...unrelated.mcp, ordewell },
+        permission: { ...unrelated.permission, 'ordewell_*': 'allow' },
+      });
+      expect(carriesParent(env)).toBe(false);
+      expect(await adapter.mcpAttached()).toBe(true);
+      adapter.dispose();
+    });
+
+    it('takes the workspace\'s configuration over the parent\'s, stripped the same way', async () => {
+      vi.stubEnv('OPENCODE_CONFIG_CONTENT', parentConfig());
+      const workspace = { OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: 'workspace/model', mcp: { ordewell: parentEntry } }) };
+
+      const bare = await startTask(fakeServer(), taskStart(), workspace);
+      expect(configOf(bare.env)).toEqual({ model: 'workspace/model' });
+      expect(carriesParent(bare.env)).toBe(false);
+      bare.adapter.dispose();
+
+      const tooled = await startTask(fakeServer(), taskStart({ mcp }), workspace);
+      expect(configOf(tooled.env)).toEqual({ model: 'workspace/model', mcp: { ordewell }, permission: { 'ordewell_*': 'allow' } });
+      expect(carriesParent(tooled.env)).toBe(false);
+      tooled.adapter.dispose();
+    });
+
+    it('strips a workspace\'s configuration under any spelling', async () => {
+      const { adapter, env } = await startTask(fakeServer(), taskStart(), { opencode_config_content: parentConfig() });
+
+      expect(JSON.parse(env.opencode_config_content ?? 'null')).toEqual(unrelated);
+      expect(carriesParent(env)).toBe(false);
+      adapter.dispose();
+    });
   });
 
   it('merges into the configuration the workspace already sets, keeping what it carries', async () => {
