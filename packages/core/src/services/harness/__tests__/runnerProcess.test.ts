@@ -4,6 +4,7 @@ import { OpenCodeAdapter } from '../OpenCodeAdapter';
 import { CodexAdapter } from '../CodexAdapter';
 import type { AgentAdapter, AgentEvent, AgentProcessDeps, TaskStartOptions } from '../AgentAdapter';
 import { fakeSpawn } from '../../__tests__/harnessTestKit';
+import { OPENCODE_PLANNER_PERMISSION } from '../openCodeOrdewell';
 
 /**
  * What the harness adapters owe the runner process they start, whatever its
@@ -106,7 +107,7 @@ describe('the environment a runner starts under', () => {
     adapter.dispose();
   });
 
-  it.each(adapters)('%s leaves a parent Ordewell\'s OpenCode server behind, from the host and the workspace alike', async (_label, start) => {
+  it.each(adapters)('%s leaves a parent Ordewell\'s OpenCode server behind, from the host and the workspace alike', async (label, start) => {
     const parent = { type: 'remote', url: 'http://127.0.0.1:4999/mcp', headers: { Authorization: 'Bearer parent-synthetic' } };
     vi.stubEnv('OPENCODE_CONFIG_CONTENT', JSON.stringify({ model: 'host/model', mcp: { ordewell: parent }, permission: { 'ordewell_*': 'allow' } }));
     const workspace = { Opencode_Config_Content: JSON.stringify({ model: 'workspace/model', mcp: { ordewell: parent, other: { type: 'local', command: ['x'] } } }) };
@@ -114,7 +115,9 @@ describe('the environment a runner starts under', () => {
     const envs: NodeJS.ProcessEnv[] = [];
     const adapter = await start(spawned, deps(spawned, workspace, envs));
     expect(Object.values(envs[0]).some((value) => value?.includes('parent-synthetic'))).toBe(false);
-    expect(JSON.parse(envs[0].OPENCODE_CONFIG_CONTENT ?? 'null')).toEqual({ model: 'host/model' });
+    // The OpenCode planner's server carries Ordewell's own permission policy in place of any it inherited (ADR-0026).
+    const planner = label === 'the OpenCode adapter' ? { permission: OPENCODE_PLANNER_PERMISSION } : {};
+    expect(JSON.parse(envs[0].OPENCODE_CONFIG_CONTENT ?? 'null')).toEqual({ model: 'host/model', ...planner });
     expect(JSON.parse(envs[0].Opencode_Config_Content ?? 'null')).toEqual({ model: 'workspace/model', mcp: { other: { type: 'local', command: ['x'] } } });
     adapter.dispose();
   });

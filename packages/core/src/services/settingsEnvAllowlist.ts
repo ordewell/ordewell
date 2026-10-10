@@ -56,6 +56,7 @@ export const SETTINGS_ENV_REFUSED: readonly string[] = [
   'ORDEWELL_AUTONOMOUS_MODE',
   'ORDEWELL_APPROVAL_MODE',
   'ORDEWELL_APPROVAL_ALLOW',
+  'ORDEWELL_APPROVAL_DEFAULTS',
   // Where settings are persisted.
   'ORDEWELL_SETTINGS_PATH',
   // Runtime options and dynamic loaders.

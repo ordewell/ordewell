@@ -59,6 +59,8 @@ export function fakeConfig(overrides: Partial<IConfig> = {}): IConfig {
     conflictRepairAttempts: 0,
     approvalMode: 'ask',
     approvalPreApproved: [],
+    // Off so a test that is not about the allowlist sees every prompt it raises.
+    approvalDefaults: false,
     setProviderModelLists: () => {},
     getProviderBaseUrl: () => '',
     getProviderApiKey: () => '',

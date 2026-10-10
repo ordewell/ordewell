@@ -31,9 +31,9 @@ per-agent adapter:
 
 | agent | transport (verified against the installed CLI) | read-only mode |
 |---|---|---|
-| Claude Code | `-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages` | `--permission-mode dontAsk` + direct edit, shell and native plan-mode tools disallowed (ADR-0008) |
-| Codex | `app-server` stdio JSON-RPC: `initialize` → `thread/start` → `turn/start` | `sandbox: read-only`, `approvalPolicy: never` |
-| OpenCode | `serve` (headless HTTP) + SSE event stream — 1.x `/event`, 2.x `/api/event` | `agent: plan`, plus rules denying `question` and `edit` on 2.x; shell writes are not confined (ADR-0008) |
+| Claude Code | `-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages` | `--permission-mode default` + `--permission-prompt-tool stdio`, direct edit, shell and native plan-mode tools disallowed (ADR-0008, ADR-0026) |
+| Codex | `app-server` stdio JSON-RPC: `initialize` → `thread/start` → `turn/start` | `sandbox: read-only`, `approvalPolicy: on-request` with only MCP tool approvals held for Ordewell (ADR-0026) |
+| OpenCode | `serve` (headless HTTP) + SSE event stream — 1.x `/event`, 2.x `/api/event` | `agent: plan`, shell and subagent tools withheld, and Ordewell's permission policy for the server (ADR-0026) |
 
 Three details in that table were corrected during implementation, against the
 binaries themselves rather than against memory:
@@ -73,18 +73,22 @@ model's behalf, which is precisely what a coding agent replaces.
 ## Key properties
 
 - **Mutation belongs to task runners.** Claude planners deny direct edit and
-  shell tools and native plan-mode transitions, using `dontAsk`; Codex planners
+  shell tools and native plan-mode transitions; Codex planners
   use an OS read-only sandbox with approvals disabled. OpenCode uses its plan
   agent and edit-tool denials, which leave a shell enforcement gap (ADR-0008).
   Adapters also have a task mode, for the structured transport
   ([ADR-0018](0018-structured-runner-transport.md)),
   whose permission mode and effort come from the runner manifest; it is an
-  explicit start switch the planner path never passes, and tests assert it. The
-  planner's permission requests that still arrive are auto-denied and surfaced
-  as a `refused` step. ADR-0008's envelope does not apply — `commandPolicy`, `BaseFileSystem` confinement and the `IApproval` seam
-  are all bypassed, because the agent brings its own tools and its own approval
-  machinery. What survives is the *invariant*, not the mechanism: mutation
-  belongs to the runners, and an absent answer is a denial. Enforcement comes
+  explicit start switch the planner path never passes, and tests assert it.
+  *Amended by [ADR-0026](0026-one-envelope-for-every-planner.md):* a planner's
+  commands run through Ordewell's `run_command`, inside ADR-0008's envelope,
+  and every planner's own permission requests — a user's MCP tool, a fetch, a
+  read outside the workspace — are held open and decided against `IApproval`
+  rather than auto-denied. Claude runs in `default` mode with its prompt tool
+  on stdio, Codex with `approvalPolicy: on-request`, and OpenCode under
+  Ordewell's own permission policy with its shell and subagents withheld. The
+  invariant holds: mutation belongs to the runners, and an absent answer is a
+  denial. Enforcement comes
   from fixed spawn controls and tool denials, not prompt instructions; native
   plan mode alone cannot supply the invariant.
   Read-only mode covers what the agent *does*; it does not cover what the agent
@@ -264,3 +268,4 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-10-09 — harness planners get skills through the unified loader (ADR-0024): `/name`, `load_skill`, task skills.
 - 2026-10-09 — Claude planners use `dontAsk` with edit, shell and native plan-mode tools denied; OpenCode shell limitations are made explicit (ADR-0008).
 - 2026-10-09 — aligned with [ADR-0025](0025-structured-only-runners.md).
+- 2026-10-10 — harness planners research inside ADR-0008's envelope (ADR-0026).

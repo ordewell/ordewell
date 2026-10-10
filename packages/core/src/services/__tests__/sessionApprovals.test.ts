@@ -267,6 +267,52 @@ describe('Session approval flow', () => {
     expect(approvalRequests(messages)).toHaveLength(0);
   });
 
+  // The approval mode follows the autonomy level unless one is set (ADR-0026).
+  describe('under the default allowlist', () => {
+    const withDefaults = (autonomousMode: boolean) => sessionWithProbe({ approvalMode: 'auto', approvalDefaults: true, autonomousMode });
+
+    it('runs an allowlisted read without asking, at either level, and says it was pre-approved', async () => {
+      for (const autonomousMode of [true, false]) {
+        const { fsAdapter, messages } = withDefaults(autonomousMode);
+
+        expect((await fsAdapter.bash('gh issue list --state open')).success).toBe(true);
+        expect(fsAdapter.bashCalls).toEqual(['gh issue list --state open']);
+        expect(approvalRequests(messages)).toHaveLength(0);
+        expect(approvalDecisions(messages)).toEqual([expect.objectContaining({ granted: true, source: 'pre-approved' })]);
+      }
+    });
+
+    it('refuses anything else without asking under Full, and points the planner at an ops task', async () => {
+      const { fsAdapter, messages } = withDefaults(true);
+
+      const result = await fsAdapter.bash('gh issue close 12');
+
+      expect(result.success).toBe(false);
+      expect(result.output).toContain('ops task');
+      expect(fsAdapter.bashCalls).toEqual([]);
+      expect(approvalRequests(messages)).toHaveLength(0);
+    });
+
+    it('asks about anything else under Guarded', async () => {
+      const { session, fsAdapter, messages } = withDefaults(false);
+
+      const pending = fsAdapter.bash('gh issue close 12');
+      await vi.waitFor(() => expect(approvalRequests(messages)).toHaveLength(1));
+      session.resolveApproval(approvalRequests(messages)[0].id, true);
+
+      expect((await pending).success).toBe(true);
+      expect(fsAdapter.bashCalls).toEqual(['gh issue close 12']);
+    });
+
+    it('still refuses a write, whatever the allowlist and the level', async () => {
+      const { fsAdapter, messages } = sessionWithProbe({ approvalMode: 'allow', approvalDefaults: true, approvalPreApproved: ['touch'] });
+
+      expect((await fsAdapter.bash('touch notes.txt')).output).toContain('Command refused');
+      expect(fsAdapter.bashCalls).toEqual([]);
+      expect(approvalRequests(messages)).toHaveLength(0);
+    });
+  });
+
   /**
    * The stop path, from the user's side: they pressed ESC while an approval
    * prompt was on screen. Nothing else denies the parked request, so without a

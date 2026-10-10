@@ -53,7 +53,7 @@ describe('OrdewellMcpServer', () => {
 
     const names = async (client: Client) => (await client.listTools()).tools.map((t) => t.name).sort();
     expect(await names(task)).toEqual(['checkpoint', 'task_complete']);
-    expect(await names(planner)).toEqual(['edit_plan', 'list_models', 'list_runners', 'load_skill', 'submit_plan', 'task_output', 'task_query']);
+    expect(await names(planner)).toEqual(['edit_plan', 'list_models', 'list_runners', 'load_skill', 'run_command', 'submit_plan', 'task_output', 'task_query']);
   });
 
   // Claude Code in plan mode refuses any MCP tool not marked read-only, even
@@ -63,7 +63,7 @@ describe('OrdewellMcpServer', () => {
     const task = await connect(await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1 }));
     const planner = await connect(await server.issuePlannerToken({ sessionId: 's1' }));
 
-    expect((await planner.listTools()).tools.map((t) => t.annotations?.readOnlyHint)).toEqual([true, true, true, true, true, true, true]);
+    expect((await planner.listTools()).tools.map((t) => t.annotations?.readOnlyHint)).toEqual([true, true, true, true, true, true, true, true]);
     expect((await task.listTools()).tools.map((t) => t.annotations?.readOnlyHint)).toEqual([undefined, undefined]);
   });
 

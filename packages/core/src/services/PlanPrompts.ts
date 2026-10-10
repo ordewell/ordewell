@@ -98,6 +98,7 @@ function researchPhaseBlock(harnessMode: boolean): string {
     ? [
       '- Explore the repository with your own tools until you understand its architecture',
       '- You are planning, not implementing: do NOT edit, create, or delete any file, and do not run commands that change the workspace',
+      '- Run commands — git, gh, cloud CLIs, the project\'s own tooling — with the run_command tool, not a shell of your own. MCP tools the user configured (issue trackers, todo lists) are yours to read from too. Reads run at once; anything else is approved or refused by the user\'s settings. When something the plan needs to change is refused, add it to the plan as an ops task instead',
       '- If you delegate exploration to your own agents, WAIT for their results inside this reply. Do NOT launch them in the background or async and end your turn saying you will report back later: your turn ending is what hands the conversation back to the user, and anything you say after it never reaches them.',
     ]
     : [

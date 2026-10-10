@@ -2,6 +2,7 @@ import { Task, ConversationMessage, DiscoveredModel, ResearchLogEntry, ResearchP
 import { IConfig } from '../interfaces/IConfig';
 import { IFileSystem } from '../interfaces/IFileSystem';
 import { IWebFetcher } from '../interfaces/IWebFetcher';
+import type { IApproval } from '../interfaces/IApproval';
 import type { LegacyPlanState } from '../models/Task';
 import type { RunnerModeInfo } from './ModeResolver';
 import { GeminiService } from './GeminiService';
@@ -58,6 +59,12 @@ export interface ConversationRequest {
    */
   initialMessage?: string;
   plannerTools?: PlannerToolsOffer;
+  /**
+   * The session's approval policy, which a harness planner's own tool
+   * requests are decided against as the API planner's are (ADR-0026). Absent:
+   * nobody can be asked, so they are denied.
+   */
+  approval?: IApproval;
   /**
    * The workspace's skill catalog. Every planner is shown the task skills it
    * may attach; only one with tools is shown the planner skills, which load

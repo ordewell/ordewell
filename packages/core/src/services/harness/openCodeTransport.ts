@@ -2,7 +2,7 @@ import { randomBytes } from 'crypto';
 import { partedPromptUsage, type UsageRecord } from '../../models/Usage';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { McpClientConfig } from '../mcp';
-import { LineBuffer, type AgentEvent, type TaskStartOptions } from './AgentAdapter';
+import { LineBuffer, type AgentEvent, type PlannerAsk, type TaskStartOptions } from './AgentAdapter';
 import { OPENCODE_ORDEWELL } from './openCodeOrdewell';
 import { settleWithin } from './settleWithin';
 
@@ -20,6 +20,42 @@ const STREAM_CONNECT_TIMEOUT_MS = 5000;
 
 type OnEvent = (event: AgentEvent) => void;
 export type PermissionRequest = Extract<AgentEvent, { type: 'permission_request' }>;
+
+/**
+ * OpenCode's own tools and permission kinds. Anything else a planner is asked
+ * about is a tool of a configured MCP server only when its name starts with a
+ * server OpenCode reported: a built-in added in a later release must never be
+ * mistaken for an MCP tool a person could approve.
+ */
+const OPENCODE_BUILTINS = new Set([
+  'bash', 'edit', 'write', 'patch', 'apply_patch', 'multiedit', 'read', 'glob', 'grep', 'list', 'lsp', 'task',
+  'question', 'todowrite', 'todoread', 'skill', 'websearch', 'codesearch', 'webfetch', 'external_directory',
+  'doom_loop', 'invalid', 'batch',
+  'shell', 'subagent', 'browser', 'execute', 'search', 'opencode_read_mcp_resource', 'opencode_list_mcp_resources',
+]);
+
+/** What a planner's OpenCode permission request is for (ADR-0026). `servers` are the MCP servers `/mcp` lists. */
+export function openCodePlannerAsk(
+  permission: string,
+  details: { metadata?: Record<string, unknown>; patterns?: readonly string[] },
+  servers: readonly string[],
+): PlannerAsk {
+  const meta = details.metadata ?? {};
+  const pattern = details.patterns?.[0];
+  if (permission === 'webfetch') {
+    const url = typeof meta.url === 'string' ? meta.url : pattern;
+    return url ? { kind: 'fetch', url } : { kind: 'other' };
+  }
+  if (permission === 'external_directory') {
+    if (typeof meta.filepath === 'string') return { kind: 'path', path: meta.filepath, directory: false };
+    const dir = typeof meta.parentDir === 'string' ? meta.parentDir : pattern?.replace(/[\\/]\*$/, '');
+    return dir ? { kind: 'path', path: dir, directory: true } : { kind: 'other' };
+  }
+  if (OPENCODE_BUILTINS.has(permission)) return { kind: 'other' };
+  const server = servers.filter((s) => permission.startsWith(`${s}_`)).sort((a, b) => b.length - a.length)[0];
+  if (!server) return { kind: 'other' };
+  return { kind: 'mcp', scope: permission, tool: permission.slice(server.length + 1), server };
+}
 
 /**
  * OpenCode addresses a model as a provider id and a model id; discovery and
@@ -170,7 +206,6 @@ export class PendingSteers {
 }
 
 const ALLOW: ApprovalDecision = { decision: 'allow' };
-const DENY: ApprovalDecision = { decision: 'deny' };
 
 /**
  * A session's permission requests, from the frame that raises one to the
@@ -188,24 +223,8 @@ export class OpenCodePermissions {
   ) {}
 
   /**
-   * A planner's request (T1): refused, which is the same "absent answer is a
-   * denial" invariant ADR-0008 states for Ordewell's own tools. The refusal is
-   * announced so the timeline shows the planner reaching for something it may
-   * not have. The planner's own submission path, which the allow rule should
-   * already have settled, is the one request it may not be refused.
-   */
-  refuse(request: PermissionRequest, sessionId: string, seen: Set<string>, onEvent: OnEvent): void {
-    if (!firstSight(request.id, seen)) return;
-    if (this.isOrdewellTool(request.name)) {
-      this.send(request.id, sessionId, ALLOW);
-      return;
-    }
-    onEvent(request);
-    this.send(request.id, sessionId, DENY);
-  }
-
-  /**
-   * A task's request. Under a mode whose manifest sets `approvals: auto` it is
+   * A task's request, or a planner's (with `autoApprove` false) for the
+   * planner's envelope to answer (ADR-0026). Under a mode whose manifest sets `approvals: auto` it is
    * answered at once with what `opencode run --auto` answers, so the same plan
    * follows the manifest (ADR-0001), and announced already
    * decided so the log still shows it. Any other mode leaves it open for an

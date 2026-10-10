@@ -184,7 +184,7 @@ export class HttpWebFetcher implements IWebFetcher {
     // per-origin approval both run even when a caller invokes fetch directly
     // rather than through executeTool.
     if (!await this.confirm(url)) {
-      return { success: false, output: `Fetch denied (blocked host or not approved): ${url}`, truncated: false };
+      return { success: false, output: `Fetch denied (blocked host or not approved): ${url}. Continue without it, or ask the user to approve this origin or add it to the planner allowlist.`, truncated: false };
     }
     return this.get(url, 'Fetch');
   }

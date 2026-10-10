@@ -53,7 +53,7 @@ async function until(condition: () => boolean): Promise<void> {
 }
 
 describe('ClaudeCodeAdapter start switch', () => {
-  it('starts a planner without native plan mode or shell tools', async () => {
+  it('starts a planner without native plan mode or shell tools, its requests routed to Ordewell', async () => {
     const { spawned, processDeps } = deps([]);
     const adapter = new ClaudeCodeAdapter(processDeps);
     await adapter.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN', model: 'sonnet', effort: 'high', resumeSessionId: 'sess-1' });
@@ -64,7 +64,8 @@ describe('ClaudeCodeAdapter start switch', () => {
       '--output-format', 'stream-json',
       '--verbose',
       '--include-partial-messages',
-      '--permission-mode', 'dontAsk',
+      '--permission-prompt-tool', 'stdio',
+      '--permission-mode', 'default',
       '--disallowedTools', 'Edit,Write,MultiEdit,NotebookEdit,KillShell,Bash,PowerShell,EnterPlanMode,ExitPlanMode',
       '--append-system-prompt', 'PLAN',
       '--model', 'sonnet',
@@ -88,9 +89,9 @@ describe('ClaudeCodeAdapter start switch', () => {
     await adapter.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN', ...extra } as unknown as AgentStartOptions);
     const args = spawned.lastArgs();
 
-    expect(args.flatMap((arg, i) => (arg === '--permission-mode' ? [args[i + 1]] : []))).toEqual(['dontAsk']);
+    expect(args.flatMap((arg, i) => (arg === '--permission-mode' ? [args[i + 1]] : []))).toEqual(['default']);
     expect(args[args.indexOf('--disallowedTools') + 1].split(',')).toEqual(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'KillShell', 'Bash', 'PowerShell', 'EnterPlanMode', 'ExitPlanMode']);
-    for (const flag of ['--permission-prompt-tool', '--dangerously-skip-permissions', 'acceptEdits', 'bypassPermissions']) {
+    for (const flag of ['--dangerously-skip-permissions', 'acceptEdits', 'bypassPermissions']) {
       expect(args).not.toContain(flag);
     }
     adapter.dispose();
@@ -511,22 +512,27 @@ describe('ClaudeCodeAdapter in task mode', () => {
     adapter.dispose();
   });
 
-  it('still denies a planner\'s request itself, at once, with nothing left open', async () => {
+  it('leaves a planner\'s request open for Ordewell, without Claude\'s own grants', async () => {
     const { spawned, processDeps } = deps([fixture('claude-code', 'permission-task')]);
     const adapter = new ClaudeCodeAdapter(processDeps);
     await adapter.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN' });
     const events: AgentEvent[] = [];
     void adapter.send('Plan it', (e) => events.push(e));
-    await until(() => spawned.processes[0].written.length === 2);
-    const answer = JSON.parse(spawned.processes[0].written[1]) as { response: { response: { behavior: string } } };
-    expect(answer.response.response.behavior).toBe('deny');
+    await until(() => events.some((e) => e.type === 'permission_request'));
+    expect(spawned.processes[0].written).toHaveLength(1);
     expect(events.find((e) => e.type === 'permission_request')).toEqual({
       type: 'permission_request',
       id: '9a948184-6792-4049-85b1-3e837387f618',
       name: 'Write',
       detail: JSON.stringify({ file_path: '/repo/a.txt', content: 'a' }),
+      input: { file_path: '/repo/a.txt', content: 'a' },
+      suggestions: [],
+      toolUseId: expect.any(String),
+      ask: { kind: 'other' },
     });
-    expect(adapter.answerPermission('9a948184-6792-4049-85b1-3e837387f618', { decision: 'allow' })).toBe(false);
+    expect(adapter.answerPermission('9a948184-6792-4049-85b1-3e837387f618', { decision: 'deny', note: 'no' })).toBe(true);
+    const answer = JSON.parse(spawned.processes[0].written[1]) as { response: { response: { behavior: string; message: string } } };
+    expect(answer.response.response).toEqual({ behavior: 'deny', message: 'no' });
     adapter.dispose();
   });
 

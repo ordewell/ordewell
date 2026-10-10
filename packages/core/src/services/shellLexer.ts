@@ -123,8 +123,19 @@ export interface Segment {
    * literal.
    */
   expandable: boolean;
+  /**
+   * A word holds an unquoted `*`, `?` or `[`: the shell may replace it with
+   * file names the command line never spells, a repository file named
+   * `--server=…` among them.
+   */
+  globbed: boolean;
   /** The binary token as written, when the shell computes it — see {@link isComputedWord}. */
   computedBinary?: string;
+  /**
+   * The binary token as written, when it is a path (`./bin/gh`): what runs is
+   * that file, perhaps one the repository ships, not the program {@link binary} names.
+   */
+  binaryPath?: string;
   /**
    * Files read through `<`, kept apart from `args` because the shell never
    * passes them to the command. For path confinement only.
@@ -376,6 +387,7 @@ export function lex(command: string, nested: string[], dialect: Dialect): Lexed 
 
   let tokens: string[] = [];
   let expandable = false;
+  let globbed = false;
   let current = '';
   let started = false;
   let piped = false;
@@ -460,7 +472,7 @@ export function lex(command: string, nested: string[], dialect: Dialect): Lexed 
     if (tokens.length > 0) {
       const seg = toSegment(tokens, piped, dialect);
       if (!seg.binary) { followable = false; bareSegment = true; }
-      segments.push({ ...seg, expandable, stdinRedirected, inputs, joinedBy });
+      segments.push({ ...seg, expandable, globbed, stdinRedirected, inputs, joinedBy });
     } else if (!last || segments.length > 0 || joinedBy !== undefined) {
       // Nothing ran here, or only a redirect did, yet an operator still joined it.
       followable = false;
@@ -469,6 +481,7 @@ export function lex(command: string, nested: string[], dialect: Dialect): Lexed 
     tokens = [];
     inputs = [];
     expandable = false;
+    globbed = false;
     stdinRedirected = false;
     piped = nextPiped;
     joinedBy = next;
@@ -645,6 +658,7 @@ export function lex(command: string, nested: string[], dialect: Dialect): Lexed 
     else if (c === '{') braceOpen = true;
     else if (braceOpen && (c === ',' || (c === '.' && command[i + 1] === '.'))) braceList = true;
     else if (braceOpen && braceList && c === '}') expandable = true;
+    else if (c === '*' || c === '?' || c === '[') globbed = true;
     current += c; started = true; i++;
   }
 
@@ -710,8 +724,10 @@ export function toSegment(tokens: string[], piped: boolean, dialect: Dialect): S
     piped,
     stdinRedirected: false,
     expandable: false,
+    globbed: false,
     inputs: [],
     ...(first !== undefined && isComputedWord(first, dialect) ? { computedBinary: first } : {}),
+    ...(first !== undefined && /[/\\]/.test(first) ? { binaryPath: first } : {}),
     ...(ambiguousCmdName !== undefined ? { ambiguousCmdName } : {}),
   };
 }

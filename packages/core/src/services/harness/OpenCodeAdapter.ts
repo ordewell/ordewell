@@ -7,7 +7,7 @@ import { awaitAttach } from './ordewellBinding';
 import type { McpClientConfig } from '../mcp';
 import { hunksOf, markedLines } from './fileDiff';
 import {
-  OpenCodePermissions, PendingSteers, autoApproves, delay, interruptAcknowledged, newUserMessageId, openEventStream, permissionReply, settleTurn, splitModelId,
+  OpenCodePermissions, PendingSteers, autoApproves, delay, interruptAcknowledged, newUserMessageId, openCodePlannerAsk, openEventStream, permissionReply, settleTurn, splitModelId,
   streamTurn, turnLatch, usageRecord, type PermissionAnswer, type PermissionRequest, type StreamTurn, type TurnLatch,
 } from './openCodeTransport';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
@@ -42,6 +42,8 @@ const DISABLED_TOOLS: Record<string, boolean> = {
   write: false,
   apply_patch: false,
   todowrite: false,
+  bash: false,
+  task: false,
 };
 
 /**
@@ -264,6 +266,8 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
   private taskTurn: TaskTurn | null = null;
   /** An abort was posted during the current task turn, so the idle that follows ends it as interrupted. */
   private interruptRequested = false;
+  /** The user's MCP servers, as `/mcp` last listed them: what tells a planner's MCP tool request from a built-in's (ADR-0026). */
+  private mcpServers: string[] = [];
   private readonly permissions = new OpenCodePermissions(
     (id, sessionId, decision) => this.replyPermission(id, sessionId, permissionReply(decision, 'reply')),
     () => this.ordewell,
@@ -307,7 +311,12 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
       args: ['serve', '--hostname', '127.0.0.1', '--port', '0'],
       env: (workspaceEnv: Record<string, string>) => {
         // The token rides in the server's environment, not its argv (ADR-0022, A5).
-        const ordewellConfig = opts.mcp ? OPENCODE_ORDEWELL.configContent(workspaceEnv[OPENCODE_CONFIG_VARIABLE] ?? process.env[OPENCODE_CONFIG_VARIABLE], opts.mcp) : null;
+        // A planner always gets its permission policy (ADR-0026), with the server or without it, and
+        // over content that cannot be merged too: a planner without its policy may not start.
+        const existing = workspaceEnv[OPENCODE_CONFIG_VARIABLE] ?? process.env[OPENCODE_CONFIG_VARIABLE];
+        const ordewellConfig = opts.kind === 'planner'
+          ? OPENCODE_ORDEWELL.configContent(existing, opts.mcp ?? null, 'planner') ?? OPENCODE_ORDEWELL.configContent(undefined, opts.mcp ?? null, 'planner')
+          : opts.mcp ? OPENCODE_ORDEWELL.configContent(existing, opts.mcp, 'task') : null;
         if (opts.mcp && ordewellConfig === null) {
           console.error('[opencode] OPENCODE_CONFIG_CONTENT is not a JSON object, so the Ordewell tools were not injected.');
         }
@@ -369,6 +378,7 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
         processEnded: this.processEnded,
         isExited: () => this.exited,
         exitMessage: () => this.exitMessage(),
+        mcpServers: () => this.mcpServers,
       }, { ...opts, mcp: this.ordewell ?? undefined }, this.role());
       await this.v2.start();
       this.sessionId = this.v2.nativeSessionId();
@@ -904,7 +914,16 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
     const sessionId = ask.sessionID ?? this.sessionId ?? '';
     const name = permissionName(ask);
     if (!this.task) {
-      this.permissions.refuse({ type: 'permission_request', id, name, detail: permissionDetail(ask) }, sessionId, seen, onEvent);
+      // Held for the planner's envelope (ADR-0026), which answers through `answerPermission`.
+      this.permissions.ask({
+        type: 'permission_request',
+        id,
+        name,
+        detail: permissionDetail(ask),
+        input: ask.metadata ?? {},
+        ...(ask.tool?.callID ? { toolUseId: ask.tool.callID } : {}),
+        ask: openCodePlannerAsk(name, ask, this.mcpServers),
+      }, sessionId, false, seen, onEvent);
       return;
     }
     const request: PermissionRequest = {
@@ -966,9 +985,21 @@ export class OpenCodeAdapter implements TaskModeAgentAdapter {
     if (!ordewell || !this.baseUrl) return false;
     return awaitAttach(async () => {
       if (this.exited) return 'failed';
-      const servers = await this.json<Record<string, { status?: string } | undefined>>('GET', '/mcp').catch(() => null);
+      const servers = this.v2 ? await this.v2McpStatus() : await this.json<Record<string, { status?: string } | undefined>>('GET', '/mcp').catch(() => null);
+      if (servers) this.mcpServers = Object.keys(servers).filter((name) => name !== ordewell.name);
       return OPENCODE_ORDEWELL.attachState(servers?.[ordewell.name]?.status);
     }, MCP_ATTACH_TIMEOUT_MS, MCP_STATUS_POLL_MS);
+  }
+
+  /** 2.x lists its servers as `{ name, status: { status } }`, and only once it has started connecting them. */
+  private async v2McpStatus(): Promise<Record<string, { status?: string }> | null> {
+    const listed = await this.json<{ data?: { name?: unknown; status?: { status?: unknown } }[] }>('GET', '/api/mcp').catch(() => null);
+    if (!Array.isArray(listed?.data)) return null;
+    const servers: Record<string, { status?: string }> = {};
+    for (const { name, status } of listed.data) {
+      if (typeof name === 'string') servers[name] = typeof status?.status === 'string' ? { status: status.status } : {};
+    }
+    return servers;
   }
 
   dispose(): void {

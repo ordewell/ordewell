@@ -5,7 +5,7 @@ import type { AgentEvent, TaskStartOptions } from '../AgentAdapter';
 import { mcpClientConfig } from '../../mcp';
 import { sseResponse } from '../../__tests__/harnessTestKit';
 import {
-  ChildSessions, OpenCodePermissions, PendingSteers, ReplyText, autoApproves, delay, interruptAcknowledged, newUserMessageId, openEventStream, permissionReply, settleTurn,
+  ChildSessions, OpenCodePermissions, PendingSteers, ReplyText, autoApproves, delay, interruptAcknowledged, newUserMessageId, openCodePlannerAsk, openEventStream, permissionReply, settleTurn,
   splitModelId, turnLatch, usageRecord, type PermissionRequest,
 } from '../openCodeTransport';
 
@@ -143,22 +143,22 @@ describe('OpenCodePermissions', () => {
     return { permissions, replies, events, onEvent: (e: AgentEvent) => events.push(e) };
   }
 
-  it('refuses a planner\'s request and announces it, once however often it is raised', () => {
+  it('holds a planner\'s request open for its envelope, once however often it is raised', () => {
     const { permissions, replies, events, onEvent } = desk();
     const seen = new Set<string>();
-    permissions.refuse(request('per_1'), 'ses', seen, onEvent);
-    permissions.refuse(request('per_1'), 'ses', seen, onEvent);
+    permissions.ask(request('per_1'), 'ses', false, seen, onEvent);
+    permissions.ask(request('per_1'), 'ses', false, seen, onEvent);
 
     expect(events).toEqual([request('per_1')]);
-    expect(replies).toEqual([['per_1', 'ses', { decision: 'deny' }]]);
-    expect(permissions.answer('per_1', { decision: 'allow' })).toBe(false);
+    expect(replies).toEqual([]);
+    expect(permissions.answer('per_1', { decision: 'deny', note: 'no' })).toBe(true);
+    expect(replies).toEqual([['per_1', 'ses', { decision: 'deny', note: 'no' }]]);
   });
 
-  it('allows the planner its Ordewell tool without a word', () => {
-    const { permissions, replies, events, onEvent } = desk(mcp);
-    permissions.refuse(request('per_1', 'ordewell_submit_plan'), 'ses', new Set(), onEvent);
+  it('allows the planner its Ordewell tool at once', () => {
+    const { permissions, replies, onEvent } = desk(mcp);
+    permissions.ask(request('per_1', 'ordewell_submit_plan'), 'ses', false, new Set(), onEvent);
 
-    expect(events).toEqual([]);
     expect(replies).toEqual([['per_1', 'ses', { decision: 'allow' }]]);
   });
 
@@ -428,5 +428,27 @@ describe('openEventStream', () => {
     }, () => {});
     await close();
     expect(aborted).toBe(true);
+  });
+});
+
+describe('openCodePlannerAsk', () => {
+  const servers = ['todoist', 'todoist_beta'];
+
+  it('reads a fetch and an outside read from the request', () => {
+    expect(openCodePlannerAsk('webfetch', { metadata: { url: 'https://example.com' } }, servers)).toEqual({ kind: 'fetch', url: 'https://example.com' });
+    expect(openCodePlannerAsk('external_directory', { metadata: { filepath: '/etc/hostname', parentDir: '/etc' } }, servers))
+      .toEqual({ kind: 'path', path: '/etc/hostname', directory: false });
+    expect(openCodePlannerAsk('external_directory', { patterns: ['/opt/data/*'] }, servers)).toEqual({ kind: 'path', path: '/opt/data', directory: true });
+  });
+
+  it('names an MCP tool by the longest server it starts with', () => {
+    expect(openCodePlannerAsk('todoist_beta_find-tasks', {}, servers)).toEqual({ kind: 'mcp', scope: 'todoist_beta_find-tasks', tool: 'find-tasks', server: 'todoist_beta' });
+    expect(openCodePlannerAsk('todoist_add-tasks', {}, servers)).toEqual({ kind: 'mcp', scope: 'todoist_add-tasks', tool: 'add-tasks', server: 'todoist' });
+  });
+
+  it('never takes a built-in, or a tool of a server it was not told about, for an MCP tool', () => {
+    for (const name of ['bash', 'edit', 'write', 'task', 'question', 'notebook_edit']) {
+      expect(openCodePlannerAsk(name, {}, servers), name).toEqual({ kind: 'other' });
+    }
   });
 });

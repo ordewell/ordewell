@@ -15,6 +15,7 @@ export type {
   ListRunnersArgs,
   ListModelsArgs,
   LoadSkillArgs,
+  RunCommandArgs,
   SubmitPlanArgs,
   EditPlanArgs,
   TaskQueryArgs,

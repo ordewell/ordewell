@@ -30,7 +30,16 @@ const KNOWN_TOOLS: Record<string, ResearchToolType> = {
   // OpenCode
   list: 'list_dir',
   fetch: 'fetch',
+  // Ordewell's own research shell (ADR-0026), under every runner's name for it
+  runcommand: 'bash',
 };
+
+/**
+ * Claude Code and Codex call it `mcp__ordewell__<tool>`, OpenCode `ordewell_<tool>`.
+ * Spelled out rather than built from `ORDEWELL_MCP_SERVER_NAME`: the webview
+ * bundles this file, and `../mcp` brings the Node-only server with it.
+ */
+const ORDEWELL_TOOL_PREFIX = /^(mcp__ordewell__|ordewell_)/i;
 
 /**
  * The tools that write a file, by their normalized names: Claude Code's,
@@ -54,7 +63,7 @@ export interface MappedTool {
  * three agents disagree on `Read` vs `read` vs `read_file` for the same thing.
  */
 export function mapAgentTool(name: string): MappedTool {
-  const normalized = name.trim().toLowerCase().replace(/[_-]/g, '');
+  const normalized = name.trim().replace(ORDEWELL_TOOL_PREFIX, '').toLowerCase().replace(/[_-]/g, '');
   const direct = KNOWN_TOOLS[normalized] ?? KNOWN_TOOLS[name.trim().toLowerCase()];
   if (direct) {
     // The label survives even on a mapped tool: `Read` and `read_file` render

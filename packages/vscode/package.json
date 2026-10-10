@@ -272,6 +272,32 @@
           "default": true,
           "description": "Autonomy level for new plans. On = Full: each runner's autonomous mode, with no permission prompts. Off = Guarded: each runner's safe mode, where the runner's own reviewer or classifier decides what to approve. Change it with /auto full or /auto guarded."
         },
+        "ordewell.plannerApprovals": {
+          "scope": "application",
+          "type": "string",
+          "enum": ["auto", "ask", "allowlist", "allow"],
+          "enumDescriptions": [
+            "Follow the autonomy level: Guarded asks you, Full runs only the allowlist and asks nobody.",
+            "Ask you before any command, MCP tool, fetch or outside read the allowlist does not cover.",
+            "Run only what the allowlist covers and refuse the rest without asking.",
+            "Run everything except file writes, which are always refused."
+          ],
+          "default": "auto",
+          "description": "What the planner may run beyond read-only commands in the workspace. File writes are refused in every mode; changes belong to the plan's tasks."
+        },
+        "ordewell.plannerAllowlist": {
+          "scope": "application",
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra planner allowlist entries. A command rule such as \"gh issue list\" or \"gcloud * * list\" covers commands whose leading words match it; \"mcp:find-*\" covers MCP tools by name; \"https://docs.example.com/*\" or \"/opt/data/*\" covers fetches and outside reads. A leading \"!\" excludes, and an exclusion wins."
+        },
+        "ordewell.plannerAllowlistDefaults": {
+          "scope": "application",
+          "type": "boolean",
+          "default": true,
+          "description": "Include Ordewell's built-in allowlist of read-only commands (GitHub, GitLab, Azure, Google Cloud, AWS, Kubernetes, containers, installed packages and more) and read-only MCP tools."
+        },
         "ordewell.worktreeIsolation": {
           "type": "boolean",
           "default": true,

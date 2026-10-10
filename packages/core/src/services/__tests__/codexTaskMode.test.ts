@@ -7,6 +7,7 @@ import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { StructuredRunner } from '../StructuredRunner';
 import type { StructuredEvent } from '../../interfaces/IRunner';
 import { mcpClientConfig } from '../mcp';
+import { CODEX_ORDEWELL } from '../harness/codexOrdewell';
 import { modeIds, fakeSpawn, fixture, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
 
 /**
@@ -633,7 +634,7 @@ describe('CodexAdapter planner boundary (ADR-0008/0009)', () => {
     // Task fields smuggled onto a planner start: nothing on the planner path reads them.
     ['a task\'s full-access mode and flags', { mode: 'fullAccess', flags: { permissionMode: 'danger-full-access', effort: 'xhigh', modeSettings: { approvalPolicy: 'never' } } }],
     ['a task\'s agent mode and reviewer', { mode: 'agent', flags: { permissionMode: 'workspace-write', modeSettings: { approvalPolicy: 'on-request', approvalsReviewer: 'auto_review' } } }],
-  ])('opens a planner thread read-only with nobody asked, whatever else its start carries: %s', async (_label, extra) => {
+  ])('opens a planner thread read-only, its approvals asked of Ordewell, whatever else its start carries: %s', async (_label, extra) => {
     const { spawned, processDeps } = deps(plannerHandshake());
     const adapter = new CodexAdapter(processDeps);
     await adapter.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN', ...extra } as unknown as AgentStartOptions);
@@ -645,7 +646,7 @@ describe('CodexAdapter planner boundary (ADR-0008/0009)', () => {
       ...('model' in extra ? { model: extra.model } : {}),
       cwd: '/repo',
       sandbox: 'read-only',
-      approvalPolicy: 'never',
+      approvalPolicy: 'on-request',
       developerInstructions: 'PLAN',
     });
     adapter.dispose();
@@ -670,6 +671,60 @@ describe('CodexAdapter planner boundary (ADR-0008/0009)', () => {
     expect(answerTo(proc, 23)?.error?.message).toContain('read-only');
     expect(answerTo(proc, 24)?.result).toEqual({ action: 'decline' });
     for (const id of ['21', '22', '23', '24']) expect(adapter.answerPermission(id, { decision: 'allow' })).toBe(false);
+    adapter.dispose();
+  });
+
+  // The request as Codex 0.162 raised it for a configured server's tool under `on-request`.
+  const mcpToolApproval = (id: number, message: string) => line({
+    id,
+    method: 'mcpServer/elicitation/request',
+    params: {
+      threadId: 'thr-codex-1', turnId: 't', serverName: 'todoist', mode: 'form', message,
+      _meta: { codex_approval_kind: 'mcp_tool_call', persist: ['session', 'always'], tool_params: { filter: 'today' } },
+      requestedSchema: { type: 'object', properties: {} },
+    },
+  });
+
+  it('holds a user\'s MCP tool approval open for the planner\'s envelope, and answers it as decided', async () => {
+    const { spawned, processDeps } = deps(plannerHandshake());
+    const adapter = new CodexAdapter(processDeps);
+    await adapter.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN' });
+    const proc = spawned.processes[0];
+    const events: AgentEvent[] = [];
+    void adapter.send('plan it', (e) => events.push(e));
+    proc.emitStdout(mcpToolApproval(31, 'Allow the todoist MCP server to run tool "find-tasks"?'));
+    await tick();
+
+    expect(answerTo(proc, 31)).toBeUndefined();
+    expect(events.find((e) => e.type === 'permission_request')).toEqual({
+      type: 'permission_request',
+      id: '31',
+      name: 'mcp__todoist__find-tasks',
+      detail: JSON.stringify({ filter: 'today' }),
+      input: { filter: 'today' },
+      ask: { kind: 'mcp', scope: 'mcp__todoist__find-tasks', tool: 'find-tasks', server: 'todoist' },
+    });
+    expect(adapter.answerPermission('31', { decision: 'deny', note: 'not approved' })).toBe(true);
+    expect(answerTo(proc, 31)?.result).toEqual({ action: 'decline', content: null });
+    // The note is the envelope's, not a person's message: nothing is steered into the planner's thread.
+    expect(sentNamed(proc.written, 'turn/steer')).toEqual([]);
+    adapter.dispose();
+  });
+
+  it('names the tool from the call it started when the question does not', async () => {
+    const { spawned, processDeps } = deps(plannerHandshake());
+    const adapter = new CodexAdapter(processDeps);
+    await adapter.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN' });
+    const proc = spawned.processes[0];
+    const events: AgentEvent[] = [];
+    void adapter.send('plan it', (e) => events.push(e));
+    proc.emitStdout(
+      line({ method: 'item/started', params: { threadId: 'thr-codex-1', turnId: 't', item: { type: 'mcpToolCall', id: 'm1', server: 'todoist', tool: 'add-tasks', status: 'inProgress', arguments: {} } } })
+      + mcpToolApproval(32, 'Allow this call?'),
+    );
+    await tick();
+
+    expect(events.find((e) => e.type === 'permission_request')).toMatchObject({ ask: { kind: 'mcp', tool: 'add-tasks', server: 'todoist' } });
     adapter.dispose();
   });
 });
@@ -777,7 +832,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
     adapter.dispose();
   });
 
-  it('gives a planner thread the server and keeps it read-only with nobody asked', async () => {
+  it('gives a planner thread the server and keeps it read-only', async () => {
     const { spawned, processDeps } = deps(plannerHandshake());
     const adapter = new CodexAdapter(processDeps);
     await adapter.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN', mcp });
@@ -786,10 +841,12 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
     expect(thread.params).toEqual({
       cwd: '/repo',
       sandbox: 'read-only',
-      approvalPolicy: 'never',
+      approvalPolicy: 'on-request',
       config: { mcp_servers: { ordewell: ordewellServer } },
-      developerInstructions: 'PLAN',
+      developerInstructions: `PLAN\n\n${CODEX_ORDEWELL.plannerInstructions()}`,
     });
+    // Codex lists MCP tools only behind its own discovery, and its shell has no network (ADR-0026).
+    expect(CODEX_ORDEWELL.plannerInstructions()).toContain('`mcp__ordewell__run_command`');
     expect(spawned.lastEnv().ORDEWELL_MCP_TOKEN_0).toBe('Bearer tok-secret');
     adapter.dispose();
   });

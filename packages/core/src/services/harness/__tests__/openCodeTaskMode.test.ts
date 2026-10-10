@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { OpenCodeAdapter } from '../OpenCodeAdapter';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, SpawnFn, TaskStartOptions } from '../AgentAdapter';
 import { mcpClientConfig } from '../../mcp';
+import { OPENCODE_PLANNER_PERMISSION } from '../openCodeOrdewell';
 import { OPENCODE_MANIFEST } from '../../../plugins/builtin/opencode.manifest';
 import { modeIds, fakeSpawn, sseResponse, type FakeEventStream } from '../../__tests__/harnessTestKit';
 
@@ -711,13 +712,16 @@ describe('OpenCodeAdapter planner — still read-only', () => {
     ['nothing else', {}],
     // Task fields smuggled onto a planner start: nothing on the planner path reads them.
     ['a task\'s mode and auto approvals', { mode: 'build', flags: { permissionMode: 'build', effort: 'max', modeSettings: { approvals: 'auto' } } }],
-  ])('plans with the read-only agent and refuses every request whatever its start carries: %s', async (_label, extra) => {
+  ])('plans with the read-only agent, no shell and no subagents, and holds every request for the envelope whatever its start carries: %s', async (_label, extra) => {
     const { server, release } = plannerServer();
     const { adapter, env } = await startTask(server, { kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN', ...extra } as unknown as AgentStartOptions);
     const events: AgentEvent[] = [];
     const turn = adapter.send('the goal', (e) => events.push(e));
     const stream = await server.stream();
     stream.push(ask('per_1'));
+    await until(() => events.some((e) => e.type === 'permission_request'));
+    expect(server.requests.some((r) => r.path === '/permission/per_1/reply')).toBe(false);
+    expect(adapter.answerPermission('per_1', { decision: 'deny' })).toBe(true);
     await until(() => server.requests.some((r) => r.path === '/permission/per_1/reply'));
     release();
     await turn;
@@ -725,15 +729,18 @@ describe('OpenCodeAdapter planner — still read-only', () => {
     const message = server.requests.find((r) => r.path === `/session/${SES}/message` && r.method === 'POST');
     expect(message?.body).toMatchObject({
       agent: 'plan',
-      tools: { question: false, edit: false, write: false, apply_patch: false, todowrite: false },
+      tools: { question: false, edit: false, write: false, apply_patch: false, todowrite: false, bash: false, task: false },
       system: 'PLAN',
     });
+    // Its server's whole permission policy is Ordewell's (ADR-0026).
+    expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT ?? 'null')).toEqual({ permission: OPENCODE_PLANNER_PERMISSION });
     expect(server.requests.find((r) => r.path === '/permission/per_1/reply')?.body).toEqual({ reply: 'reject' });
     expect(server.requests.some((r) => r.path.endsWith('/prompt_async'))).toBe(false);
     // 2.x refuses every /api request without credentials, so a planner's server is secured like a task's.
     const password = env.OPENCODE_SERVER_PASSWORD;
     expect(password).toBeTruthy();
     for (const request of server.requests) expect(request.authorization).toBe(basic(password!));
+    expect(events.find((e) => e.type === 'permission_request')).toMatchObject({ id: 'per_1', name: 'bash', ask: { kind: 'other' } });
     expect(events.find((e) => e.type === 'permission_request')).not.toHaveProperty('decided');
     expect(adapter.answerPermission('per_1', { decision: 'allow' })).toBe(false);
     adapter.dispose();
@@ -742,7 +749,9 @@ describe('OpenCodeAdapter planner — still read-only', () => {
   it('denies on the deprecated path only when the new reply endpoint 404s', async () => {
     const { server, release } = plannerServer({ 'POST /permission/per_1/reply': () => ({ status: 404 }) });
     const { adapter } = await startTask(server, { kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN' });
-    const turn = adapter.send('the goal', () => {});
+    const turn = adapter.send('the goal', (e) => {
+      if (e.type === 'permission_request') adapter.answerPermission(e.id, { decision: 'deny' });
+    });
     const stream = await server.stream();
     stream.push(ask('per_1'));
     stream.push(ask('per_2'));
@@ -807,7 +816,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
   it('hands the planner the same, beside the read-only agent', async () => {
     const { adapter, env } = await startTask(fakeServer(), { kind: 'planner', cwd: '/repo', systemPrompt: 'plan read-only', mcp });
 
-    expect(configOf(env)).toEqual({ mcp: { ordewell }, permission: { 'ordewell_*': 'allow' } });
+    expect(configOf(env)).toEqual({ mcp: { ordewell }, permission: { ...OPENCODE_PLANNER_PERMISSION, 'ordewell_*': 'allow' } });
     adapter.dispose();
   });
 
@@ -976,7 +985,7 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
     adapter.dispose();
   });
 
-  it('answers the planner\'s Ordewell tool with an allow and everything else with a refusal', async () => {
+  it('answers the planner\'s Ordewell tool with an allow at once and holds everything else for the envelope', async () => {
     let settle: (reply: unknown) => void = () => {};
     const server = fakeServer({ 'POST /session/ses_task/message': () => new Promise((resolve) => { settle = resolve; }) });
     const { adapter } = await startTask(server, { kind: 'planner', cwd: '/repo', systemPrompt: 'plan read-only', mcp });
@@ -985,13 +994,16 @@ describe('OpenCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
     const stream = await server.stream();
     stream.push(ask('per_s', { permission: 'ordewell_submit_plan', patterns: ['*'], metadata: {} }));
     stream.push(ask('per_w', { permission: 'edit' }));
+    await until(() => events.some((e) => e.type === 'permission_request' && e.id === 'per_w'));
+    adapter.answerPermission('per_w', { decision: 'deny' });
     await until(() => server.requests.some((r) => r.path === '/permission/per_w/reply'));
     settle({ info: { id: 'msg_a', role: 'assistant' }, parts: [] });
     await turn;
 
     expect(server.requests.find((r) => r.path === '/permission/per_s/reply')?.body).toEqual({ reply: 'once' });
     expect(server.requests.find((r) => r.path === '/permission/per_w/reply')?.body).toEqual({ reply: 'reject' });
-    expect(events.filter((e) => e.type === 'permission_request').map((e) => e.type === 'permission_request' && e.name)).toEqual(['edit']);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'permission_request', id: 'per_s', decided: { decision: 'allow' } }));
+    expect(events.find((e) => e.type === 'permission_request' && e.id === 'per_w')).toMatchObject({ ask: { kind: 'other' } });
     adapter.dispose();
   });
 

@@ -9,8 +9,10 @@ export { classifyCommand, AUTO_COMMANDS, GIT_READONLY_SUBCOMMANDS, REFUSED_COMMA
 export type { CommandTier, CommandClassification } from './services/commandPolicy';
 export { resolveWithin, grantScopeFor } from './services/pathScope';
 export * from './interfaces/IApproval';
-export { ApprovalPolicy } from './services/ApprovalPolicy';
-export type { ApprovalMode, ApprovalPolicyOptions, ApprovalSource } from './services/ApprovalPolicy';
+export { ApprovalPolicy, effectiveApprovalMode, parseApprovalModeSetting } from './services/ApprovalPolicy';
+export type { ApprovalMode, ApprovalModeSetting, ApprovalPolicyOptions, ApprovalSource } from './services/ApprovalPolicy';
+export { DEFAULT_PLANNER_ALLOWLIST, parseAllowlist, commandAllowedBy, toolAllowed, scopeAllowed } from './services/plannerAllowlist';
+export type { PlannerAllowlist, CommandWords } from './services/plannerAllowlist';
 export { PendingApprovals } from './services/PendingApprovals';
 export type { AskOptions, PendingApproval, PendingApprovalsOptions } from './services/PendingApprovals';
 export { RunnerApprovals } from './services/RunnerApprovals';

@@ -10,6 +10,26 @@ const NAMES = prefixedToolNames(`${ORDEWELL_MCP_SERVER_NAME}_`);
 /** The permission rule that covers every tool of the server. */
 const RULE = NAMES.toolName('*');
 
+/**
+ * A planner server's whole permission policy (ADR-0026), in order: OpenCode
+ * applies the last rule that matches, so the catch-all comes first. Anything
+ * not named asks, which reaches the planner's envelope: a user's MCP tool, a
+ * fetch, a read outside the workspace. OpenCode's own read tools run, and
+ * everything that writes or runs is denied — its shell too, since the
+ * planner's commands go through Ordewell's `run_command`. 2.x renamed `bash`
+ * to `shell` and `task` to `subagent`, and added a `browser` that clicks
+ * through pages; both spellings are listed. Checked against 1.18.35 and 2.0.26.
+ */
+export const OPENCODE_PLANNER_PERMISSION: Record<string, OpenCodeSessionRule['effect']> = {
+  '*': 'ask',
+  read: 'allow', glob: 'allow', grep: 'allow', list: 'allow', lsp: 'allow',
+  skill: 'allow', todoread: 'allow', websearch: 'allow', codesearch: 'allow',
+  webfetch: 'ask', external_directory: 'ask',
+  edit: 'deny', write: 'deny', patch: 'deny', apply_patch: 'deny', multiedit: 'deny',
+  bash: 'deny', task: 'deny', question: 'deny', todowrite: 'deny',
+  shell: 'deny', subagent: 'deny', browser: 'deny',
+};
+
 /** The variable OpenCode reads inline configuration from, over its config files. */
 export const OPENCODE_CONFIG_VARIABLE = 'OPENCODE_CONFIG_CONTENT';
 
@@ -22,7 +42,7 @@ export interface OpenCodeSessionRule {
 
 export interface OpenCodeOrdewellBinding extends OrdewellToolBinding<string> {
   /** The 1.x server's `OPENCODE_CONFIG_CONTENT` with the server added — see {@link mergeOrdewellConfig}. */
-  configContent(existing: string | undefined, mcp: McpClientConfig): string | null;
+  configContent(existing: string | undefined, mcp: McpClientConfig | null, role: 'planner' | 'task'): string | null;
   /** The rules a 2.x session is created with so the server's tools never wait on a person (ADR-0022, S3). */
   sessionRules(): OpenCodeSessionRule[];
 }
@@ -89,7 +109,7 @@ export function withoutParentOrdewell(content: string): string {
  * `existing` is not a JSON object — it cannot be merged, and replacing it would
  * silently drop whatever it carried, so the caller runs without the server.
  */
-function mergeOrdewellConfig(existing: string | undefined, mcp: McpClientConfig): string | null {
+function mergeOrdewellConfig(existing: string | undefined, mcp: McpClientConfig | null, role: 'planner' | 'task'): string | null {
   let base: Record<string, unknown> = {};
   if (existing?.trim()) {
     let parsed: unknown;
@@ -97,11 +117,13 @@ function mergeOrdewellConfig(existing: string | undefined, mcp: McpClientConfig)
     if (!isRecord(parsed)) return null;
     base = withoutOrdewell(parsed);
   }
+  // A planner's policy is Ordewell's alone: a permission the workspace grants its own sessions is not one it grants the planner.
+  if (role === 'planner') { delete base.permission; delete base.permissions; }
   // A bare `"permission": "allow"` is the whole policy; the rule needs an object to join.
   const policy = typeof base.permission === 'string' ? { '*': base.permission } : base.permission;
   const ours = {
-    mcp: { [mcp.name]: { type: 'remote', url: mcp.url, headers: mcp.headers, enabled: true } },
-    permission: { [RULE]: 'allow' },
+    ...(mcp ? { mcp: { [mcp.name]: { type: 'remote', url: mcp.url, headers: mcp.headers, enabled: true } } } : {}),
+    permission: { ...(role === 'planner' ? OPENCODE_PLANNER_PERMISSION : {}), ...(mcp ? { [RULE]: 'allow' } : {}) },
   };
   return JSON.stringify(deepMerge({ ...base, ...(policy === undefined ? {} : { permission: policy }) }, ours));
 }

@@ -3,7 +3,7 @@ import type { SubagentOutcome } from '../../models/Task';
 import { partedPromptUsage, type UsageRecord } from '../../models/Usage';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import { claudeThinkingArgs } from '../../plugins/resolveArgs';
-import type { AgentEvent, AgentStartOptions, TaskModeAgentAdapter, TaskStartOptions } from './AgentAdapter';
+import type { AgentEvent, AgentStartOptions, PlannerAsk, TaskModeAgentAdapter, TaskStartOptions } from './AgentAdapter';
 import { StdioAgentAdapter, type SpawnSpec } from './StdioAgentAdapter';
 import { markedLines, structuredPatchText } from './fileDiff';
 import { ORDEWELL_MCP_SERVER_NAME, type McpClientConfig, type OwnerOnlyFile } from '../mcp';
@@ -12,16 +12,43 @@ import { settleWithin } from './settleWithin';
 import { awaitAttach, type OrdewellToolRole } from './ordewellBinding';
 
 /**
- * Native plan mode permits Bash writes to its plan file, and `dontAsk` still
- * honors saved shell allow rules. Withhold shell tools and native plan-mode
- * transitions as well as direct edits so neither can reopen that write path.
+ * Native plan mode permits Bash writes to its plan file, and saved allow rules
+ * run shell commands without asking. Withhold shell tools and native plan-mode
+ * transitions as well as direct edits so neither can reopen that write path;
+ * a planner's commands go through Ordewell's `run_command` (ADR-0026).
  */
 const DISALLOWED_TOOLS = [
   'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'KillShell',
   'Bash', 'PowerShell', 'EnterPlanMode', 'ExitPlanMode',
 ];
 
-const PLANNER_PERMISSION_MODE = 'dontAsk';
+/**
+ * `default`, so what the mode cannot decide — an MCP tool the user configured,
+ * a fetch, a read outside the workspace — reaches the planner's envelope over
+ * `--permission-prompt-tool stdio` (ADR-0026). `dontAsk` denied it unseen.
+ */
+const PLANNER_PERMISSION_MODE = 'default';
+
+/** Claude Code's read tools, by the input field that names their path. */
+const PATH_TOOLS: Record<string, { field: string; directory: boolean }> = {
+  Read: { field: 'file_path', directory: false },
+  Grep: { field: 'path', directory: true },
+  Glob: { field: 'path', directory: true },
+  LS: { field: 'path', directory: true },
+};
+
+/** What a planner's `can_use_tool` request is for (ADR-0026). Claude names an MCP tool `mcp__<server>__<tool>`. */
+function plannerAsk(name: string, input: Record<string, unknown>, server: string | undefined): PlannerAsk {
+  if (name.startsWith('mcp__')) {
+    const tool = name.split('__').slice(2).join('__');
+    return { kind: 'mcp', scope: name, tool: tool || name, ...(server ? { server } : {}) };
+  }
+  if (name === 'WebFetch' && typeof input.url === 'string') return { kind: 'fetch', url: input.url };
+  const pathTool = PATH_TOOLS[name];
+  const target = pathTool ? input[pathTool.field] : undefined;
+  if (pathTool && typeof target === 'string') return { kind: 'path', path: target, directory: pathTool.directory };
+  return { kind: 'other' };
+}
 
 /**
  * `AskUserQuestion` reaches us as a tool request whose allow must carry the
@@ -125,7 +152,14 @@ interface ClaudeLine {
   /** A failed result's own words when it has no `result` text — a refused `--resume`, say. */
   errors?: string[];
   request_id?: string;
-  request?: { subtype?: string; tool_name?: string; input?: Record<string, unknown>; permission_suggestions?: unknown[]; tool_use_id?: string };
+  request?: {
+    subtype?: string;
+    tool_name?: string;
+    input?: Record<string, unknown>;
+    permission_suggestions?: unknown[];
+    tool_use_id?: string;
+    mcp_server?: { name?: string };
+  };
   /** `control_response`: the answer to a request Ordewell sent, such as an interrupt. */
   response?: ControlResponse;
   message?: { id?: string; model?: string; usage?: ClaudeUsage; content?: ClaudeBlock[] | string };
@@ -274,6 +308,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     const args = [
       ...PROTOCOL_ARGS,
       // The read-only guarantee, enforced at spawn rather than by prompt.
+      '--permission-prompt-tool', 'stdio',
       '--permission-mode', PLANNER_PERMISSION_MODE,
       '--disallowedTools', DISALLOWED_TOOLS.join(','),
       '--append-system-prompt', opts.systemPrompt,
@@ -479,25 +514,13 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
 
     switch (msg.type) {
       // The control channel: Claude asks whether a tool may run when its mode
-      // cannot decide alone. A read-only planner answers "deny", every time —
-      // and must answer, because an unacknowledged request stalls the turn.
-      // A task's request is left open for someone to answer (ADR-0018, A1).
+      // cannot decide alone. The request is left open — a task's for someone
+      // to answer (ADR-0018, A1), a planner's for its envelope (ADR-0026) —
+      // and must be answered, because an unacknowledged request stalls the turn.
       case 'control_request': {
         if (msg.request?.subtype !== 'can_use_tool') return;
         const input = msg.request.input ?? {};
         const id = msg.request_id ?? '';
-        if (this.role === 'planner') {
-          this.writeLine({
-            type: 'control_response',
-            response: {
-              subtype: 'success',
-              request_id: msg.request_id,
-              response: { behavior: 'deny', message: 'The Ordewell planner is read-only. Mutation belongs to the runners that execute the plan.' },
-            },
-          });
-          emit({ type: 'permission_request', id, name: msg.request.tool_name ?? 'unknown', detail: JSON.stringify(input) });
-          return;
-        }
         const name = msg.request.tool_name ?? 'unknown';
         if (this.givenOrdewell && CLAUDE_ORDEWELL.isOrdewellAsk(name)) {
           // `--allowedTools` should have settled it already. A completion that
@@ -506,7 +529,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
           emit({ type: 'permission_request', id, name, detail: JSON.stringify(input), input, decided: { decision: 'allow' } });
           return;
         }
-        const suggestions = msg.request.permission_suggestions ?? [];
+        // A planner's grants are the session policy's, never Claude's own.
+        const suggestions = this.role === 'task' ? msg.request.permission_suggestions ?? [] : [];
         this.openPermissions.set(id, { input, suggestions });
         emit({
           type: 'permission_request',
@@ -516,6 +540,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
           input,
           suggestions,
           ...(msg.request.tool_use_id ? { toolUseId: msg.request.tool_use_id } : {}),
+          ...(this.role === 'planner' ? { ask: plannerAsk(name, input, msg.request.mcp_server?.name) } : {}),
         });
         return;
       }

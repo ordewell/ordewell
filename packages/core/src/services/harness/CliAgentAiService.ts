@@ -15,6 +15,7 @@ import { addUsage, type UsageTotals } from '../../models/Usage';
 import type { IConfig } from '../../interfaces/IConfig';
 import type { IFileSystem } from '../../interfaces/IFileSystem';
 import type { IWebFetcher } from '../../interfaces/IWebFetcher';
+import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { RunnerModeInfo } from '../ModeResolver';
 import type { IAiService, ConversationRequest, ConversationTurn, PlannerToolsOffer } from '../AiService';
 import {
@@ -35,6 +36,7 @@ import { collectResearchContext } from '../ContextCollector';
 import type { AgentAdapter, AgentEvent, AgentProcessDeps, PlannerStartOptions } from './AgentAdapter';
 import { createPlannerAdapter } from './connectors';
 import { mapAgentTool, normalizeAgentArgs } from './agentTools';
+import { decidePlannerPermission, type PlannerPermissionGate } from './plannerPermissions';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from '../plannerModes';
 import { mcpClientConfig, sharedMcpServer, type McpCredential, type OrdewellMcpServer } from '../mcp';
 
@@ -126,7 +128,8 @@ export class CliAgentAiService implements IAiService {
    * every session boundary — nothing from one goal may reach the next.
    */
   private lastNativeSessionId: string | null = null;
-  private conversation: { startOptions: PlannerStartOptions; tools: PlannerToolsOffer } | null = null;
+  /** `gate` is what the agent's own tool requests are decided against; absent, only Ordewell's tools are allowed (ADR-0026). */
+  private conversation: { startOptions: PlannerStartOptions; tools: PlannerToolsOffer; gate?: PlannerPermissionGate } | null = null;
   private readonly mcpServer: OrdewellMcpServer | undefined;
   /** The planner token the running process was spawned with; revoked with the process (ADR-0022, A3). */
   private plannerToken: string | null = null;
@@ -218,7 +221,8 @@ export class CliAgentAiService implements IAiService {
     const tools = req.plannerTools;
     await this.startAdapter(startOptions, tools);
 
-    this.conversation = { startOptions, tools };
+    const gate = req.approval ? { approval: req.approval, fetcher: req.fetcher, workspaceRoot: startOptions.cwd } : undefined;
+    this.conversation = { startOptions, tools, gate };
 
     // A reloaded session replays its transcript instead of re-running the
     // research the agent already paid for. The agent gets it as context, not
@@ -343,6 +347,9 @@ export class CliAgentAiService implements IAiService {
     // Who streamed thinking deltas (the planner as '', or a subagent) since
     // their last complete `thinking`, which then repeats what was already sent.
     const streamedThinking = new Set<string>();
+    // Calls whose permission request the envelope denied: their failed result is a denial, not a failure.
+    const deniedCalls = new Set<string>();
+    const gate = this.conversation?.gate;
     const subagentUsage = new Map<string, UsageTotals>();
     let error: string | undefined;
     let stepIndex = 0;
@@ -412,7 +419,7 @@ export class CliAgentAiService implements IAiService {
         }
 
         case 'tool_result':
-          settle(event.id, event.output, event.success, event.success ? 'success' : 'failure', event.subagentId);
+          settle(event.id, event.output, event.success, event.success ? 'success' : deniedCalls.has(event.id) ? 'denied' : 'failure', event.subagentId);
           return;
 
         case 'usage': {
@@ -442,21 +449,35 @@ export class CliAgentAiService implements IAiService {
           return;
 
         case 'permission_request': {
-          // Auto-denied, always (T1). The request is still announced so the
-          // user can see the planner reached for something it may not have —
-          // a silently swallowed denial reads as the agent losing interest.
-          const mapped = mapAgentTool(event.name);
-          const args = JSON.stringify({ detail: event.detail });
-          if (!pendingCalls.has(event.id)) {
-            pendingCalls.set(event.id, { tool: mapped.tool, toolLabel: mapped.toolLabel, args });
-            onProgress({ type: 'tool_call', tool: mapped.tool, toolLabel: mapped.toolLabel, toolArgs: args, toolCallId: event.id });
+          // Announced so the user can see the planner reached for something it
+          // may not have — a silently swallowed denial reads as the agent losing interest.
+          const announceDenial = (output: string) => {
+            const mapped = mapAgentTool(event.name);
+            const args = JSON.stringify({ detail: event.detail });
+            if (!pendingCalls.has(event.id)) {
+              pendingCalls.set(event.id, { tool: mapped.tool, toolLabel: mapped.toolLabel, args });
+              onProgress({ type: 'tool_call', tool: mapped.tool, toolLabel: mapped.toolLabel, toolArgs: args, toolCallId: event.id });
+            }
+            settle(event.id, output, false, 'denied');
+          };
+          if (!event.decided && adapter.answerPermission) {
+            // Open: the envelope decides it, asking the user where the API
+            // planner would (ADR-0026). A call the runner linked settles from
+            // its own result; one it did not is shown denied here.
+            const { id, toolUseId } = event;
+            void decidePlannerPermission(event.ask, event.input ?? {}, gate)
+              .catch((): ApprovalDecision => ({ decision: 'deny' }))
+              .then((decision) => {
+                if (decision.decision === 'deny') {
+                  if (toolUseId) deniedCalls.add(toolUseId);
+                  else announceDenial(`Access denied: "${event.name}" was refused. ${decision.note ?? ''}`.trim());
+                }
+                adapter.answerPermission?.(id, decision);
+              });
+            return;
           }
-          settle(
-            event.id,
-            `Access denied: the planner runs read-only, so "${event.name}" was refused. Mutation belongs to the runners that execute the plan.`,
-            false,
-            'denied',
-          );
+          if (event.decided?.decision !== 'deny') return;
+          announceDenial(`Access denied: the planner runs read-only, so "${event.name}" was refused. Mutation belongs to the runners that execute the plan.`);
           return;
         }
 

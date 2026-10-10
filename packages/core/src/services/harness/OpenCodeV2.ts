@@ -1,9 +1,9 @@
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { AgentEvent, PlannerStartOptions, TaskStartOptions } from './AgentAdapter';
-import { OPENCODE_ORDEWELL, type OpenCodeSessionRule as SessionRule } from './openCodeOrdewell';
+import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION, type OpenCodeSessionRule as SessionRule } from './openCodeOrdewell';
 import { hunksOf } from './fileDiff';
 import {
-  OpenCodePermissions, autoApproves, delay, interruptAcknowledged, openEventStream, permissionReply, settleTurn, splitModelId, streamTurn,
+  OpenCodePermissions, autoApproves, delay, interruptAcknowledged, openCodePlannerAsk, openEventStream, permissionReply, settleTurn, splitModelId, streamTurn,
   turnLatch, usageRecord, type OpenCodeTokens, type PermissionRequest, type StreamTurn, type TurnLatch,
 } from './openCodeTransport';
 /** A turn's end is also read from `/api/session/active`, behind the stream, which can drop a frame. */
@@ -12,15 +12,12 @@ const ACTIVE_POLL_INTERVAL_MS = 1000;
 const IDLE_POLLS_BEFORE_START = 3;
 
 /**
- * Asked of the planner's session, which nobody is watching. `question` blocks
- * the turn on an answer that cannot come; a denied request makes the model say
- * so in text. `edit` is the write tools, withheld for the reason ADR-0009 gives
- * for the plan agent alone not being the guarantee.
+ * The planner's session gets the same policy its server is configured with
+ * (ADR-0026), catch-all first: 2.x, like 1.x, applies the last rule that
+ * matches, after the agent's and the user's own.
  */
-const PLANNER_RULES: SessionRule[] = [
-  { action: 'question', resource: '*', effect: 'deny' },
-  { action: 'edit', resource: '*', effect: 'deny' },
-];
+const PLANNER_RULES: SessionRule[] = Object.entries(OPENCODE_PLANNER_PERMISSION)
+  .map(([action, effect]) => ({ action, resource: '*', effect }));
 /** A task asks its user in plain text for now, through its runner session. */
 const TASK_RULES: SessionRule[] = [{ action: 'question', resource: '*', effect: 'deny' }];
 
@@ -72,6 +69,8 @@ interface V2Message {
 
 /** What the adapter that owns the server lends this module. */
 export interface OpenCodeV2Host {
+  /** The user's MCP servers the server listed, for telling a planner's MCP tool request from a built-in's (ADR-0026). */
+  mcpServers?(): readonly string[];
   request(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<Response>;
   /** A request whose body is the answer or throws, as `request` + status check. */
   json<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T | null>;
@@ -164,6 +163,7 @@ export class OpenCodeV2 {
   nativeSessionId(): string | null { return this.sessionId; }
 
   async start(): Promise<void> {
+    await this.exposeOrdewellTools();
     const resume = this.opts.resumeSessionId;
     if (resume) {
       // A resume id names a session on disk, not on this process — so it is checked rather than trusted.
@@ -188,6 +188,21 @@ export class OpenCodeV2 {
     if (!created?.data?.id) throw new Error(`The OpenCode ${this.role} server did not return a session id.`);
     this.sessionId = created.data.id;
     await this.applyInstructions();
+  }
+
+  /**
+   * 2.x lists an MCP server's tools inside its code-mode `execute` tool, where
+   * a model told to call `task_complete` does not look for it. The server is
+   * replaced at runtime with `codemode: false`, which lists its tools as tools
+   * of their own: the config it started with is in the 1.x shape both versions
+   * read, and that shape drops the setting. If the route is gone, the tools
+   * are still reachable through `execute`.
+   */
+  private async exposeOrdewellTools(): Promise<void> {
+    const mcp = this.opts.mcp;
+    if (!mcp) return;
+    await this.host.request('PUT', `/api/experimental/mcp/${mcp.name}`, { config: { type: 'remote', url: mcp.url, headers: mcp.headers, codemode: false } })
+      .catch(() => undefined);
   }
 
   /** Allow the Ordewell server's tools, so a call never waits on a person (ADR-0022, S3). */
@@ -475,11 +490,13 @@ export class OpenCodeV2 {
     };
   }
 
-  /** A planner's request is refused; a task's is answered at once or left open for a card. */
+  /** A planner's request is held for its envelope (ADR-0026); a task's is answered at once or left open for a card. */
   private onPermissionAsked(ask: NonNullable<V2Frame['data']>, session: string, state: TurnState, onEvent: (e: AgentEvent) => void): void {
     const request = this.permissionRequest(ask);
     if (!request) return;
-    if (this.role !== 'task') this.permissions.refuse(request, session, state.seen, onEvent);
-    else this.permissions.ask(request, session, this.opts.kind === 'task' && autoApproves(this.opts), state.seen, onEvent);
+    if (this.role !== 'task') {
+      const target = openCodePlannerAsk(request.name, { patterns: ask.resources }, this.host.mcpServers?.() ?? []);
+      this.permissions.ask({ ...request, ask: target }, session, false, state.seen, onEvent);
+    } else this.permissions.ask(request, session, this.opts.kind === 'task' && autoApproves(this.opts), state.seen, onEvent);
   }
 }
