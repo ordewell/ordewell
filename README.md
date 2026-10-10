@@ -24,7 +24,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/readme/story.png" width="900" alt="Three steps: say what you want and answer a question or two, shape the plan by changing any task, agent or model, then read the diff and merge once the agents are done.">
+  <img src="assets/readme/workflow.svg" width="900" alt="Describe your goal, review and edit the plan, run independent tasks in parallel with Claude Code, Codex and OpenCode, then review the diff and choose when to merge.">
 </p>
 
 Describe what you want to build. Ordewell explores your repository, asks clarifying
