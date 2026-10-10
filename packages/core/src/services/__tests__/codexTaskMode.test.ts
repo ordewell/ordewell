@@ -842,6 +842,20 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
       adapter.dispose();
     });
 
+    it('hands on none of the parent\'s OpenCode server, keeping the rest of that configuration', async () => {
+      const parent = { type: 'remote', url: 'http://127.0.0.1:4999/mcp', headers: { Authorization: 'Bearer parent-synthetic' } };
+      vi.stubEnv('OPENCODE_CONFIG_CONTENT', JSON.stringify({ model: 'host/model', mcp: { ordewell: parent }, permission: { 'ordewell_*': 'allow' } }));
+      for (const opts of [taskStart('agent'), taskStart('agent', { mcp })]) {
+        const { spawned, processDeps } = deps(handshake());
+        const adapter = new CodexAdapter(processDeps);
+        await adapter.start(opts);
+
+        expect(Object.values(spawned.lastEnv()).some((value) => value?.includes('parent-synthetic'))).toBe(false);
+        expect(JSON.parse(spawned.lastEnv().OPENCODE_CONFIG_CONTENT ?? 'null')).toEqual({ model: 'host/model' });
+        adapter.dispose();
+      }
+    });
+
     it('takes no token from the workspace\'s own variables either', async () => {
       const { spawned, processDeps } = deps(handshake());
       const adapter = new CodexAdapter({
