@@ -715,6 +715,33 @@ describe('CliAgentAiService — streamed events (#47)', () => {
     expect(steps.map((step) => [step.toolCallId, step.subagentId])).toEqual([['c1', 'sa1'], ['task-1', undefined]]);
   });
 
+  it('shows a usage-limit failure once, as the error and not also as a reply', async () => {
+    const limit = "You've hit your session limit · resets 8:10pm (Europe/Rome)";
+    const svc = scripted([
+      { type: 'assistant_text', text: limit },
+      { type: 'error', message: `${limit}.` },
+    ]);
+    const { events, onProgress } = collector();
+
+    const turn = await svc.startConversation(request({ onProgress }));
+
+    expect(turn).toMatchObject({ kind: 'message', text: `${limit}.`, failed: true });
+    expect(events.map((e) => e.type)).toEqual(['text_delta', 'text_retracted']);
+  });
+
+  it('keeps a real reply that comes before a different failure', async () => {
+    const svc = scripted([
+      { type: 'assistant_text', text: 'Which store should the cache use?' },
+      { type: 'error', message: "You've hit your session limit · resets 8:10pm (Europe/Rome)." },
+    ]);
+    const { events, onProgress } = collector();
+
+    const turn = await svc.startConversation(request({ onProgress }));
+
+    expect(turn).toMatchObject({ kind: 'message', failed: true });
+    expect(events.map((e) => e.type)).toEqual(['text_delta']);
+  });
+
   it('settles a reply that looks like a botched plan as prose, with no corrective re-emit', async () => {
     const broken = '{"tasks":[{"id":"t1","order":1,"title":"A","description":"d","type":"ai","dependencies":[],"subtasks":[]}]}';
     const svc = scripted(

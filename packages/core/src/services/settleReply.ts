@@ -57,6 +57,13 @@ export interface SettleReplyOptions {
   replyJoinsSegments: boolean;
 }
 
+/** Whether `reply` says what `failure` says, ignoring case, spacing and a closing full stop. */
+function repeats(reply: string, failure: string): boolean {
+  const plain = (text: string) => text.replace(/\s+/g, ' ').trim().replace(/\.+$/, '').toLowerCase();
+  const spoken = plain(reply);
+  return spoken !== '' && spoken === plain(failure);
+}
+
 /**
  * Settle one planner turn's reply (ADR-0002): classify what the model said,
  * and give what cannot be settled yet its bounded corrective retries — one
@@ -103,7 +110,14 @@ export async function settleReply(opts: SettleReplyOptions): Promise<Conversatio
         opts.onProgress({ type: 'interrupted' });
         return { done: turn };
       }
-      if (attempt.failure !== undefined) return { done: { ...message(attempt.failure), failed: true } };
+      if (attempt.failure !== undefined) {
+        // An agent that hits its usage limit says so as a reply and then fails
+        // the turn with the same words. The failure is the one that says the
+        // turn failed, so the streamed copy is taken back; a real reply that
+        // came before a different failure stays.
+        if (opts.replyJoinsSegments && repeats(attempt.text, attempt.failure)) retract();
+        return { done: { ...message(attempt.failure), failed: true } };
+      }
       if (!attempt.text.trim()) return { done: message(emptyReplyReport(deniedStep(attempt))) };
 
       const reply: PlannerReplyClassification = opts.classify ? classifyPlannerReply(attempt.text, opts.classify) : { kind: 'prose' };

@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
+## [Unreleased]
+
+### Fixed
+
+- **A planner's usage-limit message shows once.** When an agent hit its limit it said so as a reply and then failed the turn with the same words, so the chat showed the message twice, once as the reply and once as the error. The repeated reply is taken back and only the error stays; a real reply that comes before a different failure is kept (#79).
+
 ## [0.9.1] — 2026-10-11
 
 ### Security
