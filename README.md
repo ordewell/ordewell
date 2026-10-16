@@ -146,7 +146,7 @@ sandbox cannot start on your machine, see [troubleshooting](docs/troubleshooting
 
 ## Where it's going
 
-- **Now:** take-over, opening a running task in its coding agent's own terminal UI ([#58](https://github.com/ordewell/ordewell/issues/58)).
+- **Now:** a planner that does small things itself. It runs an exact command you consent to as a script task ([#107](https://github.com/ordewell/ordewell/issues/107)), reads with a sandboxed shell that can loop and script ([#64](https://github.com/ordewell/ordewell/issues/64), [#109](https://github.com/ordewell/ordewell/issues/109)), and keeps talking while research tasks report back ([#111](https://github.com/ordewell/ordewell/issues/111)).
 - **Shipped in 0.10:** the supervisor, which watches a run and, if you let it, acts within limits you set.
 
 The full roadmap, and where to help, is in [#21](https://github.com/ordewell/ordewell/issues/21).
