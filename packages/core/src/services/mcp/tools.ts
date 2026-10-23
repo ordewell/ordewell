@@ -332,6 +332,81 @@ export interface McpTool<H> {
   call(handler: H, args: unknown, context: McpToolContext): Promise<McpToolReply>;
 }
 
+/**
+ * One rejected slot of a tool call, said so the caller can mend the call in
+ * one try. Three kinds cover every schema failure: a count problem (a missing
+ * or unexpected parameter, a wrong number of items), a parse problem (the
+ * value's shape) and a constraint problem (the value's content).
+ */
+const slotOf = (path: readonly PropertyKey[]): string =>
+  path.length === 0 ? 'arguments' : path.map(String).reduce((at, part, i) => (i === 0 ? part : /^\d+$/.test(part) ? `${at}[${part}]` : `${at}.${part}`));
+
+/** Whether the slot an issue names ever arrived in the raw call arguments. */
+function arrived(args: unknown, path: readonly PropertyKey[]): boolean {
+  let at: unknown = args;
+  for (const part of path) {
+    if (at === null || typeof at !== 'object') return true;
+    if (!(part in at)) return false;
+    at = (at as Record<PropertyKey, unknown>)[part];
+  }
+  return true;
+}
+
+function issueLines(issue: z.core.$ZodIssue, args: unknown): string[] {
+  const at = slotOf(issue.path);
+  switch (issue.code) {
+    case 'invalid_type': {
+      // A slot that never arrived is a count problem, not a shape one.
+      if (!arrived(args, issue.path)) return [`wrong number of parameters: '${at}' is required and missing`];
+      // This zod build neither types nor sets `received`; it says it only in the message.
+      const received = /received (\S+)$/.exec(issue.message)?.[1] ?? 'nothing';
+      return [`parameter parsing failed: '${at}' expected ${issue.expected}, the call sent ${received}`];
+    }
+    case 'invalid_union': {
+      if ((issue as { note?: string }).note === 'No matching discriminator') return [`invalid parameter: '${at}' matches none of the accepted values`];
+      const forms = issue.errors.map((option) => option[0]).filter(Boolean).map((first) => (first as { expected?: string }).expected ?? first.message);
+      return [`parameter parsing failed: '${at}' matches none of its accepted forms: ${forms.length > 0 ? forms.join('; ') : 'none'}`];
+    }
+    case 'unrecognized_keys':
+      return issue.keys.map((key) => `wrong number of parameters: '${at === 'arguments' ? key : `${at}.${key}`}' is not a parameter of this tool`);
+    case 'too_small':
+    case 'too_big':
+      // An array bound counts items; every other bound is about one value's content.
+      return issue.origin === 'array'
+        ? [`wrong number of parameters: '${at}' ${issue.message}`]
+        : [`invalid parameter: '${at}' ${issue.message}`];
+    default: {
+      // An enum: this zod build reports one code, `invalid_value`, with the choices but not what arrived.
+      if ('values' in issue && Array.isArray(issue.values)) {
+        return arrived(args, issue.path)
+          ? [`invalid parameter: '${at}' — expected one of: ${issue.values.join(', ')}`]
+          : [`wrong number of parameters: '${at}' is required and missing`];
+      }
+      return [`invalid parameter: '${at}' ${issue.message}`];
+    }
+  }
+}
+
+/** The cap on rejected slots in one reply: enough to mend a call, not enough to bury the fix. */
+const ISSUE_LINES_MAX = 8;
+
+/**
+ * The reply to a call the schema rejected: every rejected slot with its kind
+ * and its slot path (`ops[0].taskId`), then the parameters the tool takes.
+ * Nothing ran, and the reply says so — several of these tools write.
+ */
+function invocationError(name: string, input: z.ZodObject, error: z.ZodError, args: unknown): string {
+  const lines = error.issues.slice(0, ISSUE_LINES_MAX).flatMap((issue) => issueLines(issue, args));
+  const more = Math.max(0, error.issues.length - ISSUE_LINES_MAX);
+  const takes = Object.keys(input.shape);
+  return [
+    `Invocation error: ${name} rejected the call before it ran; nothing changed.`,
+    ...lines,
+    ...(more > 0 ? [`… and ${more} more rejected slots`] : []),
+    ...(takes.length > 0 ? [`Parameters of ${name}: ${takes.join(', ')}.`] : [`${name} takes no parameters.`]),
+  ].join('\n');
+}
+
 function tool<H, S extends z.ZodObject>(
   name: string,
   description: string,
@@ -346,9 +421,9 @@ function tool<H, S extends z.ZodObject>(
     ...(annotations ? { annotations } : {}),
     async call(handler, args, context) {
       const run = pick(handler);
-      if (!run) return { text: `${name} is not available in this session.`, isError: true };
+      if (!run) return { text: `Invocation error: ${name} is not available in this session — no handler is wired, so the call ran nothing.`, isError: true };
       const parsed = input.safeParse(args ?? {});
-      if (!parsed.success) return { text: `Invalid ${name} arguments: ${z.prettifyError(parsed.error)}`, isError: true };
+      if (!parsed.success) return { text: invocationError(name, input, parsed.error, args ?? {}), isError: true };
       return run(parsed.data, context);
     },
   };
