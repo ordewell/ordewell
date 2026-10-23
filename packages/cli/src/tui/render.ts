@@ -569,7 +569,7 @@ function renderStepper(stepper: StepperState, rows: number, cols: number): strin
     .join(style.grey(' › '));
   const hint = active.hint ?? definition.hint;
   const top = [truncate(header, inner), ...(hint ? wrap(hint, inner).map((line) => style.grey(line)) : [])];
-  const enter = ['enter', !definition.advanceOnEnter ? 'sets' : at === trail.length - 1 ? 'done' : 'next'] as const;
+  const enter = ['enter', definition.afterSave === 'stay' ? 'sets' : at === trail.length - 1 ? 'done' : 'next'] as const;
   const cancel = ['esc', 'closes'] as const;
   const switchStep = trail.length > 1 ? [['←/→', 'switch step'] as const] : [];
   if (active.number) {

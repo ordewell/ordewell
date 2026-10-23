@@ -44,8 +44,13 @@ export interface StepperDefinition {
   title: string;
   hint?: string;
   steps: StepDefinition[];
-  /** Whether enter moves on to the next step, closing after the last, or stays to show what it saved. */
-  advanceOnEnter: boolean;
+  /**
+   * What a saved step does next. `'advance'` moves on to the next applicable
+   * step and closes after the last one; `'stay'` keeps the step on screen to
+   * show what it saved, and only Esc closes — a settings menu, where every
+   * enter is its own save.
+   */
+  afterSave: 'advance' | 'stay';
   /**
    * Called on every enter with every applicable step's choice, and expected to
    * save only what differs from `state` — updating `state` too, since the rows
@@ -165,6 +170,24 @@ function confirm(state: TuiState, stepper: StepperState, item: PickerItem | unde
   return choose(state, stepper, item.id);
 }
 
+/** Where a saved choice leaves the stepper: on a step to show, or closed. */
+type AfterChoice = { flow: 'advance' | 'stay'; step: number } | { flow: 'close' };
+
+/**
+ * The one place a saved step's successor is decided, as data rather than as
+ * a sentinel index. `'advance'` walks to the next applicable step and closes
+ * once none is left; `'stay'` shows the same step again with the choice
+ * marked — and closes when the save made that very step stop applying, for
+ * then there is nothing left to show.
+ */
+function afterChoice(definition: StepperDefinition, lists: readonly (PickerItem[] | null)[], current: number): AfterChoice {
+  if (definition.afterSave === 'stay') {
+    return lists[current] === null ? { flow: 'close' } : { flow: 'stay', step: current };
+  }
+  const next = lists.findIndex((list, i) => i > current && list !== null);
+  return next === -1 ? { flow: 'close' } : { flow: 'advance', step: next };
+}
+
 /** Saves `value` as the step's choice, then stays, moves on, or closes after the last step. */
 function choose(state: TuiState, stepper: StepperState, value: string): Step {
   const { definition, current } = stepper;
@@ -181,9 +204,9 @@ function choose(state: TuiState, stepper: StepperState, value: string): Step {
 
   // Rebuilt from the saved state, so an earlier choice that changed which steps apply shows at once.
   const { lists } = settle(saved.state, definition, choices);
-  const next = !definition.advanceOnEnter ? current : lists.findIndex((list, i) => i > current && list !== null);
-  if (next === -1 || lists[next] === null) return { ...saved, state: { ...saved.state, overlay: null } };
-  return { ...saved, state: { ...saved.state, overlay: { kind: 'stepper', stepper: show(saved.state, definition, choices, next) } } };
+  const after = afterChoice(definition, lists, current);
+  if (after.flow === 'close') return { ...saved, state: { ...saved.state, overlay: null } };
+  return { ...saved, state: { ...saved.state, overlay: { kind: 'stepper', stepper: show(saved.state, definition, choices, after.step) } } };
 }
 
 /**

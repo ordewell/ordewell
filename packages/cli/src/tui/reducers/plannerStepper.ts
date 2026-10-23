@@ -41,7 +41,7 @@ const effortLabel = (label: string): string => (/\beffort$/i.test(label) ? label
 
 export const plannerStepper: StepperDefinition = {
   title: 'Planner',
-  advanceOnEnter: true,
+  afterSave: 'advance',
   hint: 'Who researches your goal and writes the plan. Coding agents use their own subscription. No API key.',
   steps: [
     {

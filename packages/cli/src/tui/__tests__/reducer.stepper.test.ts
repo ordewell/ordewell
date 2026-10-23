@@ -44,7 +44,7 @@ const saved = (provider: string, modelId: string, effort: string) =>
 
 const planner: StepperDefinition = {
   title: 'Planner',
-  advanceOnEnter: true,
+  afterSave: 'advance',
   steps: [
     {
       id: 'harness',
@@ -122,7 +122,7 @@ describe('stepper', () => {
     // Both sizes come in both colours; what a colour pre-selects is its own.
     const shirts: StepperDefinition = {
       title: 'Shirt',
-      advanceOnEnter: true,
+      afterSave: 'advance',
       steps: [
         { id: 'colour', label: 'Colour', items: () => [{ id: 'red', label: 'Red', selected: true }, { id: 'blue', label: 'Blue' }] },
         { id: 'size', label: 'Size', items: (_s, c) => ['s', 'l'].map((id) => ({ id, label: id, selected: id === (c.colour === 'red' ? 's' : 'l') })) },
@@ -253,7 +253,7 @@ describe('stepper that stays on the step', () => {
     const saves: StepChoices[] = [];
     const definition: StepperDefinition = {
       title: 'Run',
-      advanceOnEnter: false,
+      afterSave: 'stay',
       steps: [
         {
           id: 'pace',

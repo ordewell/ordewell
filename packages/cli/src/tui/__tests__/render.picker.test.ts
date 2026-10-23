@@ -151,7 +151,7 @@ describe('picker paint', () => {
 describe('stepper', () => {
   const definition: StepperDefinition = {
     title: 'Planner',
-    advanceOnEnter: true,
+    afterSave: 'advance',
     steps: [
       {
         id: 'harness',
@@ -209,7 +209,7 @@ describe('stepper', () => {
   it('draws a number step as one input line with its minimum, and says enter sets it where enter stays', () => {
     const counts: StepperDefinition = {
       title: 'Settings',
-      advanceOnEnter: false,
+      afterSave: 'stay',
       steps: [
         { id: 'pace', label: 'Pace', items: () => [{ id: 'fast', label: 'Fast', selected: true }] },
         { id: 'parallel', label: 'Parallel', hint: 'How many tasks run at once.', number: { min: 1, current: () => 7 } },

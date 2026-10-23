@@ -32,7 +32,7 @@ const supervisorOff = (_state: TuiState, choices: StepChoices): boolean => choic
 // their minimum up, with no ceiling (parseCount, parseMaxParallel).
 export const SETTINGS: StepperDefinition = {
   title: 'Settings',
-  advanceOnEnter: false,
+  afterSave: 'stay',
   hint: 'Saved for this run and every later one. Each choice is saved when you press enter.',
   steps: [
     {
