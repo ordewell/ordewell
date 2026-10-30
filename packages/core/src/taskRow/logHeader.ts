@@ -3,7 +3,7 @@ import type { TaskLogFollow } from '../conversation/taskLogFollow';
 import type { RunnerCommand } from '../models/RunnerCommand';
 import type { AwaitingReason } from '../models/Task';
 import { plannerContextFill, taskUsageSummary, usageText, type AttemptUsage, type ContextFill } from '../models/Usage';
-import { approvalLabel, awaitingLabel, resumeLabel, skippedLabel, taskStatusKind, type TaskStatusKind } from './status';
+import { approvalLabel, awaitingLabel, resumeLabel, skippedLabel, STALLED_LABEL, taskStatusKind, type TaskStatusKind } from './status';
 
 /**
  * A task as an opened log's header reads it. Structural: the TUI projects its
@@ -58,7 +58,7 @@ const STATE_LABEL: Record<TaskStatusKind, string> = {
   done: 'Done',
   failed: 'Failed',
   running: 'Running',
-  quiet: 'Stalled',
+  quiet: STALLED_LABEL,
   awaiting: 'Waiting for your input',
   blocked: 'Blocked',
   skipped: 'Skipped',

@@ -21,7 +21,7 @@ const opened = (over: Partial<TaskView> = {}, cols = 100): TuiState => {
 
 const statusRow = (state: TuiState): string => {
   const lines = render(state).map(stripAnsi);
-  return lines.find((l) => l.includes('●')) ?? '';
+  return lines.find((l) => !l.includes('│') && l.includes('⠋')) ?? '';
 };
 const headerKeys = (state: TuiState): string => stripAnsi(chatLayout(state, 30, 200).header[1] ?? '');
 
@@ -39,7 +39,7 @@ describe('naming ctrl-x while the runner works', () => {
 
   it('says it on the status row, next to the spinner, on one line', () => {
     const row = statusRow(opened());
-    expect(row.trimStart()).toMatch(/^● Working… · ctrl-x to stop(\s{2,}\S.*)?$/);
+    expect(row.trimStart()).toMatch(/^⠋ Working… · ctrl-x to stop(\s{2,}\S.*)?$/);
   });
 
   it('leads the header keys with it, so truncation drops the others first', () => {

@@ -661,7 +661,7 @@ describe('status line', () => {
       planner: 'planning',
       conversation: chatOf(['user', 'add auth']),
     });
-    expect(out).toContain('● Planning…');
+    expect(out).toContain('⠋ Planning…');
     expect(out).not.toMatch(/Researching|Executing|Grep\(/);
   });
 
@@ -671,7 +671,7 @@ describe('status line', () => {
   });
 
   it('says Working in the chat of a task whose attempt is in progress', () => {
-    expect(text({ status: 'executing', tasks, ...viewing('b') })).toContain('● Working…');
+    expect(text({ status: 'executing', tasks, ...viewing('b') })).toContain('⠋ Working…');
   });
 
   it('is quiet in the chat of a task that is not running while another one is', () => {

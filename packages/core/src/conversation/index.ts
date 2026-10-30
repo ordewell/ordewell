@@ -8,6 +8,8 @@ export type { ConversationInput, ConversationView, LocalEntry } from './reduce';
 export { fromTranscript } from './transcript';
 export { EMPTY_TASK_LOG, reduceTaskLog, replayTaskLog, runnerToolSubject } from './taskLog';
 export type { TaskLogView } from './taskLog';
+export { activityLabel, taskActivity } from './activity';
+export type { TaskActivity } from './activity';
 export { toolHeadline, outputPreview, outputLines, diffStat, diffRows, diffSummary } from './format';
 export { approvalKindText, approvalStatusText, compactionText, handoffFindingsText, handoffPeekParts, planMarkerParts } from './labels';
 export type { HandoffPeekSubject } from './labels';

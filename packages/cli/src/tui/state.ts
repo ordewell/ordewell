@@ -570,13 +570,6 @@ export interface TuiState {
 export { isTaskRunning };
 
 /**
- * Whether the plan pane has a spinner to animate. Deliberately not
- * `status === 'executing'`: a single force-started task never puts the whole
- * session into a run, and its icon still has to turn.
- */
-export const anyTaskRunning = (state: TuiState): boolean => state.tasks.some(isTaskRunning);
-
-/**
  * A planner turn the user can still call off — research rounds included, which
  * are part of planning and carry no status of their own.
  * Every in-flight question and hint is asked through here, so a new status

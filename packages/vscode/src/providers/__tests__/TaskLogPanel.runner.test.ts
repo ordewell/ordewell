@@ -34,3 +34,11 @@ describe('the task log tab names the runner of an AI task only', () => {
     expect(openedStatus(task(over)).runner).toBe('');
   });
 });
+
+describe('the task log tab tells the webview what its activity line needs', () => {
+  it('sends the plan task\'s status, and that the runner is not quiet', () => {
+    const status = openedStatus(task({ status: 'in_progress' }));
+    expect(status.taskStatus).toBe('in_progress');
+    expect(status.idleSince).toBeNull();
+  });
+});

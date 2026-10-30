@@ -6406,6 +6406,37 @@ body.vscode-high-contrast-light .pending-message {
   padding: 8px 0;
 }
 
+/* Pinned between the log body and the composer, so it never scrolls away. */
+.task-log-activity {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  min-width: 0;
+  padding: 4px 14px 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.task-log-activity-mark {
+  width: 12px;
+  margin-right: 6px;
+  text-align: center;
+  color: var(--accent);
+}
+
+.task-log-activity-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-log-activity .chat-msg-spinner {
+    animation: none;
+  }
+}
+
 .task-log-empty {
   padding: 16px 14px;
   font-size: 12px;
