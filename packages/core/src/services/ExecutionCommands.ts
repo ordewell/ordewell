@@ -4,11 +4,12 @@ import type { ExecutionActor, ExecutionCommandName, ExecutionRecord, ScriptConse
 import { sameScriptBody, scriptBodyOf, scriptBodyText, type ScriptBody } from '../models/ScriptTask';
 import { reportEnded, scriptResultOf, taskReport } from './taskReport';
 import type { ApprovalDecision, ApprovalRequest, IApproval } from '../interfaces/IApproval';
-import type { IsolationMergeResult } from '../interfaces/IWorktreeIsolation';
+import type { IsolationMergeResult, IsolationRevertResult } from '../interfaces/IWorktreeIsolation';
 import { continuability } from './continuation';
 import type { GuardTarget, GuardTrip } from './LoopGuards';
 import { STOPPED_BEFORE_START, type StartAdmission } from './TaskOrchestrator';
 import { waitOf, type StartWait } from './readiness';
+import { revertStopped, type RevertScope } from './taskRevert';
 import { manualOverrideConfirmation, manualOverrideStopFirst, type OverrideDirection } from '../taskRow/texts';
 
 /** One call at the command seam, as every route words it (ADR-0029). Task references are resolved here. */
@@ -43,6 +44,13 @@ export type ExecutionCommand =
   | { command: 'mark_complete'; task: string; confirmed?: boolean; seen?: TaskStatus }
   /** The user takes a completion back: the task is not started again, and held until it is retried or started. Confirmed as Mark complete is. */
   | { command: 'mark_not_done'; task: string; confirmed?: boolean; seen?: TaskStatus }
+  /**
+   * The user takes a task's landed work off the integration branch, before
+   * Merge all, with its landed dependents (ADR-0054). Needs `confirmed`, their
+   * yes to what the preview listed; `seen` is the task ids it listed, and a
+   * set that changed since is refused.
+   */
+  | { command: 'revert_task'; task: string; confirmed?: boolean; seen?: string[] }
   /** Stop a structured task's running turn, keeping its session: it then waits for the user's message. */
   | { command: 'interrupt_task'; task: string }
   /** Force send a message queued behind the running turn (ADR-0023, F1); `id` is the one `message_task` answered with. */
@@ -79,7 +87,9 @@ export type CommandPayload =
    * The user's `merge_all`, merged or stopped: what the Merge all card
    * renders. Whether it closed the run is the Session's `run_closed` (ADR-0013).
    */
-  | { kind: 'merge'; result: IsolationMergeResult };
+  | { kind: 'merge'; result: IsolationMergeResult }
+  /** The user's `revert_task`, reverted or stopped: which tasks, or the task and files, or the commands that do it by hand. */
+  | { kind: 'revert'; result: IsolationRevertResult };
 
 /**
  * What a call came to: `message` is written for the caller, a model included,
@@ -199,6 +209,10 @@ export interface ExecutionHost {
   forceStart(taskId: string): Promise<string | undefined>;
   markComplete(taskId: string): Promise<void>;
   markNotDone(taskId: string): Promise<void>;
+  /** What reverting the task would take, as far as the plan can say; see {@link TaskOrchestrator.revertScope}. */
+  revertScope(taskId: string): RevertScope;
+  /** Revert the task's landed work, through the queue it shares with landings. */
+  revertTask(taskId: string): Promise<IsolationRevertResult>;
   interrupt(taskId: string): Promise<void>;
   stopTask(taskId: string): Promise<void>;
   stopRun(): void;
@@ -273,13 +287,15 @@ const STARTS: ReadonlySet<ExecutionCommandName> = new Set(['run_plan', 'run_task
  * What waits for a landing override, besides the starts: a skip restarts a run
  * that ended on a failure, so it would start work under the landing task.
  */
-const HELD_BY_LANDING_OVERRIDE: ReadonlySet<ExecutionCommandName> = new Set([...STARTS, 'skip_task']);
+const HELD_BY_LANDING_OVERRIDE: ReadonlySet<ExecutionCommandName> = new Set([...STARTS, 'skip_task', 'revert_task']);
 
 /** The user's own controls, by the names they press them by: a model asking for one is refused. */
 const USERS_ONLY: Partial<Record<ExecutionCommandName, string>> = {
   force_start: 'Force start',
   mark_complete: 'Mark complete',
   mark_not_done: 'Mark not done',
+  // It takes landed work off the branch: the user's own review decides that, never a model (ADR-0054).
+  revert_task: 'Reverting a task',
   interrupt_task: 'Interrupt',
   force_send_queued: 'Force send',
   remove_queued: 'Taking back a queued message',
@@ -740,6 +756,7 @@ export class ExecutionCommands {
       case 'force_start': return this.prepareForceStart(located!);
       case 'mark_complete': return this.prepareMarkComplete(located!, command);
       case 'mark_not_done': return this.prepareMarkNotDone(located!, command);
+      case 'revert_task': return this.prepareRevert(located!, command);
       case 'interrupt_task': return this.prepareInterrupt(located!);
       case 'force_send_queued': return this.prepareQueued(located!, command.id, 'force');
       case 'remove_queued': return this.prepareQueued(located!, command.id, 'remove');
@@ -990,6 +1007,38 @@ export class ExecutionCommands {
       act: async () => {
         await this.overriddenBy(located, () => this.host.markNotDone(located.task.id));
         return { message: `Marked ${label} not done: it waits until you retry or start it.` };
+      },
+    };
+  }
+
+  /**
+   * A revert asks nothing of the run, so unlike an override it waits for no
+   * task that does not depend on the work (ADR-0054). What only git can say —
+   * that it is in the user's branch, that it conflicts — it says as it runs,
+   * in its turn on the queue.
+   */
+  private prepareRevert(located: Located, command: Extract<ExecutionCommand, { command: 'revert_task' }>): Prepared {
+    const scope = this.host.revertScope(located.task.id);
+    if (scope.refusal) return { refusal: scope.refusal.message };
+    const takes = named(scope.taskIds.flatMap((id) => this.located(id) ?? []));
+    if (command.seen && !sameIds(command.seen, scope.taskIds)) {
+      return { refusal: `What reverting ${describe(located)} takes has changed since you were asked: it would revert ${takes}. Nothing was changed; look at it again before deciding.` };
+    }
+    if (command.confirmed !== true) {
+      return { refusal: `Reverting ${describe(located)} would revert ${takes} on the integration branch. Nothing was changed: it needs the user's explicit yes, so ask them and send the command again with "confirmed": true.` };
+    }
+    return {
+      act: async () => {
+        let result: IsolationRevertResult | undefined;
+        await this.overriddenBy(located, async () => { result = await this.host.revertTask(located.task.id); });
+        // Set by the act just awaited.
+        const ended = result!;
+        if (ended.outcome !== 'reverted') throw new Stopped(revertStopped(ended), { kind: 'revert', result: ended });
+        const one = ended.tasks.length === 1;
+        return {
+          message: `Reverted ${takes} on the integration branch: ${one ? 'it is' : 'they are'} back to not started and held until retried, ${one ? 'its' : 'their'} attempts and logs kept. A retry starts from the current tip, without this work.`,
+          payload: { kind: 'revert', result: ended },
+        };
       },
     };
   }
@@ -1341,6 +1390,7 @@ export class ExecutionCommands {
       case 'force_start': return `force start ${label}`;
       case 'mark_complete': return `mark ${label} complete`;
       case 'mark_not_done': return `mark ${label} not done`;
+      case 'revert_task': return `revert ${label}`;
       case 'interrupt_task': return `interrupt ${label}`;
       case 'force_send_queued': return `force send a queued message to ${label}`;
       case 'remove_queued': return `take back a queued message to ${label}`;
@@ -1488,6 +1538,10 @@ function voiceOf(actor: ExecutionActor): Voice {
   }
 }
 
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id) => b.includes(id));
+}
+
 function withSubtasks(task: Readonly<Task>): string[] {
   return [task.id, ...task.subtasks.flatMap(withSubtasks)];
 }
@@ -1583,6 +1637,7 @@ function describeExecution(record: ExecutionRecord, command: ExecutionCommand, p
       force_start: `force start ${label}`,
       mark_complete: `mark ${label} complete`,
       mark_not_done: `mark ${label} not done`,
+      revert_task: `revert ${label}`,
       interrupt_task: `interrupt ${label}`,
       force_send_queued: `force send a queued message to ${label}`,
       remove_queued: `take back a queued message to ${label}`,
@@ -1623,6 +1678,7 @@ function doneWords(record: ExecutionRecord, command: ExecutionCommand, label: st
     case 'force_start': return { action: `force started ${label}`, tail: '.' };
     case 'mark_complete': return { action: `marked ${label} complete`, tail: '.' };
     case 'mark_not_done': return { action: `marked ${label} not done`, tail: '.' };
+    case 'revert_task': return { action: `reverted ${label}`, tail: '.' };
     case 'interrupt_task': return { action: `interrupted ${label}`, tail: '.' };
     case 'force_send_queued': return { action: `force sent a queued message to ${label}`, tail: '.' };
     case 'remove_queued': return { action: `took back a queued message to ${label}`, tail: '.' };

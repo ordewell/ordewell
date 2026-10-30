@@ -34,6 +34,7 @@ const SAMPLES: { [K in ExecutionCommandName]: Extract<ExecutionCommand, { comman
   force_start: { command: 'force_start', task: 't1' },
   mark_complete: { command: 'mark_complete', task: 't2', confirmed: true },
   mark_not_done: { command: 'mark_not_done', task: 't2', confirmed: true },
+  revert_task: { command: 'revert_task', task: 't2', confirmed: true, seen: ['t2'] },
   interrupt_task: { command: 'interrupt_task', task: 't1' },
   force_send_queued: { command: 'force_send_queued', task: 't1', id: 'msg-9' },
   remove_queued: { command: 'remove_queued', task: 't1', id: 'msg-9' },

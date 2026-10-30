@@ -13,6 +13,7 @@ import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type {
   IsolationHandoff,
   IsolationMergeResult,
+  IsolationRevertResult,
   IsolationRun,
   IWorktreeIsolation,
 } from '../interfaces/IWorktreeIsolation';
@@ -36,6 +37,7 @@ import { capConflictFiles } from './conflictFiles';
 import { resolveWorkspaceEnv, type WorkspaceEnv } from './workspaceEnv';
 import { continuability, sessionOwner } from './continuation';
 import { quotedList } from '../utils/quotedList';
+import { inBranchRefusal, revertScope, type RevertScope, type TaskRevertPreview } from './taskRevert';
 import type { RunMergeView, RunActivity } from './SessionMessage';
 import { ScriptRunner } from './ScriptRunner';
 import type { StoredHandoff } from '../models/Handoff';
@@ -855,6 +857,8 @@ export class TaskOrchestrator {
     this.onHold.clear();
     if (edited) this.restoreHolds(chosen);
     else this.chosenHolds.clear();
+    // Saved on the task, so another process does not run what the user took back (ADR-0054).
+    for (const t of this.store.allTasks) if (t.reverted) this.hold(t.id, REVERTED_HOLD, true);
     this.queuedStarts = new Map(queued.filter(([id]) => this.store.get(id)));
     this.owedRepairs.clear();
     this.recoverOrphans();
@@ -1523,6 +1527,84 @@ export class TaskOrchestrator {
     this.notifications.info(`Task "${task.title}" marked not done.`);
     this.emit('onTaskChanged');
     await this.tick();
+  }
+
+  /**
+   * What reverting a task would take, and what stands in its way, as far as
+   * the plan can say (ADR-0054); {@link revertPreview} and the revert itself
+   * ask git the rest.
+   */
+  revertScope(taskId: string): RevertScope {
+    const live = this.liveTaskIds();
+    // Mark complete's landing is at work with no attempt, and a usage-limit pause goes on by itself.
+    for (const id of this.completing.keys()) live.add(id);
+    for (const t of this.store.allTasks) if (pausedOnLimit(t)) live.add(t.id);
+    return revertScope(taskId, { tasks: this.store.allTasks, run: this.runs.current, live });
+  }
+
+  /** What a revert of the task would do now: the tasks, newest landing first, or why it would not go ahead. */
+  async revertPreview(taskId: string): Promise<TaskRevertPreview> {
+    const { taskIds, refusal } = this.revertScope(taskId);
+    if (taskIds.length === 0) return { revertible: false, ...refusal! };
+    const landed = await this.runs.readLanded(taskIds);
+    if (!landed.ok) return { revertible: false, reason: landed.reason, message: landed.error };
+    if (landed.inBranch.length > 0) return { revertible: false, ...inBranchRefusal(landed.inBranch) };
+    if (refusal) return { revertible: false, ...refusal };
+    return { revertible: true, tasks: landed.tasks.map((t) => ({ ...t, dependent: t.taskId !== taskId })) };
+  }
+
+  /**
+   * Revert the task's landed work, with its landed dependents, on the
+   * integration branches (ADR-0054). No new start while it waits for its
+   * turn and works: one that took its claim now would be cut from a tip about
+   * to lose what it depends on. What it finds in the way there is judged again:
+   * a dependent that started since is live like any other. Tasks not depending
+   * on it keep running.
+   */
+  async revertTask(taskId: string): Promise<IsolationRevertResult> {
+    const { taskIds, refusal } = this.revertScope(taskId);
+    if (refusal) return { outcome: 'refused', reason: refusal.message };
+    const releaseStarts = this.holdStarts();
+    let result: IsolationRevertResult;
+    try {
+      result = await this.runs.revert(taskIds, {
+        refusal: () => this.revertRefusalNow(taskId, taskIds),
+        settled: (reverted) => this.takeBack(reverted),
+      });
+    } finally {
+      releaseStarts();
+    }
+    if (result.outcome === 'reverted') {
+      const one = result.tasks.length === 1;
+      this.notifications.info(`Reverted ${quotedList(result.tasks.map((t) => t.title))} on the integration branch: back to not started and held until ${one ? 'it is' : 'they are'} retried. ${one ? 'Its attempts and logs are' : 'Their attempts and logs are'} kept.`);
+    }
+    this.emit('onTaskChanged');
+    await this.tick();
+    return result;
+  }
+
+  private revertRefusalNow(taskId: string, asked: readonly string[]): string | null {
+    const { taskIds, refusal } = this.revertScope(taskId);
+    if (refusal) return refusal.message;
+    const same = taskIds.length === asked.length && taskIds.every((id) => asked.includes(id));
+    return same ? null : 'What this revert would take changed while it waited for its turn. Nothing was reverted; look at it again.';
+  }
+
+  /**
+   * Each reverted task goes back to not started, held like a stopped one so
+   * the scheduler does not run it again, and starts over when retried: from
+   * the current tip, which no longer holds its work. Its completion goes as
+   * Mark not done takes one back; the logs of its attempts stay.
+   */
+  private takeBack(taskIds: readonly string[]): void {
+    for (const id of taskIds) {
+      const task = this.store.get(id);
+      if (!task) continue;
+      this.attempts.clear(task);
+      this.store.markReverted(id);
+      this.store.removeFromLog(id);
+      this.hold(id, REVERTED_HOLD, true);
+    }
   }
 
   /**
@@ -2266,6 +2348,8 @@ export class TaskOrchestrator {
 }
 
 const LIMIT_RESET_MESSAGE = 'Your usage limit has reset. Carry on with the task from where you stopped.';
+
+const REVERTED_HOLD = 'reverted; retry or force start to run it again';
 
 /** Why a loop's body that did not run ends skipped once its loop is over (ADR-0045 L6). */
 const LOOP_PASSED = 'not needed: its check passed';

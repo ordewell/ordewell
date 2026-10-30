@@ -9,11 +9,13 @@ import type {
   IsolationMergeResult,
   IsolationOutcome,
   IsolationRemoval,
+  IsolationRevertResult,
   IsolationRun,
   IsolationTaskRecord,
   IsolationTaskRef,
   IsolationView,
   IWorktreeIsolation,
+  LandedWork,
   PlanIsolation,
   PreparedTask,
   PrepareIntent,
@@ -21,6 +23,7 @@ import type {
   PreviousWork,
   RepairEvidence,
   RepoGroupLayout,
+  RevertWatch,
   SetupFailure,
   TaskIsolation,
   TreeSnapshot,
@@ -646,6 +649,28 @@ export class IsolationRunController {
     return result;
   }
 
+  /** What git says of landed work a revert would take; see {@link IWorktreeIsolation.readLanded}. */
+  readLanded(taskIds: readonly string[]): Promise<LandedWork> {
+    return this.isolation.readLanded(this.requireRun(), taskIds);
+  }
+
+  /**
+   * Revert tasks' landings on the integration branches (ADR-0054). The record
+   * is reported changed once the tips are set and before the first commit,
+   * and again once it settles, as a landing's is. Bound to the run it was
+   * asked in: a plan loaded meanwhile has records of its own under these ids.
+   */
+  async revert(taskIds: readonly string[], watch: Omit<RevertWatch, 'persist'>): Promise<IsolationRevertResult> {
+    const run = this.requireRun();
+    const result = await this.isolation.revert(run, taskIds, {
+      refusal: watch.refusal,
+      persist: () => this.listener.changed(run === this.run ? undefined : run),
+      settled: (reverted) => { if (run === this.run) watch.settled(reverted); },
+    });
+    this.listener.changed(run === this.run ? undefined : run);
+    return result;
+  }
+
   /**
    * Worktrees and task branches go; the integration branch and the record stay
    * for review and merge. Refused while a task of the run is still live.
@@ -811,11 +836,12 @@ export class IsolationRunController {
    * means a resumed plan's dependents must start from a tip that holds their
    * predecessors' work, and anything held — a kept attempt, a conflict, a
    * repair — is work the user may still want, which a fresh run's mint would
-   * delete. Only a run with no records at all is superseded.
+   * delete. Only a run with no records at all is superseded, and not one that
+   * reverted the tasks it had: a retry starts from its tip (ADR-0054).
    */
   private continuableRun(root: string): IsolationRun | null {
     const run = this.run;
-    return run && run.workspaceRoot === root && Object.values(run.tasks).some((r) => r.status !== 'active') ? run : null;
+    return run && run.workspaceRoot === root && (run.reverted || Object.values(run.tasks).some((r) => r.status !== 'active')) ? run : null;
   }
 
   /**

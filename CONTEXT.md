@@ -1686,7 +1686,9 @@ attempt it lands through the controller and answers `landed`,
 marks a task, starts an attempt or emits — TaskOrchestrator applies the answer.
 It also builds the task `resolveConflictAsTask` adds (`conflictResolverTask`).
 *Avoid:* "merge" for the whole of it — a landing is one merge per changed repo;
-"rollback" for anything done to a user's branch — Ordewell never resets one.
+"rollback" for anything done to a user's branch — Ordewell never resets one;
+"revert" for what a landing that stopped does to its own merges: that is a
+rollback, and it leaves no trace, where a *revert* adds to the branch.
 
 **Conflict repair** — a bounded, automatic response to a conflicted landing
 (ADR-0015): a new attempt of the same task, in its kept worktree, on its own
@@ -1783,6 +1785,27 @@ judgment is an ops task.
 rejected them for ops tasks too); "ops task" for it where the difference
 matters — an ops task has a runner and a model, a script task has neither;
 "shell task" — `commands` run with no shell.
+
+**Revert** (ADR-0054) — the user taking one task's landed work back off the
+run's integration branches before *Merge all*: `revert_task` at the command
+seam, and only the user's, after `Session.revertPreview` (`GET
+…/revert-preview`) has said what it would take. It adds one revert commit per
+landing (`git revert -m 1` of each merge in `IsolationRun.landings`, since a
+continue or a retry lands a task again) and rewrites nothing, in every repo the
+task changed or none. Landed dependents, direct or
+not, go with it, newest landing first, once the user confirms the list. It takes
+its turn on the landing queue, and no new start is claimed meanwhile. It is
+refused for a task that landed nothing, while a dependent is live, and for a task
+in a loop that has not ended. Work already in the user's branch is refused with
+the exact `git revert` to run, which Ordewell never runs. A conflict or a failure
+puts every recorded tip back and names the task, repo and files. Each reverted
+task is `pending`, on a chosen hold, with `reverted` saved on it; its run record
+goes, so it stops counting as landed and no longer holds a *merge gate*; its
+attempts' logs stay, and a retry starts from the current integration tip. Merge
+all then brings both the landing and its revert to the user's branch.
+*Avoid:* "undo" or "unmerge", which do not say the history stays; "rollback",
+which is a *landing*'s taking its own merges off again; "reset", which is what a
+revert never does; "discard" for one task, which is the whole run's.
 
 **Merge gate** — where an ops task or a user task that depends on change tasks
 waits until their work is merged into the user's branch (ADR-0020): until the

@@ -50,9 +50,13 @@ everything below applies per repo of the group.
   failure, the next Execute preserves completed tasks, and a fresh integration
   branch cut from the checked-out commit would hand their dependents a tree
   without the work they depend on. So a run continues the plan's `IsolationRun`
-  (same integration branches, same base refs) while it has a `merged` task; a
-  record with nothing landed holds only superseded attempts and is discarded
-  whole before a new one is minted. `discardRun` is how a user starts over.
+  (same integration branches, same base refs) while it has a `merged` task, or
+  once it has reverted one
+  ([ADR-0054](0054-a-landed-task-reverts-on-the-integration-branch-before-merge-all.md)):
+  its branch then holds commits no record names, and a retry starts from its
+  tip. A record with nothing landed holds only superseded attempts and is
+  discarded whole before a new one is minted. `discardRun` is how a user starts
+  over.
 - **Naming and location.** A task's worktrees are made by `prepare` when the task
   starts, not when the run opens. They live together in one *task
   workspace*, `.ordewell/worktrees/<run-id>/<order>-<slug>/`, each at its repo's
@@ -140,6 +144,12 @@ everything below applies per repo of the group.
   worktree is the exception (ADR-0046): it is never integrated, and every
   release removes it whole, kept or not, with nothing preserved on a branch
   and no git run inside it.
+- **A landing can be taken back until it is merged.** One merge per task is what
+  makes a landing undoable on its own. Until the user's branch holds it, the user
+  can revert a task on the integration branches: a revert commit, never a
+  rewrite, with its landed dependents, in every repo or none, on the landing
+  queue, leaving the task pending and held. Work already in their branch is
+  refused with the exact `git revert` to run (ADR-0054).
 - **Dirty trees.** Modified tracked files in any repo of the group make
   isolated execution unavailable for that run (`dirty`); untracked and ignored
   files do not, because the bootstrap accounts for them. `isActive` returns the
@@ -331,7 +341,8 @@ everything below applies per repo of the group.
 - **Surfaces.** The daemon passes `isolation_blocked` and `isolation_handoff`
   through unchanged and has routes for the handoff steps (`/isolation/diff`,
   `merge`, `cleanup`, `discard`), the blocked run's two ways on
-  (`stash-and-continue`, `run-without`) and `resolve-conflict`. The TUI marks a
+  (`stash-and-continue`, `run-without`), `resolve-conflict` and
+  `revert-preview`. The TUI marks a
   conflicted task in the plan pane and shows a branch and worktree only in a
   task's expanded detail; the handoff overlay (`/handoff`) opens on
   `isolation_handoff` when nothing else is open, and a blocked run asks with a
@@ -523,3 +534,4 @@ literal git command lines or private fields.
 - 2026-10-24 — preparing a task workspace takes its turn, and a replaced run's integration branch is deleted only where HEAD contains it, never on the word of its records.
 - 2026-10-24 — only the host holding the session's lease adopts, continues or changes its run (ADR-0049).
 - 2026-10-24 — preparing a task prunes stale worktree registrations and clears an unrecorded leftover at the task's path or branch, keeping its work first.
+- 2026-10-30 — one task's landing can be reverted on the integration branch before Merge all, and a run that reverted one continues (ADR-0054).

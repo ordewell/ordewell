@@ -514,6 +514,7 @@ describe('the user\'s controls are the user\'s', () => {
     ['force_start', { command: 'force_start', task: 't2' }],
     ['mark_complete', { command: 'mark_complete', task: 't1' }],
     ['mark_not_done', { command: 'mark_not_done', task: 't1' }],
+    ['revert_task', { command: 'revert_task', task: 't1', confirmed: true }],
     ['interrupt_task', { command: 'interrupt_task', task: 't1' }],
     ['a force send', { command: 'message_task', task: 't1', text: 'now', force: true }],
     ['force_send_queued', { command: 'force_send_queued', task: 't1', id: 'msg-1' }],
