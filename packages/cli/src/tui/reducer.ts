@@ -613,7 +613,7 @@ function reduceAction(state: TuiState, action: Action): Step {
     // Whether there is anything to animate is the app loop's call (it owns the
     // timer); a tick that arrives simply advances the frame.
     case 'spinnerTick':
-      return step({ ...state, spinnerFrame: (state.spinnerFrame + (action.by ?? 1)) % SPINNER_CYCLE });
+      return step({ ...state, spinnerFrame: (state.spinnerFrame + 1) % SPINNER_CYCLE });
 
     // The scheduled expiry of an armed stop; a token that is no longer the live
     // arm is a stale timer (the user disarmed and re-armed in between) and is

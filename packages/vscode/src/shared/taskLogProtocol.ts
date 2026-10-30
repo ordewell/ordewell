@@ -35,6 +35,10 @@ export interface TaskLogStatus {
   script?: boolean;
   /** The state, resume time, continuation, usage and runner commands, worded once in core (ADR-0018, V1). */
   header: TaskLogHeaderView;
+  /** The plan task's status: the activity line shows only for a running task, whatever its log's turn says. */
+  taskStatus: string;
+  /** When the runner last went quiet, as the status stream says it; null while it is not. The line goes static from it. */
+  idleSince: string | null;
   /** Messages the runner has not read yet, oldest first. */
   queued: readonly TaskLogQueuedMessage[];
   /** Attempts that have a saved log, oldest first. */

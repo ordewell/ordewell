@@ -180,34 +180,30 @@ describe('createApp', () => {
     }
   });
 
-  describe('the status dot', () => {
-    // Colour is what the dot pulses in, so these run with it on and restore it.
-    const withColour = (on: boolean, body: () => void): void => {
-      const before = style.enabled;
-      style.enabled = on;
-      vi.useFakeTimers();
-      try {
-        body();
-      } finally {
-        vi.useRealTimers();
-        style.enabled = before;
+  describe('the status row spinner', () => {
+    const quiet = { id: 't1', order: 1, title: 'Add the login route', type: 'ai' as const, status: 'in_progress' as const, dependencies: [], idleSince: '2026-08-18T00:00:00.000Z' };
+
+    it('turns during a planner turn, with colour on or off', () => {
+      for (const colour of [true, false]) {
+        const before = style.enabled;
+        style.enabled = colour;
+        vi.useFakeTimers();
+        try {
+          const h = harness({ planner: 'planning' });
+          h.app.start();
+
+          vi.advanceTimersByTime(500);
+          expect(h.app.getState().spinnerFrame).toBeGreaterThan(0);
+        } finally {
+          vi.useRealTimers();
+          style.enabled = before;
+        }
       }
-    };
-
-    it('pulses no faster than every 400ms while the selected chat is busy', () => {
-      withColour(true, () => {
-        const h = harness({ planner: 'planning' });
-        h.app.start();
-
-        vi.advanceTimersByTime(399);
-        expect(h.app.getState().spinnerFrame).toBe(0);
-        vi.advanceTimersByTime(600);
-        expect(h.app.getState().spinnerFrame).toBeGreaterThan(0);
-      });
     });
 
     it('holds still while the chat is idle', () => {
-      withColour(true, () => {
+      vi.useFakeTimers();
+      try {
         const h = harness({ tasks: [{ id: 't1', order: 1, title: 'Done', type: 'ai', status: 'completed', dependencies: [] }] });
         h.app.start();
         const drawn = h.frames.length;
@@ -215,17 +211,24 @@ describe('createApp', () => {
         vi.advanceTimersByTime(2000);
         expect(h.app.getState().spinnerFrame).toBe(0);
         expect(h.frames).toHaveLength(drawn);
-      });
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
-    it('holds still with colour off, as on a pipe', () => {
-      withColour(false, () => {
-        const h = harness({ planner: 'planning' });
+    it('holds still when the only running task is quiet: its marker is static', () => {
+      vi.useFakeTimers();
+      try {
+        const h = harness({ status: 'idle', tasks: [quiet] });
         h.app.start();
+        const drawn = h.frames.length;
 
         vi.advanceTimersByTime(2000);
         expect(h.app.getState().spinnerFrame).toBe(0);
-      });
+        expect(h.frames).toHaveLength(drawn);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

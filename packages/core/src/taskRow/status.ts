@@ -27,6 +27,9 @@ export function taskStatusKind(task: { status: string; idleSince?: string | null
   return task.status === 'in_progress' && task.idleSince ? 'quiet' : 'running';
 }
 
+/** The word for a running task whose runner has printed nothing for a while (`quiet`). */
+export const STALLED_LABEL = 'Stalled';
+
 const AWAITING_LABELS: Record<AwaitingReason, string> = {
   input: 'Waiting for your input',
   checkpoint: 'Checkpoint',

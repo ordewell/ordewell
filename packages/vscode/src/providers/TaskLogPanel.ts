@@ -280,6 +280,8 @@ export class TaskLogPanel {
         continuable: task ? canContinue(task) : false,
         attemptUsage: task?.attemptUsage ?? [],
       }, this.follow, approvals, this.follow.attempt),
+      taskStatus: task?.status ?? '',
+      idleSince: this.idleSince,
       queued: this.follow.view.queued,
       attempts: this.follow.attempts,
       attempt: this.follow.attempt,

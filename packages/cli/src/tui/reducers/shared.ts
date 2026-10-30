@@ -213,7 +213,7 @@ export type Action =
   /** `sessionId` names the session a notice is about, so one the user has left is not shown on another. */
   | { type: 'notice'; message: string; level?: 'info' | 'warn' | 'error'; holdPlace?: boolean; sessionId?: string }
   | { type: 'resize'; rows: number; cols: number }
-  | { type: 'spinnerTick'; by?: number };
+  | { type: 'spinnerTick' };
 
 export interface Step {
   state: TuiState;

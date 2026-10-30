@@ -11,7 +11,7 @@ import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
 import { runnerNamesOr } from '../runnerNames';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
-import { accountLimitsText, attachingLabel, contextMeterText, accountLimitsOf, assignedRunnerOf, describeIsolationPreview, scriptTaskText, getProviderMeta, isApiProvider, blockedByLabel, handoffPeekParts, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeTime, runnerForProvider, taskLogHeaderView, taskRowView, taskStatusKind, tasksTotalText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskLogHeaderTask, type TaskLogHeaderView, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
+import { accountLimitsText, attachingLabel, contextMeterText, accountLimitsOf, assignedRunnerOf, describeIsolationPreview, scriptTaskText, getProviderMeta, isApiProvider, blockedByLabel, handoffPeekParts, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeTime, runnerForProvider, taskLogHeaderView, taskActivity, taskRowView, taskStatusKind, tasksTotalText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskLogHeaderTask, type TaskLogHeaderView, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -335,13 +335,7 @@ export function stopHint(state: TuiState): string {
   return plannerInFlight(state) && state.stopArmed ? 'Press Esc again to stop' : '';
 }
 
-/**
- * 200ms spinner ticks one colour of the status dot lasts: 800ms, slow enough
- * to read as a pulse and well under the repaint rate the plan spinner already
- * sets. The frame counter wraps at a multiple of this and of the spinner's ten
- * frames, so neither animation skips a beat at the wrap.
- */
-export const DOT_TICKS = 4;
+/** The frame counter wraps at a multiple of the spinner's ten frames, so the animation skips no beat at the wrap. */
 export const SPINNER_CYCLE = 40;
 
 /**
@@ -351,7 +345,9 @@ export const SPINNER_CYCLE = 40;
  */
 export function runnerStoppable(state: TuiState): boolean {
   const tv = state.taskView;
-  if (!tv || !chatActivity(state)?.busy) return false;
+  const activity = chatActivity(state);
+  // A quiet runner is still a live one: stopping it is what its row is for.
+  if (!tv || !(activity?.busy || activity?.quiet)) return false;
   // A script runs no model: there is no turn to interrupt (ADR-0035).
   if (scriptTaskView(state)) return false;
   const task = findTask(state.tasks, tv.taskId);
@@ -362,6 +358,13 @@ export function runnerStoppable(state: TuiState): boolean {
 export interface ChatActivity {
   label: string;
   busy: boolean;
+  /** A running task whose runner has gone quiet: a static marker, not the spinner. */
+  quiet?: true;
+}
+
+/** Whether anything on screen is animated by the spinner tick: a running task's plan row, or the status row's spinner. */
+export function animating(state: TuiState): boolean {
+  return state.tasks.some((t) => taskStatusKind(t) === 'running') || !!chatActivity(state)?.busy;
 }
 
 /**
@@ -384,7 +387,13 @@ export function chatActivity(state: TuiState): ChatActivity | null {
   // Nothing has been sent to a runner whose tools have not connected, so it is not working yet (ADR-0025).
   const attaching = attachingLabel(task);
   if (attaching) return { label: `${attaching}…`, busy: true };
-  if (isTaskRunning(task) || (own && isTaskRunning(own))) return { label: 'Working…', busy: true };
+  if (isTaskRunning(task) || (own && isTaskRunning(own))) {
+    // A subtask runs inside its parent's attempt, whose facts the row follows.
+    const running = isTaskRunning(task) ? task : own;
+    const activity = running && taskActivity(tv.view, running);
+    if (!activity) return null;
+    return activity.busy ? activity : { ...activity, quiet: true };
+  }
   const at = task.status === 'awaiting_user' && task.awaitingReason === 'usage-limit' && task.resumeAt ? new Date(task.resumeAt) : null;
   if (at && !Number.isNaN(at.getTime())) return { label: `paused · resumes ${resumeTime(at)}`, busy: false };
   return null;
@@ -973,7 +982,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
 
 // ── Plan pane ────────────────────────────────────────────────────────────────
 
-const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+export const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 const STATUS_PAINT: Record<TaskStatusKind, (text: string) => string> = {
   done: style.green,
@@ -997,6 +1006,9 @@ const STATUS_ICON: Record<Exclude<TaskStatusKind, 'running'>, string> = {
   quiet: '~',
   todo: '·',
 };
+
+/** The static glyph of a task whose runner has gone quiet, in the plan pane and on the status row. */
+export const QUIET_MARK = STATUS_ICON.quiet;
 
 /** A row's annotations run on inside a sentence, so core's sentence-case labels lose their capital. */
 const inRow = (label: string): string => label.charAt(0).toLowerCase() + label.slice(1);

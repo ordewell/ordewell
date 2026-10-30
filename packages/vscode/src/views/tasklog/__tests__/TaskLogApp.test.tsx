@@ -81,6 +81,7 @@ function status(over: StatusOverrides = {}): TaskLogStatus {
       continuable,
       attemptUsage: ledger,
     }, follow, awaitingApproval, attempt),
+    taskStatus: planStatus, idleSince: null,
     queued: [], attempts, attempt,
     ...rest,
   };
@@ -803,5 +804,75 @@ describe('the runner\'s activity, folded (ADR-0017, X1)', () => {
 
     send({ type: 'init', status: status({ attempts: [1, 2], attempt: 1 }), blocks: [...turn.blocks] });
     expect(groups().map((g) => g.getAttribute('aria-expanded'))).toEqual(['false', 'false']);
+  });
+
+  describe('the activity line above the composer (#80)', () => {
+    const thinking = replayTaskLog([{ type: 'turn_start', message: 'go' }, { type: 'thinking_delta', text: 'Hmm' }]);
+    const line = (): HTMLElement | null => document.querySelector('.task-log-activity');
+
+    it('sits between the log body and the composer, outside the scrolling body, and spins while a turn is open', () => {
+      render(<TaskLogApp />);
+      init({ working: true }, [...thinking.blocks]);
+
+      expect(line()?.textContent).toContain('Thinking…');
+      expect(line()?.querySelector('.chat-msg-spinner')).not.toBeNull();
+      expect(document.querySelector('.task-log-body')?.contains(line())).toBe(false);
+      const order = [...document.querySelector('.task-log-container')!.children];
+      expect(order.indexOf(line()!)).toBeGreaterThan(order.indexOf(document.querySelector('.task-log-body')!));
+      expect(order.indexOf(line()!)).toBeLessThan(order.indexOf(document.querySelector('.task-log-composer')!));
+    });
+
+    it('keeps Send/Stop where it was', () => {
+      render(<TaskLogApp />);
+      init({ working: true }, [...thinking.blocks]);
+
+      expect(screen.getByRole('button', { name: 'Interrupt' })).toBeTruthy();
+    });
+
+    it('names a pending tool from its headline', () => {
+      const view = replayTaskLog([{ type: 'turn_start', message: 'go' }, { type: 'tool_call', id: 'r1', name: 'Read', args: '{"file_path":"README.md"}' }]);
+      render(<TaskLogApp />);
+      init({ working: true }, [...view.blocks]);
+
+      expect(line()?.textContent).toContain('Running Read(README.md)…');
+    });
+
+    it('goes static, worded as the plan pane words it, once the task is quiet', () => {
+      render(<TaskLogApp />);
+      init({ working: true, idleSince: '2026-08-18T00:00:00.000Z' }, [...thinking.blocks]);
+
+      expect(line()?.textContent).toContain('Stalled');
+      expect(line()?.textContent).toContain('~');
+      expect(line()?.querySelector('.chat-msg-spinner')).toBeNull();
+    });
+
+    it('is absent while a runner request waits', () => {
+      const asked = replayTaskLog([{ type: 'turn_start', message: 'go' }, { type: 'approval_requested', approvalId: 'p1', tool: 'Bash', args: '{}', allowForTask: true }]);
+      render(<TaskLogApp />);
+      init({ working: true }, [...asked.blocks]);
+
+      expect(line()).toBeNull();
+    });
+
+    it('is absent while a checkpoint waits, even with its turn still open', () => {
+      render(<TaskLogApp />);
+      init({ working: true, planStatus: 'awaiting_user', awaitingReason: 'checkpoint' }, [...thinking.blocks]);
+
+      expect(line()).toBeNull();
+    });
+
+    it('is absent once no turn is open', () => {
+      render(<TaskLogApp />);
+      init({ working: false }, [...thinking.blocks]);
+
+      expect(line()).toBeNull();
+    });
+
+    it('is absent for a script task, which runs no model', () => {
+      render(<TaskLogApp />);
+      init({ working: true, script: true }, [...thinking.blocks]);
+
+      expect(line()).toBeNull();
+    });
   });
 });
