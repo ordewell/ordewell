@@ -49,6 +49,7 @@ interface PlanCardGroupProps {
   onForceStart?: (taskId: string) => void;
   onMarkComplete?: (taskId: string) => void;
   onMarkIncomplete?: (taskId: string) => void;
+  onRevert?: (taskId: string) => void;
   onExecutePlan?: () => void;
   onStopExecution?: () => void;
   /** Approve every task that waits for approval: each starts once its dependencies finish (ADR-0035). */
@@ -97,6 +98,7 @@ export default function PlanCardGroup({
   onForceStart,
   onMarkComplete,
   onMarkIncomplete,
+  onRevert,
   onExecutePlan,
   onStopExecution,
   onApproveAll,
@@ -221,6 +223,7 @@ export default function PlanCardGroup({
                 onForceStart={onForceStart}
                 onMarkComplete={onMarkComplete}
                 onMarkIncomplete={onMarkIncomplete}
+                onRevert={onRevert}
                 onRunTask={onRunTask}
                 onSendMessage={onSendMessage}
                 onSendMessageNow={onSendMessageNow}

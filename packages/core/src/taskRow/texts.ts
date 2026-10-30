@@ -63,6 +63,15 @@ export function manualOverrideConfirmation(direction: OverrideDirection, label: 
     : `Mark ${label} not done? This clears its completion and holds it until you retry or start it. The work it did stays where it is, and tasks that already ran on its result are not undone.`;
 }
 
+/** What a revert does (ADR-0054), told with the list of tasks it takes: the same words on every surface. */
+export const revertEffect = 'Its landed work comes off the integration branch, newest first, and each task listed is held as not started until you retry it. Nothing in your own branch changes.';
+
+/** One task of a revert's confirmation: `dependent` is one that goes with the task the user chose. */
+export function revertListLine(task: { order: number; title: string; repos: readonly string[]; dependent: boolean }): string {
+  const repos = task.repos.length === 1 && task.repos[0] === '.' ? '' : ` (${task.repos.join(', ')})`;
+  return `#${task.order} ${task.title}${repos}${task.dependent ? ' (goes with it)' : ''}`;
+}
+
 /** Why a manual override waits for the run to stop (ADR-0029); `label` names the task. */
 export function manualOverrideStopFirst(direction: OverrideDirection, label: string): string {
   return `${label.charAt(0).toUpperCase()}${label.slice(1)} cannot be marked ${direction === 'complete' ? 'complete' : 'not done'} while the plan is starting, running or waiting to resume, because the run could still move it on. Stop the run first, and mark it once everything has stopped.`;

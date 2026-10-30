@@ -4,7 +4,7 @@ import {
   Session, LegacyPlanState, Task, flattenTasks, RunnerId, DiscoveredModel, enabledRunners,
   saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReadyFor, describePlannerNotReady, CHAT_COMMANDS, taskStartedNotice,
   createEmptyPlan, installedPlannerAnswered, isRunnerApproval, loopRemovalRefusal, pastGateConfirmation, titledRefs, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner,
-  taskActionCommand, runHoldsEditors, cardEditNeedsUnstarted, confirmedOverride, manualOverrideConfirmation, manualOverrideStopFirst, overrideNeedsConfirmation, titledTaskRefOf, type ExecutionCommand, type OverrideDirection, type TaskAction, type TaskEditOptions,
+  taskActionCommand, revertEffect, revertListLine, runHoldsEditors, cardEditNeedsUnstarted, confirmedOverride, manualOverrideConfirmation, manualOverrideStopFirst, overrideNeedsConfirmation, titledTaskRefOf, type ExecutionCommand, type OverrideDirection, type TaskAction, type TaskEditOptions,
   recordedRunnerAuth, runnerForProvider, type RunnerInstallation,
 } from '@ordewell/core';
 import type { TaskDraft, TaskEdit, WebviewToHost } from '../shared/protocol';
@@ -589,6 +589,31 @@ export async function markTaskByHand(direction: OverrideDirection, taskId: strin
 }
 
 /**
+ * Revert a task's landed work (ADR-0054), from its card. Core's preview says
+ * what goes with it, or why nothing does, and a real modal shows that list
+ * (a `confirm()` in the webview would never fire). The yes carries the ids the
+ * user was shown, so a plan that changed meanwhile is refused, not reverted.
+ * A refusal at any point is core's own words.
+ */
+export async function revertTaskByHand(taskId: string, deps: Pick<PlanManagerDeps, 'session'>): Promise<void> {
+  const { session } = deps;
+  const preview = await session.revertPreview(taskId);
+  if (!preview.revertible) {
+    showRefusal(new Error(preview.message));
+    return;
+  }
+  const asked = preview.tasks.find((t) => t.taskId === taskId) ?? preview.tasks.at(-1);
+  const list = preview.tasks.map(revertListLine);
+  const choice = await vscode.window.showWarningMessage(
+    `Revert task ${asked ? `#${asked.order} ${asked.title}` : 'this task'}? ${revertEffect}`,
+    { modal: true, detail: `Reverting, newest first:\n${list.join('\n')}` },
+    'Revert',
+  );
+  if (choice !== 'Revert') return;
+  await executeUserCommand(session, { command: 'revert_task', task: taskId, confirmed: true, seen: preview.tasks.map((t) => t.taskId) });
+}
+
+/**
  * A start reopens the run whose cards its last end left up. Cleared only once
  * the seam accepts it: a refused start replaced no run, and the Session still
  * holds every mark and the handoff.
@@ -644,6 +669,9 @@ export async function handleSystemCommand(
       case 'markComplete':
       case 'markIncomplete':
         await markTaskByHand(SYSTEM_TASK_ACTIONS[command], taskId, deps);
+        break;
+      case 'revertTask':
+        await revertTaskByHand(taskId, deps);
         break;
       case 'forceStart':
         await forceStartPastGate(taskId, deps);

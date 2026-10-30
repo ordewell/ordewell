@@ -32,7 +32,7 @@ describe('SLASH_COMMANDS', () => {
     // No 'plan': typing the goal starts planning, so an alias would only
     // shadow /planner on completion.
     'run', 'stop', 'approve',
-    'add-task', 'remove-task', 'complete', 'skip', 'retry', 'cancel', 'force-start',
+    'add-task', 'remove-task', 'complete', 'revert', 'skip', 'retry', 'cancel', 'force-start',
     // Per-task assignment editors, in the order each choice constrains the next.
     'task-runner', 'task-model', 'task-effort', 'task-mode', 'task-deps', 'task-skills',
     'quit',

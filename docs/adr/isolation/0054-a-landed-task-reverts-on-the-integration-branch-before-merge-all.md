@@ -1,8 +1,6 @@
 ---
 status: accepted
-implemented: partial
 amends: ["0013"]
-note: "Core, the command seam and the daemon contract are built; the TUI and VS Code offer it next (#86)."
 ---
 
 # 0054 — A landed task reverts on the integration branch, before Merge all
@@ -78,6 +76,13 @@ revert adds commits and rewrites nothing.
   because its branch holds commits no record names and a retry starts from it.
 - **Not while a loop decides.** A task in a loop that has not ended is refused:
   ADR-0045 owns those rounds, and they land and run tasks again by themselves.
+- **What a surface shows.** `/revert <id>` in the terminal and a Revert button
+  on the task's card in VS Code. Each reads `revertPreview`, shows the task and
+  every dependent that goes with it, newest first, and sends `revert_task` with
+  `confirmed` and `seen` only on the user's yes; declining sends nothing. Every
+  refusal (a live dependent, a conflict and its files, work already merged and
+  its `git revert`, a loop still running) is core's own sentence. The button is
+  there only where the task's isolation mark says `revertible`.
 - **A user action.** It is in the user's controls at the seam and reaches no
   planner or supervisor tool: taking landed work back is the review's decision.
   Read-only, ops, script and user tasks land nothing, so they cannot be reverted;
@@ -132,3 +137,4 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
 ## History
 
 - 2026-10-30 — accepted; core, the command seam and the daemon contract implemented.
+- 2026-10-30 — the terminal and VS Code offer it; fully implemented.

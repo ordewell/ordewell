@@ -32,6 +32,7 @@ Tasks (<id> is an order number or a task ID):
   ordewell remove-task <id>       Remove a task from the current plan
   ordewell complete <id>          Mark a task complete (alias: mark-complete; asks first, --yes skips the question)
   ordewell uncomplete <id>        Mark a completed task not done (asks first, --yes skips the question)
+  ordewell revert <id>            Take a landed task's work back off the integration branch (lists what goes with it, asks first, --yes skips the question)
   ordewell skip <id>              Skip a task: nothing it did lands, dependents go ahead
   ordewell force-start <id>       Approve a task and start it now, or once its dependencies finish (asks past a merge gate)
   ordewell run-task <id>          Run only one task

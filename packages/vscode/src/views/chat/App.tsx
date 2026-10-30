@@ -465,6 +465,11 @@ export default function App() {
     vscode.postMessage({ type: 'sendSystemCommand', command: 'markIncomplete', taskId });
   }, []);
 
+  // The host asks core what goes with the task and confirms in a real modal.
+  const handleRevert = useCallback((taskId: string) => {
+    vscode.postMessage({ type: 'sendSystemCommand', command: 'revertTask', taskId });
+  }, []);
+
   // The card answers into the same resolution every surface uses; the outcome
   // comes back as `approval_settled` and redraws the card.
   const handleResolveApproval = useCallback((id: string, granted: boolean) => {
@@ -832,6 +837,7 @@ export default function App() {
               onForceStart={handleForceStart}
               onMarkComplete={handleMarkComplete}
               onMarkIncomplete={handleMarkIncomplete}
+              onRevert={handleRevert}
               onExecutePlan={handleExecutePlan}
               onStopExecution={handleStopExecution}
               onApproveAll={handleApproveAll}

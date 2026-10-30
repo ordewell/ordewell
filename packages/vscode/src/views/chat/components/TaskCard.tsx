@@ -90,6 +90,8 @@ interface TaskCardProps {
   onForceStart?: (taskId: string) => void;
   onMarkComplete?: (taskId: string) => void;
   onMarkIncomplete?: (taskId: string) => void;
+  /** Revert the task's landed work (ADR-0054); the host confirms what goes with it. */
+  onRevert?: (taskId: string) => void;
   onRunTask?: (taskId: string) => void;
   /** Message the running or waiting task from its card (ADR-0018, M1); a plain message goes through the command seam. */
   onSendMessage?: (taskId: string, text: string) => void;
@@ -231,6 +233,29 @@ export function TaskMarkControl({ taskId, row, runActive, hint, onMarkComplete, 
         {label}
       </button>
       {why && <span className="task-mark-hint">{why}</span>}
+    </div>
+  );
+}
+
+/**
+ * Revert, beside the mark control: only where core's isolation mark says the
+ * landing can be reverted. The button names its task, since a plan holds many
+ * of them; the host's modal lists what else goes with it.
+ */
+export function TaskRevertControl({ taskId, title, row, onRevert }: {
+  taskId: string;
+  title: string;
+  row: Pick<TaskRowView, 'revertible' | 'orderLabel'>;
+  onRevert?: (taskId: string) => void;
+}) {
+  if (!onRevert || !row.revertible) return null;
+  return (
+    <div className="task-mark-control">
+      <button type="button" className="task-mark-btn" aria-label={`Revert task #${row.orderLabel} ${title}`}
+        title="Take this landed work back off the integration branch, with the tasks that landed on top of it"
+        onClick={(e) => { e.stopPropagation(); onRevert(taskId); }}>
+        Revert
+      </button>
     </div>
   );
 }
@@ -426,7 +451,7 @@ export function runnerOptionsFor(runners: RunnerOption[] | undefined, assignedRu
   return [...runners, { id: assignedRunner, displayName: assignedRunner }];
 }
 
-export default function TaskCard({ task, run, runsByTask, models, modes, modelsByRunner, modesByRunner, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, runActive, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
+export default function TaskCard({ task, run, runsByTask, models, modes, modelsByRunner, modesByRunner, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, runActive, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRevert, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
   const [internalExpanded, setInternalExpanded] = useState(false);
   const isControlled = expandedProp !== undefined;
   const expanded = isControlled ? expandedProp : internalExpanded;
@@ -833,6 +858,8 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             <TaskMarkControl taskId={task.id} row={row} runActive={runActive ?? !!isExecuting}
               hint={isExecuting && isUserTask && task.userSteps && task.userSteps.length > 0 && !allStepsComplete ? 'Complete all steps above first' : undefined}
               onMarkComplete={onMarkComplete} onMarkIncomplete={onMarkIncomplete} />
+
+            <TaskRevertControl taskId={task.id} title={task.title} row={row} onRevert={onRevert} />
           </div>
         )}
       </div>

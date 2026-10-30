@@ -1839,7 +1839,9 @@ puts every recorded tip back and names the task, repo and files. Each reverted
 task is `pending`, on a chosen hold, with `reverted` saved on it; its run record
 goes, so it stops counting as landed and no longer holds a *merge gate*; its
 attempts' logs stay, and a retry starts from the current integration tip. Merge
-all then brings both the landing and its revert to the user's branch.
+all then brings both the landing and its revert to the user's branch. The terminal
+offers it as `/revert <id>`, and VS Code as a button on the task's card where its
+isolation mark says `revertible`; each lists the preview and asks before it sends.
 *Avoid:* "undo" or "unmerge", which do not say the history stays; "rollback",
 which is a *landing*'s taking its own merges off again; "reset", which is what a
 revert never does; "discard" for one task, which is the whole run's.
