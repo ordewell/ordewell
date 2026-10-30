@@ -123,9 +123,11 @@ keep each variable in double quotes, as above, and never pass one to `eval`.
 The command runs once for each new wait. What already waits when a session opens
 counts as told, so a restart sends nothing. It can never affect a run: it has a
 short time limit, and a failure is logged once, to `~/.ordewell/server.log` (or
-the extension host's log in VS Code), and otherwise ignored. Only you can set it:
-Ordewell refuses it from a repository's `.ordewell/env` and `.envrc`, and from VS
-Code workspace settings
+the extension host's log in VS Code), and otherwise ignored. Ordewell refuses it
+from a repository's `.ordewell/env`, from what direnv exports for its runners, and
+from VS Code workspace settings. It does read it from the shell it started in, so
+an `.envrc` you have allowed can set it there, as that `.envrc` can already run
+anything as you
 ([ADR-0053](adr/supervision/0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
 
 ## Adding a coding agent

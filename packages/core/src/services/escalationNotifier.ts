@@ -140,7 +140,7 @@ function stop(proc: ChildProcess): void {
  * Runs the command as a {@link NotifyRun} does: never through a shell, and with
  * the escalation in its environment only, because part of its text comes from
  * a runner. It runs in the user's home with the host's environment, not the
- * workspace's: it belongs to the user, and a repository chooses nothing about it.
+ * workspace's: it belongs to the user.
  *
  * It leads a process group so the limit reaches what it started, but not through
  * `spawnInOwnGroup`: a host's recorded runner groups hold the session against

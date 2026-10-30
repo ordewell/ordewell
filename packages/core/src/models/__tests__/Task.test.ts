@@ -330,6 +330,11 @@ describe('migratePlanState', () => {
 });
 
 describe('keepExecutionState', () => {
+  it('keeps the count of a waiting task\'s ended waits through a rewrite (ADR-0053)', () => {
+    const current = [{ ...createTask({ id: 'a', title: 'A' }), status: 'pending' as const, waitsEnded: 2 }];
+    expect(keepExecutionState(current, [createTask({ id: 'a', title: 'Edited' })])[0].waitsEnded).toBe(2);
+  });
+
   const done = (id: string, order: number) => createTask({ id, order, title: id.toUpperCase(), prompt: `do ${id}`, status: 'completed' });
   const todo = (id: string, order: number) => createTask({ id, order, title: id.toUpperCase(), prompt: `do ${id}` });
 

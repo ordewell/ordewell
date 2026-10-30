@@ -569,4 +569,14 @@ describe('a plan edit while a task waits on the user mid-attempt', () => {
 
     expect(task(orchestrator)).toMatchObject({ status: 'awaiting_user', awaitingReason: 'input' });
   });
+
+  it('keeps the count of the waits it ended since the snapshot was taken (ADR-0053)', async () => {
+    const { orchestrator } = await started();
+    const snapshot = orchestrator.storeInstance.planTasks.map((t) => ({ ...t }));
+    orchestrator.storeInstance.endWait(task(orchestrator)!.id);
+
+    orchestrator.reconcilePlan(snapshot);
+
+    expect(task(orchestrator)?.waitsEnded).toBe(1);
+  });
 });

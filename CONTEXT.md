@@ -1420,9 +1420,9 @@ out of rounds, or, in an open run, a task that nothing but a person holds back
 (its *Merge gate*, a hold, its approval, nothing to run, a user task), or a
 reverted task in any run; and of the run itself, landed work with nothing left
 to move it, and a *Blocked run*.
-It carries an id of its kind, task, attempt and approval, or for a Merge all of
-the run and the attempts it would merge, so a later wait is another escalation;
-the task it belongs to, which links to the
+It carries an id that names the wait and not just its attempt, which can wait
+many times, so a later wait is another escalation; the task it belongs to, which
+links to the
 evidence; a reason in plain words; and the options that wait's own card or
 command offers, each with the question its card asks first where it has one.
 It has no deadline and no default answer. What resolves itself is left out, and
@@ -1443,8 +1443,11 @@ not.
 ADR-0053) — the user's optional command, an argument vector, run once for each
 new *Escalation* id. It runs in core, with no surface attached and no shell, and
 the escalation reaches it only in sanitized `ORDEWELL_ESCALATION_*` environment
-variables. User-level only: a workspace's environment files and settings cannot
-set it. What already waits when a plan is adopted counts as told. It never
+variables. Nothing Ordewell reads for a workspace sets it: its environment files
+and settings cannot. The environment Ordewell started in is read as the user's,
+as for the *Effect allowlist*, so an `.envrc` direnv exported into that shell can
+set it; that adds no authority, since `direnv allow` already runs that file's
+code as the user. What already waits when a plan is adopted counts as told. It never
 affects a run: a failure is logged once and ignored.
 *Avoid:* "hook", which names a runner's own hooks; "webhook", a thing the command
 may do, not what it is.

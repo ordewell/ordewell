@@ -925,7 +925,11 @@ export class TaskOrchestrator {
       const at = adopted.findIndex((t) => t.id === taskId);
       if (at < 0) {
         adopted.push({ ...task });
-      } else if (waitsMidAttempt(task)) {
+        continue;
+      }
+      // The snapshot may predate waits this attempt has ended since (ADR-0053).
+      adopted[at] = { ...adopted[at], waitsEnded: task.waitsEnded };
+      if (waitsMidAttempt(task)) {
         // The question the runner asked is still open: the snapshot's status
         // would hide it, and the supervisor already settled the task on it.
         adopted[at] = { ...adopted[at], status: task.status, awaitingReason: task.awaitingReason };
