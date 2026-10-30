@@ -55,6 +55,20 @@ describe('Revert on a task\'s card', () => {
     expect(document.activeElement).toBe(button);
   });
 
+  it('asks the host to revert a subtask, called by its full path', () => {
+    const onRevert = vi.fn();
+    const subtask = makeTask({ id: 's1', order: 1, title: 'Parse the header' });
+    render(
+      <TaskCard task={makeTask({ subtasks: [subtask], status: 'in_progress' })} models={[]} isExecuting={false} expanded onExpandedChange={() => {}}
+        runsByTask={new Map([['s1', { status: 'completed', isolation: { state: 'none', revertible: true } }]])} onRevert={onRevert} />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Parse the header/, expanded: false }));
+    fireEvent.click(screen.getByRole('button', { name: 'Revert task #1.1 Parse the header' }));
+
+    expect(onRevert).toHaveBeenCalledWith('s1');
+  });
+
   it('is hidden for a task that landed nothing', () => {
     card({ state: 'none' });
     expect(screen.queryByRole('button', { name: /Revert/ })).toBeNull();

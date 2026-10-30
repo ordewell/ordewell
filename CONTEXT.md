@@ -1838,10 +1838,12 @@ not, go with it, newest landing first, once the user confirms the list, whatever
 a later attempt left of their records. It takes
 its turn on the landing queue, and no new start is claimed meanwhile. It is
 refused for a task that landed nothing, while a dependent is live, for a task
-in a loop that has not ended, and while the integration branch is checked out
-outside Ordewell's own worktree. Work already in the user's branch is refused with
-the exact `git revert` to run, which Ordewell never runs: a checkout of the
-integration branch itself is not that. A conflict or a failure
+in a loop that has not ended, while the integration branch is checked out
+outside Ordewell's own worktree, and wherever it cannot be sure what it covers:
+work a conflict's resolver carried (`IsolationRun.carried`), whichever of the two
+tasks is asked, or merges no record can name. Work already in the user's branch is refused with
+the exact `git revert` to run, which Ordewell never runs: a checkout that only
+stands on the integration branch is not that. A conflict or a failure
 puts every recorded tip back and names the task, repo and files. Each reverted
 task is `pending`, on a chosen hold, with `reverted` saved on it; its run record
 goes, so it stops counting as landed and no longer holds a *merge gate*, unless a
@@ -1855,10 +1857,11 @@ which is a *landing*'s taking its own merges off again; "reset", which is what a
 revert never does; "discard" for one task, which is the whole run's.
 
 **Merge gate** — where an ops task or a user task that depends on change tasks
-waits until their work is merged into the user's branch (ADR-0020): until the
-checked-out HEAD contains the integration tip each of them landed at, or that
-repo's integration branch is gone so no merge could bring it in. The
-user's Merge all opens it, as does a merge made by hand; Force start passes it
+waits until their work is merged into the user's branch (ADR-0020): until that
+branch contains the integration tip each of them landed at, or that repo's
+integration branch is gone so no merge could bring it in. A review checkout of
+the integration branch, detached or a branch cut from it, is no merge (ADR-0054).
+The user's Merge all opens it, as does a merge made by hand; Force start passes it
 after a confirmation naming what is not merged, and the task keeps that choice
 (`forcedPastGate`). A force start queued behind its dependencies passes only
 the gate the user confirmed when forcing it; work that lands after stops it at

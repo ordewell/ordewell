@@ -499,6 +499,27 @@ describe('TaskOrchestrator: reverting a landed task (ADR-0054)', () => {
   });
 
   describe('the preview', () => {
+    it('does not offer a revert it cannot name when a recordless landing has no landedTasks', async () => {
+      const { orchestrator } = await landed([task('t1', 1)], ['t1']);
+      const run = orchestrator.runs.current!;
+      // A run saved by the first #86 build: it has landings but no landedTasks.
+      delete run.landedTasks;
+      delete run.tasks.t1;
+
+      expect(await orchestrator.revertPreview('t1')).toMatchObject({ revertible: false });
+    });
+
+    it('refuses the whole revert rather than leave out a dependent it cannot name', async () => {
+      const { orchestrator, isolation } = await landed([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], ['t1', 't2']);
+      const run = orchestrator.runs.current!;
+      delete run.landedTasks;
+      delete run.tasks.t2;
+
+      expect(await orchestrator.revertPreview('t1')).toMatchObject({ revertible: false, reason: 'no-own-merge', message: expect.stringContaining('"Task t2"') });
+      expect(await orchestrator.revertTask('t1')).toMatchObject({ outcome: 'refused' });
+      expect(isolation.calls.some((c) => c.op === 'revert')).toBe(false);
+    });
+
     it('lists what would go, newest first, the task asked for told from its dependents', async () => {
       const { orchestrator, isolation, status } = await landed([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], ['t1', 't2']);
 

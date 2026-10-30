@@ -31,7 +31,9 @@ and every surface names that branch.**
   group of one is blocked by this and by a partial landing alone.
 - A repo in the middle of a rebase is told apart from one the user detached on
   purpose (`rebasing`): the notice says to finish or abort the rebase. A run
-  that started detached names no branch, so any checkout is as good as it was.
+  that started detached names no branch, so any checkout is as good as it was;
+  its merge is always a merge commit, the only thing that tells it from a review
+  of the integration tip (ADR-0054).
 - The handoff, the Merge confirmation, `ordewell status` and the VS Code card
   say where the run forked as `<branch> @ <commit>` (or `detached at <commit>`)
   and which branch the merge will change.
@@ -61,3 +63,4 @@ and every surface names that branch.**
 ## History
 
 - 2026-10-17 — accepted and implemented: the `wrong-branch` block, the rebase case, and the branch named in the handoff, the confirmations, `ordewell status` and VS Code.
+- 2026-10-31 — a run with no base branch merges with a merge commit, never a fast-forward (ADR-0054).

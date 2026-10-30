@@ -54,7 +54,18 @@ const ref = ({ id, order, title }: Readonly<Task>): IsolationTaskRef => ({ taskI
  */
 function landedWork(run: IsolationRun | null, taskId: string): boolean {
   const record = run?.tasks[taskId];
-  return run?.landings?.[taskId] !== undefined || (record?.status === 'merged' && changedReposOf(record).length > 0);
+  return run?.landings?.[taskId] !== undefined || run?.carried?.[taskId] !== undefined || (record?.status === 'merged' && changedReposOf(record).length > 0);
+}
+
+/** Whether a task of a run that did not keep its merges from the start can have landed in an attempt no record speaks for: nothing says it did not. */
+function mayHaveLanded(run: IsolationRun | null, task: Readonly<Task>): boolean {
+  const record = run?.tasks[task.id];
+  return !run?.keepsEveryLanding && !landedWork(run, task.id) && task.type === 'ai' && !task.ops && !record?.readOnly && (task.attempted === true || record !== undefined);
+}
+
+/** What stops a revert being all of what it says: a task that goes with it whose merges no record can name, or a dependent that may have some. */
+function unnamedLanding(run: IsolationRun | null, taken: readonly Readonly<Task>[], dependents: readonly Readonly<Task>[]): Readonly<Task> | undefined {
+  return taken.find((t) => !run?.tasks[t.id] && !run?.landedTasks?.[t.id]) ?? dependents.find((t) => mayHaveLanded(run, t));
 }
 
 /** Everything that depends on the task, directly or not, a check counting on its body as it does at a merge gate (ADR-0045 L9). */
@@ -96,6 +107,11 @@ export function revertScope(taskId: string, { tasks, run, live }: RevertScopeInp
   if (looped) {
     const check = openLoop(tasks, looped)!;
     return { taskIds, refusal: { reason: 'in-a-loop', message: `Task "${looped.title}" is in the loop of task "${check.title}", which has not ended: a loop's rounds decide what it lands, so a revert would be working against them. Nothing was reverted. Let the loop end first.` } };
+  }
+
+  const unnamed = unnamedLanding(run, taken, dependents);
+  if (unnamed) {
+    return { taskIds, refusal: { reason: 'no-own-merge', message: `Ordewell has no record of which merges landed task "${unnamed.title}", so it cannot tell what a revert would have to take. Nothing was reverted.` } };
   }
 
   const held = [task, ...dependents].filter((t) => live.has(t.id));
