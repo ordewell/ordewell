@@ -48,6 +48,7 @@ import type {
   TaskLogAttemptsResponse,
   TaskLogResponse,
   TaskMessageResponse,
+  TaskRevertPreviewResponse,
 } from '@ordewell/core';
 
 const DEFAULT_HTTP_TIMEOUT_MS = 15 * 60 * 1000;
@@ -511,6 +512,11 @@ export class ApiClient {
   async getMergeGate(sessionId: string, taskId: string): Promise<MergeGateEntry[]> {
     const res = await this.call<MergeGateResponse>('GET', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/merge-gate`, 'Could not read the merge gate');
     return res.mergeGate ?? [];
+  }
+
+  /** What reverting a task would do now (ADR-0054), which the user confirms before `execute` sends `revert_task`. */
+  revertPreview(sessionId: string, taskId: string): Promise<TaskRevertPreviewResponse> {
+    return this.call('GET', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/revert-preview`, 'Could not read what the revert would take');
   }
 
   async reviewRunDiff(sessionId: string): Promise<string> {

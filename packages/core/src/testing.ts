@@ -13,17 +13,21 @@ import type {
   IsolationOutcome,
   IsolationPruneResult,
   IsolationRemoval,
+  IsolationRevertResult,
   IsolationRun,
   IntegrationDisposal,
+  LandedWork,
   PreparedTask,
   PrepareIntent,
   IWorktreeIsolation,
   RepairEvidence,
+  RevertCommand,
+  RevertWatch,
   SetupFailure,
   TreeSnapshot,
 } from './interfaces/IWorktreeIsolation';
 import { DEFAULT_RUNNERS, type Task } from './models/Task';
-import { handoffOf, integrationBranchFor, noRemoval, SELF_REPO } from './services/isolationRecord';
+import { changedReposOf, handoffOf, integrationBranchFor, noRemoval, SELF_REPO } from './services/isolationRecord';
 
 /**
  * Let an already-queued promise chain run to its next await before asserting,
@@ -289,7 +293,8 @@ export type FakeIsolationCall =
   | { op: 'integrate'; taskId: string }
   | { op: 'release'; taskId: string; keep: boolean }
   | { op: 'handoff' | 'pruneOrphans' | 'reviewDiff' | 'mergeIntoCheckedOut' | 'sweep' | 'findInHead' | 'snapshotTree' | 'changedSince' }
-  | { op: 'discard'; integration: IntegrationDisposal };
+  | { op: 'discard'; integration: IntegrationDisposal }
+  | { op: 'readLanded' | 'revert'; taskIds: readonly string[] };
 
 /**
  * An in-memory {@link IWorktreeIsolation} for scheduling tests: no git, no
@@ -338,11 +343,16 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
   removal: IsolationRemoval = noRemoval();
   /** Per task id; a task not listed integrates as `merged`. */
   outcomes = new Map<string, IsolationOutcome>();
+  /** What `revert` stops with; a revert that goes through when null. */
+  revertStop: Exclude<IsolationRevertResult, { outcome: 'reverted' }> | null = null;
+  /** What `readLanded` finds of a task's work in the user's branch, by task id. */
+  inBranch = new Map<string, RevertCommand[]>();
   /** Per task id, what `verifyRepair` finds; a task not listed passes. */
   repairEvidence = new Map<string, RepairEvidence>();
   calls: FakeIsolationCall[] = [];
   private holds = new Map<string, Promise<void>>();
   private verifyHolds = new Map<string, Promise<void>>();
+  private revertHold: Promise<void> | null = null;
   private runCount = 0;
 
   private log(call: FakeIsolationCall): void { this.calls.push(call); }
@@ -356,6 +366,13 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
   holdIntegration(taskId: string): () => void {
     let open!: () => void;
     this.holds.set(taskId, new Promise<void>((resolve) => { open = resolve; }));
+    return open;
+  }
+
+  /** Make the next `revert` wait, past its `refusal`, until the returned function is called. */
+  holdRevert(): () => void {
+    let open!: () => void;
+    this.revertHold = new Promise<void>((resolve) => { open = resolve; });
     return open;
   }
 
@@ -458,6 +475,35 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
       else delete record.conflictFiles;
     }
     return outcome;
+  }
+
+  /** Newest landing first, read as the plan's highest order: scheduling tests land in plan order. */
+  async readLanded(run: IsolationRun, taskIds: readonly string[]): Promise<LandedWork> {
+    this.log({ op: 'readLanded', taskIds });
+    const records = taskIds.flatMap((id) => run.tasks[id] ?? []).sort((a, b) => b.order - a.order);
+    const tasks = records.map((r) => ({ taskId: r.taskId, order: r.order, title: r.title, repos: changedReposOf(r) }));
+    return { ok: true, tasks, inBranch: records.flatMap((r) => this.inBranch.get(r.taskId) ?? []) };
+  }
+
+  /** Like git: the turn, then the judgement, then the records go in one step with the tasks back. */
+  async revert(run: IsolationRun, taskIds: readonly string[], watch: RevertWatch): Promise<IsolationRevertResult> {
+    this.log({ op: 'revert', taskIds });
+    const hold = this.revertHold;
+    this.revertHold = null;
+    await hold;
+    const reason = watch.refusal();
+    if (reason) return { outcome: 'refused', reason };
+    if (this.revertStop) return this.revertStop;
+    const landed = await this.readLanded(run, taskIds);
+    if (!landed.ok) return { outcome: 'failed', error: landed.error };
+    if (landed.inBranch.length > 0) return { outcome: 'in-branch', commands: landed.inBranch };
+    run.landing = { taskId: taskIds[0], tips: {}, reverts: taskIds.length };
+    watch.persist();
+    delete run.landing;
+    for (const id of taskIds) delete run.tasks[id];
+    run.reverted = true;
+    watch.settled(taskIds);
+    return { outcome: 'reverted', tasks: landed.tasks };
   }
 
   async release(run: IsolationRun, taskId: string, opts: { keep: boolean }): Promise<IsolationRemoval> {

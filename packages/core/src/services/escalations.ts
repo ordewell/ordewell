@@ -84,7 +84,7 @@ export interface Escalation {
 
 /** What the list reads of the run. */
 export interface EscalationRun {
-  /** A full-plan run is scheduling, held, or ended on a failure a retry continues: only then does a task that has not started wait on anyone. */
+  /** A full-plan run is scheduling, held, or ended on a failure a retry continues: only then does a task that has not started wait on anyone, a reverted one apart. */
   open: boolean;
   /** Something could move a task on unasked, so the seam refuses a Mark complete (ADR-0029). */
   advancing: boolean;
@@ -243,7 +243,8 @@ function failed(row: TaskWithParent, input: EscalationInput, rows: readonly Task
 function unstarted(row: TaskWithParent, input: EscalationInput, rows: readonly TaskWithParent[]): Wait | null {
   const { task } = row;
   const waits = input.waits.get(task.id) ?? [];
-  if (!input.run.open || waits.some((w) => !ONLY_A_PERSON[w.kind])) return null;
+  // A reverted task waits for the user's decision however the run stands: it is reverted before Merge all, usually after the last task landed (ADR-0054).
+  if (!(input.run.open || task.reverted) || waits.some((w) => !ONLY_A_PERSON[w.kind])) return null;
   // In a plan nobody has approved yet nothing is theirs to start, and a manual task needs no approval to be done.
   if (waitOf(waits, 'unapproved') && task.type !== 'user' && !input.waitsForApproval(task.id)) return null;
   if (waitOf(waits, 'no-prompt')) {

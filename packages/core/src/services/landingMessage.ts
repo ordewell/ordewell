@@ -51,6 +51,17 @@ export function landingMessage(kind: LandingCommit, from: LandingSubject, planne
 const RESCUE_BODY = 'Work left uncommitted when its worktree was removed, kept so that nothing is lost.';
 
 /**
+ * The message of the commit that reverts a task's landing `merge` (ADR-0054),
+ * in place of git's `Revert "Merge: …"`. Its body is not the task's: that
+ * describes the work this commit removes.
+ */
+export function revertMessage(from: LandingSubject, merge: string, plannedWith = false): string {
+  const subject = firstLine(from.commit?.subject ?? '') || firstLine(from.title);
+  const body = `This reverts the merge ${merge}, which landed it.`;
+  return finish(`Revert: ${subject}\n\n${body}`, body, plannedWith);
+}
+
+/**
  * The message of Merge all's merge into the user's branch, from the tasks it
  * brings there in plan order: the one task's subject, or the first's with a
  * line per task below. Never git's default, which names the integration branch.

@@ -37,6 +37,15 @@ describe('ApiClient isolation endpoints', () => {
     expect([seen.method, seen.url]).toEqual(['GET', '/api/plans/s1/isolation/diff']);
   });
 
+  it('revertPreview reads what a revert would take, a refusal included', async () => {
+    const preview = { revertible: true, tasks: [{ taskId: 't 1', order: 1, title: 'One', repos: ['.'], dependent: false }] };
+    const { api, seen } = await client(200, preview);
+    expect(await api.revertPreview('s1', 't 1')).toEqual(preview);
+    expect([seen.method, seen.url]).toEqual(['GET', '/api/plans/s1/tasks/t%201/revert-preview']);
+    const refused = { revertible: false, reason: 'in-a-loop', message: 'Let the loop end first.' };
+    expect(await (await client(200, refused)).api.revertPreview('s1', 't1')).toEqual(refused);
+  });
+
   it('mergeRun answers the outcome, conflict included', async () => {
     const { api, seen } = await client(200, { outcome: 'conflict', repo: '.', files: ['a.txt'] });
     expect(await api.mergeRun('s1')).toEqual({ outcome: 'conflict', repo: '.', files: ['a.txt'] });

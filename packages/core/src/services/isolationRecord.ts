@@ -74,6 +74,12 @@ export function changedReposOf(record: IsolationTaskRecord): string[] {
   return Object.entries(record.repos).filter(([, r]) => r.changed).map(([repoPath]) => repoPath);
 }
 
+/** Landed work a revert can undo (ADR-0054): a merge of its own in every repo it changed, none of it in the user's branch yet. */
+function revertible(record: IsolationTaskRecord): boolean {
+  const changed = changedReposOf(record);
+  return record.status === 'merged' && !record.inHead && changed.length > 0 && changed.every((repo) => record.repos[repo].landedTip);
+}
+
 /**
  * `repairLimit` is `conflictRepairAttempts` as it stands now, which is what the
  * next repair will be held to. Without one — a saved plan never carries server
@@ -89,6 +95,7 @@ export function taskIsolationOf(record: IsolationTaskRecord, repairLimit?: numbe
     ...(record.conflictFiles?.length ? { conflictFiles: record.conflictFiles } : {}),
     ...(record.repairs && repairLimit !== undefined ? { repair: { attempt: record.repairs, limit: repairLimit } } : {}),
     ...(record.repairedFiles?.length ? { repairedFiles: record.repairedFiles } : {}),
+    ...(revertible(record) ? { revertible: true as const } : {}),
   };
 }
 

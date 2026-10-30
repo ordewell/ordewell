@@ -266,6 +266,13 @@ export class PlanStore {
     }
   }
 
+  /** Its landed work was reverted (ADR-0054): as a retry leaves it, marked so until it starts. */
+  markReverted(id: string): void {
+    this.retry(id);
+    const task = this._taskMap.get(id);
+    if (task) task.reverted = true;
+  }
+
   /** A loop's check counts its rounds afresh from its next run (ADR-0045 L7). */
   startRoundsOver(id: string): void {
     const task = this._taskMap.get(id);
@@ -299,6 +306,7 @@ export class PlanStore {
     delete task.awaitingReason;
     delete task.resumeAt;
     delete task.skipReason;
+    delete task.reverted;
   }
 
   setTaskVerdict(id: string, verdict: Task['verdict']): void {

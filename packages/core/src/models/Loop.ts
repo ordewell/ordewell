@@ -62,6 +62,15 @@ export function outOfRounds(check: LoopSubject): boolean {
   return !!check.loop && check.status === 'failed' && foundWanting(check) && loopRoundOf(check) >= check.loop.maxRounds;
 }
 
+/**
+ * A check whose loop is over: it passed, it was skipped, or it found the work
+ * wanting in its last round. Anything else — not run yet, at work, between
+ * rounds, or a run that could not check — leaves its rounds to come.
+ */
+export function loopEnded(check: LoopSubject): boolean {
+  return check.status === 'completed' || check.status === 'skipped' || outOfRounds(check);
+}
+
 /** The check whose loop has `taskId` in its body, if any. */
 export function checkOf<T extends Pick<LoopSubject, 'loop'>>(tasks: readonly T[], taskId: string): T | undefined {
   return tasks.find((t) => t.loop?.body.includes(taskId));

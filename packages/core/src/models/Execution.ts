@@ -34,6 +34,7 @@ export type ExecutionCommandName =
   | 'force_start'
   | 'mark_complete'
   | 'mark_not_done'
+  | 'revert_task'
   | 'interrupt_task'
   | 'force_send_queued'
   | 'remove_queued'

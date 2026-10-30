@@ -200,6 +200,12 @@ export interface IsolationLanding {
   taskId: string;
   /** Keyed by repo path. */
   tips: Record<string, string>;
+  /**
+   * Set when this is a revert rather than a landing (ADR-0054): the most revert
+   * commits it can put on any one tip, which is what a rollback may prove it
+   * made and take off again.
+   */
+  reverts?: number;
 }
 
 /**
@@ -251,6 +257,19 @@ export interface IsolationRun {
    * names exactly what to return each repo's integration branch to.
    */
   landing?: IsolationLanding;
+  /**
+   * Every merge that landed a task, by task id and repo, oldest first. A
+   * continue or a retry lands a task again under a new record, so no record
+   * holds them all, and a revert takes them all back (ADR-0054). A run saved
+   * before these were kept has only each record's `landedTip`.
+   */
+  landings?: Record<string, Record<string, string[]>>;
+  /**
+   * A task's revert was committed on this run (ADR-0054): the integration
+   * branch holds commits no record names, so the run carries on even with no
+   * record left, and a retry starts from its tip.
+   */
+  reverted?: true;
 }
 
 /**
@@ -289,6 +308,8 @@ export type TaskIsolation =
     repair?: { attempt: number; limit: number };
     /** What {@link IsolationTaskRecord.repairedFiles} says. */
     repairedFiles?: string[];
+    /** Its landing has a merge of its own and is not in the user's branch: what a surface offers a revert on (ADR-0054). */
+    revertible?: true;
   };
 
 export interface IsolationLandedTask {
@@ -432,6 +453,64 @@ export type PreviousWork =
 /** A task as a removal names it. */
 export type IsolationTaskRef = Pick<IsolationTaskRecord, 'taskId' | 'order' | 'title'>;
 
+/** A task a revert acts on, with the repos its landing changed. */
+export interface IsolationRevertTask extends IsolationTaskRef {
+  repos: string[];
+}
+
+/**
+ * What undoes a task's landing once it is in the user's branch: a command for
+ * them to run, which Ordewell shows and never runs (ADR-0054).
+ */
+export interface RevertCommand {
+  task: IsolationTaskRef;
+  repo: string;
+  /** The task's merge commit, which their branch holds. */
+  commit: string;
+  /** Ready to type at the workspace root. */
+  command: string;
+}
+
+/**
+ * What git says of the landed work a revert would take, newest landing first.
+ * `inBranch`: the part already in the user's branch, which no revert touches;
+ * newest first too, the order to run the commands in. `no-own-merge`: a task's
+ * work came in through another's merge, a conflict resolver's, so no merge of
+ * its own can undo it. `git`: git could not read what the record names.
+ */
+export type LandedWork =
+  | { ok: true; tasks: IsolationRevertTask[]; inBranch: RevertCommand[] }
+  | { ok: false; reason: 'no-own-merge' | 'git'; error: string };
+
+/** What {@link IWorktreeIsolation.revert} asks of its caller, in its turn. */
+export interface RevertWatch {
+  /** Why the revert may no longer go ahead, read once it has its turn; null when it may. */
+  refusal: () => string | null;
+  /** Called once the tips are recorded and before the first commit, as a landing's `persist` is. */
+  persist: () => void;
+  /** Called in the one synchronous step that lets the records go, so a save never sees them gone with the tasks not yet back. */
+  settled: (taskIds: readonly string[]) => void;
+}
+
+/**
+ * How a revert ended (ADR-0054). Anything but `reverted` left every integration
+ * branch where it was, except a `failed` that says so: tips git would not put
+ * back stay recorded on the run, which holds landings and Merge all off them.
+ *
+ * - `reverted`: `tasks`, newest landing first, in every repo each changed.
+ * - `in-branch`: part of it is in the user's branch already: `commands` undo it.
+ * - `refused`: {@link RevertWatch.refusal} said no once it had its turn, or
+ *   git found work with no merge of its own.
+ * - `conflict`: reverting `task` conflicted in `repo`, over `files`.
+ * - `failed`: git stopped it; `error` says on what.
+ */
+export type IsolationRevertResult =
+  | { outcome: 'reverted'; tasks: IsolationRevertTask[] }
+  | { outcome: 'in-branch'; commands: RevertCommand[] }
+  | { outcome: 'refused'; reason: string }
+  | { outcome: 'conflict'; task: IsolationTaskRef; repo: string; files: string[] }
+  | { outcome: 'failed'; error: string; task?: IsolationTaskRef; repo?: string };
+
 /**
  * Work a removal found that had not landed — edits never committed, or
  * commits only the task's branch carried — committed and kept on `branch`,
@@ -554,6 +633,22 @@ export interface IWorktreeIsolation {
    * the runner made is never rewritten.
    */
   integrate(task: Task, run: IsolationRun, persist?: () => void, commit?: HandoffCommit): Promise<IsolationOutcome>;
+
+  /**
+   * What git says of the tasks' landed work now. Reads only and takes no turn:
+   * it answers a confirmation, and {@link revert} reads it all again in its own.
+   */
+  readLanded(run: IsolationRun, taskIds: readonly string[]): Promise<LandedWork>;
+
+  /**
+   * Revert the tasks' landings on the integration branches (ADR-0054): one
+   * revert commit per landing, newest first, in every repo each changed or in
+   * none. Takes its turn on the landing queue, so it never reads
+   * a branch mid-landing, judges what it is asked again there, and writes only
+   * to Ordewell's own branches. Each reverted task's record goes: its landing
+   * no longer counts for anything. What stops it puts every tip back.
+   */
+  revert(run: IsolationRun, taskIds: readonly string[], watch: RevertWatch): Promise<IsolationRevertResult>;
 
   /**
    * `keep: false` removes the task's worktree, branch and record (retry, task

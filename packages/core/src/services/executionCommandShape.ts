@@ -36,6 +36,8 @@ const SHAPES: Record<ExecutionCommandName, Record<string, Field>> = {
   // `seen` is the status the user was asked about; the seam compares it, so any string is kept.
   mark_complete: { task, confirmed: { kind: 'boolean' }, seen: { kind: 'string' } },
   mark_not_done: { task, confirmed: { kind: 'boolean' }, seen: { kind: 'string' } },
+  // `seen` is the task ids the user was shown; the seam compares them, so a stale yes is refused.
+  revert_task: { task, confirmed: { kind: 'boolean' }, seen: { kind: 'strings' } },
   interrupt_task: { task },
   force_send_queued: { task, id },
   remove_queued: { task, id },

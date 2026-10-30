@@ -22,6 +22,7 @@ import {
   type IsolationDiffResponse,
   type IsolationMergeResponse,
   type MergeGateResponse,
+  type TaskRevertPreviewResponse,
   type OkResponse,
   type PlanResponse,
   type PrdResponse,
@@ -206,6 +207,17 @@ export function plansRoute(pool: OrchestratorPool) {
         return { id, order: dep?.order ?? 0, title: dep?.title ?? id };
       });
       return c.json({ mergeGate } satisfies MergeGateResponse);
+    } catch (err) {
+      return failure(c, err, 'task edit');
+    }
+  });
+
+  // What reverting a task would do now (ADR-0054), for a surface that confirms
+  // before it sends `revert_task`. A refusal is the answer here, not an error.
+  router.get('/:sessionId/tasks/:taskId/revert-preview', async (c) => {
+    try {
+      const session = pool.session(c.req.param('sessionId'));
+      return c.json((await session.revertPreview(idOfRef(session, c.req.param('taskId')))) satisfies TaskRevertPreviewResponse);
     } catch (err) {
       return failure(c, err, 'task edit');
     }

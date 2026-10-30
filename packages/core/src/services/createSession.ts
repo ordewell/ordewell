@@ -75,6 +75,7 @@ import { PlanEditError } from './PlanEditError';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import { ExecutionCommands, mergeStopped, type CommandOutcome, type ExecutionCommand, type ExecutionHost } from './ExecutionCommands';
 import { escalations, type Escalation } from './escalations';
+import type { TaskRevertPreview } from './taskRevert';
 import { REPORT_TAIL_LINES, reportEnded } from './taskReport';
 import { ResearchTasks, researchReportTo } from './ResearchTasks';
 import type { ExecutionActor, ExecutionRecord } from '../models/Execution';
@@ -914,6 +915,8 @@ export class Session {
       forceStart: (taskId) => this.withSave(() => this.orchestrator.forceStartTask(taskId, 'user')),
       markComplete: (taskId) => this.withSave(() => this.orchestrator.markTaskComplete(taskId)),
       markNotDone: (taskId) => this.withSave(() => this.orchestrator.markTaskIncomplete(taskId)),
+      revertScope: (taskId) => this.orchestrator.revertScope(taskId),
+      revertTask: (taskId) => this.withSave(() => this.orchestrator.revertTask(taskId)),
       interrupt: (taskId) => this.withSave(() => this.orchestrator.interruptTask(taskId)),
       stopTask: (taskId) => this.withSave(() => this.orchestrator.cancelTask(taskId)),
       stopRun: () => this.stopExecution(),
@@ -2198,6 +2201,11 @@ export class Session {
   /** The ancestors a task waits on at its merge gate (ADR-0020); empty when it waits for no Merge all. */
   mergeGate(taskId: string): string[] {
     return this.orchestrator.getMergeGate(taskId);
+  }
+
+  /** What reverting the task would do now, for a surface to confirm before `revert_task` (ADR-0054). Reads only. */
+  revertPreview(taskId: string): Promise<TaskRevertPreview> {
+    return this.orchestrator.revertPreview(taskId);
   }
 
   /** What Merge all would merge now; null once everything landed is merged. */

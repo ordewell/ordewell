@@ -2,13 +2,13 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { ConversationBlocks } from '../chat/components/ChatMessage';
 import { OpenPatchContext } from '../chat/openPatch';
 import { useFollowOutput } from '../chat/followOutput';
-import { contextMeterText, contextMeterTitle, hasAccountLimits } from '@ordewell/core/plan-utils';
+import { contextMeterText, contextMeterTitle, hasAccountLimits, taskActivity } from '@ordewell/core/plan-utils';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks, type PatchedView } from '../../shared/conversationPatch';
 import type { HostToTaskLog, TaskLogStatus, TaskLogToHost } from '../../shared/taskLogProtocol';
 import { taskCommand, useRunnerCommands } from '../chat/components/RunnerCommands';
 import AccountLimitRows from '../chat/components/AccountLimitRows';
 import PendingMessages, { QUEUE_TITLE, SendKeyHint, isSendNowKey, type PendingMessage } from '../chat/components/PendingMessages';
-import { taskActivity, type AccountLimitSnapshot, type TaskActivity, type TaskLogHeaderUsage, type TaskLogHeaderView } from '@ordewell/core';
+import type { AccountLimitSnapshot, TaskActivity, TaskLogHeaderUsage, TaskLogHeaderView } from '@ordewell/core';
 
 /**
  * One row of the log header's usage: its context, the runner's live limits,

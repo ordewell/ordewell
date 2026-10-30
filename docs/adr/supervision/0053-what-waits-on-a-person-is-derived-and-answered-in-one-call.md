@@ -80,7 +80,10 @@ it on, since the seam refuses it otherwise
 
 `merge-gate`, `on-hold`, `unapproved`, `no-prompt` and `by-hand` are listed only
 in an open run: one scheduling, held, or ended on a failure a retry continues.
-Outside one nothing was going to start them, so nothing is late.
+Outside one nothing was going to start them, so nothing is late. A reverted task
+([ADR-0054](../isolation/0054-a-landed-task-reverts-on-the-integration-branch-before-merge-all.md))
+is the exception: it is `on-hold` in any run, because the user took it back,
+usually after the last task landed, and whether it runs again is theirs to say.
 
 The three options that dispatch past the seam's commands are the ones that have
 no command: a resolver task is a plan edit, and a blocked run's two answers
@@ -124,7 +127,8 @@ saved. A failed task is not: a load gives it a fresh chance as pending
 (`PlanStore.load`), and its dependents are unblocked with it. Holds, runner
 approvals and a blocked run's parked start are in memory and go with the
 process, and tasks not started are listed only in an open run, which a load
-does not bring back.
+does not bring back. A reverted task's hold is the exception: it is saved on the
+task, so it is listed after a load.
 
 ## Reaching a surface
 
@@ -196,3 +200,4 @@ fake runner to each wait and answering it, which also folds the stream through
 ## History
 
 - 2026-10-30 — accepted.
+- 2026-10-30 — a reverted task is listed outside an open run (ADR-0054).

@@ -256,6 +256,12 @@ export interface Task {
   /** Why the task was skipped, as whoever skipped it put it; set only while `status` is `skipped`, and not always then. */
   skipReason?: string;
   /**
+   * The user reverted its landed work (ADR-0054): saved with the plan, so the
+   * hold that keeps it from running again outlives this process. Set only
+   * while it waits as the revert left it: its next start clears it.
+   */
+  reverted?: true;
+  /**
    * An ops task (ADR-0020): it changes no repository files, runs at the
    * workspace root rather than in a worktree, and waits for the change tasks
    * it depends on to be merged into the user's branch. Top-level AI tasks
@@ -1240,6 +1246,7 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
         ...t,
         status: prior?.status ?? 'pending',
         skipReason: prior?.skipReason,
+        reverted: prior?.reverted,
         verdict: prior?.verdict,
         outputSummary: prior?.outputSummary,
         handoff: prior?.handoff,

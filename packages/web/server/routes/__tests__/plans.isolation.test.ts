@@ -67,6 +67,33 @@ describe('GET /:sessionId/tasks/:taskId/merge-gate (ADR-0020)', () => {
   });
 });
 
+describe('GET /:sessionId/tasks/:taskId/revert-preview (ADR-0054)', () => {
+  const planState = { tasks: [createTask({ id: 'fix', order: 3, title: 'Fix' })] };
+
+  it('answers what a revert would take, for the reference the user typed', async () => {
+    const preview = { revertible: true, tasks: [{ taskId: 'fix', order: 3, title: 'Fix', repos: ['.'], dependent: false }] };
+    const revertPreview = vi.fn().mockResolvedValue(preview);
+    const app = appFor({ revertPreview, planState });
+
+    const res = await app.request('/api/plans/s1/tasks/%233/revert-preview');
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(preview);
+    expect(revertPreview).toHaveBeenCalledWith('fix');
+  });
+
+  it('answers a refusal 200, as what the surface shows, and a 404 for a session the daemon does not hold', async () => {
+    const refused = { revertible: false, reason: 'in-branch', message: 'Already merged.', commands: [] };
+    const app = appFor({ revertPreview: vi.fn().mockResolvedValue(refused), planState });
+
+    const res = await app.request('/api/plans/s1/tasks/fix/revert-preview');
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(refused);
+    expect((await app.request('/api/plans/nope/tasks/fix/revert-preview')).status).toBe(404);
+  });
+});
+
 /** What the seam answers the user's Merge all: the result in its payload, refused when git stopped it. */
 const merged = (result: { outcome: string }) => result.outcome === 'merged'
   ? { ok: true, message: 'Merged.', payload: { kind: 'merge', result } }

@@ -16,6 +16,7 @@ import type { TaskLogEvent } from './models/TaskLog';
 import type { CommandPayload } from './services/ExecutionCommands';
 import type { RunnerAuth } from './services/runnerAuth';
 import type { Escalation } from './services/escalations';
+import type { TaskRevertPreview } from './services/taskRevert';
 
 /**
  * The daemon contract: every HTTP body the local daemon sends, in one place.
@@ -193,6 +194,9 @@ export interface MergeGateEntry {
 export interface MergeGateResponse {
   mergeGate: MergeGateEntry[];
 }
+
+/** A revert that would not go ahead is an answer, not a failure, so it comes back 200 with why (ADR-0054). */
+export type TaskRevertPreviewResponse = TaskRevertPreview;
 
 export interface IsolationDiffResponse {
   diff: string;
