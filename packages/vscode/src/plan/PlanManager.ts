@@ -7,7 +7,7 @@ import {
   taskActionCommand, revertEffect, revertListLine, runHoldsEditors, cardEditNeedsUnstarted, confirmedOverride, manualOverrideConfirmation, manualOverrideStopFirst, overrideNeedsConfirmation, titledTaskRefOf, type ExecutionCommand, type OverrideDirection, type TaskAction, type TaskEditOptions,
   recordedRunnerAuth, runnerForProvider, type RunnerInstallation,
 } from '@ordewell/core';
-import type { TaskDraft, TaskEdit } from '../shared/protocol';
+import type { TaskDraft, TaskEdit, WebviewToHost } from '../shared/protocol';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
 import { VsCodeConfig } from '../adapters/VsCodeConfig';
 import { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
@@ -427,6 +427,27 @@ export async function handleCheckpointAnswer(taskId: string, approved: boolean, 
       : { command: 'answer_checkpoint', task: taskId, answer: 'reject', ...(reason ? { reason } : {}) });
   } catch (err) {
     showRefusal(err);
+  }
+}
+
+/**
+ * An inbox answer (ADR-0053) goes through `Session.answerEscalation`, which
+ * derives the list afresh and refuses a stale id. Unlike the cards' controls,
+ * the verdict goes back to the inbox rather than to a toast: the entry it names
+ * has usually left the list by the time a refusal arrives.
+ */
+export async function handleEscalationAnswer(
+  answer: Extract<WebviewToHost, { type: 'answerEscalation' }>,
+  deps: Pick<PlanManagerDeps, 'session' | 'chatProvider'>,
+): Promise<void> {
+  const { requestId, id } = answer;
+  try {
+    const outcome = await deps.session.answerEscalation(id, answer.option, answer.note, answer.confirmed);
+    deps.chatProvider.postMessage(outcome.ok
+      ? { type: 'escalationAnswered', requestId, id, ok: true }
+      : { type: 'escalationAnswered', requestId, id, ok: false, message: outcome.message });
+  } catch (err) {
+    deps.chatProvider.postMessage({ type: 'escalationAnswered', requestId, id, ok: false, message: err instanceof Error ? err.message : String(err) });
   }
 }
 

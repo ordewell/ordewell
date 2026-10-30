@@ -292,6 +292,34 @@ describe('webview messages reach the session through one entry point each', () =
       ]);
     });
 
+    it('answers an escalation through the session and tells the webview what it said, a refusal in its own words', async () => {
+      const answer = vi.spyOn(h.session, 'answerEscalation')
+        .mockResolvedValueOnce({ ok: true, message: 'Retried.' })
+        .mockResolvedValueOnce({ ok: false, outcome: 'refused', message: 'That is no longer waiting on you.' });
+
+      await h.route({ type: 'answerEscalation', requestId: 'r1', id: 'failed:t1:2', option: 'retry' });
+      await h.route({ type: 'answerEscalation', requestId: 'r2', id: 'failed:t1:1', option: 'complete', note: 'by hand', confirmed: true });
+
+      expect(answer.mock.calls).toEqual([
+        ['failed:t1:2', 'retry', undefined, undefined],
+        ['failed:t1:1', 'complete', 'by hand', true],
+      ]);
+      expect(h.posts.filter((m) => m.type === 'escalationAnswered')).toEqual([
+        { type: 'escalationAnswered', requestId: 'r1', id: 'failed:t1:2', ok: true },
+        { type: 'escalationAnswered', requestId: 'r2', id: 'failed:t1:1', ok: false, message: 'That is no longer waiting on you.' },
+      ]);
+    });
+
+    it('tells the webview an escalation answer threw, so its entry does not stay sending', async () => {
+      vi.spyOn(h.session, 'answerEscalation').mockRejectedValue(new Error('git said no'));
+
+      await h.route({ type: 'answerEscalation', requestId: 'r1', id: 'failed:t1:2', option: 'retry' });
+
+      expect(h.posts.filter((m) => m.type === 'escalationAnswered')).toEqual([
+        { type: 'escalationAnswered', requestId: 'r1', id: 'failed:t1:2', ok: false, message: 'git said no' },
+      ]);
+    });
+
     it('sends a message, a removal, an interrupt and a force send through the command seam as the user', async () => {
       const execute = vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: true, message: 'done' });
 

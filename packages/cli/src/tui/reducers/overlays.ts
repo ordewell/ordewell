@@ -12,6 +12,7 @@ import { assignTaskEffort, assignTaskSkills, assignTaskMode, assignTaskModel, as
 import { say } from '../transcript';
 import { clamp, digitRow, editText, fail, step, type Step } from './shared';
 import { answerSaveSettings } from './settings';
+import { chooseAnswer, chooseEscalation, confirmedAnswer, noteEntered } from './inbox';
 import { handleStepperKey } from './stepper';
 
 export function handleOverlayKey(state: TuiState, overlay: NonNullable<TuiState['overlay']>, key: Key): Step {
@@ -92,6 +93,7 @@ function runConfirm(
     return step(closed, [{ type: 'revertTask', sessionId: state.sessionId, taskId: overlay.action.taskId, seen: overlay.action.seen }]);
   }
   if (overlay.action.kind === 'save-settings') return answerSaveSettings(state, overlay.action, true);
+  if (overlay.action.kind === 'answer-escalation') return confirmedAnswer(state, overlay.action.escalationId, overlay.action.option, overlay.action.note);
   if (overlay.action.kind === 'merge-run' || overlay.action.kind === 'discard-run') {
     return confirmedHandoff(state, overlay.action.kind);
   }
@@ -131,6 +133,8 @@ function handlePromptKey(
   if (key.name === 'enter') {
     const value = overlay.value.trim();
     const closed = { ...state, overlay: null };
+    // An optional note may be empty, which is an answer, not a cancel.
+    if (overlay.action.kind === 'escalation-note') return noteEntered(state, overlay.action, value);
     if (!value) return step(closed);
 
     if (overlay.action.kind === 'api-key') {
@@ -232,6 +236,10 @@ function choose(state: TuiState, picker: PickerState, item: PickerItem | undefin
   switch (picker.action.kind) {
     case 'load-session':
       return step(closed, [{ type: 'loadSession', sessionId: item.id }]);
+    case 'inbox':
+      return chooseEscalation(state, item.id);
+    case 'inbox-answer':
+      return chooseAnswer(state, picker.action.escalationId, item.id);
     case 'rewind':
       return pickRewindTarget(state, Number(item.id));
     case 'delete-session':

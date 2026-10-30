@@ -8,6 +8,7 @@ import { modelsForRunner } from '../taskAssignment';
 import { say } from '../transcript';
 import { picker, pickerItemsFor } from './pickers';
 import { plannerStepper } from './plannerStepper';
+import { openInbox } from './inbox';
 import { openStepper } from './stepper';
 import { confirmMark, startPlan, taskActionEffect } from './planPane';
 import { answerCheckpoint, continueTaskStep, openTaskView } from './taskView';
@@ -121,6 +122,8 @@ export function runCommand(state: TuiState, parsed: ParsedCommand): Step {
       });
     case 'open':
       return taskCommand(state, args[0], (sessionId, taskId) => openTaskView(state, sessionId, taskId));
+    case 'inbox':
+      return openInbox(state);
     case 'checkpoint':
       return taskCommand(state, args[0], (sessionId, taskId) => {
         const answer = args[1]?.toLowerCase();

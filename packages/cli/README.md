@@ -42,7 +42,8 @@ is `ordewell --help`; `/quit`, `/new` (every `ordewell plan` starts a fresh
 session) and `/save` (plans persist as they change) have no subcommand; `/load`
 and `/delete` are `ordewell sessions load|delete`; `/open` opens a task's view
 in the full-screen terminal, where a shell has no view to switch to
-(`ordewell checkpoint` answers from one); `/mouse` configures that terminal; and
+(`ordewell checkpoint` answers from one); `/inbox` lists everything waiting on you
+and answers it in place, with a count on the status row while anything waits; `/mouse` configures that terminal; and
 `/settings` is a panel over headless commands that remain for scripts
 (`ordewell auto`, `supervisor`, `automerge`, `autorun` and `parallel`);
 `ordewell supervisor reads` and `ordewell trailer` have no panel row. `/planner` has its own `ordewell planner`, and its model and effort

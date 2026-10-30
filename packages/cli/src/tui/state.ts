@@ -203,7 +203,10 @@ export type PickerAction =
   | { kind: 'set-task-effort'; taskId: string }
   | { kind: 'set-task-mode'; taskId: string }
   | { kind: 'set-task-deps'; taskId: string }
-  | { kind: 'set-task-skills'; taskId: string };
+  | { kind: 'set-task-skills'; taskId: string }
+  /** The escalation inbox: choosing a row opens that escalation's answers (ADR-0053). */
+  | { kind: 'inbox' }
+  | { kind: 'inbox-answer'; escalationId: string };
 
 export interface PickerState {
   title: string;
@@ -298,7 +301,9 @@ export interface ConfirmChoice {
 /** A free-text prompt overlay — used where a list of options makes no sense. */
 export type PromptAction =
   | { kind: 'api-key'; provider: string; envVar: string }
-  | { kind: 'add-task' };
+  | { kind: 'add-task' }
+  /** The note an escalation's answer takes; `required` refuses an empty one. */
+  | { kind: 'escalation-note'; escalationId: string; option: string; required: boolean; confirm?: string };
 
 /** A confirmation overlay for destructive actions — enter confirms, escape cancels, unless it offers a `choice`. */
 export type ConfirmAction =
@@ -314,7 +319,9 @@ export type ConfirmAction =
   | { kind: 'merge-run' }
   | { kind: 'discard-run' }
   | { kind: 'init-workspace'; goal: string; workspace: string }
-  | { kind: 'rewind'; index: number };
+  | { kind: 'rewind'; index: number }
+  /** The yes an escalation option's own question asks for; the answer carries it as `confirmed`. */
+  | { kind: 'answer-escalation'; escalationId: string; option: string; note?: string };
 
 export type Focus = 'chat' | 'plan';
 

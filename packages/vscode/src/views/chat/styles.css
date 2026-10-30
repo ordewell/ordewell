@@ -6886,3 +6886,142 @@ body.vscode-high-contrast-light .pending-message {
   white-space: nowrap;
   border: 0;
 }
+
+/* The escalation inbox (ADR-0053) sits between the plan dock and the composer.
+   Its body is bounded and scrolls, so a long list never pushes the composer or
+   the queued-message stack off screen. */
+.escalation-inbox {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-muted);
+  background: var(--bg-primary);
+}
+
+.escalation-inbox-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.escalation-inbox-bar:hover {
+  background: var(--bg-hover);
+}
+
+.escalation-inbox-bar:focus-visible,
+.escalation-inbox-body button:focus-visible,
+.escalation-inbox-body textarea:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.escalation-inbox-body {
+  max-height: 30vh;
+  overflow-y: auto;
+  padding: 0 10px 6px;
+}
+
+.escalation-inbox-body[hidden] {
+  display: none;
+}
+
+.escalation-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.escalation-entry {
+  padding: 6px 8px;
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--warning-text);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  font-size: 12px;
+}
+
+.escalation-entry-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.escalation-entry-task {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.escalation-entry-reason {
+  margin: 2px 0 6px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.escalation-entry-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.escalation-entry-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.escalation-entry-confirm {
+  margin: 0;
+}
+
+.escalation-entry-note {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.escalation-entry-note textarea {
+  resize: vertical;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+}
+
+.escalation-entry-sending {
+  color: var(--text-secondary);
+}
+
+/* The refusal leads with words, not colour: the border only echoes them. */
+.escalation-refusal {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--red-boundary);
+  border-radius: var(--radius-md);
+  background: var(--red-subtle);
+  font-size: 12px;
+}
+
+.escalation-refusal-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

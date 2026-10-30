@@ -7,6 +7,7 @@ import { orNames } from './runnerNames';
 import ChatInput from './components/ChatInput';
 import PlannerResendBar from './components/PlannerResendBar';
 import PlannerPauseBar from './components/PlannerPauseBar';
+import EscalationInbox from './components/EscalationInbox';
 import DockResizeHandle from './components/DockResizeHandle';
 import { ConversationBlocks } from './components/ChatMessage';
 import { reduceHost, runnersOn, INITIAL_HOST_STATE, type HostState } from './hostState';
@@ -24,7 +25,7 @@ import { planSummaryLabel, nextDock } from './planDock';
 import { OpenPatchContext } from './openPatch';
 import { useFollowOutput } from './followOutput';
 import { isBuiltinSlashCommand, slashHelp } from '../../commands/slashCommands';
-import type { HostToWebview, SettingsChange, WebviewToHost } from '../../shared/protocol';
+import type { EscalationAnswer, HostToWebview, SettingsChange, WebviewToHost } from '../../shared/protocol';
 import { patchedBlocks } from '../../shared/conversationPatch';
 
 declare function acquireVsCodeApi(): {
@@ -425,6 +426,17 @@ export default function App() {
   // for it. Opening is idempotent host-side — an open tab is focused.
   const handleOpenTaskLog = useCallback((taskId: string) => {
     vscode.postMessage({ type: 'openTaskLog', taskId });
+  }, []);
+
+  const handleEscalationAnswer = useCallback((answer: EscalationAnswer) => {
+    vscode.postMessage({ type: 'answerEscalation', ...answer });
+  }, []);
+
+  // The card is where a task's evidence is, so opening the task is opening its
+  // card in the dock, whatever the user had collapsed.
+  const handleOpenEscalatedTask = useCallback((taskId: string) => {
+    setDockExpanded((v) => nextDock(v, 'user-expanded'));
+    setExpandedTaskId(taskId);
   }, []);
 
   // A handoff's saved patch is a workspace file beside the attempt's log
@@ -1125,6 +1137,8 @@ export default function App() {
       </div>
 
       {renderPlanDock()}
+
+      <EscalationInbox escalations={run.escalations ?? []} onAnswer={handleEscalationAnswer} onOpenTask={handleOpenEscalatedTask} />
 
       <UsageLine block={usageBlock} limits={accountLimitsOf(accountLimits, planner.runner, modelConfig?.orchestrator)} />
 

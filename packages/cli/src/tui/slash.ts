@@ -44,6 +44,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'continue', usage: '/continue <id> <message>', description: 'Continue a finished task in its saved runner session, with your message', category: 'tasks' },
   { name: 'open', usage: '/open <id>', description: "Open a started task's chat: its view, and the keys that answer its checkpoint or tool request", category: 'tasks' },
   { name: 'checkpoint', usage: '/checkpoint <id> approve|reject [reason]', description: 'Answer the checkpoint a task waits at: approve lets it go on, reject tells it why not', category: 'tasks' },
+  { name: 'inbox', usage: '/inbox', description: 'List everything waiting on you, and answer it or open its task', category: 'tasks' },
   { name: 'task-runner', usage: '/task-runner <id> [runner]', description: "Choose or set a task's executor (re-picks its model and mode)", category: 'tasks' },
   { name: 'task-model', usage: '/task-model <id> [model]', description: "Choose or set a task's executor model", category: 'tasks' },
   { name: 'task-effort', usage: '/task-effort <id> [level]', description: "Choose or set a task's thinking effort", category: 'tasks' },

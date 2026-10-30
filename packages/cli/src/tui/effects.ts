@@ -22,7 +22,7 @@ export type OrdewellApi = Pick<ApiClient,
   | 'startConversation' | 'sendConversationMessage' | 'forceSendPlannerMessage' | 'executePlan' | 'stopExecution' | 'cancelPlanning'
   | 'execute' | 'cancelPlannerResend' | 'retryPlannerCompaction'
   | 'getTaskLogAttempts' | 'getTaskLog'
-  | 'invokeTaskCommand' | 'approveTaskCheckpoint' | 'rejectTaskCheckpoint'
+  | 'invokeTaskCommand' | 'answerEscalation' | 'approveTaskCheckpoint' | 'rejectTaskCheckpoint'
   | 'addTask' | 'updateTask' | 'removeTask'
   | 'getSessions' | 'getSession' | 'adoptSession' | 'deleteSession' | 'closeSession'
   | 'getIsolationPreview' | 'revertPreview'
@@ -325,6 +325,19 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       const { message } = await api.execute(effect.sessionId, { command: 'revert_task', task: effect.taskId, confirmed: true, seen: effect.seen });
       await refreshPlan(deps, effect.sessionId);
       dispatch({ type: 'notice', message });
+      return;
+    }
+
+    case 'answerEscalation': {
+      const { sessionId, id, option, note, confirmed } = effect;
+      // The daemon derives the list afresh and refuses a stale id in plain words, which `failedFrom` shows as they are.
+      let said = '';
+      const request = async (): Promise<void> => {
+        said = (await api.answerEscalation(sessionId, { id, option, ...(note ? { note } : {}), ...(confirmed ? { confirmed } : {}) })).message;
+      };
+      await (effect.watch ? withExecutionStream(deps, sessionId, request) : request());
+      await refreshPlan(deps, sessionId);
+      if (said) dispatch({ type: 'notice', message: said });
       return;
     }
 

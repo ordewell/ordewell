@@ -489,6 +489,7 @@ function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionI
         ...(event.runMerge ? { runMerge: event.runMerge } : {}),
         ...(event.usage ? { usage: event.usage } : {}),
         ...(event.activity ? { activity: event.activity } : {}),
+        ...(event.escalations ? { escalations: event.escalations } : {}),
         sessionId,
       });
       return;
