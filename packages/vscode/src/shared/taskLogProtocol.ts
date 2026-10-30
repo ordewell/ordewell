@@ -39,6 +39,8 @@ export interface TaskLogStatus {
   taskStatus: string;
   /** When the runner last went quiet, as the status stream says it; null while it is not. The line goes static from it. */
   idleSince: string | null;
+  /** When the open turn began (ISO), which the activity line counts its time from (#81); null between turns and for a log saved before it was kept. */
+  turnStartedAt: string | null;
   /** Messages the runner has not read yet, oldest first. */
   queued: readonly TaskLogQueuedMessage[];
   /** Attempts that have a saved log, oldest first. */

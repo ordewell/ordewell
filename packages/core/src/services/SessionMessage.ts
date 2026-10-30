@@ -225,8 +225,10 @@ export type SessionMessage =
    * digests the turn delivers, shown ahead of the prompt; `supervisor` marks a
    * wake-up turn, which no user message opened (ADR-0029). `forced`: the
    * prompt was force sent, and this turn replaces the one it stopped.
+   * `startedAt` (ISO) is when it began, which a surface counts its elapsed
+   * time from (#81); an older daemon sends none.
    */
-  | { type: 'planner_turn_started'; turnId: string; prompt?: string; skills?: SkillLoadNotice[]; wakeUps?: string[]; supervisor?: true; forced?: true }
+  | { type: 'planner_turn_started'; turnId: string; prompt?: string; skills?: SkillLoadNotice[]; wakeUps?: string[]; supervisor?: true; forced?: true; startedAt?: string }
   | { type: 'planner_skill_loaded'; turnId: string; skill: SkillLoadNotice }
   /**
    * A planner turn is over; nothing more carries its `turnId`. Emitted exactly

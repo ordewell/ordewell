@@ -107,6 +107,8 @@ export interface HostState {
   dockExpanded: boolean;
   /** The dock's dragged cap in px, remembered by the host; undefined keeps the stylesheet's default. */
   dockHeight: number | undefined;
+  /** When the open planner turn began (ISO), for the elapsed time of its working row (#81); none while the host did not say. */
+  plannerTurnStartedAt?: string;
   /** The user stopped the turn: plan updates are dropped until the host closes it. */
   stopped: boolean;
   /**
@@ -367,7 +369,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
     // The stop gate lasts until the host has closed the stopped turn; a new
     // turn is never gated.
     case 'plannerTurn':
-      return { ...state, stopped: false, isResearchActive: action.active, turnLost: false };
+      return { ...state, stopped: false, isResearchActive: action.active, turnLost: false, plannerTurnStartedAt: action.active ? action.startedAt : undefined };
 
     case 'plannerTurnAlive':
       if (!state.turnLost || state.stopped) return state;

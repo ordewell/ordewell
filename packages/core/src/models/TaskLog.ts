@@ -25,14 +25,16 @@ export type TaskLogEvent =
   /**
    * A turn began by delivering `message`; `messageId` names it when it had been
    * queued, `forced` when it was force sent. `from` on this and the other
-   * message events marks one Ordewell sent rather than the user.
+   * message events marks one Ordewell sent rather than the user. `startedAt`
+   * (ISO) is when it began, which a reload needs to date its open turn (#81);
+   * a log saved before it was kept has none.
    */
-  | { type: 'turn_start'; message: string; messageId?: string; forced?: boolean; from?: TaskMessageFrom }
+  | { type: 'turn_start'; message: string; messageId?: string; forced?: boolean; from?: TaskMessageFrom; startedAt?: string }
   /**
    * A turn began by running the runner's own command `/name args` (#66): the
    * `turn_start` of a command turn. `messageId` names it when it had been queued.
    */
-  | { type: 'command'; name: string; args?: string; messageId?: string }
+  | { type: 'command'; name: string; args?: string; messageId?: string; startedAt?: string }
   /** What the running command printed, for one that runs without the model. */
   | { type: 'command_output'; text: string }
   /** The runner compacted its own context, asked to or on its own. */

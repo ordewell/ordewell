@@ -360,11 +360,18 @@ export interface ChatActivity {
   busy: boolean;
   /** A running task whose runner has gone quiet: a static marker, not the spinner. */
   quiet?: true;
+  /** When the turn behind the label began (ISO), for the time at the end of the line; none when its log did not say (#81). */
+  since?: string;
 }
 
-/** Whether anything on screen is animated by the spinner tick: a running task's plan row, or the status row's spinner. */
+/**
+ * Whether anything on screen moves with the tick: a running task's plan row,
+ * the status row's spinner, or its elapsed time, which a quiet runner's line
+ * keeps counting.
+ */
 export function animating(state: TuiState): boolean {
-  return state.tasks.some((t) => taskStatusKind(t) === 'running') || !!chatActivity(state)?.busy;
+  const activity = chatActivity(state);
+  return state.tasks.some((t) => taskStatusKind(t) === 'running') || !!activity?.busy || !!activity?.since;
 }
 
 /**
@@ -379,7 +386,9 @@ export function chatActivity(state: TuiState): ChatActivity | null {
     if (state.status === 'starting') return { label: 'Starting the plan…', busy: true };
     if (!plannerInFlight(state)) return null;
     const label = state.planner === 'condensing' ? 'Condensing…' : state.planner === 'compacting' ? 'Compacting…' : state.planner === 'awaiting' ? 'Waiting for the planner…' : 'Planning…';
-    return { label, busy: true };
+    // A compaction or a wait for the planner opens no turn of its own.
+    const since = state.turnGate.open !== null ? state.turnGate.openedAt : undefined;
+    return since ? { label, busy: true, since } : { label, busy: true };
   }
   const own = findTask(state.tasks, tv.taskId);
   const task = state.tasks.find((t) => t.subtasks?.some((s) => s.id === tv.taskId)) ?? own;

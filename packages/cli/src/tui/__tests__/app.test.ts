@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
+import { replayTaskLog } from '@ordewell/core';
+import { stripAnsi } from '../ansi';
 import { createApp } from '../app';
 import { style } from '../ansi';
 import type { Effect } from '../reducer';
@@ -211,6 +213,31 @@ describe('createApp', () => {
         vi.advanceTimersByTime(2000);
         expect(h.app.getState().spinnerFrame).toBe(0);
         expect(h.frames).toHaveLength(drawn);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps counting the elapsed time of a quiet runner the chat is open on (#81)', () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2026-10-30T10:03:05.000Z'));
+        const h = harness({
+          focus: 'chat',
+          rows: 30,
+          cols: 100,
+          tasks: [quiet],
+          taskView: {
+            taskId: 't1', attempts: [1], attempt: 1, pending: [], loaded: true, followLatest: true, queuedIndex: 0,
+            view: replayTaskLog([{ type: 'turn_start', message: 'Go', startedAt: '2026-10-30T10:00:00.000Z' }]),
+          },
+        });
+        h.app.start();
+        const timeOf = () => h.frames.at(-1)?.map(stripAnsi).join('\n').match(/~ Stalled (\S+ \S+)/)?.[1];
+        expect(timeOf()).toBe('3m 05s');
+
+        vi.advanceTimersByTime(5100);
+        expect(timeOf()).toBe('3m 10s');
       } finally {
         vi.useRealTimers();
       }

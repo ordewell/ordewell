@@ -1318,7 +1318,7 @@ export class PlannerConversation {
     const skills = prompt.skills.map(skillLoadNotice);
     const wakeUps = delivered.wakeUps ?? [];
     this.host.broadcast({
-      type: 'planner_turn_started', turnId, prompt: prompt.text,
+      type: 'planner_turn_started', turnId, prompt: prompt.text, startedAt: new Date().toISOString(),
       ...(skills.length > 0 ? { skills } : {}),
       ...(wakeUps.length > 0 ? { wakeUps: [...wakeUps] } : {}),
       ...(bySupervisor(wakeUp) ? { supervisor: true } : {}),

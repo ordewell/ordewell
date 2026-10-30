@@ -2,7 +2,7 @@ import { isTaskRunning, STALLED_LABEL, taskStatusKind } from '../taskRow/status'
 import type { DisplayBlock, SubagentBlock } from './blocks';
 
 /** What the label reads: a `TaskLogView`'s blocks, which is all a webview holds of one. */
-type LoggedBlocks = { readonly blocks: readonly DisplayBlock[] };
+type LoggedBlocks = { readonly blocks: readonly DisplayBlock[]; readonly turnStartedAt?: string };
 
 /**
  * What a task's runner is busy with, from its log: the latest block still
@@ -40,6 +40,8 @@ function openLabel(block: DisplayBlock, view: LoggedBlocks): string | null {
 export interface TaskActivity {
   label: string;
   busy: boolean;
+  /** When the open turn began (ISO): a surface counts from it on its own ticks (#81). Absent for a log saved before turns were dated. */
+  since?: string;
 }
 
 /**
@@ -52,6 +54,7 @@ export interface TaskActivity {
 export function taskActivity(view: LoggedBlocks, task: { status: string; idleSince?: string | null; awaitingApproval?: number }): TaskActivity | null {
   if (!isTaskRunning(task)) return null;
   if (task.awaitingApproval || view.blocks.some((b) => b.type === 'approval' && b.status === 'pending')) return null;
-  if (taskStatusKind(task) === 'quiet') return { label: STALLED_LABEL, busy: false };
-  return { label: activityLabel(view), busy: true };
+  const since = view.turnStartedAt ? { since: view.turnStartedAt } : {};
+  if (taskStatusKind(task) === 'quiet') return { label: STALLED_LABEL, busy: false, ...since };
+  return { label: activityLabel(view), busy: true, ...since };
 }

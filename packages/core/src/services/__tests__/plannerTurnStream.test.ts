@@ -48,7 +48,7 @@ describe('planner turn stream', () => {
     expect(started.type).toBe('planner_turn_started');
     const turnId = (started as Extract<Streamed, { type: 'planner_turn_started' }>).turnId;
     expect(timestampless(streamed())).toEqual([
-      { type: 'planner_turn_started', turnId, prompt: 'add persistence' },
+      { type: 'planner_turn_started', turnId, prompt: 'add persistence', startedAt: expect.any(String) },
       { type: 'planner_text_delta', turnId, segmentId: 's1', text: 'Which ' },
       { type: 'planner_text_delta', turnId, segmentId: 's1', text: 'store?' },
       { type: 'planner_message', content: 'Which store?', timestamp: '<now>', turnId },

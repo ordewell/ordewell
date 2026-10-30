@@ -25,6 +25,8 @@ export interface TaskLogView extends BlockList {
   readonly queued: readonly QueuedTaskMessage[];
   /** A turn is running. */
   readonly working: boolean;
+  /** When the open turn began (ISO), for a surface to count from; absent between turns and for a log saved before it was kept (#81). */
+  readonly turnStartedAt?: string;
   /** How the last turn ended; absent before the first one does. */
   readonly lastTurnEnd?: StructuredTurnEnd;
   /** What the runner reported over the attempt, subagents included. */
@@ -255,9 +257,9 @@ function decideApproval(view: TaskLogView, { approvalId, decision, note }: Event
   return settleApproval(view, approvalId, (block) => answered(block, decision, note));
 }
 
-function startTurn(view: TaskLogView, { message, messageId, from, forced }: Event<'turn_start'>): TaskLogView {
+function startTurn(view: TaskLogView, { message, messageId, from, forced, startedAt }: Event<'turn_start'>): TaskLogView {
   const queued = messageId ? view.queued.filter((m) => m.id !== messageId) : view.queued;
-  const working = { ...view, queued, working: true, latestText: undefined };
+  const working = { ...view, queued, working: true, turnStartedAt: startedAt, latestText: undefined };
   // A turn the runner opened itself has no user message to show.
   return message ? append(working, (id) => ({ ...sentMessage(id, message, from), ...(forced ? { forced: true } : {}) })) : working;
 }
@@ -268,9 +270,9 @@ function sentMessage(id: string, text: string, from: TaskMessageFrom | undefined
 }
 
 /** A runner command opens its turn as a message would, shown as the command it runs (#66). */
-function startCommand(view: TaskLogView, { name, args, messageId }: Event<'command'>): TaskLogView {
+function startCommand(view: TaskLogView, { name, args, messageId, startedAt }: Event<'command'>): TaskLogView {
   const queued = messageId ? view.queued.filter((m) => m.id !== messageId) : view.queued;
-  return append({ ...view, queued, working: true, latestText: undefined }, (id) => ({
+  return append({ ...view, queued, working: true, turnStartedAt: startedAt, latestText: undefined }, (id) => ({
     type: 'command', id, name, ...(args ? { args } : {}), status: 'running', output: '',
   }));
 }
@@ -306,7 +308,7 @@ function endTurn(view: TaskLogView, { reason }: Event<'turn_end'>): TaskLogView 
   const i = runningCommand(view);
   const command = view.blocks[i];
   const settled = command?.type === 'command' ? { ...view, blocks: replaceAt(view.blocks, i, { ...command, status: COMMAND_END[reason] }) } : view;
-  const closed = closeOpenBlocks({ ...settled, working: false, lastTurnEnd: reason, streams: {}, latestText: undefined }, CUT[reason]);
+  const closed = closeOpenBlocks({ ...settled, working: false, turnStartedAt: undefined, lastTurnEnd: reason, streams: {}, latestText: undefined }, CUT[reason]);
   return reason === 'interrupted' ? append(closed, (id) => settledMessage(id, 'system', 'Interrupted.')) : closed;
 }
 
@@ -370,7 +372,7 @@ function endScriptStep(view: TaskLogView, event: Event<'script_exit'>): TaskLogV
   const passed = event.code === 0 && !event.signal && event.error === undefined;
   const i = runningScriptStep(view);
   const block = view.blocks[i];
-  const ended = { ...view, working: false };
+  const ended = { ...view, working: false, turnStartedAt: undefined };
   if (block?.type !== 'tool') return append(ended, (id) => settledMessage(id, 'system', status));
   const output = block.output.trim() ? `${block.output.replace(/\n+$/, '')}\n${status}` : status;
   return { ...ended, blocks: replaceAt(view.blocks, i, finishedTool(block, output, passed ? 'success' : 'failure')) };
@@ -454,7 +456,7 @@ export function reduceTaskLog(view: TaskLogView, event: TaskLogEvent): TaskLogVi
     case 'script_output': return scriptStepOutput(view, event);
     case 'script_exit': return endScriptStep(view, event);
     case 'handoff': return showHandoff(view, event);
-    case 'runner_ended': return closeOpenBlocks({ ...endOpenCalls(view), working: false, streams: {}, latestText: undefined }, 'stopped');
+    case 'runner_ended': return closeOpenBlocks({ ...endOpenCalls(view), working: false, turnStartedAt: undefined, streams: {}, latestText: undefined }, 'stopped');
     default: return view;
   }
 }

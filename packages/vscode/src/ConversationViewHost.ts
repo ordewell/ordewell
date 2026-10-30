@@ -156,7 +156,7 @@ export class ConversationViewHost {
     this.sent = [];
     this.flush();
     this.post({ type: 'heldPrompts', prompts: this.held });
-    this.post({ type: 'plannerTurn', active: this.gate.open !== null });
+    this.postTurn();
   }
 
   flush(): void {
@@ -194,7 +194,12 @@ export class ConversationViewHost {
   // the change ahead of the blocks it was drawn with.
   private announceTurn(): void {
     this.flush();
-    this.post({ type: 'plannerTurn', active: this.gate.open !== null });
+    this.postTurn();
+  }
+
+  private postTurn(): void {
+    const open = this.gate.open !== null;
+    this.post({ type: 'plannerTurn', active: open, ...(open && this.gate.openedAt ? { startedAt: this.gate.openedAt } : {}) });
   }
 
   private fold(input: ConversationInput): void {

@@ -68,7 +68,7 @@ describe('OrchestratorPool task logs', () => {
     expect(logged.every((f) => f.taskId === 't1' && f.attempt === 1)).toBe(true);
     const events = logged.flatMap((f) => f.events ?? []);
     expect(events).toEqual([
-      { type: 'turn_start', message: 'do it' },
+      { type: 'turn_start', message: 'do it', startedAt: expect.any(String) },
       { type: 'text', runId: 'r1', text: 'Working on it.' },
       { type: 'turn_end', reason: 'completed' },
     ]);

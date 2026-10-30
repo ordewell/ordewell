@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type * as vscode from 'vscode';
-import type { Task } from '@ordewell/core';
+import type { Task, TaskLogEvent } from '@ordewell/core';
 import { createFakeWebviewPanel } from '../../test/vscode.mock';
 import { TaskLogPanel, type TaskLogSession } from '../TaskLogPanel';
 import type { HostToTaskLog } from '../../shared/taskLogProtocol';
@@ -10,10 +10,10 @@ const task = (over: Partial<Task>): Task => ({
   id: 't1', order: 1, title: 'Ship it', description: '', type: 'ai', status: 'pending', dependencies: [], subtasks: [], assignedRunner: 'opencode', ...over,
 });
 
-function openedStatus(t: Task) {
+function openedStatus(t: Task, events: readonly TaskLogEvent[] = []) {
   const panel = createFakeWebviewPanel('ordewell.taskLog', 'Task log');
   const session = {
-    taskLogAttempts: () => [], taskLog: () => [], outstandingApprovals: () => [], execute: vi.fn(), invokeTaskCommand: vi.fn(),
+    taskLogAttempts: () => (events.length > 0 ? [1] : []), taskLog: () => events, outstandingApprovals: () => [], execute: vi.fn(), invokeTaskCommand: vi.fn(),
   } as unknown as TaskLogSession;
   new TaskLogPanel(panel as unknown as vscode.WebviewPanel, t.id, { session, getTask: () => t, openFile: () => undefined, log: () => undefined }, { toString: () => 'file:///ext' } as unknown as vscode.Uri, () => undefined);
   panel.__receive({ type: 'ready' });
@@ -40,5 +40,19 @@ describe('the task log tab tells the webview what its activity line needs', () =
     const status = openedStatus(task({ status: 'in_progress' }));
     expect(status.taskStatus).toBe('in_progress');
     expect(status.idleSince).toBeNull();
+  });
+});
+
+describe('the task log tab tells the webview when the open turn began (#81)', () => {
+  it('sends the start of the turn a reload replays as still open', () => {
+    const status = openedStatus(task({ status: 'in_progress' }), [{ type: 'turn_start', message: 'go', startedAt: '2026-10-30T10:00:00.000Z' }]);
+    expect(status.turnStartedAt).toBe('2026-10-30T10:00:00.000Z');
+  });
+
+  it('sends none for a log saved before turns were dated, or between turns', () => {
+    expect(openedStatus(task({ status: 'in_progress' }), [{ type: 'turn_start', message: 'go' }]).turnStartedAt).toBeNull();
+    expect(openedStatus(task({ status: 'in_progress' }), [
+      { type: 'turn_start', message: 'go', startedAt: '2026-10-30T10:00:00.000Z' }, { type: 'turn_end', reason: 'completed' },
+    ]).turnStartedAt).toBeNull();
   });
 });
