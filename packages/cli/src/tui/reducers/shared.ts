@@ -1,5 +1,5 @@
 import type { AccountLimitSnapshot } from '@ordewell/core';
-import type { AiProvider, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, IsolationPreview, PlanUsage, PlannerUsage, ResearchLogEntry, RunActivity, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, StreamStamp, TaskAction, TaskLogEvent, TaskStatus } from '@ordewell/core';
+import type { AiProvider, Escalation, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, IsolationPreview, PlanUsage, PlannerUsage, ResearchLogEntry, RunActivity, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, StreamStamp, TaskAction, TaskLogEvent, TaskStatus } from '@ordewell/core';
 import type { Key } from '../keys';
 import type {
   HandoffView, LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
@@ -83,6 +83,8 @@ export type Effect =
   | { type: 'forceSendQueuedTaskMessage'; sessionId: string; taskId: string; messageId: string }
   /** Continue a finished structured task in its saved session, with `text` as its next turn (ADR-0018, K1). */
   | { type: 'continueTask'; sessionId: string; taskId: string; text: string; watch?: boolean }
+  /** One escalation answered through the seam (ADR-0053); a refusal comes back in its words. */
+  | { type: 'answerEscalation'; sessionId: string; id: string; option: string; note?: string; confirmed?: true; /** The answer spawns a runner: the execution stream is held open around it, as for `taskAction`. */ watch?: true }
   | { type: 'respondApproval'; sessionId: string; approvalId: string; granted: boolean }
   /** A task runner's tool request, answered from its task view (ADR-0018, A1). */
   | { type: 'answerTaskApproval'; sessionId: string; approvalId: string; answer: ApprovalDecision }
@@ -158,7 +160,7 @@ export type Action =
   | { type: 'taskUpdated'; taskId: string; changes: Record<string, unknown>; sessionId?: string }
   | { type: 'taskCheckpoint'; taskId: string; title: string; summary: string; sessionId?: string }
   /** The run's status stream: folded through core's `reduceRun`, status-only fields and all. */
-  | { type: 'statusUpdate'; tasks: SerializedTaskStatus[]; runMerge?: RunMergeView; usage?: PlanUsage; activity?: RunActivity; sessionId?: string }
+  | { type: 'statusUpdate'; tasks: SerializedTaskStatus[]; runMerge?: RunMergeView; usage?: PlanUsage; activity?: RunActivity; escalations?: Escalation[]; sessionId?: string }
   /** The run as the daemon sends it when a socket connects, before the next update. */
   | { type: 'runSnapshot'; view: RunView; approvals?: ApprovalRequestMessage[]; sessionId?: string }
   /** The edit the open planner turn holds, as it would leave the plan; null once it landed or was dropped. */

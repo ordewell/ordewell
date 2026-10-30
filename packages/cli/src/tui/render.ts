@@ -9,6 +9,7 @@ import {
   SPINNER,
   QUIET_MARK,
   runHint,
+  inboxHint,
   type BodyPanes,
   type ComposerView,
 } from './layout';
@@ -258,7 +259,8 @@ function statusText(state: TuiState, cols: number, panes: BodyPanes): string {
   const activity = chatActivity(state);
   // Without a plan pane the run has nowhere else to show what it waits on.
   const hint = !panes.plan || panes.plan.rows === 0 ? runHint(state) : '';
-  const notes = [mark, activity && !activity.busy ? activity.label : '', hint, state.toast].filter(Boolean).join(' · ');
+  const inbox = inboxHint(state);
+  const notes = [mark, activity && !activity.busy ? activity.label : '', hint, inbox, state.toast].filter(Boolean).join(' · ');
   if (activity?.busy || activity?.quiet) {
     // A quiet runner gets the plan pane's static marker, never the spinner.
     const glyph = activity.busy ? SPINNER[state.spinnerFrame % SPINNER.length] : QUIET_MARK;
@@ -267,7 +269,9 @@ function statusText(state: TuiState, cols: number, panes: BodyPanes): string {
     // The label holds runner output, and it gives way before the stop key does.
     const room = Math.max(1, cols - width(scrolled) - width(glyph) - 1 - width(stop));
     const label = truncate(sanitize(activity.label).replace(/\s+/g, ' ').trim(), room);
-    return truncate(`${scrolled}${style.brand(glyph)} ${label}${stop}`, cols);
+    // The count has the row's leftover only: it never takes room from the label or the stop key.
+    const count = inbox && width(label) + width(inbox) + 3 <= room ? style.grey(` · ${inbox}`) : '';
+    return truncate(`${scrolled}${style.brand(glyph)} ${label}${count}${stop}`, cols);
   }
   return notes ? truncate(style.grey(notes), cols) : '';
 }

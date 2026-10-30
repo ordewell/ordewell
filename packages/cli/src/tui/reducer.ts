@@ -304,6 +304,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         ...(action.runMerge !== undefined ? { runMerge: action.runMerge } : {}),
         ...(action.usage !== undefined ? { usage: action.usage } : {}),
         ...(action.activity !== undefined ? { activity: action.activity } : {}),
+        ...(action.escalations !== undefined ? { escalations: action.escalations } : {}),
       });
       // The indicator follows the run's own activity first, then the tasks:
       // beginning a run is "starting" until it claims, and once none is
