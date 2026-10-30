@@ -1420,8 +1420,9 @@ out of rounds, or, in an open run, a task that nothing but a person holds back
 (its *Merge gate*, a hold, its approval, nothing to run, a user task), or a
 reverted task in any run; and of the run itself, landed work with nothing left
 to move it, and a *Blocked run*.
-It carries an id of its kind, task, attempt and approval, so a later attempt's
-wait is another escalation; the task it belongs to, which links to the
+It carries an id of its kind, task, attempt and approval, or for a Merge all of
+the run and the attempts it would merge, so a later wait is another escalation;
+the task it belongs to, which links to the
 evidence; a reason in plain words; and the options that wait's own card or
 command offers, each with the question its card asks first where it has one.
 It has no deadline and no default answer. What resolves itself is left out, and

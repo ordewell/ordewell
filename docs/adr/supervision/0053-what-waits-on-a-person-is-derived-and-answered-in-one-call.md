@@ -32,9 +32,9 @@ existing command for that wait.**
   itself is left out, and a task whose cause is listed is left out in favour of
   that cause, listed once. The tables below are the exact kinds.
 - **An escalation says what is waiting and what may be answered.** A stable id
-  built from its kind, task, attempt and approval id, so that a later attempt's
-  wait is another escalation and a stale answer can be told from a live one;
-  its kind; the task it belongs to, which is the link to the evidence; a reason
+  built from its kind, task, attempt and approval id, or for a `merge-all` from
+  the run and a digest of the attempts it would merge, so that a later wait is
+  another escalation and a stale answer can be told from a live one; its kind; the task it belongs to, which is the link to the evidence; a reason
   in plain words; and the options a user may choose, which are what that wait's
   own card or command offers, as the seam would take them now. An option carries
   the question its card asks first, where there is one. There is no deadline
@@ -108,6 +108,7 @@ to compile until someone decides it.
 | A task with any of these besides a wait of its own | Its turn comes once they clear: it waits on a person only then. |
 | A merge gate while Ordewell merges at gates by itself | The scheduler merges it, unless a merge stopped, which lists it again. |
 | Landed work while anything could still land more | Merge all is offered at a gate or once nothing moves. |
+| Landed work the run's close merges by itself | The run says it has ended just before it closes, and nobody has to answer that merge. A Stop, or a merge that stopped, leaves the work to the user, and it is listed. |
 | A planner approval | It times out by itself into a denial, and belongs to the conversation the user is told of it in, not to a task. |
 | A planner paused on its context or its usage limit | A wait of the conversation, shown there, with no task and no command at the seam. |
 | The plan's review | Nothing records that one is waiting: `review_needed` is an event, and a plan nobody executed is no run waiting. |
@@ -230,6 +231,19 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
   one thing the call adds to `answerEscalation(id, option, note?)` as first
   drawn. Force start past a gate, where a surface asks and the seam does not,
   is held to the same question.
+- **The run's id alone as a `merge-all`'s id.** Dropped: a run that holds a record
+  keeps its id past a Merge all, so work landing later would be told as the first
+  wait, and the notify command would stay silent for it.
+- **The task ids themselves in a `merge-all`'s id.** Rejected: the id is capped
+  where the notify command reads it, and a long run's would not fit.
+- **The run's end merged before the status that says it ended.** Rejected: the
+  surfaces would not hear the run was over for as long as git took, and a Mark
+  complete or a cancel closing a run has the same gap with no such status to
+  move. `TaskOrchestrator.mergesAtClose` answers for all of them, and is what
+  decides the merge.
+- **Leaving Merge all out while the setting is on.** Rejected: a Stop leaves
+  landed work the run will not merge, with the setting still on, and that wait
+  is real.
 - **Listing every blocked dependent.** Rejected: one failure reads as many
   decisions, and every one of them has the same answer.
 - **One escalation for all the tasks at a merge gate.** Rejected: Force start is
@@ -282,3 +296,4 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
 - 2026-10-30 — accepted.
 - 2026-10-30 — a reverted task is listed outside an open run (ADR-0054).
 - 2026-10-30 — an optional notify command, run once for each new escalation (#30).
+- 2026-10-30 — a `merge-all`'s id names the attempts it would merge, and a merge the run's close makes itself is left out (#30).

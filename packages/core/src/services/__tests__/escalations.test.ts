@@ -9,7 +9,7 @@ import type { RunMergeView } from '../SessionMessage';
 const task = (id: string, order: number, over: Partial<Task> = {}): Task =>
   ({ ...createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, status: 'approved', ...over }), ...over });
 
-const OPEN: EscalationRun = { open: true, advancing: false, merging: false, autoMerges: false, merge: null, id: null, blocked: null };
+const OPEN: EscalationRun = { open: true, advancing: false, merging: false, autoMerges: false, mergesAtClose: false, merge: null, id: null, blocked: null };
 
 const failedVerdict = (reported: 'failed' | 'blocked'): Task['verdict'] => ({ outcome: 'fail', reason: 'it did not hold', checks: [], decidedAt: '2026-10-30T00:00:00Z', reported });
 
@@ -136,6 +136,8 @@ describe('what waits on a person, task by task', () => {
 describe('what only a person can start', () => {
   const landed = { taskId: 't1', order: 1, title: 'Task t1' };
   const merge: RunMergeView = { waitingAtGate: false, paused: false, repos: [], landed: [landed] };
+  // Pinned, not recomputed: a change of what the id is built from retells every live Merge all.
+  const MERGE_ALL = 'merge-all:r1:da4b67039c7c';
   const gated: Task[] = [task('t1', 1, { status: 'completed' }), task('t2', 2, { type: 'script', commands: [['npm', 'publish']], dependencies: ['t1'] })];
 
   it.each<[string, Task[], Setup, ReturnType<typeof shape>]>([
@@ -154,9 +156,9 @@ describe('what only a person can start', () => {
     ['a task with nothing to run', [task('t1', 1, { prompt: undefined })], {},
       [{ id: 'no-prompt:t1:0', kind: 'no-prompt', options: ['skip'] }]],
     ['landed work with nothing left to move it', [task('t1', 1, { status: 'completed' })], { run: { open: false, merge, id: 'r1' } },
-      [{ id: 'merge-all:r1', kind: 'merge-all', options: ['merge-all'] }]],
+      [{ id: MERGE_ALL, kind: 'merge-all', options: ['merge-all'] }]],
     ['a merge owed beside a failure the run ended on', [task('t1', 1, { status: 'completed' }), task('t2', 2, { status: 'failed' })], { attempts: { t2: 1 }, run: { merge, id: 'r1' } },
-      [{ id: 'failed:t2:1', kind: 'failed', options: ['retry', 'skip', 'complete'] }, { id: 'merge-all:r1', kind: 'merge-all', options: ['merge-all'] }]],
+      [{ id: 'failed:t2:1', kind: 'failed', options: ['retry', 'skip', 'complete'] }, { id: MERGE_ALL, kind: 'merge-all', options: ['merge-all'] }]],
     ['a run a dirty checkout turned away, first', [task('t1', 1, { status: 'failed' })], { attempts: { t1: 1 }, run: { blocked: 4, advancing: true } },
       [{ id: 'blocked-run:4', kind: 'blocked-run', options: ['stash', 'run-without-isolation'] }, { id: 'failed:t1:1', kind: 'failed', options: ['retry', 'skip'] }]],
   ])('%s', (_name, tasks, setup, expected) => {
@@ -178,6 +180,7 @@ describe('what only a person can start', () => {
     ['a task nobody approved, in a run a lone start opened', [task('t1', 1)], { added: [] }],
     ['landed work while the run still moves', [task('t1', 1, { status: 'completed' }), task('t2', 2, { status: 'in_progress' })], { live: ['t2'], run: { advancing: true, merge, id: 'r1' } }],
     ['landed work a Merge all is already merging', [task('t1', 1, { status: 'completed' })], { run: { merging: true, merge, id: 'r1' } }],
+    ['landed work the run\'s close is about to merge by itself', [task('t1', 1, { status: 'completed' })], { run: { open: false, mergesAtClose: true, merge, id: 'r1' } }],
     ['a user task with no run open', [task('t1', 1, { type: 'user' })], { run: { open: false } }],
     ['a merge gate with no run open', gated, { unmerged: ['t1'], run: { open: false } }],
     ['a task on hold with no run open', [task('t1', 1)], { onHold: { t1: 'cancelled' }, run: { open: false } }],
@@ -191,9 +194,22 @@ describe('what only a person can start', () => {
     expect(only.options.find((o) => o.id === 'force-start')?.confirm).toBe('It waits for Merge all: the work of #1 is not merged into your branch yet, so it would act without it. Starting it now is kept on the task.');
   });
 
+  it('names a Merge all by what it would merge, so work landing later is another wait', () => {
+    const done = [task('t1', 1, { status: 'completed' }), task('t2', 2, { status: 'completed' })];
+    const idOf = (taskIds: string[], attempts: Record<string, number>, id = 'r1') =>
+      listFor(done, { attempts, run: { open: false, id, merge: { ...merge, landed: taskIds.map((taskId, order) => ({ taskId, order, title: taskId })) } } })[0].id;
+    const first = idOf(['t1'], { t1: 1 });
+
+    expect(idOf(['t1'], { t1: 1, t2: 1 })).toBe(first);
+    expect(idOf(['t2'], { t1: 1, t2: 1 })).not.toBe(first);
+    expect(idOf(['t1', 't2'], { t1: 1, t2: 1 })).not.toBe(first);
+    expect(idOf(['t1'], { t1: 2 })).not.toBe(first);
+    expect(idOf(['t1'], { t1: 1 }, 'r2')).not.toBe(first);
+  });
+
   it('holds no task on a run\'s own wait', () => {
     expect(listFor([task('t1', 1, { status: 'completed' })], { run: { open: false, merge, id: 'r1' } })).toEqual([{
-      id: 'merge-all:r1',
+      id: MERGE_ALL,
       kind: 'merge-all',
       reason: 'The run\'s landed work waits for Merge all: #1.',
       options: [{ id: 'merge-all', label: 'Merge all' }],

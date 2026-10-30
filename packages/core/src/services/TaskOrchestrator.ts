@@ -769,11 +769,19 @@ export class TaskOrchestrator {
    * over as before.
    */
   private async closeRun(): Promise<void> {
-    if (this.mergesAutomatically() && !this.autoMergeBlocked && !this.merging && this.runs.isolating && this.runMergeView()
-      && this.attempts.excludingMerge() === undefined) {
-      await this.mergeLanded({ kind: 'run_end' });
-    }
+    if (this.mergesAtClose) await this.mergeLanded({ kind: 'run_end' });
     await this.runs.close();
+  }
+
+  /**
+   * Whether closing the run merges what landed, with nobody asked. The run
+   * says it has ended before it closes, and a list read in between must not
+   * name a Merge all it is about to do itself (ADR-0053). A Stop takes the run
+   * out of isolating and a merge that stopped blocks this, so neither wait is hidden.
+   */
+  get mergesAtClose(): boolean {
+    return this.mergesAutomatically() && !this.autoMergeBlocked && !this.merging && this.settled && this.runs.isolating
+      && this.runMergeView() !== null && this.attempts.excludingMerge() === undefined;
   }
 
   /**
