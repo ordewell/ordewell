@@ -2,13 +2,13 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { ConversationBlocks } from '../chat/components/ChatMessage';
 import { OpenPatchContext } from '../chat/openPatch';
 import { useFollowOutput } from '../chat/followOutput';
-import { contextMeterText, contextMeterTitle, hasAccountLimits } from '@ordewell/core/plan-utils';
+import { contextMeterText, contextMeterTitle, hasAccountLimits, taskActivity } from '@ordewell/core/plan-utils';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks, type PatchedView } from '../../shared/conversationPatch';
 import type { HostToTaskLog, TaskLogStatus, TaskLogToHost } from '../../shared/taskLogProtocol';
 import { taskCommand, useRunnerCommands } from '../chat/components/RunnerCommands';
 import AccountLimitRows from '../chat/components/AccountLimitRows';
 import PendingMessages, { QUEUE_TITLE, SendKeyHint, isSendNowKey, type PendingMessage } from '../chat/components/PendingMessages';
-import type { AccountLimitSnapshot, TaskLogHeaderUsage, TaskLogHeaderView } from '@ordewell/core';
+import type { AccountLimitSnapshot, TaskActivity, TaskLogHeaderUsage, TaskLogHeaderView } from '@ordewell/core';
 
 /**
  * One row of the log header's usage: its context, the runner's live limits,
@@ -192,6 +192,14 @@ export default function TaskLogApp() {
     else send();
   };
 
+  // Spinner only while a turn is open; a quiet task's line is the static marker.
+  // A script runs no model, so there is nothing for the line to say.
+  const activity = ((): TaskActivity | null => {
+    if (!status || script || !header) return null;
+    const line = taskActivity({ blocks }, { status: status.taskStatus, idleSince: status.idleSince, awaitingApproval: state?.kind === 'approval' ? 1 : 0 });
+    return line && (header.working || !line.busy) ? line : null;
+  })();
+
   // One button, as in the planner's composer: Stop only while a turn is live
   // and nothing is typed, so typing a message always turns it back into Send.
   const stops = !script && working && !canSend;
@@ -244,6 +252,13 @@ export default function TaskLogApp() {
           : <ConversationBlocks blocks={blocks} asRun={script} onShowPlan={noop}
               onAnswerApproval={(id, decision) => vscode.postMessage({ type: 'answerApproval', id, decision })} />}
       </div>
+
+      {activity && (
+        <div className={`task-log-activity${activity.busy ? '' : ' quiet'}`} role="status">
+          {activity.busy ? <span className="chat-msg-spinner" aria-hidden="true" /> : <span className="task-log-activity-mark" aria-hidden="true">~</span>}
+          <span className="task-log-activity-label">{activity.label}</span>
+        </div>
+      )}
 
       {header?.usage.map((row, i, rows) => (
         <UsageRow key={i} row={row} total={i > 0} limits={i === rows.length - 1 ? shownLimits : []} />

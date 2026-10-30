@@ -1,4 +1,4 @@
-import { firstGrapheme, graphemes, pad, stripAnsi, style, truncate, width, wrap } from './ansi';
+import { firstGrapheme, graphemes, pad, sanitize, stripAnsi, style, truncate, width, wrap } from './ansi';
 import { cursorInLines } from './editor';
 import { activeToken, composerCompletions, runnerCommandFor, skillMatchKind, slashTokens } from './slash';
 import {
@@ -6,7 +6,8 @@ import {
   stopHint,
   chatActivity,
   runnerStoppable,
-  DOT_TICKS,
+  SPINNER,
+  QUIET_MARK,
   runHint,
   type BodyPanes,
   type ComposerView,
@@ -258,12 +259,15 @@ function statusText(state: TuiState, cols: number, panes: BodyPanes): string {
   // Without a plan pane the run has nowhere else to show what it waits on.
   const hint = !panes.plan || panes.plan.rows === 0 ? runHint(state) : '';
   const notes = [mark, activity && !activity.busy ? activity.label : '', hint, state.toast].filter(Boolean).join(' · ');
-  if (activity?.busy) {
-    const lit = Math.floor(state.spinnerFrame / DOT_TICKS) % 2 === 0;
-    const dot = lit ? style.brand('●') : style.grey('●');
+  if (activity?.busy || activity?.quiet) {
+    // A quiet runner gets the plan pane's static marker, never the spinner.
+    const glyph = activity.busy ? SPINNER[state.spinnerFrame % SPINNER.length] : QUIET_MARK;
     const scrolled = mark ? style.grey(`${mark} · `) : '';
     const stop = runnerStoppable(state) ? ' · ctrl-x to stop' : '';
-    return truncate(`${scrolled}${dot} ${activity.label}${stop}`, cols);
+    // The label holds runner output, and it gives way before the stop key does.
+    const room = Math.max(1, cols - width(scrolled) - width(glyph) - 1 - width(stop));
+    const label = truncate(sanitize(activity.label).replace(/\s+/g, ' ').trim(), room);
+    return truncate(`${scrolled}${style.brand(glyph)} ${label}${stop}`, cols);
   }
   return notes ? truncate(style.grey(notes), cols) : '';
 }

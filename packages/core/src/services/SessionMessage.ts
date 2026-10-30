@@ -7,6 +7,7 @@ import type { HandoffDigest } from '../models/Handoff';
 import type { TaskLogEvent } from '../models/TaskLog';
 import type { ApprovalKind } from '../interfaces/IApproval';
 import type { ApprovalSource } from './ApprovalPolicy';
+import type { Escalation } from './escalations';
 import type { AutoMergeTrigger } from './TaskOrchestrator';
 import type { IsolationHandoff, IsolationMergeResult, TaskIsolation } from '../interfaces/IWorktreeIsolation';
 import type { QueuedTaskMessage } from '../interfaces/IRunner';
@@ -296,7 +297,8 @@ export type SessionMessage =
    * which is no user turn. A fact, not a turn's stream: a stop never cuts it off.
    */
   | { type: 'planner_compaction'; compaction: PlannerCompaction; turnId?: string }
-  | { type: 'status_update'; tasks: SerializedTaskStatus[]; runMerge?: RunMergeView; usage?: PlanUsage; activity?: RunActivity }
+  /** `escalations`: what waits on a person now (ADR-0053), whole; absent from an older daemon. */
+  | { type: 'status_update'; tasks: SerializedTaskStatus[]; runMerge?: RunMergeView; usage?: PlanUsage; activity?: RunActivity; escalations?: Escalation[] }
   | { type: 'review_needed'; tasks: SerializedTask[] }
   | { type: 'review_approved' }
   | { type: 'checkpoint'; taskId: string; taskTitle: string; summary: string }
@@ -432,6 +434,8 @@ export interface RunView {
   mergeResult: IsolationMergeResult | null;
   /** What the scheduler is doing with the plan, as {@link RunActivity}. */
   activity?: RunActivity;
+  /** What will not move without a person (ADR-0053), as the newest status update said; absent from an older daemon's snapshot. */
+  escalations?: Escalation[];
 }
 
 export type RunInput = SessionMessage | PlanSnapshot;

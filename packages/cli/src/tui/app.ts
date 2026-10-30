@@ -1,8 +1,7 @@
 import { render } from './render';
 import { initialState, reduce, type Action, type Effect } from './reducer';
-import { style } from './ansi';
-import { DOT_TICKS, chatActivity } from './layout';
-import { anyTaskRunning, type TuiState } from './state';
+import { animating } from './layout';
+import type { TuiState } from './state';
 
 export interface AppDeps {
   initial?: Partial<TuiState>;
@@ -42,18 +41,9 @@ export function createApp(deps: AppDeps): App {
   let state = initialState(deps.initial);
   let exited = false;
 
-  let dotTicks = 0;
+  // Only while something animates: a repaint every tick is a cost a still screen should not pay.
   const spinnerInterval = setInterval(() => {
-    if (anyTaskRunning(state)) {
-      dispatch({ type: 'spinnerTick' });
-      return;
-    }
-    // Only the status dot moves here, and it changes colour once per DOT_TICKS,
-    // so repaint at that pace rather than at the plan spinner's. Colour off
-    // (a pipe, NO_COLOR) leaves nothing to pulse, so nothing repaints.
-    if (style.enabled && chatActivity(state)?.busy && ++dotTicks % DOT_TICKS === 0) {
-      dispatch({ type: 'spinnerTick', by: DOT_TICKS });
-    }
+    if (animating(state)) dispatch({ type: 'spinnerTick' });
   }, 200);
 
   let renderPending = false;

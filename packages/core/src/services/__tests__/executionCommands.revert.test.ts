@@ -65,6 +65,17 @@ describe('revert_task', () => {
     expect(env.status('t2')).toBe('pending');
   });
 
+  it('leaves a reverted task in the inbox of an ended run, where answering it runs the task again', async () => {
+    const env = await landed([task('t1', 1), task('t2', 2)], ['t1', 't2']);
+    await env.run({ command: 'revert_task', task: 't1', confirmed: true });
+
+    const escalation = env.session.escalations().find((e) => e.task?.id === 't1');
+
+    expect(escalation).toMatchObject({ kind: 'on-hold', reason: 'On hold: reverted; retry or force start to run it again' });
+    expect(await env.session.answerEscalation(escalation!.id, 'retry')).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(env.status('t1')).toBe('in_progress'));
+  });
+
   it('changes nothing without the user\'s yes, and says what a yes would take', async () => {
     const env = await landed([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], ['t1', 't2']);
 

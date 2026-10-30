@@ -12,7 +12,9 @@ import {
   type ConversationForkResponse,
   type ConversationRewindResponse,
   type ApproveReviewResponse,
+  type AnswerEscalationRequest,
   type ErrorBody,
+  type EscalationsResponse,
   type ExecuteCommandResponse,
   type ExecuteResponse,
   type ExecutionCommand,
@@ -131,6 +133,27 @@ export function plansRoute(pool: OrchestratorPool) {
       return c.json({ ok: true, message: outcome.message, ...(outcome.payload ? { payload: outcome.payload } : {}) } satisfies ExecuteCommandResponse);
     } catch (err) {
       return failure(c, err, 'execute-command');
+    }
+  });
+
+  router.get('/:sessionId/escalations', (c) => {
+    try {
+      return c.json({ escalations: pool.session(c.req.param('sessionId')).escalations() } satisfies EscalationsResponse);
+    } catch (err) {
+      return failure(c, err, 'escalations');
+    }
+  });
+
+  // Always the user's: a planner or a supervisor has no route here (ADR-0053).
+  router.post('/:sessionId/escalations/answer', async (c) => {
+    try {
+      const { id, option, note, confirmed } = await jsonObject<Partial<AnswerEscalationRequest>>(c);
+      if (typeof id !== 'string' || typeof option !== 'string') return refuse(c, 400, 'id and option are required', 'refused');
+      const outcome = await pool.session(c.req.param('sessionId')).answerEscalation(id, option, typeof note === 'string' ? note : undefined, confirmed === true);
+      if (!outcome.ok) return c.json({ error: outcome.message, code: 'refused', ...(outcome.payload ? { payload: outcome.payload } : {}) } satisfies ErrorBody, 400);
+      return c.json({ ok: true, message: outcome.message, ...(outcome.payload ? { payload: outcome.payload } : {}) } satisfies ExecuteCommandResponse);
+    } catch (err) {
+      return failure(c, err, 'escalations');
     }
   });
 

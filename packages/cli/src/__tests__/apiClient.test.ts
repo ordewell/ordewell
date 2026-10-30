@@ -63,6 +63,29 @@ describe('ApiClient', () => {
     ]);
   });
 
+  it('reads what waits on the user, and answers one by its id, on the daemon\'s two routes (ADR-0053)', async () => {
+    const hits: string[] = [];
+    const srv = await startCustomServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk) => { body += String(chunk); });
+      req.on('end', () => {
+        hits.push(`${req.method} ${req.url} ${body}`);
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify(req.method === 'GET' ? { escalations: [{ id: 'failed:t1:1' }] } : { ok: true, message: 'Retrying.' }));
+      });
+    });
+    servers.push(srv);
+    const client = new ApiClient(srv.port, '/work/app');
+
+    expect(await client.escalations('session-1')).toEqual([{ id: 'failed:t1:1' }]);
+    expect(await client.answerEscalation('session-1', { id: 'failed:t1:1', option: 'retry' })).toEqual({ ok: true, message: 'Retrying.' });
+
+    expect(hits).toEqual([
+      'GET /api/plans/session-1/escalations ',
+      'POST /api/plans/session-1/escalations/answer {"id":"failed:t1:1","option":"retry"}',
+    ]);
+  });
+
   it('leaves a session that cannot be adopted as not found, without retrying', async () => {
     const hits: string[] = [];
     const srv = await startCustomServer((req, res) => {

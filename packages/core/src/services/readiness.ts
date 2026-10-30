@@ -117,6 +117,12 @@ export function startWaits(task: Readonly<Task>, input: StartRuleInput, forced?:
   return waitsOf(task, input, forced, judgeOnce(input.store));
 }
 
+/** Every task's {@link startWaits}, the plan judged once however many tasks it holds. */
+export function planStartWaits(input: StartRuleInput): Map<string, StartWait[]> {
+  const plan = judgeOnce(input.store);
+  return new Map(input.store.allTasks.map((task) => [task.id, waitsOf(task, input, undefined, plan)]));
+}
+
 /**
  * The scheduler's pick: what nothing holds back, lowest order first, no more
  * than the free slots of `maxParallel` with `active` taken.

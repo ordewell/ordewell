@@ -14,6 +14,7 @@ import {
 import { surfaceStep } from '../conversation/records';
 import { planUsage } from '../models/Usage';
 import type { LegacyPlanState, ResearchProgress } from '../models/Task';
+import type { Escalation } from './escalations';
 
 type PlannerCompactionMessage = Extract<SessionMessage, { type: 'planner_compaction' }>;
 
@@ -32,6 +33,8 @@ export interface SessionEventRelayDeps {
   checkpointQuestion?: (taskId: string) => string | undefined;
   /** The task waits for the user's approval to start (ADR-0035). */
   waitsForApproval?: (taskId: string) => boolean;
+  /** What waits on a person now (ADR-0053). */
+  escalations?: () => Escalation[];
 }
 
 /**
@@ -64,6 +67,7 @@ export class SessionEventRelay {
   private readonly awaitingApproval: (taskId: string) => number;
   private readonly checkpointQuestion: (taskId: string) => string | undefined;
   private readonly waitsForApproval: (taskId: string) => boolean;
+  private readonly escalations: () => Escalation[];
   private statusHeld = false;
   private statusOwed = false;
   /** The planner's requests announced and not yet settled, as they were announced: a surface joining now is owed them. */
@@ -81,6 +85,7 @@ export class SessionEventRelay {
     this.awaitingApproval = deps.awaitingApproval ?? (() => 0);
     this.checkpointQuestion = deps.checkpointQuestion ?? (() => undefined);
     this.waitsForApproval = deps.waitsForApproval ?? (() => false);
+    this.escalations = deps.escalations ?? (() => []);
   }
 
   /** `plan` is read per event: a Session with no plan (or mid-reset) announces nothing about tasks. */
@@ -142,6 +147,7 @@ export class SessionEventRelay {
       )),
       ...(runMerge ? { runMerge } : {}),
       activity: this.orchestrator.activity,
+      escalations: this.escalations(),
     };
   }
 

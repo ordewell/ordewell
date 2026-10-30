@@ -26,7 +26,7 @@ import { LimitPauses, type LimitWait, type ResumeNow } from './LimitPauses';
 import { IDLE_RUN, heldFrom, nextRunState, type RunEvent, type RunState } from './runState';
 import { Attempts, type Admitted, type AttemptEnded, type EndedAttempt, type TaskAttemptSnapshot } from './Attempts';
 import { TaskControlError } from './TaskControlError';
-import { landed, selectReadyTasks, startWaits, waitOf, type ForcedStart, type Readiness, type StartRuleInput, type StartWait, type StartWaitKind } from './readiness';
+import { landed, planStartWaits, selectReadyTasks, startWaits, waitOf, type ForcedStart, type Readiness, type StartRuleInput, type StartWait, type StartWaitKind } from './readiness';
 import type { ResearchTasks } from './ResearchTasks';
 import { blockingFailures, planBlocks, repeatingChecks } from './blocking';
 import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
@@ -613,6 +613,11 @@ export class TaskOrchestrator {
     return this.attempts.snapshot(taskId);
   }
 
+  /** The number of the task's latest attempt, live or ended; 0 before any ran. */
+  latestAttempt(task: Readonly<Task>): number {
+    return this.attempts.latestAttempt(task);
+  }
+
   /** A planner turn holds new starts: what is ready starts when it releases them. */
   get startsHeld(): boolean { return this.startHolds > 0; }
 
@@ -808,6 +813,11 @@ export class TaskOrchestrator {
    */
   startWaits(task: Readonly<Task>, forced?: ForcedStart): StartWait[] {
     return startWaits(task, this.startRule(), forced);
+  }
+
+  /** Every task's {@link startWaits}, the plan judged once. */
+  planStartWaits(): Map<string, StartWait[]> {
+    return planStartWaits(this.startRule());
   }
 
   private startRule(): StartRuleInput {
@@ -1333,6 +1343,12 @@ export class TaskOrchestrator {
   private mergesAutomatically(): boolean {
     return this.runSettings()?.mergeAtGatesAutomatically ?? false;
   }
+
+  /** A Merge all is under way. */
+  get isMerging(): boolean { return this.merging; }
+
+  /** A gate reached now is merged with nobody asked: the setting is on, and no merge has stopped it. */
+  get mergesAtGates(): boolean { return this.mergesAutomatically() && !this.autoMergeBlocked; }
 
   /**
    * The user changed the run settings under an open run (ADR-0030). The

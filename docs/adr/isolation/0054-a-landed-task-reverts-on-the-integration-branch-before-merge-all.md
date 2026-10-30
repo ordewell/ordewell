@@ -66,7 +66,10 @@ revert adds commits and rewrites nothing.
   claimed while it waits and works: one cut now would lose what it depends on.
 - **What a reverted task is afterwards.** Pending, on a chosen hold like a
   stopped task's, with `reverted` saved on the task so the hold outlives the
-  process and the plan says why. It starts from nothing it earned, as Mark not
+  process and the plan says why. It waits on the user in the escalation inbox
+  whether or not the run is still open
+  ([ADR-0053](../supervision/0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
+  It starts from nothing it earned, as Mark not
   done leaves a task, and the logs of its attempts stay. A retry or a force start
   releases it and starts from the current integration tip. Its run record goes,
   and every reading of landed work follows: the handoff, the merge gates, Merge
