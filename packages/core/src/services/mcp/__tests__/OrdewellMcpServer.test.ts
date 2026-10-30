@@ -78,7 +78,7 @@ describe('OrdewellMcpServer', () => {
     expect((await change.listTools()).tools.map((t) => t.name).sort()).toEqual(['apply_patch', 'checkpoint', 'read_task', 'task_complete']);
 
     expect(await readOnly.callTool({ name: 'run_command', arguments: { command: 'npm test' } })).toMatchObject({ content: [{ type: 'text', text: 'ran npm test' }], isError: false });
-    await expect(change.callTool({ name: 'run_command', arguments: { command: 'npm test' } })).rejects.toThrow(/Unknown tool/);
+    await expect(change.callTool({ name: 'run_command', arguments: { command: 'npm test' } })).rejects.toThrow(/'run_command' is disabled on this token: read-only tasks only/);
     expect(runCommand).toHaveBeenCalledTimes(1);
   });
 
@@ -94,14 +94,14 @@ describe('OrdewellMcpServer', () => {
     expect((await change.listTools()).tools.map((t) => t.name)).not.toContain('save_patch');
 
     expect(await readOnly.callTool({ name: 'save_patch', arguments: {} })).toMatchObject({ content: [{ type: 'text', text: 'saved, signal live' }], isError: false });
-    await expect(change.callTool({ name: 'save_patch', arguments: {} })).rejects.toThrow(/Unknown tool/);
+    await expect(change.callTool({ name: 'save_patch', arguments: {} })).rejects.toThrow(/disabled on this token/);
     expect(savePatch).toHaveBeenCalledTimes(1);
   });
 
   it('answers save_patch as not available where the attempt has no handler for it', async () => {
     const server = newServer();
     const readOnly = await connect(await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1, readOnly: true }, {}));
-    expect(await readOnly.callTool({ name: 'save_patch', arguments: {} })).toMatchObject({ content: [{ type: 'text', text: 'save_patch is not available in this session.' }], isError: true });
+    expect(await readOnly.callTool({ name: 'save_patch', arguments: {} })).toMatchObject({ content: [{ type: 'text', text: 'Invocation error: save_patch is not available in this session — no handler is wired, so the call ran nothing.' }], isError: true });
   });
 
   it("offers apply_patch to a change task's token alone, and routes its call to that attempt (ADR-0050)", async () => {
@@ -114,14 +114,14 @@ describe('OrdewellMcpServer', () => {
     expect((await readOnly.listTools()).tools.map((t) => t.name)).not.toContain('apply_patch');
 
     expect(await change.callTool({ name: 'apply_patch', arguments: { task: '#2', attempt: 2 } })).toMatchObject({ content: [{ type: 'text', text: 'applied #2 attempt 2' }], isError: false });
-    await expect(readOnly.callTool({ name: 'apply_patch', arguments: { task: '#2' } })).rejects.toThrow(/Unknown tool/);
+    await expect(readOnly.callTool({ name: 'apply_patch', arguments: { task: '#2' } })).rejects.toThrow(/disabled on this token/);
     expect(applyPatch).toHaveBeenCalledTimes(1);
   });
 
   it('answers apply_patch as not available where the attempt has no handler for it', async () => {
     const server = newServer();
     const change = await connect(await server.issueTaskToken({ sessionId: 's1', taskId: 't1', attempt: 1 }, {}));
-    expect(await change.callTool({ name: 'apply_patch', arguments: { task: '#1' } })).toMatchObject({ content: [{ type: 'text', text: 'apply_patch is not available in this session.' }], isError: true });
+    expect(await change.callTool({ name: 'apply_patch', arguments: { task: '#1' } })).toMatchObject({ content: [{ type: 'text', text: 'Invocation error: apply_patch is not available in this session — no handler is wired, so the call ran nothing.' }], isError: true });
   });
 
   // Claude Code in plan mode refuses any MCP tool not marked read-only, even
@@ -185,8 +185,8 @@ describe('OrdewellMcpServer', () => {
     await server.issuePlannerToken({ sessionId: 's1' }, { submitPlan });
     const planner = await connect(await server.issuePlannerToken({ sessionId: 's1' }));
 
-    await expect(task.callTool({ name: 'submit_plan', arguments: { tasks: [{ title: 'x' }] } })).rejects.toThrow(/Unknown tool/);
-    await expect(planner.callTool({ name: 'task_complete', arguments: { status: 'done', summary: 's' } })).rejects.toThrow(/Unknown tool/);
+    await expect(task.callTool({ name: 'submit_plan', arguments: { tasks: [{ title: 'x' }] } })).rejects.toThrow(/'submit_plan' is disabled on this token: planner tokens only/);
+    await expect(planner.callTool({ name: 'task_complete', arguments: { status: 'done', summary: 's' } })).rejects.toThrow(/'task_complete' is disabled on this token: task tokens only/);
     expect(submitPlan).not.toHaveBeenCalled();
   });
 
@@ -199,8 +199,18 @@ describe('OrdewellMcpServer', () => {
       'answer_approval', 'answer_checkpoint', 'edit_plan', 'list_models', 'list_runners', 'load_skill', 'merge_all', 'message_task', 'retry_task', 'run_command',
       'run_plan', 'run_script', 'run_task', 'skip_task', 'stop_run', 'stop_task', 'submit_plan', 'task_diff', 'task_output', 'task_query',
     ]);
-    await expect(planner.callTool({ name: 'fetch', arguments: { url: 'https://example.com' } })).rejects.toThrow(/Unknown tool/);
+    await expect(planner.callTool({ name: 'fetch', arguments: { url: 'https://example.com' } })).rejects.toThrow(/'fetch' is disabled on this token: your runner carries its own/);
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("answers a call for a tool the token does not serve with the enabled and disabled lists, and un-prefixes a runner's name", async () => {
+    const server = newServer();
+    const planner = await connect(await server.issuePlannerToken({ sessionId: 's1', hidden: ['fetch'] }));
+
+    // Enabled first, then every disabled tool with its reason, then the mended name.
+    await expect(planner.callTool({ name: 'ordewell_list_runners', arguments: {} })).rejects.toThrow(
+      /unknown tool 'ordewell_list_runners'.\nEnabled: [^\n]*list_runners[^\n]*\nDisabled: [^\n]*fetch \(your runner carries its own\)[^\n]*\nThis server names its tools without a runner's prefix: call 'list_runners'/,
+    );
   });
 
   it("routes each token's calls to the handler it was issued with", async () => {
@@ -223,14 +233,14 @@ describe('OrdewellMcpServer', () => {
     expect(calls).toEqual(['s2/t1:blocked:no key', 's1/t1:done:built it']);
   });
 
-  it('answers a tool with no handler wired as not available', async () => {
+  it('answers a tool with no handler wired as an invocation error that says nothing ran', async () => {
     const server = newServer();
     const planner = await connect(await server.issuePlannerToken({ sessionId: 's1' }));
 
     const result = await planner.callTool({ name: 'list_runners', arguments: {} });
 
     expect(result.isError).toBe(true);
-    expect(result.content).toEqual([{ type: 'text', text: 'list_runners is not available in this session.' }]);
+    expect(result.content).toEqual([{ type: 'text', text: 'Invocation error: list_runners is not available in this session — no handler is wired, so the call ran nothing.' }]);
   });
 
   it('rejects arguments that do not match the tool schema without reaching the handler', async () => {
@@ -241,8 +251,31 @@ describe('OrdewellMcpServer', () => {
     const result = await task.callTool({ name: 'task_complete', arguments: { status: 'finished', summary: 'x' } });
 
     expect(result.isError).toBe(true);
-    expect(JSON.stringify(result.content)).toMatch(/Invalid task_complete arguments/);
+    expect(JSON.stringify(result.content)).toMatch(/Invocation error: task_complete rejected the call before it ran/);
+    expect(JSON.stringify(result.content)).toMatch(/invalid parameter: 'status' — expected one of: done, blocked, failed/);
     expect(taskComplete).not.toHaveBeenCalled();
+  });
+
+  it('names the kind of rejection and the slot for every rejected parameter', async () => {
+    const server = newServer();
+    const editPlan = vi.fn(async () => ({ text: 'ok' }));
+    const planner = await connect(await server.issuePlannerToken({ sessionId: 's1' }, { editPlan }));
+
+    const missing = await planner.callTool({ name: 'edit_plan', arguments: {} });
+    expect(JSON.stringify(missing.content)).toMatch(/wrong number of parameters: 'ops' is required and missing/);
+
+    const wrongType = await planner.callTool({ name: 'edit_plan', arguments: { ops: 'x' } });
+    expect(JSON.stringify(wrongType.content)).toMatch(/parameter parsing failed: 'ops' expected array, the call sent string/);
+
+    const emptyOps = await planner.callTool({ name: 'edit_plan', arguments: { ops: [] } });
+    expect(JSON.stringify(emptyOps.content)).toMatch(/wrong number of parameters: 'ops' Too small/);
+
+    const badSlot = await planner.callTool({ name: 'edit_plan', arguments: { ops: [{ op: 'update', taskId: '#1' }] } });
+    expect(JSON.stringify(badSlot.content)).toMatch(/wrong number of parameters: 'ops\[0\].changes' is required and missing/);
+
+    const badValue = await planner.callTool({ name: 'edit_plan', arguments: { ops: [{ op: 'renumber', taskId: '#1', changes: {} }] } });
+    expect(JSON.stringify(badValue.content)).toMatch(/invalid parameter: 'ops\[0\].op' matches none of the accepted values/);
+    expect(editPlan).not.toHaveBeenCalled();
   });
 
   it('refuses oversized reference strings by field and leaves the token open for a corrected completion', async () => {

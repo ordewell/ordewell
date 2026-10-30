@@ -227,8 +227,8 @@ export class OrdewellMcpServer {
     // Stateless: a fresh server per request, built from the grant, so the tool
     // list and every call are fixed by the token on that very request.
     const mcp = new McpProtocolServer({ name: 'ordewell', version: '1' }, { capabilities: { tools: {} } });
-    if (grant.role === 'task') serveTools(mcp, grant.scope.readOnly ? READ_ONLY_TASK_TOOLS : TASK_TOOLS, grant.handler, grant, this.heartbeatMs);
-    else serveTools(mcp, PLANNER_TOOLS.filter((tool) => !grant.scope.hidden?.includes(tool.name)), grant.handler, grant, this.heartbeatMs);
+    if (grant.role === 'task') serveTools(mcp, grant.scope.readOnly ? READ_ONLY_TASK_TOOLS : TASK_TOOLS, taskInventory(grant.scope.readOnly), grant.handler, grant, this.heartbeatMs);
+    else serveTools(mcp, PLANNER_TOOLS.filter((tool) => !grant.scope.hidden?.includes(tool.name)), plannerInventory(grant.scope.hidden ?? []), grant.handler, grant, this.heartbeatMs);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {
       void transport.close();
@@ -246,17 +246,74 @@ export class OrdewellMcpServer {
   }
 }
 
-function serveTools<H>(mcp: McpProtocolServer, tools: readonly McpTool<H>[], handler: H, { revoked, calls }: Pick<Grant, 'revoked' | 'calls'>, heartbeatMs: number): void {
+/**
+ * What one token serves and what it withholds, for the reply to a call that
+ * names a tool the token cannot run: the enabled tools first, then every
+ * disabled one with its reason, so the caller can mend the call in one try.
+ */
+interface ToolInventory {
+  served: readonly string[];
+  withheld: readonly { name: string; reason: string }[];
+}
+
+/** `ordewell_<tool>` and `mcp__ordewell__<tool>`: the prefixes runners put on the server's tools (agentTools.ts). */
+const RUNNER_TOOL_PREFIX = /^(?:mcp__ordewell__|ordewell_)/;
+
+const disabledLine = (withheld: readonly { name: string; reason: string }[]): string => {
+  const byReason = new Map<string, string[]>();
+  for (const { name, reason } of withheld) byReason.set(reason, [...(byReason.get(reason) ?? []), name]);
+  return [...byReason].map(([reason, names]) => `${names.join(', ')} (${reason})`).join('; ');
+};
+
+/** The reply to a call for a tool this token does not serve, with the enabled and disabled lists at the top. */
+function unknownToolMessage(called: string, inventory: ToolInventory): string {
+  const withheld = inventory.withheld.find((w) => w.name === called);
+  const lines = [
+    withheld
+      ? `Invocation error: '${called}' is disabled on this token: ${withheld.reason}.`
+      : `Invocation error: unknown tool '${called}'.`,
+    `Enabled: ${inventory.served.join(', ')}`,
+    `Disabled: ${disabledLine(inventory.withheld)}`,
+  ];
+  const bare = called.replace(RUNNER_TOOL_PREFIX, '');
+  if (bare !== called && inventory.served.includes(bare)) {
+    lines.push(`This server names its tools without a runner's prefix: call '${bare}'.`);
+  }
+  return lines.filter((line) => line.length > 0).join('\n');
+}
+
+/** A task token's inventory: its own tools, and the planner tools it is refused. */
+function taskInventory(readOnly?: boolean): ToolInventory {
+  const served = (readOnly ? READ_ONLY_TASK_TOOLS : TASK_TOOLS).map((t) => t.name);
+  const candidates = [...PLANNER_TOOLS, ...TASK_TOOLS, ...READ_ONLY_TASK_TOOLS];
+  const withheld = [...new Set(candidates.map((t) => t.name))].filter((name) => !served.includes(name));
+  return { served, withheld: withheld.map((name) => ({ name, reason: READ_ONLY_TASK_TOOLS.some((t) => t.name === name) ? 'read-only tasks only' : TASK_TOOLS.some((t) => t.name === name) ? 'change tasks only' : 'planner tokens only' })) };
+}
+
+function plannerInventory(hidden: readonly string[]): ToolInventory {
+  const served = PLANNER_TOOLS.map((t) => t.name).filter((name) => !hidden.includes(name));
+  const taskNames = [...new Set([...TASK_TOOLS, ...READ_ONLY_TASK_TOOLS].map((t) => t.name))];
+  return {
+    served,
+    withheld: [
+      ...taskNames.filter((name) => !PLANNER_TOOLS.some((t) => t.name === name)).map((name) => ({ name, reason: 'task tokens only' })),
+      ...PLANNER_TOOLS.filter((t) => hidden.includes(t.name)).map((t) => ({ name: t.name, reason: 'your runner carries its own' })),
+    ],
+  };
+}
+
+function serveTools<H>(mcp: McpProtocolServer, tools: readonly McpTool<H>[], inventory: ToolInventory, handler: H, { revoked, calls }: Pick<Grant, 'revoked' | 'calls'>, heartbeatMs: number): void {
   mcp.setNotificationHandler(CancelledNotificationSchema, ({ params }) => {
     if (params.requestId === undefined) return;
     for (const call of calls.get(String(params.requestId)) ?? []) call.abort();
   });
+
   mcp.setRequestHandler(ListToolsRequestSchema, () => ({
     tools: tools.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, ...(annotations ? { annotations } : {}) })),
   }));
   mcp.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const tool = tools.find((t) => t.name === request.params.name);
-    if (!tool) throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${request.params.name}`);
+    if (!tool) throw new McpError(ErrorCode.InvalidParams, unknownToolMessage(request.params.name, inventory));
     const progressToken = request.params._meta?.progressToken;
     const id = String(extra.requestId);
     const cancelled = new AbortController();

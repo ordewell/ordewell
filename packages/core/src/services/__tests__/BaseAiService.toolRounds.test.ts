@@ -262,7 +262,7 @@ describe('API planner task reads', () => {
     expect(taskOutput.mock.calls[0]).toBeDefined();
     expect(taskDiff).toHaveBeenCalledOnce();
     expect(taskQuery).toHaveBeenCalledOnce();
-    expect(chat.toolResultsSent[0].map((r) => r.output)).toEqual(['saved log', 'file patch', 'task body', expect.stringContaining('Invalid task_output arguments')]);
+    expect(chat.toolResultsSent[0].map((r) => r.output)).toEqual(['saved log', 'file patch', 'task body', expect.stringContaining("Invocation error: task_output rejected the call")]);
   });
 
   it('does not execute task reads after the turn is stopped', async () => {

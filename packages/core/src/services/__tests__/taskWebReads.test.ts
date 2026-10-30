@@ -182,7 +182,7 @@ describe('a read-only task reads the web through Ordewell (ADR-0046)', () => {
     const client = await env.start('c1');
 
     expect((await client.listTools()).tools.map((t) => t.name)).toEqual(['task_complete', 'checkpoint', 'read_task', 'apply_patch']);
-    await expect(client.callTool({ name: 'fetch', arguments: { url: 'https://docs.example.com/' } })).rejects.toThrow(/Unknown tool: fetch/);
+    await expect(client.callTool({ name: 'fetch', arguments: { url: 'https://docs.example.com/' } })).rejects.toThrow(/'fetch' is disabled on this token: read-only tasks only/);
     expect(env.transport).not.toHaveBeenCalled();
   });
 
