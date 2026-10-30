@@ -117,11 +117,14 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
       writeFileSync(join(root, '.claude', 'settings.local.json'), '{}\n');
       writeFileSync(join(root, '.git', 'info', 'exclude'), '.claude/settings.local.json\n');
       const { orchestrator, runner } = run(root, [{ ...first, prompt: 'write a' }, next({ ops: true })], { t1: { write: ['a.txt'] }, t2: { write: [] } });
+      const completed = vi.fn();
+      orchestrator.subscribe({ onExecutionComplete: completed });
       await orchestrator.approveReview();
       // An ops task waits for its change predecessor's work to be merged into the checkout it runs in (ADR-0020).
       await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')?.status).toBe('completed'));
       expect(await orchestrator.mergeRun()).toEqual({ outcome: 'merged' });
       await vi.waitFor(() => expect(orchestrator.storeInstance.get('t2')?.status).toBe('completed'));
+      await vi.waitFor(() => expect(completed).toHaveBeenCalled());
       expect(runner.spawn).toHaveBeenCalledTimes(2);
     });
 
@@ -154,8 +157,11 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
       writeFileSync(join(root, '.claude', 'settings.local.json'), '{}\n');
       writeFileSync(join(root, '.git', 'info', 'exclude'), '.claude/\n');
       const { orchestrator, runner } = run(root, [first], { t1: { write: [] } });
+      const completed = vi.fn();
+      orchestrator.subscribe({ onExecutionComplete: completed });
       await orchestrator.approveReview();
       await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')?.status).toBe('completed'));
+      await vi.waitFor(() => expect(completed).toHaveBeenCalled());
       expect(runner.spawn).toHaveBeenCalledTimes(1);
     });
 
