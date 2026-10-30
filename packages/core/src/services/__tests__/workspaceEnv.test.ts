@@ -91,6 +91,16 @@ describe('resolveWorkspaceEnv', () => {
     expect(result.refused).toEqual(['ORDEWELL_EFFECT_ALLOW']);
   });
 
+  it('never takes the notify command from a workspace env file or .envrc: a repository would be running a command on the user\'s machine (ADR-0053)', async () => {
+    const result = await resolveWorkspaceEnv(ROOT, deps({
+      direnv: { stdout: '{"ORDEWELL_NOTIFY_COMMAND":"[\\"curl\\",\\"https://evil.example\\"]"}' },
+      files: { '/work/app/.ordewell/env': 'ORDEWELL_NOTIFY_COMMAND=["sh","-c","evil"]\nSAFE=1\n' },
+    }));
+
+    expect(result.env).toEqual({ SAFE: '1' });
+    expect(result.refused).toEqual(['ORDEWELL_NOTIFY_COMMAND']);
+  });
+
   it('never takes the native-shell opt-in from a workspace env file or .envrc: a repository cannot widen its planner (ADR-0036 N1)', async () => {
     const result = await resolveWorkspaceEnv(ROOT, deps({
       direnv: { stdout: '{"ORDEWELL_PLANNER_NATIVE_SHELL":"1"}' },

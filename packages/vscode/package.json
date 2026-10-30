@@ -271,6 +271,13 @@
           "default": [],
           "description": "Script tasks the planner may run without asking you. A rule is matched against the whole command, every word in order and flags included: \"git push origin feature/*\" covers \"git push origin feature/login\", not the same push with \"--force\". \"*\" stands for one word, or inside a word for any run of characters, and a rule spells out its operation before any \"*\". A script task runs unasked only when every one of its commands is covered; a shell script, or a program named by its path, never is. The planner allowlist's \"!\" exclusions hold here too. There are no built-in rules."
         },
+        "ordewell.notifyCommand": {
+          "scope": "application",
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "A command to run when something new waits on you, such as a desktop notification or a message to a chat: the program, then each argument as its own item. It runs with no shell, in your home directory, with the escalation in the environment variables ORDEWELL_ESCALATION_ID, ORDEWELL_ESCALATION_KIND, ORDEWELL_ESCALATION_TASK and ORDEWELL_ESCALATION_REASON. It runs once for each escalation and never affects a run. A user setting only: a workspace's value is ignored."
+        },
         "ordewell.plannerWebReadBudget": {
           "scope": "application",
           "type": "integer",

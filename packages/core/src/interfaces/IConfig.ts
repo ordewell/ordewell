@@ -95,6 +95,12 @@ export interface IConfig {
   approvalDefaults: boolean;
   /** The user's effect allowlist rules (ADR-0035, `effectAllowlist.ts`), read on every request. It has no defaults. */
   effectAllowlist: string[];
+  /**
+   * The user's notify command as an argument vector (ADR-0053), read as each
+   * new escalation appears; empty when there is none. A repository never sets
+   * it, because it would then run a command on the user's machine.
+   */
+  notifyCommand: string[];
   /** How many fetches and searches one planner turn may make (ADR-0027). User-only, like the approval settings. */
   webReadBudget: number;
   /**

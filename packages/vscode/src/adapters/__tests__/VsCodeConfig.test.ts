@@ -30,7 +30,7 @@ async function makeStore(initial: Record<string, string> = {}) {
 
 // Every ORDEWELL_* var BaseConfig or VsCodeConfig reads, so a developer shell
 // (the local .envrc exports several) cannot leak in and move a default.
-const ENV_KEYS = ['ORDEWELL_WORKTREE_ISOLATION', 'ORDEWELL_WORKTREE_SETUP', 'ORDEWELL_CONFLICT_REPAIR_ATTEMPTS', 'ORDEWELL_WORKSPACE_REPOS', 'ORDEWELL_WORKTREE_LINKS', 'ORDEWELL_MAX_PARALLEL', 'ORDEWELL_RESEARCH_ENABLED', 'ORDEWELL_RESEARCH_MAX_STEPS', 'ORDEWELL_RESEARCH_MAX_FILE_SIZE', 'ORDEWELL_PLAN_MAP_ENABLED', 'ORDEWELL_AUTONOMOUS_MODE', 'ORDEWELL_APPROVAL_MODE', 'ORDEWELL_APPROVAL_ALLOW', 'ORDEWELL_EFFECT_ALLOW', 'ORDEWELL_WEB_READ_BUDGET', 'ORDEWELL_PLANNER_NATIVE_SHELL', 'ORDEWELL_SUBAGENT_MODEL', 'ORDEWELL_PLANNER_EFFORT', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'ORCHESTRATOR_MODEL', 'AI_PROVIDER'];
+const ENV_KEYS = ['ORDEWELL_WORKTREE_ISOLATION', 'ORDEWELL_WORKTREE_SETUP', 'ORDEWELL_CONFLICT_REPAIR_ATTEMPTS', 'ORDEWELL_WORKSPACE_REPOS', 'ORDEWELL_WORKTREE_LINKS', 'ORDEWELL_MAX_PARALLEL', 'ORDEWELL_RESEARCH_ENABLED', 'ORDEWELL_RESEARCH_MAX_STEPS', 'ORDEWELL_RESEARCH_MAX_FILE_SIZE', 'ORDEWELL_PLAN_MAP_ENABLED', 'ORDEWELL_AUTONOMOUS_MODE', 'ORDEWELL_APPROVAL_MODE', 'ORDEWELL_APPROVAL_ALLOW', 'ORDEWELL_EFFECT_ALLOW', 'ORDEWELL_NOTIFY_COMMAND', 'ORDEWELL_WEB_READ_BUDGET', 'ORDEWELL_PLANNER_NATIVE_SHELL', 'ORDEWELL_SUBAGENT_MODEL', 'ORDEWELL_PLANNER_EFFORT', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'ORCHESTRATOR_MODEL', 'AI_PROVIDER'];
 let savedEnv: Record<string, string | undefined>;
 
 beforeEach(() => {
@@ -146,6 +146,30 @@ describe('VsCodeConfig.plannerNativeShell (ADR-0036 N1)', () => {
     __setConfig({ plannerNativeShell: false });
     process.env.ORDEWELL_PLANNER_NATIVE_SHELL = 'true';
     expect(new VsCodeConfig(await makeStore({})).plannerNativeShell).toBe(true);
+  });
+});
+
+describe('VsCodeConfig.notifyCommand (ADR-0053)', () => {
+  it('is empty by default', async () => {
+    expect(new VsCodeConfig(await makeStore({})).notifyCommand).toEqual([]);
+  });
+
+  it("reads the user's setting word for word", async () => {
+    __setConfig({ notifyCommand: ['notify-send', ' Ordewell run '] });
+    expect(new VsCodeConfig(await makeStore({})).notifyCommand).toEqual(['notify-send', ' Ordewell run ']);
+  });
+
+  it('refuses a workspace value: a repository must not run a command on the machine', async () => {
+    __setWorkspaceConfig({ notifyCommand: ['sh', '-c', 'evil'] });
+    expect(new VsCodeConfig(await makeStore({})).notifyCommand).toEqual([]);
+  });
+
+  it('falls back to ORDEWELL_NOTIFY_COMMAND, the setting winning', async () => {
+    process.env.ORDEWELL_NOTIFY_COMMAND = '["notify-send", "from the shell"]';
+    expect(new VsCodeConfig(await makeStore({})).notifyCommand).toEqual(['notify-send', 'from the shell']);
+
+    __setConfig({ notifyCommand: ['notify-send', 'from the setting'] });
+    expect(new VsCodeConfig(await makeStore({})).notifyCommand).toEqual(['notify-send', 'from the setting']);
   });
 });
 

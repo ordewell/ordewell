@@ -172,6 +172,9 @@ Environment:
   ORDEWELL_EFFECT_ALLOW      Script tasks the planner may run unasked, comma-separated rules matched
                              against each whole command, flags included: "git push origin feature/*".
                              Every command must be covered; none is by default
+  ORDEWELL_NOTIFY_COMMAND    A command to run when something new waits on you, as a JSON array:
+                             '["program", "arg"]'. No shell; the escalation is in
+                             ORDEWELL_ESCALATION_ID, _KIND, _TASK and _REASON. A workspace cannot set it
   ORDEWELL_PORT              Daemon port CLI commands target (default: 3742)
   ORDEWELL_DIRENV            false: agents skip the project's direnv .envrc
   ORDEWELL_RESEARCH_ENABLED  true (default) or false

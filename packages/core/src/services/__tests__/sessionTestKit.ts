@@ -74,6 +74,8 @@ export interface SessionOverrides {
   mcpServer?: SessionDeps['mcpServer'];
   /** A fake network for web reads (ADR-0027); the real transport, DNS, cache and search provider unless given. */
   web?: SessionDeps['web'];
+  /** What runs the notify command (ADR-0053); a real process unless a test supplies one. */
+  runNotifyCommand?: SessionDeps['runNotifyCommand'];
 }
 
 /** Task-log files that live in memory, numbered per task as the real store numbers them. */
@@ -140,6 +142,7 @@ export function makeSession(overrides: SessionOverrides = {}): Session {
     mcpServer: overrides.mcpServer,
     leaseHost: overrides.leaseHost,
     web: overrides.web,
+    runNotifyCommand: overrides.runNotifyCommand,
   });
   if (!overrides.saveSession) saveFakes.set(session, save);
   return session;

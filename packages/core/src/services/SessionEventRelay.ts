@@ -35,6 +35,8 @@ export interface SessionEventRelayDeps {
   waitsForApproval?: (taskId: string) => boolean;
   /** What waits on a person now (ADR-0053). */
   escalations?: () => Escalation[];
+  /** The list as a status update carried it, for what must see each one with no surface attached. */
+  escalationsSent?: (list: readonly Escalation[]) => void;
 }
 
 /**
@@ -68,6 +70,7 @@ export class SessionEventRelay {
   private readonly checkpointQuestion: (taskId: string) => string | undefined;
   private readonly waitsForApproval: (taskId: string) => boolean;
   private readonly escalations: () => Escalation[];
+  private readonly escalationsSent: (list: readonly Escalation[]) => void;
   private statusHeld = false;
   private statusOwed = false;
   /** The planner's requests announced and not yet settled, as they were announced: a surface joining now is owed them. */
@@ -86,6 +89,7 @@ export class SessionEventRelay {
     this.checkpointQuestion = deps.checkpointQuestion ?? (() => undefined);
     this.waitsForApproval = deps.waitsForApproval ?? (() => false);
     this.escalations = deps.escalations ?? (() => []);
+    this.escalationsSent = deps.escalationsSent ?? (() => {});
   }
 
   /** `plan` is read per event: a Session with no plan (or mid-reset) announces nothing about tasks. */
@@ -123,7 +127,9 @@ export class SessionEventRelay {
     // Hosts that render from the plan object (VS Code) read statuses off it
     // when a status_update arrives, so it has to be current by then.
     plan.tasks = this.store.snapshot();
-    this.broadcast(this.statusMessage());
+    const message = this.statusMessage();
+    this.broadcast(message);
+    this.escalationsSent(message.escalations ?? []);
   }
 
   /** Every task's status as it stands, in the message a status update carries. */

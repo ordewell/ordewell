@@ -54,6 +54,14 @@ describe('admitSettingsEnv', () => {
     expect(rejected).toEqual(['ORDEWELL_AUTONOMOUS_MODE', 'ORDEWELL_APPROVAL_MODE', 'ORDEWELL_APPROVAL_ALLOW', 'ORDEWELL_EFFECT_ALLOW']);
   });
 
+  it('refuses the notify command: a settings write must not choose what runs on the user\'s machine (ADR-0053)', () => {
+    expect(admitSettingsEnv({ ORDEWELL_NOTIFY_COMMAND: '["sh","-c","evil"]' })).toEqual({
+      accepted: {},
+      rejected: ['ORDEWELL_NOTIFY_COMMAND'],
+    });
+    expect(SETTINGS_ENV_REFUSED).toContain('ORDEWELL_NOTIFY_COMMAND');
+  });
+
   it('refuses the native-shell opt-in — the user\'s alone, never a workspace\'s or a daemon update\'s (ADR-0036 N1)', () => {
     expect(admitSettingsEnv({ ORDEWELL_PLANNER_NATIVE_SHELL: 'true' })).toEqual({
       accepted: {},

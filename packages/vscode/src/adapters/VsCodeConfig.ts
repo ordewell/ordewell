@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { type AiProvider, type PlannerBackendId, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, defaultEnabledRunners, parseMaxParallel, normalizeGeminiModel, isApiProvider, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET, SettingsService } from '@ordewell/core';
+import { type AiProvider, type PlannerBackendId, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, defaultEnabledRunners, parseMaxParallel, normalizeGeminiModel, isApiProvider, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET, SettingsService, notifyCommandOf } from '@ordewell/core';
 import type { ConfiguredPlanner, ProviderModelLists, ResolvedPlanner } from '@ordewell/core';
 import { SecretStore, type ApiProvider, type SecretKey } from './SecretStore';
 
@@ -274,6 +274,11 @@ export class VsCodeConfig extends BaseConfig {
   }
   get approvalPreApproved() { return [...(this.stringList('plannerAllowlist') ?? []), ...super.approvalPreApproved]; }
   get effectAllowlist() { return [...(this.stringList('effectAllowlist') ?? []), ...super.effectAllowlist]; }
+  /** The user's value alone, whatever a manifest scope allows: a workspace's would let a repository run a command (ADR-0053). */
+  get notifyCommand() {
+    const own = notifyCommandOf(this.config.inspect<unknown>('notifyCommand')?.globalValue);
+    return own.length > 0 ? own : super.notifyCommand;
+  }
   get approvalDefaults() {
     if (process.env.ORDEWELL_APPROVAL_DEFAULTS !== undefined) return super.approvalDefaults;
     return this.config.get<boolean>('plannerAllowlistDefaults', true);

@@ -45,6 +45,8 @@ export const ORDEWELL_SETTABLE_ENV: readonly string[] = [
  *   off, so every later command runs unprompted; the web-read budget bounds
  *   how much a planner may send out unasked in Full; the effect allowlist
  *   pre-approves script tasks that change real systems (ADR-0035).
+ * - The notify command is a program Ordewell starts as the user, with no
+ *   approval, on every new escalation (ADR-0053).
  * - The settings-path override is honoured by the settings service, which
  *   creates directories recursively when persisting — admitting it turns the
  *   same write into an arbitrary-path file write.
@@ -61,6 +63,8 @@ export const SETTINGS_ENV_REFUSED: readonly string[] = [
   'ORDEWELL_APPROVAL_DEFAULTS',
   'ORDEWELL_WEB_READ_BUDGET',
   'ORDEWELL_EFFECT_ALLOW',
+  // A command run as the user: never a workspace's or a daemon update's.
+  'ORDEWELL_NOTIFY_COMMAND',
   // The native-shell opt-in (ADR-0036 N1): the user's alone, never a workspace's or a daemon update's.
   'ORDEWELL_PLANNER_NATIVE_SHELL',
   // Where settings are persisted.

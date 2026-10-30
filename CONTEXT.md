@@ -1437,6 +1437,17 @@ made); "blocked" for one — that is a dependency term, and a blocked task is no
 listed; a stored or raised escalation — nothing raises one, it holds or it does
 not.
 
+**Notify command** (`IConfig.notifyCommand`, `ORDEWELL_NOTIFY_COMMAND`,
+`ordewell.notifyCommand`, `EscalationNotifier`, `services/escalationNotifier.ts`;
+ADR-0053) — the user's optional command, an argument vector, run once for each
+new *Escalation* id. It runs in core, with no surface attached and no shell, and
+the escalation reaches it only in sanitized `ORDEWELL_ESCALATION_*` environment
+variables. User-level only: a workspace's environment files and settings cannot
+set it. What already waits when a plan is adopted counts as told. It never
+affects a run: a failure is logged once and ignored.
+*Avoid:* "hook", which names a runner's own hooks; "webhook", a thing the command
+may do, not what it is.
+
 **Skipped task** (`status: 'skipped'`, `TaskOrchestrator.skipTask`, the
 `skip_task` command) — a task ended by *Skip*: a terminal state with no
 Verdict, in which nothing the task produced lands. Its worktree and branch are

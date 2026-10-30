@@ -227,6 +227,13 @@ except where [ADR-0011](docs/adr/planner-envelope/0011-sandboxing-the-planners-s
   settings and environment files cannot set it, it has no built-in entries, and
   it never covers a shell script or a program named by its path
   ([ADR-0035](docs/adr/supervision/0035-effects-are-consented-and-recorded.md)).
+- **Your notify command runs as you, with no approval**, once for each new
+  escalation (`ordewell.notifyCommand`, or `ORDEWELL_NOTIFY_COMMAND`). It is a
+  user-level setting only: a workspace's settings and environment files cannot
+  set it. It runs with no shell, and the escalation reaches it only in sanitized
+  environment variables, because part of that text comes from runners. Treat
+  those values as untrusted in anything you write around them
+  ([ADR-0053](docs/adr/supervision/0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
 - **Change and ops tasks run as you**, with the runner's own native tools, in
   the mode their plan assigned
   ([ADR-0020](docs/adr/isolation/0020-ops-tasks-and-merge-gates.md)). They can read and

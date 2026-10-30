@@ -115,6 +115,27 @@ describe('BaseConfig', () => {
     });
   });
 
+  describe('notifyCommand (ADR-0053)', () => {
+    const saved = process.env.ORDEWELL_NOTIFY_COMMAND;
+    afterEach(() => {
+      if (saved === undefined) delete process.env.ORDEWELL_NOTIFY_COMMAND;
+      else process.env.ORDEWELL_NOTIFY_COMMAND = saved;
+    });
+
+    it('is empty when the launching environment sets none', () => {
+      delete process.env.ORDEWELL_NOTIFY_COMMAND;
+      expect(new TestConfig().notifyCommand).toEqual([]);
+    });
+
+    it('reads the variable as each escalation appears, not once', () => {
+      const config = new TestConfig();
+      process.env.ORDEWELL_NOTIFY_COMMAND = '["notify-send", "Ordewell"]';
+      expect(config.notifyCommand).toEqual(['notify-send', 'Ordewell']);
+      process.env.ORDEWELL_NOTIFY_COMMAND = '["say", "Ordewell"]';
+      expect(config.notifyCommand).toEqual(['say', 'Ordewell']);
+    });
+  });
+
   describe('plannerNativeShell (ADR-0036 N1)', () => {
     const key = 'ORDEWELL_PLANNER_NATIVE_SHELL';
     let backup: string | undefined;
