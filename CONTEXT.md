@@ -1411,6 +1411,31 @@ of "it has started": its loop starts it again.
 *Avoid:* "readiness gate" for one of its reasons, and "gate" for any reason but
 the *Merge gate*.
 
+**Escalation** (`escalations`, `Escalation`, `Session.answerEscalation`,
+`services/escalations.ts`; ADR-0053) — one thing that will not move without a
+person, derived and never stored: a *Runner approval*, a *Checkpoint*, a task
+*waiting for input*, a landing conflict, an ops task that changed tracked
+files, a usage-limit pause with no resume scheduled, a failed task, a *Loop*
+out of rounds, or, in an open run, a task that nothing but a person holds back
+(its *Merge gate*, a hold, its approval, nothing to run, a user task); and of
+the run itself, landed work with nothing left to move it, and a *Blocked run*.
+It carries an id of its kind, task, attempt and approval, so a later attempt's
+wait is another escalation; the task it belongs to, which links to the
+evidence; a reason in plain words; and the options that wait's own card or
+command offers, each with the question its card asks first where it has one.
+It has no deadline and no default answer. What resolves itself is left out, and
+a task whose cause is listed: a blocked task's failure is listed once, not its
+dependents. Answered only by the user, through `answerEscalation` on the
+*Command seam*, which derives the list afresh, refuses a stale id, and
+dispatches to the existing command for that wait, so it adds no authority. Every
+status update carries the list whole, and it is in the *Run view*. A surface's
+list of them is the *inbox*.
+*Avoid:* "notification" (how one might reach a person, not what it is);
+"alert", "ticket"; "pending decision" (a decision the maintainers have not
+made); "blocked" for one — that is a dependency term, and a blocked task is not
+listed; a stored or raised escalation — nothing raises one, it holds or it does
+not.
+
 **Skipped task** (`status: 'skipped'`, `TaskOrchestrator.skipTask`, the
 `skip_task` command) — a task ended by *Skip*: a terminal state with no
 Verdict, in which nothing the task produced lands. Its worktree and branch are
@@ -2619,8 +2644,8 @@ messages to a drawing, and streamed semi-states live in it;
 
 **Run view** (`RunView`, `reduceRun`, `EMPTY_RUN`, `Session.runSnapshot()`) —
 the conversation view's counterpart for a run: each task's plan fields and its
-status-only fields, plus the run's merge view, usage, run settings, handoff and
-last Merge all result. `reduceRun` folds `SessionMessage`s and plan snapshots
+status-only fields, plus the run's merge view, usage, run settings, handoff,
+last Merge all result and *Escalation*s. `reduceRun` folds `SessionMessage`s and plan snapshots
 (`plan_snapshot`: a plan a surface read whole) into it, and is the one place
 that decides what a plan refresh keeps: plan fields (title, dependencies,
 `addedBy`, skills, …) come from the plan, absent meaning none; status-only
@@ -3018,7 +3043,9 @@ point every execution action reaches the scheduler through: `run_plan`,
 turn or the supervisor calls it), and the user's own controls, refused to anyone else: `force_start`, `mark_complete`,
 `mark_not_done`, `interrupt_task`, a force send (`message_task` with `force`),
 `force_send_queued`, `remove_queued`, `cancel_resume` and `approve_review`.
-Resume now is `retry_task` from `session` on a paused task.
+Resume now is `retry_task` from `session` on a paused task. An *Escalation*'s
+answer reaches it through `answerEscalation`, the user's alone, as the existing
+command for that wait.
 It checks who asked (user, planner turn, supervisor), the Supervisor level,
 plan approval and the loop guards, refuses with an actionable note worded for
 who asked (a model's tools, or the user's controls), and records each action

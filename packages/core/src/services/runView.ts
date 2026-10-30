@@ -3,7 +3,7 @@ import type { IsolationHandoff } from '../interfaces/IWorktreeIsolation';
 import { rejoinPlanTree } from '../models/Task';
 import { walkPlan } from './PlanTree';
 
-export const EMPTY_RUN: RunView = { tasks: [], runMerge: null, handoff: null, mergeResult: null, activity: IDLE_ACTIVITY };
+export const EMPTY_RUN: RunView = { tasks: [], runMerge: null, handoff: null, mergeResult: null, activity: IDLE_ACTIVITY, escalations: [] };
 
 type PlanFields = Omit<RunTask, keyof RunTaskStatus>;
 
@@ -130,6 +130,7 @@ export function reduceRun(view: RunView, input: RunInput): RunView {
         handoff: stillToMerge(view.handoff, input.runMerge),
         usage: input.usage,
         ...(input.activity ? { activity: input.activity } : {}),
+        escalations: input.escalations ?? [],
       };
     case 'task_started':
     case 'task_updated': {

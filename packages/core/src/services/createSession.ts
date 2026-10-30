@@ -74,6 +74,7 @@ import { PlanEditor, type TaskEditOptions } from './PlanEditor';
 import { PlanEditError } from './PlanEditError';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import { ExecutionCommands, mergeStopped, type CommandOutcome, type ExecutionCommand, type ExecutionHost } from './ExecutionCommands';
+import { escalations, type Escalation } from './escalations';
 import { REPORT_TAIL_LINES, reportEnded } from './taskReport';
 import { ResearchTasks, researchReportTo } from './ResearchTasks';
 import type { ExecutionActor, ExecutionRecord } from '../models/Execution';
@@ -371,6 +372,7 @@ export function createSession(deps: SessionDeps): Session {
     awaitingApproval: (taskId) => runnerApprovals.waiting(taskId),
     checkpointQuestion: (taskId) => orchestrator.getCheckpointQuestion(taskId),
     waitsForApproval: (taskId): boolean => session.waitsForApproval(taskId),
+    escalations: (): Escalation[] => session.escalations(),
   });
 
   const approvalPolicy = new ApprovalPolicy({
@@ -831,6 +833,36 @@ export class Session {
     return this.commands.run(command, actor);
   }
 
+  /** What will not move without a person, derived afresh from the plan, the run and the pending approvals (ADR-0053). */
+  escalations(): Escalation[] {
+    if (!this.plan) return [];
+    const { scheduled, resumable, advancesOnItsOwn } = this.orchestrator.activity;
+    return escalations({
+      tasks: this.store.planTasks,
+      waits: this.orchestrator.planStartWaits(),
+      approvals: this.approvals.outstanding(),
+      attempt: (task) => this.orchestrator.latestAttempt(task),
+      live: (taskId) => this.orchestrator.getAttempt(taskId) !== undefined,
+      checkpoint: (taskId) => this.orchestrator.getCheckpointQuestion(taskId),
+      waitsForApproval: (taskId) => this.record.waitsForApproval(taskId),
+      holdReason: (taskId) => this.orchestrator.holdReason(taskId),
+      run: {
+        open: scheduled || resumable,
+        advancing: advancesOnItsOwn,
+        merging: this.orchestrator.isMerging,
+        autoMerges: this.orchestrator.mergesAtGates,
+        merge: this.runMergeView(),
+        id: this.runs.planIsolation?.run.id ?? null,
+        blocked: this.runs.blocked ? this.runs.epoch : null,
+      },
+    });
+  }
+
+  /** The user's answer to an escalation; see {@link ExecutionCommands.answerEscalation}. */
+  async answerEscalation(id: string, option: string, note?: string, confirmed?: boolean): Promise<CommandOutcome> {
+    return this.commands.answerEscalation(id, option, note, confirmed);
+  }
+
   /** Run one planner turn with its own {@link TurnEffects}, which only a turn that lands hands back. */
   private async openTurn<T>(turn: () => Promise<T>): Promise<{ landed: T; effects: TurnEffects }> {
     const effects = new TurnEffects();
@@ -913,6 +945,9 @@ export class Session {
       awaitEnd: (taskId, ms, signal) => this.awaitEnd(taskId, ms, signal),
       owe: (taskId, to) => this.oweReport(taskId, to),
       reportTail: (taskId) => this.reportTail(taskId),
+      escalations: () => this.escalations(),
+      resolveConflict: async (taskId) => (await this.resolveConflictAsTask(taskId)) !== null,
+      continueRun: (how) => (how === 'stash' ? this.continueWithStash() : this.continueWithoutIsolation()),
     };
   }
 

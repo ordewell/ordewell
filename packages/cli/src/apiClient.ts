@@ -13,6 +13,8 @@ import type {
   ConversationRewindResponse,
   DaemonErrorCode,
   ErrorBody,
+  AnswerEscalationRequest,
+  EscalationsResponse,
   ExecuteCommandResponse,
   ExecuteResponse,
   ExecutionCommand,
@@ -401,6 +403,17 @@ export class ApiClient {
    */
   execute(sessionId: string, command: ExecutionCommand): Promise<ExecuteCommandResponse> {
     return this.call('POST', `/api/plans/${sessionId}/execute-command`, 'Command failed', command);
+  }
+
+  /** What waits on a person now (ADR-0053). */
+  async escalations(sessionId: string): Promise<EscalationsResponse['escalations']> {
+    const res = await this.call<EscalationsResponse>('GET', `/api/plans/${sessionId}/escalations`, 'Could not read what waits on you');
+    return res.escalations;
+  }
+
+  /** Answer an escalation by its id; a stale one is a {@link DaemonError} saying so. `confirmed` is the user's yes to the option's `confirm`. */
+  answerEscalation(sessionId: string, answer: AnswerEscalationRequest): Promise<ExecuteCommandResponse> {
+    return this.call('POST', `/api/plans/${sessionId}/escalations/answer`, 'Could not answer', answer);
   }
 
   /** Keep what waits on the planner's usage limit from being sent at the reset; `cancelled` is false when nothing waited. */

@@ -228,6 +228,7 @@ export { EMPTY_RUN, reduceRun } from './services/runView';
 export { IDLE_ACTIVITY } from './services/SessionMessage';
 export { serializeTask, serializeTaskStatus, serializePlan, surfacePlan, surfacePlanState, executionSummary, truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH, type ExecutionSummary } from './services/SessionMessage';
 export { blockingFailures, repeatingChecks, planBlocks, type BlockingSubject, type PlanBlocks } from './services/blocking';
+export { escalations, type Escalation, type EscalationInput, type EscalationKind, type EscalationOption, type EscalationOptionId, type EscalationRun } from './services/escalations';
 export { summarizeToolCall, classifyOutcome, ranSealed, withoutSealedMark } from './services/researchStepSummary';
 export * from './conversation';
 export * from './taskRow';
