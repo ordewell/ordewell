@@ -74,10 +74,16 @@ export function changedReposOf(record: IsolationTaskRecord): string[] {
   return Object.entries(record.repos).filter(([, r]) => r.changed).map(([repoPath]) => repoPath);
 }
 
-/** Landed work a revert can undo (ADR-0054): a merge of its own in every repo it changed, none of it in the user's branch yet. */
-function revertible(record: IsolationTaskRecord): boolean {
-  const changed = changedReposOf(record);
-  return record.status === 'merged' && !record.inHead && changed.length > 0 && changed.every((repo) => record.repos[repo].landedTip);
+/**
+ * Landed work a revert can undo (ADR-0054): a merge of its own in every repo it
+ * changed, none of it in the user's branch yet. `landings` are the task's merges
+ * in {@link IsolationRun.landings}, which a later attempt's record says nothing
+ * of: a task at work again keeps its mark off, and a revert would refuse it.
+ */
+function revertible(record: IsolationTaskRecord, landings?: Record<string, string[]>): boolean {
+  if (record.inHead || record.status === 'active' || record.status === 'repairing') return false;
+  const changed = record.status === 'merged' ? changedReposOf(record) : [];
+  return (changed.length > 0 || landings !== undefined) && changed.every((repo) => record.repos[repo].landedTip || landings?.[repo]);
 }
 
 /**
@@ -85,7 +91,7 @@ function revertible(record: IsolationTaskRecord): boolean {
  * next repair will be held to. Without one — a saved plan never carries server
  * config — the repair attempt is left out and a live status update fills it in.
  */
-export function taskIsolationOf(record: IsolationTaskRecord, repairLimit?: number): TaskIsolation {
+export function taskIsolationOf(record: IsolationTaskRecord, repairLimit?: number, landings?: Record<string, string[]>): TaskIsolation {
   return {
     state: ISOLATION_STATE[record.status],
     branch: record.branch,
@@ -95,8 +101,23 @@ export function taskIsolationOf(record: IsolationTaskRecord, repairLimit?: numbe
     ...(record.conflictFiles?.length ? { conflictFiles: record.conflictFiles } : {}),
     ...(record.repairs && repairLimit !== undefined ? { repair: { attempt: record.repairs, limit: repairLimit } } : {}),
     ...(record.repairedFiles?.length ? { repairedFiles: record.repairedFiles } : {}),
-    ...(revertible(record) ? { revertible: true as const } : {}),
+    ...(revertible(record, landings) ? { revertible: true as const } : {}),
   };
+}
+
+/**
+ * Every task's mark in a run. A task with merges on the branch and no record
+ * left, a retry having dropped it, has no state to show and can still be
+ * reverted. A status this build does not know is its own mark-less task, not a
+ * crash: a newer daemon may have written one.
+ */
+export function taskIsolationsOf(run: IsolationRun, repairLimit?: number): Record<string, TaskIsolation> {
+  const tasks: Record<string, TaskIsolation> = {};
+  for (const taskId of Object.keys(run.landings ?? {})) tasks[taskId] = { state: 'none', revertible: true };
+  for (const [taskId, record] of Object.entries(run.tasks)) {
+    if (isKnownStatus(record.status)) tasks[taskId] = taskIsolationOf(record, repairLimit, run.landings?.[taskId]);
+  }
+  return tasks;
 }
 
 /**
@@ -233,12 +254,5 @@ function carriesIsolation(plan: unknown): plan is { isolation: PlanIsolation | A
 export function isolationViewOfPlan(plan: unknown, repairLimit?: number): IsolationView | null {
   if (!carriesIsolation(plan)) return null;
   const { run } = migratePlanIsolation(plan.isolation);
-  const tasks: Record<string, TaskIsolation> = {};
-  for (const [taskId, record] of Object.entries(run.tasks)) {
-    // A status this build does not know is its own mark-less task, not a crash:
-    // a newer daemon may have written one.
-    if (!isKnownStatus(record.status)) continue;
-    tasks[taskId] = taskIsolationOf(record, repairLimit);
-  }
-  return { tasks, handoff: handoffOf(run) };
+  return { tasks: taskIsolationsOf(run, repairLimit), handoff: handoffOf(run) };
 }

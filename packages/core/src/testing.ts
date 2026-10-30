@@ -27,7 +27,7 @@ import type {
   TreeSnapshot,
 } from './interfaces/IWorktreeIsolation';
 import { DEFAULT_RUNNERS, type Task } from './models/Task';
-import { changedReposOf, handoffOf, integrationBranchFor, noRemoval, SELF_REPO } from './services/isolationRecord';
+import { handoffOf, integrationBranchFor, noRemoval, SELF_REPO } from './services/isolationRecord';
 
 /**
  * Let an already-queued promise chain run to its next await before asserting,
@@ -469,6 +469,10 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
     if (outcome === 'merged') {
       delete record.conflictRepo;
       delete record.conflictFiles;
+      for (const repo of changed) {
+        ((run.landings ??= {})[task.id] ??= {})[repo] = [...run.landings?.[task.id]?.[repo] ?? [], `tip-${repo}`];
+        (run.landedTasks ??= {})[task.id] = { taskId: task.id, order: task.order, title: task.title };
+      }
     } else {
       record.conflictRepo = this.stopsIn.get(task.id) ?? changed[0] ?? SELF_REPO;
       const files = this.conflictFiles.get(task.id);
@@ -481,8 +485,11 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
   /** Newest landing first, read as the plan's highest order: scheduling tests land in plan order. */
   async readLanded(run: IsolationRun, taskIds: readonly string[]): Promise<LandedWork> {
     this.log({ op: 'readLanded', taskIds });
-    const records = taskIds.flatMap((id) => run.tasks[id] ?? []).sort((a, b) => b.order - a.order);
-    const tasks = records.map((r) => ({ taskId: r.taskId, order: r.order, title: r.title, repos: changedReposOf(r) }));
+    const records = taskIds.flatMap((id) => run.tasks[id] ?? run.landedTasks?.[id] ?? []).sort((a, b) => b.order - a.order);
+    const tasks = records.map((r) => ({
+      taskId: r.taskId, order: r.order, title: r.title,
+      repos: Object.keys(run.landings?.[r.taskId] ?? {}),
+    }));
     return { ok: true, tasks, inBranch: records.flatMap((r) => this.inBranch.get(r.taskId) ?? []) };
   }
 
@@ -501,7 +508,13 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
     run.landing = { taskId: taskIds[0], tips: {}, reverts: taskIds.length };
     watch.persist();
     delete run.landing;
-    for (const id of taskIds) delete run.tasks[id];
+    for (const id of taskIds) {
+      // Like git: a later attempt's record that did not land stays for its worktree, its conflict over.
+      if (run.tasks[id]?.status === 'merged') delete run.tasks[id];
+      else if (run.tasks[id]?.status === 'conflict') run.tasks[id].status = 'kept';
+      delete run.landings?.[id];
+      delete run.landedTasks?.[id];
+    }
     run.reverted = true;
     watch.settled(taskIds);
     return { outcome: 'reverted', tasks: landed.tasks };

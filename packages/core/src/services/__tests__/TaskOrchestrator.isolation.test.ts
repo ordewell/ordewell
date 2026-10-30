@@ -85,7 +85,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
     openMerge();
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
     expect(orchestrator.runs.taskIsolation('t1')).toEqual({
-      state: 'integrated', branch: 'ordewell/run1/1-t1', worktree: '/fake-worktrees/run1/1-t1', repos: ['.'],
+      state: 'integrated', branch: 'ordewell/run1/1-t1', worktree: '/fake-worktrees/run1/1-t1', repos: ['.'], revertible: true,
     });
   });
 

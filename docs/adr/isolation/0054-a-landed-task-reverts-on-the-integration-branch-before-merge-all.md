@@ -27,18 +27,27 @@ revert adds commits and rewrites nothing.
   already in the user's branch is refused, with the exact `git revert -m 1
   <commit>` for each repo, newest first, for them to run; Ordewell never writes
   to their branch. Merged means what the merge gate means: the checked-out HEAD
-  contains the landing's merge.
+  contains the landing's merge. The integration branch itself checked out is no
+  merge, only a review: it marks nothing merged, and clears no run. A revert
+  cannot commit to it there, so that is refused, in the preview too, naming
+  where it is checked out.
 - **A revert commit per landing.** Each is `git revert -m 1` of a merge that
   landed the task, worded `Revert: <subject>` beside the other messages Ordewell
   writes (ADR-0013). A continue or a retry lands a task again under a new record,
   so `IsolationRun.landings` keeps every such merge, by task and repo, and all of
-  them go. A merge whose work a later landing already took out has nothing to
-  commit and counts as reverted.
+  them go, with `IsolationRun.landedTasks` naming the task once no record does.
+  A merge whose work a later landing already took out has nothing to commit and
+  counts as reverted.
 - **Landed dependents go with it.** Every task that depends on it, directly or
   not, and has landed goes too, newest landing first. A dependent that landed
-  nothing is walked through and stays as it is. Newest means the first-parent
-  order of the integration branch: the landing queue makes it one line, and git
-  knows that order in each repo however the record was saved.
+  nothing is walked through and stays as it is. A subtask is a task here: it goes
+  with its parent only if it depends on it. Landed reads `IsolationRun.landings`,
+  not the current record: a retry, a failed spawn or a continue that conflicted
+  leaves a record that is not `merged`, or none, over merges still on the branch.
+  Those merges go; such a record stays, `kept`, for the worktree only it names,
+  and a conflict it held is over. Newest means the first-parent order of the
+  integration branch: the landing queue makes it one line, and git knows that
+  order in each repo however the record was saved.
 - **Two steps, so a surface can confirm.** `Session.revertPreview` (`GET
   /tasks/:id/revert-preview`) reads what would go, or why it would not, and
   changes nothing. `revert_task` at the command seam then needs `confirmed`, and
@@ -57,11 +66,15 @@ revert adds commits and rewrites nothing.
   `pruneOrphans`, since the saved run still has the tasks landed. The rollback
   moves a branch only when what sits on the tip is plain commits, no more than
   the revert could have made; anything else stays recorded and holds landings
-  and Merge all off it, as a landing's does (ADR-0014).
+  and Merge all off it, as a landing's does (ADR-0014). It is judged again with
+  its commits made and rolled back if it may no longer go: a plan loaded under
+  it, the same run's saved copy too, has not heard of them.
 - **The same queue.** A revert takes its turn with landings and Merge all, and
   judges everything again there, so it never reads a branch mid-landing and a
   Merge all that went first is refused with its commands. No new start is
   claimed while it waits and works: one cut now would lose what it depends on.
+  The scheduler, queued starts and owed repairs hold, and the claim of anything
+  depending on the work is refused, a start admitted before the revert with it.
 - **What a reverted task is afterwards.** Pending, on a chosen hold like a
   stopped task's, with `reverted` saved on the task so the hold outlives the
   process and the plan says why. It waits on the user in the escalation inbox
@@ -82,7 +95,9 @@ revert adds commits and rewrites nothing.
   `confirmed` and `seen` only on the user's yes; declining sends nothing. Every
   refusal (a live dependent, a conflict and its files, work already merged and
   its `git revert`, a loop still running) is core's own sentence. The button is
-  there only where the task's isolation mark says `revertible`.
+  there only where the task's isolation mark says `revertible`, which reads the
+  same landings a revert does, so a task with no record left can carry it. A
+  task is called by its reference, a subtask by its full path.
 - **A user action.** It is in the user's controls at the seam and reaches no
   planner or supervisor tool: taking landed work back is the review's decision.
   Read-only, ops, script and user tasks land nothing, so they cannot be reverted;
@@ -105,6 +120,8 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
 - Work a conflict resolver brought in has no merge of its own: reverting it, or
   the resolver that carried it, is refused rather than leaving a record that
   says landed over work that is gone.
+- A task saved with neither `landedTip` nor a `landings` entry, as ADR-0013 ran:
+  no record says which merge is its, so it is refused, in those words.
 - Reverting after Merge all, and any write to the user's branch.
 
 ## Considered options
@@ -138,3 +155,4 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
 
 - 2026-10-30 — accepted; core, the command seam and the daemon contract implemented.
 - 2026-10-30 — the terminal and VS Code offer it; fully implemented.
+- 2026-10-30 — landed reads `landings` over the record, and a checkout of the integration branch counts as no merge; a claim in a revert's reach is refused, and it is judged again before it settles.

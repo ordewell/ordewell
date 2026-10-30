@@ -1581,7 +1581,8 @@ function voiceOf(actor: ExecutionActor): Voice {
 }
 
 function sameIds(a: readonly string[], b: readonly string[]): boolean {
-  return a.length === b.length && a.every((id) => b.includes(id));
+  const seen = new Set(a);
+  return seen.size === new Set(b).size && b.every((id) => seen.has(id));
 }
 
 function withSubtasks(task: Readonly<Task>): string[] {

@@ -66,10 +66,15 @@ export function manualOverrideConfirmation(direction: OverrideDirection, label: 
 /** What a revert does (ADR-0054), told with the list of tasks it takes: the same words on every surface. */
 export const revertEffect = 'Its landed work comes off the integration branch, newest first, and each task listed is held as not started until you retry it. Nothing in your own branch changes.';
 
+/** How a revert's confirmation calls a task: a subtask's order alone would name a top-level task. */
+export function revertTaskRef(task: { order: number; ref?: string }): string {
+  return task.ref ?? `#${task.order}`;
+}
+
 /** One task of a revert's confirmation: `dependent` is one that goes with the task the user chose. */
-export function revertListLine(task: { order: number; title: string; repos: readonly string[]; dependent: boolean }): string {
+export function revertListLine(task: { order: number; ref?: string; title: string; repos: readonly string[]; dependent: boolean }): string {
   const repos = task.repos.length === 1 && task.repos[0] === '.' ? '' : ` (${task.repos.join(', ')})`;
-  return `#${task.order} ${task.title}${repos}${task.dependent ? ' (goes with it)' : ''}`;
+  return `${revertTaskRef(task)} ${task.title}${repos}${task.dependent ? ' (goes with it)' : ''}`;
 }
 
 /** Why a manual override waits for the run to stop (ADR-0029); `label` names the task. */

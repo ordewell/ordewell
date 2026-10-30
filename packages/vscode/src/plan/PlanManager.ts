@@ -4,7 +4,7 @@ import {
   Session, LegacyPlanState, Task, flattenTasks, RunnerId, DiscoveredModel, enabledRunners,
   saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReadyFor, describePlannerNotReady, CHAT_COMMANDS, taskStartedNotice,
   createEmptyPlan, installedPlannerAnswered, isRunnerApproval, loopRemovalRefusal, pastGateConfirmation, titledRefs, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner,
-  taskActionCommand, revertEffect, revertListLine, runHoldsEditors, cardEditNeedsUnstarted, confirmedOverride, manualOverrideConfirmation, manualOverrideStopFirst, overrideNeedsConfirmation, titledTaskRefOf, type ExecutionCommand, type OverrideDirection, type TaskAction, type TaskEditOptions,
+  taskActionCommand, revertEffect, revertListLine, revertTaskRef, runHoldsEditors, cardEditNeedsUnstarted, confirmedOverride, manualOverrideConfirmation, manualOverrideStopFirst, overrideNeedsConfirmation, titledTaskRefOf, type ExecutionCommand, type OverrideDirection, type TaskAction, type TaskEditOptions,
   recordedRunnerAuth, runnerForProvider, type RunnerInstallation,
 } from '@ordewell/core';
 import type { TaskDraft, TaskEdit, WebviewToHost } from '../shared/protocol';
@@ -605,7 +605,7 @@ export async function revertTaskByHand(taskId: string, deps: Pick<PlanManagerDep
   const asked = preview.tasks.find((t) => t.taskId === taskId) ?? preview.tasks.at(-1);
   const list = preview.tasks.map(revertListLine);
   const choice = await vscode.window.showWarningMessage(
-    `Revert task ${asked ? `#${asked.order} ${asked.title}` : 'this task'}? ${revertEffect}`,
+    `Revert task ${asked ? `${revertTaskRef(asked)} ${asked.title}` : 'this task'}? ${revertEffect}`,
     { modal: true, detail: `Reverting, newest first:\n${list.join('\n')}` },
     'Revert',
   );

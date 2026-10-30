@@ -37,7 +37,7 @@ import { capConflictFiles } from './conflictFiles';
 import { resolveWorkspaceEnv, type WorkspaceEnv } from './workspaceEnv';
 import { continuability, sessionOwner } from './continuation';
 import { quotedList } from '../utils/quotedList';
-import { inBranchRefusal, revertScope, type RevertScope, type TaskRevertPreview } from './taskRevert';
+import { inBranchRefusal, revertReach, revertScope, type RevertScope, type TaskRevertPreview } from './taskRevert';
 import type { RunMergeView, RunActivity } from './SessionMessage';
 import { ScriptRunner } from './ScriptRunner';
 import type { StoredHandoff } from '../models/Handoff';
@@ -283,6 +283,8 @@ export class TaskOrchestrator {
   private runState: RunState = IDLE_RUN;
   /** Planner turns in flight that new starts wait for (ADR-0029); running attempts carry on. */
   private startHolds = 0;
+  /** The {@link revertReach} of each revert under way: unlike a hold, it stops a start admitted before the revert too. */
+  private readonly reverting = new Set<ReadonlySet<string>>();
   /** Bumped by the user's Stop: a start admitted under an older generation never takes its claim. */
   private stopGeneration = 0;
   /** Starts admitted and not yet claimed or let go; see {@link StartAdmission}. */
@@ -1566,21 +1568,24 @@ export class TaskOrchestrator {
     if (!landed.ok) return { revertible: false, reason: landed.reason, message: landed.error };
     if (landed.inBranch.length > 0) return { revertible: false, ...inBranchRefusal(landed.inBranch) };
     if (refusal) return { revertible: false, ...refusal };
-    return { revertible: true, tasks: landed.tasks.map((t) => ({ ...t, dependent: t.taskId !== taskId })) };
+    return { revertible: true, tasks: landed.tasks.map((t) => ({ ...t, dependent: t.taskId !== taskId, ref: taskRefOf(this.store.planTasks, t.taskId) })) };
   }
 
   /**
    * Revert the task's landed work, with its landed dependents, on the
    * integration branches (ADR-0054). No new start while it waits for its
    * turn and works: one that took its claim now would be cut from a tip about
-   * to lose what it depends on. What it finds in the way there is judged again:
-   * a dependent that started since is live like any other. Tasks not depending
-   * on it keep running.
+   * to lose what it depends on, so the claim of anything depending on the work
+   * is refused too, a start admitted before the revert with it. What it finds
+   * in the way there is judged again: a Mark complete landing a dependent is
+   * live like any other. Tasks not depending on it keep running.
    */
   async revertTask(taskId: string): Promise<IsolationRevertResult> {
     const { taskIds, refusal } = this.revertScope(taskId);
     if (refusal) return { outcome: 'refused', reason: refusal.message };
     const releaseStarts = this.holdStarts();
+    const reach = revertReach(taskId, this.store.allTasks);
+    this.reverting.add(reach);
     let result: IsolationRevertResult;
     try {
       result = await this.runs.revert(taskIds, {
@@ -1588,6 +1593,7 @@ export class TaskOrchestrator {
         settled: (reverted) => this.takeBack(reverted),
       });
     } finally {
+      this.reverting.delete(reach);
       releaseStarts();
     }
     if (result.outcome === 'reverted') {
@@ -2294,8 +2300,9 @@ export class TaskOrchestrator {
   /**
    * Why a start may not take its claim now, or null when it may: a Stop came
    * since it was admitted (ADR-0029), the task left the plan or is being
-   * marked complete, it is outside the user's approval record (ADR-0035), or
-   * every slot is taken. Read in the same synchronous step as the claim it
+   * marked complete, a revert is taking back work it depends on (ADR-0054), it
+   * is outside the user's approval record (ADR-0035), or every slot is taken.
+   * Read in the same synchronous step as the claim it
    * guards, so nothing can change in between.
    */
   private claimRefusal(taskId: string, admission: Admitted): string | null {
@@ -2303,6 +2310,7 @@ export class TaskOrchestrator {
     const task = this.store.get(taskId);
     if (!task) return `There is no task "${taskId}" in this plan any more.`;
     if (this.completing.has(taskId)) return beingMarkedComplete(task);
+    if ([...this.reverting].some((reach) => reach.has(taskId))) return `A revert is taking back work task "${task.title}" depends on. Start it again once the revert has ended.`;
     if (!this.isApproved(taskId)) return `Task "${task.title}" waits for the user's approval: they approve it by starting it, or by executing the plan.`;
     const live = this.attempts.size;
     if (live >= this.config.maxParallelSessions) {

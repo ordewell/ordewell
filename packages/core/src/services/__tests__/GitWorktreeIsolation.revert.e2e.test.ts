@@ -10,6 +10,8 @@ import type { IsolationRun, IWorktreeIsolation } from '../../interfaces/IWorktre
 import type { Task } from '../../models/Task';
 import { fakeConfig } from '../../testing';
 import { taskIsolationOf } from '../isolationRecord';
+import { IsolationRunController } from '../IsolationRunController';
+import { fakeNotification } from './sessionTestKit';
 
 // A git hook that runs the suite exports GIT_DIR & co., which would point every
 // fixture command at the outer repository instead of the temp one.
@@ -439,6 +441,88 @@ describe('a task that landed more than once', () => {
   });
 });
 
+describe('a landing whose record no longer says so', () => {
+  it('names a task with no record left, and words its commit from what it stated', async () => {
+    const root = initRepo(tempDir());
+    const iso = isolation();
+    const run = await iso.startRun(root);
+    const integration = run.repos[0].integrationBranch;
+    const t = task(1, 'Add greeting');
+    const { cwd } = await iso.prepare(t, run);
+    writeFileSync(join(cwd, 'greeting.txt'), 'hi\n');
+    expect(await iso.integrate(t, run, undefined, { subject: 'Greet the user' })).toBe('merged');
+    await iso.release(run, t.id, { keep: false });
+
+    const read = await iso.readLanded(run, [t.id]);
+    const result = await iso.revert(run, [t.id], nothingInTheWay);
+
+    expect(read).toEqual({ ok: true, tasks: [{ taskId: t.id, order: 1, title: 'Add greeting', repos: ['.'] }], inBranch: [] });
+    expect(result).toMatchObject({ outcome: 'reverted', tasks: [{ taskId: t.id }] });
+    expect(git(root, 'log', '-1', '--format=%s', integration)).toBe('Revert: Greet the user');
+    expect(run.landings?.[t.id]).toBeUndefined();
+    expect(run.landedTasks?.[t.id]).toBeUndefined();
+  });
+
+  it('keeps the record and worktree of a later attempt that did not land', async () => {
+    const root = initRepo(tempDir());
+    const iso = isolation();
+    const run = await iso.startRun(root);
+    const integration = run.repos[0].integrationBranch;
+    const t = task(1, 'Add greeting');
+    await land(iso, run, t, { 'greeting.txt': 'hi\n' });
+    const { cwd } = await iso.prepare(t, run);
+    writeFileSync(join(cwd, 'unlanded.txt'), 'still here\n');
+    await iso.release(run, t.id, { keep: true });
+
+    expect(await iso.revert(run, [t.id], nothingInTheWay)).toMatchObject({ outcome: 'reverted' });
+
+    expect(git(root, 'ls-tree', '--name-only', integration)).toBe('README.md');
+    expect(run.tasks[t.id].status).toBe('kept');
+    expect(readFileSync(join(cwd, 'unlanded.txt'), 'utf8')).toBe('still here\n');
+    expect(run.landings?.[t.id]).toBeUndefined();
+  });
+
+  it('ends the conflict of a later attempt, which nothing should repair or land now', async () => {
+    const root = initRepo(tempDir(), { 'shared.txt': 'base\n' });
+    const iso = isolation();
+    const run = await iso.startRun(root);
+    const t = task(1, 'Change the line');
+    await land(iso, run, t, { 'shared.txt': 'first\n' });
+    const { cwd } = await iso.prepare(t, run);
+    git(cwd, 'reset', '-q', '--hard', run.repos[0].baseRef);
+    writeFileSync(join(cwd, 'shared.txt'), 'second\n');
+    expect(await iso.integrate(t, run)).toBe('conflict');
+
+    expect(await iso.revert(run, [t.id], nothingInTheWay)).toMatchObject({ outcome: 'reverted' });
+
+    expect(run.tasks[t.id]).toMatchObject({ status: 'kept' });
+    expect(run.tasks[t.id]).not.toHaveProperty('conflictRepo');
+    expect(run.tasks[t.id]).not.toHaveProperty('conflictFiles');
+    expect(existsSync(cwd)).toBe(true);
+  });
+
+  it('does not take a repo only the later attempt changed for one with no merge', async () => {
+    const root = tempDir();
+    initRepo(join(root, 'api'));
+    initRepo(join(root, 'web'), { 'shared.txt': 'base\n' });
+    const iso = isolation();
+    const run = await iso.startRun(root);
+    const [api, web] = run.repos;
+    const t = task(1, 'Touch the api');
+    const between = task(2, 'Change the line');
+    await land(iso, run, t, { 'api/one.txt': 'a\n' });
+    await land(iso, run, between, { 'web/shared.txt': 'between\n' });
+    const { cwd } = await iso.prepare(t, run);
+    git(join(cwd, 'web'), 'reset', '-q', '--hard', web.baseRef);
+    writeFileSync(join(cwd, 'web', 'shared.txt'), 'conflicted\n');
+    expect(await iso.integrate(t, run)).toBe('conflict');
+
+    expect(await iso.readLanded(run, [t.id])).toMatchObject({ ok: true, tasks: [{ taskId: t.id, repos: ['api'] }] });
+    expect(await iso.revert(run, [t.id], nothingInTheWay)).toMatchObject({ outcome: 'reverted' });
+    expect(git(api.root, 'ls-tree', '--name-only', api.integrationBranch)).toBe('README.md');
+  });
+});
+
 describe('the revert\'s commit', () => {
   it('is named from the commit the task stated, carries the trailer and lands as written', async () => {
     const root = initRepo(tempDir());
@@ -503,7 +587,8 @@ describe('the revert\'s place on the queue', () => {
     open();
     await landed;
     expect(await reverted).toMatchObject({ outcome: 'reverted' });
-    expect(judged).toEqual(['judged']);
+    // In its turn, and again with its commits made.
+    expect(judged).toEqual(['judged', 'judged']);
   });
 
   it('hears a refusal that came while it waited, and touches nothing', async () => {
@@ -520,6 +605,63 @@ describe('the revert\'s place on the queue', () => {
     expect(result).toEqual({ outcome: 'refused', reason: 'Task "D" started meanwhile.' });
     expect(git(root, 'rev-parse', integration)).toBe(tip);
     expect(run.tasks[t.id].status).toBe('merged');
+  });
+
+  it('rolls its commits back when something stops it while it made them', async () => {
+    const root = initRepo(tempDir());
+    const iso = isolation();
+    const run = await iso.startRun(root);
+    const integration = run.repos[0].integrationBranch;
+    const t = task(1, 'Add greeting');
+    await land(iso, run, t, { 'greeting.txt': 'hi\n' });
+    const tip = git(root, 'rev-parse', integration);
+    let judged = 0;
+    const settled: unknown[] = [];
+
+    const result = await iso.revert(run, [t.id], {
+      ...nothingInTheWay,
+      refusal: () => (++judged === 2 ? 'Another plan was loaded.' : null),
+      settled: (taskIds) => settled.push(taskIds),
+    });
+
+    expect(result).toEqual({ outcome: 'refused', reason: 'Another plan was loaded.' });
+    expect(git(root, 'rev-parse', integration)).toBe(tip);
+    expect(settled).toEqual([]);
+    expect(run.landing).toBeUndefined();
+    expect(run.tasks[t.id].status).toBe('merged');
+  });
+
+  it('leaves a plan loaded under it alone, the same run saved or not', async () => {
+    const root = initRepo(tempDir());
+    const { exec, held, open } = holdGit((args) => subcommandOf(args) === 'revert');
+    const iso = isolation({ execFileImpl: exec });
+    const run = await iso.startRun(root);
+    const integration = run.repos[0].integrationBranch;
+    const t = task(1, 'Add greeting');
+    await land(iso, run, t, { 'greeting.txt': 'hi\n' });
+    const tip = git(root, 'rev-parse', integration);
+    const settled: unknown[] = [];
+    const controller = new IsolationRunController({
+      isolation: iso,
+      config: fakeConfig({ worktreeIsolation: true }),
+      notifications: fakeNotification(),
+      workspaceRoot: () => root,
+      listener: { changed: () => undefined, blocked: () => undefined, handoff: () => undefined, closed: () => undefined, notice: () => undefined },
+      liveTasks: () => new Set(),
+    });
+    await controller.adopt({ run, resolvers: {} });
+
+    const reverting = controller.revert([t.id], { refusal: () => null, settled: (ids) => settled.push(ids) });
+    await held;
+    // What the session reloads from its file: the same run, as a new record that has not heard of this revert.
+    const adopted = controller.adopt({ run: JSON.parse(JSON.stringify(run)) as IsolationRun, resolvers: {} });
+    open();
+
+    expect(await reverting).toMatchObject({ outcome: 'refused', reason: expect.stringContaining('Another plan was loaded') });
+    await adopted;
+    expect(git(root, 'rev-parse', integration)).toBe(tip);
+    expect(settled).toEqual([]);
+    expect(controller.current?.tasks[t.id].status).toBe('merged');
   });
 
   it('records the tips and has the run saved before its first commit, and takes the task back in one step', async () => {
@@ -604,9 +746,32 @@ describe('the command for work in the user\'s branch', () => {
 
     const read = await iso.readLanded(run, [t.id]);
 
-    expect(read).toMatchObject({ ok: true, inBranch: [{ command: `git -C "my api" revert -m 1 ${merge}` }] });
-    execFileSync('sh', ['-c', `git -C "my api" revert --no-edit -m 1 ${merge}`], { cwd: root, env: cleanEnv(), stdio: 'ignore' });
+    expect(read).toMatchObject({ ok: true, inBranch: [{ command: `git -C 'my api' revert -m 1 ${merge}` }] });
+    execFileSync('sh', ['-c', `git -C 'my api' revert --no-edit -m 1 ${merge}`], { cwd: root, env: cleanEnv(), stdio: 'ignore' });
     expect(existsSync(join(root, 'my api', 'greeting.txt'))).toBe(false);
+  });
+
+  it.each([
+    ['a variable', 'we$HOME'],
+    ['a command substitution', 'we$(touch pwned)ird'],
+    ['a backtick', 'we`touch pwned`ird'],
+    ['a double quote', 'we"ird'],
+    ['a single quote', "it's"],
+  ])('runs as printed with %s in the path', async (_what, name) => {
+    const root = tempDir();
+    initRepo(join(root, name));
+    const iso = isolation({ config: fakeConfig({ worktreeIsolation: true, workspaceRepos: [name] }) });
+    const run = await iso.startRun(root);
+    const t = task(1, 'Add greeting');
+    await land(iso, run, t, { [join(name, 'greeting.txt')]: 'hi\n' });
+    await iso.mergeIntoCheckedOut(run);
+
+    const read = await iso.readLanded(run, [t.id]);
+    if (!read.ok) throw new Error(read.error);
+    execFileSync('sh', ['-c', read.inBranch[0].command.replace(' revert ', ' revert --no-edit ')], { cwd: root, env: cleanEnv(), stdio: 'ignore' });
+
+    expect(existsSync(join(root, name, 'greeting.txt'))).toBe(false);
+    expect(existsSync(join(root, 'pwned'))).toBe(false);
   });
 });
 
@@ -656,12 +821,65 @@ describe('what stands in a revert\'s way', () => {
     git(root, 'checkout', '-q', integration);
     const tip = git(root, 'rev-parse', integration);
 
+    const read = await iso.readLanded(run, [t.id]);
     const result = await iso.revert(run, [t.id], nothingInTheWay);
 
-    expect(result).toEqual({ outcome: 'failed', repo: '.', error: `the integration branch is checked out in ${root}` });
+    const reason = `The integration branch is checked out in ${root}, and a revert has to commit to it. Check out another branch there first. Nothing was reverted.`;
+    expect(read).toEqual({ ok: false, reason: 'checked-out', error: reason });
+    expect(result).toEqual({ outcome: 'refused', reason });
     expect(git(root, 'rev-parse', integration)).toBe(tip);
     expect(run.tasks[t.id].status).toBe('merged');
     expect(run.landing).toBeUndefined();
+  });
+
+  it('names another worktree that has the branch checked out, and not its own', async () => {
+    const root = initRepo(tempDir());
+    const review = join(tempDir(), 'review');
+    const iso = isolation();
+    const run = await iso.startRun(root);
+    const integration = run.repos[0].integrationBranch;
+    const t = task(1, 'Add greeting');
+    await land(iso, run, t, { 'greeting.txt': 'hi\n' });
+    expect(await iso.readLanded(run, [t.id])).toMatchObject({ ok: true });
+    await iso.handoff(run);
+    git(root, 'worktree', 'add', '-q', review, integration);
+
+    expect(await iso.readLanded(run, [t.id])).toMatchObject({ ok: false, reason: 'checked-out', error: expect.stringContaining(`checked out in ${realpathSync(review)}`) });
+  });
+
+  it('names the repo of a group whose branch is checked out', async () => {
+    const root = tempDir();
+    initRepo(join(root, 'api'));
+    initRepo(join(root, 'web'));
+    const iso = isolation();
+    const run = await iso.startRun(root);
+    const [api] = run.repos;
+    const t = task(1, 'Touch both');
+    await land(iso, run, t, { 'api/both.txt': 'a\n', 'web/both.txt': 'w\n' });
+    await iso.handoff(run);
+    git(api.root, 'checkout', '-q', api.integrationBranch);
+
+    expect(await iso.readLanded(run, [t.id])).toMatchObject({ ok: false, reason: 'checked-out', error: expect.stringContaining('integration branch of api is checked out') });
+  });
+
+  it('says a task that landed before its merges were kept cannot be told apart, in its own words', async () => {
+    const root = initRepo(tempDir());
+    const iso = isolation();
+    const run = await iso.startRun(root);
+    const integration = run.repos[0].integrationBranch;
+    const t = task(1, 'Add greeting');
+    await land(iso, run, t, { 'greeting.txt': 'hi\n' });
+    const entry = run.tasks[t.id].repos['.'];
+    delete run.landings;
+    delete run.landedTasks;
+    delete entry.landedTip;
+    delete entry.taskTip;
+    const tip = git(root, 'rev-parse', integration);
+
+    expect(await iso.readLanded(run, [t.id])).toEqual({ ok: false, reason: 'no-own-merge', error: 'Task "Add greeting" landed before Ordewell kept a record of its merge, so it cannot tell which merge to revert. Nothing was reverted.' });
+    expect(await iso.revert(run, [t.id], nothingInTheWay)).toMatchObject({ outcome: 'refused' });
+    expect(git(root, 'rev-parse', integration)).toBe(tip);
+    expect(taskIsolationOf(run.tasks[t.id])).not.toHaveProperty('revertible');
   });
 
   it('leaves a handed-over run free to check its branch out afterwards', async () => {

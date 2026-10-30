@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { handoffOf, isolationViewOfPlan, migratePlanIsolation, taskIsolationOf, type Adr0013PlanIsolation, type Adr0013TaskRecord } from '../isolationRecord';
+import { handoffOf, isolationViewOfPlan, migratePlanIsolation, taskIsolationOf, taskIsolationsOf, type Adr0013PlanIsolation, type Adr0013TaskRecord } from '../isolationRecord';
 import { capConflictFiles } from '../conflictFiles';
 import type { IsolationRun, IsolationTaskRecord, IsolationTaskStatus, PlanIsolation } from '../../interfaces/IWorktreeIsolation';
 
@@ -160,6 +160,50 @@ describe('handoffOf', () => {
       repos: [{ path: '.', integrationBranch: 'ordewell/r1/integration', baseRef: '0123abcd', landed }],
       landed,
     });
+  });
+});
+
+describe('which tasks a surface offers Revert on', () => {
+  const merged = (over: Partial<IsolationTaskRecord> = {}): IsolationTaskRecord => ({
+    taskId: 't', order: 1, title: 'Task t', branch: 'ordewell/r1/1-t', workspace: '/work/1-t', status: 'merged',
+    repos: { '.': { worktree: '/work/1-t', linked: [], changed: true, landedTip: 'aaaa' } }, ...over,
+  });
+  const repos = [{ path: '.', root: '/work', baseRef: 'base', integrationBranch: 'ordewell/r1/integration' }];
+  const run = (tasks: Record<string, IsolationTaskRecord>, landings?: Record<string, Record<string, string[]>>): IsolationRun => ({
+    id: 'r1', workspaceRoot: '/work', repos, shared: [], sharedRepos: [], tasks, ...(landings ? { landings } : {}),
+  });
+  const landings = { t: { '.': ['aaaa'] } };
+
+  it('marks a landing with a merge of its own', () => {
+    expect(taskIsolationsOf(run({ t: merged() })).t).toMatchObject({ state: 'integrated', revertible: true });
+  });
+
+  it('marks a task whose new record landed nothing over merges still on the branch', () => {
+    const relanded = merged({ repos: { '.': { worktree: '/work/1-t', linked: [], changed: false } } });
+
+    expect(taskIsolationsOf(run({ t: relanded }, landings)).t).toMatchObject({ state: 'integrated', revertible: true });
+    expect(taskIsolationsOf(run({ t: relanded })).t).not.toHaveProperty('revertible');
+  });
+
+  it('marks a task with no record left', () => {
+    expect(taskIsolationsOf(run({}, landings)).t).toEqual({ state: 'none', revertible: true });
+  });
+
+  it.each(['kept', 'failed', 'conflict'] as const)('marks a task whose later attempt ended %s', (status) => {
+    expect(taskIsolationsOf(run({ t: merged({ status }) }, landings)).t).toMatchObject({ revertible: true });
+    expect(taskIsolationsOf(run({ t: merged({ status }) })).t).not.toHaveProperty('revertible');
+  });
+
+  it.each(['active', 'repairing'] as const)('does not mark a task %s again, which a revert would refuse', (status) => {
+    expect(taskIsolationsOf(run({ t: merged({ status }) }, landings)).t).not.toHaveProperty('revertible');
+  });
+
+  it('does not mark work in the user\'s branch', () => {
+    expect(taskIsolationsOf(run({ t: merged({ inHead: true }) }, landings)).t).not.toHaveProperty('revertible');
+  });
+
+  it('reads the same from a saved plan', () => {
+    expect(isolationViewOfPlan({ isolation: { run: run({}, landings), resolvers: {} } })?.tasks.t).toEqual({ state: 'none', revertible: true });
   });
 });
 

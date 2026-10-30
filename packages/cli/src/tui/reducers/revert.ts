@@ -1,4 +1,4 @@
-import { revertEffect, revertListLine, type TaskRevertPreview } from '@ordewell/core';
+import { revertEffect, revertListLine, revertTaskRef, type TaskRevertPreview } from '@ordewell/core';
 import { sanitize } from '../ansi';
 import type { TuiState } from '../state';
 import { fail, step, type Step } from './shared';
@@ -19,7 +19,7 @@ export function revertPreviewed(state: TuiState, taskId: string, preview: TaskRe
     ...state,
     overlay: {
       kind: 'confirm',
-      title: `Revert ${asked ? `#${asked.order} ${sanitize(asked.title)}` : 'this task'}?`,
+      title: `Revert ${asked ? `${revertTaskRef(asked)} ${sanitize(asked.title)}` : 'this task'}?`,
       message: revertEffect,
       note: ['Reverting:', ...lines].join('\n'),
       action: { kind: 'revert-task', taskId, seen: preview.tasks.map((t) => t.taskId) },
