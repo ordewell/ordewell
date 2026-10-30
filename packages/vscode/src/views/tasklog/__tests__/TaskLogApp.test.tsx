@@ -862,10 +862,18 @@ describe('the runner\'s activity, folded (ADR-0017, X1)', () => {
     });
 
     it('is absent once no turn is open', () => {
+      const ended = replayTaskLog([{ type: 'turn_start', message: 'go' }, { type: 'thinking_delta', text: 'Hmm' }, { type: 'turn_end', reason: 'completed' }]);
+      render(<TaskLogApp />);
+      init({ working: false }, [...ended.blocks]);
+
+      expect(line()).toBeNull();
+    });
+
+    it('stays for blocks still streaming, whatever the turn flag says', () => {
       render(<TaskLogApp />);
       init({ working: false }, [...thinking.blocks]);
 
-      expect(line()).toBeNull();
+      expect(line()?.textContent).toContain('Thinking…');
     });
 
     it('is absent on an earlier attempt, though its log was left on an open turn', () => {

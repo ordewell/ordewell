@@ -115,6 +115,39 @@ describe('reduceHost after the watchdog', () => {
   });
 });
 
+describe('the planner turn\'s start (#81)', () => {
+  const startedAt = '2026-10-30T10:00:00.000Z';
+  const running = reduceHost(INITIAL_HOST_STATE, msg({ type: 'plannerTurn', active: true, startedAt }));
+
+  it('is the open turn\'s', () => {
+    expect(running.plannerTurnStartedAt).toBe(startedAt);
+    expect(reduceHost(running, msg({ type: 'plannerTurn', active: false })).plannerTurnStartedAt).toBeUndefined();
+  });
+
+  it('does not outlive a turn that ends without the host closing it', () => {
+    const ended: Record<string, HostState> = {
+      stopped: reduceHost(running, { type: 'turnStopped' }),
+      errored: reduceHost(running, msg({ type: 'showError', error: 'planner down' })),
+      'a new session': reduceHost(running, { type: 'resetSession', kind: 'new' }),
+      'a restored one': reduceHost(running, { type: 'resetSession', kind: 'restore' }),
+    };
+    for (const [how, state] of Object.entries(ended)) {
+      expect([how, state.plannerTurnStartedAt]).toEqual([how, undefined]);
+      expect([how, reduceHost(state, { type: 'turnRequested' }).plannerTurnStartedAt]).toEqual([how, undefined]);
+    }
+  });
+
+  it('is dropped when a new turn is asked for after the watchdog gave up on the last', () => {
+    const lost = reduceHost(running, { type: 'turnLost' });
+    expect(reduceHost(lost, { type: 'turnRequested' }).plannerTurnStartedAt).toBeUndefined();
+  });
+
+  it('is kept while the lost turn is still out, and comes back with it', () => {
+    const lost = reduceHost(running, { type: 'turnLost' });
+    expect(reduceHost(lost, msg({ type: 'plannerTurnAlive' })).plannerTurnStartedAt).toBe(startedAt);
+  });
+});
+
 describe('reduceHost runView', () => {
   const checkpointTask = { id: 't1', title: 'Add rate limiting', status: 'awaiting_user' as const, awaitingReason: 'checkpoint' as const, checkpoint: 'ready for review' };
 

@@ -107,7 +107,12 @@ export interface HostState {
   dockExpanded: boolean;
   /** The dock's dragged cap in px, remembered by the host; undefined keeps the stylesheet's default. */
   dockHeight: number | undefined;
-  /** When the open planner turn began (ISO), for the elapsed time of its working row (#81); none while the host did not say. */
+  /**
+   * When the open planner turn began (ISO), for the elapsed time of its working
+   * row (#81); none while the host did not say, and none once the turn is over
+   * or a new one is asked for, so a row never counts from a turn that has ended.
+   * Kept through `turnLost` alone: that turn may still be out (`plannerTurnAlive`).
+   */
   plannerTurnStartedAt?: string;
   /** The user stopped the turn: plan updates are dropped until the host closes it. */
   stopped: boolean;
@@ -231,6 +236,7 @@ export function resetSession(state: HostState, kind: SessionResetKind): HostStat
   };
   if (kind === 'empty') return next;
   next.isResearchActive = false;
+  next.plannerTurnStartedAt = undefined;
   next.turnLost = false;
   next.isExecuting = false;
   next.held = EMPTY_HOLD;
@@ -256,10 +262,10 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
       return resetSession(state, action.kind);
 
     case 'turnStopped':
-      return { ...state, stopped: true, isResearchActive: false, turnLost: false };
+      return { ...state, stopped: true, isResearchActive: false, turnLost: false, plannerTurnStartedAt: undefined };
 
     case 'turnRequested':
-      return { ...state, stopped: false, sessionCleared: false, error: '', isResearchActive: true, turnLost: false };
+      return { ...state, stopped: false, sessionCleared: false, error: '', isResearchActive: true, turnLost: false, plannerTurnStartedAt: undefined };
 
     // A command such as /fork or /compact opens no turn of the old session's,
     // and may fail before it opens one at all: its error is the new session's.
@@ -377,7 +383,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'showError':
       if (state.sessionCleared) return state;
-      return { ...state, error: action.error, isResearchActive: false, turnLost: false, starting: false, startRequestId: null };
+      return { ...state, error: action.error, isResearchActive: false, turnLost: false, plannerTurnStartedAt: undefined, starting: false, startRequestId: null };
 
     case 'taskOutput':
       return { ...state, taskOutput: appendTaskOutput(state.taskOutput, action.taskId, action.text ?? '') };
