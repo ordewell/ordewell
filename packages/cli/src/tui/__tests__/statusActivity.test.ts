@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { replayTaskLog, type TaskLogEvent } from '@ordewell/core';
 import { stripAnsi } from '../ansi';
-import { initialState } from '../reducer';
+import { initialState, reduce, type Action } from '../reducer';
 import { render } from '../render';
 import type { TaskView, TuiState } from '../state';
 
@@ -49,6 +49,12 @@ describe('the status row as the activity line', () => {
   it('keeps the stop key beside a quiet runner', () => {
     const state = opened([turn], { idleSince: '2026-08-18T00:00:00.000Z' });
     expect(frame(state)).toContain('~ Stalled · ctrl-x to stop');
+  });
+
+  it('still shows the line for a log that streams without having seen its turn start', () => {
+    const state = opened([{ type: 'thinking_delta', text: 'Hmm' }]);
+    expect(state.taskView?.view.working).toBe(false);
+    expect(activityRows(state)).toEqual([expect.stringMatching(/^⠋ Thinking… · ctrl-x to stop/)]);
   });
 
   it('shows no line while a runner request waits', () => {
@@ -125,6 +131,43 @@ describe('the elapsed time on the activity line (#81)', () => {
   it('is absent on the planner row when its daemon did not date the turn', () => {
     const planning = initialState({ sessionId: 's1', rows: 30, cols: 100, planner: 'planning', turnGate: { open: 't-1', stopped: null }, ...secondsIn(7) });
     expect(activityRows(planning)).toEqual([expect.stringMatching(/^⠋ Planning…\s*$/)]);
+  });
+
+  describe('on the planner row after a turn ends', () => {
+    const open = { open: 't-1', stopped: null, openedAt: startedAt };
+    const planning = (): TuiState => initialState({ sessionId: 's1', rows: 30, cols: 100, planner: 'planning', turnGate: open, ...secondsIn(1200) });
+    const plan = { id: 'p1', goal: 'g', status: 'draft', tasks: [] };
+
+    it.each([
+      ['its call failed', { type: 'failed', turn: true, message: 'boom' } as Action],
+      ['it returned the plan before its end was heard', { type: 'planUpdated', plan, sessionId: 's1' } as Action],
+    ])('does not carry the start into the next turn when %s', (_how, action) => {
+      const ended = reduce(planning(), action).state;
+      expect(ended.planner).toBe('idle');
+      expect(ended.turnGate.open).toBeNull();
+      expect(ended.turnGate.openedAt).toBeUndefined();
+      const next = reduce({ ...ended, editor: { ...ended.editor, text: 'again', cursor: 5 } }, { type: 'key', key: { name: 'enter' } }).state;
+      expect(next.planner).toBe('planning');
+      // The settings badge shares the row; a time would follow the label by one space.
+      expect(activityRows(next)).toEqual([expect.stringMatching(/^⠋ Planning… {2}/)]);
+    });
+
+    it('does not make ctrl-s a force send once the turn has failed', () => {
+      const ended = reduce(planning(), { type: 'failed', turn: true, message: 'boom' } as Action).state;
+      const { effects } = reduce({ ...ended, editor: { ...ended.editor, text: 'again', cursor: 5 } }, { type: 'key', key: { name: 'ctrl-s' } });
+      expect(effects.map((e) => e.type)).toEqual(['sendMessage']);
+    });
+
+    it('does not outlive an opening the workspace check refused', () => {
+      const refused = reduce(planning(), { type: 'workspaceNeedsInit', workspace: '/ws', goal: 'g' } as Action).state;
+      expect(refused.planner).toBe('idle');
+      expect(refused.turnGate).toEqual({ open: null, stopped: null });
+    });
+
+    it('keeps a stop standing while closing the turn', () => {
+      const stopped = { ...planning(), turnGate: { ...open, stopped: 't-0' } };
+      expect(reduce(stopped, { type: 'failed', turn: true, message: 'boom' } as Action).state.turnGate).toEqual({ open: null, stopped: 't-0' });
+    });
   });
 
   it('gives way to the stop key last: the label is cut before the time and the key', () => {

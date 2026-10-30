@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { EMPTY_CONVERSATION, type ConversationInput } from '../reduce';
-import { NO_TURN, followTurn, stopTurn, type TurnGate } from '../turnGate';
+import { NO_TURN, closeTurn, followTurn, stopTurn, type TurnGate } from '../turnGate';
 import type { ConversationView } from '../reduce';
 
 const TURN = 't-1';
@@ -86,5 +86,17 @@ describe('when the open turn began (#81)', () => {
 
   it('is absent for a turn announced without one, as an older daemon does', () => {
     expect(follow([started]).gate).toEqual({ open: TURN, stopped: null });
+  });
+});
+
+describe('closeTurn', () => {
+  it('drops the open turn and its start, and keeps a stop standing', () => {
+    expect(closeTurn({ open: 't1', stopped: null, openedAt: '2026-10-30T10:00:00.000Z' })).toEqual({ open: null, stopped: null });
+    expect(closeTurn({ open: 't1', stopped: 't0', openedAt: '2026-10-30T10:00:00.000Z' })).toEqual({ open: null, stopped: 't0' });
+  });
+
+  it('hands back the same gate when no turn is open', () => {
+    const gate = { open: null, stopped: 't0' };
+    expect(closeTurn(gate)).toBe(gate);
   });
 });

@@ -1,4 +1,4 @@
-import { blockingFailures, DEFAULT_RUNNERS, EMPTY_HOLD, EMPTY_RUN, NO_TURN, fromTranscript, holdPrompt, taskLogCommands, taskStartedNotice, type RunnerId, type SerializedPlan } from '@ordewell/core';
+import { blockingFailures, DEFAULT_RUNNERS, EMPTY_HOLD, EMPTY_RUN, NO_TURN, closeTurn, fromTranscript, holdPrompt, taskLogCommands, taskStartedNotice, type RunnerId, type SerializedPlan } from '@ordewell/core';
 import { bodyMode, chatEditorRoomFor } from './geometry';
 import { SPINNER_CYCLE, chatScrollMax } from './layout';
 import { activeToken, composerCompletions, findCommand, parseRunnerCommand, parseSlash, runnerCommandFor, type ParsedCommand } from './slash';
@@ -171,7 +171,9 @@ function reduceAction(state: TuiState, action: Action): Step {
       // than fail as stopped (see `failed`); the forced turn is still running,
       // and the held prompts wait for it.
       if (state.forceSendPending) return step({ ...settled, planner: 'planning', forceSendPending: null });
-      return drainQueue(state, settled);
+      // The turn's own end follows this on the stream; until it does, the gate
+      // would hand the next turn this one's start and read as a turn in flight.
+      return drainQueue(state, { ...settled, turnGate: closeTurn(settled.turnGate) });
     }
 
     // The call that carried the turn's reply died, so nothing will say the turn
@@ -562,7 +564,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       // A planner turn dying IS a turn ending — the queue would otherwise wait
       // on a next one that never comes.
       if (!plannerInFlight(state)) return step(reported);
-      return drainQueue(state, reported);
+      return drainQueue(state, { ...reported, turnGate: closeTurn(reported.turnGate) });
     }
 
     // As `failed`: an opening that let itself go asks on the welcome it left,
@@ -572,6 +574,7 @@ function reduceAction(state: TuiState, action: Action): Step {
       return step({
         ...state,
         planner: 'idle',
+        turnGate: plannerInFlight(state) ? closeTurn(state.turnGate) : state.turnGate,
         overlay: {
           kind: 'confirm',
           title: 'Initialize new workspace?',

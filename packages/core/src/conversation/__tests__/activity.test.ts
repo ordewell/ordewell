@@ -100,6 +100,20 @@ describe('taskActivity', () => {
     expect(taskActivity(view, { status: 'in_progress' })).toEqual({ label: 'Subagent: Scan the repo…', busy: true });
   });
 
+  it('stays busy for a log that streams without having seen its turn start', () => {
+    for (const events of [
+      [{ type: 'thinking_delta', text: 'Hmm' }],
+      [{ type: 'text_delta', runId: 'a', text: 'Here' }],
+      [{ type: 'tool_call', id: 'r1', name: 'Read', args: '{"file_path":"a.ts"}' }],
+    ] satisfies TaskLogEvent[][]) {
+      const view = replayTaskLog(events);
+      expect(view.working).toBe(false);
+      expect(taskActivity(view, { status: 'in_progress' })).toMatchObject({ busy: true });
+    }
+    // Sealed by a turn's end, the same blocks leave nothing open.
+    expect(taskActivity(replayTaskLog([{ type: 'thinking_delta', text: 'Hmm' }, { type: 'turn_end', reason: 'completed' }]), { status: 'in_progress' })).toBeNull();
+  });
+
   it('is absent while a runner request waits', () => {
     const asked = replayTaskLog([start, { type: 'approval_requested', approvalId: 'p1', tool: 'Bash', args: '{}', allowForTask: true }]);
     expect(taskActivity(asked, { status: 'in_progress' })).toBeNull();

@@ -68,3 +68,13 @@ export function stopTurn(view: ConversationView, gate: TurnGate): GatedConversat
     gate: { open: null, stopped: gate.open },
   };
 }
+
+/**
+ * The turn is over without its `planner_turn_ended` having been heard: its
+ * call failed or returned the plan. The open turn and its start go, so the
+ * next turn does not count from this one's; a stop still standing stays, as
+ * the stopped turn's stragglers have not stopped.
+ */
+export function closeTurn(gate: TurnGate): TurnGate {
+  return gate.open === null ? gate : { open: null, stopped: gate.stopped };
+}
