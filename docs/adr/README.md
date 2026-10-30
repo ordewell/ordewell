@@ -333,7 +333,7 @@ Worktrees, repo groups, conflicts, ops tasks and merge gates.
 | [0020](isolation/0020-ops-tasks-and-merge-gates.md) | Ops tasks run in the workspace, behind a merge gate | accepted | [0013](isolation/0013-worktree-isolation.md), [0014](isolation/0014-multi-repo-workspaces.md) | [0029](supervision/0029-the-supervisor.md), [0030](supervision/0030-global-run-settings.md), [0035](supervision/0035-effects-are-consented-and-recorded.md) |
 | [0042](isolation/0042-merge-all-lands-only-on-the-branch-the-run-started-on.md) | Merge all lands only on the branch the run started on | accepted | [0013](isolation/0013-worktree-isolation.md), [0014](isolation/0014-multi-repo-workspaces.md) | — |
 | [0049](isolation/0049-a-session-has-one-live-host.md) | A session has one live host: the session lease | accepted | [0013](isolation/0013-worktree-isolation.md) | — |
-| [0054](isolation/0054-a-landed-task-reverts-on-the-integration-branch-before-merge-all.md) | A landed task reverts on the integration branch, before Merge all | accepted, partly implemented | [0013](isolation/0013-worktree-isolation.md) | — |
+| [0054](isolation/0054-a-landed-task-reverts-on-the-integration-branch-before-merge-all.md) | A landed task reverts on the integration branch, before Merge all | accepted | [0013](isolation/0013-worktree-isolation.md) | — |
 
 ### supervision/
 

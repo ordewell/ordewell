@@ -309,6 +309,8 @@ export type ConfirmAction =
   | { kind: 'mark-override'; taskId: string; direction: OverrideDirection; seen: TaskStatus }
   /** `menu` is the `/settings` stepper the question was asked from, reopened once it is answered. */
   | { kind: 'save-settings'; effect: SaveSettingsEffect; menu?: StepperState }
+  /** `seen` is the task ids the user was shown, which the daemon holds the revert to (ADR-0054). */
+  | { kind: 'revert-task'; taskId: string; seen: string[] }
   | { kind: 'merge-run' }
   | { kind: 'discard-run' }
   | { kind: 'init-workspace'; goal: string; workspace: string }

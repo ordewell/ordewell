@@ -84,6 +84,7 @@ function fakeDaemon() {
     stopExecution: vi.fn(async () => ({ status: 'stopped' })),
     cancelPlanning: vi.fn(async () => ({ cancelled: true })),
     execute: vi.fn(async (_sessionId: string, _command: ExecutionCommand) => ({ ok: true as const, message: 'Done.' })),
+    revertPreview: vi.fn(async () => ({ revertible: true as const, tasks: [{ taskId: 't1', order: 1, title: 'Add the login route', repos: ['.'], dependent: false }] })),
     addTask: vi.fn(async () => ({ ok: true })),
     updateTask: vi.fn(async () => ({ ok: true })),
     removeTask: vi.fn(async () => ({ ok: true })),
@@ -701,6 +702,25 @@ describe('TUI end to end', () => {
       expect(h.daemon.mocks.execute).toHaveBeenCalledWith('session-1', { command: 'mark_not_done', task: 't1', confirmed: true, seen: 'completed' });
     });
     expect(h.daemon.mocks.execute.mock.calls.filter(([, command]) => command.command === 'mark_complete')).toHaveLength(1);
+  });
+
+  it('/revert asks the daemon what goes, asks the user, and sends the yes with the ids it showed', async () => {
+    const h = harness();
+    h.type('Build the login flow');
+    h.type('\r');
+    await vi.waitFor(() => expect(h.screen()).toContain('Add the login route'));
+
+    h.type('/revert t1');
+    h.type('\r');
+
+    await vi.waitFor(() => expect(h.app.getState().overlay).toMatchObject({ kind: 'confirm', action: { kind: 'revert-task', taskId: 't1', seen: ['t1'] } }));
+    expect(h.daemon.mocks.revertPreview).toHaveBeenCalledWith('session-1', 't1');
+    expect(h.daemon.mocks.execute).not.toHaveBeenCalled();
+    h.type('\r');
+
+    await vi.waitFor(() => {
+      expect(h.daemon.mocks.execute).toHaveBeenCalledWith('session-1', { command: 'revert_task', task: 't1', confirmed: true, seen: ['t1'] });
+    });
   });
 
   it('/planner <provider> persists the switch to the env, the daemon, and the header', async () => {

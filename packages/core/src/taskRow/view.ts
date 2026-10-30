@@ -67,6 +67,8 @@ export interface TaskRowIsolation {
   conflictFiles?: string[];
   repair?: { attempt: number; limit: number };
   repairedFiles?: string[];
+  /** Core's word that its landing can be reverted (ADR-0054); a surface offers the action only then. */
+  revertible?: true;
 }
 
 /**
@@ -214,6 +216,8 @@ export interface TaskRowView {
   dependencies: string[];
   /** What the row offers while a plan runs. */
   actions: TaskRowAction[];
+  /** Its landed work can be reverted before Merge all (ADR-0054): a surface offers Revert only then, and core's preview says the rest. */
+  revertible: boolean;
   /** The one mark its toggle sets. */
   mark: 'complete' | 'uncomplete';
   opsEditable: boolean;
@@ -358,6 +362,7 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
     dependencies: refsOf(task.dependencies, context.tasks),
     // A block read off the plan offers what a stored one does: Skip among them.
     actions: taskRowActions(blocked.length > 0 ? { ...task, status: 'blocked' } : task, context.placement ?? (parent ? 'subtask' : 'task')),
+    revertible: isolation?.revertible === true,
     mark: markAction(task),
     opsEditable: opsEditable(task),
   };

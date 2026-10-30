@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  taskRowView, taskStatusKind, isTaskRunning, awaitingLabel, approvalLabel, resumeLabel, resumeTime, taskRowActions, markAction, taskActionCommand, overrideNeedsConfirmation, confirmedOverride, manualOverrideConfirmation, manualOverrideStopFirst, opsEditable,
+  taskRowView, taskStatusKind, isTaskRunning, awaitingLabel, approvalLabel, resumeLabel, resumeTime, taskRowActions, markAction, taskActionCommand, overrideNeedsConfirmation, confirmedOverride, manualOverrideConfirmation, manualOverrideStopFirst, opsEditable, revertEffect, revertListLine,
   titledRefs, dependentsNotice, pastGateConfirmation, newTaskFields, noExecutorRefusal, blockedByLabel, holdLabel, skippedLabel, type TaskRowSubject, type TaskRowAction,
 } from '..';
 import { taskRef, titledTaskRef } from '../../services/TaskRefs';
@@ -314,6 +314,12 @@ describe('the row view, every status against every annotation', () => {
     ['repaired files, still repairing', { isolation: { ...isolated, state: 'repairing', repairedFiles: ['a'] } }, (v) => {
       expect(v.repaired).toEqual({ files: 'a', landed: false });
     }],
+    ['work a revert can take back', { isolation: { ...isolated, state: 'integrated', revertible: true } }, (v) => {
+      expect(v.revertible).toBe(true);
+    }],
+    ['landed work a revert cannot take', { isolation: { ...isolated, state: 'integrated' } }, (v) => {
+      expect(v.revertible).toBe(false);
+    }],
     ['no isolation at all', { isolation: { state: 'none' } }, (v) => {
       expect(v).toMatchObject({ conflict: null, repairing: null, repaired: null, repos: [] });
     }],
@@ -462,6 +468,23 @@ describe('the row view, every status against every annotation', () => {
 
   it('marks a quiet task as still running', () => {
     expect(taskRowView(subject({ status: 'in_progress', idleSince: 'x' }))).toMatchObject({ status: 'quiet', running: true });
+  });
+});
+
+describe('what a revert is confirmed with (ADR-0054)', () => {
+  it('lists a task by order and title, and says which one goes with the task asked about', () => {
+    expect(revertListLine({ order: 1, title: 'Parse JSON', repos: ['.'], dependent: false })).toBe('#1 Parse JSON');
+    expect(revertListLine({ order: 2, title: 'Wire it up', repos: ['.'], dependent: true })).toBe('#2 Wire it up (goes with it)');
+  });
+
+  it('names the repos only when the work went beyond the workspace\'s own', () => {
+    expect(revertListLine({ order: 3, title: 'Both', repos: ['api', 'web'], dependent: true })).toBe('#3 Both (api, web) (goes with it)');
+  });
+
+  it('says what it does to the branch and to the tasks, and that the user\'s branch is untouched', () => {
+    expect(revertEffect).toContain('integration branch');
+    expect(revertEffect).toContain('held as not started');
+    expect(revertEffect).toContain('Nothing in your own branch changes');
   });
 });
 

@@ -87,6 +87,10 @@ function runConfirm(
     if (!state.sessionId || !task) return fail(closed, 'That task is no longer in the plan: nothing was changed.');
     return step(closed, [taskActionEffect(closed, state.sessionId, taskId, direction, overrideNeedsConfirmation(task) ? { seen } : undefined)]);
   }
+  if (overlay.action.kind === 'revert-task') {
+    if (!state.sessionId) return step(closed);
+    return step(closed, [{ type: 'revertTask', sessionId: state.sessionId, taskId: overlay.action.taskId, seen: overlay.action.seen }]);
+  }
   if (overlay.action.kind === 'save-settings') return answerSaveSettings(state, overlay.action, true);
   if (overlay.action.kind === 'merge-run' || overlay.action.kind === 'discard-run') {
     return confirmedHandoff(state, overlay.action.kind);

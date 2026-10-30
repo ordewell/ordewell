@@ -25,7 +25,7 @@ export type OrdewellApi = Pick<ApiClient,
   | 'invokeTaskCommand' | 'approveTaskCheckpoint' | 'rejectTaskCheckpoint'
   | 'addTask' | 'updateTask' | 'removeTask'
   | 'getSessions' | 'getSession' | 'adoptSession' | 'deleteSession' | 'closeSession'
-  | 'getIsolationPreview'
+  | 'getIsolationPreview' | 'revertPreview'
   | 'forkConversation' | 'rewindTargets' | 'rewindConversation' | 'compactConversation'
   | 'reviewRunDiff' | 'mergeRun' | 'discardRun' | 'cleanupRun' | 'continueWithStash' | 'continueWithoutIsolation' | 'resolveConflictAsTask'
   | 'getSettings' | 'updateSettings' | 'updateRunSettings'
@@ -313,6 +313,18 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       // way a whole run does, so it needs the same stream open around it.
       await (effect.watch ? withExecutionStream(deps, sessionId, request) : request());
       await refreshPlan(deps, sessionId);
+      return;
+    }
+
+    case 'previewRevert':
+      dispatch({ type: 'revertPreviewed', sessionId: effect.sessionId, taskId: effect.taskId, preview: await api.revertPreview(effect.sessionId, effect.taskId) });
+      return;
+
+    // A refusal at this point (a plan that changed, a conflict) comes back as the failure the seam worded.
+    case 'revertTask': {
+      const { message } = await api.execute(effect.sessionId, { command: 'revert_task', task: effect.taskId, confirmed: true, seen: effect.seen });
+      await refreshPlan(deps, effect.sessionId);
+      dispatch({ type: 'notice', message });
       return;
     }
 

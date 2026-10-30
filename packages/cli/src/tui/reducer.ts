@@ -12,6 +12,7 @@ import { syncApprovals } from './reducers/approvals';
 import { handlePlanKey } from './reducers/planPane';
 import { announceApprovals, announceCheckpoint, answerCheckpoint, continueTaskStep, handleTaskViewKey, openTaskView, taskLogAbandoned, taskLogArrived, taskLogLoaded } from './reducers/taskView';
 import { newSession, pickRewindTarget, runCommand } from './reducers/commands';
+import { revertPreviewed } from './reducers/revert';
 import { adoptCompaction, followCompaction } from './reducers/compaction';
 import { disarmStop, drainQueue, forceSendPlanner, plannerEscape, queueToEditor, restoreForced } from './reducers/turnQueue';
 import { applySettings, foldRun, followSession, planSnapshot, withRun } from './reducers/incoming';
@@ -440,6 +441,9 @@ function reduceAction(state: TuiState, action: Action): Step {
 
     case 'sessionsLoaded':
       return step(refillPicker({ ...state, sessions: action.sessions }, ['load-session', 'delete-session']));
+
+    case 'revertPreviewed':
+      return stale(state, action.sessionId) ? step(state) : revertPreviewed(state, action.taskId, action.preview);
 
     case 'rewindTargetsLoaded':
       if (stale(state, action.sessionId)) return step(state);

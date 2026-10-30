@@ -1,5 +1,5 @@
 import type { AccountLimitSnapshot } from '@ordewell/core';
-import type { AiProvider, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, IsolationPreview, PlanUsage, PlannerUsage, ResearchLogEntry, RunActivity, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, StreamStamp, TaskAction, TaskLogEvent, TaskStatus } from '@ordewell/core';
+import type { AiProvider, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, IsolationPreview, PlanUsage, PlannerUsage, ResearchLogEntry, RunActivity, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, StreamStamp, TaskAction, TaskRevertPreview, TaskLogEvent, TaskStatus } from '@ordewell/core';
 import type { Key } from '../keys';
 import type {
   HandoffView, LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
@@ -61,6 +61,10 @@ export type Effect =
   /** `watch` asks the runtime to hold the execution stream open for this action — see `taskActionEffect`. */
   /** `confirmed`: the user's yes to an override, with the status they were asked about (ADR-0029). */
   | { type: 'taskAction'; sessionId: string; taskId: string; action: TaskAction; watch?: boolean; confirmed?: { seen: TaskStatus } }
+  /** Asks the daemon what reverting a task would take (ADR-0054), to confirm with the user. */
+  | { type: 'previewRevert'; sessionId: string; taskId: string }
+  /** The user's yes to that list; `seen` is the ids they were shown. */
+  | { type: 'revertTask'; sessionId: string; taskId: string; seen: string[] }
   | { type: 'addTask'; sessionId: string; title: string }
   /** `/settings`: only the changed values, saved the way their headless commands save them, then `message` as one notice. */
   | { type: 'saveSettings'; run: Partial<GlobalRunSettings>; autonomous?: boolean; maxParallel?: number; message: string; sessionId?: string }
@@ -183,6 +187,7 @@ export type Action =
   | { type: 'sessionsLoaded'; sessions: SessionView[] }
   | { type: 'sessionForked'; sessionId: string; goal: string }
   | { type: 'inputPrefilled'; text: string; sessionId?: string }
+  | { type: 'revertPreviewed'; sessionId: string; taskId: string; preview: TaskRevertPreview }
   | { type: 'rewindTargetsLoaded'; targets: RewindTargetView[]; sessionId?: string; pick?: number }
   | { type: 'runnersLoaded'; runners: RunnerView[]; orchestratorModel?: string }
   /** The welcome's repositories and branches: `read` is the request this answers, so an older one cannot land on a newer. */

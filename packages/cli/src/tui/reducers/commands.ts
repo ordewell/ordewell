@@ -129,6 +129,8 @@ export function runCommand(state: TuiState, parsed: ParsedCommand): Step {
         if (answer === 'approve' && reason) return fail(state, 'Approving takes no note: reject with a reason to tell the task something.');
         return answerCheckpoint(state, sessionId, taskId, answer, reason);
       });
+    case 'revert':
+      return taskCommand(state, args[0], (sessionId, taskId) => step(state, [{ type: 'previewRevert', sessionId, taskId }]));
     case 'task-runner':
       return taskRunnerCommand(state, args);
     case 'task-model':

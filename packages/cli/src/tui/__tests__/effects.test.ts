@@ -1506,6 +1506,38 @@ describe('catalogs and sessions', () => {
   });
 });
 
+describe('revert (ADR-0054)', () => {
+  const preview = { revertible: true, tasks: [{ taskId: 't1', order: 1, title: 'One', repos: ['.'], dependent: false }] };
+
+  it('reads the preview and hands it to the reducer', async () => {
+    const revertPreview = vi.fn().mockResolvedValue(preview);
+    const h = harness({ revertPreview });
+    await runEffect({ type: 'previewRevert', sessionId: 's1', taskId: 't1' }, h.deps);
+
+    expect(revertPreview).toHaveBeenCalledWith('s1', 't1');
+    expect(h.actions).toContainEqual({ type: 'revertPreviewed', sessionId: 's1', taskId: 't1', preview });
+  });
+
+  it('sends the yes with the ids the user was shown, then re-reads the plan', async () => {
+    const execute = vi.fn().mockResolvedValue({ ok: true, message: 'Reverted task #1 One.' });
+    const h = harness({ execute });
+    await runEffect({ type: 'revertTask', sessionId: 's1', taskId: 't1', seen: ['t2', 't1'] }, h.deps);
+
+    expect(execute).toHaveBeenCalledWith('s1', { command: 'revert_task', task: 't1', confirmed: true, seen: ['t2', 't1'] });
+    expect(h.api.getSession).toHaveBeenCalledWith('s1', '/ws');
+    expect(h.actions).toContainEqual({ type: 'notice', message: 'Reverted task #1 One.' });
+  });
+
+  it('shows a conflict in the seam\'s words and no notice of success', async () => {
+    const words = 'Reverting task "One" conflicts with what landed after it: a.txt. Nothing was reverted, and the integration branch is as it was.';
+    const h = harness({ execute: vi.fn().mockRejectedValue(new DaemonError(words, 400, 'refused')) });
+    await runEffect({ type: 'revertTask', sessionId: 's1', taskId: 't1', seen: ['t1'] }, h.deps);
+
+    expect(h.actions).toContainEqual({ type: 'failed', message: words, code: 'refused' });
+    expect(h.actions.some((a) => a.type === 'notice')).toBe(false);
+  });
+});
+
 describe('failures', () => {
   // Now that loading adopts the session, this only happens when the daemon has
   // restarted underneath us — so the advice is to reload, not to re-plan.
