@@ -564,6 +564,15 @@ export class Attempts {
     if (handoff) this.deps.recordHandoff(sessionId, taskId, handoff);
   }
 
+  /**
+   * The number of the task's latest attempt, live or ended; 0 before any ran.
+   * A script's attempt has no ledger, so after a reload only its log says.
+   */
+  latestAttempt(task: Readonly<Task>): number {
+    const known = Math.max(this.spawnCounts.get(task.id) ?? 0, ...task.attemptUsage?.map((u) => u.attempt) ?? []);
+    return known > 0 || task.type === 'user' ? known : this.deps.lastLoggedAttempt(task.id);
+  }
+
   /*
    * The saved reason says what the task waits on. The live attempt stays a
    * guard: a checkpoint reloaded from disk has no runner left to answer it,

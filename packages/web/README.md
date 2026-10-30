@@ -27,7 +27,9 @@ task, skip, mark complete, message) are one `POST /api/plans/:id/execute-command
 whose body is core's `ExecutionCommand`. Mark complete and Mark not done on an
 AI or script task are refused while a run could advance the task, and otherwise
 need `"confirmed": true`, the user's yes (with `"seen"`, the task status they
-were asked about); a manual task's sign-off needs neither.
+were asked about); a manual task's sign-off needs neither. What waits on a
+person (ADR-0053) is `GET /api/plans/:id/escalations`, and on every status
+update; `POST /api/plans/:id/escalations/answer` answers one by its id.
 
 Skills are read by the planner and the task orchestrator, not served as a
 route; the format is in [Writing skills](https://github.com/ordewell/ordewell/blob/main/docs/skills.md).

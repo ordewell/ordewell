@@ -347,6 +347,7 @@ The supervisor, run settings, failure policy, consent and research tasks.
 | [0037](supervision/0037-research-tasks-wake-the-planner.md) | Evidence the planner decides on is a research task, and its report wakes the planner | accepted | [0009](planner/0009-coding-agents-as-planners.md), [0029](supervision/0029-the-supervisor.md) | [0046](planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md), [0047](supervision/0047-structured-task-handoffs.md) |
 | [0045](supervision/0045-a-check-repeats-with-its-fix-until-it-passes.md) | A check repeats with its fix until it passes | accepted | [0029](supervision/0029-the-supervisor.md), [0034](supervision/0034-a-failed-task-blocks-only-its-dependents.md) | [0047](supervision/0047-structured-task-handoffs.md) |
 | [0047](supervision/0047-structured-task-handoffs.md) | Every task ends with a handoff: a short summary, atomic findings and a way to pull the rest | accepted | [0022](runners/0022-ordewell-mcp-server.md), [0029](supervision/0029-the-supervisor.md), [0037](supervision/0037-research-tasks-wake-the-planner.md), [0045](supervision/0045-a-check-repeats-with-its-fix-until-it-passes.md) | [0050](planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md) |
+| [0053](supervision/0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md) | What waits on a person is derived, listed once and answered in one call | accepted | — | — |
 
 ### surfaces/
 

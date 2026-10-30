@@ -9,6 +9,7 @@ import { continuability } from './continuation';
 import type { GuardTarget, GuardTrip } from './LoopGuards';
 import { STOPPED_BEFORE_START, type StartAdmission } from './TaskOrchestrator';
 import { waitOf, type StartWait } from './readiness';
+import { escalationAct, type Escalation } from './escalations';
 import { manualOverrideConfirmation, manualOverrideStopFirst, type OverrideDirection } from '../taskRow/texts';
 
 /** One call at the command seam, as every route words it (ADR-0029). Task references are resolved here. */
@@ -249,6 +250,12 @@ export interface ExecutionHost {
   awaitEnd(taskId: string, ms: number, signal?: AbortSignal): Promise<void>;
   /** The task's result is owed to the planner, in a turn acting for whoever started it (ADR-0037, R2, R3). */
   owe(taskId: string, to: TaskReportTo): void;
+  /** What waits on a person now, derived afresh (ADR-0053). */
+  escalations(): readonly Escalation[];
+  /** Add the task that merges a conflicted task's branch by hand; false when it has no conflict left. */
+  resolveConflict(taskId: string): Promise<boolean>;
+  /** Replay the run a dirty checkout turned away, stashing first or for this run without isolation. */
+  continueRun(how: 'stash' | 'shared'): Promise<void>;
   /** The end of a task's output, as a planner turn is told it; see {@link taskReport}. */
   reportTail(taskId: string): string | undefined;
 }
@@ -309,6 +316,8 @@ const NO_PLAN_FOR_SCRIPT = 'There is no plan yet, so there is nowhere to add a s
 
 
 const OVERRIDE_LANDING = 'Another manual override is landing: wait for it to finish, then start or override again.';
+
+const ESCALATION_GONE = 'That is no longer waiting on you: it was answered, or the run moved on. Nothing was changed.';
 
 const NEVER_ALLOWS = 'answer_approval never allows. A runner asks because its mode did not cover the request, and allowing it would widen the mode the plan gave the task. Deny it with a note saying what to do instead, or escalate it to the user.';
 
@@ -416,6 +425,39 @@ export class ExecutionCommands {
       return await this.carryOut(command, actor, located, consent, first, admission);
     } finally {
       admission?.release();
+    }
+  }
+
+  /**
+   * The user's answer to an escalation (ADR-0053): the list derived afresh,
+   * and the option chosen dispatched to the existing command for that wait, as
+   * the user, so every check it has still applies and this adds no authority.
+   * It takes no actor because it is the user's alone: no planner tool reaches
+   * it, and the supervisor keeps its own tools. `confirmed` is the user's yes to
+   * an option's `confirm`, which a choice cannot imply.
+   */
+  async answerEscalation(id: string, option: string, note?: string, confirmed = false): Promise<CommandOutcome> {
+    const refused = (message: string): CommandOutcome => ({ ok: false, outcome: 'refused', message });
+    const escalation = this.host.escalations().find((e) => e.id === id);
+    if (!escalation) return refused(ESCALATION_GONE);
+    const chosen = escalation.options.find((o) => o.id === option);
+    if (!chosen) {
+      const offered = escalation.options.map((o) => `"${o.id}"`);
+      return refused(`"${option}" is not an answer to this: use ${offered.length < 2 ? offered.join('') : `${offered.slice(0, -1).join(', ')} or ${offered[offered.length - 1]}`}. Nothing was changed.`);
+    }
+    if (chosen.confirm && !confirmed) return refused(`${chosen.confirm} Nothing was changed: it needs your explicit yes.`);
+    const act = escalationAct(escalation, chosen.id, note);
+    if (act.kind === 'command') return this.run(act.command, { kind: 'user' });
+    try {
+      if (act.kind === 'continue-run') {
+        await this.host.continueRun(act.how);
+        return { ok: true, message: act.how === 'stash' ? 'Stashed your changes: the run goes on.' : 'The run goes on without isolation, this once.' };
+      }
+      const label = `task ${escalation.task?.ref} "${escalation.task?.title}"`;
+      if (!(await this.host.resolveConflict(act.task))) return refused(`${capitalize(label)} has no conflict left to resolve.`);
+      return { ok: true, message: `Added a task that resolves the conflict of ${label}.` };
+    } catch (err) {
+      return refused(err instanceof Error ? err.message : String(err));
     }
   }
 

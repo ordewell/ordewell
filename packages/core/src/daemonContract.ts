@@ -15,6 +15,7 @@ import type { GlobalRunSettings, UserSettings } from './services/SettingsService
 import type { TaskLogEvent } from './models/TaskLog';
 import type { CommandPayload } from './services/ExecutionCommands';
 import type { RunnerAuth } from './services/runnerAuth';
+import type { Escalation } from './services/escalations';
 
 /**
  * The daemon contract: every HTTP body the local daemon sends, in one place.
@@ -100,6 +101,26 @@ export interface ExecuteCommandResponse {
   ok: true;
   message: string;
   payload?: CommandPayload;
+}
+
+/**
+ * `GET /api/plans/:id/escalations`: what waits on a person now (ADR-0053). A
+ * client holding a socket has the same list on every status update.
+ */
+export interface EscalationsResponse {
+  escalations: Escalation[];
+}
+
+/**
+ * The body of `POST /api/plans/:id/escalations/answer`, run as the user, and
+ * answered as `execute-command` answers. `confirmed` is the user's yes to the
+ * option's `confirm`.
+ */
+export interface AnswerEscalationRequest {
+  id: string;
+  option: string;
+  note?: string;
+  confirmed?: boolean;
 }
 
 /**
