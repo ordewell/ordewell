@@ -423,6 +423,12 @@ export function runHints(state: TuiState): string[] {
 
 export const runHint = (state: TuiState): string => runHints(state)[0] ?? '';
 
+/** The status row's count of what waits on the person (ADR-0053); nothing while the list is empty. */
+export function inboxHint(state: TuiState): string {
+  const waiting = state.run.escalations?.length ?? 0;
+  return waiting > 0 ? `${waiting} waiting: /inbox` : '';
+}
+
 export function packHints(hints: string[], cols: number): string[] {
   const lines: string[] = [];
   let current = '';

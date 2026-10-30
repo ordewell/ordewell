@@ -99,6 +99,15 @@ export interface ConversationPatch {
   replaced?: true;
 }
 
+/** One answer to an escalation (ADR-0053); `requestId` is what the host's `escalationAnswered` replies to. */
+export interface EscalationAnswer {
+  requestId: string;
+  id: string;
+  option: string;
+  note?: string;
+  confirmed?: true;
+}
+
 export type WebviewToHost =
   | { type: 'getTaskCommands'; taskId: string }
   | { type: 'invokeTaskCommand'; taskId: string; name: string; args: string }
@@ -148,6 +157,8 @@ export type WebviewToHost =
   /** Send one held prompt now, by its position in the hold; the rest stay held in order. */
   | { type: 'sendHeldPromptNow'; index: number }
   | { type: 'ready' }
+  /** The user's answer to an escalation in the inbox; the host asks the Session and replies with `escalationAnswered`. */
+  | ({ type: 'answerEscalation' } & EscalationAnswer)
   /** A per-task model dropdown opened — re-discover so a stale/degraded catalog self-heals. */
   | { type: 'refreshModels' }
   | { type: 'stopResearch' }
@@ -230,6 +241,13 @@ export type HostToWebview =
    * session it belonged to is dropped.
    */
   | { type: 'runActivity'; activity: RunActivity; requestId?: number }
+  /**
+   * The Session's verdict on one `answerEscalation`, in its own words when it
+   * refused. A refusal is shown by the inbox, not as a toast: the entry it
+   * names has usually left the list by the time it arrives.
+   */
+  | { type: 'escalationAnswered'; requestId: string; id: string; ok: true }
+  | { type: 'escalationAnswered'; requestId: string; id: string; ok: false; message: string }
   | { type: 'taskOutput'; taskId: string; text: string }
   /** The queued prompts the host is holding for the next planner turn, oldest first. */
   | { type: 'heldPrompts'; prompts: PromptHold }

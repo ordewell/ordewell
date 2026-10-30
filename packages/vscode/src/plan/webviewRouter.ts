@@ -5,7 +5,7 @@ import type { SettingsChange, WebviewToHost } from '../shared/protocol';
 import { isKnownSlashCommand } from '../commands/SlashParser';
 import { handleIsolationAction } from './isolation';
 import {
-  handleAddTask, handleCheckpointAnswer, handleResolveApproval, handleNewSession, handleRemoveTask,
+  handleAddTask, handleCheckpointAnswer, handleEscalationAnswer, handleResolveApproval, handleNewSession, handleRemoveTask,
   handleSendMessage, handleSendMessageNow, handleStopPlanning, handleSystemCommand, handleTaskControl, handleTaskEdit, type PlanManagerDeps,
 } from './PlanManager';
 
@@ -101,6 +101,9 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
       return;
     case 'answerCheckpoint':
       await handleCheckpointAnswer(msg.taskId, msg.approved, msg.reason, deps);
+      return;
+    case 'answerEscalation':
+      await handleEscalationAnswer(msg, deps);
       return;
     case 'getTaskCommands':
       deps.chatProvider.postMessage({ type: 'taskCommands', taskId: msg.taskId, commands: latestTaskCommands(deps.session, msg.taskId) });

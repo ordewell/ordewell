@@ -6,6 +6,7 @@ import { sanitize } from '../ansi';
 import type { TaskView, TuiState } from '../state';
 import { hear } from '../transcript';
 import { dropApproval, enqueueApproval } from './approvals';
+import { refillInbox } from './inbox';
 
 /**
  * A plan's text, safe to lay out. Every field here was written by a model, so
@@ -137,7 +138,8 @@ function supervisorOfRun(runSettings: RunView['runSettings']): Pick<TuiState, 'r
 
 /** The pane's fields, all derived from the run view the surface folds. */
 export function withRun(state: TuiState, run: RunView): TuiState {
-  return {
+  // An open inbox follows the list as core sends it, with no polling (ADR-0053).
+  return refillInbox({
     ...state,
     run,
     tasks: run.tasks.map(runTaskToView),
@@ -147,7 +149,7 @@ export function withRun(state: TuiState, run: RunView): TuiState {
       : null,
     runAutoMerge: run.runSettings?.mergeAtGatesAutomatically ?? null,
     ...supervisorOfRun(run.runSettings),
-  };
+  });
 }
 
 /** One run input into the surface's view; a fold that changes nothing returns the state unchanged. */
