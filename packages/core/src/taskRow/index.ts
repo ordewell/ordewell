@@ -10,7 +10,7 @@ export { patchView, savedPatchView, savedPatchViews } from '../models/Handoff';
 export type { PatchView } from '../models/Handoff';
 export { taskLogHeaderView, taskLogCommands, logContinues, logResumes } from './logHeader';
 export type { TaskLogHeaderTask, TaskLogHeaderView, TaskLogHeaderKind, TaskLogHeaderUsage } from './logHeader';
-export { titledRefs, dependentsNotice, loopLeaveNotice, pastGateConfirmation, manualOverrideConfirmation, manualOverrideStopFirst, revertEffect, revertListLine, newTaskFields, noExecutorRefusal } from './texts';
+export { titledRefs, dependentsNotice, loopLeaveNotice, pastGateConfirmation, manualOverrideConfirmation, manualOverrideStopFirst, revertEffect, revertListLine, revertTaskRef, newTaskFields, noExecutorRefusal } from './texts';
 export type { NewTaskFields, OverrideDirection } from './texts';
 export { assignedRunnerOf, assignmentIssue, assignmentIssueText } from '../services/AssignmentScope';
 export type { AssignmentScope, AssignmentIssue } from '../services/AssignmentScope';

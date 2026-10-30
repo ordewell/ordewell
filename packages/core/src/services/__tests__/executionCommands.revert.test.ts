@@ -95,6 +95,16 @@ describe('revert_task', () => {
     expect(env.status('t2')).toBe('completed');
   });
 
+  it('refuses a list that repeats a task to reach the length of what would go', async () => {
+    const env = await landed([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], ['t1', 't2']);
+
+    const outcome = await env.run({ command: 'revert_task', task: 't1', confirmed: true, seen: ['t1', 't1'] });
+
+    expect(outcome).toMatchObject({ ok: false, message: expect.stringContaining('has changed since you were asked') });
+    expect(env.status('t1')).toBe('completed');
+    expect(env.status('t2')).toBe('completed');
+  });
+
   it('goes ahead on the very list the preview showed', async () => {
     const env = await landed([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], ['t1', 't2']);
     const preview = await env.session.revertPreview('t1');

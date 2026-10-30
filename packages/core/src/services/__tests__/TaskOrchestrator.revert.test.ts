@@ -161,6 +161,63 @@ describe('TaskOrchestrator: reverting a landed task (ADR-0054)', () => {
       expect(status('nothing')).toBe('completed');
     });
 
+    describe('whose record a later attempt left in another state', () => {
+      const chain = () => [task('t1', 1), task('t2', 2, { dependencies: ['t1'] })];
+      /** Both landed and the run over: `t2` retried, at work again on a new record. */
+      async function retried() {
+        const env = await landed(chain(), ['t1', 't2']);
+        await vi.waitFor(() => expect(env.orchestrator.runs.isOpen).toBe(false));
+        await env.orchestrator.retryTask('t2');
+        await env.orchestrator.forceStartTask('t2');
+        await vi.waitFor(() => expect(env.orchestrator.getAttempt('t2')?.phase).toBe('running'));
+        return env;
+      }
+
+      it('go with it when a retry has dropped the record, and stay held', async () => {
+        const { orchestrator, status } = await retried();
+        await orchestrator.cancelTask('t2');
+        await orchestrator.runs.release('t2', { keep: false });
+        expect(orchestrator.runs.current?.tasks.t2).toBeUndefined();
+
+        expect(orchestrator.revertScope('t1').taskIds).toEqual(['t1', 't2']);
+        expect(orchestrator.runs.taskIsolation('t2')).toEqual({ state: 'none', revertible: true });
+        expect(await orchestrator.revertTask('t1')).toMatchObject({ outcome: 'reverted', tasks: [{ taskId: 't2' }, { taskId: 't1' }] });
+
+        expect(status('t2')).toBe('pending');
+        expect(orchestrator.holdReason('t2')).toContain('reverted');
+        expect(orchestrator.runs.taskIsolation('t2')).toEqual({ state: 'none' });
+      });
+
+      it('go with it from a stopped attempt, whose worktree stays', async () => {
+        const { orchestrator, isolation, status } = await retried();
+        await orchestrator.cancelTask('t2');
+        expect(orchestrator.runs.current?.tasks.t2.status).toBe('kept');
+
+        expect(await orchestrator.revertTask('t1')).toMatchObject({ outcome: 'reverted' });
+
+        expect(status('t2')).toBe('pending');
+        expect(orchestrator.runs.current?.tasks.t2.status).toBe('kept');
+        expect(isolation.calls).toContainEqual({ op: 'revert', taskIds: ['t1', 't2'] });
+      });
+
+      it('keep a retry at work from being reverted under it', async () => {
+        const { orchestrator, status } = await retried();
+
+        expect(await orchestrator.revertTask('t1')).toMatchObject({ outcome: 'refused', reason: expect.stringContaining('"Task t2"') });
+        expect(orchestrator.runs.taskIsolation('t2')).not.toHaveProperty('revertible');
+        expect(status('t1')).toBe('completed');
+      });
+
+      it('can be reverted by themselves', async () => {
+        const { orchestrator, status } = await retried();
+        await orchestrator.cancelTask('t2');
+
+        expect(await orchestrator.revertPreview('t2')).toMatchObject({ revertible: true, tasks: [{ taskId: 't2', dependent: false }] });
+        expect(await orchestrator.revertTask('t2')).toMatchObject({ outcome: 'reverted' });
+        expect(status('t1')).toBe('completed');
+      });
+    });
+
     it('is refused while one is live, naming it, and touches nothing', async () => {
       const { orchestrator, isolation, status } = await landed(chain(), ['t1']);
       await vi.waitFor(() => expect(orchestrator.getAttempt('t2')?.phase).toBe('running'));
@@ -223,18 +280,52 @@ describe('TaskOrchestrator: reverting a landed task (ADR-0054)', () => {
       expect(orchestrator.startsHeld).toBe(false);
     });
 
-    it('refuses in its turn a dependent that went live meanwhile', async () => {
+    it('refuses in its turn a dependent Mark complete began landing meanwhile', async () => {
       const { orchestrator, isolation, status } = await landed([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], ['t1']);
       await vi.waitFor(() => expect(orchestrator.getAttempt('t2')?.phase).toBe('running'));
       await orchestrator.cancelTask('t2');
       const open = isolation.holdRevert();
+      const land = isolation.holdIntegration('t2');
 
       const reverting = orchestrator.revertTask('t1');
-      await orchestrator.forceStartTask('t2');
+      const completing = orchestrator.markTaskComplete('t2');
       open();
 
       expect(await reverting).toMatchObject({ outcome: 'refused', reason: expect.stringContaining('"Task t2"') });
       expect(status('t1')).toBe('completed');
+      land();
+      await completing;
+    });
+
+    it('refuses the start of a dependent, and goes ahead', async () => {
+      const { orchestrator, isolation, status, started } = await landed([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], ['t1']);
+      await vi.waitFor(() => expect(orchestrator.getAttempt('t2')?.phase).toBe('running'));
+      await orchestrator.cancelTask('t2');
+      const before = started('t2');
+      const open = isolation.holdRevert();
+
+      const reverting = orchestrator.revertTask('t1');
+      await expect(orchestrator.forceStartTask('t2')).rejects.toThrow('A revert is taking back work task "Task t2" depends on');
+      open();
+
+      expect(await reverting).toMatchObject({ outcome: 'reverted' });
+      expect(started('t2')).toBe(before);
+      expect(status('t2')).toBe('pending');
+    });
+
+    it('lets the start of a task that does not depend on the work through', async () => {
+      const { orchestrator, isolation, started } = await landed([task('t1', 1), task('other', 2)], ['t1']);
+      await vi.waitFor(() => expect(orchestrator.getAttempt('other')?.phase).toBe('running'));
+      await orchestrator.cancelTask('other');
+      const before = started('other');
+      const open = isolation.holdRevert();
+
+      const reverting = orchestrator.revertTask('t1');
+      await orchestrator.forceStartTask('other');
+      expect(started('other')).toBe(before + 1);
+      open();
+
+      expect(await reverting).toMatchObject({ outcome: 'reverted' });
     });
 
     it('leaves a plan loaded meanwhile alone', async () => {
@@ -246,8 +337,8 @@ describe('TaskOrchestrator: reverting a landed task (ADR-0054)', () => {
       await orchestrator.runs.adopt(null);
       orchestrator.loadPlan([replacement]);
       open();
-      await reverting;
 
+      expect(await reverting).toMatchObject({ outcome: 'refused', reason: expect.stringContaining('Another plan was loaded') });
       expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed');
       expect(orchestrator.holdReason('t1')).toBeNull();
     });
@@ -338,6 +429,40 @@ describe('TaskOrchestrator: reverting a landed task (ADR-0054)', () => {
     });
   });
 
+  describe('subtasks', () => {
+    // A subtask runs and lands as a task of its own, with its own record: it goes with a parent only if it depends on it.
+    const family = () => [
+      task('parent', 1, { subtasks: [task('free', 1), task('on-parent', 2, { dependencies: ['parent'] })] }),
+    ];
+
+    it('leaves one that does not depend on its parent landed and done', async () => {
+      const { orchestrator, status } = await landed(family(), ['parent', 'free', 'on-parent']);
+
+      expect(await orchestrator.revertTask('parent')).toMatchObject({ outcome: 'reverted', tasks: [{ taskId: 'on-parent' }, { taskId: 'parent' }] });
+
+      expect(status('parent')).toBe('pending');
+      expect(status('on-parent')).toBe('pending');
+      expect(orchestrator.holdReason('on-parent')).toContain('reverted');
+      expect(status('free')).toBe('completed');
+      expect(orchestrator.runs.taskIsolation('free')).toMatchObject({ state: 'integrated' });
+    });
+
+    it('reverts one by itself, its parent untouched', async () => {
+      const { orchestrator, status } = await landed(family(), ['parent', 'free', 'on-parent']);
+
+      expect(await orchestrator.revertTask('free')).toMatchObject({ outcome: 'reverted', tasks: [{ taskId: 'free' }] });
+
+      expect(status('free')).toBe('pending');
+      expect(status('parent')).toBe('completed');
+    });
+
+    it('calls it by its full path in the preview: its order alone would name a top-level task', async () => {
+      const { orchestrator } = await landed(family(), ['parent', 'free', 'on-parent']);
+
+      expect(await orchestrator.revertPreview('free')).toMatchObject({ revertible: true, tasks: [{ taskId: 'free', ref: '#1.1' }] });
+    });
+  });
+
   describe('the merge gate', () => {
     const gatedOn = (deps: string[]) => task('ops', 9, { ops: true, dependencies: deps });
 
@@ -380,8 +505,8 @@ describe('TaskOrchestrator: reverting a landed task (ADR-0054)', () => {
       const preview = await orchestrator.revertPreview('t1');
 
       expect(preview).toEqual({ revertible: true, tasks: [
-        { taskId: 't2', order: 2, title: 'Task t2', repos: ['.'], dependent: true },
-        { taskId: 't1', order: 1, title: 'Task t1', repos: ['.'], dependent: false },
+        { taskId: 't2', order: 2, ref: '#2', title: 'Task t2', repos: ['.'], dependent: true },
+        { taskId: 't1', order: 1, ref: '#1', title: 'Task t1', repos: ['.'], dependent: false },
       ] });
       expect(status('t1')).toBe('completed');
       expect(isolation.calls.some((c) => c.op === 'revert')).toBe(false);

@@ -11,6 +11,7 @@ import { loggedHandoff, type TaskLogReader } from './readTask';
 import { listed } from './harness/ordewellBinding';
 import { resolveTaskRef, titledTaskRefOf } from './TaskRefs';
 import type { ApplyPatchArgs, McpToolReply } from './mcp/tools';
+import { shellQuoted } from '../utils/shell';
 
 /*
  * A read-only task's prototype, kept as a patch (ADR-0050). Its worktree is
@@ -104,10 +105,6 @@ const PINNED = [
 
 /** A patch `git apply` takes at the repository root, whatever the repository says about diffs. */
 const DIFF = '--no-ext-diff --no-textconv --no-color --src-prefix=a/ --dst-prefix=b/ -O/dev/null';
-
-function shellQuoted(text: string): string {
-  return `'${text.replace(/'/g, `'\\''`)}'`;
-}
 
 /** What both scripts start with: where their files go, and git pointed at the private index and object store. */
 function prelude(stem: string): string {

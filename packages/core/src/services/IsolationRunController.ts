@@ -30,7 +30,7 @@ import type {
 } from '../interfaces/IWorktreeIsolation';
 import { describeMergeResult, repairedLanded } from './mergeResultNotice';
 import { quotedList } from '../utils/quotedList';
-import { handoffOf, layoutOf, PrepareFailedError, SELF_REPO, taskIsolationOf } from './isolationRecord';
+import { handoffOf, layoutOf, PrepareFailedError, SELF_REPO, taskIsolationsOf } from './isolationRecord';
 import { handoffBranchName } from './mergeWording';
 import type { IsolatedExecution } from './plannerModes';
 import { PlanEditError } from './PlanEditError';
@@ -106,6 +106,8 @@ type RunDecision =
   | { mode: 'shared'; reason: SharedRootReason; repos: string[] };
 
 const SHARED_ROOT_TAIL = 'tasks run in the workspace root without worktree isolation.';
+
+const PLAN_REPLACED_REVERT = 'Another plan was loaded while this revert was under way, so nothing was reverted.';
 
 /** Why a run fell back to the shared workspace root, as the one line the user is told. */
 function sharedRootNotice(reason: SharedRootReason, repos: string[]): string {
@@ -257,16 +259,13 @@ export class IsolationRunController {
   /** Where a task's isolated work stands; null when the plan has no isolation run to speak of. */
   taskIsolation(taskId: string): TaskIsolation | null {
     if (!this.run) return null;
-    const record = this.run.tasks[taskId];
-    if (!record) return { state: 'none' };
-    return taskIsolationOf(record, this.config.conflictRepairAttempts);
+    return taskIsolationsOf(this.run, this.config.conflictRepairAttempts)[taskId] ?? { state: 'none' };
   }
 
   view(): IsolationView | null {
     const run = this.run;
     if (!run) return null;
-    const tasks = Object.fromEntries(Object.values(run.tasks).map((r): [string, TaskIsolation] => [r.taskId, taskIsolationOf(r, this.config.conflictRepairAttempts)]));
-    return { tasks, handoff: handoffOf(run) };
+    return { tasks: taskIsolationsOf(run, this.config.conflictRepairAttempts), handoff: handoffOf(run) };
   }
 
   /**
@@ -658,12 +657,14 @@ export class IsolationRunController {
    * Revert tasks' landings on the integration branches (ADR-0054). The record
    * is reported changed once the tips are set and before the first commit,
    * and again once it settles, as a landing's is. Bound to the run it was
-   * asked in: a plan loaded meanwhile has records of its own under these ids.
+   * asked in: a plan loaded meanwhile has records of its own under these ids,
+   * and is saved without what this would write to that run's branches, so it
+   * stops the revert and leaves them as they were.
    */
   async revert(taskIds: readonly string[], watch: Omit<RevertWatch, 'persist'>): Promise<IsolationRevertResult> {
     const run = this.requireRun();
     const result = await this.isolation.revert(run, taskIds, {
-      refusal: watch.refusal,
+      refusal: () => (run === this.run ? watch.refusal() : PLAN_REPLACED_REVERT),
       persist: () => this.listener.changed(run === this.run ? undefined : run),
       settled: (reverted) => { if (run === this.run) watch.settled(reverted); },
     });

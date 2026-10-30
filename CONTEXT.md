@@ -1831,14 +1831,18 @@ seam, and only the user's, after `Session.revertPreview` (`GET
 landing (`git revert -m 1` of each merge in `IsolationRun.landings`, since a
 continue or a retry lands a task again) and rewrites nothing, in every repo the
 task changed or none. Landed dependents, direct or
-not, go with it, newest landing first, once the user confirms the list. It takes
+not, go with it, newest landing first, once the user confirms the list, whatever
+a later attempt left of their records. It takes
 its turn on the landing queue, and no new start is claimed meanwhile. It is
-refused for a task that landed nothing, while a dependent is live, and for a task
-in a loop that has not ended. Work already in the user's branch is refused with
-the exact `git revert` to run, which Ordewell never runs. A conflict or a failure
+refused for a task that landed nothing, while a dependent is live, for a task
+in a loop that has not ended, and while the integration branch is checked out
+outside Ordewell's own worktree. Work already in the user's branch is refused with
+the exact `git revert` to run, which Ordewell never runs: a checkout of the
+integration branch itself is not that. A conflict or a failure
 puts every recorded tip back and names the task, repo and files. Each reverted
 task is `pending`, on a chosen hold, with `reverted` saved on it; its run record
-goes, so it stops counting as landed and no longer holds a *merge gate*; its
+goes, so it stops counting as landed and no longer holds a *merge gate*, unless a
+later attempt that never landed holds a worktree, whose record stays `kept`; its
 attempts' logs stay, and a retry starts from the current integration tip. Merge
 all then brings both the landing and its revert to the user's branch. The terminal
 offers it as `/revert <id>`, and VS Code as a button on the task's card where its

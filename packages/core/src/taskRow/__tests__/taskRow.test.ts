@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  taskRowView, taskStatusKind, isTaskRunning, awaitingLabel, approvalLabel, resumeLabel, resumeTime, taskRowActions, markAction, taskActionCommand, overrideNeedsConfirmation, confirmedOverride, manualOverrideConfirmation, manualOverrideStopFirst, opsEditable, revertEffect, revertListLine,
+  taskRowView, taskStatusKind, isTaskRunning, awaitingLabel, approvalLabel, resumeLabel, resumeTime, taskRowActions, markAction, taskActionCommand, overrideNeedsConfirmation, confirmedOverride, manualOverrideConfirmation, manualOverrideStopFirst, opsEditable, revertEffect, revertListLine, revertTaskRef,
   titledRefs, dependentsNotice, pastGateConfirmation, newTaskFields, noExecutorRefusal, blockedByLabel, holdLabel, skippedLabel, type TaskRowSubject, type TaskRowAction,
 } from '..';
 import { taskRef, titledTaskRef } from '../../services/TaskRefs';
@@ -475,6 +475,15 @@ describe('what a revert is confirmed with (ADR-0054)', () => {
   it('lists a task by order and title, and says which one goes with the task asked about', () => {
     expect(revertListLine({ order: 1, title: 'Parse JSON', repos: ['.'], dependent: false })).toBe('#1 Parse JSON');
     expect(revertListLine({ order: 2, title: 'Wire it up', repos: ['.'], dependent: true })).toBe('#2 Wire it up (goes with it)');
+  });
+
+  it('calls a subtask by its full path, which its order alone is not', () => {
+    expect(revertListLine({ order: 1, ref: '#2.1', title: 'Parse JSON', repos: ['.'], dependent: false })).toBe('#2.1 Parse JSON');
+    expect(revertTaskRef({ order: 1, ref: '#2.1' })).toBe('#2.1');
+  });
+
+  it('falls back on the order a daemon that sends no reference gives', () => {
+    expect(revertTaskRef({ order: 3 })).toBe('#3');
   });
 
   it('names the repos only when the work went beyond the workspace\'s own', () => {

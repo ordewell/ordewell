@@ -10,7 +10,7 @@ import { changedReposOf } from './isolationRecord';
  * is told in. GitWorktreeIsolation answers the other half, in its turn.
  */
 
-export type RevertRefusalReason = 'no-landing' | 'no-own-merge' | 'in-a-loop' | 'live-dependent' | 'in-branch' | 'git';
+export type RevertRefusalReason = 'no-landing' | 'no-own-merge' | 'checked-out' | 'in-a-loop' | 'live-dependent' | 'in-branch' | 'git';
 
 export interface RevertRefusal {
   reason: RevertRefusalReason;
@@ -27,9 +27,10 @@ export interface RevertScope {
   refusal?: RevertRefusal;
 }
 
-/** A task a preview lists; `dependent` is one that goes with the task the user chose. */
+/** A task a preview lists; `dependent` is one that goes with the task the user chose, and `ref` how the plan calls it, a subtask's full path. */
 export interface RevertPreviewTask extends IsolationRevertTask {
   dependent: boolean;
+  ref?: string;
 }
 
 /** What a revert would do now, for a surface to confirm with the user before anything changes. */
@@ -46,10 +47,14 @@ export interface RevertScopeInput {
 
 const ref = ({ id, order, title }: Readonly<Task>): IsolationTaskRef => ({ taskId: id, order, title });
 
-/** Whether a task's record is a landing of work it changed, this attempt's or an earlier one's. */
+/**
+ * Whether a task has work of its own on the integration branch, this attempt's
+ * or an earlier one's. A retry, a failed spawn or a continue that conflicted
+ * leaves a record that is not `merged`, or none, over merges still on the branch.
+ */
 function landedWork(run: IsolationRun | null, taskId: string): boolean {
   const record = run?.tasks[taskId];
-  return record?.status === 'merged' && (changedReposOf(record).length > 0 || run?.landings?.[taskId] !== undefined);
+  return run?.landings?.[taskId] !== undefined || (record?.status === 'merged' && changedReposOf(record).length > 0);
 }
 
 /** Everything that depends on the task, directly or not, a check counting on its body as it does at a merge gate (ADR-0045 L9). */
@@ -65,6 +70,11 @@ function dependentsOf(tasks: readonly Readonly<Task>[], taskId: string): Readonl
   }
   found.delete(taskId);
   return tasks.filter((task) => found.has(task.id));
+}
+
+/** The tasks a revert of this one stands to change the ground of, landed or not: no start of one may be claimed while it runs. */
+export function revertReach(taskId: string, tasks: readonly Readonly<Task>[]): ReadonlySet<string> {
+  return new Set([taskId, ...dependentsOf(tasks, taskId).map((t) => t.id)]);
 }
 
 /** The check of a loop the task is in, while that loop has not ended. */

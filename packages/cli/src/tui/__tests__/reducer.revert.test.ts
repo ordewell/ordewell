@@ -68,6 +68,12 @@ describe('/revert', () => {
     expect((asked.state.overlay as { note: string }).note).toContain('api, web');
   });
 
+  it('asks about a subtask by its full path', () => {
+    const asked = previewed(chat(), { revertible: true, tasks: [{ taskId: 't1', order: 1, ref: '#2.1', title: 'Parse JSON', repos: ['.'], dependent: false }] });
+
+    expect((asked.state.overlay as { title: string }).title).toBe('Revert #2.1 Parse JSON?');
+  });
+
   it('draws the list on the screen', () => {
     const asked = previewed(chat(), goingWith).state;
 
