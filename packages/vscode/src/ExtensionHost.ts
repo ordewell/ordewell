@@ -176,6 +176,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     accountLimits: () => accountLimits.snapshots(),
     orderLabel: (taskId) => taskRefOf(requireSession().planTasks, taskId)?.replace(/^#/, ''),
     openFile: (path) => { void openWorkspaceFile(path); },
+    idleSince: (taskId) => requireSession().runSnapshot().tasks.find((t) => t.id === taskId)?.idleSince ?? null,
     log,
   });
 

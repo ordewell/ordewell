@@ -10,12 +10,12 @@ const task = (over: Partial<Task>): Task => ({
   id: 't1', order: 1, title: 'Ship it', description: '', type: 'ai', status: 'pending', dependencies: [], subtasks: [], assignedRunner: 'opencode', ...over,
 });
 
-function openedStatus(t: Task, events: readonly TaskLogEvent[] = []) {
+function openedStatus(t: Task, events: readonly TaskLogEvent[] = [], idleSince?: (taskId: string) => string | null) {
   const panel = createFakeWebviewPanel('ordewell.taskLog', 'Task log');
   const session = {
     taskLogAttempts: () => (events.length > 0 ? [1] : []), taskLog: () => events, outstandingApprovals: () => [], execute: vi.fn(), invokeTaskCommand: vi.fn(),
   } as unknown as TaskLogSession;
-  new TaskLogPanel(panel as unknown as vscode.WebviewPanel, t.id, { session, getTask: () => t, openFile: () => undefined, log: () => undefined }, { toString: () => 'file:///ext' } as unknown as vscode.Uri, () => undefined);
+  new TaskLogPanel(panel as unknown as vscode.WebviewPanel, t.id, { session, getTask: () => t, openFile: () => undefined, idleSince, log: () => undefined }, { toString: () => 'file:///ext' } as unknown as vscode.Uri, () => undefined);
   panel.__receive({ type: 'ready' });
   const init = panel.webview.postMessage.mock.calls.map(([m]) => m as HostToTaskLog).find((m) => m.type === 'init');
   if (init?.type !== 'init') throw new Error('the panel posted no init');
@@ -40,6 +40,14 @@ describe('the task log tab tells the webview what its activity line needs', () =
     const status = openedStatus(task({ status: 'in_progress' }));
     expect(status.taskStatus).toBe('in_progress');
     expect(status.idleSince).toBeNull();
+  });
+});
+
+describe('a task log tab opened on a runner that is already quiet', () => {
+  it('learns it at once, as no update need follow a silent task', () => {
+    const quiet = '2026-10-30T10:05:00.000Z';
+    const status = openedStatus(task({ status: 'in_progress' }), [], (id) => (id === 't1' ? quiet : null));
+    expect(status.idleSince).toBe(quiet);
   });
 });
 

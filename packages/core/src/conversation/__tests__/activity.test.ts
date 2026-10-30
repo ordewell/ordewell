@@ -85,6 +85,21 @@ describe('taskActivity', () => {
     expect(taskActivity(dated, { status: 'in_progress', idleSince: '2026-10-30T10:05:00.000Z' })).toEqual({ label: 'Stalled', busy: false, since: at });
   });
 
+  it('is absent between turns, and for an earlier attempt left open', () => {
+    for (const reason of ['completed', 'interrupted', 'failed'] as const) {
+      expect(taskActivity(replayTaskLog([start, { type: 'thinking_delta', text: 'Hmm' }, { type: 'turn_end', reason }]), { status: 'in_progress' })).toBeNull();
+    }
+    expect(working.working).toBe(true);
+    expect(taskActivity({ ...working, archived: true }, { status: 'in_progress' })).toBeNull();
+    expect(taskActivity({ ...working, archived: true }, { status: 'in_progress', idleSince: '2026-08-18T00:00:00.000Z' })).toBeNull();
+  });
+
+  it('keeps a background subagent that outlives the turn', () => {
+    const view = replayTaskLog([start, { type: 'subagent_started', subagentId: 's1', brief: 'Scan the repo' }, { type: 'turn_end', reason: 'completed' }]);
+    expect(view.working).toBe(false);
+    expect(taskActivity(view, { status: 'in_progress' })).toEqual({ label: 'Subagent: Scan the repo…', busy: true });
+  });
+
   it('is absent while a runner request waits', () => {
     const asked = replayTaskLog([start, { type: 'approval_requested', approvalId: 'p1', tool: 'Bash', args: '{}', allowForTask: true }]);
     expect(taskActivity(asked, { status: 'in_progress' })).toBeNull();

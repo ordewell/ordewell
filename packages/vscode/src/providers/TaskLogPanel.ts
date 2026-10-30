@@ -28,6 +28,8 @@ export interface TaskLogPanelDeps {
   accountLimits?: () => readonly AccountLimitSnapshot[];
   /** Open a workspace-relative file the handoff saved, such as its patch (ADR-0050). */
   openFile: (path: string) => void;
+  /** When the task's runner went quiet, if it has: seeds a panel that opens after the stream said so. */
+  idleSince?: (taskId: string) => string | null;
   log: (msg: string) => void;
 }
 
@@ -82,6 +84,7 @@ export class TaskLogPanel {
       script: 'tasklog.js',
       title: 'Task log',
     });
+    this.idleSince = deps.idleSince?.(taskId) ?? null;
     panel.webview.onDidReceiveMessage((msg: TaskLogToHost) => this.handle(msg));
     panel.onDidDispose(() => onDisposed());
   }

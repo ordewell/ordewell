@@ -868,6 +868,21 @@ describe('the runner\'s activity, folded (ADR-0017, X1)', () => {
       expect(line()).toBeNull();
     });
 
+    it('is absent on an earlier attempt, though its log was left on an open turn', () => {
+      render(<TaskLogApp />);
+      init({ working: true, attempts: [1, 2], attempt: 1, turnStartedAt: '2026-10-30T10:00:00.000Z' }, [...thinking.blocks]);
+
+      expect(line()).toBeNull();
+    });
+
+    it('stays for a background subagent that outlives the turn', () => {
+      const view = replayTaskLog([{ type: 'turn_start', message: 'go' }, { type: 'subagent_started', subagentId: 's1', brief: 'Scan the repo' }, { type: 'turn_end', reason: 'completed' }]);
+      render(<TaskLogApp />);
+      init({ working: false }, [...view.blocks]);
+
+      expect(line()?.textContent).toContain('Subagent: Scan the repo…');
+    });
+
     describe('and how long the turn has run (#81)', () => {
       const startedAt = '2026-10-30T10:00:00.000Z';
       const at = (seconds: number) => new Date(Date.parse(startedAt) + seconds * 1000);

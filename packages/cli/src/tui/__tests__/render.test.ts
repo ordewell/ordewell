@@ -652,7 +652,7 @@ describe('status line', () => {
   });
 
   const viewing = (taskId: string, over: Partial<TuiState> = {}): Partial<TuiState> => ({
-    taskView: { taskId, view: EMPTY_TASK_LOG, attempts: [1], attempt: 1, pending: [], loaded: true, followLatest: true, queuedIndex: 0 },
+    taskView: { taskId, view: { ...EMPTY_TASK_LOG, working: true }, attempts: [1], attempt: 1, pending: [], loaded: true, followLatest: true, queuedIndex: 0 },
     ...over,
   });
 
