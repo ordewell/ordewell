@@ -866,6 +866,7 @@ export class Session {
         advancing: advancesOnItsOwn,
         merging: this.orchestrator.isMerging,
         autoMerges: this.orchestrator.mergesAtGates,
+        mergesAtClose: this.orchestrator.mergesAtClose,
         merge: this.runMergeView(),
         id: this.runs.planIsolation?.run.id ?? null,
         blocked: this.runs.blocked ? this.runs.epoch : null,

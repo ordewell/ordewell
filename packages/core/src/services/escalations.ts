@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { isRunnerApproval } from '../interfaces/IApproval';
 import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
 import { flattenTasksWithParents, type Task, type TaskWithParent } from '../models/Task';
@@ -69,7 +70,7 @@ export interface EscalationOption {
  * timer is a consent decision, which belongs to the mandate (#23).
  */
 export interface Escalation {
-  /** Kind, task, attempt and approval: a later attempt's wait is another escalation, so a stale answer is told from a live one. */
+  /** Kind, task, attempt and approval, or for Merge all the run and the attempts it would merge: a later wait is another escalation, so a stale answer is told from a live one. */
   id: string;
   kind: EscalationKind;
   /** The task it belongs to, the link to its evidence; absent on the run's own. */
@@ -92,6 +93,8 @@ export interface EscalationRun {
   merging: boolean;
   /** Ordewell merges at gates by itself: the setting is on, and no merge has stopped it. */
   autoMerges: boolean;
+  /** The run's close merges what landed by itself, so nobody has to; a Stop or a merge that stopped ends this, and the wait is real. */
+  mergesAtClose: boolean;
   /** What Merge all would merge now. */
   merge: RunMergeView | null;
   /** The isolated run's id. */
@@ -306,6 +309,20 @@ function ofTask(row: TaskWithParent, input: EscalationInput, rows: readonly Task
 }
 
 /**
+ * A run holding a record keeps its id past a Merge all, so work that lands later
+ * is told apart by the attempts it would merge. A digest, because a long run's
+ * attempts would not fit the capped id the notify command is handed.
+ */
+function mergeAllId(input: EscalationInput, rows: readonly TaskWithParent[]): string {
+  const { id, merge } = input.run;
+  const landed = merge?.landed.map(({ taskId }) => {
+    const row = rows.find((r) => r.task.id === taskId);
+    return `${taskId}:${row ? input.attempt(row.task) : 0}`;
+  });
+  return `merge-all:${id ?? ''}:${createHash('sha256').update(String(landed)).digest('hex').slice(0, 12)}`;
+}
+
+/**
  * Everything that will not move without a person (ADR-0053), in the order of
  * what stops the most first: a run that cannot start, then the plan's tasks in
  * order, then the work waiting to be merged. Pure and derived, as `planBlocks`
@@ -323,9 +340,9 @@ export function escalations(input: EscalationInput): Escalation[] {
     options: [{ id: 'stash', label: 'Stash and continue' }, { id: 'run-without-isolation', label: 'Run without isolation' }],
   }];
   // A gate's own escalation offers the same Merge all, and work still moving may land more.
-  const mergeOwed = run.merge && !run.merging && !run.advancing && !tasks.some((e) => e.kind === 'merge-gate');
+  const mergeOwed = run.merge && !run.merging && !run.mergesAtClose && !run.advancing && !tasks.some((e) => e.kind === 'merge-gate');
   const merge: Escalation[] = !mergeOwed ? [] : [{
-    id: `merge-all:${run.id ?? ''}`,
+    id: mergeAllId(input, rows),
     kind: 'merge-all',
     reason: `The run's landed work waits for Merge all: ${run.merge?.landed.map((t) => taskRefOf(input.tasks, t.taskId) ?? t.taskId).join(', ')}.`,
     options: [MERGE_ALL],
