@@ -70,7 +70,12 @@ export interface EscalationOption {
  * timer is a consent decision, which belongs to the mandate (#23).
  */
 export interface Escalation {
-  /** Kind, task, attempt and approval, or for Merge all the run and the attempts it would merge: a later wait is another escalation, so a stale answer is told from a live one. */
+  /**
+   * Kind, task and attempt, then the approval, what a merge gate waits to have
+   * merged, and how many of the attempt's waits ended before it; for Merge all,
+   * the run and the attempts it would merge. A later wait is another
+   * escalation, so a stale answer is told from a live one.
+   */
   id: string;
   kind: EscalationKind;
   /** The task it belongs to, the link to its evidence; absent on the run's own. */
@@ -99,7 +104,7 @@ export interface EscalationRun {
   merge: RunMergeView | null;
   /** The isolated run's id. */
   id: string | null;
-  /** Which opening of the run waits on a dirty checkout; null when none does. */
+  /** Which of the session's starts a dirty checkout turned away, when one waits on it; null when none does. */
   blocked: number | null;
 }
 
@@ -153,6 +158,8 @@ const RETRY: EscalationOption = { id: 'retry', label: 'Retry' };
 const SKIP: EscalationOption = { id: 'skip', label: 'Skip', note: 'optional' };
 const MERGE_ALL: EscalationOption = { id: 'merge-all', label: 'Merge all' };
 
+const BY_HAND = 'A manual task: it is yours to do, and to mark complete.';
+
 /** Mark complete, as the seam would take it now: an AI or script task's waits until nothing can move it on (ADR-0029). */
 function completeOption(row: TaskWithParent, run: EscalationRun): EscalationOption[] {
   if (row.task.type === 'user') return [{ id: 'complete', label: 'Mark complete' }];
@@ -160,8 +167,8 @@ function completeOption(row: TaskWithParent, run: EscalationRun): EscalationOpti
   return [{ id: 'complete', label: 'Mark complete', confirm: manualOverrideConfirmation('complete', label(row)) }];
 }
 
-/** A wait of the task, before the id and task every escalation carries. */
-type Wait = Pick<Escalation, 'kind' | 'reason' | 'options'>;
+/** A wait of the task, before the id and task every escalation carries; `on` is what its id adds to tell it from a later one. */
+type Wait = Pick<Escalation, 'kind' | 'reason' | 'options'> & { on?: string };
 
 function askedOf(row: TaskWithParent, pending: PendingApproval, attempt: number): Escalation {
   const { task, ref } = row;
@@ -254,6 +261,8 @@ function unstarted(row: TaskWithParent, input: EscalationInput, rows: readonly T
     return { kind: 'no-prompt', reason: task.type === 'script' ? 'It has no body to run.' : 'It has no prompt, so there is nothing to run.', options: [SKIP] };
   }
   if (waitOf(waits, 'on-hold')) {
+    // No runner starts a user task, so its hold is the wait for it to be done.
+    if (task.type === 'user') return { kind: 'on-hold', reason: BY_HAND, options: completeOption(row, input.run) };
     return {
       kind: 'on-hold',
       reason: holdLabel(input.holdReason(task.id) ?? 'start it again'),
@@ -266,6 +275,7 @@ function unstarted(row: TaskWithParent, input: EscalationInput, rows: readonly T
     const refs = gate.unmerged.map((id) => rows.find((r) => r.task.id === id)?.ref ?? id);
     return {
       kind: 'merge-gate',
+      on: attemptsDigest(gate.unmerged, input, rows),
       reason: `Waits for Merge all: the work of ${refs.join(', ')} is not merged into your branch yet.`,
       options: [
         MERGE_ALL,
@@ -273,7 +283,7 @@ function unstarted(row: TaskWithParent, input: EscalationInput, rows: readonly T
       ],
     };
   }
-  if (task.type === 'user') return waitOf(waits, 'by-hand') ? { kind: 'by-hand', reason: 'A manual task: it is yours to do, and to mark complete.', options: completeOption(row, input.run) } : null;
+  if (task.type === 'user') return waitOf(waits, 'by-hand') ? { kind: 'by-hand', reason: BY_HAND, options: completeOption(row, input.run) } : null;
   if (waitOf(waits, 'unapproved')) {
     return { kind: 'unapproved', reason: 'Added since you approved the plan, so it waits for you to start it.', options: [{ id: 'run', label: 'Start' }] };
   }
@@ -299,7 +309,7 @@ function ofTask(row: TaskWithParent, input: EscalationInput, rows: readonly Task
   const wait = waitOfTask(row, input, rows);
   if (!wait) return asked;
   return [...asked, {
-    id: `${wait.kind}:${task.id}:${attempt}`,
+    id: [wait.kind, task.id, attempt, ...(wait.on ? [wait.on] : []), ...(task.waitsEnded ? [task.waitsEnded] : [])].join(':'),
     kind: wait.kind,
     task: { id: task.id, ref, title: task.title },
     ...(attempt > 0 ? { attempt } : {}),
@@ -309,17 +319,15 @@ function ofTask(row: TaskWithParent, input: EscalationInput, rows: readonly Task
 }
 
 /**
- * A run holding a record keeps its id past a Merge all, so work that lands later
- * is told apart by the attempts it would merge. A digest, because a long run's
- * attempts would not fit the capped id the notify command is handed.
+ * A merge's wait is told apart by the attempts it would merge. A digest, because
+ * a long run's attempts would not fit the capped id the notify command is handed.
  */
-function mergeAllId(input: EscalationInput, rows: readonly TaskWithParent[]): string {
-  const { id, merge } = input.run;
-  const landed = merge?.landed.map(({ taskId }) => {
+function attemptsDigest(taskIds: readonly string[], input: EscalationInput, rows: readonly TaskWithParent[]): string {
+  const attempts = taskIds.map((taskId) => {
     const row = rows.find((r) => r.task.id === taskId);
     return `${taskId}:${row ? input.attempt(row.task) : 0}`;
   });
-  return `merge-all:${id ?? ''}:${createHash('sha256').update(String(landed)).digest('hex').slice(0, 12)}`;
+  return createHash('sha256').update(String(attempts)).digest('hex').slice(0, 12);
 }
 
 /**
@@ -342,7 +350,7 @@ export function escalations(input: EscalationInput): Escalation[] {
   // A gate's own escalation offers the same Merge all, and work still moving may land more.
   const mergeOwed = run.merge && !run.merging && !run.mergesAtClose && !run.advancing && !tasks.some((e) => e.kind === 'merge-gate');
   const merge: Escalation[] = !mergeOwed ? [] : [{
-    id: mergeAllId(input, rows),
+    id: `merge-all:${run.id ?? ''}:${attemptsDigest(run.merge?.landed.map((t) => t.taskId) ?? [], input, rows)}`,
     kind: 'merge-all',
     reason: `The run's landed work waits for Merge all: ${run.merge?.landed.map((t) => taskRefOf(input.tasks, t.taskId) ?? t.taskId).join(', ')}.`,
     options: [MERGE_ALL],

@@ -138,13 +138,14 @@ describe('what only a person can start', () => {
   const merge: RunMergeView = { waitingAtGate: false, paused: false, repos: [], landed: [landed] };
   // Pinned, not recomputed: a change of what the id is built from retells every live Merge all.
   const MERGE_ALL = 'merge-all:r1:da4b67039c7c';
+  const AT_GATE = 'merge-gate:t2:0:da4b67039c7c';
   const gated: Task[] = [task('t1', 1, { status: 'completed' }), task('t2', 2, { type: 'script', commands: [['npm', 'publish']], dependencies: ['t1'] })];
 
   it.each<[string, Task[], Setup, ReturnType<typeof shape>]>([
     ['a task at its merge gate', gated, { unmerged: ['t1'], run: { merge: { ...merge, waitingAtGate: true }, id: 'r1' } },
-      [{ id: 'merge-gate:t2:0', kind: 'merge-gate', options: ['merge-all', 'force-start'] }]],
+      [{ id: AT_GATE, kind: 'merge-gate', options: ['merge-all', 'force-start'] }]],
     ['a user task at its merge gate', [task('t1', 1, { status: 'completed' }), task('t2', 2, { type: 'user', dependencies: ['t1'] })], { unmerged: ['t1'], run: { merge: { ...merge, waitingAtGate: true }, id: 'r1' } },
-      [{ id: 'merge-gate:t2:0', kind: 'merge-gate', options: ['merge-all', 'complete'] }]],
+      [{ id: AT_GATE, kind: 'merge-gate', options: ['merge-all', 'complete'] }]],
     ['a user task done by hand', [task('t1', 1, { type: 'user' })], {},
       [{ id: 'by-hand:t1:0', kind: 'by-hand', options: ['complete'] }]],
     ['a user task added since the approval, which needs none', [task('t1', 1, { type: 'user' })], { added: ['t1'] },
@@ -153,6 +154,8 @@ describe('what only a person can start', () => {
       [{ id: 'unapproved:t1:0', kind: 'unapproved', options: ['run'] }]],
     ['a task on hold', [task('t1', 1)], { onHold: { t1: 'cancelled; retry or force start to run it again' } },
       [{ id: 'on-hold:t1:0', kind: 'on-hold', options: ['retry', 'force-start'] }]],
+    ['a user task on hold, which no runner starts', [task('t1', 1, { type: 'user' })], { onHold: { t1: 'marked not done; retry or force start to run it again' } },
+      [{ id: 'on-hold:t1:0', kind: 'on-hold', options: ['complete'] }]],
     ['a task with nothing to run', [task('t1', 1, { prompt: undefined })], {},
       [{ id: 'no-prompt:t1:0', kind: 'no-prompt', options: ['skip'] }]],
     ['landed work with nothing left to move it', [task('t1', 1, { status: 'completed' })], { run: { open: false, merge, id: 'r1' } },
@@ -244,5 +247,34 @@ describe('an escalation\'s other fields', () => {
     expect(ai.options.find((o) => o.id === 'complete')?.confirm).toMatch(/^Mark task #1 "Task t1" complete\? You vouch/);
     const [manual] = listFor([task('t1', 1, { type: 'user' })]);
     expect(manual.options.find((o) => o.id === 'complete')?.confirm).toBeUndefined();
+  });
+});
+
+describe('what an id names', () => {
+  const ids = (tasks: Task[], setup: Setup = {}) => listFor(tasks, setup).map((e) => e.id);
+  const waiting = (over: Partial<Task> = {}) => [task('t1', 1, { status: 'awaiting_user', awaitingReason: 'input', ...over })];
+
+  it('adds the waits the attempt has ended, and nothing for its first', () => {
+    expect(ids(waiting(), { attempts: { t1: 1 } })).toEqual(['input:t1:1']);
+    expect(ids(waiting({ waitsEnded: 2 }), { attempts: { t1: 1 } })).toEqual(['input:t1:1:2']);
+  });
+
+  it('adds them to a wait with no attempt, and a task waiting for approval again', () => {
+    expect(ids([task('t1', 1, { type: 'user', waitsEnded: 2 })])).toEqual(['by-hand:t1:0:2']);
+    expect(ids([task('t1', 1, { waitsEnded: 1 })], { added: ['t1'] })).toEqual(['unapproved:t1:0:1']);
+  });
+
+  it('names what a merge gate waits to have merged, so another gate is another wait', () => {
+    const gated = [task('t1', 1, { status: 'completed' }), task('t2', 2, { type: 'script', commands: [['npm', 'publish']], dependencies: ['t1'] })];
+    const merge: RunMergeView = { waitingAtGate: true, paused: false, repos: [], landed: [{ taskId: 't1', order: 1, title: 'Task t1' }] };
+    const first = ids(gated, { unmerged: ['t1'], attempts: { t1: 1 }, run: { merge, id: 'r1' } });
+    const retried = ids(gated, { unmerged: ['t1'], attempts: { t1: 2 }, run: { merge, id: 'r1' } });
+
+    expect(first).toEqual(['merge-gate:t2:0:4db5deff3c79']);
+    expect(retried).toEqual(['merge-gate:t2:0:19bbd5473f96']);
+  });
+
+  it('keeps the attempt alone in naming a run\'s own waits', () => {
+    expect(ids([], { run: { blocked: 3 } })).toEqual(['blocked-run:3']);
   });
 });

@@ -202,6 +202,8 @@ export class IsolationRunController {
   private activations = 0;
   /** The start a dirty tree turned away, handed back once the user chooses how to go on. */
   private blockedStart: (() => Promise<void>) | null = null;
+  /** How many starts it has turned away; a replay can be turned away again in the same run. */
+  private turnedAway = 0;
   /** The dirty repos behind {@link blockedStart}, for the stash notice. */
   private blockedRepos: string[] = [];
 
@@ -239,6 +241,9 @@ export class IsolationRunController {
 
   /** A run is waiting on the user to stash or to go on without isolation. */
   get blocked(): boolean { return this.blockedStart !== null; }
+
+  /** How many starts a dirty tree has turned away: what tells one wait on it from the next (ADR-0053). */
+  get blockedStarts(): number { return this.turnedAway; }
 
   /** What the plan persists of isolated execution; null when no run ever isolated. */
   get planIsolation(): PlanIsolation | null {
@@ -789,6 +794,7 @@ export class IsolationRunController {
     if (interrupted()) return false;
     if (decision.mode === 'blocked') {
       this.blockedStart = resume;
+      this.turnedAway += 1;
       this.blockedRepos = decision.repos;
       this.listener.blocked(decision.repos);
       return false;

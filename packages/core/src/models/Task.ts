@@ -241,6 +241,13 @@ export interface Task {
   /** Set only while `status` is `awaiting_user`, and not always then — a pause saved by an older build has none. */
   awaitingReason?: AwaitingReason;
   /**
+   * How many waits have ended since its latest attempt started, or since the
+   * task was written if none has: an attempt can wait many times, and this
+   * tells one wait from the next in an escalation's id (ADR-0053). Saved with
+   * the plan, so the id holds across a reload. Absent counts as none.
+   */
+  waitsEnded?: number;
+  /**
    * When a task paused on its runner's usage limit is resumed on its own (ISO
    * time): the reset the runner announced, plus a short margin. Absent when no
    * reset time could be read or the user cancelled the resume — the task then
@@ -1257,6 +1264,7 @@ export function keepExecutionState(current: readonly Task[], rewrite: Task[]): T
         attempted: prior?.attempted,
         attemptUsage: prior?.attemptUsage,
         loopRound: prior?.loopRound,
+        waitsEnded: prior?.waitsEnded,
         // Where a task that has run ran is fixed, like its runner session (ADR-0020).
         ...(prior?.status === 'failed' ? { ops: prior.ops } : {}),
         forcedPastGate: prior?.forcedPastGate,

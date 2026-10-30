@@ -203,6 +203,9 @@ describe('answering what a run left waiting', () => {
 });
 
 describe('the run\'s own waits', () => {
+  // Pinned, not recomputed: the digest of attempt 1 of t1.
+  const AT_GATE = 'merge-gate:t2:0:4db5deff3c79';
+
   /** t1 landed, and the ops task t2 waits at its merge gate. */
   async function atGate() {
     const isolation = new FakeWorktreeIsolation();
@@ -211,7 +214,7 @@ describe('the run\'s own waits', () => {
     await env.start();
     await vi.waitFor(() => expect(env.latest('t1')).toBeDefined());
     env.latest('t1').reportComplete({ status: 'done', summary: 'ok' });
-    await vi.waitFor(() => expect(env.ids()).toEqual(['merge-gate:t2:0']));
+    await vi.waitFor(() => expect(env.ids()).toEqual([AT_GATE]));
     return env;
   }
 
@@ -220,7 +223,7 @@ describe('the run\'s own waits', () => {
     expect(env.session.escalations()[0].reason).toBe('Waits for Merge all: the work of #1 is not merged into your branch yet.');
     env.expectStreamed();
 
-    expect(await env.session.answerEscalation('merge-gate:t2:0', 'merge-all')).toMatchObject({ ok: true, payload: { kind: 'merge', result: { outcome: 'merged' } } });
+    expect(await env.session.answerEscalation(AT_GATE, 'merge-all')).toMatchObject({ ok: true, payload: { kind: 'merge', result: { outcome: 'merged' } } });
 
     await vi.waitFor(() => expect(env.latest('t2')).toBeDefined());
     expect(env.ids()).toEqual([]);
@@ -230,10 +233,10 @@ describe('the run\'s own waits', () => {
   it('holds a force start past the gate back for the same question the row asks', async () => {
     const env = await atGate();
 
-    expect(await env.session.answerEscalation('merge-gate:t2:0', 'force-start')).toMatchObject({ ok: false, outcome: 'refused' });
+    expect(await env.session.answerEscalation(AT_GATE, 'force-start')).toMatchObject({ ok: false, outcome: 'refused' });
     expect(env.latest('t2')).toBeUndefined();
 
-    expect(await env.session.answerEscalation('merge-gate:t2:0', 'force-start', undefined, true)).toMatchObject({ ok: true });
+    expect(await env.session.answerEscalation(AT_GATE, 'force-start', undefined, true)).toMatchObject({ ok: true });
     await vi.waitFor(() => expect(env.latest('t2')).toBeDefined());
   });
 

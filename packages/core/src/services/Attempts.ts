@@ -469,7 +469,7 @@ export class Attempts {
     // A script spends nothing a ledger counts: no model, no tokens (ADR-0035).
     if (!script) store.startAttemptUsage(task.id, attempt.attempt, attempt.runner, attempt.startedAt);
     store.setTaskOutputSummary(task.id, undefined);
-    store.markInProgress(task.id);
+    store.markAttemptStarted(task.id);
     this.host.emit('onTaskChanged');
     return this.run(task, attempt, continuation);
   }

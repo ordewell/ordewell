@@ -212,6 +212,9 @@ describe('a withdrawal reaches the surfaces', () => {
 
     expect(env.session.isApproved('r')).toBe(false);
     expect(env.session.isApproved('t1')).toBe(true);
+    // What it waits on now is another wait, with its own escalation id (ADR-0053).
+    expect(taskOf(env.session, 'r')?.waitsEnded).toBe(1);
+    expect(taskOf(env.session, 't1')?.waitsEnded).toBeUndefined();
     expect(env.messages.some((m) => m.type === 'plan_generated')).toBe(true);
     expect(lastStatus(env, 'r')?.waitsForApproval).toBe(true);
     expect(lastStatus(env, 't1')?.waitsForApproval).toBeUndefined();

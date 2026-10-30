@@ -680,7 +680,11 @@ export class Session {
       plan: () => this.plan,
       store: this.store,
       runnerModes: (runner) => this.catalog.edit().runnerModes?.[runner],
-      onWithdrawn: () => this.withdrawalOwed(),
+      onWithdrawn: (taskIds) => {
+        // What the task would run now is not what was approved, so waiting on that is another wait (ADR-0053).
+        for (const id of taskIds) this.store.endWait(id);
+        this.withdrawalOwed();
+      },
     });
     this.store.onTree = (ids) => this.record.reconcile(ids);
     this.orchestrator = parts.orchestrator;
@@ -869,7 +873,7 @@ export class Session {
         mergesAtClose: this.orchestrator.mergesAtClose,
         merge: this.runMergeView(),
         id: this.runs.planIsolation?.run.id ?? null,
-        blocked: this.runs.blocked ? this.runs.epoch : null,
+        blocked: this.runs.blocked ? this.runs.blockedStarts : null,
       },
     });
   }

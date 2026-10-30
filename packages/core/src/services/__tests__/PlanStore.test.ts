@@ -343,3 +343,51 @@ describe('PlanStore.load of a plan with a task on a runner outside its set', () 
     expect(store.get('n1')).toBeUndefined();
   });
 });
+
+describe('PlanStore counts the waits a task has ended (ADR-0053)', () => {
+  const load = (status: Task['status'] = 'pending') => {
+    const store = new PlanStore();
+    store.load([{ ...createTask({ id: 't', title: 't' }), status }], ['claude-code']);
+    return store;
+  };
+
+  it('counts none for work under way that reaches its first wait', () => {
+    const store = load('in_progress');
+    store.markAwaitingUser('t', 'checkpoint');
+    expect(store.get('t')?.waitsEnded).toBeUndefined();
+  });
+
+  it('counts each wait a task moves off, within an attempt', () => {
+    const store = load('in_progress');
+    store.markAwaitingUser('t', 'input');
+    store.markInProgress('t');
+    store.markAwaitingUser('t', 'input');
+    store.markInProgress('t');
+    expect(store.get('t')?.waitsEnded).toBe(2);
+  });
+
+  it('counts nothing for a task told again what it is already waiting on', () => {
+    const store = load('in_progress');
+    store.markAwaitingUser('t', 'conflict');
+    store.markAwaitingUser('t', 'conflict');
+    expect(store.get('t')?.waitsEnded).toBeUndefined();
+  });
+
+  it('counts a task taken back and done again, which has no attempt to tell them apart', () => {
+    const store = load();
+    store.markCompleted('t');
+    store.retry('t');
+    expect(store.get('t')?.waitsEnded).toBe(2);
+  });
+
+  it('starts over with an attempt, whose number tells its waits apart', () => {
+    const store = load('in_progress');
+    store.markAwaitingUser('t', 'input');
+    store.markInProgress('t');
+    store.markFailed('t');
+    store.retry('t');
+    store.markAttemptStarted('t');
+    expect(store.get('t')).toMatchObject({ status: 'in_progress' });
+    expect(store.get('t')?.waitsEnded).toBeUndefined();
+  });
+});

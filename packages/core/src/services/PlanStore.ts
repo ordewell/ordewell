@@ -226,9 +226,17 @@ export class PlanStore {
     if (task) task.attempted = true;
   }
 
+  /** Its attempt starts: the number now tells its waits from the last attempt's, so they count from nothing (ADR-0053). */
+  markAttemptStarted(id: string): void {
+    this.setStatus(id, 'in_progress');
+    const task = this._taskMap.get(id);
+    if (task) delete task.waitsEnded;
+  }
+
   markAwaitingUser(id: string, reason?: AwaitingReason): void {
     const task = this._taskMap.get(id);
     if (!task) return;
+    this.leaveStatus(task, 'awaiting_user');
     task.status = 'awaiting_user';
     if (reason) task.awaitingReason = reason;
     else delete task.awaitingReason;
@@ -298,10 +306,22 @@ export class PlanStore {
     if (task) task.forcedPastGate = dependencies;
   }
 
+  /** One of the task's waits is over, so what it waits on next is another (ADR-0053). */
+  endWait(id: string): void {
+    const task = this._taskMap.get(id);
+    if (task) task.waitsEnded = (task.waitsEnded ?? 0) + 1;
+  }
+
+  /** Work under way is the one status nobody could be waiting on, so moving off any other ends a wait. */
+  private leaveStatus(task: Task, status: TaskStatus): void {
+    if (task.status !== status && task.status !== 'in_progress') this.endWait(task.id);
+  }
+
   /** A reason outlives nothing: any status but `awaiting_user` drops it, and the resume time with it; any status drops a skip's reason. */
   private setStatus(id: string, status: Exclude<TaskStatus, 'awaiting_user'>): void {
     const task = this._taskMap.get(id);
     if (!task) return;
+    this.leaveStatus(task, status);
     task.status = status;
     delete task.awaitingReason;
     delete task.resumeAt;

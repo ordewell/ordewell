@@ -27,14 +27,16 @@ existing command for that wait.**
   (`packages/core/src/services/escalations.ts`) is a pure function, as
   `planBlocks` and `startWaits` are, over the plan, the start rule's waits, the
   pending approvals and what the run is doing. Nothing sets one and nothing
-  clears one: whatever ends a wait ends its escalation.
+  clears one: whatever ends a wait ends its escalation. The one thing saved
+  for its sake is a count on the task, `Task.waitsEnded`, a fact about the task
+  and no form of the escalation: see [What an id names](#what-an-id-names).
 - **The list holds only what will not move without a person.** What resolves
   itself is left out, and a task whose cause is listed is left out in favour of
   that cause, listed once. The tables below are the exact kinds.
 - **An escalation says what is waiting and what may be answered.** A stable id
-  built from its kind, task, attempt and approval id, or for a `merge-all` from
-  the run and a digest of the attempts it would merge, so that a later wait is
-  another escalation and a stale answer can be told from a live one; its kind; the task it belongs to, which is the link to the evidence; a reason
+  that names the wait and not just its attempt, so that a later wait is another
+  escalation and a stale answer can be told from a live one; its kind; the task
+  it belongs to, which is the link to the evidence; a reason
   in plain words; and the options a user may choose, which are what that wait's
   own card or command offers, as the seam would take them now. An option carries
   the question its card asks first, where there is one. There is no deadline
@@ -71,7 +73,7 @@ it on, since the seam refuses it otherwise
 | `failed` | `failed`, no loop going on | Retry, Continue, Skip, Mark complete | as above |
 | `out-of-rounds` | A loop's check, `outOfRounds` | Retry, Continue, Skip, Mark complete | as above; a retry starts its rounds over ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md)) |
 | `merge-gate` | Not started, held by nothing but its gate | Merge all; Force start, or Mark complete for a user task | `merge_all`, `force_start`, `mark_complete` |
-| `on-hold` | Not started, held by nothing but its hold | Retry, Force start | `retry_task`, `force_start` |
+| `on-hold` | Not started, held by nothing but its hold | Retry, Force start; Mark complete alone for a user task, which no runner starts | `retry_task`, `force_start`, `mark_complete` |
 | `unapproved` | Not started, nothing else holds it, added since the plan was approved ([ADR-0035](0035-effects-are-consented-and-recorded.md)) | Start | `run_task` |
 | `no-prompt` | Not started, nothing to run | Skip | `skip_task` |
 | `by-hand` | A user task nothing else holds | Mark complete | `mark_complete` |
@@ -117,6 +119,33 @@ A supervisor at Act does not take anything off the list. Whether it will act
 is a model's choice, and the user may still answer first; the seam refuses
 whichever answer comes second.
 
+## What an id names
+
+An attempt can wait many times: every turn that ends without `task_complete`
+waits for input, and a runner can reach several checkpoints. So the attempt is
+not enough to name a wait, and each kind says what tells it from the next. A
+task's id is `kind:task:attempt`, then whatever of these it has.
+
+| Kind | Told from the next wait by |
+|---|---|
+| `approval` | The request's own id, unique to it. |
+| `merge-gate` | A digest of the attempts it waits to have merged, as a `merge-all`'s id: a Force start confirmed past one task's work says nothing of another's. |
+| Any other kind on a task | `Task.waitsEnded`, when it is not 0. |
+| `merge-all` | The run, and a digest of the attempts it would merge, in place of a task and attempt. |
+| `blocked-run` | Which of the session's starts a dirty checkout turned away, in place of a task and attempt: a replay can be turned away again in the same run. In memory, as the parked start is. |
+
+`Task.waitsEnded` counts the waits ended since the task's latest attempt
+started: `PlanStore` adds one as a task moves off any status but `in_progress`,
+and as its approval is withdrawn, since it then waits on something the user has
+not seen. A new attempt starts it over, the number having moved on. The first
+wait of an attempt adds nothing to its id. A hidden wait that comes back, a
+usage-limit pause whose resume was cancelled, was never left, and keeps its id.
+
+Saved with the plan, the count holds an id across a reload, so a surface that
+held one can still answer it and a stale one is still refused. A `no-prompt`
+task keeps its id through an edit that fills its prompt and one that empties it
+again: no run moved, and the wait's only answer means the same in both.
+
 ## What a reload keeps
 
 The list survives a reload exactly as the waits it reads do, and is not meant
@@ -153,21 +182,27 @@ list; this reaches someone who is not looking at one.
   which wins. With neither, nothing runs. It is read as each new escalation
   appears. A plain string is refused with a warning, not split: splitting one
   is a shell's job, and there is none.
-- **User-level only.** A repository that could set it could run a command on
-  the user's machine (#92). The variable is in `SETTINGS_ENV_REFUSED`, as the
-  effect allowlist is ([ADR-0035](0035-effects-are-consented-and-recorded.md)),
-  so a workspace's environment files and a settings update are both refused
-  it, and VS Code's setting is application-scoped and read from the user's value
-  alone.
+- **Nothing Ordewell reads for a workspace sets it.** A repository that could
+  set it through Ordewell could run a command on the user's machine (#92). The
+  variable is in `SETTINGS_ENV_REFUSED`, as the effect allowlist is
+  ([ADR-0035](0035-effects-are-consented-and-recorded.md)), so a workspace's
+  `.ordewell/env`, what direnv exports for its runners and a settings update are
+  all refused it, and VS Code's setting is application-scoped and read from the
+  user's value alone.
+- **The environment Ordewell started in is the exception, and is read as the
+  user's.** `ORDEWELL_NOTIFY_COMMAND` comes from `process.env`, as
+  `ORDEWELL_EFFECT_ALLOW` does, so an `.envrc` that direnv has exported into the
+  shell Ordewell is started from can set it, and that value cannot be told from
+  the user's own. It adds no authority: `direnv allow` is already consent to run
+  that file's code as the user, every time they enter the directory.
 - **No shell, and the escalation in the environment only.** Part of an
   escalation's text comes from runners, so it is untrusted. The command runs as
   written, and the escalation reaches it in `ORDEWELL_ESCALATION_ID`, `_KIND`,
   `_TASK` (the task's ref and title, empty for a wait of the run itself) and
   `_REASON`, each always set, with control and format characters replaced and
   its length capped. Nothing is interpolated into the command. It runs in the
-  user's home with the host's environment, never the workspace's: a repository
-  chooses nothing about it. A shell the user writes into the command is theirs
-  to quote.
+  user's home with the host's environment, never the workspace's. A shell the
+  user writes into the command is theirs to quote.
 - **Once per id, remembered in memory.** `EscalationNotifier`
   (`packages/core/src/services/escalationNotifier.ts`) keeps the ids it has
   seen, for the plan the Session holds and no longer. When a plan is adopted,
@@ -196,7 +231,8 @@ ids, every case left out among them (`escalations.test.ts`).
 reaches, as the user (`escalations.answer.test.ts`). A real Session driving a
 fake runner to each wait and answering it, which also folds the stream through
 `reduceRun` and holds it to what the Session derives
-(`sessionEscalations.test.ts`).
+(`sessionEscalations.test.ts`), and each way a wait can come back under the
+same task (`sessionEscalations.reuse.adversarial.test.ts`).
 
 The notify command is tested at the notifier, with real processes for what only
 a process can show: the text staying out of the command line, the limit stopping
@@ -236,6 +272,12 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
   wait, and the notify command would stay silent for it.
 - **The task ids themselves in a `merge-all`'s id.** Rejected: the id is capped
   where the notify command reads it, and a long run's would not fit.
+- **The attempt alone in a task's id.** Dropped: an attempt waits many times, so
+  a second checkpoint took the first one's id, heard the first one's stale
+  answer, and the notify command stayed silent for it.
+- **Counting waits in the notifier.** Rejected: it remembers in memory, so after
+  a reload a stale id would be answered as a live one, and a surface that asks
+  for the list would see other ids than the notifier told.
 - **The run's end merged before the status that says it ended.** Rejected: the
   surfaces would not hear the run was over for as long as git took, and a Mark
   complete or a cancel closing a run has the same gap with no such status to
@@ -258,6 +300,10 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
   already covers.
 - **The command from a repository or a workspace's environment files.**
   Rejected: that lets a repository run a command on the user's machine (#92).
+- **Reading the command from a source only the user owns, not `process.env`.**
+  Rejected: it would close the `.envrc` exception, but a repository the user
+  allowed direnv for can already run anything as them, so nothing would be
+  protected, and the command would be read unlike the effect allowlist beside it.
 - **A shell string, or the text as placeholders in the command.** Rejected: the
   text is partly a runner's, and either would turn it into something run.
 - **The command in `settings.json`, as the run settings are
@@ -286,10 +332,6 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
   command that many times.
 - A wait that appeared just before a host died is counted as told on load, though
   its command may never have run. A restart staying quiet is worth that miss.
-- The variable is read from the environment Ordewell started in, like the effect
-  allowlist: what direnv has already exported into that shell cannot be told
-  from the user's own. The refusal covers what Ordewell itself reads for a
-  workspace.
 
 ## History
 
@@ -297,3 +339,4 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
 - 2026-10-30 — a reverted task is listed outside an open run (ADR-0054).
 - 2026-10-30 — an optional notify command, run once for each new escalation (#30).
 - 2026-10-30 — a `merge-all`'s id names the attempts it would merge, and a merge the run's close makes itself is left out (#30).
+- 2026-10-31 — an id names the wait, not the attempt; a user task on hold offers Mark complete; the Decision names the `.envrc` exception (#30).
