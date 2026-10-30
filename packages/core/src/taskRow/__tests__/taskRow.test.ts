@@ -320,6 +320,9 @@ describe('the row view, every status against every annotation', () => {
     ['landed work a revert cannot take', { isolation: { ...isolated, state: 'integrated' } }, (v) => {
       expect(v.revertible).toBe(false);
     }],
+    ['no record left but merges a revert can take back', { isolation: { state: 'none', revertible: true } }, (v) => {
+      expect(v.revertible).toBe(true);
+    }],
     ['no isolation at all', { isolation: { state: 'none' } }, (v) => {
       expect(v).toMatchObject({ conflict: null, repairing: null, repaired: null, repos: [] });
     }],

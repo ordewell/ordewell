@@ -182,10 +182,10 @@ export interface IsolationTaskRecord {
    */
   readOnly?: true;
   /**
-   * Set once the task's landed work is in the checked-out HEAD of every repo
-   * it changed — merged into the user's branch, by Merge all or by hand — or
-   * can no longer be merged there, its integration branch gone. What a merge
-   * gate waits for (ADR-0020).
+   * Set once the task's landed work is merged into the user's branch in every
+   * repo it changed, by Merge all or by hand — never by a checkout that only
+   * stands on the integration branch (ADR-0054) — or can no longer be merged
+   * there, its integration branch gone. What a merge gate waits for (ADR-0020).
    */
   inHead?: true;
 }
@@ -265,8 +265,22 @@ export interface IsolationRun {
    */
   landings?: Record<string, Record<string, string[]>>;
   /**
-   * What each task in {@link landings} landed as: all a revert has to name it
-   * by once a retry has dropped its record and left its merges on the branch.
+   * Set on a run started with {@link landings} kept from its first merge. A
+   * run saved before that can hold merges no record names, so a revert cannot
+   * take the absence of a task's landings as proof it landed nothing.
+   */
+  keepsEveryLanding?: true;
+  /**
+   * Task branch tips another task's merge brought in, by task id and repo: a
+   * resolver's merge carrying a conflicted task's work. No merge of that task
+   * holds this work, and a later attempt's record says nothing of it, so
+   * neither task can be reverted (ADR-0054).
+   */
+  carried?: Record<string, Record<string, string[]>>;
+  /**
+   * What each task in {@link landings} or {@link carried} landed as: all a
+   * revert has to name it by once a retry has dropped its record and left its
+   * merges on the branch.
    */
   landedTasks?: Record<string, LandedTask>;
   /**
@@ -696,11 +710,12 @@ export interface IWorktreeIsolation {
   taskDiff?(run: IsolationRun, taskId: string, options: TaskDiffRead): Promise<TaskDiffResult>;
 
   /**
-   * Mark the landed tasks whose work the checked-out HEAD now contains in
-   * every repo they changed (`git merge-base --is-ancestor`), and return their
-   * ids. A repo whose integration branch is gone counts as containing it: no
-   * Merge all could bring that work in. Only adds marks: a task found merged
-   * stays merged.
+   * Mark the landed tasks whose work the user's branch now contains in every
+   * repo they changed (`git merge-base --is-ancestor`), and return their ids.
+   * A review checkout of the integration branch, detached or not, contains
+   * nothing merged (ADR-0054). A repo whose integration branch is gone counts
+   * as containing it: no Merge all could bring that work in. Only adds marks: a
+   * task found merged stays merged.
    */
   findInHead(run: IsolationRun): Promise<string[]>;
 

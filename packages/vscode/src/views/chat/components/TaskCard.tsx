@@ -836,7 +836,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
                       onRemoveTask={onRemoveTask} onPromptChange={onPromptChange}
                       onRetry={onRetry} onSkip={onSkip} onCancel={onCancel} onCancelResume={onCancelResume} onResumeNow={onResumeNow}
                       onForceStart={onForceStart} onMarkComplete={onMarkComplete}
-                      onMarkIncomplete={onMarkIncomplete}
+                      onMarkIncomplete={onMarkIncomplete} onRevert={onRevert}
                       onRunTask={onRunTask} onOpenLog={onOpenLog} />
                   );
                 })}

@@ -26,11 +26,17 @@ revert adds commits and rewrites nothing.
 - **Only on the integration branch.** It is the one branch Ordewell owns. Work
   already in the user's branch is refused, with the exact `git revert -m 1
   <commit>` for each repo, newest first, for them to run; Ordewell never writes
-  to their branch. Merged means what the merge gate means: the checked-out HEAD
-  contains the landing's merge. The integration branch itself checked out is no
-  merge, only a review: it marks nothing merged, and clears no run. A revert
-  cannot commit to it there, so that is refused, in the preview too, naming
-  where it is checked out.
+  to their branch. Merged means what the merge gate means, and what a clear-up
+  reads before it deletes a branch: the user's branch contains the landing's
+  merge. HEAD holding it is not enough. A checkout that stands on the
+  integration branch, by name, detached or a branch cut from it, is no merge,
+  only a review: it marks nothing merged, and clears no run. The branch the run
+  started on is the user's, a fast-forward of it included, and speaks for a
+  detached HEAD; on any other checkout git has to show a merge, the landing off
+  HEAD's first-parent line. A run with no base branch has only that to go on, so
+  Merge all makes a merge commit there. A revert cannot commit to the integration
+  branch where it is checked out, so that is refused, in the preview too, naming
+  where.
 - **A revert commit per landing.** Each is `git revert -m 1` of a merge that
   landed the task, worded `Revert: <subject>` beside the other messages Ordewell
   writes (ADR-0013). A continue or a retry lands a task again under a new record,
@@ -45,7 +51,9 @@ revert adds commits and rewrites nothing.
   not the current record: a retry, a failed spawn or a continue that conflicted
   leaves a record that is not `merged`, or none, over merges still on the branch.
   Those merges go; such a record stays, `kept`, for the worktree only it names,
-  and a conflict it held is over. Newest means the first-parent order of the
+  and a conflict it held is over. If any of what goes cannot be named, nothing
+  does: a revert that took some of it would leave the rest standing on work that
+  is gone. Newest means the first-parent order of the
   integration branch: the landing queue makes it one line, and git knows that
   order in each repo however the record was saved.
 - **Two steps, so a surface can confirm.** `Session.revertPreview` (`GET
@@ -119,9 +127,17 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
   built on the work; what follows it waits only for what it depends on.
 - Work a conflict resolver brought in has no merge of its own: reverting it, or
   the resolver that carried it, is refused rather than leaving a record that
-  says landed over work that is gone.
+  says landed over work that is gone. `IsolationRun.carried` keeps it from the
+  moment that merge lands, so the refusal outlives the carried task's record and
+  stands after it lands a merge of its own, which holds only its later work.
 - A task saved with neither `landedTip` nor a `landings` entry, as ADR-0013 ran:
   no record says which merge is its, so it is refused, in those words.
+- A dependent in a run started before every merge was kept
+  (`IsolationRun.keepsEveryLanding`), when an attempt of it ran and nothing shows
+  it landed: an earlier attempt's merge may be on the branch with no record of
+  it, so the whole revert is refused.
+- A task with merges in `landings` and no record or `landedTasks` entry left to
+  name it, which only a build between the two could save: refused, not previewed.
 - Reverting after Merge all, and any write to the user's branch.
 
 ## Considered options
@@ -141,6 +157,16 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
   run the work again on the next Execute, which is what the user took back.
 - **A planner or supervisor tool.** Rejected: it would add a route to undoing
   reviewed work for a decision the user is present to make.
+- **Take HEAD containing a landing as merged, whatever is checked out.** Rejected:
+  a detached review of the integration tip would mark work merged and let a
+  clear-up delete the branch, and work that is only being read would be refused
+  as in the user's branch.
+- **Revert a carried task's own later merge and leave what its resolver brought.**
+  Rejected: the task would go back to pending with its work still on the branch,
+  and a retry would start from a tip that holds it.
+- **Find a dependent's forgotten merges by reading the branch's messages.**
+  Rejected: a merge's message is words a task chose, and a wrong match reverts
+  work the user did not ask to lose. Not being sure refuses.
 
 ## Consequences
 
@@ -150,9 +176,16 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
   merged, and its integration branch stays, since HEAD does not contain it. It
   holds nothing the user lacks but the reverted work; deleting it is theirs.
 - A reverted task has no diff to show: that read goes through the record.
+- A user who fast-forwards by hand on a run with no base branch, or on a branch
+  other than the base branch, has their merge read as a review: it stays not
+  merged until Merge all or a merge commit says otherwise, which errs towards
+  keeping the branch.
+- The resolver of a conflict and the task it carried stay on the integration
+  branch for good; only discarding the run takes them back.
 
 ## History
 
 - 2026-10-30 — accepted; core, the command seam and the daemon contract implemented.
 - 2026-10-30 — the terminal and VS Code offer it; fully implemented.
 - 2026-10-30 — landed reads `landings` over the record, and a checkout of the integration branch counts as no merge; a claim in a revert's reach is refused, and it is judged again before it settles.
+- 2026-10-31 — merged means the user's branch, not HEAD: any review checkout is no merge, and Merge all makes a merge commit where no base branch says otherwise; `carried` keeps resolver-carried work; what cannot be named refuses the whole revert.

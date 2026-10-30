@@ -216,15 +216,24 @@ function landingsOf(run: IsolationRun, taskId: string, repoPath: string): string
 /** Whether a task has work on the integration branch in a repo: a later attempt's record says nothing of the merges before it. */
 function landedIn(run: IsolationRun, taskId: string, repoPath: string): boolean {
   const record = run.tasks[taskId];
-  return landingsOf(run, taskId, repoPath).length > 0 || (record?.status === 'merged' && record.repos[repoPath]?.changed === true);
+  return landingsOf(run, taskId, repoPath).length > 0 || run.carried?.[taskId]?.[repoPath] !== undefined || (record?.status === 'merged' && record.repos[repoPath]?.changed === true);
 }
 
-/** Why a task that landed in a repo has no merge to revert there; only a merge made since `taskTip` was recorded can have been a resolver's. */
+/** Why a task that landed in a repo cannot be reverted by its own merges there; only a merge made since `taskTip` was recorded can have been a resolver's. */
 function noOwnMerge(run: IsolationRun, task: LandedTask, repoPath: string): string {
-  return run.tasks[task.taskId]?.repos[repoPath]?.taskTip
-    ? `Task "${task.title}" landed through the merge of the task that resolved its conflict, so it has no merge of its own to revert.`
+  return run.carried?.[task.taskId]?.[repoPath] || run.tasks[task.taskId]?.repos[repoPath]?.taskTip
+    ? `Task "${task.title}" landed work through the merge of the task that resolved its conflict, and that work has no merge of its own to revert. Nothing was reverted.`
     : `Task "${task.title}" landed before Ordewell kept a record of its merge, so it cannot tell which merge to revert. Nothing was reverted.`;
 }
+
+const landedTask = ({ taskId, order, title, commit }: IsolationTaskRecord): LandedTask => ({ taskId, order, title, ...(commit ? { commit } : {}) });
+
+/**
+ * A repo with no branch of its own to name takes Merge all as a merge commit:
+ * with no base branch to read, that commit is the only thing that tells it from
+ * a review checkout of the integration tip (ADR-0054).
+ */
+const landsAsMergeCommit = (repo: IsolationRepo): boolean => !repo.baseBranch;
 
 const repoName = (repo: Pick<IsolationRepo, 'path'>): string => (repo.path === SELF_REPO ? 'the repository' : repo.path);
 
@@ -480,7 +489,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       const scan = await this.scanGroup(workspaceRoot);
       const paths = 'paths' in scan ? scan.paths : [SELF_REPO];
       const nested = 'paths' in scan ? scan.nested : [];
-      const run: IsolationRun = { id: this.mintRunId(), workspaceRoot, repos: [], shared: [], sharedRepos: [], tasks: {} };
+      const run: IsolationRun = { id: this.mintRunId(), workspaceRoot, repos: [], shared: [], sharedRepos: [], tasks: {}, keepsEveryLanding: true };
       for (const repoPath of paths) {
         const repo = await this.startRepo(run, repoPath);
         if (repo) run.repos.push(repo);
@@ -929,17 +938,30 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     for (const repo of run.repos) {
       const entry = record.repos[repo.path];
       if (!entry?.changed) continue;
-      // The branch itself checked out for review is no merge: HEAD holds the work, the user's branch does not.
-      if (await this.onIntegration(repo)) return false;
       // A task landed before its tip was recorded counts as merged once the whole integration branch is.
-      const merged = await this.tryGit(repo.root, ['merge-base', '--is-ancestor', entry.landedTip ?? repo.integrationBranch, 'HEAD']);
-      if (!merged.ok && !(await this.integrationGone(repo))) return false;
+      if (!(await this.inUserBranch(repo, entry.landedTip ?? repo.integrationBranch)) && !(await this.integrationGone(repo))) return false;
     }
     return true;
   }
 
-  private async onIntegration(repo: IsolationRepo): Promise<boolean> {
-    return (await this.tryGit(repo.root, ['symbolic-ref', '--short', '-q', 'HEAD'])).stdout.trim() === repo.integrationBranch;
+  /**
+   * Whether `commit` has reached the user's branch: what merged means to a
+   * merge gate, a revert and a clear-up alike (ADR-0054). HEAD holding it is
+   * not enough. The integration branch checked out for review, by name or
+   * detached, or a branch cut from it, holds the work with no merge of it into
+   * anything. The branch the run started on is the user's, a fast-forward of
+   * it included, and speaks for a detached HEAD. Anywhere else git has to show
+   * a merge, which leaves the commit off HEAD's first-parent line.
+   */
+  private async inUserBranch(repo: IsolationRepo, commit: string): Promise<boolean> {
+    const current = (await this.tryGit(repo.root, ['symbolic-ref', '--short', '-q', 'HEAD'])).stdout.trim();
+    if (current === repo.integrationBranch) return false;
+    if (repo.baseBranch && (!current || current === repo.baseBranch)) {
+      return (await this.tryGit(repo.root, ['merge-base', '--is-ancestor', commit, `refs/heads/${repo.baseBranch}`])).ok;
+    }
+    if (!(await this.tryGit(repo.root, ['merge-base', '--is-ancestor', commit, 'HEAD'])).ok) return false;
+    const [sha, line] = await Promise.all([this.tryGit(repo.root, ['rev-parse', '--verify', '-q', `${commit}^{commit}`]), this.tryGit(repo.root, ['rev-list', '--first-parent', 'HEAD'])]);
+    return sha.ok && line.ok && !line.stdout.split(/\r?\n/).includes(sha.stdout.trim());
   }
 
   /**
@@ -1097,9 +1119,9 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     return inTheWay.length > 0 ? block('uncommitted-changes', [...new Set(inTheWay)]) : null;
   }
 
-  /** Whether the checked-out HEAD is an ancestor of the integration branch, so merging it moves HEAD without a merge commit. */
+  /** Whether merging the integration branch moves HEAD without a merge commit: the checked-out HEAD is its ancestor, and the merge is allowed to. */
   private async fastForwards(repo: IsolationRepo): Promise<boolean> {
-    return (await this.tryGit(repo.root, ['merge-base', '--is-ancestor', 'HEAD', repo.integrationBranch])).ok;
+    return !landsAsMergeCommit(repo) && (await this.tryGit(repo.root, ['merge-base', '--is-ancestor', 'HEAD', repo.integrationBranch])).ok;
   }
 
   /** Merge each repo in turn, stopping at the first that does not take its merge. Only a merge started here is ever aborted. */
@@ -1118,7 +1140,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       // throw away their resolution as if it were ours.
       if (await this.mergeInProgress(repo.root)) return stopped('failed', repo);
       const message = runMergeMessage(this.bringsToHead(run, repo), this.deps.plannedWith?.() ?? false);
-      const merge = await this.tryGit(repo.root, [...VERBATIM, 'merge', '--no-edit', ...messageArgs(message), repo.integrationBranch]);
+      const merge = await this.tryGit(repo.root, [...VERBATIM, 'merge', '--no-edit', ...(landsAsMergeCommit(repo) ? ['--no-ff'] : []), ...messageArgs(message), repo.integrationBranch]);
       if (merge.ok) {
         landed.push(repo.path);
         continue;
@@ -1150,7 +1172,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       if (opts.integration !== 'keep') {
         for (const repo of run.repos) {
           if (opts.integration === 'delete') await this.tryGit(repo.root, ['branch', '-D', repo.integrationBranch]);
-          else await this.deleteIfMerged(repo.root, repo.integrationBranch);
+          else await this.deleteIfMerged(repo, repo.integrationBranch);
         }
         // A refused worktree keeps its record: the one pointer left to what is still in it.
         const refused = new Set(removal.refused.flatMap((r) => (r.task ? [r.task.taskId] : [])));
@@ -1192,7 +1214,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       const branch = ref.slice('refs/heads/'.length);
       const runId = RUN_BRANCH.exec(branch)?.[1];
       if (!runId || runId === run.id || liveRuns.has(runId) || checkedOut.has(branch)) continue;
-      if ((await this.deleteIfMerged(repo.root, branch)) === 'failed') ok = false;
+      if ((await this.deleteIfMerged(repo, branch)) === 'failed') ok = false;
     }
     return ok;
   }
@@ -1200,13 +1222,15 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   /**
    * Delete `branch` only if the repo's checked-out HEAD already contains it —
    * HEAD, not an upstream: what the user has checked out is what they merged
-   * into. `-d` rather than `-D`, so git also refuses a branch a worktree has
-   * checked out.
+   * into — and that is a merge, not a review checkout standing on the branch.
+   * `-d` rather than `-D`, so git also refuses a branch a worktree has checked
+   * out.
    */
-  private async deleteIfMerged(root: string, branch: string): Promise<'deleted' | 'kept' | 'failed'> {
-    const merged = await this.tryGit(root, ['merge-base', '--is-ancestor', branch, 'HEAD']);
+  private async deleteIfMerged(repo: IsolationRepo, branch: string): Promise<'deleted' | 'kept' | 'failed'> {
+    const merged = await this.tryGit(repo.root, ['merge-base', '--is-ancestor', branch, 'HEAD']);
     if (!merged.ok) return merged.code === 1 ? 'kept' : 'failed';
-    return (await this.tryGit(root, ['branch', '-d', branch])).ok ? 'deleted' : 'failed';
+    if (!(await this.inUserBranch(repo, branch))) return 'kept';
+    return (await this.tryGit(repo.root, ['branch', '-d', branch])).ok ? 'deleted' : 'failed';
   }
 
   private async drain(): Promise<void> {
@@ -1287,12 +1311,18 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       const tip = await this.tryGit(repo.root, ['rev-parse', '--verify', '-q', repo.integrationBranch]);
       if (tip.ok) landedTips.push([repo, tip.stdout.trim()]);
     }
+    const carried = await this.carriedIn(run, record, landedTips);
     // No await between these: a persist must never see the landing cleared
     // without the task merged, nor a merge a rollback may yet take off counted as landed.
     for (const [repo, tip] of landedTips) {
       record.repos[repo.path].landedTip = tip;
       ((run.landings ??= {})[task.id] ??= {})[repo.path] = [...landingsOf(run, task.id, repo.path).filter((merge) => merge !== tip), tip];
-      (run.landedTasks ??= {})[task.id] = { taskId: record.taskId, order: record.order, title: record.title, ...(record.commit ? { commit: record.commit } : {}) };
+      (run.landedTasks ??= {})[task.id] = landedTask(record);
+    }
+    for (const { other, repo, tip } of carried) {
+      const tips = ((run.carried ??= {})[other.taskId] ??= {});
+      tips[repo.path] = [...tips[repo.path] ?? [], tip];
+      (run.landedTasks ??= {})[other.taskId] = landedTask(other);
     }
     delete run.landing;
     settleStatus(record, 'merged');
@@ -1304,6 +1334,25 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     // not turn that into a failure. `pruneOrphans` sweeps up whatever it leaves.
     await this.admin(run.workspaceRoot, () => this.removeTask(run, record, { dropRecord: false })).catch(() => undefined);
     return 'merged';
+  }
+
+  /** What a task's merges just brought in of a task yet to land: a conflict's resolver, which took that task's branch with it. */
+  private async carriedIn(run: IsolationRun, record: IsolationTaskRecord, landedTips: readonly [IsolationRepo, string][]): Promise<{ other: IsolationTaskRecord; repo: IsolationRepo; tip: string }[]> {
+    const carried: { other: IsolationTaskRecord; repo: IsolationRepo; tip: string }[] = [];
+    for (const [repo, merge] of landedTips) {
+      for (const other of Object.values(run.tasks)) {
+        const entry = other.repos[repo.path];
+        if (other === record || other.status === 'merged' || !entry?.changed || !entry.taskTip) continue;
+        if (await this.broughtBy(repo, entry.taskTip, merge)) carried.push({ other, repo, tip: entry.taskTip });
+      }
+    }
+    return carried;
+  }
+
+  /** Whether a landing's merge is what put `tip` on the integration branch. */
+  private async broughtBy(repo: IsolationRepo, tip: string, merge: string): Promise<boolean> {
+    return (await this.tryGit(repo.root, ['merge-base', '--is-ancestor', tip, merge])).ok
+      && !(await this.tryGit(repo.root, ['merge-base', '--is-ancestor', tip, `${merge}^1`])).ok;
   }
 
   async readLanded(run: IsolationRun, taskIds: readonly string[]): Promise<LandedWork> {
@@ -1324,7 +1373,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     for (const repo of run.repos) {
       const landed = records.filter(({ taskId }) => landedIn(run, taskId, repo.path));
       if (landed.length === 0) continue;
-      const unmerged = landed.find(({ taskId }) => landingsOf(run, taskId, repo.path).length === 0);
+      const unmerged = landed.find(({ taskId }) => landingsOf(run, taskId, repo.path).length === 0 || run.carried?.[taskId]?.[repo.path]);
       if (unmerged) return { ok: false, reason: 'no-own-merge', error: noOwnMerge(run, unmerged, repo.path) };
       const holder = await this.integrationHeldBy(run, repo);
       if (holder) return { ok: false, reason: 'checked-out', error: `The integration branch${repo.path === SELF_REPO ? '' : ` of ${repo.path}`} is checked out in ${holder}, and a revert has to commit to it. Check out another branch there first. Nothing was reverted.` };
@@ -1334,10 +1383,10 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       const landings = landed.flatMap((record) => landingsOf(run, record.taskId, repo.path).map((merge) => ({ record, merge }))).sort((a, b) => at(a) - at(b));
       lines.set(repo.path, landings);
       for (const { record, merge } of landings) {
-        if (run.tasks[record.taskId]?.inHead || (await this.tryGit(repo.root, ['merge-base', '--is-ancestor', merge, 'HEAD'])).ok) inBranch.push(revertCommand(repo, record, merge));
+        if (run.tasks[record.taskId]?.inHead || (await this.inUserBranch(repo, merge))) inBranch.push(revertCommand(repo, record, merge));
         else if (!position.has(merge)) return { ok: false, reason: 'git', error: `The merge of task "${record.title}" is not on the integration branch in ${repoName(repo)}.` };
-        const carried = await this.carriedBy(run, repo, merge, records);
-        if (carried) return { ok: false, reason: 'no-own-merge', error: `The work of task "${carried.title}" landed through the merge of task "${record.title}", so reverting that merge would take it too, and it has no merge of its own to go with it.` };
+        const carried = await this.carriedBy(run, repo, merge);
+        if (carried) return { ok: false, reason: 'no-own-merge', error: `The work of task "${carried}" landed through the merge of task "${record.title}", so reverting that merge would take it too, and it has no merge of its own to go with it. Nothing was reverted.` };
       }
     }
     const tasks = newestFirst([...lines.values()].map((line) => [...new Set(line.map((l) => l.record))])).map((record) => ({
@@ -1348,17 +1397,19 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   }
 
   /**
-   * A landed task outside `asked` whose work `merge` brought in: a conflicted
-   * task its resolver landed, which then found its own branch merged and made
-   * no merge of its own. Its record would go on saying landed over work that
-   * is gone.
+   * The title of a task whose work `merge` brought in without being its own
+   * landing: a conflicted task its resolver took along. Reverting it would
+   * remove work no record lets go of, whether that task made no merge, landed
+   * one later or lost its record to a retry. `run.carried` keeps what a record
+   * dropped since can no longer say; the records still answer for a run saved
+   * before it, and for a task whose branch went in by any other merge.
    */
-  private async carriedBy(run: IsolationRun, repo: IsolationRepo, merge: string, asked: readonly LandedTask[]): Promise<IsolationTaskRecord | undefined> {
-    for (const record of Object.values(run.tasks)) {
-      const entry = record.repos[repo.path];
-      if (record.status !== 'merged' || asked.includes(record) || !entry?.changed || entry.landedTip || !entry.taskTip) continue;
-      const brought = await this.tryGit(repo.root, ['merge-base', '--is-ancestor', entry.taskTip, merge]);
-      if (brought.ok && !(await this.tryGit(repo.root, ['merge-base', '--is-ancestor', entry.taskTip, `${merge}^1`])).ok) return record;
+  private async carriedBy(run: IsolationRun, repo: IsolationRepo, merge: string): Promise<string | undefined> {
+    const kept = Object.entries(run.carried ?? {}).flatMap(([taskId, repos]) => (repos[repo.path] ?? []).map((tip) => ({ taskId, tip })));
+    const recorded = Object.values(run.tasks).flatMap(({ taskId, repos }) => (repos[repo.path]?.changed && repos[repo.path].taskTip ? [{ taskId, tip: repos[repo.path].taskTip! }] : []));
+    for (const { taskId, tip } of [...kept, ...recorded]) {
+      if (landingsOf(run, taskId, repo.path).includes(merge)) continue;
+      if (await this.broughtBy(repo, tip, merge)) return (run.tasks[taskId] ?? run.landedTasks?.[taskId])?.title ?? taskId;
     }
     return undefined;
   }

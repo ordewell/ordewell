@@ -362,7 +362,8 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
     dependencies: refsOf(task.dependencies, context.tasks),
     // A block read off the plan offers what a stored one does: Skip among them.
     actions: taskRowActions(blocked.length > 0 ? { ...task, status: 'blocked' } : task, context.placement ?? (parent ? 'subtask' : 'task')),
-    revertible: isolation?.revertible === true,
+    // Read off the mark itself: a task with merges left and no record has state `none`.
+    revertible: task.isolation?.revertible === true,
     mark: markAction(task),
     opsEditable: opsEditable(task),
   };
