@@ -8,6 +8,7 @@ import type { RunnerModelDiscovery } from '../plugins/types';
 import type { PlannerModelChoice } from '../services/PlannerModelMemory';
 import { DEFAULT_MAX_PARALLEL, parseMaxParallel } from '../utils/maxParallel';
 import { SettingsService } from '../services/SettingsService';
+import { parseNotifyCommand } from '../services/escalationNotifier';
 import { recordedInstalledPlanner } from '../services/InstalledPlanner';
 
 export function normalizeGeminiModel(id: string): string {
@@ -231,6 +232,8 @@ export abstract class BaseConfig implements IConfig {
       .map((s) => s.trim())
       .filter(Boolean);
   }
+
+  get notifyCommand(): string[] { return parseNotifyCommand(process.env.ORDEWELL_NOTIFY_COMMAND); }
 
   /**
    * Who plans when no surface setting names a planner: an explicit

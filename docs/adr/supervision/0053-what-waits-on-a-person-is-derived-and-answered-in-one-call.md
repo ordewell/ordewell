@@ -140,6 +140,52 @@ daemon adds `GET /api/plans/:id/escalations`, and
 ([ADR-0006](../surfaces/0006-tui-pure-core-thin-driver.md) S3), answering in the
 same shapes.
 
+## Telling a person
+
+**The user may name one command, and Ordewell runs it once for each new
+escalation.** It covers a desktop notification, a chat message or a webhook,
+whichever they want, and core sends nothing out by itself. A surface answers the
+list; this reaches someone who is not looking at one.
+
+- **One optional setting, an argument vector.** `ORDEWELL_NOTIFY_COMMAND`, a
+  JSON array with the program first, or VS Code's `ordewell.notifyCommand`,
+  which wins. With neither, nothing runs. It is read as each new escalation
+  appears. A plain string is refused with a warning, not split: splitting one
+  is a shell's job, and there is none.
+- **User-level only.** A repository that could set it could run a command on
+  the user's machine (#92). The variable is in `SETTINGS_ENV_REFUSED`, as the
+  effect allowlist is ([ADR-0035](0035-effects-are-consented-and-recorded.md)),
+  so a workspace's environment files and a settings update are both refused
+  it, and VS Code's setting is application-scoped and read from the user's value
+  alone.
+- **No shell, and the escalation in the environment only.** Part of an
+  escalation's text comes from runners, so it is untrusted. The command runs as
+  written, and the escalation reaches it in `ORDEWELL_ESCALATION_ID`, `_KIND`,
+  `_TASK` (the task's ref and title, empty for a wait of the run itself) and
+  `_REASON`, each always set, with control and format characters replaced and
+  its length capped. Nothing is interpolated into the command. It runs in the
+  user's home with the host's environment, never the workspace's: a repository
+  chooses nothing about it. A shell the user writes into the command is theirs
+  to quote.
+- **Once per id, remembered in memory.** `EscalationNotifier`
+  (`packages/core/src/services/escalationNotifier.ts`) keeps the ids it has
+  seen, for the plan the Session holds and no longer. When a plan is adopted,
+  what already waits counts as told, so a restart sends nothing it may have sent
+  before; what appears after that is new. While a plan is on its way out nothing
+  is told: a run stopped by leaving its session can raise a wait nobody is there
+  for. An id seen while no command was set counts as told too.
+- **It can never affect a run.** It is started and left, with a short time limit
+  that stops it and what it started. A failure is logged once per Session and
+  otherwise ignored, and it is not retried. It leads a process group of its own
+  but is kept out of the runner groups a session lease records
+  ([ADR-0049](../isolation/0049-a-session-has-one-live-host.md)), which would hold
+  the session against another host while a hung command lived. It does not keep
+  a host from exiting.
+- **It runs where the run runs.** The notifier reads the list as each status
+  update goes out, so after what the update says is saved, and it needs no
+  surface attached. Its seam is `SessionDeps.runNotifyCommand`, wired in
+  `createSession`.
+
 ## Testing decisions
 
 Three seams, each through the public interface. `escalations` with the real
@@ -151,9 +197,17 @@ fake runner to each wait and answering it, which also folds the stream through
 `reduceRun` and holds it to what the Session derives
 (`sessionEscalations.test.ts`).
 
+The notify command is tested at the notifier, with real processes for what only
+a process can show: the text staying out of the command line, the limit stopping
+a hung command (`escalationNotifier.test.ts`). A real Session drives it with a
+fake command through what a run leaves waiting, a reload, a plan left, and a
+command that fails, throws or never answers
+(`sessionEscalationNotify.test.ts`). A workspace's value is refused where each
+reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
+
 ## Out of scope
 
-- Surfaces and notifications, which build on this.
+- Surfaces, which build on this.
 - Escalations raised by a supervisor, or by mandate rules (#23). Neither can be
   derived from what a run holds, so they would need a stored form, decided then.
 
@@ -184,6 +238,24 @@ fake runner to each wait and answering it, which also folds the stream through
 - **A message of its own for a change of the list.** Rejected: a status update
   already goes out on each change the list reads, and says everything about
   what it covers.
+- **A built-in webhook.** Rejected: it makes core send data out with no egress
+  guard yet (#88, #90). A command the user wrote is theirs to point anywhere.
+- **A built-in desktop notifier.** Rejected: per-platform code that the command
+  already covers.
+- **The command from a repository or a workspace's environment files.**
+  Rejected: that lets a repository run a command on the user's machine (#92).
+- **A shell string, or the text as placeholders in the command.** Rejected: the
+  text is partly a runner's, and either would turn it into something run.
+- **The command in `settings.json`, as the run settings are
+  ([ADR-0030](0030-global-run-settings.md)).** Rejected: it sits with the other
+  values a repository must never set, under the refusal that already covers
+  them, and in the settings page VS Code users set those in. It is no run
+  setting: nothing about a run reads it.
+- **Saving the ids told with the plan.** Rejected: counting what waits on load as
+  told already stops a storm after a restart, without a stored form of something
+  that is otherwise derived.
+- **Running it on a surface.** Rejected: it would run only with one attached,
+  and the person it is for has walked away from it.
 
 ## Consequences
 
@@ -196,8 +268,17 @@ fake runner to each wait and answering it, which also folds the stream through
   list and the answer. That is the same refusal the card meets.
 - A stale id is refused, however close the new wait is to the old one: a client
   reads the list again rather than retrying.
+- Each new id runs one process, so a stop that lists many tasks at once runs the
+  command that many times.
+- A wait that appeared just before a host died is counted as told on load, though
+  its command may never have run. A restart staying quiet is worth that miss.
+- The variable is read from the environment Ordewell started in, like the effect
+  allowlist: what direnv has already exported into that shell cannot be told
+  from the user's own. The refusal covers what Ordewell itself reads for a
+  workspace.
 
 ## History
 
 - 2026-10-30 — accepted.
 - 2026-10-30 — a reverted task is listed outside an open run (ADR-0054).
+- 2026-10-30 — an optional notify command, run once for each new escalation (#30).

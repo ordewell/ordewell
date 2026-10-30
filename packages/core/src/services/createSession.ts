@@ -75,6 +75,7 @@ import { PlanEditError } from './PlanEditError';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import { ExecutionCommands, mergeStopped, type CommandOutcome, type ExecutionCommand, type ExecutionHost } from './ExecutionCommands';
 import { escalations, type Escalation } from './escalations';
+import { EscalationNotifier, runNotifyCommand, type NotifyRun } from './escalationNotifier';
 import type { TaskRevertPreview } from './taskRevert';
 import { REPORT_TAIL_LINES, reportEnded } from './taskReport';
 import { ResearchTasks, researchReportTo } from './ResearchTasks';
@@ -226,6 +227,8 @@ export interface SessionDeps {
    * process-wide cache and search provider unless a test fakes the network.
    */
   web?: { transport?: WebTransport; resolveHost?: ResolveAll; cache?: WebResponseCache; searchProvider?: ISearchProvider };
+  /** What runs the user's notify command (ADR-0053); the real process unless a test supplies one. */
+  runNotifyCommand?: NotifyRun;
 }
 
 /**
@@ -368,12 +371,18 @@ export function createSession(deps: SessionDeps): Session {
     sessionHeld: () => session.heldElsewhere(),
   });
   const usage = new PlannerUsageLedger(windows, () => aiService().plannerContextStatus?.());
+  const escalationNotifier = new EscalationNotifier({
+    command: () => deps.config.notifyCommand,
+    run: deps.runNotifyCommand ?? runNotifyCommand,
+    log: (message) => console.warn(`[EscalationNotifier] ${message}`),
+  });
   const events = new SessionEventRelay({
     broadcast: deps.broadcast, onNotice: deps.onNotice, store, orchestrator, runs: orchestrator.runs, usage,
     awaitingApproval: (taskId) => runnerApprovals.waiting(taskId),
     checkpointQuestion: (taskId) => orchestrator.getCheckpointQuestion(taskId),
     waitsForApproval: (taskId): boolean => session.waitsForApproval(taskId),
     escalations: (): Escalation[] => session.escalations(),
+    escalationsSent: (list) => escalationNotifier.changed(list),
   });
 
   const approvalPolicy = new ApprovalPolicy({
@@ -449,6 +458,7 @@ export function createSession(deps: SessionDeps): Session {
     orchestrator,
     runs: orchestrator.runs,
     events,
+    escalationNotifier,
     usage,
     windows,
     approvals,
@@ -498,6 +508,8 @@ export interface SessionParts {
   /** The orchestrator's own: Session reads the run and acts on it there, Merge all aside. */
   runs: IsolationRunController;
   events: SessionEventRelay;
+  /** Told by the Session when a plan changes hands; what it sees comes from the relay. */
+  escalationNotifier: Pick<EscalationNotifier, 'hush' | 'baseline'>;
   usage: PlannerUsageLedger;
   /** The windows every stream of the session reports, saved with the plan. */
   windows: SessionWindows;
@@ -536,6 +548,7 @@ export class Session {
   private readonly usage: PlannerUsageLedger;
   private readonly windows: SessionWindows;
   private readonly events: SessionEventRelay;
+  private readonly escalationNotifier: SessionParts['escalationNotifier'];
   private readonly planner: SessionPlanner;
   private readonly orchestrator: TaskOrchestrator;
   private readonly runs: IsolationRunController;
@@ -673,6 +686,7 @@ export class Session {
     this.orchestrator = parts.orchestrator;
     this.runs = parts.runs;
     this.events = parts.events;
+    this.escalationNotifier = parts.escalationNotifier;
     this.usage = parts.usage;
     this.windows = parts.windows;
     this.approvals = parts.approvals;
@@ -1351,6 +1365,7 @@ export class Session {
    * boundary does not (ADR-0008).
    */
   private dropPlanScope({ keepGrants = false }: { keepGrants?: boolean } = {}): void {
+    this.escalationNotifier.hush();
     // A turn waiting at the planner gate belongs to this scope too: let open
     // later, it would plan the old goal in whatever scope is held by then.
     this.endWaiting(() => new PlannerTurnDiscardedError());
@@ -1389,6 +1404,7 @@ export class Session {
     this.dropPlanScope(opts);
     this.orchestrator.loadPlan([]);
     void this.runs.adopt(null);
+    this.escalationNotifier.baseline([]);
   }
 
   /**
@@ -2461,6 +2477,8 @@ export class Session {
       // What the surfaces were last sent is not saved; a settled run is handed
       // over again as its resend would, until git says what of it is merged.
       this.sentHandoff = this.owedHandoff();
+      // Last, once the run is taken over: what waits now was there before this load (ADR-0053).
+      this.escalationNotifier.baseline(this.escalations());
     }
     if (opts?.persist !== false) this.persist();
     // A reopened session shows its token line again without waiting for the

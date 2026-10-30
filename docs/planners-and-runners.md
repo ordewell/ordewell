@@ -83,6 +83,51 @@ too; a key in VS Code's secret storage or settings does not. Claude Code and Cod
 also sign in with `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`, so such a key saved for
 the Anthropic or OpenAI planner can change which account they use.
 
+## Get told when a run waits on you
+
+Ordewell can run a command of yours whenever something new waits on you, so a run
+can reach you away from the screen: a desktop notification, a chat message, a
+webhook. Ordewell sends nothing itself. Set the command once, as a list with the
+program first, either in `~/.ordewell/.env` or your shell (restart the daemon with
+`ordewell stop --server` to pick up a change), or as `ordewell.notifyCommand` in
+VS Code's user settings.
+
+On macOS, in `~/.ordewell/.env`:
+
+```bash
+ORDEWELL_NOTIFY_COMMAND=["osascript","-e","display notification (do shell script \"printenv ORDEWELL_ESCALATION_REASON\") with title \"Ordewell\""]
+```
+
+On Linux, with `notify-send`:
+
+```bash
+ORDEWELL_NOTIFY_COMMAND=["sh","-c","notify-send -- \"Ordewell: $ORDEWELL_ESCALATION_TASK\" \"$ORDEWELL_ESCALATION_REASON\""]
+```
+
+In an `export` in your shell, put single quotes around the list.
+
+Ordewell runs the command with no shell, in your home directory, and tells it what
+is waiting in four environment variables:
+
+| Variable | Holds |
+| --- | --- |
+| `ORDEWELL_ESCALATION_ID` | What this wait is called; it does not repeat |
+| `ORDEWELL_ESCALATION_KIND` | What sort of wait it is, such as `failed` or `approval` |
+| `ORDEWELL_ESCALATION_TASK` | The task's number and title; empty for a wait of the run itself |
+| `ORDEWELL_ESCALATION_REASON` | Why it waits, in plain words |
+
+Part of that text comes from the runners, so treat it as untrusted. Ordewell strips
+control characters and caps its length, but a shell you add is yours to keep safe:
+keep each variable in double quotes, as above, and never pass one to `eval`.
+
+The command runs once for each new wait. What already waits when a session opens
+counts as told, so a restart sends nothing. It can never affect a run: it has a
+short time limit, and a failure is logged once, to `~/.ordewell/server.log` (or
+the extension host's log in VS Code), and otherwise ignored. Only you can set it:
+Ordewell refuses it from a repository's `.ordewell/env` and `.envrc`, and from VS
+Code workspace settings
+([ADR-0053](adr/supervision/0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
+
 ## Adding a coding agent
 
 Only a built-in runner can run tasks or plan as a harness planner. To add one, see

@@ -71,6 +71,7 @@ export function fakeConfig(overrides: Partial<IConfig> = {}): IConfig {
     // Off so a test that is not about the allowlist sees every prompt it raises.
     approvalDefaults: false,
     effectAllowlist: [],
+    notifyCommand: [],
     webReadBudget: 40,
     plannerNativeShell: false,
     setProviderModelLists: () => {},
