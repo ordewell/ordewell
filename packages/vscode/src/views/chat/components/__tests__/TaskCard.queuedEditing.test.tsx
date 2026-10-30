@@ -129,6 +129,47 @@ describe('a queued task keeps its editors while another task runs', () => {
   });
 });
 
+describe('editable prompt keyboard controls', () => {
+  it('focuses and activates a task prompt without toggling the card', () => {
+    const onExpandedChange = vi.fn();
+    renderCard({ onExpandedChange });
+
+    const prompt = screen.getByRole('button', { name: /Edit task prompt:/ });
+    prompt.focus();
+    expect(prompt).toHaveFocus();
+    fireEvent.keyDown(prompt, { key: 'Enter' });
+    // A native button turns keyboard activation into click; fireEvent models that activation.
+    fireEvent.click(prompt);
+
+    expect(screen.getByRole('textbox')).toBeTruthy();
+    expect(onExpandedChange).not.toHaveBeenCalled();
+  });
+
+  it('focuses and activates a subtask prompt without toggling its card', () => {
+    const onPromptChange = vi.fn();
+    const parent = makeTask({ id: 'p1', status: 'in_progress' });
+    render(<SubTaskCard task={makeTask({ id: 's1' })} parentTask={parent} models={[]} isExecuting onPromptChange={onPromptChange} />);
+    fireEvent.click(document.querySelector('.subtask-card-header')!);
+
+    const prompt = screen.getByRole('button', { name: /Edit subtask prompt:/ });
+    prompt.focus();
+    expect(prompt).toHaveFocus();
+    fireEvent.keyDown(prompt, { key: ' ' });
+    fireEvent.click(prompt);
+
+    expect(screen.getByRole('textbox')).toBeTruthy();
+    expect(document.querySelector('.subtask-card')?.classList.contains('expanded')).toBe(true);
+    expect(onPromptChange).not.toHaveBeenCalled();
+  });
+
+  it('does not expose read-only prompts as controls', () => {
+    renderCard({ task: makeTask({ status: 'in_progress' }) });
+
+    expect(screen.queryByRole('button', { name: /Edit task prompt:/ })).toBeNull();
+    expect(screen.getByText('Do the queued work').className).toContain('task-prompt-readonly');
+  });
+});
+
 describe('a subtask reads its own execution state, not its parent\'s', () => {
   const parent = makeTask({ id: 'p1', order: 1, status: 'in_progress' });
   const sub = makeTask({ id: 's1', order: 1, status: 'pending', title: 'Queued subtask' });

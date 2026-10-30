@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Task and subtask prompts are keyboard accessible.** Editable prompts can be
+  focused and activated from the keyboard; read-only prompts remain unchanged.
 ## [0.11.3] - 2026-10-29
 
 ### Fixed

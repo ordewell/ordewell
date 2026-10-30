@@ -8,6 +8,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **VS Code prompts are keyboard accessible.** Editable task and subtask prompts
+  are focusable controls with accessible names; read-only prompts remain
+  unchanged.
 ## [0.11.3] - 2026-10-29
 
 ### Fixed

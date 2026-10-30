@@ -32,6 +32,8 @@ record of who built what, rather than `git log`.
 - Hanbin Tan ([@hskl18](https://github.com/hskl18)) — documented how
   planners and runners get their models and credentials (#140).
 
+- [@torialfaro](https://github.com/torialfaro) and [@aavykyy](https://github.com/aavykyy) — made VS Code task prompts keyboard accessible (#141).
+
 Thank you. Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Acknowledgements
