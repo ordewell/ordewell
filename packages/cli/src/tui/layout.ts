@@ -399,7 +399,9 @@ export function chatActivity(state: TuiState): ChatActivity | null {
   if (isTaskRunning(task) || (own && isTaskRunning(own))) {
     // A subtask runs inside its parent's attempt, whose facts the row follows.
     const running = isTaskRunning(task) ? task : own;
-    const activity = running && taskActivity(tv.view, running);
+    // An earlier attempt is browsed, not run: what its log left open ended with it.
+    const archived = tv.attempts.length > 0 && tv.attempt < Math.max(...tv.attempts);
+    const activity = running && taskActivity({ ...tv.view, archived }, running);
     if (!activity) return null;
     return activity.busy ? activity : { ...activity, quiet: true };
   }

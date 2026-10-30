@@ -4,6 +4,14 @@ import type { DisplayBlock, SubagentBlock } from './blocks';
 /** What the label reads: a `TaskLogView`'s blocks, which is all a webview holds of one. */
 type LoggedBlocks = { readonly blocks: readonly DisplayBlock[]; readonly turnStartedAt?: string };
 
+/** What {@link taskActivity} reads of a log: the view's turn flag, and whether the log is an attempt the runner is no longer in. */
+type LoggedTurn = LoggedBlocks & {
+  /** A turn is open in the log. Absent where a surface holds no such flag, which reads as open. */
+  readonly working?: boolean;
+  /** The log is an earlier attempt, browsed: whatever it left open ended with it. */
+  readonly archived?: boolean;
+};
+
 /**
  * What a task's runner is busy with, from its log: the latest block still
  * open decides, since that is what the runner is doing now. Several running
@@ -49,12 +57,15 @@ export interface TaskActivity {
  * task not running, and one waiting on a runner request, whose card in the log
  * already asks the user. A running task whose runner has gone quiet is named
  * as the plan pane names it and is never `busy`, so a runner that is not
- * producing anything cannot look as if it were.
+ * producing anything cannot look as if it were. Nor can a runner between
+ * turns: `busy` needs an open turn, or a background subagent that outlived it.
+ * A browsed earlier attempt has no line, whatever its log was left open on.
  */
-export function taskActivity(view: LoggedBlocks, task: { status: string; idleSince?: string | null; awaitingApproval?: number }): TaskActivity | null {
-  if (!isTaskRunning(task)) return null;
+export function taskActivity(view: LoggedTurn, task: { status: string; idleSince?: string | null; awaitingApproval?: number }): TaskActivity | null {
+  if (!isTaskRunning(task) || view.archived) return null;
   if (task.awaitingApproval || view.blocks.some((b) => b.type === 'approval' && b.status === 'pending')) return null;
   const since = view.turnStartedAt ? { since: view.turnStartedAt } : {};
   if (taskStatusKind(task) === 'quiet') return { label: STALLED_LABEL, busy: false, ...since };
+  if (view.working === false && !view.blocks.some((b) => b.type === 'subagent' && b.status === 'running')) return null;
   return { label: activityLabel(view), busy: true, ...since };
 }

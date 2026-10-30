@@ -193,12 +193,12 @@ export default function TaskLogApp() {
     else send();
   };
 
-  // Spinner only while a turn is open; a quiet task's line is the static marker.
+  // Spinner only while a turn is open, or a subagent outlives it; a quiet task's line is the static marker.
   // A script runs no model, so there is nothing for the line to say.
   const activity = ((): TaskActivity | null => {
     if (!status || script || !header) return null;
-    const line = taskActivity({ blocks, turnStartedAt: status.turnStartedAt ?? undefined }, { status: status.taskStatus, idleSince: status.idleSince, awaitingApproval: state?.kind === 'approval' ? 1 : 0 });
-    return line && (header.working || !line.busy) ? line : null;
+    const archived = status.attempts.length > 0 && status.attempt < Math.max(...status.attempts);
+    return taskActivity({ blocks, turnStartedAt: status.turnStartedAt ?? undefined, working: header.working, archived }, { status: status.taskStatus, idleSince: status.idleSince, awaitingApproval: state?.kind === 'approval' ? 1 : 0 });
   })();
 
   // One button, as in the planner's composer: Stop only while a turn is live

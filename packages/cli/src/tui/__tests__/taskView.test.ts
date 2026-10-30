@@ -441,10 +441,11 @@ describe('the task view draws as a runner, not the planner', () => {
     expect(out).toContain('→ Task 1');
     expect(out).toContain('Refactor PlanStore');
     // The log ends with a completed turn, so the header reads the saved status;
-    // "working" is the header's word only while a turn is live.
+    // "working" is the header's word only while a turn is live, and ctrl-x
+    // stops a turn, so it is named only then.
     expect(out).toContain('claude-code · running');
     expect(out).toContain('ctrl-r remove queued');
-    expect(out).toContain('ctrl-x stop runner');
+    expect(out).not.toContain('ctrl-x stop runner');
   });
 
   it('says what an awaiting task waits on', () => {

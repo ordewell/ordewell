@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
-import { EMPTY_TASK_LOG } from '@ordewell/core';
+import { EMPTY_TASK_LOG, replayTaskLog } from '@ordewell/core';
 import { chatActivity } from '../layout';
 import { initialState, type TaskLogState, type TaskView, type TuiState } from '../state';
 
@@ -7,8 +7,8 @@ function task(over: Partial<TaskView> = {}): TaskView {
   return { id: 't1', order: 1, title: 'Add multiply', type: 'ai', status: 'pending', dependencies: [], assignedRunner: 'claude-code', ...over };
 }
 
-function viewing(taskId: string): TaskLogState {
-  return { taskId, view: EMPTY_TASK_LOG, attempts: [1], attempt: 1, pending: [], loaded: true, followLatest: true, queuedIndex: 0 };
+function viewing(taskId: string, over: Partial<TaskLogState> = {}): TaskLogState {
+  return { taskId, view: { ...EMPTY_TASK_LOG, working: true }, attempts: [1], attempt: 1, pending: [], loaded: true, followLatest: true, queuedIndex: 0, ...over };
 }
 
 const state = (over: Partial<TuiState>): TuiState => initialState({ sessionId: 's1', ...over });
@@ -40,6 +40,29 @@ describe('chatActivity: a task chat', () => {
   it('says Working while that task\'s attempt is in progress', () => {
     const tasks = [task({ status: 'in_progress' })];
     expect(chatActivity(state({ tasks, taskView: viewing('t1') }))).toEqual({ label: 'Working…', busy: true });
+  });
+
+  it.each(['completed', 'interrupted', 'failed'] as const)('says nothing between turns, after one %s: a stopped runner must not look busy', (reason) => {
+    const tasks = [task({ status: 'in_progress' })];
+    const view = replayTaskLog([{ type: 'turn_start', message: 'go', startedAt: '2026-10-30T10:00:00.000Z' }, { type: 'turn_end', reason }]);
+    expect(chatActivity(state({ tasks, taskView: viewing('t1', { view }) }))).toBeNull();
+  });
+
+  it('says nothing for an earlier attempt browsed while the task runs a later one, whatever it was left on', () => {
+    const tasks = [task({ status: 'in_progress' })];
+    const view = replayTaskLog([{ type: 'turn_start', message: 'go', startedAt: '2026-10-30T10:00:00.000Z' }, { type: 'tool_call', id: 'c1', name: 'Bash', args: '{"command":"sleep 999"}' }]);
+    expect(chatActivity(state({ tasks, taskView: viewing('t1', { view, attempts: [1, 2], attempt: 1 }) }))).toBeNull();
+    expect(chatActivity(state({ tasks, taskView: viewing('t1', { view, attempts: [1, 2], attempt: 2 }) }))?.label).toBe('Running Bash(sleep 999)…');
+  });
+
+  it('still names a background subagent that outlives its turn', () => {
+    const tasks = [task({ status: 'in_progress' })];
+    const view = replayTaskLog([
+      { type: 'turn_start', message: 'go' },
+      { type: 'subagent_started', subagentId: 's1', brief: 'Scan the repo' },
+      { type: 'turn_end', reason: 'completed' },
+    ]);
+    expect(chatActivity(state({ tasks, taskView: viewing('t1', { view }) }))).toEqual({ label: 'Subagent: Scan the repo…', busy: true });
   });
 
   it('says its runner is connecting Ordewell\'s tools, not working, while nothing has been sent to it (ADR-0025)', () => {

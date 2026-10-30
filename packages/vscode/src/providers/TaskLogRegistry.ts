@@ -15,6 +15,8 @@ export interface TaskLogRegistryDeps {
   accountLimits?: () => readonly AccountLimitSnapshot[];
   /** Open a workspace-relative file the log's handoff saved, from the panel's own link (ADR-0050). */
   openFile: (path: string) => void;
+  /** When the task's runner went quiet, if it has, as the Session's run holds it: a tab opened or restored later learns it from here, as no update need follow. */
+  idleSince?: (taskId: string) => string | null;
   log: (msg: string) => void;
 }
 
@@ -105,7 +107,7 @@ export class TaskLogRegistry {
     const controller = new TaskLogPanel(
       panel,
       taskId,
-      { session: this.deps.session(), getTask: this.deps.getTask, orderLabel: this.deps.orderLabel, accountLimits: this.deps.accountLimits, openFile: this.deps.openFile, log: this.deps.log },
+      { session: this.deps.session(), getTask: this.deps.getTask, orderLabel: this.deps.orderLabel, accountLimits: this.deps.accountLimits, idleSince: this.deps.idleSince, openFile: this.deps.openFile, log: this.deps.log },
       this.deps.extensionUri,
       () => { this.panels.delete(taskId); },
     );

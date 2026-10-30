@@ -15,7 +15,7 @@ const task = (over: Partial<TaskView> = {}): TaskView => ({
 });
 
 const opened = (over: Partial<TaskView> = {}, cols = 100): TuiState => {
-  const tv: TaskLogState = { taskId: 't1', view: EMPTY_TASK_LOG, attempts: [1], attempt: 1, pending: [], loaded: true, followLatest: true, queuedIndex: 0 };
+  const tv: TaskLogState = { taskId: 't1', view: { ...EMPTY_TASK_LOG, working: true }, attempts: [1], attempt: 1, pending: [], loaded: true, followLatest: true, queuedIndex: 0 };
   return initialState({ sessionId: 's1', rows: 30, cols, focus: 'chat', tasks: [task(over)], taskView: tv });
 };
 
