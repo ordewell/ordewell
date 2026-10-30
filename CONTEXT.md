@@ -1448,7 +1448,8 @@ decides whether the loop goes on. A round starts only on `failed` evidence
 could not start starts none, and the check fails as any task does.
 *Avoid:* a bare "check" where a verdict's *Check* could be meant — this one is
 a task; "test" or "review" for the role — those are what a loop check may do;
-"declared check" — that is #39's acceptance check, which is not a loop's.
+"declared check" or "acceptance check" — a check is a task in the plan, not a
+field on the task it checks.
 
 **Body** (of a loop) — the top-level tasks `loop.body` names, which fix what the
 check found. A body task depends on its check, and otherwise only on what the

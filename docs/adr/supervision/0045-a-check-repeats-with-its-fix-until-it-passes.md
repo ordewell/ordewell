@@ -172,9 +172,8 @@ before.
 
 ## Out of scope
 
-Nested loops; a loop whose body is a delegated child plan (#33); declared
-acceptance checks (#39) as the check, until #39 is decided; a manual task as
-check or body; a user editing a loop's `loop` field by hand from a surface.
+Nested loops; a loop whose body is a delegated child plan (#33); a manual task
+as check or body; a user editing a loop's `loop` field by hand from a surface.
 
 ## Considered options
 
@@ -192,7 +191,8 @@ check or body; a user editing a loop's `loop` field by hand from a surface.
   tasks), while attempts already keep each round's log and report.
 - **Only declared checks (#39) as checks.** Rejected: an AI check, such as an
   adversarial review, is the main use, and its `task_complete` report is
-  already evidence.
+  already evidence. #39 itself was closed: a check is a task in the plan, so
+  there is no separate declared check.
 - **A stored `repeating` status.** Rejected for the reason ADR-0034 rejected a
   stored `blocked`: it has to be set and cleared on every path that fails,
   retries, edits, removes or reloads a task. Between rounds is read from the
@@ -241,3 +241,4 @@ check or body; a user editing a loop's `loop` field by hand from a surface.
 - 2026-10-22 — decided, not built: handoffs run in both directions of a loop ([ADR-0047](0047-structured-task-handoffs.md), #120).
 - 2026-10-22 — implemented handoffs in both loop directions and scoped reads between check and body (step 3, L1; ADR-0047, #120).
 - 2026-10-26 — the planner prompt and the diagnose skill add a loop only for an explicit iterate-until goal or a specific acceptance gate, not for routine validation.
+- 2026-10-30 — #39 closed: a check is a task in the plan, so no declared check is planned.
