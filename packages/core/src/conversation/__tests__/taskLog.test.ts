@@ -24,6 +24,27 @@ describe('reduceTaskLog', () => {
     expect(unkeyed(view.blocks)).toEqual([{ type: 'message', role: 'user', text: 'Do the task', streaming: false }]);
   });
 
+  it('knows when its open turn began, and forgets it once the turn is over (#81)', () => {
+    const at = '2026-10-30T10:00:00.000Z';
+    const open = replayTaskLog([{ ...start, startedAt: at }, { type: 'text_delta', text: 'Hel' }]);
+    expect(open.turnStartedAt).toBe(at);
+    expect(replayTaskLog([{ ...start, startedAt: at }, { type: 'turn_end', reason: 'completed' }]).turnStartedAt).toBeUndefined();
+    expect(replayTaskLog([{ ...start, startedAt: at }, { type: 'runner_ended' }]).turnStartedAt).toBeUndefined();
+  });
+
+  it('dates a turn a runner command opened the same way (#81)', () => {
+    const at = '2026-10-30T10:00:00.000Z';
+    expect(replayTaskLog([{ type: 'command', name: 'compact', startedAt: at }]).turnStartedAt).toBe(at);
+  });
+
+  it('has no start time for a turn saved before they were kept, nor for the next one after it (#81)', () => {
+    const at = '2026-10-30T10:00:00.000Z';
+    expect(replayTaskLog([start]).turnStartedAt).toBeUndefined();
+    const second = replayTaskLog([{ ...start, startedAt: at }, { type: 'turn_end', reason: 'completed' }, start]);
+    expect(second.working).toBe(true);
+    expect(second.turnStartedAt).toBeUndefined();
+  });
+
   it('shows a message Ordewell sent as Ordewell\'s, not the user\'s, wherever the runner read it', () => {
     const opened = replayTaskLog([start, { type: 'turn_end', reason: 'completed' }, { type: 'turn_start', message: 'Call task_complete.', from: 'ordewell' }]);
     expect(unkeyed(opened.blocks).at(-1)).toEqual({ type: 'message', role: 'system', text: 'Ordewell: Call task_complete.', streaming: false });

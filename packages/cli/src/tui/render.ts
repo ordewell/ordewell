@@ -14,7 +14,7 @@ import {
 } from './layout';
 import { chatEditorRoomFor, chatPromptLabel } from './geometry';
 import { currentHandoff, diffRoom, handoffActions } from './handoff';
-import { capConflictFiles, handoffBaseLine, handoffBranchName, isRepoGroup, repoResultLines, taskLogCommands, titledTaskRef, titledTaskRefOf, type RunnerCommand } from '@ordewell/core';
+import { capConflictFiles, elapsedSince, handoffBaseLine, handoffBranchName, isRepoGroup, repoResultLines, taskLogCommands, titledTaskRef, titledTaskRefOf, type RunnerCommand } from '@ordewell/core';
 import { matchingItems, scriptTaskView, visibleItems, type Overlay, type PickerItem, type PickerState, type TuiState } from './state';
 import type { StepperState } from './reducers/stepper';
 import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
@@ -264,10 +264,12 @@ function statusText(state: TuiState, cols: number, panes: BodyPanes): string {
     const glyph = activity.busy ? SPINNER[state.spinnerFrame % SPINNER.length] : QUIET_MARK;
     const scrolled = mark ? style.grey(`${mark} · `) : '';
     const stop = runnerStoppable(state) ? ' · ctrl-x to stop' : '';
-    // The label holds runner output, and it gives way before the stop key does.
-    const room = Math.max(1, cols - width(scrolled) - width(glyph) - 1 - width(stop));
+    const elapsed = elapsedSince(activity.since, state.now);
+    const time = elapsed ? ` ${elapsed}` : '';
+    // The label holds runner output, and it gives way before the time and the stop key do.
+    const room = Math.max(1, cols - width(scrolled) - width(glyph) - 1 - width(time) - width(stop));
     const label = truncate(sanitize(activity.label).replace(/\s+/g, ' ').trim(), room);
-    return truncate(`${scrolled}${style.brand(glyph)} ${label}${stop}`, cols);
+    return truncate(`${scrolled}${style.brand(glyph)} ${label}${time}${stop}`, cols);
   }
   return notes ? truncate(style.grey(notes), cols) : '';
 }

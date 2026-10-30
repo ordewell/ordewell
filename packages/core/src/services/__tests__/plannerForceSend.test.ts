@@ -82,7 +82,7 @@ describe('planner force send', () => {
     await sent;
 
     const [started, ended] = turnEvents(env);
-    expect(started).toEqual({ type: 'planner_turn_started', turnId: started.turnId, prompt: 'add a README task' });
+    expect(started).toEqual({ type: 'planner_turn_started', turnId: started.turnId, prompt: 'add a README task', startedAt: expect.any(String) });
     expect(ended).toEqual({ type: 'planner_turn_ended', turnId: started.turnId, outcome: 'message' });
     expect(env.session.planState!.conversationHistory!.at(-2)).toEqual({ role: 'user', content: 'add a README task', timestamp: NOW.toISOString() });
   });

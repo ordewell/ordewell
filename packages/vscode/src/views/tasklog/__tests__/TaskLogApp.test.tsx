@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, fireEvent, cleanup } from '@testing-library/react';
 import { EMPTY_TASK_LOG, EMPTY_TASK_LOG_FOLLOW, taskLogHeaderView, type AccountLimitSnapshot, type AttemptUsage, type DisplayBlock, type RunnerCommand, type StructuredTurnEnd, type TaskLogFollow, type TaskLogHeaderTask, type TaskUsageSummary, type UsageTotals } from '@ordewell/core';
 import { replayTaskLog } from '@ordewell/core/plan-utils';
@@ -81,7 +81,7 @@ function status(over: StatusOverrides = {}): TaskLogStatus {
       continuable,
       attemptUsage: ledger,
     }, follow, awaitingApproval, attempt),
-    taskStatus: planStatus, idleSince: null,
+    taskStatus: planStatus, idleSince: null, turnStartedAt: null,
     queued: [], attempts, attempt,
     ...rest,
   };
@@ -866,6 +866,52 @@ describe('the runner\'s activity, folded (ADR-0017, X1)', () => {
       init({ working: false }, [...thinking.blocks]);
 
       expect(line()).toBeNull();
+    });
+
+    describe('and how long the turn has run (#81)', () => {
+      const startedAt = '2026-10-30T10:00:00.000Z';
+      const at = (seconds: number) => new Date(Date.parse(startedAt) + seconds * 1000);
+      const time = (): string | undefined => line()?.querySelector('.task-log-activity-time')?.textContent ?? undefined;
+      beforeEach(() => { vi.useFakeTimers(); });
+      afterEach(() => { vi.useRealTimers(); });
+
+      it('ends the line with the time since the turn began, counting on a timer of its own', () => {
+        vi.setSystemTime(at(42));
+        render(<TaskLogApp />);
+        init({ working: true, turnStartedAt: startedAt }, [...thinking.blocks]);
+        expect(time()).toBe('42s');
+
+        act(() => { vi.advanceTimersByTime(3000); });
+        expect(time()).toBe('45s');
+        act(() => { vi.advanceTimersByTime(140_000); });
+        expect(time()).toBe('3m 05s');
+      });
+
+      it('keeps counting once the task is quiet', () => {
+        vi.setSystemTime(at(185));
+        render(<TaskLogApp />);
+        init({ working: true, idleSince: '2026-10-30T10:01:00.000Z', turnStartedAt: startedAt }, [...thinking.blocks]);
+        expect(line()?.textContent).toContain('Stalled');
+        expect(time()).toBe('3m 05s');
+
+        act(() => { vi.advanceTimersByTime(5000); });
+        expect(time()).toBe('3m 10s');
+      });
+
+      it('shows the spinner with no time for a turn saved before they were dated', () => {
+        vi.setSystemTime(at(42));
+        render(<TaskLogApp />);
+        init({ working: true }, [...thinking.blocks]);
+        expect(line()?.querySelector('.chat-msg-spinner')).not.toBeNull();
+        expect(time()).toBeUndefined();
+      });
+
+      it('is kept out of the live region, which would read it out every second', () => {
+        vi.setSystemTime(at(42));
+        render(<TaskLogApp />);
+        init({ working: true, turnStartedAt: startedAt }, [...thinking.blocks]);
+        expect(line()?.querySelector('.task-log-activity-time')?.getAttribute('aria-hidden')).toBe('true');
+      });
     });
 
     it('is absent for a script task, which runs no model', () => {

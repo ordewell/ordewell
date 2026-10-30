@@ -73,3 +73,18 @@ describe('the stop rule', () => {
     expect(followTurn(live.view, live.gate, { type: 'planner_liveness' }).view).toBe(live.view);
   });
 });
+
+describe('when the open turn began (#81)', () => {
+  const at = '2026-10-30T10:00:00.000Z';
+
+  it('is kept from the turn\'s start until it ends or is stopped', () => {
+    const live = follow([{ ...started, startedAt: at }, delta('Half')]);
+    expect(live.gate).toEqual({ open: TURN, stopped: null, openedAt: at });
+    expect(follow([{ type: 'planner_turn_ended', turnId: TURN, outcome: 'message' }], live).gate.openedAt).toBeUndefined();
+    expect(stopTurn(live.view, live.gate).gate.openedAt).toBeUndefined();
+  });
+
+  it('is absent for a turn announced without one, as an older daemon does', () => {
+    expect(follow([started]).gate).toEqual({ open: TURN, stopped: null });
+  });
+});

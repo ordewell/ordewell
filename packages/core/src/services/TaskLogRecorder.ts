@@ -118,8 +118,11 @@ export class TaskLogRecorder {
     this.latest.set(taskId, { sessionId: session.id, note: (entry) => { pending.push(entry); flush(); } });
 
     session.onEvent((event) => {
-      const entry = toTaskLogEvent(event);
-      if (!entry) return;
+      const logged = toTaskLogEvent(event);
+      if (!logged) return;
+      // Dated here, where every runner's events meet the log, so a reload
+      // knows when an open turn began (#81).
+      const entry = logged.type === 'turn_start' || logged.type === 'command' ? { ...logged, startedAt: new Date().toISOString() } : logged;
       pending.push(entry);
       // A turn's end is what a surface shows "waiting for input" on, an
       // approval is someone's to answer, and a script step's end settles its

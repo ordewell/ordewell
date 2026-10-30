@@ -509,6 +509,11 @@ body {
   align-items: center;
 }
 
+.chat-msg-working-time {
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---- Conversation blocks (#51): thinking, command rows, subagent cards ---- */
 
 .chat-msg-error {
@@ -6429,6 +6434,13 @@ body.vscode-high-contrast-light .pending-message {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The label gives way before the time does: the time is what says how long. */
+.task-log-activity-time {
+  flex-shrink: 0;
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
 }
 
 @media (prefers-reduced-motion: reduce) {

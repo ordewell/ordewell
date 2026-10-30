@@ -6,6 +6,7 @@ import { contextMeterText, contextMeterTitle, hasAccountLimits, taskActivity } f
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks, type PatchedView } from '../../shared/conversationPatch';
 import type { HostToTaskLog, TaskLogStatus, TaskLogToHost } from '../../shared/taskLogProtocol';
 import { taskCommand, useRunnerCommands } from '../chat/components/RunnerCommands';
+import ElapsedTime from '../chat/components/ElapsedTime';
 import AccountLimitRows from '../chat/components/AccountLimitRows';
 import PendingMessages, { QUEUE_TITLE, SendKeyHint, isSendNowKey, type PendingMessage } from '../chat/components/PendingMessages';
 import type { AccountLimitSnapshot, TaskActivity, TaskLogHeaderUsage, TaskLogHeaderView } from '@ordewell/core';
@@ -196,7 +197,7 @@ export default function TaskLogApp() {
   // A script runs no model, so there is nothing for the line to say.
   const activity = ((): TaskActivity | null => {
     if (!status || script || !header) return null;
-    const line = taskActivity({ blocks }, { status: status.taskStatus, idleSince: status.idleSince, awaitingApproval: state?.kind === 'approval' ? 1 : 0 });
+    const line = taskActivity({ blocks, turnStartedAt: status.turnStartedAt ?? undefined }, { status: status.taskStatus, idleSince: status.idleSince, awaitingApproval: state?.kind === 'approval' ? 1 : 0 });
     return line && (header.working || !line.busy) ? line : null;
   })();
 
@@ -257,6 +258,7 @@ export default function TaskLogApp() {
         <div className={`task-log-activity${activity.busy ? '' : ' quiet'}`} role="status">
           {activity.busy ? <span className="chat-msg-spinner" aria-hidden="true" /> : <span className="task-log-activity-mark" aria-hidden="true">~</span>}
           <span className="task-log-activity-label">{activity.label}</span>
+          <ElapsedTime since={activity.since} className="task-log-activity-time" />
         </div>
       )}
 

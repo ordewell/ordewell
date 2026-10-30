@@ -89,3 +89,49 @@ describe('the planner row', () => {
     expect(out).not.toContain('Planning…');
   });
 });
+
+describe('the elapsed time on the activity line (#81)', () => {
+  const startedAt = '2026-10-30T10:00:00.000Z';
+  const dated: TaskLogEvent = { ...turn, startedAt };
+  const secondsIn = (n: number): Partial<TuiState> => ({ now: Date.parse(startedAt) + n * 1000 });
+
+  it('ends the line with the time since the open turn began', () => {
+    const events: TaskLogEvent[] = [dated, { type: 'thinking_delta', text: 'Hmm' }];
+    expect(frame(opened(events, {}, secondsIn(42)))).toContain('⠋ Thinking… 42s');
+    expect(frame(opened(events, {}, secondsIn(185)))).toContain('⠋ Thinking… 3m 05s');
+  });
+
+  it('keeps counting once the task is quiet, before the stop key', () => {
+    const state = opened([dated], { idleSince: '2026-10-30T10:01:00.000Z' }, secondsIn(185));
+    expect(frame(state)).toContain('~ Stalled 3m 05s · ctrl-x to stop');
+  });
+
+  it('shows the spinner and no time for a turn saved before they were dated', () => {
+    const state = opened([turn, { type: 'thinking_delta', text: 'Hmm' }], {}, secondsIn(42));
+    expect(activityRows(state)).toEqual([expect.stringMatching(/^⠋ Thinking… · ctrl-x to stop/)]);
+  });
+
+  it('shows no time for a start the clock has not reached', () => {
+    expect(activityRows(opened([dated], {}, secondsIn(-5)))).toEqual([expect.stringMatching(/^⠋ Working… · ctrl-x to stop/)]);
+  });
+
+  it('is on the planner row too, from when its turn began', () => {
+    const planning = initialState({
+      sessionId: 's1', rows: 30, cols: 100, planner: 'planning', turnGate: { open: 't-1', stopped: null, openedAt: startedAt }, ...secondsIn(7),
+    });
+    expect(frame(planning)).toContain('⠋ Planning… 7s');
+  });
+
+  it('is absent on the planner row when its daemon did not date the turn', () => {
+    const planning = initialState({ sessionId: 's1', rows: 30, cols: 100, planner: 'planning', turnGate: { open: 't-1', stopped: null }, ...secondsIn(7) });
+    expect(activityRows(planning)).toEqual([expect.stringMatching(/^⠋ Planning…\s*$/)]);
+  });
+
+  it('gives way to the stop key last: the label is cut before the time and the key', () => {
+    const long = 'x'.repeat(300);
+    const state = opened([dated, { type: 'tool_call', id: 'r1', name: 'Bash', args: JSON.stringify({ command: long }) }], {}, { cols: 60, ...secondsIn(42) });
+    const row = frame(state).split('\n').find((l) => l.includes('Running Bash')) ?? '';
+    expect(row.length).toBeLessThanOrEqual(60);
+    expect(row).toContain('… 42s · ctrl-x to stop');
+  });
+});

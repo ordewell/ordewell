@@ -77,6 +77,14 @@ describe('taskActivity', () => {
     expect(taskActivity(working, { status: 'in_progress', idleSince: '2026-08-18T00:00:00.000Z' })).toEqual({ label: 'Stalled', busy: false });
   });
 
+  it('carries when the open turn began, so a surface can count from it (#81)', () => {
+    const at = '2026-10-30T10:00:00.000Z';
+    const dated = replayTaskLog([{ ...start, startedAt: at }, { type: 'thinking_delta', text: 'Hmm' }]);
+    expect(taskActivity(dated, { status: 'in_progress' })).toEqual({ label: 'Thinking…', busy: true, since: at });
+    // A quiet task keeps counting: the time is how long it has been silent.
+    expect(taskActivity(dated, { status: 'in_progress', idleSince: '2026-10-30T10:05:00.000Z' })).toEqual({ label: 'Stalled', busy: false, since: at });
+  });
+
   it('is absent while a runner request waits', () => {
     const asked = replayTaskLog([start, { type: 'approval_requested', approvalId: 'p1', tool: 'Bash', args: '{}', allowForTask: true }]);
     expect(taskActivity(asked, { status: 'in_progress' })).toBeNull();

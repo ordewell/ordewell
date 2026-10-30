@@ -565,6 +565,12 @@ export interface TuiState {
   exiting: boolean;
   /** Cycles while a task is running to animate the plan pane's spinner. */
   spinnerFrame: number;
+  /**
+   * The clock of the frame being drawn (epoch ms), which the activity line's
+   * elapsed time counts to (#81). The app sets it as it paints, so the reducer
+   * and renderer read no clock; 0 until then shows no time.
+   */
+  now: number;
 }
 
 export { isTaskRunning };
@@ -773,6 +779,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     cols: 80,
     exiting: false,
     spinnerFrame: 0,
+    now: 0,
     ...overrides,
     run: seedRun(overrides),
   };

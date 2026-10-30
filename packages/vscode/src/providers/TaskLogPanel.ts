@@ -282,6 +282,7 @@ export class TaskLogPanel {
       }, this.follow, approvals, this.follow.attempt),
       taskStatus: task?.status ?? '',
       idleSince: this.idleSince,
+      turnStartedAt: this.follow.view.turnStartedAt ?? null,
       queued: this.follow.view.queued,
       attempts: this.follow.attempts,
       attempt: this.follow.attempt,

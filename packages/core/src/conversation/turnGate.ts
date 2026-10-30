@@ -9,6 +9,8 @@ import { reduceConversation, type ConversationInput, type ConversationView } fro
 export interface TurnGate {
   readonly open: string | null;
   readonly stopped: string | null;
+  /** When the open turn began (ISO), for its elapsed time (#81); absent when none is open or its daemon did not say. */
+  readonly openedAt?: string;
 }
 
 export const NO_TURN: TurnGate = { open: null, stopped: null };
@@ -34,7 +36,7 @@ function cutOff(gate: TurnGate, input: ConversationInput): boolean {
 }
 
 function withGate(live: GatedConversation, gate: TurnGate): GatedConversation {
-  return gate.open === live.gate.open && gate.stopped === live.gate.stopped ? live : { ...live, gate };
+  return gate.open === live.gate.open && gate.stopped === live.gate.stopped && gate.openedAt === live.gate.openedAt ? live : { ...live, gate };
 }
 
 /**
@@ -45,13 +47,13 @@ function withGate(live: GatedConversation, gate: TurnGate): GatedConversation {
 export function followTurn(view: ConversationView, gate: TurnGate, input: ConversationInput): GatedConversation {
   const live = { view, gate };
   if (input.type === 'planner_turn_started') {
-    return withGate({ view: reduceConversation(view, input), gate }, { open: input.turnId, stopped: null });
+    return withGate({ view: reduceConversation(view, input), gate }, { open: input.turnId, stopped: null, ...(input.startedAt ? { openedAt: input.startedAt } : {}) });
   }
   if (cutOff(gate, input)) {
     return input.type === 'planner_turn_ended' ? withGate(live, { ...gate, stopped: null }) : live;
   }
   const next = { view: reduceConversation(view, input), gate };
-  return input.type === 'planner_turn_ended' && input.turnId === gate.open ? withGate(next, { ...gate, open: null }) : next;
+  return input.type === 'planner_turn_ended' && input.turnId === gate.open ? withGate(next, { open: null, stopped: gate.stopped }) : next;
 }
 
 /**

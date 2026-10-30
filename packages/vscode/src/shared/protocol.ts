@@ -200,8 +200,12 @@ export type HostToWebview =
   | { type: 'taskCommands'; taskId: string; commands: readonly RunnerCommand[] }
   | { type: 'setState'; state: ChatState }
   | ConversationPatch
-  /** A planner turn opened or closed: what turns a send into a hold, and Esc into unsend or stop. */
-  | { type: 'plannerTurn'; active: boolean }
+  /**
+   * A planner turn opened or closed: what turns a send into a hold, and Esc
+   * into unsend or stop. `startedAt` (ISO) dates an open one for its elapsed
+   * time (#81); an older daemon sends none.
+   */
+  | { type: 'plannerTurn'; active: boolean; startedAt?: string }
   /** The planner is working without producing anything visible; keeps the webview's watchdog quiet. */
   | { type: 'plannerLiveness' }
   /**

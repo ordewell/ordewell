@@ -62,7 +62,7 @@ export function createApp(deps: AppDeps): App {
     }
     renderPending = false;
     lastPaint = Date.now();
-    deps.draw(render(state));
+    deps.draw(render({ ...state, now: Date.now() }));
   }
 
   function paintKey(): void {

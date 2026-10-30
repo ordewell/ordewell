@@ -73,6 +73,18 @@ describe('ConversationViewHost', () => {
     expect(screen.blocks()[1]).toMatchObject({ text: 'Done.', streaming: false });
   });
 
+  it('tells the webview when the turn began, and again to one that opens mid-turn (#81)', () => {
+    const at = '2026-10-30T10:00:00.000Z';
+    host.receive({ ...started, startedAt: at });
+    expect(screen.posts.filter((m) => m.type === 'plannerTurn')).toEqual([{ type: 'plannerTurn', active: true, startedAt: at }]);
+
+    host.resync();
+    expect(screen.posts.filter((m) => m.type === 'plannerTurn').at(-1)).toEqual({ type: 'plannerTurn', active: true, startedAt: at });
+
+    host.receive({ type: 'planner_turn_ended', turnId: TURN, outcome: 'message' });
+    expect(screen.posts.filter((m) => m.type === 'plannerTurn').at(-1)).toEqual({ type: 'plannerTurn', active: false });
+  });
+
   it('passes liveness on to the webview, which has nothing else to show for it', () => {
     host.receive({ type: 'planner_liveness' });
 

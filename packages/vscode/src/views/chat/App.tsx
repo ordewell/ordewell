@@ -5,6 +5,7 @@ import PlannerLoginAction from './components/PlannerLogin';
 import GetStarted from './components/GetStarted';
 import { orNames } from './runnerNames';
 import ChatInput from './components/ChatInput';
+import ElapsedTime from './components/ElapsedTime';
 import PlannerResendBar from './components/PlannerResendBar';
 import PlannerPauseBar from './components/PlannerPauseBar';
 import DockResizeHandle from './components/DockResizeHandle';
@@ -71,7 +72,7 @@ export default function App() {
     conversation, plan, isExecuting, isResearchActive, error, models, modelsByRunner,
     runnerList, enabledRunnerIds, pendingRunners, modelAllowlist, held, unsent, modesByRunner, runnerNotice, modelConfig,
     modelOptions, configuredProviders, planner, plannerKnown, runnersKnown, isReady, modelDiscoveryErrors,
-    skills, taskSkills, checkpoint, taskOutput, run, activity, starting, dockExpanded, dockHeight, settingsRequest, accountLimits,
+    skills, taskSkills, checkpoint, taskOutput, run, activity, starting, dockExpanded, dockHeight, settingsRequest, accountLimits, plannerTurnStartedAt,
   } = host;
   const setPlan = useCallback((v: Updatable<HostState['plan']>) => dispatch({ type: 'patchPlan', plan: v }), []);
   const setError = useCallback((v: string) => dispatch({ type: 'patchError', error: v }), []);
@@ -1129,6 +1130,7 @@ export default function App() {
       {isResearchActive && !compacting && (
         <div className="chat-msg-working" role="status">
           <span className="chat-msg-spinner" aria-hidden="true" /> Working&hellip;
+          <ElapsedTime since={plannerTurnStartedAt} className="chat-msg-working-time" />
         </div>
       )}
 

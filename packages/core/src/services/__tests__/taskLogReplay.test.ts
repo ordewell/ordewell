@@ -88,8 +88,8 @@ describe('a multi-turn attempt, saved and replayed', () => {
     const events = saved(1);
     expect(events.map((e) => e.type)).toEqual(expect.arrayContaining(['message_queued', 'turn_end']));
     expect(events.filter((e) => e.type === 'turn_start')).toEqual([
-      { type: 'turn_start', message: 'Do the task' },
-      { type: 'turn_start', message: 'Say only: ok', messageId: queued },
+      { type: 'turn_start', message: 'Do the task', startedAt: expect.any(String) },
+      { type: 'turn_start', message: 'Say only: ok', messageId: queued, startedAt: expect.any(String) },
     ]);
     expect(events.filter((e) => e.type === 'turn_end')).toEqual([
       { type: 'turn_end', reason: 'interrupted' },
@@ -252,7 +252,7 @@ describe('a message read mid-turn in the saved task log (ADR-0023)', () => {
 
     const events = saved(1);
     expect(events.filter((e) => e.type.startsWith('message_') || e.type.startsWith('turn_'))).toEqual([
-      { type: 'turn_start', message: 'Do the task' },
+      { type: 'turn_start', message: 'Do the task', startedAt: expect.any(String) },
       { type: 'message_queued', messageId: id, text: 'use Postgres' },
       { type: 'message_handed_over', messageId: id },
       { type: 'message_delivered', messageId: id, text: 'use Postgres' },

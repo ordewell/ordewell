@@ -87,7 +87,7 @@ describe('OpenAI planner reply stream', () => {
     expect(segments).toHaveLength(2);
     const [before, after] = segments;
     expect(sent.map((m) => ({ ...m, ...('step' in m ? { step: '<step>' } : {}) }))).toEqual([
-      { type: 'planner_turn_started', turnId, prompt: 'add persistence' },
+      { type: 'planner_turn_started', turnId, prompt: 'add persistence', startedAt: expect.any(String) },
       { type: 'planner_thinking_delta', turnId, segmentId: before, text: 'look first' },
       { type: 'planner_text_delta', turnId, segmentId: before, text: 'Let me look.' },
       { type: 'research_step', turnId, tool: 'read_file', args: '{"path":"a.ts"}', toolCallId: 'c1' },
@@ -151,7 +151,7 @@ describe('OpenAI planner reply stream', () => {
     const turnId = turnIdOf(sent);
     const discarded = (sent[1] as { segmentId: string }).segmentId;
     expect(sent.slice(0, 4)).toEqual([
-      { type: 'planner_turn_started', turnId, prompt: 'add persistence' },
+      { type: 'planner_turn_started', turnId, prompt: 'add persistence', startedAt: expect.any(String) },
       { type: 'planner_text_delta', turnId, segmentId: discarded, text: 'Here is the plan: ' },
       { type: 'planner_text_delta', turnId, segmentId: discarded, text: broken },
       { type: 'planner_text_retracted', turnId, segmentId: discarded },

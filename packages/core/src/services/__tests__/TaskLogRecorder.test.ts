@@ -39,6 +39,23 @@ describe('TaskLogRecorder', () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
+  it('dates a turn as it opens, for a reload to count its open turn from (#81)', async () => {
+    vi.setSystemTime(new Date('2026-10-30T10:00:00.000Z'));
+    const session = new FakeRunnerSession('s1', 't1');
+    const file = memoryFile();
+    const recorder = new TaskLogRecorder({ broadcast: () => {}, location: () => ({ baseDir: '/ws', sessionId: 'sess' }), open: () => file });
+    await recorder.wrap(handing(session)).spawn(spawnOpts);
+
+    session.emitEvent({ type: 'turn_start', text: 'Do it' });
+    session.emitEvent({ type: 'turn_start', text: '/compact', command: { name: 'compact' } });
+    vi.advanceTimersByTime(60);
+
+    expect(file.saved).toEqual([
+      { type: 'turn_start', message: 'Do it', startedAt: '2026-10-30T10:00:00.000Z' },
+      { type: 'command', name: 'compact', startedAt: '2026-10-30T10:00:00.000Z' },
+    ]);
+  });
+
   it('saves and streams each batch of events together, deltas merged', async () => {
     const session = new FakeRunnerSession('s1', 't1');
     const file = memoryFile();
@@ -52,7 +69,7 @@ describe('TaskLogRecorder', () => {
     expect(sent).toEqual([]);
     vi.advanceTimersByTime(60);
 
-    const expected: TaskLogEvent[] = [{ type: 'turn_start', message: 'Do it' }, { type: 'text_delta', runId: 'r1', text: 'Hello' }];
+    const expected: TaskLogEvent[] = [{ type: 'turn_start', message: 'Do it', startedAt: expect.any(String) }, { type: 'text_delta', runId: 'r1', text: 'Hello' }];
     expect(sent).toEqual([{ type: 'task_log', taskId: 't1', attempt: 1, events: expected }]);
     expect(file.saved).toEqual(expected);
   });
@@ -69,7 +86,7 @@ describe('TaskLogRecorder', () => {
     await recorder.wrap(handing(a)).spawn(spawnOpts);
     a.emitEvent({ type: 'turn_start', text: 'Do it' });
     recorder.note('s1', 't1', note);
-    expect(first.saved).toEqual([{ type: 'turn_start', message: 'Do it' }, note]);
+    expect(first.saved).toEqual([{ type: 'turn_start', message: 'Do it', startedAt: expect.any(String) }, note]);
     a.emitExit(0);
     recorder.note('s1', 't1', note);
     expect(first.saved).toHaveLength(4);
@@ -111,8 +128,8 @@ describe('TaskLogRecorder', () => {
     b.emitEvent({ type: 'turn_start', text: 'Do it' });
     vi.advanceTimersByTime(60);
 
-    expect(first.saved).toEqual([{ type: 'task_skills', skills }, { type: 'turn_start', message: 'Do it' }]);
-    expect(second.saved).toEqual([{ type: 'turn_start', message: 'Do it' }]);
+    expect(first.saved).toEqual([{ type: 'task_skills', skills }, { type: 'turn_start', message: 'Do it', startedAt: expect.any(String) }]);
+    expect(second.saved).toEqual([{ type: 'turn_start', message: 'Do it', startedAt: expect.any(String) }]);
     expect(replayTaskLog(first.saved).blocks[0]).toMatchObject({ type: 'message', role: 'system', text: 'Skills: tdd (/g/tdd/SKILL.md)' });
     // The file keeps the body; a surface is told which skill, never what it says.
     expect(taskLogs(sent)[0].events[0]).toEqual({ type: 'task_skills', skills: [{ name: 'tdd', source: 'global', path: '/g/tdd/SKILL.md' }] });
@@ -332,7 +349,7 @@ describe('a session’s task logs', () => {
 
     await vi.waitFor(() => expect(taskLogs(sent).flatMap((m) => m.events).map((e) => e.type)).toEqual(['turn_start', 'turn_end']));
     expect(taskLogs(sent)[0]).toMatchObject({ taskId: 't1', attempt: 1 });
-    expect(files.files.get('t1')).toEqual([[{ type: 'turn_start', message: 'do it' }, { type: 'turn_end', reason: 'completed' }]]);
+    expect(files.files.get('t1')).toEqual([[{ type: 'turn_start', message: 'do it', startedAt: expect.any(String) }, { type: 'turn_end', reason: 'completed' }]]);
   });
 
   it('writes the handoff a task completed with into its attempt\'s log once, report and all, and keeps the plan to its digest', async () => {
