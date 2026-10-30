@@ -7,7 +7,7 @@
 
 <p align="center">
   <strong>Stop juggling agent tabs. Talk to one planner.</strong><br>
-  It runs Claude Code, Codex and OpenCode for you, in plain sight, and nothing runs until you approve.
+  It runs Claude Code, Codex and OpenCode for you, in plain sight. Review build plans before they run, or turn on autorun.
 </p>
 
 <p align="center">
@@ -50,15 +50,13 @@ Ordewell is pre-1.0, so minor releases can include breaking changes. Read the
 
 <table>
   <tr><td><b>Editable plans</b></td><td>Change prompts, dependencies and each task's runner, model, thinking effort or mode before execution.</td></tr>
-  <tr><td><b>Worktree isolation</b></td><td>Use separate git worktrees for code tasks, with an integration branch for review and merging. See <a href="#how-it-works">How it works</a> for shared workspace behavior.</td></tr>
-  <tr><td><b>Loops</b></td><td>Repeat tasks in response to a check until it passes or reaches its round limit.</td></tr>
-  <tr><td><b>Ops and scripts</b></td><td>Put deployments and other operations in the plan with dependencies. Run exact commands as script tasks without a model, under your approval and run settings.</td></tr>
-  <tr><td><b>Read-only tasks</b></td><td>Review, audit or prototype without landing changes. Research tasks report back to the planner while you keep talking.</td></tr>
-  <tr><td><b>Completion reports</b></td><td>AI tasks pass their completion check with a <code>task_complete</code> report marked <code>done</code>; scripts use exit status. Task handoffs share summaries, findings and evidence. Review the diff and test evidence before merging.</td></tr>
-  <tr><td><b>Run controls</b></td><td>Let the supervisor watch and suggest, or act within limits you set. Choose autorun and automatic merging in <code>/settings</code>.</td></tr>
-  <tr><td><b>Usage limits</b></td><td>A task that hits its agent's account limit pauses. Claude Code and Codex name the reset, and the task then continues in its saved session, while Ordewell is running. After a restart it waits for you to resume it. OpenCode names no reset, so its tasks wait for you. Move a paused task to another agent and its unfinished work comes with it.</td></tr>
+  <tr><td><b>Worktree isolation</b></td><td>Run code tasks in separate git worktrees, then review and merge their changes. See <a href="https://ordewell.ai/docs#isolation">isolation and handoff</a>.</td></tr>
+  <tr><td><b>Check-and-fix loops</b></td><td>Repeat a check and its fix until it passes or reaches its round limit.</td></tr>
+  <tr><td><b>More than code</b></td><td>Plan read-only research, operations and consented scripts alongside code tasks.</td></tr>
+  <tr><td><b>Run controls</b></td><td>Watch tasks live, review their reports and choose whether to automate execution or merging.</td></tr>
+  <tr><td><b>Usage limits</b></td><td>Tasks pause when an agent hits its account limit. Resume later or move unfinished work to another agent.</td></tr>
   <tr><td><b>Planner choices</b></td><td>Plan with a supported coding agent without an extra API key, or use an API provider. The planner reads your repository; changes run through tasks in the plan.</td></tr>
-  <tr><td><b>Interfaces</b></td><td>Use the terminal UI, VS Code extension, CLI or local API. Follow live task logs and see account usage limits alongside context and cost.</td></tr>
+  <tr><td><b>Interfaces</b></td><td>Use the terminal UI, VS Code extension, CLI or local API.</td></tr>
   <tr><td><b>Skills</b></td><td>Share your team's instructions in repository skills that the planner attaches to tasks across runners.</td></tr>
 </table>
 
@@ -80,74 +78,21 @@ OpenCode, and git for task isolation.
 
 ### Windows
 
-| Surface | On Windows |
-| --- | --- |
-| VS Code extension and its local daemon | Supported natively |
-| Terminal UI (`ordewell`) | Not verified on native Windows. Run it under [WSL](https://learn.microsoft.com/windows/wsl/install) |
-
-To run your first goal natively, in PowerShell:
-
-```powershell
-code --install-extension ordewell.ordewell
-claude --version    # or: codex --version, opencode --version
-```
-
-Then open your project folder in VS Code, open the Ordewell panel from the
-activity bar, type a goal, review the plan and approve it. At least one runner
-must be installed and on your `PATH`; if it is greyed out right after
-installing, reload the window. Ordewell finds npm-installed runners (`.cmd` and
-`.exe` shims) on Windows.
-
-Most of the Windows support is tested on Linux, through the seams that stand
-in for Windows. On a Windows host, only how npm-installed runners are launched
-has been measured, and no first run from goal to merge has been watched end to
-end ([ADR-0010](docs/adr/platform/0010-windows-support.md)). Two things are
-known to be open: whether Codex's read-only sandbox is enforced, and `%VAR%`
-expansion on the `cmd.exe` shim route. The planner's shell also has no OS
-sandbox on Windows and relies on its command rules alone; see
-[troubleshooting](docs/troubleshooting.md).
-
-## What Ordewell sends
-
-Once a day, Ordewell asks ordewell.ai whether a newer version is out. The request
-carries two things: the version you run and a random install ID, kept in
-`~/.ordewell/version-check.json` and shared by the CLI and the VS Code extension.
-The ID is replaced every 30 days. Nothing else is sent: no code, prompts, paths,
-file names or account details. Like any server, ordewell.ai sees the IP address
-the request comes from.
-
-The first time Ordewell starts on a machine, it shows a notice saying this and
-sends nothing. The first check happens on a later start. If Ordewell cannot write
-that file, it shows no notice and never sends anything. When a newer version is
-out, Ordewell shows one line naming it.
-
-To turn the check off, set `ORDEWELL_NO_VERSION_CHECK=1` or `DO_NOT_TRACK=1`, or
-turn off VS Code's telemetry for the extension. Turned off, Ordewell sends
-nothing and writes no install ID.
+The VS Code extension runs natively on Windows. The terminal UI has not been
+verified natively; run it under [WSL](https://learn.microsoft.com/windows/wsl/install).
+See the [platform notes](https://ordewell.ai/docs#platforms) for setup and
+current limitations.
 
 ## Quick start
 
 Run `ordewell` in your project to open the terminal UI, then type a goal. The first
 run lets you pick a planner and runners with `/planner` and `/runners`.
 
-The same workflow is available from the command line:
+In VS Code, open your project folder and the Ordewell panel, then type a goal.
+See the [extension guide](packages/vscode/README.md) for setup.
 
-```bash
-export AI_PROVIDER=claude-code      # plan with Claude Code, Codex or OpenCode
-
-ordewell plan --goal "Add rate limiting to the public API"
-ordewell run
-ordewell handoff review             # read the diff
-ordewell handoff merge              # bring it onto your branch
-```
-
-Between `plan` and `run`, the plan is yours to edit:
-
-```bash
-ordewell task-runner 2 opencode     # move a task to another agent
-ordewell task-model 3 sonnet        # or just change its model
-ordewell task-deps 3 1,2            # make it wait for tasks 1 and 2
-```
+Ordewell also supports [command-line workflows](https://ordewell.ai/docs#first-plan)
+for scripting.
 
 Tried it? [Tell us how your first run went](https://github.com/ordewell/ordewell/discussions/115).
 
@@ -163,42 +108,21 @@ Tried it? [Tell us how your first run went](https://github.com/ordewell/ordewell
 
 1. **Describe your goal.** The planner explores your workspace without modifying
    it and asks clarifying questions.
-2. **Review the plan.** Read the tasks and their dependencies. Edit prompts, agent
-   assignments and models before execution. To automate execution, turn autorun
-   on in `/settings` and submitted build plans start automatically. Script tasks
-   still follow their consent rules.
-3. **Run the tasks.** Each AI task starts a coding agent session; script tasks
-   run their commands without a model. Independent tasks run in parallel;
-   dependent tasks wait for the work they need. With worktree isolation enabled,
-   code changes stay on separate branches. Follow each task's progress live.
-4. **Review and merge.** Ordewell combines the changes for your review. Read the
-   diff and test evidence, then merge into your branch or discard the run. You
-   can also enable automatic merging or allow an Act supervisor to merge in
-   `/settings`. If a task or a merge needs your attention, Ordewell shows you where.
+2. **Review the plan.** Edit tasks, dependencies, runners and models before
+   approving the build plan.
+3. **Run the tasks.** Independent tasks run in parallel; dependent tasks wait
+   for the work they need. Follow progress live.
+4. **Review and merge.** Read the diff and test evidence, then merge the changes
+   into your branch or discard the run.
 
-Autorun and automatic merging are off by default, and the supervisor starts at
-Watch. During planning, research tasks can start without build-plan approval,
-and script tasks can run with consent under your approval and run settings.
+Autorun and automatic merging are off by default. During planning, research tasks
+can start without build-plan approval, and script tasks can run with consent under
+your approval and run settings. See [run settings](https://ordewell.ai/docs#run-settings).
 
-The commits Ordewell writes (a task's merge, work a task left uncommitted, a
-conflict repair, the merge into your branch) end with a `Planned-with: Ordewell`
-line, a git trailer that `git interpret-trailers` reads. Commits a coding agent
-made itself are not changed. To leave the line out, run `ordewell trailer off`
-(or set `"plannedWithTrailer": false` in `settings.json`); the next commit
-follows it.
-
-The planner only reads; tasks run as you, in the mode the plan assigns. A new
-installation starts in Guarded, where a task gets its runner's safe mode; Full
-gives it the runner's autonomous mode. For exactly what each part can touch and
-what to use for untrusted repositories, see
-[SECURITY.md](SECURITY.md#what-each-part-can-touch).
-
-Without a git repository, or when isolation is disabled, tasks share the workspace
-folder. With isolation enabled, a code task in a workspace containing several
-repositories gets a worktree of each isolated repository; its changes land in all
-of them or none. Ops and script tasks run at the workspace root. Dependencies,
-environment files and loose files beside a repository group can still be shared
-between worktrees. See
+The planner only reads; tasks run as you, in the mode the plan assigns. See
+[SECURITY.md](SECURITY.md#what-each-part-can-touch) for what each part can touch.
+Without a git repository or with isolation disabled, tasks share the workspace;
+some files can also be shared between worktrees. See
 [isolation and handoff](https://ordewell.ai/docs#isolation) for details.
 
 ## Documentation
@@ -235,6 +159,13 @@ that are open for help.
 
 The grilling, spec, architecture and TDD skills are
 adapted from [Matt Pocock's skills](https://github.com/mattpocock/skills) (MIT).
+
+## What Ordewell sends
+
+Ordewell checks for updates daily, sending its version and a random install ID
+to ordewell.ai after a one-time notice. To turn the check off, set
+`ORDEWELL_NO_VERSION_CHECK=1` or `DO_NOT_TRACK=1`, or turn off VS Code's
+telemetry for the extension. See [version check details](https://ordewell.ai/docs#version-check).
 
 ## License
 
