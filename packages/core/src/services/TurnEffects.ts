@@ -10,6 +10,8 @@ import type { Admitted } from './Attempts';
  */
 export class TurnEffects {
   private submitted: Admitted | null = null;
+  private run: Admitted | null = null;
+  private open = true;
 
   /** `failedBefore` is each task failed as the turn opened, with the attempt that failed. */
   constructor(private readonly failedBefore: ReadonlyMap<string, number> = new Map()) {}
@@ -19,10 +21,22 @@ export class TurnEffects {
     if (how === 'commit') this.submitted = admitted;
   }
 
+  /** A run of the plan opened: past a Stop that came before it, the plan is running on someone's word. */
+  ran(admitted: Admitted): void { this.run = admitted; }
+
+  /** The turn is over, landed or not: nothing it submitted waits for its end any more. */
+  closed(): void { this.open = false; }
+
   get planSubmitted(): boolean { return this.submitted !== null; }
+
+  /** A plan was submitted and its start waits for the turn's end, with no Stop since. */
+  get startWaits(): boolean { return this.open && this.planSubmitted && !this.submissionStopped; }
 
   /** A Stop came since the plan was submitted, so the start it stood for is withdrawn. */
   get submissionStopped(): boolean { return this.submitted !== null && !this.submitted.current(); }
+
+  /** A run opened after that Stop and no Stop has ended it since: the plan has started all the same. */
+  get ranSinceStop(): boolean { return this.run?.current() ?? false; }
 
   /** Of the tasks failed now, those whose failure is this turn's: not the attempt that had failed as it opened. */
   failedSince(failedNow: ReadonlyMap<string, number>): Set<string> {

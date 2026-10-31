@@ -138,6 +138,21 @@ export function failInterruptedTasks(tasks: readonly Task[], now: string): void 
 }
 
 /**
+ * A task an edit made manual has nothing to retry, and is the user's to do: one
+ * failed, or waiting on the user with no runner to hear an answer, waits as a
+ * manual task does (ADR-0053). A runner still at a question keeps it, and the
+ * answer is still its to read, until it ends or the plan comes off disk.
+ */
+export function releaseMadeManual(tasks: readonly Task[], live: (taskId: string) => boolean = () => false): void {
+  for (const task of flattenTasks(tasks)) {
+    if (task.type !== 'user' || live(task.id) || (task.status !== 'failed' && task.status !== 'awaiting_user')) continue;
+    task.status = 'pending';
+    delete task.awaitingReason;
+    delete task.resumeAt;
+  }
+}
+
+/**
  * Nothing claims a repair when a plan comes off disk: what owed it went with
  * the host that saved it. So a task saved not started whose landing conflicted
  * is a conflict waiting on the user, in place, and the inbox lists it; the

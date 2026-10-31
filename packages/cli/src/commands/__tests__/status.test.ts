@@ -516,8 +516,27 @@ describe('handleStatus on a loop (ADR-0045)', () => {
     expect(out).toContain('1 failed');
   });
 
+  it.each([
+    ['landed', 'completed', 'start it for round 2 of 3'],
+    ['not landed', 'pending', 'execute the plan and the loop goes on'],
+  ])('counts a check of a session no run holds as the failure it is, its fix %s', async (_, status_, next) => {
+    const out = await status(loopSession([check({ status: 'failed', loopRound: 1, verdict: found }), fix({ status: status_ })]));
+
+    expect(out).toContain(`      ↻ Stopped in round 1 of 3 · Nothing runs it now: ${next}`);
+    expect(out).toContain('1 failed');
+    expect(out).not.toContain('fixing');
+  });
+
+  it('offers no start of a check whose dependency has not finished', async () => {
+    const dep = { id: 'b', order: 3, title: 'Before', type: 'ai', status: 'pending', dependencies: [] };
+    const out = await status(loopSession([check({ status: 'failed', loopRound: 1, verdict: found, dependencies: ['b'] }), fix({ status: 'completed' }), dep]));
+
+    expect(out).toContain('Nothing runs it now: execute the plan and the loop goes on');
+  });
+
   it('shows a check between rounds as no failure, and what is fixing it', async () => {
-    const out = await status(loopSession([check({ status: 'failed', loopRound: 1, verdict: found }), fix({ status: 'in_progress' }), dependent]));
+    const tasks = [check({ status: 'failed', loopRound: 1, verdict: found }), fix({ status: 'in_progress' }), dependent];
+    const out = await status({ ...loopSession(tasks), run: { tasks, runMerge: null, handoff: null, mergeResult: null } });
 
     expect(out).toContain('      ↻ Round 1 of 3: fixing · Found problems: runs again once #2 has landed');
     expect(out).toContain('      ↻ Runs if #1 fails (round 1 of 3)');

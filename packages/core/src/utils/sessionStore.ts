@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { LegacyPlanState, PlanState } from '../models/Task';
-import { dropRetiredPlanFields, failInterruptedTasks, migratePlanState, migrateLoadedTasks, settleOwedRepairs } from '../models/Task';
+import { dropRetiredPlanFields, failInterruptedTasks, migratePlanState, migrateLoadedTasks, releaseMadeManual, settleOwedRepairs } from '../models/Task';
 import { migratePlanStateIsolation } from '../services/isolationRecord';
 import type { SessionMeta, SessionData } from '../models/Session';
 import { defaultLogger, type ILogger } from '../interfaces/ILogger';
@@ -205,6 +205,7 @@ export function loadSession(sessionId: string, baseDir?: string, logger: ILogger
       failInterruptedTasks(plan.tasks, new Date().toISOString());
       migratePlanStateIsolation(plan);
       settleOwedRepairs(plan);
+      releaseMadeManual(plan.tasks);
       migrateLoadedTasks(plan.tasks);
       dropRetiredPlanFields(plan);
       return { meta: session.meta, plan };

@@ -182,6 +182,8 @@ export interface ExecutionHost {
   hasLiveWork(): boolean;
   /** Something will start without being asked again: a start admitted and not yet claimed, or a scheduled resume. */
   startsPending(): boolean;
+  /** A plan the turn in flight submitted, whose start autorun makes as the turn ends (ADR-0030): a start on its way that no run holds yet. */
+  submittedStartWaits(): boolean;
   /** Something will run this loop's check between rounds without being asked; see {@link TaskOrchestrator.loopRunsOn}. */
   loopRunsOn(taskId: string): boolean;
   /** Something could move a task on without being asked: a start, an attempt in any phase, the scheduler or a usage-limit hold. */
@@ -225,6 +227,8 @@ export interface ExecutionHost {
   interrupt(taskId: string): Promise<void>;
   stopTask(taskId: string): Promise<void>;
   stopRun(): void;
+  /** The user's Stop found nothing to stop: what was admitted before it is withdrawn all the same. */
+  stopAsked(): void;
   retryTask(taskId: string, actor: ExecutionActor): Promise<void>;
   /** End the task as skipped, landing nothing of it; see {@link TaskOrchestrator.skipTask}. */
   skipTask(taskId: string, reason: string | undefined, actor: ExecutionActor): Promise<void>;
@@ -727,14 +731,17 @@ export class ExecutionCommands {
    * The tasks a start approves, read from the plan as it stands at the
    * command's last check. Autorun starts a plan as the user's standing
    * instruction, so its start approves what it runs as the user's does; so
-   * does a start under Full with autorun. A yes on the card approves the tasks
-   * the card named, and no others.
+   * does a start under Full with autorun. Under Guarded it leaves a script task
+   * the commit left unapproved: that waits for the user (ADR-0035). A yes on
+   * the card approves the tasks the card named, and no others.
    */
   private consented(command: ExecutionCommand, actor: ExecutionActor, located: Located | undefined, named: readonly Located[] = []): string[] {
     if (!STARTS.has(command.command)) return [];
     if (this.asksToApprove(actor)) return named.flatMap(({ task }) => withSubtasks(task));
     if (actor.kind !== 'user' && actor.kind !== 'autorun' && !this.startsUnattended(actor)) return [];
-    return located ? withSubtasks(located.task) : this.all().map(({ task }) => task.id).filter((id) => !this.carded.has(id));
+    if (located) return withSubtasks(located.task);
+    const leaves = (task: Readonly<Task>) => actor.kind === 'autorun' && !this.host.autonomous() && task.type === 'script' && !this.host.taskApproved(task.id);
+    return this.all().filter(({ task }) => !leaves(task)).map(({ task }) => task.id).filter((id) => !this.carded.has(id));
   }
 
   /**
@@ -1244,11 +1251,13 @@ export class ExecutionCommands {
 
   private prepareStopRun(actor: ExecutionActor): Prepared {
     const live = this.all().filter(({ task }) => this.host.running(task.id));
-    // A start admitted but not yet claimed would begin after a refused Stop, so it is a run to stop too.
-    const pending = this.host.startsPending();
+    // A start admitted but not yet claimed would begin after a refused Stop, so it is a run to stop too, as is the one a submitted plan waits on (ADR-0030).
+    const pending = this.host.startsPending() || this.host.submittedStartWaits();
     if (!this.host.hasLiveWork() && !this.host.scheduling() && !pending) {
-      // The user's Stop pressed after the run ended is no request to refuse: the surface already shows it stopped.
-      return actor.kind === 'user' ? { nothing: 'Nothing is running: there is nothing to stop.' } : { refusal: 'Nothing is running: there is no run to stop.' };
+      if (actor.kind !== 'user') return { refusal: 'Nothing is running: there is no run to stop.' };
+      // The user's Stop pressed after the run ended is no request to refuse: the surface already shows it stopped. It still stands against what was admitted before it.
+      this.host.stopAsked();
+      return { nothing: 'Nothing is running: there is nothing to stop.' };
     }
     return {
       act: async () => {

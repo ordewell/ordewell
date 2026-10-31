@@ -3065,7 +3065,8 @@ or on the switch being turned on while a plan waits — and starts ops tasks too
 Work already live, a task the planner started with `run_task` in that reply,
 joins it as one scheduled run in Full; in Guarded it does not, and a notice says why, as it
 does whenever autorun cannot start a plan. It skips only a scheduled run already
-going.
+going. A user's Stop after the submission withdraws its start, even one that
+found nothing else to stop.
 Independent of the Supervisor level and of Full/Guarded. Recorded as `run_plan`
 with autorun as who asked. With autorun on and Full nobody is asked: a planner
 turn, or a supervisor at Act, may start anything, a script task or `run_script`
@@ -3073,7 +3074,8 @@ included, on a first plan as on an approved one, and such a start makes the plan
 approved; both settings are read at each start. An edit starts nothing by
 itself. A task the planner adds in the user's turn is approved as its edit
 commits when autorun is on, in Full and in Guarded alike, read as it commits; a
-script task only where `run_script` would run it unasked.
+script task only where `run_script` would run it unasked, which holds of
+autorun's own start too.
 *Avoid:* "auto-execute", "auto-approve" (approval is a consequence, not the
 setting), "autopilot".
 

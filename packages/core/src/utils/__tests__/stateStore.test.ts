@@ -45,6 +45,15 @@ describe('loadState', () => {
     expect(tasks[1].verdict).toBeUndefined();
   });
 
+  it('releases a task an edit made manual from a wait no runner is left to answer', () => {
+    saveState({ tasks: [createTask({ id: 't1', title: 'By hand', type: 'user', status: 'awaiting_user', awaitingReason: 'input' })], runners: ['claude-code'], status: 'approved', generatedAt: '', lastUpdated: '' }, tmpDir);
+
+    const [task] = loadState(tmpDir)!.plan.tasks;
+
+    expect(task.status).toBe('pending');
+    expect(task.awaitingReason).toBeUndefined();
+  });
+
   it('gives back the session id the state was saved for, kept off the plan', () => {
     saveState(plan(), tmpDir, '2026-10-18T10-05-18_review_0328b893');
 

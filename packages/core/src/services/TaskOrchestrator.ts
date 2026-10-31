@@ -731,6 +731,11 @@ export class TaskOrchestrator {
     return { current: () => generation === this.stopGeneration };
   }
 
+  /** The user's Stop found nothing to stop: it still withdraws every start admitted before it, one no live work counts included (ADR-0029). */
+  stopAsked(): void {
+    this.stopGeneration++;
+  }
+
   /** Run `work`, which awaits before it claims, under an admission it holds throughout and claims under. */
   private async whileAdmitted<T>(work: (admission: StartAdmission) => Promise<T>): Promise<T> {
     const admission = this.admitStart();
@@ -1026,7 +1031,7 @@ export class TaskOrchestrator {
     }
 
     this.store.load(adopted, planRunners);
-    this.store.releaseMadeManual();
+    this.store.releaseMadeManual((id) => this.attempts.has(id));
     this.planEdited(before);
     // An edit may have taken the last task waiting on a reset out of the plan, or ended its pause.
     this.limitPauses.recount();
@@ -1123,7 +1128,7 @@ export class TaskOrchestrator {
    * for meanwhile.
    */
   stop(reason: 'user' | 'restart' = 'user'): void {
-    if (reason === 'user') this.stopGeneration++;
+    if (reason === 'user') this.stopAsked();
     this.transition({ type: 'stop' });
     // Interrupted work is kept like a failed attempt's: inspectable, and off
     // `active` so a crash-recovery prune does not sweep it away. A stopped

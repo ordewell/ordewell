@@ -896,7 +896,11 @@ export class Session {
   private async openTurn<T>(turn: () => Promise<T>): Promise<{ landed: T; effects: TurnEffects }> {
     const effects = new TurnEffects(this.failedTasks());
     this.turnEffects = effects;
-    return { landed: await turn(), effects };
+    try {
+      return { landed: await turn(), effects };
+    } finally {
+      effects.closed();
+    }
   }
 
   /** Each failed task, with the attempt that failed. */
@@ -913,13 +917,14 @@ export class Session {
    * run, so autorun skips only a run the scheduler already drives; in Guarded
    * only one at work, and the seam keeps it out of any other live work there.
    * A plan it could not start says why, and a Stop since the plan was submitted
-   * withdraws the start as it withdraws any (ADR-0029). What failed in that
-   * turn stays failed: the fresh chance is the user's to ask for (ADR-0053).
+   * withdraws the start as it withdraws any (ADR-0029), unless a run opened
+   * after that Stop has the plan already. What failed in that turn stays
+   * failed: the fresh chance is the user's to ask for (ADR-0053).
    */
   private autorunSubmitted(effects: TurnEffects): void {
     if (!effects.planSubmitted || !this.userRunSettings().autorun) return;
     if (effects.submissionStopped) {
-      this.notice('info', 'Autorun did not start the plan: the run was stopped after the planner submitted it. Execute it to start it.');
+      if (!effects.ranSinceStop) this.notice('info', 'Autorun did not start the plan: the run was stopped after the planner submitted it. Execute it to start it.');
       return;
     }
     if (this.orchestrator.isScheduling && (this.config.autonomousMode || this.orchestrator.hasLiveWork)) return;
@@ -946,6 +951,7 @@ export class Session {
       startsHeld: () => this.orchestrator.startsHeld,
       hasLiveWork: () => this.orchestrator.hasLiveWork,
       startsPending: () => this.orchestrator.startsPending,
+      submittedStartWaits: () => this.turnEffects.startWaits && this.userRunSettings().autorun,
       loopRunsOn: (taskId) => this.orchestrator.loopRunsOn(taskId),
       advancesOnItsOwn: () => this.orchestrator.advancesOnItsOwn,
       admitStart: () => this.orchestrator.admitStart(),
@@ -969,6 +975,7 @@ export class Session {
       interrupt: (taskId) => this.withSave(() => this.orchestrator.interruptTask(taskId)),
       stopTask: (taskId) => this.withSave(() => this.orchestrator.cancelTask(taskId)),
       stopRun: () => this.stopExecution(),
+      stopAsked: () => this.orchestrator.stopAsked(),
       retryTask: (taskId, actor) => this.restartTask(taskId, runOrigin(actor)),
       skipTask: (taskId, reason, actor) => this.withSave(() => this.orchestrator.skipTask(taskId, reason, runOrigin(actor))),
       continueTask: (taskId, message, actor) => this.resumeTask(taskId, message, runOrigin(actor)),
@@ -2039,6 +2046,7 @@ export class Session {
     // plan over it and spawn its tasks a second time.
     if (this.runOpening) return this.runOpening;
     const plan = this.idlePlan();
+    this.turnEffects.ran(this.orchestrator.admittedNow());
     const opening = this.withSave(async () => {
       // Approved first: the scheduler reads the record at each start.
       this.record.approvePlan();
@@ -2060,6 +2068,7 @@ export class Session {
    */
   private async joinRun(approved: number, left: number): Promise<string> {
     const scheduling = this.orchestrator.isScheduling;
+    this.turnEffects.ran(this.orchestrator.admittedNow());
     await this.withSave(async () => {
       this.record.approvePlan();
       await this.orchestrator.joinRun('user');
