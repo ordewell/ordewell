@@ -172,14 +172,18 @@ Judgment stays the planner's.
     and in the timeline.
   - A subplanner's own turns come before what it carved. A node's room is `limit`
     less the other three. A carve or a raise takes only room, and a subplanner keeps
-    one session's `reserve` while it is parked ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D18), so a carve of
-    everything leaves it a turn to answer a `checkpoint` or call `task_complete`. A
-    turn that spends past its node's room takes the rest from its children's room, the
-    child that woke it first: that child's `limit` and the parent's `committed` fall
-    together, as a budget event. So a child pays for answers its parent cannot, and
-    only a raise needs the parent's own room. A turn neither could cover is not
-    started: the node stops (ADR-0055 D16) and ends `blocked` with a derived report,
-    as at its limit, since a node with no turn left cannot say so itself.
+    one session's `reserve` for its next turn while it is parked ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D18), so a carve of
+    everything leaves it a turn to answer a `checkpoint` or call `task_complete`. That
+    share is the turn's own allowance, not a second one. The turn spends it first,
+    `reserve` falling as `spent` rises, so nothing carved or claimed meanwhile can take
+    it. Past it the turn spends room, then its children's room, the child that woke it
+    first: that child's `limit` and the parent's `committed` fall together, as a budget
+    event. As it parks it keeps one session's `reserve` again, from the same two. So a
+    child pays for answers its parent cannot, and only a raise needs the parent's own
+    room. A turn starts only if that share, room and its children's room come to one
+    session's `reserve`. One they cannot cover is not started: the node stops
+    (ADR-0055 D16) and ends `blocked` with a derived report, as at its limit, since a
+    node with no turn left cannot say so itself.
   - The root's budget bounds what is carved for delegated tasks, and only the user
     raises it. The root's own tasks and planner are charged nothing: a flat run has no
     budget.
@@ -292,8 +296,9 @@ Judgment stays the planner's.
   finishes, and it ends `blocked`. M1 is tested with a guard lowering an Act run.
 - The ledger runs on `FakeRunnerSession` usage: carve, reserve, a claim refused, a stop at
   the limit, a return on close, a raise, across a tree. A carve of all the room leaves a
-  parked subplanner its next turn, questions go on being answered from the child's room,
-  and a turn nothing can cover ends the node `blocked`. A start path added past
+  parked subplanner its next turn, which spends its reserve first and keeps it again as
+  it parks, questions go on being answered from the child's room, and a turn nothing can
+  cover ends the node `blocked`. A start path added past
   `claimRefusal` fails it.
 - Each leak in M6 gets a test through its own path, not through the seam.
 
@@ -323,6 +328,8 @@ Judgment stays the planner's.
   runs out while the child that asks still holds budget it has not spent.
 - **Charging a child for every turn it wakes.** Rejected: a child that asks for a raise has
   no room to pay with.
+- **Releasing a parked reserve into room as its turn starts.** Rejected: a carve, a raise or
+  a claim in that turn could take it, and nothing would be left to keep as it parks.
 - **Excluding cache reads from spend.** Rejected: they are most of a long session's cost, and
   a budget that ignores them would let context grow unbounded.
 - **What a child leaves flows to its siblings.** Rejected: a return would wake them all, and
@@ -357,3 +364,4 @@ Judgment stays the planner's.
 - 2026-10-31 — checked against the code: what the root may hand down, where the root's mandate reads its level, what the floor binds and what a revocation does to a saved child, `run_script`'s grant, a fresh retry, and the names of the types.
 - 2026-10-31 — checked against the code again: what narrows is `grantable`, a delegated task's absent `grants` ask for nothing, the clock past a reset, who answers a depth-1 question at each level, and a sealed script where nothing can seal.
 - 2026-10-31 — a subplanner's turns come before its carves: a parked subplanner keeps its reserve, a turn past its room takes from its children's, and a turn nothing covers ends the node `blocked`.
+- 2026-10-31 — a parked subplanner's reserve funds its next turn, which spends it before room, and is kept again as it parks; what covers a turn is said.

@@ -5,7 +5,7 @@ amends: ["0029", "0034"]
 
 # 0045 — A check repeats with its fix until it passes
 
-*Pending:* [ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — a script check marked `readOnly` runs in a worktree of its own, so L9 does not hold it at a gate, and a retry of a delegated task retries its check, which L7 reads as any retry: its rounds start over.
+*Pending:* [ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — a script check marked `readOnly` runs in a worktree of its own, so L9 does not hold it at a gate, and a retry or fresh attempt of a delegated task retries its check, which L7 reads as any retry: its rounds start over.
 
 ## Problem
 

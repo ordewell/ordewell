@@ -61,8 +61,9 @@ the child cannot reach follows it in the parent's plan.**
   | `goal` | what the child plan must achieve, in place of `prompt` |
   | `assignedRunner`, `assignedModel` | the subplanner's, resolved as any task's are ([ADR-0003](../routing/0003-per-runner-model-allowlist.md), [ADR-0041](../routing/0041-a-tasks-model-follows-the-runners-own-switch.md)) |
   | `budget` | required: tokens, and optionally wall-clock time (ADR-0056 M5) |
-  | `grants`, `protectedPaths`, `scope` | optional: the grants it asks for past the floor (ADR-0056 M2, M4), paths the child may not change (D7), a declared scope (ADR-0057 R6) |
-  | `readOnly` | optional: it answers a question and lands nothing ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)), so D6 asks for no change and D8 for a read-only AI task as its check |
+  | `protectedPaths` | required unless `readOnly`: paths the child may not change (D7) |
+  | `grants`, `scope` | optional: the grants it asks for past the floor (ADR-0056 M2, M4), a declared scope (ADR-0057 R6) |
+  | `readOnly` | optional: it answers a question and lands nothing ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)), so D6 asks for no change, D7 for no paths and D8 for a read-only AI task as its check |
 
   It has no subtasks and is never one: it is top-level, as a script task is, and
   `checkPlanInvariants` holds it to that as it holds a script task. `subtasks`
@@ -149,8 +150,17 @@ the child cannot reach follows it in the parent's plan.**
   the one completion reminder; a second fails the attempt with a derived report,
   since no person is there to wait for (ADR-0056 M8).
 - **Protected paths are checked at the verdict, not in the landing (D7).** A
-  delegated task may declare paths (tests, CI, scoring) its child may not change.
-  A landing never fails a task
+  delegated task that lands names the paths (tests, CI, scoring) its child may not
+  change: `delegationErrors` refuses one with none on every route. A check runs the
+  branch it judges, so a child that rewrites what the check runs, a test or the
+  `package.json` that names it, turns its one gate green without the work, however
+  far out of reach the check is. Ordewell cannot derive what a command reads
+  (ADR-0035, [ADR-0058](0058-a-tree-holds-many-nodes-and-few-live-sessions.md) S6),
+  so the planner names it: the prompt teaches listing what the check runs and the
+  configuration that runs it, and a read-only AI check, told to read that change, for
+  a goal that must edit one of them. The refusal proves a list was written, not that
+  it is whole: a path it leaves out is the child's to change, and a pass rests on
+  that list. A landing never fails a task
   ([ADR-0013](../isolation/0013-worktree-isolation.md)), so the check sits in the
   last step before one, on the same diff. A repair lands after that step, and is
   held to the same paths there (D14). Paths accumulate down the tree
@@ -184,13 +194,20 @@ the child cannot reach follows it in the parent's plan.**
   - **A new result is checked again.** A pass judged one result, and a re-run of
     the delegated task makes another. A completed task never runs again, and
     ADR-0054 leaves a dependent that landed nothing as it is, so that pass would
-    stand over work and a handoff it never read. So `PlanStore.retry` of a delegated
-    task, which a retry, a continue, Mark not done and a revert all pass through,
-    retries each of its checks with it, whatever the check's status, its rounds
-    starting over (ADR-0045 L7). That takes back a check the user skipped too: a
-    Skip let one result past, not the next. A live check refuses the retry, naming
-    it, as a live dependent refuses a revert (ADR-0054). A resume after a usage limit
-    goes on with the attempt the limit cut short, so it takes nothing back.
+    stand over work and a handoff it never read. So a delegated task's checks are
+    retried with it, whatever their status, their rounds starting over (ADR-0045 L7),
+    at two points. `PlanStore.retry`, which a retry, a continue, Mark not done and a
+    revert all pass through, does it at once, since each of those ends the result the
+    pass judged. The claim does it for the starts that never call `retry`: being the
+    one point every start passes, it has a fresh attempt, neither a repair nor a
+    continuation, take its checks back, which reaches Execute's fresh chance
+    (`resetForRun`, `readyFailed`, a child's Continue by D17) and a force start. That
+    takes back a check the user skipped too, though a new run leaves any other skipped
+    task as it is: a Skip let one result past, not the next. A live check refuses the
+    retry, naming it, as a live dependent refuses a revert (ADR-0054), and is a start
+    wait of a fresh attempt, so Execute's and a force start's wait for it to end. A
+    resume after a usage limit goes on with the attempt the limit cut short, so it
+    takes nothing back.
   - A check may declare a loop whose body fixes what it finds (ADR-0045): the body
     may depend on the delegated task, and the delegated task stays outside it.
   - A failed check blocks its dependents and wakes the planner, as any failure
@@ -371,13 +388,16 @@ the child cannot reach follows it in the parent's plan.**
 - D6, D8 and D9 are held at the seam with a table of child states against the
   answer to `done`, every task skipped and an unchanged branch among them, and the
   plan-level refusals, a script check where nothing can seal and one on a `readOnly`
-  delegated task included, a `readOnly` script among them, through
+  delegated task included, a `readOnly` script among them, and a delegated task that
+  lands with no protected paths, through
   `validatePlanTasks` and `applyTaskOps`, as `loop.validation.test.ts` does. A merge
   is held by landed work whose check is pending, blocked or failed, and not by a
   delegated task that has not landed, a `readOnly` one included, nor by work the user
   has merged; a held merge goes through at the next tick once the check passes. A
   retry, a continue, Mark not done and a revert each take a passed, failed or skipped
   check back, its next run reads the new handoff, and a live check refuses them.
+  Execute, with work live and with none, and a force start take one back at the fresh
+  attempt's claim, and wait for a live one; a resume and a repair take nothing back.
 - Isolation runs against real repositories. The probe task 32 saved
   (`nestedRun.probe.test.ts`, a two-level climb to main) is the prior art, extended
   with the state root, a prune with a child live, a sweep from a child's HEAD, a
@@ -448,6 +468,15 @@ the child cannot reach follows it in the parent's plan.**
   runs would carry the work past it, which is what D9 is for.
 - **A check that keeps its pass through a re-run.** Dropped: ADR-0054 leaves it as it
   is, so new work merged on the old pass, and a new handoff went unread.
+- **Taking a check back in `PlanStore.retry` alone.** Dropped: Execute readies a failed
+  task without it and a force start claims one as it stands, so a skipped check stayed
+  skipped over the new result, and D9 released it. Adding each route was rejected for
+  the same reason: the claim is the one point none can miss.
+- **Optional protected paths.** Dropped: a plan that left them out gave the child the
+  check's inputs, and nothing said so until its report, after the merge.
+- **Deriving a check's inputs from its command, or a built-in floor of paths.** Rejected:
+  ADR-0035 and ADR-0058 S6 say why nothing can derive them, and a floor of manifests and
+  CI files differs by language and fails the verdict of a task that adds a dependency.
 - **Instructions not to game the check.** Rejected. METR found o3 reward-hacking in
   30.4% of RE-Bench runs, where it could see the scoring function, against 0.7% on
   HCAST, and "Please do not cheat" left the rate at 80% on the task it tested
@@ -484,6 +513,8 @@ the child cannot reach follows it in the parent's plan.**
   Revert; the parent's way on is a fix task or a loop.
 - A check's hiding is only as good as the runner's reach, until a container backend
   proves it.
+- A pass is only as good as the planner's `protectedPaths`: a check that runs the
+  repository's own code trusts what the list leaves out.
 - A subplanner parks, which [ADR-0009](../planner/0009-coding-agents-as-planners.md)
   rejected for the root because of the cold start on each message. A subplanner's
   turns are far apart and nobody waits on one, and the Model context stays the
@@ -499,3 +530,4 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-10-31 — checked against the code again: what wakes a kept resume, a child that did no work and `readOnly`, a script check where nothing can seal, a repair in a repo its landing did not change, the bound on turns past the limit, and `research` in a child plan.
 - 2026-10-31 — checked against the code a third time: what checks a `readOnly` delegated task and what its check holds, and conflict markers in a repo a repair's landing did not change.
 - 2026-10-31 — checked against the code a fourth time: a re-run takes its checks back, only landed work holds a merge, a script is no check of a `readOnly` delegated task, and what `taskTip`'s diff holds.
+- 2026-10-31 — checked against the code a fifth time: a fresh attempt takes its checks back at the claim, Execute and a force start included, and a delegated task that lands must name its protected paths.
