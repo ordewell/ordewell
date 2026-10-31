@@ -170,6 +170,16 @@ Judgment stays the planner's.
     `raiseTokens`, or the same on the inbox's Approve, carved at the call from what the
     parent has left, and recorded as a budget event ([ADR-0058](0058-a-tree-holds-many-nodes-and-few-live-sessions.md) S3)
     and in the timeline.
+  - A subplanner's own turns come before what it carved. A node's room is `limit`
+    less the other three. A carve or a raise takes only room, and a subplanner keeps
+    one session's `reserve` while it is parked ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D18), so a carve of
+    everything leaves it a turn to answer a `checkpoint` or call `task_complete`. A
+    turn that spends past its node's room takes the rest from its children's room, the
+    child that woke it first: that child's `limit` and the parent's `committed` fall
+    together, as a budget event. So a child pays for answers its parent cannot, and
+    only a raise needs the parent's own room. A turn neither could cover is not
+    started: the node stops (ADR-0055 D16) and ends `blocked` with a derived report,
+    as at its limit, since a node with no turn left cannot say so itself.
   - The root's budget bounds what is carved for delegated tasks, and only the user
     raises it. The root's own tasks and planner are charged nothing: a flat run has no
     budget.
@@ -281,7 +291,9 @@ Judgment stays the planner's.
 - M10 is tested on a live child: with delegation turned off nothing starts, its work in flight
   finishes, and it ends `blocked`. M1 is tested with a guard lowering an Act run.
 - The ledger runs on `FakeRunnerSession` usage: carve, reserve, a claim refused, a stop at
-  the limit, a return on close, a raise, across a tree. A start path added past
+  the limit, a return on close, a raise, across a tree. A carve of all the room leaves a
+  parked subplanner its next turn, questions go on being answered from the child's room,
+  and a turn nothing can cover ends the node `blocked`. A start path added past
   `claimRefusal` fails it.
 - Each leak in M6 gets a test through its own path, not through the seam.
 
@@ -307,6 +319,10 @@ Judgment stays the planner's.
 - **Enforcing the mandate in the prompt.** Rejected: ADR-0029's reason. A prompt is advice.
 - **Budgets at the command seam.** Rejected: the scheduler's starts never reach it.
 - **Dollars.** Rejected: no price table is kept in Ordewell, and a subscription has none.
+- **A carve that leaves a fixed number of the parent's turns, alone.** Rejected: any number
+  runs out while the child that asks still holds budget it has not spent.
+- **Charging a child for every turn it wakes.** Rejected: a child that asks for a raise has
+  no room to pay with.
 - **Excluding cache reads from spend.** Rejected: they are most of a long session's cost, and
   a budget that ignores them would let context grow unbounded.
 - **What a child leaves flows to its siblings.** Rejected: a return would wake them all, and
@@ -340,3 +356,4 @@ Judgment stays the planner's.
 - 2026-10-31 — accepted. Not yet implemented.
 - 2026-10-31 — checked against the code: what the root may hand down, where the root's mandate reads its level, what the floor binds and what a revocation does to a saved child, `run_script`'s grant, a fresh retry, and the names of the types.
 - 2026-10-31 — checked against the code again: what narrows is `grantable`, a delegated task's absent `grants` ask for nothing, the clock past a reset, who answers a depth-1 question at each level, and a sealed script where nothing can seal.
+- 2026-10-31 — a subplanner's turns come before its carves: a parked subplanner keeps its reserve, a turn past its room takes from its children's, and a turn nothing covers ends the node `blocked`.

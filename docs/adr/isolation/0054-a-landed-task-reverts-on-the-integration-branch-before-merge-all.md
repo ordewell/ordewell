@@ -5,6 +5,8 @@ amends: ["0013"]
 
 # 0054 — A landed task reverts on the integration branch, before Merge all
 
+*Pending:* [ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — a delegated task's check, which lands nothing, does not keep its result: a revert of that task retries it, as any re-run does.
+
 ## Problem
 
 A task finished and landed, and its work turns out to be wrong. The user could
