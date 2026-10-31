@@ -1407,20 +1407,29 @@ export class Session {
     if (this.saveTimer || !this.plan) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = undefined;
-      // Outside any observer, whose throw the orchestrator would catch: a full disk must not take the daemon down.
-      try {
-        this.persist();
-      } catch (err) {
-        console.error('[Session] save failed:', err);
-      }
+      // Outside any observer, whose throw the orchestrator would catch.
+      this.tryPersist();
     }, SAVE_INTERVAL_MS);
     // A process with nothing else to do does not wait for this: settling and destroy save.
     this.saveTimer.unref?.();
   }
 
+  /**
+   * A save nothing that follows may depend on: a full disk must not take the
+   * daemon down, nor leave a stop or a close half done, its run live and its
+   * lease held.
+   */
+  private tryPersist(): void {
+    try {
+      this.persist();
+    } catch (err) {
+      console.error('[Session] save failed:', err);
+    }
+  }
+
   /** Make the save owed, before the plan it is owed for goes. */
   private settleSaves(): void {
-    if (this.saveTimer) this.persist();
+    if (this.saveTimer) this.tryPersist();
   }
 
   /** A new plan on a long-lived Session gets its own persisted identity (unless the host fixed one). */
@@ -2422,7 +2431,9 @@ export class Session {
     // The opening stopped here may still be awaiting a spawn; an Execute after
     // this Stop starts afresh instead of joining a run that no longer stands.
     this.runOpening = null;
-    this.saved(() => this.orchestrator.stop());
+    this.events.holdStatus(() => this.orchestrator.stop());
+    this.tryPersist();
+    this.events.releaseStatus(this.plan);
     this.approvals.clear((request) => request.kind === 'task_start');
     this.broadcast({ type: 'execution_stopped' });
   }

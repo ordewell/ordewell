@@ -282,4 +282,67 @@ describe('saving', () => {
 
     expect(saves(env.session).mock.calls.at(0)![0].tasks[0].attemptUsage?.[0].totals.inputTokens).toBe(10);
   });
+
+  describe('on a disk that refuses every save', () => {
+    /** A run owing the timer's save, with every save from here on failing. */
+    async function refused() {
+      const env = await running();
+      reportUsage(env, 't1');
+      saves(env.session).mockImplementation(() => { throw new Error('disk full'); });
+      env.messages.length = 0;
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+      return { env, logged };
+    }
+
+    it('still stops the run on the user\'s Stop, says so, and logs the save', async () => {
+      const { env, logged } = await refused();
+
+      env.session.stopExecution();
+      await settled();
+
+      expect(logged).toHaveBeenCalledWith('[Session] save failed:', expect.any(Error));
+      logged.mockRestore();
+      expect(env.session.activity.running).toBe(false);
+      expect(env.messages.map((m) => m.type)).toContain('execution_stopped');
+      expect(env.session.planTasks.map((t) => t.status)).not.toContain('in_progress');
+    });
+
+    it('still closes the session, its run and its observer', async () => {
+      const { env, logged } = await refused();
+
+      expect(() => env.session.destroy()).not.toThrow();
+      await settled();
+
+      expect(logged).toHaveBeenCalledWith('[Session] save failed:', expect.any(Error));
+      logged.mockRestore();
+      expect(env.session.activity.running).toBe(false);
+      env.messages.length = 0;
+      reportUsage(env, 't1');
+      expect(env.messages).toEqual([]);
+    });
+
+    it('still leaves the plan on a new session', async () => {
+      const { env, logged } = await refused();
+
+      expect(() => env.session.reset()).not.toThrow();
+      await settled();
+      logged.mockRestore();
+
+      expect(env.session.activity.running).toBe(false);
+      expect(env.session.planState).toBeNull();
+      expect(env.session.planTasks).toEqual([]);
+    });
+
+    it('still leaves the plan for another', async () => {
+      const { env, logged } = await refused();
+      const other = plan([task('other', 1)]);
+
+      expect(() => env.session.loadPlan(other, 'another goal', testWorkspace, { persist: false })).not.toThrow();
+      await settled();
+      logged.mockRestore();
+
+      expect(env.session.activity.running).toBe(false);
+      expect(env.session.planTasks.map((t) => t.id)).toEqual(['other']);
+    });
+  });
 });

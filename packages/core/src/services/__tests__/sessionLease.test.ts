@@ -287,6 +287,41 @@ describe('the session lease (ADR-0049)', () => {
     expect(runner.stopAll).toHaveBeenCalled();
   });
 
+  it('stops the run and lets the lease go when no save reaches the disk as the session closes', async () => {
+    const runners: FakeRunnerSession[] = [];
+    const runner: IRunner = {
+      spawn: vi.fn(async ({ taskId }: Parameters<IRunner['spawn']>[0]) => {
+        const made = new FakeRunnerSession(`s${runners.length + 1}`, taskId);
+        runners.push(made);
+        return made;
+      }),
+      stop: vi.fn(),
+      stopAll: vi.fn(),
+      activeCount: 0,
+    };
+    const first = makeSession({ saveSession: sessionStore.saveSession, leaseHost: host({ id: 'host-a', alive: () => true }), workspaceRoot: () => workspace, runner });
+    adopt(first);
+    await first.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(runners).toHaveLength(1));
+    runners[0].emitEvent({ type: 'usage', record: { source: 'claude-code', inputTokens: 10 } });
+    // A rename over a directory fails as a full disk does: on the save itself, every time.
+    const file = sessionFile();
+    fs.rmSync(file);
+    fs.mkdirSync(file);
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    expect(() => first.destroy()).not.toThrow();
+
+    expect(logged).toHaveBeenCalledWith('[Session] save failed:', expect.objectContaining({ code: 'EISDIR' }));
+    logged.mockRestore();
+    await vi.waitFor(() => expect(first.activity.running).toBe(false));
+    expect(runner.stopAll).toHaveBeenCalled();
+    expect(fs.existsSync(path.join(sessionStore.sessionDataDir(SESSION, workspace), 'lease.json'))).toBe(false);
+    fs.rmdirSync(file);
+    sessionStore.saveSession(savedPlan(), GOAL, workspace, SESSION);
+    expect(() => adopt(sessionOn(host({ id: 'host-b', alive: () => true })))).not.toThrow();
+  });
+
   function sessionFile(): string {
     const dir = path.join(workspace, '.ordewell', 'sessions');
     const [file] = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
