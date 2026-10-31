@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NOW, plan, settled, supervised, task, until, type Env } from './supervisorTestKit';
 import { fakeConfig, FakeRunnerSession, makeSession, saves, testWorkspace } from './sessionTestKit';
+import { FakeWorktreeIsolation } from '../../testing';
 import type { SessionMessage } from '../SessionMessage';
 import type { UsageRecord } from '../../models/Usage';
 
@@ -135,6 +136,21 @@ describe('a status update', () => {
       await until(() => env.run.spawnedIds().length === 20);
 
       expect(statuses(env.messages).length).toBeLessThan(6);
+    });
+
+    it('sends the landings of a run in worktrees as a status or so a second, not one per report', async () => {
+      const env = await supervised(wide(20), { isolation: new FakeWorktreeIsolation(), config: { maxParallelSessions: 20 } });
+      await until(() => env.run.spawnedIds().length === 20);
+      await vi.advanceTimersByTimeAsync(2000);
+      env.messages.length = 0;
+
+      for (const { id } of wide(20)) env.run.of(id).reportComplete({ status: 'done', summary: 'ok' });
+      await until(() => env.messages.some((m) => m.type === 'execution_complete'));
+
+      expect(statuses(env.messages).length).toBeLessThan(6);
+      const last = statuses(env.messages).at(-1);
+      expect(last?.type === 'status_update' && last.tasks.map((t) => t.status)).toEqual(wide(20).map(() => 'completed'));
+      expect(last?.type === 'status_update' && last.runMerge?.landed).toHaveLength(20);
     });
 
     it('never leaves the end of a run behind execution_complete', async () => {

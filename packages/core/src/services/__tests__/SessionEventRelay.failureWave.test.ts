@@ -128,15 +128,6 @@ describe('a wave of failures', () => {
     expect(statuses()).toBe(1);
   });
 
-  it('still sends a landing at once when no wave is on', () => {
-    const { observer, statuses } = wave();
-
-    observer.onIsolationChanged();
-    observer.onIsolationChanged();
-
-    expect(statuses()).toBe(2);
-  });
-
   it('tells of each checkpoint in a wave of them, with no status of its own past the first', () => {
     const { tasks, sent, observer, fail, statuses } = wave();
 

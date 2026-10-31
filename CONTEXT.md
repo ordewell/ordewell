@@ -212,9 +212,9 @@ removal that renumbers) and after anything that drops the live context or
 leaves the last whole block uncertain: a reset, a compaction, a turn that
 failed, was stopped or was abandoned (ADR-0012 T10). The catalog block follows
 the same rule. A plan past 60 tasks lists only the ones a planner acts on, the
-running, failed and waiting first (`planWindow`); a line says how many are not
-listed, by status, and that `task_query` reads any of them by reference. A task
-that leaves the list but stays in the plan is named in `<plan_changes>` by its
+failed and waiting first, then the running (`planWindow`); a line says how many
+are not listed, by status, names any failed or waiting among them, and says that
+`task_query` reads any of them by reference. A task that leaves the list but stays in the plan is named in `<plan_changes>` by its
 status, never as removed.
 The live model context — a vendor service's message list, a harness planner's
 process and native session id — is disposable: dropping it makes the next turn

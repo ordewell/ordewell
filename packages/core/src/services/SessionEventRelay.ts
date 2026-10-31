@@ -6,6 +6,7 @@ import {
   serializePlan,
   serializeTask,
   serializeTaskStatus,
+  type RunMergeView,
   type SessionBroadcaster,
   type SessionMessage,
   type SessionNotice,
@@ -21,6 +22,7 @@ type PlannerCompactionMessage = Extract<SessionMessage, { type: 'planner_compact
 const STATUS_INTERVAL_MS = 1000;
 
 const waitIds = (list: readonly Escalation[]): string => list.map((e) => e.id).join();
+const landedIds = (view: RunMergeView | null | undefined): string => view?.landed.map((t) => t.taskId).join() ?? '';
 
 export interface SessionEventRelayDeps {
   broadcast: SessionBroadcaster;
@@ -83,6 +85,10 @@ export class SessionEventRelay {
   private sentWaits = '';
   /** {@link statusWindow} has sent a change to what waits on a person: the next change waits for it to end. */
   private waitsSent = false;
+  /** The ids of the work a merge is offered on, as the last status update carried it. */
+  private sentLanded = '';
+  /** {@link statusWindow} has sent a change to that work: the next change waits for it to end. */
+  private landedSent = false;
   /** The run as {@link statusChanged} last read it. */
   private lastMoved: string | undefined;
   private livePlan: () => LegacyPlanState | null = () => null;
@@ -121,9 +127,7 @@ export class SessionEventRelay {
       },
       onTick: () => this.statusChanged(plan()),
       onUsageChanged: () => this.statusCanWait(plan()),
-      // A landing or a conflict: what a merge gate or a person waits on, and git's pace, not a runner's.
-      // A wave of failures is a wave of worktrees given up too, and those wait with the rest of it.
-      onIsolationChanged: () => (this.waitsSent ? this.statusCanWait(plan()) : this.status(plan())),
+      onIsolationChanged: () => this.isolationChanged(plan()),
       onIsolationBlocked: ({ reason, repos }) => {
         this.flushStatus(plan());
         const where = repos.length > 0 ? ` in ${repos.join(', ')}` : '';
@@ -154,6 +158,9 @@ export class SessionEventRelay {
     const waits = waitIds(message.escalations ?? []);
     if (waits !== this.sentWaits) this.waitsSent = true;
     this.sentWaits = waits;
+    const landed = landedIds(message.runMerge);
+    if (landed !== this.sentLanded) this.landedSent = true;
+    this.sentLanded = landed;
     this.openStatusWindow();
     this.broadcast(message);
     this.escalationsSent(message.escalations ?? []);
@@ -215,11 +222,23 @@ export class SessionEventRelay {
     else this.status(plan);
   }
 
+  /**
+   * A task in a worktree reports its landing twice and its release once, and
+   * every update carries every task, so a wide run must not send the plan per
+   * report. What a person acts on still goes first: new work to merge, like a
+   * new wait, goes at once, and the rest waits for the second to end.
+   */
+  private isolationChanged(plan: LegacyPlanState | null): void {
+    if (!plan || !this.statusWindow || this.statusHeld || this.landedSent || landedIds(this.orchestrator.runMergeView()) === this.sentLanded) this.waitsMayHaveChanged(plan);
+    else this.status(plan);
+  }
+
   private openStatusWindow(): void {
     if (this.statusWindow) return;
     this.statusWindow = setTimeout(() => {
       this.statusWindow = undefined;
       this.waitsSent = false;
+      this.landedSent = false;
       this.flushStatus(this.livePlan());
     }, STATUS_INTERVAL_MS);
     // A second's wait is no reason to keep a process that has finished alive.
