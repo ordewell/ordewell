@@ -141,7 +141,8 @@ export interface EscalationInput {
  * Whether a person alone can lift this start wait. Written out so that a new
  * wait fails to compile until someone decides. A task with any `false` wait is
  * left out: that wait clears by itself, or the task's cause is listed in its
- * place, and the task's turn comes after.
+ * place, and the task's turn comes after. A reverted task's hold alone outlasts
+ * its dependencies (see {@link unstarted}).
  */
 const ONLY_A_PERSON: Record<StartWaitKind, boolean> = {
   started: false,
@@ -300,8 +301,11 @@ function unstarted(row: TaskWithParent, input: EscalationInput, rows: readonly T
   const { task } = row;
   const waits = input.waits.get(task.id) ?? [];
   const carried = input.carried(task.id);
+  // A reverted task's hold outlasts its dependencies: a chain revert leaves each task behind the one before it, and only the user lifts any of those holds (ADR-0054).
+  const reverted = task.reverted && waitOf(waits, 'on-hold');
+  const behind = reverted ? [...waitOf(waits, 'blocked')?.failed ?? [], ...waitOf(waits, 'dependencies')?.waiting ?? []] : [];
   // A reverted task waits for the user's decision however the run stands: it is reverted before Merge all, usually after the last task landed (ADR-0054).
-  if (!(input.run.open || carried || task.reverted) || waits.some((w) => !ONLY_A_PERSON[w.kind])) return null;
+  if (!(input.run.open || carried || task.reverted) || waits.some((w) => !ONLY_A_PERSON[w.kind] && !(reverted && (w.kind === 'blocked' || w.kind === 'dependencies')))) return null;
   // In a plan nobody has approved yet nothing is theirs to start, but what a loop carried on waits on, and a manual task needs no approval to be done.
   if (waitOf(waits, 'unapproved') && task.type !== 'user' && !carried && !input.waitsForApproval(task.id)) return null;
   if (waitOf(waits, 'no-prompt')) {
@@ -310,6 +314,15 @@ function unstarted(row: TaskWithParent, input: EscalationInput, rows: readonly T
   if (waitOf(waits, 'on-hold')) {
     // No runner starts a user task, so its hold is the wait for it to be done.
     if (task.type === 'user') return { kind: 'on-hold', reason: BY_HAND, options: completeOption(row, input.run) };
+    // The seam refuses a retry until they have finished; a force start goes past a failure, and queues behind what has yet to run.
+    if (behind.length > 0) {
+      const refs = behind.map((id) => rows.find((r) => r.task.id === id)?.ref ?? id);
+      return {
+        kind: 'on-hold',
+        reason: holdLabel(`reverted, and it depends on ${refs.join(', ')}; force start it, or retry it once ${refs.length === 1 ? 'that has' : 'they have'} finished`),
+        options: [{ id: 'force-start', label: 'Force start' }],
+      };
+    }
     return {
       kind: 'on-hold',
       reason: holdLabel(input.holdReason(task.id) ?? 'start it again'),
