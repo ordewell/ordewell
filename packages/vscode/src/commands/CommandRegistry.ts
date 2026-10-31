@@ -396,14 +396,16 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
     }),
   );
   context.subscriptions.push(
-    vscode.commands.registerCommand('ordewell.loadSessionById', async (sessionId: string) => {
+    // Answers whether the session was opened, so a caller does not say it was.
+    vscode.commands.registerCommand('ordewell.loadSessionById', async (sessionId: string): Promise<boolean> => {
       const loaded = loadSession(sessionId, deps.fsAdapter.getWorkspaceRoot());
       if (!loaded) {
         vscode.window.showErrorMessage('Failed to load session.');
-        return;
+        return false;
       }
-      if (!applyLoadedSession(loaded, deps)) return;
+      if (!applyLoadedSession(loaded, deps)) return false;
       deps.log(`Loaded session by id: ${loaded.meta.id}`);
+      return true;
     }),
   );
   context.subscriptions.push(

@@ -322,6 +322,27 @@ describe('the session lease (ADR-0049)', () => {
     expect(() => adopt(sessionOn(host({ id: 'host-b', alive: () => true })))).not.toThrow();
   });
 
+  it('keeps the session open and lets the other go when the disk refuses a load', () => {
+    const OTHER = 'session-other000';
+    const leaseOf = (id: string) => path.join(sessionStore.sessionDataDir(id, workspace), 'lease.json');
+    const first = sessionOn(host({ id: 'host-a', alive: () => true }));
+    adopt(first);
+    const meta = sessionStore.saveSession(savedPlan(), 'another goal', workspace, OTHER);
+    const other = path.join(workspace, '.ordewell', 'sessions', fs.readdirSync(path.join(workspace, '.ordewell', 'sessions')).find((f) => f.includes(OTHER.slice('session-'.length, 16)))!);
+    const loaded = sessionStore.loadSession(meta.id, workspace)!;
+    // A rename over a directory fails as a full disk does.
+    fs.rmSync(other);
+    fs.mkdirSync(other);
+
+    expect(() => first.loadPlan(loaded.plan, loaded.meta.goal, workspace, { sessionId: OTHER })).toThrow(/not opened/);
+
+    expect(first.sessionId).toBe(SESSION);
+    expect(fs.existsSync(leaseOf(SESSION))).toBe(true);
+    expect(fs.existsSync(leaseOf(OTHER))).toBe(false);
+    fs.rmdirSync(other);
+    first.destroy();
+  });
+
   function sessionFile(): string {
     const dir = path.join(workspace, '.ordewell', 'sessions');
     const [file] = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));

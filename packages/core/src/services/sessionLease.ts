@@ -108,9 +108,11 @@ export class SessionHeldError extends Error {
 export interface SessionLease {
   /**
    * Hold `sessionId`'s lease in `workspace`, letting go of the one held before
-   * only once this one is held. Throws {@link SessionHeldError}.
+   * only once this one is held. Throws {@link SessionHeldError}. `commit` runs
+   * holding both: when it throws, the one held before is still held, and a
+   * lease this claim took is let go.
    */
-  claim(sessionId: string, workspace: string): void;
+  claim(sessionId: string, workspace: string, commit?: () => void): void;
   /**
    * Null while this Session holds `sessionId`'s lease, claiming it when no
    * live host holds it; otherwise who holds it. A lease another host took from
@@ -123,7 +125,7 @@ export interface SessionLease {
 
 /** For a Session whose saves go nowhere on disk (a test's): there is no shared state to own. */
 export const UNLEASED: SessionLease = {
-  claim() {},
+  claim(_sessionId, _workspace, commit) { commit?.(); },
   hold: () => null,
   release() {},
 };
@@ -380,14 +382,21 @@ class HostedLease implements SessionLease {
 
   constructor(private readonly host: LeaseHost, private readonly onLost: (held: SessionHeld) => void) {}
 
-  claim(sessionId: string, workspace: string): void {
+  claim(sessionId: string, workspace: string, commit?: () => void): void {
     const file = leaseFile(sessionId, workspace);
     if (this.file === file) {
       const held = this.host.check(file, this);
       if (held) throw new SessionHeldError(held);
+      commit?.();
       return;
     }
     this.host.acquire(file, workspace, this);
+    try {
+      commit?.();
+    } catch (err) {
+      this.host.release(file, this);
+      throw err;
+    }
     const previous = this.file;
     this.file = file;
     this.workspace = workspace;

@@ -612,6 +612,8 @@ export class Session {
   private saveTimer: ReturnType<typeof setTimeout> | undefined;
   /** The store's status mark as last saved, or as loaded. */
   private savedStatuses: string | undefined;
+  /** The user was told the disk is refusing this session's saves, and none has landed since. */
+  private saveFailureSaid = false;
   /** A whole-plan start opening; a second Execute joins it rather than resetting the run under it. */
   private runOpening: Promise<void> | null = null;
   private unsubObserver: (() => void) | null;
@@ -1181,13 +1183,17 @@ export class Session {
     return this.runSettingsValue;
   }
 
-  /** A call at the seam, in the transcript where it happened and on every surface at once. */
+  /**
+   * A call at the seam, in the transcript where it happened and on every
+   * surface at once. The call has happened by now, so a failed save is said
+   * rather than thrown: a Stop that took must not answer as refused.
+   */
   private recordExecution(record: ExecutionRecord, text: string): void {
     this.supervision.executed(record);
     this.mutatePlan(() => {
       this.conversation.recordExecution(record, text);
       return true;
-    }, () => this.broadcast({ type: 'execution_action', record, text }));
+    }, () => this.broadcast({ type: 'execution_action', record, text }), () => this.tryPersist());
   }
 
   /** Whether the user approved this task to run; see {@link ApprovalRecord.isApproved}. */
@@ -1387,6 +1393,7 @@ export class Session {
     this.plan.lastUpdated = new Date().toISOString();
     this.save(this.plan, this.goal, this.workspace, this.currentSessionId);
     this.savedStatuses = this.store.statusMark();
+    this.saveFailureSaid = false;
   }
 
   /**
@@ -1417,13 +1424,17 @@ export class Session {
   /**
    * A save nothing that follows may depend on: a full disk must not take the
    * daemon down, nor leave a stop or a close half done, its run live and its
-   * lease held.
+   * lease held. Said once a failing stretch, since the timer tries again for
+   * as long as the disk refuses.
    */
   private tryPersist(): void {
     try {
       this.persist();
     } catch (err) {
       console.error('[Session] save failed:', err);
+      if (this.saveFailureSaid) return;
+      this.saveFailureSaid = true;
+      this.notice('error', `This session could not be saved: ${err instanceof Error ? err.message : String(err)}. A reload shows it as it was last saved.`);
     }
   }
 
@@ -1473,7 +1484,7 @@ export class Session {
   private leaseLost(held: SessionHeld): void {
     this.saveRefusedFor = held.holder.hostId;
     this.notice('error', describeLost(held));
-    if (this.isExecuting || this.orchestrator.isRunning || this.orchestrator.awaitsResume || this.orchestrator.startsPending) this.stopExecution();
+    if (this.isExecuting || this.orchestrator.isRunning || this.orchestrator.awaitsResume || this.orchestrator.startsPending) this.stopRun();
   }
 
   /**
@@ -1493,7 +1504,7 @@ export class Session {
     // later, it would plan the old goal in whatever scope is held by then.
     this.endWaiting(() => new PlannerTurnDiscardedError());
     // A start still opening its run belongs to this plan: let through, it would claim a task of the next one that shares its id.
-    if (this.isExecuting || this.orchestrator.isRunning || this.orchestrator.awaitsResume || this.orchestrator.startsPending) this.stopExecution();
+    if (this.isExecuting || this.orchestrator.isRunning || this.orchestrator.awaitsResume || this.orchestrator.startsPending) this.stopRun();
     this.conversation.abandonTurn();
     this.turns.abandon();
     this.supervision.reset();
@@ -2428,6 +2439,12 @@ export class Session {
    * answers as stopped rather than waiting on a question that no longer stands.
    */
   stopExecution(): void {
+    // A Stop is answered whatever the saves before it already said.
+    this.saveFailureSaid = false;
+    this.stopRun();
+  }
+
+  private stopRun(): void {
     // The opening stopped here may still be awaiting a spawn; an Execute after
     // this Stop starts afresh instead of joining a run that no longer stands.
     this.runOpening = null;
@@ -2455,13 +2472,14 @@ export class Session {
    * a hold would stall every task's status for as long, and an
    * `execution_complete` the control triggers would overtake the status held
    * back — which a surface treats as the end of the stream. Instead each status
-   * announced while one runs is saved first (see {@link observer}).
+   * announced while one runs is saved first (see {@link observer}). The save
+   * that ends it fails as {@link saved}'s does.
    */
   private async withSave<T>(op: () => Promise<T>): Promise<T> {
     this.controlsInFlight++;
     try {
       const result = await op();
-      this.persist();
+      this.tryPersist();
       // The user's own act shows as it ends: nothing of it waits for the second to run out.
       this.events.flushStatus(this.plan);
       return result;
@@ -2470,10 +2488,15 @@ export class Session {
     }
   }
 
-  /** A control that finishes synchronously: its status is held until it is saved. */
+  /**
+   * A control that finishes synchronously: its status is held until it is
+   * saved. Its effect has landed by then, so a failed save is said rather than
+   * thrown: the caller would report a control that took as one that failed,
+   * and a surface would keep showing what it answered.
+   */
   private saved<T>(op: () => T): T {
     const result = this.events.holdStatus(op);
-    this.persist();
+    this.tryPersist();
     this.events.releaseStatus(this.plan);
     return result;
   }
@@ -2487,10 +2510,10 @@ export class Session {
    * Direct edits reach it through the {@link PlanEditor}, which adds the
    * reschedule they owe.
    */
-  private mutatePlan(op: () => boolean, notify: () => void = () => this.announcePlan()): LegacyPlanState | null {
+  private mutatePlan(op: () => boolean, notify: () => void = () => this.announcePlan(), save: () => void = () => this.persist()): LegacyPlanState | null {
     if (!this.plan) return null;
     const changed = this.events.holdStatus(op);
-    if (changed) this.persist();
+    if (changed) save();
     this.events.releaseStatus(this.plan);
     if (!changed) return null;
     notify();
@@ -2558,8 +2581,10 @@ export class Session {
     // a drop, the first user send reseeds it from this plan's own transcript.
     const adopting = plan !== this.plan;
     // Before anything of the plan held now is dropped, so a refusal leaves it
-    // as it was: another live host has this session open (ADR-0049).
-    if (adopting) this.lease.claim(opts?.sessionId ?? this.currentSessionId, workspace);
+    // as it was: another live host has this session open (ADR-0049), or the
+    // disk will not take it. A run stopped below cannot be started again, so
+    // the load's save is tried here, on the plan as it came, not undone after.
+    if (adopting) this.lease.claim(opts?.sessionId ?? this.currentSessionId, workspace, () => this.writeLoaded(plan, goal, workspace, opts));
     if (adopting) this.dropPlanScope();
     this.plan = plan;
     // A plan adopted off disk carries what supervision remembered: the loop
@@ -2612,11 +2637,23 @@ export class Session {
       // Last, once the run is taken over: what waits now was there before this load (ADR-0053).
       this.escalationNotifier.baseline(this.escalations());
     }
-    if (opts?.persist !== false) this.persist();
+    // The load has happened: the file has the plan as it came, and the next
+    // save carries what adopting it added.
+    if (opts?.persist !== false) this.tryPersist();
     this.events.releaseStatus(this.plan);
     // A reopened session shows its token line again without waiting for the
     // next turn: announce the totals the moment the plan is adopted.
     if (this.usage.hasUsage) this.broadcast(this.usage.message());
+  }
+
+  /** The plan a load adopts goes to disk first; whoever asked hears that nothing here changed if it cannot. */
+  private writeLoaded(plan: LegacyPlanState, goal: string, workspace: string, opts?: { sessionId?: string; persist?: boolean }): void {
+    if (opts?.persist === false) return;
+    try {
+      this.save(plan, goal, workspace, opts?.sessionId ?? this.currentSessionId);
+    } catch (err) {
+      throw new Error(`The session could not be saved (${err instanceof Error ? err.message : String(err)}), so it was not opened. What was open here stays as it was.`, { cause: err });
+    }
   }
 
   /**
@@ -2635,7 +2672,7 @@ export class Session {
     if (this.closed || this.plan !== plan || outcome === 'unchanged') return;
     plan.isolation = this.runs.planIsolation ?? undefined;
     plan.mergedRun = this.runs.mergedRun ?? undefined;
-    if (persists) this.persist();
+    if (persists) this.tryPersist();
     this.events.status(plan);
     if (outcome === 'cleared') this.broadcast({ type: 'run_closed' });
   }
