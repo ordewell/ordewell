@@ -10,7 +10,7 @@ import { changedReposOf } from './isolationRecord';
  * is told in. GitWorktreeIsolation answers the other half, in its turn.
  */
 
-export type RevertRefusalReason = 'no-landing' | 'no-own-merge' | 'checked-out' | 'uncommitted-changes' | 'in-a-loop' | 'live-dependent' | 'in-branch' | 'git';
+export type RevertRefusalReason = 'no-landing' | 'no-own-merge' | 'checked-out' | 'in-a-loop' | 'live-dependent' | 'in-branch' | 'git';
 
 export interface RevertRefusal {
   reason: RevertRefusalReason;

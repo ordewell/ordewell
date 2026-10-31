@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execFileSync } from 'child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
@@ -112,7 +112,7 @@ describe('a revert with the integration worktree off the integration branch', ()
     const settled: string[][] = [];
 
     // Saved just before the first commit: the last moment the revert could have looked.
-    const result = await iso.revert(run, [t.id], { ...nothingInTheWay, persist: () => git(dir, 'checkout', '-q', '-b', 'review'), settled: (ids) => settled.push([...ids]) });
+    const result = await iso.revert(run, [t.id], { ...nothingInTheWay, persist: () => git(dir, 'checkout', '-q', '-B', 'review'), settled: (ids) => settled.push([...ids]) });
 
     expect(result).toMatchObject({ outcome: 'failed', repo: '.', error: expect.stringContaining(dir) });
     expect(git(root, 'rev-parse', integration)).toBe(tip);
@@ -120,20 +120,6 @@ describe('a revert with the integration worktree off the integration branch', ()
     expect(run.tasks[t.id].status).toBe('merged');
     expect(run.landing).toBeUndefined();
     expect(run.reverted).toBeUndefined();
-  });
-
-  it('is not fooled by a worktree that moved off the branch and back while it committed', async () => {
-    const { root, iso, run, integration, t, tip, dir } = await landedThenMoved(() => undefined);
-    // Back on the branch by the time the commit has been made, as a look at HEAD afterwards would see it.
-    const hook = join(root, '.git', 'hooks', 'post-commit');
-    writeFileSync(hook, `#!/bin/sh\ngit symbolic-ref HEAD refs/heads/${integration}\ngit reset -q --hard\n`);
-    chmodSync(hook, 0o755);
-
-    const result = await iso.revert(run, [t.id], { ...nothingInTheWay, persist: () => git(dir, 'checkout', '-q', '-b', 'review') });
-
-    expect(result).toMatchObject({ outcome: 'failed', repo: '.' });
-    expect(git(root, 'rev-parse', integration)).toBe(tip);
-    expect(run.tasks[t.id].status).toBe('merged');
   });
 
   it('puts the other repo of a group back when one worktree strays, and leaves nothing half reverted', async () => {

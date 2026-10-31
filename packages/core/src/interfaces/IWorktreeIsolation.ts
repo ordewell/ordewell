@@ -211,9 +211,7 @@ export interface IsolationLanding {
 
 /** A revert's share of one repo, saved so that it can tell its own commits from anyone else's. */
 export interface IsolationRepoRevert {
-  /** The merges it takes back, newest first. */
-  merges: string[];
-  /** The commits it has made, oldest first, each saved as soon as it is made. */
+  /** The commits it has made, oldest first, each saved before the branch moves onto it. */
   commits: string[];
 }
 
@@ -529,13 +527,12 @@ export interface RevertCommand {
  * `inBranch`: the part something of the user's holds, which no revert touches;
  * newest first too, the order to run the commands in. `no-own-merge`: a task's
  * work came in through another's merge, a conflict resolver's, so no merge of
- * its own can undo it. `uncommitted-changes`: tracked changes in the integration
- * worktree, which a revert would commit or lose. `git`: git could not read what
- * the record names.
+ * its own can undo it. `git`: git could not read what the record names, or say
+ * what holds it.
  */
 export type LandedWork =
   | { ok: true; tasks: IsolationRevertTask[]; inBranch: RevertCommand[] }
-  | { ok: false; reason: 'no-own-merge' | 'checked-out' | 'uncommitted-changes' | 'git'; error: string };
+  | { ok: false; reason: 'no-own-merge' | 'checked-out' | 'git'; error: string };
 
 /** What {@link IWorktreeIsolation.revert} asks of its caller, in its turn. */
 export interface RevertWatch {

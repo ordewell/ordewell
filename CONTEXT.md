@@ -1876,9 +1876,9 @@ matters — an ops task has a runner and a model, a script task has neither;
 run's integration branches before *Merge all*: `revert_task` at the command
 seam, and only the user's, after `Session.revertPreview` (`GET
 …/revert-preview`) has said what it would take. It adds one revert commit per
-landing (`git revert -m 1` of each merge in `IsolationRun.landings`, since a
-continue or a retry lands a task again) and rewrites nothing, in every repo the
-task changed or none. Landed dependents, direct or
+landing (each merge in `IsolationRun.landings` undone as `git revert -m 1` would,
+by plumbing and off any worktree, since a continue or a retry lands a task again)
+and rewrites nothing, in every repo the task changed or none. Landed dependents, direct or
 not, go with it, newest landing first, once the user confirms the list, whatever
 a later attempt left of their records. It takes
 its turn on the landing queue, and no new start is claimed meanwhile. It is

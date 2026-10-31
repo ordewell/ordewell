@@ -52,7 +52,10 @@ revert adds commits and rewrites nothing.
   nothing else counts: not a merge by hand into another branch, a preserved tip
   or a review checkout. The user's own branch is the branch the run started on, a
   fast-forward of it included, from any checkout, under any name its reflog says
-  it was renamed to, and it speaks for a detached HEAD. A run with no base branch
+  it was renamed to, and it speaks for a detached HEAD. The reflog speaks before
+  the name: with a branch renamed from it that holds the commit the run started
+  from, a new branch taking the old name is a review. A git query that fails is
+  no answer, so it reads as not merged, and a revert refuses. A run with no base branch
   has only what is checked out, which has to show a merge: the landing off its
   first-parent line, and no tip of Ordewell's holding it on that line. So Merge
   all makes a merge commit there. It is the same reading a clear-up takes before
@@ -63,27 +66,32 @@ revert adds commits and rewrites nothing.
   leaves nothing to merge, but puts nothing in the user's branch either: the
   revert is refused with no command to run.
 
-  A revert cannot commit to the integration
-  branch where it is checked out, so that is refused, in the preview too, naming
-  where. Nor can it from Ordewell's own integration worktree with anything else
-  checked out there, by name or detached, since git commits to whatever HEAD
-  says: that is refused the same way, and it is the user's to put back. Tracked
-  changes in that worktree, staged or not, are refused the same way too, naming
-  them and where, in the preview and again before every commit: a commit would
-  take in what is staged. An untracked file goes in no commit, so it stays.
-- **A revert commit per landing.** Each is `git revert -m 1` of a merge that
-  landed the task, worded `Revert: <subject>` beside the other messages Ordewell
-  writes (ADR-0013). A continue or a retry lands a task again under a new record,
+  A revert does not move the integration branch where it is checked out, since
+  that checkout would be left behind it, so that is refused, in the preview too,
+  naming where. Nor does it with anything else checked out in Ordewell's own
+  integration worktree, by name or detached: that is refused the same way, and
+  it is the user's to put back. Both are looked at again before the branch moves.
+- **A revert commit per landing.** Each undoes a merge that landed the task, as
+  `git revert -m 1` would, worded `Revert: <subject>` beside the other messages
+  Ordewell writes (ADR-0013). It is made by plumbing and never in a worktree:
+  `git merge-tree --write-tree` with the merge as base and the branch's tip and
+  the merge's first parent as its sides, `commit-tree`, signed where
+  `commit.gpgsign` says, then `update-ref` from the tip it expected. So nothing
+  staged anywhere can go in a commit, and a revert that conflicts has written
+  nothing to clear. It needs no integration worktree and makes none. Where there
+  is one, a two-tree read brings it along last, every other path left as it is,
+  staged or not. Git refuses that read, writing nothing, over a change on a path
+  the commit touches; the branch goes back and the revert fails, naming the path
+  and the worktree. A continue or a retry lands a task again under a new record,
   so `IsolationRun.landings` keeps every such merge, by task and repo, and all of
   them go, with `IsolationRun.landedTasks` naming the task once no record does.
   A merge whose work a later landing already took out has nothing to commit and
   counts as reverted. A landing with the integration worktree off the branch
   fails, naming where, as one with the branch checked out elsewhere does. What
   either made is read off the branch, never off HEAD alone: a landing's merge is
-  the tip with the tip it recorded and the task's for parents, and a revert's
-  commit is the one HEAD names, as the branch's tip, with the commit before it
-  its one parent. A checkout or anyone's commit there mid-way fails it, and it
-  records nothing it did not make.
+  the tip with the tip it recorded and the task's for parents, and a revert moves
+  the branch only from the commit before its own. A checkout or anyone's commit there
+  mid-way fails it, and it records nothing it did not make.
 - **Landed dependents go with it.** Every task that depends on it, directly or
   not, and has landed goes too, newest landing first. A dependent that landed
   nothing is walked through and stays as it is. A subtask is a task here: it goes
@@ -120,9 +128,9 @@ revert adds commits and rewrites nothing.
   work keep running: when one lands, a three-way merge from the tip it was cut
   from keeps the revert.
 - **All or nothing.** The tips are recorded as `IsolationRun.landing`, with
-  `reverts` saying it is a revert and which merges it takes in each repo,
-  and saved before the first commit, across the
-  whole set and every repo; each commit it makes is saved there as it is made. A
+  `reverts` saying it is a revert, and saved before the first commit, across the
+  whole set and every repo; each commit it makes is saved there before the branch
+  moves onto it, so a crash leaves no commit of its own unnamed. A
   conflict or a failure anywhere puts every tip back
   and names the task, repo and files. A crash does the same through
   `pruneOrphans`, since the saved run still has the tasks landed. The rollback
@@ -130,12 +138,8 @@ revert adds commits and rewrites nothing.
   nothing else: the line it saved, each on the last. In the integration worktree
   it takes them off by a two-tree read, so a change made there since stays as it
   was, staged or not; git refuses over a path those commits touched, and the
-  revert then stays recorded until that change is cleared. A revert stopped before
-  its commit is cleared by the same read, from a tree built of what it could have
-  written, and a change it conflicted with, or wrote over, is left there and
-  reported the same way. A crash can come between a
-  commit and its save, so one more may follow that line, on it, if its message
-  holds Ordewell's sentence naming one of the merges. Anything else stays recorded and holds landings
+  revert then stays recorded until that change is cleared. Anything else stays
+  recorded and holds landings
   and Merge all off it, as a landing's does (ADR-0014). It is judged again with
   its commits made and rolled back if it may no longer go: a plan loaded under
   it, the same run's saved copy too, has not heard of them.
@@ -259,23 +263,26 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
 - **Tell a review branch from a merge, so a review does not stop a revert.**
   Rejected: a review and a merge by hand look alike to git, which is what the
   guessing above kept getting wrong. Deleting a review branch is one command.
+- **Run `git revert --no-commit` in the integration worktree, then `git commit`.**
+  Dropped: it merges into the index, so what was staged there went into the
+  commit, and clearing a stopped one had to guess what was its own. Refusing
+  tracked changes first left a gap to the commit, and each way of closing it
+  reopened on another path. It did run commit hooks, which plumbing goes past.
+- **Refuse any tracked change in the integration worktree.** Dropped with it: a
+  commit no longer takes in what is staged, and a rollback leaves it.
 - **Clear a stopped revert with `git reset --hard`.** Rejected: it takes whatever
-  else is staged there. Restoring only the revert's paths by name would overwrite
-  a change on one of them, where the two-tree read refuses.
-- **Make the commits with `commit-tree`, so each is saved before the branch moves
-  and a crash can leave none unsaved.** Rejected: it would go past the commit
-  hooks and signing that the commits Ordewell writes go through.
-- **Refuse a commit left unsaved by a crash.** Rejected: a crash between two
-  steps would hold the run off every landing over a commit it made itself, and
-  its own sentence on the saved parent leaves no plain commit in that place.
+  else is staged there.
+- **Let one commit follow the saved line, by Ordewell's sentence in its message.**
+  Dropped: a crash between a commit and its save could leave one, until the commit
+  was saved before the branch moved. A message is words anyone can write.
 - **Refuse every revert while any landing's task has left the plan.** Rejected:
   a task that stood apart from the work would stop it for good, when its
   dependencies can be kept as it lands.
-- **Commit past an integration worktree that is off its branch, through a
-  temporary worktree or `commit-tree`, or move it back first.** Rejected: that
-  worktree was moved by someone, for a reason Ordewell cannot read, and it may
-  hold their changes. A landing needs a checkout of the branch to merge in
-  anyway, and naming where it stands leaves the choice with them.
+- **Move the branch past an integration worktree that is off it, or move that
+  worktree back first.** Rejected: that worktree was moved by someone, for a
+  reason Ordewell cannot read, and it may hold their changes. A landing needs a
+  checkout of the branch to merge in anyway, and naming where it stands leaves
+  the choice with them.
 
 ## Consequences
 
@@ -292,15 +299,25 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
   merged only from there, and a fast-forward by hand as a review.
 - A branch cut from the integration branch stops a revert until it is deleted,
   though it marks nothing merged. That includes a branch a runner cut.
-- A change staged in the integration worktree after the last check, on a path the
-  revert then merges cleanly, cannot be told from the revert: `git revert
-  --no-commit` merges into the index. A stop clears it with the revert.
+- A revert's commits go past commit hooks, since `commit-tree` runs none: a
+  repository that polices commits there does not see them. A signing key still
+  signs them.
+- A revert needs git 2.40, for `merge-tree --merge-base`, and an older git is
+  refused in the preview, naming the version. The rest of a run does not.
+- A change on a path a revert touches is found only when the two-tree read
+  refuses it, past the preview, and nothing has moved by then.
+- A crash between a branch's move and its read, in a chain of reverts that touch
+  one path twice, reads as a change of the user's, and the revert stays recorded
+  until the integration worktree's index is cleared by hand.
 - A merge the user rebases or squashes away reads as taken out, since git no
   longer shows it: its gate closes until Merge all brings it in again.
 - A renamed base branch is followed for what merged means, through a reflog that
   can expire; a revert needs no reflog, since the branch holds the work under any
   name. Merge all still names the branch the run started on, and refuses
-  any other as the wrong branch, so it waits for that name to come back.
+  any other as the wrong branch, so it waits for that name to come back, and a
+  merge into a new branch of that name reads as not merged.
+- A branch renamed from the base name before the run, that happens to hold the
+  commit the run started from, reads as the user's own, and the run stays open.
 - The resolver of a conflict and the task it carried stay on the integration
   branch for good; only discarding the run takes them back.
 
@@ -316,3 +333,4 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
 - 2026-10-31 — merged is asked of git for each merge across the user's branches, not read from `inHead`; `landedOn` is kept from when a worktree is cut; tracked changes are checked before every revert commit and a rollback keeps them; a claim refuses a task skipped since its start was asked for; resolvers are retired last.
 - 2026-10-31 — `ordewell-preserved/` branches count as Ordewell's own; a renamed base branch is followed; `inHead` is read both ways; a Stop puts a reverted task's hold back; a dirty tree's replay is the start it parked.
 - 2026-10-31 — whether a revert may touch a merge and whether work is merged are two questions: anything of the user's holding a merge refuses a revert, a review branch included, and only the user's own branch reads as merged; a stopped revert is cleared by the two-tree read.
+- 2026-10-31 — a revert is plumbing, off the worktree, so the tracked-changes refusal and the clearing of a stopped revert go, and each commit is saved before the branch moves; the reflog speaks before the base name; a failed git query refuses.
