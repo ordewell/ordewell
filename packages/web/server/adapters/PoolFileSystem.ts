@@ -249,7 +249,7 @@ export class PoolFileSystem extends BaseFileSystem {
       const detail = err || out || `exited with code ${result.code}`;
       // A failing command is still research: the model asked to diagnose, and
       // the failure output is usually the answer. Report it, do not swallow it.
-      return { success: false, output: `Command exited ${result.code}:\n${detail.slice(0, 20_000)}`, truncated: detail.length > 20_000, ...(result.timedOut ? { timedOut: true } : {}) };
+      return { success: false, output: `Command exited ${result.code}:\n${detail.slice(0, 20_000)}`, truncated: detail.length > 20_000, ...(result.timedOut ? { timedOut: true } : {}), ...(result.signal ? { signal: result.signal } : {}) };
     }
 
     const combined = err ? `${out}\n[stderr]\n${err}` : out;

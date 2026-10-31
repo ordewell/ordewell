@@ -169,6 +169,12 @@ describe.skipIf(process.platform === 'win32')('run — a sealed run (ADR-0036 S1
     expect(r).toMatchObject({ timedOut: true });
   });
 
+  it('reports the signal that ended a command, which is how a sealed run says its memory limit ended it', async () => {
+    const r = await run('/bin/sh', ['-c', 'kill -USR2 $$'], { timeout: 5_000, sealed: true });
+    expect(r).toMatchObject({ signal: 'SIGUSR2', timedOut: false });
+    expect(await run('/bin/sh', ['-c', 'exit 3'], { timeout: 5_000, sealed: true })).toMatchObject({ signal: null });
+  });
+
   it('does not call a command that failed on its own a timeout', async () => {
     const r = await run('/bin/sh', ['-c', 'exit 3'], { timeout: 5_000, sealed: true });
     expect(r).toMatchObject({ code: 3, timedOut: false });

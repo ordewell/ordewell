@@ -7,7 +7,7 @@ import { SEALED_RUN_MARK } from '../researchStepSummary';
 import { BubblewrapBackend, findBubblewrap } from './bubblewrap';
 import { SANDBOX_EXEC, SeatbeltBackend } from './seatbelt';
 import { processAlive } from '../../utils/processTree';
-import { execProbe, type ProbeExec, type SandboxBackend, type SandboxGitEntry, type SandboxInvocation, type SandboxLaunch, type SandboxLimits, type SandboxProfile } from './SandboxBackend';
+import { execProbe, MEMORY_LIMIT_SIGNAL, type ProbeExec, type SandboxBackend, type SandboxGitEntry, type SandboxInvocation, type SandboxLaunch, type SandboxLimits, type SandboxProfile } from './SandboxBackend';
 
 /**
  * The planner's shell inside an OS sandbox (ADR-0011): every command the
@@ -215,8 +215,13 @@ const SEALED_ENV: readonly string[] = [
   'TZ', 'TERM', 'USER', 'LOGNAME', '__CF_USER_TEXT_ENCODING',
 ];
 
-/** Enough for a loop over a repository's files, a pipeline or a short script; not for a build. */
-export const SEALED_LIMITS: SandboxLimits = { processes: 256, memoryBytes: 4 * 1024 ** 3, wallTimeMs: 60_000 };
+/**
+ * Time enough for a loop over a repository's files, a pipeline or a short
+ * script, not for a build. The memory is real memory across the run; the
+ * address space is per process and far above what V8 reserves for ordinary
+ * programs (ADR-0036 S1, which records the measurement).
+ */
+export const SEALED_LIMITS: SandboxLimits = { processes: 256, memoryBytes: 4 * 1024 ** 3, addressSpaceBytes: 256 * 1024 ** 3, wallTimeMs: 60_000 };
 
 /**
  * A read-only task's sealed runs (ADR-0046): the same resources, with the ten
@@ -650,6 +655,27 @@ export function sealedTimeLimitNote(wallTimeMs: number, forTask: boolean): strin
   return forTask
     ? `The sealed run was ended at its time limit of ${limit}: what it had not finished did not happen. Run less at a time, in commands that each finish inside the limit, or say in your report what needs longer.`
     : `The sealed run was ended at its time limit of ${limit}: what it had not finished did not happen. A command that needs longer belongs in the plan as a task; to read something, run it in pieces that each finish in time.`;
+}
+
+/** A byte count in the largest binary unit it is a whole number of: "4 GiB", "200 MiB". */
+function memoryLimitText(bytes: number): string {
+  const units: [number, string][] = [[1024 ** 3, 'GiB'], [1024 ** 2, 'MiB'], [1024, 'KiB'], [1, 'bytes']];
+  const [size, name] = units.find(([unit]) => bytes % unit === 0) ?? units[units.length - 1];
+  return `${bytes / size} ${name}`;
+}
+
+/**
+ * Appended to a sealed run the memory limit ended (ADR-0036 S1), in place of a
+ * failure note about reach, or null for any other failure. Ended by the signal
+ * only the launcher's watcher sends, so nothing a command prints or exits with
+ * can claim it.
+ */
+export function sealedMemoryLimitNote(outcome: { signal?: NodeJS.Signals }, memoryBytes: number | undefined, forTask: boolean): string | null {
+  if (outcome.signal !== MEMORY_LIMIT_SIGNAL || memoryBytes === undefined) return null;
+  const limit = memoryLimitText(memoryBytes);
+  return forTask
+    ? `The sealed run was ended at its memory limit of ${limit}, counted across all its processes: what it had not finished did not happen. Run less at a time, with fewer parallel workers or in commands that each hold less, or say in your report what needs more.`
+    : `The sealed run was ended at its memory limit of ${limit}, counted across all its processes: what it had not finished did not happen. A command that needs more belongs in the plan as a task; to read something, run it in pieces that each hold less.`;
 }
 
 /** Appended to a sealed run that failed: what it could never have done, and what to do in place of a retry. */

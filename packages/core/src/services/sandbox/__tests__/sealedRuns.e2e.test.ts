@@ -1,14 +1,17 @@
-import { execFile, spawnSync } from 'node:child_process';
+import { execFile, spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
+import { createRequire } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { PlannerShellSandbox, resolvePlannerSandbox, TASK_SEALED_LIMITS } from '../plannerSandbox';
+import { PlannerShellSandbox, resolvePlannerSandbox, SEALED_LIMITS, TASK_SEALED_LIMITS, type SealedRunOptions } from '../plannerSandbox';
+import { mirrorDir } from '../../worktreeLink';
 import { BaseFileSystem } from '../../BaseFileSystem';
 import { ApprovalPolicy } from '../../ApprovalPolicy';
 import { ranSealed } from '../../researchStepSummary';
 import type { ResearchShell, ShellLaunch } from '../../researchShell';
+import { MEMORY_LIMIT_SIGNAL, type SandboxLimits } from '../SandboxBackend';
 import type { ToolOutcome } from '../../../interfaces/IFileSystem';
 
 /**
@@ -20,14 +23,14 @@ import type { ToolOutcome } from '../../../interfaces/IFileSystem';
 
 const POSIX: ResearchShell = { file: null, args: [], dialect: 'posix', utilsDir: null };
 
-function run(launch: ShellLaunch, command: string, cwd: string): Promise<{ code: number; out: string; ms: number }> {
+function run(launch: ShellLaunch, command: string, cwd: string): Promise<{ code: number; out: string; ms: number; signal: NodeJS.Signals | null }> {
   const started = Date.now();
   return new Promise((resolve) => {
     execFile(launch.file ?? '/bin/sh', [...launch.args, command], {
       cwd, env: launch.env, timeout: launch.wallTimeMs ?? 60_000, killSignal: 'SIGKILL', encoding: 'utf8',
     }, (err, stdout, stderr) => {
       const code = !err ? 0 : typeof (err as { code?: unknown }).code === 'number' ? (err as { code: number }).code : 1;
-      resolve({ code, out: `${stdout}${stderr}`, ms: Date.now() - started });
+      resolve({ code, out: `${stdout}${stderr}`, ms: Date.now() - started, signal: err?.signal ?? null });
     });
   });
 }
@@ -52,8 +55,8 @@ class HostFileSystem extends BaseFileSystem {
 
   protected async execBashImpl(command: string, shell: ShellLaunch, _signal: AbortSignal | undefined, cwd: string): Promise<ToolOutcome> {
     this.runs += 1;
-    const { code, out } = await run(shell, command, cwd);
-    return { success: code === 0, output: code === 0 ? out : `Command exited ${code}:\n${out}`, truncated: false };
+    const { code, out, signal } = await run(shell, command, cwd);
+    return { success: code === 0, output: code === 0 ? out : `Command exited ${code}:\n${out}`, truncated: false, ...(signal ? { signal } : {}) };
   }
 }
 
@@ -190,12 +193,17 @@ describe('sealed runs', async () => {
       });
     });
 
-    // The bomb spends the user's process budget, which every sealed run on the
-    // host is charged against, so another file's sealed run beside it fails
-    // to fork: test:sandbox runs its files one at a time.
+    // A bomb spends the user's process budget, which macOS charges every sealed
+    // run on the host against, so a sealed run in another file beside it fails
+    // to fork. One held well under the real limit leaves them room; the real
+    // one runs only in CI's sandbox job, where test:sandbox runs a file at a
+    // time.
+    const bombProcesses = REQUIRE_SANDBOX ? SEALED_LIMITS.processes : 32;
+    const bomb = (name: string) => `${name}() { ${name} | ${name} & }; ${name}`;
+
     it('stops a fork bomb at its process limit, and leaves none of it behind', async () => {
-      const marker = `ordewell_bomb_${process.pid}`;
-      const result = await sealed(`echo "group=$$"; ${marker}() { ${marker} | ${marker} & }; ${marker}; sleep 2; echo survived`);
+      const launch = await sandbox.launchSealed(POSIX, { workspace, limits: { ...SEALED_LIMITS, processes: bombProcesses } });
+      const result = await run(launch, `echo "group=$$"; ${bomb(`ordewell_bomb_${process.pid}`)}; sleep 2; echo survived`, workspace);
       expect(result.out).toMatch(/fork|Resource temporarily unavailable|Cannot fork/i);
       expect(result.out).toContain('survived');
       expect(result.ms).toBeLessThan(30_000);
@@ -204,8 +212,165 @@ describe('sealed runs', async () => {
       // `(bash)` or `<defunct>` while they come and go, never by the marker.
       const group = /group=\s*(\d+)/.exec(result.out)?.[1];
       expect(group).toBeDefined();
+      await expectGroupGone(group!);
+    });
+
+    /** The run's processes, gone with it once a loaded machine has finished tearing them down. */
+    async function expectGroupGone(group: string): Promise<void> {
       const left = () => spawnSync('ps', ['-A', '-o', 'pgid='], { encoding: 'utf8' }).stdout.split('\n').filter((line) => line.trim() === group);
       await vi.waitFor(() => expect(left()).toEqual([]), { timeout: 20_000, interval: 500 });
+    }
+
+    it('ends at its wall-time limit with every process it started', async () => {
+      const launch = await sandbox.launchSealed(POSIX, { workspace, limits: { ...SEALED_LIMITS, wallTimeMs: 1_500 } });
+      const result = await run(launch, 'echo "group=$$"; sleep 30; echo survived', workspace);
+      expect(result.signal).toBe('SIGKILL');
+      expect(result.out).not.toContain('survived');
+      expect(result.ms).toBeLessThan(15_000);
+      await expectGroupGone(/group=\s*(\d+)/.exec(result.out)![1]);
+    });
+
+    it('leaves no watcher behind when the caller kills it', async () => {
+      const launch = await sandbox.launchSealed(POSIX, { workspace });
+      const child = spawn(launch.file!, [...launch.args, 'sleep 30'], { cwd: workspace, env: launch.env, stdio: ['pipe', 'ignore', 'ignore'] });
+      const processes = () => spawnSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8' }).stdout.split('\n').flatMap((line) => {
+        const [pid, ppid] = line.trim().split(/\s+/).map(Number);
+        return Number.isInteger(ppid) ? [{ pid, ppid }] : [];
+      });
+      let started: number[] = [];
+      await vi.waitFor(() => {
+        started = processes().filter((p) => p.ppid === child.pid).map((p) => p.pid);
+        expect(started.length).toBeGreaterThanOrEqual(2);
+      });
+      child.kill('SIGKILL');
+      await vi.waitFor(() => {
+        const alive = new Set(processes().map((p) => p.pid));
+        expect(started.filter((pid) => alive.has(pid))).toEqual([]);
+      }, { timeout: 20_000, interval: 500 });
+    });
+
+    describe('what a test run needs', () => {
+      // A package's real path is the install it came from, which the links in a task's worktree lead to.
+      const install = dirname(dirname(realpathSync(createRequire(__filename).resolve('vitest/package.json'))));
+      const checkout = dirname(install);
+      // CI keeps its Node where no sealed run reads, and a user's may be in their home: the one thing these tests add to the profile.
+      const node = realpathSync(process.execPath);
+
+      async function launchWithNode(opts: SealedRunOptions): Promise<ShellLaunch> {
+        if (!availability.available || !availability.sealed.available) throw new Error('no sealed run on this host');
+        const profile = availability.sealed.profile({ scratch: sandbox.scratchPath(), ...opts });
+        return availability.backend.wrap(
+          { shell: '/bin/sh', shellArgs: ['-c'], env: process.env },
+          { ...profile, read: [...(profile.read as readonly string[]), dirname(dirname(node))] },
+        );
+      }
+
+      it('runs a WebAssembly memory, which reserves far more address space than it touches', async () => {
+        const launch = await launchWithNode({ workspace });
+        const result = await run(launch, `'${node}' -e "new WebAssembly.Memory({ initial: 1 }); console.log('reserved')"`, workspace);
+        expect(result.out).toContain('reserved');
+        expect(result.code).toBe(0);
+      });
+
+      describe('a real vitest run', () => {
+        let project: string;
+
+        beforeAll(() => {
+          // A task's worktree as bootstrap leaves one: a repository, with the install mirrored into it.
+          project = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-sealed-vitest-')));
+          spawnSync('git', ['init', '-q'], { cwd: project });
+          writeFileSync(join(project, 'package.json'), '{"name":"sealed-vitest","type":"module"}\n');
+          writeFileSync(join(project, 'sum.test.js'), "import { expect, it } from 'vitest';\nit('adds', () => { expect(1 + 1).toBe(2); });\n");
+          mirrorDir(install, join(project, 'node_modules'), { platform: process.platform, from: checkout, to: project });
+        });
+
+        afterAll(() => {
+          rmSync(project, { recursive: true, force: true });
+        });
+
+        it("passes, keeping its cache in the worktree and writing none of the shared install", async () => {
+          const before = readdirSync(install, { withFileTypes: true }).map((entry) => entry.name);
+          const launch = await launchWithNode({ workspace: checkout, writable: project, limits: TASK_SEALED_LIMITS });
+          const result = await run(launch, `'${node}' node_modules/vitest/vitest.mjs run`, project);
+          expect(result.out).toContain('1 passed');
+          expect(result.out).not.toContain('EPERM');
+          expect(result.code).toBe(0);
+          expect(existsSync(join(project, 'node_modules', '.vite', 'vitest', 'results.json'))).toBe(true);
+          expect(lstatSync(join(project, 'node_modules', '.vite')).isDirectory()).toBe(true);
+          expect(readdirSync(install, { withFileTypes: true }).map((entry) => entry.name)).toEqual(before);
+
+          await run(launch, 'echo written > node_modules/vitest/sealed-check', project);
+          expect(existsSync(join(install, 'vitest', 'sealed-check'))).toBe(false);
+        }, 60_000);
+      });
+    });
+
+    describe('its memory limit', () => {
+      const limit = 300 * 1024 ** 2;
+
+      /** The same sandbox, holding a sealed run to a limit small enough to pass on any machine. */
+      class SmallMemorySandbox extends PlannerShellSandbox {
+        constructor(private readonly also: Partial<SandboxLimits> = {}) {
+          super();
+        }
+
+        override launchSealed(shell: ResearchShell, opts: SealedRunOptions): Promise<ShellLaunch> {
+          return super.launchSealed(shell, { ...opts, limits: { ...SEALED_LIMITS, memoryBytes: limit, ...this.also } });
+        }
+      }
+
+      /** A shell that touches 128 MiB and keeps it, by doubling a string, which needs no interpreter a host may lack. */
+      const hold = 'hold() { x=0123456789abcdef; i=0; while [ $i -lt 23 ]; do x="$x$x"; i=$((i + 1)); done; sleep 30; }';
+
+      it('sums its processes, ends them all past the limit, and says so rather than blaming reach', async () => {
+        const small = new SmallMemorySandbox();
+        try {
+          const fs = new HostFileSystem(workspace, small);
+          // Each is under the limit: only the sum is over it.
+          const outcome = await fs.bash(`echo "group=$$"; ${hold}; hold & hold & hold & wait; echo survived`, undefined, { sealed: true });
+          expect(outcome.success).toBe(false);
+          expect(outcome.signal).toBe(MEMORY_LIMIT_SIGNAL);
+          expect(outcome.output).toContain('ended at its memory limit of 300 MiB');
+          expect(outcome.output).toContain('counted across all its processes');
+          expect(outcome.output).not.toContain('survived');
+          expect(outcome.output).not.toContain('cannot reach the network');
+          await expectGroupGone(/group=\s*(\d+)/.exec(outcome.output)![1]);
+        } finally {
+          small.end();
+        }
+      }, 40_000);
+
+      it('still ends a run at the limit while a fork bomb holds its process limit', async () => {
+        const small = new SmallMemorySandbox({ processes: bombProcesses });
+        try {
+          const fs = new HostFileSystem(workspace, small);
+          // Started before the bomb, they wait for it to reach the limit before
+          // they touch anything, and spin on what they hold: no `sleep` of theirs
+          // starts under a bomb.
+          const spin = hold.replace('hold() {', 'hold() { while [ ! -e "$TMPDIR/go" ]; do :; done;').replace('sleep 30', 'while :; do :; done');
+          const settle = 'i=0; while [ $i -lt 100000 ]; do i=$((i + 1)); done';
+          // Its complaints go to a file: a bomb's fill any buffer a caller keeps for the output.
+          const outcome = await fs.bash(`echo "group=$$"; ${spin}; hold & hold & hold & { ${bomb(`ordewell_bomb_${process.pid}`)}; } 2>"$TMPDIR/bomb"; ${settle}; : > "$TMPDIR/go"; wait; echo survived`, undefined, { sealed: true });
+          expect(readFileSync(join(small.scratchPath(), 'bomb'), 'utf8')).toMatch(/fork|Resource temporarily unavailable|Cannot fork/i);
+          expect(outcome.signal).toBe(MEMORY_LIMIT_SIGNAL);
+          expect(outcome.output).toContain('ended at its memory limit of 300 MiB');
+          await expectGroupGone(/group=\s*(\d+)/.exec(outcome.output)![1]);
+        } finally {
+          small.end();
+        }
+      }, 40_000);
+
+      it('leaves alone a run that stays under it', async () => {
+        const small = new SmallMemorySandbox();
+        try {
+          const fs = new HostFileSystem(workspace, small);
+          const outcome = await fs.bash('x=0123456789abcdef; i=0; while [ $i -lt 20 ]; do x="$x$x"; i=$((i + 1)); done; sleep 3; echo survived', undefined, { sealed: true });
+          expect(outcome.success).toBe(true);
+          expect(outcome.output).toContain('survived');
+        } finally {
+          small.end();
+        }
+      }, 40_000);
     });
 
     it('backgrounds a job without a stray "Killed" line, keeping the foreground exit code', async () => {

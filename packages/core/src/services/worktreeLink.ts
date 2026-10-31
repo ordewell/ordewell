@@ -44,9 +44,20 @@ export interface MirrorOptions {
 }
 
 /**
+ * What tools keep in an install's top level for themselves, which is no part
+ * of the install. Vite takes `node_modules/.vite` under the nearest
+ * `package.json` and reads no environment to say otherwise, so a link here
+ * would have a task write the main checkout's cache, which a sealed run cannot
+ * (ADR-0013). Left out, each tool makes its own in the worktree's real
+ * directory.
+ */
+const TOOL_CACHES: ReadonlySet<string> = new Set(['.cache', '.vite', '.vite-temp', '.vitest']);
+
+/**
  * Make `source`'s entries appear in a real directory at `target`, one link per
- * entry, going one level into `@scope` and `.bin` directories. Returns the
- * entries that had to be copied, relative to `target`.
+ * entry, going one level into `@scope` and `.bin` directories, and leaving out
+ * {@link TOOL_CACHES}. Returns the entries that had to be copied, relative to
+ * `target`.
  */
 export function mirrorDir(source: string, target: string, opts: MirrorOptions): string[] {
   const copied: string[] = [];
@@ -54,6 +65,7 @@ export function mirrorDir(source: string, target: string, opts: MirrorOptions): 
   const mirror = (from: string, to: string, prefix: string, top: boolean): void => {
     fs.mkdirSync(to, { recursive: true });
     for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+      if (top && TOOL_CACHES.has(entry.name)) continue;
       const name = path.join(prefix, entry.name);
       const at = { from: path.join(from, entry.name), to: path.join(to, entry.name), name };
       if (entry.isSymbolicLink()) links.push(at);

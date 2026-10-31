@@ -100,9 +100,10 @@ refuse, such as a loop, a here-document or a script piped into `python3`, is
 refused rather than run sealed
 ([ADR-0036](adr/planner-envelope/0036-the-planners-shell-sealed-runs-and-native-opt-in.md)).
 **Sealed runs are unavailable** means the sandbox starts but its stricter
-sealed profile does not: its read list, or its limits on processes and
-memory, which a shell prelude sets with `ulimit` before the sandbox starts.
-The notice quotes what failed.
+sealed profile does not: its read list, its limits on processes and address
+space, which a shell prelude sets with `ulimit` before the sandbox starts, or
+on Linux the `sleep` and the shell's `test -ef` its memory watcher needs. The
+notice quotes what failed.
 
 ### Check it
 
@@ -134,8 +135,11 @@ process.
   The planner's sealed runs have 60 seconds, and the result says it ran sealed.
   A read-only task's sealed commands get ten minutes instead, the time limit a
   script task gets, since running the project's tests is what its one shell is
-  for; one that runs out of time says so. Once a read-only task has run one
-  command sealed, all its later commands run sealed too, allowlisted ones
+  for; one that runs out of time says so. Either way a sealed run may hold
+  4 GiB of memory across its processes, and one ended at that says so: run
+  fewer test workers. On macOS a test that listens on a socket fails in one,
+  loopback included, since it has no network. Once a read-only task has run one command
+  sealed, all its later commands run sealed too, allowlisted ones
   included, so a `gh` it runs after that has no network.
 
 ## Merge all refused: not on the base branch
