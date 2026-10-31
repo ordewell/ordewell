@@ -25,7 +25,12 @@ import { PlanStore } from './PlanStore';
 import { ApprovalPolicy, effectiveApprovalMode } from './ApprovalPolicy';
 import { DEFAULT_PLANNER_ALLOWLIST } from './plannerAllowlist';
 import { effectRuleFor, parseEffectAllowlist, type EffectRules } from './effectAllowlist';
-import { autonomousAt, rootAuthority, withheldPlannerTools, type Mandate, type NodeAuthority, type RootSettings } from './Mandate';
+import { autonomousAt, narrow, rootAuthority, withheldPlannerTools, type Mandate, type MandateRequest, type NodeAuthority, type RootSettings } from './Mandate';
+import { TreeLedger, type Carved, type NodeBudget } from './TreeLedger';
+import type { EventStore } from './eventStore';
+import { ROOT_NODE } from '../models/TreeEvent';
+import { jsonlEventStore, treeEventLogFile } from '../utils/treeEventLog';
+import { ensureStateDirIgnored } from '../utils/fsHelpers';
 import { PendingApprovals, type PendingApproval } from './PendingApprovals';
 import { RunnerApprovals } from './RunnerApprovals';
 import { approvalScopes, isRunnerApproval, type ApprovalAnswer, type ApprovalRequest } from '../interfaces/IApproval';
@@ -188,6 +193,8 @@ export interface ChildPlacement {
   isolation: IWorktreeIsolation;
   /** The root's, so the tree shares one Parallel limit (D18). */
   pool: SlotPool;
+  /** Its side of the tree's ledger, once a carve gave it one (ADR-0056 M5). */
+  budget?: NodeBudget;
 }
 
 /**
@@ -272,6 +279,8 @@ export interface SessionDeps {
   child?: NodeAuthority;
   /** Where this session sits below the root (ADR-0055 D11, D13); absent, its workspace is both its code root and its state root. */
   placement?: ChildPlacement;
+  /** Where a root's tree keeps its log (ADR-0058 S3): a file in that root's directory, unless a test supplies another. */
+  eventLog?: (rootSessionId: string, stateRoot: string) => EventStore;
 }
 
 /**
@@ -387,6 +396,7 @@ export function createSession(deps: SessionDeps): Session {
     registry: deps.registry,
     workspaceRoot: deps.workspaceRoot,
     ...(deps.placement ? { stateRoot: deps.placement.stateRoot, pool: deps.placement.pool } : {}),
+    ...(deps.placement?.budget ? { budget: deps.placement.budget } : {}),
     ...(deps.execution ? { execution: deps.execution } : {}),
     sessionId: () => session.sessionId,
     openTurn: () => session.turnRoomFreed(),
@@ -429,6 +439,7 @@ export function createSession(deps: SessionDeps): Session {
   });
   const events = new SessionEventRelay({
     broadcast: deps.broadcast, onNotice: deps.onNotice, store, orchestrator, usage,
+    ...(deps.placement?.budget ? { spent: deps.placement.budget.turnSpent } : {}),
     awaitingApproval: (taskId) => runnerApprovals.waiting(taskId),
     checkpointQuestion: (taskId) => orchestrator.getCheckpointQuestion(taskId),
     waitsForApproval: (taskId): boolean => session.waitsForApproval(taskId),
@@ -527,6 +538,10 @@ export function createSession(deps: SessionDeps): Session {
     conversation: (host) => (conversation = new PlannerConversation(host)),
     child: deps.child,
     placement: deps.placement,
+    eventLog: deps.eventLog ?? ((rootSessionId, stateRoot) => {
+      ensureStateDirIgnored(stateRoot);
+      return jsonlEventStore(treeEventLogFile(rootSessionId, stateRoot));
+    }),
   });
   return session;
 }
@@ -588,6 +603,7 @@ export interface SessionParts {
   child?: NodeAuthority;
   /** Where it sits below the root. */
   placement?: ChildPlacement;
+  eventLog: (rootSessionId: string, stateRoot: string) => EventStore;
 }
 
 /**
@@ -673,6 +689,16 @@ export class Session {
   private readonly child: NodeAuthority | undefined;
   private readonly placement: ChildPlacement | undefined;
   private readonly authority: NodeAuthority;
+  /** Opens the root's log; only a first carve, or a reopen of a tree, asks. */
+  private readonly eventLog: (rootSessionId: string, stateRoot: string) => EventStore;
+  /** This node's side of the tree's ledger; undefined at the root, which is charged nothing (ADR-0056 M5). */
+  private readonly budget: NodeBudget | undefined;
+  /** The tree's ledger, once something asked: a flat run never does, so it has none and writes no log (ADR-0058 S3). */
+  private tree: TreeLedger | null = null;
+  /** The opening behind {@link tree}, and the session it opened for. */
+  private treeOpening: { sessionId: string; ledger: Promise<TreeLedger> } | null = null;
+  /** The ledger let go, which the next opening reads after. */
+  private treeClosing: Promise<void> = Promise.resolve();
   private readonly hostSessionId?: string;
   private currentSessionId: string;
   private readonly skillsService: Pick<SkillsService, 'findSkill' | 'listSkills' | 'searchedDirs' | 'forRoot'>;
@@ -753,6 +779,15 @@ export class Session {
     this.child = parts.child;
     this.placement = parts.placement;
     this.authority = parts.child ?? rootAuthority(() => this.rootSettings());
+    this.eventLog = parts.eventLog;
+    this.budget = parts.placement?.budget;
+    this.tree = this.budget?.tree ?? null;
+    // The node stops, as a Stop does: nothing can recall what is in flight, so this is what bounds it (ADR-0056 M5).
+    this.budget?.onStop((why) => {
+      if (this.closed) return;
+      this.notice('warn', why);
+      this.stopRun();
+    });
     this.settingsFn = parts.settings;
     this.runSettingsValue = { ...RUN_SETTINGS_DEFAULTS, ...(parts.settings().run ?? {}) };
     this.hostSessionId = parts.hostSessionId;
@@ -1388,13 +1423,16 @@ export class Session {
    * lease and isolation (D11, D13). Throws for a task with no worktree (D12).
    */
   hostChild(taskId: string): ChildPlacement {
+    const sessionId = this.runs.hostChild(taskId, mintSessionId);
+    const budget = this.tree?.nodeOf(sessionId);
     return {
-      sessionId: this.runs.hostChild(taskId, mintSessionId),
+      sessionId,
       stateRoot: this.stateRoot,
       rootSessionId: this.placement?.rootSessionId ?? this.currentSessionId,
       held: () => this.heldElsewhere(),
       isolation: this.runs.childIsolation,
       pool: this.orchestrator.slotPool,
+      ...(budget ? { budget } : {}),
     };
   }
 
@@ -1433,7 +1471,86 @@ export class Session {
     if (!lease) return;
     this.turnLease = null;
     if (this.placement) this.backend.current().restart?.();
+    this.budget?.parked();
     lease.release('turn ended');
+  }
+
+  /**
+   * The tree's ledger, opened from the log if nothing has yet. A Continue asks
+   * before {@link hostChild}, whose placement names a child's node only once
+   * this has answered. A flat run has no reason to ask.
+   */
+  ledger(): Promise<TreeLedger> {
+    if (this.placement) return this.budget ? Promise.resolve(this.budget.tree) : Promise.reject(new Error('This child holds no budget, so it has no tree to read.'));
+    const sessionId = this.currentSessionId;
+    if (this.treeOpening?.sessionId === sessionId) return this.treeOpening.ledger;
+    this.closeTree();
+    const ledger = this.treeClosing.then(() => TreeLedger.open(this.eventLog(sessionId, this.stateRoot), { sessionId, limit: this.userRunSettings().delegationTokens }, {
+      failed: (err) => this.notice('warn', `The tree's event log could not be written, so a restart would not know of its latest spending: ${err instanceof Error ? err.message : String(err)}`),
+    }));
+    const opening = {
+      sessionId,
+      ledger: ledger.then((tree) => {
+        if (this.treeOpening === opening) this.tree = tree;
+        return tree;
+      }, (err: unknown) => {
+        if (this.treeOpening === opening) this.treeOpening = null;
+        throw err;
+      }),
+    };
+    this.treeOpening = opening;
+    return opening.ledger;
+  }
+
+  /** The root's ledger is let go with its session; a child's stays its root's. */
+  private closeTree(): void {
+    const opening = this.treeOpening;
+    this.treeOpening = null;
+    if (this.placement) return;
+    this.tree = null;
+    if (opening) this.treeClosing = opening.ledger.then((tree) => tree.shutdown()).catch(() => undefined);
+  }
+
+  /**
+   * The tree as it stands, with the root's limit where the user keeps it. Read
+   * as a carve or a raise is asked for, so a raised setting reaches them.
+   */
+  private async currentTree(): Promise<TreeLedger> {
+    const tree = await this.ledger();
+    if (!this.placement) tree.setRootLimit(this.userRunSettings().delegationTokens);
+    return tree;
+  }
+
+  /**
+   * A child's mandate and budget, carved from what this node has left
+   * (ADR-0056 M4, M5). At the root, what can never pass is refused before a
+   * log is opened: the first carve is what makes a run a tree. A child's limit
+   * is the ledger's, which a raise has moved past its saved mandate.
+   */
+  async carveChild(taskId: string, request: Omit<MandateRequest, 'level'>): Promise<Carved> {
+    const asked = { ...request, level: this.authority.depth };
+    const never = this.placement ? null : narrow(this.mandate(), asked);
+    if (never && !never.ok) return never;
+    const sessionId = this.runs.hostChild(taskId, mintSessionId);
+    const tree = await this.currentTree();
+    return tree.carve(this.budget?.path ?? ROOT_NODE, this.mandate(), asked, { sessionId, taskId });
+  }
+
+  /** A raise for the child in `taskId`, applied from what this node has left (M5). Null when it took; otherwise why not. */
+  async raiseChild(taskId: string, tokens: number): Promise<string | null> {
+    const node = (await this.currentTree()).nodeOf(this.runs.childSession(taskId) ?? '');
+    return node ? node.tree.raise(node.path, tokens) : 'That task has no child to raise.';
+  }
+
+  /** The child in `taskId` confirmed closed: what it did not spend comes back here (M5). */
+  async closeChild(taskId: string): Promise<void> {
+    const node = (await this.ledger()).nodeOf(this.runs.childSession(taskId) ?? '');
+    if (node) node.tree.close(node.path);
+  }
+
+  /** Why this node stopped for its budget, or null: a parent's reason for ending it `blocked`. */
+  get outOfBudget(): string | null {
+    return this.budget?.stoppedFor() ?? null;
   }
 
   /** The attempts of a task that have a saved log, oldest first. */
@@ -1700,6 +1817,8 @@ export class Session {
     this.turns.abandon();
     this.supervision.reset();
     this.conversation.reset();
+    // A tree is its root session's: the next one reads its own log, if it has one.
+    this.closeTree();
     // Totals belong to the plan they were recorded under; a fresh plan starts
     // its ledger from zero so the previous session's line never lingers.
     this.usage.clear();
@@ -1812,6 +1931,12 @@ export class Session {
     // and another one's runner list must not decide this planner's login.
     const reason = plannerNotReadyFor(this.config, (runner) => recordedRunnerAuth(runner, this.workspace));
     if (reason) throw new PlannerNotReadyError(reason);
+    // A node with no turn left cannot say so itself (ADR-0056 M5).
+    const refused = this.budget?.turnRefusal();
+    if (refused) {
+      this.budget?.stop(refused);
+      throw new Error(refused);
+    }
   }
 
   /**

@@ -1,7 +1,7 @@
 ---
 status: accepted
 implemented: partial
-note: "States the scale goal behind ADR-0055. Built: S4's admission, the pool at `reserve`. The EventStore (S3) is built as trees need it; the AIMD window (S4) is later."
+note: "States the scale goal behind ADR-0055. Built: S4's admission, the pool at `reserve`, and S3's EventStore with its JSONL backend, holding node lifecycle and budget events (ADR-0056 M5). Reports and board entries join the log with ADR-0057; the AIMD window (S4) is later."
 ---
 
 # 0058 — A tree holds many nodes and few live sessions
@@ -57,22 +57,32 @@ This is a design target and no promise to a user, and nothing here is a performa
 
   ```ts
   interface EventStore {
-    append(events: readonly TreeEvent[]): Promise<void>; // ordered; a batch lands whole
+    append(events: readonly TreeFact[]): Promise<void>; // ordered; a batch lands whole
     read(after: number, path?: NodePath): AsyncIterable<TreeEvent>;
     close(): Promise<void>;
   }
   ```
 
-  - Its first backend is append-only JSONL per root, under the root's state directory, with no new dependency:
-    the VS Code extension allows 1.90, and `node:sqlite` is not in its Node. SQLite can back the port later on a
-    daemon host.
+  A `TreeEvent` is a `TreeFact` with its `seq`, its place in the tree's one order, which the store numbers.
+
+  - Its first backend is append-only JSONL per root, `tree-events.jsonl` in the root's session directory, so it
+    goes with its root, with no new dependency: the VS Code extension allows 1.90, and `node:sqlite` is not in its
+    Node. SQLite can back the port later on a daemon host.
+  - One line is one batch, a JSON array, so a batch lands whole and a torn line loses that batch alone. The newline
+    says a line landed. A read drops a torn last line and changes nothing; the writer, which holds the root's
+    session lease, cuts it off before its first append, or the next line would join it and be lost too. An
+    unreadable line that is not the last is no crash, and a read refuses it: skipping it would lose spend.
   - It holds node lifecycle, budget events, reports and board entries. A report's event carries its digest
     and its reference; the whole handoff stays in the attempt's log
     ([ADR-0047](0047-structured-task-handoffs.md)), which a reference reads.
   - Deltas stay in the per-attempt logs, and most events are deltas. Session files stay as they are until a
     later migration.
-  - Node ids are immutable, and the path, `root/3/2`, is derived from them: a move in a plan rewrites no
-    history. State is a fold of the log, read at load.
+  - Node ids are immutable, each a child's place among its parent's children, and the path, `root/3/2`, is derived
+    from them: a move in a plan rewrites no history. So an event carries its node's path, and a store filters on it
+    without a fold.
+  - State is a fold of the log, read at load, and the live state is that same fold. So an event says what was
+    decided, amounts included, and a replay decides nothing. Only a tree has a log: the first carve opens it, so a
+    flat run writes none, delegation on or off.
 - **Admission (S4).** Live sessions are admitted, not requests: the pool of ADR-0055 D18 is the admission, at
   `reserve` ([ADR-0059](../isolation/0059-an-execution-lease-reserves-in-the-claim-and-opens-after-it.md) L1).
   Later, an AIMD window per credential and model shrinks admission on a rate limit. It needs a signal
@@ -87,9 +97,11 @@ This is a design target and no promise to a user, and nothing here is a performa
 
 ## Testing decisions
 
-The port is tested through an in-memory fake and the JSONL backend against the same suite: order, a batch whole,
-a torn last line dropped on read, a read after a cursor. The fold is a pure function, tested by replaying a log
-into the state a live tree held. The scale harness is an offline bench, and no CI test asserts a rate.
+The port is tested through an in-memory fake and the JSONL backend against the same suite: order, a read after a
+cursor and at a path. The JSONL backend alone is tested for a batch whole, a torn last line dropped on read and cut
+off before an append, a failed write, and damage before the end. The fold is a pure function, tested by replaying
+a log into the state a live tree held. `treeLedger.flatRun.test.ts` holds a flat run to no log and no ledger, with a
+carve as its control. The scale harness is an offline bench, and no CI test asserts a rate.
 
 ## Out of scope
 
@@ -126,3 +138,4 @@ stays possible behind the port or the lease.
 - 2026-10-31 — accepted. Not yet implemented.
 - 2026-10-31 — S1 names the planner turns that may run past the Parallel limit.
 - 2026-10-31 — S4's admission implemented: the pool of ADR-0055 D18, at `reserve`.
+- 2026-10-31 — S3 implemented in `EventStore` and `jsonlEventStore`, opened by a tree's first carve: a batch is one line, the store numbers events, so `append` takes facts, and an event carries its node's path.

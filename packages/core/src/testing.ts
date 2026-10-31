@@ -28,6 +28,8 @@ import type {
 } from './interfaces/IWorktreeIsolation';
 import { DEFAULT_RUNNERS, type Task } from './models/Task';
 import { GUARANTEES, refuseUnproven, type ExecutionBackend, type Guarantee, type GuaranteeReport, type LeaseRecord, type LeaseRequest, type LeaseSpec, type OpenLease, type ReservedLease } from './services/executionLease';
+import type { EventStore } from './services/eventStore';
+import { isWithin, type NodePath, type TreeEvent, type TreeFact } from './models/TreeEvent';
 import { handoffOf, integrationBranchFor, noRemoval, SELF_REPO } from './services/isolationRecord';
 
 /**
@@ -284,6 +286,29 @@ export class FakeRunnerSession implements IRunnerSession {
     this.delivered.push(text);
     if (from === 'ordewell') this.fromOrdewell.push(text);
     this.emitEvent({ type: 'turn_start', text, ...(from ? { from } : {}) });
+  }
+}
+
+/** An in-memory {@link EventStore}. `failing` makes the next appends reject, as a full disk would. */
+export class FakeEventStore implements EventStore {
+  readonly events: TreeEvent[] = [];
+  failing: Error | null = null;
+  private closed = false;
+
+  async append(events: readonly TreeFact[]): Promise<void> {
+    if (this.closed) throw new Error('This event log is closed.');
+    if (this.failing) throw this.failing;
+    for (const event of events) this.events.push({ ...event, seq: this.events.length + 1 });
+  }
+
+  async *read(after: number, path?: NodePath): AsyncIterable<TreeEvent> {
+    for (const event of [...this.events]) {
+      if (event.seq > after && (path === undefined || isWithin(event.node, path))) yield event;
+    }
+  }
+
+  async close(): Promise<void> {
+    this.closed = true;
   }
 }
 

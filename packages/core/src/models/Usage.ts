@@ -100,6 +100,15 @@ export function partedPromptUsage(parts: { uncached?: number; cacheRead?: number
 
 const TOKEN_FIELDS = ['inputTokens', 'outputTokens', 'cachedInputTokens'] as const;
 
+/**
+ * What a budget counts (ADR-0056 M5), of a record or of totals alike: the same
+ * tokens a total holds, input and output. `cachedInputTokens` is a share of the
+ * input, so cache reads count, once.
+ */
+export function spentTokens({ inputTokens, outputTokens }: Pick<UsageTotals, 'inputTokens' | 'outputTokens'>): number {
+  return (inputTokens ?? 0) + (outputTokens ?? 0);
+}
+
 export function addUsage(totals: UsageTotals, record: UsageRecord): UsageTotals {
   const next: UsageTotals = { ...totals };
   for (const field of TOKEN_FIELDS) {
