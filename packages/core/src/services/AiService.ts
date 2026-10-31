@@ -24,6 +24,8 @@ import type { ConversationCompactionHost } from './budgetedChat';
  */
 export interface PlannerToolsOffer {
   sessionId: string;
+  /** The tools a child's grants leave out of its list, fixed as its session starts (ADR-0056 M6); the root's list is not filtered. */
+  withheld?: readonly string[];
   handler: PlannerToolHandler;
 }
 

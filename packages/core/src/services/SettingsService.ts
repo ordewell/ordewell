@@ -20,6 +20,11 @@ export interface GlobalRunSettings {
   supervisorRetryLimit: number;
   /** Reads a wake-up turn may make, in place of a user message's caps. */
   wakeUpReadBudget: number;
+  /**
+   * The token budget of a delegation tree (ADR-0055 D21, ADR-0056 M5); 0 is
+   * delegation off. One value, so delegation is never on with no budget.
+   */
+  delegationTokens: number;
 }
 
 export const RUN_SETTINGS_DEFAULTS: Readonly<GlobalRunSettings> = {
@@ -29,6 +34,7 @@ export const RUN_SETTINGS_DEFAULTS: Readonly<GlobalRunSettings> = {
   autorun: false,
   supervisorRetryLimit: DEFAULT_SUPERVISOR_RETRY_LIMIT,
   wakeUpReadBudget: DEFAULT_WAKE_UP_READ_BUDGET,
+  delegationTokens: 0,
 };
 
 export class RunSettingsError extends Error {
@@ -66,6 +72,10 @@ const RUN_SETTING_CHECKS: { [K in keyof GlobalRunSettings]: { valid: (v: unknown
     valid: (v): v is number => Number.isInteger(v) && (v as number) >= 1,
     refusal: 'The wake-up read budget must be a whole number of reads, 1 or more.',
   },
+  delegationTokens: {
+    valid: (v): v is number => Number.isSafeInteger(v) && (v as number) >= 0,
+    refusal: 'The delegation budget must be a whole number of tokens; 0 turns delegation off.',
+  },
 };
 
 const RUN_SETTING_KEYS = Object.keys(RUN_SETTING_CHECKS) as (keyof GlobalRunSettings)[];
@@ -87,6 +97,7 @@ export interface UserSettings {
   autorun?: boolean;
   supervisorRetryLimit?: number;
   wakeUpReadBudget?: number;
+  delegationTokens?: number;
   /**
    * Whether an API planner prunes its own context ahead of a call that would
    * pass 90% of its model's window. Absent means on. Set in the file only:

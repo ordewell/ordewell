@@ -13,6 +13,8 @@ type ModelsByRunner = Partial<Record<RunnerId, DiscoveredModel[]>>;
 
 export interface SessionCatalogDeps {
   config: Pick<IConfig, 'enabledRunners' | 'autonomousMode' | 'aiProvider'>;
+  /** Whether a task's mode defaults to its runner's autonomous one: a child's mandate says, the config's level unless set (ADR-0056 M6). */
+  autonomous?: () => boolean;
   registry: Pick<RunnerRegistry, 'getManifest'>;
   modelResolver: Pick<ModelResolver, 'modelsForRunners' | 'getCachedRunnerModels'>;
   /** Read at each call: a toggle or allowlist edit made since the session was built counts (#69). */
@@ -37,6 +39,10 @@ export class SessionCatalog {
   private discovered: ModelsByRunner = {};
 
   constructor(private readonly deps: SessionCatalogDeps) {}
+
+  private autonomous(): boolean {
+    return this.deps.autonomous?.() ?? this.deps.config.autonomousMode;
+  }
 
   /** The runners enabled right now. */
   enabledRunners(): RunnerId[] {
@@ -137,7 +143,7 @@ export class SessionCatalog {
       // a model the planner is forbidden to assign.
       models: filterModelsForPrompt(this.models(), this.allowlist()),
       modes: this.modes(registered),
-      autonomousDefault: this.deps.config.autonomousMode,
+      autonomousDefault: this.autonomous(),
     };
   }
 
@@ -153,7 +159,7 @@ export class SessionCatalog {
       modelsByRunner: this.models(),
       runnerModes: this.modes(runners),
       perRunnerAllowlist: this.allowlist(),
-      autonomousDefault: this.deps.config.autonomousMode,
+      autonomousDefault: this.autonomous(),
       ...(this.deps.liveRunner ? { liveRunner: this.deps.liveRunner } : {}),
     };
   }

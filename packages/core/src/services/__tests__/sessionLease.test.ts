@@ -322,6 +322,65 @@ describe('the session lease (ADR-0049)', () => {
     expect(() => adopt(sessionOn(host({ id: 'host-b', alive: () => true })))).not.toThrow();
   });
 
+  it('leaves the picked session and its lease alone when the orchestrator refuses a load', () => {
+    const OTHER = 'session-other000';
+    const leaseOf = (id: string) => path.join(sessionStore.sessionDataDir(id, workspace), 'lease.json');
+    const first = sessionOn(host({ id: 'host-a', alive: () => true }));
+    adopt(first);
+    const onDisk = savedPlan();
+    onDisk.tasks = [createTask({ id: 't2', order: 1, title: 'Lex', prompt: 'do it', assignedRunner: 'gemini' })];
+    const meta = sessionStore.saveSession(onDisk, 'another goal', workspace, OTHER);
+    const loaded = sessionStore.loadSession(meta.id, workspace)!;
+
+    expect(() => first.loadPlan(loaded.plan, loaded.meta.goal, workspace, { sessionId: OTHER })).toThrow(/runner set/);
+    first.stopExecution();
+
+    expect(first.sessionId).toBe(SESSION);
+    expect(fs.existsSync(leaseOf(SESSION))).toBe(true);
+    expect(fs.existsSync(leaseOf(OTHER))).toBe(false);
+    expect(sessionStore.loadSession(OTHER, workspace)?.plan.tasks.map((t) => t.id)).toEqual(['t2']);
+    first.destroy();
+  });
+
+  it('holds the picked session while the plan it leaves saves its last', async () => {
+    const OTHER = 'session-other000';
+    const leaseOf = (id: string) => path.join(sessionStore.sessionDataDir(id, workspace), 'lease.json');
+    const runner: IRunner = {
+      spawn: vi.fn(async ({ taskId }: { taskId: string }) => new FakeRunnerSession(`s-${taskId}`, taskId)) as unknown as IRunner['spawn'],
+      stop: vi.fn(),
+      stopAll: vi.fn(),
+      activeCount: 0,
+    };
+    const opening = sessionOn(host({ id: 'host-b', alive: () => true }));
+    const meta = sessionStore.saveSession(savedPlan(), 'another goal', workspace, OTHER);
+    const loaded = sessionStore.loadSession(meta.id, workspace)!;
+    let loading = false;
+    let refused: SessionHeldError | null = null;
+    // The other host opens the picked session in the window: as the plan left saves.
+    const saveSession: typeof sessionStore.saveSession = (plan, goal, ws, id) => {
+      if (loading && id === SESSION && !refused) {
+        const saved = sessionStore.loadSession(OTHER, workspace)!;
+        refused = refusal(() => opening.loadPlan(saved.plan, saved.meta.goal, workspace, { sessionId: OTHER }));
+      }
+      return sessionStore.saveSession(plan, goal, ws, id);
+    };
+    const first = makeSession({ saveSession, leaseHost: host({ id: 'host-a', alive: () => true }), workspaceRoot: () => workspace, runner });
+    adopt(first);
+    await first.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(first.activity.running).toBe(true));
+
+    loading = true;
+    first.loadPlan(loaded.plan, loaded.meta.goal, workspace, { sessionId: OTHER, persist: false });
+
+    expect(refused).not.toBeNull();
+    expect(first.sessionId).toBe(OTHER);
+    expect(fs.existsSync(leaseOf(SESSION))).toBe(false);
+    expect(JSON.parse(fs.readFileSync(leaseOf(OTHER), 'utf8')).hostId).toBe('host-a');
+    expect(first.heldElsewhere()).toBeNull();
+    opening.destroy();
+    first.destroy();
+  });
+
   it('keeps the session open and lets the other go when the disk refuses a load', () => {
     const OTHER = 'session-other000';
     const leaseOf = (id: string) => path.join(sessionStore.sessionDataDir(id, workspace), 'lease.json');

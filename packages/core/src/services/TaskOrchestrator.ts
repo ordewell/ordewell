@@ -223,6 +223,8 @@ export interface TaskOrchestratorDeps {
    * owns it, and the scheduler starts nothing outside it.
    */
   isApproved: (taskId: string) => boolean;
+  /** Read beside the run's setting at each automatic merge, which passes no command (ADR-0056 M6). */
+  mayMergeUnasked: () => boolean;
   /** A read-only attempt's shell (ADR-0046); absent, its runner is given no `run_command`. */
   taskShell?: (site: TaskShellSite) => TaskShell | undefined;
   /** The session's web fetcher for one read-only attempt (ADR-0046); absent, its `fetch` and `web_search` are not available. */
@@ -265,6 +267,8 @@ export interface TaskOrchestratorOptions {
   plannedWith?: () => boolean;
   /** Every task is approved unless a Session supplies its record: an orchestrator on its own has no user to ask. */
   isApproved?: (taskId: string) => boolean;
+  /** Whether this node's mandate lets an automatic merge run; true unless set. */
+  mayMergeUnasked?: () => boolean;
   taskShell?: (site: TaskShellSite) => TaskShell | undefined;
   taskWebFetcher?: (task: string) => IWebFetcher | undefined;
   keepPatch?: (taskId: string, attempt: number, patch: Buffer) => string;
@@ -380,6 +384,7 @@ export class TaskOrchestrator {
   private previousRounds = new Map<string, { round: number; report?: string }>();
   private runSettings: () => SchedulerRunSettings | undefined;
   private isApproved: (taskId: string) => boolean;
+  private mayMergeUnasked: () => boolean;
 
   constructor(deps: TaskOrchestratorDeps) {
     this.config = deps.config;
@@ -389,6 +394,7 @@ export class TaskOrchestrator {
     this.landing = deps.landing;
     this.runSettings = deps.runSettings;
     this.isApproved = deps.isApproved;
+    this.mayMergeUnasked = deps.mayMergeUnasked;
     this.attempts = new Attempts({
       config: deps.config,
       notifications: deps.notifications,
@@ -491,6 +497,7 @@ export class TaskOrchestrator {
       lastLoggedAttempt: options.lastLoggedAttempt ?? (() => 0),
       runSettings: options.runSettings ?? (() => undefined),
       isApproved: options.isApproved ?? (() => true),
+      mayMergeUnasked: options.mayMergeUnasked ?? (() => true),
       research: options.research,
       ...(options.taskShell ? { taskShell: options.taskShell } : {}),
       ...(options.taskWebFetcher ? { taskWebFetcher: options.taskWebFetcher } : {}),
@@ -978,6 +985,11 @@ export class TaskOrchestrator {
     return blockingFailures(this.store.planTasks).get(taskId) ?? [];
   }
 
+  /** Throws what {@link loadPlan} would, for a caller with work of its own to do before it loads. */
+  assertLoadable(tasks: readonly Task[], planRunners: RunnerId[] = [...DEFAULT_RUNNERS]): void {
+    assertAssignedRunners(tasks, planRunners);
+  }
+
   /**
    * `edited`: the plan is the last one edited, not a new one. Only a Stop
    * withdraws a queued start (ADR-0035), so one of a task the edit keeps
@@ -987,7 +999,7 @@ export class TaskOrchestrator {
   loadPlan(tasks: readonly Task[], planRunners: RunnerId[] = [...DEFAULT_RUNNERS], edited = false): void {
     // Refused before the plan being replaced is ended: a throw past that
     // would leave its run scheduling over a plan half loaded.
-    assertAssignedRunners(tasks, planRunners);
+    this.assertLoadable(tasks, planRunners);
     const queued = edited ? [...this.queuedStarts] : [];
     const carried = edited ? [...this.carriedLoops] : [];
     const chosen = this.chosenHoldsNow();
@@ -1590,7 +1602,7 @@ export class TaskOrchestrator {
   }
 
   private mergesAutomatically(): boolean {
-    return this.runSettings()?.mergeAtGatesAutomatically ?? false;
+    return (this.runSettings()?.mergeAtGatesAutomatically ?? false) && this.mayMergeUnasked();
   }
 
   /** A Merge all is under way. */

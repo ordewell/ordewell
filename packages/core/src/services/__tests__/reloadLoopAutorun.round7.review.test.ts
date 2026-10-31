@@ -110,7 +110,7 @@ describe('the other routes that end a run with a dormant carried loop', () => {
     const isolation = new FakeWorktreeIsolation();
     const env = await supervised(loop(), {
       execute: false, settings: { supervisorLevel: 'off' }, isolation, config: { worktreeIsolation: true },
-      leaseHost: { lease: (onLost) => { lose = onLost; return UNLEASED; } } as LeaseHost,
+      leaseHost: { lease: (onLost: (held: SessionHeld) => void) => { lose = onLost; return UNLEASED; } } as unknown as LeaseHost,
     });
     await failCheckAndBody(env);
     const now = new Date(NOW).toISOString();

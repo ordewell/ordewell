@@ -14,13 +14,21 @@ export const automergeSummary = (run: GlobalRunSettings): string => `Merge autom
 export const PLANNED_WITH_LABEL = 'Planned-with line in commits Ordewell writes';
 export const trailerSummary = (run: GlobalRunSettings): string => `${PLANNED_WITH_LABEL}: ${onOff(run.plannedWithTrailer)}`;
 export const autorunSummary = (run: GlobalRunSettings): string => `Autorun: ${onOff(run.autorun)}`;
+export const delegationSummary = (run: GlobalRunSettings): string => `Delegation: ${run.delegationTokens > 0 ? `on, ${run.delegationTokens} tokens for a tree` : 'off'}`;
 
 export const ACT_RISK = 'Tasks it adds run too, ops tasks included, which can act on real systems unattended.';
 export const AUTORUN_RISK = 'Plans start without review, ops tasks included, which can act on real systems unattended. In Full nobody is asked at all: the planner may start anything, script tasks included, from a plan no person read.';
+/** What turning delegation on accepts below the root, as Act and autorun accept it at the root (ADR-0056 M9). */
+export const DELEGATION_RISK = 'A subplanner approves and runs its own plan, and no person reads it. Its change tasks keep the network they have in a flat run, so an instruction injected into something a subplanner read can become a plan nobody read, and run with that network.';
 
 /** `on`/`off` as a switch's value; null for anything else. */
 export function parseSwitch(arg: string): boolean | null {
   return arg === 'on' ? true : arg === 'off' ? false : null;
+}
+
+/** A delegation setting as typed: `off`, which is 0, or the tree's budget in tokens; null for anything else. */
+export function parseDelegation(arg: string): number | null {
+  return arg === 'off' ? 0 : parseCount(arg, 1);
 }
 
 /** A whole number at least `min`, as typed; null for anything else. */

@@ -1086,6 +1086,15 @@ describe('CliAgentAiService — Codex', () => {
   });
   const approval = { request: async () => false };
 
+  it('adds what a child\'s grants withhold to what its runner carries itself (ADR-0056 M6)', async () => {
+    const mcp = fakeMcpServer();
+    const { svc } = service('codex', [...codexHandshake(), fixture('codex', 'tools')], {}, {}, mcp);
+    const offered = request({ runners: ['codex'], approval, fetcher: searchFetcher(() => true) });
+    await svc.startConversation({ ...offered, plannerTools: { ...offered.plannerTools!, withheld: ['merge_all', 'run_script'] } });
+
+    expect(mcp.plannerScopes[0].hidden).toEqual(['web_search', 'merge_all', 'run_script']);
+  });
+
   it.each([
     ['on: the token hides Ordewell\'s web_search', true, 'cached', ['web_search']],
     ['off: Ordewell\'s web_search is served instead', false, 'disabled', []],

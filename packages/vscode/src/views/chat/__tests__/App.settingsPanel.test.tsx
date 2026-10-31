@@ -110,6 +110,14 @@ describe('run settings in the Settings panel', () => {
     expect(block).toHaveTextContent(/Autonomy and Parallel tasks apply to every session\./);
   });
 
+  it('sets delegation\'s budget as a number, off at 0', () => {
+    const budget = screen.getByRole('spinbutton', { name: 'Delegation budget' });
+    expect(budget).toHaveValue(0);
+    fireEvent.change(budget, { target: { value: '5000000' } });
+    fireEvent.keyDown(budget, { key: 'Enter' });
+    expect(api.postMessage).toHaveBeenCalledWith({ type: 'changeSettings', change: { run: { delegationTokens: 5000000 } } });
+  });
+
   it('a number commits on Enter, any whole number at or above its floor', () => {
     const parallel = screen.getByRole('spinbutton', { name: 'Parallel tasks' });
     expect(parallel).toHaveValue(5);

@@ -36,7 +36,7 @@ describe('run settings over /api/settings', () => {
   it('answers the run settings, each at its default until the user sets it', async () => {
     const body = await (await app.request('/api/settings')).json() as SettingsResponse;
 
-    expect(body.run).toEqual({ supervisorLevel: 'watch', mergeAtGatesAutomatically: false, plannedWithTrailer: true, autorun: false, supervisorRetryLimit: 2, wakeUpReadBudget: 12 });
+    expect(body.run).toEqual({ supervisorLevel: 'watch', mergeAtGatesAutomatically: false, plannedWithTrailer: true, autorun: false, supervisorRetryLimit: 2, wakeUpReadBudget: 12, delegationTokens: 0 });
   });
 
   it('saves a change for every session and answers the settings as they now stand', async () => {
