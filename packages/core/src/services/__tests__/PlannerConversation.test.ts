@@ -1425,7 +1425,7 @@ describe('the plan block: whole once per live context, then what changed', () =>
     const grown = (total: number, done: number, over: Record<number, Partial<Task>> = {}): Task[] =>
       Array.from({ length: total }, (_, i) => task(`t${i + 1}`, i + 1, { status: i < done ? 'completed' : 'pending', ...over[i + 1] }));
 
-    it('lists the running, failed and waiting tasks first, counts the rest by status, and says how to read them', async () => {
+    it('lists the failed, waiting and running tasks first, counts the rest by status, and says how to read them', async () => {
       const tasks = grown(LIMIT + 190, 100, {
         [LIMIT + 185]: { status: 'in_progress' },
         [LIMIT + 188]: { status: 'failed' },

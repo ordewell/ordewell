@@ -14,11 +14,16 @@ export interface PlannedTask {
   status: TaskStatus;
 }
 
-/** What a planner needs to act on first: work in motion, then what needs a decision, then what is next. */
+/**
+ * What a planner acts on first: what needs a decision, then work in motion,
+ * then what is next. Running tasks come after the decisions because they are
+ * locked, and because a run can be wider than the block: the line that locks
+ * them names them anyway, and nothing else names a failed task.
+ */
 const LISTING_RANK: Record<TaskStatus, number> = {
-  in_progress: 0,
-  failed: 1,
-  awaiting_user: 1,
+  failed: 0,
+  awaiting_user: 0,
+  in_progress: 1,
   approved: 2,
   pending: 3,
   completed: 4,
@@ -27,8 +32,9 @@ const LISTING_RANK: Record<TaskStatus, number> = {
 
 /**
  * The ids to list from a plan: all of them within the limit, else the
- * limit's worth that matter most — running, failed and waiting tasks, then
- * approved and pending ones, then finished ones — each kind in plan order.
+ * limit's worth that matter most — failed and waiting tasks, then running
+ * ones, then approved and pending ones, then finished ones — each kind in
+ * plan order.
  */
 export function listedIds(tasks: readonly PlannedTask[], limit = PLAN_BLOCK_MAX_TASKS): Set<string> {
   if (tasks.length <= limit) return new Set(tasks.map(({ id }) => id));
@@ -53,12 +59,16 @@ const STATUS_ORDER: readonly TaskStatus[] = ['in_progress', 'failed', 'awaiting_
 
 /**
  * The line that stands in for the tasks the block does not list: how many, by
- * status, and where to read them. Empty when every task is listed.
+ * status, and where to read them. A read takes a reference, so one that needs
+ * a decision is named here or could not be found. Empty when every task is
+ * listed.
  */
-export function unlistedSummary(shown: number, unlisted: readonly Pick<PlannedTask, 'status'>[], reread: string): string {
+export function unlistedSummary(shown: number, unlisted: readonly (Pick<PlannedTask, 'status'> & { ref: string })[], reread: string): string {
   if (unlisted.length === 0) return '';
   const counts = new Map<TaskStatus, number>();
   for (const { status } of unlisted) counts.set(status, (counts.get(status) ?? 0) + 1);
   const byStatus = STATUS_ORDER.filter((s) => counts.has(s)).map((s) => `${counts.get(s)} ${s.replace('_', ' ')}`).join(', ');
-  return `${shown} of ${shown + unlisted.length} tasks are listed (running, failed and waiting ones first). Not listed: ${byStatus}. A task not listed still exists, and ${reread} reads it by its reference (#order, or #order.subtask), as an edit names it.`;
+  const undecided = unlisted.filter(({ status }) => LISTING_RANK[status] === 0).map(({ ref }) => ref);
+  const named = undecided.length > 0 ? ` Failed or waiting among them: ${namedRefs(undecided)}.` : '';
+  return `${shown} of ${shown + unlisted.length} tasks are listed (failed and waiting ones first, then running). Not listed: ${byStatus}.${named} A task not listed still exists, and ${reread} reads it by its reference (#order, or #order.subtask), as an edit names it.`;
 }
