@@ -34,6 +34,7 @@ import { handoffOf, layoutOf, PrepareFailedError, SELF_REPO, taskIsolationsOf } 
 import { handoffBranchName } from './mergeWording';
 import type { IsolatedExecution } from './plannerModes';
 import { PlanEditError } from './PlanEditError';
+import { SessionHeldError } from './sessionLease';
 import { workspaceRepoGroup } from './repoGroup';
 import type { SkillLayout } from './taskSkills';
 
@@ -93,6 +94,8 @@ export interface IsolationRunControllerDeps {
   config: IConfig;
   notifications: INotification;
   workspaceRoot: () => string;
+  /** A child session's state root, which every run it mints keeps (ADR-0055 D11); absent on a flat run. */
+  stateRoot?: string;
   listener: IsolationRunListener;
   /**
    * The tasks no clean-up of the whole run may take a worktree from: an
@@ -183,6 +186,7 @@ export class IsolationRunController {
   private readonly config: IConfig;
   private readonly notifications: INotification;
   private readonly workspaceRoot: () => string;
+  private readonly stateRoot: string | undefined;
   private readonly listener: IsolationRunListener;
   private readonly liveTasks: () => ReadonlySet<string>;
   private readonly landedOn: IsolationRunControllerDeps['landedOn'];
@@ -219,6 +223,7 @@ export class IsolationRunController {
     this.config = deps.config;
     this.notifications = deps.notifications;
     this.workspaceRoot = deps.workspaceRoot;
+    this.stateRoot = deps.stateRoot;
     this.listener = deps.listener;
     this.liveTasks = deps.liveTasks;
     this.landedOn = deps.landedOn;
@@ -226,6 +231,9 @@ export class IsolationRunController {
 
   /** The plan's run record, open or not; null when the plan has not isolated. */
   get current(): IsolationRun | null { return this.run; }
+
+  /** What a child works through: this run's own, so a tree takes one admin lock (ADR-0055 D11). */
+  get childIsolation(): IWorktreeIsolation { return this.isolation; }
 
   /**
    * The id of the plan's last isolated run once it closed with everything it
@@ -338,6 +346,22 @@ export class IsolationRunController {
     }
     // A start opened while git was deleting: the run in force is that one.
     return this.isOpen ? 'changed' : 'cleared';
+  }
+
+  /**
+   * The child session a task's worktree is the code root of, named on the
+   * task's record so a reopen knows that worktree is a child's (ADR-0055 D17),
+   * and the same child again once it is. A task with no worktree has nothing
+   * to host one in: a run that shares the workspace root would root the child
+   * in the user's checkout (D12).
+   */
+  hostChild(taskId: string, mintSessionId: () => string): string {
+    const record = this.run?.tasks[taskId];
+    if (!record) throw new PlanEditError('A delegated task needs an isolated run, with a worktree of its own: this one has none, and a child plan never runs in the user\'s checkout.');
+    if (record.childSession) return record.childSession;
+    record.childSession = mintSessionId();
+    this.listener.changed();
+    return record.childSession;
   }
 
   /** Open a run if none is, leaving whether it isolates to its first change task. */
@@ -848,6 +872,8 @@ export class IsolationRunController {
         if (!(await this.mint(root, interrupted))) return false;
       } catch (err) {
         if (interrupted()) return false;
+        // Not git's refusal: another host holds this session, or a child's root (ADR-0049, ADR-0055 D13), and a run without worktrees would change what it holds.
+        if (err instanceof SessionHeldError) throw err;
         // Git can still refuse every repo of the group once a run is minted — the one check `isActive` cannot make.
         this.tell('info', `${err instanceof Error ? err.message : String(err)}: ${SHARED_ROOT_TAIL}`);
         this.listener.changed();
@@ -912,7 +938,7 @@ export class IsolationRunController {
     }
     if (this.run === previous) this.run = null;
     if (interrupted()) return false;
-    const run = await this.isolation.startRun(root);
+    const run = await this.isolation.startRun(root, this.stateRoot);
     if (interrupted()) {
       await this.isolation.discard(run, { integration: 'delete' }).catch(() => null);
       return false;

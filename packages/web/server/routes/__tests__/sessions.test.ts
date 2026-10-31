@@ -3,13 +3,14 @@ import { Hono } from 'hono';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { listSessions, loadSessionPlanState, openTaskLog, saveSession, SessionHeldError, SessionNotFoundError } from '@ordewell/core';
+import { createWorktreeIsolation, listChildSessions, listSessions, loadSessionPlanState, openTaskLog, saveChildSession, saveSession, SessionHeldError, SessionNotFoundError } from '@ordewell/core';
 import { sessionsRoute } from '../sessions';
 import type { OrchestratorPool } from '../../pool/orchestratorPool';
 
 vi.mock('@ordewell/core', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@ordewell/core')>()),
   loadSessionPlanState: vi.fn(),
+  createWorktreeIsolation: vi.fn((await importOriginal<typeof import('@ordewell/core')>()).createWorktreeIsolation),
 }));
 
 const readSaved = vi.mocked(loadSessionPlanState);
@@ -265,6 +266,22 @@ describe('DELETE /api/sessions/:id', () => {
     expect(pool.destroy).toHaveBeenCalledWith(meta.id, { notifyClients: true });
     expect(filesWhenDestroyed).toEqual([true]);
     expect(listSessions(ws)).toEqual([]);
+  });
+
+  it('discards a child\'s run first, and keeps the session when git could not let it go', async () => {
+    const meta = saveSession(savedPlan as never, 'g', ws, 's1');
+    saveChildSession({ ...savedPlan, isolation: { run: { id: 'child-run', workspaceRoot: path.join(ws, 'gone'), stateRoot: ws, repos: [], shared: [], sharedRepos: [], tasks: {} }, resolvers: {} } } as never, 'sub', { baseDir: ws, rootSessionId: meta.id, sessionId: 'child' });
+    vi.mocked(createWorktreeIsolation).mockReturnValueOnce({
+      discard: vi.fn().mockResolvedValue({ preserved: [], refused: [{ worktree: '/w/child', reason: 'git said no' }] }),
+    } as never);
+    const app = new Hono();
+    app.route('/api/sessions', sessionsRoute(fakePool()));
+
+    const res = await app.request(`/api/sessions/${meta.id}?workspace=${encodeURIComponent(ws)}`, { method: 'DELETE' });
+
+    expect(await res.json()).toEqual({ ok: false, message: 'The session was kept: /w/child (git said no)' });
+    expect(listSessions(ws).map((s) => s.id)).toEqual([meta.id]);
+    expect(listChildSessions(meta.id, ws)).toEqual(['child']);
   });
 
   it('still reports failure when there was no saved file to remove', async () => {

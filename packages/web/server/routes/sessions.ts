@@ -92,12 +92,17 @@ export function sessionsRoute(pool: OrchestratorPool) {
 
   // The live session goes first: it persists as it changes, so a session left
   // running would write its file back and reappear in the list.
-  router.delete('/:id', (c) => {
+  router.delete('/:id', async (c) => {
     const ws = c.req.query('workspace') || process.cwd();
     const id = c.req.param('id');
     const held = pool.hasSession(id);
     pool.destroy(id, { notifyClients: true });
-    const removed = removeSession(id, ws);
+    let removed: boolean;
+    try {
+      removed = await removeSession(id, ws);
+    } catch (err) {
+      return c.json({ ok: false, message: err instanceof Error ? err.message : String(err) } satisfies OkResponse);
+    }
     const ok = held || removed;
     return c.json({
       ok,

@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0009", "0013", "0015", "0018", "0020", "0022", "0029", "0030", "0035", "0045", "0046", "0049", "0054"]
-note: "Settles #33. Built: D21's run setting. The rest is decided ahead of its code: what a node may do is ADR-0056, how it reports is ADR-0057."
+note: "Settles #33. Built: D21's run setting, and what makes a child run safe: D10 to D13 and D17's prune, reached by `Session.hostChild`. No delegated task or `ChildPlanRunner` exists yet. The rest is decided ahead of its code: what a node may do is ADR-0056, how it reports is ADR-0057."
 ---
 
 # 0055 — A delegated task is a child plan behind the runner seam
@@ -257,34 +257,46 @@ the child cannot reach follows it in the parent's plan.**
   workspace: `.ordewell/sessions/<root>/children/<child>/` holds a child's session
   file, task logs and patches, and `.ordewell/worktrees/<child-run>/` its worktrees,
   at every depth. Never inside a task worktree.
-  - `startRun` takes both and a run keeps both, one path on a flat run. Git reads the
-    code root, as `workspaceRoot` is read today, so `repo.root` is the worktree and
-    `baseRef` and `baseBranch` are the delegated task's HEAD and branch, as D10 needs.
-  - Ordewell's own files read the state root: `runRoot`, `sweep`, `taskLogLocation`
-    and `getStateDir`. `ensureStateDirIgnored` runs there and never on a task
-    worktree, and a prune of the parent's worktree cannot reach a child's. The admin
-    lock is keyed by it and is the tree's, since one repository's `git worktree add`s
-    race whichever root asks.
+  - `startRun` takes both and a run keeps both. A flat run saves only the one path,
+    so its file reads as it always did. Git reads the code root, as `workspaceRoot`
+    is read today, so `repo.root` is the worktree and `baseRef` and `baseBranch` are
+    the delegated task's HEAD and branch, as D10 needs.
+  - Ordewell's own files read the state root: `runRoot`, `taskLogLocation` and the
+    session store. `ensureStateDirIgnored` runs there and never on a task worktree,
+    and a prune of the parent's worktree cannot reach a child's. The admin lock is
+    keyed by it, and a child is handed its parent's isolation, so the lock is the
+    tree's: one repository's `git worktree add`s race whichever root asks.
+  - A child never sweeps: its HEAD holds the tip its siblings start from, so a sibling
+    that has no worktree yet would read as an earlier run, merged, and lose its
+    integration branch. The root's sweep clears a tree.
   - A child's worktrees bootstrap from the repository under the state root, the
     root's checkout (ADR-0013), and not from `repo.root`, a worktree's links.
   - The session store keys a path by session id alone, so its helpers take a child's
-    root as well. `listSessions` reads `sessions/*.json`, so a child session is never
-    in the list and never offered: it is deleted with its root and adopted only
-    through it. `deleteSession` removes files and no worktree, so deleting a root
-    first discards each child's run as `discardRun` does, or its worktrees and
-    branches would outlive the only record that names them.
+    root as well, and a child's file is `session.json` beside its logs.
+    `listSessions` reads `sessions/*.json`, so a child session is never in the list
+    and never offered: it is deleted with its root and adopted only through it.
+    `deleteSession` removes files and no worktree, so a host deleting a root first
+    calls `discardChildRuns`, which discards each child's run as `discardRun` does, or
+    its worktrees and branches would outlive the only record that names them. What
+    git could not let go stops the delete.
+  - `Session.hostChild` seats a child: it mints the child's id, names it on the
+    delegated task's run record (`childSession`), and hands back what `createSession`
+    builds the child from. Asked again it finds the same child, so a reopen does too.
 - **Only the root touches the user's branch (D12).** Enforced where a child is
-  built: `ChildPlanRunner` refuses a child whose code root is the user's checkout.
-  `mergeLanded` needs no check of its own, since a child's checkout is a worktree
-  on the delegated task's branch. So a delegated task needs an isolated run: in a
-  run that shares the workspace root (`not-git`, `no-commits`, `disabled`, or Run
-  without isolation) its start is refused, saying why, and the planner is told
-  when the plan is written.
-- **One session lease (D13).** A child holds no lease file. The root's
-  [session lease](../isolation/0049-a-session-has-one-live-host.md) covers the
-  tree, its runner groups included, and `leasedIsolation` asks it. Only a root is
-  adopted, so no second host can reach a child, and a tree does not multiply the
-  heartbeat.
+  built: `createSession`, and so `ChildPlanRunner`, refuses a child whose code root
+  is not a task's workspace under its state root, the user's checkout included, and
+  so do `loadPlan`, which can move a code root, and `startRun`. `mergeIntoCheckedOut`
+  holds to it for a saved record that names one, below every route to a merge, since
+  git cannot tell a task worktree from a checkout. So a delegated task needs an
+  isolated run: in a run that shares the workspace root (`not-git`, `no-commits`,
+  `disabled`, or Run without isolation) `hostChild` refuses it, saying why, and the
+  planner is told when the plan is written.
+- **One session lease (D13).** A child holds no lease file. Its `childLease` reads
+  the root's [session lease](../isolation/0049-a-session-has-one-live-host.md),
+  which covers the tree, its runner groups included, and `leasedIsolation` asks it.
+  Only a root is adopted, so no second host can reach a child, and a tree does not
+  multiply the heartbeat. A run a held lease refuses stays unopened: it does not fall
+  back to running without worktrees, as a refusal from git does.
 - **A conflict is repaired by a runner (D14).** A delegated task's landing can
   conflict. Its repair ([ADR-0015](../isolation/0015-conflict-repair.md)) needs a
   session that edits files, which a subplanner never is, so a delegated task's
@@ -338,8 +350,9 @@ the child cannot reach follows it in the parent's plan.**
   loads, in-progress tasks fail, and `PlanStore.resetForRun` readies what failed, so
   they are retried. Its subplanner resumes from its native session, or replays its
   Model context. A parent's adoption does not prune a task that names a child:
-  `pruneOrphans` keeps that record as it keeps kept work, and a child's worktrees
-  are out of its reach by D11. Continue never crosses runners, as ever.
+  `pruneOrphans` keeps a record with a `childSession` as it keeps kept work, a
+  read-only one too, and a restore carries the name. A child's worktrees are out of
+  its reach by D11. Continue never crosses runners, as ever.
 - **Slots (D18).** A delegated task holds no runner slot: a parent at its limit
   would otherwise deadlock on children that hold them. The `child-plan` lease role
   reserves a node and no slot (ADR-0059 L1). One pool counts every attempt in the
@@ -416,11 +429,12 @@ the child cannot reach follows it in the parent's plan.**
   check back, its next run reads the new handoff, and a live check refuses them.
   Execute, with work live and with none, and a force start take one back at the fresh
   attempt's claim, and wait for a live one; a resume and a repair take nothing back.
-- Isolation runs against real repositories. The probe task 32 saved
-  (`nestedRun.probe.test.ts`, a two-level climb to main) is the prior art, extended
-  with the state root, a prune with a child live, a sweep from a child's HEAD, a
-  root's delete and a repo group, which the probe did not reach. It drove `GitWorktreeIsolation`
-  alone: a real nested Session is untested.
+- Isolation runs against real repositories, in `nestedRun.e2e.test.ts`, which grew
+  out of the probe task 32 saved: a two-level climb to main, with the state root, a
+  prune with a child live, a sweep from a child's HEAD, a root's delete and a repo
+  group. It also runs a nested Session built by `createSession` beside a running
+  parent, through a restart. `flatSessionLayout.e2e.test.ts` holds a flat session's
+  files, and passed on the commit before the two roots split.
 - D18 is held by a test that fills every slot with attempts waiting on a checkpoint
   and asserts the answer still runs and that one turn is the most let past the limit,
   and by one with Parallel 1 across two children: the task the pool refused starts
@@ -472,6 +486,9 @@ the child cannot reach follows it in the parent's plan.**
 - **`plan_complete` and `ask_parent` tools.** Rejected. Two tools for what
   `task_complete` and `checkpoint` already say, and a second kind of node with them
   (#112).
+- **An admin lock shared by every isolation in the process.** Tried, and dropped: a
+  git command that hangs in one session then stops every other in that workspace,
+  and a flat run's recovery from a crash waits on the attempt that crashed.
 - **Child worktrees inside the parent's.** The probe's shape, and how it found the
   prune and the swept `.gitignore`. Rejected, not patched: a state root removes both.
 - **Passing on a settled child alone.** Dropped: a child settles by skipping
@@ -567,3 +584,4 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-10-31 — checked against the code a fifth time: a fresh attempt takes its checks back at the claim, Execute and a force start included, and a delegated task that lands must name its protected paths.
 - 2026-10-31 — checked against the code a sixth time: a subplanner's handoff is checked against its own plan, a body on a delegated task's check is a worktree task, a repair's mode comes from the mandate, and a child run is discarded on any fresh attempt or removal.
 - 2026-10-31 — D21's run setting implemented, off by default; nothing can delegate yet, so the planner is not taught it, and it moves only the root's mandate ([ADR-0030](0030-global-run-settings.md)).
+- 2026-10-31 — D10 to D13 and D17's prune implemented, reached by `Session.hostChild`: `createSession` is where a child is refused the user's checkout until `ChildPlanRunner` exists, a child takes its parent's isolation and never sweeps, a delete stops on what git could not let go, and a run a held lease refuses does not fall back to the checkout.

@@ -395,13 +395,14 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
     if (!this.availability.active && this.availability.reason === 'dirty') this.availability = { active: true };
   }
 
-  async startRun(workspaceRoot: string): Promise<IsolationRun> {
+  async startRun(workspaceRoot: string, stateRoot?: string): Promise<IsolationRun> {
     this.log({ op: 'startRun', workspaceRoot });
     if (this.startRunError) throw this.startRunError;
     const id = `run${++this.runCount}`;
     return {
       id,
       workspaceRoot,
+      ...(stateRoot !== undefined ? { stateRoot } : {}),
       repos: this.repos.map((repo) => ({
         path: repo, root: `${workspaceRoot}/${repo}`.replace(/\/\.$/, ''), baseRef: 'base0000', baseBranch: 'main', integrationBranch: integrationBranchFor(id),
       })),

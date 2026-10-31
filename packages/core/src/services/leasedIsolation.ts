@@ -18,7 +18,7 @@ export function leasedIsolation(isolation: IWorktreeIsolation, held: () => Sessi
   return {
     isActive: (root) => isolation.isActive(root),
     stash: guarded((root) => isolation.stash(root)),
-    startRun: guarded((root) => isolation.startRun(root)),
+    startRun: guarded((root, stateRoot) => isolation.startRun(root, stateRoot)),
     prepare: guarded((task, run, intent, opts) => isolation.prepare(task, run, intent, opts)),
     reopen: guarded((task, run) => isolation.reopen(task, run)),
     verifyRepair: (task, run) => isolation.verifyRepair(task, run),

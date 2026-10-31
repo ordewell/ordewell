@@ -130,6 +130,25 @@ export const UNLEASED: SessionLease = {
   release() {},
 };
 
+/**
+ * A child session's hold: its root's (ADR-0055 D13). Only a root is adopted, so
+ * no second host can reach a child, and a child writes no lease file: a tree
+ * does not multiply the heartbeat, and the root's record already names the
+ * runner groups of this whole process. Letting go lets nothing go. When the
+ * root loses its lease the Session there stops its run, children included.
+ */
+export function childLease(held: () => SessionHeld | null): SessionLease {
+  return {
+    claim(_sessionId, _workspace, commit) {
+      const holder = held();
+      if (holder) throw new SessionHeldError(holder);
+      commit?.();
+    },
+    hold: () => held(),
+    release() {},
+  };
+}
+
 export interface LeaseHostOptions {
   /** Minted when absent; two hosts in one test process are given two. */
   id?: string;

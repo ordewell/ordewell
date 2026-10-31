@@ -1732,6 +1732,18 @@ branch name, `ordewell/<run-id>/<order>-<slug>`. For a group of one it is the
 worktree.
 *Avoid:* "workspace" bare — that is the user's real folder; "sandbox".
 
+**Code root** — where a Session's planner, runners and git work: `Session.workspace`
+and an isolation run's `workspaceRoot`. A root session's is the user's workspace; a
+child session's is its delegated task's worktree, which goes with that task
+(ADR-0055 D11).
+
+**State root** — where a Session's own files live: `.ordewell/` under the root
+Session's workspace, at every depth. On a flat run it is the code root. A child's
+session file, task logs and patches are at
+`.ordewell/sessions/<root>/children/<child>/`, and its worktrees at
+`.ordewell/worktrees/<child-run>/`, so nothing of it sits in a worktree (ADR-0055
+D11).
+
 **Integration branch** — `ordewell/<run-id>/integration`, the one branch a run's
 work lands on (in each repo of the group, under ADR-0014, where landing a task is
 atomic across the repos it changed). Each task that passes its Verdict is merged into it with

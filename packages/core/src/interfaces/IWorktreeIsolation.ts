@@ -140,6 +140,8 @@ export interface IsolationTaskRecord {
   status: IsolationTaskStatus;
   /** Keyed by repo path. */
   repos: Record<string, IsolationTaskRepo>;
+  /** The child session whose code root this worktree is (ADR-0055 D11): what stops a prune taking it from under that child (D17). */
+  childSession?: string;
   /** Unrecovered branches from a conflict fallback, so a later continue cannot forget them. */
   continuationWork?: PreservedWork[];
   /** The repo whose merge stopped the task from landing, while `status` is `conflict` or `failed`. */
@@ -244,7 +246,13 @@ export interface IsolationRepo {
  */
 export interface IsolationRun {
   id: string;
+  /** The code root: what git reads for the run's repos, branch and base (ADR-0055 D11). */
   workspaceRoot: string;
+  /**
+   * A child run's state root, the root Session's workspace: where its worktrees
+   * and Ordewell's own files go. Absent on a flat run, whose workspace is both.
+   */
+  stateRoot?: string;
   repos: IsolationRepo[];
   /**
    * Workspace paths outside every isolated repo, linked live into each task
@@ -634,9 +642,11 @@ export interface IWorktreeIsolation {
   /**
    * Mint a run: resolve each repo's base ref to a commit now, and share the
    * repos that cannot be isolated. Only meaningful after `isActive` said yes;
-   * throws when no repo of the group can be isolated after all.
+   * throws when no repo of the group can be isolated after all. `stateRoot`
+   * makes it a child's run (ADR-0055 D11), and it throws for a `workspaceRoot`
+   * that is not a task's workspace under that root (D12).
    */
-  startRun(workspaceRoot: string): Promise<IsolationRun>;
+  startRun(workspaceRoot: string, stateRoot?: string): Promise<IsolationRun>;
 
   /**
    * Create the task workspace — one worktree per isolated repo from its
@@ -792,6 +802,7 @@ export interface IWorktreeIsolation {
    * Never a branch of `run` itself, one a worktree has checked out, or any
    * branch of a run that still has a worktree — that run may be live in
    * another plan. Tries every repo, then throws naming those where git failed.
+   * A child's run sweeps nothing (ADR-0055 D11).
    */
   sweep(run: IsolationRun): Promise<void>;
 }

@@ -4,6 +4,7 @@ import * as path from 'path';
 import { devNull } from 'os';
 import type { IsolationRun } from '../interfaces/IWorktreeIsolation';
 import { git, tryGit, type GitInvoker } from './gitExec';
+import { stateRootOf } from './stateRoot';
 import type { HandoffPatch } from '../models/Handoff';
 
 export interface TaskDiffRead {
@@ -152,7 +153,8 @@ export async function readTaskDiff(invoker: GitInvoker, run: IsolationRun, taskI
   };
   try {
     const files: DiffFile[] = [];
-    const workspaceRoot = fs.realpathSync(run.workspaceRoot);
+    // A child's worktrees and its code root both sit under the state root (ADR-0055 D11).
+    const workspaceRoot = fs.realpathSync(stateRootOf(run));
     for (const repo of run.repos) {
       if (options.repo !== undefined && repo.path !== options.repo) continue;
       const entry = record.repos[repo.path];

@@ -45,6 +45,7 @@ import { augmentedPath } from '../utils/shellPath';
 import { ensureStateDirIgnored, STATE_DIR } from '../utils/fsHelpers';
 import { sanitizeSlug } from '../utils/prdStore';
 import { absorbRemoval, handoffOf, integrationBranchFor, landedInRepo, noRemoval, PrepareFailedError, repoRootOf, SELF_REPO } from './isolationRecord';
+import { isTaskWorkspaceOf, refuseUsersCheckout, stateRootOf, worktreesDirOf } from './stateRoot';
 import { defaultExecFile, git, isAncestor, tryGit, type Ancestry, type GitExecFn, type GitInvoker, type GitResult } from './gitExec';
 import { IsolationLocks } from './isolationLocks';
 import { bootstrap, installDirs, isEnvFile, lexists, LINKED_ARTIFACTS, listDir, SetupCommandError } from './worktreeBootstrap';
@@ -514,12 +515,13 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     }
   }
 
-  startRun(workspaceRoot: string): Promise<IsolationRun> {
-    return this.admin(workspaceRoot, async () => {
+  startRun(workspaceRoot: string, stateRoot?: string): Promise<IsolationRun> {
+    return this.admin(stateRoot ?? workspaceRoot, async () => {
+      if (stateRoot !== undefined) refuseUsersCheckout(workspaceRoot, stateRoot);
       const scan = await this.scanGroup(workspaceRoot);
       const paths = 'paths' in scan ? scan.paths : [SELF_REPO];
       const nested = 'paths' in scan ? scan.nested : [];
-      const run: IsolationRun = { id: this.mintRunId(), workspaceRoot, repos: [], shared: [], sharedRepos: [], tasks: {}, keepsEveryLanding: true, carried: {} };
+      const run: IsolationRun = { id: this.mintRunId(), workspaceRoot, ...(stateRoot !== undefined ? { stateRoot } : {}), repos: [], shared: [], sharedRepos: [], tasks: {}, keepsEveryLanding: true, carried: {} };
       for (const repoPath of paths) {
         const repo = await this.startRepo(run, repoPath);
         if (repo) run.repos.push(repo);
@@ -562,7 +564,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
    */
   private async acceptsWorktree(run: IsolationRun, repo: IsolationRepo): Promise<boolean> {
     const dir = this.integrationDir(run, repo);
-    ensureStateDirIgnored(run.workspaceRoot);
+    ensureStateDirIgnored(stateRootOf(run));
     fs.mkdirSync(path.dirname(dir), { recursive: true });
     const added = await this.tryGit(repo.root, ['worktree', 'add', '-q', '--no-checkout', dir, repo.integrationBranch]);
     await this.removeWorktreeDir(run, repo, dir, []);
@@ -595,7 +597,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   prepare(task: Task, run: IsolationRun, intent: PrepareIntent = 'fresh', opts: { readOnly?: boolean } = {}): Promise<PreparedTask> {
     // The turn first, for any intent: a group's integration tips are only a consistent set between landings. A fresh task branched mid-landing
     // would hold a merge that is rolled back a moment later, and land it through its own.
-    return this.inTurn(() => this.admin(run.workspaceRoot, async () => {
+    return this.inTurn(() => this.admin(stateRootOf(run), async () => {
       const previous = run.tasks[task.id];
       const replaced = previous ? await this.removeTask(run, previous, { dropRecord: true, intent }) : noRemoval();
       const [refused] = replaced.refused;
@@ -619,13 +621,15 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
         ...(opts.readOnly ? { readOnly: true } : {}),
         // A restore continues the same work, so its merges keep the subject its landing stated; a fresh attempt states its own.
         ...(intent === 'restore' && previous?.commit ? { commit: previous.commit } : {}),
+        // And the same child, which Continue reopens (ADR-0055 D17); a fresh attempt starts one over (D15).
+        ...(intent === 'restore' && previous?.childSession ? { childSession: previous.childSession } : {}),
       };
       let cwd = dir;
       const copied: string[] = [];
       const setupFailed: SetupFailure[] = [];
       let restoration: PreparedTask['restoration'];
       try {
-        ensureStateDirIgnored(run.workspaceRoot);
+        ensureStateDirIgnored(stateRootOf(run));
         for (const repo of run.repos) {
           const worktree = path.join(dir, repo.path);
           const tip = (await this.git(repo.root, ['rev-parse', repo.integrationBranch])).trim();
@@ -650,9 +654,11 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
           const inRepo = await this.inWorkspacePlace(repo, entry.worktree);
           if (repo.path === SELF_REPO) cwd = inRepo;
           const options = { links: this.deps.config.worktreeLinks, platform: this.platform, resolvePath: this.resolvePath };
+          // From the checkout under the state root: a delegated task's worktree holds only links to it (ADR-0055 D11).
+          const source = { ...repo, root: repoRootOf(stateRootOf(run), repo.path) };
           let boot;
           try {
-            boot = await bootstrap(repo, inRepo, { ...options, setupCommand: this.deps.config.worktreeSetupCommand });
+            boot = await bootstrap(source, inRepo, { ...options, setupCommand: this.deps.config.worktreeSetupCommand });
           } catch (err) {
             if (!(err instanceof SetupCommandError)) throw err;
             // The setting is not scoped to one repository: a user-level VS Code
@@ -663,7 +669,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
             // command left half-done.
             await this.git(entry.worktree, ['reset', '-q', '--hard']);
             await this.git(entry.worktree, ['clean', '-ffdxq']);
-            boot = await bootstrap(repo, inRepo, options);
+            boot = await bootstrap(source, inRepo, options);
             setupFailed.push({ repo: repo.path, detail: err.detail });
           }
           entry.linked = boot.linked;
@@ -782,7 +788,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   }
 
   reopen(task: Task, run: IsolationRun): Promise<PreparedTask> {
-    return this.admin(run.workspaceRoot, async () => {
+    return this.admin(stateRootOf(run), async () => {
       const record = run.tasks[task.id];
       if (record?.status !== 'conflict') throw new Error(`Task ${task.order} has no conflict to repair`);
       let cwd = record.workspace;
@@ -867,7 +873,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   }
 
   release(run: IsolationRun, taskId: string, opts: { keep: boolean }): Promise<IsolationRemoval> {
-    return this.admin(run.workspaceRoot, async () => {
+    return this.admin(stateRootOf(run), async () => {
       const record = run.tasks[taskId];
       if (!record) return noRemoval();
       // A read-only task's worktree is never kept for inspection: nothing in it is work (ADR-0046).
@@ -882,7 +888,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   }
 
   handoff(run: IsolationRun): Promise<IsolationHandoff> {
-    return this.inTurn(() => this.admin(run.workspaceRoot, async () => {
+    return this.inTurn(() => this.admin(stateRootOf(run), async () => {
       // A branch checked out in a worktree cannot be checked out in the main
       // one, and the user is about to review it.
       await this.removeIntegrationWorktrees(run);
@@ -892,7 +898,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   }
 
   pruneOrphans(run: IsolationRun): Promise<IsolationPruneResult> {
-    return this.inTurn(() => this.admin(run.workspaceRoot, async () => {
+    return this.inTurn(() => this.admin(stateRootOf(run), async () => {
       // A half-finished merge from a crash is easier to drop than to repair;
       // the branch refs are the only state that matters. What a landing had
       // merged goes back too, since the run was saved as not having it.
@@ -901,7 +907,11 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       const kept: IsolationPruneResult['kept'] = [];
       const removal = noRemoval();
       for (const record of Object.values(run.tasks)) {
-        if (record.readOnly) absorbRemoval(removal, await this.removeTask(run, record, { dropRecord: true }));
+        // Its worktree is a child's code root, whatever git finds in it. Off `active` as kept work is, and a read-only one too: Continue reopens the child there (ADR-0055 D17).
+        if (record.childSession && (record.status === 'active' || record.status === 'kept')) {
+          if (record.status === 'active') kept.push({ taskId: record.taskId, order: record.order, title: record.title });
+          record.status = 'kept';
+        } else if (record.readOnly) absorbRemoval(removal, await this.removeTask(run, record, { dropRecord: true }));
         else if (record.status === 'active') {
           // Adopting a plan is not proof its runner died: another host may
           // have adopted the same record mid-run. Deleting an active worktree
@@ -1159,6 +1169,10 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   }
 
   private async mergeAll(run: IsolationRun): Promise<IsolationMergeResult> {
+    // Below every route to a merge, an automatic one included, and for the saved record a reopened child reads its checkout from (ADR-0055 D12).
+    const { stateRoot } = run;
+    const stray = stateRoot === undefined ? undefined : run.repos.find((repo) => !isTaskWorkspaceOf(stateRoot, repo.root));
+    if (stray) return { outcome: 'failed', repo: stray.path, error: `A child plan runs in its delegated task's worktree, never in the user's checkout: ${stray.root} takes no merge from it.` };
     const partial = await this.settleLanding(run);
     if (partial.length > 0) return { outcome: 'blocked', blocked: partial.map((repo) => ({ repo, reason: 'partial-landing', files: [] })) };
     // Every repo, not only those with work: the confirmations promise each is on its starting branch.
@@ -1286,7 +1300,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   }
 
   discard(run: IsolationRun, opts: { integration: IntegrationDisposal }): Promise<IsolationRemoval> {
-    return this.inTurn(() => this.admin(run.workspaceRoot, async () => {
+    return this.inTurn(() => this.admin(stateRootOf(run), async () => {
       await this.removeIntegrationWorktrees(run);
       const removal = noRemoval();
       for (const record of Object.values(run.tasks)) {
@@ -1309,7 +1323,10 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   }
 
   sweep(run: IsolationRun): Promise<void> {
-    return this.admin(run.workspaceRoot, async () => {
+    // A child's HEAD holds the tip its siblings start from, so a sibling that
+    // has no worktree yet reads as an earlier run, merged. The root sweeps a tree.
+    if (run.stateRoot !== undefined) return Promise.resolve();
+    return this.admin(stateRootOf(run), async () => {
       const failed: string[] = [];
       for (const repo of run.repos) {
         if (!(await this.sweepRepo(run, repo))) failed.push(repo.path);
@@ -1459,7 +1476,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     delete record.landingError;
     // The work is on the integration branches already; a stuck cleanup must
     // not turn that into a failure. `pruneOrphans` sweeps up whatever it leaves.
-    await this.admin(run.workspaceRoot, () => this.removeTask(run, record, { dropRecord: false })).catch(() => undefined);
+    await this.admin(stateRootOf(run), () => this.removeTask(run, record, { dropRecord: false })).catch(() => undefined);
     return 'merged';
   }
 
@@ -1890,11 +1907,11 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   }
 
   private async ensureIntegrationWorktree(run: IsolationRun, repo: IsolationRepo): Promise<string> {
-    return this.admin(run.workspaceRoot, async () => {
+    return this.admin(stateRootOf(run), async () => {
       const dir = this.integrationDir(run, repo);
       if (fs.existsSync(path.join(dir, '.git'))) return dir;
       await this.tryGit(repo.root, ['worktree', 'prune']);
-      ensureStateDirIgnored(run.workspaceRoot);
+      ensureStateDirIgnored(stateRootOf(run));
       fs.mkdirSync(path.dirname(dir), { recursive: true });
       await this.git(repo.root, ['worktree', 'add', '-q', dir, repo.integrationBranch]);
       return dir;
@@ -2095,8 +2112,9 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     try { fs.rmdirSync(dir); } catch { /* not empty, or already gone */ }
   }
 
+  /** Under the state root, so a child's worktrees sit beside its parent's run and no prune of the parent's worktree reaches them (ADR-0055 D11). */
   private runRoot(run: IsolationRun): string {
-    return path.join(run.workspaceRoot, STATE_DIR, 'worktrees', run.id);
+    return path.join(worktreesDirOf(stateRootOf(run)), run.id);
   }
 
   private namesFor(run: IsolationRun, task: Task): { branch: string; dir: string } {
@@ -2134,8 +2152,8 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     return this.locks.inTurn(fn);
   }
 
-  private admin<T>(workspaceRoot: string, fn: () => Promise<T>): Promise<T> {
-    return this.locks.admin(workspaceRoot, fn);
+  private admin<T>(stateRoot: string, fn: () => Promise<T>): Promise<T> {
+    return this.locks.admin(stateRoot, fn);
   }
 
   private tryGit(cwd: string | undefined, args: string[]): Promise<GitResult> {
