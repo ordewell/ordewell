@@ -321,6 +321,25 @@ describe('sealed runs', async () => {
       }
     });
 
+    // A kill reaches the launcher alone, and a compound command's shell has a
+    // child running, which only the launcher's watcher can take down with it.
+    it.skipIf(process.platform !== 'darwin').each([
+      ['SIGKILL', 'a compound'], ['SIGTERM', 'a compound'], ['SIGKILL', 'a pipeline of'],
+    ] as const)('leaves nothing running of %s to %s planner command', async (signal, shape) => {
+      const { launch } = await sandbox.launch(POSIX, { network: false });
+      const sleep = `sleep 30.${process.pid}9`;
+      const command = shape === 'a compound' ? `${sleep}; true` : `${sleep} | cat`;
+      const child = spawn(launch.file!, [...launch.args, command], { cwd: workspace, env: launch.env, stdio: ['ignore', 'ignore', 'ignore'] });
+      try {
+        await vi.waitFor(() => expect(runningWith(sleep).filter((line) => !line.includes('-c')).length).toBeGreaterThanOrEqual(1));
+        child.kill(signal);
+        await once(child, 'exit');
+        await vi.waitFor(() => expect(runningWith(sleep)).toEqual([]), { timeout: 5_000, interval: 250 });
+      } finally {
+        for (const line of runningWith(sleep)) spawnSync('kill', ['-KILL', line.trim().split(/\s+/)[0]]);
+      }
+    });
+
     // macOS has no death signal, and the launcher starts the sandbox before what
     // reaps it. A kill written into the launcher's script ends it between the two.
     it.skipIf(process.platform !== 'darwin')('leaves nothing running of a run whose launcher dies the moment it starts the sandbox', async () => {

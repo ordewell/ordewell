@@ -216,11 +216,6 @@ export function keptEnv(invocation: SandboxInvocation, profile: SandboxProfile):
     : Object.fromEntries(profile.inheritEnv.flatMap((name) => (invocation.env[name] === undefined ? [] : [[name, invocation.env[name]]])));
 }
 
-/** The environment a wrapped command starts with: what the profile keeps of the shell's, then what it sets. */
-export function launchEnv(invocation: SandboxInvocation, profile: SandboxProfile): NodeJS.ProcessEnv {
-  return { ...keptEnv(invocation, profile), ...profile.env };
-}
-
 export type ProbeExec = (file: string, args: string[], env: NodeJS.ProcessEnv) => Promise<{ code: number | null; output: string }>;
 
 /** A probe that hangs must not hold up the first command for long; no answer means no sandbox. */

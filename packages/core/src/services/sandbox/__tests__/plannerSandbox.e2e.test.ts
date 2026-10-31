@@ -207,15 +207,51 @@ describe("the planner's sandbox", async () => {
       });
     });
 
-    // Seatbelt has no setting up to be killed in: `sandbox-exec` becomes the shell.
-    it.skipIf(process.platform !== 'darwin')('runs the command as the launcher itself, so no process stands between a kill and it', async () => {
-      const { launch } = await sandbox.launch(POSIX, { network: false });
-      const child = spawn(launch.file!, [...launch.args, 'echo $$'], { cwd: workspace, env: launch.env, stdio: ['ignore', 'pipe', 'ignore'] });
-      let out = '';
-      child.stdout!.on('data', (chunk) => { out += String(chunk); });
-      await once(child, 'close');
+    // Seatbelt's launcher stands between the caller and the command, and must not show.
+    describe.skipIf(process.platform !== 'darwin')('the launcher a kill goes through', () => {
+      const psLines = (needle: string) => spawnSync('ps', ['-A', '-o', 'args='], { encoding: 'utf8' }).stdout.split('\n').filter((line) => line.startsWith(needle));
 
-      expect(out.trim()).toBe(String(child.pid));
+      it('hands the command standard input, and the caller its output and exit status', async () => {
+        const { launch } = await sandbox.launch(POSIX, { network: false });
+        const child = spawn(launch.file!, [...launch.args, 'cat; echo err >&2; exit 7'], { cwd: workspace, env: launch.env, stdio: ['pipe', 'pipe', 'pipe'] });
+        let out = '';
+        child.stdout!.on('data', (chunk) => { out += String(chunk); });
+        child.stderr!.on('data', (chunk) => { out += String(chunk); });
+        child.stdin!.end('in\n');
+        const [code] = await once(child, 'close');
+
+        expect(code).toBe(7);
+        expect(out).toBe('in\nerr\n');
+      });
+
+      it('says nothing of a command a signal ended', async () => {
+        const { launch } = await sandbox.launch(POSIX, { network: false });
+        const result = await run(launch, 'kill -SEGV $$', workspace);
+        expect(result).toEqual({ code: 128 + 11, out: '' });
+      });
+
+      it.each(['POSIXLY_CORRECT', 'TMOUT'])('runs a command to its end when the host sets %s', async (name) => {
+        const availability = await resolvePlannerSandbox();
+        if (!availability.available) return;
+        const launch = availability.backend.wrap({ shell: '/bin/sh', shellArgs: ['-c'], env: { ...process.env, [name]: '1' } }, availability.profile({ network: false }));
+        expect(await run(launch, 'sleep 2; echo ran', workspace)).toEqual({ code: 0, out: 'ran\n' });
+      });
+
+      it('gives the command no end of the pipe that tells the watcher how it ended', async () => {
+        expect((await sh('echo done >&3')).code).not.toBe(0);
+      });
+
+      it('leaves what a command left running when it ends by itself', async () => {
+        const { launch } = await sandbox.launch(POSIX, { network: false });
+        const sleep = `sleep 30.${process.pid}8`;
+        try {
+          expect((await run(launch, `${sleep} >/dev/null 2>&1 </dev/null &`, workspace)).code).toBe(0);
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          expect(psLines(sleep)).toHaveLength(1);
+        } finally {
+          spawnSync('pkill', ['-KILL', '-f', `^${sleep}`]);
+        }
+      });
     });
 
     // A top-level bash with a socket on standard input, which is what Node gives

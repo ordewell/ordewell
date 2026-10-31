@@ -8,6 +8,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Stopping a planner command on macOS ends all of it.** A Stop or a time limit
+  now ends a compound command's or a pipeline's child processes along with its
+  shell, and the result comes back at once rather than when they finish.
+
 ## [0.12.0] - 2026-10-31
 
 ### Added

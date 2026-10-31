@@ -61,14 +61,25 @@ describe('SeatbeltBackend.wrap', () => {
   const seatbelt = new SeatbeltBackend();
 
   function profileText(args: string[]): string {
-    expect(args[0]).toBe('-p');
-    return args[1];
+    const start = args.indexOf(SANDBOX_EXEC) + 1;
+    expect(args[start]).toBe('-p');
+    return args[start + 1];
   }
 
-  it('launches sandbox-exec by its absolute path, with the shell and its arguments last', () => {
+  it('starts sandbox-exec by its absolute path behind a bash that reads no startup file, with the shell and its arguments last', () => {
     const launch = seatbelt.wrap(SH, profile());
-    expect(launch.file).toBe(SANDBOX_EXEC);
+    expect(launch.file).toBe('/bin/bash');
+    expect(launch.args.slice(0, 4)).toEqual(['--norc', '--noprofile', '-p', '-c']);
+    expect(launch.args.slice(5, 7)).toEqual(['ordewell-shell', SANDBOX_EXEC]);
     expect(launch.args.slice(-2)).toEqual(['/bin/sh', '-c']);
+    expect(launch.wallTimeMs).toBeUndefined();
+  });
+
+  it('adds nothing to a command without limits but builtins, since one starts for every planner command', () => {
+    const prelude = seatbelt.wrap(SH, profile()).args[4];
+    expect(prelude).toContain('set -m');
+    expect(prelude).toContain('kill -KILL -$pid');
+    expect(prelude).not.toMatch(/\/(bin|usr)\//);
   });
 
   it('denies by default and allows writes only under the parameters it passes', () => {
@@ -126,9 +137,16 @@ describe('SeatbeltBackend.wrap', () => {
       .toBeLessThan(text.indexOf('file-write* (subpath (param "WRITABLE_0")))'));
   });
 
-  it('sets the profile environment over the one the shell had', () => {
-    const { env } = seatbelt.wrap(SH, profile({ env: { TMPDIR: SCRATCH, HOME: '/elsewhere' } }));
-    expect(env).toEqual({ PATH: '/usr/bin:/bin', HOME: '/elsewhere', TMPDIR: SCRATCH });
+  it('sets the profile environment inside the sandbox, over the one the shell had, and leaves it out of the launcher', () => {
+    const { env, args } = seatbelt.wrap(SH, profile({ env: { TMPDIR: SCRATCH, HOME: '/elsewhere' } }));
+    expect(env).toEqual(SH.env);
+    expect(args.slice(-5)).toEqual(['/usr/bin/env', `TMPDIR=${SCRATCH}`, 'HOME=/elsewhere', '/bin/sh', '-c']);
+  });
+
+  it('keeps what would change how bash runs the launcher for the command, inside the sandbox', () => {
+    const { env, args } = seatbelt.wrap({ ...SH, env: { ...SH.env, POSIXLY_CORRECT: '1', TMOUT: '5' } }, profile());
+    expect(env).toEqual(SH.env);
+    expect(args.slice(-6)).toEqual(['/usr/bin/env', 'POSIXLY_CORRECT=1', 'TMOUT=5', `TMPDIR=${SCRATCH}`, '/bin/sh', '-c']);
   });
 
   it.each<[string, Partial<SandboxProfile>]>([
@@ -144,7 +162,7 @@ describe('SeatbeltBackend.wrap', () => {
   describe('a sealed profile (ADR-0036 S1)', () => {
     it('reads only what it lists, the directories above it by name, and none of the user preferences or other processes', () => {
       const launch = seatbelt.wrap(SH, sealed({ masked: ['/usr/local/var'] }));
-      const text = profileText(launch.args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1));
+      const text = profileText(launch.args);
       expect(text).not.toContain('(allow file-read* file-test-existence file-map-executable)\n');
       expect(text).not.toContain('user-preference-read');
       expect(text).not.toContain('com.apple.cfprefsd');
@@ -159,17 +177,17 @@ describe('SeatbeltBackend.wrap', () => {
 
     it('refuses a link made in, or moved into, a writable directory without links, after the rule that makes it writable (ADR-0046)', () => {
       const launch = seatbelt.wrap(SH, sealed({ write: [SCRATCH, '/work/repo/wt'], linkless: ['/work/repo/wt'] }));
-      const text = profileText(launch.args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1));
+      const text = profileText(launch.args);
       const deny = '(deny file-write-create (require-all (vnode-type SYMLINK) (require-any (subpath (param "LINKLESS_0")))))';
       expect(text).toContain(deny);
       expect(text.indexOf(deny)).toBeGreaterThan(text.indexOf('(param "WRITABLE_1")'));
       expect(launch.args).toContain('LINKLESS_0=/work/repo/wt');
-      expect(profileText(seatbelt.wrap(SH, sealed()).args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1))).not.toContain('LINKLESS');
+      expect(profileText(seatbelt.wrap(SH, sealed()).args)).not.toContain('LINKLESS');
     });
 
     it("protects a writable worktree's .git and its root, after the writable allow (ADR-0046)", () => {
       const launch = seatbelt.wrap(SH, sealed({ write: [SCRATCH, '/work/repo/wt'], gitWorktrees: ['/work/repo/wt'] }));
-      const text = profileText(launch.args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1));
+      const text = profileText(launch.args);
       const write = '(deny file-write* (literal (param "GIT_0")))';
       expect(text).toContain(write);
       // After the rule that made the worktree writable, so the last-match-wins deny stands.
@@ -182,7 +200,7 @@ describe('SeatbeltBackend.wrap', () => {
       expect(text).toContain(root);
       expect(text.indexOf(root)).toBeGreaterThan(text.indexOf('(param "WRITABLE_1")'));
       expect(launch.args).toContain('WORKTREE_0=/work/repo/wt');
-      expect(profileText(seatbelt.wrap(SH, sealed()).args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1))).not.toContain('GIT_0=');
+      expect(profileText(seatbelt.wrap(SH, sealed()).args)).not.toContain('GIT_0=');
     });
 
     it("holds every .git entry the checkout brought still: literal for a file, subpath for a directory (ADR-0046)", () => {
@@ -193,7 +211,7 @@ describe('SeatbeltBackend.wrap', () => {
           { path: '/work/repo/wt/vendor/.git', directory: true },
         ],
       }));
-      const text = profileText(launch.args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1));
+      const text = profileText(launch.args);
       const file = '(deny file-write* (literal (param "GITFILE_0")))';
       const dir = '(deny file-write* (subpath (param "GITDIR_0")))';
       expect(text).toContain(file);
@@ -203,18 +221,18 @@ describe('SeatbeltBackend.wrap', () => {
       expect(text.indexOf(dir)).toBeGreaterThan(text.indexOf('(param "WRITABLE_1")'));
       expect(launch.args).toContain('GITFILE_0=/work/repo/wt/sub/.git');
       expect(launch.args).toContain('GITDIR_0=/work/repo/wt/vendor/.git');
-      expect(profileText(seatbelt.wrap(SH, sealed()).args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1))).not.toContain('GITFILE_0=');
+      expect(profileText(seatbelt.wrap(SH, sealed()).args)).not.toContain('GITFILE_0=');
     });
 
     it('refuses creating a .git anywhere in a gitless directory, its own root included, after the writable allow (ADR-0046)', () => {
       // A repo group's task workspace: the runner's own git starts at its root, where no worktree's .git is.
       const launch = seatbelt.wrap(SH, sealed({ write: [SCRATCH, '/work/ws'], gitWorktrees: ['/work/ws/alpha'], gitless: ['/work/ws'] }));
-      const text = profileText(launch.args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1));
+      const text = profileText(launch.args);
       const create = '(deny file-write-create (require-all (regex #"/\\.git$") (require-any (subpath (param "GITLESS_0")))))';
       expect(text).toContain(create);
       expect(text.indexOf(create)).toBeGreaterThan(text.indexOf('(param "WRITABLE_1")'));
       expect(launch.args).toContain('GITLESS_0=/work/ws');
-      expect(profileText(seatbelt.wrap(SH, sealed({ gitWorktrees: ['/work/ws/alpha'] })).args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1))).not.toContain('GITLESS');
+      expect(profileText(seatbelt.wrap(SH, sealed({ gitWorktrees: ['/work/ws/alpha'] })).args)).not.toContain('GITLESS');
     });
 
     it("keeps each worktree's .git protected when a repo group makes only its worktrees writable (ADR-0046)", () => {
@@ -224,7 +242,7 @@ describe('SeatbeltBackend.wrap', () => {
         gitWorktrees: ['/ws/alpha', '/ws/beta'],
         gitless: ['/ws'],
       }));
-      const text = profileText(launch.args.slice(launch.args.indexOf(SANDBOX_EXEC) + 1));
+      const text = profileText(launch.args);
       expect(launch.args).toEqual(expect.arrayContaining([
         'WRITABLE_1=/ws/alpha', 'WRITABLE_2=/ws/beta', 'GIT_0=/ws/alpha/.git', 'GIT_1=/ws/beta/.git', 'GITLESS_0=/ws',
         'WORKTREE_0=/ws/alpha', 'WORKTREE_1=/ws/beta',
