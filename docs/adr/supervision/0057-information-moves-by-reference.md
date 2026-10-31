@@ -47,7 +47,21 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   of immutable ids, pinned by Ordewell as the call is accepted: an author writes `#4/F3` and
   `checkHandoff` stores the attempt that finding belongs to. It renders as `#4@2/F3`. Across
   plans it carries the derived path, `3/2:#4@2/F3`: `TaskRefs`' grammar is not overloaded, and
-  the separator is one a task label cannot hold. It stays valid for the life of the root plan,
+  the separator is one a task label cannot hold.
+
+  A subplanner's `task_complete` is checked against its own plan, the child plan, not the
+  parent's, whose attempt handles the call
+  ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D4). Its readable
+  set for `promote`, `open` and `findings[].evidence` is its whole subtree: every task of that
+  plan and of each plan below it. So `#4` is the child plan's task 4, whether or not the
+  parent's plan has one, a task further down is written with its path from that plan, `2:#4/F3`,
+  and a refusal names the child plan's task. The producer, the delegated task, is in none of
+  those plans, so `checkHandoff` is handed that set: `readableTaskIds` cannot derive it. A pinned
+  reference holds the child task's immutable id and the attempt, under the `node` of its plan,
+  and renders with the node path, so a later read reaches that attempt whatever the reader's
+  plan holds.
+
+  A reference stays valid for the life of the root plan,
   since attempt logs live as long as their session and a child's sit under the root's
   ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D11); a task
   removed from the plan keeps its log. A saved reference with no attempt reads the latest,
@@ -57,7 +71,8 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   fan-out and not on its subtree. Its Report, the long form of at most 20,000, stays pulled
   ([ADR-0047](0047-structured-task-handoffs.md)). A subplanner's `task_complete` adds two fields, refused on any other token:
   `promote`, up to 8 references to findings in its subtree, and `open`, references its parent
-  must decide. Rendered, by ADR-0047's rule, whole items until the ceiling and then a count:
+  must decide, both pinned and scoped as R1 says. Rendered, by ADR-0047's rule, whole items until
+  the ceiling and then a count:
 
   ```text
   counts       done, failed, blocked, skipped, commits, tokens: derived by Ordewell
@@ -175,7 +190,8 @@ Added after R1 to R7, and only if those leave a need; replays of Ordewell's own 
 
 - The renderer stays a pure function of a digest, tested for the order, the whole-item cut and the
   counts, as ADR-0047's is. R1 is tested across a retry and a loop round: a reference still reads what
-  it named.
+  it named. A finding promoted from a child's task 4 renders and reads that task's attempt, with and
+  without a task 4 in the parent's plan, and a refusal names the child plan's task.
 - `WakePolicy` stays pure: a table of event streams against a fake clock asserts when a batch is due,
   including each flush reason, a pass that flushes nothing, and a flat run's events.
 - The tool sets are held by a test that serialises each role's list and fails past a stated size, and
@@ -197,6 +213,9 @@ Added after R1 to R7, and only if those leave a need; replays of Ordewell's own 
   nearly clean ([arXiv 2608.24306](https://arxiv.org/abs/2608.24306), EMNLP 2026). That measures AI-Q and
   citations, not code: the transfer to a planner is an analogy, and the safer side of one. ADR-0047
   already holds that the author writes it.
+- **A subplanner's references checked against the parent's plan.** Rejected: it is the plan on hand
+  where the call is handled, but `#4` would resolve to the parent's task 4, a wrong handoff stored
+  silently whenever that task is readable, and a child's finding could never be cited.
 - **A report that grows with its subtree.** Rejected: the root's context would depend on the tree's size.
 - **Waking per event, or on the debounce alone.** Rejected: it is the cost in the Problem, at each level.
 - **Waking only when a cohort ends.** Rejected: one slow task holds everything.
@@ -239,3 +258,4 @@ Added after R1 to R7, and only if those leave a need; replays of Ordewell's own 
 - 2026-10-31 — accepted. Not yet implemented.
 - 2026-10-31 — checked against the code: R2 names the push ceiling and not the Report's limit, and R11 states what its rename does to a flat run's list.
 - 2026-10-31 — checked against the code again: a pass stays a ride-along, and R2's counts show what a subplanner left out of its subtree.
+- 2026-10-31 — checked against the code a third time: a subplanner's references resolve in its own plan, and it may cite its whole subtree.
