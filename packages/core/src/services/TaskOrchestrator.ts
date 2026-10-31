@@ -626,6 +626,10 @@ export class TaskOrchestrator {
   get isReviewApproved(): boolean { return this.reviewApproved; }
   /** The scheduler is driving the plan: ready tasks start on their own as slots free. Narrower than {@link isRunning}. */
   get isScheduling(): boolean { return this.runState.kind === 'scheduling'; }
+  /** A scheduled run, driving the plan or held by a usage limit that gives it back: a hold never closes one. */
+  get scheduledRun(): boolean { return this.isScheduling || heldFrom(this.runState) === 'scheduling'; }
+  /** A usage limit holds the run, whatever it goes back to at the reset. */
+  get runHeld(): boolean { return this.runState.kind === 'held'; }
   /**
    * A full-plan run with nothing starting that something still resumes: a
    * usage limit's reset, or a retry of a failed task its blocked tasks wait on.
@@ -954,7 +958,7 @@ export class TaskOrchestrator {
    */
   private owesRepair(task: Readonly<Task>): boolean {
     if ((task.status !== 'pending' && task.status !== 'approved') || this.onHold.has(task.id) || !this.landing.nextRepair(task.id)) return false;
-    return this.owedRepairs.has(task.id) || this.isScheduling || heldFrom(this.runState) === 'scheduling';
+    return this.owedRepairs.has(task.id) || this.scheduledRun;
   }
 
   /** The failed tasks a task not started yet waits on, through its dependencies (ADR-0034); empty when it is not blocked. */
@@ -1383,6 +1387,8 @@ export class TaskOrchestrator {
   }
 
   private async afterVerdict(taskId: string): Promise<void> {
+    // The runner a task made manual kept its wait for is gone, so it is the manual task it now is (ADR-0053).
+    this.store.releaseMadeManual((id) => this.attempts.has(id));
     // A conflict owed a repair is back in progress: nothing has settled yet.
     const status = this.store.get(taskId)?.status;
     if (status === 'completed' || status === 'failed' || status === 'awaiting_user') this.emit('onTaskSettled', { taskId });
@@ -2485,7 +2491,9 @@ export class TaskOrchestrator {
    * the failure is the round's, not the task's. Approval is not spent by a
    * run, so the plan's approval of the body covers every round. Out of
    * rounds, the body still to run will not run. A body task the user skipped
-   * has stopped the loop (L7): no round starts, and the skip stands.
+   * has stopped the loop (L7): no round starts, and the skip stands. One they
+   * reverted keeps its hold, which a round takes as any start does (L5, ADR-0054):
+   * the rest of the body runs, and the loop waits for them to say.
    */
   private startRound(checkId: string): boolean {
     const check = this.store.get(checkId);
@@ -2497,13 +2505,15 @@ export class TaskOrchestrator {
     if (!betweenRounds(check)) return false;
     const body = check.loop.body.flatMap((id) => this.store.get(id) ?? []);
     if (body.some((t) => t.status === 'skipped' && !LOOP_SKIPS.has(t.skipReason ?? ''))) return false;
-    for (const task of body.filter((t) => !this.attempts.has(t.id) && REPEATABLE.has(t.status))) {
+    const [taken, runs] = [body.filter((t) => t.reverted), body.filter((t) => !t.reverted)];
+    for (const task of runs.filter((t) => !this.attempts.has(t.id) && REPEATABLE.has(t.status))) {
       this.store.retry(task.id);
       this.onHold.delete(task.id);
       this.queuedStarts.delete(task.id);
     }
-    const named = quotedList(body.map((t) => t.title));
-    this.tell('info', `Task "${check.title}" failed round ${loopRoundOf(check)} of ${check.loop.maxRounds}: ${named} ${body.length === 1 ? 'runs' : 'run'} to fix what it found, then it checks again.`);
+    const fixes = runs.length === 0 ? '' : ` ${quotedList(runs.map((t) => t.title))} ${runs.length === 1 ? 'runs' : 'run'} to fix what it found, then it checks again.`;
+    const held = taken.length === 0 ? '' : ` ${quotedList(taken.map((t) => t.title))} ${taken.length === 1 ? 'was' : 'were'} reverted, so the loop waits for you to start ${taken.length === 1 ? 'it' : 'them'} again.`;
+    this.tell('info', `Task "${check.title}" failed round ${loopRoundOf(check)} of ${check.loop.maxRounds}:${fixes}${held}`);
     return true;
   }
 
@@ -2554,7 +2564,7 @@ export class TaskOrchestrator {
    * L5). What the seam reads before it says so to anyone.
    */
   loopRunsOn(checkId: string): boolean {
-    return this.isScheduling || heldFrom(this.runState) === 'scheduling' || this.carriedLoops.has(checkId);
+    return this.scheduledRun || this.carriedLoops.has(checkId);
   }
 
   /** A start of this task would be its loop's next round: between rounds, its body landed, and nothing else will run it. */

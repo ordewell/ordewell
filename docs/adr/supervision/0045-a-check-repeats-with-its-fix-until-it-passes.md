@@ -109,7 +109,10 @@ round *r* and round *r* + 1 the body runs once.
   its body runs first. The rounds take the one start rule: approval, holds, the
   Merge-all exclusion of ops work, usage limits and the merge gate apply to them
   as to any start, a task not approved waits for approval (see *Consent*), and a
-  Stop ends a round's running attempt as it ends any.
+  Stop ends a round's running attempt as it ends any. A body task the user
+  reverted ([ADR-0054](../isolation/0054-a-landed-task-reverts-on-the-integration-branch-before-merge-all.md))
+  keeps its hold and its mark: the round runs the rest of the body, and the
+  check goes on waiting for that task until they start it.
   They run however the check was started. A check that fails a round in a run
   the scheduler is not driving, started by `run_task` or a force start, is
   carried on by that run (`TaskOrchestrator.carriedLoops`): each tick starts
@@ -294,3 +297,4 @@ as check or body; a user editing a loop's `loop` field by hand from a surface.
 - 2026-10-31 — a loop's rounds run however its check was started, in a run carrying on the loop alone until it ends or a Stop (L5); a start of a check nothing will run keeps the count, and the refusal stands only while something will (L7).
 - 2026-10-31 — a check nothing will run is drawn and listed as the failure it is, with its next round offered, and what a carried loop waits on is listed (L5; [ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
 - 2026-10-31 — a check nothing will run offers its next round only once its dependencies have finished too (L5; [ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
+- 2026-10-31 — a round leaves a body task the user reverted on hold (L5; [ADR-0054](../isolation/0054-a-landed-task-reverts-on-the-integration-branch-before-merge-all.md)).

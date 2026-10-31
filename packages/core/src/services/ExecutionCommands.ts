@@ -180,6 +180,8 @@ export interface ExecutionHost {
   startsHeld(): boolean;
   /** Work is running right now. */
   hasLiveWork(): boolean;
+  /** A usage limit holds the run: what it paused resumes at the reset. */
+  runHeld(): boolean;
   /** Something will start without being asked again: a start admitted and not yet claimed, or a scheduled resume. */
   startsPending(): boolean;
   /** A plan the turn in flight submitted, whose start autorun makes as the turn ends (ADR-0030): a start on its way that no run holds yet. */
@@ -343,6 +345,7 @@ const SCRIPTS_ARE_THE_PLANNERS = 'run_script is the planner\'s: a person adds a 
 const NO_PLAN_FOR_SCRIPT = 'There is no plan yet, so there is nowhere to add a script task. Submit a plan that holds it.';
 
 const AUTORUN_JOINS_NOTHING = 'tasks are already running, and in Guarded autorun takes no plan into work under way. Run the plan yourself to start the rest.';
+const AUTORUN_RESTARTS_NOTHING = 'a usage limit holds a task, and autorun does not restart a run to start a plan. It resumes at its reset; run the plan yourself to start the rest.';
 
 const OVERRIDE_LANDING = 'Another manual override is landing: wait for it to finish, then start or override again.';
 
@@ -870,6 +873,8 @@ export class ExecutionCommands {
         },
       };
     }
+    // A new run takes back the pause and what failed around it, and no plan submitted asks for that (ADR-0030).
+    if (actor.kind === 'autorun' && this.host.runHeld()) return { refusal: AUTORUN_RESTARTS_NOTHING };
     // A new run leaves a skipped task skipped, as it leaves a completed one done.
     const toRun = all.filter(({ task }) => task.type !== 'user' && task.status !== 'completed' && task.status !== 'skipped');
     if (toRun.length === 0) return { refusal: 'Every task has already completed: there is nothing left to run.' };
@@ -943,18 +948,8 @@ export class ExecutionCommands {
     const approval = this.unapproved(located, actor);
     if (approval && 'refusal' in approval) return approval;
 
-    const unmet = (waitOf(waits, 'dependencies') ?? waitOf(waits, 'queued'))?.waiting.flatMap((id) => this.located(id, tasks) ?? []) ?? [];
-    if (unmet.length > 0) {
-      const one = unmet.length === 1;
-      // Work reached through a skip is not a dependency the caller can see on the task.
-      const behindSkip = unmet.some((dep) => !task.dependencies.includes(dep.task.id)) ? ': skipping a task does not skip the work behind it' : '';
-      return { refusal: `${capitalize(label)} depends on ${unmet.map((dep) => `${describe(dep)} (${depState(dep.task)})`).join(', ')}, which ${one ? 'has' : 'have'} not finished${behindSkip}. It can start once ${one ? 'it has' : 'they have'}.` };
-    }
-    // Judged whatever the task's status: a retry of a failed ops task acts on the checkout as a first start does.
-    const gate = (waitOf(waits, 'merge-gate')?.unmerged ?? []).flatMap((id) => this.located(id, tasks) ?? []);
-    if (gate.length > 0) {
-      return { refusal: `${capitalize(label)} waits for Merge all: the work of ${named(gate)} is not merged into the user's branch yet. ${voice.passGate}` };
-    }
+    const behind = this.heldBehind(located, waits, voice, tasks);
+    if (behind) return { refusal: behind };
     // A retry under a running scheduler is left to it, as the Retry button leaves it, so only a start of our own takes a slot.
     const live = this.all(tasks).filter(({ task: t }) => this.host.running(t.id)).length;
     if (!(settled && this.host.scheduling()) && live >= this.host.maxParallel()) {
@@ -978,6 +973,23 @@ export class ExecutionCommands {
         };
       },
     };
+  }
+
+  /** Why the work this task builds on keeps a start of it, a fresh one or a continue, from running now; null when it does not. */
+  private heldBehind(located: Located, waits: readonly StartWait[], voice: Voice, tasks?: readonly Task[]): string | null {
+    const { task } = located;
+    const label = describe(located);
+    const unmet = (waitOf(waits, 'dependencies') ?? waitOf(waits, 'queued'))?.waiting.flatMap((id) => this.located(id, tasks) ?? []) ?? [];
+    if (unmet.length > 0) {
+      const one = unmet.length === 1;
+      // Work reached through a skip is not a dependency the caller can see on the task.
+      const behindSkip = unmet.some((dep) => !task.dependencies.includes(dep.task.id)) ? ': skipping a task does not skip the work behind it' : '';
+      return `${capitalize(label)} depends on ${unmet.map((dep) => `${describe(dep)} (${depState(dep.task)})`).join(', ')}, which ${one ? 'has' : 'have'} not finished${behindSkip}. It can start once ${one ? 'it has' : 'they have'}.`;
+    }
+    // Judged whatever the task's status: a retry of a failed ops task acts on the checkout as a first start does.
+    const gate = (waitOf(waits, 'merge-gate')?.unmerged ?? []).flatMap((id) => this.located(id, tasks) ?? []);
+    if (gate.length > 0) return `${capitalize(label)} waits for Merge all: the work of ${named(gate)} is not merged into the user's branch yet. ${voice.passGate}`;
+    return null;
   }
 
   /**
@@ -1189,6 +1201,9 @@ export class ExecutionCommands {
     if (!message?.trim()) return { refusal: `Continuing ${label} in its saved session needs a message: what the runner should do next.` };
     const approval = this.unapproved(located, actor);
     if (approval && 'refusal' in approval) return approval;
+    // A continue is a retry whose first turn is the message (ADR-0018 K1), so what holds a retry holds it.
+    const behind = this.heldBehind(located, this.host.startWaits(task), voice);
+    if (behind) return { refusal: behind };
     return {
       ...approval,
       act: async () => {

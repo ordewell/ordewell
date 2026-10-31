@@ -215,7 +215,8 @@ and completion evidence.
   (`runnerSessionOwner`; for a plan from before that, the runner of the last
   attempt), and a session cannot cross runners
   ([ADR-0041](../routing/0041-a-tasks-model-follows-the-runners-own-switch.md)). Dependents
-  are left alone, as with retry. If the runner
+  are left alone, as with retry, and unfinished dependencies or a merge gate
+  refuse it as they refuse a retry. If the runner
   refuses the resume, the attempt fails; no fresh session is started in its
   place. In an isolated run the task workspace is recreated at the same path
   from the current integration tips, then the previous attempt's unlanded work
@@ -508,3 +509,4 @@ transport is retained for take-over.
 - 2026-10-24 — U1: a pause also holds a run that ended on a failure, which it goes back to once released; the hold is an event of the run's state (`nextRunState`).
 - 2026-10-25 — the VS Code task-log control reads "Open chat" and appears once an attempt has started.
 - 2026-10-26 — L1: an accepted `task_complete` call is shown received at once, while its turn closes and its attempt winds down; the receipt is no verdict and is never saved.
+- 2026-10-31 — K1: a continue waits on a task's dependencies and merge gate as a retry does.
