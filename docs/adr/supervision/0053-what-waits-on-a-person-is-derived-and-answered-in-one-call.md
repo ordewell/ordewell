@@ -84,6 +84,11 @@ it on, since the seam refuses it otherwise
 | `merge-all` | Landed work, nothing moving and no gate listed | Merge all | `merge_all` |
 | `blocked-run` | A run a dirty checkout turned away | Stash and continue, Run without isolation | `Session.continueWithStash`, `continueWithoutIsolation` |
 
+A task whose attempt ended, listed as `failed`, `out-of-rounds`, or a `checkpoint`
+or `input` with no runner left, offers no Retry and no Continue while a
+dependency or a merge gate holds any start of it: the seam would refuse both, so
+its reason names that wait instead.
+
 `merge-gate`, `on-hold`, `unapproved`, `no-prompt` and `by-hand` are listed only
 in an open run: one scheduling, held, or ended on a failure a retry continues.
 Outside one nothing was going to start them, so nothing is late. A loop carried
@@ -191,7 +196,8 @@ reads do.
   waiting on the user: it has nothing to retry, so it is the manual task it now
   is (`releaseMadeManual`). A runner still at a question keeps its wait while it
   lives, to be answered; its end releases what it left, and so does a load, where
-  both saved forms are read.
+  both saved forms are read. A usage limit that ends that runner holds nothing:
+  no resume is promised, and the rest of the run goes on.
 - **A task running when the host died is failed.** Nothing runs when a plan comes
   off disk, so `failInterruptedTasks` fails a task saved in progress where both
   saved forms are read, `loadSession` and `loadState`. Its reason says it was
@@ -439,3 +445,4 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
 - 2026-10-31 — a check between rounds nothing will run is listed, a carried loop is an open run for its own tasks, Execute gives its fresh chance to hand-started work it takes in, and an edit keeps every wait and frees a failed task it made manual (#30).
 - 2026-10-31 — a task an edit made manual is released from a wait with no runner behind it too, at the edit or at a load, and a check whose dependency holds its next round names it rather than offering a start that refuses.
 - 2026-10-31 — a stranded check behind a dependency offers no Continue either, and the seam refuses one; a task made manual is released when the runner it kept its wait for ends; a reverted task is listed behind its loop's check too.
+- 2026-10-31 — an ended attempt's entry names what holds any start of its task and offers no Retry or Continue the seam would refuse; a usage limit that ends a task made manual holds nothing.

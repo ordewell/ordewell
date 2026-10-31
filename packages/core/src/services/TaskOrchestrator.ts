@@ -348,8 +348,8 @@ export class TaskOrchestrator {
    * The checks whose loop goes on with no scheduler: each failed a round in a
    * run the scheduler was not driving, so nothing else would start what it
    * owes (ADR-0045 L5). Held here and not on the plan, because a Stop ends it
-   * and a reload does not bring it back; a loop stopped by its body stays
-   * here, so a retry of that task resumes it (L7).
+   * and a reload does not bring it back; an edit does neither. A loop stopped
+   * by its body stays here, so a retry of that task resumes it (L7).
    */
   private readonly carriedLoops = new Set<string>();
   /** What was last said of a carried loop's approvals, so it is said once. */
@@ -977,6 +977,7 @@ export class TaskOrchestrator {
     // would leave its run scheduling over a plan half loaded.
     assertAssignedRunners(tasks, planRunners);
     const queued = edited ? [...this.queuedStarts] : [];
+    const carried = edited ? [...this.carriedLoops] : [];
     const chosen = this.chosenHoldsNow();
     // Ended before the plan is swapped, so nothing of the plan being replaced reaches the next one.
     const repairs = this.attempts.unload().filter((a) => a.kind.kind === 'repair' && a.worktree);
@@ -999,6 +1000,7 @@ export class TaskOrchestrator {
     for (const t of this.store.allTasks) if (t.reverted) this.hold(t.id, REVERTED_HOLD, true);
     this.queuedStarts = new Map(queued.filter(([id]) => this.store.get(id)));
     this.carriedLoops.clear();
+    for (const id of carried) if (this.store.get(id)?.loop) this.carriedLoops.add(id);
     this.owedRepairs.clear();
     this.recoverOrphans();
     this.limitPauses.rearm();
@@ -1389,6 +1391,8 @@ export class TaskOrchestrator {
   private async afterVerdict(taskId: string): Promise<void> {
     // The runner a task made manual kept its wait for is gone, so it is the manual task it now is (ADR-0053).
     this.store.releaseMadeManual((id) => this.attempts.has(id));
+    // A paused task a direct edit made manual goes with it, and it may be the last wait on a reset.
+    this.limitPauses.recount();
     // A conflict owed a repair is back in progress: nothing has settled yet.
     const status = this.store.get(taskId)?.status;
     if (status === 'completed' || status === 'failed' || status === 'awaiting_user') this.emit('onTaskSettled', { taskId });

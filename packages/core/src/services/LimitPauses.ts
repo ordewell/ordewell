@@ -101,7 +101,9 @@ export class LimitPauses {
     const task = store.get(taskId);
     if (!task) return;
     store.markAwaitingUser(taskId, 'usage-limit');
-    this.waitForReset(task, attempt, said);
+    // A task an edit made manual has no resume to wait for: `settled` releases it (ADR-0053), so it holds nothing and promises nothing.
+    if (task.type === 'user') this.host.tell('info', `Task "${task.title}" stopped: ${attempt.runner} hit its usage limit. It is a manual task now, so it is yours to do.`);
+    else this.waitForReset(task, attempt, said);
     // Words are the turn's whole output, too long to stand as the reason.
     const reason = typeof said === 'string' ? `${attempt.runner} hit its usage limit` : said.message;
     store.setTaskOutputSummary(taskId, summarizeOutput(reason, output));
@@ -133,7 +135,8 @@ export class LimitPauses {
 
   /**
    * Tasks stopped waiting some other way than through here: an edit took them
-   * out of the plan or ended their pause, or Mark complete completed one. No
+   * out of the plan or ended their pause, an attempt's end released one an edit
+   * made manual, or Mark complete completed one. No
    * timer resumes a wait nothing owes, and the hold goes once nothing waits.
    */
   recount(): void {

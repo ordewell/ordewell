@@ -200,14 +200,26 @@ function askedOf(row: TaskWithParent, pending: PendingApproval, attempt: number)
   };
 }
 
-/** What starts an ended attempt's task again: a saved session is offered beside a fresh attempt. */
+/** What stands in front of any start of this task: the seam refuses a retry and a continue alike until it has moved. */
+function inFront(row: TaskWithParent, input: EscalationInput): string[] {
+  return [...new Set((input.waits.get(row.task.id) ?? []).flatMap((w) => (w.kind === 'dependencies' || w.kind === 'queued' ? w.waiting : w.kind === 'merge-gate' ? w.unmerged : w.kind === 'loop-check' ? [w.check] : [])))];
+}
+
+/** What starts an ended attempt's task again: a saved session is offered beside a fresh attempt, and neither behind what holds any start. */
 function startedOver(row: TaskWithParent, input: EscalationInput): EscalationOption[] {
+  const startable = inFront(row, input).length === 0;
   return [
-    RETRY,
-    ...(canContinue(row.task) ? [{ id: 'continue' as const, label: 'Continue', note: 'required' as const }] : []),
+    ...(startable ? [RETRY] : []),
+    ...(startable && canContinue(row.task) ? [{ id: 'continue' as const, label: 'Continue', note: 'required' as const }] : []),
     SKIP,
     ...completeOption(row, input.run),
   ];
+}
+
+/** An ended attempt's wait, which names what holds any start of it, since no option then says so. */
+function ended(row: TaskWithParent, reason: string, input: EscalationInput, rows: Rows): Pick<Wait, 'reason' | 'options'> {
+  const behind = inFront(row, input).map((id) => rows.get(id)?.ref ?? id);
+  return { reason: behind.length > 0 ? `${reason} It waits on ${behind.join(', ')}: nothing can start it again before then.` : reason, options: startedOver(row, input) };
 }
 
 /**
@@ -240,7 +252,7 @@ function awaiting(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait
         options: [canContinue(task) ? { id: 'resume', label: 'Resume now', note: 'optional' } : RETRY, SKIP, ...completeOption(row, input.run)],
       };
     case 'checkpoint': {
-      if (!live) return { kind: 'checkpoint', reason: 'It stopped at a checkpoint, and no runner is left to hear an answer.', options: startedOver(row, input) };
+      if (!live) return { kind: 'checkpoint', ...ended(row, 'It stopped at a checkpoint, and no runner is left to hear an answer.', input, rows) };
       const question = input.checkpoint(task.id);
       return {
         kind: 'checkpoint',
@@ -263,7 +275,7 @@ function awaiting(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait
     case undefined:
       return live
         ? { kind: 'input', reason: 'Waiting for your input.', options: [{ id: 'reply', label: 'Reply', note: 'required' }, SKIP, ...completeOption(row, input.run)] }
-        : { kind: 'input', reason: 'It was waiting for your input, and no runner is left to read a reply.', options: startedOver(row, input) };
+        : { kind: 'input', ...ended(row, 'It was waiting for your input, and no runner is left to read a reply.', input, rows) };
   }
 }
 
@@ -277,9 +289,9 @@ function awaiting(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait
 function stranded(row: TaskWithParent, repeating: Extract<StartWait, { kind: 'repeating' }>, input: EscalationInput, rows: Rows): Wait {
   const round = `round ${repeating.round} of ${repeating.maxRounds}`;
   const refOf = (id: string) => rows.get(id)?.ref ?? id;
-  const behind = (input.waits.get(row.task.id) ?? []).flatMap((w) => (w.kind === 'dependencies' || w.kind === 'queued' ? w.waiting : w.kind === 'merge-gate' ? w.unmerged : w.kind === 'loop-check' ? [w.check] : []));
+  const behind = inFront(row, input);
   const waitsOn = behind.map(refOf).join(', ');
-  const options = behind.length > 0 ? startedOver(row, input).filter((o) => o.id !== 'retry' && o.id !== 'continue') : startedOver(row, input);
+  const options = startedOver(row, input);
   if (repeating.waiting.length === 0) {
     if (behind.length > 0) return { kind: 'failed', reason: `Its fix has landed, and its ${round} waits on ${waitsOn}: nothing runs it now. Execute the plan and the loop goes on.`, options };
     return { kind: 'failed', reason: `Its fix has landed, and nothing runs its ${round}.`, options: [{ id: 'run', label: `Start ${round}` }, ...options] };
@@ -298,13 +310,13 @@ function stranded(row: TaskWithParent, repeating: Extract<StartWait, { kind: 're
  */
 function failed(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait | null {
   const { task } = row;
-  if (outOfRounds(task)) return { kind: 'out-of-rounds', reason: `Its loop ran out of rounds: it failed round ${loopRoundOf(task)} of ${task.loop?.maxRounds}.`, options: startedOver(row, input) };
-  if (!betweenRounds(task)) return { kind: 'failed', reason: task.verdict?.reason || 'It failed.', options: startedOver(row, input) };
+  if (outOfRounds(task)) return { kind: 'out-of-rounds', ...ended(row, `Its loop ran out of rounds: it failed round ${loopRoundOf(task)} of ${task.loop?.maxRounds}.`, input, rows) };
+  if (!betweenRounds(task)) return { kind: 'failed', ...ended(row, task.verdict?.reason || 'It failed.', input, rows) };
   const repeating = waitOf(input.waits.get(task.id) ?? [], 'repeating');
   if (repeating) return input.loopRunsOn(task.id) ? null : stranded(row, repeating, input, rows);
   const body = [...rows.values()].filter((r) => task.loop?.body.includes(r.task.id));
   if (body.some((r) => r.task.status === 'failed' || waitOf(input.waits.get(r.task.id) ?? [], 'blocked'))) return null;
-  return { kind: 'failed', reason: `Its loop stopped: ${body.map((r) => r.ref).join(', ')} did not run.`, options: startedOver(row, input) };
+  return { kind: 'failed', ...ended(row, `Its loop stopped: ${body.map((r) => r.ref).join(', ')} did not run.`, input, rows) };
 }
 
 /** A task not started that only a person can start, once a run is there for it to be late for. */

@@ -8,10 +8,10 @@ import type { IConfig } from '../../interfaces/IConfig';
 import type { SessionMessage, SessionNotice } from '../SessionMessage';
 import type { SubmitPlanArgs } from '../mcp/tools';
 import { makeSession, taskOf, testWorkspace } from './sessionTestKit';
-import { ctx, heldPlanner, hitLimit, NOW, prose, recordingRunner, settled, supervised, task, until } from './supervisorTestKit';
+import { ctx, heldPlanner, hitLimit, NOW, prose, recordingRunner, settled, supervised, task, until, type Env } from './supervisorTestKit';
 import { fakeConfig } from '../../testing';
 import { PlanStore } from '../PlanStore';
-import { createTask } from '../../models/Task';
+import { createTask, type Task } from '../../models/Task';
 import { loadSession, saveSession } from '../../utils/sessionStore';
 
 /**
@@ -761,5 +761,134 @@ describe('an awaiting task an edit makes manual', () => {
 
     expect(store.get('t1')).toMatchObject({ status: 'pending' });
     expect(store.get('t1')?.awaitingReason).toBeUndefined();
+  });
+});
+
+describe('a task made manual on a usage limit', () => {
+  const limited = (env: Env) => env.notices.map((n) => n.message).filter((m) => m.includes('usage limit'));
+
+  async function atInputMadeManual(tasks: Task[], parallel: number) {
+    const env = await supervised(tasks, { settings: { supervisorLevel: 'off' }, config: { maxParallelSessions: parallel } });
+    await until(() => env.run.spawnedIds().includes('t1'));
+    env.run.of('t1').waitForInput();
+    await until(() => taskOf(env.session, 't1')?.status === 'awaiting_user');
+    await settled();
+    void env.session.continueConversation('make it manual');
+    await until(() => env.planner.calls.length === 1);
+    expect((await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: 't1', changes: { type: 'user', userSteps: ['do it by hand'] } }] } as never, ctx)).isError).toBeFalsy();
+    env.planner.calls[0].finish(prose('Changed.'));
+    await settled();
+    await env.session.execute({ command: 'message_task', task: 't1', text: 'carry on' }, USER);
+    await settled();
+    return env;
+  }
+
+  it('holds nothing when its live runner hits the limit: the rest of the run goes on, and no resume is promised', async () => {
+    const env = await atInputMadeManual([task('t1', 1), task('t2', 2)], 1);
+    hitLimit(env.run.of('t1'));
+    await until(() => env.run.spawnedIds().includes('t2'));
+
+    expect(taskOf(env.session, 't1')).toMatchObject({ type: 'user', status: 'pending' });
+    expect(taskOf(env.session, 't1')?.resumeAt).toBeUndefined();
+    expect(limited(env).join('\n')).not.toContain('resumes on its own');
+    expect(limited(env).join('\n')).toContain('yours to do');
+    expect(env.session.escalations().find((e) => e.task?.id === 't1')).toMatchObject({ kind: 'by-hand' });
+    env.session.destroy();
+  });
+
+  it('leaves the hold of another task waiting on the reset, which resumes it and lets the run go on', async () => {
+    const env = await atInputMadeManual([task('t1', 1), task('t2', 2), task('t3', 3)], 2);
+    await until(() => env.run.spawnedIds().includes('t2'));
+    hitLimit(env.run.of('t2'));
+    await until(() => !!taskOf(env.session, 't2')?.resumeAt);
+    hitLimit(env.run.of('t1'));
+    await until(() => taskOf(env.session, 't1')?.status === 'pending');
+    await settled();
+
+    expect(env.run.spawnedIds()).not.toContain('t3');
+    await vi.advanceTimersByTimeAsync(3 * 60 * 60 * 1000);
+    await until(() => env.run.spawnedIds().filter((id) => id === 't2').length === 2);
+    expect(taskOf(env.session, 't1')).toMatchObject({ type: 'user', status: 'pending' });
+    env.session.destroy();
+  });
+
+  it('lets the run go when another verdict releases a paused task a direct edit made manual', async () => {
+    const env = await supervised([task('t1', 1), task('t2', 2), task('t3', 3)], { settings: { supervisorLevel: 'off' }, config: { maxParallelSessions: 2 } });
+    await until(() => env.run.spawnedIds().includes('t2'));
+    hitLimit(env.run.of('t1'));
+    await until(() => !!taskOf(env.session, 't1')?.resumeAt);
+    await env.session.updateTask('t1', { type: 'user', userSteps: [{ order: 1, instruction: 'do it by hand', completed: false }] });
+    env.run.of('t2').reportComplete({ status: 'done', summary: 'done' });
+    await until(() => env.run.spawnedIds().includes('t3'));
+
+    expect(taskOf(env.session, 't1')).toMatchObject({ type: 'user', status: 'pending' });
+    env.session.destroy();
+  });
+});
+
+describe('a planner edit between a carried loop\'s body failure and its retry', () => {
+  const loop = () => [task('check', 1, { loop: { body: ['fix'], maxRounds: 3 } }), task('fix', 2, { dependencies: ['check'] }), task('other', 3), task('ship', 4, { dependencies: ['check'] })];
+
+  async function bodyFailedThenEdited(op: unknown) {
+    const env = await supervised(loop(), { execute: false, settings: { supervisorLevel: 'off' } });
+    await env.session.execute({ command: 'run_task', task: 'check' }, USER);
+    await until(() => env.run.spawnedIds().includes('check'));
+    env.run.of('check').reportComplete({ status: 'failed', summary: 'Found it.', reason: 'Found it.' });
+    await until(() => env.run.spawnedIds().includes('fix'));
+    env.run.of('fix').reportComplete({ status: 'failed', summary: 'No.', reason: 'No.' });
+    await until(() => taskOf(env.session, 'fix')?.status === 'failed');
+    await settled();
+    void env.session.continueConversation('change it');
+    await until(() => env.planner.calls.length === 1);
+    expect((await env.planner.tools().editPlan!({ ops: [op] } as never, ctx)).isError).toBeFalsy();
+    env.planner.calls[0].finish(prose('Changed.'));
+    await settled();
+    return env;
+  }
+
+  it('leaves the loop carried: a retry that passes resumes it, and nothing else starts', async () => {
+    const env = await bodyFailedThenEdited({ op: 'update', taskId: 'other', changes: { title: 'Other renamed' } });
+    expect(await env.session.execute({ command: 'retry_task', task: 'fix', from: 'fresh' }, USER)).toMatchObject({ ok: true });
+    await until(() => env.run.spawnedIds().filter((id) => id === 'fix').length === 2);
+    env.run.of('fix').reportComplete({ status: 'done', summary: 'fixed' });
+    await until(() => env.run.spawnedIds().filter((id) => id === 'check').length === 2);
+
+    expect(taskOf(env.session, 'check')).toMatchObject({ loopRound: 2 });
+    expect(env.run.spawnedIds()).not.toContain('other');
+    env.session.destroy();
+  });
+});
+
+describe('a failed task behind a dependency that has not finished', () => {
+  async function behind() {
+    const env = await supervised([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], { settings: { supervisorLevel: 'off' } });
+    await until(() => env.run.spawnedIds().includes('t1'));
+    env.run.of('t1').reportComplete({ status: 'done', summary: 'done' });
+    await until(() => env.run.spawnedIds().includes('t2'));
+    env.run.of('t2').reportComplete({ status: 'failed', summary: 'No.', reason: 'No.' });
+    await until(() => taskOf(env.session, 't2')?.status === 'failed');
+    await settled();
+    expect(await env.session.execute({ command: 'mark_not_done', task: 't1', confirmed: true }, USER)).toMatchObject({ ok: true });
+    await settled();
+    return env;
+  }
+
+  it('names what it waits on, and offers no start the seam would refuse', async () => {
+    const env = await behind();
+    const entry = env.session.escalations().find((e) => e.task?.id === 't2')!;
+
+    expect(entry).toMatchObject({ kind: 'failed', reason: expect.stringContaining('#1') });
+    expect(entry.options.map((o) => o.id)).toEqual(['skip', 'complete']);
+    expect(await env.session.execute({ command: 'retry_task', task: 't2', from: 'fresh' }, USER)).toMatchObject({ ok: false, message: expect.stringContaining('#1') });
+    env.session.destroy();
+  });
+
+  it('offers them again once it has finished', async () => {
+    const env = await behind();
+    await env.session.execute({ command: 'mark_complete', task: 't1', confirmed: true }, USER);
+    await settled();
+
+    expect(env.session.escalations().find((e) => e.task?.id === 't2')?.options.map((o) => o.id)).toEqual(expect.arrayContaining(['retry', 'continue']));
+    env.session.destroy();
   });
 });
