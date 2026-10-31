@@ -212,8 +212,8 @@ It is a fresh consent, given after the notice that explained the lowering.
 
 ### Autorun
 
-**With autorun on, a plan the planner submits is approved and started, as if
-the user had pressed Execute.** It is a switch of its own, independent of the
+**With autorun on, a plan the planner submits is approved and started when its
+reply ends, as if the user had pressed Execute.** It is a switch of its own, independent of the
 supervisor level, for the reason ADR-0029 keeps auto-merge independent: two
 consents, "I do not need to see the plan" and "act for me when something goes
 wrong", that users want in either combination.
@@ -225,7 +225,16 @@ wrong", that users want in either combination.
 - **It fires on a submission only** — the first plan of a session, or a new
   plan after a run has finished. Never when a session loads with a plan
   waiting, and never when autorun is turned on while one waits: that plan is
-  already in front of the user.
+  already in front of the user. An edit starts nothing either: the planner
+  calls `run_plan` when the user wants it run.
+- **It never silently does nothing.** A task the planner started with `run_task`
+  in the reply that submitted the plan is live when the reply ends. In Full,
+  autorun joins that work as one scheduled run, by the path Execute takes during
+  a run, so the dependents start and the plan is approved; it skips only when a
+  scheduled run is already going, which has the plan's tasks. In Guarded it does
+  not join, since a join would approve a script task the user was never shown
+  ([ADR-0035](0035-effects-are-consented-and-recorded.md)). The refusal is in
+  the timeline, and whenever autorun cannot start a plan a notice says why.
 - **The approval and the start are recorded** in the timeline as `run_plan`
   through the command seam, with autorun as who asked, and drawn as
   "Started by autorun".
@@ -246,15 +255,20 @@ wrong", that users want in either combination.
 This is the exception to ADR-0029's "an unapproved task never starts": under
 autorun, submission is approval.
 
-**With autorun on and Full, the planner may also start a task added after the
-plan was approved.** A task the planner adds to an approved plan is otherwise
-unapproved until the user starts it, so with autorun on a finished run stopped
-at the first follow-up: the planner added the task, its `run_task` was
-refused, and the task waited for a person the user had said was not needed.
+**With autorun on and Full, nobody is asked: a planner turn may start anything,
+on a first plan as on an approved one.** That is `run_task`, `run_plan`,
+`run_script`, a retry, and script tasks. Otherwise a task waits for a person the
+user has said is not needed: a task added to an approved plan stops a finished
+run at the first follow-up, and a first plan the planner started by hand is
+refused `run_plan` for the rest of the session.
 
-- **The planner starts it, when it asks** — `run_task`, or `run_plan` over a
-  plan with added tasks. Nothing starts on its own: adding a task for later
-  stays possible, and autorun still fires on a whole submitted plan only.
+- **The planner starts it, when it asks.** Nothing starts on its own: adding a
+  task for later stays possible, and autorun still fires on a whole submitted
+  plan only. `run_plan` starts the whole plan, or makes the work already live
+  one scheduled run and approves what waits, so the planner never needs to drive
+  tasks one by one.
+- **Such a start makes the plan approved**, as autorun's own start does, so
+  nothing later in the session is refused for it.
 - **A start in the reply that adds the task goes through at once**, since the
   edit is in the plan as its `edit_plan` call answers (ADR-0022, P2; ADR-0029).
 - **Both settings are read at the start**, not when the task was added, so
@@ -262,16 +276,19 @@ refused, and the task waited for a person the user had said was not needed.
   through approves the task, as the user's own start does.
 - **Ops tasks too**, for the reason autorun starts them in a submitted plan.
 - **Script tasks, and `run_script`, in Full only** ([ADR-0035](0035-effects-are-consented-and-recorded.md)).
-  With autorun on in Full, on an approved plan, `run_script` runs a script
-  without asking, and a script task the planner writes in the user's turn is
-  approved as it lands. Under Guarded autorun does not do so: `run_script` asks
+  With autorun on in Full, `run_script` runs a script without asking, and a
+  script task the planner writes, a rewritten body included, is approved as it
+  lands. Under Guarded autorun does not do so: `run_script` asks
   on the approval card, and a script task the planner writes waits for the
   user's approval unless their effect allowlist covers it. A script's body is
   shown verbatim either way.
-- **Only a planner turn the user started, and only on a plan the user or
-  autorun approved.** Under Guarded, autorun off, or a plan never approved, an
-  added task waits for the user as before. The supervisor's starts follow its
-  level (ADR-0029): Act already counts its own added tasks as approved.
+- **A planner turn the user started, or a supervisor at Act.** A wake-up turn
+  at Act is never refused for a plan the user has not approved; at Watch and Off
+  the supervisor's level refuses it as ever (ADR-0029). Under Guarded or with
+  autorun off, a task the user has not approved waits for them as before.
+- **Effects stay recorded.** The effect allowlist, the record of every effect
+  and a script's verdict do not change: each is a task, its consent recorded as
+  autorun ([ADR-0035](0035-effects-are-consented-and-recorded.md)).
 
 ### API
 
@@ -329,6 +346,17 @@ the daemon reads it from there at generation.
 - **Rejected: autorun holds plans with ops tasks for review, or holds the ops
   tasks back.** Safer against injection; recorded as a choice for #23 to
   revisit, not as safe.
+- **Dropped: the planner's starts under autorun need an approved plan.** It was
+  the rule until 2026-10-31, for fear of a plan no person had looked at. It did
+  not hold that line, since autorun already started such a plan, ops tasks
+  included. A planner that called `submit_plan` and `run_task` in one reply left
+  the plan unapproved for good: autorun saw live work and did nothing, `run_plan`
+  was refused both ways, dependents never started, and the user had to start a
+  script task by hand, in Full with autorun on.
+- **Rejected: start on `edit_plan` too.** An edit may add work for later, and a
+  turn may make several; the planner says when it wants a run.
+- **Rejected: autorun joins live work in Guarded too.** It would approve a script
+  task the user was never shown, which Guarded's autorun does not do.
 - **Rejected: Guarded turns autorun into an approval card.** One setting would
   silently switch another off.
 - **Rejected: autorun on by default.** A new user's
@@ -368,6 +396,11 @@ the daemon reads it from there at generation.
 - With autorun on, Full and Act, Ordewell can go from a goal to changes on real
   systems with no person reading anything. Each of the three is a separate
   setting with its own confirmation; #23 owns the narrower answer.
+- With autorun on and Full alone, a planner turn can too, a script task on a
+  first plan included. An instruction injected into what the planner read can
+  run as a script with no card and no plan a person saw, as an ops task already
+  could. That is what the two settings ask for: the user trades every point of
+  review for a run that does not stop, and reads the timeline afterwards.
 - ADR-0013's "never merged for the user" holds unless the user opts in, once,
   for every plan.
 - The README's "Review the plan" step names autorun in `/settings` as the way to skip it.
@@ -413,3 +446,4 @@ the daemon reads it from there at generation.
   <n>` or in `settings.json`, which the headless command still writes.
 - 2026-10-26 — a start in the reply that adds the task goes through at once: the edit commits as its call answers (ADR-0022, P2).
 - 2026-10-27 — an open session shows and keeps its own run settings, seeded from `settings.json` when it opens; another session's change no longer moves its panel, and the file is the default the next session opens with.
+- 2026-10-31 — in Full with autorun a planner turn or an Act supervisor may start anything, on a first plan too, and such a start makes the plan approved; autorun joins live work in Full rather than doing nothing, and says why when it cannot start a plan.

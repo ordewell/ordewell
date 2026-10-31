@@ -218,7 +218,7 @@ export const NATIVE_SHELL_GUIDE = [
  * would then run unattended.
  */
 export const AUTORUN_ON =
-  'AUTORUN is on: a plan you submit starts at once, without the user\'s review. When you are ready to plan, write the outline in your reply as the plan\'s summary and submit the plan in the same reply; do not wait for the user to confirm it. Still ask clarifying questions first when the goal is vague or a decision would materially change the outcome.';
+  'AUTORUN is on: a plan you submit starts when your reply ends, without the user\'s review. When you are ready to plan, write the outline in your reply as the plan\'s summary and submit the plan in the same reply; do not wait for the user to confirm it, and do not start its tasks yourself. Still ask clarifying questions first when the goal is vague or a decision would materially change the outcome.';
 
 /** A turn where the user turned autorun off: the outline gate is back. */
 export const AUTORUN_OFF =
@@ -253,8 +253,8 @@ export interface ConversationVariant {
 const EXECUTION_TOOLS_SECTION = [
   'RUNNING THE PLAN:',
   'When the user asks you to start, stop or retry work, do it with these tools rather than telling them which button to press. Ordewell checks every call, may ask the user first, and a refusal says why and what would be accepted.',
-  '- run_plan starts the whole plan; run_task starts one task now.',
-  '- run_script performs an exact effect yourself, such as a push or one setting on a cloud resource: a script task, added to the plan and started at once with no model, from the commands you give as argument vectors (or a script). The user consents to it as written. It returns the result, or after a minute that it still runs, and the result then reaches you in a run update. An effect that needs judgment is an ops task.',
+  '- run_plan starts the whole plan, or makes the tasks already running one scheduled run, so their dependents start; run_task starts one task now, and nothing starts after it on its own.',
+  '- run_script performs an exact effect yourself, such as a push or one setting on a cloud resource: a script task, added to the plan and started at once with no model, from the commands you give as argument vectors (or a script). The user consents to it as written, unless AUTORUN is on and autonomy is Full. It returns the result, or after a minute that it still runs, and the result then reaches you in a run update. An effect that needs judgment is an ops task.',
   '- stop_task stops one running task; stop_run stops every running task and keeps the plan.',
   '- retry_task starts a new attempt of a failed, stopped or waiting task: "fresh" from its prompt, or "session" to continue its saved session with a message. To change what it is told, edit its prompt with edit_plan first. A task paused on a usage limit can be resumed early with from "session" once the user says the limit has been reset.',
   '- message_task sends a running task a message, or answers one waiting for input.',
@@ -262,7 +262,7 @@ const EXECUTION_TOOLS_SECTION = [
   '- answer_checkpoint approves the checkpoint a task\'s runner waits at, or rejects it with a reason the runner acts on. Only the supervisor at Act may, in a wake-up turn; in the user\'s own turn they answer it from the task\'s checkpoint card, so tell them what it asks. A message does not answer one.',
   '- merge_all merges the run\'s landed work into the user\'s branch. Only the supervisor at Act may, in a wake-up turn; in the user\'s own turn they press Merge all themselves.',
   '- skip_task gives up waiting for a failed, blocked or waiting task, with a reason: none of its work lands, and its dependents go ahead once the work it waited on is done. Only the supervisor at Act may, in a wake-up turn; in the user\'s own turn they skip it themselves.',
-  'Only tasks the user approved start: a task you add in the user\'s turn waits for them, unless AUTORUN is on and autonomy is Full — then you may start it yourself when the user wants it run. A task the supervisor adds at Act is approved to run.',
+  'With AUTORUN on and autonomy Full nobody is asked anything, in the user\'s turn or in a wake-up turn at Act: run_plan, run_task, run_script and retry_task go through on a first plan as on an approved one, script tasks included, and run_plan starts or joins everything, so you never need to drive tasks one by one. An edit starts nothing by itself: call run_plan when the user wants it run. Otherwise only tasks the user approved start, and a task you add in the user\'s turn waits for them. A task the supervisor adds at Act is approved to run.',
   '',
 ];
 
