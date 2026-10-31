@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import type { LegacyPlanState, PlanState } from '../models/Task';
+import type { LegacyPlanState, PlanState, ResearchLogEntry } from '../models/Task';
 import { dropRetiredPlanFields, failInterruptedTasks, migratePlanState, migrateLoadedTasks, settleOwedRepairs } from '../models/Task';
 import { migratePlanStateIsolation } from '../services/isolationRecord';
 import type { SessionMeta, SessionData } from '../models/Session';
@@ -29,6 +29,44 @@ export function idSegment(id: string): string {
  */
 export function sessionDataDir(sessionId: string, baseDir?: string): string {
   return path.join(getSessionsDir(baseDir), idSegment(sessionId));
+}
+
+const RESEARCH_LOG_FILE = 'research-log.json';
+
+function researchLogPath(sessionId: string, baseDir?: string): string {
+  return path.join(sessionDataDir(sessionId, baseDir), RESEARCH_LOG_FILE);
+}
+
+/** What stands for a plan with no log, so that one also has a write to remember. */
+const NO_RESEARCH_LOG: readonly ResearchLogEntry[] = [];
+
+/** Where each log object was last written, and how long it was: the plan replaces its log to change it, so most saves find it here. */
+const writtenLogs = new WeakMap<readonly ResearchLogEntry[], { file: string; length: number }>();
+
+/**
+ * A session's research trace is kept with its task logs, not in its file: it
+ * changes only with a planner turn, and it can outweigh the rest of the plan,
+ * on every save of a run. Written before the session file, and a trace only: a
+ * crash between the two leaves it a step ahead of a plan that reads fine
+ * without it.
+ */
+function saveResearchLog(log: readonly ResearchLogEntry[], file: string): void {
+  const written = writtenLogs.get(log);
+  const unchanged = fs.existsSync(file) ? written?.file === file && written.length === log.length : log.length === 0;
+  if (unchanged) return;
+  writeFileAtomic(file, JSON.stringify(log));
+  writtenLogs.set(log, { file, length: log.length });
+}
+
+/** A file from before the log moved out holds its own, and the next save moves it. */
+function restoreResearchLog(plan: LegacyPlanState, sessionId: string, baseDir: string | undefined, logger: ILogger): void {
+  if (plan.researchLog) return;
+  try {
+    plan.researchLog = JSON.parse(fs.readFileSync(researchLogPath(sessionId, baseDir), 'utf-8')) as ResearchLogEntry[];
+  } catch (err: unknown) {
+    // No file is a session with no research; a bad one costs the trace, not the session.
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') logger.warn('sessionStore', `failed to read the research log of ${sessionId}; going on without it`, err);
+  }
 }
 
 const REJECTION_MESSAGE = 'This session was created with an older version of Ordewell. Please re-plan.';
@@ -108,16 +146,15 @@ export function saveSession(plan: LegacyPlanState, goal: string, baseDir?: strin
     updatedAt: now,
   };
 
-  const session: SessionData = {
-    meta,
-    plan: JSON.parse(JSON.stringify(plan)),
-  };
-  dropRetiredPlanFields(session.plan);
+  const { researchLog, ...kept } = plan;
+  dropRetiredPlanFields(kept);
+  saveResearchLog(researchLog ?? NO_RESEARCH_LOG, researchLogPath(meta.id, baseDir));
+  const session: SessionData = { meta, plan: kept };
 
   const filename = sessionFilename(meta);
   const filePath = path.join(sessionsDir, filename);
 
-  writeFileAtomic(filePath, JSON.stringify(session, null, 2));
+  writeFileAtomic(filePath, JSON.stringify(session));
   dropLegacyFile(sessionsDir, meta);
 
   return meta;
@@ -202,6 +239,7 @@ export function loadSession(sessionId: string, baseDir?: string, logger: ILogger
       }
       const session = parsed as SessionData;
       const plan = session.plan as LegacyPlanState;
+      restoreResearchLog(plan, sessionId, baseDir, logger);
       failInterruptedTasks(plan.tasks, new Date().toISOString());
       migratePlanStateIsolation(plan);
       settleOwedRepairs(plan);

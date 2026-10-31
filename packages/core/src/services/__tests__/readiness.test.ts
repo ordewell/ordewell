@@ -49,7 +49,25 @@ const why = (readiness: Readiness, taskId: string): StartWait[] | undefined => r
 /** Whether a dependency on `depId` is met: the work behind it is on the integration branch. */
 const met = (depId: string, store: ReturnType<typeof storeOf>, runs = runsOf()) => unmetDependencies({ dependencies: [depId] }, store, runs).length === 0;
 
+/** How many times judging `tasks` read the whole plan: a task judged by scanning it reads once per task. */
+function planReads(tasks: Task[]): number {
+  const store = storeOf(tasks);
+  let reads = 0;
+  selectReadyTasks(input(tasks, { store: { ...store, get allTasks() { reads++; return store.allTasks; } } }));
+  return reads;
+}
+
 describe('selectReadyTasks', () => {
+  it('reads the whole plan no more often for a plan ten times the size, through a skip and in a loop', () => {
+    const plan = (n: number) => [
+      createTask({ id: 'skipped', order: 0, title: 'Skipped', prompt: 'x', status: 'skipped' }),
+      ...Array.from({ length: n }, (_, i) => createTask({ id: `t${i}`, order: i + 1, title: `T${i}`, prompt: 'x', dependencies: ['skipped'] })),
+      createTask({ id: 'check', order: n + 1, title: 'Check', prompt: 'x', loop: { body: ['t0'], maxRounds: 2 } }),
+    ];
+
+    expect(planReads(plan(100))).toBe(planReads(plan(10)));
+  });
+
   it('offers pending AI tasks with a prompt, lowest order first', () => {
     const t1 = createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' });
     const t2 = createTask({ id: 't2', order: 2, title: 'Second', prompt: 'do second' });

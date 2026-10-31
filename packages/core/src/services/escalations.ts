@@ -6,7 +6,6 @@ import { manualOverrideConfirmation, pastGateConfirmation } from '../taskRow/tex
 import { holdLabel } from '../taskRow/status';
 import { canContinue } from './continuation';
 import { waitOf, type StartWait, type StartWaitKind } from './readiness';
-import { taskRefOf } from './TaskRefs';
 import type { ExecutionCommand } from './ExecutionCommands';
 import type { PendingApproval } from './PendingApprovals';
 import type { RunMergeView } from './SessionMessage';
@@ -163,6 +162,9 @@ const ONLY_A_PERSON: Record<StartWaitKind, boolean> = {
   'by-hand': true,
 };
 
+/** The plan's rows by task id, in plan order: the list is derived on every status update, so nothing here scans it per task. */
+type Rows = ReadonlyMap<string, TaskWithParent>;
+
 const label = ({ task, ref }: Pick<TaskWithParent, 'task' | 'ref'>): string => `task ${ref} "${task.title}"`;
 
 const RETRY: EscalationOption = { id: 'retry', label: 'Retry' };
@@ -213,8 +215,8 @@ function startedOver(row: TaskWithParent, input: EscalationInput): EscalationOpt
  * is listed itself, its cause in its place; only a resolver nothing will start
  * leaves the conflict to say so, which a run stopped or reloaded under it does.
  */
-function conflictWithResolver(row: TaskWithParent, resolverId: string, input: EscalationInput, rows: readonly TaskWithParent[]): Wait | null {
-  const resolver = rows.find((r) => r.task.id === resolverId);
+function conflictWithResolver(row: TaskWithParent, resolverId: string, input: EscalationInput, rows: Rows): Wait | null {
+  const resolver = rows.get(resolverId);
   const waiting = resolver?.task.status === 'pending' || resolver?.task.status === 'approved';
   if (!resolver || !waiting || input.run.open || input.startQueued(resolverId)) return null;
   return {
@@ -226,7 +228,7 @@ function conflictWithResolver(row: TaskWithParent, resolverId: string, input: Es
 }
 
 /** An `awaiting_user` task, but for one that resumes by itself at its usage limit's reset. */
-function awaiting(row: TaskWithParent, input: EscalationInput, rows: readonly TaskWithParent[]): Wait | null {
+function awaiting(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait | null {
   const { task } = row;
   const live = input.live(task.id);
   switch (task.awaitingReason) {
@@ -270,12 +272,12 @@ function awaiting(row: TaskWithParent, input: EscalationInput, rows: readonly Ta
  * goes on from here, and a start runs its next round once its body has landed
  * (ADR-0045 L5, L7), which a retry would not, starting its rounds over.
  */
-function stranded(row: TaskWithParent, repeating: Extract<StartWait, { kind: 'repeating' }>, input: EscalationInput, rows: readonly TaskWithParent[]): Wait {
+function stranded(row: TaskWithParent, repeating: Extract<StartWait, { kind: 'repeating' }>, input: EscalationInput, rows: Rows): Wait {
   const round = `round ${repeating.round} of ${repeating.maxRounds}`;
   if (repeating.waiting.length === 0) {
     return { kind: 'failed', reason: `Its fix has landed, and nothing runs its ${round}.`, options: [{ id: 'run', label: `Start ${round}` }, ...startedOver(row, input)] };
   }
-  const fix = repeating.waiting.map((id) => rows.find((r) => r.task.id === id)?.ref ?? id);
+  const fix = repeating.waiting.map((id) => rows.get(id)?.ref ?? id);
   return { kind: 'failed', reason: `Its loop stopped between rounds: nothing runs it again, and ${fix.join(', ')} ${fix.length === 1 ? 'has' : 'have'} not landed. Execute the plan and the loop goes on.`, options: startedOver(row, input) };
 }
 
@@ -285,19 +287,19 @@ function stranded(row: TaskWithParent, repeating: Extract<StartWait, { kind: 're
  * its place: retrying that task is what lets the loop go on (L7), so the check
  * would be the same wait twice.
  */
-function failed(row: TaskWithParent, input: EscalationInput, rows: readonly TaskWithParent[]): Wait | null {
+function failed(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait | null {
   const { task } = row;
   if (outOfRounds(task)) return { kind: 'out-of-rounds', reason: `Its loop ran out of rounds: it failed round ${loopRoundOf(task)} of ${task.loop?.maxRounds}.`, options: startedOver(row, input) };
   if (!betweenRounds(task)) return { kind: 'failed', reason: task.verdict?.reason || 'It failed.', options: startedOver(row, input) };
   const repeating = waitOf(input.waits.get(task.id) ?? [], 'repeating');
   if (repeating) return input.loopRunsOn(task.id) ? null : stranded(row, repeating, input, rows);
-  const body = rows.filter((r) => task.loop?.body.includes(r.task.id));
+  const body = [...rows.values()].filter((r) => task.loop?.body.includes(r.task.id));
   if (body.some((r) => r.task.status === 'failed' || waitOf(input.waits.get(r.task.id) ?? [], 'blocked'))) return null;
   return { kind: 'failed', reason: `Its loop stopped: ${body.map((r) => r.ref).join(', ')} did not run.`, options: startedOver(row, input) };
 }
 
 /** A task not started that only a person can start, once a run is there for it to be late for. */
-function unstarted(row: TaskWithParent, input: EscalationInput, rows: readonly TaskWithParent[]): Wait | null {
+function unstarted(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait | null {
   const { task } = row;
   const waits = input.waits.get(task.id) ?? [];
   const carried = input.carried(task.id);
@@ -316,7 +318,7 @@ function unstarted(row: TaskWithParent, input: EscalationInput, rows: readonly T
     if (task.type === 'user') return { kind: 'on-hold', reason: BY_HAND, options: completeOption(row, input.run) };
     // The seam refuses a retry until they have finished; a force start goes past a failure, and queues behind what has yet to run.
     if (behind.length > 0) {
-      const refs = behind.map((id) => rows.find((r) => r.task.id === id)?.ref ?? id);
+      const refs = behind.map((id) => rows.get(id)?.ref ?? id);
       return {
         kind: 'on-hold',
         reason: holdLabel(`reverted, and it depends on ${refs.join(', ')}; force start it, or retry it once ${refs.length === 1 ? 'that has' : 'they have'} finished`),
@@ -332,7 +334,7 @@ function unstarted(row: TaskWithParent, input: EscalationInput, rows: readonly T
   const gate = waitOf(waits, 'merge-gate');
   if (gate) {
     if (input.run.autoMerges) return null;
-    const refs = gate.unmerged.map((id) => rows.find((r) => r.task.id === id)?.ref ?? id);
+    const refs = gate.unmerged.map((id) => rows.get(id)?.ref ?? id);
     return {
       kind: 'merge-gate',
       on: attemptsDigest(gate.unmerged, input, rows),
@@ -350,7 +352,7 @@ function unstarted(row: TaskWithParent, input: EscalationInput, rows: readonly T
   return null;
 }
 
-function waitOfTask(row: TaskWithParent, input: EscalationInput, rows: readonly TaskWithParent[]): Wait | null {
+function waitOfTask(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait | null {
   switch (row.task.status) {
     case 'awaiting_user': return awaiting(row, input, rows);
     case 'failed': return failed(row, input, rows);
@@ -360,13 +362,14 @@ function waitOfTask(row: TaskWithParent, input: EscalationInput, rows: readonly 
   }
 }
 
-function ofTask(row: TaskWithParent, input: EscalationInput, rows: readonly TaskWithParent[]): Escalation[] {
+function ofTask(row: TaskWithParent, input: EscalationInput, rows: Rows): Escalation[] {
   const { task, ref } = row;
-  const attempt = input.attempt(task);
-  const asked = input.approvals
-    .filter(({ request }) => isRunnerApproval(request) && request.taskId === task.id)
-    .map((pending) => askedOf(row, pending, attempt));
+  const requests = input.approvals.filter(({ request }) => isRunnerApproval(request) && request.taskId === task.id);
   const wait = waitOfTask(row, input, rows);
+  // After a reload the attempt comes off the task's log directory, so a task nothing waits on does not ask.
+  if (!wait && requests.length === 0) return [];
+  const attempt = input.attempt(task);
+  const asked = requests.map((pending) => askedOf(row, pending, attempt));
   if (!wait) return asked;
   return [...asked, {
     id: [wait.kind, task.id, attempt, ...(wait.on ? [wait.on] : []), ...(task.waitsEnded ? [task.waitsEnded] : [])].join(':'),
@@ -383,9 +386,9 @@ function ofTask(row: TaskWithParent, input: EscalationInput, rows: readonly Task
  * A merge's wait is told apart by the attempts it would merge. A digest, because
  * a long run's attempts would not fit the capped id the notify command is handed.
  */
-function attemptsDigest(taskIds: readonly string[], input: EscalationInput, rows: readonly TaskWithParent[]): string {
+function attemptsDigest(taskIds: readonly string[], input: EscalationInput, rows: Rows): string {
   const attempts = taskIds.map((taskId) => {
-    const row = rows.find((r) => r.task.id === taskId);
+    const row = rows.get(taskId);
     return `${taskId}:${row ? input.attempt(row.task) : 0}`;
   });
   return createHash('sha256').update(String(attempts)).digest('hex').slice(0, 12);
@@ -399,8 +402,8 @@ function attemptsDigest(taskIds: readonly string[], input: EscalationInput, rows
  * survives a reload as the waits it reads do.
  */
 export function escalations(input: EscalationInput): Escalation[] {
-  const rows = flattenTasksWithParents(input.tasks);
-  const tasks = rows.flatMap((row) => ofTask(row, input, rows));
+  const rows: Rows = new Map(flattenTasksWithParents(input.tasks).map((row) => [row.task.id, row]));
+  const tasks = [...rows.values()].flatMap((row) => ofTask(row, input, rows));
   const { run } = input;
   const blocked: Escalation[] = run.blocked === null ? [] : [{
     id: `blocked-run:${run.blocked}`,
@@ -413,7 +416,7 @@ export function escalations(input: EscalationInput): Escalation[] {
   const merge: Escalation[] = !mergeOwed ? [] : [{
     id: `merge-all:${run.id ?? ''}:${attemptsDigest(run.merge?.landed.map((t) => t.taskId) ?? [], input, rows)}`,
     kind: 'merge-all',
-    reason: `The run's landed work waits for Merge all: ${run.merge?.landed.map((t) => taskRefOf(input.tasks, t.taskId) ?? t.taskId).join(', ')}.`,
+    reason: `The run's landed work waits for Merge all: ${run.merge?.landed.map((t) => rows.get(t.taskId)?.ref ?? t.taskId).join(', ')}.`,
     options: [MERGE_ALL],
   }];
   return [...blocked, ...tasks, ...merge];

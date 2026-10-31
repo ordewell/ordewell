@@ -1607,6 +1607,7 @@ describe('idleSince on the status_update broadcast', () => {
 
     broadcast.mockClear();
     fakeSession.emitOutput('more output');
+    vi.advanceTimersByTime(1000);
 
     const resumeUpdates = broadcast.mock.calls
       .map((c: unknown[]) => c[0] as { type: string; tasks?: Array<{ id: string; idleSince?: string | null }> })
@@ -1656,12 +1657,17 @@ describe('saving a run as its tasks settle', () => {
     return { session, saveSession, order, runnerSession, messages };
   }
 
-  it('persists live attempt usage before broadcasting the task ledgers and task total', async () => {
+  it('announces live attempt usage at once and saves it on the timer, as a reload restores it', async () => {
+    vi.useFakeTimers();
     const env = twoTaskRun();
     await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.advanceTimersByTimeAsync(1000);
     env.order.length = 0;
     env.runnerSession('t1').emitEvent({ type: 'usage', record: { source: 'claude-code', model: 'actual', inputTokens: 10, reportedCost: { amount: 0.5, currency: 'USD' } } });
-    expect(env.order).toEqual(['save:in_progress', 'status:in_progress']);
+    expect(env.order).toEqual(['status:in_progress']);
+    await vi.advanceTimersByTimeAsync(5000);
+    vi.useRealTimers();
+    expect(env.order).toEqual(['status:in_progress', 'save:in_progress']);
     const persisted = env.saveSession.mock.calls.at(-1)![0];
     expect(persisted.tasks[0].attemptUsage?.[0].byModel?.[0].model).toBe('actual');
     expect(persisted.tasks[0].attemptUsage?.[0].totals).toEqual({ inputTokens: 10, reportedCost: { USD: 0.5 } });
@@ -1793,7 +1799,8 @@ describe('saving a run as its tasks settle', () => {
     runnerSession('t1').reportComplete({ status: 'done', summary: '' });
     runnerSession('t1').emitExit(0);
 
-    await vi.waitFor(() => expect(order).toContain('save:completed'));
+    await vi.waitFor(() => expect(order).toContain('status:completed'));
+    expect(order.indexOf('save:completed')).toBeGreaterThanOrEqual(0);
     expect(order.indexOf('save:completed')).toBeLessThan(order.indexOf('status:completed'));
     expect(order).not.toContain('complete');
     expect(session.isExecuting).toBe(true);

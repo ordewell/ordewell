@@ -152,11 +152,11 @@ describe('preserved planner history across compaction', () => {
     const { planner } = apiStylePlanner();
     const session = adopted(plannedDialogue(), { aiService: planner });
     await session.compactConversation();
-    const before = fs.readdirSync(path.join(workspace, '.ordewell', 'sessions')).map((f) => fs.readFileSync(path.join(workspace, '.ordewell', 'sessions', f), 'utf-8'));
+    const before = fs.readdirSync(path.join(workspace, '.ordewell', 'sessions')).filter((f) => f.endsWith('.json')).map((f) => fs.readFileSync(path.join(workspace, '.ordewell', 'sessions', f), 'utf-8'));
 
     await expect(session.compactConversation()).rejects.toThrow(/too short/i);
 
-    const after = fs.readdirSync(path.join(workspace, '.ordewell', 'sessions')).map((f) => fs.readFileSync(path.join(workspace, '.ordewell', 'sessions', f), 'utf-8'));
+    const after = fs.readdirSync(path.join(workspace, '.ordewell', 'sessions')).filter((f) => f.endsWith('.json')).map((f) => fs.readFileSync(path.join(workspace, '.ordewell', 'sessions', f), 'utf-8'));
     expect(after).toEqual(before);
     session.destroy();
   });
@@ -272,7 +272,7 @@ describe('preserved planner history across compaction', () => {
   });
 
   it('leaves the saved session byte for byte when the summary turn is stopped or returns no summary', async () => {
-    const file = () => fs.readdirSync(path.join(workspace, '.ordewell', 'sessions')).map((f) => fs.readFileSync(path.join(workspace, '.ordewell', 'sessions', f), 'utf-8'));
+    const file = () => fs.readdirSync(path.join(workspace, '.ordewell', 'sessions')).filter((f) => f.endsWith('.json')).map((f) => fs.readFileSync(path.join(workspace, '.ordewell', 'sessions', f), 'utf-8'));
     const controller = new AbortController();
     const { planner, state } = apiStylePlanner();
     const session = adopted(plannedDialogue(), { aiService: planner });

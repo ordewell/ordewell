@@ -76,6 +76,15 @@ export function checkOf<T extends Pick<LoopSubject, 'loop'>>(tasks: readonly T[]
   return tasks.find((t) => t.loop?.body.includes(taskId));
 }
 
+/** {@link checkOf} for a whole plan at once: each body task's check, the first that holds it. */
+export function checksOfBodies<T extends Pick<LoopSubject, 'loop'>>(tasks: readonly T[]): Map<string, T> {
+  const checks = new Map<string, T>();
+  for (const task of tasks) {
+    for (const id of task.loop?.body ?? []) if (!checks.has(id)) checks.set(id, task);
+  }
+  return checks;
+}
+
 /** Whether a task is a loop's check or in a loop's body. */
 export function inLoop(tasks: readonly Pick<LoopSubject, 'id' | 'loop'>[], task: Pick<LoopSubject, 'id' | 'loop'>): boolean {
   return !!task.loop || checkOf(tasks, task.id) !== undefined;

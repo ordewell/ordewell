@@ -67,6 +67,7 @@ describe('task editing route with a task waiting on a usage-limit reset', () => 
     expect(response.status).toBe(200);
     await vi.waitFor(() => expect(sessions).toHaveLength(2));
     expect(runner.spawn.mock.calls[1][0]).toMatchObject({ taskId: 't1', runner: 'opencode' });
+    await vi.advanceTimersByTimeAsync(1000);
     const status = messages.filter((m) => m.type === 'status_update').at(-1)!;
     expect(status.tasks[0].status).toBe('in_progress');
     expect(status.tasks[0].resumeAt).toBeUndefined();

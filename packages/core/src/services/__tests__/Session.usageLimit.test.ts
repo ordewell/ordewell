@@ -121,6 +121,7 @@ describe('editing a task waiting on a usage-limit reset', () => {
     expect(taskOf(env.session, 't1')!.resumeAt).toBeUndefined();
     await until(() => env.run.spawnedIds().length === 2);
     expect(env.run.runner.spawn.mock.calls[1][0]).toMatchObject({ taskId: 't1', runner: 'codex' });
+    await vi.advanceTimersByTimeAsync(1000);
     const status = env.messages.filter((m) => m.type === 'status_update').at(-1)!;
     expect(status.tasks[0].status).toBe('in_progress');
     expect(status.tasks[0].resumeAt).toBeUndefined();

@@ -172,11 +172,15 @@ the *ModelResolver*'s own cache is a different one that this overlays.
 **SessionEventRelay** — the one place a surface's view of a Session is made:
 it turns orchestrator events (task changes, ticks, review, checkpoints,
 isolation, execution complete) and planner progress into **SessionMessage**
-broadcasts, and holds status updates back while a mutation is in flight. It
-holds nothing of a planner turn — a turn's subagent runs are the turn's own
+broadcasts, and holds status updates back while a mutation is in flight. Status
+updates that report progress go out about once a second; one that changes what
+waits on a person, and the last of a run, goes at once. It holds nothing of a
+planner turn — a turn's subagent runs are the turn's own
 (*PlannerConversation*) — and never persists; where an event owes a save, the
-Session saves before handing the event on. Built by `createSession`, tested
-directly against a fake broadcast.
+Session saves before handing the event on. A task's status is saved as it
+changes; usage owes no save of its own and waits for a timer, so a crash loses
+seconds of usage and no decision. Built by `createSession`, tested directly
+against a fake broadcast.
 *Avoid:* "the broadcaster" — `SessionBroadcaster` is the transport callback the
 relay sends through, not the relay.
 

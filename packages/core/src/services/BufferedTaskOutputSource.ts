@@ -11,7 +11,6 @@ const DEFAULT_MAX_BUFFER_CHARS = 256 * 1024;
 const CUT_SEARCH_CHARS = 4096;
 
 interface Capture {
-  readonly session: IRunnerSession;
   raw: string;
   /** Characters discarded from the front of `raw` to keep it bounded. */
   dropped: number;
@@ -40,7 +39,7 @@ export class BufferedTaskOutputSource implements TaskOutputSource {
   }
 
   attach(taskId: string, session: IRunnerSession): void {
-    const capture: Capture = { session, raw: '', dropped: 0, attached: true, exited: false, stepsMs: 0 };
+    const capture: Capture = { raw: '', dropped: 0, attached: true, exited: false, stepsMs: 0 };
     this.captures.set(taskId, capture);
     session.onOutput((text) => {
       if (capture.attached) this.append(capture, text);

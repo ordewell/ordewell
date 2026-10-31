@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { saveSession, listSessions, loadSession, loadSessionPlanState, getLatestSession, deleteSession } from '../sessionStore';
 import { canContinue } from '../../services/continuation';
-import { createEmptyPlan, createTask, type Task } from '../../models/Task';
+import { createEmptyPlan, createTask, type ResearchLogEntry, type Task } from '../../models/Task';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -29,6 +29,96 @@ describe('sessionStore', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  describe('a session\'s research log', () => {
+    const entry = (id: string) => ({ id, tool: 'Read', args: 'a.ts', timestamp: '2026-01-01T00:00:00.000Z' }) as unknown as ResearchLogEntry;
+    const sessionsDir = () => path.join(tmpDir, '.ordewell', 'sessions');
+    const logFile = (id: string) => path.join(sessionsDir(), id, 'research-log.json');
+    const sessionFile = () => path.join(sessionsDir(), fs.readdirSync(sessionsDir()).find((f) => f.endsWith('.json'))!);
+    const planWith = (researchLog?: ResearchLogEntry[]) => ({ ...createEmptyPlan(), runners: ['claude-code'], tasks: [], generatedAt: '2026-01-01T00:00:00.000Z', researchLog });
+
+    it('is kept out of the session file and comes back with the session', () => {
+      const plan = planWith([entry('r1'), entry('r2')]);
+
+      const { id } = saveSession(plan, 'Goal', tmpDir);
+
+      expect(fs.readFileSync(sessionFile(), 'utf-8')).not.toContain('r1');
+      expect(loadSession(id, tmpDir)!.plan.researchLog).toEqual(plan.researchLog);
+      expect(plan.researchLog).toHaveLength(2);
+    });
+
+    it('is written once however many saves carry it, and again when it changes', () => {
+      const plan = planWith([entry('r1')]);
+      const { id } = saveSession(plan, 'Goal', tmpDir, 'session-aaaaaaaaaaaaaaaa');
+      const written = fs.statSync(logFile(id)).ino;
+
+      saveSession({ ...plan, status: 'approved' }, 'Goal', tmpDir, id);
+      expect(fs.statSync(logFile(id)).ino).toBe(written);
+
+      plan.researchLog = [...plan.researchLog!, entry('r2')];
+      saveSession(plan, 'Goal', tmpDir, id);
+      expect(loadSession(id, tmpDir)!.plan.researchLog).toEqual([entry('r1'), entry('r2')]);
+    });
+
+    it('writes nothing for a session with none', () => {
+      const { id } = saveSession(planWith(), 'Goal', tmpDir);
+
+      expect(fs.existsSync(logFile(id))).toBe(false);
+      expect(loadSession(id, tmpDir)!.plan.researchLog).toBeUndefined();
+    });
+
+    it('goes when the plan drops it', () => {
+      const { id } = saveSession(planWith([entry('r1')]), 'Goal', tmpDir);
+
+      saveSession(planWith(), 'Goal', tmpDir, id);
+
+      expect(loadSession(id, tmpDir)!.plan.researchLog ?? []).toEqual([]);
+    });
+
+    it('is written again for a session given the same log under a new id, as a fork is', () => {
+      const plan = planWith([entry('r1')]);
+      saveSession(plan, 'Goal', tmpDir, 'session-aaaaaaaaaaaaaaaa');
+
+      saveSession(plan, 'Goal', tmpDir, 'session-bbbbbbbbbbbbbbbb');
+
+      expect(loadSession('session-bbbbbbbbbbbbbbbb', tmpDir)!.plan.researchLog).toEqual([entry('r1')]);
+    });
+
+    it('still reads a pretty-printed file that holds its own log, and moves it out at the next save', () => {
+      const plan = planWith([entry('old')]);
+      const id = 'session-cccccccccccccccc';
+      fs.mkdirSync(sessionsDir(), { recursive: true });
+      fs.writeFileSync(path.join(sessionsDir(), '2026-01-01T00-00-00_goal_cccccccc.json'), JSON.stringify({
+        meta: { id, goal: 'Goal', runners: ['claude-code'], taskCount: 0, status: plan.status, createdAt: plan.generatedAt, updatedAt: plan.generatedAt },
+        plan,
+      }, null, 2));
+
+      const loaded = loadSession(id, tmpDir)!;
+      expect(loaded.plan.researchLog).toEqual([entry('old')]);
+
+      saveSession(loaded.plan, 'Goal', tmpDir, id);
+      expect(fs.readFileSync(sessionFile(), 'utf-8')).not.toContain('old');
+      expect(loadSession(id, tmpDir)!.plan.researchLog).toEqual([entry('old')]);
+    });
+
+    it('that will not parse costs the log, said so, and not the session', () => {
+      const { id } = saveSession(planWith([entry('r1')]), 'Goal', tmpDir);
+      fs.writeFileSync(logFile(id), '{ not json');
+      const { logger, warns } = fakeLogger();
+
+      expect(loadSession(id, tmpDir, logger)!.plan.researchLog).toBeUndefined();
+
+      expect(warns.join()).toContain('research log');
+    });
+
+    it('goes with its session', () => {
+      const { id } = saveSession(planWith([entry('r1')]), 'Goal', tmpDir);
+
+      deleteSession(id, tmpDir);
+
+      expect(fs.existsSync(logFile(id))).toBe(false);
+    });
+  });
+
   describe('saveSession', () => {
     it('writes a session file and returns meta with runners array', () => {
       const plan = createEmptyPlan();
@@ -44,6 +134,28 @@ describe('sessionStore', () => {
       const loaded = loadSession(meta.id, tmpDir);
       expect(loaded).not.toBeNull();
       expect(loaded!.plan.runners).toEqual(['claude-code', 'opencode']);
+    });
+
+    it('writes the file compact, on one line', () => {
+      const plan = { ...createEmptyPlan(), runners: ['claude-code'], tasks: [createTask({ id: 't1', order: 1, title: 'One', prompt: 'x' })] };
+
+      const { id } = saveSession(plan, 'Goal', tmpDir);
+
+      const [file] = fs.readdirSync(path.join(tmpDir, '.ordewell', 'sessions')).filter((f) => f.endsWith('.json'));
+      expect(fs.readFileSync(path.join(tmpDir, '.ordewell', 'sessions', file), 'utf-8')).not.toContain('\n');
+      expect(loadSession(id, tmpDir)!.plan.tasks.map((t) => t.id)).toEqual(['t1']);
+    });
+
+    it('drops the plan\'s retired fields', () => {
+      const task = { ...createTask({ id: 't1', order: 1, title: 'One', prompt: 'x' }), researchWait: true };
+      const plan = { ...createEmptyPlan(), runners: ['claude-code'], tasks: [task], researchBudget: 3 };
+
+      const { id } = saveSession(plan, 'Goal', tmpDir);
+
+      const raw = fs.readFileSync(path.join(tmpDir, '.ordewell', 'sessions', fs.readdirSync(path.join(tmpDir, '.ordewell', 'sessions')).find((f) => f.endsWith('.json'))!), 'utf-8');
+      expect(raw).not.toContain('researchBudget');
+      expect(raw).not.toContain('researchWait');
+      expect(loadSession(id, tmpDir)!.plan.tasks[0].title).toBe('One');
     });
 
     it('keeps two sessions apart that share a goal and a creation second', () => {
