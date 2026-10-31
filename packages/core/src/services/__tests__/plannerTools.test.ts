@@ -2002,8 +2002,8 @@ describe('task references in the read tools', () => {
     read: async (_signature, answerRead) => ({ status: 'answered', value: await answerRead(), landNow: false }),
     liveOutput: () => null,
     lastAttempt: () => null,
-    taskLogAttempts: () => [],
-    taskLog: () => [],
+    taskLogAttempts: (taskId) => (taskId === 'gone' ? [1, 2] : []),
+    taskLog: (taskId, attempt) => (taskId === 'gone' && attempt === 2 ? [{ type: 'text', text: 'the race' }] : []),
     taskDiff: async () => ({ available: false, reason: 'not available' }),
     runCommand: async () => ({ success: true, output: '', truncated: false }),
     fetchUrl: async () => ({ success: true, output: '', truncated: false }),
@@ -2028,6 +2028,20 @@ describe('task references in the read tools', () => {
 
     const output = await handler.taskOutput!({ task: '#1.2' }, context);
     expect(JSON.parse(output.text).task).toEqual({ id: 'a2', ref: '#1.2', title: 'Seed', status: 'pending' });
+  });
+
+  it('reads a pinned attempt of a task removed from the plan from its log (ADR-0057 R1)', async () => {
+    const output = await handler.taskOutput!({ task: 'gone@2/F1' }, context);
+
+    expect(output.isError).toBeUndefined();
+    expect(JSON.parse(output.text)).toMatchObject({ task: { id: 'gone', removed: true }, attempt: 2, attempts: [1, 2] });
+    expect(output.text).toContain('the race');
+    expect((await handler.taskOutput!({ task: 'gone', attempt: 2 }, context)).isError).toBeUndefined();
+  });
+
+  it('refuses a removed task with no attempt pinned, or one its log does not hold', async () => {
+    expect((await handler.taskOutput!({ task: 'gone' }, context)).isError).toBe(true);
+    expect((await handler.taskOutput!({ task: 'gone@3' }, context)).isError).toBe(true);
   });
 });
 

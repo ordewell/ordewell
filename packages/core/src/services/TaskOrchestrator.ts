@@ -1,3 +1,4 @@
+import { actorAuthority } from '../models/Execution';
 import { Task, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasks, flattenTasksWithParents, pausedOnLimit, waitsForReset, waitsMidAttempt, type RunSettings } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
 import { INotification } from '../interfaces/INotification';
@@ -56,9 +57,10 @@ export type AutoMergeTrigger = { kind: 'gate'; taskId: string } | { kind: 'run_e
 
 /**
  * Who opened a run (ADR-0029): a call the user made, or one made for them; a
- * call of the supervisor's own; a usage-limit reset resuming what it paused;
- * or a loop carried on with no scheduler (ADR-0045 L5). Only the user's starts
- * a run's supervision afresh.
+ * call of the supervisor's own, or a subplanner's, which has no user to make
+ * one for (ADR-0056 M6); a usage-limit reset resuming what it paused; or a loop
+ * carried on with no scheduler (ADR-0045 L5). Only the user's starts a run's
+ * supervision afresh.
  */
 export type RunOrigin = 'user' | 'supervisor' | 'limit-reset' | 'loop';
 
@@ -2325,7 +2327,8 @@ export class TaskOrchestrator {
       }
       this.queuedStarts.delete(id);
       try {
-        const origin = task.research && (task.reportTo ?? task.researchOrigin)?.actor === 'supervisor' ? 'supervisor' : 'user';
+        const owed = task.research ? task.reportTo ?? task.researchOrigin : undefined;
+        const origin = owed ? actorAuthority(owed.actor) : 'user';
         await this.startForced(id, origin, { queued: true, pastGate: queued.pastGate, ...(queued.asScheduled ? { asScheduled: true } : {}) });
       } catch (err) {
         this.tell('warn', `Task "${task.title}" did not start${queued.asScheduled ? '' : ' once its dependencies finished'}: ${err instanceof Error ? err.message : String(err)}`);

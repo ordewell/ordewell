@@ -1,5 +1,5 @@
 import { flattenTasks, flattenTasksWithParents, type RunSettings, type SupervisionSnapshot, type Task, type TaskReportTo, type TurnAuthority } from '../models/Task';
-import type { ExecutionActor, ExecutionRecord, SupervisorLevel } from '../models/Execution';
+import { actorAuthority, type ExecutionActor, type ExecutionRecord, type SupervisorLevel } from '../models/Execution';
 import type { IsolationHandoff } from '../interfaces/IWorktreeIsolation';
 import type { GlobalRunSettings } from './SettingsService';
 import type { RunOrigin } from './TaskOrchestrator';
@@ -20,9 +20,9 @@ import { taskRefOf } from './TaskRefs';
 /** Supervisor levels, lowest first: an automatic lowering only ever goes down. */
 const LEVEL_RANK: Record<SupervisorLevel, number> = { off: 0, watch: 1, act: 2 };
 
-/** A run the supervisor opens continues the last; every other actor asks for the user (ADR-0029, ADR-0030). */
+/** A run the supervisor or a subplanner opens continues the last; every other actor asks for the user (ADR-0029, ADR-0030, ADR-0056 M6). */
 export function runOrigin(actor: ExecutionActor): RunOrigin {
-  return actor.kind === 'supervisor' ? 'supervisor' : 'user';
+  return actorAuthority(actor.kind);
 }
 
 /** One word for a loop's whole run, saying how many rounds it took (ADR-0045 L6); empty for any other failure. */
@@ -228,7 +228,7 @@ export class RunSupervision {
 
   private reportOf(task: Readonly<Task>, to: TaskReportTo): RunEventInput['report'] {
     // A child has no user's turn: its report wakes it as any event does, under its own wake-up rules (ADR-0056 M6).
-    const authority: TurnAuthority = to.actor === 'supervisor' || to.actor === 'subplanner' ? 'supervisor' : 'user';
+    const authority = actorAuthority(to.actor);
     const rounds = outOfRoundsNote(task);
     const tail = this.host.reportTail(task.id);
     const named = (id: string) => taskRefOf([...this.host.tasks()], id);

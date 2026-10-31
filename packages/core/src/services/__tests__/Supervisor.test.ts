@@ -124,7 +124,7 @@ describe('a wake\'s size (ADR-0057 R5)', () => {
   it('builds a turn\'s message from every update that waited, within the cap', () => {
     const digests = ['a'.repeat(10_000), 'b'.repeat(10_000), 'c'.repeat(10_000), 'd'];
 
-    expect(boundedWakeUps(digests)).toEqual([digests[0], digests[1], '+2 more run updates; task_query reads the tasks they were about.']);
+    expect(boundedWakeUps(digests)).toEqual(['+1 earlier run update left out.', digests[1], digests[2], digests[3]]);
     expect(boundedWakeUps(['short'])).toEqual(['short']);
   });
 

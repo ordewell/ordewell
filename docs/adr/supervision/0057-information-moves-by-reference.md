@@ -67,8 +67,11 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   newest attempt the logs hold. A reference stays valid for the life of the root plan,
   since attempt logs live as long as their session and a child's sit under the root's
   ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D11); a task
-  removed from the plan keeps its log. A saved reference with no attempt reads the latest,
-  as it does today.
+  removed from the plan keeps its log, so a reference pinned to one of its attempts reads that
+  log by the id and attempt it holds. A task's `read_task` takes that read only when a handoff in
+  its readable set cites the attempt: the graph no longer reaches a removed task, and a task still
+  cannot read work it was never given ([ADR-0047](0047-structured-task-handoffs.md)). A saved
+  reference with no attempt reads the latest, as it does today.
 - **What is pushed is one size (R2).** A handoff is pushed at most 4,000 characters at every
   level (`HANDOFF_PUSH_CHARS`, its artifacts apart), so a node's inbound context depends on its
   fan-out and not on its subtree. Its Report, the long form of at most 20,000, stays pulled
@@ -132,10 +135,13 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   ending, in the table. Not waiting on the cohort alone is deliberate: it would be bound to its
   slowest task. There are no keep-warm pings: they are model turns that grow the context.
 - **Bounded wakes (R5).** A wake has a size cap, 24,000 characters, with one line per ride-along
-  event of at most 120: a pass, or a held event that holds no work back. What woke the planner goes
+  event of at most 120: a pass, or a held event that holds no work back. A digest names a task in at
+  most 80, so a long title is cut and the line still says what happened. What woke the planner goes
   first, whole items only. Overflow becomes counts and a pointer: `task_query` reads the rest. The
   cap is on what the turn sends, so updates that waited for one turn are bounded together, and the
-  transcript keeps them all. A failure blocking many tasks names the first few and the count, as a
+  transcript keeps them all. The newest is what opened the turn, so it stays whole and the oldest
+  are left out first, each of their events named in a line up to a count, since a turn settles what
+  it was sent and nothing raises them again. A failure blocking many tasks names the first few and the count, as a
   usage limit does. The level brief is sent once and then one line on a change, through
   `PlannerBriefing`, and again whole only when a context no longer holds it, as ADR-0012 T10 sends
   the plan block; ADR-0029's "each turn" goes. Each level has its brief, and a context that never
@@ -276,3 +282,4 @@ Added after R1 to R7, and only if those leave a need; replays of Ordewell's own 
 - 2026-10-31 — checked against the code again: a pass stays a ride-along, and R2's counts show what a subplanner left out of its subtree.
 - 2026-10-31 — checked against the code a third time: a subplanner's references resolve in its own plan, and it may cite its whole subtree.
 - 2026-10-31 — R1, R3, R4 and R5 built for a flat plan: references pinned under the root, reports and handoffs labelled as data, `wakeDue` deciding each wake, and a wake's cap, with a brief per level sent once a context.
+- 2026-10-31 — a removed task's pinned attempt reads from its log, within the readable set by citation; a turn's cap keeps the newest update and names what it leaves out; a digest cuts a title, not what happened.

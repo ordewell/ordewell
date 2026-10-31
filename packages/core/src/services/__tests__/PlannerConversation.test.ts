@@ -1830,11 +1830,12 @@ describe('the level brief, sent once to a context (ADR-0057 R5)', () => {
   it('keeps a turn on many waiting updates inside the wake cap', async () => {
     const { conversation, sent } = counted();
 
-    await conversation.reply('', { wakeUps: ['a'.repeat(14_000), 'b'.repeat(14_000)], wakeUp: { readBudget: 3, refused: () => undefined } });
+    const older = `Run update:\n- task #1 "Build" failed: boom\n  ${'a'.repeat(14_000)}`;
+    await conversation.reply('', { wakeUps: [older, 'b'.repeat(14_000)], wakeUp: { readBudget: 3, refused: () => undefined } });
 
-    expect(sent[0]).toContain('a'.repeat(14_000));
-    expect(sent[0]).not.toContain('b'.repeat(14_000));
-    expect(sent[0]).toContain('+1 more run update; task_query');
+    expect(sent[0]).toContain('b'.repeat(14_000));
+    expect(sent[0]).not.toContain('a'.repeat(14_000));
+    expect(sent[0]).toContain('+1 earlier run update left out; task_query reads these tasks:\n- task #1 "Build" failed: boom');
   });
 
   it('counts the prompt cache from the turn that opened, and from nothing once its context is gone', async () => {

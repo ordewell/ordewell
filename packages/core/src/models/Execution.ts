@@ -1,3 +1,5 @@
+import type { TurnAuthority } from './Task';
+
 /**
  * How far a plan's supervisor may act in its wake-up turns (ADR-0029): a plan
  * setting, saved on the run as it starts. Off: it never wakes. Watch: it
@@ -22,6 +24,11 @@ export type ExecutionActor =
   | { kind: 'autorun'; leavesFailed?: ReadonlySet<string> }
   /** Every turn of a child plan's planner (ADR-0056 M6): no person is there, so its grants alone answer. `depth` is its level, the root being 0. */
   | { kind: 'subplanner'; depth: number };
+
+/** Whose authority an actor's work runs under: a child has no user, so a subplanner's is a supervisor's (ADR-0056 M6). */
+export function actorAuthority(actor: ExecutionActor['kind']): TurnAuthority {
+  return actor === 'supervisor' || actor === 'subplanner' ? 'supervisor' : 'user';
+}
 
 export type ExecutionCommandName =
   | 'run_plan'

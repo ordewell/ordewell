@@ -1,6 +1,6 @@
 import type { SupervisorLevel } from '../models/Execution';
 import type { TurnAuthority } from '../models/Task';
-import { createWakePolicy, isHeldEvent, REPORT_LEAD, WAKE_MAX_CHARS, type RunEvent, type RunEventKind, type WakeBatch, type WakeFacts, type WakePolicy, type WakePolicySnapshot } from './WakePolicy';
+import { createWakePolicy, cut, isHeldEvent, LEFT_OUT_ROOM, REPORT_LEAD, RIDE_ALONG_CHARS, SINCE_LAST, WAKE_MAX_CHARS, type RunEvent, type RunEventKind, type WakeBatch, type WakeFacts, type WakePolicy, type WakePolicySnapshot } from './WakePolicy';
 import { classifyRunnerStop } from './runnerExit';
 import { WAKE_UP_RATE, wakeUpRateTripped, type WakeUpRate } from './LoopGuards';
 import { PlannerContextPausedError, PlannerTurnDiscardedError, PlannerTurnFailedError, PlannerTurnStoppedError, PlannerUsageLimitError, type PlanChange, type WakeBrief, type WakeUpTurn } from './PlannerConversation';
@@ -24,8 +24,8 @@ export const DEFAULT_WAKE_UP_READ_BUDGET = 12;
 /** How long one event's detail runs in a digest: what happened, never the log behind it. */
 const DETAIL_CHARS = 240;
 
-/** The most one event that rode along takes (ADR-0057 R5): it woke nobody, and `task_query` reads the rest. */
-const RIDE_ALONG_CHARS = 120;
+/** The most a digest takes to name a task: a long title goes before the line does, which says what happened (ADR-0057 R5). */
+const TASK_NAME_CHARS = 80;
 
 /** How many tasks a digest names in a list before it counts them (ADR-0057 R5). */
 const NAMED_TASKS = 3;
@@ -597,8 +597,8 @@ const OVERFLOW_WORDS: Record<RunEventKind, string> = {
   task_report: 'reported',
 };
 
-/** Room kept for the overflow line, which is never left out. */
-const OVERFLOW_ROOM = 400;
+/** Room kept for the overflow line, which is never left out, and for the note on updates a turn cannot carry beside this one. */
+const OVERFLOW_ROOM = 400 + LEFT_OUT_ROOM;
 
 /**
  * What a wake-up tells the planner: each event that woke it, with its task
@@ -607,13 +607,17 @@ const OVERFLOW_ROOM = 400;
  * woke it goes first, whole items only, and the rest is counted.
  */
 export function wakeUpDigest(batch: WakeBatch, describe: (taskId: string) => string, blockedBy: (taskId: string) => string[] = () => []): string {
+  const name = (taskId: string) => {
+    const whole = describe(taskId);
+    return whole.length > TASK_NAME_CHARS ? `${whole.slice(0, TASK_NAME_CHARS - 2)}…"` : whole;
+  };
   const passed = [...new Set(batch.sinceLast.flatMap((e) => e.taskId ?? []))];
   const items: DigestItem[] = [
-    ...batch.attention.map((e) => attentionItem(e, describe, blockedBy)),
-    ...passed.map((taskId): DigestItem => ({ kind: 'task_passed', rank: 2, line: `- ${cut(`task ${describe(taskId)} passed`, RIDE_ALONG_CHARS - 2)}` })),
+    ...batch.attention.map((e) => attentionItem(e, name, blockedBy)),
+    ...passed.map((taskId): DigestItem => ({ kind: 'task_passed', rank: 2, line: `- ${cut(`task ${name(taskId)} passed`, RIDE_ALONG_CHARS - 2)}` })),
   ];
   const shown = new Set<DigestItem>();
-  let used = 'Run update:'.length + 'Since the last update:'.length + OVERFLOW_ROOM;
+  let used = 'Run update:'.length + SINCE_LAST.length + OVERFLOW_ROOM;
   // Whole items by rank, stopping at the first that does not fit: a smaller one past it would read as more important than it.
   for (const item of [...items].sort((a, b) => a.rank - b.rank)) {
     if (used + item.line.length + 1 > WAKE_MAX_CHARS) break;
@@ -625,7 +629,7 @@ export function wakeUpDigest(batch: WakeBatch, describe: (taskId: string) => str
   return [
     'Run update:',
     ...items.filter((item) => item.kind !== 'task_passed' && shown.has(item)).map((item) => item.line),
-    ...(passes.length > 0 ? ['Since the last update:', ...passes.map((item) => item.line)] : []),
+    ...(passes.length > 0 ? [SINCE_LAST, ...passes.map((item) => item.line)] : []),
     ...(left.length > 0 ? [overflowLine(left)] : []),
   ].join('\n');
 }
@@ -686,10 +690,6 @@ function listed(items: readonly string[]): string {
 function namedFirst(ids: readonly string[], describe: (taskId: string) => string): string {
   if (ids.length <= NAMED_TASKS) return listed(ids.map(describe));
   return `${ids.slice(0, NAMED_TASKS).map(describe).join(', ')} and ${ids.length - NAMED_TASKS} more`;
-}
-
-function cut(text: string, chars: number): string {
-  return text.length > chars ? `${text.slice(0, chars - 1)}…` : text;
 }
 
 /** One line, cut to fit a digest. */

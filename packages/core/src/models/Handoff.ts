@@ -280,6 +280,17 @@ export function resolveWrittenRef(plan: readonly Task[], written: string): (Omit
   return target && { task: target, ...pin };
 }
 
+/**
+ * What a reference naming no task in the plan is pinned to, if anything: the id
+ * it renders with once its task is removed, and the attempt. A removed task
+ * keeps its log (ADR-0057 R1). `asked` is an attempt given apart from the text.
+ */
+export function removedPin(written: string, asked?: number): { taskId: string; attempt: number } | undefined {
+  const { task, attempt } = parseFindingRef(written);
+  const pinned = asked ?? attempt;
+  return pinned === undefined ? undefined : { taskId: task, attempt: pinned };
+}
+
 /** The pinned reference as text: `#4@2/F3` (ADR-0057 R1); `task` is how the reader names it. */
 export function findingRefText(task: string, ref: Pick<WrittenTaskRef, 'attempt' | 'finding'>): string {
   return `${task}${ref.attempt !== undefined ? `@${ref.attempt}` : ''}${ref.finding ? `/${ref.finding}` : ''}`;
