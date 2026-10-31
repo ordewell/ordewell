@@ -96,8 +96,9 @@ round *r* and round *r* + 1 the body runs once.
 - **A body runs only for its check (L4).** A body task's dependency on its
   check is met only while the check is between rounds. Before that it waits
   `loop-check` ("runs if #X fails"), not on a dependency to finish, and a
-  force start of it queues behind the check as behind any work under way;
-  once the loop is over it has ended skipped.
+  force start of it queues behind the check as behind any work under way, and a
+  retry or a continue of a body task that failed is refused until the check has
+  decided; once the loop is over it has ended skipped.
 - **The check runs again once its body has landed (L5).** At each tick, a check
   between rounds whose body has all passed and landed is made pending again as
   its next round (`PlanStore.repeat`): a new attempt, its verdict and report
@@ -298,3 +299,4 @@ as check or body; a user editing a loop's `loop` field by hand from a surface.
 - 2026-10-31 — a check nothing will run is drawn and listed as the failure it is, with its next round offered, and what a carried loop waits on is listed (L5; [ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
 - 2026-10-31 — a check nothing will run offers its next round only once its dependencies have finished too (L5; [ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
 - 2026-10-31 — a round leaves a body task the user reverted on hold (L5; [ADR-0054](../isolation/0054-a-landed-task-reverts-on-the-integration-branch-before-merge-all.md)).
+- 2026-10-31 — L4: a continue of a failed body task waits on its undecided check as a retry does.

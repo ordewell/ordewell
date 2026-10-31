@@ -84,10 +84,12 @@ it on, since the seam refuses it otherwise
 | `merge-all` | Landed work, nothing moving and no gate listed | Merge all | `merge_all` |
 | `blocked-run` | A run a dirty checkout turned away | Stash and continue, Run without isolation | `Session.continueWithStash`, `continueWithoutIsolation` |
 
-A task whose attempt ended, listed as `failed`, `out-of-rounds`, or a `checkpoint`
-or `input` with no runner left, offers no Retry and no Continue while a
-dependency or a merge gate holds any start of it: the seam would refuse both, so
-its reason names that wait instead.
+A task whose attempt ended, listed as `failed`, `out-of-rounds`, `conflict`,
+`files-changed`, or a `checkpoint` or `input` with no runner left, offers no Retry
+and no Continue while a dependency, a merge gate or its loop's undecided check
+holds any start of it: the seam would refuse both, so its reason names that wait
+instead. A `usage-limit` pause with a session keeps Resume now: a resume goes on
+with the attempt the limit cut short, which no such wait holds.
 
 `merge-gate`, `on-hold`, `unapproved`, `no-prompt` and `by-hand` are listed only
 in an open run: one scheduling, held, or ended on a failure a retry continues.
@@ -184,17 +186,21 @@ reads do.
   Execute. Execute readies every failed task (`PlanStore.resetForRun`), a loop's
   failed check with its rounds started over (L7), and leaves one between rounds
   for its body to run first. With tasks started by hand at work it does the same
-  as it takes them into the plan's run (`PlanStore.readyFailed`). A scheduled run
-  under way keeps its failures: a retry continues them
+  as it takes them into the plan's run (`PlanStore.readyFailed`), and so with a
+  usage limit holding them, which takes no resume back: that run goes on at the
+  reset ([ADR-0018](../runners/0018-structured-runner-transport.md) U1). A
+  scheduled run keeps its failures, with work live or not, one waiting on a person
+  or held by a usage limit included: a retry continues them
   ([ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)), and Execute only
   approves what waits in it. Neither a planner's `run_plan` nor autorun asks: a
   join leaves a failure as it is, and autorun's run leaves what failed in the
   reply it follows
   ([ADR-0030](0030-global-run-settings.md)). An edit outside a run asks for neither,
   and leaves a failure and a wait as they are (`resetForRun({ edited: true })`).
-  The one exception is a task an edit made manual, in a run or not, failed or
-  waiting on the user: it has nothing to retry, so it is the manual task it now
-  is (`releaseMadeManual`). A runner still at a question keeps its wait while it
+  The one exception is a task an edit made manual, by the planner or by hand, in a
+  run or not, failed or waiting on the user: it has nothing to retry, so it is the
+  manual task it now is (`releaseMadeManual`, as the edit lands), and a pause it
+  was under holds nothing. A runner still at a question keeps its wait while it
   lives, to be answered; its end releases what it left, and so does a load, where
   both saved forms are read. A usage limit that ends that runner holds nothing:
   no resume is promised, and the rest of the run goes on.
@@ -446,3 +452,4 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
 - 2026-10-31 — a task an edit made manual is released from a wait with no runner behind it too, at the edit or at a load, and a check whose dependency holds its next round names it rather than offering a start that refuses.
 - 2026-10-31 — a stranded check behind a dependency offers no Continue either, and the seam refuses one; a task made manual is released when the runner it kept its wait for ends; a reverted task is listed behind its loop's check too.
 - 2026-10-31 — an ended attempt's entry names what holds any start of its task and offers no Retry or Continue the seam would refuse; a usage limit that ends a task made manual holds nothing.
+- 2026-10-31 — a task an edit made manual is released as a direct edit lands too; a scheduled or held run keeps its failures and pauses through Execute with nothing live; a conflict, changed files and a pause with no session offer no Retry the seam would refuse, and a seam Continue is refused behind a loop's undecided check.

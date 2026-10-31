@@ -15,7 +15,8 @@ export type HeldFrom = 'idle' | 'scheduling' | 'endedOnFailure';
  *   free. A run that waits on the user, a hold or a merge gate stays here.
  * - `held`: a usage-limit pause holds the run, and `from` is what it goes back
  *   to. It stays open and starts nothing new until the reset, a Resume now, a
- *   retry, a skip or a move to another runner continues it.
+ *   retry, a skip or a move to another runner continues it. Execute takes the
+ *   plan in without ending it.
  * - `endedOnFailure`: the run ended with failed tasks and the tasks they
  *   block; a retry or a skip continues it.
  * - `finished`: every task completed or was skipped.
@@ -36,6 +37,8 @@ export type RunEvent =
   | { readonly type: 'load' }
   /** A retry, skip or continue of a task: a run that ended on a failure goes on, and one a reset holds goes back to a scheduled run. */
   | { readonly type: 'continue' }
+  /** The plan was taken into a run a reset holds: it stays held, and the reset gives back the plan's run. */
+  | { readonly type: 'join' }
   /** A usage-limit pause with a reset to wait for. */
   | { readonly type: 'hold' }
   /** The last wait on a reset went, however it went. */
@@ -68,6 +71,8 @@ export function nextRunState(state: RunState, event: RunEvent): RunState {
       // Still held, since its reset is still owed; the reset then gives back the plan's run.
       if (state.kind === 'held' && state.from === 'endedOnFailure') return { kind: 'held', from: 'scheduling' };
       return state;
+    case 'join':
+      return state.kind === 'held' ? { kind: 'held', from: 'scheduling' } : state;
     case 'hold':
       if (state.kind === 'held') return state;
       // A finished run a pause comes to is unfinished, as the settle step

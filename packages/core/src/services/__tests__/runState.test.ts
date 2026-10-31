@@ -26,6 +26,7 @@ const TABLE: ReadonlyArray<[RunEvent, ReadonlyArray<RunState>]> = [
   [{ type: 'stop' }, [idle, idle, idle, idle, idle, idle, idle]],
   [{ type: 'load' }, [idle, scheduling, idle, idle, idle, idle, idle]],
   [{ type: 'continue' }, [idle, scheduling, scheduling, finished, heldIdle, heldScheduling, heldScheduling]],
+  [{ type: 'join' }, [idle, scheduling, endedOnFailure, finished, heldScheduling, heldScheduling, heldScheduling]],
   [{ type: 'hold' }, [heldIdle, heldScheduling, heldEnded, heldIdle, heldIdle, heldScheduling, heldEnded]],
   [{ type: 'release' }, [idle, scheduling, endedOnFailure, finished, idle, scheduling, endedOnFailure]],
   [{ type: 'end', outcome: 'finished' }, [finished, finished, finished, finished, heldIdle, heldScheduling, heldEnded]],

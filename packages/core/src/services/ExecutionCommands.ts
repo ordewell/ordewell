@@ -182,6 +182,8 @@ export interface ExecutionHost {
   hasLiveWork(): boolean;
   /** A usage limit holds the run: what it paused resumes at the reset. */
   runHeld(): boolean;
+  /** A scheduled run is open, driving the plan or held by a usage limit that gives it back, whether or not anything is live. */
+  scheduledRun(): boolean;
   /** Something will start without being asked again: a start admitted and not yet claimed, or a scheduled resume. */
   startsPending(): boolean;
   /** A plan the turn in flight submitted, whose start autorun makes as the turn ends (ADR-0030): a start on its way that no run holds yet. */
@@ -345,7 +347,7 @@ const SCRIPTS_ARE_THE_PLANNERS = 'run_script is the planner\'s: a person adds a 
 const NO_PLAN_FOR_SCRIPT = 'There is no plan yet, so there is nowhere to add a script task. Submit a plan that holds it.';
 
 const AUTORUN_JOINS_NOTHING = 'tasks are already running, and in Guarded autorun takes no plan into work under way. Run the plan yourself to start the rest.';
-const AUTORUN_RESTARTS_NOTHING = 'a usage limit holds a task, and autorun does not restart a run to start a plan. It resumes at its reset; run the plan yourself to start the rest.';
+const AUTORUN_RESTARTS_NOTHING = 'a usage limit holds a task, and autorun takes no plan into that run. It resumes at its reset; run the plan yourself and the rest starts then.';
 
 const OVERRIDE_LANDING = 'Another manual override is landing: wait for it to finish, then start or override again.';
 
@@ -844,7 +846,12 @@ export class ExecutionCommands {
   private prepareRunPlan(actor: ExecutionActor, tasks: readonly Task[]): Prepared {
     const all = this.all(tasks);
     const live = all.filter(({ task }) => this.host.running(task.id));
-    if (this.host.hasLiveWork()) {
+    const working = this.host.hasLiveWork();
+    // No plan submitted asks to take a hold's run on (ADR-0030): that is the user's Execute.
+    if (actor.kind === 'autorun' && !working && this.host.runHeld()) return { refusal: AUTORUN_RESTARTS_NOTHING };
+    // A run that is open with nothing live is joined too: a new run would take back its pause and what failed in it (ADR-0018 U1, ADR-0053).
+    // One a dirty checkout turned away has neither, and only a new run looks at the checkout again.
+    if (working || this.host.runHeld() || (this.host.scheduledRun() && !this.host.runBlocked())) {
       const waiting = all.filter(({ task }) => this.host.waitsForApproval(task.id) && !this.carded.has(task.id));
       // Autorun under Guarded stays out of it: its join would approve a script task the user was never shown (ADR-0035).
       if (actor.kind === 'autorun' && !this.host.autonomous()) return { refusal: AUTORUN_JOINS_NOTHING };
@@ -869,12 +876,12 @@ export class ExecutionCommands {
         act: async () => {
           await (unattended ? this.host.joinRun(waiting.length, 0) : this.host.joinRun(0, waiting.length));
           const held = unattended || waiting.length === 0 ? '' : ` ${capitalize(named(waiting))} ${waiting.length === 1 ? 'was' : 'were'} added after the user approved the plan, so ${waiting.length === 1 ? 'it waits' : 'they wait'} until they start ${waiting.length === 1 ? 'it' : 'them'} or execute the plan.`;
-          return { message: `The plan is running: ${named(live)} ${live.length === 1 ? 'is' : 'are'} already running, and each approved task starts as its dependencies finish.${held}` };
+          const under = live.length === 0 ? '' : `${named(live)} ${live.length === 1 ? 'is' : 'are'} already running, and `;
+          const limit = this.host.runHeld() ? ' A usage limit holds the run, so nothing starts before its reset.' : '';
+          return { message: `The plan is running: ${under}each approved task starts as its dependencies finish.${limit}${held}` };
         },
       };
     }
-    // A new run takes back the pause and what failed around it, and no plan submitted asks for that (ADR-0030).
-    if (actor.kind === 'autorun' && this.host.runHeld()) return { refusal: AUTORUN_RESTARTS_NOTHING };
     // A new run leaves a skipped task skipped, as it leaves a completed one done.
     const toRun = all.filter(({ task }) => task.type !== 'user' && task.status !== 'completed' && task.status !== 'skipped');
     if (toRun.length === 0) return { refusal: 'Every task has already completed: there is nothing left to run.' };
@@ -941,10 +948,6 @@ export class ExecutionCommands {
     if (failed.length > 0) {
       return { refusal: `${capitalize(label)} is blocked: ${named(failed)} failed. Retry ${failed.length === 1 ? 'it' : 'them'} first.` };
     }
-    const check = this.located(waitOf(waits, 'loop-check')?.check ?? '', tasks);
-    if (check) {
-      return { refusal: `${capitalize(label)} is in the body of the loop of ${describe(check)}: it runs only if that check fails, and the loop starts it then.` };
-    }
     const approval = this.unapproved(located, actor);
     if (approval && 'refusal' in approval) return approval;
 
@@ -979,6 +982,8 @@ export class ExecutionCommands {
   private heldBehind(located: Located, waits: readonly StartWait[], voice: Voice, tasks?: readonly Task[]): string | null {
     const { task } = located;
     const label = describe(located);
+    const check = this.located(waitOf(waits, 'loop-check')?.check ?? '', tasks);
+    if (check) return `${capitalize(label)} is in the body of the loop of ${describe(check)}: it runs only if that check fails, and the loop starts it then.`;
     const unmet = (waitOf(waits, 'dependencies') ?? waitOf(waits, 'queued'))?.waiting.flatMap((id) => this.located(id, tasks) ?? []) ?? [];
     if (unmet.length > 0) {
       const one = unmet.length === 1;

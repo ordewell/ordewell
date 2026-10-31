@@ -969,6 +969,7 @@ export class Session {
       startsHeld: () => this.orchestrator.startsHeld,
       hasLiveWork: () => this.orchestrator.hasLiveWork,
       runHeld: () => this.orchestrator.runHeld,
+      scheduledRun: () => this.orchestrator.scheduledRun,
       startsPending: () => this.orchestrator.startsPending,
       submittedStartWaits: () => this.turnEffects.startWaits && this.userRunSettings().autorun,
       loopRunsOn: (taskId) => this.orchestrator.loopRunsOn(taskId),
@@ -2123,10 +2124,12 @@ export class Session {
    * as executing does, and the run takes them in. A run the scheduler was not
    * driving, one task started on its own, becomes the plan's run, as Execute
    * would make it. The planner's run_plan joins with `approved` 0: the
-   * scheduler starts only approved tasks, so `left` tasks still wait.
+   * scheduler starts only approved tasks, so `left` tasks still wait. A run a
+   * usage limit holds stays held, and the line says so, since nothing it names
+   * starts before the reset.
    */
   private async joinRun(approved: number, left: number): Promise<string> {
-    const scheduling = this.orchestrator.isScheduling;
+    const scheduling = this.orchestrator.scheduledRun;
     this.turnEffects.ran(this.orchestrator.admittedNow());
     await this.withSave(async () => {
       this.record.approvePlan();
@@ -2136,8 +2139,9 @@ export class Session {
       ? left > 0 ? `The plan is ${scheduling ? 'already ' : ''}running; ${left} ${left === 1 ? 'task waits' : 'tasks wait'} for your approval.`
         : scheduling ? 'The plan is already running, and no task waits for your approval.' : 'The plan is running: each task starts once its dependencies finish.'
       : approved === 1 ? 'Approved 1 task; it starts once its dependencies finish.' : `Approved ${approved} tasks; each starts once its dependencies finish.`;
-    this.notice('info', line);
-    return line;
+    const said = this.orchestrator.runHeld ? `${line} A usage limit holds the run, so nothing starts before its reset.` : line;
+    this.notice('info', said);
+    return said;
   }
 
   private async startOneTask(taskId: string, origin: RunOrigin): Promise<void> {

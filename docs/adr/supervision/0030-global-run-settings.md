@@ -242,8 +242,9 @@ wrong", that users want in either combination.
   In Guarded it does not join, since a join would approve a script task the user
   was never shown ([ADR-0035](0035-effects-are-consented-and-recorded.md)). A
   usage limit holding anything else, a task started alone or a run that ended on
-  a failure, is left as it is too, and the plan waits for Execute. The refusal is
-  in the timeline, and whenever autorun cannot start a plan a notice says why.
+  a failure, is left as it is too, and the plan waits for Execute, which takes it
+  in for the reset to go on with. The refusal is in the timeline, and whenever
+  autorun cannot start a plan a notice says why.
 - **A Stop since the plan was submitted wins.** Autorun's start is admitted as
   the plan lands, so a Stop after that withdraws it as it withdraws any start
   not yet claimed ([ADR-0029](0029-the-supervisor.md)): the run stays stopped, the
@@ -477,3 +478,4 @@ the daemon reads it from there at generation.
 - 2026-10-31 — a Stop since the plan was submitted withdraws autorun's start, and what failed in the reply stays failed.
 - 2026-10-31 — a user's Stop withdraws autorun's start even with nothing live, and a run opened after that Stop has the plan; under Guarded autorun's start approves no script task the commit left unapproved.
 - 2026-10-31 — autorun restarts no run a usage limit holds, and skips a scheduled run with nothing live in Guarded as in Full.
+- 2026-10-31 — the plan left to Execute under a usage limit is taken in for the reset to go on with; Execute no longer takes the pause back.

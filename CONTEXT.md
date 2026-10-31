@@ -3043,10 +3043,12 @@ it; it carries what it goes back to once released — *idle* for a task started
 alone, *scheduling*, or *ended on a failure*), *ended on a failure* (every task
 left is failed or blocked; a retry or a skip continues it) and *finished*
 (every task completed or was skipped). It changes only by an event — schedule,
-stop, load, continue, hold, release, end, reopen — through one pure reducer
+stop, load, continue, join, hold, release, end, reopen — through one pure reducer
 (`nextRunState`). The Session changes the run through three verbs on the
-orchestrator: `beginRun` (Execute with nothing at work: the run afresh),
-`joinRun` (Execute during a run: the plan joins it) and `adoptEdit` (a
+orchestrator: `beginRun` (Execute with no open run: the run afresh),
+`joinRun` (Execute during a run, a scheduled one waiting with nothing at work or
+one a usage limit holds: the plan joins it, and a hold starts nothing until its
+reset gives back the plan's run) and `adoptEdit` (a
 planner's edit, reconciled into a run at work or awaiting a resume, else loaded
 for the next run). `isScheduling`, `awaitsResume` and the plan status
 (`running`, `completed`, else `approved`) derive from it. One

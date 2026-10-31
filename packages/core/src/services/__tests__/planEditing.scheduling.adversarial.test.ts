@@ -85,11 +85,12 @@ describe('a paused task edited into a manual one', () => {
       type: 'user',
       userSteps: [{ order: 1, instruction: 'sign off', completed: false }],
     });
-    expect(taskOf(env.session, 't1')).toMatchObject({ type: 'user', status: 'awaiting_user' });
+    // The edit ends the pause, so the hold goes with it and the run takes its next task.
+    expect(taskOf(env.session, 't1')).toMatchObject({ type: 'user', status: 'pending' });
 
     await vi.advanceTimersByTimeAsync(Date.parse(RESUME_AT) - Date.now() + 1000);
 
-    expect(env.run.spawnedIds()).toEqual(['t1']);
+    expect(env.run.spawnedIds().filter((id) => id === 't1')).toHaveLength(1);
   });
 });
 

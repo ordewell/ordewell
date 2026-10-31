@@ -1064,22 +1064,21 @@ export class TaskOrchestrator {
     }
 
     this.store.load(adopted, planRunners);
-    this.store.releaseMadeManual((id) => this.attempts.has(id));
     this.planEdited(before);
-    // An edit may have taken the last task waiting on a reset out of the plan, or ended its pause.
-    this.limitPauses.recount();
   }
 
   /**
    * An edit landed on the plan — a planner's task ops through
    * {@link reconcilePlan}, or the user's direct edit through the PlanEditor.
-   * One that leaves a loop's check out of rounds ends the loop (ADR-0045 L6):
-   * what of its body has not run will not run, and, while the run is under
-   * way, the check settles once more so the supervisor hears the end. Nothing
-   * else notices such an edit: the check settled when it failed a round, and
-   * no round will run it again.
+   * A task it made manual is the manual task it now is (ADR-0053), a runner
+   * still at a question apart. One that leaves a loop's check out of rounds
+   * ends the loop (ADR-0045 L6): what of its body has not run will not run,
+   * and, while the run is under way, the check settles once more so the
+   * supervisor hears the end. Nothing else notices such an edit: the check
+   * settled when it failed a round, and no round will run it again.
    */
   planEdited(before: readonly Task[]): void {
+    this.store.releaseMadeManual((id) => this.attempts.has(id));
     this.retireResolversLeft(before);
     const was = new Map(before.map((task) => [task.id, task]));
     for (const check of this.store.allTasks) {
@@ -1091,13 +1090,15 @@ export class TaskOrchestrator {
       // run starts a failed check's rounds over; the close still stands.
       if (this.isRunning) this.emit('onTaskSettled', { taskId: check.id });
     }
+    // An edit may have taken the last task waiting on a reset out of the plan, or ended its pause.
+    this.limitPauses.recount();
   }
 
   /**
-   * Begin the full-plan run afresh, as Execute does with nothing at work.
-   * Whatever an earlier run left goes: its state, even held or armed with
-   * nothing live, which {@link start} would take as a run already under way;
-   * its scheduled resumes and execution log; and, as the plan is loaded over
+   * Begin the full-plan run afresh, as Execute does with no open run to join.
+   * Whatever an earlier run left goes: its state, which {@link start} would
+   * take as a run already under way; its scheduled resumes and execution log;
+   * and, as the plan is loaded over
    * itself, its retry counts, holds, loop rounds and review approval. Every
    * task not done is ready to run again, and the scheduler starts it; a plan
    * with nothing left to run ends at once, and the scheduler says so, but for
@@ -1117,22 +1118,30 @@ export class TaskOrchestrator {
    * Take the plan into the run under way (#95), whose tasks were approved
    * first: a scheduled run starts them as their dependencies finish, and one
    * the scheduler was not driving — tasks started on their own — becomes the
-   * plan's run, as Execute would make it.
+   * plan's run, as Execute would make it. A hold starts nothing either way:
+   * the plan's run is what its reset gives back (ADR-0018 U1).
    */
   async joinRun(origin: RunOrigin): Promise<void> {
     if (this.isScheduling) return this.tick();
-    if (this.reviewApproved) return this.start(origin);
-    return this.approveReview(origin);
+    if (!this.reviewApproved) return this.approveReview(origin);
+    if (this.runHeld) return this.joinHold();
+    return this.start(origin);
+  }
+
+  private joinHold(): void {
+    this.transition({ type: 'join' });
+    this.emit('onTaskChanged');
   }
 
   /**
    * The user's Execute takes in work the scheduler was not driving: it becomes
    * the plan's run, so what failed gets the fresh chance Execute gives
    * (ADR-0053). A scheduled run keeps its failures, which a retry continues
-   * (ADR-0034), and Execute only approves what waits in it.
+   * (ADR-0034), and Execute only approves what waits in it: a hold that gives
+   * one back is that run still.
    */
   readyFailed(): void {
-    if (!this.isScheduling) this.store.readyFailed((id) => this.attempts.has(id));
+    if (!this.scheduledRun) this.store.readyFailed((id) => this.attempts.has(id));
   }
 
   /** Start the full-plan run, or continue one that is held or ended on a failure. */
@@ -2021,6 +2030,8 @@ export class TaskOrchestrator {
     const task = this.store.get(taskId);
     if (!task || task.status !== 'awaiting_user' || task.awaitingReason !== 'usage-limit') return changes;
     const next = { ...task, ...changes };
+    // No next attempt to route around the limit: the edit's landing releases a task it made manual (ADR-0053).
+    if (next.type === 'user') return changes;
     // The limit belongs to the runner's account, so a model change on that
     // same runner must keep waiting for its reset.
     if ((next.assignedRunner ?? this.store.planRunners[0]) === this.store.resolveTaskRunner(task)) return changes;
@@ -2069,8 +2080,8 @@ export class TaskOrchestrator {
       const task = this.store.get(taskId);
       // One asked for now resumes without a resume time; any other cancelled meanwhile stays put.
       if (!task || !(asked ? pausedOnLimit(task) : waitsForReset(task)) || this.attempts.has(taskId)) return;
-      // A task a direct edit turned manual never runs, so the reset ends its
-      // pause rather than spawning a runner for it (CONTEXT.md, "Start rule").
+      // An edit releases a task it made manual as it lands, so this is only the
+      // last line: no runner is spawned for one (CONTEXT.md, "Start rule").
       if (task.type !== 'ai') {
         this.limitPauses.cancel(taskId);
         return;
@@ -2351,6 +2362,7 @@ export class TaskOrchestrator {
     this.reviewApproved = true;
     this.emit('onTaskChanged');
     this.emit('onReviewApproved', { tasks: this.store.planTasks });
+    if (this.runHeld) return this.joinHold();
     await this.start(origin);
   }
 

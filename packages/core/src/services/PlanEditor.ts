@@ -448,9 +448,13 @@ export class PlanEditor {
     // The plan as it was, so the scheduler can see a loop this edit ends:
     // `updateTaskInPlan` copies every task, so this view stays what it read.
     const before = this.store.planTasks;
-    const plan = this.mutate(op, notify);
+    const plan = this.mutate(() => {
+      if (!op()) return false;
+      // Inside the mutation: what the edit ends is saved and announced with it.
+      this.scheduler.planEdited(before);
+      return true;
+    }, notify);
     if (!plan) return null;
-    this.scheduler.planEdited(before);
     await this.scheduler.tick();
     return plan;
   }
