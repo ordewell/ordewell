@@ -168,13 +168,23 @@ export function revertScope(taskId: string, { tasks, run, live, resolvers }: Rev
   return { taskIds };
 }
 
-/** What a user is told of work already in their branch. */
+/**
+ * What a user is told of work something of theirs holds. A revert cannot tell a
+ * review from a merge (ADR-0054), so what is not their own branch may only be
+ * in the way, and they are told how to clear it. Their own branch never is.
+ */
 export function inBranchRefusal(commands: readonly RevertCommand[]): RevertRefusal {
   const one = commands.length === 1;
+  const held = [...new Set(commands.flatMap((c) => c.heldBy))];
+  const branches = held.filter((ref) => ref !== 'HEAD');
+  const detached = held.includes('HEAD');
+  const named = [...(branches.length > 0 ? [quotedList(branches)] : []), ...(detached ? ['a detached HEAD'] : [])].join(' and ');
+  const clear = [...(branches.length > 0 ? [`delete ${quotedList(branches)}`] : []), ...(detached ? ['check out something else'] : [])].join(' and ');
+  const review = commands.every((c) => !c.merged) ? `. If that is only a review, ${clear} first, then revert again.` : '';
   return {
     reason: 'in-branch',
     commands: [...commands],
-    message: `This work is already merged into your branch, which Ordewell never writes to. To undo it there, run ${one ? 'this' : 'these, in order'}: ${commands.map((c) => c.command).join('; ')}`,
+    message: `This work is already in ${named}, which Ordewell never writes to. To undo it there, run ${one ? 'this' : 'these, in order'}: ${commands.map((c) => c.command).join('; ')}${review}`,
   };
 }
 

@@ -139,8 +139,8 @@ describe('/revert', () => {
       const text = refused({
         revertible: false,
         reason: 'in-branch',
-        message: 'This work is already merged into your branch, which Ordewell never writes to. To undo it there, run this: git revert -m 1 abc1234',
-        commands: [{ task: { taskId: 't1', order: 1, title: 'Parse JSON' }, repo: '.', commit: 'abc1234', command: 'git revert -m 1 abc1234' }],
+        message: 'This work is already in "main", which Ordewell never writes to. To undo it there, run this: git revert -m 1 abc1234',
+        commands: [{ task: { taskId: 't1', order: 1, title: 'Parse JSON' }, repo: '.', commit: 'abc1234', command: 'git revert -m 1 abc1234', heldBy: ['main'], merged: true }],
       });
 
       expect(text).toContain('git revert -m 1 abc1234');

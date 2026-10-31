@@ -1887,9 +1887,11 @@ in a loop that has not ended, while the integration branch is checked out
 outside Ordewell's own worktree or that worktree stands on anything else, and
 wherever it cannot be sure what it covers: work a conflict's resolver carried
 (`IsolationRun.carried`), whichever of the two tasks is asked, or merges no
-record can name. Work already in the user's branch is refused with
-the exact `git revert` to run, which Ordewell never runs: a checkout that only
-stands on the integration branch is not that. A conflict or a failure
+record can name. Work anything of the user's holds is refused with
+the exact `git revert` to run, which Ordewell never runs: any local branch that
+is not Ordewell's stops it, a branch cut only to review included, which the
+refusal says to delete first, and a detached HEAD that does not stand on a tip of
+Ordewell's. A conflict or a failure
 puts every recorded tip back and names the task, repo and files. Each reverted
 task is `pending`, on a chosen hold, with `reverted` saved on it; its run record
 goes, so it stops counting as landed and no longer holds a *merge gate*, unless a
@@ -1906,8 +1908,9 @@ revert never does; "discard" for one task, which is the whole run's.
 waits until their work is merged into the user's branch (ADR-0020): until that
 branch contains the integration tip each of them landed at, or that repo's
 integration branch is gone so no merge could bring it in. A review checkout of
-the integration branch, detached or a branch cut from it, is no merge (ADR-0054).
-The user's Merge all opens it, as does a merge made by hand, and a merge taken back
+the integration branch, detached or a branch cut from it, is no merge, nor is a
+merge into any branch but the one the run started on (ADR-0054).
+The user's Merge all opens it, as does a merge made by hand into that branch, and a merge taken back
 out closes it; Force start passes it
 after a confirmation naming what is not merged, and the task keeps that choice
 (`forcedPastGate`). A force start queued behind its dependencies passes only

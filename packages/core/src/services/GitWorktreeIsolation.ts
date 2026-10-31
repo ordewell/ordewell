@@ -261,10 +261,10 @@ function uncommittedRefusal(dir: string, files: readonly string[]): string {
   return `The integration worktree ${dir} has uncommitted changes (${files.join(', ')}), which a revert would commit or lose. Commit or clear them there first. Nothing was reverted.`;
 }
 
-function revertCommand(repo: IsolationRepo, record: IsolationTaskRef, merge: string): RevertCommand {
+function revertCommand(repo: IsolationRepo, record: IsolationTaskRef, merge: string, heldBy: string[], merged: boolean): RevertCommand {
   // Single quotes: the user pastes this, and double quotes would still run a `$(...)` in a directory's name.
   const at = repo.path === SELF_REPO ? '' : `-C ${/^[\w./-]+$/.test(repo.path) ? repo.path : shellQuoted(repo.path)} `;
-  return { task: { taskId: record.taskId, order: record.order, title: record.title }, repo: repo.path, commit: merge, command: `git ${at}revert -m 1 ${merge}` };
+  return { task: { taskId: record.taskId, order: record.order, title: record.title }, repo: repo.path, commit: merge, command: `git ${at}revert -m 1 ${merge}`, heldBy, merged };
 }
 
 /**
@@ -973,47 +973,64 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   }
 
   /**
-   * Whether `commit` has reached the user's branch: what merged means to a
-   * merge gate, a revert and a clear-up alike (ADR-0054). Git is asked every
-   * time and wherever the user stands now, since a saved fact goes with the
-   * record it is on and work merged stays merged from a checkout that does not
-   * show it. The branch the run started on is the user's, a fast-forward of it
-   * included. Any other branch, and a detached HEAD where the run has no such
-   * branch to speak for it, has to show a merge, which leaves the commit off
-   * its first-parent line: one that holds it on that line stands on the
-   * integration branch, as a review does. Ordewell's own branches are no one's.
+   * Is this work merged, so a gate may open and a run may close (ADR-0054)?
+   * Strict, since a false yes clears a run: only the user's own branch counts.
+   * That is the branch the run started on, a fast-forward of it included, under
+   * any name its reflog gives it. Git is asked every time and wherever the user
+   * stands, since a saved fact goes with the record it is on. A revert asks
+   * something else, of {@link holdersOf}.
    */
   private async inUserBranch(repo: IsolationRepo, commit: string): Promise<boolean> {
-    const base = await this.baseBranchRef(repo);
-    if (base && (await this.tryGit(repo.root, ['merge-base', '--is-ancestor', commit, base])).ok) return true;
     const sha = await this.tryGit(repo.root, ['rev-parse', '--verify', '-q', `${commit}^{commit}`]);
     if (!sha.ok) return false;
     const merge = sha.stdout.trim();
-    const holding = await this.tryGit(repo.root, ['for-each-ref', '--contains', merge, '--format=%(refname)', 'refs/heads/']);
-    const tips = holding.stdout.split(/\r?\n/).filter((ref) => ref && !isOwnBranch(ref));
-    if (!repo.baseBranch && !(await this.tryGit(repo.root, ['symbolic-ref', '-q', 'HEAD'])).ok && (await this.tryGit(repo.root, ['merge-base', '--is-ancestor', merge, 'HEAD'])).ok) tips.push('HEAD');
-    for (const tip of tips) {
-      const line = await this.tryGit(repo.root, ['rev-list', '--first-parent', tip]);
-      if (line.ok && !line.stdout.split(/\r?\n/).includes(merge)) return true;
+    if (!repo.baseBranch) return this.mergedIntoCheckout(repo, merge);
+    const named = `refs/heads/${repo.baseBranch}`;
+    const holding = await this.branchesHolding(repo, merge);
+    if (holding.includes(named)) return true;
+    for (const ref of holding.filter((branch) => !isOwnBranch(branch))) {
+      // `git branch -m` takes the reflog along and writes the old name in it, whether or not a new branch has since taken that name.
+      const renamed = await this.tryGit(repo.root, ['log', '-g', '-1', '--format=%H', '-F', `--grep-reflog=Branch: renamed ${named} to `, ref]);
+      if (renamed.stdout.trim()) return true;
     }
     return false;
   }
 
   /**
-   * The branch the run started on, under the name it has now. `git branch -m`
-   * takes the reflog along and writes the old name in it, so a name gone with
-   * no branch saying so is a branch deleted, or one with no reflog to read.
+   * A run with no base branch has only what is checked out for the user's own
+   * branch, and it has to show a merge: `merge` off its first-parent line, and no
+   * tip of Ordewell's that holds `merge` on it, or it stands on that tip as a
+   * review does, whatever merged it there.
    */
-  private async baseBranchRef(repo: IsolationRepo): Promise<string | undefined> {
-    if (!repo.baseBranch) return undefined;
-    const named = `refs/heads/${repo.baseBranch}`;
-    if ((await this.tryGit(repo.root, ['rev-parse', '--verify', '-q', named])).ok) return named;
-    const branches = await this.tryGit(repo.root, ['for-each-ref', '--format=%(refname)', 'refs/heads/']);
-    for (const ref of branches.stdout.split(/\r?\n/).filter((branch) => branch && !isOwnBranch(branch))) {
-      const renamed = await this.tryGit(repo.root, ['log', '-g', '-1', '--format=%H', '-F', `--grep-reflog=Branch: renamed ${named} to `, ref]);
-      if (renamed.stdout.trim()) return ref;
-    }
-    return undefined;
+  private async mergedIntoCheckout(repo: IsolationRepo, merge: string): Promise<boolean> {
+    if (!(await this.tryGit(repo.root, ['merge-base', '--is-ancestor', merge, 'HEAD'])).ok) return false;
+    const line = await this.tryGit(repo.root, ['rev-list', '--first-parent', 'HEAD']);
+    if (!line.ok) return false;
+    const onLine = new Set(line.stdout.split(/\r?\n/));
+    const own = await this.tryGit(repo.root, ['for-each-ref', '--contains', merge, '--format=%(objectname)', ...OWN_BRANCHES]);
+    return ![merge, ...own.stdout.split(/\r?\n/).filter(Boolean)].some((commit) => onLine.has(commit));
+  }
+
+  /**
+   * May a revert touch this merge (ADR-0054)? Not while anything of the user's
+   * holds it: what that is goes unread, since a review and a merge look alike and
+   * a revert refuses when it cannot be sure. So these are every local branch that
+   * is not Ordewell's, the base branch always, and a detached HEAD, as 'HEAD',
+   * unless it stands on a tip of Ordewell's.
+   */
+  private async holdersOf(repo: IsolationRepo, merge: string): Promise<string[]> {
+    const holders = (await this.branchesHolding(repo, merge))
+      .filter((ref) => ref === `refs/heads/${repo.baseBranch}` || !isOwnBranch(ref))
+      .map((ref) => ref.replace(/^refs\/heads\//, ''));
+    const detached = !(await this.tryGit(repo.root, ['symbolic-ref', '-q', 'HEAD'])).ok;
+    if (!detached || !(await this.tryGit(repo.root, ['merge-base', '--is-ancestor', merge, 'HEAD'])).ok) return holders;
+    const onOwnTip = await this.tryGit(repo.root, ['for-each-ref', '--points-at', 'HEAD', '--format=%(refname)', ...OWN_BRANCHES]);
+    return onOwnTip.stdout.trim() ? holders : [...holders, 'HEAD'];
+  }
+
+  private async branchesHolding(repo: IsolationRepo, commit: string): Promise<string[]> {
+    const holding = await this.tryGit(repo.root, ['for-each-ref', '--contains', commit, '--format=%(refname)', 'refs/heads/']);
+    return holding.stdout.split(/\r?\n/).filter(Boolean);
   }
 
   /**
@@ -1441,7 +1458,8 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       for (const { record, merge } of landings) {
         const shared = alsoLandedBy(run, repo.path, record.taskId, merge);
         if (shared) return { ok: false, reason: 'no-own-merge', error: `Tasks "${record.title}" and "${shared}" are recorded as landed by the same merge, so Ordewell cannot tell whose work a revert of it would take. Nothing was reverted.` };
-        if (await this.inUserBranch(repo, merge)) inBranch.push(revertCommand(repo, record, merge));
+        const heldBy = await this.holdersOf(repo, merge);
+        if (heldBy.length > 0) inBranch.push(revertCommand(repo, record, merge, heldBy, await this.inUserBranch(repo, merge)));
         else if (!position.has(merge)) return { ok: false, reason: 'git', error: `The merge of task "${record.title}" is not on the integration branch in ${repoName(repo)}.` };
         const carried = await this.carriedBy(run, repo, merge);
         if (carried) return { ok: false, reason: 'no-own-merge', error: `The work of task "${carried}" landed through the merge of task "${record.title}", so reverting that merge would take it too, and it has no merge of its own to go with it. Nothing was reverted.` };
@@ -1528,8 +1546,6 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
         }
         const stopped = await this.revertLanding(dir, record, merge);
         if (!('commits' in stopped)) {
-          // The index a stopped revert leaves behind is not on the branch, so no tip rolls it back.
-          await this.tryGit(dir, ['reset', '-q', '--hard']);
           const unsettled = await this.settleLanding(run);
           const task = { taskId: record.taskId, order: record.order, title: record.title };
           if (unsettled.length > 0) return finish({ outcome: 'failed', task, repo: repo.path, error: `${'error' in stopped ? stopped.error : 'it conflicted'}, and the integration branch could not be put back in ${unsettled.join(', ')}` });
@@ -1579,12 +1595,60 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     const revert = await this.tryGit(dir, ['revert', '--no-commit', '-m', '1', merge]);
     if (!revert.ok) {
       const files = await this.unmergedPaths(dir);
-      return files.length > 0 ? { files } : { error: `git could not revert it (${stoppedOn(revert)})` };
+      // With nothing conflicted git stopped before it wrote, often over a change that is someone's, so there is nothing of it to clear.
+      if (files.length === 0) return { error: `git could not revert it (${stoppedOn(revert)})` };
+      return (await this.clearStoppedRevert(dir, merge)) ? { files } : { error: `it conflicted over ${files.join(', ')}, and what it left in ${dir} could not be cleared` };
     }
     // A later landing took all of it out already, so there is nothing to commit.
     if ((await this.tryGit(dir, ['diff', '--cached', '--quiet'])).ok) return { commits: 0 };
     const commit = await this.tryGit(dir, [...VERBATIM, 'commit', '-q', ...messageArgs(revertMessage(record, merge, this.deps.plannedWith?.() ?? false))]);
-    return commit.ok ? { commits: 1 } : { error: `git could not commit its revert (${stoppedOn(commit)})` };
+    if (commit.ok) return { commits: 1 };
+    const left = (await this.clearStoppedRevert(dir, merge)) ? '' : `, and what it left in ${dir} could not be cleared`;
+    return { error: `git could not commit its revert (${stoppedOn(commit)})${left}` };
+  }
+
+  /**
+   * Take what a stopped revert left off the worktree it ran in, by the read a
+   * rollback takes, so a change made there since stays as it was (ADR-0054). What
+   * it conflicted over goes first, since an index holding a conflict cannot be
+   * read, and only if that is its own: `git revert --no-commit` merges into the
+   * index, so anything else staged there is in the conflict's stage 2, and stays.
+   * The rest has no commit to read from, so the tree is built: the index, with
+   * every path the revert could not have written back at HEAD.
+   */
+  private async clearStoppedRevert(dir: string, merge: string): Promise<boolean> {
+    const conflicted = await this.unmergedPaths(dir);
+    for (const file of conflicted) {
+      const [ours, head] = await Promise.all([`:2:${file}`, `HEAD:${file}`].map((spec) => this.tryGit(dir, ['rev-parse', '-q', '--verify', spec])));
+      if (ours.stdout !== head.stdout) return false;
+    }
+    if (conflicted.length > 0 && !(await this.tryGit(dir, ['--literal-pathspecs', 'restore', '--source=HEAD', '--staged', '--worktree', '--', ...conflicted])).ok) return false;
+    const undone = await this.tryGit(dir, ['diff', '--no-renames', '--name-only', '-z', merge, `${merge}^1`]);
+    // A revert follows a file a later landing renamed, onto its new name.
+    const renamed = await this.tryGit(dir, ['diff', '--find-renames', '--diff-filter=R', '--name-only', '-z', merge, 'HEAD']);
+    const status = await this.tryGit(dir, ['status', '--porcelain', '-z', '--untracked-files=no', '--no-renames']);
+    if (!undone.ok || !renamed.ok || !status.ok) return false;
+    const its = new Set(`${undone.stdout}${renamed.stdout}`.split('\0'));
+    const tree = await this.indexTreeWithout(dir, statusPaths(status.stdout).filter((file) => !its.has(file)));
+    return tree !== null && this.takeCommitsOff(dir, tree, 'HEAD');
+  }
+
+  /** The tree of a worktree's index with `paths` back at HEAD, leaving that index as it is. */
+  private async indexTreeWithout(dir: string, paths: string[]): Promise<string | null> {
+    const index = await this.tryGit(dir, ['rev-parse', '--git-path', 'index']);
+    if (!index.ok) return null;
+    const live = path.resolve(dir, index.stdout.trim());
+    const scratch = `${live}.ordewell-revert`;
+    const invoker = this.gitInvoker;
+    const inScratch: GitInvoker = { ...invoker, exec: (file, args, opts) => invoker.exec(file, args, { ...opts, env: { ...opts.env, GIT_INDEX_FILE: scratch } }) };
+    fs.copyFileSync(live, scratch);
+    try {
+      if (paths.length > 0 && !(await tryGit(inScratch, dir, ['--literal-pathspecs', 'reset', '-q', 'HEAD', '--', ...paths])).ok) return null;
+      const tree = await tryGit(inScratch, dir, ['write-tree']);
+      return tree.ok ? tree.stdout.trim() : null;
+    } finally {
+      fs.rmSync(scratch, { force: true });
+    }
   }
 
   /**
@@ -1698,14 +1762,15 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   }
 
   /**
-   * Take a revert's commits off the worktree they were made in, leaving what
-   * has been staged or changed there since where it is: a hard reset would take
-   * it (ADR-0054). Git refuses over a path the commits touched, and then the
-   * branch stays, recorded, until that change is cleared.
+   * Take a revert off the worktree it was made in, from what it wrote to where
+   * it started, leaving what has been staged or changed there since where it is:
+   * a hard reset would take it (ADR-0054). Git refuses over a path the revert
+   * touched, and then it stays, recorded, until that change is cleared. The
+   * reset also ends the revert a stopped one left in progress.
    */
-  private async takeCommitsOff(dir: string, head: string, tip: string): Promise<boolean> {
+  private async takeCommitsOff(dir: string, from: string, tip: string): Promise<boolean> {
     await this.tryGit(dir, ['update-index', '-q', '--refresh']);
-    return (await this.tryGit(dir, ['read-tree', '-m', '-u', head, tip])).ok && (await this.tryGit(dir, ['reset', '-q', '--soft', tip])).ok;
+    return (await this.tryGit(dir, ['read-tree', '-m', '-u', from, tip])).ok && (await this.tryGit(dir, ['reset', '-q', '--soft', tip])).ok;
   }
 
   private async isOneMergeOn(repo: IsolationRepo, head: string, tip: string): Promise<boolean> {

@@ -61,7 +61,7 @@ describe('Revert from the host', () => {
   it.each([
     ['a live dependent', { revertible: false, reason: 'live-dependent', message: 'Task "Wire it up" depends on it and is still running. Nothing was reverted. Let it finish, or stop it, first.', tasks: [{ taskId: 't2', order: 2, title: 'Wire it up' }] }],
     ['a conflict with its files', { revertible: false, reason: 'git', message: 'Reverting task "Parse JSON" conflicts with what landed after it: src/a.ts. Nothing was reverted, and the integration branch is as it was.' }],
-    ['work already merged, with the command', { revertible: false, reason: 'in-branch', message: 'This work is already merged into your branch, which Ordewell never writes to. To undo it there, run this: git revert -m 1 abc1234', commands: [] }],
+    ['work already merged, with the command', { revertible: false, reason: 'in-branch', message: 'This work is already in "main", which Ordewell never writes to. To undo it there, run this: git revert -m 1 abc1234', commands: [] }],
     ['a loop still running', { revertible: false, reason: 'in-a-loop', message: 'Task "Parse JSON" is in the loop of task "Check", which has not ended. Nothing was reverted. Let the loop end first.' }],
   ] as [string, TaskRevertPreview][])('shows a refusal for %s in core\'s words and asks nothing', async (_name, preview) => {
     const { session } = deps(preview);

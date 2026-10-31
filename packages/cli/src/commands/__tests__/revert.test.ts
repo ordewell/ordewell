@@ -98,7 +98,7 @@ describe('ordewell revert (ADR-0054)', () => {
 
   it('shows a refusal in core\'s words, with the exact command for work already merged, and asks nothing', async () => {
     const hits: string[] = [];
-    const message = 'This work is already merged into your branch, which Ordewell never writes to. To undo it there, run this: git revert -m 1 abc1234';
+    const message = 'This work is already in "main", which Ordewell never writes to. To undo it there, run this: git revert -m 1 abc1234';
     const srv = await daemon({ revertible: false, reason: 'in-branch', message, commands: [] }, hits);
     const confirm = vi.fn();
 

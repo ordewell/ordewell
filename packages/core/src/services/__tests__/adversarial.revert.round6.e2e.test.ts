@@ -133,12 +133,16 @@ describe('whether a landing reached the user\'s branch', () => {
     expect(await iso.revert(run, [t.id], nothingInTheWay)).toMatchObject({ outcome: 'reverted' });
   });
 
-  it('is not a branch cut from the integration tip, checked out or not', async () => {
+  it('is not a branch cut from the integration tip, checked out or not, though that stops a revert until it goes', async () => {
     const { root, iso, run, t, integration } = await oneLanding();
     git(root, 'branch', 'review', integration);
     git(root, 'checkout', '-q', '-b', 'reading', integration);
     git(root, 'checkout', '-q', 'main');
 
+    expect(await iso.findInHead(run)).toEqual([]);
+    expect(await iso.readLanded(run, [t.id])).toMatchObject({ ok: true, inBranch: [{ heldBy: ['reading', 'review'], merged: false }] });
+
+    git(root, 'branch', '-D', 'reading', 'review');
     expect(await iso.readLanded(run, [t.id])).toMatchObject({ ok: true, inBranch: [] });
   });
 
