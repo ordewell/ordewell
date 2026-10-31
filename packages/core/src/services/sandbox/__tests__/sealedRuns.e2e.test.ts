@@ -1,5 +1,6 @@
 import { execFile, spawn, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync, writeSync } from 'node:fs';
+import { once } from 'node:events';
 import { createServer, type Server } from 'node:net';
 import { createRequire } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
@@ -237,9 +238,19 @@ describe('sealed runs', async () => {
         const [pid, ppid] = line.trim().split(/\s+/).map(Number);
         return Number.isInteger(ppid) ? [{ pid, ppid }] : [];
       });
+      const descendants = (root: number) => {
+        const all = processes();
+        const found = new Set([root]);
+        for (let grew = true; grew;) {
+          grew = false;
+          for (const p of all) if (found.has(p.ppid) && !found.has(p.pid)) { found.add(p.pid); grew = true; }
+        }
+        found.delete(root);
+        return [...found];
+      };
       let started: number[] = [];
       await vi.waitFor(() => {
-        started = processes().filter((p) => p.ppid === child.pid).map((p) => p.pid);
+        started = descendants(child.pid!);
         expect(started.length).toBeGreaterThanOrEqual(2);
       });
       child.kill('SIGKILL');
@@ -247,6 +258,77 @@ describe('sealed runs', async () => {
         const alive = new Set(processes().map((p) => p.pid));
         expect(started.filter((pid) => alive.has(pid))).toEqual([]);
       }, { timeout: 20_000, interval: 500 });
+    });
+
+    /** What is running with `command` in its arguments. Named by its command, since nothing else outlives a launcher to ask. */
+    const runningWith = (command: string) => spawnSync('ps', ['-A', '-o', 'pid=,args='], { encoding: 'utf8' }).stdout.split('\n').filter((line) => line.includes(command));
+
+    it('leaves nothing running when the caller kills it and its standard input is no pipe to close', async () => {
+      const launch = await sandbox.launchSealed(POSIX, { workspace });
+      const command = `sleep 30.${process.pid}1`;
+      const child = spawn(launch.file!, [...launch.args, command], { cwd: workspace, env: launch.env, stdio: ['ignore', 'ignore', 'ignore'] });
+      try {
+        // The command itself, not the shell or the launcher naming it.
+        await vi.waitFor(() => expect(runningWith(command).filter((line) => !line.includes('-c')).length).toBeGreaterThanOrEqual(1));
+        child.kill('SIGKILL');
+        await vi.waitFor(() => expect(runningWith(command)).toEqual([]), { timeout: 20_000, interval: 250 });
+      } finally {
+        for (const line of runningWith(command)) spawnSync('kill', ['-KILL', line.trim().split(/\s+/)[0]]);
+      }
+    });
+
+    // macOS has no death signal, and the launcher starts the sandbox before what
+    // reaps it. A hook bash runs as it starts kills the launcher between the two.
+    // SHLVL, since a top-level bash with a socket for its input skips BASH_ENV.
+    it.skipIf(process.platform !== 'darwin')('leaves nothing running of a run whose launcher dies the moment it starts the sandbox', async () => {
+      const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-sealed-hook-')));
+      writeFileSync(join(dir, 'hook'), 'set() { builtin set "$@"; if [ "$1" = +m ]; then kill -KILL $$; fi; }\n');
+      const launch = await sandbox.launchSealed(POSIX, { workspace });
+      const command = `sleep 30.${process.pid}2`;
+      const child = spawn(launch.file!, [...launch.args, command], { cwd: workspace, env: { ...launch.env, SHLVL: '1', BASH_ENV: join(dir, 'hook') }, stdio: ['pipe', 'ignore', 'ignore'] });
+      try {
+        const [, signal] = await once(child, 'exit');
+        expect(signal).toBe('SIGKILL');
+        await vi.waitFor(() => expect(runningWith(command)).toEqual([]), { timeout: 20_000, interval: 250 });
+      } finally {
+        for (const line of runningWith(command)) spawnSync('kill', ['-KILL', line.trim().split(/\s+/)[0]]);
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    // Bubblewrap arms its death signal only once the sandbox is set up, and a
+    // signal armed after the parent has died never comes. Its own options hold
+    // it at the two steps where that happens, so no test has to win a race.
+    describe.skipIf(process.platform !== 'linux')('killed before bubblewrap arms its death signal', () => {
+      const held: [string, string[]][] = [
+        ['setting up the sandbox', ['--block-fd', '3']],
+        ['still waiting for the launcher to release it', ['--unshare-user', '--info-fd', '4', '--userns-block-fd', '3']],
+      ];
+
+      it.each(held)('leaves nothing running of a run %s', async (_step, hold) => {
+        const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-sealed-gate-')));
+        spawnSync('mkfifo', [join(dir, 'gate')]);
+        // Read-write, so what bubblewrap reads is the byte below and never an end of file.
+        const gate = openSync(join(dir, 'gate'), 'r+');
+        const launch = await sandbox.launchSealed(POSIX, { workspace });
+        const args = [...launch.args];
+        args.splice(args.indexOf('ordewell-sealed') + 2, 0, ...hold);
+        const command = `sleep 30.${process.pid}${hold.length}`;
+        const left = () => runningWith(command);
+        const child = spawn(launch.file!, [...args, command], { cwd: workspace, env: launch.env, stdio: ['pipe', 'ignore', 'ignore', gate, 'pipe'] });
+        try {
+          // The launcher, and the namespace's first process it cloned.
+          await vi.waitFor(() => expect(left().filter((line) => line.includes('--new-session')).length).toBeGreaterThanOrEqual(2));
+          child.kill('SIGKILL');
+          await new Promise((resolve) => child.once('exit', resolve));
+          writeSync(gate, 'g');
+          await vi.waitFor(() => expect(left()).toEqual([]), { timeout: 20_000, interval: 250 });
+        } finally {
+          for (const line of left()) spawnSync('kill', ['-KILL', line.trim().split(/\s+/)[0]]);
+          closeSync(gate);
+          rmSync(dir, { recursive: true, force: true });
+        }
+      });
     });
 
     describe('what a test run needs', () => {

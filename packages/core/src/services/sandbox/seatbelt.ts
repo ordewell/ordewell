@@ -147,12 +147,18 @@ const KEYCHAIN_PROFILE = `(allow mach-lookup
  * otherwise fill the group back to its process limit while the reaper waited,
  * and outlast it.
  *
+ * macOS has no death signal to fall back on, so all of that runs in a subshell
+ * the caller's kill never reaches, and this script only waits for it. Were the
+ * script to start the sandbox and then the reaper itself, a kill between the
+ * two would leave a sandbox nothing ever reaped (ADR-0036 S1).
+ *
  * About once a second a watcher sums the group's resident memory, and past the
  * limit it ends this script by {@link MEMORY_LIMIT_SIGNAL}, as the caller's
  * clock would, then the group: the caller reads the signal, and the group goes
- * the same way whichever comes first. The kernel's limits are set on the
- * command alone, so a fork bomb at its process limit leaves the watcher able
- * to start `ps`.
+ * the same way whichever comes first. It reaps the group too when this script
+ * has gone, which is all that does when no pipe stands on standard input. The
+ * kernel's limits are set on the command alone, so a fork bomb at its process
+ * limit leaves the watcher able to start `ps`.
  *
  * macOS counts processes per user and maps hundreds of gigabytes into every
  * program as it starts, so both kernel limits are added to what is measured
@@ -168,29 +174,35 @@ reap() { i=0; while [ $i -lt 2000 ] && kill -STOP -$pid 2>/dev/null; do kill -KI
 watch=0
 if [ -p /dev/stdin ] || [ -S /dev/stdin ]; then watch=1; fi
 exec 3<&0
-set -m
-( ulimit -u $((n + ${limits.processes})) && ulimit -v $((v + ${addressSpace})) \\
-    || { echo 'The sealed run could not be held to its limits, so it did not run.' >&2; exit 125; }
-  exec "$@" ) </dev/null 3<&- &
-pid=$!
-set +m
-if [ $watch = 1 ]; then { /bin/cat >/dev/null; reap; } <&3 >/dev/null 2>&1 & watcher=$!; fi
-while kill -0 $$ 2>/dev/null; do
-  /bin/sleep 1
-  kb=0
-  for rss in $(/bin/ps -o rss= -g $pid); do kb=$((kb + rss)); done
-  if [ $kb -gt ${memory} ]; then kill -${MEMORY_LIMIT_SIGNAL.slice(3)} $$; reap; break; fi
-done </dev/null >/dev/null 2>&1 3<&- &
-memory=$!
+(
+  set -m
+  ( ulimit -u $((n + ${limits.processes})) && ulimit -v $((v + ${addressSpace})) \\
+      || { echo 'The sealed run could not be held to its limits, so it did not run.' >&2; exit 125; }
+    exec "$@" ) </dev/null 3<&- &
+  pid=$!
+  set +m
+  if [ $watch = 1 ]; then { /bin/cat >/dev/null; reap; } <&3 >/dev/null 2>&1 & watcher=$!; fi
+  { while kill -0 $$ 2>/dev/null; do
+      /bin/sleep 1
+      kb=0
+      for rss in $(/bin/ps -o rss= -g $pid); do kb=$((kb + rss)); done
+      if [ $kb -gt ${memory} ]; then kill -${MEMORY_LIMIT_SIGNAL.slice(3)} $$; break; fi
+    done
+    reap; } </dev/null >/dev/null 2>&1 3<&- &
+  memory=$!
+  exec 3<&-
+  wait $pid
+  status=$?
+  # Reap the watchers with their own waits, so monitor mode does not print a
+  # stray "Killed" line to the command's output that reads as a crash.
+  kill -KILL $memory 2>/dev/null; wait $memory 2>/dev/null
+  if [ $watch = 1 ]; then kill -KILL $watcher 2>/dev/null; wait $watcher 2>/dev/null; fi
+  reap
+  exit $status
+) &
 exec 3<&-
-wait $pid
-status=$?
-# Reap the watchers with their own waits, so monitor mode does not print a
-# stray "Killed" line to the command's output that reads as a crash.
-kill -KILL $memory 2>/dev/null; wait $memory 2>/dev/null
-if [ $watch = 1 ]; then kill -KILL $watcher 2>/dev/null; wait $watcher 2>/dev/null; fi
-reap
-exit $status`;
+wait $!
+exit $?`;
 }
 
 /**
