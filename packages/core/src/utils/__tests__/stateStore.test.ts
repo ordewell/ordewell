@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { loadState, saveState } from '../stateStore';
-import type { LegacyPlanState } from '../../models/Task';
+import { createTask, type LegacyPlanState } from '../../models/Task';
 
 describe('loadState', () => {
   let tmpDir: string;
@@ -30,6 +30,20 @@ describe('loadState', () => {
   });
 
   const plan = (): LegacyPlanState => ({ tasks: [], runners: ['claude-code'], status: 'approved', generatedAt: '', lastUpdated: '' });
+
+  it('fails a task saved in progress, a subtask too: nothing is running it now', () => {
+    const running = createTask({ id: 't2', title: 'Child', status: 'in_progress', attempted: true });
+    const parent = createTask({ id: 't1', title: 'Parent', status: 'in_progress', subtasks: [running] });
+    saveState({ tasks: [parent, createTask({ id: 't3', title: 'Other', status: 'approved' })], runners: ['claude-code'], status: 'approved', generatedAt: '', lastUpdated: '' }, tmpDir);
+
+    const { tasks } = loadState(tmpDir)!.plan;
+
+    const reason = 'It was interrupted when Ordewell stopped, and nothing is running it now.';
+    expect(tasks[0]).toMatchObject({ status: 'failed', verdict: { outcome: 'fail', reason, checks: [] } });
+    expect(tasks[0].subtasks[0]).toMatchObject({ status: 'failed', attempted: true, verdict: { outcome: 'fail', reason } });
+    expect(tasks[1].status).toBe('approved');
+    expect(tasks[1].verdict).toBeUndefined();
+  });
 
   it('gives back the session id the state was saved for, kept off the plan', () => {
     saveState(plan(), tmpDir, '2026-10-18T10-05-18_review_0328b893');

@@ -1,4 +1,4 @@
-import { LegacyPlanState, Session, SessionHeldError, describeHeld, saveState, loadState, saveSession, loadSession, flattenTasks, isUserMessage } from '@ordewell/core';
+import { LegacyPlanState, Session, SessionHeldError, describeHeld, saveState, loadState, saveSession, loadSession, isUserMessage } from '@ordewell/core';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
 
 export interface PersistenceDeps {
@@ -63,11 +63,8 @@ export function restoreState(deps: PersistenceDeps): void {
       if (firstUserMessage) deps.setCurrentGoal(firstUserMessage);
     }
 
-    // Nothing runs after a reload. The plan's own status stays as saved: an
-    // older plan's approval is read from it once, as the Session adopts it.
-    for (const task of flattenTasks(saved.tasks)) {
-      if (task.status === 'in_progress') { task.status = 'pending'; }
-    }
+    // The plan's own status stays as saved: an older plan's approval is read
+    // from it once, as the Session adopts it.
     // Adopt the plan into the Session so its tasks are executable and the
     // conversation can resume when the user sends a message. The saved id keeps
     // later persists in the session file the run was already writing; without

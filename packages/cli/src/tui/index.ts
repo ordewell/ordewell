@@ -239,8 +239,8 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
 
   // A daemon this TUI spawned dies with it — tasks mid-flight are abandoned,
   // not reconciled; the next launch respawns a fresh daemon and reloads the
-  // saved plan, which normalizes any still-'in_progress' task back to
-  // 'pending' so the scheduler just reruns it from scratch.
+  // saved plan, which fails any still-'in_progress' task as interrupted, so
+  // the inbox lists it and a retry or Execute reruns it from scratch.
   // The stop is awaited: exiting in the same tick abandons it before its first
   // request, leaving the daemon to notice the parent is gone on its own. A
   // daemon that does not answer only gets the grace below, and a second

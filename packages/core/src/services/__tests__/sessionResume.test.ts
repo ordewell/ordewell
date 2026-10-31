@@ -147,10 +147,24 @@ describe('PlanStore.load status handling', () => {
     expect(store.get('b')!.status).toBe('pending');
   });
 
-  it('resets failed tasks to pending for a fresh chance', () => {
+  it('keeps a failed task failed: the fresh chance is Execute\'s to give', () => {
     const store = new PlanStore();
     store.load([createTask({ id: 'a', order: 1, title: 'A', prompt: 'p', status: 'failed' })], ['claude-code']);
+    expect(store.isFailed('a')).toBe(true);
+
+    store.resetForRun({ edited: true });
+    expect(store.isFailed('a')).toBe(true);
+
+    store.resetForRun();
+    expect(store.get('a')!.status).toBe('approved');
+  });
+
+  it('gives a task an edit made manual after it failed its fresh chance too, though no run readies it', () => {
+    const store = new PlanStore();
+    store.load([createTask({ id: 'a', order: 1, title: 'A', type: 'user', status: 'failed' })], ['claude-code']);
+
+    store.resetForRun();
+
     expect(store.get('a')!.status).toBe('pending');
-    expect(store.isFailed('a')).toBe(false);
   });
 });

@@ -31,6 +31,9 @@ starting as usual.
   block on. The rule is one pure function (`blockingFailures`,
   `packages/core/src/services/blocking.ts`) over task statuses and
   dependencies; nothing is stored, so whatever lifts a failure lifts its block.
+  A load lifts none: a failed task stays failed through it, and so its block
+  stands, until a retry, a skip, Mark complete or Execute
+  ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
   There is no `blocked` task status: a plan file saved with one loads it as
   pending.
   Subtasks follow the same rule. A loop's check that failed a round with
@@ -98,6 +101,7 @@ starting as usual.
   reconciled into that run rather than reloaded over it
   (`TaskOrchestrator.adoptEdit`), so the failed task stays failed: an edit is
   not a retry, and a reload would drop the review approval the retry continues.
+  An edit outside a run leaves a failure as it is too.
   Loading another plan, starting a run (`beginRun`) or stopping one forgets it.
   Every one of these is an event of the run's state, and one pure function
   (`nextRunState`, `packages/core/src/services/runState.ts`) says what each
@@ -140,6 +144,10 @@ attempt. This decides what a failure stops, not how a verdict is reached.
   task the user had not approved, and a force start queued behind its
   dependencies started during a planner turn's start hold and past a merge
   gate nobody had confirmed.
+- **A load giving a failed task a fresh chance.** The design until 2026-10-31.
+  Dropped: a restart unblocked the failure's dependents with nothing said about
+  it, so a task could read as ready on a failure nobody had seen. Execute gives
+  that chance when the user asks for it.
 - **Keep the run open until every failure is retried.** Rejected: a run that
   never ends never hands its work over, and a surface treats the end of the
   execution stream as the run's end; the retry continues an ended run instead.
@@ -164,3 +172,4 @@ attempt. This decides what a failure stops, not how a verdict is reached.
 - 2026-10-21 — a loop's check that fails a round with rounds left blocks nothing, ends no run and wakes no one until its loop stops or runs out of rounds; the start rule gains the check between rounds and the body waiting on its check ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md)).
 - 2026-10-24 — the run's state changes only through `nextRunState`; Execute begins a run with `beginRun` and a planner edit is adopted with `adoptEdit`; a retry while a usage-limit pause holds a run that ended on a failure keeps it held until the reset.
 - 2026-10-24 — a hold set by a stop or a taken-back completion survives starting the plan again, the user's Stop of the run and an edit of the same plan; it was cleared by all three.
+- 2026-10-31 — a load and an edit outside a run leave a failed task failed, so its block stands; Execute gives the fresh chance ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).

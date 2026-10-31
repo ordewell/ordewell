@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { fakeConfig, FakeRunnerSession, makeSession, taskOf, testWorkspace } from './sessionTestKit';
 import { FakeWorktreeIsolation } from '../../testing';
-import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
+import { createTask, failInterruptedTasks, type LegacyPlanState, type Task } from '../../models/Task';
 import type { IRunner } from '../../interfaces/IRunner';
 import type { NotifyRun } from '../escalationNotifier';
 
@@ -127,6 +127,29 @@ describe('the notify command in a run', () => {
     env.latest('t2').requestPermission('s1-perm-1', 'Write', { file_path: '/repo/a.txt' }, []);
     await vi.waitFor(() => expect(env.told()).toHaveLength(1));
     expect(env.told()[0]).toMatch(/^approval:t2:/);
+  });
+
+  it('sends nothing for a failed or an interrupted task a restart finds, and tells the failure that comes after', async () => {
+    const env = setup();
+    env.load([
+      task('t1', 1, { status: 'failed', verdict: { outcome: 'fail', reason: 'nope', checks: [], decidedAt: '2026-10-30T00:00:00Z' } }),
+      task('t2', 2),
+    ]);
+    const saved = structuredClone(env.session.planState!);
+    saved.tasks[1].status = 'in_progress';
+    failInterruptedTasks(saved.tasks, '2026-10-30T00:00:01Z');
+    env.session.destroy();
+
+    const session = env.build();
+    session.loadPlan(saved, 'goal', testWorkspace, { persist: false });
+    expect(session.escalations().map((e) => e.id)).toEqual(['failed:t1:0', 'failed:t2:0']);
+    await session.answerEscalation('failed:t2:0', 'retry');
+    await vi.waitFor(() => expect(env.latest('t2')).toBeDefined());
+    expect(env.run).not.toHaveBeenCalled();
+
+    env.latest('t2').reportComplete({ status: 'failed', summary: 'nope', reason: 'nope' });
+    await vi.waitFor(() => expect(env.told()).toEqual(['failed:t2:1']));
+    session.destroy();
   });
 
   it('tells a new plan of its own waits, though a plan before it used the same ids', async () => {

@@ -103,21 +103,14 @@ describe('Session.forkConversation', () => {
 
     const saved = sessionStore.loadSession(fork.sessionId, workspace)!.plan;
     expect(saved.tasks.map((t) => [t.id, t.status])).toEqual([
-      ['done', 'completed'], ['running', 'pending'], ['checkpoint', 'pending'], ['broken', 'pending'], ['later', 'pending'],
+      ['done', 'completed'], ['running', 'pending'], ['checkpoint', 'pending'], ['broken', 'failed'], ['later', 'pending'],
     ]);
     expect(saved.tasks[0].verdict?.reason).toBe('marker seen');
     expect(saved.tasks[1].outputSummary).toBeUndefined();
     expect(saved.tasks[1].handoff).toBeUndefined();
     expect(saved.tasks[2]).not.toHaveProperty('awaitingReason');
     expect(saved.pendingTurns).toBeUndefined();
-    expect(session.planTasks.map((t) => t.status)).toEqual(['completed', 'in_progress', 'awaiting_user', 'pending', 'pending']);
-  });
-
-  // Adoption re-arms failed tasks, so a failure reaches a fork only the way a
-  // run leaves one in the store — checked on the builder directly.
-  it('keeps a failed task failed', () => {
-    const fork = forkPlanState(runningPlan(), runningPlan().tasks, { conversationHistory: [], researchLog: [] }, '2026-01-02T00:00:00Z');
-    expect(fork.tasks.find((t) => t.id === 'broken')!.status).toBe('failed');
+    expect(session.planTasks.map((t) => t.status)).toEqual(['completed', 'in_progress', 'awaiting_user', 'failed', 'pending']);
   });
 
   // A turn input belongs to the conversation that was asked; the fork's own
@@ -139,7 +132,7 @@ describe('Session.forkConversation', () => {
     const saved = sessionStore.loadSession(fork.sessionId, workspace)!.plan;
     expect(saved.conversationHistory!.map((m) => m.content)).toEqual([GOAL, 'Plan generated with 5 tasks.']);
     expect(saved.tasks.map((t) => [t.id, t.status])).toEqual([
-      ['done', 'completed'], ['running', 'pending'], ['checkpoint', 'pending'], ['broken', 'pending'], ['later', 'pending'],
+      ['done', 'completed'], ['running', 'pending'], ['checkpoint', 'pending'], ['broken', 'failed'], ['later', 'pending'],
     ]);
     expect(saved.pendingTurns).toBeUndefined();
     expect(session.planState!.conversationHistory).toHaveLength(4);

@@ -304,6 +304,18 @@ describe('adoptEdit', () => {
     expect(orchestrator.isScheduling).toBe(false);
   });
 
+  it('leaves a failed task as it stands in an edit between runs: only Execute gives it a fresh chance', () => {
+    const { orchestrator, task } = setup();
+    const verdict = { outcome: 'fail' as const, reason: 'broke', checks: [], decidedAt: '2026-10-31T00:00:00Z' };
+    const outputSummary = { reviewReason: 'broke', logTail: '', capturedAt: '2026-10-31T00:00:00Z' };
+    const failed = createTask({ id: 't1', order: 1, title: 'One', prompt: 'do first', status: 'failed', verdict, outputSummary });
+    orchestrator.loadPlan([failed]);
+
+    orchestrator.adoptEdit([{ ...failed, prompt: 'do it better' }], ['claude-code']);
+
+    expect(task('t1')).toMatchObject({ status: 'failed', prompt: 'do it better', verdict, outputSummary });
+  });
+
   it('reconciles an edit into a run that ended on a failure, which keeps the failure for the retry', async () => {
     const { orchestrator, task } = await endedOnFailure();
     const tasks = orchestrator.storeInstance.planTasks.map((t) => ({ ...t, subtasks: [] }));
