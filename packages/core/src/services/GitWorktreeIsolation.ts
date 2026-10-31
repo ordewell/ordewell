@@ -49,6 +49,7 @@ import { defaultExecFile, git, isAncestor, tryGit, type Ancestry, type GitExecFn
 import { IsolationLocks } from './isolationLocks';
 import { bootstrap, installDirs, isEnvFile, lexists, LINKED_ARTIFACTS, listDir, SetupCommandError } from './worktreeBootstrap';
 import { linkPath } from './worktreeLink';
+import { OLDER_RUN_REFUSAL, startedOlder } from './taskRevert';
 import { landingMessage, messageArgs, revertMessage, runMergeMessage, type LandingCommit, type LandingSubject } from './landingMessage';
 import { childDirs, groupPaths, hasGitEntry, workspaceRepoGroup } from './repoGroup';
 
@@ -518,7 +519,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       const scan = await this.scanGroup(workspaceRoot);
       const paths = 'paths' in scan ? scan.paths : [SELF_REPO];
       const nested = 'paths' in scan ? scan.nested : [];
-      const run: IsolationRun = { id: this.mintRunId(), workspaceRoot, repos: [], shared: [], sharedRepos: [], tasks: {}, keepsEveryLanding: true };
+      const run: IsolationRun = { id: this.mintRunId(), workspaceRoot, repos: [], shared: [], sharedRepos: [], tasks: {}, keepsEveryLanding: true, carried: {} };
       for (const repoPath of paths) {
         const repo = await this.startRepo(run, repoPath);
         if (repo) run.repos.push(repo);
@@ -1436,7 +1437,8 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       }
     }
 
-    const carried = await this.carriedIn(run, record, landedTips);
+    // A run that started without the record never gets one: it would miss what landed before it, and its absence is what refuses a revert (ADR-0054).
+    const carried = run.carried ? await this.carriedIn(run, record, landedTips) : [];
     // No await between these: a persist must never see the landing cleared
     // without the task merged, nor a merge a rollback may yet take off counted as landed.
     for (const [repo, tip] of landedTips) {
@@ -1499,6 +1501,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
    * it across a group.
    */
   private async landedLines(run: IsolationRun, taskIds: readonly string[]): Promise<LandedLines> {
+    if (startedOlder(run)) return { ok: false, reason: 'no-own-merge', error: OLDER_RUN_REFUSAL };
     const records = taskIds.flatMap((id): LandedTask | [] => run.tasks[id] ?? run.landedTasks?.[id] ?? []);
     const lines = new Map<string, RepoLanding[]>();
     const inBranch: RevertCommand[] = [];
@@ -1548,9 +1551,9 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
    * landing: a conflicted task its resolver took along. Reverting it would
    * remove work no record lets go of, whether that task made no merge, landed
    * one later or lost its record to a retry. `run.carried` keeps what a record
-   * dropped since can no longer say; the records still answer for a run saved
-   * before it, and for a task whose branch went in by any other merge. Null
-   * when git cannot say, which is not the same as none.
+   * dropped since can no longer say; the records still answer for a task whose
+   * branch went in by any other merge. Null when git cannot say, which is not
+   * the same as none.
    */
   private async carriedBy(run: IsolationRun, repo: IsolationRepo, merge: string): Promise<{ task: string | null } | null> {
     const kept = Object.entries(run.carried ?? {}).flatMap(([taskId, repos]) => (repos[repo.path] ?? []).map((tip) => ({ taskId, tip })));

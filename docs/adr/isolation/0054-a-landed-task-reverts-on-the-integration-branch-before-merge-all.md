@@ -186,6 +186,14 @@ revert adds commits and rewrites nothing.
   same landings and `IsolationRun.carried` a revert does, so a task with no
   record left can carry it and a carried task does not. A
   task is called by its reference, a subtask by its full path.
+- **Not in a run with no `carried` record.** Every run holds
+  `IsolationRun.carried` from the moment it starts, empty until a merge carries
+  something, so a run without it was saved by a build that kept no such record,
+  and what its merges carried is unknown. Every revert of that run is refused,
+  whichever task is asked, in the preview and in the revert itself: this run
+  started on an older version, so Ordewell cannot tell what its merges carried.
+  No task of it is marked `revertible`. A landing never adds the record to such
+  a run, since one begun then would miss what came before and read as complete.
 - **A user action.** It is in the user's controls at the seam and reaches no
   planner or supervisor tool: taking landed work back is the review's decision.
   Read-only, ops, script and user tasks land nothing, so they cannot be reverted;
@@ -212,8 +220,9 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
   stands after it lands a merge of its own, which holds only its later work. A
   tip git cannot say of then is kept too: that moment does not come again, and
   a record too many only refuses a revert.
-- A task saved with neither `landedTip` nor a `landings` entry, as ADR-0013 ran:
-  no record says which merge is its, so it is refused, in those words.
+- A task saved with neither `landedTip` nor a `landings` entry: no record says
+  which merge is its, so it is refused. A run as ADR-0013 saved it has no
+  `carried` either, and gets that refusal first.
 - A dependent in a run started before every merge was kept
   (`IsolationRun.keepsEveryLanding`), when an attempt of it ran and nothing shows
   it landed: an earlier attempt's merge may be on the branch with no record of
@@ -251,6 +260,10 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
 - **Revert a carried task's own later merge and leave what its resolver brought.**
   Rejected: the task would go back to pending with its work still on the branch,
   and a retry would start from a tip that holds it.
+- **Work out what an older run carried.** Rejected: its records keep only each
+  task's latest `taskTip`, so a tip a later attempt replaced is gone and git shows
+  nothing to tell it from any other merge. Refusing the whole run is the simplest
+  rule that cannot lose work, and the commands to do it by hand stay the user's.
 - **Find a dependent's forgotten merges by reading the branch's messages.**
   Rejected: a merge's message is words a task chose, and a wrong match reverts
   work the user did not ask to lose. Not being sure refuses.
@@ -325,6 +338,10 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
   commit the run started from, reads as the user's own, and the run stays open.
 - The resolver of a conflict and the task it carried stay on the integration
   branch for good; only discarding the run takes them back.
+- A run from an older version has no revert at all, even of a task no resolver
+  came near, and the same goes for one started on a build that wrote `carried`
+  only once a merge carried something, where none did. Only `git revert` by hand
+  or discarding the run undoes its work.
 
 ## History
 
@@ -340,3 +357,4 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
 - 2026-10-31 — whether a revert may touch a merge and whether work is merged are two questions: anything of the user's holding a merge refuses a revert, a review branch included, and only the user's own branch reads as merged; a stopped revert is cleared by the two-tree read.
 - 2026-10-31 — a revert is plumbing, off the worktree, so the tracked-changes refusal and the clearing of a stopped revert go, and each commit is saved before the branch moves; the reflog speaks before the base name; a failed git query refuses.
 - 2026-10-31 — every ancestor read goes through one yes, no or unknown helper; a warning beside a ref list is no answer; a landing keeps a tip it cannot read as carried, and stops when it cannot say what a task brings.
+- 2026-10-31 — a run with no `carried` record refuses every revert and offers none; every run holds the record from its start, and a landing never adds it to a run without one.

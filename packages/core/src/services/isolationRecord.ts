@@ -84,10 +84,11 @@ export function landedInRepo(run: IsolationRun, record: IsolationTaskRecord, rep
  * changed, none of it in the user's branch yet, and nothing of it carried in by
  * a resolver. `landings` are the task's merges in {@link IsolationRun.landings},
  * which a later attempt's record says nothing of: a task at work again keeps its
- * mark off, and a revert would refuse it.
+ * mark off, and a revert would refuse it. A run with no `carried` record, or
+ * none given, offers nothing: every revert of such a run is refused.
  */
 function revertible(record: IsolationTaskRecord, run?: Pick<IsolationRun, 'landings' | 'carried'>): boolean {
-  if (record.inHead || record.status === 'active' || record.status === 'repairing' || run?.carried?.[record.taskId]) return false;
+  if (record.inHead || record.status === 'active' || record.status === 'repairing' || !run?.carried || run.carried[record.taskId]) return false;
   const landings = run?.landings?.[record.taskId];
   const changed = record.status === 'merged' ? changedReposOf(record) : [];
   return (changed.length > 0 || landings !== undefined) && changed.every((repo) => record.repos[repo].landedTip || landings?.[repo]);
@@ -121,7 +122,7 @@ export function taskIsolationOf(record: IsolationTaskRecord, repairLimit?: numbe
 export function taskIsolationsOf(run: IsolationRun, repairLimit?: number): Record<string, TaskIsolation> {
   const tasks: Record<string, TaskIsolation> = {};
   for (const taskId of Object.keys(run.landings ?? {})) {
-    if (!run.carried?.[taskId]) tasks[taskId] = { state: 'none', revertible: true };
+    if (run.carried && !run.carried[taskId]) tasks[taskId] = { state: 'none', revertible: true };
   }
   for (const [taskId, record] of Object.entries(run.tasks)) {
     if (isKnownStatus(record.status)) tasks[taskId] = taskIsolationOf(record, repairLimit, run);

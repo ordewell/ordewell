@@ -9,7 +9,7 @@ import { defaultExecFile, subcommandOf } from '../gitExec';
 import type { IsolationRun, IWorktreeIsolation } from '../../interfaces/IWorktreeIsolation';
 import type { Task } from '../../models/Task';
 import { fakeConfig } from '../../testing';
-import { taskIsolationOf, taskIsolationsOf } from '../isolationRecord';
+import { taskIsolationsOf } from '../isolationRecord';
 import { IsolationRunController } from '../IsolationRunController';
 import { revertScope } from '../taskRevert';
 import { fakeNotification } from './sessionTestKit';
@@ -163,11 +163,11 @@ describe('what a surface offers', () => {
     const t = task(1, 'Add greeting');
     await land(iso, run, t, { 'greeting.txt': 'hi\n' });
 
-    expect(taskIsolationOf(run.tasks[t.id])).toMatchObject({ state: 'integrated', revertible: true });
+    expect(taskIsolationsOf(run)[t.id]).toMatchObject({ state: 'integrated', revertible: true });
 
     await iso.mergeIntoCheckedOut(run);
     await iso.findInHead(run);
-    expect(taskIsolationOf(run.tasks[t.id])).not.toHaveProperty('revertible');
+    expect(taskIsolationsOf(run)[t.id]).not.toHaveProperty('revertible');
   });
 
   it('does not mark a task that landed nothing', async () => {
@@ -178,7 +178,7 @@ describe('what a surface offers', () => {
     await iso.prepare(t, run);
     expect(await iso.integrate(t, run)).toBe('merged');
 
-    expect(taskIsolationOf(run.tasks[t.id])).not.toHaveProperty('revertible');
+    expect(taskIsolationsOf(run)[t.id]).not.toHaveProperty('revertible');
   });
 });
 
@@ -912,7 +912,7 @@ describe('what stands in a revert\'s way', () => {
     expect(await iso.readLanded(run, [t.id])).toEqual({ ok: false, reason: 'no-own-merge', error: 'Task "Add greeting" landed before Ordewell kept a record of its merge, so it cannot tell which merge to revert. Nothing was reverted.' });
     expect(await iso.revert(run, [t.id], nothingInTheWay)).toMatchObject({ outcome: 'refused' });
     expect(git(root, 'rev-parse', integration)).toBe(tip);
-    expect(taskIsolationOf(run.tasks[t.id])).not.toHaveProperty('revertible');
+    expect(taskIsolationsOf(run)[t.id]).not.toHaveProperty('revertible');
   });
 
   it('leaves a handed-over run free to check its branch out afterwards', async () => {
