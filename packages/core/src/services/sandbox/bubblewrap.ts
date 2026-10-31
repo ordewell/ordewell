@@ -4,6 +4,7 @@ import {
   assertLimits,
   assertProfilePaths,
   execProbe,
+  keptEnv,
   launchEnv,
   MEMORY_LIMIT_SIGNAL,
   probeByRunning,
@@ -122,7 +123,11 @@ function memoryWatcher(limits: SandboxLimits): string {
 /**
  * Runs before bubblewrap, outside it, then becomes it, so the caller's kill
  * at the wall-time limit and `--die-with-parent` reach the sandbox's PID
- * namespace, and every process in it, unchanged (ADR-0036 S1). The memory
+ * namespace, and every process in it, unchanged (ADR-0036 S1). Under `sh -c`,
+ * neither interactive nor a login shell, no shell reads a startup file, and
+ * dash takes no flag to say so. Its environment holds only what the profile
+ * keeps of the host's: the command's own variables are set by `--setenv`
+ * inside the sandbox. The memory
  * watcher starts first, with none of the limits on it, and without a way to
  * wait, to compare namespaces or to find what a killed launcher left the limit
  * cannot be held, so nothing runs.
@@ -207,10 +212,19 @@ export class BubblewrapBackend implements SandboxBackend {
       ...(profile.gitEntries ?? []).map((entry) => entry.path),
     ]);
     for (const gitPath of readOnlyGit) args.push('--ro-bind', gitPath, gitPath);
-    args.push('--', invocation.shell, ...invocation.shellArgs);
 
-    const env = launchEnv(invocation, profile);
-    if (!profile.limits) return { file: this.bwrap, args, env };
-    return { file: '/bin/sh', args: ['-c', limitsPrelude(profile.limits), 'ordewell-sealed', this.bwrap, ...args], env, wallTimeMs: profile.limits.wallTimeMs, memoryBytes: profile.limits.memoryBytes };
+    if (!profile.limits) {
+      args.push('--', invocation.shell, ...invocation.shellArgs);
+      return { file: this.bwrap, args, env: launchEnv(invocation, profile) };
+    }
+    for (const [name, value] of Object.entries(profile.env)) args.push('--setenv', name, value);
+    args.push('--', invocation.shell, ...invocation.shellArgs);
+    return {
+      file: '/bin/sh',
+      args: ['-c', limitsPrelude(profile.limits), 'ordewell-sealed', this.bwrap, ...args],
+      env: keptEnv(invocation, profile),
+      wallTimeMs: profile.limits.wallTimeMs,
+      memoryBytes: profile.limits.memoryBytes,
+    };
   }
 }

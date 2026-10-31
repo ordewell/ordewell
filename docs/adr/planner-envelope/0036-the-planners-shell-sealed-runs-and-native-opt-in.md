@@ -80,6 +80,14 @@ below, and on Linux but for what `/etc/hosts` lists), so no path is asked about.
   one more writable directory as a parameter, none by default: a read-only
   task's sealed commands get its own throwaway worktree
   ([ADR-0046](0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)).
+  The launcher that sets the limits runs before the sandbox, so it reads no
+  startup file: on macOS `/bin/bash` starts with `--norc --noprofile -p`, which
+  also keeps it from taking functions or options from the environment, and on
+  Linux `/bin/sh -c` is neither interactive nor a login shell, so no shell
+  reads one there. It starts with only what the profile keeps of the host's
+  environment: `HOME`, `TMPDIR` and the other variables that name scratch are
+  set inside the sandbox, by `--setenv` under bubblewrap and `env` under
+  Seatbelt.
 - **What runs sealed (S2).** A command runs sealed when the planner asks for
   it (`run_command` with `sealed: true`), or when the envelope would refuse it
   without asking: the classifier's `refuse`, or a command the approval mode
@@ -531,3 +539,4 @@ shell.
 - 2026-10-31 — `memoryBytes` is real memory, held by a watcher that sums the run's resident memory about once a second and ends it with a note of its own; the address limit stops being the memory bound and becomes a 256 GiB ceiling (`addressSpaceBytes`), measured under The limits of a sealed run, so Node, vitest and the build run sealed.
 - 2026-10-31 — a sealed run on Linux reads `/etc/hosts`, so `localhost` resolves to its own loopback and `vitest` starts: S1's read list had no name table, and the network stays as it was.
 - 2026-10-31 — a run killed as it starts dies with its launcher: on Linux the watcher kills what carries the launcher's mark once the launcher has gone, since bubblewrap arms `--die-with-parent` only after setting up, and ends the launcher if its parent goes; on macOS a subshell starts the sandbox and its reaper, and the watcher reaps too.
+- 2026-10-31 — the launcher reads no startup file and starts with only what the profile keeps of the host's environment; what names scratch is set inside the sandbox.

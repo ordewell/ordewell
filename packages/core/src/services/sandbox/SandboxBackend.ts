@@ -149,6 +149,7 @@ export const MEMORY_LIMIT_SIGNAL = 'SIGUSR2';
 export interface SandboxLaunch {
   file: string;
   args: string[];
+  /** What `file` starts with. A launcher that runs before the sandbox gets only what the profile keeps of the host's. */
   env: NodeJS.ProcessEnv;
   /** The profile's wall-time limit: the caller kills the launch with SIGKILL once it has run this long. */
   wallTimeMs?: number;
@@ -204,12 +205,20 @@ export function assertLimits(backend: string, limits: SandboxLimits): void {
   }
 }
 
-/** The environment a wrapped command starts with: what the profile keeps of the shell's, then what it sets. */
-export function launchEnv(invocation: SandboxInvocation, profile: SandboxProfile): NodeJS.ProcessEnv {
-  const kept = profile.inheritEnv === undefined
+/**
+ * What the profile keeps of the shell's environment. A launcher that runs
+ * before the sandbox starts with this alone: what the profile sets names
+ * directories the command writes, so it is set inside (ADR-0036 S1).
+ */
+export function keptEnv(invocation: SandboxInvocation, profile: SandboxProfile): NodeJS.ProcessEnv {
+  return profile.inheritEnv === undefined
     ? invocation.env
     : Object.fromEntries(profile.inheritEnv.flatMap((name) => (invocation.env[name] === undefined ? [] : [[name, invocation.env[name]]])));
-  return { ...kept, ...profile.env };
+}
+
+/** The environment a wrapped command starts with: what the profile keeps of the shell's, then what it sets. */
+export function launchEnv(invocation: SandboxInvocation, profile: SandboxProfile): NodeJS.ProcessEnv {
+  return { ...keptEnv(invocation, profile), ...profile.env };
 }
 
 export type ProbeExec = (file: string, args: string[], env: NodeJS.ProcessEnv) => Promise<{ code: number | null; output: string }>;
