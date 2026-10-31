@@ -50,7 +50,8 @@ export type Effect =
   | { type: 'isolationCleanup'; sessionId: string; branch: string }
   /** Replays a run a dirty tree parked; `stash` puts tracked changes aside first, `shared` runs in the working tree this once. */
   | { type: 'isolationContinue'; sessionId: string; mode: 'stash' | 'shared' }
-  | { type: 'resolveConflict'; sessionId: string; taskId: string }
+  /** `watch`: the resolver may start now, and no stream is open to show it. */
+  | { type: 'resolveConflict'; sessionId: string; taskId: string; watch?: true }
   | { type: 'saveSession'; sessionId: string }
   | { type: 'closeSession'; sessionId: string }
   | { type: 'execute'; sessionId: string }

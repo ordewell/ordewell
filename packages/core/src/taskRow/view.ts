@@ -3,13 +3,13 @@ import type { AwaitingReason, TaskType, Verdict } from '../models/Task';
 import type { FindingSeverity, HandoffCommit, HandoffDigest } from '../models/Handoff';
 import { savedPatchView, worstSeverity, type PatchView } from '../models/Handoff';
 import type { TaskLoop } from '../models/Loop';
-import type { TaskIsolationState } from '../interfaces/IWorktreeIsolation';
+import type { RepairWait, TaskIsolationState } from '../interfaces/IWorktreeIsolation';
 import { taskOrderLabel, taskRefOf } from '../services/TaskRefs';
 import { capConflictFiles } from '../services/conflictFiles';
 import { planBlocks, type BlockingSubject, type PlanBlocks } from '../services/blocking';
 import { checkOf, type LoopSubject } from '../models/Loop';
 import { assignedRunnerOf, assignmentConsequence, assignmentIssue, assignmentIssueText, type AssignmentScope } from '../services/AssignmentScope';
-import { approvalLabel, attachingLabel, awaitingLabel, isTaskRunning, NOT_STARTED, receiptLabel, resumeLabel, taskStatusKind, WAITS_FOR_APPROVAL_LABEL, type TaskStatusKind } from './status';
+import { approvalLabel, attachingLabel, awaitingLabel, isTaskRunning, NOT_STARTED, receiptLabel, repairWaitLabel, resumeLabel, taskStatusKind, WAITS_FOR_APPROVAL_LABEL, type TaskStatusKind } from './status';
 import { markAction, opsEditable, taskRowActions, type TaskRowAction, type TaskRowPlacement } from './actions';
 import { loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, type LoopCheckState } from './loop';
 
@@ -69,6 +69,9 @@ export interface TaskRowIsolation {
   repairedFiles?: string[];
   /** Core's word that its landing can be reverted (ADR-0054); a surface offers the action only then. */
   revertible?: true;
+  repairWaits?: RepairWait;
+  /** The task added to resolve its conflict, by id. */
+  resolver?: string;
 }
 
 /**
@@ -192,8 +195,10 @@ export interface TaskRowView {
   autonomous: boolean;
   /** The repos its isolated work changed, by path; empty for a group of one. */
   repos: string[];
-  /** Integration stopped on a conflict: the one isolation state that needs the user. */
-  conflict: { repo: string | null; files: string | null } | null;
+  /** Integration stopped on a conflict: the one isolation state that needs the user. `resolver` is the task, by reference, that has it; then a second is not offered. */
+  conflict: { repo: string | null; files: string | null; resolver: string | null } | null;
+  /** A conflict repair that starts by itself once what it waits for clears (ADR-0015): `label` says what, in sentence case. Progress, so `conflict` is null. */
+  repairWaiting: { label: string; files: string | null } | null;
   /** A conflict repair in flight (ADR-0015) — progress, not a blocker. */
   repairing: { files: string | null; attempt: { attempt: number; limit: number } | null } | null;
   /** The files a conflict repair was started for; `landed` once the task is integrated. */
@@ -343,8 +348,11 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
     ...flagOf(task, context.runnerScope),
     autonomous: task.type === 'ai' && context.modes?.find((m) => m.id === task.taskMode)?.autonomous === true,
     repos: namedRepos(isolation?.repos),
-    conflict: isolation?.state === 'conflict'
-      ? { repo: namedRepo(isolation.conflictRepo), files: filesOf(isolation.conflictFiles) }
+    conflict: isolation?.state === 'conflict' && !isolation.repairWaits
+      ? { repo: namedRepo(isolation.conflictRepo), files: filesOf(isolation.conflictFiles), resolver: isolation.resolver ? refsOf([isolation.resolver], context.tasks)[0] : null }
+      : null,
+    repairWaiting: isolation?.state === 'conflict' && isolation.repairWaits
+      ? { label: repairWaitLabel(isolation.repairWaits), files: filesOf(isolation.conflictFiles) }
       : null,
     repairing: isolation?.state === 'repairing'
       ? { files: filesOf(isolation.conflictFiles), attempt: isolation.repair ?? null }
@@ -361,7 +369,7 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
     handoff: handoffOf(task),
     dependencies: refsOf(task.dependencies, context.tasks),
     // A block read off the plan offers what a stored one does: Skip among them.
-    actions: taskRowActions(blocked.length > 0 ? { ...task, status: 'blocked' } : task, context.placement ?? (parent ? 'subtask' : 'task')),
+    actions: taskRowActions({ ...task, ...(blocked.length > 0 ? { status: 'blocked' } : {}), ...(isolation?.repairWaits ? { repairWaits: isolation.repairWaits } : {}) }, context.placement ?? (parent ? 'subtask' : 'task')),
     // Read off the mark itself: a task with merges left and no record has state `none`.
     revertible: task.isolation?.revertible === true,
     mark: markAction(task),

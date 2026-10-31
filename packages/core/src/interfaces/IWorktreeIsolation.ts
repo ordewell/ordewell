@@ -311,6 +311,9 @@ export interface PlanIsolation {
  */
 export type TaskIsolationState = 'none' | 'active' | 'integrated' | 'conflict' | 'repairing' | 'kept';
 
+/** What a conflict repair that will start by itself waits for (ADR-0015). */
+export type RepairWait = 'slot' | 'planner' | 'usage-limit';
+
 export type TaskIsolation =
   /** `revertible`: no record, but merges of an earlier attempt are still on the branch. */
   | { state: 'none'; revertible?: true }
@@ -330,6 +333,10 @@ export type TaskIsolation =
     repairedFiles?: string[];
     /** Its landing has a merge of its own and is not in the user's branch: what a surface offers a revert on (ADR-0054). */
     revertible?: true;
+    /** A `conflict` whose repair starts by itself once this clears: progress, not a conflict to act on (ADR-0015). Said by the scheduler, not the record. */
+    repairWaits?: RepairWait;
+    /** A `conflict` a task was added to resolve, by id: its one worker (ADR-0015). */
+    resolver?: string;
   };
 
 export interface IsolationLandedTask {

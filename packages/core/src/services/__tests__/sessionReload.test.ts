@@ -2,12 +2,14 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FakeRunnerSession, makeSession, taskOf, testWorkspace } from './sessionTestKit';
+import { fakeConfig, FakeRunnerSession, makeSession, taskOf, testWorkspace } from './sessionTestKit';
 import { FakeWorktreeIsolation } from '../../testing';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import { loadSession, saveSession } from '../../utils/sessionStore';
 import { blockingFailures } from '../blocking';
 import type { IRunner } from '../../interfaces/IRunner';
+import type { IConfig } from '../../interfaces/IConfig';
+import type { TaskOrchestrator } from '../TaskOrchestrator';
 
 /**
  * Someone walks away, the host restarts, and they come back (ADR-0053). Each
@@ -30,14 +32,14 @@ function plan(tasks: Task[]): LegacyPlanState {
   return { tasks, generatedAt: now, status: 'approved', runners: ['claude-code'], lastUpdated: now };
 }
 
-function host(isolation?: FakeWorktreeIsolation) {
+function host(isolation?: FakeWorktreeIsolation, config?: Partial<IConfig>) {
   const sessions: FakeRunnerSession[] = [];
   const spawn = vi.fn(async (opts: Parameters<IRunner['spawn']>[0]) => {
     const session = new FakeRunnerSession(`s${sessions.length + 1}`, opts.taskId);
     sessions.push(session);
     return session;
   });
-  const session = makeSession({ isolation, runner: { spawn, stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 } as IRunner });
+  const session = makeSession({ isolation, ...(config ? { config: fakeConfig(config) } : {}), runner: { spawn, stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 } as IRunner });
   const latest = (taskId: string) => sessions.filter((s) => s.taskId === taskId).at(-1)!;
   const spawned = () => spawn.mock.calls.map(([opts]) => opts.taskId);
   const start = () => session.execute({ command: 'run_plan' }, { kind: 'user' });
@@ -58,15 +60,71 @@ async function running(tasks: Task[], first: number, isolation?: FakeWorktreeIso
 }
 
 /** The plan as the host that ran it left it on disk, read back and opened by a new host. */
-function reopened(from: ReturnType<typeof host>, isolation?: FakeWorktreeIsolation) {
+function reopened(from: ReturnType<typeof host>, isolation?: FakeWorktreeIsolation, config?: Partial<IConfig>) {
   saveSession(from.session.planState!, 'goal', dir, SESSION);
   from.session.destroy();
-  const env = host(isolation);
+  const env = host(isolation, config);
   env.session.loadPlan(loadSession(SESSION, dir)!.plan, 'goal', testWorkspace, { persist: false });
   return env;
 }
 
 const blockedBy = (env: ReturnType<typeof host>, taskId: string) => blockingFailures(env.session.planTasks).get(taskId) ?? [];
+
+describe('a repair owed through a reload (ADR-0015)', () => {
+  const CONFIG = { maxParallelSessions: 1, conflictRepairAttempts: 2 };
+
+  /** t1's second landing conflicted with t2 in the only slot, so its repair waits: then the host goes. */
+  async function owed() {
+    const isolation = new FakeWorktreeIsolation();
+    isolation.outcomes.set('t1', 'conflict');
+    const before = host(isolation, CONFIG);
+    before.session.loadPlan(plan([task('t1', 1), task('t2', 2)]), 'goal', testWorkspace, { persist: false });
+    await before.start();
+    before.latest('t1').reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(before.spawned()).toEqual(['t1', 't1']));
+    before.latest('t1').emitExit(1);
+    await vi.waitFor(() => expect(before.spawned()).toEqual(['t1', 't1', 't2']));
+    await (before.session as unknown as { orchestrator: TaskOrchestrator }).orchestrator.markTaskComplete('t1');
+    expect(taskOf(before.session, 't1')?.status).toBe('pending');
+    expect(before.session.escalations()).toEqual([]);
+    return { before, isolation };
+  }
+
+  it('lists the conflict after the load: nothing starts the repair now, so it waits on the user', async () => {
+    const { before, isolation } = await owed();
+
+    const env = reopened(before, isolation, CONFIG);
+
+    expect(taskOf(env.session, 't1')).toMatchObject({ status: 'awaiting_user', awaitingReason: 'conflict' });
+    const listed = env.session.escalations().find((e) => e.task?.id === 't1');
+    expect(listed).toMatchObject({ kind: 'conflict' });
+    expect(listed?.options.map((o) => o.id)).toEqual(['resolve-conflict', 'retry', 'skip', 'complete']);
+    expect(env.spawned()).toEqual([]);
+    env.session.destroy();
+  });
+
+  it('repairs it at the next Execute, with the repair the record has left', async () => {
+    const { before, isolation } = await owed();
+    const env = reopened(before, isolation, CONFIG);
+
+    await env.start();
+
+    await vi.waitFor(() => expect(env.spawned()).toContain('t1'));
+    expect(isolation.taskIdsFor('reopen')).toEqual(['t1', 't1']);
+    env.session.destroy();
+  });
+
+  it('takes a resolver added after the load, and starts it', async () => {
+    const { before, isolation } = await owed();
+    const env = reopened(before, isolation, CONFIG);
+
+    await env.session.resolveConflictAsTask('t1');
+
+    const resolver = env.session.planTasks.at(-1)!;
+    await vi.waitFor(() => expect(env.spawned()).toContain(resolver.id));
+    env.session.destroy();
+  });
+});
 
 describe('a failed task through a reload', () => {
   it('stays failed with its verdict and report, keeps its dependents blocked and stays in the inbox', async () => {

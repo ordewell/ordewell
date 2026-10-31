@@ -1,7 +1,7 @@
 import { flag, hasFlag, readLastSession } from '../utils';
 import { iconFor } from '../utils/output';
 import type { ApiClient } from '../apiClient';
-import { handoffBranchName, holdLabel, isRepoGroup, loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, repoResultLines, scriptTaskText, skippedLabel, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL, type SerializedTaskStatus } from '@ordewell/core';
+import { handoffBranchName, holdLabel, isRepoGroup, loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, repairWaitLabel, repoResultLines, scriptTaskText, skippedLabel, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL, type SerializedTaskStatus } from '@ordewell/core';
 import { allTasksOf } from '../utils/tasks';
 import { connect } from './shared';
 import { taskHandoffLines } from './taskHandoff';
@@ -85,6 +85,7 @@ export async function followExecution(
       const waits = t.waitsForApproval ? `: ${inLine(WAITS_FOR_APPROVAL_LABEL)}: \`ordewell force-start <id>\` approves it, \`ordewell run\` approves all` : '';
       lines.push(`  ${icon} ${refOf(t.id)}${t.type === 'script' ? ' [SCR]' : t.research ? ' [RES]' : ''} ${t.status}${verdict}${waits}${loop ? ` · ↻ ${inLine(loop.text)}` : ''}`);
       if (t.holdReason) lines.push(`      ${holdLabel(t.holdReason)}`);
+      if (t.isolation?.state === 'conflict' && t.isolation.repairWaits) lines.push(`      ${repairWaitLabel(t.isolation.repairWaits)}`);
       if (t.status === 'skipped') lines.push(`      ${skippedLabel(t.skipReason ?? null)}`);
       // How it ended, before the next task's line: the same block `status` prints (ADR-0047).
       if (t.handoff && (t.status === 'completed' || t.status === 'failed')) lines.push(...taskHandoffLines(t.handoff, '      '));

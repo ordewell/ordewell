@@ -2,8 +2,9 @@ import type { TaskLogView } from '../conversation/taskLog';
 import type { TaskLogFollow } from '../conversation/taskLogFollow';
 import type { RunnerCommand } from '../models/RunnerCommand';
 import type { AwaitingReason } from '../models/Task';
+import type { RepairWait } from '../interfaces/IWorktreeIsolation';
 import { plannerContextFill, taskUsageSummary, usageText, type AttemptUsage, type ContextFill } from '../models/Usage';
-import { approvalLabel, awaitingLabel, resumeLabel, skippedLabel, STALLED_LABEL, taskStatusKind, type TaskStatusKind } from './status';
+import { approvalLabel, awaitingLabel, repairWaitLabel, resumeLabel, skippedLabel, STALLED_LABEL, taskStatusKind, type TaskStatusKind } from './status';
 
 /**
  * A task as an opened log's header reads it. Structural: the TUI projects its
@@ -19,6 +20,8 @@ export interface TaskLogHeaderTask {
   idleSince?: string | null;
   /** Its last attempt left a runner session the task's composer can continue (ADR-0018, K1). */
   continuable?: boolean;
+  /** A conflict repair of it starts by itself once this clears (ADR-0015). */
+  repairWaits?: RepairWait;
   attemptUsage?: readonly AttemptUsage[];
 }
 
@@ -83,6 +86,7 @@ function stateOf(task: TaskLogHeaderTask, follow: TaskLogFollow, approvals: numb
     return { kind: task.awaitingReason === 'checkpoint' ? 'checkpoint' : 'awaiting', label: awaitingLabel(task) ?? STATE_LABEL.awaiting };
   }
   if (task.status === 'blocked') return { kind: 'blocked', label: STATE_LABEL.blocked };
+  if (task.repairWaits) return { kind: 'todo', label: repairWaitLabel(task.repairWaits) };
   if (follow.view.lastTurnEnd === 'failed') return { kind: 'failed', label: 'Turn failed' };
   if (follow.view.lastTurnEnd === 'interrupted') return { kind: 'todo', label: 'Interrupted' };
   const kind = taskStatusKind(task);

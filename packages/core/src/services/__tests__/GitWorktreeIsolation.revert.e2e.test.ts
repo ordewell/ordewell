@@ -647,7 +647,7 @@ describe('the revert\'s place on the queue', () => {
       config: fakeConfig({ worktreeIsolation: true }),
       notifications: fakeNotification(),
       workspaceRoot: () => root,
-      listener: { changed: () => undefined, blocked: () => undefined, handoff: () => undefined, closed: () => undefined, notice: () => undefined },
+      listener: { changed: () => undefined, blocked: () => undefined, handoff: () => undefined, closed: () => undefined, notice: () => undefined, resolversEnded: () => undefined },
       liveTasks: () => new Set(),
     });
     await controller.adopt({ run, resolvers: {} });

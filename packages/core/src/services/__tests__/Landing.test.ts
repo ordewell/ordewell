@@ -18,7 +18,7 @@ const READ_ONLY: AttemptKind = { kind: 'readOnly' };
 
 async function setup(opts: { isolation?: FakeWorktreeIsolation; conflictRepairAttempts?: number; tasks?: Task[]; plannedWith?: () => boolean } = {}) {
   const isolation = opts.isolation ?? new FakeWorktreeIsolation();
-  const listener: IsolationRunListener = { changed: vi.fn(), blocked: vi.fn(), handoff: vi.fn(), closed: vi.fn(), notice: vi.fn() };
+  const listener: IsolationRunListener = { changed: vi.fn(), blocked: vi.fn(), handoff: vi.fn(), closed: vi.fn(), notice: vi.fn(), resolversEnded: vi.fn() };
   const config = fakeConfig({ conflictRepairAttempts: opts.conflictRepairAttempts ?? 2 });
   const runs = new IsolationRunController({ isolation, config, notifications: fakeNotification(), workspaceRoot: () => '/repo', listener, liveTasks: () => new Set() });
   const store = new PlanStore();
@@ -314,6 +314,33 @@ describe('Landing', () => {
   });
 
   describe('a resolver task', () => {
+    it('takes the conflict from a repair while it is live, and gives it back once it is skipped or gone', async () => {
+      const { landing, runs, store, t1 } = await conflicted();
+      const resolver = store.add({ title: 'Resolve', prompt: 'merge it' });
+      runs.linkResolver(resolver.id, t1.id);
+      expect(landing.liveResolvers('t1').map((r) => r.id)).toEqual([resolver.id]);
+      expect(landing.nextRepair('t1')).toBeNull();
+
+      store.markFailed(resolver.id);
+      expect(landing.nextRepair('t1')).toBeNull();
+
+      store.markSkipped(resolver.id);
+      expect(landing.liveResolvers('t1')).toEqual([]);
+      expect(landing.nextRepair('t1')).toEqual({ n: 1, limit: 2 });
+
+      const removed = store.add({ title: 'Resolve again', prompt: 'merge it' });
+      runs.linkResolver(removed.id, t1.id);
+      store.remove(removed.id);
+      expect(landing.nextRepair('t1')).toEqual({ n: 1, limit: 2 });
+    });
+
+    it('lets a conflict that conflicts again with a resolver out wait on the user, not on a repair', async () => {
+      const { landing, runs, store, t1 } = await conflicted();
+      runs.linkResolver(store.add({ title: 'Resolve', prompt: 'merge it' }).id, t1.id);
+
+      expect(await landing.landVouched(t1)).toMatchObject({ kind: 'awaiting_user', reason: 'conflict' });
+    });
+
     async function resolving() {
       const t1 = task('t1', 1);
       const env = await setup({ tasks: [t1, task('r1', 2)], conflictRepairAttempts: 0 });

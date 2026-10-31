@@ -59,6 +59,18 @@ describe('plan footer — the keys that fit the selected task', () => {
       {},
       ['x resolve conflict', 'enter chat'],
     ],
+    [
+      'a conflict a resolver has, which offers no second one',
+      { status: 'awaiting_user', awaitingReason: 'conflict', attempted: true, isolation: { state: 'conflict', branch: 'b', worktree: '/w', repos: [], resolver: 't9' } },
+      {},
+      ['enter chat'],
+    ],
+    [
+      'a repair waiting for a slot, which is no conflict to act on',
+      { status: 'pending', attempted: true, isolation: { state: 'conflict', branch: 'b', worktree: '/w', repos: [], repairWaits: 'slot' } },
+      {},
+      ['c stop repair', 'enter chat'],
+    ],
   ])('lists exactly the hints of %s', (_name, over, stateOver, expected) => {
     expect(footerHints(plan([task(over)], stateOver))).toEqual([...expected, ...SHARED_TAIL]);
   });

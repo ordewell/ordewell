@@ -77,6 +77,42 @@ request.
   merges into the user's own checked-out branch by itself; that boundary is
   untouched.
 
+### One worker per conflict
+
+**A conflict has at most one worker: a repair or a resolver, never both, and
+never two resolvers.** The rule is one read, `Landing.liveResolvers`, of the link
+`resolveConflictAsTask` makes: a resolver is live while it is in the plan and
+neither skipped nor completed. A failed one is still live: retrying it, skipping
+it or removing it is the way on.
+
+- **Adding one is refused beside a worker.** `PlanEditor.addConflictResolver`
+  asks `TaskOrchestrator.resolverRefusal`, for every path alike: the TUI, VS
+  Code, the daemon's route and the inbox's option. A repair at work, a repair
+  owed and a live resolver each refuse, in words that say how to take the
+  conflict back. A repair owed is refused rather than withdrawn, because the
+  resolver would wait for the same slot, and refusing asks nothing of a surface
+  that has not caught up.
+- **A resolver keeps the conflict.** While one is live, `nextRepair` answers null,
+  the start rule holds the conflicted task with the wait `resolver`, and the one
+  claim every attempt passes refuses it. So Execute, a force start or a landing
+  that conflicts again starts no second worker beside it, however it was reached.
+- **A control that would end a conflict waits for a resolver at work.** A retry
+  or a skip of the conflicted task is refused until it is stopped or finishes.
+  Deleting the task is the user meaning it: its resolver is cancelled.
+- **A resolver left behind never starts.** When a conflict ends some other way —
+  the task landed, was retried or skipped, left the plan, or a clean-up took the
+  branches — its link goes and the resolver not started is skipped, with the
+  reason `not needed: the conflict it was added for is gone`, so no merge runs
+  that is no longer needed. `landResolved`'s check that the task is still
+  conflicted remains the last guard. A skipped task can still be started by
+  hand; that is the user's own act.
+- **A resolver starts as a repair does.** The user's action asked for the
+  conflict to be resolved, so one added with no scheduler driving the run is
+  started by `startWhenAllowed`: it waits with the queued starts, is judged by
+  the whole start rule and past none of it, takes a free slot within the Parallel
+  limit, says what holds it, and a Stop withdraws it. With a scheduler it is
+  claimed as any task is, exactly as before.
+
 ### How a repair runs
 
 - **Two operations on the isolation seam.** `reopen` hands a `conflict`
@@ -101,6 +137,20 @@ request.
   instead of re-running it; with none left it runs afresh from the tip, as a
   conflicted task always has. A repair that did not land waits on the user and
   is not tried again in the same run.
+- **A repair that waits reads as what it is.** A repair that will start by
+  itself is progress, not a conflict to act on, so `TaskIsolation.repairWaits`
+  says what it waits for (a slot, a planner's turn, a usage limit) on the task
+  row and the task log, and the inbox leaves it out. It is derived and never
+  saved: the record says `conflict`, and the scheduler says a repair is owed.
+  Outside a scheduled run `TaskOrchestrator.owedRepairs` holds what no scheduler
+  would claim. It respects the Parallel limit, a start hold and a usage limit.
+- **Whatever ends that wait leaves the conflict waiting on the user.** A Stop of
+  the task, or of the run, withdraws the repair: the task goes to `awaiting_user`
+  with reason `conflict`, not back to not started, so its options are offered
+  and the inbox lists it (ADR-0053). The same holds for a repair stopped at
+  work, on no hold. A load does the same (`settleOwedRepairs`), since what owed
+  it went with the host. The repair is not spent by any of this: it was never
+  started, and the next Execute repairs the task.
 - **What the repair is given.** `buildConflictRepairPrompt` goes through the
   same `composeAugmentedPrompt` as any spawn, with the completion and
   checkpoint tool instructions. The repair uses a fresh attempt token
@@ -120,6 +170,17 @@ request.
   agent session, and the more tasks a run parallelizes, the worse that gets. A
   repair belongs in the task's own worktree, on its own attempt, so the queue
   only ever does the mechanical merge it already does.
+- **A resolver withdrawing a repair owed.** Rejected: the resolver needs the same
+  slot, and a press on a stale surface would give up a repair that was about to
+  run. A Stop is one press, and says what it did.
+- **Removing a resolver left behind from the plan.** Rejected: a task the user
+  asked for would vanish, along with what depends on it; a skip keeps it, with
+  why, as a loop's body is kept when its loop ends.
+- **A saved mark for a repair that waits.** Rejected: it would have to be set and
+  cleared on every path, as ADR-0034 and ADR-0053 rejected for what they derive.
+- **Reading a saved `pending` task with a conflict as still owed.** Rejected:
+  nothing starts it after a load, so the inbox would leave out a conflict that
+  will not move, and the row would say a repair is coming.
 - **Spawning resolver tasks automatically, added to the plan.** Rejected: it
   grows the plan with work nobody planned, which is exactly what ADR-0001 tries
   to keep from happening implicitly. `resolveConflictAsTask` (the `x` action)
@@ -155,3 +216,4 @@ request.
 - 2026-09-26 — accepted and implemented.
 - 2026-10-09 — aligned with [ADR-0025](../runners/0025-structured-only-runners.md).
 - 2026-10-14 — a failed task blocks only its dependents instead of halting the run ([ADR-0034](../supervision/0034-a-failed-task-blocks-only-its-dependents.md)).
+- 2026-10-31 — one worker per conflict; a repair that waits says so, and a Stop or a load leaves its conflict waiting on the user; a resolver left behind is skipped, and one added outside a run is started.

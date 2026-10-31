@@ -1,4 +1,4 @@
-import { Task, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasksWithParents, pausedOnLimit, waitsForReset, waitsMidAttempt, type RunSettings } from '../models/Task';
+import { Task, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasks, flattenTasksWithParents, pausedOnLimit, waitsForReset, waitsMidAttempt, type RunSettings } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
 import { INotification } from '../interfaces/INotification';
 import type { IRunner, QueuedTaskMessage } from '../interfaces/IRunner';
@@ -15,7 +15,10 @@ import type {
   IsolationMergeResult,
   IsolationRevertResult,
   IsolationRun,
+  IsolationView,
   IWorktreeIsolation,
+  RepairWait,
+  TaskIsolation,
 } from '../interfaces/IWorktreeIsolation';
 import { createWorktreeIsolation } from './GitWorktreeIsolation';
 import { SELF_REPO } from './isolationRecord';
@@ -151,8 +154,13 @@ export interface OrchestratorObserver {
 interface QueuedStart {
   /** The merge gate as it stood when the user forced the start: every surface confirms that one first (ADR-0020). */
   pastGate: readonly string[];
-  /** What it last said of a gate it was not confirmed past, so it says so once. */
-  gateNotice?: string;
+  /** What it last said of what holds it back, so it says so once. */
+  notice?: string;
+  /**
+   * Judged by the whole start rule, as the scheduler judges a task, rather
+   * than as a force start: asked for by the user's act, and past nothing.
+   */
+  asScheduled?: true;
 }
 
 /** What keeps a queued force start waiting, with nothing to say: it starts once these clear. */
@@ -449,6 +457,7 @@ export class TaskOrchestrator {
         handoff: (handoff) => orchestrator.emit('onIsolationHandoff', handoff),
         closed: () => orchestrator.emit('onRunClosed'),
         notice: (level, message) => orchestrator.emit('onIsolationNotice', { level, message }),
+        resolversEnded: (resolverIds) => { for (const id of resolverIds) orchestrator.retireResolver(id); },
       },
       liveTasks: (): ReadonlySet<string> => orchestrator.liveTaskIds(),
     });
@@ -851,7 +860,62 @@ export class TaskOrchestrator {
       startsHeld: this.startHolds > 0,
       completing: this.completing,
       queued: this.queuedStarts,
+      conflictResolver: (taskId) => this.landing.liveResolvers(taskId)[0]?.id,
     };
+  }
+
+  /**
+   * Why no resolver may be added to this task's conflict now, or null: a
+   * conflict has one worker (ADR-0015), so a repair or a resolver that has it
+   * keeps it. The words are for whoever asked, since a surface may still offer
+   * the action from a status update it has not yet replaced.
+   */
+  resolverRefusal(taskId: string): string | null {
+    const task = this.store.get(taskId);
+    if (!task) return null;
+    if (this.runs.current?.tasks[taskId]?.status === 'repairing') return `Task "${task.title}" is repairing its conflict: stop it, then add a resolver if its conflict still waits.`;
+    if (this.owesRepair(task)) return `Task "${task.title}" waits to repair its conflict. Stop it to withdraw the repair, then add a resolver.`;
+    const [resolver] = this.landing.liveResolvers(taskId);
+    if (resolver) return `Task "${resolver.title}" already resolves the conflict of task "${task.title}". Skip or remove it to add another.`;
+    return null;
+  }
+
+  /** What the conflict repair this task is owed waits for; null when no repair will start by itself. */
+  repairWait(taskId: string): RepairWait | null {
+    const task = this.store.get(taskId);
+    if (!task || !this.owesRepair(task)) return null;
+    if (this.startHolds > 0) return 'planner';
+    return this.runState.kind === 'held' || waitOf(this.startWaits(task), 'usage-limit') ? 'usage-limit' : 'slot';
+  }
+
+  /** Where a task's isolated work stands, and who has its conflict: the record says the first, the scheduler the second. */
+  taskIsolation(taskId: string): TaskIsolation | null {
+    const isolation = this.runs.taskIsolation(taskId);
+    return isolation && this.withConflictWorker(taskId, isolation);
+  }
+
+  /** Each task's isolation mark and the run's handoff, as {@link taskIsolation} reads them. */
+  isolationView(): IsolationView | null {
+    const view = this.runs.view();
+    if (!view) return null;
+    return { ...view, tasks: Object.fromEntries(Object.entries(view.tasks).map(([id, isolation]) => [id, this.withConflictWorker(id, isolation)])) };
+  }
+
+  private withConflictWorker(taskId: string, isolation: TaskIsolation): TaskIsolation {
+    if (isolation.state !== 'conflict') return isolation;
+    const waits = this.repairWait(taskId);
+    const [resolver] = this.landing.liveResolvers(taskId);
+    return { ...isolation, ...(waits ? { repairWaits: waits } : {}), ...(resolver ? { resolver: resolver.id } : {}) };
+  }
+
+  /**
+   * A repair will start by itself: the task is not started, it has one left,
+   * and something will claim it, the scheduler or {@link owedRepairs}. Nothing
+   * saves this: a reload or a Stop leaves the conflict waiting on the user.
+   */
+  private owesRepair(task: Readonly<Task>): boolean {
+    if ((task.status !== 'pending' && task.status !== 'approved') || this.onHold.has(task.id) || !this.landing.nextRepair(task.id)) return false;
+    return this.owedRepairs.has(task.id) || this.isScheduling || heldFrom(this.runState) === 'scheduling';
   }
 
   /** The failed tasks a task not started yet waits on, through its dependencies (ADR-0034); empty when it is not blocked. */
@@ -904,13 +968,15 @@ export class TaskOrchestrator {
    * cancelled would be re-armed by the tick that follows, and a retry after
    * the edit would run the failed task alone, its failure lost. Otherwise it
    * is the plan the next run starts from, with a failed task still failed and
-   * what waits on a usage-limit reset still waiting: an edit between runs is
-   * not the user starting over.
+   * what waits on a usage-limit reset still waiting, and a conflict too: an
+   * edit between runs is not the user starting over.
    */
   adoptEdit(tasks: readonly Task[], planRunners: RunnerId[]): void {
-    if (this.isRunning || this.awaitsResume) return this.reconcilePlan(tasks, planRunners);
+    if (this.isRunning || this.awaitsResume || this.owedRepairs.size > 0) return this.reconcilePlan(tasks, planRunners);
+    const before = this.store.planTasks;
     this.loadPlan(tasks, planRunners, true);
     this.store.resetForRun({ edited: true });
+    this.retireResolversLeft(before);
   }
 
   /**
@@ -968,6 +1034,7 @@ export class TaskOrchestrator {
    * no round will run it again.
    */
   planEdited(before: readonly Task[]): void {
+    this.retireResolversLeft(before);
     const was = new Map(before.map((task) => [task.id, task]));
     for (const check of this.store.allTasks) {
       if (!outOfRounds(check)) continue;
@@ -1056,7 +1123,7 @@ export class TaskOrchestrator {
     }
     this.runs.interrupt();
     this.releaseUnchosenHolds();
-    this.owedRepairs.clear();
+    this.withdrawRepairs();
     this.carriedLoops.clear();
     this.loopNotice = '';
     if (reason === 'user') this.queuedStarts.clear();
@@ -1064,6 +1131,18 @@ export class TaskOrchestrator {
     this.sayStopped(stopped);
     this.recoverOrphans();
     this.emit('onTaskChanged');
+  }
+
+  /**
+   * Nothing claims a repair once the run has stopped, so what was owed one is
+   * a conflict waiting on the user, listed with its options, not a task that
+   * reads as never started.
+   */
+  private withdrawRepairs(): void {
+    this.owedRepairs.clear();
+    for (const t of this.store.allTasks) {
+      if ((t.status === 'pending' || t.status === 'approved') && this.runs.current?.tasks[t.id]?.status === 'conflict') this.store.markAwaitingUser(t.id, 'conflict');
+    }
   }
 
   private chosenHoldsNow(): [string, string][] {
@@ -1276,6 +1355,7 @@ export class TaskOrchestrator {
   private async applyLanding(task: Task, outcome: LandingOutcome, admission: Admitted, onLanded: () => void): Promise<void> {
     if (!completesTask(outcome)) return this.settleUnlanded(task, outcome, admission);
     this.store.markCompleted(task.id);
+    this.retireResolvers(task.id);
     this.closeLoop(task, LOOP_PASSED);
     onLanded();
     this.say(outcome.messages);
@@ -1312,14 +1392,52 @@ export class TaskOrchestrator {
     if (this.startHolds > 0) return;
     for (const id of [...this.owedRepairs]) {
       if (this.slotsFull()) return;
+      // Held as any start on that runner is; the reset ticks, and it is still owed then.
+      if (this.repairWait(id) === 'usage-limit') continue;
       this.owedRepairs.delete(id);
       const task = this.store.get(id);
       // A retry, skip or edit since has settled it some other way.
       if (!task || task.status !== 'pending' || this.attempts.has(id) || !this.landing.nextRepair(id)) continue;
       const claimed = this.claim(id, admission);
-      if ('refused' in claimed) this.tell('warn', `The conflict of task "${task.title}" is not repaired: ${claimed.refused}`);
-      else this.unawaited(claimed.spawned, `Could not start the repair of task "${task.title}"`);
+      if ('refused' in claimed) {
+        // Nothing will ask again, so it waits on the user as a repair that could not start does.
+        this.store.markAwaitingUser(id, 'conflict');
+        this.tell('warn', `The conflict of task "${task.title}" is not repaired: ${claimed.refused}`);
+      } else this.unawaited(claimed.spawned, `Could not start the repair of task "${task.title}"`);
     }
+  }
+
+  /**
+   * A conflict ended some other way than through its resolver: the task
+   * landed, was retried or skipped, or left the plan. The merge the resolver
+   * was added for is no longer needed, so it goes with its link: skipped,
+   * with why, and never started (ADR-0015).
+   */
+  private retireResolvers(conflictedId: string): void {
+    for (const id of this.runs.resolversOf(conflictedId)) {
+      this.runs.takeResolver(id);
+      this.retireResolver(id);
+    }
+  }
+
+  private retireResolver(id: string): void {
+    const resolver = this.store.get(id);
+    if (!resolver || this.attempts.has(id) || !LEFT_UNDONE.has(resolver.status)) return;
+    this.store.markSkipped(id, RESOLVER_NOT_NEEDED);
+    this.onHold.delete(id);
+    this.queuedStarts.delete(id);
+    this.tell('info', `Task "${resolver.title}" was skipped: the conflict it was added for is gone.`);
+  }
+
+  /** A planner's remove reaches no {@link releaseTask}: what it took out of the plan since `before` ends its conflicts here. */
+  private retireResolversLeft(before: readonly Task[]): void {
+    for (const { id } of flattenTasks(before)) if (!this.store.get(id)) this.retireResolvers(id);
+  }
+
+  /** A control that would end a conflict waits for the resolver at work on it: a conflict has one worker (ADR-0015). */
+  private refuseBesideResolver(taskId: string): void {
+    const resolver = this.landing.liveResolvers(taskId).find((r) => this.attempts.has(r.id));
+    if (resolver) throw new TaskControlError(`Task "${resolver.title}" is resolving the conflict of task "${this.store.get(taskId)?.title ?? taskId}": stop it first, or let it finish.`);
   }
 
   private async landResolved(resolverId: string, admission: Admitted): Promise<void> {
@@ -1443,6 +1561,7 @@ export class TaskOrchestrator {
    * Cancel a running (or scheduled) task: kill its session and return it to
    * 'pending' — "not executed". The task is put on hold so the scheduler
    * doesn't immediately restart it; Retry / Force Start release the hold.
+   * A repair, running or owed a start, leaves its conflict waiting instead.
    *
    * The attempt's worktree is kept, as a stopped or failed one is: a runner is
    * often cancelled because it looked stuck after doing the work, and Mark
@@ -1450,6 +1569,12 @@ export class TaskOrchestrator {
    */
   async cancelTask(taskId: string): Promise<void> {
     this.refuseWhileCompleting(taskId);
+    if (this.repairWait(taskId)) {
+      this.owedRepairs.delete(taskId);
+      this.store.markAwaitingUser(taskId, 'conflict');
+      this.emit('onTaskChanged');
+      return this.tick();
+    }
     await this.cancelAttempt(taskId, { keep: true });
   }
 
@@ -1472,8 +1597,12 @@ export class TaskOrchestrator {
     // silently discarding a verdict that already landed.
     if (!this.attempts.has(taskId) && task.status !== 'in_progress') return;
     const ended = this.attempts.end(taskId, 'cancel');
-    this.store.markPending(taskId);
-    this.hold(taskId, 'cancelled; retry or force start to run it again', true);
+    // A stopped repair did not land, so its conflict waits on the user, as the run's Stop leaves it.
+    if (ended?.kind.kind === 'repair') this.store.markAwaitingUser(taskId, 'conflict');
+    else {
+      this.store.markPending(taskId);
+      this.hold(taskId, 'cancelled; retry or force start to run it again', true);
+    }
     this.emit('onTaskChanged');
     await this.runs.release(taskId, worktree, ended?.integration);
     await this.tick();
@@ -1498,6 +1627,12 @@ export class TaskOrchestrator {
     for (let holds = this.completing.get(taskId); holds; holds = this.completing.get(taskId)) await Promise.allSettled(holds);
     this.releasing.add(taskId);
     try {
+      // The user deleting the task means it: its resolver has nothing left to merge.
+      for (const resolver of this.landing.liveResolvers(taskId)) {
+        if (this.attempts.has(resolver.id)) await this.cancelAttempt(resolver.id, { keep: false });
+      }
+      this.retireResolvers(taskId);
+      this.runs.takeResolver(taskId);
       const phase = this.attempts.phaseOf(taskId);
       if (phase === 'running' || phase === 'integrating') await this.cancelAttempt(taskId, { keep: false });
       else {
@@ -1510,6 +1645,7 @@ export class TaskOrchestrator {
       this.releasing.delete(taskId);
     }
     this.onHold.delete(taskId);
+    this.owedRepairs.delete(taskId);
     this.retryCounts.delete(taskId);
     this.attempts.forget(taskId);
   }
@@ -1539,6 +1675,7 @@ export class TaskOrchestrator {
     this.attempts.handOver(taskId, summarizeOutput(verdict.reason, ''), handoff);
     if (completesTask(landing)) {
       this.store.markCompleted(taskId);
+      this.retireResolvers(taskId);
       this.closeLoop(task, LOOP_CHECK_MARKED_COMPLETE);
     } else this.settleUnlanded(task, landing, admission);
     this.logAndArchive(task, verdict);
@@ -1670,12 +1807,17 @@ export class TaskOrchestrator {
     if (!task || task.status === 'completed' || task.status === 'skipped') return;
     this.refuseWhileCompleting(taskId);
     if (task.status === 'in_progress') throw new TaskControlError(`Task "${task.title}" is running: stop it before skipping it.`);
+    this.refuseBesideResolver(taskId);
     await this.whileAdmitted(async (admission) => {
       // Dropping its resume may release a held run, which the tick below then schedules.
       this.limitPauses.cancel(taskId);
       const ended = this.attempts.end(taskId, 'skip');
       this.attempts.clear(task);
       this.store.markSkipped(taskId, reason?.trim() || undefined);
+      this.owedRepairs.delete(taskId);
+      // Skipped itself, a resolver leaves its conflict free for another worker.
+      this.runs.takeResolver(taskId);
+      this.retireResolvers(taskId);
       this.closeLoop(task, LOOP_CHECK_SKIPPED);
       this.onHold.delete(taskId);
       this.notifications.info(`Task "${task.title}" skipped: none of its work lands, and the tasks that depend on it go ahead without it once the work it waited on is done.`);
@@ -1705,6 +1847,7 @@ export class TaskOrchestrator {
     const task = this.store.get(taskId);
     if (!task) return;
     this.refuseWhileCompleting(taskId);
+    this.refuseBesideResolver(taskId);
     await this.whileAdmitted(async (admission) => {
       // A retried task's own pause ends with it; that may release a held run,
       // which the tick below then schedules (ADR-0018, U1).
@@ -1713,6 +1856,9 @@ export class TaskOrchestrator {
       const ended = this.attempts.end(taskId, 'retry');
       const movedFrom = this.movedFrom(task);
       this.store.retry(taskId);
+      this.owedRepairs.delete(taskId);
+      // Now, not once the worktree has gone: a tick in between would start it.
+      this.retireResolvers(taskId);
       if (movedFrom) this.store.setCarriedFrom(taskId, movedFrom);
       this.onHold.delete(taskId);
       this.emit('onTaskChanged');
@@ -1934,6 +2080,24 @@ export class TaskOrchestrator {
     this.emit('onTaskChanged');
   }
 
+  /** A start of this task waits in the queue, and starts with nobody asked once what holds it clears. */
+  startQueuedFor(taskId: string): boolean {
+    return this.queuedStarts.has(taskId);
+  }
+
+  /**
+   * Start a task the user's own act asked for, under the one start rule and
+   * past none of it (ADR-0015). A scheduler driving the run claims it as it
+   * would any task; otherwise it waits with the queued starts for a slot, a
+   * start hold or a usage limit, says what holds it, and a Stop withdraws it.
+   * A conflict repair is started the same way, and this is what a resolver
+   * added outside a run has in place of one.
+   */
+  startWhenAllowed(taskId: string): void {
+    if (!this.store.get(taskId) || this.attempts.has(taskId) || this.isScheduling) return;
+    this.queuedStarts.set(taskId, { pastGate: [], asScheduled: true });
+  }
+
   /**
    * A forced start, from its run opening to its claim. It is judged again once
    * the run has opened, against the task as it stands then, which is what
@@ -1952,7 +2116,7 @@ export class TaskOrchestrator {
       // A Merge all may have begun while it opened.
       this.refuseOpsDuringMerge(taskId, forced);
       if (forced.queued && (this.holdsQueued(taskId, forced) || this.slotsFull())) {
-        this.queuedStarts.set(taskId, { pastGate: forced.pastGate });
+        this.queuedStarts.set(taskId, { pastGate: forced.pastGate, ...(forced.asScheduled ? { asScheduled: true } : {}) });
         return;
       }
       const task = this.store.get(taskId);
@@ -2021,8 +2185,12 @@ export class TaskOrchestrator {
       }
       // The start rule leaves slots to the claim, so a start a full run would refuse waits in the queue for one.
       if (this.slotsFull()) continue;
-      const waits = this.startWaits(task, task.research ? undefined : { queued: true, pastGate: queued.pastGate });
+      const waits = this.startWaits(task, task.research || queued.asScheduled ? undefined : { queued: true, pastGate: queued.pastGate });
       if (task.research && waits.length > 0) continue;
+      if (queued.asScheduled && (waits.length > 0 || this.runState.kind === 'held')) {
+        this.sayQueuedHeld(task, queued, waits);
+        continue;
+      }
       if (waits.some((w) => QUEUED_WAITS.has(w.kind))) continue;
       if (this.leftToScheduler(task) && queued.pastGate.length === 0) {
         this.queuedStarts.delete(id);
@@ -2036,9 +2204,9 @@ export class TaskOrchestrator {
       this.queuedStarts.delete(id);
       try {
         const origin = task.research && (task.reportTo ?? task.researchOrigin)?.actor === 'supervisor' ? 'supervisor' : 'user';
-        await this.startForced(id, origin, { queued: true, pastGate: queued.pastGate });
+        await this.startForced(id, origin, { queued: true, pastGate: queued.pastGate, ...(queued.asScheduled ? { asScheduled: true } : {}) });
       } catch (err) {
-        this.tell('warn', `Task "${task.title}" did not start once its dependencies finished: ${err instanceof Error ? err.message : String(err)}`);
+        this.tell('warn', `Task "${task.title}" did not start${queued.asScheduled ? '' : ' once its dependencies finished'}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   }
@@ -2059,9 +2227,19 @@ export class TaskOrchestrator {
 
   private sayQueuedAtGate(task: Readonly<Task>, queued: QueuedStart, unmerged: readonly string[]): void {
     const titles = unmerged.map((id) => `"${this.store.get(id)?.title ?? id}"`).join(', ');
-    const notice = `Task "${task.title}" waits for Merge all: the work of ${titles} is not merged into your branch yet. Merge all to start it, or force start it again to start it without that work.`;
-    if (queued.gateNotice === notice) return;
-    queued.gateNotice = notice;
+    this.sayOnce(queued, `Task "${task.title}" waits for Merge all: the work of ${titles} is not merged into your branch yet. Merge all to start it, or force start it again to start it without that work.`);
+  }
+
+  /** A start asked for under the whole rule that the rule holds back, in words the user can act on; a turn's hold ends by itself. */
+  private sayQueuedHeld(task: Readonly<Task>, queued: QueuedStart, waits: readonly StartWait[]): void {
+    if (waitOf(waits, 'start-hold')) return;
+    const limited = this.runState.kind === 'held' || waitOf(waits, 'usage-limit');
+    this.sayOnce(queued, `Task "${task.title}" has not started: ${limited ? 'its runner is on a usage limit, so it starts after the reset' : 'the plan holds it back: see what it waits on, then start it'}.`);
+  }
+
+  private sayOnce(queued: QueuedStart, notice: string): void {
+    if (queued.notice === notice) return;
+    queued.notice = notice;
     this.tell('info', notice);
   }
 
@@ -2274,6 +2452,7 @@ export class TaskOrchestrator {
       const task = this.store.get(id);
       if (!task || this.attempts.has(id) || !LEFT_UNDONE.has(task.status)) continue;
       this.store.markSkipped(id, reason);
+      this.retireResolvers(id);
       this.onHold.delete(id);
       this.queuedStarts.delete(id);
     }
@@ -2402,7 +2581,8 @@ export class TaskOrchestrator {
   /**
    * Why a start may not take its claim now, or null when it may: a Stop came
    * since it was admitted (ADR-0029), the task left the plan or is being
-   * marked complete, a revert is taking back work it depends on (ADR-0054), it
+   * marked complete, a resolver has its conflict, so a start of it would be a
+   * second worker on it (ADR-0015), a revert is taking back work it depends on (ADR-0054), it
    * is outside the user's approval record (ADR-0035), or every slot is taken.
    * Read in the same synchronous step as the claim it
    * guards, so nothing can change in between.
@@ -2412,6 +2592,8 @@ export class TaskOrchestrator {
     const task = this.store.get(taskId);
     if (!task) return `There is no task "${taskId}" in this plan any more.`;
     if (this.completing.has(taskId)) return beingMarkedComplete(task);
+    const [resolver] = this.landing.liveResolvers(taskId);
+    if (resolver) return `Task "${resolver.title}" already resolves the conflict of task "${task.title}": skip or remove it first, or let it finish.`;
     if ([...this.reverting].some((reach) => reach.has(taskId))) return `A revert is taking back work task "${task.title}" depends on. Start it again once the revert has ended.`;
     if (!this.isApproved(taskId)) return `Task "${task.title}" waits for the user's approval: they approve it by starting it, or by executing the plan.`;
     const live = this.attempts.size;
@@ -2482,6 +2664,9 @@ const LOOP_PASSED = 'not needed: its check passed';
 const LOOP_OUT_OF_ROUNDS = 'not run: the loop ran out of rounds';
 const LOOP_CHECK_MARKED_COMPLETE = 'not needed: its check was marked complete';
 const LOOP_CHECK_SKIPPED = 'not needed: its check was skipped';
+
+/** Why a resolver ends skipped once its conflict has ended some other way (ADR-0015). */
+const RESOLVER_NOT_NEEDED = 'not needed: the conflict it was added for is gone';
 
 /** The skips a loop made itself, which a new set of rounds undoes; any other is the user's, and stops the loop (L7). */
 const LOOP_SKIPS: ReadonlySet<string> = new Set([LOOP_PASSED, LOOP_OUT_OF_ROUNDS, LOOP_CHECK_MARKED_COMPLETE, LOOP_CHECK_SKIPPED]);

@@ -19,6 +19,8 @@ interface ActionSubject {
   resumeAt?: string | null;
   /** Its last attempt left a runner session to continue (ADR-0018, K1). */
   continuable?: boolean;
+  /** A conflict repair of it will start by itself, which Stop withdraws (ADR-0015). */
+  repairWaits?: unknown;
 }
 
 type Rule = readonly [TaskRowAction, (task: ActionSubject) => boolean];
@@ -33,9 +35,12 @@ const RESUMABLE = (t: ActionSubject): boolean => PAUSED(t) && t.continuable === 
 /** Work that holds up what depends on it until someone acts: Skip lets the run go on without it. */
 const HOLDS_UP = (t: ActionSubject): boolean => t.status === 'failed' || t.status === 'blocked' || t.status === 'awaiting_user';
 
+/** There is something for a Stop to end: a runner, or a repair about to start one. */
+const STOPPABLE = (t: ActionSubject): boolean => t.status === 'in_progress' || !!t.repairWaits;
+
 // Order is the order a surface lays the actions out in.
 const TASK_RULES: readonly Rule[] = [
-  ['cancel', (t) => t.status === 'in_progress'],
+  ['cancel', STOPPABLE],
   ['resume-now', RESUMABLE],
   ['cancel-resume', RESUMES],
   ['skip', HOLDS_UP],
@@ -47,7 +52,7 @@ const TASK_RULES: readonly Rule[] = [
 ];
 
 const SUBTASK_RULES: readonly Rule[] = [
-  ['cancel', (t) => t.status === 'in_progress'],
+  ['cancel', STOPPABLE],
   ['resume-now', RESUMABLE],
   ['cancel-resume', RESUMES],
   ['complete', (t) => t.status === 'in_progress' && t.type === 'ai'],

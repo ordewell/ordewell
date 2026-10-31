@@ -2451,6 +2451,16 @@ describe('worktree isolation', () => {
 
     expect(resolveConflictAsTask).toHaveBeenCalledWith('s1', 't2');
     expect(types(h.actions)).toEqual(['planRefreshed', 'notice']);
+    expect(h.actions.at(-1)).toMatchObject({ message: expect.stringContaining('starts once a slot is free') });
+  });
+
+  it('a refused second resolver surfaces the daemon\'s reason, and says nothing was added', async () => {
+    const h = harness({ resolveConflictAsTask: vi.fn().mockRejectedValue(new Error('Task "R" already resolves the conflict of task "T".')) } as Partial<OrdewellApi>);
+
+    await runEffect({ type: 'resolveConflict', sessionId: 's1', taskId: 't2' }, h.deps);
+
+    expect(h.actions.at(-1)).toMatchObject({ type: 'failed', message: expect.stringContaining('already resolves') });
+    expect(types(h.actions)).not.toContain('notice');
   });
 
   it('a refused action surfaces the daemon\'s reason', async () => {

@@ -284,6 +284,7 @@ function logHeaderTask(task: TaskView | undefined): TaskLogHeaderTask {
     resumeAt: task?.resumeAt ?? null,
     idleSince: task?.idleSince ?? null,
     continuable: task?.continuable === true,
+    ...(task?.isolation?.state === 'conflict' && task.isolation.repairWaits ? { repairWaits: task.isolation.repairWaits } : {}),
     attemptUsage: task?.attemptUsage ?? [],
   };
 }
@@ -1267,7 +1268,13 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   if (row.conflict) {
     const where = row.conflict.repo ? ` in ${row.conflict.repo}` : '';
     const files = row.conflict.files ? ` (${row.conflict.files})` : '';
-    lines.push(...statusLines(style.red, '⚠', `merge conflict${where}${files}: its work is kept on its own branch`, cols, bodyPad));
+    const held = row.conflict.resolver ? `task ${row.conflict.resolver} is resolving it` : 'its work is kept on its own branch';
+    lines.push(...statusLines(style.red, '⚠', `merge conflict${where}${files}: ${held}`, cols, bodyPad));
+  }
+  // It starts by itself, so it is no warning; `c` withdraws it.
+  if (row.repairWaiting) {
+    const files = row.repairWaiting.files ? ` (${row.repairWaiting.files})` : '';
+    lines.push(...statusLines(style.yellow, '⏸', `${inRow(row.repairWaiting.label)}${files}`, cols, bodyPad));
   }
   // `attempt` is absent only for a task shown straight from a reloaded plan,
   // before the live stream has caught up.

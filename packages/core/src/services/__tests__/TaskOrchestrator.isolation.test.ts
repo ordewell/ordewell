@@ -1348,20 +1348,20 @@ describe('TaskOrchestrator with worktree isolation', () => {
       expect(orchestrator.runs.planIsolation?.resolvers).toEqual({});
     });
 
-    it('does not land a conflicted task the user retried meanwhile, whose new attempt is still running', async () => {
-      const { orchestrator, isolation, pass, sessionFor } = await conflicted();
+    it('leaves a resolver not started out of a conflict the user retried: its merge is no longer needed', async () => {
+      const { orchestrator, isolation, sessionFor } = await conflicted();
       const resolver = orchestrator.storeInstance.add({ title: 'Resolve', prompt: 'merge it' });
       orchestrator.runs.linkResolver(resolver.id, 't1');
       isolation.outcomes.set('t1', 'merged');
-      await orchestrator.retryTask('t1');
-      await vi.waitFor(() => expect(sessionFor(resolver.id)).toBeDefined());
 
-      pass(resolver);
-      await vi.waitFor(() => expect(orchestrator.storeInstance.get(resolver.id)!.status).toBe('completed'));
+      await orchestrator.retryTask('t1');
+      await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('in_progress'));
       await flushMicrotasks();
 
-      expect(orchestrator.storeInstance.get('t1')!.status).toBe('in_progress');
-      expect(isolation.taskIdsFor('integrate')).toEqual(['t1', resolver.id]);
+      expect(orchestrator.storeInstance.get(resolver.id)).toMatchObject({ status: 'skipped', skipReason: 'not needed: the conflict it was added for is gone' });
+      expect(sessionFor(resolver.id)).toBeUndefined();
+      expect(orchestrator.runs.planIsolation?.resolvers).toEqual({});
+      expect(isolation.taskIdsFor('integrate')).toEqual(['t1']);
     });
 
     it('a stop does not land the repair: the kill that stop() makes is not a verdict', async () => {

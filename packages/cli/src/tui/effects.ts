@@ -773,11 +773,15 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       return;
     }
 
-    case 'resolveConflict':
-      await api.resolveConflictAsTask(effect.sessionId, effect.taskId);
-      await refreshPlan(deps, effect.sessionId);
-      dispatch({ type: 'notice', message: 'Added a task that merges the conflicted branch by hand. Run it with E (run plan); when it lands, the conflicted task lands through it.' });
+    // A refusal, a second resolver among them, comes back in the daemon's words.
+    case 'resolveConflict': {
+      const { sessionId, taskId } = effect;
+      const request = () => api.resolveConflictAsTask(sessionId, taskId);
+      await (effect.watch ? withExecutionStream(deps, sessionId, request) : request());
+      await refreshPlan(deps, sessionId);
+      dispatch({ type: 'notice', message: 'Added a task that merges the conflicted branch by hand. It starts once a slot is free; when it lands, the conflicted task lands through it.' });
       return;
+    }
 
     case 'deleteSession': {
       const { ok } = await api.deleteSession(effect.sessionId, workspace);

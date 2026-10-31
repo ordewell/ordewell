@@ -67,6 +67,8 @@ function setup(opts: { tasks?: Task[]; plan?: boolean; allowlist?: Partial<Recor
     tick: vi.fn(async () => { events.push('tick'); }),
     releaseTask: vi.fn(async (taskId: string) => { events.push(`release:${taskId}`); }),
     planEdited: vi.fn(),
+    resolverRefusal: vi.fn((): string | null => null),
+    startWhenAllowed: vi.fn(),
   };
   const runs = { current: opts.run ?? null, linkResolver: vi.fn() };
   const notice = vi.fn();
@@ -487,6 +489,26 @@ describe('PlanEditor.addConflictResolver', () => {
     expect(resolver.prompt).toContain('ordewell/run1/1-t1');
     expect(runs.linkResolver).toHaveBeenCalledWith(resolver.id, 't1');
     expect(events).toEqual(['saved', 'plan announced', 'tick']);
+  });
+
+  it('asks the scheduler to start what it added, which a run with no scheduler would not', async () => {
+    const { editor, store, scheduler } = setup({ run: conflicted });
+
+    await editor.addConflictResolver('t1');
+
+    expect(scheduler.startWhenAllowed).toHaveBeenCalledWith(store.planTasks.at(-1)!.id);
+  });
+
+  it('adds nothing when the scheduler says the conflict has its worker, in its words', async () => {
+    const { editor, store, scheduler, runs } = setup({ run: conflicted });
+    const before = store.planTasks.length;
+    scheduler.resolverRefusal.mockReturnValue('Task "Setup" waits to repair its conflict.');
+
+    await expect(editor.addConflictResolver('t1')).rejects.toThrow('waits to repair its conflict');
+
+    expect(store.planTasks).toHaveLength(before);
+    expect(runs.linkResolver).not.toHaveBeenCalled();
+    expect(scheduler.startWhenAllowed).not.toHaveBeenCalled();
   });
 
   it('writes the resolver\'s merge message with the Planned-with trailer when the setting is on', async () => {

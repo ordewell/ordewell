@@ -82,6 +82,8 @@ export interface IsolationRunListener {
   closed(): void;
   /** Already said through the notifications; also for a surface that shows no toasts. */
   notice(level: IsolationNoticeLevel, message: string): void;
+  /** A clean-up took the branches these resolver tasks would merge, and their links with them. */
+  resolversEnded(resolverIds: readonly string[]): void;
 }
 
 export interface IsolationRunControllerDeps {
@@ -620,6 +622,11 @@ export class IsolationRunController {
     return conflictedId;
   }
 
+  /** The tasks added to resolve this task's conflict: one, but for a plan saved before that was the rule (ADR-0015). */
+  resolversOf(conflictedId: string): string[] {
+    return Object.keys(this.resolvers).filter((id) => this.resolvers[id] === conflictedId);
+  }
+
   async taskDiff(taskId: string, options: TaskDiffRead): Promise<TaskDiffResult> {
     if (!this.run || !this.run.tasks[taskId] || !this.isolation.taskDiff) {
       return { available: false, reason: TASK_DIFF_UNAVAILABLE };
@@ -685,6 +692,7 @@ export class IsolationRunController {
     const run = this.requireRun();
     this.refuseWhileLive(run);
     this.report(await this.isolation.discard(run, { integration: 'keep' }));
+    this.endResolvers();
     this.listener.changed();
   }
 
@@ -761,10 +769,17 @@ export class IsolationRunController {
     for (const { worktree, reason, task } of removal.refused) this.tell('warn', refusedNotice(worktree, reason, task));
   }
 
+  /** The branches the links' resolvers would merge have gone: the links go, and the scheduler is told of the tasks left. */
+  private endResolvers(): void {
+    const ended = Object.keys(this.resolvers);
+    this.resolvers = {};
+    if (ended.length > 0) this.listener.resolversEnded(ended);
+  }
+
   /** The run goes from the plan; `merged` names it as {@link mergedRun} when everything it landed was merged. */
   private forget(merged?: string): void {
     this.run = null;
-    this.resolvers = {};
+    this.endResolvers();
     this.merged = merged ?? null;
     this.listener.changed();
     this.listener.closed();

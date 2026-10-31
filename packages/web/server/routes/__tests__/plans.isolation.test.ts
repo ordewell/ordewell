@@ -199,4 +199,15 @@ describe('POST /:sessionId/tasks/:taskId/resolve-conflict', () => {
 
     expect((await post(app, 'tasks/t2/resolve-conflict')).status).toBe(400);
   });
+
+  it('is a 400 in the seam\'s words for a conflict that has its worker', async () => {
+    const app = appFor({
+      resolveConflictAsTask: vi.fn().mockRejectedValue(new PlanEditError('Task "R" already resolves the conflict of task "T". Skip or remove it to add another.')),
+    });
+
+    const res = await post(app, 'tasks/t2/resolve-conflict');
+
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain('already resolves');
+  });
 });

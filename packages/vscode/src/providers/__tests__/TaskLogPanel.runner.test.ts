@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type * as vscode from 'vscode';
-import type { Task, TaskLogEvent } from '@ordewell/core';
+import type { Task, TaskIsolation, TaskLogEvent } from '@ordewell/core';
 import { createFakeWebviewPanel } from '../../test/vscode.mock';
 import { TaskLogPanel, type TaskLogSession } from '../TaskLogPanel';
 import type { HostToTaskLog } from '../../shared/taskLogProtocol';
@@ -10,10 +10,11 @@ const task = (over: Partial<Task>): Task => ({
   id: 't1', order: 1, title: 'Ship it', description: '', type: 'ai', status: 'pending', dependencies: [], subtasks: [], assignedRunner: 'opencode', ...over,
 });
 
-function openedStatus(t: Task, events: readonly TaskLogEvent[] = [], idleSince?: (taskId: string) => string | null) {
+function openedStatus(t: Task, events: readonly TaskLogEvent[] = [], idleSince?: (taskId: string) => string | null, isolation?: TaskIsolation) {
   const panel = createFakeWebviewPanel('ordewell.taskLog', 'Task log');
   const session = {
     taskLogAttempts: () => (events.length > 0 ? [1] : []), taskLog: () => events, outstandingApprovals: () => [], execute: vi.fn(), invokeTaskCommand: vi.fn(),
+    isolationView: () => (isolation ? { tasks: { [t.id]: isolation }, handoff: { repos: [], landed: [] } } : null),
   } as unknown as TaskLogSession;
   new TaskLogPanel(panel as unknown as vscode.WebviewPanel, t.id, { session, getTask: () => t, openFile: () => undefined, idleSince, log: () => undefined }, { toString: () => 'file:///ext' } as unknown as vscode.Uri, () => undefined);
   panel.__receive({ type: 'ready' });
@@ -40,6 +41,14 @@ describe('the task log tab tells the webview what its activity line needs', () =
     const status = openedStatus(task({ status: 'in_progress' }));
     expect(status.taskStatus).toBe('in_progress');
     expect(status.idleSince).toBeNull();
+  });
+});
+
+describe('a task log tab on a conflict repair waiting to start', () => {
+  it('says what it waits for, not that it is to do or in conflict', () => {
+    const isolation: TaskIsolation = { state: 'conflict', branch: 'b', worktree: 'w', repos: [], repairWaits: 'slot' };
+
+    expect(openedStatus(task({ status: 'pending' }), [], undefined, isolation).header.state).toEqual({ kind: 'todo', label: 'Repair waits for a free slot' });
   });
 });
 

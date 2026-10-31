@@ -28,7 +28,7 @@ function harness(attempts: Record<number, TaskLogEvent[]> = { 1: attemptOne }, l
     invokeTaskCommand: vi.fn(() => 'c1'),
     execute: vi.fn(async (_command: ExecutionCommand, _actor: ExecutionActor): Promise<CommandOutcome> => ({ ok: true, message: 'done' })),
     pending: [] as PendingApproval[],
-    outstandingApprovals: vi.fn((): PendingApproval[] => session.pending),
+    isolationView: () => null, outstandingApprovals: vi.fn((): PendingApproval[] => session.pending),
   };
   const registry = new TaskLogRegistry({
     extensionUri: vscode.Uri.file('/ext'),
@@ -228,7 +228,7 @@ describe('the task-log registry (ADR-0018, V1)', () => {
     const registry = new TaskLogRegistry({
       extensionUri: vscode.Uri.file('/ext'),
       session: () => ({
-        invokeTaskCommand: () => 'c', taskLogAttempts: () => [], taskLog: () => [], execute: async () => ({ ok: true, message: '' }), outstandingApprovals: () => [],
+        invokeTaskCommand: () => 'c', taskLogAttempts: () => [], taskLog: () => [], execute: async () => ({ ok: true, message: '' }), isolationView: () => null, outstandingApprovals: () => [],
       }),
       getTask: () => undefined,
       openFile: vi.fn(),

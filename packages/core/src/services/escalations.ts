@@ -51,6 +51,7 @@ export type EscalationOptionId =
   | 'complete'
   | 'merge-all'
   | 'resolve-conflict'
+  | 'start-resolver'
   | 'stash'
   | 'run-without-isolation';
 
@@ -84,6 +85,8 @@ export interface Escalation {
   attempt?: number;
   /** The runner request it answers, for `approval`. */
   approval?: string;
+  /** The task out to resolve it, for a `conflict` nothing is starting that task for. */
+  resolver?: string;
   reason: string;
   options: EscalationOption[];
 }
@@ -123,6 +126,8 @@ export interface EscalationInput {
   checkpoint: (taskId: string) => string | undefined;
   /** Added since the user approved the plan, and left for them (ADR-0035). */
   waitsForApproval: (taskId: string) => boolean;
+  /** Queued to start with no scheduler, once what holds it clears. */
+  startQueued: (taskId: string) => boolean;
   /** Why the task is on hold. */
   holdReason: (taskId: string) => string | null | undefined;
   run: EscalationRun;
@@ -138,6 +143,7 @@ const ONLY_A_PERSON: Record<StartWaitKind, boolean> = {
   started: false,
   repeating: false,
   completing: false,
+  resolver: false,
   blocked: false,
   'loop-check': false,
   dependencies: false,
@@ -168,7 +174,7 @@ function completeOption(row: TaskWithParent, run: EscalationRun): EscalationOpti
 }
 
 /** A wait of the task, before the id and task every escalation carries; `on` is what its id adds to tell it from a later one. */
-type Wait = Pick<Escalation, 'kind' | 'reason' | 'options'> & { on?: string };
+type Wait = Pick<Escalation, 'kind' | 'reason' | 'options' | 'resolver'> & { on?: string };
 
 function askedOf(row: TaskWithParent, pending: PendingApproval, attempt: number): Escalation {
   const { task, ref } = row;
@@ -197,8 +203,25 @@ function startedOver(row: TaskWithParent, input: EscalationInput): EscalationOpt
   ];
 }
 
+/**
+ * A conflict with a resolver out to it (ADR-0015). The resolver moves it on, or
+ * is listed itself, its cause in its place; only a resolver nothing will start
+ * leaves the conflict to say so, which a run stopped or reloaded under it does.
+ */
+function conflictWithResolver(row: TaskWithParent, resolverId: string, input: EscalationInput, rows: readonly TaskWithParent[]): Wait | null {
+  const resolver = rows.find((r) => r.task.id === resolverId);
+  const waiting = resolver?.task.status === 'pending' || resolver?.task.status === 'approved';
+  if (!resolver || !waiting || input.run.open || input.startQueued(resolverId)) return null;
+  return {
+    kind: 'conflict',
+    reason: `Its conflict waits on ${label(resolver)}, added to resolve it, and nothing is starting that task.`,
+    resolver: resolverId,
+    options: [{ id: 'start-resolver', label: 'Start its resolver task' }, RETRY, SKIP, ...completeOption(row, input.run)],
+  };
+}
+
 /** An `awaiting_user` task, but for one that resumes by itself at its usage limit's reset. */
-function awaiting(row: TaskWithParent, input: EscalationInput): Wait | null {
+function awaiting(row: TaskWithParent, input: EscalationInput, rows: readonly TaskWithParent[]): Wait | null {
   const { task } = row;
   const live = input.live(task.id);
   switch (task.awaitingReason) {
@@ -218,12 +241,15 @@ function awaiting(row: TaskWithParent, input: EscalationInput): Wait | null {
         options: [{ id: 'approve', label: 'Approve' }, { id: 'reject', label: 'Reject', note: 'optional' }, SKIP],
       };
     }
-    case 'conflict':
+    case 'conflict': {
+      const resolver = waitOf(input.waits.get(task.id) ?? [], 'resolver');
+      if (resolver) return conflictWithResolver(row, resolver.resolver, input, rows);
       return {
         kind: 'conflict',
         reason: 'Its work could not land: it conflicts with what landed before it.',
         options: [{ id: 'resolve-conflict', label: 'Add a resolver task' }, RETRY, SKIP, ...completeOption(row, input.run)],
       };
+    }
     case 'files-changed':
       return { kind: 'files-changed', reason: 'It changed tracked files in your checkout, and nothing was committed.', options: [RETRY, SKIP, ...completeOption(row, input.run)] };
     case 'input':
@@ -292,7 +318,7 @@ function unstarted(row: TaskWithParent, input: EscalationInput, rows: readonly T
 
 function waitOfTask(row: TaskWithParent, input: EscalationInput, rows: readonly TaskWithParent[]): Wait | null {
   switch (row.task.status) {
-    case 'awaiting_user': return awaiting(row, input);
+    case 'awaiting_user': return awaiting(row, input, rows);
     case 'failed': return failed(row, input, rows);
     case 'pending':
     case 'approved': return unstarted(row, input, rows);
@@ -313,6 +339,7 @@ function ofTask(row: TaskWithParent, input: EscalationInput, rows: readonly Task
     kind: wait.kind,
     task: { id: task.id, ref, title: task.title },
     ...(attempt > 0 ? { attempt } : {}),
+    ...(wait.resolver ? { resolver: wait.resolver } : {}),
     reason: wait.reason,
     options: wait.options,
   }];
@@ -390,6 +417,7 @@ export function escalationAct(escalation: Escalation, option: EscalationOptionId
     case 'complete': return command({ command: 'mark_complete', task, confirmed: true });
     case 'merge-all': return command({ command: 'merge_all' });
     case 'resolve-conflict': return { kind: 'resolve-conflict', task };
+    case 'start-resolver': return command({ command: 'run_task', task: escalation.resolver ?? '' });
     case 'stash': return { kind: 'continue-run', how: 'stash' };
     case 'run-without-isolation': return { kind: 'continue-run', how: 'shared' };
   }
