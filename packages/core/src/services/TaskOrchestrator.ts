@@ -1849,7 +1849,6 @@ export class TaskOrchestrator {
    */
   private takeBack(taskIds: readonly string[]): void {
     for (const id of taskIds) {
-      this.retireResolvers(id);
       const task = this.store.get(id);
       if (!task) continue;
       this.attempts.clear(task);
@@ -1857,6 +1856,8 @@ export class TaskOrchestrator {
       this.store.removeFromLog(id);
       this.hold(id, REVERTED_HOLD, true);
     }
+    // Last: retiring one saves the run, whose records have gone already, so every task has to be back by then.
+    for (const id of taskIds) this.retireResolvers(id);
   }
 
   /**
@@ -1955,6 +1956,7 @@ export class TaskOrchestrator {
     const eligible = continuability(task);
     if (!eligible.ok) throw new TaskControlError(eligible.reason);
     if (pausedOnLimit(task)) return this.resumeNow(taskId, origin, text);
+    const revives = task.status === 'skipped';
     await this.whileAdmitted(async (admission) => {
       if (!(await this.openForAdmitted(taskId, origin, () => this.continueTask(taskId, message, origin), admission))) return;
       // The run may have started it while opening, or the task changed: the
@@ -1962,7 +1964,7 @@ export class TaskOrchestrator {
       const now = this.store.get(taskId);
       const resumable = now && continuability(now);
       if (this.attempts.has(taskId) || !resumable?.ok) return;
-      this.refuseClaim(taskId, admission);
+      this.refuseClaim(taskId, admission, { revives });
 
       this.retryCounts.set(taskId, (this.retryCounts.get(taskId) ?? 0) + 1);
       this.attempts.end(taskId, 'retry');
@@ -2175,6 +2177,7 @@ export class TaskOrchestrator {
   private async startForced(taskId: string, origin: RunOrigin, forced: ForcedStart): Promise<string | undefined> {
     // A dirty tree's replay of a start made now asks again, from its dependencies on.
     const resume = async () => { await (forced.queued ? this.startForced(taskId, origin, forced) : this.forceStartTask(taskId, origin)); };
+    const revives = this.store.get(taskId)?.status === 'skipped';
     return this.whileAdmitted(async (admission) => {
       if (!(await this.openForAdmitted(taskId, origin, resume, admission))) return;
       // The run may have started it while opening.
@@ -2188,7 +2191,7 @@ export class TaskOrchestrator {
       const task = this.store.get(taskId);
       const requeued = !forced.queued && task ? this.queueBehindDependencies(task) : null;
       if (requeued) return requeued;
-      this.refuseClaim(taskId, admission);
+      this.refuseClaim(taskId, admission, { revives });
       // Nothing else would run a check whose fix has landed, so this is its next
       // round. Forced again after any other failure, a check starts its rounds
       // over, as a retry does (ADR-0045 L5, L7).
@@ -2199,7 +2202,7 @@ export class TaskOrchestrator {
       this.limitPauses.cancel(taskId);
       this.onHold.delete(taskId);
       this.notePastGate(taskId);
-      await this.claimed(taskId, admission);
+      await this.claimed(taskId, admission, null, { revives });
     });
   }
 
@@ -2663,15 +2666,19 @@ export class TaskOrchestrator {
    * Why a start may not take its claim now, or null when it may: a Stop came
    * since it was admitted (ADR-0029), the task left the plan or is being
    * marked complete, a resolver has its conflict, so a start of it would be a
-   * second worker on it (ADR-0015), a revert is taking back work it depends on (ADR-0054), it
+   * second worker on it (ADR-0015), a revert is taking back work it depends on
+   * or skipped it since (ADR-0054), it
    * is outside the user's approval record (ADR-0035), or every slot is taken.
    * Read in the same synchronous step as the claim it
-   * guards, so nothing can change in between.
+   * guards, so nothing can change in between. `revives` is a start asked of a
+   * task already skipped, as a force start or a continue may be: only that runs
+   * one again. A retry has made it pending by the time it claims.
    */
-  private claimRefusal(taskId: string, admission: Admitted): string | null {
+  private claimRefusal(taskId: string, admission: Admitted, { revives = false }: { revives?: boolean } = {}): string | null {
     if (!admission.current()) return STOPPED_BEFORE_START;
     const task = this.store.get(taskId);
     if (!task) return `There is no task "${taskId}" in this plan any more.`;
+    if (task.status === 'skipped' && !revives) return `Task "${task.title}" was skipped after this start was asked for${task.skipReason ? `: ${task.skipReason}` : ''}. Start it again to run it.`;
     if (this.completing.has(taskId)) return beingMarkedComplete(task);
     const [resolver] = this.landing.liveResolvers(taskId);
     if (resolver) return `Task "${resolver.title}" already resolves the conflict of task "${task.title}": skip or remove it first, or let it finish.`;
@@ -2685,13 +2692,13 @@ export class TaskOrchestrator {
   }
 
   /** An explicit start's refusal, before it changes anything: its caller's answer, as a {@link TaskControlError}. */
-  private refuseClaim(taskId: string, admission: Admitted): void {
-    const refused = this.claimRefusal(taskId, admission);
+  private refuseClaim(taskId: string, admission: Admitted, opts: { revives?: boolean } = {}): void {
+    const refused = this.claimRefusal(taskId, admission, opts);
     if (refused) throw new TaskControlError(refused);
   }
 
   /** An explicit start's claim, once {@link refuseClaim} let it through: its spawn, or the refusal as a rejection. */
-  private claimed(taskId: string, admission: Admitted, continuation: Continuation | null = null, opts: { autoResumed?: boolean } = {}): Promise<void> {
+  private claimed(taskId: string, admission: Admitted, continuation: Continuation | null = null, opts: { autoResumed?: boolean; revives?: boolean } = {}): Promise<void> {
     const claimed = this.claim(taskId, admission, continuation, opts);
     return 'spawned' in claimed ? claimed.spawned : Promise.reject(new TaskControlError(claimed.refused));
   }
@@ -2706,9 +2713,9 @@ export class TaskOrchestrator {
    * held when it was asked for. A task already claimed is not claimed again:
    * there is nothing to start.
    */
-  private claim(taskId: string, admission: Admitted, continuation: Continuation | null = null, opts: { autoResumed?: boolean } = {}): Claim {
+  private claim(taskId: string, admission: Admitted, continuation: Continuation | null = null, opts: { autoResumed?: boolean; revives?: boolean } = {}): Claim {
     if (this.attempts.has(taskId)) return { spawned: Promise.resolve() };
-    const refused = this.claimRefusal(taskId, admission);
+    const refused = this.claimRefusal(taskId, admission, opts);
     if (refused) return { refused };
     return { spawned: this.attempts.start(this.store.get(taskId)!, { admission, continuation, autoResumed: opts.autoResumed === true }) };
   }

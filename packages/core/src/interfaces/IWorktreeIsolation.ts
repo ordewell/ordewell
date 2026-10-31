@@ -186,6 +186,7 @@ export interface IsolationTaskRecord {
    * repo it landed in, by Merge all or by hand — never by a checkout that only
    * stands on the integration branch (ADR-0054) — or can no longer be merged
    * there, its integration branch gone. What a merge gate waits for (ADR-0020).
+   * It goes with the record, so a revert asks git of each merge instead.
    */
   inHead?: true;
 }
@@ -291,11 +292,13 @@ export interface IsolationRun {
    */
   landedTasks?: Record<string, LandedTask>;
   /**
-   * What each landed task depended on when it landed, directly or not, by task
-   * id. Leaving the plan takes a task's dependencies with it, and those of the
-   * tasks that named it, while its merges stay on the branch, so this is what
-   * finds a dependent the plan has lost. A landed task the plan no longer has
-   * and this does not name refuses every revert of the run (ADR-0054).
+   * What each task depended on when its worktree was cut and when it landed,
+   * directly or not, by task id, across every attempt. A plan edit takes a link
+   * while a worktree stays cut from what it stood on, and leaving the plan takes
+   * a task's dependencies with it, and those of the tasks that named it, while
+   * its merges stay on the branch, so this is what finds a dependent the plan
+   * has lost, at work or landed. A landed task the plan no longer has and this
+   * does not name refuses every revert of the run (ADR-0054).
    */
   landedOn?: Record<string, string[]>;
   /**

@@ -239,6 +239,9 @@ function alsoLandedBy(run: IsolationRun, repoPath: string, taskId: string, merge
   return other === undefined ? undefined : (run.tasks[other] ?? run.landedTasks?.[other])?.title ?? other;
 }
 
+/** Every branch Ordewell makes is under here: an integration branch, a task's, or a kept one's. */
+const OWN_BRANCHES = 'refs/heads/ordewell/';
+
 const landedTask = ({ taskId, order, title, commit }: IsolationTaskRecord): LandedTask => ({ taskId, order, title, ...(commit ? { commit } : {}) });
 
 /**
@@ -966,22 +969,28 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
 
   /**
    * Whether `commit` has reached the user's branch: what merged means to a
-   * merge gate, a revert and a clear-up alike (ADR-0054). HEAD holding it is
-   * not enough. The integration branch checked out for review, by name or
-   * detached, or a branch cut from it, holds the work with no merge of it into
-   * anything. The branch the run started on is the user's, a fast-forward of
-   * it included, and speaks for a detached HEAD. Anywhere else git has to show
-   * a merge, which leaves the commit off HEAD's first-parent line.
+   * merge gate, a revert and a clear-up alike (ADR-0054). Git is asked every
+   * time and wherever the user stands now, since a saved fact goes with the
+   * record it is on and work merged stays merged from a checkout that does not
+   * show it. The branch the run started on is the user's, a fast-forward of it
+   * included. Any other branch, and a detached HEAD where the run has no such
+   * branch to speak for it, has to show a merge, which leaves the commit off
+   * its first-parent line: one that holds it on that line stands on the
+   * integration branch, as a review does. Ordewell's own branches are no one's.
    */
   private async inUserBranch(repo: IsolationRepo, commit: string): Promise<boolean> {
-    const current = (await this.tryGit(repo.root, ['symbolic-ref', '--short', '-q', 'HEAD'])).stdout.trim();
-    if (current === repo.integrationBranch) return false;
-    if (repo.baseBranch && (!current || current === repo.baseBranch)) {
-      return (await this.tryGit(repo.root, ['merge-base', '--is-ancestor', commit, `refs/heads/${repo.baseBranch}`])).ok;
+    if (repo.baseBranch && (await this.tryGit(repo.root, ['merge-base', '--is-ancestor', commit, `refs/heads/${repo.baseBranch}`])).ok) return true;
+    const sha = await this.tryGit(repo.root, ['rev-parse', '--verify', '-q', `${commit}^{commit}`]);
+    if (!sha.ok) return false;
+    const merge = sha.stdout.trim();
+    const holding = await this.tryGit(repo.root, ['for-each-ref', '--contains', merge, '--format=%(refname)', 'refs/heads/']);
+    const tips = holding.stdout.split(/\r?\n/).filter((ref) => ref && !ref.startsWith(OWN_BRANCHES));
+    if (!repo.baseBranch && !(await this.tryGit(repo.root, ['symbolic-ref', '-q', 'HEAD'])).ok && (await this.tryGit(repo.root, ['merge-base', '--is-ancestor', merge, 'HEAD'])).ok) tips.push('HEAD');
+    for (const tip of tips) {
+      const line = await this.tryGit(repo.root, ['rev-list', '--first-parent', tip]);
+      if (line.ok && !line.stdout.split(/\r?\n/).includes(merge)) return true;
     }
-    if (!(await this.tryGit(repo.root, ['merge-base', '--is-ancestor', commit, 'HEAD'])).ok) return false;
-    const [sha, line] = await Promise.all([this.tryGit(repo.root, ['rev-parse', '--verify', '-q', `${commit}^{commit}`]), this.tryGit(repo.root, ['rev-list', '--first-parent', 'HEAD'])]);
-    return sha.ok && line.ok && !line.stdout.split(/\r?\n/).includes(sha.stdout.trim());
+    return false;
   }
 
   /**
@@ -1409,8 +1418,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       for (const { record, merge } of landings) {
         const shared = alsoLandedBy(run, repo.path, record.taskId, merge);
         if (shared) return { ok: false, reason: 'no-own-merge', error: `Tasks "${record.title}" and "${shared}" are recorded as landed by the same merge, so Ordewell cannot tell whose work a revert of it would take. Nothing was reverted.` };
-        // Found merged stays merged from a checkout that no longer shows it; `inHead` over a branch that is gone says only that nothing is left to merge.
-        if ((await this.inUserBranch(repo, merge)) || (run.tasks[record.taskId]?.inHead && !(await this.integrationGone(repo)))) inBranch.push(revertCommand(repo, record, merge));
+        if (await this.inUserBranch(repo, merge)) inBranch.push(revertCommand(repo, record, merge));
         else if (!position.has(merge)) return { ok: false, reason: 'git', error: `The merge of task "${record.title}" is not on the integration branch in ${repoName(repo)}.` };
         const carried = await this.carriedBy(run, repo, merge);
         if (carried) return { ok: false, reason: 'no-own-merge', error: `The work of task "${carried}" landed through the merge of task "${record.title}", so reverting that merge would take it too, and it has no merge of its own to go with it. Nothing was reverted.` };
@@ -1486,15 +1494,15 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
         const left = `the integration branch of ${repoName(repo)} is not what the revert made in ${dir}, so the revert did not reach it`;
         return { outcome: 'failed', repo: repo.path, error: unsettled.length > 0 ? `${left}, and the integration branch could not be put back in ${unsettled.join(', ')}` : left };
       };
-      // Again here: a change staged since `landedLines` looked would go into the first commit, and a reset after a stop would take it.
-      const dirty = await this.integrationChanges(run, repo);
-      if (dirty.length > 0) {
-        const unsettled = await this.settleLanding(run);
-        const refused = uncommittedRefusal(dir, dirty);
-        return finish(unsettled.length > 0 ? { outcome: 'failed', error: `${refused} The integration branch could not be put back in ${unsettled.join(', ')}` } : { outcome: 'refused', reason: refused });
-      }
       let onto = tips[repo.path];
       for (const { record, merge } of read.lines.get(repo.path)!) {
+        // Before every commit, the persist after the last one included: a change staged since `landedLines` looked would go into this one.
+        const dirty = await this.integrationChanges(run, repo);
+        if (dirty.length > 0) {
+          const unsettled = await this.settleLanding(run);
+          const refused = uncommittedRefusal(dir, dirty);
+          return finish(unsettled.length > 0 ? { outcome: 'failed', error: `${refused} The integration branch could not be put back in ${unsettled.join(', ')}` } : { outcome: 'refused', reason: refused });
+        }
         const stopped = await this.revertLanding(dir, record, merge);
         if (!('commits' in stopped)) {
           // The index a stopped revert leaves behind is not on the branch, so no tip rolls it back.
@@ -1662,7 +1670,19 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     const holder = await this.worktreeHolding(repo, repo.integrationBranch);
     if (holder === null) return (await this.tryGit(repo.root, ['update-ref', `refs/heads/${repo.integrationBranch}`, tip, head])).ok;
     if (!sameDir(holder, this.integrationDir(run, repo))) return false;
+    if (reverts) return this.takeCommitsOff(holder, head, tip);
     return (await this.tryGit(holder, ['reset', '-q', '--hard', tip])).ok;
+  }
+
+  /**
+   * Take a revert's commits off the worktree they were made in, leaving what
+   * has been staged or changed there since where it is: a hard reset would take
+   * it (ADR-0054). Git refuses over a path the commits touched, and then the
+   * branch stays, recorded, until that change is cleared.
+   */
+  private async takeCommitsOff(dir: string, head: string, tip: string): Promise<boolean> {
+    await this.tryGit(dir, ['update-index', '-q', '--refresh']);
+    return (await this.tryGit(dir, ['read-tree', '-m', '-u', head, tip])).ok && (await this.tryGit(dir, ['reset', '-q', '--soft', tip])).ok;
   }
 
   private async isOneMergeOn(repo: IsolationRepo, head: string, tip: string): Promise<boolean> {

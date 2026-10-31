@@ -450,6 +450,8 @@ export class IsolationRunController {
   }
 
   private async prepareCwd(task: Task, run: IsolationRun, intent: PrepareIntent, readOnly: boolean): Promise<AttemptWorkspace> {
+    // As it is cut, not as it lands: a plan edit from here on drops the link, and the worktree still stands on the work (ADR-0054).
+    this.keepLandedOn(run, task.id);
     let result: PreparedTask;
     try {
       result = await this.isolation.prepare(task, run, intent, readOnly ? { readOnly } : {});
@@ -479,9 +481,13 @@ export class IsolationRunController {
     const run = this.run;
     if (!run) return 'failed';
     const outcome = await this.isolation.integrate(task, run, () => this.listener.changed(), commit).catch((): IsolationOutcome => 'failed');
-    if (outcome === 'merged') (run.landedOn ??= {})[task.id] = [...new Set([...run.landedOn?.[task.id] ?? [], ...this.landedOn(task.id)])];
+    if (outcome === 'merged') this.keepLandedOn(run, task.id);
     this.listener.changed();
     return outcome;
+  }
+
+  private keepLandedOn(run: IsolationRun, taskId: string): void {
+    (run.landedOn ??= {})[taskId] = [...new Set([...run.landedOn?.[taskId] ?? [], ...this.landedOn(taskId)])];
   }
 
   /** What a conflict repair's work shows (ADR-0015); git that cannot tell counts against it. */
