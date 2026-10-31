@@ -205,6 +205,13 @@ describe('which tasks a surface offers Revert on', () => {
   it('reads the same from a saved plan', () => {
     expect(isolationViewOfPlan({ isolation: { run: run({}, landings), resolvers: {} } })?.tasks.t).toEqual({ state: 'none', revertible: true });
   });
+
+  it('does not mark a task a resolver carried, whose work no merge of its own holds', () => {
+    const carried = { t: { '.': ['bbbb'] } };
+
+    expect(taskIsolationsOf({ ...run({ t: merged() }, landings), carried }).t).not.toHaveProperty('revertible');
+    expect(taskIsolationsOf({ ...run({}, landings), carried }).t).toBeUndefined();
+  });
 });
 
 describe('taskIsolationOf', () => {

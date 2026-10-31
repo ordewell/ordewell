@@ -17,7 +17,8 @@ Owns structural CRUD (`add`/`remove`/
 `update`), status mutations (`markCompleted`/`markFailed`/
 `markInProgress`/`retry`), the named run-preparation op (`resetForRun` — flip
 AI tasks to approved, preserving completed ones unless the plan was freshly
-generated), runner-set validation, and the `rebuild` internal seam. Completed
+generated; it is what gives a failed task a fresh chance, which a load never
+does), runner-set validation, and the `rebuild` internal seam. Completed
 and failed are read from `task.status` alone — there is no second record — so
 `isCompleted`, `completedCount`, `isAllComplete` and the scheduler's
 dependency checks always agree. The store owns its task objects: `load` copies
@@ -1382,7 +1383,9 @@ dependents, which then start. A run with nothing running and only failed and blo
 counting completed, failed and blocked; a retry of a task in it continues that
 run (`TaskOrchestrator.awaitsResume`), and a planner edit made meanwhile is
 reconciled into it rather than reloaded over it, leaving the failed task failed:
-an edit is not a retry. A task at work — force-started, or waiting on the user —
+an edit is not a retry. A load or an edit outside a run leaves a failure and its
+block too; a task saved in progress loads failed, as interrupted, since nothing
+is running it (`failInterruptedTasks`, ADR-0053). A task at work — force-started, or waiting on the user —
 is never blocked. A usage-limit pause with a reset holds the whole run until it;
 one without a time keeps only its own runner's tasks from starting, and a
 merge gate keeps the run waiting; neither is a block. A *Loop*'s check
@@ -1432,7 +1435,9 @@ dependents. Answered only by the user, through `answerEscalation` on the
 *Command seam*, which derives the list afresh, refuses a stale id, and
 dispatches to the existing command for that wait, so it adds no authority. Every
 status update carries the list whole, and it is in the *Run view*. A surface's
-list of them is the *inbox*.
+list of them is the *inbox*. A reload keeps what is saved: a failed task, an
+interrupted one, a checkpoint with no runner left, but no hold, runner approval
+or parked start, which stay in memory.
 *Avoid:* "notification" (how one might reach a person, not what it is);
 "alert", "ticket"; "pending decision" (a decision the maintainers have not
 made); "blocked" for one — that is a dependency term, and a blocked task is not
@@ -1822,8 +1827,8 @@ check. Its verdict is its exit status, handed to `VerdictEngine` as the
 attempt's evidence in place of a `task_complete` call: every step exiting 0
 passes. The planner adds one with `edit_plan` or `submit_plan`, or adds it and
 starts it at once with `run_script`; the user consents to the body as written,
-on the approval card or through the *Effect allowlist*, and a changed body needs
-consent again. Surfaces draw it as an ops task with its body in place of a
+on the approval card or through the *Effect allowlist*, or by having *Autorun*
+on in Full, which asks nobody, and a changed body needs consent again. Surfaces draw it as an ops task with its body in place of a
 prompt, read-only. The planner writes one for an effect it can state as exact
 commands (a push, one setting on a cloud resource); an effect that needs
 judgment is an ops task.
@@ -3022,16 +3027,23 @@ copying the user's settings and clearing the guards' memory; the others
 continue the run before. Never inferred from what else is in flight: the user's
 Execute while a supervisor's `merge_all` still merges is the user's.
 
-**Autorun** — the **Run setting** that starts a plan when the planner submits
-it, approved as if the user had pressed Execute; off by default, set in
+**Autorun** — the **Run setting** that starts a plan when the reply that
+submits it ends, approved as if the user had pressed Execute; off by default, set in
 `/settings` (or `ordewell autorun` headless; ADR-0030). The planner skips the outline gate but still asks
 clarifying questions. It fires on a submission only — never on a session's load
 or on the switch being turned on while a plan waits — and starts ops tasks too.
+Work already live, a task the planner started with `run_task` in that reply,
+joins it as one scheduled run in Full; in Guarded it does not, and a notice says why, as it
+does whenever autorun cannot start a plan. It skips only a scheduled run already
+going.
 Independent of the Supervisor level and of Full/Guarded. Recorded as `run_plan`
-with autorun as who asked. With autorun on and Full, the planner may also start
-a task it added after the plan was approved, when it asks; both are read at the
-start. A task the planner adds in the user's turn is approved as its edit
-commits when autorun is on, in Full and in Guarded alike, read as it commits.
+with autorun as who asked. With autorun on and Full nobody is asked: a planner
+turn, or a supervisor at Act, may start anything, a script task or `run_script`
+included, on a first plan as on an approved one, and such a start makes the plan
+approved; both settings are read at each start. An edit starts nothing by
+itself. A task the planner adds in the user's turn is approved as its edit
+commits when autorun is on, in Full and in Guarded alike, read as it commits; a
+script task only where `run_script` would run it unasked.
 *Avoid:* "auto-execute", "auto-approve" (approval is a consequence, not the
 setting), "autopilot".
 
@@ -3126,6 +3138,8 @@ plan, kept by `ApprovalRecord` and read through `Session.isApproved`); a start f
 for a task outside that set, and the scheduler starts nothing outside it
 either (ADR-0035), so a task the planner added since *waits for approval to
 start*. A start the seam lets through is approved before it acts.
+Under *Autorun* in Full a planner turn or an Act supervisor needs none of this,
+and its start makes the plan approved.
 A task an Act supervisor adds is approved as its edit commits. A start a
 planner turn asks for after editing that task in the same reply goes through
 the seam at once, against the plan as edited (*Tool commit*); what it hands

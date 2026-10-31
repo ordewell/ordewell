@@ -9,7 +9,7 @@ import { subcommandOf } from '../gitExec';
 import type { IsolationRun, IWorktreeIsolation } from '../../interfaces/IWorktreeIsolation';
 import type { Task } from '../../models/Task';
 import { fakeConfig } from '../../testing';
-import { taskIsolationOf } from '../isolationRecord';
+import { taskIsolationOf, taskIsolationsOf } from '../isolationRecord';
 import { IsolationRunController } from '../IsolationRunController';
 import { revertScope } from '../taskRevert';
 import { fakeNotification } from './sessionTestKit';
@@ -681,7 +681,7 @@ describe('the revert\'s place on the queue', () => {
     });
 
     expect(seen).toEqual([
-      { landing: { taskId: t.id, tips: { '.': tip }, reverts: 1 }, reverted: 'Merge: Add greeting' },
+      { landing: { taskId: t.id, tips: { '.': tip }, reverts: { '.': 1 } }, reverted: 'Merge: Add greeting' },
       { taskIds: [t.id], landing: undefined, record: undefined, flagged: true },
     ]);
   });
@@ -724,13 +724,40 @@ describe('a revert a crash interrupted', () => {
     git(dir, 'commit', '-q', '--allow-empty', '-m', 'one too many');
     git(dir, 'commit', '-q', '--allow-empty', '-m', 'two too many');
     const moved = git(root, 'rev-parse', integration);
-    run.landing = { taskId: t.id, tips: { '.': tip }, reverts: 1 };
+    run.landing = { taskId: t.id, tips: { '.': tip }, reverts: { '.': 1 } };
 
     await isolation().pruneOrphans(run);
 
     expect(git(root, 'rev-parse', integration)).toBe(moved);
     expect(run.landing).toBeDefined();
     expect(await iso.mergeIntoCheckedOut(run)).toMatchObject({ outcome: 'blocked', blocked: [{ reason: 'partial-landing' }] });
+  });
+
+  it('holds each repo to the reverts it had to make, not to the most any repo did', async () => {
+    const root = tempDir();
+    initRepo(join(root, 'api'));
+    initRepo(join(root, 'web'));
+    const iso = isolation();
+    const run = await iso.startRun(root);
+    const [api, web] = run.repos;
+    const first = task(1, 'Touch both');
+    const second = task(2, 'Touch api again');
+    await land(iso, run, first, { 'api/one.txt': '1\n', 'web/one.txt': '1\n' });
+    await land(iso, run, second, { 'api/two.txt': '2\n' });
+    const [apiTip, webTip] = [git(root, '-C', 'api', 'rev-parse', api.integrationBranch), git(root, '-C', 'web', 'rev-parse', web.integrationBranch)];
+    const saved = structuredClone(run);
+    await iso.revert(run, [first.id, second.id], { ...nothingInTheWay, persist: () => Object.assign(saved, structuredClone(run)) });
+    expect(saved.landing?.reverts).toEqual({ api: 2, web: 1 });
+    // A writer outside the queue: one revert on web, and a commit no revert made.
+    git(join(root, '.ordewell', 'worktrees', run.id, 'integration', 'web'), 'commit', '-q', '--allow-empty', '-m', 'Work of the user');
+    const moved = git(root, '-C', 'web', 'rev-parse', web.integrationBranch);
+
+    await isolation().pruneOrphans(saved);
+
+    expect(git(root, '-C', 'api', 'rev-parse', api.integrationBranch)).toBe(apiTip);
+    expect(git(root, '-C', 'web', 'rev-parse', web.integrationBranch)).toBe(moved);
+    expect(moved).not.toBe(webTip);
+    expect(saved.landing).toBeDefined();
   });
 });
 
@@ -1002,6 +1029,17 @@ describe('work a resolver carried, after the carried task landed on its own', ()
     expect(result).toMatchObject({ outcome: 'refused', reason: expect.stringContaining('no merge of its own') });
     expect(run.tasks[conflicted.id]?.status).toBe('merged');
     expect(git(root, 'show', `${run.repos[0].integrationBranch}:shared.txt`)).toBe('resolved');
+  });
+
+  it('offers no Revert on the carried task, which core would always refuse', async () => {
+    const root = initRepo(tempDir(), { 'shared.txt': 'base\n' });
+    const iso = isolation();
+    const run = await iso.startRun(root);
+    const { conflicted } = await carriedAndLandedAgain(iso, run);
+
+    expect(run.landings?.[conflicted.id]).toBeDefined();
+    expect(taskIsolationsOf(run)[conflicted.id]).toMatchObject({ state: 'integrated' });
+    expect(taskIsolationsOf(run)[conflicted.id]).not.toHaveProperty('revertible');
   });
 });
 

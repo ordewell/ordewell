@@ -322,9 +322,9 @@ describe('a reload', () => {
     const env = setup();
     env.load(tasks);
 
-    // A load gives a failed task a fresh chance (`PlanStore.load`), so its wait is one that does not survive, and its dependent is no longer blocked.
-    expect(taskOf(env.session, 't3')?.status).toBe('pending');
-    expect(env.ids()).toEqual(['input:t1:2', 'checkpoint:t2:2']);
+    // The failed task's dependent is blocked, so its cause alone is listed.
+    expect(taskOf(env.session, 't3')?.status).toBe('failed');
+    expect(env.ids()).toEqual(['input:t1:2', 'checkpoint:t2:2', 'failed:t3:2']);
     expect(env.session.runSnapshot().escalations).toEqual(env.session.escalations());
   });
 

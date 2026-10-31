@@ -194,9 +194,8 @@ export default function TaskLogApp() {
   };
 
   // Spinner only while a turn is open, or a subagent outlives it; a quiet task's line is the static marker.
-  // A script runs no model, so there is nothing for the line to say.
   const activity = ((): TaskActivity | null => {
-    if (!status || script || !header) return null;
+    if (!status || !header) return null;
     const archived = status.attempts.length > 0 && status.attempt < Math.max(...status.attempts);
     return taskActivity({ blocks, turnStartedAt: status.turnStartedAt ?? undefined, working: header.working, lastTurnEnd: status.lastTurnEnd ?? undefined, archived }, { status: status.taskStatus, idleSince: status.idleSince, awaitingApproval: state?.kind === 'approval' ? 1 : 0 });
   })();

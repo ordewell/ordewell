@@ -40,6 +40,12 @@ describe('the status row as the activity line', () => {
     expect(frame(state)).toContain('Running Read(README.md)…');
   });
 
+  it('names a script task\'s running step, with no stop key: it has no turn to stop', () => {
+    const state = opened([{ type: 'script_run', argv: ['npm', 'test'] }], { type: 'script', assignedRunner: undefined });
+    expect(frame(state)).toContain('⠋ Running Run(npm test)…');
+    expect(frame(state)).not.toContain('ctrl-x to stop');
+  });
+
   it('is static once the task is quiet, worded as the plan pane words it', () => {
     const state = opened([turn, { type: 'thinking_delta', text: 'Hmm' }], { idleSince: '2026-08-18T00:00:00.000Z' });
     expect(activityRows(state)).toEqual([expect.stringMatching(/^~ Stalled/)]);

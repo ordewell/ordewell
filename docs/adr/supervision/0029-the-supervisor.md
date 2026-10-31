@@ -187,7 +187,7 @@ the same seam through its own tool definitions.
 
 | tool | does |
 |---|---|
-| `run_plan` | start the approved plan |
+| `run_plan` | start the approved plan, or any plan under Full with autorun ([ADR-0030](0030-global-run-settings.md)); with work live, make it one scheduled run |
 | `run_task` | start one ready task; refuses one whose dependencies or merge gate are not met, and says which |
 | `stop_task` | stop one task, denying its open approvals as stop does |
 | `stop_run` | stop every running task, keep the plan |
@@ -280,8 +280,9 @@ supervisor's judgement on the rest.
   follow plan approval in Full. An unapproved task never starts, at any level,
   with one exception ([ADR-0030](0030-global-run-settings.md)): with autorun on,
   a plan the planner submits is approved and started as the user's standing
-  instruction, and with autorun on and Full the planner may also start a task it
-  added after the plan was approved.
+  instruction, and with autorun on and Full a planner turn, or a supervisor at
+  Act, may start anything, on a first plan as on an approved one, which makes the
+  plan approved.
   `merge_all`, `skip_task` and `answer_checkpoint` are refused: the user is in
   the conversation, and presses Merge all, skips the task or answers its
   checkpoint from the card themselves. A skip decides that
@@ -302,7 +303,8 @@ and then starts the task as a start of any approved task does, whether or not a
 run is in progress: nothing else would start it once the run has ended. The
 edit's approval is what lets the start through, so below Act the start is
 refused in the words of the level, and a task the plan already holds that the
-user has not approved stays refused. A skip of a task the same edit adds is
+user has not approved stays refused, unless autorun and Full are both on
+([ADR-0030](0030-global-run-settings.md)). A skip of a task the same edit adds is
 refused instead. This is a deliberate choice, and it carries the risk
 #23's comment describes: an instruction injected into something the planner
 read — an issue body, a fetched page, a task's output — can become an ops task
@@ -573,6 +575,11 @@ until #30 exists.
 - **Rejected: let `answer_approval` allow.** It widens a task's mode after
   the plan set it (ADR-0001, #92). Deny or escalate keeps the plan the source
   of truth.
+- **Dropped: the supervisor stays within what the user approved under Full
+  with autorun too.** It was the rule until 2026-10-31. A task started by hand on
+  a first plan that then failed woke a supervisor at Act which could do nothing
+  but tell a user who had asked not to be needed. At Watch and Off nothing
+  changes, and under Guarded or with autorun off it still holds.
 - **Rejected: added tasks under Act wait for the user.** Safer against
   injection, but Act then stalls at every replan. Recorded as a choice for #23
   to revisit, not as safe.
@@ -696,4 +703,5 @@ until #30 exists.
 - 2026-10-25 — Mark complete and Mark not done on an AI or script task are refused while a run could advance the task and otherwise need the user's explicit yes, in both directions; a manual task's sign-off is never held up by a run.
 - 2026-10-26 — a planner's edit commits as its `edit_plan` call answers (ADR-0022, P2), so a start asked for after it goes through the seam at once against the plan as edited; the starts deferred behind a held edit, their replay and their "not done" notices are gone.
 - 2026-10-26 — the run update at the run's end says whether its landed work is merged or waits for Merge all, and a Merge all after the plan's last isolated run closed merged is answered ok as nothing to merge, recorded nowhere, across a restart too (`mergedRun`). Seen live: an Act supervisor woken after the automatic Merge all at the run's end called `merge_all`, and the timeline said "refused: This plan has no isolated run".
+- 2026-10-31 — under Full with autorun a supervisor at Act is refused nothing for a plan or task the user has not approved, and its start makes the plan approved ([ADR-0030](0030-global-run-settings.md)); Watch and Off do not change.
 - 2026-10-31 — a supervisor's start or skip of a check between rounds is refused only while something will run it (ADR-0045 L7).

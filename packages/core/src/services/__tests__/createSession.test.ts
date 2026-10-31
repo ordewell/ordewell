@@ -643,11 +643,12 @@ describe('planState.tasks — written from the store, never shared with it', () 
   }
 
   it('does not let an edit to the plan object reach the store, or the store reach the caller\'s tasks', () => {
-    const input = [createTask({ id: 't1', order: 1, title: 'First', prompt: 'p', status: 'failed' })];
+    // A status only a file from before ADR-0034 holds: the load rewrites it, on its own copy.
+    const input = [createTask({ id: 't1', order: 1, title: 'First', prompt: 'p', status: 'blocked' as Task['status'] })];
     const session = makeSession();
     session.loadPlan(planOf(input), 'Test', '/repo');
 
-    expect(input[0].status).toBe('failed');
+    expect(input[0].status).toBe('blocked');
     expect(session.planState!.tasks[0].status).toBe('pending');
 
     session.planState!.tasks[0].status = 'completed';

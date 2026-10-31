@@ -183,7 +183,7 @@ export interface IsolationTaskRecord {
   readOnly?: true;
   /**
    * Set once the task's landed work is merged into the user's branch in every
-   * repo it changed, by Merge all or by hand — never by a checkout that only
+   * repo it landed in, by Merge all or by hand — never by a checkout that only
    * stands on the integration branch (ADR-0054) — or can no longer be merged
    * there, its integration branch gone. What a merge gate waits for (ADR-0020).
    */
@@ -201,11 +201,11 @@ export interface IsolationLanding {
   /** Keyed by repo path. */
   tips: Record<string, string>;
   /**
-   * Set when this is a revert rather than a landing (ADR-0054): the most revert
-   * commits it can put on any one tip, which is what a rollback may prove it
-   * made and take off again.
+   * Set when this is a revert rather than a landing (ADR-0054): by repo path,
+   * the most revert commits it can put on that repo's tip, which is what a
+   * rollback may prove it made and take off again.
    */
-  reverts?: number;
+  reverts?: Record<string, number>;
 }
 
 /**

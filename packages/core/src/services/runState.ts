@@ -59,9 +59,9 @@ export function nextRunState(state: RunState, event: RunEvent): RunState {
     case 'stop':
       return IDLE_RUN;
     case 'load':
-      // A held or ended run belongs to the plan it was in, whose failed tasks
-      // a load gives a fresh chance: kept, the next retry would restart a run
-      // nobody started, and a usage-limit move would arm the scheduler.
+      // A held or ended run belongs to the plan it was in, not to the load:
+      // kept, the next retry would restart a run nobody started, and a
+      // usage-limit move would arm the scheduler.
       return state.kind === 'scheduling' ? state : IDLE_RUN;
     case 'continue':
       if (state.kind === 'endedOnFailure') return { kind: 'scheduling' };

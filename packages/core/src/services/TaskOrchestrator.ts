@@ -903,13 +903,14 @@ export class TaskOrchestrator {
    * reload would clear the holds and the review approval, so a task the user
    * cancelled would be re-armed by the tick that follows, and a retry after
    * the edit would run the failed task alone, its failure lost. Otherwise it
-   * is the plan the next run starts from, with what waits on a usage-limit
-   * reset still waiting: an edit between runs is not the user starting over.
+   * is the plan the next run starts from, with a failed task still failed and
+   * what waits on a usage-limit reset still waiting: an edit between runs is
+   * not the user starting over.
    */
   adoptEdit(tasks: readonly Task[], planRunners: RunnerId[]): void {
     if (this.isRunning || this.awaitsResume) return this.reconcilePlan(tasks, planRunners);
     this.loadPlan(tasks, planRunners, true);
-    this.store.resetForRun({ keepScheduledResumes: true });
+    this.store.resetForRun({ edited: true });
   }
 
   /**
@@ -924,8 +925,8 @@ export class TaskOrchestrator {
    * input it waits at — adopting the snapshot's "pending" would offer the
    * scheduler work a runner is already doing.
    *
-   * A failed task stays failed, unlike a plan load's fresh chance: an edit is
-   * not a retry, and the tasks it blocks wait for that retry (ADR-0034).
+   * A failed task stays failed: an edit is not a retry, and the tasks it blocks
+   * wait for that retry (ADR-0034).
    */
   reconcilePlan(newTasks: readonly Task[], planRunners: RunnerId[] = [...DEFAULT_RUNNERS]): void {
     const before = this.store.planTasks;
@@ -951,7 +952,7 @@ export class TaskOrchestrator {
       }
     }
 
-    this.store.load(adopted, planRunners, { keepFailed: true });
+    this.store.load(adopted, planRunners);
     this.planEdited(before);
     // An edit may have taken the last task waiting on a reset out of the plan, or ended its pause.
     this.limitPauses.recount();

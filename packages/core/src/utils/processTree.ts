@@ -63,6 +63,8 @@ const ownGroups = new Map<number, ChildProcess>();
 let hostTeardownHooked = false;
 /** Told of each runner group as it starts, so a session lease records it at once (ADR-0049). */
 const groupStartListeners = new Set<() => void>();
+/** What else goes with the host: see {@link onHostTeardown}. */
+const teardownListeners = new Set<() => void>();
 
 /**
  * Start a runner as the leader of a new process group, so {@link killTree}
@@ -107,6 +109,20 @@ export function runnerGroups(): number[] {
 export function onRunnerGroupStarted(listener: () => void): () => void {
   groupStartListeners.add(listener);
   return () => { groupStartListeners.delete(listener); };
+}
+
+/**
+ * Stop something else as the host goes, with its runner groups but not among
+ * them: {@link runnerGroups} never names it, so no lease is held by it. Here
+ * rather than in a hook of the caller's, because two signal hooks would each
+ * read the other as the host's own handler, and neither would end the host.
+ * The returned function stops it being called. Nothing runs for a host killed
+ * outright, as for the groups.
+ */
+export function onHostTeardown(stop: () => void): () => void {
+  teardownListeners.add(stop);
+  hookHostTeardown();
+  return () => { teardownListeners.delete(stop); };
 }
 
 /** Whether a process answers to `pid`: one owned by another user, which refuses the signal, is alive too. */
@@ -160,6 +176,10 @@ function hookHostTeardown(): void {
       try { process.kill(-pgid, 'SIGTERM'); } catch { /* already gone */ }
     }
     ownGroups.clear();
+    for (const stop of teardownListeners) {
+      try { stop(); } catch { /* already gone */ }
+    }
+    teardownListeners.clear();
   };
   process.on('exit', stopAll);
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {

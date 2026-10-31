@@ -102,12 +102,12 @@ round *r* and round *r* + 1 the body runs once.
   cleared from the task (they stay in its attempt's log), the round counted
   in `loopRound`. The round is saved on the check, and the loop's state is
   read from statuses at every tick, so a reload or a daemon restart resumes
-  mid-round: a plan load and a new run keep a check between rounds failed
-  rather than giving it the fresh chance a failed task gets, so its body runs
-  first. The rounds take the one start rule: approval, holds, the Merge-all
-  exclusion of ops work, usage limits and the merge gate apply to them as to
-  any start, a task not approved waits for approval (see *Consent*), and a Stop
-  ends a round's running attempt as it ends any.
+  mid-round: a plan load changes no check, and a new run keeps one between
+  rounds failed rather than giving it the fresh chance a failed task gets, so
+  its body runs first. The rounds take the one start rule: approval, holds, the
+  Merge-all exclusion of ops work, usage limits and the merge gate apply to them
+  as to any start, a task not approved waits for approval (see *Consent*), and a
+  Stop ends a round's running attempt as it ends any.
   They run however the check was started. A check that fails a round in a run
   the scheduler is not driving, started by `run_task` or a force start, is
   carried on by that run (`TaskOrchestrator.carriedLoops`): each tick starts
@@ -143,7 +143,7 @@ round *r* and round *r* + 1 the body runs once.
   the loop is retried and passes. A carried loop stops the same way: its run
   settles as a lone start does, and a retry that passes resumes the loop,
   unless a Stop or a reload came first. A retry of the check — the user's, a
-  `rearm`, a force start after a failure, a fresh chance on load or Execute —
+  `rearm`, a force start after a failure, the fresh chance Execute gives —
   starts a new set of rounds: `loopRound` goes, and the body waits for the
   check again. The loop's own run of the check is no retry: the retry limit
   and the identical-retry guard (ADR-0029) count none of its rounds. A resume
@@ -284,4 +284,5 @@ as check or body; a user editing a loop's `loop` field by hand from a surface.
 - 2026-10-22 — implemented handoffs in both loop directions and scoped reads between check and body (step 3, L1; ADR-0047, #120).
 - 2026-10-26 — the planner prompt and the diagnose skill add a loop only for an explicit iterate-until goal or a specific acceptance gate, not for routine validation.
 - 2026-10-30 — #39 closed: a check is a task in the plan, so no declared check is planned.
+- 2026-10-31 — a load no longer starts a failed check's rounds over; Execute and a retry do (L5, L7; [ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
 - 2026-10-31 — a loop's rounds run however its check was started, in a run carrying on the loop alone until it ends or a Stop (L5); a start of a check nothing will run keeps the count, and the refusal stands only while something will (L7).

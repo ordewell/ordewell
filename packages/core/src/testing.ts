@@ -506,7 +506,7 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
     const landed = await this.readLanded(run, taskIds);
     if (!landed.ok) return { outcome: 'failed', error: landed.error };
     if (landed.inBranch.length > 0) return { outcome: 'in-branch', commands: landed.inBranch };
-    run.landing = { taskId: taskIds[0], tips: {}, reverts: taskIds.length };
+    run.landing = { taskId: taskIds[0], tips: {}, reverts: {} };
     watch.persist();
     delete run.landing;
     for (const id of taskIds) {

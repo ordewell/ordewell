@@ -163,7 +163,7 @@ export function hitLimit(s: FakeRunnerSession): void {
 export type Env = Awaited<ReturnType<typeof supervised>>;
 
 /** The user changes run settings in this session, as a surface does: saved, then applied to the session's run. */
-export function changeSettings(env: Env, changes: Partial<GlobalRunSettings>): void {
+export function changeSettings(env: Pick<Env, 'session' | 'settings'>, changes: Partial<GlobalRunSettings>): void {
   Object.assign(env.settings, changes);
   env.session.applyRunSettings(changes);
 }

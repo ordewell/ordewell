@@ -168,6 +168,8 @@ export interface ExecutionHost {
   waitsForApproval(taskId: string): boolean;
   /** A start the user consented to approves these tasks, before it acts. */
   approve(taskIds: readonly string[]): void;
+  /** A start under Full with autorun makes the plan approved, as autorun's own start does, so nothing later in the session is refused for it (ADR-0030). */
+  approvePlan(): void;
   /** Full autonomy: starts follow plan approval without a question. */
   autonomous(): boolean;
   /** The user's autorun setting, as it is now (ADR-0030). */
@@ -330,8 +332,9 @@ const SKIP_IS_USERS = 'Skipping a task is the user\'s in their own turn: they ar
 
 const SCRIPTS_ARE_THE_PLANNERS = 'run_script is the planner\'s: a person adds a script task to the plan and starts it themselves.';
 
-const NO_PLAN_FOR_SCRIPT = 'There is no plan yet, so there is nowhere to add a script task. Submit a plan that holds it: the user approves it by executing the plan.';
+const NO_PLAN_FOR_SCRIPT = 'There is no plan yet, so there is nowhere to add a script task. Submit a plan that holds it.';
 
+const AUTORUN_JOINS_NOTHING = 'tasks are already running, and in Guarded autorun takes no plan into work under way. Run the plan yourself to start the rest.';
 
 const OVERRIDE_LANDING = 'Another manual override is landing: wait for it to finish, then start or override again.';
 
@@ -505,6 +508,7 @@ export class ExecutionCommands {
     // Recorded before it acts too because the scheduler starts only approved tasks (ADR-0035), and a retry
     // or run it hands over is started by the scheduler.
     this.host.approve(this.consented(command, actor, located, prepared.approves));
+    if (STARTS.has(command.command) && this.startsUnattended(actor)) this.host.approvePlan();
     let acted: Acted;
     try {
       acted = await prepared.act(stopped);
@@ -530,7 +534,7 @@ export class ExecutionCommands {
    * running, when its end is owed to the planner as a report (ADR-0037, R2).
    */
   private async runScript(command: RunScript, actor: ExecutionActor, signal?: AbortSignal): Promise<CommandOutcome> {
-    if (!this.host.tasks()) return this.refuse(command, actor, undefined, NO_PLAN_FOR_SCRIPT);
+    if (!this.host.tasks()) return this.refuse(command, actor, undefined, `${NO_PLAN_FOR_SCRIPT} ${this.startsUnattended(actor) ? 'It starts when your reply ends.' : 'The user approves it by executing the plan.'}`);
     const consent = this.scriptConsent(actor, scriptBodyOf({ type: 'script', commands: command.commands, script: command.script, timeoutMs: command.timeoutMs }));
     if (consent.kind === 'refuse') return this.refuse(command, actor, undefined, consent.reason);
     const draft = this.host.draftScript(command, actor);
@@ -547,7 +551,10 @@ export class ExecutionCommands {
     try {
       this.host.addScript(draft.task, actor);
       how = consent.kind === 'ask' ? await this.askForScript(command, actor, draft.task, admission) : consent.how;
-      if ('by' in how) this.host.approve([draft.task.id]);
+      if ('by' in how) {
+        this.host.approve([draft.task.id]);
+        if (this.startsUnattended(actor)) this.host.approvePlan();
+      }
     } finally {
       admission.release();
     }
@@ -646,10 +653,10 @@ export class ExecutionCommands {
    * Who may run a script without the mandate (#23), as ADR-0035's table says.
    * An effect the user's allowlist covers runs in every row but one, and is
    * recorded by its rule. In the user's turn: otherwise autorun in Full runs
-   * it (ADR-0030), and failing that they are asked on the card. The
-   * supervisor's level decides for it first: at Watch it is refused, to
-   * suggest it instead, covered or not; at Act it runs, the task it adds
-   * being approved (ADR-0029).
+   * it, on a first plan as on an approved one (ADR-0030), and failing that
+   * they are asked on the card. The supervisor's level decides for it first:
+   * at Watch it is refused, to suggest it instead, covered or not; at Act it
+   * runs, the task it adds being approved (ADR-0029).
    */
   private scriptConsent(actor: ExecutionActor, body: ScriptBody | null): { kind: 'allow'; how: ScriptConsent } | { kind: 'ask' } | { kind: 'refuse'; reason: string } {
     // A rule the user wrote covers the whole of a `commands` body, or nothing does.
@@ -665,22 +672,26 @@ export class ExecutionCommands {
         return level.kind === 'allow' ? { kind: 'allow', how: covered() ?? { by: 'act' } } : level;
       }
       case 'planner-turn': {
-        const how: ScriptConsent | undefined = covered() ?? (this.addedMayStart(actor) ? { by: 'autorun' } : undefined);
+        const how: ScriptConsent | undefined = covered() ?? (this.startsUnattended(actor) ? { by: 'autorun' } : undefined);
         return how ? { kind: 'allow', how } : { kind: 'ask' };
       }
     }
   }
 
   /**
-   * Of the tasks a planner edit in the user's turn wrote, the ones autorun
-   * approves as the edit commits: all of them, but for a script task, which
-   * runs unasked only where `run_script` would run it unasked (ADR-0035), so
-   * under Guarded it waits for the user unless their effect allowlist covers
-   * it. Its row shows the body verbatim, and starting it is their consent.
+   * Of the tasks a planner edit wrote, the ones autorun approves as the edit
+   * commits. Under Full every one of them, a rewritten script's new body
+   * included, for the user's turn and a supervisor at Act alike. Otherwise only
+   * in the user's turn, and all but a script task, which runs unasked only
+   * where `run_script` would run it unasked (ADR-0035), so under Guarded it
+   * waits for the user unless their effect allowlist covers it. Its row shows
+   * the body verbatim, and starting it is their consent.
    */
-  autorunApproves(written: readonly Readonly<Task>[]): string[] {
-    const turn: ExecutionActor = { kind: 'planner-turn' };
-    return written.filter((t) => t.type !== 'script' || this.scriptConsent(turn, scriptBodyOf(t)).kind === 'allow').map((t) => t.id);
+  autorunApproves(actor: ExecutionActor, written: readonly Readonly<Task>[]): string[] {
+    if (!this.host.autorun()) return [];
+    if (this.startsUnattended(actor)) return written.map((t) => t.id);
+    if (actor.kind !== 'planner-turn') return [];
+    return written.filter((t) => t.type !== 'script' || this.scriptConsent(actor, scriptBodyOf(t)).kind === 'allow').map((t) => t.id);
   }
 
   /**
@@ -710,23 +721,25 @@ export class ExecutionCommands {
    * The tasks a start approves, read from the plan as it stands at the
    * command's last check. Autorun starts a plan as the user's standing
    * instruction, so its start approves what it runs as the user's does; so
-   * does a start under its exception for added tasks. A yes on the card
-   * approves the tasks the card named, and no others.
+   * does a start under Full with autorun. A yes on the card approves the tasks
+   * the card named, and no others.
    */
   private consented(command: ExecutionCommand, actor: ExecutionActor, located: Located | undefined, named: readonly Located[] = []): string[] {
     if (!STARTS.has(command.command)) return [];
     if (this.asksToApprove(actor)) return named.flatMap(({ task }) => withSubtasks(task));
-    if (actor.kind !== 'user' && actor.kind !== 'autorun' && !this.addedMayStart(actor)) return [];
+    if (actor.kind !== 'user' && actor.kind !== 'autorun' && !this.startsUnattended(actor)) return [];
     return located ? withSubtasks(located.task) : this.all().map(({ task }) => task.id).filter((id) => !this.carded.has(id));
   }
 
   /**
-   * With autorun on and Full, a planner turn may start a task added after the
-   * user approved the plan (ADR-0030). Read at each start, so switching either
-   * off stops it at once; never on a plan the user has not approved.
+   * With autorun on and Full, nobody is asked: a planner turn, or a supervisor
+   * its level lets act, may start anything, on a first plan as on an approved
+   * one (ADR-0030). Read at each start, so switching either off stops it at
+   * once. Below Act the level has refused the call before this is read.
    */
-  private addedMayStart(actor: ExecutionActor): boolean {
-    return actor.kind === 'planner-turn' && this.host.autorun() && this.host.autonomous() && this.host.planApproved();
+  private startsUnattended(actor: ExecutionActor): boolean {
+    const acts = actor.kind === 'planner-turn' || (actor.kind === 'supervisor' && this.supervisor(actor.level, 'run_plan').kind === 'allow');
+    return acts && this.host.autorun() && this.host.autonomous();
   }
 
   /**
@@ -817,17 +830,21 @@ export class ExecutionCommands {
     const live = all.filter(({ task }) => this.host.running(task.id));
     if (this.host.hasLiveWork()) {
       const waiting = all.filter(({ task }) => this.host.waitsForApproval(task.id) && !this.carded.has(task.id));
-      // The user's Execute approves what waits rather than restarting the run under way; counted before the approval it records.
-      if (actor.kind === 'user') return { act: async () => ({ message: await this.host.joinRun(waiting.length, 0) }) };
+      // Autorun under Guarded stays out of it: its join would approve a script task the user was never shown (ADR-0035).
+      if (actor.kind === 'autorun' && !this.host.autonomous()) return { refusal: AUTORUN_JOINS_NOTHING };
+      // The user's Execute, and autorun for them, approves what waits rather than restarting the run under way; counted before the approval it records.
+      if (actor.kind === 'user' || actor.kind === 'autorun') return { act: async () => ({ message: await this.host.joinRun(waiting.length, 0) }) };
       // Tasks started one by one are no scheduled run, so nothing starts their dependents: this call makes them one.
-      // It approves nothing, and the scheduler starts only approved tasks, so it grants what run_task already does (ADR-0035).
-      if (!this.host.planApproved()) {
+      // It approves nothing, and the scheduler starts only approved tasks, so it grants what run_task already does (ADR-0035);
+      // under Full with autorun it approves what waits, since nobody is asked there.
+      const unattended = this.startsUnattended(actor);
+      if (!unattended && !this.host.planApproved()) {
         return { refusal: `${NOT_APPROVED_YET} Tasks started with run_task are not a scheduled run, so their dependents start only once the user executes the plan.` };
       }
       return {
         act: async () => {
-          await this.host.joinRun(0, waiting.length);
-          const held = waiting.length === 0 ? '' : ` ${capitalize(named(waiting))} ${waiting.length === 1 ? 'was' : 'were'} added after the user approved the plan, so ${waiting.length === 1 ? 'it waits' : 'they wait'} until they start ${waiting.length === 1 ? 'it' : 'them'} or execute the plan.`;
+          await (unattended ? this.host.joinRun(waiting.length, 0) : this.host.joinRun(0, waiting.length));
+          const held = unattended || waiting.length === 0 ? '' : ` ${capitalize(named(waiting))} ${waiting.length === 1 ? 'was' : 'were'} added after the user approved the plan, so ${waiting.length === 1 ? 'it waits' : 'they wait'} until they start ${waiting.length === 1 ? 'it' : 'them'} or execute the plan.`;
           return { message: `The plan is running: ${named(live)} ${live.length === 1 ? 'is' : 'are'} already running, and each approved task starts as its dependencies finish.${held}` };
         },
       };
@@ -836,13 +853,13 @@ export class ExecutionCommands {
     const toRun = all.filter(({ task }) => task.type !== 'user' && task.status !== 'completed' && task.status !== 'skipped');
     if (toRun.length === 0) return { refusal: 'Every task has already completed: there is nothing left to run.' };
     let approves: Located[] = [];
-    // Autorun is the user's standing instruction: its run is the user's approval, as Execute plan is.
-    if (actor.kind !== 'user' && actor.kind !== 'autorun') {
+    // Autorun is the user's standing instruction: its run is the user's approval, as Execute plan is, and so is a start it lets a planner make in Full.
+    if (actor.kind !== 'user' && actor.kind !== 'autorun' && !this.startsUnattended(actor)) {
       // Executing the plan is how the user first takes it as theirs, so no card stands in for it.
       if (!this.host.planApproved()) {
         return { refusal: NOT_APPROVED_YET };
       }
-      approves = this.addedMayStart(actor) ? [] : toRun.filter(({ task }) => !this.host.taskApproved(task.id));
+      approves = toRun.filter(({ task }) => !this.host.taskApproved(task.id));
       if (approves.length > 0 && !this.asksToApprove(actor)) {
         const one = approves.length === 1;
         return { refusal: `${capitalize(named(approves))} ${one ? 'was' : 'were'} added after the user approved the plan, so ${one ? 'it is' : 'they are'} not approved to run. Ask the user to execute the plan themselves, which approves ${one ? 'it' : 'them'}.` };
@@ -1388,7 +1405,7 @@ export class ExecutionCommands {
    * approve, or null: the user's own call is its own approval.
    */
   private unapproved(located: Located, actor: ExecutionActor): { refusal: string } | { approves: Located[] } | null {
-    if (actor.kind === 'user' || actor.kind === 'autorun' || this.addedMayStart(actor) || this.host.taskApproved(located.task.id)) return null;
+    if (actor.kind === 'user' || actor.kind === 'autorun' || this.startsUnattended(actor) || this.host.taskApproved(located.task.id)) return null;
     const label = describe(located);
     if (!this.host.planApproved()) {
       return { refusal: `The user has not approved ${label}: they approve the plan by executing it themselves (Execute plan), or a task by starting it. Ask them to.` };

@@ -148,17 +148,42 @@ again: no run moved, and the wait's only answer means the same in both.
 
 ## What a reload keeps
 
-The list survives a reload exactly as the waits it reads do, and is not meant
-to do better. A checkpoint or a task waiting for input is saved, and is listed
-with no runner behind it. A usage-limit pause loses its saved resume on load
-([ADR-0044](../planner/0044-the-planners-usage-limit-waits-and-resends.md)), so
-it is listed. A loop's rounds and the merge the run owes are
-saved. A failed task is not: a load gives it a fresh chance as pending
-(`PlanStore.load`), and its dependents are unblocked with it. Holds, runner
-approvals and a blocked run's parked start are in memory and go with the
-process, and tasks not started are listed only in an open run, which a load
-does not bring back. A reverted task's hold is the exception: it is saved on the
-task, so it is listed after a load.
+**A load changes no outcome, so what waits on a person is still listed when they
+come back to a host that restarted.** The list survives a reload as the waits it
+reads do.
+
+- **A failed task stays failed.** `PlanStore.load` leaves it as it was saved, with
+  its verdict and report. Its dependents stay blocked by the derived rule
+  ([ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)), and it is
+  listed with its usual options. A loop's check keeps its round, so one out of
+  rounds is listed as `out-of-rounds`, and one between rounds is read as it was
+  before the load
+  ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md) L5).
+- **The fresh chance is given where the user asks for it.** A retry starts that
+  one task: a load brings no run back, so what its pass unblocks waits for
+  Execute. Execute readies every failed task (`PlanStore.resetForRun`), a loop's
+  failed check with its rounds started over (L7), and leaves one between rounds
+  for its body to run first. An edit outside a run asks for neither, and leaves
+  a failure as it is (`resetForRun({ edited: true })`).
+- **A task running when the host died is failed.** Nothing runs when a plan comes
+  off disk, so `failInterruptedTasks` fails a task saved in progress where both
+  saved forms are read, `loadSession` and `loadState`. Its reason says it was
+  interrupted when Ordewell stopped, it is listed as `failed`, and a retry or
+  Execute starts it again. Its verdict reports nothing, as a runner's that exited
+  without reporting, so it starts no round (L2). Its attempts and logs stay.
+- **The other saved waits.** A checkpoint or a task waiting for input is saved,
+  and is listed with no runner behind it. A usage-limit pause loses its saved
+  resume on load
+  ([ADR-0044](../planner/0044-the-planners-usage-limit-waits-and-resends.md)), so
+  it is listed. A loop's rounds and the merge the run owes are saved. A reverted
+  task's hold is saved on the task, so it is listed after a load.
+- **What stays in memory, which #31 decides.** Other holds, runner approvals and
+  a blocked run's parked start go with the process. Tasks not started are listed
+  only in an open run, which a load does not bring back. Resuming an interrupted
+  task, rather than starting it again, is #31 as well.
+- **The notify command is told nothing of it.** What waits at a load counts as
+  already told, a failed or interrupted task included, so a restart sends no
+  storm: see [Telling a person](#telling-a-person).
 
 ## Reaching a surface
 
@@ -211,12 +236,17 @@ list; this reaches someone who is not looking at one.
   is told: a run stopped by leaving its session can raise a wait nobody is there
   for. An id seen while no command was set counts as told too.
 - **It can never affect a run.** It is started and left, with a short time limit
-  that stops it and what it started. A failure is logged once per Session and
-  otherwise ignored, and it is not retried. It leads a process group of its own
-  but is kept out of the runner groups a session lease records
+  that stops it and what it started. Two run at a time and up to 32 wait in
+  order, so a stop that lists many tasks starts no storm of processes. Past
+  that an id is dropped, logged once per Session: it counts as told, and the
+  list still holds it. A failure is logged once per Session and otherwise
+  ignored, and it is not retried. It leads a process group of its own but is
+  kept out of the runner groups a session lease records
   ([ADR-0049](../isolation/0049-a-session-has-one-live-host.md)), which would hold
   the session against another host while a hung command lived. It does not keep
-  a host from exiting.
+  a host from exiting, and it does not outlive one: the limit's timer goes with
+  the host, so the host's teardown (`onHostTeardown`) stops a command still
+  running on an exit or a signal, as it stops the runner groups.
 - **It runs where the run runs.** The notifier reads the list as each status
   update goes out, so after what the update says is saved, and it needs no
   surface attached. Its seam is `SessionDeps.runNotifyCommand`, wired in
@@ -232,11 +262,15 @@ reaches, as the user (`escalations.answer.test.ts`). A real Session driving a
 fake runner to each wait and answering it, which also folds the stream through
 `reduceRun` and holds it to what the Session derives
 (`sessionEscalations.test.ts`), and each way a wait can come back under the
-same task (`sessionEscalations.reuse.adversarial.test.ts`).
+same task (`sessionEscalations.reuse.adversarial.test.ts`). What a reload keeps
+is held to a real run's plan through a real save and load into a new Session:
+failed tasks, a loop's checks and interrupted tasks, answered and executed
+afterwards (`sessionReload.test.ts`).
 
 The notify command is tested at the notifier, with real processes for what only
 a process can show: the text staying out of the command line, the limit stopping
-a hung command (`escalationNotifier.test.ts`). A real Session drives it with a
+a hung command, a host ending with one still running
+(`escalationNotifier.test.ts`). A real Session drives it with a
 fake command through what a run leaves waiting, a reload, a plan left, and a
 command that fails, throws or never answers
 (`sessionEscalationNotify.test.ts`). A workspace's value is refused where each
@@ -311,11 +345,29 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
   values a repository must never set, under the refusal that already covers
   them, and in the settings page VS Code users set those in. It is no run
   setting: nothing about a run reads it.
+- **A process that watches the host and stops the command, or the command's own
+  group in the lease.** Rejected: a watcher is a second process for every
+  notification, and needs a Node to run on in a VS Code host; the lease would
+  hold a session by a command that has no say in a run. A host killed outright
+  is the one case either would cover.
 - **Saving the ids told with the plan.** Rejected: counting what waits on load as
   told already stops a storm after a restart, without a stored form of something
   that is otherwise derived.
 - **Running it on a surface.** Rejected: it would run only with one attached,
   and the person it is for has walked away from it.
+- **A load giving a failed task a fresh chance as pending.** The design until
+  2026-10-31. Dropped: a restart took the failure out of the list, unblocked its
+  dependents and left nothing to say what went wrong, so the person who most
+  needed the inbox lost it. Execute already gave that chance, and it was only a
+  second one the user had not asked for. An edit needed a `keepFailed` option on
+  the load to escape it.
+- **A task saved in progress going back to pending.** The design until
+  2026-10-31. Dropped for the same reason: outside an open run a pending task is
+  not listed, so work that stopped halfway read as work never started.
+- **A status or field of its own for an interrupted task.** Rejected: a failed
+  task is already listed, blocks its dependents and is retried, and a new status
+  would have to teach every surface and rule the same things. The reason says
+  what happened.
 
 ## Consequences
 
@@ -328,10 +380,21 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
   list and the answer. That is the same refusal the card meets.
 - A stale id is refused, however close the new wait is to the old one: a client
   reads the list again rather than retrying.
-- Each new id runs one process, so a stop that lists many tasks at once runs the
-  command that many times.
+- Each new id runs the command once, so a stop that lists many tasks runs it many
+  times, two at a time, and one past the queue's bound is told only by the list.
+  A command that hangs holds its turn until the limit.
+- A host killed outright runs no teardown, so a command it left running ends only
+  when it ends by itself. It holds nothing against another host.
 - A wait that appeared just before a host died is counted as told on load, though
-  its command may never have run. A restart staying quiet is worth that miss.
+  its command may never have run, and a task the host died running is too, so
+  no command says it stopped. A restart staying quiet is worth that miss.
+- A saved session read without being adopted, for a host that is not the one
+  running it, shows that run's tasks as interrupted: the read cannot tell a dead
+  host from a live one, and only a claim of the lease can
+  ([ADR-0049](../isolation/0049-a-session-has-one-live-host.md)). A claim is
+  refused while the other host lives, so nothing is saved from such a read.
+- After a restart a failed task's dependents wait for the user's answer, and a
+  retry starts only that task: Execute is what carries on with the rest.
 
 ## History
 
@@ -340,3 +403,5 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
 - 2026-10-30 — an optional notify command, run once for each new escalation (#30).
 - 2026-10-30 — a `merge-all`'s id names the attempts it would merge, and a merge the run's close makes itself is left out (#30).
 - 2026-10-31 — an id names the wait, not the attempt; a user task on hold offers Mark complete; the Decision names the `.envrc` exception (#30).
+- 2026-10-31 — a load keeps a failed task failed, and a task saved in progress loads failed as interrupted; the fresh chance is Execute's alone (#30).
+- 2026-10-31 — the notify command runs through a bounded queue, two at a time, and a host's teardown stops one still running (#30).
