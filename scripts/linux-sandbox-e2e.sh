@@ -24,6 +24,22 @@ if ! command -v bwrap >/dev/null 2>&1; then
   fi
 fi
 
+# The native-shell tests in sealedRuns.e2e.test.ts start the shells a user has,
+# and skip the ones this host lacks. The runner image has no zsh, so install it
+# for them to run; fish stays optional.
+if ! command -v zsh >/dev/null 2>&1; then
+  if command -v apt-get >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y zsh
+  elif command -v dnf >/dev/null 2>&1; then
+    sudo dnf install -y zsh
+  elif command -v pacman >/dev/null 2>&1; then
+    sudo pacman -S --noconfirm zsh
+  else
+    echo 'zsh is not installed, and this host has no package manager this step knows; the native-shell tests skip.' >&2
+  fi
+fi
+
 restricted() {
   [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = "1" ]
 }

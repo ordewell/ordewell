@@ -698,7 +698,12 @@ describe('sealed runs', async () => {
           ? [['/bin/zsh', '.zshenv']]
           : [['/bin/zsh', '.zshenv'], ['/usr/bin/zsh', '.zshenv'], ['/usr/bin/fish', '.config/fish/config.fish']];
 
-        it.each(shells.filter(([shell]) => existsSync(shell)))('starts %s without reading %s from where a sealed run wrote', async (shell, startup) => {
+        const installed = shells.filter(([shell]) => existsSync(shell));
+        // An empty it.each table fails the file ("No test found in suite"), so a host without
+        // these shells registers one skipped test instead.
+        if (installed.length === 0) it.skip('starts a native shell (none of these shells is installed here)', () => {});
+
+        it.each(installed)('starts %s without reading %s from where a sealed run wrote', async (shell, startup) => {
           const native = nativeSession();
           const launcher = await createNativeShellLauncher({ workspace: project, sandbox: native, env: { ...process.env, SHELL: shell } });
           try {

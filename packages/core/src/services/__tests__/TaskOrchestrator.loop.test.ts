@@ -70,8 +70,15 @@ function setup(tasks: Task[], opts: { isolation?: FakeWorktreeIsolation; previou
 /** Lets what is already under way settle: nothing else wakes a test that expects nothing to start. */
 const idle = () => new Promise((resolve) => setImmediate(resolve));
 
+// Three hours ahead, so the reset never falls in the past (a fixed "8:10pm" does for the hour after it).
+function resetsSoon(): string {
+  const at = new Date(Date.now() + 3 * 3_600_000);
+  const hour = at.getUTCHours() % 12 || 12;
+  return `${hour}:${String(at.getUTCMinutes()).padStart(2, '0')}${at.getUTCHours() < 12 ? 'am' : 'pm'}`;
+}
+
 function hitLimit(session: FakeRunnerSession): void {
-  const limit = "You've hit your session limit · resets 8:10pm (UTC)";
+  const limit = `You've hit your session limit · resets ${resetsSoon()} (UTC)`;
   session.emitEvent({ type: 'error', message: limit });
   session.emitOutput(`${limit}\n`);
   session.emitTurnEnd('failed');
