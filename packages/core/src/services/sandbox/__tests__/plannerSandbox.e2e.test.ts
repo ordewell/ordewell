@@ -1,5 +1,6 @@
-import { execFile, spawnSync } from 'node:child_process';
+import { execFile, spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { once } from 'node:events';
 import { createServer, type Server } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -204,6 +205,33 @@ describe("the planner's sandbox", async () => {
           rmSync(socketDir, { recursive: true, force: true });
         }
       });
+    });
+
+    // Seatbelt has no setting up to be killed in: `sandbox-exec` becomes the shell.
+    it.skipIf(process.platform !== 'darwin')('runs the command as the launcher itself, so no process stands between a kill and it', async () => {
+      const { launch } = await sandbox.launch(POSIX, { network: false });
+      const child = spawn(launch.file!, [...launch.args, 'echo $$'], { cwd: workspace, env: launch.env, stdio: ['ignore', 'pipe', 'ignore'] });
+      let out = '';
+      child.stdout!.on('data', (chunk) => { out += String(chunk); });
+      await once(child, 'close');
+
+      expect(out.trim()).toBe(String(child.pid));
+    });
+
+    // A top-level bash with a socket on standard input, which is what Node gives
+    // it, reads `~/.bashrc`, and what starts bubblewrap runs outside the sandbox.
+    it('reads no startup file on the way into the sandbox', async () => {
+      const home = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-sandbox-home-')));
+      const marker = join(home, 'marker');
+      writeFileSync(join(home, '.bashrc'), `touch '${marker}'\n`);
+      const { launch } = await sandbox.launch(POSIX, { network: false });
+      const child = spawn(launch.file!, [...launch.args, 'true'], { cwd: workspace, env: { ...launch.env, HOME: home, SHLVL: undefined }, stdio: ['pipe', 'ignore', 'ignore'] });
+      try {
+        await once(child, 'close');
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
     });
 
     it('takes a path with quotes, parentheses and a newline as a path, never as policy', async () => {

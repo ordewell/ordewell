@@ -63,38 +63,50 @@ const WATCHER_PATH = '/usr/bin:/bin:/run/current-system/sw/bin';
  * the first of the NULs between arguments. The bracket keeps `grep` from
  * finding its own arguments.
  */
-const RUN_MARK = 'ordewell-sealed-$$-';
+const RUN_MARK = 'ordewell-launch-$$-';
 const RUN_MARK_PATTERN = `[${RUN_MARK[0]}]${RUN_MARK.slice(1)}`;
 
 /**
- * Sums the sandbox's resident memory about once a second, in the shell's own
- * builtins, and past the limit ends bubblewrap by {@link MEMORY_LIMIT_SIGNAL},
- * which takes the sandbox down as the caller's kill does, and the namespace's
- * first process, in case bubblewrap is past hearing it. Nothing in the
- * namespace can leave it, so nothing can hide from the sum as a process can
- * leave a process group. Its streams are its own, since one it held open would
- * keep the caller waiting for the run's output.
- *
- * With the launcher gone it ends what the launcher left. Bubblewrap arms
- * `--die-with-parent` in its child only after setting the sandbox up, and a
- * signal armed once the parent has died never comes, so a launcher killed
- * first leaves the sandbox running, or that child blocked for good waiting to
- * be released (ADR-0036 S1). Its parent no longer says whose it is by then, but
- * it never execs, so it keeps bubblewrap's arguments and {@link RUN_MARK} in
- * them. Past the memory limit the watcher exits instead: the launcher bears the
- * mark too, and this kill must not overtake the signal the caller reads. A
- * caller that dies before bubblewrap has armed the signal for the launcher
- * itself leaves the same gap one step up, with no clock left on the run, so
- * the watcher ends the launcher then.
+ * Stays beside the launcher, outside the sandbox, and once the launcher has gone
+ * ends what it left. Bubblewrap arms `--die-with-parent` in its child only after
+ * setting the sandbox up, and a signal armed once the parent has died never
+ * comes, so a launcher killed first leaves the sandbox running, or that child
+ * blocked for good waiting to be released (ADR-0036 S1). Its parent no longer
+ * says whose it is by then, but it never execs, so it keeps bubblewrap's
+ * arguments and {@link RUN_MARK} in them. A caller that dies before bubblewrap
+ * has armed the signal for the launcher itself leaves the same gap one step up,
+ * with no clock left on the run, so the watcher ends the launcher then. Its
+ * streams are its own, since one it held open would keep the caller waiting for
+ * the run's output.
+ */
+function launcherWatcher(start: string, poll = ''): string {
+  return `{ PATH=${WATCHER_PATH}
+  ${start}
+  while [ -d /proc/$$ ]; do
+    [ -d /proc/$PPID ] || kill -KILL $$
+    sleep 1${poll}
+  done
+  for p in $(grep -l "${RUN_MARK_PATTERN}" /proc/[0-9]*/cmdline); do
+    p=\${p%/cmdline}
+    kill -KILL \${p##*/}
+  done
+} </dev/null >/dev/null 2>&1 &`;
+}
+
+/**
+ * The launcher's watcher, which also sums the sandbox's resident memory about
+ * once a second, in the shell's own builtins, and past the limit ends
+ * bubblewrap by {@link MEMORY_LIMIT_SIGNAL}, which takes the sandbox down as the
+ * caller's kill does, and the namespace's first process, in case bubblewrap is
+ * past hearing it. Nothing in the namespace can leave it, so nothing can hide
+ * from the sum as a process can leave a process group. It exits there rather
+ * than go on to what the launcher left: the launcher bears the mark too, and
+ * that kill must not overtake the signal the caller reads.
  */
 function memoryWatcher(limits: SandboxLimits): string {
   const memory = Math.ceil(limits.memoryBytes / 1024);
-  return `{ PATH=${WATCHER_PATH}
-  field() { f=; while read -r k w _; do if [ "$k" = "$1" ]; then f=$w; return; fi; done < "$2/status"; }
-  root=
-  while [ -d /proc/$$ ]; do
-    [ -d /proc/$PPID ] || kill -KILL $$
-    sleep 1
+  return launcherWatcher(`field() { f=; while read -r k w _; do if [ "$k" = "$1" ]; then f=$w; return; fi; done < "$2/status"; }
+  root=`, `
     if [ ! -d "$root" ]; then
       root=
       for p in /proc/[0-9]*; do
@@ -110,14 +122,24 @@ function memoryWatcher(limits: SandboxLimits): string {
       field VmRSS: "$p"
       kb=$((kb + \${f:-0}))
     done
-    if [ $kb -gt ${memory} ]; then kill -${MEMORY_LIMIT_SIGNAL.slice(3)} $$; kill -KILL \${root##*/}; exit; fi
-  done
-  for p in $(grep -l "${RUN_MARK_PATTERN}" /proc/[0-9]*/cmdline); do
-    p=\${p%/cmdline}
-    kill -KILL \${p##*/}
-  done
-} </dev/null >/dev/null 2>&1 &`;
+    if [ $kb -gt ${memory} ]; then kill -${MEMORY_LIMIT_SIGNAL.slice(3)} $$; kill -KILL \${root##*/}; exit; fi`);
 }
+
+/** Replaces the launcher with bubblewrap, so its pid, which is what the caller kills, and the parent `--die-with-parent` watches stay as they were. */
+const BECOME_BUBBLEWRAP = `bwrap=$1
+shift
+exec "$bwrap" --unsetenv ${RUN_MARK} "$@"`;
+
+/**
+ * What a command without limits starts behind: the watcher and nothing else,
+ * since a Stop can land in the same milliseconds of a launch as a sealed run's
+ * clock (ADR-0011 B4). A planner command must still run on a host with nothing to wait with,
+ * where a sealed run is refused, so the watcher leaves it to `--die-with-parent`
+ * rather than spin. `/bin/sh` takes no `--norc`, which dash refuses, and needs
+ * none: neither dash nor bash under that name reads a startup file for `-c`.
+ */
+const LAUNCH_PRELUDE = `${launcherWatcher('command -v sleep >/dev/null || exit')}
+${BECOME_BUBBLEWRAP}`;
 
 /**
  * Runs before bubblewrap, outside it, then becomes it, so the caller's kill
@@ -140,9 +162,7 @@ function limitsPrelude(limits: SandboxLimits): string {
 ${memoryWatcher(limits)}
 { ulimit -u ${processes} 2>/dev/null || ulimit -p ${processes}; } && ulimit -v ${Math.ceil(limits.addressSpaceBytes / 1024)} \\
   || ${refused}
-bwrap=$1
-shift
-exec "$bwrap" --unsetenv ${RUN_MARK} "$@"`;
+${BECOME_BUBBLEWRAP}`;
 }
 
 /**
@@ -210,7 +230,7 @@ export class BubblewrapBackend implements SandboxBackend {
     args.push('--', invocation.shell, ...invocation.shellArgs);
 
     const env = launchEnv(invocation, profile);
-    if (!profile.limits) return { file: this.bwrap, args, env };
+    if (!profile.limits) return { file: '/bin/sh', args: ['-c', LAUNCH_PRELUDE, 'ordewell-shell', this.bwrap, ...args], env };
     return { file: '/bin/sh', args: ['-c', limitsPrelude(profile.limits), 'ordewell-sealed', this.bwrap, ...args], env, wallTimeMs: profile.limits.wallTimeMs, memoryBytes: profile.limits.memoryBytes };
   }
 }

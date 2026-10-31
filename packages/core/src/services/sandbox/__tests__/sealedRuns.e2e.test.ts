@@ -298,28 +298,34 @@ describe('sealed runs', async () => {
 
     // Bubblewrap arms its death signal only once the sandbox is set up, and a
     // signal armed after the parent has died never comes. Its own options hold
-    // it at the two steps where that happens, so no test has to win a race.
-    describe.skipIf(process.platform !== 'linux')('killed before bubblewrap arms its death signal', () => {
+    // it at the two steps where that happens, so no test has to win a race. A
+    // planner command goes through the same launcher, ended by what ends one: a
+    // Stop, or its time limit, which is Node's default signal rather than a kill.
+    describe.skipIf(process.platform !== 'linux').each<[string, () => Promise<ShellLaunch>, NodeJS.Signals]>([
+      ['a sealed run', () => sandbox.launchSealed(POSIX, { workspace }), 'SIGKILL'],
+      ['a planner command', async () => (await sandbox.launch(POSIX, { network: false })).launch, 'SIGTERM'],
+    ])('%s killed before bubblewrap arms its death signal', (_launch, launcher, signal) => {
       const held: [string, string[]][] = [
         ['setting up the sandbox', ['--block-fd', '3']],
         ['still waiting for the launcher to release it', ['--unshare-user', '--info-fd', '4', '--userns-block-fd', '3']],
       ];
 
-      it.each(held)('leaves nothing running of a run %s', async (_step, hold) => {
+      it.each(held)('leaves nothing running of one %s', async (_step, hold) => {
         const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-sealed-gate-')));
         spawnSync('mkfifo', [join(dir, 'gate')]);
         // Read-write, so what bubblewrap reads is the byte below and never an end of file.
         const gate = openSync(join(dir, 'gate'), 'r+');
-        const launch = await sandbox.launchSealed(POSIX, { workspace });
+        const launch = await launcher();
+        // After the script, the name it runs under and bubblewrap's own path.
         const args = [...launch.args];
-        args.splice(args.indexOf('ordewell-sealed') + 2, 0, ...hold);
-        const command = `sleep 30.${process.pid}${hold.length}`;
+        args.splice(4, 0, ...hold);
+        const command = `sleep 30.${process.pid}${hold.length}${signal.length}`;
         const left = () => runningWith(command);
         const child = spawn(launch.file!, [...args, command], { cwd: workspace, env: launch.env, stdio: ['pipe', 'ignore', 'ignore', gate, 'pipe'] });
         try {
           // The launcher, and the namespace's first process it cloned.
           await vi.waitFor(() => expect(left().filter((line) => line.includes('--new-session')).length).toBeGreaterThanOrEqual(2));
-          child.kill('SIGKILL');
+          child.kill(signal);
           await new Promise((resolve) => child.once('exit', resolve));
           writeSync(gate, 'g');
           await vi.waitFor(() => expect(left()).toEqual([]), { timeout: 20_000, interval: 250 });
