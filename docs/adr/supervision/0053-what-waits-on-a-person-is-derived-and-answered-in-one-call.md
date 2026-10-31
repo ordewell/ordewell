@@ -4,6 +4,8 @@ status: accepted
 
 # 0053 — What waits on a person is derived, listed once and answered in one call
 
+*Pending:* [ADR-0056](0056-a-mandate-narrows-down-the-tree.md) — a subplanner's question reaches this list as its delegated task's checkpoint, naming the path; a child's own waits never do.
+
 ## Problem
 
 A run that needs a person says so in many separate places: a runner approval

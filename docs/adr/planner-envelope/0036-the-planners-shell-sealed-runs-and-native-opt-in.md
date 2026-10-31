@@ -5,6 +5,9 @@ amends: ["0008", "0011", "0026"]
 
 # 0036 — The planner's shell: sealed runs instead of refusals, and the harness's own shell as an opt-in
 
+*Pending:* [ADR-0056](../supervision/0056-a-mandate-narrows-down-the-tree.md) — S5 holds for a subplanner, whose requests run sealed as a research subagent's do.
+*Pending:* [ADR-0059](../isolation/0059-an-execution-lease-reserves-in-the-claim-and-opens-after-it.md) — the broker and the lease this ADR defers to; stage 3 stays open, and native tools inside a lease do not arise while planners stay on the host.
+
 ## Problem
 
 The classifier refuses what it cannot read: a shell keyword (`for`, `while`,

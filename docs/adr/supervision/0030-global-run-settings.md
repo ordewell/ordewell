@@ -5,6 +5,9 @@ amends: ["0001", "0013", "0020", "0029"]
 
 # 0030 — Run settings are saved once and live per session; autorun
 
+*Pending:* [ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — delegation joins the run settings, off by default, and the Parallel limit counts a whole tree.
+*Pending:* [ADR-0056](0056-a-mandate-narrows-down-the-tree.md) — the root's mandate is derived from these settings on each read; a child's is saved with its plan.
+
 **Amends:** ADR-0029 — the supervisor level, merge at gates automatically, the
 retry limit and the wake-up read budget stop being per-plan settings saved at
 run start; the default level becomes Watch; "an unapproved task never starts"

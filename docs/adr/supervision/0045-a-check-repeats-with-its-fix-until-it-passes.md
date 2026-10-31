@@ -5,6 +5,8 @@ amends: ["0029", "0034"]
 
 # 0045 — A check repeats with its fix until it passes
 
+*Pending:* [ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — a script check marked `readOnly` runs in a worktree of its own, so L9 does not hold it at a gate.
+
 ## Problem
 
 "Until it passes" is a common shape of work: an adversarial review and a fix,

@@ -4,6 +4,7 @@ status: accepted
 
 # 0009 — Coding agents as planners: the harness planner backend
 
+*Pending:* [ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — a subplanner is a harness planner that parks between turns, which this ADR rejects for the root; its token also serves `task_complete` and `checkpoint`.
 
 ## Problem
 
