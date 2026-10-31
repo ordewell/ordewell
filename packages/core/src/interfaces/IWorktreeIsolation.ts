@@ -186,7 +186,8 @@ export interface IsolationTaskRecord {
    * repo it landed in, by Merge all or by hand — never by a checkout that only
    * stands on the integration branch (ADR-0054) — or can no longer be merged
    * there, its integration branch gone. What a merge gate waits for (ADR-0020).
-   * It goes with the record, so a revert asks git of each merge instead.
+   * Git's answer as last read, so it goes when the user takes the merge back
+   * out; it goes with the record too, so a revert asks git of each merge instead.
    */
   inHead?: true;
 }
@@ -737,12 +738,12 @@ export interface IWorktreeIsolation {
   taskDiff?(run: IsolationRun, taskId: string, options: TaskDiffRead): Promise<TaskDiffResult>;
 
   /**
-   * Mark the landed tasks whose work the user's branch now contains in every
-   * repo they changed (`git merge-base --is-ancestor`), and return their ids.
-   * A review checkout of the integration branch, detached or not, contains
-   * nothing merged (ADR-0054). A repo whose integration branch is gone counts
-   * as containing it: no Merge all could bring that work in. Only adds marks: a
-   * task found merged stays merged.
+   * Read each landed task's mark again from git: on where the user's branch
+   * contains its work in every repo it changed (`git merge-base --is-ancestor`),
+   * off where it no longer does. Returns the ids whose mark changed. A review
+   * checkout of the integration branch, detached or not, contains nothing
+   * merged (ADR-0054). A repo whose integration branch is gone counts as
+   * containing it: no Merge all could bring that work in.
    */
   findInHead(run: IsolationRun): Promise<string[]>;
 

@@ -554,21 +554,26 @@ export class IsolationRunController {
 
   /**
    * Look again for landed work the user has merged — by Merge all, or by hand
-   * with git. Resolves true when some was found.
+   * with git — or has taken back out. Resolves true when a mark changed.
    */
   async refreshInHead(): Promise<boolean> {
     const run = this.run;
     if (!run) return false;
-    const found = await this.findLanded(run);
-    if (found) this.listener.changed();
-    return found;
+    const changed = await this.findLanded(run);
+    if (changed) this.listener.changed();
+    return changed;
   }
 
-  /** Mark the run's landed work git finds in HEAD; true when some was found. */
+  /** Whether any landed work reads as merged: an answer git can take back, if the user takes the merge out. */
+  get readsMerged(): boolean {
+    return Object.values(this.run?.tasks ?? {}).some((r) => r.status === 'merged' && r.inHead);
+  }
+
+  /** Mark the run's landed work as git finds it now; true when a mark changed. */
   private async findLanded(run: IsolationRun): Promise<boolean> {
-    if (!Object.values(run.tasks).some((r) => r.status === 'merged' && !r.inHead)) return false;
-    const found = await this.isolation.findInHead(run).catch((): string[] => []);
-    return found.length > 0;
+    if (!Object.values(run.tasks).some((r) => r.status === 'merged')) return false;
+    const changed = await this.isolation.findInHead(run).catch((): string[] => []);
+    return changed.length > 0;
   }
 
   /** The run landed something and every landing is in the user's HEAD. */

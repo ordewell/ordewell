@@ -239,8 +239,11 @@ function alsoLandedBy(run: IsolationRun, repoPath: string, taskId: string, merge
   return other === undefined ? undefined : (run.tasks[other] ?? run.landedTasks?.[other])?.title ?? other;
 }
 
-/** Every branch Ordewell makes is under here: an integration branch, a task's, or a kept one's. */
-const OWN_BRANCHES = 'refs/heads/ordewell/';
+/** Every branch Ordewell makes is under one of these: an integration branch, a task's, a kept one's, or what a removal preserved. */
+const OWN_BRANCHES = ['refs/heads/ordewell/', `refs/heads/${PRESERVED_BRANCHES}/`];
+
+/** Ordewell's own branches are no one's: nothing on one is the user's, whatever it holds (ADR-0054). */
+const isOwnBranch = (ref: string): boolean => OWN_BRANCHES.some((own) => ref.startsWith(own));
 
 const landedTask = ({ taskId, order, title, commit }: IsolationTaskRecord): LandedTask => ({ taskId, order, title, ...(commit ? { commit } : {}) });
 
@@ -945,14 +948,16 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   }
 
   async findInHead(run: IsolationRun): Promise<string[]> {
-    const found: string[] = [];
+    const changed: string[] = [];
     for (const record of Object.values(run.tasks)) {
-      if (record.status !== 'merged' || record.inHead) continue;
-      if (!(await this.headContains(run, record))) continue;
-      record.inHead = true;
-      found.push(record.taskId);
+      if (record.status !== 'merged') continue;
+      const merged = await this.headContains(run, record);
+      if (merged === !!record.inHead) continue;
+      if (merged) record.inHead = true;
+      else delete record.inHead;
+      changed.push(record.taskId);
     }
-    return found;
+    return changed;
   }
 
   private async headContains(run: IsolationRun, record: IsolationTaskRecord): Promise<boolean> {
@@ -979,18 +984,36 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
    * integration branch, as a review does. Ordewell's own branches are no one's.
    */
   private async inUserBranch(repo: IsolationRepo, commit: string): Promise<boolean> {
-    if (repo.baseBranch && (await this.tryGit(repo.root, ['merge-base', '--is-ancestor', commit, `refs/heads/${repo.baseBranch}`])).ok) return true;
+    const base = await this.baseBranchRef(repo);
+    if (base && (await this.tryGit(repo.root, ['merge-base', '--is-ancestor', commit, base])).ok) return true;
     const sha = await this.tryGit(repo.root, ['rev-parse', '--verify', '-q', `${commit}^{commit}`]);
     if (!sha.ok) return false;
     const merge = sha.stdout.trim();
     const holding = await this.tryGit(repo.root, ['for-each-ref', '--contains', merge, '--format=%(refname)', 'refs/heads/']);
-    const tips = holding.stdout.split(/\r?\n/).filter((ref) => ref && !ref.startsWith(OWN_BRANCHES));
+    const tips = holding.stdout.split(/\r?\n/).filter((ref) => ref && !isOwnBranch(ref));
     if (!repo.baseBranch && !(await this.tryGit(repo.root, ['symbolic-ref', '-q', 'HEAD'])).ok && (await this.tryGit(repo.root, ['merge-base', '--is-ancestor', merge, 'HEAD'])).ok) tips.push('HEAD');
     for (const tip of tips) {
       const line = await this.tryGit(repo.root, ['rev-list', '--first-parent', tip]);
       if (line.ok && !line.stdout.split(/\r?\n/).includes(merge)) return true;
     }
     return false;
+  }
+
+  /**
+   * The branch the run started on, under the name it has now. `git branch -m`
+   * takes the reflog along and writes the old name in it, so a name gone with
+   * no branch saying so is a branch deleted, or one with no reflog to read.
+   */
+  private async baseBranchRef(repo: IsolationRepo): Promise<string | undefined> {
+    if (!repo.baseBranch) return undefined;
+    const named = `refs/heads/${repo.baseBranch}`;
+    if ((await this.tryGit(repo.root, ['rev-parse', '--verify', '-q', named])).ok) return named;
+    const branches = await this.tryGit(repo.root, ['for-each-ref', '--format=%(refname)', 'refs/heads/']);
+    for (const ref of branches.stdout.split(/\r?\n/).filter((branch) => branch && !isOwnBranch(branch))) {
+      const renamed = await this.tryGit(repo.root, ['log', '-g', '-1', '--format=%H', '-F', `--grep-reflog=Branch: renamed ${named} to `, ref]);
+      if (renamed.stdout.trim()) return ref;
+    }
+    return undefined;
   }
 
   /**

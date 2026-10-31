@@ -1183,7 +1183,7 @@ export class TaskOrchestrator {
     this.withdrawRepairs();
     this.carriedLoops.clear();
     this.loopNotice = '';
-    if (reason === 'user') this.queuedStarts.clear();
+    if (reason === 'user') this.withdrawQueuedStarts();
     this.limitPauses.cancelAll();
     this.sayStopped(stopped);
     this.recoverOrphans();
@@ -1200,6 +1200,16 @@ export class TaskOrchestrator {
     for (const t of this.store.allTasks) {
       if ((t.status === 'pending' || t.status === 'approved') && this.runs.current?.tasks[t.id]?.status === 'conflict') this.store.markAwaitingUser(t.id, 'conflict');
     }
+  }
+
+  /**
+   * A force start behind a dependency lifted a reverted task's hold for that
+   * start alone, in the queue or left to the scheduler. With the start
+   * withdrawn, the task stays what the user took back (ADR-0054).
+   */
+  private withdrawQueuedStarts(): void {
+    this.queuedStarts.clear();
+    for (const t of this.store.allTasks) if (t.reverted) this.hold(t.id, REVERTED_HOLD, true);
   }
 
   private chosenHoldsNow(): [string, string][] {
@@ -1951,8 +1961,10 @@ export class TaskOrchestrator {
    * the task ended in rather than a fresh one given its prompt again. The
    * worktree keeps the same path, where the runner keeps its sessions, and
    * restores the previous work so that session's memory matches its files.
+   * `revives` is {@link claimRefusal}'s, read as the start is asked for: a dirty
+   * tree's replay carries the first answer, not one read after a skip.
    */
-  async continueTask(taskId: string, message: string, origin: RunOrigin = 'user'): Promise<void> {
+  async continueTask(taskId: string, message: string, origin: RunOrigin = 'user', revives = this.store.get(taskId)?.status === 'skipped'): Promise<void> {
     const text = message.trim();
     if (!text) throw new TaskControlError('A message to continue a task with cannot be empty.');
     const task = this.store.get(taskId);
@@ -1960,9 +1972,8 @@ export class TaskOrchestrator {
     const eligible = continuability(task);
     if (!eligible.ok) throw new TaskControlError(eligible.reason);
     if (pausedOnLimit(task)) return this.resumeNow(taskId, origin, text);
-    const revives = task.status === 'skipped';
     await this.whileAdmitted(async (admission) => {
-      if (!(await this.openForAdmitted(taskId, origin, () => this.continueTask(taskId, message, origin), admission))) return;
+      if (!(await this.openForAdmitted(taskId, origin, () => this.continueTask(taskId, message, origin, revives), admission))) return;
       // The run may have started it while opening, or the task changed: the
       // claim below must be the only one, and continues the task as it is now.
       const now = this.store.get(taskId);
@@ -2126,9 +2137,9 @@ export class TaskOrchestrator {
    * Reuses the scheduler's own claim so a force-started task gets the same
    * augmented prompt, session tracking, and exit handling — callers must not
    * re-spawn the runner themselves. No-op if the task is unknown, a user
-   * task, or already running.
+   * task, or already running. `revives` is as on {@link continueTask}.
    */
-  async forceStartTask(taskId: string, origin: RunOrigin = 'user'): Promise<string | undefined> {
+  async forceStartTask(taskId: string, origin: RunOrigin = 'user', revives = this.store.get(taskId)?.status === 'skipped'): Promise<string | undefined> {
     const task = this.store.get(taskId);
     if (!task || task.type === 'user') return;
     if (this.attempts.has(taskId)) return;
@@ -2136,7 +2147,7 @@ export class TaskOrchestrator {
     const queued = this.queueBehindDependencies(task);
     if (queued) return queued;
     this.queuedStarts.delete(taskId);
-    return this.startForced(taskId, origin, FORCED_NOW);
+    return this.startForced(taskId, origin, FORCED_NOW, revives);
   }
 
   /**
@@ -2178,10 +2189,9 @@ export class TaskOrchestrator {
    * dependencies still under way waits for them as if forced after the edit,
    * and says so.
    */
-  private async startForced(taskId: string, origin: RunOrigin, forced: ForcedStart): Promise<string | undefined> {
+  private async startForced(taskId: string, origin: RunOrigin, forced: ForcedStart, revives = this.store.get(taskId)?.status === 'skipped'): Promise<string | undefined> {
     // A dirty tree's replay of a start made now asks again, from its dependencies on.
-    const resume = async () => { await (forced.queued ? this.startForced(taskId, origin, forced) : this.forceStartTask(taskId, origin)); };
-    const revives = this.store.get(taskId)?.status === 'skipped';
+    const resume = async () => { await (forced.queued ? this.startForced(taskId, origin, forced, revives) : this.forceStartTask(taskId, origin, revives)); };
     return this.whileAdmitted(async (admission) => {
       if (!(await this.openForAdmitted(taskId, origin, resume, admission))) return;
       // The run may have started it while opening.
@@ -2358,6 +2368,8 @@ export class TaskOrchestrator {
     // What this tick starts was admitted as it began: a Stop during one of its awaits withdraws it.
     const admission = this.admittedNow();
     this.recoverOrphans();
+    // A merge taken back out closes its gate again, before anything reads it.
+    if (this.runs.readsMerged) await this.runs.refreshInHead();
     // Every way a dependency finishes ticks — a verdict, Mark complete, a skip,
     // a failed spawn — so a queued force start waiting on it is started here.
     await this.startQueued();
