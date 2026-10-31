@@ -894,11 +894,17 @@ export class Session {
    * Autorun (ADR-0030): a plan the planner submitted in the turn that just
    * ended starts as if the user had pressed Execute, through the seam, so the
    * timeline says autorun started it. Read now, not when the turn opened: the
-   * switch is the user's to flip at any time.
+   * switch is the user's to flip at any time. Work already live, a task the
+   * planner started with `run_task` in that turn, joins it as one scheduled
+   * run, so autorun skips only a run the scheduler already drives; in Guarded
+   * only one at work, and the seam keeps it out of any other live work there.
+   * A plan it could not start says why.
    */
   private autorunSubmitted(effects: TurnEffects): void {
-    if (!effects.planSubmitted || !this.userRunSettings().autorun || this.orchestrator.hasLiveWork) return;
+    if (!effects.planSubmitted || !this.userRunSettings().autorun) return;
+    if (this.orchestrator.isScheduling && (this.config.autonomousMode || this.orchestrator.hasLiveWork)) return;
     void this.execute({ command: 'run_plan' }, { kind: 'autorun' })
+      .then((outcome) => { if (!outcome.ok) this.notice('warn', `Autorun could not start the plan: ${outcome.message}`); })
       .catch((err: unknown) => this.notice('error', `Autorun could not start the plan: ${err instanceof Error ? err.message : String(err)}`));
   }
 
@@ -913,6 +919,7 @@ export class Session {
       taskApproved: (taskId) => this.record.isApproved(taskId),
       waitsForApproval: (taskId) => this.record.waitsForApproval(taskId),
       approve: (taskIds) => this.record.approve(taskIds),
+      approvePlan: () => this.record.approvePlan(),
       autonomous: () => this.config.autonomousMode,
       autorun: () => this.userRunSettings().autorun,
       scheduling: () => this.orchestrator.isScheduling,
@@ -1931,8 +1938,8 @@ export class Session {
     this.record.withdraw(rewritten);
     // Once they are in the plan: approval is only ever of a task the plan holds.
     if (bySupervisor) this.record.approve(added);
-    // With autorun on the user said they need not approve what the planner writes in their turn; read as it lands, so turning it off first holds the task.
-    else if (this.turnActor().kind === 'planner-turn' && this.userRunSettings().autorun) this.record.approve(this.commands.autorunApproves(writtenTasks(before, coerced)));
+    // With autorun on the user said they need not approve what the planner writes; read as it lands, so turning it off first holds the task.
+    this.record.approve(this.commands.autorunApproves(this.turnActor(), writtenTasks(before, coerced)));
     this.adoptResearch(before);
     return coerced.length;
   }

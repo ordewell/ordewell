@@ -974,7 +974,7 @@ describe('the command seam\'s extension points', () => {
   function stubHost(): ExecutionHost {
     const tasks = [task('t1', 1)];
     return {
-      tasks: () => tasks, planApproved: () => true, taskApproved: () => true, waitsForApproval: () => false, approve: vi.fn(), autonomous: () => true, autorun: () => false,
+      tasks: () => tasks, planApproved: () => true, taskApproved: () => true, waitsForApproval: () => false, approve: vi.fn(), approvePlan: vi.fn(), autonomous: () => true, autorun: () => false,
       scheduling: () => false, startsHeld: () => false, hasLiveWork: () => true, startsPending: () => false, advancesOnItsOwn: () => false, admitStart: admission,
       running: () => true, maxParallel: () => 3, runBlocked: () => false,
       startWaits: () => [], waitingRequests: () => [],
@@ -1159,12 +1159,63 @@ describe('the command seam\'s extension points', () => {
     expect(host.approve).toHaveBeenCalledWith(['t1']);
   });
 
-  it('never lets the supervisor start an unapproved task on the autorun exception', async () => {
-    const host = { ...stubHost(), autorun: () => true, running: () => false, hasLiveWork: () => false, taskApproved: () => false };
+  it('with autorun on and Full, lets a supervisor at Act start an unapproved task on a first plan, which approves the plan', async () => {
+    const host = { ...stubHost(), autorun: () => true, planApproved: () => false, running: () => false, hasLiveWork: () => false, taskApproved: () => false };
     const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
 
-    expect(await commands.run({ command: 'run_task', task: 't1' }, { kind: 'supervisor', level: 'act' })).toMatchObject({ ok: false, outcome: 'refused' });
+    expect(await commands.run({ command: 'run_task', task: 't1' }, { kind: 'supervisor', level: 'act' })).toMatchObject({ ok: true });
+    expect(host.startTask).toHaveBeenCalled();
+    expect(host.approve).toHaveBeenCalledWith(['t1']);
+    expect(host.approvePlan).toHaveBeenCalled();
+  });
+
+  it('never lets the supervisor at Watch start anything on the autorun exception', async () => {
+    const host = { ...stubHost(), autorun: () => true, planApproved: () => false, running: () => false, hasLiveWork: () => false, taskApproved: () => false };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    expect(await commands.run({ command: 'run_task', task: 't1' }, { kind: 'supervisor', level: 'watch' })).toMatchObject({ ok: false, outcome: 'refused' });
     expect(host.startTask).not.toHaveBeenCalled();
+    expect(host.approvePlan).not.toHaveBeenCalled();
+  });
+
+  it('with autorun on and Full, takes the planner\'s run_plan on a first plan through the join when work is live, approving the plan', async () => {
+    const host = { ...stubHost(), autorun: () => true, planApproved: () => false, waitsForApproval: () => false };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    expect(await commands.run({ command: 'run_plan' }, PLANNER)).toMatchObject({ ok: true });
+    expect(host.joinRun).toHaveBeenCalledWith(0, 0);
+    expect(host.approve).toHaveBeenCalledWith(['t1']);
+    expect(host.approvePlan).toHaveBeenCalled();
+  });
+
+  it('leaves the plan as it was when a start under autorun in Full is refused', async () => {
+    const host = { ...stubHost(), autorun: () => true, planApproved: () => false, startWaits: () => [{ kind: 'dependencies' as const, waiting: ['t1'] }] };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    expect(await commands.run({ command: 'run_task', task: 't1' }, PLANNER)).toMatchObject({ ok: false, outcome: 'refused' });
+    expect(host.approvePlan).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Full', true, { ok: true }],
+    ['Guarded', false, { ok: false, outcome: 'refused' }],
+  ])('autorun with work live in %s: it joins only in Full', async (_level, autonomous, outcome) => {
+    const host = { ...stubHost(), autorun: () => true, autonomous: () => autonomous, planApproved: () => false };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    expect(await commands.run({ command: 'run_plan' }, { kind: 'autorun' })).toMatchObject(outcome);
+    expect(host.joinRun).toHaveBeenCalledTimes(autonomous ? 1 : 0);
+  });
+
+  it.each([
+    ['in Guarded', { autonomous: () => false }],
+    ['with autorun off', { autorun: () => false }],
+  ])('never approves the plan for a planner start %s', async (_how, over) => {
+    const host = { ...stubHost(), autorun: () => true, running: () => false, hasLiveWork: () => false, ...over };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn(async () => true) } });
+
+    expect(await commands.run({ command: 'run_task', task: 't1' }, PLANNER)).toMatchObject({ ok: true });
+    expect(host.approvePlan).not.toHaveBeenCalled();
   });
 
   it('in Guarded, refuses the supervisor\'s start of a task the user has not approved, without asking', async () => {

@@ -220,7 +220,9 @@ except where [ADR-0011](docs/adr/planner-envelope/0011-sandboxing-the-planners-s
   planner's sandbox and nothing at the OS or network layer bounds it. You
   consent to the body as written: the approval card shows it verbatim, and a
   body that changes needs consent again. A card you do not answer is a denial.
-  Autorun in Full, and an Act supervisor, run one without asking. So does your
+  Autorun in Full, and an Act supervisor, run one without asking; autorun in
+  Full does so on a first plan too, so a script can run that no person read,
+  from an instruction injected into something the planner read. So does your
   **effect allowlist** (`ordewell.effectAllowlist`, or `ORDEWELL_EFFECT_ALLOW`),
   which covers a script task only when every command in it matches a rule
   exactly, flags included. It is a user-level setting only: a workspace's

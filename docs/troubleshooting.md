@@ -299,8 +299,10 @@ nothing may start it until you approve it
 approve every waiting task with `/run` (or **Approve all** in VS Code). Neither
 starts a task before its dependencies finish: it starts once they do, and the
 answer says what it waits for. With nothing running, run the plan to start them.
-With autorun on, tasks the planner adds in your turn need no approval, a script
-task apart: under Guarded it waits unless your effect allowlist covers every
+With autorun on in Full nothing waits for you, script tasks included, and the
+planner starts the plan or joins what runs without asking. With autorun on under
+Guarded, tasks the planner adds in your turn need no approval, a script
+task apart: it waits unless your effect allowlist covers every
 command in it. Its row shows the commands or the script as written, so read it,
 then approve it as above. With autorun off, a script task the planner adds in
 the plan waits even when the allowlist covers it.

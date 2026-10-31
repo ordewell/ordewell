@@ -126,13 +126,14 @@ writes repository files.**
   | turn | covered by the effect allowlist | otherwise |
   |---|---|---|
   | the user's, Guarded | runs | the user approves it on the approval card |
-  | the user's, Full | runs | the user approves it on the approval card |
-  | the user's, Full with autorun, on an approved plan | runs | runs |
+  | the user's, Full without autorun | runs | the user approves it on the approval card |
+  | the user's, Full with autorun | runs | runs |
   | the supervisor's, at Act | runs | runs: a task it adds is approved (ADR-0029) |
   | the supervisor's, at Watch | refused: suggest it to the user | refused: suggest it to the user |
 
-  In Full with autorun, a plan the user has not approved yet gets the card, as
-  in the first two rows. The effect allowlist is read on every call. The card
+  In Full with autorun, nobody is asked, on a first plan as on an approved one,
+  and the start makes the plan approved, as autorun's own start does (ADR-0030).
+  The effect allowlist is read on every call. The card
   shows the commands or the script verbatim, so the consent is to
   what will run, not to a description of it. In Full without autorun the user
   reviews what the planner proposes in any case; the card puts the script in
@@ -150,8 +151,9 @@ writes repository files.**
 - **Consent is to a body.** An edit that changes an approved script task's
   body or time limit, or turns it into another type of task (or another type
   into a script task), takes it out of the approved set, and the new body needs
-  consent by the same rule. Otherwise a script approved as shown could run as
-  something else. The same question for an AI task's prompt belongs to the
+  consent by the same rule. Under Full with autorun that rule asks nobody: the
+  edit that writes the new body approves it as it commits. Otherwise a script
+  approved as shown could run as something else. The same question for an AI task's prompt belongs to the
   mandate (#23).
 
 ### The effect allowlist
@@ -218,8 +220,8 @@ for the user's consent.
 
 **The scheduler starts only tasks in the plan's approved set** (`approvedTasks`):
 every task when the plan is executed, a task the user adds by hand or starts
-themselves, a task an Act supervisor adds, and one a Full planner starts with
-autorun on. Any other task added after approval waits, shown as "waits for
+themselves, a task an Act supervisor adds, and one a Full planner, or a Full
+supervisor at Act, starts with autorun on. Any other task added after approval waits, shown as "waits for
 your approval" on every surface. This is the first of #95's two options, and it
 makes ADR-0029's "an unapproved task never starts" true of the scheduler too.
 
@@ -232,10 +234,11 @@ How the user approves what waits, without starting anything early:
   dependencies finish. The setting is read as the edit commits, so turning
   autorun off first holds the task. A task added while autorun was off is
   approved when the planner next rewrites it with autorun on. A supervisor's
-  wake-up turn is not the user's turn and approves nothing this way.
+  wake-up turn is not the user's turn and approves nothing this way, unless it
+  is at Act under Full with autorun.
 - **A script task is the exception: autorun approves one only where
-  `run_script` would run it unasked.** That is Full with autorun on an approved
-  plan, or a body the effect allowlist covers. In Guarded, any other script
+  `run_script` would run it unasked.** That is Full with autorun, on a first
+  plan as on an approved one, or a body the effect allowlist covers. In Guarded, any other script
   task the planner writes waits for the user's approval, and no card is asked:
   its row shows the body verbatim, and starting it, or Execute, is the user's
   consent. Otherwise a Guarded user's turn with autorun on would run a script
@@ -256,7 +259,9 @@ How the user approves what waits, without starting anything early:
   user, and the answer names it. It grants nothing `run_task` does not, since
   the planner can start each approved task itself, and Guarded still asks the
   user first. In a plan the user never executed it is refused, saying that
-  executing the plan is what makes the run.
+  executing the plan is what makes the run. Under Full with autorun neither
+  holds: it approves what waits and makes the run, on a first plan too
+  (ADR-0030).
 - **A force start never skips unfinished dependencies.** It approves the task.
   If every dependency it would build on has finished, it starts now. If one is
   still under way or yet to run, the task is approved and queued, and the
@@ -320,6 +325,14 @@ minute is recorded beside its start.
   against a rule is the classifier's problem again.
 - **Built-in effect allowlist entries.** Rejected: a default pre-approves an
   effect the user never chose.
+- **In Full with autorun, a first plan gets the card.** The earlier rule:
+  `run_script`, and a script task in a plan, needed a plan the user had already
+  approved. Dropped: it asked a person the user had said was not needed, and
+  stopped on a dependency no one could see, since a plan autorun failed to start
+  stayed unapproved for the rest of the session. It guarded nothing ADR-0030 had
+  not already given up, since an ops task on that same first plan ran from a
+  plan no person read, and it pushed the planner back to ops tasks, which show
+  less of what will run.
 - **Run every script task unattended in Full.** Rejected: without autorun the
   user reviews what the planner proposes, and an effect gets the same review,
   on the card, when it would run.
@@ -361,6 +374,13 @@ minute is recorded beside its start.
   autorun applies to script tasks too, narrowed in one way: what runs is the
   script that was written, shown verbatim. Declared scope and the escalation
   of outward effects stay with the mandate (#23).
+- In Full with autorun, more runs with nobody reading it. A script on a first
+  plan can run from something injected into what the planner read, an issue
+  body or a fetched page, with no card and no plan a person saw, as an ops task
+  already could. That is what Full with autorun asks for, and it is the trade:
+  the user gives up the last point where a body was put in front of them, and
+  keeps the record, the verdict and the two switches, read at each start. The
+  timeline shows what ran, afterwards.
 - During a run, a task added after approval waits for approval (#95); every
   surface gains that row state.
 - The plan schema gains `type: 'script'` with `commands` or `script` and an
@@ -380,3 +400,4 @@ minute is recorded beside its start.
 - 2026-10-24 — the planner's `run_plan` while only tasks started with `run_task` are running joins them into the plan's run, approving nothing, as the user's Execute does; before, it was refused as "already running" and the dependents of those tasks started only by hand.
 - 2026-10-24 — a script attempt's whole output is kept in a file beside its log, named in the verdict and as a handoff artifact; before, the log kept the first 32,000 and last 16,000 characters and the verdict the last 4,000 of stderr, which lost the failure of a long command.
 - 2026-10-26 — `run_script` adds its task to the plan as the turn's committed edits left it, and autorun approves what an edit wrote as it commits: a tool's edit commits as its call answers (ADR-0022, P2).
+- 2026-10-31 — in Full with autorun nobody is asked on a first plan either, and a start there makes the plan approved; an approved plan is no longer a condition of the consent table's autorun row.
