@@ -13,7 +13,7 @@ import type { CheckedChange, PlanChangeError } from './PlanChangeCheck';
 import type { PlanChange, ToolRead } from './PlannerConversation';
 import { commandReply, type McpToolReply, type PlannerToolHandler } from './mcp/tools';
 import type { TaskLogEvent } from '../models/TaskLog';
-import { namedHandoff, resolveWrittenRef } from '../models/Handoff';
+import { namedHandoff, removedPin, resolveWrittenRef } from '../models/Handoff';
 import { renderTaskLog } from './taskLogRead';
 import { taskReadPage } from './taskReadPage';
 import type { TaskDiffRead, TaskDiffResult } from './taskDiffRead';
@@ -220,10 +220,19 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
     async taskOutput({ task: ref, lines, since, attempt: asked, kinds }) {
       // A reference a run update shows, `#4@2/F3`, reads the attempt it names (ADR-0057 R1).
       const written = resolveWrittenRef(host.tasks(), String(ref));
-      if (!written) return { isError: true, text: JSON.stringify({ ok: false, error: `No task matches "${ref}" in the current plan.` }) };
+      const maxLines = Math.min(lines ?? OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX);
+      if (!written) {
+        // A removed task keeps its log, so what is pinned to an attempt of it still reads (ADR-0057 R1).
+        const pin = removedPin(String(ref), asked);
+        const attempts = pin ? host.taskLogAttempts(pin.taskId) : [];
+        if (!pin || !attempts.includes(pin.attempt)) return { isError: true, text: JSON.stringify({ ok: false, error: `No task matches "${ref}" in the current plan.` }) };
+        return read(host, JSON.stringify(['output', pin.taskId, maxLines, since ?? null, pin.attempt, kinds ? [...kinds].sort() : null]), async () => ({
+          task: { id: pin.taskId, removed: true }, attempt: pin.attempt, attempts,
+          ...taskReadPage(renderTaskLog(host.taskLog(pin.taskId, pin.attempt), kinds), { lines: maxLines, since }),
+        }));
+      }
       const { task } = written;
       const attempt = asked ?? written.attempt;
-      const maxLines = Math.min(lines ?? OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX);
       return read(host, JSON.stringify(['output', task.id, maxLines, since ?? null, attempt ?? null, kinds ? [...kinds].sort() : null]), async () => {
         const head = { task: taskHead(host.tasks(), task) };
         if (attempt !== undefined || kinds !== undefined) {

@@ -107,3 +107,23 @@ describe('adversarial: a queued force start re-reads the task as it opens its ru
     expect(env.status('c')).toBe('in_progress');
   });
 });
+
+describe('whose run a queued research start opens', () => {
+  it.each([
+    ['the supervisor', { research: true, actor: 'supervisor', level: 'act' }, 'supervisor'],
+    ['a subplanner, which has no user to act for (ADR-0056 M6)', { research: true, actor: 'subplanner', depth: 1 }, 'supervisor'],
+    ['a planner turn', { research: true, actor: 'planner-turn' }, 'user'],
+  ] as const)('is that of the task %s started', async (_who, researchOrigin, origin) => {
+    const env = setup();
+    const origins: string[] = [];
+    env.orchestrator.subscribe({ onRunStarted: (run) => origins.push(run.origin) });
+    env.orchestrator.loadPlan([change('a', 1), change('r', 2, { dependencies: ['a'], research: true })]);
+    env.store.update('r', { researchOrigin });
+    env.orchestrator.startAtGate('r');
+
+    await env.orchestrator.markTaskComplete('a');
+
+    await vi.waitFor(() => expect(env.spawned('r')).toHaveLength(1));
+    expect(origins).toEqual([origin]);
+  });
+});

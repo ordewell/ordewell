@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createTask, type RunSettings, type Task } from '../../models/Task';
 import type { ExecutionRecord } from '../../models/Execution';
-import { RunSupervision, type RunSupervisionHost } from '../RunSupervision';
+import { RunSupervision, runOrigin, type RunSupervisionHost } from '../RunSupervision';
 import { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings } from '../SettingsService';
 import type { SupervisorOptions } from '../Supervisor';
 
@@ -303,5 +303,13 @@ describe('a loop\'s check whose result a planner turn asked for (ADR-0045 L3, L6
     expect(host.reported).toHaveBeenCalledTimes(1);
     expect(host.reported).toHaveBeenCalledWith('t1', expect.anything());
     expect(host.deliver).toHaveBeenCalledWith(expect.stringContaining('two tests fail'), 'user');
+  });
+});
+
+describe('whose run an actor opens', () => {
+  it('carries on the run for a supervisor or a subplanner, and asks for the user for anyone else (ADR-0056 M6)', () => {
+    expect(runOrigin({ kind: 'supervisor', level: 'act' })).toBe('supervisor');
+    expect(runOrigin({ kind: 'subplanner', depth: 1 })).toBe('supervisor');
+    for (const kind of ['user', 'planner-turn', 'autorun'] as const) expect(runOrigin({ kind })).toBe('user');
   });
 });

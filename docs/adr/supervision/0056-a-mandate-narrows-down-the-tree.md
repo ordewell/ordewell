@@ -192,7 +192,9 @@ Judgment stays the planner's.
 - **Authority stays at the seam (M6).** `consent()` in `ExecutionCommands` stays the one
   place. `ExecutionActor` gains `subplanner`, at its depth: every turn of a child acts as
   it, and consent is its grants alone, allow or refuse, never `ask`. `USERS_ONLY` is
-  refused to it as to any model. These paths reach around the seam and are closed:
+  refused to it as to any model. It has no user to act for, so what it starts carries the
+  supervisor's authority: a run it opens, a queued research start and a report turn alike
+  (`actorAuthority`). These paths reach around the seam and are closed:
 
   | path | what goes wrong | closed by |
   |---|---|---|
@@ -373,3 +375,4 @@ Judgment stays the planner's.
 - 2026-10-31 — a subplanner's turns come before its carves: a parked subplanner keeps its reserve, a turn past its room takes from its children's, and a turn nothing covers ends the node `blocked`.
 - 2026-10-31 — a parked subplanner's reserve funds its next turn, which spends it before room, and is kept again as it parks; what covers a turn is said.
 - 2026-10-31 — implemented in part: `Mandate`, `rootMandate`, `narrow`, the seam, the paths around it and a child's tool list, on a faked child, and the delegation setting (ADR-0055 D21). Built closest to the text where it could not hold: an automatic merge and `{ kind: 'autorun' }` read their grants below the root only, since Off and Watch hold neither and a flat run does not change; `PlanChangeCheck` reads `research` too; a request names the level narrowing.
+- 2026-10-31 — a subplanner's starts take the supervisor's authority as its report turns do, so a run it opens carries on rather than starting supervision afresh from a user's settings.

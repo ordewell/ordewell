@@ -74,18 +74,52 @@ export function isHeldEvent(event: Pick<RunEvent, 'kind'>): boolean {
 /** The most a wake carries (ADR-0057 R5): overflow becomes counts and a pointer. A tuning value. */
 export const WAKE_MAX_CHARS = 24_000;
 
+/** The most one event that rode along takes (ADR-0057 R5): it woke nobody, and `task_query` reads the rest. */
+export const RIDE_ALONG_CHARS = 120;
+
+/** What a digest's passes go under, which is how {@link boundedWakeUps} tells them from what needs an answer. */
+export const SINCE_LAST = 'Since the last update:';
+
+/** How many events the note on updates left out names before it counts them. */
+const LEFT_OUT_EVENTS = 8;
+
+/** What each digest leaves free for {@link leftOut}, so the newest update and that note fit the cap together. */
+export const LEFT_OUT_ROOM = 100 + LEFT_OUT_EVENTS * (RIDE_ALONG_CHARS + 1);
+
+export function cut(text: string, chars: number): string {
+  return text.length > chars ? `${text.slice(0, chars - 1)}…` : text;
+}
+
 /**
- * A turn's run updates within {@link WAKE_MAX_CHARS}, whole and oldest first,
- * then how many are left out. A turn takes every update that waited for it,
- * so each one's own cap does not bound what the planner is sent; the
- * transcript keeps them all.
+ * A turn's run updates within {@link WAKE_MAX_CHARS}, in the order they came. A
+ * turn takes every update that waited for it, so each one's own cap does not
+ * bound what the planner is sent; the transcript keeps them all. The newest is
+ * what opened the turn, so it stays whole and the oldest go first, each named
+ * in {@link leftOut}: the turn settles what it was sent, and nothing raises
+ * those events again.
  */
 export function boundedWakeUps(digests: readonly string[]): string[] {
-  let used = 0;
-  let kept = 0;
-  while (kept < digests.length && used + digests[kept].length <= WAKE_MAX_CHARS) used += digests[kept++].length;
-  const more = digests.length - kept;
-  return more > 0 ? [...digests.slice(0, kept), `+${more} more run update${more === 1 ? '' : 's'}; task_query reads the tasks they were about.`] : [...digests];
+  if (digests.reduce((used, digest) => used + digest.length, 0) <= WAKE_MAX_CHARS) return [...digests];
+  let from = digests.length - 1;
+  let used = digests[from].length + LEFT_OUT_ROOM;
+  while (from > 0 && used + digests[from - 1].length <= WAKE_MAX_CHARS) used += digests[--from].length;
+  return from > 0 ? [leftOut(digests.slice(0, from)), ...digests.slice(from)] : [...digests];
+}
+
+/** A note of updates left out: their events in a line each, what needs an answer ahead of the passes, then a count. */
+function leftOut(digests: readonly string[]): string {
+  const head = `+${digests.length} earlier run update${digests.length === 1 ? '' : 's'} left out`;
+  const sections = digests.map((digest) => digest.split(`\n${SINCE_LAST}\n`));
+  const bullets = (text = '') => text.split('\n').filter((line) => line.startsWith('- '));
+  const events = [...sections.flatMap(([asks]) => bullets(asks)), ...sections.flatMap(([, passes]) => bullets(passes))];
+  // A digest that overflowed its own cap only counted what it could not show.
+  const counted = digests.flatMap((digest) => [...digest.matchAll(/^\+(\d+) more: /gm)]).reduce((sum, [, count]) => sum + Number(count), 0);
+  const more = events.length - Math.min(events.length, LEFT_OUT_EVENTS) + counted;
+  return [
+    events.length > 0 ? `${head}; task_query reads these tasks:` : `${head}.`,
+    ...events.slice(0, LEFT_OUT_EVENTS).map((line) => cut(line, RIDE_ALONG_CHARS)),
+    ...(more > 0 ? [`+${more} more.`] : []),
+  ].join('\n');
 }
 
 /** A planner's prompt cache whose connector does not state how long it lasts (ADR-0057 R4). */
