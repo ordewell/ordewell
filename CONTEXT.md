@@ -3557,7 +3557,7 @@ Windows box can answer POSIX.
 **Planner sandbox** (`services/sandbox/`, ADR-0011) — the OS sandbox every
 command of the planner's shell runs in, beneath the classifier: Seatbelt on
 macOS, bubblewrap on Linux, none on Windows. One profile for every command the
-classifier allowed: the host readable, the session's *scratch directory*
+classifier allowed: the host readable, the planner's *scratch directory*
 writable, and the network only for a command that was approved; an `auto` one
 has none, nor the local services that would act for it (on macOS but
 launchd). A *sealed run* has a stricter profile of its own. A `SandboxBackend` (`probe`, `wrap`) turns the *research
@@ -3568,19 +3568,21 @@ start, commands run on the classifier alone and the session says so once.
 Separate from Codex's *Sandbox probe*, which asks whether Codex's own sandbox
 starts. *Avoid:* "container" — sandboxes share nothing and need no daemon.
 
-**Scratch directory** — the one directory a planner command may write, set as
-its `TMPDIR` (and a *sealed run*'s `HOME`): made under the OS temporary
-directory on the session's first command, private to the user, and removed
-when the session ends or resets (or by the next process, when the one that made
-it was killed). The caches read commands write as a side effect (npm's, Go's,
-the XDG cache root) point at it, and a sealed run keeps intermediate files
-there for the session's later commands. *Avoid:* "workspace" — the workspace
-is read-only to the planner.
+**Scratch directory** — the directory a profile's commands may write, set as
+their `TMPDIR` (and the `HOME` of a *sealed run* and a *native shell*): made
+under the OS temporary directory on that profile's first command, private to
+the user, and removed when the session ends or resets (or by the next process,
+when the one that made it was killed). A session has one per profile, with the
+caches read commands write as a side effect (npm's, Go's, the XDG cache root)
+inside it, so nothing a sealed run writes takes effect under a wider profile
+(ADR-0036 S8). A sealed run keeps intermediate files in its own for the
+session's later sealed runs. *Avoid:* "workspace" — the workspace is read-only
+to the planner.
 
 **Sealed run** (`PlannerShellSandbox.launchSealed`, ADR-0036) — a planner
 command run where it can compute anything and change nothing, so that no
 classifier has to vouch for it: the workspace read-only (a throwaway overlay on
-a bubblewrap that has one), the *scratch directory* writable and its `HOME`,
+a bubblewrap that has one), its own *scratch directory* writable and its `HOME`,
 nothing else readable but the system's executables, libraries and minimal
 configuration, no network, none of the host's environment beyond `PATH` and
 the locale, a `/tmp` of its own, limits on processes, memory and wall time, and
@@ -3605,8 +3607,8 @@ a harness planner's own shell, let through only by the user's opt-in
 Code's `Bash` and `Monitor`, or OpenCode 2.x's `bash` and `shell`. Ordewell
 names its launcher in the harness's own spelling — `CLAUDE_CODE_SHELL_PREFIX`,
 or `SHELL` plus the config layer's `shell` — and every command runs through it
-in the *sealed run* profile with the network (N3), so the workspace stays
-read-only and the keychain and the user's credential files stay out of reach;
+in the *sealed run* profile with the network (N3) and a *scratch directory* of
+its own, so the workspace stays read-only and the keychain and the user's credential files stay out of reach;
 that network stops at the machine itself, with loopback and local Unix sockets
 refused, since the harness's own server and Ordewell's daemon listen there;
 the planner's process starts without the user's credential variables (N2.2)

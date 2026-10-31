@@ -9,6 +9,7 @@ import {
   plannerShellProfile,
   resolvePlannerSandbox,
   sandboxedFailureNote,
+  sealedRunHeader,
   sealedShellProfile,
   sweepOrphanScratch,
   PLANNER_SANDBOX_DOCS,
@@ -384,12 +385,12 @@ describe('PlannerShellSandbox', () => {
     const root = mkdtempSync(join(tmpdir(), 'ordewell-sealed-ws-'));
     try {
       await sandbox.launchSealed(POSIX, { workspace: root });
-      const [planner, sealed] = backend.profiles;
-      expect(sealed.write).toEqual(planner.write);
+      const [, sealed] = backend.profiles;
       expect(sealed.read).toEqual(['/usr', realpathSync(root)]);
-      expect(sealed.env.HOME).toBe(planner.write[0]);
+      expect(sealed.env.HOME).toBe(sealed.write[0]);
+      expect(sealed.write[0]).toBe(sandbox.scratchPath());
       await sandbox.launchSealed(POSIX, { workspace: root, writable: root });
-      expect(backend.profiles[2].write).toEqual([planner.write[0], realpathSync(root)]);
+      expect(backend.profiles[2].write).toEqual([sealed.write[0], realpathSync(root)]);
     } finally {
       sandbox.end();
       rmSync(root, { recursive: true, force: true });
@@ -418,6 +419,44 @@ describe('PlannerShellSandbox', () => {
     }
   });
 
+  it('keeps every path a wider profile writes or names out of what a sealed run can write (ADR-0036 S8)', async () => {
+    const backend = fakeBackend();
+    const sandbox = new PlannerShellSandbox(availableWith(backend));
+    const root = mkdtempSync(join(tmpdir(), 'ordewell-wider-ws-'));
+    const short = mkdtempSync(join(tmpdir(), 'ordewell-wider-tmp-'));
+    try {
+      await sandbox.launchSealed(POSIX, { workspace: root });
+      await sandbox.launch(POSIX, { network: false });
+      await sandbox.launch(POSIX, { network: true });
+      await sandbox.launchNativeShell({ workspace: root, tmpdir: short, shell: '/usr/bin/zsh' });
+      const [sealed, ...wider] = backend.profiles;
+      const [scratch] = sealed.write;
+      expect(wider).toHaveLength(3);
+      for (const profile of wider) {
+        const named = [...profile.write, ...Object.values(profile.env).filter((value) => value.startsWith('/'))];
+        expect(named.length).toBeGreaterThan(profile.write.length);
+        expect(named.filter((p) => p === scratch || p.startsWith(`${scratch}/`))).toEqual([]);
+      }
+      expect(wider[2].env.HOME).toBe(wider[2].write[0]);
+      expect(wider[2].write[0]).not.toBe(wider[0].write[0]);
+    } finally {
+      sandbox.end();
+      rmSync(root, { recursive: true, force: true });
+      rmSync(short, { recursive: true, force: true });
+    }
+  });
+
+  it('removes the scratch directory of every profile when the session ends', async () => {
+    const backend = fakeBackend();
+    const sandbox = new PlannerShellSandbox(availableWith(backend));
+    await sandbox.launch(POSIX, { network: false });
+    await sandbox.launchSealed(POSIX, { workspace: tmpdir() });
+    const dirs = backend.profiles.map((profile) => profile.write[0]);
+    expect(new Set(dirs).size).toBe(2);
+    sandbox.end();
+    expect(dirs.filter((dir) => existsSync(dir))).toEqual([]);
+  });
+
   it('cannot seal where no sandbox runs, or where the sandbox cannot start a sealed run, and says so once (S6)', async () => {
     const notices: string[] = [];
     const none = new PlannerShellSandbox(async () => ({ available: false, notice: 'no sandbox' }));
@@ -433,6 +472,13 @@ describe('PlannerShellSandbox', () => {
     expect(notices).toEqual(['no sandbox', 'no sealed runs']);
     none.end();
     unsealed.end();
+  });
+});
+
+describe('sealedRunHeader', () => {
+  it("tells the planner its other commands have another $TMPDIR, and a task that its later commands share this one (ADR-0036 S8)", () => {
+    expect(sealedRunHeader('asked')).toContain('which later sealed runs can read');
+    expect(sealedRunHeader('after', { worktree: true, first: false })).toContain('which later commands can read');
   });
 });
 

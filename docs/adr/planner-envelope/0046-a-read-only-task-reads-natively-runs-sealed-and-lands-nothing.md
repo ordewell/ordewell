@@ -64,7 +64,7 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
   read-only tier and the allowlist included, so none has the network. A sealed
   run may have written what a later command runs or reads as config: the
   worktree's `package.json` `test` script, which an allowlisted `npm test`
-  runs, a Makefile, a `conftest.py`, a tool's dotfile, a cache in the scratch
+  runs, a Makefile, a `conftest.py`, a tool's dotfile, a file in the scratch
   directory. Run as the planner's would, that command reads the whole host,
   and an allowlisted one has the network, so the user's credentials could
   leave the machine with nobody asked. Until then the worktree holds only what
@@ -83,7 +83,8 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 - **Its sealed runs** have ADR-0036's profile with the task's own worktree
   writable: the workspace readable, the worktree writable, no network, no home
   directory, and a scratch directory of the attempt's own as `TMPDIR` and
-  `HOME`, removed when the attempt ends. In a repo group every worktree is
+  `HOME`, removed when the attempt ends and apart from the one its commands
+  have before the first sealed run (ADR-0036 S8). In a repo group every worktree is
   writable and the group's task workspace root is not persistently writable,
   since the root holds no worktree's `.git` and is where the group's runner
   starts its git; one repository keeps its worktree whole. Where the sandbox
@@ -444,3 +445,4 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 - 2026-10-25 — a read-only task reads the web through Ordewell's `fetch` and `web_search`, under the planner's web-read policy without prompting and with a budget per attempt; native web tools stay refused.
 - 2026-10-25 — a task's web-read decisions are recorded in its attempt's log, an allowed read's naming what allowed it, and never in the planner's conversation; a read answered after its attempt ended hands the runner nothing; a cancelled allowed read keeps its count.
 - 2026-10-31 — a sealed run's memory limit is real memory, and a run ended at it says so (ADR-0036).
+- 2026-10-31 — a task's commands before its first sealed run have a scratch directory apart from its sealed runs' (ADR-0036 S8).

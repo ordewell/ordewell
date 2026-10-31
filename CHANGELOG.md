@@ -89,6 +89,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **Each sandbox profile has its own scratch directory**, so nothing a sealed
+  run writes takes effect under a wider profile.
 - **VS Code prompts are keyboard accessible.** Editable task and subtask prompts
   are focusable controls with accessible names; read-only prompts remain
   unchanged.

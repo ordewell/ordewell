@@ -87,7 +87,7 @@ const listModelsInput = z.object({
  * and shared with the API planner's `bash`, so a sealed failure on the
  * network reads as the sandbox's doing rather than one to retry.
  */
-export const SEALED_RUNS = 'Where this machine has a sandbox, a command that would be refused without asking (a loop, a here-document, a pipe into python3) runs sealed instead: no network, no home directory or credentials, and nothing it writes reaches the workspace; $TMPDIR, which is also $HOME, is a scratch directory kept for this session. Its result starts with "[Ran sealed".';
+export const SEALED_RUNS = 'Where this machine has a sandbox, a command that would be refused without asking (a loop, a here-document, a pipe into python3) runs sealed instead: no network, no home directory or credentials, and nothing it writes reaches the workspace; $TMPDIR, also $HOME, is scratch kept for this session\'s sealed runs. Its result starts with "[Ran sealed".';
 
 export const SEALED_PARAM = 'Run it sealed, without asking anyone: for local computation over the workspace, such as a loop over files or a pipeline into python3. Never for a command that needs the network or the user\'s accounts; it fails sealed. An allowlist exclusion and a command the user denied are refused either way.';
 

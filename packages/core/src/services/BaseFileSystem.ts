@@ -413,7 +413,7 @@ export abstract class BaseFileSystem implements IFileSystem {
     }
 
     // A sealed run may have written what a later command reads: a script the
-    // allowlisted `npm test` runs, a tool's config, a cache in scratch. Run
+    // allowlisted `npm test` runs, a tool's config, a file in scratch. Run
     // outside the sealed profile, that command would read the whole host, and
     // an allowlisted one would have the network, so once a sealed run has
     // started every later command of the attempt runs sealed (ADR-0046).
