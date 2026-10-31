@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -27,14 +28,17 @@ describe.each(SHELLS)('the bubblewrap memory watcher, under %s', (shell) => {
     rmSync(proc, { recursive: true, force: true });
   });
 
-  function prelude(): string {
-    const profile: SandboxProfile = {
-      write: [], read: ['/usr'], network: false, env: {},
-      limits: { processes: 2000, memoryBytes: LIMIT_KB * 1024, addressSpaceBytes: 8 * 1024 ** 4, wallTimeMs: 60_000 },
-    };
-    const [, script] = new BubblewrapBackend('/usr/bin/bwrap').wrap({ shell: '/bin/sh', shellArgs: ['-c'], env: {} }, profile).args;
+  const SEALED: SandboxProfile = {
+    write: [], read: ['/usr'], network: false, env: {},
+    limits: { processes: 2000, memoryBytes: LIMIT_KB * 1024, addressSpaceBytes: 8 * 1024 ** 4, wallTimeMs: 60_000 },
+  };
+  /** A planner command's profile: no limits, so nothing of the sum the memory limit needs. */
+  const PLANNER: SandboxProfile = { write: [], read: 'host', network: false, env: {} };
+
+  function launcherArgs(profile: SandboxProfile, edit: (script: string) => string = (script) => script): string[] {
+    const [flag, script, name] = new BubblewrapBackend('/usr/bin/bwrap').wrap({ shell: '/bin/sh', shellArgs: ['-c'], env: {} }, profile).args;
     // Linux's `/proc/$$` is there from the start, and the watcher takes its going to mean the run ended.
-    return `mkdir -p '${proc}/'$$ '${proc}/'$PPID\n${script.replaceAll('/proc/', `${proc}/`)}`;
+    return [flag, `mkdir -p '${proc}/'$$ '${proc}/'$PPID\n${edit(script).replaceAll('/proc/', `${proc}/`)}`, name];
   }
 
   /** The launcher's last argument: a program file, since bubblewrap takes the arguments the prelude adds. */
@@ -69,7 +73,7 @@ describe.each(SHELLS)('the bubblewrap memory watcher, under %s', (shell) => {
 
   function run(rssKb: number): Promise<{ code: number | null; signal: NodeJS.Signals | null; root: string }> {
     return new Promise((resolve, reject) => {
-      const child = spawn(shell, ['-c', prelude(), 'ordewell-sealed', program(bubblewrap(rssKb))], { stdio: ['ignore', 'pipe', 'ignore'] });
+      const child = spawn(shell, [...launcherArgs(SEALED), program(bubblewrap(rssKb))], { stdio: ['ignore', 'pipe', 'ignore'] });
       let out = '';
       child.stdout.on('data', (chunk) => { out += String(chunk); });
       child.on('error', reject);
@@ -133,8 +137,10 @@ describe.each(SHELLS)('the bubblewrap memory watcher, under %s', (shell) => {
     }
   }
 
-  it("ends a sandbox the launcher's death left behind, and no other run's", async () => {
-    const { child, pids } = start(['-c', prelude(), 'ordewell-sealed', program(orphaned())]);
+  const LAUNCHES: [string, SandboxProfile][] = [['a sealed run', SEALED], ['a planner command', PLANNER]];
+
+  it.each(LAUNCHES)("ends %s the launcher's death left behind, and no other run's", async (_launch, profile) => {
+    const { child, pids } = start([...launcherArgs(profile), program(orphaned())]);
     const { root, other } = await pids;
     try {
       child.kill('SIGKILL');
@@ -147,9 +153,9 @@ describe.each(SHELLS)('the bubblewrap memory watcher, under %s', (shell) => {
     }
   });
 
-  it('ends the launcher, and so the sandbox, when its caller died before the launcher armed its own death signal', async () => {
+  it.each(LAUNCHES)('ends the launcher of %s, and so the sandbox, when its caller died before the launcher armed its own death signal', async (_launch, profile) => {
     // The caller: a shell that can be killed while the launcher, in the background, goes on.
-    const { child, pids } = start(['-c', '"$@" & wait', 'caller', shell, '-c', prelude(), 'ordewell-sealed', program(orphaned())]);
+    const { child, pids } = start(['-c', '"$@" & wait', 'caller', shell, ...launcherArgs(profile), program(orphaned())]);
     const { root, other, launcher } = await pids;
     try {
       child.kill('SIGKILL');
@@ -161,5 +167,17 @@ describe.each(SHELLS)('the bubblewrap memory watcher, under %s', (shell) => {
     } finally {
       for (const pid of [root, other, launcher]) if (alive(pid)) process.kill(pid, 'SIGKILL');
     }
+  });
+
+  it('runs a planner command with no watcher on a host where it cannot wait, and does not spin', async () => {
+    const noPrograms = (script: string) => script.replaceAll(/PATH=\S+/g, `PATH=${proc}/nothing`);
+    const children = program(['/bin/sleep 1', '/usr/bin/pgrep -P $$', 'exit 0'].join('\n'));
+    const child = spawn(shell, [...launcherArgs(PLANNER, noPrograms), children], { stdio: ['ignore', 'pipe', 'ignore'] });
+    let out = '';
+    child.stdout.on('data', (chunk) => { out += String(chunk); });
+    const [code] = await once(child, 'close');
+
+    expect(code).toBe(0);
+    expect(out).toBe('');
   });
 });

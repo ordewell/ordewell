@@ -118,10 +118,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   died. It now counts what is in use, and a run over it is ended with a note.
   On Linux a sealed run also reads `/etc/hosts`, since vitest stops at startup
   when `localhost` does not resolve; `localhost` is the run's own loopback.
-- **A sealed run stopped as it starts no longer outlives the stop.** A kill in
-  the first moments of a run could leave it going with nothing watching it, so
-  with no time or memory limit: on Linux under bubblewrap, and on macOS with
-  nothing left to end it at all. It now ends with its launcher on both.
+- **A command stopped as it starts no longer outlives the stop.** A kill in
+  the first moments of a sealed run could leave it going with nothing watching
+  it, so with no time or memory limit: on Linux under bubblewrap, and on macOS
+  with nothing left to end it at all. It now ends with its launcher on both, and
+  so on Linux does an ordinary planner command, which had the same gap.
 - **The sealed launcher reads no shell startup files.**
 - **A planner turn waiting on agent detection says so.** It read as planning
   while it waited for the agents to be listed, which can take a while on a
