@@ -1907,7 +1907,8 @@ waits until their work is merged into the user's branch (ADR-0020): until that
 branch contains the integration tip each of them landed at, or that repo's
 integration branch is gone so no merge could bring it in. A review checkout of
 the integration branch, detached or a branch cut from it, is no merge (ADR-0054).
-The user's Merge all opens it, as does a merge made by hand; Force start passes it
+The user's Merge all opens it, as does a merge made by hand, and a merge taken back
+out closes it; Force start passes it
 after a confirmation naming what is not merged, and the task keeps that choice
 (`forcedPastGate`). A force start queued behind its dependencies passes only
 the gate the user confirmed when forcing it; work that lands after stops it at

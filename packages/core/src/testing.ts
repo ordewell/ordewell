@@ -564,13 +564,16 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
   }
   async findInHead(run: IsolationRun): Promise<string[]> {
     this.log({ op: 'findInHead' });
-    const found: string[] = [];
+    const changed: string[] = [];
     for (const record of Object.values(run.tasks)) {
-      if (record.status !== 'merged' || record.inHead || !this.mergedByHand.has(record.taskId)) continue;
-      record.inHead = true;
-      found.push(record.taskId);
+      if (record.status !== 'merged') continue;
+      const merged = this.mergedByHand.has(record.taskId);
+      if (merged === !!record.inHead) continue;
+      if (merged) record.inHead = true;
+      else delete record.inHead;
+      changed.push(record.taskId);
     }
-    return found;
+    return changed;
   }
   async snapshotTree(): Promise<TreeSnapshot | null> { this.log({ op: 'snapshotTree' }); return this.treeSnapshot; }
   async changedSince(): Promise<string[]> { this.log({ op: 'changedSince' }); return [...this.changedFiles]; }
