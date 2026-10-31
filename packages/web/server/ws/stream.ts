@@ -40,6 +40,9 @@ export function createWsHandler(pool: OrchestratorPool) {
     // broadcast it already holds.
     const compaction = pool.plannerCompaction(sessionId);
     if (compaction) ws.send(JSON.stringify(compaction satisfies SessionFrame));
+    // Nor has a turn at the planner gate, which no planner has heard of yet.
+    const detection = pool.plannerDetection(sessionId);
+    if (detection?.waiting) ws.send(JSON.stringify(detection satisfies SessionFrame));
     // Subscribing also greets with host-owned account limits, independently
     // of the run snapshot above, even when the host knows none yet.
     pool.subscribe(sessionId, ws);

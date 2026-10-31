@@ -7,6 +7,7 @@ import { PlannerTurnDiscardedError, PlannerTurnStoppedError } from '../PlannerCo
 import { PlannerNotReadyError } from '../plannerReadiness';
 import { recordRunnerAuth, resetRunnerAuth } from '../runnerAuth';
 import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
+import type { SessionMessage } from '../SessionMessage';
 import { fakeConfig, makeSession, testWorkspace } from './sessionTestKit';
 import { recordingRunner } from './supervisorTestKit';
 
@@ -81,6 +82,65 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 afterEach(() => {
   resetInstalledPlanner();
   resetRunnerAuth();
+});
+
+describe('what a turn at the gate tells the surfaces', () => {
+  function session() {
+    const config = keylessConfig();
+    const { aiService } = recordingPlanner(config);
+    const heard: SessionMessage[] = [];
+    const held = makeSession({ aiService, config, broadcast: (m) => heard.push(m) });
+    held.loadPlan(savedPlan(), 'build it', testWorkspace, { persist: false });
+    const told = () => heard.flatMap((m) => (m.type === 'planner_detection' ? [m.waiting ? 'waiting' : 'answered'] : m.type === 'planner_turn_started' ? ['turn'] : []));
+    return { held, aiService, told };
+  }
+
+  it('says it waits on the probe, and has asked no planner, until the probe answers', async () => {
+    const env = session();
+    const probe = heldProbe();
+
+    const turn = env.held.continueConversation('next step');
+    await settle();
+
+    expect(env.told()).toEqual(['waiting']);
+    expect(env.held.plannerDetection()).toEqual({ type: 'planner_detection', waiting: true });
+    expect(env.aiService.continueConversation).not.toHaveBeenCalled();
+
+    probe.answer(true);
+    await turn;
+
+    expect(env.told()).toEqual(['waiting', 'answered', 'turn']);
+    expect(env.held.plannerDetection()).toEqual({ type: 'planner_detection', waiting: false });
+  });
+
+  it('says so once for all that wait, and ends with the probe, not with a Stop', async () => {
+    const env = session();
+    const probe = heldProbe();
+
+    const stop = new AbortController();
+    const compacted = env.held.compactConversation(stop.signal).catch((err: unknown) => err);
+    await settle();
+    stop.abort();
+    expect(await compacted).toBeInstanceOf(PlannerTurnStoppedError);
+    const reply = env.held.continueConversation('next step');
+    await settle();
+
+    expect(env.told()).toEqual(['waiting']);
+
+    probe.answer(true);
+    await reply;
+
+    expect(env.told()).toEqual(['waiting', 'answered', 'turn']);
+  });
+
+  it('says nothing of a turn the gate lets through at once', async () => {
+    recordInstalledPlanner('claude-code');
+    const env = session();
+
+    await env.held.continueConversation('next step');
+
+    expect(env.told()).toEqual(['turn']);
+  });
 });
 
 describe('a restored message', () => {

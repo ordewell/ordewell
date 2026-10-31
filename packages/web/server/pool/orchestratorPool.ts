@@ -359,6 +359,7 @@ export class OrchestratorPool {
   plannerTurnId(sessionId: string): string | undefined { return this.sessions.get(sessionId)?.plannerTurnId; }
   /** The planner compaction running in a session this process holds, as its start was announced; it has no turn to name. */
   plannerCompaction(sessionId: string): ReturnType<Session['plannerCompaction']> { return this.sessions.get(sessionId)?.plannerCompaction(); }
+  plannerDetection(sessionId: string): ReturnType<Session['plannerDetection']> | undefined { return this.sessions.get(sessionId)?.plannerDetection(); }
   /** The planner's approval requests still waiting, as they were announced. */
   announcedApprovals(sessionId: string): ApprovalRequestMessage[] { return this.sessions.get(sessionId)?.announcedApprovals() ?? []; }
   /** The last broadcast of the session so far: a snapshot taken now accounts for it and everything before. */

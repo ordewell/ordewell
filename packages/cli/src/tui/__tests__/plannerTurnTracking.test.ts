@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { createTask, type SessionMessage } from '@ordewell/core';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import { initialState, reduce, type Action, type Effect } from '../reducer';
+import { inboundFor } from '../inbound';
+import { chatActivity } from '../layout';
 import { plannerInFlight, type TuiState } from '../state';
 
 /**
@@ -46,6 +48,43 @@ function fold(state: TuiState, actions: Action[]): { state: TuiState; effects: E
   }
   return { state: current, effects };
 }
+
+describe('a turn the daemon holds for agent detection', () => {
+  const socket = () => {
+    const actions: Action[] = [];
+    const planning = inboundFor({ getTaskLog: vi.fn() } as unknown as Parameters<typeof inboundFor>[0], (action) => actions.push(action), 's1').planning();
+    return { actions, planning };
+  };
+
+  it('says what it waits for, until the probe answers', () => {
+    const { actions, planning } = socket();
+
+    planning({ type: 'planner_detection', waiting: true });
+    const waiting = fold(midTurn(), actions).state;
+    expect(chatActivity(waiting)?.label).toBe('Detecting coding agents…');
+
+    planning({ type: 'planner_detection', waiting: false });
+    expect(chatActivity(fold(midTurn(), actions).state)?.label).toBe('Planning…');
+  });
+
+  it('says it no longer once a turn opens, whatever of the answer a dropped socket lost', () => {
+    const { actions, planning } = socket();
+
+    planning({ type: 'planner_detection', waiting: true });
+    planning({ type: 'planner_turn_started', turnId: 'turn-1', startedAt: '2026-10-31T10:00:00.000Z' });
+
+    expect(chatActivity(fold(midTurn(), actions).state)?.label).toBe('Planning…');
+  });
+
+  it('leaves a turn stopped at the gate idle, however long the probe takes', () => {
+    const { actions, planning } = socket();
+
+    planning({ type: 'planner_detection', waiting: true });
+    const { state } = fold({ ...midTurn(), planner: 'idle' }, actions);
+
+    expect(chatActivity(state)).toBeNull();
+  });
+});
 
 describe('a plan refresh during a planner turn', () => {
   it('shows the plan and leaves the turn, and the prompt held behind it, where they were', async () => {

@@ -187,6 +187,8 @@ export function applySettings(state: TuiState, settings: Partial<SettingsRespons
  */
 export function followSession(state: TuiState, message: SessionMessage): TuiState {
   const heard = hear(state, message);
+  // An open turn has passed the planner gate, whatever of the answer a dropped socket lost.
+  if (message.type === 'planner_turn_started') return { ...heard, plannerDetecting: false };
   if (message.type === 'approval_request') {
     const { id, kind, subject, scope, detail, body } = message;
     // A task runner's request is answered in its task view, never in the planner's modal.

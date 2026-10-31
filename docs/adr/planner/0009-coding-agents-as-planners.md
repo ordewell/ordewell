@@ -197,7 +197,11 @@ model's behalf, which is precisely what a coding agent replaces.
   ([ADR-0052](../routing/0052-a-signed-out-coding-agent-is-flagged-and-signs-in-from-the-chat.md)).
   A login names one installed agent and never moves the planner, and an agent's
   own login failure is still reworded where a stale verdict slips through. A turn whose process dies surfaces the stderr tail as a visible chat
-  error — never an empty planner bubble, per the repo's fail-safe contract.
+  error — never an empty planner bubble, per the repo's fail-safe contract. A
+  turn sent while that probe is out waits for its answer, and no planner hears
+  of it until then, so the Session says so (`planner_detection`) and a surface
+  shows "Detecting coding agents…" for that turn rather than that it is
+  planning. A probe can run for as long as its slowest agent answers.
   What the preflight cannot know, the agent says itself: a startup warning —
   Codex's `configWarning` — reaches the timeline instead of being dropped for
   arriving before the first turn. That warning is the difference between a
@@ -371,3 +375,4 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-10-24 — the surface list corrected: there is no web surface, so three (VS Code, the CLI and the TUI) consume the planner's events (ADR-0006).
 - 2026-10-24 — evidence a later task acts on is a plain read-only task it depends on; only evidence the planner decides on is a research task (ADR-0037 R5).
 - 2026-10-27 — a signed-out harness planner is flagged in the welcome line, the picker and the planner pills; its turn is refused before it is sent with the way to sign in, and `/login` or the chat's Log in runs the runner's own login ([ADR-0052](../routing/0052-a-signed-out-coding-agent-is-flagged-and-signs-in-from-the-chat.md)).
+- 2026-10-31 — a turn waiting on the probe for installed agents says so on every surface.

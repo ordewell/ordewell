@@ -643,6 +643,8 @@ export class Session {
    * with why it must not open: a Stop, a newer goal, or its plan scope ending.
    */
   private readonly openingsWaiting = new Set<(err: Error) => void>();
+  /** The installed-planner probe a turn was parked on and the surfaces were told of; null once it answered. */
+  private detection: Promise<void> | null = null;
   /** The conversation's opening, from admission until its turn settles; see {@link behindOpening}. */
   private opening: PendingOpening | null = null;
   private readonly editor: PlanEditor;
@@ -805,7 +807,7 @@ export class Session {
         return landed;
       },
       notice: (message) => this.notice('error', message),
-      plannerDetecting: () => (installedPlannerAnswered() ? null : installedPlannerDetected()),
+      plannerDetecting: () => (installedPlannerAnswered() ? null : this.plannerDetected()),
       assertPlannerReady: () => this.assertPlannerReady(),
       plannerRunner: () => runnerForProvider(this.config.aiProvider),
     });
@@ -1278,6 +1280,11 @@ export class Session {
     return this.events.currentCompaction();
   }
 
+  /** Whether a planner turn waits on the installed-planner probe, for a surface that joins or reconnects meanwhile. */
+  plannerDetection(): Extract<SessionMessage, { type: 'planner_detection' }> {
+    return { type: 'planner_detection', waiting: this.detection !== null };
+  }
+
   /** Scopes the user granted this session — surfaced so a UI can show what is already allowed. */
   approvedScopes(): string[] {
     return this.approvalPolicy.grantedScopes();
@@ -1701,13 +1708,29 @@ export class Session {
       };
       this.openingsWaiting.add(end);
       signal?.addEventListener('abort', onAbort, { once: true });
-      installedPlannerDetected().then(() => {
+      this.plannerDetected().then(() => {
         // Ended meanwhile: its caller has heard, and the probe's answer must not open it after all.
         if (!this.openingsWaiting.delete(end)) return;
         signal?.removeEventListener('abort', onAbort);
         this.assertPlannerReady();
       }).then(resolve, reject);
     });
+  }
+
+  /**
+   * The installed-planner probe, for a turn at the gate to wait on. No planner
+   * has heard of that turn, so the surfaces are told what it waits for, once
+   * however many wait.
+   */
+  private plannerDetected(): Promise<void> {
+    if (!this.detection) {
+      this.detection = installedPlannerDetected().then(() => {
+        this.detection = null;
+        this.broadcast({ type: 'planner_detection', waiting: false });
+      });
+      this.broadcast({ type: 'planner_detection', waiting: true });
+    }
+    return this.detection;
   }
 
   /** End every turn waiting at the planner gate before it opens; false when none was. */

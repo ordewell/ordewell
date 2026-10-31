@@ -232,6 +232,7 @@ function reduceAction(state: TuiState, action: Action): Step {
     case 'sessionMessage': {
       if (stale(state, action.sessionId)) return step(state);
       if (action.message.type === 'planner_compaction') return followCompaction(state, action.message);
+      if (action.message.type === 'planner_detection') return step({ ...state, plannerDetecting: action.message.waiting });
       const next = followSession(state, action.message);
       const { sessionId } = state;
       const gateClosed = action.message.type === 'planner_turn_ended' && next.turnGate.open === null;

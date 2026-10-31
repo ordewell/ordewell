@@ -73,7 +73,7 @@ export default function App() {
   const {
     conversation, plan, isExecuting, isResearchActive, error, models, modelsByRunner,
     runnerList, enabledRunnerIds, pendingRunners, modelAllowlist, held, unsent, modesByRunner, runnerNotice, modelConfig,
-    modelOptions, configuredProviders, planner, plannerKnown, runnersKnown, isReady, modelDiscoveryErrors,
+    modelOptions, configuredProviders, planner, plannerKnown, plannerDetecting, runnersKnown, isReady, modelDiscoveryErrors,
     skills, taskSkills, checkpoint, taskOutput, run, activity, starting, dockExpanded, dockHeight, settingsRequest, accountLimits, plannerTurnStartedAt,
   } = host;
   const setPlan = useCallback((v: Updatable<HostState['plan']>) => dispatch({ type: 'patchPlan', plan: v }), []);
@@ -1150,7 +1150,7 @@ export default function App() {
           and a reader scrolled back up would not see a row in the list. */}
       {isResearchActive && !compacting && (
         <div className="chat-msg-working" role="status">
-          <span className="chat-msg-spinner" aria-hidden="true" /> Working&hellip;
+          <span className="chat-msg-spinner" aria-hidden="true" /> {plannerDetecting ? DETECTING : <>Working&hellip;</>}
           <ElapsedTime since={plannerTurnStartedAt} className="chat-msg-working-time" />
         </div>
       )}

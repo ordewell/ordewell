@@ -69,6 +69,8 @@ export interface HostState {
    * nothing is installed.
    */
   plannerKnown: boolean;
+  /** A planner turn waits on the probe for coding agents, and no planner has heard of it yet. */
+  plannerDetecting: boolean;
   runnersKnown: boolean;
   isReady: boolean;
   modelDiscoveryErrors: Record<string, string>;
@@ -162,6 +164,7 @@ export const INITIAL_HOST_STATE: HostState = {
   configuredProviders: [],
   planner: { backends: [], provider: '' },
   plannerKnown: false,
+  plannerDetecting: false,
   runnersKnown: false,
   isReady: false,
   modelDiscoveryErrors: {},
@@ -237,6 +240,7 @@ export function resetSession(state: HostState, kind: SessionResetKind): HostStat
   if (kind === 'empty') return next;
   next.isResearchActive = false;
   next.plannerTurnStartedAt = undefined;
+  next.plannerDetecting = false;
   next.turnLost = false;
   next.isExecuting = false;
   next.held = EMPTY_HOLD;
@@ -375,7 +379,10 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
     // The stop gate lasts until the host has closed the stopped turn; a new
     // turn is never gated.
     case 'plannerTurn':
-      return { ...state, stopped: false, isResearchActive: action.active, turnLost: false, plannerTurnStartedAt: action.active ? action.startedAt : undefined };
+      return { ...state, stopped: false, isResearchActive: action.active, turnLost: false, plannerDetecting: action.active ? false : state.plannerDetecting, plannerTurnStartedAt: action.active ? action.startedAt : undefined };
+
+    case 'plannerDetection':
+      return { ...state, plannerDetecting: action.waiting };
 
     case 'plannerTurnAlive':
       if (!state.turnLost || state.stopped) return state;

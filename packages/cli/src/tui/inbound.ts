@@ -46,7 +46,7 @@ type ConversationMessage = Partial<StreamStamp> & Extract<
       | 'planner_message' | 'planner_turn_started' | 'planner_turn_ended' | 'planner_text_delta' | 'planner_thinking_delta'
       | 'planner_skill_loaded'
       | 'planner_text_retracted' | 'plan_token' | 'plan_generated' | 'research_step' | 'research_step_done'
-      | 'subagent_started' | 'subagent_finished' | 'planner_usage' | 'planner_liveness' | 'planner_compaction'
+      | 'subagent_started' | 'subagent_finished' | 'planner_usage' | 'planner_liveness' | 'planner_compaction' | 'planner_detection'
       | 'approval_request' | 'approval_settled' | 'approval_decided'
       | 'execution_action';
   }
@@ -59,7 +59,7 @@ const CONVERSATION_TYPES: ReadonlySet<string> = new Set<ConversationMessage['typ
   'planner_message', 'planner_turn_started', 'planner_turn_ended', 'planner_text_delta', 'planner_thinking_delta',
   'planner_skill_loaded',
   'planner_text_retracted', 'plan_token', 'plan_generated', 'research_step', 'research_step_done',
-  'subagent_started', 'subagent_finished', 'planner_usage', 'planner_liveness', 'planner_compaction',
+  'subagent_started', 'subagent_finished', 'planner_usage', 'planner_liveness', 'planner_compaction', 'planner_detection',
   'approval_request', 'approval_settled', 'approval_decided',
   'execution_action',
 ]);
