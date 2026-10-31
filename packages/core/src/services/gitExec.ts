@@ -89,6 +89,20 @@ export async function tryGit(invoker: GitInvoker, cwd: string | undefined, args:
   }
 }
 
+/** Git's answer on one commit holding another; `unknown` is a query that failed, which is no answer (ADR-0054). */
+export type Ancestry = 'yes' | 'no' | 'unknown';
+
+/**
+ * Whether `ancestor` is in `descendant`'s history. The only place that asks:
+ * `.ok` alone reads a failed query as no, which has passed for "not merged here"
+ * and "nothing else is in this merge" and lost work both ways.
+ */
+export async function isAncestor(invoker: GitInvoker, cwd: string, ancestor: string, descendant: string): Promise<Ancestry> {
+  const asked = await tryGit(invoker, cwd, ['merge-base', '--is-ancestor', ancestor, descendant]);
+  if (asked.ok) return 'yes';
+  return asked.code === 1 ? 'no' : 'unknown';
+}
+
 export async function git(invoker: GitInvoker, cwd: string, args: string[]): Promise<string> {
   const result = await tryGit(invoker, cwd, args);
   if (!result.ok) throw new Error(`git ${subcommandOf(args)} failed: ${result.stderr.trim() || String(result.code ?? 'unknown error')}`);

@@ -281,7 +281,8 @@ export interface IsolationRun {
    * Task branch tips another task's merge brought in, by task id and repo: a
    * resolver's merge carrying a conflicted task's work. No merge of that task
    * holds this work, and a later attempt's record says nothing of it, so
-   * neither task can be reverted (ADR-0054).
+   * neither task can be reverted (ADR-0054). A tip git could not say of when
+   * that merge landed is here too.
    */
   carried?: Record<string, Record<string, string[]>>;
   /**
