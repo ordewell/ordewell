@@ -15,17 +15,17 @@ jobs:
   # Linux only, deliberately.
   #
   # Ordewell supports macOS and Windows (ADR-0010) and it would be better to
-  # prove that here than to assert it in the README. The blocker is npm's
-  # optional-dependency handling: a lockfile resolved on Linux records only the
-  # Linux binaries for rollup and esbuild, so `npm ci` on a macOS or Windows
-  # runner fails at the first build with "Cannot find module
-  # @rollup/rollup-darwin-arm64". `npm install --package-lock-only` does not fix
-  # it — it resolves against the host platform too.
+  # prove that here than to assert it in the README. The lockfile no longer
+  # blocks that: it records the rollup and esbuild binaries of every platform
+  # npm publishes (npm ci demands them all, not only the ones it installs), so
+  # `npm ci` builds on linux-x64, linux-arm64, darwin-x64, darwin-arm64 and
+  # win32-x64. Keep it that way: a lockfile written beside an existing
+  # node_modules has recorded only the host's binaries, so regenerate it with
+  # `npm install --package-lock-only` in a copy without node_modules and check
+  # that the diff removes nothing.
   #
-  # Adding the matrix therefore means either committing a lockfile built to
-  # carry every platform's binaries, or dropping to `npm install` off-Linux and
-  # giving up reproducible dependency resolution there. Both are real changes
-  # that deserve their own review, so the matrix is not here yet.
+  # What is still unproven off Linux is the test suite, which assumes a POSIX
+  # shell, git and sealed runs. A matrix therefore waits for that, not for npm.
   build-and-test:
     runs-on: ubuntu-latest
 
