@@ -18,7 +18,7 @@ const READ_ONLY: AttemptKind = { kind: 'readOnly' };
 
 async function setup(opts: { isolation?: FakeWorktreeIsolation; conflictRepairAttempts?: number; tasks?: Task[]; plannedWith?: () => boolean } = {}) {
   const isolation = opts.isolation ?? new FakeWorktreeIsolation();
-  const listener: IsolationRunListener = { changed: vi.fn(), blocked: vi.fn(), handoff: vi.fn(), closed: vi.fn(), notice: vi.fn(), resolversEnded: vi.fn() };
+  const listener: IsolationRunListener = { changed: vi.fn(), blocked: vi.fn(), handoff: vi.fn(), closed: vi.fn(), ended: vi.fn(), notice: vi.fn(), resolversEnded: vi.fn() };
   const config = fakeConfig({ conflictRepairAttempts: opts.conflictRepairAttempts ?? 2 });
   const runs = new IsolationRunController({ isolation, config, notifications: fakeNotification(), workspaceRoot: () => '/repo', listener, liveTasks: () => new Set(), landedOn: () => [] });
   const store = new PlanStore();

@@ -125,9 +125,14 @@ round *r* and round *r* + 1 the body runs once.
   and when the loop ends it settles as a lone start does.
   What is carried is held in memory, not on the plan: a Stop ends it, one a body
   task stopped included, which is a run to stop though nothing of it starts by
-  itself (`TaskOrchestrator.loopCarried`), and a
-  reload does not bring it back, so nothing of that loop starts by itself
-  afterwards, and a body task started by hand then runs alone. Such a check is
+  itself (`TaskOrchestrator.loopCarried`). So does whatever else ends its run: a
+  discard, a clean-up, a Merge all that clears the run up
+  ([ADR-0013](../isolation/0013-worktree-isolation.md)) or the session's lease
+  lost ([ADR-0049](../isolation/0049-a-session-has-one-live-host.md)); a Merge
+  all the run goes on after
+  ([ADR-0020](../isolation/0020-ops-tasks-and-merge-gates.md)) does not. A reload
+  does not bring it back. After any of these nothing of that loop starts by
+  itself, and a body task started by hand then runs alone. Such a check is
   not stranded: its row says nothing runs it, it is listed as `failed`, and a
   start of it runs its next round (L7), once what holds any start of it has
   finished.
@@ -303,3 +308,4 @@ as check or body; a user editing a loop's `loop` field by hand from a surface.
 - 2026-10-31 — a round leaves a body task the user reverted on hold (L5; [ADR-0054](../isolation/0054-a-landed-task-reverts-on-the-integration-branch-before-merge-all.md)).
 - 2026-10-31 — a Stop ends a carried loop a body task stopped, which it found nothing to stop in before, so the retry that passes runs that task alone (L5, L7).
 - 2026-10-31 — L4: a continue of a failed body task waits on its undecided check as a retry does.
+- 2026-10-31 — what ends a run ends the loop it carried, as a Stop does: a discard, a clean-up, a Merge all that clears the run up, the lease lost (L5).
