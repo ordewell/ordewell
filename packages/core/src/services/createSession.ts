@@ -2590,12 +2590,22 @@ export class Session {
     // re-adopting the current plan on approval) keeps the conversation; after
     // a drop, the first user send reseeds it from this plan's own transcript.
     const adopting = plan !== this.plan;
+    // First, so a plan the orchestrator would refuse is neither saved over the
+    // picked session nor half adopted: past the claim a load is not undone.
+    this.orchestrator.assertLoadable(plan.tasks, plan.runners);
     // Before anything of the plan held now is dropped, so a refusal leaves it
     // as it was: another live host has this session open (ADR-0049), or the
     // disk will not take it. A run stopped below cannot be started again, so
     // the load's save is tried here, on the plan as it came, not undone after.
-    if (adopting) this.lease.claim(opts?.sessionId ?? this.currentSessionId, workspace, () => this.writeLoaded(plan, goal, workspace, opts));
-    if (adopting) this.dropPlanScope();
+    // The plan held now goes inside the claim too: what it saves as it goes
+    // needs its own lease, and taking that back after the claim would let the
+    // picked one go.
+    if (adopting) {
+      this.lease.claim(opts?.sessionId ?? this.currentSessionId, workspace, () => {
+        this.writeLoaded(plan, goal, workspace, opts);
+        this.dropPlanScope();
+      });
+    }
     this.plan = plan;
     // A plan adopted off disk carries what supervision remembered: the loop
     // guards' memory and any batch inside its debounce window (ADR-0029). The
