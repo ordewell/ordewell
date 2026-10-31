@@ -27,6 +27,7 @@ import { SubagentRuns } from './SubagentRuns';
 import type { ConversationCompactionHost, LandedHistory } from './budgetedChat';
 import { ContextSummaryError } from './contextSummary';
 import { PlannerContextExhaustedError } from './plannerContextBudget';
+import { boundedWakeUps } from './WakePolicy';
 
 /**
  * Per-runner model cap for the always-on catalog block. Generous enough that
@@ -159,6 +160,15 @@ const withRuns = (runs: ReplyRun[] | undefined): { runs?: ReplyRun[] } => (runs 
 /** What a planner turn may change: the whole plan, or tasks through edits. */
 export type PlanChange = 'plan' | 'edit';
 
+/** A wake-up turn's brief, as `PlannerBriefing` sends it: whole to a context that does not hold it, else a line on a change (ADR-0057 R5). */
+export interface WakeBrief {
+  /** Which brief this is: a level's, or a report turn's. */
+  key: string;
+  whole: string;
+  /** All a context holding {@link whole} needs told, and all that may differ between two wake-ups of one brief. */
+  line: string;
+}
+
 /**
  * A wake-up turn (ADR-0029): a supervisor's turn on wake-up digests alone, no
  * user message in it. What it may do is its level's, decided by the host.
@@ -173,7 +183,7 @@ export interface WakeUpTurn {
    */
   refused(change: PlanChange): string | undefined;
   /** Told to the model after the digests and never saved, like the plan block: who it is in this turn, and what it may do. */
-  brief?: string;
+  brief?: WakeBrief;
   /**
    * Who the turn acts for at the command seam, read at each call; absent, the
    * supervisor at the run's level. A turn on a report owed to the user's turn
@@ -569,6 +579,8 @@ export class PlannerConversation {
   private readonly blocks: PromptBlocks;
   private live: PlannerTurn | null = null;
   private openTurn: UserTurn | null = null;
+  /** When the live context's newest turn opened; null with no live context. */
+  private requestedAt: number | null = null;
   /**
    * What an API planner's chat condenses its context through during a turn
    * (ADR-0002): the open turn, the history that landed before it, and the
@@ -587,6 +599,7 @@ export class PlannerConversation {
       scope: () => host.assignmentScope(),
       tasks: () => host.tasks(),
       plannerTools: () => host.aiService().plannerToolsAttached?.() ?? false,
+      compactions: () => host.aiService().compactions?.() ?? 0,
     });
     this.blocks = new PromptBlocks({
       catalog: () => this.catalogBlock(),
@@ -597,6 +610,17 @@ export class PlannerConversation {
 
   get transcript(): readonly ConversationMessage[] {
     return this.host.plan()?.conversationHistory ?? [];
+  }
+
+  /**
+   * When the planner's prefix was last sent, as its provider counts a prompt
+   * cache's life: from the start of a request (ADR-0057 R4). The turn's opening
+   * stands for it: a turn's later calls keep the prefix warm for longer, so
+   * this can only say a wake is due earlier than it had to be. Null with no live
+   * context, whose next turn is a replay.
+   */
+  get lastRequestAt(): number | null {
+    return this.requestedAt;
   }
 
   /** Whether a planner turn holds the conversation. */
@@ -839,6 +863,7 @@ export class PlannerConversation {
   private dropContext(): void {
     this.host.aiService().reset();
     this.blocks.forget();
+    this.requestedAt = null;
   }
 
   /**
@@ -1147,7 +1172,7 @@ export class PlannerConversation {
     // turn taken up again from the transcript starts on a replay, whatever
     // live context is left: its held input is not this turn's to send.
     const reopened = this.canContinueLive() && !userTurn.recovery ? null : await this.reopen(userTurn);
-    userTurn.briefing = this.briefing.brief();
+    userTurn.briefing = this.briefing.brief(userTurn.wakeUp?.brief);
     // The persisted transcript keeps the raw user message; the model gets the
     // catalog and the current plan (tasks, statuses, edit protocol — once
     // tasks exist) alongside it, whole where its live context holds no copy
@@ -1155,7 +1180,7 @@ export class PlannerConversation {
     userTurn.blocks = this.blocks.next();
     const contextBlock = [...userTurn.blocks.blocks, ...userTurn.briefing.blocks].join('\n\n');
     const said = fromUser ? plannerMessage(message.text, message.skills) : '';
-    const outgoing = plannerInput([contextBlock, ...wakeUps, userTurn.wakeUp?.brief, said]);
+    const outgoing = plannerInput([contextBlock, ...boundedWakeUps(wakeUps), userTurn.briefing.wakeBrief, said]);
     return reopened
       ? this.resume(reopened, outgoing, priorHistory, signal, userTurn.stream.sink())
       : this.host.aiService().continueConversation(outgoing, userTurn.stream.sink(), signal);
@@ -1316,6 +1341,7 @@ export class PlannerConversation {
       ...(recovery && retry ? { recovery: { pause: recovery, live: retry.live } } : {}),
     };
     this.openTurn = turn;
+    this.requestedAt = Date.now();
     const skills = prompt.skills.map(skillLoadNotice);
     const wakeUps = delivered.wakeUps ?? [];
     this.host.broadcast({

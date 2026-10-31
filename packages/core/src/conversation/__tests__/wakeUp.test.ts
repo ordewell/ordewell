@@ -29,7 +29,7 @@ describe('a run update as items', () => {
     }, describeTask);
 
     const items = wakeUpItems(digest);
-    expect(items.map((i) => i.kind)).toEqual(['line', 'report', 'line', 'line']);
+    expect(items.map((i) => i.kind)).toEqual(['line', 'report', 'line', 'line', 'line']);
     expect(items[0]).toEqual({ kind: 'line', text: '- task #2 "Fix it" failed: tests red' });
     expect(items[1]).toEqual({ kind: 'report', task: '#1 "Scout the cache"', lines: ['It failed: no network.'] });
   });

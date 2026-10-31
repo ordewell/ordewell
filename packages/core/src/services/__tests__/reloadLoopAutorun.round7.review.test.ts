@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { taskOf } from './sessionTestKit';
 import { NOW, settled, supervised, task, until } from './supervisorTestKit';
 import { FakeWorktreeIsolation } from '../../testing';
-import { UNLEASED, type SessionHeld } from '../sessionLease';
+import { UNLEASED, type LeaseHost, type SessionHeld } from '../sessionLease';
 
 /**
  * Round 7 of the reload, loop and autorun review, on the round-6 fix
@@ -110,7 +110,7 @@ describe('the other routes that end a run with a dormant carried loop', () => {
     const isolation = new FakeWorktreeIsolation();
     const env = await supervised(loop(), {
       execute: false, settings: { supervisorLevel: 'off' }, isolation, config: { worktreeIsolation: true },
-      leaseHost: { lease: (onLost) => { lose = onLost; return UNLEASED; } },
+      leaseHost: { lease: (onLost) => { lose = onLost; return UNLEASED; } } as LeaseHost,
     });
     await failCheckAndBody(env);
     const now = new Date(NOW).toISOString();

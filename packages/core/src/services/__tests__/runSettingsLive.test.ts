@@ -138,7 +138,9 @@ describe('the user\'s command after an automatic lowering', () => {
     await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
     await until(() => env.planner.calls.length === WAKE_UP_RATE.max + 2);
 
-    expect(env.planner.calls.at(-1)!.message).toMatch(/At Act you may act/);
+    // Back at a level its context holds the rules of: a line (ADR-0057 R5).
+    expect(env.planner.calls.at(-1)!.message).toMatch(/You are the supervisor at Act now/);
+    expect(env.planner.calls.at(-1)!.message).not.toMatch(/At Act you may act/);
     expect(env.session.planState!.runSettings!.supervisorLevel).toBe('act');
   });
 

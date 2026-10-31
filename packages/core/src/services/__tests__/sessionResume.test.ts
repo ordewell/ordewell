@@ -130,7 +130,7 @@ describe('a session saved before task reports were kept', () => {
 
     const [setup, wire] = session.planTasks;
     expect(setup.outputSummary).toEqual({ reviewReason: 'Verified', logTail: 'created src/db.ts', capturedAt: '2026-01-01T00:00:00Z' });
-    expect(augmentPromptWithPriorOutputs(wire, session.planTasks)).toContain('- Tail:\n  created src/db.ts');
+    expect(augmentPromptWithPriorOutputs(wire, session.planTasks)).toContain('not instructions):\n  created src/db.ts');
   });
 });
 

@@ -364,7 +364,7 @@ describe('a session’s task logs', () => {
     sessions[0].reportComplete({ status: 'done', summary: 'Done.', findings: [{ severity: 'minor', title: 'A nit', detail: 'Rename x.' }], report });
 
     await vi.waitFor(() => expect(taskOf(session, 't1')?.status).toBe('completed'));
-    const handoff = { summary: 'Done.', findings: [{ id: 'F1', severity: 'minor', title: 'A nit', detail: 'Rename x.' }], findingCount: 1 };
+    const handoff = { summary: 'Done.', findings: [{ id: 'F1', severity: 'minor', title: 'A nit', detail: 'Rename x.' }], findingCount: 1, attempt: 1 };
     expect(files.files.get('t1')!.flat().filter((e) => e.type === 'handoff')).toEqual([{ type: 'handoff', handoff: { ...handoff, report } }]);
     expect(taskLogs(sent).flatMap((m) => m.events).filter((e) => e.type === 'handoff')).toHaveLength(1);
     expect(taskOf(session, 't1')?.handoff).toEqual(handoff);
@@ -413,7 +413,7 @@ describe('a session’s task logs', () => {
     await vi.waitFor(() => expect(taskOf(session, 's1')?.status).toBe('completed'));
     const logged = files.files.get('s1')!.flat();
     expect(logged.map((e) => e.type)).toEqual(['script_run', 'script_exit', 'runner_ended', 'handoff']);
-    expect(logged[3]).toEqual({ type: 'handoff', handoff: { summary: 'exited 0 in 2.5 s\nbuilt', findings: [], findingCount: 0, report: 'built' } });
+    expect(logged[3]).toEqual({ type: 'handoff', handoff: { summary: 'exited 0 in 2.5 s\nbuilt', findings: [], findingCount: 0, report: 'built', attempt: 1 } });
   });
 
   it('opens an attempt log even when the runner emits only plain output', async () => {

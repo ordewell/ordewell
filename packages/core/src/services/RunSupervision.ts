@@ -5,7 +5,9 @@ import type { GlobalRunSettings } from './SettingsService';
 import type { RunOrigin } from './TaskOrchestrator';
 import type { ExecutionCommand, LoopGuard } from './ExecutionCommands';
 import type { WakeUpTurn } from './PlannerConversation';
-import { Supervisor, type RunEventInput, type SupervisorHost, type SupervisorOptions } from './Supervisor';
+import { Supervisor, type DigestReader, type RunEventInput, type SupervisorHost, type SupervisorOptions } from './Supervisor';
+import { planWakeFacts, type WakeCacheClock } from './WakePolicy';
+import type { StartWait } from './readiness';
 import { SupervisionMemory, type GuardTarget, type GuardTrip } from './LoopGuards';
 import { SUPERVISOR_LEVEL_LABEL } from './runSettingsText';
 import { executionSummary } from './SessionMessage';
@@ -40,6 +42,10 @@ export interface RunSupervisionHost extends Pick<SupervisorHost, 'deliver' | 'pu
   userSettings(): GlobalRunSettings;
   /** The plan's task tree, as the guards and the run updates read it. */
   tasks(): readonly Task[];
+  /** Why each task cannot start now, the plan judged once (ADR-0034). */
+  startWaits(): ReadonlyMap<string, readonly StartWait[]>;
+  /** The planner's prompt cache as its provider counts it (ADR-0057 R4). */
+  plannerCache(): WakeCacheClock;
   /** What a task waiting at a checkpoint asked, if it said. */
   checkpointQuestion(taskId: string): string | undefined;
   /**
@@ -96,8 +102,8 @@ export class RunSupervision {
       deliver: (digest, report) => host.deliver(digest, report),
       pump: () => host.pump(),
       saveState: () => host.save(),
-      describeTask: (taskId) => this.describeTask(taskId),
-      blockedBy: (failedId) => [...blockingFailures([...this.host.tasks()])].filter(([, failures]) => failures.includes(failedId)).map(([taskId]) => taskId),
+      digestReader: () => this.digestReader(),
+      wakeFacts: () => ({ ...planWakeFacts(this.host.tasks(), this.host.startWaits(), this.running), ...this.host.plannerCache() }),
       readBudget: () => this.settings()?.wakeUpReadBudget ?? host.userSettings().wakeUpReadBudget,
       retryLimit: () => this.retryLimit(),
       restartPlanner: () => host.restartPlanner(),
@@ -225,7 +231,8 @@ export class RunSupervision {
     const rounds = outOfRoundsNote(task);
     const tail = this.host.reportTail(task.id);
     const named = (id: string) => taskRefOf([...this.host.tasks()], id);
-    const text = to.research ? researchReport(task, tail, named) : runUpdateReport(task, tail, named);
+    const whose = named(task.id) ?? task.id;
+    const text = to.research ? researchReport(task, tail, named, whose) : runUpdateReport(task, tail, named, whose);
     return { authority, text: rounds ? `${rounds.charAt(0).toUpperCase()}${rounds.slice(1)} ${text}` : text, passed: task.status === 'completed' };
   }
 
@@ -375,10 +382,30 @@ export class RunSupervision {
     this.host.resendHandoff();
   }
 
-  /** `#3 "Title"`, how a run update names a task. */
-  private describeTask(taskId: string): string {
-    const found = flattenTasksWithParents([...this.host.tasks()]).find(({ task }) => task.id === taskId);
-    return found ? `${found.ref} "${found.task.title}"` : taskId;
+  /** How one run update reads the plan: `#3 "Title"` for a task, and what a failure blocks, each walked once. */
+  private digestReader(): DigestReader {
+    const plan = [...this.host.tasks()];
+    let names: Map<string, string> | undefined;
+    let blocked: Map<string, string[]> | undefined;
+    return {
+      describe: (taskId) => {
+        names ??= new Map(flattenTasksWithParents(plan).map(({ task, ref }) => [task.id, `${ref} "${task.title}"`]));
+        return names.get(taskId) ?? taskId;
+      },
+      blockedBy: (failedId) => {
+        if (!blocked) {
+          blocked = new Map();
+          for (const [taskId, failures] of blockingFailures(plan)) {
+            for (const failure of failures) {
+              const tasks = blocked.get(failure);
+              if (tasks) tasks.push(taskId);
+              else blocked.set(failure, [taskId]);
+            }
+          }
+        }
+        return blocked.get(failedId) ?? [];
+      },
+    };
   }
 
   /** The event a task settling on its own is for the supervisor; null for one it hears of another way. */

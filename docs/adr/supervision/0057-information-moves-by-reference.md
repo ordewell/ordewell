@@ -1,8 +1,8 @@
 ---
 status: accepted
-implemented: none
+implemented: partial
 amends: ["0012", "0013", "0022", "0029", "0047"]
-note: "Settles #34, and #36 and #38 as far as this goes. R1 to R7 come first; the board (R8 to R10) is added after them."
+note: "Settles #34, and #36 and #38 as far as this goes. R1, R3, R4 and R5 are built for a flat plan, under the root; promote, open and a child's plan come with the delegated task (ADR-0055), and R6 to R12 after them, the board (R8 to R10) last."
 ---
 
 # 0057 — Information moves by reference: reports stay one size at every level, and code decides when a planner wakes
@@ -45,9 +45,11 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 
 - **References are pinned (R1).** A reference is `{ node, task, attempt, finding }`, made
   of immutable ids, pinned by Ordewell as the call is accepted: an author writes `#4/F3` and
-  `checkHandoff` stores the attempt that finding belongs to. It renders as `#4@2/F3`. Across
-  plans it carries the derived path, `3/2:#4@2/F3`: `TaskRefs`' grammar is not overloaded, and
-  the separator is one a task label cannot hold.
+  `checkHandoff` stores the attempt that finding belongs to, as it does for the `{ task, finding }`
+  an author may also send, and `#4@1/F3` names an attempt outright. It renders as `#4@2/F3`, and
+  that text is what `read_task` and `task_output` take back. Across plans it carries the derived
+  path, `3/2:#4@2/F3`: `TaskRefs`' grammar is not overloaded, and the separator is one a task label
+  cannot hold.
 
   A subplanner's `task_complete` is checked against its own plan, the child plan, not the
   parent's, whose attempt handles the call
@@ -61,7 +63,8 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   and renders with the node path, so a later read reaches that attempt whatever the reader's
   plan holds.
 
-  A reference stays valid for the life of the root plan,
+  The digest on a task says which attempt it is from, and a digest saved before it did takes the
+  newest attempt the logs hold. A reference stays valid for the life of the root plan,
   since attempt logs live as long as their session and a child's sit under the root's
   ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D11); a task
   removed from the plan keeps its log. A saved reference with no attempt reads the latest,
@@ -92,8 +95,9 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   outside its `scope` join `open`, from code ([ADR-0056](0056-a-mandate-narrows-down-the-tree.md)
   M7). The attempt logs keep the rest, to pull.
 - **What crosses a level is untrusted (R3).** Reports, boards and handoffs are data, shown with
-  their provenance and never as instructions: the block says whose words they are, by path, and
-  a prompt tells the reader so. ADR-0037 R3 and ADR-0047 say this for one level. A tree makes
+  their provenance and never as instructions: the block says whose words they are, by path, in one
+  short label on each dependency and each report (`wordsFrom`), and the planner's prompt says what
+  that means once. ADR-0037 R3 and ADR-0047 say this for one level. A tree makes
   each report a way into every node above it, and into each task that reads it, so a report
   never becomes a plan's text unless a planner writes it, and that planner is then answerable
   for it.
@@ -114,21 +118,29 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   Any other event but a pass, `task_failed` and `task_idle` among them, is held until the first
   of these, each of which is read from the plan:
   - **nothing can start** on this node without a decision;
-  - **the cohort is done**: every task that became ready with this one has ended;
+  - **the cohort is done**: every task that became ready with this one has ended, read as every
+    task with its dependencies;
   - **a failure blocks work** that would otherwise be ready;
   - **a maximum age**: 80% of the planner's cache TTL once anything is held, so a wake finds its
-    prefix warm. Each connector states its TTL, an unknown one reads as five minutes, and time is
-    counted as the provider counts it, from the start of the request.
+    prefix warm. Each connector states its TTL, the shortest it may be since that is the one a wake
+    can count on, an unknown one reads as five minutes, and time is counted as the provider counts
+    it, from the start of the request: the turn's opening stands for that, which can only make a
+    wake early. A prefix already cold has nothing to save, so the age then runs from the event.
 
   A pass is not held: it wakes nothing and starts no clock, and rides along in the next wake, as it
   does today, so a plan that only passes opens no turn. A delegated task's pass is a child plan
   ending, in the table. Not waiting on the cohort alone is deliberate: it would be bound to its
   slowest task. There are no keep-warm pings: they are model turns that grow the context.
 - **Bounded wakes (R5).** A wake has a size cap, 24,000 characters, with one line per ride-along
-  event of at most 120. Overflow becomes counts and a pointer: `task_query` reads the rest. A
-  failure blocking many tasks names the first few and the count. The level brief is sent once
-  and then one line on a change, through `PlannerBriefing`, and again whole only when a context
-  no longer holds it, as ADR-0012 T10 sends the plan block; ADR-0029's "each turn" goes. The plan
+  event of at most 120: a pass, or a held event that holds no work back. What woke the planner goes
+  first, whole items only. Overflow becomes counts and a pointer: `task_query` reads the rest. The
+  cap is on what the turn sends, so updates that waited for one turn are bounded together, and the
+  transcript keeps them all. A failure blocking many tasks names the first few and the count, as a
+  usage limit does. The level brief is sent once and then one line on a change, through
+  `PlannerBriefing`, and again whole only when a context no longer holds it, as ADR-0012 T10 sends
+  the plan block; ADR-0029's "each turn" goes. Each level has its brief, and a context that never
+  held the one a change reaches gets it whole: a line cannot carry a level's rules, the escalation
+  rule among them, to a model that was never told them. The plan
   block is bounded too: past its cap it shows live and waiting tasks, a count of the rest and a
   `task_query` pointer. The 24,000 is a tuning value.
 
@@ -203,8 +215,12 @@ Added after R1 to R7, and only if those leave a need; replays of Ordewell's own 
 
 - A fresh start from the plan for a subplanner with a large cold context, which needs a measurement.
 - Embedding search over a board, and a board across roots.
-- Whether API planners' wakes miss the cache because the brief is dropped from history: the wake brief's
-  change removes the likely cause, and #34's token task should log cached tokens per wake.
+- Whether API planners' wakes miss the cache for other reasons. The brief is no cause: traced through
+  `PlannerConversation.sendTurn` and `BudgetedChat`, a live chat keeps each message whole, brief included,
+  and sends it unchanged ahead of the next (`OpenAiService.test.ts`). Only the transcript leaves it out,
+  which a replay reads, and a replay opens a new prefix anyway, as it does after each plan an API planner
+  commits. Ordewell sets no cache markers, so a provider that needs them caches nothing. No request was
+  made to a real provider: #34's token task should log cached tokens per wake.
 
 ## Considered options
 
@@ -259,3 +275,4 @@ Added after R1 to R7, and only if those leave a need; replays of Ordewell's own 
 - 2026-10-31 — checked against the code: R2 names the push ceiling and not the Report's limit, and R11 states what its rename does to a flat run's list.
 - 2026-10-31 — checked against the code again: a pass stays a ride-along, and R2's counts show what a subplanner left out of its subtree.
 - 2026-10-31 — checked against the code a third time: a subplanner's references resolve in its own plan, and it may cite its whole subtree.
+- 2026-10-31 — R1, R3, R4 and R5 built for a flat plan: references pinned under the root, reports and handoffs labelled as data, `wakeDue` deciding each wake, and a wake's cap, with a brief per level sent once a context.

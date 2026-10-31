@@ -275,6 +275,8 @@ export class CliAgentAiService implements IAiService {
   /** The compactions the agents reported of their own context, never a subagent's or another thread's: their adapters drop those (ADR-0012 T10). */
   compactions(): number { return this.compacted; }
 
+  promptCacheTtlMs(): number | undefined { return connectorFor(this.runner)?.promptCacheTtlMs; }
+
   heldSecrets(): readonly string[] { return this.environmentSecrets; }
 
   restart(): void {

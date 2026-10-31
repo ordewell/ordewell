@@ -106,8 +106,8 @@ describe('TaskOrchestrator: script tasks (ADR-0035)', () => {
     e.end('s1', PASSED, 1200);
 
     await vi.waitFor(() => expect(e.status('s1')).toBe('completed'));
-    const expected = { summary: 'exited 0 in 1.2 s\nEverything up-to-date', findings: [], findingCount: 0, report: 'Everything up-to-date' };
-    expect(e.orchestrator.storeInstance.get('s1')!.handoff).toEqual({ summary: 'exited 0 in 1.2 s\nEverything up-to-date', findings: [], findingCount: 0 });
+    const expected = { summary: 'exited 0 in 1.2 s\nEverything up-to-date', findings: [], findingCount: 0, report: 'Everything up-to-date', attempt: 1 };
+    expect(e.orchestrator.storeInstance.get('s1')!.handoff).toEqual({ summary: 'exited 0 in 1.2 s\nEverything up-to-date', findings: [], findingCount: 0, attempt: 1 });
     expect(e.handoffs).toEqual([{ sessionId: e.latest('s1').id, taskId: 's1', handoff: expected }]);
   });
 
@@ -119,7 +119,7 @@ describe('TaskOrchestrator: script tasks (ADR-0035)', () => {
     e.end('s1', PASSED, 300);
 
     await vi.waitFor(() => expect(e.status('s1')).toBe('completed'));
-    expect(e.handoffs.map((h) => h.handoff)).toEqual([{ summary: 'exited 0 in 0.3 s', findings: [], findingCount: 0 }]);
+    expect(e.handoffs.map((h) => h.handoff)).toEqual([{ summary: 'exited 0 in 0.3 s', findings: [], findingCount: 0, attempt: 1 }]);
   });
 
   it('hands over a failed script as its exit code and the end of its output without inferred findings', async () => {
@@ -132,7 +132,7 @@ describe('TaskOrchestrator: script tasks (ADR-0035)', () => {
 
     await vi.waitFor(() => expect(e.status('s1')).toBe('failed'));
     const output = 'To origin\n ! [rejected] main -> main (non-fast-forward)';
-    const digest = { summary: `exited 1 in 0.8 s\n${output}`, findings: [], findingCount: 0 };
+    const digest = { summary: `exited 1 in 0.8 s\n${output}`, findings: [], findingCount: 0, attempt: 1 };
     expect(e.handoffs.map((h) => h.handoff)).toEqual([{ ...digest, report: output }]);
     expect(e.orchestrator.storeInstance.get('s1')!.handoff).toEqual(digest);
   });
@@ -147,8 +147,8 @@ describe('TaskOrchestrator: script tasks (ADR-0035)', () => {
 
     await vi.waitFor(() => expect(e.handoffs).toHaveLength(2));
     const [timedOut, killed] = e.handoffs.map((h) => h.handoff);
-    expect(timedOut).toEqual({ summary: 'timed out in 600.1 s', findings: [], findingCount: 0 });
-    expect(killed).toEqual({ summary: 'ended by SIGKILL in 2 s', findings: [], findingCount: 0 });
+    expect(timedOut).toEqual({ summary: 'timed out in 600.1 s', findings: [], findingCount: 0, attempt: 1 });
+    expect(killed).toEqual({ summary: 'ended by SIGKILL in 2 s', findings: [], findingCount: 0, attempt: 1 });
   });
 
   it('hands over nothing for a script that was stopped, and clears the one before it', async () => {

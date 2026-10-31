@@ -4,7 +4,6 @@ status: accepted
 
 # 0012 — The task-query read channel: reading a task before rewriting it
 
-*Pending:* [ADR-0057](../supervision/0057-information-moves-by-reference.md) — the plan block a planner is sent has a size cap, past which it carries live tasks, counts and a pointer.
 
 ## Problem
 
@@ -132,7 +131,9 @@ than cached or replayed.
   ([ADR-0009](0009-coding-agents-as-planners.md), T3), so every block a turn
   sends stays in the model's context. The plan block — its `<current_plan>`
   lines and the read and edit protocol after them — goes whole to a live
-  context that holds no intact copy. Every later turn sends a `<plan_changes>`
+  context that holds no intact copy. Past `PLAN_BLOCK_MAX_TASKS` it lists what
+  a planner acts on first, counts the rest and points at `task_query`
+  ([ADR-0057](../supervision/0057-information-moves-by-reference.md) R5). Every later turn sends a `<plan_changes>`
   block instead: the line, in the same format, of each task added or whose
   line changed since the turn before, a line naming each task removed, what
   runs and is locked now (or that nothing runs), and one line pointing to the
@@ -308,3 +309,4 @@ ADR-0008's exploration envelope is unchanged.
 - 2026-10-18 — an edit's model and mode are checked by the assignment resolver, which every writer calls, rather than by `TaskEditValidator` (T7, M3).
 - 2026-10-23 — T10: the plan and catalog blocks go whole once per live context, then as what changed (M7).
 - 2026-10-25 — T10: a vendor planner condensing its context in the middle of a turn ([ADR-0002](0002-planner-as-conversation-loop.md)) counts as a compaction, so the next turn is sent the whole plan.
+- 2026-10-31 — T10: the plan block has a size cap, past which it lists live and waiting tasks, a count of the rest and a pointer (ADR-0057 R5).

@@ -33,7 +33,7 @@ import { scriptBodyOf } from '../models/ScriptTask';
 import { SCRIPT_RUNNER } from './ScriptRunner';
 import { checkHandoff, withPatch, type HandoffPatch, type StoredHandoff } from '../models/Handoff';
 import { applySavedPatch, capturePatch, patchArtifact, patchReply } from './PatchCapture';
-import { readTask, type TaskLogReader } from './readTask';
+import { handoffLogs, readTask, type TaskLogReader } from './readTask';
 import { defaultExecFile, type GitInvoker } from './gitExec';
 import { augmentedPath } from '../utils/shellPath';
 import type { ApplyPatchArgs, McpToolReply } from './mcp/tools';
@@ -559,9 +559,11 @@ export class Attempts {
    * plan keeps the digest and the attempt's log the whole of it. One path for
    * an attempt a runner or a script ran, and for the completion a user marked.
    */
-  handOver(taskId: string, summary: Task['outputSummary'], handoff: StoredHandoff | undefined, sessionId?: string): void {
-    this.deps.store.setTaskOutputSummary(taskId, summary, handoff);
-    if (handoff) this.deps.recordHandoff(sessionId, taskId, handoff);
+  handOver(taskId: string, summary: Task['outputSummary'], handoff: StoredHandoff | undefined, from?: Pick<TaskAttempt, 'attempt' | 'session'>): void {
+    // The digest says whose it is: a reference to it is pinned to that attempt (ADR-0057 R1).
+    const told = handoff && from ? { ...handoff, attempt: from.attempt } : handoff;
+    this.deps.store.setTaskOutputSummary(taskId, summary, told);
+    if (told) this.deps.recordHandoff(from?.session?.id, taskId, told);
   }
 
   /**
@@ -906,7 +908,7 @@ export class Attempts {
       ...(attempt.skills.length > 0 ? { skills: attempt.skills } : {}),
       ...(shell ? { shell } : {}),
       ...(writesCommit(kind) ? { commits: true } : {}),
-      checkHandoff: (completion) => checkHandoff(completion, task.id, store.planTasks),
+      checkHandoff: (completion) => checkHandoff(completion, task.id, store.planTasks, { attempt: attempt.attempt, logs: handoffLogs(this.deps.taskLog) }),
       readTask: (args) => readTask(args, task.id, store.planTasks, this.deps.taskLog),
       ...(shell ? { savePatch: (signal: AbortSignal) => this.savePatch(task, attempt, signal) } : {}),
       ...(web ? { webReads: web } : {}),
@@ -1196,7 +1198,7 @@ export class Attempts {
       return this.host.settle({ kind: 'usage-limited', taskId, attempt, said: stoppedMidTurn, output: summary });
     }
     store.setTaskVerdict(taskId, verdict);
-    this.handOver(taskId, summarizeOutput(unresumed ?? verdict.reason, authored ? '' : summary), handoff, attempt.session?.id);
+    this.handOver(taskId, summarizeOutput(unresumed ?? verdict.reason, authored ? '' : summary), handoff, attempt);
     console.error(`[Attempts] Output summary:\n${summary || '(empty: no output captured)'}`);
     // The evidence the ops rule rests on: a runner cannot be kept from
     // writing, only caught.
@@ -1216,7 +1218,7 @@ export class Attempts {
     const landing = await this.land(attempt, () => this.deps.landing.settleRepair(task, verdict, () => this.live.get(task.id) === attempt));
     if (this.live.get(task.id) !== attempt) return;
     this.end(task.id, 'verdict');
-    this.handOver(task.id, summarizeOutput(verdict.reason, handoff ? '' : summary), handoff, attempt.session?.id);
+    this.handOver(task.id, summarizeOutput(verdict.reason, handoff ? '' : summary), handoff, attempt);
     return this.host.settle({ kind: 'repaired', task, attempt, verdict, landing });
   }
 

@@ -5,7 +5,7 @@ import { SELF_REPO } from './isolationRecord';
 import { renderTaskSkills } from './taskSkills';
 import { assignedRunnerOf } from './AssignmentScope';
 import { betweenRounds, loopRoundOf } from '../models/Loop';
-import { REPORT_MAX_CHARS, artifactLines, boundedHandoffLines, findingLines, namedHandoff, openingLines, type HandoffDigest, type StoredHandoff } from '../models/Handoff';
+import { REPORT_MAX_CHARS, artifactLines, boundedHandoffLines, findingLines, namedHandoff, openingLines, wordsFrom, type HandoffDigest, type StoredHandoff } from '../models/Handoff';
 
 const MAX_TAIL_CHARS = 500;
 /** Each dependency's share of a dependent's prompt, which carries every direct dependency's handoff (ADR-0047). */
@@ -118,9 +118,10 @@ export function renderPriorOutputs(outputs: PriorOutput[]): string {
       const skip = o.skipped ? `- Skipped${o.skipped.reason ? `: ${o.skipped.reason.replace(/\.$/, '')}` : ' (no reason given)'}. None of its work landed, so it is not in your tree; do not count on it.` : '';
       if (o.skipped && !o.handoff && !o.reviewReason && !o.report && !o.logTail) return `${heading}\n${skip}`;
       const reason = o.reviewReason || '(no review note)';
-      const output = o.handoff ? `- Handoff:\n${indent(handoffText(o.handoff, o.label))}`
-        : o.report ? `- Report:\n${indent(dependencyReport(o.report))}`
-        : `- Tail:\n${o.logTail ? indent(o.logTail) : '  (no output captured)'}`;
+      // Whose words, and that they are data: what a dependency says is never this task's brief (ADR-0057 R3).
+      const output = o.handoff ? `- ${wordsFrom('Handoff', `#${o.label}`)}\n${indent(handoffText(o.handoff, o.label))}`
+        : o.report ? `- ${wordsFrom('Report', `#${o.label}`)}\n${indent(dependencyReport(o.report))}`
+        : `- ${wordsFrom('Tail', `#${o.label}`)}\n${o.logTail ? indent(o.logTail) : '  (no output captured)'}`;
       const answer = o.handoff?.findingCount ? `Answer its findings ${findingRange(o.handoff.findingCount)}. ` : '';
       const round = o.round
         ? `- The check of your loop: it failed round ${o.round.round} of ${o.round.maxRounds}, and you are part of the fix. ${answer}Fix what its report found; it runs again once the fix has landed.\n`
@@ -245,8 +246,8 @@ function renderSinceLastRound(task: Task, allTasks: readonly Task[], loop: NonNu
   for (const { task: fix, label } of flattenTasksWithParents(allTasks)) {
     if (!body.has(fix.id)) continue;
     lines.push('', `### Task ${label}: ${fix.title}`);
-    if (fix.handoff) lines.push(`- Handoff:\n${indent(handoffText(namedHandoff(allTasks, fix.handoff), label))}`);
-    else if (fix.outputSummary?.report) lines.push(`- Report:\n${indent(dependencyReport(fix.outputSummary.report))}`);
+    if (fix.handoff) lines.push(`- ${wordsFrom('Handoff', `#${label}`)}\n${indent(handoffText(namedHandoff(allTasks, fix.handoff), label))}`);
+    else if (fix.outputSummary?.report) lines.push(`- ${wordsFrom('Report', `#${label}`)}\n${indent(dependencyReport(fix.outputSummary.report))}`);
   }
   lines.push('', `You are the check, round ${loop.round} of ${task.loop?.maxRounds}. Verify the fix claims against the tree; do not trust its summary. Answer each previous finding by its F number: fixed, still open, or superseded. Report only what still fails and anything new.`);
   return lines.join('\n');

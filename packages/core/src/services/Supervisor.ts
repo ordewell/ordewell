@@ -1,11 +1,11 @@
 import type { SupervisorLevel } from '../models/Execution';
 import type { TurnAuthority } from '../models/Task';
-import { createWakePolicy, REPORT_LEAD, type RunEvent, type WakeBatch, type WakePolicy, type WakePolicySnapshot } from './WakePolicy';
+import { createWakePolicy, isHeldEvent, REPORT_LEAD, WAKE_MAX_CHARS, type RunEvent, type RunEventKind, type WakeBatch, type WakeFacts, type WakePolicy, type WakePolicySnapshot } from './WakePolicy';
 import { classifyRunnerStop } from './runnerExit';
 import { WAKE_UP_RATE, wakeUpRateTripped, type WakeUpRate } from './LoopGuards';
-import { PlannerContextPausedError, PlannerTurnDiscardedError, PlannerTurnFailedError, PlannerTurnStoppedError, PlannerUsageLimitError, type PlanChange, type WakeUpTurn } from './PlannerConversation';
+import { PlannerContextPausedError, PlannerTurnDiscardedError, PlannerTurnFailedError, PlannerTurnStoppedError, PlannerUsageLimitError, type PlanChange, type WakeBrief, type WakeUpTurn } from './PlannerConversation';
 
-/** How long the first attention event waits for others to join its wake-up. */
+/** How long an event due at once waits for others to join its wake-up: what "at once" means (ADR-0057 R4). */
 export const WAKE_DEBOUNCE_MS = 5_000;
 
 /** How long a wake-up turn may run before it counts as hung and is stopped. */
@@ -23,6 +23,12 @@ export const DEFAULT_WAKE_UP_READ_BUDGET = 12;
 
 /** How long one event's detail runs in a digest: what happened, never the log behind it. */
 const DETAIL_CHARS = 240;
+
+/** The most one event that rode along takes (ADR-0057 R5): it woke nobody, and `task_query` reads the rest. */
+const RIDE_ALONG_CHARS = 120;
+
+/** How many tasks a digest names in a list before it counts them (ADR-0057 R5). */
+const NAMED_TASKS = 3;
 
 /** A run event as the host reports it; the supervisor stamps it. */
 export type RunEventInput = Omit<RunEvent, 'at' | 'taskIds'>;
@@ -61,10 +67,10 @@ export interface SupervisorHost {
   pump(): void;
   /** Save what the supervisor gathered: a restart must still deliver a debounced batch (ADR-0029). */
   saveState(): void;
-  /** How a digest names a task: `#3 "Title"`. */
-  describeTask(taskId: string): string;
-  /** The tasks a failed task blocks now, through their dependencies (ADR-0034). */
-  blockedBy(taskId: string): string[];
+  /** What a digest reads of the plan, built once as it goes out: reading it per name is what made a large one quadratic. */
+  digestReader(): DigestReader;
+  /** What the plan and the planner's prompt cache say now, for the decision the policy makes (ADR-0057 R4). */
+  wakeFacts(): WakeFacts;
   /** Reads a wake-up turn may make, as the plan sets them. */
   readBudget(): number;
   /** Retries the supervisor may make of one task in a run, as the plan sets them. */
@@ -80,6 +86,14 @@ export interface SupervisorHost {
   /** An Act supervisor tripped the wake-up rate: the run carries on at Watch. `reason` says what it did. */
   dropToWatch(reason: string): void;
   notice(level: 'info' | 'warn', message: string): void;
+}
+
+/** What a digest reads of the plan. */
+export interface DigestReader {
+  /** How a digest names a task: `#3 "Title"`. */
+  describe(taskId: string): string;
+  /** The tasks a failed task blocks now, through their dependencies (ADR-0034). */
+  blockedBy(taskId: string): string[];
 }
 
 export interface SupervisorOptions {
@@ -138,7 +152,11 @@ export class Supervisor {
     this.turnTimeoutMs = options.turnTimeoutMs ?? WAKE_UP_TURN_TIMEOUT_MS;
     this.hungGraceMs = options.hungGraceMs ?? HUNG_TURN_GRACE_MS;
     this.now = options.now ?? Date.now;
-    this.policy = createWakePolicy({ debounceMs: this.debounceMs });
+    this.policy = this.newPolicy();
+  }
+
+  private newPolicy(): WakePolicy {
+    return createWakePolicy({ debounceMs: this.debounceMs, facts: () => this.host.wakeFacts() });
   }
 
   /** The level the supervisor acts at now: the run's, lowered during it perhaps, and Off once it failed. */
@@ -176,8 +194,9 @@ export class Supervisor {
    * What a wake-up turn is held to. One on the supervisor's inputs is held to
    * the run's level: the brief is the level's as the turn opens, and what the
    * turn may change and run is read as it does it, so a level lowered meanwhile
-   * applies at once. One on a report for a task the user's turn started acts
-   * as that turn did (ADR-0037, R3).
+   * applies at once. The brief is advice, since the seam enforces the level.
+   * One on a report for a task the user's turn started acts as that turn did
+   * (ADR-0037, R3).
    */
   wakeUpTurn(authority: TurnAuthority = 'supervisor'): WakeUpTurn {
     const readBudget = this.host.readBudget();
@@ -242,7 +261,7 @@ export class Supervisor {
     // A report is the planner's answer, whichever run it ended in.
     const reports = this.policy.snapshot().attention.filter((e) => e.kind === 'task_report');
     this.disarm();
-    this.policy = createWakePolicy({ debounceMs: this.debounceMs });
+    this.policy = this.newPolicy();
     for (const report of reports) this.policy.push(report);
     this.arm();
   }
@@ -265,7 +284,7 @@ export class Supervisor {
     this.finished = false;
     this.runEndPending = false;
     this.wakeUps = [];
-    this.policy = createWakePolicy({ debounceMs: this.debounceMs });
+    this.policy = this.newPolicy();
   }
 
   /**
@@ -430,7 +449,8 @@ export class Supervisor {
   private deliver(batch: WakeBatch): void {
     const theirs = batch.attention.filter((e) => e.report?.authority === 'user');
     const own = batch.attention.filter((e) => e.report?.authority !== 'user');
-    const digest = (part: WakeBatch) => wakeUpDigest(part, (taskId) => this.host.describeTask(taskId), (taskId) => this.host.blockedBy(taskId));
+    const { describe, blockedBy } = this.host.digestReader();
+    const digest = (part: WakeBatch) => wakeUpDigest(part, describe, blockedBy);
     // A failure is the wake-up turn's to handle, in {@link turn}; the batch stays pending meanwhile.
     if (own.length > 0) {
       const runEnd = own.some((e) => e.kind === 'run_finished');
@@ -468,83 +488,157 @@ function changeRefusal(level: SupervisorLevel, change: PlanChange): string | und
   }
 }
 
-/** What a wake-up turn is told after its run update, never saved: who it is, and what its level lets it do. */
-function watchBrief(readBudget: number): string {
-  return [
-    'You are this plan\'s supervisor, woken by the run update above; the user did not write to you.',
-    'Tell the user, in a few lines, what needs their attention and what you suggest, so they can answer.',
-    readsLine(readBudget),
-    'At Watch you only suggest. Running, stopping, retrying, skipping or messaging tasks, answering approvals or checkpoints and editing the plan are refused in this turn: the user\'s reply is how a suggestion is applied.',
-  ].join('\n');
+/**
+ * What a wake-up turn is told after its run update, never saved: who it is,
+ * and what its level lets it do. Sent whole once per context, and then a line
+ * on a change (ADR-0057 R5, `PlannerBriefing`).
+ */
+function watchBrief(readBudget: number): WakeBrief {
+  return {
+    key: 'watch',
+    whole: [
+      'You are this plan\'s supervisor, woken by the run update above; the user did not write to you.',
+      'Tell the user, in a few lines, what needs their attention and what you suggest, so they can answer.',
+      readsLine(readBudget),
+      'At Watch you only suggest. Running, stopping, retrying, skipping or messaging tasks, answering approvals or checkpoints and editing the plan are refused in this turn: the user\'s reply is how a suggestion is applied.',
+    ].join('\n'),
+    line: `You are the supervisor at Watch now: you suggest and the user decides, as you were told, with up to ${readBudget} reads a turn.`,
+  };
 }
 
-function actBrief(readBudget: number, retryLimit: number): string {
-  return [
-    'You are this plan\'s supervisor, woken by the run update above; the user did not write to you.',
-    'At Act you may act on it yourself: run, stop and retry tasks, message their runners, deny or escalate approvals, approve or reject checkpoints, change tasks with edit_plan, and merge_all. Nobody is asked first. A task you add is approved to run, an ops task included.',
-    'When a task that failed, is blocked or waits for input should not hold up the rest, skip_task it with your reason: none of its work lands, and its dependents go ahead once the work it waited on is done, told why. You never mark work complete; only the user vouches for it.',
-    'A task waiting at a checkpoint is answered with answer_checkpoint: approve and it goes on, or reject with a reason, which the runner reads and acts on. A checkpoint that asks for the user\'s judgement on an irreversible or outward effect (a deletion, a push, a payment, a message to someone) is theirs: escalate it to the user rather than approving it. Leave it waiting and tell them what it asks and why you did not answer. When you reject, give the reason the runner should act on.',
-    readsLine(readBudget),
-    'To change a task and run it again, call edit_plan and then retry_task in the same reply: the edit is in the plan as edit_plan answers, so the retry runs it as edited.',
-    'A task paused on a usage limit can be resumed early with from "session" once the user says the limit has been reset.',
-    `Loop guards hold you: you may retry one task up to ${retryLimit} times this run, and a skip of a task you retried counts as one more; a retry after a failure must change its prompt or model; you may not re-add a task you removed or undo an edit of your own. A refused call says why and what would be accepted. When a guard stops you, escalate to the user rather than trying again.`,
-    'Then tell the user, in a few lines, what happened, what you did and why, and what needs them.',
-  ].join('\n');
+function actBrief(readBudget: number, retryLimit: number): WakeBrief {
+  return {
+    key: 'act',
+    whole: [
+      'You are this plan\'s supervisor, woken by the run update above; the user did not write to you.',
+      'At Act you may act on it yourself: run, stop and retry tasks, message their runners, deny or escalate approvals, approve or reject checkpoints, change tasks with edit_plan, and merge_all. Nobody is asked first. A task you add is approved to run, an ops task included.',
+      'When a task that failed, is blocked or waits for input should not hold up the rest, skip_task it with your reason: none of its work lands, and its dependents go ahead once the work it waited on is done, told why. You never mark work complete; only the user vouches for it.',
+      'A task waiting at a checkpoint is answered with answer_checkpoint: approve and it goes on, or reject with a reason, which the runner reads and acts on. A checkpoint that asks for the user\'s judgement on an irreversible or outward effect (a deletion, a push, a payment, a message to someone) is theirs: escalate it to the user rather than approving it. Leave it waiting and tell them what it asks and why you did not answer. When you reject, give the reason the runner should act on.',
+      readsLine(readBudget),
+      'To change a task and run it again, call edit_plan and then retry_task in the same reply: the edit is in the plan as edit_plan answers, so the retry runs it as edited.',
+      'A task paused on a usage limit can be resumed early with from "session" once the user says the limit has been reset.',
+      `Loop guards hold you: you may retry one task up to ${retryLimit} times this run, and a skip of a task you retried counts as one more; a retry after a failure must change its prompt or model; you may not re-add a task you removed or undo an edit of your own. A refused call says why and what would be accepted. When a guard stops you, escalate to the user rather than trying again.`,
+      'Then tell the user, in a few lines, what happened, what you did and why, and what needs them.',
+    ].join('\n'),
+    line: `You are the supervisor at Act now: you act and then tell the user, as you were told, with up to ${readBudget} reads a turn and ${retryLimit} retries of a task.`,
+  };
 }
 
 /**
  * A wake-up turn's brief once the supervisor is off for the run: what wakes it
  * then is only a report it asked for as the supervisor (ADR-0037, R2).
  */
-function offBrief(readBudget: number): string {
-  return [
-    'You are this plan\'s supervisor, woken by the run update above: the result of a task you started, which you asked for. The user did not write to you.',
-    'The supervisor is off for this run, so you cannot act in this turn: running, stopping or retrying tasks and editing the plan are refused.',
-    readsLine(readBudget),
-    'Tell the user, in a few lines, how it went and what you suggest; their reply is how a suggestion is applied.',
-  ].join('\n');
+function offBrief(readBudget: number): WakeBrief {
+  return {
+    key: 'off',
+    whole: [
+      'You are this plan\'s supervisor, woken by the run update above: the result of a task you started, which you asked for. The user did not write to you.',
+      'The supervisor is off for this run, so you cannot act in this turn: running, stopping or retrying tasks and editing the plan are refused.',
+      readsLine(readBudget),
+      'Tell the user, in a few lines, how it went and what you suggest; their reply is how a suggestion is applied.',
+    ].join('\n'),
+    line: `The supervisor is off for this run now: you cannot act on the run update, as you were told; tell the user how it went, with up to ${readBudget} reads a turn.`,
+  };
 }
 
 /**
  * A report turn's brief for a task the user's turn started (ADR-0037, R3): it
  * acts as that turn did, at whatever level the supervisor is.
  */
-function reportBrief(readBudget: number): string {
-  return [
-    'The run update above is the result of a task you started in the user\'s turn, which had not ended when that turn did. The user did not write to you.',
-    'You act as in that turn: carry on with what the user asked, if it needs more, as you would have had the result come in it.',
-    readsLine(readBudget),
-    'Then tell the user, in a few lines, how it went and what, if anything, you did about it.',
-  ].join('\n');
+function reportBrief(readBudget: number): WakeBrief {
+  return {
+    key: 'report',
+    whole: [
+      'The run update above is the result of a task you started in the user\'s turn, which had not ended when that turn did. The user did not write to you.',
+      'You act as in that turn: carry on with what the user asked, if it needs more, as you would have had the result come in it.',
+      readsLine(readBudget),
+      'Then tell the user, in a few lines, how it went and what, if anything, you did about it.',
+    ].join('\n'),
+    line: `This run update is the result of a task you started in the user's turn: you act as in that turn, as you were told, with up to ${readBudget} reads a turn.`,
+  };
 }
 
 function readsLine(readBudget: number): string {
   return `Read more with task_output, task_diff or task_query if you need to: up to ${readBudget} reads this turn. The update names what happened; it does not hold the logs.`;
 }
 
+/** One line of a digest, and how much it matters when not all of them fit. */
+interface DigestItem {
+  kind: RunEventKind;
+  line: string;
+  rank: 0 | 1 | 2;
+}
+
+/** How the overflow line counts each kind of event: read after a number, one or many. */
+const OVERFLOW_WORDS: Record<RunEventKind, string> = {
+  task_passed: 'passed',
+  task_failed: 'failed',
+  waiting_input: 'waiting for input',
+  waiting_approval: 'waiting for approval',
+  task_idle: 'gone quiet',
+  landing_conflict: 'in conflict',
+  usage_limit: 'at a usage limit',
+  auto_merge_stopped: 'with a merge stopped',
+  run_finished: 'ended',
+  task_report: 'reported',
+};
+
+/** Room kept for the overflow line, which is never left out. */
+const OVERFLOW_ROOM = 400;
+
 /**
  * What a wake-up tells the planner: each event that woke it, with its task
- * and a short detail, and the passes since the last one. A digest, never a
- * log — the supervisor reads more itself.
+ * and a short detail, and what rode along in a line each (ADR-0057 R5). A
+ * digest, never a log — the supervisor reads more itself. Past the cap what
+ * woke it goes first, whole items only, and the rest is counted.
  */
 export function wakeUpDigest(batch: WakeBatch, describe: (taskId: string) => string, blockedBy: (taskId: string) => string[] = () => []): string {
   const passed = [...new Set(batch.sinceLast.flatMap((e) => e.taskId ?? []))];
+  const items: DigestItem[] = [
+    ...batch.attention.map((e) => attentionItem(e, describe, blockedBy)),
+    ...passed.map((taskId): DigestItem => ({ kind: 'task_passed', rank: 2, line: `- ${cut(`task ${describe(taskId)} passed`, RIDE_ALONG_CHARS - 2)}` })),
+  ];
+  const shown = new Set<DigestItem>();
+  let used = 'Run update:'.length + 'Since the last update:'.length + OVERFLOW_ROOM;
+  // Whole items by rank, stopping at the first that does not fit: a smaller one past it would read as more important than it.
+  for (const item of [...items].sort((a, b) => a.rank - b.rank)) {
+    if (used + item.line.length + 1 > WAKE_MAX_CHARS) break;
+    used += item.line.length + 1;
+    shown.add(item);
+  }
+  const left = items.filter((item) => !shown.has(item));
+  const passes = items.filter((item) => item.kind === 'task_passed' && shown.has(item));
   return [
     'Run update:',
-    ...batch.attention.map((e) => `- ${attentionLine(e, describe, blockedBy)}`),
-    ...(passed.length > 0 ? [`Since the last update: ${passed.length === 1 ? 'task' : 'tasks'} ${listed(passed.map(describe))} passed.`] : []),
+    ...items.filter((item) => item.kind !== 'task_passed' && shown.has(item)).map((item) => item.line),
+    ...(passes.length > 0 ? ['Since the last update:', ...passes.map((item) => item.line)] : []),
+    ...(left.length > 0 ? [overflowLine(left)] : []),
   ].join('\n');
 }
 
-function attentionLine(event: RunEvent, describe: (taskId: string) => string, blockedBy: (taskId: string) => string[]): string {
+/** What did not fit, counted by kind, and where to read it (ADR-0057 R5). */
+function overflowLine(left: readonly DigestItem[]): string {
+  const counts = new Map<RunEventKind, number>();
+  for (const { kind } of left) counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  return `+${left.length} more: ${[...counts].map(([kind, count]) => `${count} ${OVERFLOW_WORDS[kind]}`).join(', ')}; task_query reads them.`;
+}
+
+function attentionItem(event: RunEvent, describe: (taskId: string) => string, blockedBy: (taskId: string) => string[]): DigestItem {
+  // Read as the update goes out: a retry that passed since has lifted the block.
+  const blocked = event.kind === 'task_failed' && event.taskId !== undefined ? blockedBy(event.taskId) : [];
+  const line = attentionLine(event, describe, blocked);
+  // A failure holding work back is why the wake came, whatever else it was held for.
+  if (!isHeldEvent(event) || blocked.length > 0) return { kind: event.kind, rank: 0, line: `- ${line}` };
+  return { kind: event.kind, rank: 1, line: `- ${cut(line, RIDE_ALONG_CHARS - 2)}` };
+}
+
+function attentionLine(event: RunEvent, describe: (taskId: string) => string, blocked: readonly string[]): string {
   const task = event.taskId === undefined ? 'a task' : `task ${describe(event.taskId)}`;
   const detail = event.detail ? brief(event.detail) : '';
   const colon = detail ? `: ${detail}` : '';
   switch (event.kind) {
     case 'task_failed': {
-      // Read as the update goes out: a retry that passed since has lifted the block.
-      const blocked = event.taskId === undefined ? [] : blockedBy(event.taskId);
-      const blocks = blocked.length === 0 ? '' : `; it blocks ${blocked.length === 1 ? 'task' : 'tasks'} ${listed(blocked.map(describe))}`;
+      const blocks = blocked.length === 0 ? '' : `; it blocks ${blocked.length === 1 ? 'task' : 'tasks'} ${namedFirst(blocked, describe)}`;
       return `${task} failed${colon}${blocks}`;
     }
     case 'waiting_input': return `${task} is waiting for input${colon}`;
@@ -561,7 +655,7 @@ function attentionLine(event: RunEvent, describe: (taskId: string) => string, bl
     case 'usage_limit': {
       const ids = event.taskIds ?? (event.taskId === undefined ? [] : [event.taskId]);
       const one = ids.length === 1;
-      const tasks = ids.length === 0 ? 'a task' : `${one ? 'task' : 'tasks'} ${listed(ids.map(describe))}`;
+      const tasks = ids.length === 0 ? 'a task' : `${one ? 'task' : 'tasks'} ${namedFirst(ids, describe)}`;
       const resume = event.resumeAt
         ? `${one ? 'it resumes' : 'they resume'} on ${one ? 'its' : 'their'} own at ${event.resumeAt}`
         : `${one ? 'it waits' : 'they wait'} for a retry, as the reset time could not be read`;
@@ -574,8 +668,17 @@ function listed(items: readonly string[]): string {
   return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 }
 
+/** The first few tasks by name and how many more: the list never grows with the plan (ADR-0057 R5). */
+function namedFirst(ids: readonly string[], describe: (taskId: string) => string): string {
+  if (ids.length <= NAMED_TASKS) return listed(ids.map(describe));
+  return `${ids.slice(0, NAMED_TASKS).map(describe).join(', ')} and ${ids.length - NAMED_TASKS} more`;
+}
+
+function cut(text: string, chars: number): string {
+  return text.length > chars ? `${text.slice(0, chars - 1)}…` : text;
+}
+
 /** One line, cut to fit a digest. */
 function brief(text: string): string {
-  const line = text.replace(/\s+/g, ' ').trim();
-  return line.length > DETAIL_CHARS ? `${line.slice(0, DETAIL_CHARS - 1)}…` : line;
+  return cut(text.replace(/\s+/g, ' ').trim(), DETAIL_CHARS);
 }

@@ -28,7 +28,7 @@ const handoffReference = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('task'),
     task: z.union([z.string().min(1), z.number().int().min(0)]).transform(String).pipe(z.string().max(HANDOFF_LIMITS.reference))
-      .describe('A task you may read — this one, one it depends on, or its loop\'s other end: "#order", its id or its title.'),
+      .describe('A task you may read — this one, one it depends on, or its loop\'s other end: "#order", "#4/F3", its id or its title.'),
     finding: z.string().max(HANDOFF_LIMITS.reference).regex(/^F[1-9][0-9]*$/, 'A finding is named as Ordewell numbered it: "F1", "F2", ….').optional()
       .describe('One of that task\'s findings, as "F3".'),
   }),

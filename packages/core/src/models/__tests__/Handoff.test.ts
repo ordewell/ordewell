@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { checkHandoff, handoffPreviewLines, handoffReferenceText, handoffWakeLines, readableTaskIds, savedPatchOf, severityLabel, storedHandoff, withPatch, worstSeverity, type HandoffDigest, type HandoffPatch } from '../Handoff';
+import { checkHandoff, handoffPreviewLines, handoffReferenceText, handoffWakeLines, parseFindingRef, readableTaskIds, savedPatchOf, severityLabel, storedHandoff, withPatch, worstSeverity, type HandoffDigest, type HandoffPatch } from '../Handoff';
 import { createTask } from '../Task';
 
 describe('the tasks a task may read (ADR-0047)', () => {
@@ -40,7 +40,7 @@ describe('a handoff as a surface words it', () => {
     expect(handoffReferenceText({ kind: 'file', path: 'src/a.ts', line: 3 })).toBe('src/a.ts:3 (unresolved)');
     expect(handoffReferenceText({ kind: 'file', path: 'src/a.ts' })).toBe('src/a.ts (unresolved)');
     expect(handoffReferenceText({ kind: 'commit', sha: 'abc123', repo: 'api' })).toBe('commit abc123 in api (unresolved)');
-    expect(handoffReferenceText({ kind: 'task', task: 't2', finding: 'F1' }, (id) => (id === 't2' ? '#2' : undefined))).toBe('task #2 F1');
+    expect(handoffReferenceText({ kind: 'task', task: 't2', finding: 'F1' }, (id) => (id === 't2' ? '#2' : undefined))).toBe('#2/F1');
     expect(handoffReferenceText({ kind: 'url', url: 'https://example.com/pr/1' })).toBe('https://example.com/pr/1');
   });
 });
@@ -163,5 +163,93 @@ describe('a patch a read-only task saved (ADR-0050)', () => {
   it('passes the completion check untouched: it is Ordewell\'s own record, not a reference to resolve', () => {
     const plan = [createTask({ id: 't', order: 1, title: 'T' })];
     expect(checkHandoff({ summary: '', artifacts: [patch] }, 't', plan)).toEqual({ ok: true, handoff: { summary: '', artifacts: [patch] } });
+  });
+});
+
+describe('a reference pinned to its attempt (ADR-0057 R1)', () => {
+  const finding = (title: string) => ({ severity: 'major' as const, title });
+  const digest = (attempt: number | undefined, count: number): HandoffDigest => ({
+    summary: 'Reviewed.',
+    findings: Array.from({ length: count }, (_, i) => ({ id: `F${i + 1}`, ...finding(`finding ${i + 1}`) })),
+    findingCount: count,
+    ...(attempt === undefined ? {} : { attempt }),
+  });
+  const plan = (handoff?: HandoffDigest) => [
+    createTask({ id: 'review', order: 4, title: 'Review', ...(handoff ? { handoff } : {}) }),
+    createTask({ id: 'fix', order: 5, dependencies: ['review'] }),
+  ];
+  const cite = (task: string, more: { finding?: string } = {}) => ({ summary: 'Fixed.', artifacts: [{ kind: 'task' as const, task, ...more }] });
+  const pinned = (check: ReturnType<typeof checkHandoff>) => {
+    if (!check.ok) throw new Error(check.refusal);
+    return check.handoff.artifacts;
+  };
+
+  it('stores the attempt the finding belongs to, under the root, from what authors write today', () => {
+    expect(pinned(checkHandoff(cite('#4', { finding: 'F3' }), 'fix', plan(digest(2, 3))))).toEqual([{ kind: 'task', node: 'root', task: 'review', attempt: 2, finding: 'F3' }]);
+  });
+
+  it('reads the short form an author writes, #4/F3, as the same reference', () => {
+    expect(pinned(checkHandoff(cite('#4/F3'), 'fix', plan(digest(2, 3))))).toEqual([{ kind: 'task', node: 'root', task: 'review', attempt: 2, finding: 'F3' }]);
+  });
+
+  it('pins a task named with no finding, whose handoff is what the reference points at', () => {
+    expect(pinned(checkHandoff(cite('#4'), 'fix', plan(digest(2, 3))))).toEqual([{ kind: 'task', node: 'root', task: 'review', attempt: 2 }]);
+  });
+
+  it('leaves a title that only looks like a reference alone: the whole text is tried first', () => {
+    const titled = [createTask({ id: 'odd', order: 1, title: 'Answer #4/F3' }), createTask({ id: 'fix', order: 2, dependencies: ['odd'] })];
+    expect(pinned(checkHandoff(cite('Answer #4/F3'), 'fix', titled))).toEqual([{ kind: 'task', node: 'root', task: 'odd' }]);
+  });
+
+  it('refuses two different findings named at once', () => {
+    const check = checkHandoff(cite('#4/F3', { finding: 'F2' }), 'fix', plan(digest(2, 3)));
+    expect(check).toMatchObject({ ok: false, refusal: expect.stringContaining('F3 and F2') });
+  });
+
+  it('takes the attempt from the log for a digest saved before attempts were kept on it', () => {
+    const logs = { attempts: () => [1, 2], handoff: () => undefined };
+    expect(pinned(checkHandoff(cite('#4/F3'), 'fix', plan(digest(undefined, 3)), { logs }))).toEqual([{ kind: 'task', node: 'root', task: 'review', attempt: 2, finding: 'F3' }]);
+  });
+
+  it('stays unpinned where nothing says the attempt, and reads the latest as a saved one does', () => {
+    expect(pinned(checkHandoff(cite('#4/F3'), 'fix', plan(digest(undefined, 3))))).toEqual([{ kind: 'task', node: 'root', task: 'review', finding: 'F3' }]);
+  });
+
+  it('checks an attempt the author names against that attempt, not the latest', () => {
+    const logs = { attempts: () => [1, 2], handoff: (_: string, attempt: number) => (attempt === 1 ? digest(1, 5) : undefined) };
+    expect(pinned(checkHandoff(cite('#4@1/F5'), 'fix', plan(digest(2, 1)), { logs }))).toEqual([{ kind: 'task', node: 'root', task: 'review', attempt: 1, finding: 'F5' }]);
+    expect(checkHandoff(cite('#4@1/F6'), 'fix', plan(digest(2, 1)), { logs })).toMatchObject({ ok: false, refusal: expect.stringContaining('attempt 1 has F1 to F5') });
+    expect(checkHandoff(cite('#4@3'), 'fix', plan(digest(2, 1)), { logs })).toMatchObject({ ok: false, refusal: expect.stringContaining('no saved attempt 3') });
+  });
+
+  it('pins a task naming itself to the attempt making the call', () => {
+    const check = checkHandoff({ summary: 'Me.', artifacts: [{ kind: 'task', task: '#5' }] }, 'fix', plan(digest(2, 3)), { attempt: 3 });
+    expect(pinned(check)).toEqual([{ kind: 'task', node: 'root', task: 'fix', attempt: 3 }]);
+  });
+
+  it('reads a task naming itself as the attempt making the call, not one an earlier attempt left on the plan', () => {
+    const tasks = [createTask({ id: 'solo', order: 1, handoff: digest(1, 1) })];
+    const check = checkHandoff({ summary: 'Again.', artifacts: [{ kind: 'task', task: '#1' }] }, 'solo', tasks, { attempt: 2 });
+    expect(pinned(check)).toEqual([{ kind: 'task', node: 'root', task: 'solo', attempt: 2 }]);
+  });
+
+  it('renders as #4@2/F3, without the parts it does not have', () => {
+    const name = (id: string) => (id === 'review' ? '#4' : undefined);
+    expect(handoffReferenceText({ kind: 'task', node: 'root', task: 'review', attempt: 2, finding: 'F3' }, name)).toBe('#4@2/F3');
+    expect(handoffReferenceText({ kind: 'task', node: 'root', task: 'review', attempt: 2 }, name)).toBe('#4@2');
+  });
+
+  it('reads a reference saved before pinning as the latest, with no migration', () => {
+    const name = (id: string) => (id === 'review' ? '#4' : undefined);
+    expect(handoffReferenceText({ kind: 'task', task: 'review', finding: 'F3' }, name)).toBe('#4/F3');
+    expect(handoffReferenceText({ kind: 'task', task: 'review' }, name)).toBe('#4');
+  });
+
+  it('parses every form a reference is written in, and nothing else', () => {
+    expect(parseFindingRef('#4@2/F3')).toEqual({ task: '#4', attempt: 2, finding: 'F3' });
+    expect(parseFindingRef('#4.1/F3')).toEqual({ task: '#4.1', finding: 'F3' });
+    expect(parseFindingRef('#4@2')).toEqual({ task: '#4', attempt: 2 });
+    expect(parseFindingRef('#4')).toEqual({ task: '#4' });
+    expect(parseFindingRef('Fix the auth/F3 thing')).toEqual({ task: 'Fix the auth/F3 thing' });
   });
 });
