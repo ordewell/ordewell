@@ -261,6 +261,24 @@ describe('a task card, pinned before its rules move to core', () => {
     expect(el?.getAttribute('title')).toBe('Repairing the conflict in its own worktree: a.ts.');
   });
 
+  it('badges a repair waiting for a slot as that, with no Conflict badge and no Resolve', () => {
+    const isolation: TaskIsolation = { ...isolated, state: 'conflict', conflictFiles: ['a.ts'], repairWaits: 'slot' };
+    render(<TaskCard task={makeTask({ status: 'pending' })} models={[]} run={{ isolation }} isExecuting onCancel={vi.fn()} onResolveConflict={vi.fn()} expanded />);
+
+    expect(document.querySelector('.task-isolation-badge.repairing')?.textContent).toBe('Repair waits for a free slot');
+    expect(document.querySelector('.task-isolation-badge.conflict')).toBeNull();
+    expect(screen.queryByText('Resolve')).toBeNull();
+    expect(screen.getByText('Cancel')).toBeTruthy();
+  });
+
+  it('offers no second resolver for a conflict that has one', () => {
+    const isolation: TaskIsolation = { ...isolated, state: 'conflict', conflictFiles: ['a.ts'], resolver: 't9' };
+    render(<TaskCard task={makeTask({ status: 'awaiting_user', awaitingReason: 'conflict' })} models={[]} run={{ isolation }} onResolveConflict={vi.fn()} expanded />);
+
+    expect(document.querySelector('.task-isolation-badge.conflict')?.getAttribute('title')).toContain('Task t9 is resolving it.');
+    expect(screen.queryByText('Resolve')).toBeNull();
+  });
+
   it('notes the files a repair was for in the details', () => {
     const isolation: TaskIsolation = { ...isolated, state: 'integrated', repairedFiles: ['a.ts'] };
     render(<TaskCard task={makeTask({ status: 'completed' })} models={[]} run={{ isolation }} expanded onExpandedChange={noop} />);

@@ -190,6 +190,8 @@ export interface ExecutionHost {
   admitStart(): StartAdmission;
   /** The task's attempt is live: starting, running or landing. */
   running(taskId: string): boolean;
+  /** A conflict repair of the task will start by itself: there is a start to withdraw (ADR-0015). */
+  repairOwed(taskId: string): boolean;
   maxParallel(): number;
   /** The run waits on the user to stash or skip isolation before anything starts. */
   runBlocked(): boolean;
@@ -337,6 +339,8 @@ const NO_PLAN_FOR_SCRIPT = 'There is no plan yet, so there is nowhere to add a s
 const AUTORUN_JOINS_NOTHING = 'tasks are already running, and in Guarded autorun takes no plan into work under way. Run the plan yourself to start the rest.';
 
 const OVERRIDE_LANDING = 'Another manual override is landing: wait for it to finish, then start or override again.';
+
+const CONFLICT_ANSWERS = 'Add a resolver task, retry it, skip it or mark it complete.';
 
 const ESCALATION_GONE = 'That is no longer waiting on you: it was answered, or the run moved on. Nothing was changed.';
 
@@ -1207,16 +1211,25 @@ export class ExecutionCommands {
     const label = describe(located);
     const completing = this.completingRefusal(located);
     if (completing) return { refusal: completing };
-    if (!this.host.running(task.id) && task.status !== 'in_progress') {
-      return { refusal: `${capitalize(label)} is not running (it ${statusWords(task)}): there is nothing to stop.` };
+    if (!this.host.repairOwed(task.id) && !this.host.running(task.id) && task.status !== 'in_progress') {
+      return { refusal: `${capitalize(label)} is not running (it ${statusWords(task)}): there is nothing to stop.${this.conflictNext(task)}` };
     }
     return {
       act: async () => {
         await this.host.stopTask(task.id);
+        const now = this.located(task.id)?.task;
+        if (now?.status === 'awaiting_user' && now.awaitingReason === 'conflict') return { message: `Stopped the repair of ${label}: its merge conflict waits for you, and its work is kept. ${CONFLICT_ANSWERS}` };
         if (task.type === 'script') return { message: `Stopped ${label}: what it was running was ended, and it is back to not started and held until it is retried. A retry runs its body again from the first step.` };
         return { message: `Stopped ${label}: it is back to not started and held until it is retried, and its open approvals were denied.${task.ops ? ' A retry is told what this attempt did.' : ''}` };
       },
     };
+  }
+
+  /** What a refused Stop of a conflicted task can do instead: nothing runs it, so there is something else to press. */
+  private conflictNext(task: Readonly<Task>): string {
+    const resolver = this.located(waitOf(this.host.startWaits(task), 'resolver')?.resolver ?? '');
+    if (resolver) return ` Its conflict is with ${describe(resolver)}: stop that task, or let it finish.`;
+    return task.status === 'awaiting_user' && task.awaitingReason === 'conflict' ? ` ${CONFLICT_ANSWERS}` : '';
   }
 
   private prepareStopRun(actor: ExecutionActor): Prepared {
@@ -1665,6 +1678,7 @@ const STATUS_WORDS: Record<TaskStatus, string> = {
 function statusWords(task: Readonly<Task>): string {
   if (task.status === 'awaiting_user' && task.awaitingReason === 'input') return 'is waiting for input';
   if (task.status === 'awaiting_user' && task.awaitingReason === 'checkpoint') return 'is waiting at a checkpoint for the user';
+  if (task.status === 'awaiting_user' && task.awaitingReason === 'conflict') return 'is waiting on a merge conflict';
   if (pausedOnLimit(task)) return 'is paused on its runner\'s usage limit';
   return STATUS_WORDS[task.status];
 }

@@ -173,12 +173,12 @@ export class PlanStore {
    * `preserveCompleted: false` is for a freshly committed plan, where
    * everything starts over. `edited` is an edit adopted between runs, which is
    * not the user starting over: a failed task stays failed, and a task waiting
-   * on its runner's usage-limit reset stays waiting.
+   * on its runner's usage-limit reset, or on its merge conflict, stays waiting.
    */
   resetForRun(opts: { preserveCompleted?: boolean; edited?: boolean } = {}): void {
     const preserveCompleted = opts.preserveCompleted ?? true;
     for (const t of this._allTasks) {
-      if (opts.edited && (t.status === 'failed' || waitsForReset(t))) continue;
+      if (opts.edited && (t.status === 'failed' || waitsForReset(t) || (t.status === 'awaiting_user' && t.awaitingReason === 'conflict'))) continue;
       if (t.type === 'user') {
         // No run readies a manual task, but one an edit made manual after it failed still has its fresh chance.
         if (t.status === 'failed') t.status = 'pending';

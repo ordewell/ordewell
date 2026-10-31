@@ -166,7 +166,7 @@ export function handlePlanKey(state: TuiState, key: Key): Step {
   if (key.char === 'd') return confirmRemoveTask(state, task);
   // Adds a task, so it is asked for by name — and only where a conflict exists.
   if (key.char === 'x' && task.isolation?.state === 'conflict') {
-    return step(state, [{ type: 'resolveConflict', sessionId: state.sessionId, taskId: task.id }]);
+    return step(state, [{ type: 'resolveConflict', sessionId: state.sessionId, taskId: task.id, ...(state.status === 'executing' ? {} : { watch: true as const }) }]);
   }
   if (key.char === 'R') return openTaskRunnerPicker(state, task);
   if (key.char === 'o') return openTaskModelPicker(state, task);

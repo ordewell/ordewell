@@ -1397,6 +1397,7 @@ one only after a retry or a skip.
 **Start rule** (`startWaits`, `StartWait`, `services/readiness.ts`) — whether a
 task can start now and, if not, every reason it waits, in a fixed order whose
 first is *the* reason (ADR-0034): it has started; Mark complete is landing it;
+a task added to resolve its conflict has that conflict (`resolver`, ADR-0015);
 it has no prompt; it is outside the user's approval record; it is on hold, with
 that reason shown on every surface; it is blocked; it is in a *Loop*'s body
 whose check has not failed this round
@@ -1760,7 +1761,13 @@ starts, and the files every repair was started for gather in `repairedFiles`. A 
 evidence or exhausts its cap goes back to an unrepaired conflict — `awaiting_user`,
 worktree and refs kept, every existing way out still open — and never fails
 the task on its own. Every repair is logged as a notice, and a landed one is
-named, with its files, in the *Isolation handoff*.
+named, with its files, in the *Isolation handoff*. A repair that will start by
+itself waits for a slot, a planner's turn or a usage limit, and says so on the
+task row and the task log (`TaskIsolation.repairWaits`, derived and never saved);
+it is not a conflict to act on, and the *Escalation* list leaves it out. A Stop
+or a load withdraws it, and its conflict waits on the user, with no repair spent.
+A conflict has one worker: a repair or a resolver, never both and never two
+resolvers (`Landing.liveResolvers`; see *Isolation handoff*).
 *Avoid:* "auto-merge" (there is still a real merge conflict to resolve, not a
 fast-forward); "resolver" (that names `resolveConflictAsTask`, the explicit
 `x` action a person asks for — a repair runs before anyone is asked); "auto-resolve" (implies the model's word stands in for the Verdict, which it never does).
@@ -1974,9 +1981,13 @@ conflicted task's first way out is automatic: a *conflict repair* (ADR-0015)
 runs on the task's own attempt before anyone is asked, up to
 `conflictRepairAttempts`. Only a conflict that repair does not clear leaves by
 a hand resolution plus Mark complete, a retry, or `resolveConflictAsTask` — an
-added task that merges the branch by hand and through whose landing the
-conflicted task lands, if it is still conflicted by then (a retry in the
-meantime replaces the conflict with a new attempt).
+added task, the conflict's *resolver*, that merges the branch by hand and through
+whose landing the conflicted task lands. It is refused beside a repair or
+another resolver, and starts under the start rule where no scheduler would. While
+it is live the conflicted task does not start. A conflict that ends some other
+way, a retry, a skip, a landing, the task leaving the plan or the run's clean-up,
+leaves a resolver not started skipped, with why, so no merge runs that is no
+longer needed.
 *Avoid:* "result", "output branch" for the handoff — it is a branch to review,
 not an outcome; and a bare "handoff" for a task's end, which is a task's
 *Handoff* (ADR-0047).

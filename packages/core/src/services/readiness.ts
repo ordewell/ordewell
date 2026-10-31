@@ -24,6 +24,8 @@ export type StartWait =
   | { kind: 'repeating'; round: number; maxRounds: number; waiting: string[] }
   /** Mark complete is landing its work. */
   | { kind: 'completing' }
+  /** A task added to resolve its conflict has it: a conflict has one worker (ADR-0015). */
+  | { kind: 'resolver'; resolver: string }
   /** An AI task with no prompt yet, or a script task with no body to run: there is nothing to run. */
   | { kind: 'no-prompt' }
   /** Outside the user's approval record (ADR-0035). */
@@ -58,9 +60,10 @@ export type StartWaitKind = StartWait['kind'];
  * and goes past the whole gate and a planner turn's start hold. Queued behind
  * its dependencies, it starts later with nobody asking, so it waits for a
  * start hold as the scheduler's starts do, and goes past only the gate it was
- * confirmed past: `pastGate`.
+ * confirmed past: `pastGate`. `asScheduled` is one the start rule has already
+ * passed whole, carried back to the queue if it has to wait again.
  */
-export type ForcedStart = { queued: false } | { queued: true; pastGate: readonly string[] };
+export type ForcedStart = { queued: false } | { queued: true; pastGate: readonly string[]; asScheduled?: true };
 
 /** What the start rule reads: the plan, the holds, and the open isolated run. */
 export interface StartRuleInput {
@@ -83,6 +86,8 @@ export interface StartRuleInput {
   completing: Pick<ReadonlySet<string>, 'has'>;
   /** Force starts queued behind their dependencies. */
   queued: Pick<ReadonlySet<string>, 'has'>;
+  /** The task out to resolve this task's conflict, if one is; none when the caller knows of no conflicts. */
+  conflictResolver?: (taskId: string) => string | undefined;
 }
 
 /** What the scheduler picks from: the start rule's input, and the slots. */
@@ -192,6 +197,8 @@ function waitsOf(task: Readonly<Task>, input: StartRuleInput, forced: ForcedStar
     } else waits.push({ kind: 'started' });
   }
   if (input.completing.has(task.id)) waits.push({ kind: 'completing' });
+  const resolver = input.conflictResolver?.(task.id);
+  if (resolver) waits.push({ kind: 'resolver', resolver });
   if (task.type === 'ai' ? !task.prompt : task.type === 'script' && !scriptBodyOf(task)) waits.push({ kind: 'no-prompt' });
   if (!input.approved(task.id)) waits.push({ kind: 'unapproved' });
   if (!forced && input.onHold.has(task.id)) {

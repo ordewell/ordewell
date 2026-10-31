@@ -123,7 +123,7 @@ describe('AUDIT revert: the integration branch checked out for review', () => {
       config: fakeConfig({ worktreeIsolation: true }),
       notifications: fakeNotification(),
       workspaceRoot: () => root,
-      listener: { changed: () => undefined, blocked: () => undefined, handoff: () => undefined, closed: () => undefined, notice: () => undefined },
+      listener: { changed: () => undefined, blocked: () => undefined, handoff: () => undefined, closed: () => undefined, notice: () => undefined, resolversEnded: () => undefined },
       liveTasks: () => new Set(),
     });
 
@@ -141,7 +141,7 @@ describe('AUDIT revert: a retry that lands nothing over a landing still unmerged
       config: fakeConfig({ worktreeIsolation: true }),
       notifications: fakeNotification(),
       workspaceRoot: () => root,
-      listener: { changed: () => undefined, blocked: () => undefined, handoff: () => undefined, closed: () => undefined, notice: () => undefined },
+      listener: { changed: () => undefined, blocked: () => undefined, handoff: () => undefined, closed: () => undefined, notice: () => undefined, resolversEnded: () => undefined },
       liveTasks: () => new Set(),
     });
   }

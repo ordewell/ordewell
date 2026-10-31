@@ -2,7 +2,7 @@ import { assignmentFlagText } from '../tui/blocks';
 import { writeFileSync } from 'fs';
 import { flag, hasFlag, readLastSession } from '../utils';
 import { iconFor } from '../utils/output';
-import { blockedByLabel, handoffBaseLine, holdLabel, isolationViewOfPlan, loopRowParts, planBlocks, scriptTaskText, skippedLabel, flattenTasks, taskOrderLabel, taskRowView, tasksTotalText, usageText, waitsForApproval, walkPlan, type ApprovalRecord, type AssignmentScope, type RunView } from '@ordewell/core';
+import { blockedByLabel, handoffBaseLine, holdLabel, isolationViewOfPlan, loopRowParts, planBlocks, repairWaitLabel, scriptTaskText, skippedLabel, flattenTasks, taskOrderLabel, taskRowView, tasksTotalText, usageText, waitsForApproval, walkPlan, type ApprovalRecord, type AssignmentScope, type RunView } from '@ordewell/core';
 import { allTasksOf } from '../utils/tasks';
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient, type SessionMeta } from '../apiClient';
@@ -94,8 +94,10 @@ function printOneSession(
   const { blocked, repeating } = planBlocks(everyTask.map((t) => ({ ...t, subtasks: [], dependencies: t.dependencies ?? [] })));
   // A hold is live session state; a saved plan has none, and a surface does not rebuild one from it.
   const holds = new Map<string, string>();
+  const repairs = new Map<string, string>();
   for (const { task } of walkPlan(run?.tasks ?? [])) {
     if (task.holdReason) holds.set(task.id, task.holdReason);
+    if (task.isolation?.state === 'conflict' && task.isolation.repairWaits) repairs.set(task.id, repairWaitLabel(task.isolation.repairWaits));
   }
   // A check between rounds is stored failed, and no failure while its loop goes on (ADR-0045 L3).
   const count = (status: string) => everyTask.filter((t) => (t.status === status && !(status === 'failed' && repeating.has(t.id))) || (status === 'blocked' && blocked.has(t.id))).length;
@@ -127,6 +129,7 @@ function printOneSession(
     const waiting = approval(row, taskOrderLabel(t));
     if (waiting) console.log(`      ${waiting}`);
     if (row.holdReason) console.log(`      ${holdLabel(row.holdReason)}`);
+    if (repairs.has(t.id)) console.log(`      ${repairs.get(t.id)}`);
     if (row.assignmentFlag) console.log(`      ⚠ ${assignmentFlagText(row)}`);
     if (row.blockedBy) console.log(`      ${blockedByLabel(row.blockedBy)}`);
     if (row.loop) console.log(`      ↻ ${loopRowParts(row.loop).join(' · ')}`);
@@ -145,6 +148,7 @@ function printOneSession(
       const subWaiting = approval(subRow, taskOrderLabel(sub, t));
       if (subWaiting) console.log(`        ${subWaiting}`);
       if (subRow.holdReason) console.log(`        ${holdLabel(subRow.holdReason)}`);
+      if (repairs.has(sub.id)) console.log(`        ${repairs.get(sub.id)}`);
       if (subRow.assignmentFlag) console.log(`        ⚠ ${assignmentFlagText(subRow)}`);
       if (subRow.blockedBy) console.log(`        ${blockedByLabel(subRow.blockedBy)}`);
       if (subRow.status === 'skipped') console.log(`        ${skippedLabel(subRow.skipReason)}`);

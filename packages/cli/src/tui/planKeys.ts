@@ -52,10 +52,10 @@ export const PLAN_KEYS = {
   stop: { keys: 'S', meaning: 'stop the run', group: 'Run', hint: 'S stop' },
   cancel: {
     keys: 'c',
-    meaning: "cancel the task's runner, or keep a task paused on a usage limit from resuming on its own",
+    meaning: "cancel the task's runner, withdraw a conflict repair waiting to start, or keep a task paused on a usage limit from resuming on its own",
     group: 'Run',
     // `c` cancels the resume while the task has one; it has no runner to cancel then.
-    hint: (task) => (task && resumeLabel(task) ? 'c don\'t resume' : 'c cancel'),
+    hint: (task) => (task && resumeLabel(task) ? 'c don\'t resume' : task && taskRowView(task).repairWaiting ? 'c stop repair' : 'c cancel'),
   },
   resume: { keys: 'r', meaning: 'resume a task paused on a usage limit now, once the limit has reset', group: 'Run', hint: 'r resume now' },
   resolve: { keys: 'x', meaning: 'resolve a merge conflict', group: 'Run', hint: 'x resolve conflict' },
@@ -106,7 +106,9 @@ function taskKeyIds(task: TaskView | undefined, runActive: boolean): PlanKeyId[]
   const row = taskRowView(task);
   // Only a started task has a chat to enter; its status or a manual mark is not one.
   const chat = (...ids: PlanKeyId[]): PlanKeyId[] => (row.chatAvailable ? ids : ids.filter((id) => id !== 'log'));
-  if (row.conflict) return chat('resolve', 'log');
+  // A resolver has the conflict: a second is refused, so it is not offered.
+  if (row.conflict) return row.conflict.resolver ? chat('log') : chat('resolve', 'log');
+  if (row.repairWaiting) return chat('cancel', 'log');
   if (row.actions.includes('resume-now') || row.resumes) {
     return chat(...(row.actions.includes('resume-now') ? ['resume' as const] : []), ...(row.resumes ? ['cancel' as const] : []), 'skip', 'log');
   }

@@ -13,7 +13,7 @@ function setup(isolation = new FakeWorktreeIsolation()) {
     blocked: vi.fn(),
     handoff: vi.fn(),
     closed: vi.fn(),
-    notice: vi.fn(),
+    notice: vi.fn(), resolversEnded: vi.fn(),
   };
   const notifications = fakeNotification();
   /** Tasks the plan has live: an attempt running, or in progress or waiting on the user. */

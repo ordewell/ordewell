@@ -466,7 +466,23 @@ describe('resolving a conflict', () => {
   });
 
   it('x on a conflicted task asks the daemon to add a resolver task', () => {
-    expect(press(conflicted(), 'char', 'x').effects).toEqual([{ type: 'resolveConflict', sessionId: 's1', taskId: 't2' }]);
+    expect(press(conflicted(), 'char', 'x').effects).toEqual([{ type: 'resolveConflict', sessionId: 's1', taskId: 't2', watch: true }]);
+  });
+
+  it('opens no second stream for the resolver in a run that holds one', () => {
+    expect(press({ ...conflicted(), status: 'executing' }, 'char', 'x').effects).toEqual([{ type: 'resolveConflict', sessionId: 's1', taskId: 't2' }]);
+  });
+
+  it('asks the daemon even on a repair waiting to start, so the refusal says how to take it back', () => {
+    const waiting = session({ focus: 'plan', tasks: [task({ id: 't2', order: 2, status: 'pending', isolation: { state: 'conflict', branch: 'b', worktree: 'w', repos: [], repairWaits: 'slot' } })] });
+
+    expect(press(waiting, 'char', 'x').effects).toEqual([expect.objectContaining({ type: 'resolveConflict', taskId: 't2' })]);
+  });
+
+  it('c on a repair waiting to start stops it', () => {
+    const waiting = session({ focus: 'plan', tasks: [task({ id: 't2', order: 2, status: 'pending', isolation: { state: 'conflict', branch: 'b', worktree: 'w', repos: [], repairWaits: 'slot' } })] });
+
+    expect(press(waiting, 'char', 'c').effects).toEqual([{ type: 'taskAction', sessionId: 's1', taskId: 't2', action: 'cancel' }]);
   });
 
   it('x does nothing on a task without a conflict', () => {

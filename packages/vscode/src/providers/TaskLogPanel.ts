@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { accountLimitsOf, assignedRunnerOf, lastServedModel, taskActionCommand, canContinue, taskLogHeaderView, type AccountLimitSnapshot, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
+import { accountLimitsOf, assignedRunnerOf, lastServedModel, taskActionCommand, canContinue, taskLogHeaderView, type AccountLimitSnapshot, type CommandOutcome, type DisplayBlock, type ExecutionActor, type ExecutionCommand, type IsolationView, type PendingApproval, type SessionMessage, type Task, type TaskLogEvent } from '@ordewell/core';
 import { EMPTY_TASK_LOG_FOLLOW, followTaskLog } from '@ordewell/core/plan-utils';
 import { diffConversation } from '../shared/conversationPatch';
 import { renderWebviewHtml } from './webviewHtml';
@@ -17,6 +17,8 @@ export interface TaskLogSession {
   execute(command: ExecutionCommand, actor: ExecutionActor): Promise<CommandOutcome>;
   invokeTaskCommand(taskId: string, name: string, args: string): string;
   outstandingApprovals(): PendingApproval[];
+  /** Each task's isolation as the scheduler reads it: a repair waiting to start is said nowhere else. */
+  isolationView(): IsolationView | null;
 }
 
 export interface TaskLogPanelDeps {
@@ -267,6 +269,7 @@ export class TaskLogPanel {
     const task = this.deps.getTask(this.taskId);
     const approvals = this.deps.session.outstandingApprovals()
       .filter((p) => p.request.kind === 'runner_tool' && p.request.taskId === this.taskId).length;
+    const isolation = this.deps.session.isolationView()?.tasks[this.taskId];
     return {
       taskId: this.taskId,
       order: task?.order ?? 0,
@@ -281,6 +284,7 @@ export class TaskLogPanel {
         resumeAt: task?.resumeAt ?? null,
         idleSince: this.idleSince,
         continuable: task ? canContinue(task) : false,
+        ...(isolation?.state === 'conflict' && isolation.repairWaits ? { repairWaits: isolation.repairWaits } : {}),
         attemptUsage: task?.attemptUsage ?? [],
       }, this.follow, approvals, this.follow.attempt),
       taskStatus: task?.status ?? '',

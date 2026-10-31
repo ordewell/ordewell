@@ -138,6 +138,22 @@ export function failInterruptedTasks(tasks: readonly Task[], now: string): void 
 }
 
 /**
+ * Nothing claims a repair when a plan comes off disk: what owed it went with
+ * the host that saved it. So a task saved not started whose landing conflicted
+ * is a conflict waiting on the user, in place, and the inbox lists it; the
+ * next Execute still repairs it (ADR-0015, ADR-0053).
+ */
+export function settleOwedRepairs(plan: LegacyPlanState): void {
+  const records = plan.isolation?.run.tasks;
+  if (!records) return;
+  for (const task of flattenTasks(plan.tasks)) {
+    if ((task.status !== 'pending' && task.status !== 'approved') || records[task.id]?.status !== 'conflict') continue;
+    task.status = 'awaiting_user';
+    task.awaitingReason = 'conflict';
+  }
+}
+
+/**
  * Drop what a build before the per-message research budget was removed wrote
  * for it (ADR-0037): the budget, its two run settings, its per-turn flag, and
  * the report wait a task carried. The persisted types no longer name these,

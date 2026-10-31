@@ -48,7 +48,7 @@ export interface PlanEditorDeps {
    * there is no plan or `op` changed nothing.
    */
   mutate: (op: () => boolean, notify?: () => void) => LegacyPlanState | null;
-  scheduler: Pick<TaskOrchestrator, 'tick' | 'releaseTask' | 'releaseMovedResume' | 'planEdited'>;
+  scheduler: Pick<TaskOrchestrator, 'tick' | 'releaseTask' | 'releaseMovedResume' | 'planEdited' | 'resolverRefusal' | 'startWhenAllowed'>;
   runs: Pick<IsolationRunController, 'current' | 'linkResolver'>;
   broadcast: SessionBroadcaster;
   /** The workspace's skill catalog under its repo group's layout, which a hand-set skill list is checked against. */
@@ -399,10 +399,13 @@ export class PlanEditor {
    * of its own. When that task lands, the conflicted one lands through it (see
    * {@link IsolationRunController.linkResolver}). The automatic answer to a
    * conflict is a repair, a new attempt of the same task (ADR-0015); a task is
-   * only ever added to the plan by this call.
+   * only ever added to the plan by this call, and one worker at a time has a
+   * conflict, so it is refused while a repair or another resolver has this one.
    */
   async addConflictResolver(taskId: string): Promise<LegacyPlanState | null> {
     if (!this.plan()) return null;
+    const refused = this.scheduler.resolverRefusal(taskId);
+    if (refused) throw new PlanEditError(refused);
     const task = this.store.get(taskId);
     const draft = task ? conflictResolverTask(task, this.runs.current, this.store.planTasks, this.plannedWith()) : null;
     if (!draft) throw new PlanEditError('Only a task whose merge conflicted can be resolved as a task');
@@ -410,6 +413,8 @@ export class PlanEditor {
       const resolver = this.store.add(draft);
       this.approve([resolver.id]);
       this.runs.linkResolver(resolver.id, taskId);
+      // The user asked for this conflict to be resolved, and outside a run nothing else would start it.
+      this.scheduler.startWhenAllowed(resolver.id);
       return true;
     });
   }

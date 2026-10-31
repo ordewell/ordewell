@@ -309,8 +309,10 @@ everything below applies per repo of the group.
   than being taken at its word. A resolver lands only a task that is still
   conflicted: a retry in the meantime replaces the conflict with a new attempt,
   whose half-done worktree must not land through the resolver. Nothing adds the
-  task but the explicit call; conflict repair (ADR-0015) is the automatic
-  version, run as a new attempt of the task itself.
+  task but the explicit call, which is refused while a repair or another
+  resolver has the conflict, and starts the resolver where no scheduler would
+  (ADR-0015). Conflict repair is the automatic version, run as a new attempt of
+  the task itself.
 - **Discard does not rewrite the plan.** Discarding a run leaves completed tasks
   completed. Whether their work was kept (merged by hand, or with Merge all) is
   something only the user knows; Mark not done is how they say it was not.
@@ -535,3 +537,4 @@ literal git command lines or private fields.
 - 2026-10-24 — only the host holding the session's lease adopts, continues or changes its run (ADR-0049).
 - 2026-10-24 — preparing a task prunes stale worktree registrations and clears an unrecorded leftover at the task's path or branch, keeping its work first.
 - 2026-10-30 — one task's landing can be reverted on the integration branch before Merge all, and a run that reverted one continues (ADR-0054).
+- 2026-10-31 — `resolveConflictAsTask` adds one worker per conflict and starts it where no scheduler would (ADR-0015).

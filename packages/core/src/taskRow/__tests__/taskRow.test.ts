@@ -292,14 +292,23 @@ describe('the row view, every status against every annotation', () => {
       expect(v).toMatchObject({ conflict: null, repairing: null, repaired: null, mergeGate: null, opsChangedFiles: false, forcedPastGate: null, approvals: null, autonomous: false, waitsForApproval: null, holdReason: null, research: false, handoff: null });
     }],
     ['a conflict in a named repo', { isolation: { ...isolated, state: 'conflict', conflictRepo: 'api', conflictFiles: ['a', 'b', 'c', 'd', 'e', 'f'] } }, (v) => {
-      expect(v.conflict).toEqual({ repo: 'api', files: 'a, b, c, d, e, +1 more' });
+      expect(v.conflict).toEqual({ repo: 'api', files: 'a, b, c, d, e, +1 more', resolver: null });
     }],
     ['a conflict at the root repo', { isolation: { ...isolated, state: 'conflict', conflictRepo: '.' } }, (v) => {
-      expect(v.conflict).toEqual({ repo: null, files: null });
+      expect(v.conflict).toEqual({ repo: null, files: null, resolver: null });
       expect(v.repos).toEqual([]);
     }],
     ['work in a repo group', { isolation: { ...isolated, state: 'active', repos: ['.', 'api', 'web'] } }, (v) => {
       expect(v.repos).toEqual(['api', 'web']);
+    }],
+    ['a conflict a task was added to resolve', { isolation: { ...isolated, state: 'conflict', resolver: 'r1' } }, (v) => {
+      expect(v.conflict).toEqual({ repo: null, files: null, resolver: 'r1' });
+      expect(v.repairWaiting).toBeNull();
+    }],
+    ['a repair that waits for a slot', { isolation: { ...isolated, state: 'conflict', conflictFiles: ['a'], repairWaits: 'slot' } }, (v) => {
+      expect(v.conflict).toBeNull();
+      expect(v.repairWaiting).toEqual({ label: 'Repair waits for a free slot', files: 'a' });
+      expect(v.actions).toContain('cancel');
     }],
     ['a repair with its attempt', { isolation: { ...isolated, state: 'repairing', conflictFiles: ['a'], repair: { attempt: 2, limit: 3 } } }, (v) => {
       expect(v.repairing).toEqual({ files: 'a', attempt: { attempt: 2, limit: 3 } });

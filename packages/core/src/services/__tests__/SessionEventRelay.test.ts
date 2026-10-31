@@ -25,8 +25,7 @@ function setup(holds: ReadonlyMap<string, string> = new Map()) {
     broadcast: (m) => sent.push(m),
     onNotice: (n) => notices.push(n),
     store,
-    orchestrator: { getIdleSince: () => null, getCompletionReceipt: () => null, getToolsAttaching: () => null, getQueuedTaskMessages: () => [], getMergeGate: () => [], holdReason: (id) => holds.get(id) ?? null, runMergeView: () => null, activity: { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false } },
-    runs: { taskIsolation: () => null },
+    orchestrator: { getIdleSince: () => null, getCompletionReceipt: () => null, getToolsAttaching: () => null, getQueuedTaskMessages: () => [], getMergeGate: () => [], holdReason: (id) => holds.get(id) ?? null, runMergeView: () => null, activity: { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false }, taskIsolation: () => null },
     usage,
   });
   const types = () => sent.map((m) => m.type);

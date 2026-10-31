@@ -26,6 +26,19 @@ describe('plan pane — isolation', () => {
     expect(frame(plan([task({ id: 't2', order: 2, status: 'awaiting_user', isolation: conflict })]))).toContain('⚠ merge conflict');
   });
 
+  it('reads a repair waiting for a slot as that, and not as a conflict', () => {
+    const out = frame(plan([task({ id: 't2', order: 2, status: 'pending', isolation: { ...conflict, conflictFiles: ['a.ts'], repairWaits: 'slot' } })], { cols: 160 }));
+
+    expect(out).toContain('repair waits for a free slot (a.ts)');
+    expect(out).not.toContain('merge conflict');
+  });
+
+  it('names the task resolving a conflict', () => {
+    const out = frame(plan([task({ id: 't2', order: 2, status: 'awaiting_user', isolation: { ...conflict, resolver: 't1' } }), task({ id: 't1', order: 1 })], { cols: 160 }));
+
+    expect(out).toContain('⚠ merge conflict: task #1 is resolving it');
+  });
+
   it.each([
     ['none', { state: 'none' as const }],
     ['active', active],

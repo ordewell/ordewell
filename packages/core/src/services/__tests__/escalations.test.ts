@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { escalations, type Escalation, type EscalationInput, type EscalationRun } from '../escalations';
+import { escalationAct, escalations, type Escalation, type EscalationInput, type EscalationRun } from '../escalations';
 import { planStartWaits } from '../readiness';
 import { createTask, type Task } from '../../models/Task';
 import type { PendingApproval } from '../PendingApprovals';
@@ -29,6 +29,9 @@ interface Setup {
   queued?: string[];
   startsHeld?: boolean;
   merging?: boolean;
+  /** Conflicted task id → the task out to resolve it. */
+  resolvers?: Record<string, string>;
+  startsAlone?: string[];
 }
 
 function listFor(tasks: Task[], setup: Setup = {}): Escalation[] {
@@ -52,6 +55,7 @@ function listFor(tasks: Task[], setup: Setup = {}): Escalation[] {
     startsHeld: setup.startsHeld ?? false,
     completing: new Set(),
     queued: new Set(setup.queued ?? []),
+    conflictResolver: (id) => setup.resolvers?.[id],
   });
   const input: EscalationInput = {
     tasks,
@@ -61,6 +65,7 @@ function listFor(tasks: Task[], setup: Setup = {}): Escalation[] {
     live: (id) => (setup.live ?? []).includes(id),
     checkpoint: (id) => setup.checkpoints?.[id],
     waitsForApproval: (id) => (setup.added ?? []).includes(id),
+    startQueued: (id) => (setup.startsAlone ?? []).includes(id),
     holdReason: (id) => onHold.get(id),
     run: { ...OPEN, ...setup.run },
   };
@@ -217,6 +222,32 @@ describe('what only a person can start', () => {
       reason: 'The run\'s landed work waits for Merge all: #1.',
       options: [{ id: 'merge-all', label: 'Merge all' }],
     }]);
+  });
+});
+
+describe('a conflict with a resolver out to it (ADR-0015)', () => {
+  const conflicted = () => task('t1', 1, { status: 'awaiting_user', awaitingReason: 'conflict' });
+  const closed = { open: false };
+
+  it('leaves the conflict out while the resolver works on it, a scheduler will start it, or it is queued', () => {
+    const resolvers = { t1: 'r1' };
+    expect(listFor([conflicted(), task('r1', 2, { status: 'in_progress' })], { resolvers, live: ['r1'], run: closed })).toEqual([]);
+    expect(listFor([conflicted(), task('r1', 2, { status: 'approved' })], { resolvers })).toEqual([]);
+    expect(listFor([conflicted(), task('r1', 2, { status: 'approved' })], { resolvers, startsAlone: ['r1'], run: closed })).toEqual([]);
+  });
+
+  it('lists the resolver in its place once it is the wait, and the same wait only once', () => {
+    const failed = task('r1', 2, { status: 'failed', verdict: { outcome: 'fail', reason: 'no', checks: [], decidedAt: '' } });
+    expect(shape(listFor([conflicted(), failed], { resolvers: { t1: 'r1' } })).map((e) => [e.kind, e.id])).toEqual([['failed', 'failed:r1:0']]);
+    expect(shape(listFor([conflicted(), task('r1', 2)], { resolvers: { t1: 'r1' }, onHold: { r1: 'stopped' } })).map((e) => e.kind)).toEqual(['on-hold']);
+  });
+
+  it('offers to start a resolver nothing will start, and never a second one', () => {
+    const [listed] = listFor([conflicted(), task('r1', 2, { status: 'approved' })], { resolvers: { t1: 'r1' }, run: closed });
+
+    expect(listed).toMatchObject({ kind: 'conflict', resolver: 'r1', task: { id: 't1' } });
+    expect(listed.options.map((o) => o.id)).toEqual(['start-resolver', 'retry', 'skip', 'complete']);
+    expect(escalationAct(listed, 'start-resolver')).toEqual({ kind: 'command', command: { command: 'run_task', task: 'r1' } });
   });
 });
 

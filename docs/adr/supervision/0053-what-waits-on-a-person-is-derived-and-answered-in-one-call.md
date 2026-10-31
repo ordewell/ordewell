@@ -67,7 +67,8 @@ it on, since the seam refuses it otherwise
 | `checkpoint` | The same, no runner left to hear it | Retry, Skip, Mark complete | `retry_task`, `skip_task`, `mark_complete` |
 | `input` | `awaiting_user`, `input` or no saved reason, runner there | Reply, Skip, Mark complete | `message_task`, `skip_task`, `mark_complete` |
 | `input` | The same, no runner left to read a reply | Retry, Skip, Mark complete | as above |
-| `conflict` | `awaiting_user`, `conflict` | Add a resolver task, Retry, Skip, Mark complete | `Session.resolveConflictAsTask`, then as above |
+| `conflict` | `awaiting_user`, `conflict`, no resolver out to it | Add a resolver task, Retry, Skip, Mark complete | `Session.resolveConflictAsTask`, then as above |
+| `conflict` | The same, with a resolver nothing will start | Start its resolver task, Retry, Skip, Mark complete | `run_task` on the resolver, then as above |
 | `files-changed` | `awaiting_user`, `files-changed` | Retry, Skip, Mark complete | as above |
 | `usage-limit` | `awaiting_user`, `usage-limit`, no `resumeAt` | Resume now, or Retry with no session to resume; Skip, Mark complete | `retry_task`, as above |
 | `failed` | `failed`, no loop going on | Retry, Continue, Skip, Mark complete | as above |
@@ -88,7 +89,7 @@ is the exception: it is `on-hold` in any run, because the user took it back,
 usually after the last task landed, and whether it runs again is theirs to say.
 
 The three options that dispatch past the seam's commands are the ones that have
-no command: a resolver task is a plan edit, and a blocked run's two answers
+no command: adding a resolver task is a plan edit, and a blocked run's two answers
 replay a parked start. Each keeps the operation behind its button, with that
 operation's own refusals, and leaves the timeline as it does today.
 
@@ -100,12 +101,14 @@ to compile until someone decides it.
 | Left out | Why |
 |---|---|
 | A usage-limit pause with `resumeAt` | It resumes by itself at the reset. |
+| A conflict repair that will start by itself | It waits for a slot, a planner's turn or a usage limit ([ADR-0015](../isolation/0015-conflict-repair.md)). A Stop or a reload leaves its conflict waiting, which is listed. |
+| A conflict with a resolver out to it | The resolver moves it on, or is listed in its place. |
 | A loop's check between rounds whose loop goes on | The loop runs it again ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md) L3). |
 | A loop's check stopped by a body task that failed or is blocked | Retrying that task lets the loop go on, so the task is listed and the check would be the same wait twice. A check stopped by a skipped body task alone is listed as `failed`: nothing else speaks for it. |
 | A blocked task | Its cause is listed, once ([ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)). |
 | `dependencies`, `queued` | Work still at work, which ends by itself, or a cause listed in its place. |
 | `loop-check` | A body task runs only if its check fails. |
-| `usage-limit`, `start-hold`, `merging`, `completing` | Each clears by itself. |
+| `usage-limit`, `start-hold`, `merging`, `completing`, `resolver` | Each clears by itself, or its cause is listed. |
 | `started`, `repeating` | A task under way, or a check its loop starts again. |
 | A task with any of these besides a wait of its own | Its turn comes once they clear: it waits on a person only then. |
 | A merge gate while Ordewell merges at gates by itself | The scheduler merges it, unless a merge stopped, which lists it again. |
@@ -176,7 +179,9 @@ reads do.
   resume on load
   ([ADR-0044](../planner/0044-the-planners-usage-limit-waits-and-resends.md)), so
   it is listed. A loop's rounds and the merge the run owes are saved. A reverted
-  task's hold is saved on the task, so it is listed after a load.
+  task's hold is saved on the task, so it is listed after a load. A task saved
+  waiting for a conflict repair loads waiting on its conflict
+  (`settleOwedRepairs`): nothing starts that repair now, and Execute still does.
 - **What stays in memory, which #31 decides.** Other holds, runner approvals and
   a blocked run's parked start go with the process. Tasks not started are listed
   only in an open run, which a load does not bring back. Resuming an interrupted
@@ -405,3 +410,4 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
 - 2026-10-31 — an id names the wait, not the attempt; a user task on hold offers Mark complete; the Decision names the `.envrc` exception (#30).
 - 2026-10-31 — a load keeps a failed task failed, and a task saved in progress loads failed as interrupted; the fresh chance is Execute's alone (#30).
 - 2026-10-31 — the notify command runs through a bounded queue, two at a time, and a host's teardown stops one still running (#30).
+- 2026-10-31 — a repair that will start by itself is left out, a conflict with a resolver nothing will start offers to start it, and a load lists what waited for a repair (ADR-0015).

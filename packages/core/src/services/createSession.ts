@@ -377,7 +377,7 @@ export function createSession(deps: SessionDeps): Session {
     log: (message) => console.warn(`[EscalationNotifier] ${message}`),
   });
   const events = new SessionEventRelay({
-    broadcast: deps.broadcast, onNotice: deps.onNotice, store, orchestrator, runs: orchestrator.runs, usage,
+    broadcast: deps.broadcast, onNotice: deps.onNotice, store, orchestrator, usage,
     awaitingApproval: (taskId) => runnerApprovals.waiting(taskId),
     checkpointQuestion: (taskId) => orchestrator.getCheckpointQuestion(taskId),
     waitsForApproval: (taskId): boolean => session.waitsForApproval(taskId),
@@ -864,6 +864,7 @@ export class Session {
       live: (taskId) => this.orchestrator.getAttempt(taskId) !== undefined,
       checkpoint: (taskId) => this.orchestrator.getCheckpointQuestion(taskId),
       waitsForApproval: (taskId) => this.record.waitsForApproval(taskId),
+      startQueued: (taskId) => this.orchestrator.startQueuedFor(taskId),
       holdReason: (taskId) => this.orchestrator.holdReason(taskId),
       run: {
         open: scheduled || resumable,
@@ -930,6 +931,7 @@ export class Session {
       advancesOnItsOwn: () => this.orchestrator.advancesOnItsOwn,
       admitStart: () => this.orchestrator.admitStart(),
       running: (taskId) => this.orchestrator.getAttempt(taskId) !== undefined,
+      repairOwed: (taskId) => this.orchestrator.repairWait(taskId) !== null,
       maxParallel: () => this.config.maxParallelSessions,
       runBlocked: () => this.runs.blocked,
       startWaits: (task) => this.orchestrator.startWaits(task),
@@ -2211,7 +2213,7 @@ export class Session {
    * session asks here instead.
    */
   isolationView(): IsolationView | null {
-    return this.runs.view();
+    return this.orchestrator.isolationView();
   }
 
   /**

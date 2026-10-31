@@ -1,4 +1,5 @@
 import type { AwaitingReason, Verdict } from '../models/Task';
+import type { RepairWait } from '../interfaces/IWorktreeIsolation';
 
 /**
  * What a row's status means to a reader, before any surface picks a word,
@@ -41,6 +42,17 @@ const AWAITING_LABELS: Record<AwaitingReason, string> = {
 /** What an awaiting_user task waits on (ADR-0018, W1); null when no reason was saved. */
 export function awaitingLabel(task: { status: string; awaitingReason?: AwaitingReason }): string | null {
   return task.status === 'awaiting_user' && task.awaitingReason ? AWAITING_LABELS[task.awaitingReason] : null;
+}
+
+const REPAIR_WAIT_LABELS: Record<RepairWait, string> = {
+  slot: 'Repair waits for a free slot',
+  planner: 'Repair waits for the planner\'s turn to end',
+  'usage-limit': 'Repair waits for its runner\'s usage limit to reset',
+};
+
+/** A conflict repair that will start by itself (ADR-0015): progress, in words that ask nothing of the user. */
+export function repairWaitLabel(wait: RepairWait): string {
+  return REPAIR_WAIT_LABELS[wait];
 }
 
 /** "Blocked by #1, #2.1": the failed tasks a blocked task waits on, by reference (ADR-0034). */

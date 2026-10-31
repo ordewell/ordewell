@@ -281,7 +281,7 @@ export function AssignmentFlag({ row }: { row: Pick<TaskRowView, 'assignmentFlag
 }
 
 /** What holds a task back or runs on its isolated work, on the collapsed card: a merge gate, a stopped integration, a conflict repair. */
-export function IsolationBadges({ row }: { row: Pick<TaskRowView, 'mergeGate' | 'conflict' | 'repairing'> }) {
+export function IsolationBadges({ row }: { row: Pick<TaskRowView, 'mergeGate' | 'conflict' | 'repairing' | 'repairWaiting'> }) {
   return (
     <>
       {row.mergeGate && (
@@ -295,8 +295,15 @@ export function IsolationBadges({ row }: { row: Pick<TaskRowView, 'mergeGate' | 
           collapsed card, since it is the one isolation state that needs a
           decision, not just inspection. */}
       {row.conflict && (
-        <span className="task-isolation-badge conflict" title={`Integrating this task conflicted${row.conflict.repo ? ` in ${row.conflict.repo}` : ''}${row.conflict.files ? `: ${row.conflict.files}` : ''}. Its worktree and branch are kept.`}>
+        <span className="task-isolation-badge conflict" title={`Integrating this task conflicted${row.conflict.repo ? ` in ${row.conflict.repo}` : ''}${row.conflict.files ? `: ${row.conflict.files}` : ''}. Its worktree and branch are kept.${row.conflict.resolver ? ` Task ${row.conflict.resolver} is resolving it.` : ''}`}>
           Conflict{row.conflict.repo ? ` in ${row.conflict.repo}` : ''}
+        </span>
+      )}
+
+      {/* It starts by itself, so it reads as progress; Cancel withdraws it (ADR-0015). */}
+      {row.repairWaiting && (
+        <span className="task-isolation-badge repairing" title={`It repairs its conflict in its own worktree${row.repairWaiting.files ? `: ${row.repairWaiting.files}` : ''}. Cancel withdraws the repair, and the conflict waits for you.`}>
+          {row.repairWaiting.label}
         </span>
       )}
 
@@ -631,7 +638,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
                 {row.repaired && (
                   <div className="task-isolation-row task-isolation-repaired-note">Landed after repairing a conflict in {row.repaired.files}.</div>
                 )}
-                {row.conflict && onResolveConflict && (
+                {row.conflict && !row.conflict.resolver && onResolveConflict && (
                   offeringResolve ? (
                     <div className="task-isolation-resolve">
                       <span>Resolve this conflict as a new AI task?</span>

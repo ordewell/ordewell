@@ -174,12 +174,28 @@ export class Landing {
     return { kind: 'landed', messages: [{ level: 'info', text: `Task "${task.title}" landed through its conflict resolution.` }] };
   }
 
-  /** The repair a conflicted task is owed next; null when repair is off, used up, or there is no isolated run to repair it in. */
+  /**
+   * The repair a conflicted task is owed next; null when repair is off, used
+   * up, or there is no isolated run to repair it in. A resolver takes the
+   * conflict instead: a conflict has one worker (ADR-0015).
+   */
   nextRepair(taskId: string): RepairAttempt | null {
     const record = this.runs.openRecord(taskId);
     const limit = this.config.conflictRepairAttempts;
     const spent = record?.repairs ?? 0;
-    return record?.status === 'conflict' && spent < limit ? { n: spent + 1, limit } : null;
+    return record?.status === 'conflict' && spent < limit && this.liveResolvers(taskId).length === 0 ? { n: spent + 1, limit } : null;
+  }
+
+  /**
+   * The tasks in the plan still out to resolve this task's conflict. A skipped
+   * one has been given up, and a link to one that left the plan points at
+   * nothing, so either leaves the conflict free for another worker.
+   */
+  liveResolvers(taskId: string): Readonly<Task>[] {
+    return this.runs.resolversOf(taskId).flatMap((id) => {
+      const resolver = this.tasks.get(id);
+      return resolver && resolver.status !== 'skipped' && resolver.status !== 'completed' ? [resolver] : [];
+    });
   }
 
   /** What a repair is asked to do; read once `reopen` has recorded the tips it must bring in. */
