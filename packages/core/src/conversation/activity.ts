@@ -78,6 +78,8 @@ export interface TaskActivity {
  * in a log that has seen no turn end, a block still open (a stream whose
  * `turn_start` this view never saw).
  * A browsed earlier attempt has no line, whatever its log was left open on.
+ * A script task has no exception here, on any surface: it runs no model, but
+ * its log is what it printed, so a step still open is one running.
  */
 export function taskActivity(view: LoggedTurn, task: { status: string; idleSince?: string | null; awaitingApproval?: number }): TaskActivity | null {
   if (!isTaskRunning(task) || view.archived) return null;

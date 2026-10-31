@@ -243,6 +243,86 @@ describe('createApp', () => {
       }
     });
 
+    describe('with a start time on the line, against a clock that disagrees (#81)', () => {
+      const startedAt = '2026-10-30T10:00:00.000Z';
+      const quietOn = (now: string) => {
+        vi.setSystemTime(new Date(now));
+        const h = harness({
+          focus: 'chat',
+          rows: 30,
+          cols: 100,
+          tasks: [quiet],
+          taskView: {
+            taskId: 't1', attempts: [1], attempt: 1, pending: [], loaded: true, followLatest: true, queuedIndex: 0,
+            view: replayTaskLog([{ type: 'turn_start', message: 'Go', startedAt }]),
+          },
+        });
+        h.app.start();
+        return { ...h, statusRow: () => h.frames.at(-1)?.map(stripAnsi).find((row) => row.includes('~ Stalled')) };
+      };
+
+      it('holds still while a start ahead of the clock leaves nothing to count', () => {
+        vi.useFakeTimers();
+        try {
+          const h = quietOn('2026-10-30T09:59:00.000Z');
+          const drawn = h.frames.length;
+
+          vi.advanceTimersByTime(5000);
+
+          expect(h.frames).toHaveLength(drawn);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('shows the time again once a correction brings the clock past the start', () => {
+        vi.useFakeTimers();
+        try {
+          const h = quietOn('2026-10-30T09:59:58.500Z');
+          expect(h.statusRow()).not.toMatch(/\d+s/);
+
+          vi.advanceTimersByTime(3000);
+
+          expect(h.statusRow()).toContain('~ Stalled 1s');
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('takes the time off the line when the clock moves back before the start, then holds still', () => {
+        vi.useFakeTimers();
+        try {
+          const h = quietOn('2026-10-30T10:00:10.000Z');
+          expect(h.statusRow()).toContain('~ Stalled 10s');
+
+          vi.setSystemTime(new Date('2026-10-30T09:59:00.000Z'));
+          vi.advanceTimersByTime(300);
+          expect(h.statusRow()).not.toMatch(/\d+s/);
+
+          const drawn = h.frames.length;
+          vi.advanceTimersByTime(2000);
+          expect(h.frames).toHaveLength(drawn);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('paints a counting line when its text changes, not at the spinner\'s rate', () => {
+        vi.useFakeTimers();
+        try {
+          const h = quietOn('2026-10-30T10:00:10.000Z');
+          const drawn = h.frames.length;
+
+          vi.advanceTimersByTime(4100);
+
+          expect(h.frames.length - drawn).toBeLessThanOrEqual(4);
+          expect(h.statusRow()).toContain('~ Stalled 14s');
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+    });
+
     it('holds still when the only running task is quiet: its marker is static', () => {
       vi.useFakeTimers();
       try {

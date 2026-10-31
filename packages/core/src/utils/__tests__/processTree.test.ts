@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'events';
 import { spawn, type ChildProcess } from 'child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { killTree, spawnInOwnGroup, type KillTreeDeps } from '../processTree';
@@ -329,6 +329,72 @@ function lines(proc: ChildProcess): () => Promise<string> {
 
 /** A shell that backgrounds a long sleep — the grandchild Stop used to miss — and prints its pid. */
 const SHELL_WITH_GRANDCHILD = ['-c', 'sleep 30 & echo $!; wait'];
+
+describe('onHostTeardown', () => {
+  /** Runs `body` in a real host and reports what its teardown did. */
+  function hostRunning(body: string[]) {
+    const dir = mkdtempSync(join(tmpdir(), 'ordewell-host-'));
+    const host = join(dir, 'host.mts');
+    writeFileSync(host, [
+      `import { appendFileSync } from 'node:fs';`,
+      `import { onHostTeardown, runnerGroups } from ${JSON.stringify(join(__dirname, '..', 'processTree.ts'))};`,
+      `const said = (word) => () => appendFileSync(${JSON.stringify(join(dir, 'said'))}, word + ' ');`,
+      ...body,
+    ].join('\n'));
+    const proc = spawn(process.execPath, ['--experimental-strip-types', '--no-warnings', host], { stdio: ['ignore', 'pipe', 'inherit'] });
+    return {
+      proc,
+      exited: new Promise<void>((resolve) => { proc.once('exit', () => resolve()); }),
+      said: () => readFileSync(join(dir, 'said'), 'utf8').trim(),
+      done: () => { proc.kill('SIGKILL'); rmSync(dir, { recursive: true, force: true }); },
+    };
+  }
+
+  it('runs what is still registered on a host\'s exit, once, and nothing a throw or a stopped one would skip', async () => {
+    const h = hostRunning([
+      `onHostTeardown(() => { throw new Error('already gone'); });`,
+      `onHostTeardown(said('kept'));`,
+      `const stopHearing = onHostTeardown(said('stopped'));`,
+      `stopHearing();`,
+      `process.exit(0);`,
+    ]);
+    try {
+      await h.exited;
+      expect(h.said()).toBe('kept');
+    } finally {
+      h.done();
+    }
+  });
+
+  posixIt('runs it on a signal, once, with the signal still ending a host that has no handler of its own', async () => {
+    const h = hostRunning([
+      `onHostTeardown(said('kept'));`,
+      `console.log(process.pid);`,
+      `setInterval(() => {}, 1000);`,
+    ]);
+    try {
+      await firstPid(h.proc);
+      h.proc.kill('SIGTERM');
+      await h.exited;
+      expect(h.proc.signalCode).toBe('SIGTERM');
+      expect(h.said()).toBe('kept');
+    } finally {
+      h.done();
+    }
+  });
+
+  it('is no runner group: a session lease has nothing to hold it by', async () => {
+    const h = hostRunning([
+      `onHostTeardown(() => {});`,
+      `console.log(runnerGroups().length);`,
+    ]);
+    try {
+      expect(await firstPid(h.proc)).toBe(0);
+    } finally {
+      h.done();
+    }
+  });
+});
 
 describe('process groups, for real', () => {
   posixIt('Stop reaches a grandchild the runner started, and stdout still pipes', async () => {

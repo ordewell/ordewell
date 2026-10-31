@@ -127,6 +127,25 @@ describe('taskActivity', () => {
   });
 });
 
+describe('taskActivity on a script task (ADR-0035)', () => {
+  const running = { status: 'in_progress' };
+
+  it('names the step still running: its log is what it printed, so the line is true', () => {
+    const view = replayTaskLog([{ type: 'script_run', argv: ['npm', 'test'] }, { type: 'script_output', text: 'ok\n' }]);
+    expect(taskActivity(view, running)).toEqual({ label: 'Running Run(npm test)…', busy: true });
+  });
+
+  it('names an inline script the same way', () => {
+    const view = replayTaskLog([{ type: 'script_run', script: 'npm ci' }]);
+    expect(taskActivity(view, running)?.label).toBe('Running Script(npm ci)…');
+  });
+
+  it('has no line once the step has ended, nor between steps', () => {
+    const view = replayTaskLog([{ type: 'script_run', argv: ['npm', 'test'] }, { type: 'script_exit', code: 0, signal: null, durationMs: 10 }]);
+    expect(taskActivity(view, running)).toBeNull();
+  });
+});
+
 describe('taskActivity, the whole rule', () => {
   // A line shows if a turn is open, or a subagent is running, or the log has seen
   // no turn end and holds an open block. Once a turn has ended, a tool, message or
