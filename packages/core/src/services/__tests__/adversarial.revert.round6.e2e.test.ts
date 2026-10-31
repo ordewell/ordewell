@@ -193,10 +193,7 @@ describe('a change staged between two revert commits', () => {
     const tip = git(root, 'rev-parse', integration);
     let staged = false;
 
-    // ADR-0054: "Tracked changes in that worktree, staged or not, are refused
-    // ... a commit would take in what is staged, and a rollback's reset would
-    // lose the lot." The second check runs before the first commit only; the
-    // persist that fires after that commit is a second chance to stage.
+    // Each commit is built from its parent, so the index is in none of them.
     const result = await iso.revert(run, [first.id, second.id], {
       ...nothingInTheWay,
       persist: () => {
@@ -207,12 +204,9 @@ describe('a change staged between two revert commits', () => {
       },
     });
 
-    // Whatever it answers, the user's staged work must not be in a revert commit,
-    // and the branch must be exactly where it was.
+    expect(result).toMatchObject({ outcome: 'reverted' });
     expect(git(root, 'show', `${integration}:README.md`)).toBe('hello');
-    expect(git(root, 'rev-parse', integration)).toBe(tip);
-    if (result.outcome !== 'reverted') expect(result).toMatchObject({ outcome: 'refused', reason: expect.stringContaining('README.md') });
-    // And it is still the user's, staged, where they left it.
+    expect(git(root, 'rev-parse', integration)).not.toBe(tip);
     expect(git(dir, 'diff', '--cached', '--name-only')).toBe('README.md');
     expect(git(dir, 'show', ':README.md')).toBe('user staged mid-revert');
   });
@@ -229,17 +223,20 @@ describe('a change staged between two revert commits', () => {
     const dir = join(root, '.ordewell', 'worktrees', run.id, 'integration');
     const tip = git(root, 'rev-parse', integration);
 
-    // The newest goes first, so `two.txt` has just left the tree when this runs.
+    // The newest goes first, so `two.txt` has left the tree by the second commit,
+    // and judged again at the end the revert is refused and has to roll back.
+    let judged = 0;
     const result = await iso.revert(run, [first.id, second.id], {
       ...nothingInTheWay,
+      refusal: () => (judged++ > 0 ? 'Another plan was loaded.' : null),
       persist: () => {
-        if ((run.landing?.reverts?.['.']?.commits.length ?? 0) !== 1 || git(dir, 'diff', '--cached', '--name-only')) return;
+        if ((run.landing?.reverts?.['.']?.commits.length ?? 0) !== 2 || git(dir, 'diff', '--cached', '--name-only')) return;
         writeFileSync(join(dir, 'two.txt'), 'the user\'s two\n');
         git(dir, 'add', 'two.txt');
       },
     });
 
-    expect(result).toMatchObject({ outcome: 'failed', error: expect.stringContaining('two.txt') });
+    expect(result).toMatchObject({ outcome: 'failed', error: expect.stringContaining('could not be put back') });
     expect(git(dir, 'show', ':two.txt')).toBe('the user\'s two');
     expect(run.landing).toBeDefined();
     expect(await iso.mergeIntoCheckedOut(run)).toMatchObject({ outcome: 'blocked' });

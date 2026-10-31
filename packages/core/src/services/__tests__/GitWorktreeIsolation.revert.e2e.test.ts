@@ -1,11 +1,11 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execFile, execFileSync } from 'child_process';
 import { promisify } from 'util';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createWorktreeIsolation, type GitExecFn, type WorktreeIsolationDeps } from '../GitWorktreeIsolation';
-import { subcommandOf } from '../gitExec';
+import { defaultExecFile, subcommandOf } from '../gitExec';
 import type { IsolationRun, IWorktreeIsolation } from '../../interfaces/IWorktreeIsolation';
 import type { Task } from '../../models/Task';
 import { fakeConfig } from '../../testing';
@@ -214,20 +214,21 @@ describe('a revert across a repo group', () => {
 
   it('puts the first repository back when the second one fails', async () => {
     const root = group();
-    const iso = isolation();
+    let refuseIn = '';
+    const exec: GitExecFn = (file, args, opts) => (subcommandOf(args) === 'commit-tree' && opts.cwd === refuseIn
+      ? Promise.reject(Object.assign(new Error('refused here'), { stderr: 'refused here', code: 1 }))
+      : defaultExecFile(file, args, opts));
+    const iso = isolation({ execFileImpl: exec });
     const run = await iso.startRun(root);
     const [api, web] = run.repos;
     const both = task(1, 'Touch both');
     await land(iso, run, both, { 'api/both.txt': 'a\n', 'web/both.txt': 'w\n' });
     const tips = [git(api.root, 'rev-parse', api.integrationBranch), git(web.root, 'rev-parse', web.integrationBranch)];
-    // Installed once the task has landed, so only the revert's commit meets it.
-    const hook = join(web.root, '.git', 'hooks', 'pre-commit');
-    writeFileSync(hook, '#!/bin/sh\necho "refused by the hook"\nexit 1\n');
-    chmodSync(hook, 0o755);
+    refuseIn = web.root;
 
     const result = await iso.revert(run, [both.id], nothingInTheWay);
 
-    expect(result).toMatchObject({ outcome: 'failed', task: { taskId: both.id }, repo: 'web', error: expect.stringContaining('refused by the hook') });
+    expect(result).toMatchObject({ outcome: 'failed', task: { taskId: both.id }, repo: 'web', error: expect.stringContaining('refused here') });
     expect([git(api.root, 'rev-parse', api.integrationBranch), git(web.root, 'rev-parse', web.integrationBranch)]).toEqual(tips);
     expect(run.tasks[both.id].status).toBe('merged');
     expect(run.landing).toBeUndefined();
@@ -634,7 +635,7 @@ describe('the revert\'s place on the queue', () => {
 
   it('leaves a plan loaded under it alone, the same run saved or not', async () => {
     const root = initRepo(tempDir());
-    const { exec, held, open } = holdGit((args) => subcommandOf(args) === 'revert');
+    const { exec, held, open } = holdGit((args) => subcommandOf(args) === 'merge-tree');
     const iso = isolation({ execFileImpl: exec });
     const run = await iso.startRun(root);
     const integration = run.repos[0].integrationBranch;
@@ -683,8 +684,9 @@ describe('the revert\'s place on the queue', () => {
 
     const commit = git(root, 'rev-parse', run.repos[0].integrationBranch);
     expect(seen).toEqual([
-      { landing: { taskId: t.id, tips: { '.': tip }, reverts: { '.': { merges: [tip], commits: [] } } }, reverted: 'Merge: Add greeting' },
-      { landing: { taskId: t.id, tips: { '.': tip }, reverts: { '.': { merges: [tip], commits: [commit] } } }, reverted: 'Revert: Add greeting' },
+      { landing: { taskId: t.id, tips: { '.': tip }, reverts: { '.': { commits: [] } } }, reverted: 'Merge: Add greeting' },
+      // Named before the branch moves onto it, so no crash leaves a commit of its own unsaved.
+      { landing: { taskId: t.id, tips: { '.': tip }, reverts: { '.': { commits: [commit] } } }, reverted: 'Merge: Add greeting' },
       { taskIds: [t.id], landing: undefined, record: undefined, flagged: true },
     ]);
   });
@@ -727,7 +729,7 @@ describe('a revert a crash interrupted', () => {
     git(dir, 'commit', '-q', '--allow-empty', '-m', 'one too many');
     git(dir, 'commit', '-q', '--allow-empty', '-m', 'two too many');
     const moved = git(root, 'rev-parse', integration);
-    run.landing = { taskId: t.id, tips: { '.': tip }, reverts: { '.': { merges: [tip], commits: [] } } };
+    run.landing = { taskId: t.id, tips: { '.': tip }, reverts: { '.': { commits: [] } } };
 
     await isolation().pruneOrphans(run);
 

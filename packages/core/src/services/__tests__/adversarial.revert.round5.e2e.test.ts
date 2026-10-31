@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execFileSync } from 'child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
@@ -115,7 +115,7 @@ describe('what a revert takes for its own commits', () => {
 
   it('does not roll a plain commit away in a crash rollback, whatever a count would allow', async () => {
     const { root, run, integration, first, tip } = await landedRun();
-    run.landing = { taskId: first.id, tips: { '.': tip }, reverts: { '.': { merges: [tip], commits: [] } } };
+    run.landing = { taskId: first.id, tips: { '.': tip }, reverts: { '.': { commits: [] } } };
     const user = plainCommitOn(root, integration, 'user commit');
 
     await isolation().pruneOrphans(run);
@@ -136,33 +136,22 @@ describe('what a revert takes for its own commits', () => {
     expect(saved.landing).toBeDefined();
   });
 
-  it('rolls back a commit a crash left unsaved, by its parent and its own sentence', async () => {
-    const { root, iso, run, integration, first } = await landedRun();
-    const second = task(2, 'Add farewell');
-    await land(iso, run, second, { 'farewell.txt': 'bye\n' });
-    const landedTip = git(root, 'rev-parse', integration);
-    const saved = structuredClone(run);
+  it('does not roll away a commit that only says it reverts the merge', async () => {
+    const { root, run, integration, first, tip } = await landedRun();
+    run.landing = { taskId: first.id, tips: { '.': tip }, reverts: { '.': { commits: [] } } };
+    const user = plainCommitOn(root, integration, `This reverts the merge ${tip}, which landed it.`);
 
-    // The last commit made and the crash before it was saved.
-    await iso.revert(run, [first.id, second.id], {
-      ...nothingInTheWay,
-      persist: () => { if ((run.landing?.reverts?.['.'].commits.length ?? 0) < 2) Object.assign(saved, structuredClone(run)); },
-    });
-    expect(saved.landing?.reverts?.['.'].commits).toHaveLength(1);
-    expect(git(root, 'rev-parse', integration)).not.toBe(landedTip);
+    await isolation().pruneOrphans(run);
 
-    await isolation().pruneOrphans(saved);
-
-    expect(git(root, 'rev-parse', integration)).toBe(landedTip);
-    expect(saved.landing).toBeUndefined();
+    expect(git(root, 'rev-parse', integration)).toBe(user);
+    expect(run.landing).toBeDefined();
   });
-
   it('does not move a branch that has fallen behind the tip it saved forward to it', async () => {
     const { root, iso, run, integration, dir, tip } = await landedRun();
     const second = task(2, 'Add farewell');
     await land(iso, run, second, { 'farewell.txt': 'bye\n' });
     const landedTip = git(root, 'rev-parse', integration);
-    run.landing = { taskId: second.id, tips: { '.': landedTip }, reverts: { '.': { merges: [landedTip], commits: [] } } };
+    run.landing = { taskId: second.id, tips: { '.': landedTip }, reverts: { '.': { commits: [] } } };
     git(dir, 'reset', '-q', '--hard', tip);
 
     await isolation().pruneOrphans(run);
@@ -172,49 +161,47 @@ describe('what a revert takes for its own commits', () => {
   });
 });
 
-describe('uncommitted changes in the integration worktree', () => {
-  it('refuses a staged change, in the preview too, naming where, and leaves it staged', async () => {
-    const { root, iso, run, integration, first, dir, tip } = await landedRun();
+describe('changes in the integration worktree', () => {
+  it('leaves a staged change on another path staged, in the preview and the revert', async () => {
+    const { root, iso, run, integration, first, dir } = await landedRun();
     writeFileSync(join(dir, 'README.md'), 'user staged\n');
     git(dir, 'add', 'README.md');
 
-    expect(await iso.readLanded(run, [first.id])).toMatchObject({ ok: false, reason: 'uncommitted-changes', error: expect.stringContaining(dir) });
-    const result = await iso.revert(run, [first.id], nothingInTheWay);
+    expect(await iso.readLanded(run, [first.id])).toMatchObject({ ok: true });
+    expect(await iso.revert(run, [first.id], nothingInTheWay)).toMatchObject({ outcome: 'reverted' });
 
-    expect(result).toMatchObject({ outcome: 'refused', reason: expect.stringContaining(dir) });
-    expect(result).toMatchObject({ reason: expect.stringContaining('README.md') });
-    expect(git(root, 'rev-parse', integration)).toBe(tip);
-    expect(git(dir, 'diff', '--cached', '--name-only')).toBe('README.md');
-    expect(run.tasks[first.id].status).toBe('merged');
-    expect(run.landing).toBeUndefined();
+    expect(git(root, 'show', `${integration}:README.md`)).toBe('hello');
+    expect(git(dir, 'show', ':README.md')).toBe('user staged');
+    expect(git(dir, 'status', '--porcelain')).toBe('M  README.md');
+    expect(existsSync(join(dir, 'greeting.txt'))).toBe(false);
   });
 
-  it('refuses a change not staged, which a rollback would lose', async () => {
-    const { root, iso, run, integration, first, dir, tip } = await landedRun();
+  it('leaves a change not staged on another path as it is', async () => {
+    const { root, iso, run, integration, first, dir } = await landedRun();
     writeFileSync(join(dir, 'README.md'), 'user unstaged\n');
 
-    expect(await iso.revert(run, [first.id], nothingInTheWay)).toMatchObject({ outcome: 'refused', reason: expect.stringContaining('README.md') });
+    expect(await iso.revert(run, [first.id], nothingInTheWay)).toMatchObject({ outcome: 'reverted' });
 
-    expect(git(root, 'rev-parse', integration)).toBe(tip);
+    expect(git(root, 'ls-tree', '--name-only', integration)).toBe('README.md');
     expect(readFileSync(join(dir, 'README.md'), 'utf8')).toBe('user unstaged\n');
   });
 
-  it('refuses a change staged after it first looked, before its first commit', async () => {
+  it.each([
+    ['staged', true],
+    ['not staged', false],
+  ])('fails over a change %s on a path the revert touches, naming it, and puts the branch back', async (_name, staged) => {
     const { root, iso, run, integration, first, dir, tip } = await landedRun();
+    writeFileSync(join(dir, 'greeting.txt'), 'the user\'s\n');
+    if (staged) git(dir, 'add', 'greeting.txt');
 
-    const result = await iso.revert(run, [first.id], {
-      ...nothingInTheWay,
-      persist: () => {
-        writeFileSync(join(dir, 'README.md'), 'user staged\n');
-        git(dir, 'add', 'README.md');
-      },
-    });
+    const result = await iso.revert(run, [first.id], nothingInTheWay);
 
-    expect(result).toMatchObject({ outcome: 'refused', reason: expect.stringContaining('README.md') });
+    expect(result).toMatchObject({ outcome: 'failed', task: { taskId: first.id }, error: expect.stringContaining('greeting.txt') });
+    expect(result).toMatchObject({ error: expect.stringContaining(dir) });
     expect(git(root, 'rev-parse', integration)).toBe(tip);
-    expect(git(dir, 'diff', '--cached', '--name-only')).toBe('README.md');
+    expect(readFileSync(join(dir, 'greeting.txt'), 'utf8')).toBe('the user\'s\n');
     expect(run.landing).toBeUndefined();
-    expect(run.reverted).toBeUndefined();
+    expect(run.tasks[first.id].status).toBe('merged');
   });
 
   it('is not stopped by an untracked file, which goes in no commit', async () => {

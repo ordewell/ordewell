@@ -57,13 +57,8 @@ const RESCUE_BODY = 'Work left uncommitted when its worktree was removed, kept s
  */
 export function revertMessage(from: LandingSubject, merge: string, plannedWith = false): string {
   const subject = firstLine(from.commit?.subject ?? '') || firstLine(from.title);
-  const body = revertsMerge(merge);
+  const body = `This reverts the merge ${merge}, which landed it.`;
   return finish(`Revert: ${subject}\n\n${body}`, body, plannedWith);
-}
-
-/** The sentence of a {@link revertMessage} that names its merge: all a crash leaves to tell an unsaved revert commit by. */
-export function revertsMerge(merge: string): string {
-  return `This reverts the merge ${merge}, which landed it.`;
 }
 
 /**

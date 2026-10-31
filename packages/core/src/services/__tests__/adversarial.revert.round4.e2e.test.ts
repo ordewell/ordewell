@@ -57,7 +57,7 @@ const nothingInTheWay = { refusal: () => null, persist: () => undefined, settled
 const treeOf = (root: string, branch: string) => git(root, 'ls-tree', '--name-only', branch).split('\n').filter(Boolean).sort();
 
 describe('REGRESSION: a revert after handoff', () => {
-  it('recreates the integration worktree and reverts a single repo', async () => {
+  it('reverts a single repo with no integration worktree, and makes none', async () => {
     const root = initRepo(tempDir());
     const iso = isolation();
     const run = await iso.startRun(root);
@@ -69,6 +69,25 @@ describe('REGRESSION: a revert after handoff', () => {
     expect(git(root, 'worktree', 'list', '--porcelain')).not.toContain('integration');
     expect(await iso.revert(run, [t.id], nothingInTheWay)).toMatchObject({ outcome: 'reverted' });
     expect(treeOf(root, integration)).toEqual(['README.md']);
+    expect(git(root, 'worktree', 'list', '--porcelain')).not.toContain('integration');
+  });
+
+  it('leaves the branch alone if someone checks it out after it looked', async () => {
+    const root = initRepo(tempDir());
+    const iso = isolation();
+    const run = await iso.startRun(root);
+    const t = task(1, 'Add greeting');
+    await land(iso, run, t, { 'greeting.txt': 'hi\n' });
+    const integration = run.repos[0].integrationBranch;
+    await iso.handoff(run);
+    const tip = git(root, 'rev-parse', integration);
+
+    const result = await iso.revert(run, [t.id], { ...nothingInTheWay, persist: () => git(root, 'checkout', '-q', integration) });
+
+    expect(result).toMatchObject({ outcome: 'failed', repo: '.' });
+    expect(git(root, 'rev-parse', integration)).toBe(tip);
+    expect(git(root, 'status', '--porcelain', '--untracked-files=no')).toBe('');
+    expect(run.landing).toBeUndefined();
   });
 
   it('reverts both repos of a group after handoff', async () => {
