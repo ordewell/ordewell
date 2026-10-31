@@ -52,7 +52,8 @@ export async function forkConversation(deps: ConversationDeps): Promise<void> {
     if (!(await confirmLeavingRun(deps.session))) return;
     const originalId = deps.session.sessionId;
     const fork = deps.session.forkConversation();
-    await vscode.commands.executeCommand('ordewell.loadSessionById', fork.sessionId);
+    // Its error is already on screen, and the user is still where they were.
+    if (await vscode.commands.executeCommand<boolean>('ordewell.loadSessionById', fork.sessionId) === false) return;
     void vscode.window.showInformationMessage(
       `Forked ${originalId} into ${fork.sessionId}: you are in the fork now, and the original is kept. Use /sessions to go back.`,
     );
@@ -91,7 +92,7 @@ export async function rewindConversation(deps: ConversationDeps, arg?: string): 
     if (!(await confirmLeavingRun(deps.session))) return;
     const originalId = deps.session.sessionId;
     const fork = deps.session.rewindConversation(index);
-    await vscode.commands.executeCommand('ordewell.loadSessionById', fork.sessionId);
+    if (await vscode.commands.executeCommand<boolean>('ordewell.loadSessionById', fork.sessionId) === false) return;
     void vscode.window.showInformationMessage(
       `Rewound ${originalId} into a fork, ${fork.sessionId}: you are in the fork now, and the original is kept. Use /sessions to go back.`,
     );

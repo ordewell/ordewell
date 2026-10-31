@@ -54,6 +54,26 @@ beforeEach(() => {
   for (const fn of [showQuickPick, showInformationMessage, showWarningMessage, withProgress, executeCommand]) fn.mockReset();
 });
 
+describe('a fork that could not be opened', () => {
+  it('is not said to be where the user is now', async () => {
+    executeCommand.mockResolvedValue(false);
+    const { deps } = setup();
+
+    await forkConversation(deps);
+
+    expect(showInformationMessage).not.toHaveBeenCalled();
+  });
+
+  it('is not said to be where a rewind put them', async () => {
+    executeCommand.mockResolvedValue(false);
+    const { deps } = setup();
+
+    await rewindConversation(deps, '2');
+
+    expect(showInformationMessage).not.toHaveBeenCalled();
+  });
+});
+
 describe('fork', () => {
   it('switches the extension to the fork and says the original is kept', async () => {
     const { deps, session } = setup();

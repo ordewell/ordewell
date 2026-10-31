@@ -344,5 +344,121 @@ describe('saving', () => {
       expect(env.session.activity.running).toBe(false);
       expect(env.session.planTasks.map((t) => t.id)).toEqual(['other']);
     });
+
+    const errors = (env: Env) => env.notices.filter((n) => n.level === 'error').map((n) => n.message);
+
+    it('tells the user the Stop was not saved', async () => {
+      const { env, logged } = await refused();
+
+      env.session.stopExecution();
+      await settled();
+      logged.mockRestore();
+
+      expect(errors(env)).toEqual([expect.stringMatching(/could not be saved: disk full.*last saved/)]);
+    });
+
+    it('answers a Stop even when the timer has already said the disk refuses', async () => {
+      const { env, logged } = await refused();
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(errors(env)).toHaveLength(1);
+
+      env.session.stopExecution();
+      await settled();
+      logged.mockRestore();
+
+      expect(errors(env)).toHaveLength(2);
+    });
+
+    it('says it once while the timer goes on failing, and again once a save has landed since', async () => {
+      const { env, logged } = await refused();
+
+      await vi.advanceTimersByTimeAsync(5000);
+      reportUsage(env, 't1');
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(errors(env)).toHaveLength(1);
+
+      saves(env.session).mockImplementation(() => {});
+      reportUsage(env, 't1');
+      await vi.advanceTimersByTimeAsync(5000);
+      saves(env.session).mockImplementation(() => { throw new Error('disk full'); });
+      reportUsage(env, 't1');
+      await vi.advanceTimersByTimeAsync(5000);
+      logged.mockRestore();
+
+      expect(errors(env)).toHaveLength(2);
+    });
+
+    it('shows a control that took, and answers it as taken, though its save failed', async () => {
+      const env = await running();
+      env.run.of('t2').waitForInput();
+      await settled();
+      await vi.advanceTimersByTimeAsync(2000);
+      saves(env.session).mockImplementation(() => { throw new Error('disk full'); });
+      env.messages.length = 0;
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const answer = await env.session.execute({ command: 'message_task', task: 't2', text: 'carry on' }, { kind: 'user' });
+      logged.mockRestore();
+
+      expect(answer).toMatchObject({ ok: true });
+      expect(statuses(env.messages).at(-1)?.tasks.find((t) => t.id === 't2')?.status).toBe('in_progress');
+      expect(errors(env)).toEqual([expect.stringContaining('disk full')]);
+    });
+
+    it('answers a Stop through the seam as done', async () => {
+      const { env, logged } = await refused();
+
+      const answer = await env.session.execute({ command: 'stop_run' }, { kind: 'user' });
+      await settled();
+      logged.mockRestore();
+
+      expect(answer).toMatchObject({ ok: true });
+      expect(env.session.activity.running).toBe(false);
+    });
+
+    it('answers a control that awaits its effect as done', async () => {
+      const { env, logged } = await refused();
+
+      const answer = await env.session.execute({ command: 'stop_task', task: 't1' }, { kind: 'user' });
+      await settled();
+      logged.mockRestore();
+
+      expect(answer).toMatchObject({ ok: true });
+      expect(env.session.planTasks.find((t) => t.id === 't1')?.status).not.toBe('in_progress');
+    });
+
+    it('opens nothing it cannot save: the plan, its run and its id stay, and the caller hears so', async () => {
+      const { env, logged } = await refused();
+      const before = env.session.sessionId;
+
+      expect(() => env.session.loadPlan(plan([task('other', 1)]), 'another goal', testWorkspace, { sessionId: 'session-other' }))
+        .toThrow(/could not be saved \(disk full\), so it was not opened/);
+      await settled();
+      logged.mockRestore();
+
+      expect(env.session.planTasks.map((t) => t.id)).toEqual(['t1', 't2']);
+      expect(env.session.planState?.tasks.map((t) => t.id)).toEqual(['t1', 't2']);
+      expect(env.session.sessionId).toBe(before);
+      expect(env.session.activity.running).toBe(true);
+      expect(env.messages.map((m) => m.type)).not.toContain('execution_stopped');
+    });
+
+    it('stays on the plan a load reached the disk with, when only the save after it fails', async () => {
+      const env = await running();
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const other = plan([task('other', 1)]);
+      saves(env.session).mockImplementation((saved) => {
+        if (saved === other && saved.lastUpdated !== plan([]).lastUpdated) throw new Error('disk full');
+      });
+      vi.setSystemTime(NOW.getTime() + 60_000);
+
+      expect(() => env.session.loadPlan(other, 'another goal', testWorkspace, { sessionId: 'session-other' })).not.toThrow();
+      await settled();
+      logged.mockRestore();
+
+      expect(env.session.planState).toBe(other);
+      expect(env.session.sessionId).toBe('session-other');
+      expect(errors(env)).toEqual([expect.stringContaining('disk full')]);
+    });
   });
 });

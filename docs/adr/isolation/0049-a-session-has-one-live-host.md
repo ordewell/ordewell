@@ -49,9 +49,13 @@ Session — the daemon, the VS Code extension host — is covered at one seam.
 
 - **Claim before adopting (L1).** `Session.loadPlan` of a different plan claims
   the lease of the session it adopts before it drops anything it holds, so a
-  refusal leaves the plan held now as it was. A new session's lease is claimed
-  at its first save, a host-assigned id's as its planning starts. The pool
-  destroys a Session whose adoption was refused; the live one keeps running.
+  refusal leaves the plan held now as it was. A load that saves writes the
+  adopted plan while it holds both leases, for the same reason: a disk that
+  refuses it leaves the session open here as it was and lets the other lease
+  go, since the run the load would stop could not be started again. A new
+  session's lease is claimed at its first save, a host-assigned id's as its
+  planning starts. The pool destroys a Session whose adoption was refused; the
+  live one keeps running.
 - **A refusal names the holder (L2).** `SessionHeldError` carries the holder as
   data (`SessionHeld`) and says it in plain words: who, by pid and kind, and
   since when. The daemon answers it with `409` and the code `session_held`,
@@ -168,3 +172,4 @@ throwaway HTTP server, the TUI effect and the CLI command against a refusal.
 
 - 2026-10-24 — accepted.
 - 2026-10-24 — L7 states that a destroyed Session never takes its lease again: a late save claimed it back and held the session from every other host.
+- 2026-10-31 — L1 covers a load the disk refuses: a Session that kept the plan after its save failed would run tasks the user never saw.

@@ -1494,6 +1494,53 @@ describe('the plan block: whole once per live context, then what changed', () =>
 
       expect(changes(sent[1])).toContain(`removed: #${LIMIT + 1} id=t${LIMIT + 1} "Task t${LIMIT + 1}"`);
     });
+
+    describe('when a task it does not list changes', () => {
+      const LAST = LIMIT + 5;
+      /** The second turn's message, once `change` has moved the plan past what the block lists. */
+      async function afterChange(change: (tasks: Task[]) => Task[]) {
+        const tasks = grown(LAST, 0);
+        const { conversation, sent, live } = planned(tasks);
+        await conversation.reply('one');
+        live.tasks = change(tasks);
+        await conversation.reply('two');
+        return sent[1];
+      }
+      const edited = (over: Partial<Task>) => (tasks: Task[]) => tasks.map((t) => (t.id === `t${LAST}` ? { ...t, ...over } : t));
+
+      it('names one renamed', async () => {
+        const message = await afterChange(edited({ title: 'Renamed' }));
+
+        expect(changes(message)).toEqual([expect.stringMatching(new RegExp(`^changed, not listed: #${LAST} id=t${LAST} "Renamed" \\[pending\\]`))]);
+        expect(message).not.toContain('unchanged');
+      });
+
+      it('names one whose dependencies moved', async () => {
+        const message = await afterChange(edited({ dependencies: ['t1'] }));
+
+        expect(changes(message)).toEqual([expect.stringMatching(new RegExp(`^changed, not listed: #${LAST} .*deps:\\[#1\\]`))]);
+      });
+
+      it('names one added', async () => {
+        const message = await afterChange((tasks) => [...tasks, task('late', LAST + 1)]);
+
+        expect(changes(message)).toEqual([expect.stringMatching(new RegExp(`^added, not listed: #${LAST + 1} id=late `))]);
+      });
+
+      it('names one removed', async () => {
+        const message = await afterChange((tasks) => tasks.slice(0, -1));
+
+        expect(changes(message)).toEqual([`removed: #${LAST} id=t${LAST} "Task t${LAST}"`]);
+      });
+
+      it('sends the whole plan when removing one renumbers the tasks after it', async () => {
+        const message = await afterChange((tasks) => tasks
+          .filter((t) => t.id !== `t${LAST - 1}`)
+          .map((t) => (t.id === `t${LAST}` ? { ...t, order: LAST - 1 } : t)));
+
+        expect(message).toMatch(WHOLE);
+      });
+    });
   });
 
   /** Turn one, then a turn that ends as `second` makes it, then turn three after a status change. */

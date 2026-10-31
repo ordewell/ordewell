@@ -1810,8 +1810,8 @@ export class PlannerConversation {
   /**
    * One line per task, subtasks indented under their parent, with stable
    * references — null until the plan has tasks. Past a size only the tasks a
-   * planner acts on get a line (`planWindow`); a line costs a start-rule
-   * walk, so the rest are not built.
+   * planner acts on get a line (`planWindow`); what a line waits for costs a
+   * start-rule walk, so the rest are not walked.
    */
   private planRows(): { rows: PlanRow[]; unlisted: UnlistedRow[] } | null {
     const tasks = this.host.tasks();
@@ -1820,11 +1820,11 @@ export class PlannerConversation {
     const refOf = new Map(rows.map(({ task, ref }) => [task.id, ref]));
     const shown = listedIds(rows.map(({ task }) => task));
     const { modes } = this.host.catalog();
-    const lineOf = ({ task: t, parent }: (typeof rows)[number]): string => {
-      const refs = (ids: readonly string[]) => `[${ids.map((d) => refOf.get(d) ?? d).join(', ')}]`;
+    const refs = (ids: readonly string[]) => `[${ids.map((d) => refOf.get(d) ?? d).join(', ')}]`;
+    const fieldsOf = ({ task: t, parent }: (typeof rows)[number]): string => {
       // A script task runs on no runner, model or mode (ADR-0035): what it runs is its line.
       if (t.type === 'script') {
-        return `${parent ? '  ' : ''}${refOf.get(t.id)} id=${t.id} "${t.title}" [${t.status}] type:SCRIPT ${scriptPlanField(t)} slice:${t.sliceType ?? '-'} deps:${refs(t.dependencies)}${waitNote(this.host.startWaits(t), refs)}`;
+        return `${parent ? '  ' : ''}${refOf.get(t.id)} id=${t.id} "${t.title}" [${t.status}] type:SCRIPT ${scriptPlanField(t)} slice:${t.sliceType ?? '-'} deps:${refs(t.dependencies)}`;
       }
       const isMan = t.type === 'user';
       // A MAN task has no model or mode to run under — the field that means
@@ -1834,11 +1834,15 @@ export class PlannerConversation {
       const runFields = isMan
         ? `steps:${t.userSteps?.length ?? 0}`
         : `${t.assignedModel ? `model:${t.assignedModel.modelId} ` : ''}${readOnly ? 'read-only ' : ''}effort:${t.assignedModel?.thinkingEffort ?? '-'}`;
-      return `${parent ? '  ' : ''}${refOf.get(t.id)} id=${t.id} "${t.title}" [${t.status}] type:${isMan ? 'MAN' : t.ops ? 'AI ops' : 'AI'} ${isMan ? '' : `runner:${t.assignedRunner} `}${runFields} autonomy:${t.autonomy ?? '-'} slice:${t.sliceType ?? '-'} deps:${refs(t.dependencies)}${t.skills?.length ? ` skills:[${t.skills.join(', ')}]` : ''}${waitNote(this.host.startWaits(t), refs)}`;
+      return `${parent ? '  ' : ''}${refOf.get(t.id)} id=${t.id} "${t.title}" [${t.status}] type:${isMan ? 'MAN' : t.ops ? 'AI ops' : 'AI'} ${isMan ? '' : `runner:${t.assignedRunner} `}${runFields} autonomy:${t.autonomy ?? '-'} slice:${t.sliceType ?? '-'} deps:${refs(t.dependencies)}${t.skills?.length ? ` skills:[${t.skills.join(', ')}]` : ''}`;
     };
-    const named = (row: (typeof rows)[number]): UnlistedRow => ({ id: row.task.id, ref: row.ref, title: row.task.title, status: row.task.status });
+    const named = (row: (typeof rows)[number]): UnlistedRow => ({ id: row.task.id, ref: row.ref, title: row.task.title, status: row.task.status, fields: fieldsOf(row) });
+    const listed = (row: (typeof rows)[number]): PlanRow => {
+      const task = named(row);
+      return { ...task, line: `${task.fields}${waitNote(this.host.startWaits(row.task), refs)}` };
+    };
     return {
-      rows: rows.filter((row) => shown.has(row.task.id)).map((row) => ({ ...named(row), line: lineOf(row) })),
+      rows: rows.filter((row) => shown.has(row.task.id)).map(listed),
       unlisted: rows.filter((row) => !shown.has(row.task.id)).map(named),
     };
   }
