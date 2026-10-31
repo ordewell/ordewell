@@ -8,6 +8,12 @@ export interface ToolOutcome {
    * names the limit it ran out of rather than blaming the command.
    */
   timedOut?: boolean;
+  /**
+   * The signal that ended the child, if one did. The adapters report it, and a
+   * sealed run's result reads it for the one that means its memory limit ended
+   * the run (ADR-0036 S1).
+   */
+  signal?: NodeJS.Signals;
 }
 
 export interface ReadFileOpts {

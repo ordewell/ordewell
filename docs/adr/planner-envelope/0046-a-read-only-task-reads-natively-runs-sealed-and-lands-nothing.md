@@ -144,7 +144,8 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
   (`TASK_SEALED_LIMITS`, the script task's default); the planner's own sealed
   runs keep one minute. A run ended at its limit says so, and does not blame
   the network (`sealedTimeLimitNote`). The task can run the suite because of
-  it.
+  it. Memory is the same for both, ADR-0036's real-memory limit, and a run
+  ended at it says so as well (`sealedMemoryLimitNote`).
 - **Without a worktree**, where the run does not isolate, the working
   directory is the workspace root and a sealed run has nothing of it writable.
 - **Without a sandbox** (ADR-0036 S6), what would run sealed is refused, and
@@ -440,3 +441,4 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 - 2026-10-24 — a task's saved patch comes back with its handoff, captured by Ordewell's git only inside the task's seal (ADR-0050).
 - 2026-10-25 — a read-only task reads the web through Ordewell's `fetch` and `web_search`, under the planner's web-read policy without prompting and with a budget per attempt; native web tools stay refused.
 - 2026-10-25 — a task's web-read decisions are recorded in its attempt's log, an allowed read's naming what allowed it, and never in the planner's conversation; a read answered after its attempt ended hands the runner nothing; a cancelled allowed read keeps its count.
+- 2026-10-31 — a sealed run's memory limit is real memory, and a run ended at it says so (ADR-0036).

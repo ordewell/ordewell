@@ -1630,7 +1630,8 @@ worktree so it is runnable at once — never `.ordewell/`, which stays at the ma
 root. `node_modules` (the root's and each workspace package's) is a real
 directory whose entries are linked one by one, and whose own links are
 recreated, so a workspace package resolves to the worktree's code rather than
-the main checkout's (ADR-0013). Under ADR-0014 a task has one worktree per repo of the group, gathered in
+the main checkout's; tools' caches there are left out, so a worktree keeps its
+own (ADR-0013). Under ADR-0014 a task has one worktree per repo of the group, gathered in
 its *task workspace*; each is bootstrapped from its own repo, with the
 `worktreeLinks` matches linked beside the defaults, and `worktreeSetupCommand`
 runs once per repo with `ORDEWELL_REPO` and `ORDEWELL_MAIN_REPO` set; a repo

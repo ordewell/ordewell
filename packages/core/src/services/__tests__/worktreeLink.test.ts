@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs';
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { linkPath, mirrorDir } from '../worktreeLink';
@@ -82,6 +82,16 @@ describe('mirrorDir', () => {
     expect(realpathSync(join(task, 'node_modules', 'left-pad'))).toBe(join(main, 'node_modules', 'left-pad'));
     expect(readlinkSync(join(task, 'node_modules', 'a'))).toBe('../packages/a');
     expect(realpathSync(join(task, 'node_modules', 'a'))).toBe(join(task, 'packages', 'a'));
+  });
+
+  it("leaves tools' caches out, so a worktree makes its own instead of writing the main checkout's (ADR-0013)", () => {
+    const { main, task } = checkouts();
+    const caches = ['.cache', '.vite', '.vite-temp', '.vitest'];
+    for (const cache of caches) mkdirSync(join(main, 'node_modules', cache, 'vitest'), { recursive: true });
+
+    mirrorDir(join(main, 'node_modules'), join(task, 'node_modules'), { platform: 'linux', from: main, to: task });
+
+    expect(readdirSync(join(task, 'node_modules'))).toEqual(['left-pad']);
   });
 
   it('goes one level into scope and .bin directories, so a scoped workspace link and a bin link resolve through the task checkout', () => {

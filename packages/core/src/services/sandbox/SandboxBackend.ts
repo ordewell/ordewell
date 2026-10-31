@@ -104,18 +104,26 @@ export interface SandboxProfile {
 }
 
 /**
- * Held by the kernel's resource limits, set before the launcher starts, and
- * by the caller's clock (ADR-0036 S1).
+ * Held by the kernel's resource limits, set before the launcher starts, by a
+ * watcher beside the launcher, outside the sandbox, and by the caller's clock
+ * (ADR-0036 S1).
  */
 export interface SandboxLimits {
   /** Processes the command may start beyond those its user already runs, which the kernel's limit counts too. */
   processes: number;
   /**
-   * Bytes of address space any one of its processes may map. On macOS, where
-   * every program maps hundreds of gigabytes as it starts, it is counted on
-   * top of that.
+   * Bytes of real memory the command may hold: resident memory summed across
+   * its processes, which the watcher reads about once a second and ends the
+   * command for passing ({@link MEMORY_LIMIT_SIGNAL}).
    */
   memoryBytes: number;
+  /**
+   * Bytes of address space any one of its processes may map: a backstop
+   * against a runaway allocator, not a measure of memory, since V8 reserves
+   * far more than it touches. On macOS, where every program maps hundreds of
+   * gigabytes as it starts, it is counted on top of that.
+   */
+  addressSpaceBytes: number;
   /** Milliseconds before the caller kills the command, and with it every process it started. */
   wallTimeMs: number;
 }
@@ -128,6 +136,15 @@ export interface SandboxInvocation {
   env: NodeJS.ProcessEnv;
 }
 
+/**
+ * How a launch ends when its watcher ended it at the memory limit (ADR-0036
+ * S1). A signal rather than an exit status, which could be any command's own:
+ * only what runs outside the sandbox can send it to the launcher, since
+ * Seatbelt lets a command signal its own sandbox alone and bubblewrap's PID
+ * namespace hides the launcher from it.
+ */
+export const MEMORY_LIMIT_SIGNAL = 'SIGUSR2';
+
 /** What to spawn instead. The command string is appended after `args`. */
 export interface SandboxLaunch {
   file: string;
@@ -135,6 +152,8 @@ export interface SandboxLaunch {
   env: NodeJS.ProcessEnv;
   /** The profile's wall-time limit: the caller kills the launch with SIGKILL once it has run this long. */
   wallTimeMs?: number;
+  /** The profile's memory limit, past which the launch ends by {@link MEMORY_LIMIT_SIGNAL}. */
+  memoryBytes?: number;
 }
 
 export type SandboxProbe = { ok: true } | { ok: false; detail: string };

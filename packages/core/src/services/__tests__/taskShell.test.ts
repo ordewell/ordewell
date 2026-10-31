@@ -31,7 +31,7 @@ class RecordingBackend implements SandboxBackend {
   wrap(_invocation: unknown, profile: SandboxProfile): SandboxLaunch {
     this.profiles.push(profile);
     const sealed = profile.limits !== undefined;
-    return { file: sealed ? '/sealed' : '/sandboxed', args: [String(this.profiles.length - 1)], env: {}, ...(sealed ? { wallTimeMs: profile.limits!.wallTimeMs } : {}) };
+    return { file: sealed ? '/sealed' : '/sandboxed', args: [String(this.profiles.length - 1)], env: {}, ...(sealed ? { wallTimeMs: profile.limits!.wallTimeMs, memoryBytes: profile.limits!.memoryBytes } : {}) };
   }
 }
 
@@ -187,6 +187,20 @@ describe("a read-only task's shell (ADR-0046)", () => {
     expect(tests.output).toContain('Run less at a time');
     expect(tests.output).not.toContain('cannot reach the network');
     expect(loop.output).toContain('ended at its time limit of 1 minute');
+    expect(loop.output).toContain('belongs in the plan as a task');
+  });
+
+  it('says the memory limit ended it, rather than blaming reach, when a sealed run was ended at it', async () => {
+    const fs = session();
+    fs.result = { success: false, output: 'Command exited 1:\n', truncated: false, signal: 'SIGUSR2' };
+
+    const tests = await fs.taskShell({ cwd: worktree, writable: worktree }).run('npm test');
+    const loop = await fs.bash('for f in *.md; do wc -l "$f"; done');
+
+    expect(tests.output).toContain('ended at its memory limit of 4 GiB');
+    expect(tests.output).toContain('Run less at a time');
+    expect(tests.output).not.toContain('cannot reach the network');
+    expect(loop.output).toContain('ended at its memory limit of 4 GiB');
     expect(loop.output).toContain('belongs in the plan as a task');
   });
 

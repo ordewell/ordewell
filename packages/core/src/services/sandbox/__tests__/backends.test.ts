@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { SeatbeltBackend, SANDBOX_EXEC } from '../seatbelt';
 import { BubblewrapBackend, findBubblewrap } from '../bubblewrap';
 import { sealedShellProfile, type SealedRunOptions } from '../plannerSandbox';
-import { SandboxUnsupportedError, type SandboxInvocation, type SandboxLimits, type SandboxProfile, type ProbeExec } from '../SandboxBackend';
+import { MEMORY_LIMIT_SIGNAL, SandboxUnsupportedError, type SandboxInvocation, type SandboxLimits, type SandboxProfile, type ProbeExec } from '../SandboxBackend';
 
 const SH: SandboxInvocation = { shell: '/bin/sh', shellArgs: ['-c'], env: { PATH: '/usr/bin:/bin', HOME: '/home/me' } };
 const SCRATCH = '/tmp/ordewell-planner-abc';
@@ -11,7 +11,7 @@ function profile(overrides: Partial<SandboxProfile> = {}): SandboxProfile {
   return { write: [SCRATCH], read: 'host', network: false, env: { TMPDIR: SCRATCH }, ...overrides };
 }
 
-const LIMITS: SandboxLimits = { processes: 64, memoryBytes: 2 * 1024 ** 3, wallTimeMs: 30_000 };
+const LIMITS: SandboxLimits = { processes: 64, memoryBytes: 2 * 1024 ** 3, addressSpaceBytes: 64 * 1024 ** 3, wallTimeMs: 30_000 };
 
 /** A sealed run's profile, as ADR-0036 S1 shapes it. */
 function sealed(overrides: Partial<SandboxProfile> = {}): SandboxProfile {
@@ -136,6 +136,7 @@ describe('SeatbeltBackend.wrap', () => {
     ['a relative path', { write: ['scratch'] }],
     ['an option-shaped path', { write: ['--help'] }],
     ['a limit that is not a whole number', { limits: { ...LIMITS, processes: 1.5 } }],
+    ['an address ceiling that is not a whole number', { limits: { ...LIMITS, addressSpaceBytes: 1.5 } }],
   ])('refuses %s rather than enforce less than it was asked', (_what, overrides) => {
     expect(() => seatbelt.wrap(SH, profile(overrides))).toThrow(SandboxUnsupportedError);
   });
@@ -253,13 +254,37 @@ describe('SeatbeltBackend.wrap', () => {
       expect(launch.args[0]).toBe('-c');
       const prelude = launch.args[1];
       expect(prelude).toContain('ulimit -u $((n + 64))');
-      expect(prelude).toContain(`ulimit -v $((v + ${2 * 1024 * 1024}))`);
+      expect(prelude).toContain(`ulimit -v $((v + ${64 * 1024 * 1024}))`);
       expect(prelude).toContain('set -m');
       expect(prelude).toContain('kill -KILL -$pid');
       // `$0`, then the launcher and the shell, with the command left to come last.
       expect(launch.args.slice(2, 4)).toEqual(['ordewell-sealed', SANDBOX_EXEC]);
       expect(launch.args.slice(-2)).toEqual(['/bin/sh', '-c']);
       expect(launch.wallTimeMs).toBe(30_000);
+    });
+
+    it('bounds real memory with a watcher that sums the run\'s process group about once a second, and tells the caller by a signal', () => {
+      const launch = seatbelt.wrap(SH, sealed());
+      const prelude = launch.args[1];
+      expect(prelude).toContain('/bin/sleep 1');
+      expect(prelude).toContain('/bin/ps -o rss= -g $pid');
+      expect(prelude).toContain(`-gt ${2 * 1024 * 1024}`);
+      expect(prelude).toContain('kill -USR2 $$');
+      expect(MEMORY_LIMIT_SIGNAL).toBe('SIGUSR2');
+      expect(launch.memoryBytes).toBe(2 * 1024 ** 3);
+    });
+
+    it('sets the kernel\'s limits on the command alone, so a fork bomb cannot stop the watcher forking', () => {
+      const prelude = seatbelt.wrap(SH, sealed()).args[1];
+      const command = prelude.indexOf('ulimit -u');
+      expect(prelude.lastIndexOf('(', command)).toBeGreaterThan(prelude.lastIndexOf('\n', command) - 1);
+      expect(prelude.indexOf('exec "$@"')).toBeGreaterThan(command);
+      expect(prelude.indexOf('/bin/ps -o rss=')).toBeGreaterThan(prelude.indexOf('exec "$@"'));
+    });
+
+    it('puts only numbers from the limits into the script, whatever the limits are', () => {
+      const text = (limits: SandboxLimits) => seatbelt.wrap(SH, sealed({ limits })).args[1].replace(/\d+/g, 'N');
+      expect(text({ ...LIMITS, memoryBytes: 1024, addressSpaceBytes: 2048, processes: 7 })).toBe(text(LIMITS));
     });
 
     it('keeps only the environment the profile names, then sets its own', () => {
@@ -352,11 +377,29 @@ describe('BubblewrapBackend.wrap', () => {
       // dash calls the process limit -p, bash -u.
       const processes = '$(($(set -- /proc/[0-9]*; echo $#) + 64))';
       expect(prelude).toContain(`ulimit -u ${processes} 2>/dev/null || ulimit -p ${processes}`);
-      expect(prelude).toContain(`ulimit -v ${2 * 1024 * 1024}`);
+      expect(prelude).toContain(`ulimit -v ${64 * 1024 * 1024}`);
       expect(prelude).toMatch(/exec "\$@"$/);
       expect(launch.args.slice(2, 4)).toEqual(['ordewell-sealed', '/usr/bin/bwrap']);
       expect(launch.args).toContain('--die-with-parent');
       expect(launch.wallTimeMs).toBe(30_000);
+    });
+
+    it('starts the memory watcher before the limits, outside the sandbox, on no PATH the host gave it', () => {
+      const launch = bwrap().wrap(SH, sealed());
+      const prelude = launch.args[1];
+      const watcher = prelude.indexOf('VmRSS:');
+      expect(watcher).toBeGreaterThan(-1);
+      expect(watcher).toBeLessThan(prelude.indexOf('ulimit -v'));
+      expect(prelude).toContain(`-gt ${2 * 1024 * 1024}`);
+      expect(prelude).toContain('kill -USR2 $$');
+      // A sealed run may write a directory a relative PATH entry names, and this runs outside the sandbox.
+      expect(prelude).toContain('PATH=/usr/bin:/bin:/run/current-system/sw/bin');
+      expect(launch.memoryBytes).toBe(2 * 1024 ** 3);
+    });
+
+    it('puts only numbers from the limits into the script, whatever the limits are', () => {
+      const text = (limits: SandboxLimits) => bwrap().wrap(SH, sealed({ limits })).args[1].replace(/\d+/g, 'N');
+      expect(text({ ...LIMITS, memoryBytes: 1024, addressSpaceBytes: 2048, processes: 7 })).toBe(text(LIMITS));
     });
 
     it('keeps only the environment the profile names, then sets its own', () => {

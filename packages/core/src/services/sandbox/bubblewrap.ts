@@ -5,6 +5,7 @@ import {
   assertProfilePaths,
   execProbe,
   launchEnv,
+  MEMORY_LIMIT_SIGNAL,
   probeByRunning,
   SandboxUnsupportedError,
   type ProbeExec,
@@ -45,20 +46,68 @@ function shallowFirst(paths: readonly string[]): string[] {
 }
 
 /**
+ * Where the watcher finds `sleep`, in place of a PATH the host gave it: the
+ * watcher runs outside the sandbox, and a relative PATH entry can name a
+ * directory the sandbox may write.
+ */
+const WATCHER_PATH = '/usr/bin:/bin:/run/current-system/sw/bin';
+
+/**
+ * Sums the sandbox's resident memory about once a second, in the shell's own
+ * builtins, and past the limit ends bubblewrap by {@link MEMORY_LIMIT_SIGNAL},
+ * which takes the sandbox down as the caller's kill does, and the namespace's
+ * first process, in case bubblewrap is past hearing it. Nothing in the
+ * namespace can leave it, so nothing can hide from the sum as a process can
+ * leave a process group. Its streams are its own, since one it held open would
+ * keep the caller waiting for the run's output.
+ */
+function memoryWatcher(limits: SandboxLimits): string {
+  const memory = Math.ceil(limits.memoryBytes / 1024);
+  return `{ PATH=${WATCHER_PATH}
+  field() { f=; while read -r k w _; do if [ "$k" = "$1" ]; then f=$w; return; fi; done < "$2/status"; }
+  root=
+  while [ -d /proc/$$ ]; do
+    sleep 1
+    if [ ! -d "$root" ]; then
+      root=
+      for p in /proc/[0-9]*; do
+        [ "$p/ns/pid" -ef /proc/$$/ns/pid ] && continue
+        field PPid: "$p"
+        if [ "$f" = "$$" ]; then root=$p; break; fi
+      done
+      [ -n "$root" ] || continue
+    fi
+    kb=0
+    for p in /proc/[0-9]*; do
+      [ "$p/ns/pid" -ef "$root/ns/pid" ] || continue
+      field VmRSS: "$p"
+      kb=$((kb + \${f:-0}))
+    done
+    if [ $kb -gt ${memory} ]; then kill -${MEMORY_LIMIT_SIGNAL.slice(3)} $$; kill -KILL \${root##*/}; break; fi
+  done
+} </dev/null >/dev/null 2>&1 &`;
+}
+
+/**
  * Runs before bubblewrap, outside it, then becomes it, so the caller's kill
  * at the wall-time limit and `--die-with-parent` reach the sandbox's PID
- * namespace, and every process in it, unchanged (ADR-0036 S1). Older kernels
- * count the process limit against all of the user's processes and newer ones
- * against the sandbox's own, so it is set above every process the host runs
- * now: never already spent, and still a bound. Dash names that limit `-p`
- * where bash names it `-u`. Only numbers from
- * {@link SandboxLimits} enter the text, and the command reaches it as the
- * last of its arguments.
+ * namespace, and every process in it, unchanged (ADR-0036 S1). The memory
+ * watcher starts first, with none of the limits on it, and without a way to
+ * wait or to compare namespaces the limit cannot be held, so nothing runs.
+ * Older kernels count the process limit against all of the user's processes
+ * and newer ones against the sandbox's own, so it is set above every process
+ * the host runs now: never already spent, and still a bound. Dash names that
+ * limit `-p` where bash names it `-u`. Only numbers from {@link SandboxLimits}
+ * enter the text, and the command reaches it as the last of its arguments.
  */
 function limitsPrelude(limits: SandboxLimits): string {
   const processes = `$(($(set -- /proc/[0-9]*; echo $#) + ${limits.processes}))`;
-  return `{ ulimit -u ${processes} 2>/dev/null || ulimit -p ${processes}; } && ulimit -v ${Math.ceil(limits.memoryBytes / 1024)} \\
-  || { echo 'The sealed run could not be held to its limits, so it did not run.' >&2; exit 125; }
+  const refused = `{ echo 'The sealed run could not be held to its limits, so it did not run.' >&2; exit 125; }`;
+  return `(PATH=${WATCHER_PATH}; command -v sleep >/dev/null && [ / -ef / ]) 2>/dev/null \\
+  || ${refused}
+${memoryWatcher(limits)}
+{ ulimit -u ${processes} 2>/dev/null || ulimit -p ${processes}; } && ulimit -v ${Math.ceil(limits.addressSpaceBytes / 1024)} \\
+  || ${refused}
 exec "$@"`;
 }
 
@@ -128,6 +177,6 @@ export class BubblewrapBackend implements SandboxBackend {
 
     const env = launchEnv(invocation, profile);
     if (!profile.limits) return { file: this.bwrap, args, env };
-    return { file: '/bin/sh', args: ['-c', limitsPrelude(profile.limits), 'ordewell-sealed', this.bwrap, ...args], env, wallTimeMs: profile.limits.wallTimeMs };
+    return { file: '/bin/sh', args: ['-c', limitsPrelude(profile.limits), 'ordewell-sealed', this.bwrap, ...args], env, wallTimeMs: profile.limits.wallTimeMs, memoryBytes: profile.limits.memoryBytes };
   }
 }

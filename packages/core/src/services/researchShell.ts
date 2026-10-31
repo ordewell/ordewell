@@ -65,6 +65,8 @@ export interface ShellLaunch {
    * timeout, and stops waiting for output a moment after it exits.
    */
   wallTimeMs?: number;
+  /** A sealed run's memory limit, which its result names if the run was ended at it (ADR-0036 S1). */
+  memoryBytes?: number;
 }
 
 const POSIX_SHELL: ResearchShell = { file: null, args: [], dialect: 'posix', utilsDir: null };
