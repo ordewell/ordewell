@@ -5,8 +5,6 @@ amends: ["0013"]
 
 # 0049 — A session has one live host: the session lease
 
-*Pending:* [ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — the root's lease covers its tree, and a child session holds none of its own.
-
 ## Problem
 
 Nothing stopped two Ordewell processes from running one session at once.
@@ -44,6 +42,10 @@ the lease, a heartbeat, and the process groups of the runners it has started.
 The **Session** holds its own lease through a `SessionLease`, built by
 `createSession` from the process's `LeaseHost`, so every host that runs a
 Session — the daemon, the VS Code extension host — is covered at one seam.
+Only a root Session holds a file. A child Session's lease is a view of its root's
+([ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md)
+D13): the root's covers the tree, runner groups included, and a child takes and
+lets go of nothing.
 
 ## Key properties
 
@@ -176,3 +178,4 @@ throwaway HTTP server, the TUI effect and the CLI command against a refusal.
 - 2026-10-24 — L7 states that a destroyed Session never takes its lease again: a late save claimed it back and held the session from every other host.
 - 2026-10-31 — L1 covers a load the disk refuses: a Session that kept the plan after its save failed would run tasks the user never saw.
 - 2026-10-31 — L1 holds both leases until the plan held now has gone: its last saves re-claimed the old lease and let the picked one go, and a host opening it then won.
+- 2026-10-31 — the root's lease covers its tree, and a child session holds none of its own (ADR-0055 D13).

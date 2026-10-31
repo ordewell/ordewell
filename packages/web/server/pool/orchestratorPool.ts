@@ -68,6 +68,8 @@ import {
   workspaceEnvOf,
   recordedRunnerAuth,
   createIsolationPreview,
+  createWorktreeIsolation,
+  discardChildRuns,
   type IIsolationPreview,
   type IsolationPreview,
 } from '@ordewell/core';
@@ -1059,7 +1061,18 @@ export const scanWorkspaces = scanWorkspacesImpl;
 
 export function getSessionList(workspace: string) { return listSessions(workspace); }
 export function getSession(sessionId: string, workspace: string) { return loadSession(sessionId, workspace); }
-export function removeSession(sessionId: string, workspace: string) { return deleteSession(sessionId, workspace); }
+
+/**
+ * A session and the children saved under it. Their runs go first, since the
+ * files that go next are the only record that names their worktrees and
+ * branches (ADR-0055 D11). What git could not let go stops the delete, with the
+ * records still in place, and is named in the error.
+ */
+export async function removeSession(sessionId: string, workspace: string): Promise<boolean> {
+  const { refused } = await discardChildRuns(sessionId, workspace, createWorktreeIsolation({ config: new WebConfig() }));
+  if (refused.length > 0) throw new Error(`The session was kept: ${refused.map(({ worktree, reason }) => `${worktree} (${reason})`).join(', ')}`);
+  return deleteSession(sessionId, workspace);
+}
 
 /** A write's `env`, split into what may reach `process.env` and what may not. */
 function admittedEnv(changes: Record<string, unknown>): ReturnType<typeof admitSettingsEnv> | undefined {

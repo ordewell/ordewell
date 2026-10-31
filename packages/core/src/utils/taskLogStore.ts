@@ -15,10 +15,14 @@ import { idSegment, sessionDataDir } from './sessionStore';
  * (ADR-0050).
  */
 
-/** Which session's logs, in which workspace. */
+/**
+ * Which session's logs, under which state root. A child's says which root it
+ * sits under: a session id alone finds a root's (ADR-0055 D11).
+ */
 export interface TaskLogLocation {
   baseDir: string;
   sessionId: string;
+  rootSessionId?: string;
 }
 
 /** One attempt's file, open for appending. */
@@ -29,8 +33,8 @@ export interface TaskLogFile {
 
 const EXTENSION = '.jsonl';
 
-function taskDir({ baseDir, sessionId }: TaskLogLocation, taskId: string): string {
-  return path.join(sessionDataDir(sessionId, baseDir), 'tasks', idSegment(taskId));
+function taskDir({ baseDir, sessionId, rootSessionId }: TaskLogLocation, taskId: string): string {
+  return path.join(sessionDataDir(sessionId, baseDir, rootSessionId), 'tasks', idSegment(taskId));
 }
 
 /** The attempts a task has a log for, oldest first. */

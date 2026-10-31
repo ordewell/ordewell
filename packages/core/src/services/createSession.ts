@@ -44,7 +44,7 @@ import { surfacePlan, type RunActivity, type RunMergeView, type RunView, type Se
 import { EMPTY_RUN, reduceRun } from './runView';
 import { SessionEventRelay } from './SessionEventRelay';
 import { SubagentRuns } from './SubagentRuns';
-import { saveSession } from '../utils/sessionStore';
+import { saveChildSession, saveSession } from '../utils/sessionStore';
 import { listTaskLogAttempts, prepareTaskOutputFile, readTaskLog, readTaskPatch, saveTaskPatch, type TaskLogFile, type TaskLogLocation } from '../utils/taskLogStore';
 import { digestTaskLog, type TaskLogEvent } from '../models/TaskLog';
 import { TaskLogRecorder } from './TaskLogRecorder';
@@ -61,7 +61,8 @@ import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
 import { approvalRecordOf, flattenTasks, keepExecutionState, migrateLoadedPlan, stampOrigin, type LegacyPlanState, type PlanState, type Task, type TaskReportTo, type TaskSnapshot, type RunnerId } from '../models/Task';
 import { AlreadyExecutingError, NoPlanError } from './SessionErrors';
-import { describeHeld, describeLost, processLeaseHost, UNLEASED, type LeaseHost, type SessionHeld, type SessionLease } from './sessionLease';
+import { childLease, describeHeld, describeLost, processLeaseHost, UNLEASED, type LeaseHost, type SessionHeld, type SessionLease } from './sessionLease';
+import { refuseUsersCheckout } from './stateRoot';
 import { PlannerNotReadyError, plannerNotReadyFor } from './plannerReadiness';
 import { recordedRunnerAuth } from './runnerAuth';
 import { installedPlannerAnswered, installedPlannerDetected } from './InstalledPlanner';
@@ -164,8 +165,26 @@ export interface ConversationRewind extends ConversationFork {
  */
 const SAVE_INTERVAL_MS = 5000;
 
-/** Writes one plan to the saved-session store: {@link saveSession}'s shape, injected so tests never touch disk. */
+/** Writes one plan to the saved-session store: {@link saveSession}'s shape, injected so tests never touch disk. `workspace` is the state root. */
 export type SaveSession = (plan: LegacyPlanState, goal: string, workspace: string, sessionId: string) => void;
+
+/**
+ * Where a child session sits in its tree, handed out by the parent's
+ * {@link Session.hostChild}. Its code root is its `workspaceRoot`, a delegated
+ * task's worktree, which goes with that task; what must outlive that goes here.
+ */
+export interface ChildPlacement {
+  /** The id it saves under, which the parent's run record names. */
+  sessionId: string;
+  /** The root Session's workspace, at every depth (ADR-0055 D11). */
+  stateRoot: string;
+  /** The root Session's id: a child's state sits under that session's. */
+  rootSessionId: string;
+  /** Who holds the tree, as the root's lease says (D13). */
+  held: () => SessionHeld | null;
+  /** Its parent's, so one repository's worktree bookkeeping takes one lock across the tree (D11). */
+  isolation: IWorktreeIsolation;
+}
 
 /**
  * Everything a delivery surface constructs to host a session. Structural config
@@ -245,6 +264,8 @@ export interface SessionDeps {
   runNotifyCommand?: NotifyRun;
   /** The node this session is, below the root (ADR-0056); absent, it is the root, whose mandate its settings hold. */
   child?: NodeAuthority;
+  /** Where this session sits below the root (ADR-0055 D11, D13); absent, its workspace is both its code root and its state root. */
+  placement?: ChildPlacement;
 }
 
 /**
@@ -273,6 +294,8 @@ function writtenTasks(before: readonly Task[], after: readonly Task[]): Task[] {
  * Session here; the optional {@link SessionDeps} are the seams tests fill.
  */
 export function createSession(deps: SessionDeps): Session {
+  // Where a child is built, so no merge below can reach the user's branch (ADR-0055 D12).
+  if (deps.placement) refuseUsersCheckout(deps.workspaceRoot(), deps.placement.stateRoot);
   const mcpServer = deps.mcpServer ?? sharedMcpServer();
   // Made by the Session (it is the conversation's host); an approval prompt
   // names the turn that raised it, and the backend waits for the turn on it,
@@ -354,9 +377,10 @@ export function createSession(deps: SessionDeps): Session {
     scriptRunner: taskLogs.wrap(deps.scriptRunner ?? new ScriptRunner(scriptRunnerDeps)),
     store,
     output: deps.taskOutput,
-    isolation: deps.isolation,
+    isolation: deps.isolation ?? deps.placement?.isolation,
     registry: deps.registry,
     workspaceRoot: deps.workspaceRoot,
+    ...(deps.placement ? { stateRoot: deps.placement.stateRoot } : {}),
     skillsAt: (roots) => (deps.skillsService ?? new SkillsService(roots)).forRoot(roots),
     previousAttemptFromLog: (taskId) => lastAttemptDigest(session.taskLogLocation, taskId),
     previousHandoffFromLog: (taskId) => {
@@ -470,7 +494,7 @@ export function createSession(deps: SessionDeps): Session {
     onNotice: deps.onNotice,
     modelResolver: deps.modelResolver,
     settings: deps.settings,
-    hostSessionId: deps.sessionId,
+    hostSessionId: deps.placement?.sessionId ?? deps.sessionId,
     backend,
     planner: deps.planner ?? new Planner(deps.config, aiService),
     store,
@@ -485,15 +509,22 @@ export function createSession(deps: SessionDeps): Session {
     taskLogs,
     fetcher,
     skillsService: deps.skillsService ?? new SkillsService(deps.workspaceRoot()),
-    saveSession: deps.saveSession ?? saveSession,
+    saveSession: deps.saveSession ?? (deps.placement ? saveUnder(deps.placement) : saveSession),
     lease: (onLost) => {
+      if (deps.placement) return childLease(deps.placement.held);
       const host = deps.leaseHost ?? (deps.saveSession ? undefined : processLeaseHost());
       return host ? host.lease(onLost) : UNLEASED;
     },
     conversation: (host) => (conversation = new PlannerConversation(host)),
     child: deps.child,
+    placement: deps.placement,
   });
   return session;
+}
+
+/** A child's saves, which go under its root by the id they are saved under. */
+function saveUnder({ rootSessionId }: ChildPlacement): SaveSession {
+  return (plan, goal, baseDir, sessionId) => { saveChildSession(plan, goal, { baseDir, rootSessionId, sessionId }); };
 }
 
 /** The planner allowlist in force: the built-in reads unless turned off, then the user's entries. */
@@ -546,6 +577,8 @@ export interface SessionParts {
   conversation: (host: PlannerConversationHost) => PlannerConversation;
   /** The node this session is, below the root. */
   child?: NodeAuthority;
+  /** Where it sits below the root. */
+  placement?: ChildPlacement;
 }
 
 /**
@@ -579,6 +612,7 @@ export class Session {
   private readonly catalog: SessionCatalog;
   private plan: LegacyPlanState | null = null;
   private goal = '';
+  /** The code root: what its planner and runners read and git works in. See {@link stateRoot} for Ordewell's own files. */
   private workspace: string;
   private readonly broadcast: SessionBroadcaster;
   /**
@@ -628,6 +662,7 @@ export class Session {
   private unsubObserver: (() => void) | null;
   /** This session's node below the root; undefined at the root, where a person remains. */
   private readonly child: NodeAuthority | undefined;
+  private readonly placement: ChildPlacement | undefined;
   private readonly authority: NodeAuthority;
   private readonly hostSessionId?: string;
   private currentSessionId: string;
@@ -703,6 +738,7 @@ export class Session {
     this.fsAdapter.setNotice?.((message) => this.notice('warn', message));
     this.modelResolver = parts.modelResolver;
     this.child = parts.child;
+    this.placement = parts.placement;
     this.authority = parts.child ?? rootAuthority(() => this.rootSettings());
     this.settingsFn = parts.settings;
     this.runSettingsValue = { ...RUN_SETTINGS_DEFAULTS, ...(parts.settings().run ?? {}) };
@@ -1308,10 +1344,35 @@ export class Session {
    * can re-probe it before a turn without keeping a second copy.
    */
   get workspaceRoot(): string { return this.workspace; }
+  /**
+   * Where this session's own files live: its workspace, unless it is a child,
+   * whose code root goes with a worktree (ADR-0055 D11). Git and the planner
+   * read {@link workspaceRoot}; a save, a log and the lease read this.
+   */
+  private get stateRoot(): string { return this.placement?.stateRoot ?? this.workspace; }
   /** The planner this session's own gate reads — not whatever the host's config says now. */
   get plannerProvider(): PlannerBackendId { return this.config.aiProvider; }
   /** Where this session's structured task logs are saved (ADR-0018, P1). */
-  get taskLogLocation(): TaskLogLocation { return { baseDir: this.workspace, sessionId: this.currentSessionId }; }
+  get taskLogLocation(): TaskLogLocation {
+    return { baseDir: this.stateRoot, sessionId: this.currentSessionId, ...(this.placement ? { rootSessionId: this.placement.rootSessionId } : {}) };
+  }
+
+  /**
+   * Seat a child session in a task's worktree: what `createSession` builds it
+   * with, its code root being that worktree. The task's record names it, so a
+   * reopen does not prune the worktree from under it (ADR-0055 D17), and asking
+   * again finds the same child. Every depth shares the root's state root,
+   * lease and isolation (D11, D13). Throws for a task with no worktree (D12).
+   */
+  hostChild(taskId: string): ChildPlacement {
+    return {
+      sessionId: this.runs.hostChild(taskId, mintSessionId),
+      stateRoot: this.stateRoot,
+      rootSessionId: this.placement?.rootSessionId ?? this.currentSessionId,
+      held: () => this.heldElsewhere(),
+      isolation: this.runs.childIsolation,
+    };
+  }
 
   /** The attempts of a task that have a saved log, oldest first. */
   taskLogAttempts(taskId: string): number[] {
@@ -1454,7 +1515,7 @@ export class Session {
     // written in the same save as the action that changed it (ADR-0029).
     this.plan.supervision = this.supervision.snapshot();
     this.plan.lastUpdated = new Date().toISOString();
-    this.save(this.plan, this.goal, this.workspace, this.currentSessionId);
+    this.save(this.plan, this.goal, this.stateRoot, this.currentSessionId);
     this.savedStatuses = this.store.statusMark();
     this.saveFailureSaid = false;
   }
@@ -1521,7 +1582,7 @@ export class Session {
    */
   heldElsewhere(): SessionHeld | null {
     if (this.leaseReleased) return null;
-    return this.lease.hold(this.currentSessionId, this.workspace);
+    return this.lease.hold(this.currentSessionId, this.stateRoot);
   }
 
   /**
@@ -1530,7 +1591,7 @@ export class Session {
    * minted id is new, and is claimed at its first save.
    */
   private claimHostSession(): void {
-    if (this.hostSessionId) this.lease.claim(this.hostSessionId, this.workspace);
+    if (this.hostSessionId) this.lease.claim(this.hostSessionId, this.stateRoot);
   }
 
   private saveRefused(held: SessionHeld): void {
@@ -1979,7 +2040,7 @@ export class Session {
   private saveFork(dialogue: ForkedDialogue): ConversationFork {
     const sessionId = mintSessionId();
     const plan = forkPlanState(this.plan!, this.store.planTasks, dialogue, new Date().toISOString());
-    this.save(plan, this.goal, this.workspace, sessionId);
+    this.save(plan, this.goal, this.stateRoot, sessionId);
     return { sessionId, goal: this.goal, workspace: this.workspace };
   }
 
@@ -2184,7 +2245,8 @@ export class Session {
     if (!prd) return;
     this.plan.prdMarkdown = prd.markdown;
     try {
-      savePrdMarkdown(this.workspace, prd.slug, prd.markdown);
+      // Not a child's code root: an untracked file there is swept into its landing, and a subplanner writes no repository files (ADR-0055 D4).
+      savePrdMarkdown(this.stateRoot, prd.slug, prd.markdown);
     } catch {
       // Saving the PRD file is best-effort; the markdown stays on the plan state.
     }
@@ -2669,6 +2731,8 @@ export class Session {
   }
 
   loadPlan(plan: LegacyPlanState, goal: string, workspace: string, opts?: { sessionId?: string; persist?: boolean }): void {
+    // `workspace` becomes the code root: as where a child is built (ADR-0055 D12).
+    if (this.placement) refuseUsersCheckout(workspace, this.placement.stateRoot);
     // A live planner conversation belongs to the plan it was started for.
     // Adopting a different plan (session load/switch) must drop it — otherwise
     // the next user message continues the OLD session's LLM thread and the
@@ -2687,8 +2751,9 @@ export class Session {
     // needs its own lease, and taking that back after the claim would let the
     // picked one go.
     if (adopting) {
-      this.lease.claim(opts?.sessionId ?? this.currentSessionId, workspace, () => {
-        this.writeLoaded(plan, goal, workspace, opts);
+      const stateRoot = this.placement?.stateRoot ?? workspace;
+      this.lease.claim(opts?.sessionId ?? this.currentSessionId, stateRoot, () => {
+        this.writeLoaded(plan, goal, stateRoot, opts);
         this.dropPlanScope();
       });
     }
@@ -2753,10 +2818,10 @@ export class Session {
   }
 
   /** The plan a load adopts goes to disk first; whoever asked hears that nothing here changed if it cannot. */
-  private writeLoaded(plan: LegacyPlanState, goal: string, workspace: string, opts?: { sessionId?: string; persist?: boolean }): void {
+  private writeLoaded(plan: LegacyPlanState, goal: string, stateRoot: string, opts?: { sessionId?: string; persist?: boolean }): void {
     if (opts?.persist === false) return;
     try {
-      this.save(plan, goal, workspace, opts?.sessionId ?? this.currentSessionId);
+      this.save(plan, goal, stateRoot, opts?.sessionId ?? this.currentSessionId);
     } catch (err) {
       throw new Error(`The session could not be saved (${err instanceof Error ? err.message : String(err)}), so it was not opened. What was open here stays as it was.`, { cause: err });
     }

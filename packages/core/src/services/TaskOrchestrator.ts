@@ -259,6 +259,8 @@ export interface TaskOrchestratorOptions {
   isolation?: IWorktreeIsolation;
   registry?: RunnerRegistry | null;
   workspaceRoot?: () => string;
+  /** A child session's state root (ADR-0055 D11); absent on a flat run, whose workspace is both roots. */
+  stateRoot?: string;
   workspaceEnv?: (cwd: string) => Promise<WorkspaceEnv>;
   skillsAt?: (roots: readonly string[]) => SkillLookup;
   previousAttemptFromLog?: (taskId: string) => string | null;
@@ -468,6 +470,7 @@ export class TaskOrchestrator {
       config: options.config,
       notifications: options.notifications,
       workspaceRoot,
+      ...(options.stateRoot !== undefined ? { stateRoot: options.stateRoot } : {}),
       listener: {
         changed: (detached) => orchestrator.emit('onIsolationChanged', detached),
         blocked: (repos) => orchestrator.emit('onIsolationBlocked', { reason: 'dirty', repos }),

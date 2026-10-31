@@ -78,6 +78,8 @@ export interface SessionOverrides {
   runNotifyCommand?: SessionDeps['runNotifyCommand'];
   /** The node the session is, below the root (ADR-0056); the root unless set. */
   child?: SessionDeps['child'];
+  /** Where a child session sits (ADR-0055 D11): it saves and logs through the real store, under its root. */
+  placement?: SessionDeps['placement'];
 }
 
 /** Task-log files that live in memory, numbered per task as the real store numbers them. */
@@ -139,15 +141,16 @@ export function makeSession(overrides: SessionOverrides = {}): Session {
       : undefined,
     taskOutput: overrides.taskOutput ?? new BufferedTaskOutputSource(),
     isolation: overrides.isolation,
-    saveSession: overrides.saveSession ?? save,
-    openTaskLog: overrides.openTaskLog ?? memoryTaskLogs(),
+    saveSession: overrides.saveSession ?? (overrides.placement ? undefined : save),
+    openTaskLog: overrides.openTaskLog ?? (overrides.placement ? undefined : memoryTaskLogs()),
     mcpServer: overrides.mcpServer,
     leaseHost: overrides.leaseHost,
     web: overrides.web,
     runNotifyCommand: overrides.runNotifyCommand,
     child: overrides.child,
+    placement: overrides.placement,
   });
-  if (!overrides.saveSession) saveFakes.set(session, save);
+  if (!overrides.saveSession && !overrides.placement) saveFakes.set(session, save);
   return session;
 }
 

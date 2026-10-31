@@ -25,16 +25,40 @@ export function idSegment(id: string): string {
 
 /**
  * The directory beside a session's file for what it keeps outside that file —
- * its task logs (ADR-0018, P1). It goes when the session does.
+ * its task logs (ADR-0018, P1). It goes when the session does. A child's sits
+ * under its root's at every depth, so it goes with its root and no prune or
+ * sweep of a worktree reaches it (ADR-0055 D11).
  */
-export function sessionDataDir(sessionId: string, baseDir?: string): string {
-  return path.join(getSessionsDir(baseDir), idSegment(sessionId));
+export function sessionDataDir(sessionId: string, baseDir?: string, rootSessionId?: string): string {
+  return rootSessionId === undefined
+    ? path.join(getSessionsDir(baseDir), idSegment(sessionId))
+    : path.join(childSessionsDir(rootSessionId, baseDir), idSegment(sessionId));
+}
+
+const CHILDREN_SUBDIR = 'children';
+
+function childSessionsDir(rootSessionId: string, baseDir?: string): string {
+  return path.join(sessionDataDir(rootSessionId, baseDir), CHILDREN_SUBDIR);
+}
+
+/** Where a child session's state lives. `baseDir` is the state root: the root Session's workspace, never a worktree. */
+export interface ChildSessionPlace {
+  baseDir: string;
+  rootSessionId: string;
+  sessionId: string;
 }
 
 const RESEARCH_LOG_FILE = 'research-log.json';
 
-function researchLogPath(sessionId: string, baseDir?: string): string {
-  return path.join(sessionDataDir(sessionId, baseDir), RESEARCH_LOG_FILE);
+/** A child's file has a name of its own: nothing lists these by goal, and a directory it shares with its logs is not scanned for it. */
+const CHILD_SESSION_FILE = 'session.json';
+
+function childSessionPath({ baseDir, rootSessionId, sessionId }: ChildSessionPlace): string {
+  return path.join(sessionDataDir(sessionId, baseDir, rootSessionId), CHILD_SESSION_FILE);
+}
+
+function researchLogPath(sessionId: string, baseDir?: string, rootSessionId?: string): string {
+  return path.join(sessionDataDir(sessionId, baseDir, rootSessionId), RESEARCH_LOG_FILE);
 }
 
 /** What stands for a plan with no log, so that one also has a write to remember. */
@@ -64,10 +88,10 @@ function saveResearchLog(log: readonly ResearchLogEntry[], file: string): void {
 }
 
 /** A file from before the log moved out holds its own, and the next save moves it. */
-function restoreResearchLog(plan: LegacyPlanState, sessionId: string, baseDir: string | undefined, logger: ILogger): void {
+function restoreResearchLog(plan: LegacyPlanState, sessionId: string, file: string, logger: ILogger): void {
   if (plan.researchLog) return;
   try {
-    plan.researchLog = JSON.parse(fs.readFileSync(researchLogPath(sessionId, baseDir), 'utf-8')) as ResearchLogEntry[];
+    plan.researchLog = JSON.parse(fs.readFileSync(file, 'utf-8')) as ResearchLogEntry[];
   } catch (err: unknown) {
     // No file is a session with no research; a bad one costs the trace, not the session.
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') logger.warn('sessionStore', `failed to read the research log of ${sessionId}; going on without it`, err);
@@ -134,11 +158,8 @@ function dropLegacyFile(sessionsDir: string, meta: SessionMeta): void {
   }
 }
 
-export function saveSession(plan: LegacyPlanState, goal: string, baseDir?: string, id?: string): SessionMeta {
-  const sessionsDir = getSessionsDir(baseDir);
-  ensureDir(sessionsDir);
-  ensureStateDirIgnored(baseDir);
-
+/** The file a save writes: the header, and the plan without its research trace, which goes beside it. */
+function sessionData(plan: LegacyPlanState, goal: string, id: string | undefined): { meta: SessionMeta; researchLog: readonly ResearchLogEntry[]; session: SessionData } {
   const now = new Date().toISOString();
 
   const meta: SessionMeta = {
@@ -153,8 +174,16 @@ export function saveSession(plan: LegacyPlanState, goal: string, baseDir?: strin
 
   const { researchLog, ...kept } = plan;
   dropRetiredPlanFields(kept);
-  saveResearchLog(researchLog ?? NO_RESEARCH_LOG, researchLogPath(meta.id, baseDir));
-  const session: SessionData = { meta, plan: kept };
+  return { meta, researchLog: researchLog ?? NO_RESEARCH_LOG, session: { meta, plan: kept } };
+}
+
+export function saveSession(plan: LegacyPlanState, goal: string, baseDir?: string, id?: string): SessionMeta {
+  const sessionsDir = getSessionsDir(baseDir);
+  ensureDir(sessionsDir);
+  ensureStateDirIgnored(baseDir);
+
+  const { meta, researchLog, session } = sessionData(plan, goal, id);
+  saveResearchLog(researchLog, researchLogPath(meta.id, baseDir));
 
   const filename = sessionFilename(meta);
   const filePath = path.join(sessionsDir, filename);
@@ -163,6 +192,35 @@ export function saveSession(plan: LegacyPlanState, goal: string, baseDir?: strin
   dropLegacyFile(sessionsDir, meta);
 
   return meta;
+}
+
+/** Saved beside the child's logs, in the root's directory; `listSessions` never sees it (ADR-0055 D11). */
+export function saveChildSession(plan: LegacyPlanState, goal: string, place: ChildSessionPlace): SessionMeta {
+  ensureStateDirIgnored(place.baseDir);
+  const { meta, researchLog, session } = sessionData(plan, goal, place.sessionId);
+  saveResearchLog(researchLog, researchLogPath(place.sessionId, place.baseDir, place.rootSessionId));
+  writeFileAtomic(childSessionPath(place), JSON.stringify(session));
+  return meta;
+}
+
+/** The ids of every child saved under a root, at any depth. */
+export function listChildSessions(rootSessionId: string, baseDir?: string): string[] {
+  const dir = childSessionsDir(rootSessionId, baseDir);
+  const named = (entry: string): string | null => {
+    try {
+      const session = JSON.parse(fs.readFileSync(path.join(dir, entry, CHILD_SESSION_FILE), 'utf-8')) as SessionData;
+      return isSessionMeta(session.meta) ? session.meta.id : null;
+    } catch {
+      return null;
+    }
+  };
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+  return entries.map(named).filter((id): id is string => id !== null);
 }
 
 export function listSessions(baseDir?: string, logger: ILogger = defaultLogger): SessionMeta[] {
@@ -230,6 +288,32 @@ function findSessionFile(sessionsDir: string, sessionId: string, logger: ILogger
   return null;
 }
 
+/** What every load does to a saved session before anyone reads it. */
+function settledOnLoad(session: SessionData, researchLog: string, logger: ILogger): { meta: SessionMeta; plan: LegacyPlanState } {
+  const plan = session.plan as LegacyPlanState;
+  restoreResearchLog(plan, session.meta.id, researchLog, logger);
+  failInterruptedTasks(plan.tasks, new Date().toISOString());
+  migratePlanStateIsolation(plan);
+  settleOwedRepairs(plan);
+  releaseMadeManual(plan.tasks);
+  migrateLoadedTasks(plan.tasks);
+  dropRetiredPlanFields(plan);
+  return { meta: session.meta, plan };
+}
+
+/** A child is read only through its root, and only when asked for (ADR-0055 D17). */
+export function loadChildSession(place: ChildSessionPlace, logger: ILogger = defaultLogger): { meta: SessionMeta; plan: LegacyPlanState } | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(childSessionPath(place), 'utf-8'));
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') logger.warn('sessionStore', `failed to read child session ${place.sessionId}`, err);
+    return null;
+  }
+  const session = parsed as SessionData;
+  return isSessionMeta(session?.meta) ? settledOnLoad(session, researchLogPath(place.sessionId, place.baseDir, place.rootSessionId), logger) : null;
+}
+
 export function loadSession(sessionId: string, baseDir?: string, logger: ILogger = defaultLogger): { meta: SessionMeta; plan: LegacyPlanState } | null {
   const sessionsDir = getSessionsDir(baseDir);
   if (!fs.existsSync(sessionsDir)) return null;
@@ -242,16 +326,7 @@ export function loadSession(sessionId: string, baseDir?: string, logger: ILogger
         logger.warn('sessionStore', `session file ${file}: ${REJECTION_MESSAGE}`);
         return null;
       }
-      const session = parsed as SessionData;
-      const plan = session.plan as LegacyPlanState;
-      restoreResearchLog(plan, sessionId, baseDir, logger);
-      failInterruptedTasks(plan.tasks, new Date().toISOString());
-      migratePlanStateIsolation(plan);
-      settleOwedRepairs(plan);
-      releaseMadeManual(plan.tasks);
-      migrateLoadedTasks(plan.tasks);
-      dropRetiredPlanFields(plan);
-      return { meta: session.meta, plan };
+      return settledOnLoad(parsed as SessionData, researchLogPath(sessionId, baseDir), logger);
     }
   } catch (err: unknown) {
     logger.warn('sessionStore', `failed to list sessions directory while searching for ${sessionId}`, err);
