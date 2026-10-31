@@ -273,9 +273,13 @@ and completion evidence.
   a fresh attempt where none was saved — told the limit has reset, and once
   nothing else waits on a reset, the hold on the run is released, whether or
   not a task failed meanwhile (ADR-0034). The last wait going any other way —
-  the task marked complete, its resume cancelled, or the task leaving the
-  plan — releases the hold the same way; a task still paused without a resume
-  time keeps only its own runner's tasks from starting. Its message says the limit has reset and reports what K1 did with
+  the task marked complete, its resume cancelled, the task leaving the plan, or
+  an edit making it manual, which holds no runner to wait for — releases the hold
+  the same way; a task still paused without a resume
+  time keeps only its own runner's tasks from starting. Execute, a planner's
+  `run_plan` and signing off the review start nothing under a hold and take no
+  resume back: they take the plan in, and what the hold then gives back is the
+  plan's run. Its message says the limit has reset and reports what K1 did with
   the previous work: restored in the working tree, or a conflict fallback to
   the integration tips with the preserved branches named. The saved session
   and its working files must agree for an unattended run to carry on after a
@@ -510,3 +514,4 @@ transport is retained for take-over.
 - 2026-10-25 — the VS Code task-log control reads "Open chat" and appears once an attempt has started.
 - 2026-10-26 — L1: an accepted `task_complete` call is shown received at once, while its turn closes and its attempt winds down; the receipt is no verdict and is never saved.
 - 2026-10-31 — K1: a continue waits on a task's dependencies and merge gate as a retry does.
+- 2026-10-31 — U1: an edit making a paused task manual ends its pause as it lands; Execute, a planner's `run_plan` and signing off the review start nothing under a hold and take no resume back, and the reset gives back the plan's run.

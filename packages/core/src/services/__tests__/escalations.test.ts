@@ -136,6 +136,18 @@ const shape = (list: readonly Escalation[]) => list.map(({ id, kind, options }) 
 
 const continuable: Partial<Task> = { runnerSessionId: 'sess-1', runnerSessionOwner: 'claude-code', assignedRunner: 'claude-code' };
 
+describe('a wait whose Retry a dependency has taken away', () => {
+  it.each([
+    ['a conflict', 'conflict', {}],
+    ['changed files', 'files-changed', {}],
+    ['a pause with no session', 'usage-limit', {}],
+  ] as const)('names what holds it: %s', (_name, awaitingReason, over) => {
+    const [entry] = listFor([task('t1', 1), task('t2', 2, { status: 'awaiting_user', awaitingReason, dependencies: ['t1'], ...over })], { attempts: { t2: 1 } });
+
+    expect(entry.reason).toContain('It waits on #1: nothing can start it again before then.');
+  });
+});
+
 describe('what waits on a person, task by task', () => {
   const failed: Partial<Task> = { status: 'failed', verdict: failedVerdict('blocked') };
 
@@ -178,6 +190,16 @@ describe('what waits on a person, task by task', () => {
       [{ id: 'checkpoint:t2:1', kind: 'checkpoint', options: ['skip', 'complete'] }]],
     ['a wait for input no runner is left to read, behind a dependency yet to run', [task('t1', 1), task('t2', 2, { status: 'awaiting_user', awaitingReason: 'input', dependencies: ['t1'] })], { attempts: { t2: 1 } },
       [{ id: 'input:t2:1', kind: 'input', options: ['skip', 'complete'] }]],
+    ['a conflict behind a dependency yet to run', [task('t1', 1), task('t2', 2, { status: 'awaiting_user', awaitingReason: 'conflict', dependencies: ['t1'] })], { attempts: { t2: 1 } },
+      [{ id: 'conflict:t2:1', kind: 'conflict', options: ['resolve-conflict', 'skip', 'complete'] }]],
+    ['a conflict whose resolver nothing starts, behind a dependency yet to run', [task('t1', 1), task('t2', 2, { status: 'awaiting_user', awaitingReason: 'conflict', dependencies: ['t1'] }), task('r', 3, { status: 'approved', dependencies: ['t1'] })], { attempts: { t2: 1 }, resolvers: { t2: 'r' }, run: { open: false } },
+      [{ id: 'conflict:t2:1', kind: 'conflict', options: ['start-resolver', 'skip', 'complete'] }]],
+    ['changed files behind a dependency yet to run', [task('t1', 1), task('t2', 2, { status: 'awaiting_user', awaitingReason: 'files-changed', dependencies: ['t1'] })], { attempts: { t2: 1 } },
+      [{ id: 'files-changed:t2:1', kind: 'files-changed', options: ['skip', 'complete'] }]],
+    ['a pause with no session to resume, behind a dependency yet to run', [task('t1', 1), task('t2', 2, { status: 'awaiting_user', awaitingReason: 'usage-limit', dependencies: ['t1'] })], { attempts: { t2: 1 } },
+      [{ id: 'usage-limit:t2:1', kind: 'usage-limit', options: ['skip', 'complete'] }]],
+    ['a pause with a session behind a dependency yet to run: a resume goes on with the attempt, which no dependency holds', [task('t1', 1), task('t2', 2, { status: 'awaiting_user', awaitingReason: 'usage-limit', dependencies: ['t1'], ...continuable })], { attempts: { t2: 1 } },
+      [{ id: 'usage-limit:t2:1', kind: 'usage-limit', options: ['resume', 'skip', 'complete'] }]],
     ['a loop out of rounds', [task('c', 1, { status: 'failed', verdict: failedVerdict('failed'), loop: { body: ['b'], maxRounds: 2 }, loopRound: 2 }), task('b', 2, { status: 'skipped', dependencies: ['c'] })], { attempts: { c: 2 } },
       [{ id: 'out-of-rounds:c:2', kind: 'out-of-rounds', options: ['retry', 'skip', 'complete'] }]],
     ['a loop stopped by a skipped body task, whose check is the only thing left to list', [task('c', 1, { status: 'failed', verdict: failedVerdict('failed'), loop: { body: ['b'], maxRounds: 3 } }), task('b', 2, { status: 'skipped', dependencies: ['c'] })], { attempts: { c: 1 } },

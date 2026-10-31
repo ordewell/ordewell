@@ -205,21 +205,31 @@ function inFront(row: TaskWithParent, input: EscalationInput): string[] {
   return [...new Set((input.waits.get(row.task.id) ?? []).flatMap((w) => (w.kind === 'dependencies' || w.kind === 'queued' ? w.waiting : w.kind === 'merge-gate' ? w.unmerged : w.kind === 'loop-check' ? [w.check] : [])))];
 }
 
+/** A fresh attempt, offered unless something holds any start of the task. */
+function retry(row: TaskWithParent, input: EscalationInput): EscalationOption[] {
+  return inFront(row, input).length === 0 ? [RETRY] : [];
+}
+
 /** What starts an ended attempt's task again: a saved session is offered beside a fresh attempt, and neither behind what holds any start. */
 function startedOver(row: TaskWithParent, input: EscalationInput): EscalationOption[] {
-  const startable = inFront(row, input).length === 0;
+  const retried = retry(row, input);
   return [
-    ...(startable ? [RETRY] : []),
-    ...(startable && canContinue(row.task) ? [{ id: 'continue' as const, label: 'Continue', note: 'required' as const }] : []),
+    ...retried,
+    ...(retried.length > 0 && canContinue(row.task) ? [{ id: 'continue' as const, label: 'Continue', note: 'required' as const }] : []),
     SKIP,
     ...completeOption(row, input.run),
   ];
 }
 
-/** An ended attempt's wait, which names what holds any start of it, since no option then says so. */
-function ended(row: TaskWithParent, reason: string, input: EscalationInput, rows: Rows): Pick<Wait, 'reason' | 'options'> {
+/** `reason`, naming what holds any start of the task, since no option then says so. */
+function naming(row: TaskWithParent, reason: string, input: EscalationInput, rows: Rows): string {
   const behind = inFront(row, input).map((id) => rows.get(id)?.ref ?? id);
-  return { reason: behind.length > 0 ? `${reason} It waits on ${behind.join(', ')}: nothing can start it again before then.` : reason, options: startedOver(row, input) };
+  return behind.length > 0 ? `${reason} It waits on ${behind.join(', ')}: nothing can start it again before then.` : reason;
+}
+
+/** An ended attempt's wait. */
+function ended(row: TaskWithParent, reason: string, input: EscalationInput, rows: Rows): Pick<Wait, 'reason' | 'options'> {
+  return { reason: naming(row, reason, input, rows), options: startedOver(row, input) };
 }
 
 /**
@@ -233,9 +243,9 @@ function conflictWithResolver(row: TaskWithParent, resolverId: string, input: Es
   if (!resolver || !waiting || input.run.open || input.startQueued(resolverId)) return null;
   return {
     kind: 'conflict',
-    reason: `Its conflict waits on ${label(resolver)}, added to resolve it, and nothing is starting that task.`,
+    reason: naming(row, `Its conflict waits on ${label(resolver)}, added to resolve it, and nothing is starting that task.`, input, rows),
     resolver: resolverId,
-    options: [{ id: 'start-resolver', label: 'Start its resolver task' }, RETRY, SKIP, ...completeOption(row, input.run)],
+    options: [{ id: 'start-resolver', label: 'Start its resolver task' }, ...retry(row, input), SKIP, ...completeOption(row, input.run)],
   };
 }
 
@@ -244,13 +254,13 @@ function awaiting(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait
   const { task } = row;
   const live = input.live(task.id);
   switch (task.awaitingReason) {
-    case 'usage-limit':
+    case 'usage-limit': {
       if (task.resumeAt) return null;
-      return {
-        kind: 'usage-limit',
-        reason: 'Paused on its runner\'s usage limit, with no resume scheduled.',
-        options: [canContinue(task) ? { id: 'resume', label: 'Resume now', note: 'optional' } : RETRY, SKIP, ...completeOption(row, input.run)],
-      };
+      const reason = 'Paused on its runner\'s usage limit, with no resume scheduled.';
+      // A resume goes on with the attempt the limit cut short, so what holds a new start does not hold it.
+      if (canContinue(task)) return { kind: 'usage-limit', reason, options: [{ id: 'resume', label: 'Resume now', note: 'optional' }, SKIP, ...completeOption(row, input.run)] };
+      return { kind: 'usage-limit', reason: naming(row, reason, input, rows), options: [...retry(row, input), SKIP, ...completeOption(row, input.run)] };
+    }
     case 'checkpoint': {
       if (!live) return { kind: 'checkpoint', ...ended(row, 'It stopped at a checkpoint, and no runner is left to hear an answer.', input, rows) };
       const question = input.checkpoint(task.id);
@@ -265,12 +275,12 @@ function awaiting(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait
       if (resolver) return conflictWithResolver(row, resolver.resolver, input, rows);
       return {
         kind: 'conflict',
-        reason: 'Its work could not land: it conflicts with what landed before it.',
-        options: [{ id: 'resolve-conflict', label: 'Add a resolver task' }, RETRY, SKIP, ...completeOption(row, input.run)],
+        reason: naming(row, 'Its work could not land: it conflicts with what landed before it.', input, rows),
+        options: [{ id: 'resolve-conflict', label: 'Add a resolver task' }, ...retry(row, input), SKIP, ...completeOption(row, input.run)],
       };
     }
     case 'files-changed':
-      return { kind: 'files-changed', reason: 'It changed tracked files in your checkout, and nothing was committed.', options: [RETRY, SKIP, ...completeOption(row, input.run)] };
+      return { kind: 'files-changed', reason: naming(row, 'It changed tracked files in your checkout, and nothing was committed.', input, rows), options: [...retry(row, input), SKIP, ...completeOption(row, input.run)] };
     case 'input':
     case undefined:
       return live

@@ -188,6 +188,16 @@ describe('Session with worktree isolation', () => {
       });
     });
 
+    it('looks at the checkout again when the user cleans it and executes: a start turned away left no run to join', async () => {
+      const { session, spawn, isolation } = dirty();
+      await session.execute({ command: 'run_plan' }, { kind: 'user' });
+      isolation.availability = { active: true };
+
+      await session.execute({ command: 'run_plan' }, { kind: 'user' });
+
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1));
+    });
+
     it('continues isolated after stashing', async () => {
       const { session, spawn, isolation } = dirty();
       await session.execute({ command: 'run_plan' }, { kind: 'user' });
