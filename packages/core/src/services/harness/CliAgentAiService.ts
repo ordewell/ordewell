@@ -17,6 +17,7 @@ import type { IWebFetcher } from '../../interfaces/IWebFetcher';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import { readOnlyMode, type RunnerModeInfo } from '../ModeResolver';
 import type { IAiService, ConversationRequest, ConversationTurn, PlannerToolsOffer, TurnRun } from '../AiService';
+import type { OpenLease } from '../executionLease';
 import {
   buildConversationSystemPrompt,
   buildPlanWithResults,
@@ -84,6 +85,8 @@ export interface CliAgentAiServiceDeps extends Partial<AgentProcessDeps> {
   projectServerApprovals?: ProjectServerApprovals;
   /** What the planner is shown of its context and budgets at the start of each turn. */
   turnBudgets?: TurnBudgets;
+  /** Open the execution lease of the turn a process starts for (ADR-0059 L1); absent, it runs at `workspaceRoot`. */
+  openLease?: (signal: AbortSignal) => Promise<OpenLease> | undefined;
 }
 
 interface OneShotCatalog {
@@ -220,6 +223,7 @@ export class CliAgentAiService implements IAiService {
   private readonly mcpServer: OrdewellMcpServer;
   private readonly turnBudgets: TurnBudgets | undefined;
   private readonly projectServerApprovals: ProjectServerApprovals;
+  private readonly openLease: CliAgentAiServiceDeps['openLease'];
   private activeAbort: AbortController | null = null;
   /** See {@link compactions}. */
   private compacted = 0;
@@ -247,6 +251,7 @@ export class CliAgentAiService implements IAiService {
     this.mcpServer = deps.mcpServer ?? sharedMcpServer();
     this.turnBudgets = deps.turnBudgets;
     this.projectServerApprovals = deps.projectServerApprovals ?? fileProjectServerApprovals();
+    this.openLease = deps.openLease;
   }
 
   hasActiveConversation(): boolean { return this.session?.start != null; }
@@ -731,10 +736,13 @@ export class CliAgentAiService implements IAiService {
    */
   private async startAdapter(opts: PlannerStartOptions, tools: PlannerToolsOffer, session: PlannerSession): Promise<AgentAdapter> {
     const server = this.mcpServer;
+    // Where a task makes its workspace, a planner opens its lease: a process goes no further than that lets it (ADR-0059 L1).
+    const opened = await this.openLease?.(session.discarded);
     // Decided once, here, so the token's tools and the session's config are the same decision.
     const nativeShell = this.nativeShellOffered(session);
     const start: PlannerStartOptions = {
       ...opts,
+      ...(opened ? { cwd: opened.workspace.cwd } : {}),
       nativeSearch: this.nativeSearch(session),
       nativeShell,
       systemPrompt: nativeShell ? `${opts.systemPrompt}\n\n${NATIVE_SHELL_GUIDE}` : opts.systemPrompt,

@@ -53,6 +53,8 @@ export interface FakeSpawnResult {
   lastCommand(): string;
   /** The environment of the most recent spawn. */
   lastEnv(): NodeJS.ProcessEnv;
+  /** The working directory of the most recent spawn. */
+  lastCwd(): string | undefined;
   /** The argv of each sandbox probe, in order — see {@link FakeSpawnOptions.probe}. */
   probeArgs(): string[][];
 }
@@ -149,6 +151,7 @@ function spawner(onWrite: (written: string, proc: FakeAgentProcess, args: string
   let command = '';
   let args: string[] = [];
   let env: NodeJS.ProcessEnv = {};
+  let cwd: string | undefined;
 
   const spawn: SpawnFn = (cmd, argv, spawnOptions) => {
     // The sandbox probe is a short-lived side process, not the agent's
@@ -168,6 +171,7 @@ function spawner(onWrite: (written: string, proc: FakeAgentProcess, args: string
     command = cmd;
     args = argv;
     env = spawnOptions?.env ?? {};
+    cwd = spawnOptions?.cwd?.toString();
     const proc = makeProcess();
     processes.push(proc);
     if (options.exitOnSpawn) {
@@ -184,6 +188,7 @@ function spawner(onWrite: (written: string, proc: FakeAgentProcess, args: string
     lastArgs: () => args,
     lastCommand: () => command,
     lastEnv: () => env,
+    lastCwd: () => cwd,
     probeArgs: () => probes,
   };
 }

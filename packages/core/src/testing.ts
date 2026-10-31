@@ -27,6 +27,7 @@ import type {
   TreeSnapshot,
 } from './interfaces/IWorktreeIsolation';
 import { DEFAULT_RUNNERS, type Task } from './models/Task';
+import { GUARANTEES, refuseUnproven, type ExecutionBackend, type Guarantee, type GuaranteeReport, type LeaseRecord, type LeaseRequest, type LeaseSpec, type OpenLease, type ReservedLease } from './services/executionLease';
 import { handoffOf, integrationBranchFor, noRemoval, SELF_REPO } from './services/isolationRecord';
 
 /**
@@ -283,6 +284,102 @@ export class FakeRunnerSession implements IRunnerSession {
     this.delivered.push(text);
     if (from === 'ordewell') this.fromOrdewell.push(text);
     this.emitEvent({ type: 'turn_start', text, ...(from ? { from } : {}) });
+  }
+}
+
+/**
+ * An in-memory {@link ExecutionBackend}, as {@link FakeWorktreeIsolation} fakes
+ * git: a count of slots and nothing else. `requests`, `opened` and `released`
+ * log what the seam was asked; `holdOpen` keeps an open waiting, `openError`
+ * fails one, `refuse` turns a role down, `provenGuarantees` is what its probe
+ * proves, and `freed` is what a release does, a pool's tick.
+ */
+export class FakeExecutionBackend implements ExecutionBackend {
+  /** Slots; a planner, a merge and a delegated task take none, as a flat run's do not. */
+  limit = Infinity;
+  held = 0;
+  requests: LeaseRequest[] = [];
+  opened: { request: LeaseRequest; spec: LeaseSpec }[] = [];
+  released: { id: string; reason: string }[] = [];
+  letGoCalls: { taskId: string; keep: boolean; reason: string }[] = [];
+  openError: Error | null = null;
+  refuse: { role: LeaseRequest['role']; reason: string } | null = null;
+  provenGuarantees: readonly Guarantee[] = [];
+  /** What exportResult reports of a session, in place of what it is told. */
+  sessionState: { nativeSessionId: string } | null = null;
+  records: LeaseRecord[] = [];
+  freed: () => void = () => undefined;
+  private openHold: Promise<void> | null = null;
+  private nextId = 0;
+
+  /** Make the next open wait until the returned function is called. */
+  holdOpen(): () => void {
+    let open!: () => void;
+    this.openHold = new Promise<void>((resolve) => { open = resolve; });
+    return open;
+  }
+
+  async probe(): Promise<GuaranteeReport> {
+    const at = new Date(0).toISOString();
+    return Object.fromEntries(GUARANTEES.map((g) => [g, { proven: this.provenGuarantees.includes(g), by: 'fake probe', at }])) as GuaranteeReport;
+  }
+
+  private takesSlot(request: LeaseRequest): boolean {
+    return request.role === 'task' || request.role === 'script';
+  }
+
+  refusal(request: LeaseRequest): string | null {
+    if (this.refuse?.role === request.role) return this.refuse.reason;
+    return this.takesSlot(request) && this.held >= this.limit ? `no slot for ${request.node.taskId ?? request.role}` : null;
+  }
+
+  reserve(request: LeaseRequest): { lease: ReservedLease } | { refused: string } {
+    this.requests.push(request);
+    const refused = this.refusal(request);
+    if (refused) return { refused };
+    const holdsSlot = this.takesSlot(request);
+    if (holdsSlot) this.held += 1;
+    const id = `lease-${++this.nextId}`;
+    let live = true;
+    return {
+      lease: {
+        id,
+        holdsSlot,
+        open: (spec) => this.open(request, spec),
+        release: (reason) => {
+          if (!live) return;
+          live = false;
+          this.released.push({ id, reason });
+          if (holdsSlot) this.held -= 1;
+          this.freed();
+        },
+      },
+    };
+  }
+
+  private async open(request: LeaseRequest, spec: LeaseSpec): Promise<OpenLease> {
+    this.opened.push({ request, spec });
+    const guarantees = await this.probe();
+    refuseUnproven(spec.required, guarantees);
+    const hold = this.openHold;
+    this.openHold = null;
+    await hold;
+    if (this.openError) throw this.openError;
+    const worktree = spec.workspace.kind === 'worktree';
+    return {
+      workspace: { cwd: worktree ? `/fake-lease/${spec.task?.id}` : '/repo', worktree },
+      guarantees,
+      exportResult: (session) => ({ refs: {}, sessionState: { ...session, ...this.sessionState } }),
+    };
+  }
+
+  async letGo(taskId: string, { keep, landing, reason }: { keep: boolean; landing?: Promise<unknown> | null; reason: string }): Promise<void> {
+    await landing;
+    this.letGoCalls.push({ taskId, keep, reason });
+  }
+
+  async list(): Promise<readonly LeaseRecord[]> {
+    return this.records;
   }
 }
 

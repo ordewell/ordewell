@@ -2,7 +2,7 @@ import type { PreviousWork } from '../interfaces/IWorktreeIsolation';
 import type { RunnerId, Task, TaskSkillSnapshot } from '../models/Task';
 import type { StoredHandoff } from '../models/Handoff';
 import { betweenRounds, loopRoundOf } from '../models/Loop';
-import type { AttemptWorkspace, IsolationRunController } from './IsolationRunController';
+import type { LeaseWorkspace } from './executionLease';
 import type { RepairAttempt } from './Landing';
 import { composeAugmentedPrompt, composeContinuationPrompt, continuedWorkNote, READ_ONLY_CONTINUED_NOTE } from './promptAugment';
 
@@ -128,20 +128,15 @@ export function checksTree(kind: AttemptKind): boolean {
 /**
  * Where an attempt runs: the workspace root for work in the checkout, the
  * worktree kept for a repair, a fresh throwaway one for work that lands
- * nothing, else wherever the run puts a change — restoring the previous
- * attempt's work for a continue and a carry-over. Returns the controller's
- * own promise, so deciding adds no turn of its own before the spawn checks
- * its attempt is still current.
+ * nothing, else wherever the run puts a change, restoring the previous
+ * attempt's work for a continue and a carry-over. What a lease opens
+ * (ADR-0059): the kind is resolved here, before a backend sees it.
  */
-export function attemptCwd(
-  kind: AttemptKind,
-  task: Task,
-  runs: Pick<IsolationRunController, 'attemptCwd' | 'workspaceCwd'>,
-): Promise<AttemptWorkspace> {
-  if (inCheckout(kind)) return runs.workspaceCwd(task);
-  if (kind.kind === 'repair') return runs.attemptCwd(task, 'repair');
-  if (landsNothing(kind)) return runs.attemptCwd(task, 'readOnly');
-  return runs.attemptCwd(task, kind.kind === 'continuation' || kind.kind === 'carryOver' ? 'restore' : 'fresh');
+export function attemptWorkspace(kind: AttemptKind): LeaseWorkspace {
+  if (inCheckout(kind)) return { kind: 'checkout' };
+  if (kind.kind === 'repair') return { kind: 'worktree', intent: 'repair' };
+  if (landsNothing(kind)) return { kind: 'worktree', intent: 'readOnly' };
+  return { kind: 'worktree', intent: kind.kind === 'continuation' || kind.kind === 'carryOver' ? 'restore' : 'fresh' };
 }
 
 /** What an attempt's prompt is built from. The callbacks are read only for the kinds that need them. */

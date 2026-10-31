@@ -193,6 +193,8 @@ export interface ExecutionHost {
   admitStart(): StartAdmission;
   /** The task's attempt is live: starting, running or landing. */
   running(taskId: string): boolean;
+  /** Its live attempt holds a slot, as a delegated task's does not (ADR-0055 D18). */
+  holdsSlot(taskId: string): boolean;
   /** A conflict repair of the task will start by itself: there is a start to withdraw (ADR-0015). */
   repairOwed(taskId: string): boolean;
   maxParallel(): number;
@@ -666,7 +668,7 @@ export class ExecutionCommands {
     }
     if (waitOf(waits, 'merging')) return 'A Merge all is under way, and a script task never runs alongside one. Call run_script again once it has finished.';
     if (waitOf(waits, 'merge-gate')) return null;
-    const live = this.all().filter(({ task: t }) => this.host.running(t.id)).length;
+    const live = this.all().filter(({ task: t }) => this.host.holdsSlot(t.id)).length;
     if (live >= this.host.maxParallel()) return `${live} tasks are already running, the most this session runs at once. Wait for one to finish, or stop one first.`;
     return null;
   }
@@ -1016,7 +1018,7 @@ export class ExecutionCommands {
     const behind = this.heldBehind(located, waits, voice, tasks);
     if (behind) return { refusal: behind };
     // A retry under a running scheduler is left to it, as the Retry button leaves it, so only a start of our own takes a slot.
-    const live = this.all(tasks).filter(({ task: t }) => this.host.running(t.id)).length;
+    const live = this.all(tasks).filter(({ task: t }) => this.host.holdsSlot(t.id)).length;
     if (!(settled && this.host.scheduling()) && live >= this.host.maxParallel()) {
       return { refusal: `${live} tasks are already running, the most this session runs at once. Wait for one to finish, or stop one first.` };
     }

@@ -1,9 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
-  attemptCwd, attemptPrompt, checksTree, classifyAttempt, decidesIsolation, landsNothing, mergeExcludes, takesSkills, writesCommit,
+  attemptPrompt, attemptWorkspace, checksTree, classifyAttempt, decidesIsolation, landsNothing, mergeExcludes, takesSkills, writesCommit,
   type AttemptKind, type AttemptPromptSources,
 } from '../attemptKind';
-import type { AttemptIntent } from '../IsolationRunController';
 import { createTask, opsFlag, inheritedOps } from '../../models/Task';
 
 const repair = { n: 1, limit: 2 };
@@ -70,23 +69,17 @@ describe('what each kind decides', () => {
     ['continued read-only', { writesCommit: false, mergeExcludes: false, decidesIsolation: true, checksTree: false, cwd: 'throwaway' }],
   ];
 
-  it.each(table)('a %s attempt', async (name, expected) => {
+  it.each(table)('a %s attempt', (name, expected) => {
     const kind = KINDS[name];
-    const runs = {
-      attemptCwd: vi.fn(async (_t: unknown, intent: AttemptIntent) => ({ cwd: { fresh: 'fresh', repair: 'kept', restore: 'restored', readOnly: 'throwaway' }[intent], worktree: true })),
-      workspaceCwd: vi.fn(async () => ({ cwd: 'workspace', worktree: false })),
-    };
-
-    const place = await attemptCwd(kind, createTask({ id: 't1' }), runs);
+    const workspace = attemptWorkspace(kind);
 
     expect({
       writesCommit: writesCommit(kind),
       mergeExcludes: mergeExcludes(kind),
       decidesIsolation: decidesIsolation(kind),
       checksTree: checksTree(kind),
-      cwd: place.cwd,
+      cwd: workspace.kind === 'checkout' ? 'workspace' : { fresh: 'fresh', repair: 'kept', restore: 'restored', readOnly: 'throwaway' }[workspace.intent],
     }).toEqual(expected);
-    expect(runs.attemptCwd.mock.calls.length + runs.workspaceCwd.mock.calls.length).toBe(1);
   });
 });
 

@@ -5,7 +5,6 @@ amends: ["0001", "0013", "0020", "0029"]
 
 # 0030 — Run settings are saved once and live per session; autorun
 
-*Pending:* [ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — the Parallel limit counts a whole tree.
 *Pending:* [ADR-0056](0056-a-mandate-narrows-down-the-tree.md) — the root's mandate is derived from these settings on each read; a child's is saved with its plan.
 
 **Amends:** ADR-0029 — the supervisor level, merge at gates automatically, the
@@ -129,7 +128,9 @@ row.
 | `ordewell parallel [<n>]` | tasks that run at once |
 
 Parallel is the exception to the one store: the TUI keeps it in `.env` and
-VS Code in `ordewell.maxParallelSessions`, not in `settings.json`.
+VS Code in `ordewell.maxParallelSessions`, not in `settings.json`. It counts a
+session's attempts, and across a tree every attempt and subplanner turn against
+the root's limit ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D18).
 
 Choosing Act or turning autorun on asks to confirm and says what it allows,
 ops tasks on real systems included. Turning delegation on asks too, and says
@@ -493,3 +494,4 @@ the daemon reads it from there at generation.
 - 2026-10-31 — the plan left to Execute under a usage limit is taken in for the reset to go on with; Execute no longer takes the pause back.
 - 2026-10-31 — a planner's `run_plan` leaves what failed as it is, in Full with autorun as anywhere ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
 - 2026-10-31 — delegation joins the run settings, off by default, with `ordewell delegation`, a `/settings` step after Parallel and a VS Code row; it changes nothing until something can delegate (ADR-0055 D21).
+- 2026-10-31 — Parallel counts a whole tree (ADR-0055 D18).

@@ -2,11 +2,12 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { CliAgentAiService } from '../harness/CliAgentAiService';
+import { CliAgentAiService, type CliAgentAiServiceDeps } from '../harness/CliAgentAiService';
 import { createAiService } from '../AiService';
 import { fakeConfig, fakeFileSystem } from '../../testing';
 import type { IConfig } from '../../interfaces/IConfig';
 import type { ConversationRequest } from '../AiService';
+import type { GuaranteeReport } from '../executionLease';
 import { TurnBudgets } from '../PlannerBudgets';
 import type { ResearchProgress, ResearchStep } from '../../models/Task';
 import { fakeMcpServer, fakeSpawn, fixture, openCodeFixture, planJson, scriptedAdapter, sseResponse, type FakeAgentProcess, type FakeMcpServer, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
@@ -36,6 +37,7 @@ function service(
   spawnOptions: FakeSpawnOptions = {},
   mcp: FakeMcpServer = fakeMcpServer(),
   turnBudgets?: TurnBudgets,
+  openLease?: CliAgentAiServiceDeps['openLease'],
 ) {
   const spawned = fakeSpawn(replies, spawnOptions);
   const config = fakeConfig({ aiProvider: provider, ...overrides });
@@ -55,6 +57,7 @@ function service(
       exists: () => true,
       mcpServer: mcp,
       turnBudgets,
+      openLease,
     },
   );
   return { svc, spawned, config };
@@ -682,6 +685,18 @@ describe('CliAgentAiService — Claude Code', () => {
     expect(spawned.processes).toHaveLength(2);
     const args = spawned.lastArgs();
     expect(args[args.indexOf('--resume') + 1]).toBe('sess-claude-1');
+  });
+
+  it('starts its process where its lease opened, and waits for that (ADR-0059 L1)', async () => {
+    const { svc, spawned } = service('claude-code', [fixture('claude-code', 'prose')], {}, {}, undefined, undefined, async () => ({ workspace: { cwd: '/leased', worktree: false }, guarantees: {} as GuaranteeReport, exportResult: (s) => ({ refs: {}, sessionState: s }) }));
+    await svc.startConversation(request());
+    expect(spawned.lastCwd()).toBe('/leased');
+  });
+
+  it('starts no process a lease refused to open', async () => {
+    const { svc, spawned } = service('claude-code', [fixture('claude-code', 'prose')], {}, {}, undefined, undefined, async () => { throw new Error('no room on this host'); });
+    await expect(svc.startConversation(request())).rejects.toThrow('no room on this host');
+    expect(spawned.processes).toHaveLength(0);
   });
 
   it('restarts the planner on request from its own session, keeping the conversation (ADR-0029)', async () => {

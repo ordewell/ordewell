@@ -350,6 +350,8 @@ export interface PlannerConversationHost {
   turnClaiming?(): void;
   /** A planner turn let the conversation go, so the next one may take it. */
   turnReleased?(): void;
+  /** A turn was let go without ending: abandoned with its plan, or hung. */
+  turnDropped?(): void;
   /**
    * A turn ended on the planner's usage limit, which it reported as `said`:
    * what is sent again, and when. `answered`: a planner tool's change in the
@@ -665,6 +667,7 @@ export class PlannerConversation {
     if (!turn) return;
     this.live = null;
     turn.abandon();
+    this.host.turnDropped?.();
     const open = this.openTurn;
     if (open?.planner !== turn) return;
     this.openTurn = null;

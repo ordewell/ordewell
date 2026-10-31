@@ -18,7 +18,9 @@ import { forkPlanState, type ForkedDialogue } from './conversationFork';
 import { PlanTurns, type PlanTurnInput } from './PlanTurns';
 import { RunSupervision, runOrigin } from './RunSupervision';
 import { Planner } from './Planner';
-import { TaskControlError, TaskOrchestrator, type OrchestratorObserver, type RunOrigin } from './TaskOrchestrator';
+import { TaskControlError, TaskOrchestrator, type OrchestratorObserver, type RunOrigin, type TaskOrchestratorOptions } from './TaskOrchestrator';
+import type { SlotPool } from './SlotPool';
+import type { OpenLease, ReservedLease } from './executionLease';
 import { PlanStore } from './PlanStore';
 import { ApprovalPolicy, effectiveApprovalMode } from './ApprovalPolicy';
 import { DEFAULT_PLANNER_ALLOWLIST } from './plannerAllowlist';
@@ -184,6 +186,8 @@ export interface ChildPlacement {
   held: () => SessionHeld | null;
   /** Its parent's, so one repository's worktree bookkeeping takes one lock across the tree (D11). */
   isolation: IWorktreeIsolation;
+  /** The root's, so the tree shares one Parallel limit (D18). */
+  pool: SlotPool;
 }
 
 /**
@@ -262,6 +266,8 @@ export interface SessionDeps {
   web?: { transport?: WebTransport; resolveHost?: ResolveAll; cache?: WebResponseCache; searchProvider?: ISearchProvider };
   /** What runs the user's notify command (ADR-0053); the real process unless a test supplies one. */
   runNotifyCommand?: NotifyRun;
+  /** Where its sessions run (ADR-0059), given the local worktrees: those, unless a test supplies another. */
+  execution?: TaskOrchestratorOptions['execution'];
   /** The node this session is, below the root (ADR-0056); absent, it is the root, whose mandate its settings hold. */
   child?: NodeAuthority;
   /** Where this session sits below the root (ADR-0055 D11, D13); absent, its workspace is both its code root and its state root. */
@@ -322,7 +328,7 @@ export function createSession(deps: SessionDeps): Session {
   };
   const backend = new PlannerBackend(deps.aiService
     ? { pinned: deps.aiService, busy }
-    : { provider: () => deps.config.aiProvider, create: () => createAiService(deps.config, { workspaceRoot: deps.workspaceRoot, mcpServer, turnBudgets, ...plannerContext }), busy });
+    : { provider: () => deps.config.aiProvider, create: () => createAiService(deps.config, { workspaceRoot: deps.workspaceRoot, mcpServer, turnBudgets, openLease: (signal: AbortSignal): Promise<OpenLease> | undefined => session.openTurnLease(signal), ...plannerContext }), busy });
   const aiService = () => backend.current();
   const store = new PlanStore();
   // A window a runner or provider reports wins, and every later stream of the
@@ -380,7 +386,10 @@ export function createSession(deps: SessionDeps): Session {
     isolation: deps.isolation ?? deps.placement?.isolation,
     registry: deps.registry,
     workspaceRoot: deps.workspaceRoot,
-    ...(deps.placement ? { stateRoot: deps.placement.stateRoot } : {}),
+    ...(deps.placement ? { stateRoot: deps.placement.stateRoot, pool: deps.placement.pool } : {}),
+    ...(deps.execution ? { execution: deps.execution } : {}),
+    sessionId: () => session.sessionId,
+    openTurn: () => session.turnRoomFreed(),
     skillsAt: (roots) => (deps.skillsService ?? new SkillsService(roots)).forRoot(roots),
     previousAttemptFromLog: (taskId) => lastAttemptDigest(session.taskLogLocation, taskId),
     previousHandoffFromLog: (taskId) => {
@@ -669,6 +678,10 @@ export class Session {
   private readonly skillsService: Pick<SkillsService, 'findSkill' | 'listSkills' | 'searchedDirs' | 'forRoot'>;
   private readonly conversation: PlannerConversation;
   private readonly turns: PlanTurns;
+  /** The planner turn's execution lease, while one runs. */
+  private turnLease: ReservedLease | null = null;
+  /** An opening waiting for a slot: it takes one when the pool has it. True when there was one to tell. */
+  private roomWaiter: (() => boolean) | null = null;
   /** Destroyed: a turn that waited for the planner to be found must not open on it. */
   private closed = false;
   /** Destroyed and let go of its lease for good: whatever settles later neither saves nor holds the session. */
@@ -800,12 +813,19 @@ export class Session {
       // A planner switch or settings change made while no turn ran is made
       // before the next one takes the backend, and one made during a turn as
       // soon as it is over.
-      turnClaiming: () => this.backend.settle(),
+      turnClaiming: () => {
+        this.backend.settle();
+        this.turnRoom();
+      },
       // After the turn has announced its end, so the next one never starts
       // ahead of it on a surface.
       turnReleased: () => {
+        if (!this.turns.turnRunning) this.endTurnLease();
         this.backend.settle();
         queueMicrotask(() => this.turns.pump());
+      },
+      turnDropped: () => {
+        if (!this.turns.turnRunning) this.endTurnLease();
       },
       usageLimit: (said, answered) => this.turns.usageLimit(said, answered),
       contextPaused: (details) => this.turns.contextPaused(details),
@@ -827,6 +847,8 @@ export class Session {
       },
       interrupt: () => { this.conversation.stopTurn('force_send'); },
       holdStarts: () => this.orchestrator.holdStarts(),
+      turnRoom: () => this.turnRoom(),
+      turnSettled: () => this.endTurnLease(),
       // A start queued behind its dependencies waited for the turn too, with or without a run.
       resumeStarts: async () => {
         if (this.orchestrator.isRunning || this.orchestrator.startsPending) await this.withSave(() => this.orchestrator.tick());
@@ -1038,6 +1060,7 @@ export class Session {
       scheduling: () => this.orchestrator.isScheduling,
       startsHeld: () => this.orchestrator.startsHeld,
       hasLiveWork: () => this.orchestrator.hasLiveWork,
+      holdsSlot: (taskId) => this.orchestrator.holdsSlot(taskId),
       runHeld: () => this.orchestrator.runHeld,
       scheduledRun: () => this.orchestrator.scheduledRun,
       startsPending: () => this.orchestrator.startsPending,
@@ -1371,7 +1394,46 @@ export class Session {
       rootSessionId: this.placement?.rootSessionId ?? this.currentSessionId,
       held: () => this.heldElsewhere(),
       isolation: this.runs.childIsolation,
+      pool: this.orchestrator.slotPool,
     };
+  }
+
+  /**
+   * Take the planner turn's lease (ADR-0059 L1), kept from its admission to
+   * its end, however many times it takes the conversation. False when the pool
+   * has no slot for a subplanner's turn: it keeps this Session, and calls
+   * {@link turnRoomFreed}.
+   */
+  private turnRoom(): boolean {
+    if (this.turnLease) return true;
+    const reserved = this.orchestrator.reserveTurn();
+    if ('refused' in reserved) return false;
+    this.turnLease = reserved.lease;
+    return true;
+  }
+
+  /** The pool has a slot for the turn it refused: the opening waiting for one, or else the next of the queue. */
+  turnRoomFreed(): void {
+    if (!this.roomWaiter?.()) this.turns.pump();
+  }
+
+  /** Where a planner's process starts, opened around its adapter (ADR-0059 L1). No lease: nothing has a turn to start it for. */
+  openTurnLease(signal: AbortSignal): Promise<OpenLease> | undefined {
+    return this.turnLease?.open({ workspace: { kind: 'checkout' }, required: [] }, signal);
+  }
+
+  /**
+   * The turn is over. A subplanner between turns holds no process: it is a
+   * parked row, its adapter gone and its session id kept, so the next turn
+   * resumes it (ADR-0055 D18). A turn's own corrective retries come before
+   * this, in the one process, and its slot goes only once that process has.
+   */
+  private endTurnLease(): void {
+    const lease = this.turnLease;
+    if (!lease) return;
+    this.turnLease = null;
+    if (this.placement) this.backend.current().restart?.();
+    lease.release('turn ended');
   }
 
   /** The attempts of a task that have a saved log, oldest first. */
@@ -1765,6 +1827,38 @@ export class Session {
    * no longer be refused as one sent during it.
    */
   private plannerTurnMayOpen(signal?: AbortSignal): Promise<void> | null {
+    const planner = this.plannerGate(signal);
+    if (!this.placement) return planner;
+    return planner ? planner.then(() => this.slotForTurn(signal) ?? undefined) : this.slotForTurn(signal);
+  }
+
+  /** A subplanner's turn that {@link PlanTurns} does not open waits for a slot like one it does (ADR-0055 D18), ended as the gate's wait is. Null with one in hand. */
+  private slotForTurn(signal?: AbortSignal): Promise<void> | null {
+    if (this.turnRoom()) return null;
+    if (signal?.aborted) return Promise.reject(new PlannerTurnStoppedError());
+    return new Promise<void>((resolve, reject) => {
+      const onAbort = () => {
+        if (this.openingsWaiting.delete(end)) end(new PlannerTurnStoppedError());
+      };
+      const end = (err: Error) => {
+        this.roomWaiter = null;
+        signal?.removeEventListener('abort', onAbort);
+        reject(err);
+      };
+      this.openingsWaiting.add(end);
+      signal?.addEventListener('abort', onAbort, { once: true });
+      this.roomWaiter = () => {
+        if (!this.turnRoom()) return true;
+        this.roomWaiter = null;
+        this.openingsWaiting.delete(end);
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+        return true;
+      };
+    });
+  }
+
+  private plannerGate(signal?: AbortSignal): Promise<void> | null {
     if (installedPlannerAnswered()) {
       this.assertPlannerReady();
       return null;
@@ -2864,6 +2958,7 @@ export class Session {
     this.fsAdapter.endSession?.();
     this.settleSaves();
     this.events.closeStatus(this.plan);
+    this.orchestrator.leaveTree();
     // Last: stopping the run above saves what it changed, which needs the lease.
     this.lease.release();
     this.leaseReleased = true;
