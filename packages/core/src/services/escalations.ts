@@ -93,7 +93,7 @@ export interface Escalation {
 
 /** What the list reads of the run. */
 export interface EscalationRun {
-  /** A full-plan run is scheduling, held, or ended on a failure a retry continues: only then does a task that has not started wait on anyone, a reverted one apart. */
+  /** A full-plan run is scheduling, held, or ended on a failure a retry continues: only then, or in a carried loop, does a task that has not started wait on anyone, a reverted one apart. */
   open: boolean;
   /** Something could move a task on unasked, so the seam refuses a Mark complete (ADR-0029). */
   advancing: boolean;
@@ -130,6 +130,10 @@ export interface EscalationInput {
   startQueued: (taskId: string) => boolean;
   /** Why the task is on hold. */
   holdReason: (taskId: string) => string | null | undefined;
+  /** Something will run this check between rounds without being asked (ADR-0045 L5). */
+  loopRunsOn: (taskId: string) => boolean;
+  /** A loop carried on with no scheduler starts this task, so the run is open for it alone (ADR-0045 L5). */
+  carried: (taskId: string) => boolean;
   run: EscalationRun;
 }
 
@@ -261,15 +265,31 @@ function awaiting(row: TaskWithParent, input: EscalationInput, rows: readonly Ta
 }
 
 /**
- * A failed task, but for a loop's check that is no failure yet (ADR-0045 L3),
- * and one stopped by a body task that is listed in its place: retrying that
- * task is what lets the loop go on (L7), so the check would be the same wait twice.
+ * A check between rounds nothing will run, after a Stop or a reload: Execute
+ * goes on from here, and a start runs its next round once its body has landed
+ * (ADR-0045 L5, L7), which a retry would not, starting its rounds over.
+ */
+function stranded(row: TaskWithParent, repeating: Extract<StartWait, { kind: 'repeating' }>, input: EscalationInput, rows: readonly TaskWithParent[]): Wait {
+  const round = `round ${repeating.round} of ${repeating.maxRounds}`;
+  if (repeating.waiting.length === 0) {
+    return { kind: 'failed', reason: `Its fix has landed, and nothing runs its ${round}.`, options: [{ id: 'run', label: `Start ${round}` }, ...startedOver(row, input)] };
+  }
+  const fix = repeating.waiting.map((id) => rows.find((r) => r.task.id === id)?.ref ?? id);
+  return { kind: 'failed', reason: `Its loop stopped between rounds: nothing runs it again, and ${fix.join(', ')} ${fix.length === 1 ? 'has' : 'have'} not landed. Execute the plan and the loop goes on.`, options: startedOver(row, input) };
+}
+
+/**
+ * A failed task, but for a loop's check that is no failure yet because its
+ * loop goes on (ADR-0045 L3), and one stopped by a body task that is listed in
+ * its place: retrying that task is what lets the loop go on (L7), so the check
+ * would be the same wait twice.
  */
 function failed(row: TaskWithParent, input: EscalationInput, rows: readonly TaskWithParent[]): Wait | null {
   const { task } = row;
   if (outOfRounds(task)) return { kind: 'out-of-rounds', reason: `Its loop ran out of rounds: it failed round ${loopRoundOf(task)} of ${task.loop?.maxRounds}.`, options: startedOver(row, input) };
   if (!betweenRounds(task)) return { kind: 'failed', reason: task.verdict?.reason || 'It failed.', options: startedOver(row, input) };
-  if (waitOf(input.waits.get(task.id) ?? [], 'repeating')) return null;
+  const repeating = waitOf(input.waits.get(task.id) ?? [], 'repeating');
+  if (repeating) return input.loopRunsOn(task.id) ? null : stranded(row, repeating, input, rows);
   const body = rows.filter((r) => task.loop?.body.includes(r.task.id));
   if (body.some((r) => r.task.status === 'failed' || waitOf(input.waits.get(r.task.id) ?? [], 'blocked'))) return null;
   return { kind: 'failed', reason: `Its loop stopped: ${body.map((r) => r.ref).join(', ')} did not run.`, options: startedOver(row, input) };
@@ -279,10 +299,11 @@ function failed(row: TaskWithParent, input: EscalationInput, rows: readonly Task
 function unstarted(row: TaskWithParent, input: EscalationInput, rows: readonly TaskWithParent[]): Wait | null {
   const { task } = row;
   const waits = input.waits.get(task.id) ?? [];
+  const carried = input.carried(task.id);
   // A reverted task waits for the user's decision however the run stands: it is reverted before Merge all, usually after the last task landed (ADR-0054).
-  if (!(input.run.open || task.reverted) || waits.some((w) => !ONLY_A_PERSON[w.kind])) return null;
-  // In a plan nobody has approved yet nothing is theirs to start, and a manual task needs no approval to be done.
-  if (waitOf(waits, 'unapproved') && task.type !== 'user' && !input.waitsForApproval(task.id)) return null;
+  if (!(input.run.open || carried || task.reverted) || waits.some((w) => !ONLY_A_PERSON[w.kind])) return null;
+  // In a plan nobody has approved yet nothing is theirs to start, but what a loop carried on waits on, and a manual task needs no approval to be done.
+  if (waitOf(waits, 'unapproved') && task.type !== 'user' && !carried && !input.waitsForApproval(task.id)) return null;
   if (waitOf(waits, 'no-prompt')) {
     return { kind: 'no-prompt', reason: task.type === 'script' ? 'It has no body to run.' : 'It has no prompt, so there is nothing to run.', options: [SKIP] };
   }
@@ -311,7 +332,7 @@ function unstarted(row: TaskWithParent, input: EscalationInput, rows: readonly T
   }
   if (task.type === 'user') return waitOf(waits, 'by-hand') ? { kind: 'by-hand', reason: BY_HAND, options: completeOption(row, input.run) } : null;
   if (waitOf(waits, 'unapproved')) {
-    return { kind: 'unapproved', reason: 'Added since you approved the plan, so it waits for you to start it.', options: [{ id: 'run', label: 'Start' }] };
+    return { kind: 'unapproved', reason: input.waitsForApproval(task.id) ? 'Added since you approved the plan, so it waits for you to start it.' : 'Its loop is carried on, and waits for you to start it.', options: [{ id: 'run', label: 'Start' }] };
   }
   return null;
 }

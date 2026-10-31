@@ -1,7 +1,7 @@
 import {
   Task, TaskSnapshot, TaskStatus, RunnerId, AwaitingReason, DEFAULT_RUNNERS, flattenTasks,
   addTaskToPlan, removeTaskFromPlan, updateTaskInPlan,
-  runsAsOps, waitsForReset,
+  runsAsOps,
 } from '../models/Task';
 import { startAttemptUsage, addAttemptUsage, endAttemptUsage, type RunnerSessionCost, type UsageRecord } from '../models/Usage';
 import { sessionOwner } from './continuation';
@@ -173,30 +173,54 @@ export class PlanStore {
    * `preserveCompleted: false` is for a freshly committed plan, where
    * everything starts over. `edited` is an edit adopted between runs, which is
    * not the user starting over: a failed task stays failed, and a task waiting
-   * on its runner's usage-limit reset, or on its merge conflict, stays waiting.
+   * on the user, whatever for, stays waiting. `keepFailed` is what failed in
+   * the reply autorun's run follows: nobody asked for those to run again.
    */
-  resetForRun(opts: { preserveCompleted?: boolean; edited?: boolean } = {}): void {
+  resetForRun(opts: { preserveCompleted?: boolean; edited?: boolean; keepFailed?: ReadonlySet<string> } = {}): void {
     const preserveCompleted = opts.preserveCompleted ?? true;
+    this.releaseMadeManual();
     for (const t of this._allTasks) {
-      if (opts.edited && (t.status === 'failed' || waitsForReset(t) || (t.status === 'awaiting_user' && t.awaitingReason === 'conflict'))) continue;
-      if (t.type === 'user') {
-        // No run readies a manual task, but one an edit made manual after it failed still has its fresh chance.
-        if (t.status === 'failed') t.status = 'pending';
-        continue;
-      }
+      // No run readies a manual task.
+      if (t.type === 'user') continue;
+      if (opts.edited && (t.status === 'failed' || t.status === 'awaiting_user')) continue;
+      if (opts.keepFailed?.has(t.id)) continue;
       if (preserveCompleted && (t.status === 'completed' || t.status === 'skipped')) continue;
       // A check between rounds runs again once its body lands, not now (ADR-0045 L5).
       if (preserveCompleted && betweenRounds(t)) continue;
       // A failed check runs again as a retry would run it: its rounds start over (ADR-0045 L7).
       if (!preserveCompleted || t.status === 'failed') delete t.loopRound;
-      delete t.handoff;
-      delete t.outputSummary;
-      t.status = 'approved';
-      delete t.awaitingReason;
-      delete t.resumeAt;
-      delete t.skipReason;
+      this.ready(t);
     }
     this.notifyMutate();
+  }
+
+  /**
+   * Execute's fresh chance with work already live (ADR-0053), which
+   * `resetForRun` would take back: only what failed and is not at work is
+   * readied, and a check between rounds still leaves its body to run first.
+   */
+  readyFailed(live: (taskId: string) => boolean): void {
+    this.releaseMadeManual();
+    for (const t of this._allTasks) {
+      if (t.type === 'user' || t.status !== 'failed' || betweenRounds(t) || live(t.id)) continue;
+      delete t.loopRound;
+      this.ready(t);
+    }
+    this.notifyMutate();
+  }
+
+  /** A failed task an edit made manual has nothing to retry, and is the user's to do: it waits as a manual task does. */
+  releaseMadeManual(): void {
+    for (const t of this._allTasks) if (t.type === 'user' && t.status === 'failed') t.status = 'pending';
+  }
+
+  private ready(t: Task): void {
+    delete t.handoff;
+    delete t.outputSummary;
+    t.status = 'approved';
+    delete t.awaitingReason;
+    delete t.resumeAt;
+    delete t.skipReason;
   }
 
   markCompleted(id: string): void {

@@ -726,7 +726,7 @@ export class TaskOrchestrator {
   }
 
   /** A start admitted now that nothing has to count as live work: one that claims before it awaits, or follows on from one that did. */
-  private admittedNow(): Admitted {
+  admittedNow(): Admitted {
     const generation = this.stopGeneration;
     return { current: () => generation === this.stopGeneration };
   }
@@ -968,8 +968,8 @@ export class TaskOrchestrator {
    * cancelled would be re-armed by the tick that follows, and a retry after
    * the edit would run the failed task alone, its failure lost. Otherwise it
    * is the plan the next run starts from, with a failed task still failed and
-   * what waits on a usage-limit reset still waiting, and a conflict too: an
-   * edit between runs is not the user starting over.
+   * what waits on the user still waiting: an edit between runs is not the user
+   * starting over.
    */
   adoptEdit(tasks: readonly Task[], planRunners: RunnerId[]): void {
     if (this.isRunning || this.awaitsResume || this.owedRepairs.size > 0) return this.reconcilePlan(tasks, planRunners);
@@ -992,7 +992,7 @@ export class TaskOrchestrator {
    * scheduler work a runner is already doing.
    *
    * A failed task stays failed: an edit is not a retry, and the tasks it blocks
-   * wait for that retry (ADR-0034).
+   * wait for that retry (ADR-0034). One the edit made manual has no retry to wait for.
    */
   reconcilePlan(newTasks: readonly Task[], planRunners: RunnerId[] = [...DEFAULT_RUNNERS]): void {
     const before = this.store.planTasks;
@@ -1019,6 +1019,7 @@ export class TaskOrchestrator {
     }
 
     this.store.load(adopted, planRunners);
+    this.store.releaseMadeManual();
     this.planEdited(before);
     // An edit may have taken the last task waiting on a reset out of the plan, or ended its pause.
     this.limitPauses.recount();
@@ -1054,12 +1055,13 @@ export class TaskOrchestrator {
    * its scheduled resumes and execution log; and, as the plan is loaded over
    * itself, its retry counts, holds, loop rounds and review approval. Every
    * task not done is ready to run again, and the scheduler starts it; a plan
-   * with nothing left to run ends at once, and the scheduler says so.
+   * with nothing left to run ends at once, and the scheduler says so, but for
+   * `keepFailed`: failures nobody asked this run to try again (ADR-0030).
    */
-  async beginRun(origin: RunOrigin): Promise<void> {
+  async beginRun(origin: RunOrigin, keepFailed?: ReadonlySet<string>): Promise<void> {
     this.stop('restart');
     this.store.clearLog();
-    this.store.resetForRun();
+    this.store.resetForRun({ keepFailed });
     const chosen = this.chosenHoldsNow();
     this.loadPlan(this.store.planTasks, [...this.store.planRunners]);
     this.restoreHolds(chosen);
@@ -1076,6 +1078,16 @@ export class TaskOrchestrator {
     if (this.isScheduling) return this.tick();
     if (this.reviewApproved) return this.start(origin);
     return this.approveReview(origin);
+  }
+
+  /**
+   * The user's Execute takes in work the scheduler was not driving: it becomes
+   * the plan's run, so what failed gets the fresh chance Execute gives
+   * (ADR-0053). A scheduled run keeps its failures, which a retry continues
+   * (ADR-0034), and Execute only approves what waits in it.
+   */
+  readyFailed(): void {
+    if (!this.isScheduling) this.store.readyFailed((id) => this.attempts.has(id));
   }
 
   /** Start the full-plan run, or continue one that is held or ended on a failure. */
@@ -2493,8 +2505,13 @@ export class TaskOrchestrator {
 
   /** A start of this task would be its loop's next round: between rounds, its body landed, and nothing else will run it. */
   private ownsNextRound(task: Readonly<Task>): boolean {
-    const repeating = waitOf(this.startWaits(task), 'repeating');
-    return !!repeating && repeating.waiting.length === 0 && !this.loopRunsOn(task.id);
+    return this.loopStranded(task.id) && waitOf(this.startWaits(task), 'repeating')?.waiting.length === 0;
+  }
+
+  /** A check between rounds that nothing will run: it waits on a person, its failure no longer one its loop answers (ADR-0045 L5, ADR-0053). */
+  loopStranded(taskId: string): boolean {
+    const task = this.store.get(taskId);
+    return !!task?.loop && !!waitOf(this.startWaits(task), 'repeating') && !this.loopRunsOn(taskId);
   }
 
   /** A tick starts something: the scheduler the plan, or the loops carried on, their tasks alone. */
@@ -2518,14 +2535,14 @@ export class TaskOrchestrator {
   }
 
   /** What a tick may start with no scheduler: the loops carried on, and nothing that depends on them. */
-  private carriedTasks(): Set<string> {
+  carriedTasks(): Set<string> {
     return new Set(this.loopsCarriedOn().flatMap((check) => [check.id, ...check.loop?.body ?? []]));
   }
 
   /**
    * A task of a carried loop outside the user's approval record waits as any
-   * does (ADR-0045, Consent). Said here, once: in a plan they never approved
-   * no inbox entry singles it out, and the loop's next step would just not come.
+   * does (ADR-0045, Consent). Said here, once, as well as listed: a run they
+   * started one task of says nothing else of why the loop's next step does not come.
    */
   private sayUnapprovedInLoop(): void {
     const waiting = [...this.carriedTasks()].flatMap((id) => this.store.get(id) ?? []).filter((t) => waitOf(this.startWaits(t), 'unapproved'));

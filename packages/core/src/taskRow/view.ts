@@ -7,11 +7,11 @@ import type { RepairWait, TaskIsolationState } from '../interfaces/IWorktreeIsol
 import { taskOrderLabel, taskRefOf } from '../services/TaskRefs';
 import { capConflictFiles } from '../services/conflictFiles';
 import { planBlocks, type BlockingSubject, type PlanBlocks } from '../services/blocking';
-import { checkOf, type LoopSubject } from '../models/Loop';
+import { checkOf, loopRoundOf, type LoopSubject } from '../models/Loop';
 import { assignedRunnerOf, assignmentConsequence, assignmentIssue, assignmentIssueText, type AssignmentScope } from '../services/AssignmentScope';
 import { approvalLabel, attachingLabel, awaitingLabel, isTaskRunning, NOT_STARTED, receiptLabel, repairWaitLabel, resumeLabel, taskStatusKind, WAITS_FOR_APPROVAL_LABEL, type TaskStatusKind } from './status';
 import { markAction, opsEditable, taskRowActions, type TaskRowAction, type TaskRowPlacement } from './actions';
-import { loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, type LoopCheckState } from './loop';
+import { loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, type LoopCheckFacts, type LoopCheckState } from './loop';
 
 /**
  * A task as both surfaces hold it, with the live state each tracks beside it
@@ -56,6 +56,8 @@ export interface TaskRowSubject {
   loop?: TaskLoop;
   loopRound?: number;
   verdict?: { outcome: string; reported?: string } | null;
+  /** Between rounds with nothing to run it: only the run knows that, so it is told (ADR-0045 L5). */
+  loopStranded?: boolean;
   /** The latest attempt's handoff as the plan keeps it (ADR-0047); a row shows it without opening the task. */
   handoff?: HandoffDigest;
 }
@@ -268,12 +270,18 @@ function blockedBy(task: TaskRowSubject, reading: PlanReading | null): string[] 
   return reading.blocks.blocked.get(task.id) ?? [];
 }
 
+/** What moves a check on that nothing will run: a start of it once its body landed, Execute before that (ADR-0045 L5, L7). */
+function strandedDetail(check: LoopCheckFacts, reading: PlanReading | null): string {
+  const landed = reading && check.loop.body.every((id) => reading.tasks.find((t) => t.id === id)?.status === 'completed');
+  return landed ? `Nothing runs it now: start it for round ${loopRoundOf(check) + 1} of ${check.loop.maxRounds}` : 'Nothing runs it now: execute the plan and the loop goes on';
+}
+
 function loopOf(task: TaskRowSubject, reading: PlanReading | null): TaskRowLoop | null {
   const tasks = reading?.tasks;
   if (task.loop) {
     const check: LoopSubject & { loop: TaskLoop } = { id: task.id, status: task.status, loop: task.loop, loopRound: task.loopRound, ...(task.verdict ? { verdict: task.verdict } : {}) };
     // With no plan to read the body from, a check between rounds is taken to be going on.
-    const state = loopCheckState(check, reading ? reading.blocks.repeating.has(task.id) : true);
+    const state = loopCheckState(check, !task.loopStranded && (reading ? reading.blocks.repeating.has(task.id) : true));
     const body = refsOf(task.loop.body, tasks);
     // What stops a loop: a body task that failed, was skipped or is blocked (ADR-0045 L7).
     const halted = reading ? task.loop.body.filter((id) => {
@@ -283,7 +291,9 @@ function loopOf(task: TaskRowSubject, reading: PlanReading | null): TaskRowLoop 
     const detail = state === 'repeating'
       ? `Found problems: runs again once ${body.join(', ')} ${body.length === 1 ? 'has' : 'have'} landed`
       : state === 'stopped'
-        ? `${refsOf(halted, tasks).join(', ')} did not pass: retry ${halted.length === 1 ? 'it' : 'them'} and the loop goes on`
+        ? task.loopStranded
+          ? strandedDetail(check, reading)
+          : `${refsOf(halted, tasks).join(', ')} did not pass: retry ${halted.length === 1 ? 'it' : 'them'} and the loop goes on`
         : null;
     return { role: 'check', state, label: loopCheckLabel(check, state), detail, body };
   }

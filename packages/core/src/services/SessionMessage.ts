@@ -73,6 +73,8 @@ export type SerializedTaskStatus = {
   waitsForApproval?: true;
   /** Why a task is held out of auto-scheduling, in the user's words; absent when it is not held. */
   holdReason?: string;
+  /** A loop's check between rounds that nothing will run, after a Stop or a reload (ADR-0045 L5). Absent for any other task. */
+  loopStranded?: true;
   /** Set only on a research task, so a stream of statuses alone can say which task is one (ADR-0037). */
   research?: true;
   /** The latest attempt's handoff, as the plan keeps it (ADR-0047); absent when the attempt left none. */
@@ -386,7 +388,7 @@ export type PlanSnapshot = { type: 'plan_snapshot'; plan: SurfacePlan | SurfaceP
 /** What only the status stream says about a task; a plan refresh keeps these as they were. */
 export type RunTaskStatus = Partial<Pick<
   SerializedTaskStatus,
-  'verdict' | 'idleSince' | 'completionReceived' | 'attaching' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'attempted'
+  'verdict' | 'idleSince' | 'completionReceived' | 'attaching' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval' | 'holdReason' | 'loopStranded' | 'handoff' | 'attempted'
 >>;
 
 /** A task in the run view: the plan's fields, then the status stream's. */
@@ -500,6 +502,7 @@ export function serializeTaskStatus(
   holdReason: string | null = null,
   completionReceived: Verdict['reported'] | null = null,
   attaching: 1 | 2 | null = null,
+  loopStranded = false,
 ): SerializedTaskStatus {
   return {
     id: t.id,
@@ -525,6 +528,7 @@ export function serializeTaskStatus(
     ...(t.forcedPastGate?.length ? { forcedPastGate: [...t.forcedPastGate] } : {}),
     ...(waitsForApproval ? { waitsForApproval: true as const } : {}),
     ...(holdReason ? { holdReason } : {}),
+    ...(loopStranded ? { loopStranded: true as const } : {}),
     ...(t.research ? { research: true as const } : {}),
     ...(t.handoff ? { handoff: structuredClone(t.handoff) } : {}),
     ...(t.loop ? { loop: { body: [...t.loop.body], maxRounds: t.loop.maxRounds } } : {}),

@@ -33,7 +33,7 @@ export interface RunnerOption {
  * streams — `task_started` reaches it before the plan refresh does — so the
  * card's editability reads it when present.
  */
-export type TaskCardRun = Pick<RunTask, 'idleSince' | 'completionReceived' | 'attaching' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'handoff' | 'verdict' | 'loopRound' | 'attempted' | 'attemptUsage'> & { status?: Task['status'] };
+export type TaskCardRun = Pick<RunTask, 'idleSince' | 'completionReceived' | 'attaching' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'loopStranded' | 'handoff' | 'verdict' | 'loopRound' | 'attempted' | 'attemptUsage'> & { status?: Task['status'] };
 
 interface TaskCardProps {
   task: Task;
@@ -493,6 +493,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
     isolation,
     mergeGate,
     holdReason: run?.holdReason,
+    loopStranded: run?.loopStranded === true,
     continuable: run?.continuable === true,
     waitsForApproval: run?.waitsForApproval === true,
     attempted: run?.attempted ?? task.attempted,

@@ -66,6 +66,8 @@ export interface TaskView {
   waitsForApproval?: boolean;
   /** Why it is held out of the scheduler; absent when it is not held. */
   holdReason?: string;
+  /** A loop's check between rounds that nothing will run (ADR-0045 L5). */
+  loopStranded?: boolean;
   /** An ops task (ADR-0020): it runs in the user's checkout, never a worktree. */
   ops?: boolean;
   /** A research task (ADR-0037): its report goes to the planner and wakes it. */

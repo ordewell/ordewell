@@ -211,6 +211,8 @@ export interface ExecutionHost {
    * `left` still wait. Answers the line that says so.
    */
   joinRun(approved: number, left: number): Promise<string>;
+  /** The fresh chance the user's Execute gives what failed, for work it takes in (ADR-0053); none while the scheduler drives the run. */
+  readyFailed(): void;
   startTask(taskId: string, actor: ExecutionActor): Promise<void>;
   /** Force start the task; answers the line saying it waits for its dependencies, when it was queued behind them rather than started. */
   forceStart(taskId: string): Promise<string | undefined>;
@@ -837,7 +839,15 @@ export class ExecutionCommands {
       // Autorun under Guarded stays out of it: its join would approve a script task the user was never shown (ADR-0035).
       if (actor.kind === 'autorun' && !this.host.autonomous()) return { refusal: AUTORUN_JOINS_NOTHING };
       // The user's Execute, and autorun for them, approves what waits rather than restarting the run under way; counted before the approval it records.
-      if (actor.kind === 'user' || actor.kind === 'autorun') return { act: async () => ({ message: await this.host.joinRun(waiting.length, 0) }) };
+      if (actor.kind === 'user' || actor.kind === 'autorun') {
+        return {
+          act: async () => {
+            // The fresh chance is the user's to ask for: autorun's join leaves a failure as it is (ADR-0053).
+            if (actor.kind === 'user') this.host.readyFailed();
+            return { message: await this.host.joinRun(waiting.length, 0) };
+          },
+        };
+      }
       // Tasks started one by one are no scheduled run, so nothing starts their dependents: this call makes them one.
       // It approves nothing, and the scheduler starts only approved tasks, so it grants what run_task already does (ADR-0035);
       // under Full with autorun it approves what waits, since nobody is asked there.

@@ -1517,7 +1517,8 @@ check, so a reload resumes mid-round. A check that failed with rounds left is
 **between rounds** (`betweenRounds`): stored failed, but no failure for the
 blocked rule, the run's end, wake-ups or the loop guards while its loop goes
 on; it runs again once its body has passed and landed. With nothing left to run
-it, a start of it is that next round, and the count stands.
+it, after a Stop or a reload, it is the failure it is stored as, listed and drawn
+so, and a start of it is that next round, with the count kept.
 *Avoid:* "attempt" for a round — a round is the loop's count, and the check's
 attempts are counted apart; "repeating" as a status — it is derived, never
 stored.

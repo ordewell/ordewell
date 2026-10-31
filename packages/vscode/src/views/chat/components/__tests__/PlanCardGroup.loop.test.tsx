@@ -46,6 +46,14 @@ describe('a loop on the plan cards (ADR-0045)', () => {
     expect(document.querySelector('.status-failed')).toBeNull();
   });
 
+  it('shows a check nothing will run as stopped and failed, told by the run', () => {
+    const run = runOf({ id: 'c', verdict: found, loopRound: undefined, loopStranded: true }, { id: 'f' });
+    render(<PlanCardGroup run={run} tasks={[check({ status: 'failed' }), fix()]} models={[]} />);
+
+    expect(loopBadges()[0]).toBe('Loop · Stopped in round 1 of 3');
+    expect(document.querySelector('.status-failed')).toBeTruthy();
+  });
+
   it('shows the same check as failed once its loop is out of rounds', () => {
     const run = runOf({ id: 'c', verdict: found, loopRound: 3 }, { id: 'f' });
     render(<PlanCardGroup run={run} tasks={[check({ status: 'failed' }), fix({ status: 'skipped', skipReason: 'not run: the loop ran out of rounds' })]} models={[]} isExecuting />);

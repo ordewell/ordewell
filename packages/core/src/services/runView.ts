@@ -12,8 +12,8 @@ type PlanFields = Omit<RunTask, keyof RunTaskStatus>;
  * no plan carries, so only a status update changes it and a plan refresh
  * keeps it. Everything else is the plan's.
  */
-function split({ verdict, idleSince, completionReceived, attaching, isolation, checkpoint, queued, continuable, awaitingApproval, mergeGate, forcedPastGate, waitsForApproval, holdReason, handoff, attempted, ...plan }: RunTask): { plan: PlanFields; status: RunTaskStatus } {
-  return { plan, status: { verdict, idleSince, completionReceived, attaching, isolation, checkpoint, queued, continuable, awaitingApproval, mergeGate, forcedPastGate, waitsForApproval, holdReason, handoff, attempted } };
+function split({ verdict, idleSince, completionReceived, attaching, isolation, checkpoint, queued, continuable, awaitingApproval, mergeGate, forcedPastGate, waitsForApproval, holdReason, loopStranded, handoff, attempted, ...plan }: RunTask): { plan: PlanFields; status: RunTaskStatus } {
+  return { plan, status: { verdict, idleSince, completionReceived, attaching, isolation, checkpoint, queued, continuable, awaitingApproval, mergeGate, forcedPastGate, waitsForApproval, holdReason, loopStranded, handoff, attempted } };
 }
 
 /**

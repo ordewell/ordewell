@@ -507,6 +507,15 @@ describe('handleStatus on a loop (ADR-0045)', () => {
     expect(out).toContain('      ↻ Runs if #1 fails');
   });
 
+  it('counts a check nothing will run as the failure it is, told by the run', async () => {
+    const between = check({ status: 'failed', loopRound: 1, verdict: found });
+    const session = loopSession([between, fix()]) as Record<string, unknown>;
+    const out = await status({ ...session, run: { tasks: [{ ...between, loopStranded: true }, fix()], runMerge: null, handoff: null, mergeResult: null } });
+
+    expect(out).toContain('      ↻ Stopped in round 1 of 3 · Nothing runs it now: execute the plan and the loop goes on');
+    expect(out).toContain('1 failed');
+  });
+
   it('shows a check between rounds as no failure, and what is fixing it', async () => {
     const out = await status(loopSession([check({ status: 'failed', loopRound: 1, verdict: found }), fix({ status: 'in_progress' }), dependent]));
 

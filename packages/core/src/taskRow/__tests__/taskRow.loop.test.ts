@@ -20,6 +20,27 @@ const found = { outcome: 'fail', reported: 'failed' };
 
 const rowOf = (node: Node, plan: Node[]) => taskRowView({ ...node, type: 'ai' } as TaskRowSubject, { tasks: plan });
 
+describe('a loop\'s check between rounds that nothing will run (ADR-0045 L5)', () => {
+  const stranded = check({ status: 'failed', verdict: found });
+  const rowWith = (fixStatus: string) => taskRowView({ ...stranded, type: 'ai', loopStranded: true } as TaskRowSubject, { tasks: [stranded, fix({ status: fixStatus })] });
+
+  it('reads as the failure it is, not as fixing, with Execute to go on while its fix has not landed', () => {
+    const row = rowWith('pending');
+    expect(row.status).toBe('failed');
+    expect(row.loop).toMatchObject({ state: 'stopped', label: 'Stopped in round 1 of 3', detail: 'Nothing runs it now: execute the plan and the loop goes on' });
+  });
+
+  it('offers its next round once its fix has landed', () => {
+    expect(rowWith('completed').loop).toMatchObject({ state: 'stopped', detail: 'Nothing runs it now: start it for round 2 of 3' });
+  });
+
+  it('is told on the status stream, and only when it is so', () => {
+    const task = createTask({ id: 'c', loop: { body: ['f'], maxRounds: 3 } });
+    expect(serializeTaskStatus(task).loopStranded).toBeUndefined();
+    expect(serializeTaskStatus(task, null, null, [], 0, [], '', false, null, null, null, true).loopStranded).toBe(true);
+  });
+});
+
 describe('a loop\'s check row (ADR-0045)', () => {
   it('says how many rounds it may run, before it runs', () => {
     const row = rowOf(check(), [check(), fix()]);
