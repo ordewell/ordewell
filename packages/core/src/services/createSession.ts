@@ -68,7 +68,7 @@ import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
 import { approvalRecordOf, flattenTasks, keepExecutionState, migrateLoadedPlan, stampOrigin, type LegacyPlanState, type PlanState, type Task, type TaskReportTo, type TaskSnapshot, type RunnerId } from '../models/Task';
 import { AlreadyExecutingError, NoPlanError } from './SessionErrors';
-import { childLease, describeHeld, describeLost, processLeaseHost, UNLEASED, type LeaseHost, type SessionHeld, type SessionLease } from './sessionLease';
+import { childLease, describeHeld, describeLost, processLeaseHost, SessionHeldError, UNLEASED, type LeaseHost, type SessionHeld, type SessionLease } from './sessionLease';
 import { refuseUsersCheckout } from './stateRoot';
 import { PlannerNotReadyError, plannerNotReadyFor } from './plannerReadiness';
 import { recordedRunnerAuth } from './runnerAuth';
@@ -1109,6 +1109,10 @@ export class Session {
       repairOwed: (taskId) => this.orchestrator.repairWait(taskId) !== null,
       maxParallel: () => this.config.maxParallelSessions,
       runBlocked: () => this.runs.blocked,
+      heldRefusal: () => {
+        const held = this.heldElsewhere();
+        return held && describeHeld(held);
+      },
       startWaits: (task) => this.orchestrator.startWaits(task),
       waitingRequests: (taskId) => this.approvals.outstanding()
         .filter(({ request }) => isRunnerApproval(request) && request.taskId === taskId)
@@ -2698,6 +2702,9 @@ export class Session {
 
   /** Replay a run a dirty tree blocked, in the workspace root, for this run only. */
   async continueWithoutIsolation(): Promise<void> {
+    // Refused here, with the choice still parked: a shared run asks the leased isolation nothing (ADR-0049).
+    const held = this.heldElsewhere();
+    if (held) throw new SessionHeldError(held);
     await this.withSave(() => this.orchestrator.continueBlockedRun('shared'));
   }
 
