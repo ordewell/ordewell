@@ -31,6 +31,14 @@ describe('chatActivity: the planner chat', () => {
     expect(chatActivity(state({ planner: 'planning' }))).toEqual({ label: 'Planning…', busy: true });
   });
 
+  it('says what a turn waits for while no planner has heard of it yet', () => {
+    expect(chatActivity(state({ planner: 'planning', plannerDetecting: true }))).toEqual({ label: 'Detecting coding agents…', busy: true });
+  });
+
+  it('says nothing of detection with no turn out', () => {
+    expect(chatActivity(state({ plannerDetecting: true }))).toBeNull();
+  });
+
   it('says Condensing while /compact runs', () => {
     expect(chatActivity(state({ planner: 'condensing' }))).toEqual({ label: 'Condensing…', busy: true });
   });

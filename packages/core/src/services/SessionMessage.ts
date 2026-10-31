@@ -301,6 +301,14 @@ export type SessionMessage =
    * which is no user turn. A fact, not a turn's stream: a stop never cuts it off.
    */
   | { type: 'planner_compaction'; compaction: PlannerCompaction; turnId?: string }
+  /**
+   * A planner turn waits for the probe of installed coding agents (ADR-0009),
+   * or nothing does any longer. While `waiting`, no planner has heard of that
+   * turn, so a surface says so rather than that it is planning. It ends with
+   * the probe, whatever became of the turn: one stopped at the gate leaves it
+   * `true` for the next to wait under.
+   */
+  | { type: 'planner_detection'; waiting: boolean }
   /** `escalations`: what waits on a person now (ADR-0053), whole; absent from an older daemon. */
   | { type: 'status_update'; tasks: SerializedTaskStatus[]; runMerge?: RunMergeView; usage?: PlanUsage; activity?: RunActivity; escalations?: Escalation[] }
   | { type: 'review_needed'; tasks: SerializedTask[] }

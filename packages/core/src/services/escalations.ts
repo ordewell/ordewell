@@ -141,9 +141,11 @@ export interface EscalationInput {
  * wait fails to compile until someone decides. A task with any `false` wait is
  * left out: that wait clears by itself, or the task's cause is listed in its
  * place, and the task's turn comes after. A reverted task's hold alone outlasts
- * its dependencies (see {@link unstarted}).
+ * its dependencies (see {@link unstarted}). `start-hold` is not decided here: a
+ * planner turn's hold leaves every task's wait as it found it, so the list does
+ * not read it.
  */
-const ONLY_A_PERSON: Record<StartWaitKind, boolean> = {
+const ONLY_A_PERSON: Record<Exclude<StartWaitKind, 'start-hold'>, boolean> = {
   started: false,
   repeating: false,
   completing: false,
@@ -154,7 +156,6 @@ const ONLY_A_PERSON: Record<StartWaitKind, boolean> = {
   queued: false,
   merging: false,
   'usage-limit': false,
-  'start-hold': false,
   'no-prompt': true,
   unapproved: true,
   'on-hold': true,
@@ -339,7 +340,7 @@ function unstarted(row: TaskWithParent, input: EscalationInput, rows: Rows): Wai
   const check = waitOf(waits, 'loop-check')?.check;
   const behind = reverted ? [...waitOf(waits, 'blocked')?.failed ?? [], ...(check ? [check] : []), ...waitOf(waits, 'dependencies')?.waiting ?? []] : [];
   // A reverted task waits for the user's decision however the run stands: it is reverted before Merge all, usually after the last task landed (ADR-0054).
-  if (!(input.run.open || carried || task.reverted) || waits.some((w) => !ONLY_A_PERSON[w.kind] && !(reverted && (w.kind === 'blocked' || w.kind === 'loop-check' || w.kind === 'dependencies')))) return null;
+  if (!(input.run.open || carried || task.reverted) || waits.some((w) => w.kind !== 'start-hold' && !ONLY_A_PERSON[w.kind] && !(reverted && (w.kind === 'blocked' || w.kind === 'loop-check' || w.kind === 'dependencies')))) return null;
   // In a plan nobody has approved yet nothing is theirs to start, but what a loop carried on waits on, and a manual task needs no approval to be done.
   if (waitOf(waits, 'unapproved') && task.type !== 'user' && !carried && !input.waitsForApproval(task.id)) return null;
   if (waitOf(waits, 'no-prompt')) {

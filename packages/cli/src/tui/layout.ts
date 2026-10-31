@@ -386,7 +386,7 @@ export function chatActivity(state: TuiState): ChatActivity | null {
   if (!tv) {
     if (state.status === 'starting') return { label: 'Starting the plan…', busy: true };
     if (!plannerInFlight(state)) return null;
-    const label = state.planner === 'condensing' ? 'Condensing…' : state.planner === 'compacting' ? 'Compacting…' : state.planner === 'awaiting' ? 'Waiting for the planner…' : 'Planning…';
+    const label = state.plannerDetecting ? DETECTING : state.planner === 'condensing' ? 'Condensing…' : state.planner === 'compacting' ? 'Compacting…' : state.planner === 'awaiting' ? 'Waiting for the planner…' : 'Planning…';
     // A compaction or a wait for the planner opens no turn of its own.
     const since = state.turnGate.open !== null ? state.turnGate.openedAt : undefined;
     return since ? { label, busy: true, since } : { label, busy: true };

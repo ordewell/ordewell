@@ -496,6 +496,8 @@ export interface TuiState {
    */
   plannerKnown: boolean;
   runnersKnown: boolean;
+  /** A planner turn waits on the daemon's probe for coding agents, and no planner has heard of it yet. */
+  plannerDetecting: boolean;
   /** Whether `configuredProviders` came from the catalog; until then a key may be set and not yet reported. */
   providersKnown: boolean;
   /**
@@ -765,6 +767,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     runSettingsRead: 0,
     plannerKnown: false,
     runnersKnown: false,
+    plannerDetecting: false,
     providersKnown: false,
     isolationPreview: undefined,
     isolationPreviewRead: 0,

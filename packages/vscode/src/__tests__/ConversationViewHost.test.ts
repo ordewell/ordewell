@@ -91,6 +91,13 @@ describe('ConversationViewHost', () => {
     expect(screen.posts).toEqual([{ type: 'plannerLiveness' }]);
   });
 
+  it('passes on what a turn at the planner gate waits for, in order, with no turn to tag it', () => {
+    host.receive({ type: 'planner_detection', waiting: true });
+    host.receive({ type: 'planner_detection', waiting: false });
+
+    expect(screen.posts).toEqual([{ type: 'plannerDetection', waiting: true }, { type: 'plannerDetection', waiting: false }]);
+  });
+
   describe('plannerTurnAlive', () => {
     const alive = () => screen.posts.filter((m) => m.type === 'plannerTurnAlive').length;
     const readStep: SessionMessage = { type: 'research_step', tool: 'read_file', args: '{"path":"a.ts"}', turnId: TURN };

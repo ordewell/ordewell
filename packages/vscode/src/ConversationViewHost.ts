@@ -48,6 +48,10 @@ export class ConversationViewHost {
       this.post({ type: 'plannerLiveness' });
       return;
     }
+    if (msg.type === 'planner_detection') {
+      this.post({ type: 'plannerDetection', waiting: msg.waiting });
+      return;
+    }
     const wasOpen = this.gate.open;
     this.update(followTurn(this.view, this.gate, msg));
     if (this.gate.open !== wasOpen) {

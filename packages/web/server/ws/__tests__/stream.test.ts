@@ -155,6 +155,20 @@ describe('the session socket', () => {
     expect(frames[2]).toEqual(started);
   });
 
+  // A turn at the planner gate has no id to adopt either, and a first turn can
+  // park there before its client's socket has joined.
+  it('tells a client that joins while a planner turn waits on agent detection, after the snapshot', async () => {
+    const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
+    pool.adoptSavedSession(meta.id, workspace);
+    const waiting = { type: 'planner_detection', waiting: true } as const;
+    vi.spyOn(pool, 'plannerDetection').mockReturnValue(waiting);
+
+    const frames = await firstFrames(port, meta.id, 4);
+
+    expect(frames.map((f) => (f as { type: string }).type)).toEqual(['connected', 'run_snapshot', 'planner_detection', 'account_limits']);
+    expect(frames[2]).toEqual(waiting);
+  });
+
   // The lifecycle rides the existing stream: both phases arrive numbered in
   // order, carrying the id a surface folds them into one block by.
   it('streams a compaction\'s start and end to a joined client in order, under one id', async () => {
@@ -173,7 +187,7 @@ describe('the session socket', () => {
     expect(second.seq).toBe(first.seq! + 1);
   });
 
-  it('sends no compaction frame when none is running', async () => {
+  it('sends no compaction or detection frame when neither is under way', async () => {
     const meta = saveSession(savedPlan(), 'Rate limiting', workspace, 'session-saved');
     pool.adoptSavedSession(meta.id, workspace);
     const socket = joinSocket(port, meta.id);

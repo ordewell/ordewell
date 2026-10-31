@@ -114,7 +114,11 @@ operation's own refusals, and leaves the timeline as it does today.
 ## What is left out
 
 Every `StartWait` is decided in one table, `ONLY_A_PERSON`, so a new one fails
-to compile until someone decides it.
+to compile until someone decides it. `start-hold` alone is not in it: the list
+does not read a planner turn's hold, because the hold changes nothing about whose
+wait a task is, and no status update marks where it starts or ends. Nothing leaves
+the list for the length of a turn, and an answer given during one is taken as it
+would be after, Retry and Force start included.
 
 | Left out | Why |
 |---|---|
@@ -126,7 +130,7 @@ to compile until someone decides it.
 | A blocked task | Its cause is listed, once ([ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)). |
 | `dependencies`, `queued` | Work still at work, which ends by itself, or a cause listed in its place. |
 | `loop-check` | A body task runs only if its check fails. |
-| `usage-limit`, `start-hold`, `merging`, `completing`, `resolver` | Each clears by itself, or its cause is listed. |
+| `usage-limit`, `merging`, `completing`, `resolver` | Each clears by itself, or its cause is listed. |
 | `started`, `repeating` | A task under way, or a check between rounds, listed above by whether anything will run it. |
 | A task with any of these besides a wait of its own | Its turn comes once they clear: it waits on a person only then. |
 | A merge gate while Ordewell merges at gates by itself | The scheduler merges it, unless a merge stopped, which lists it again. |
@@ -306,7 +310,9 @@ reaches, as the user (`escalations.answer.test.ts`). A real Session driving a
 fake runner to each wait and answering it, which also folds the stream through
 `reduceRun` and holds it to what the Session derives
 (`sessionEscalations.test.ts`), and each way a wait can come back under the
-same task (`sessionEscalations.reuse.adversarial.test.ts`). What a reload keeps
+same task (`sessionEscalations.reuse.adversarial.test.ts`), and holds a client to
+a fresh read through a planner turn with no run to send an update
+(`sessionEscalations.plannerTurn.test.ts`). What a reload keeps
 is held to a real run's plan through a real save and load into a new Session:
 failed tasks, a loop's checks and interrupted tasks, answered and executed
 afterwards (`sessionReload.test.ts`).
@@ -372,6 +378,10 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
 - **A message of its own for a change of the list.** Rejected: a status update
   already goes out on each change the list reads, and says everything about
   what it covers.
+- **A status update as a planner turn's start hold begins and ends.** Rejected: the
+  list would keep agreeing with a fresh read, but what waits on a person would
+  leave it for the length of every turn, and an answer to one would be refused
+  as stale while the turn ran.
 - **A built-in webhook.** Rejected: it makes core send data out with no egress
   guard yet (#88, #90). A command the user wrote is theirs to point anywhere.
 - **A built-in desktop notifier.** Rejected: per-platform code that the command
@@ -457,3 +467,4 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
 - 2026-10-31 — an ended attempt's entry names what holds any start of its task and offers no Retry or Continue the seam would refuse; a usage limit that ends a task made manual holds nothing.
 - 2026-10-31 — a task an edit made manual is released as a direct edit lands too; a scheduled or held run keeps its failures and pauses through Execute with nothing live; a conflict, changed files and a pause with no session offer no Retry the seam would refuse, and a seam Continue is refused behind a loop's undecided check.
 - 2026-10-31 — Execute on a scheduled run a dirty checkout parked replays its start instead of beginning a new run, and a planner's `run_plan` joins a run that ended on a failure and leaves what failed in a run it begins.
+- 2026-10-31 — the list does not read a planner turn's start hold, which no status update marks, so a client's list stays what a fresh read says.

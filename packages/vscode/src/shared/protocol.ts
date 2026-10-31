@@ -219,6 +219,8 @@ export type HostToWebview =
   | { type: 'plannerTurn'; active: boolean; startedAt?: string }
   /** The planner is working without producing anything visible; keeps the webview's watchdog quiet. */
   | { type: 'plannerLiveness' }
+  /** A planner turn waits on the probe for coding agents (ADR-0009), or nothing does any longer. */
+  | { type: 'plannerDetection'; waiting: boolean }
   /**
    * The open turn itself produced something: an event carrying its turn id.
    * Unlike liveness, which names no turn, this says the turn is still out, so
