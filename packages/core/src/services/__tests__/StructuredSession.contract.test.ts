@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { StructuredRunner } from '../StructuredRunner';
@@ -751,7 +751,7 @@ describe('the Ordewell task tools (ADR-0022)', () => {
     });
 
     async function running(configure: (adapter: HandAdapter) => void = () => {}) {
-      const { runner, adapters } = served(configure, 1_000);
+      const { runner, adapters } = served(configure, 10_000);
       const messages: SessionMessage[] = [];
       const session = makeSession({ runner, broadcast: (m) => messages.push(m) });
       session.loadPlan(plan(), 'goal', testWorkspace);
@@ -769,7 +769,7 @@ describe('the Ordewell task tools (ADR-0022)', () => {
       await client.callTool({ name: 'task_complete', arguments: { status: 'done', summary: 'Built it.' } });
 
       expect(row('a1')).toMatchObject({ status: 'in_progress', completionReceived: 'done', verdict: null });
-      expect(lastStatus('a1')).toMatchObject({ status: 'in_progress', completionReceived: 'done' });
+      await vi.waitFor(() => expect(lastStatus('a1')).toMatchObject({ status: 'in_progress', completionReceived: 'done' }));
       expect(taskOf(session, 'a1')?.handoff).toBeUndefined();
       expect(taskOf(session, 'b2')?.status).toBe('approved');
       expect(adapters).toHaveLength(1);
@@ -779,7 +779,7 @@ describe('the Ordewell task tools (ADR-0022)', () => {
       await until(() => taskOf(session, 'a1')?.status === 'completed');
 
       expect(row('a1').completionReceived).toBeUndefined();
-      expect(lastStatus('a1')?.completionReceived).toBeUndefined();
+      await vi.waitFor(() => expect(lastStatus('a1')?.completionReceived).toBeUndefined());
       expect(taskOf(session, 'a1')?.verdict?.outcome).toBe('pass');
       expect(taskOf(session, 'a1')?.attemptUsage?.[0].totals.inputTokens).toBe(1234);
       await until(() => adapters.length === 2);
@@ -975,7 +975,7 @@ describe('the startup while Ordewell\'s tools attach (ADR-0025)', () => {
     const { session, started, adapters, reports, row, lastStatus } = await attaching();
 
     expect(row()).toMatchObject({ status: 'in_progress', attaching: 1 });
-    expect(lastStatus()).toMatchObject({ status: 'in_progress', attaching: 1 });
+    await vi.waitFor(() => expect(lastStatus()).toMatchObject({ status: 'in_progress', attaching: 1 }));
     expect(adapters[0].sent).toEqual([]);
 
     reports[0]('connected');
@@ -983,7 +983,7 @@ describe('the startup while Ordewell\'s tools attach (ADR-0025)', () => {
     await until(() => adapters[0].sent.length === 1);
 
     expect(row().attaching).toBeUndefined();
-    expect(lastStatus()?.attaching).toBeUndefined();
+    await vi.waitFor(() => expect(lastStatus()?.attaching).toBeUndefined());
     expect(row().status).toBe('in_progress');
     await session.execute({ command: 'stop_run' }, { kind: 'user' });
   });
@@ -995,7 +995,7 @@ describe('the startup while Ordewell\'s tools attach (ADR-0025)', () => {
     await until(() => reports.length === 2);
 
     expect(row()).toMatchObject({ status: 'in_progress', attaching: 2 });
-    expect(lastStatus()).toMatchObject({ attaching: 2 });
+    await vi.waitFor(() => expect(lastStatus()).toMatchObject({ attaching: 2 }));
     expect(adapters[0].disposed).toBe(1);
     expect(notices.some((n) => n.includes('respawning once'))).toBe(true);
 

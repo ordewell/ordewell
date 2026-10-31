@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { describe, it, expect, vi } from 'vitest';
-import { TaskOrchestrator, TaskControlError } from '../TaskOrchestrator';
+import { STARTS_AT_ONCE, TaskOrchestrator, TaskControlError } from '../TaskOrchestrator';
 import { createTask, type Task } from '../../models/Task';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
@@ -238,7 +238,7 @@ describe('attempt kinds, as the orchestrator runs them', () => {
       await env.orchestrator.approveReview();
 
       const { cwd } = env.spawned('c1')[0];
-      expect(env.skillRoots[0]).toEqual(['/repo', `${cwd}/api`, `${cwd}/web`]);
+      expect(env.skillRoots).toContainEqual(['/repo', `${cwd}/api`, `${cwd}/web`]);
       expect(env.spawned('c1')[0].prompt).toContain('### Skill: tdd');
     });
 
@@ -465,9 +465,11 @@ describe('attempt kinds, as the orchestrator runs them', () => {
     // Readiness is read once per tick, before the tick awaits each start: a
     // Merge all can begin while an earlier task of the same batch is starting.
     it('starts no ops task the scheduler picked before a merge began', async () => {
-      const env = setup();
-      env.orchestrator.loadPlan([change('c1', 1), opsTask('o2', 2)]);
-      const openC1 = env.hold('c1');
+      const env = setup({ config: { maxParallelSessions: STARTS_AT_ONCE + 1 } });
+      // Every start the tick waits on at once is a change, so the ops task's turn comes after they attach.
+      const changes = Array.from({ length: STARTS_AT_ONCE }, (_, i) => change(`c${i + 1}`, i + 1));
+      env.orchestrator.loadPlan([...changes, opsTask('o2', STARTS_AT_ONCE + 1)]);
+      const openChanges = changes.map((c) => env.hold(c.id));
       let openMerge!: () => void;
       let mergeEntered = false;
       env.isolation.mergeIntoCheckedOut = async (): Promise<IsolationMergeResult> => {
@@ -477,10 +479,10 @@ describe('attempt kinds, as the orchestrator runs them', () => {
       };
 
       const started = env.orchestrator.approveReview();
-      await vi.waitFor(() => expect(env.spawned('c1')).toHaveLength(1));
+      await vi.waitFor(() => expect(env.spawned(`c${STARTS_AT_ONCE}`)).toHaveLength(1));
       const merged = env.orchestrator.mergeRun();
       await vi.waitFor(() => expect(mergeEntered).toBe(true));
-      openC1();
+      for (const open of openChanges) open();
       await started;
 
       expect(env.spawned('o2')).toHaveLength(0);

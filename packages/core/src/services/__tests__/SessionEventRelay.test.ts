@@ -1,15 +1,18 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { SessionEventRelay } from '../SessionEventRelay';
+import { TaskOrchestrator } from '../TaskOrchestrator';
 import { PlanStore } from '../PlanStore';
 import { PlannerUsageLedger } from '../PlannerUsage';
 import type { SessionMessage, SessionNotice } from '../SessionMessage';
 import { createTask, type LegacyPlanState } from '../../models/Task';
+import { fakeConfig, fakeNotification } from './sessionTestKit';
+import type { Escalation } from '../escalations';
 
 function plan(): LegacyPlanState {
   return { tasks: [], generatedAt: '2026-01-01T00:00:00Z', status: 'approved', runners: ['claude-code'], lastUpdated: '2026-01-01T00:00:00Z' };
 }
 
-function setup(holds: ReadonlyMap<string, string> = new Map()) {
+function setup(holds: ReadonlyMap<string, string> = new Map(), escalations?: () => Escalation[]) {
   const sent: SessionMessage[] = [];
   const notices: SessionNotice[] = [];
   const store = new PlanStore();
@@ -25,14 +28,46 @@ function setup(holds: ReadonlyMap<string, string> = new Map()) {
     broadcast: (m) => sent.push(m),
     onNotice: (n) => notices.push(n),
     store,
-    orchestrator: { getIdleSince: () => null, getCompletionReceipt: () => null, getToolsAttaching: () => null, getQueuedTaskMessages: () => [], getMergeGate: () => [], holdReason: (id) => holds.get(id) ?? null, loopStranded: (id) => id === 't2', runMergeView: () => null, activity: { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false }, taskIsolation: () => null },
+    orchestrator: { judgingOnce: (read) => read(), getIdleSince: () => null, getCompletionReceipt: () => null, getToolsAttaching: () => null, getQueuedTaskMessages: () => [], getMergeGate: () => [], holdReason: (id) => holds.get(id) ?? null, loopStranded: (id) => id === 't2', runMergeView: () => null, activity: { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false }, taskIsolation: () => null },
     usage,
+    escalations,
   });
   const types = () => sent.map((m) => m.type);
   return { relay, sent, notices, store, usage, types };
 }
 
+/** How many times one status update read the whole plan: a judgement per task reads it once per task. */
+function planReadsPerStatus(n: number): number {
+  class CountingStore extends PlanStore {
+    reads = 0;
+    override get allTasks() { this.reads++; return super.allTasks; }
+  }
+  const store = new CountingStore();
+  const orchestrator = TaskOrchestrator.compose({
+    config: fakeConfig({ worktreeIsolation: false }),
+    notifications: fakeNotification(),
+    runner: { spawn: vi.fn(), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 },
+    store,
+    workspaceRoot: () => process.cwd(),
+  });
+  orchestrator.loadPlan(Array.from({ length: n }, (_, i) => createTask({ id: `t${i}`, order: i, title: `T${i}`, prompt: 'x', ops: i % 2 === 0, dependencies: i === 0 ? [] : [`t${i - 1}`] })), ['claude-code']);
+  const relay = new SessionEventRelay({
+    broadcast: () => {},
+    store,
+    orchestrator,
+    usage: new PlannerUsageLedger(),
+    escalations: () => { orchestrator.planStartWaits(); return []; },
+  });
+  store.reads = 0;
+  relay.statusMessage();
+  return store.reads;
+}
+
 describe('SessionEventRelay', () => {
+  it('judges the plan once per status update, whatever its size', () => {
+    expect(planReadsPerStatus(100)).toBe(planReadsPerStatus(10));
+  });
+
   it('announces task status and brings the plan object up to date first', () => {
     const { relay, sent } = setup();
     const p = plan();
@@ -98,6 +133,92 @@ describe('SessionEventRelay', () => {
     observer.onExecutionComplete();
 
     expect(sent).toEqual([]);
+  });
+
+  describe('inside the second a status update opens', () => {
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); });
+
+    /** A relay whose window is open, its one status update read and cleared. */
+    function windowOpen(waits: Escalation[] | (() => Escalation[]) = []) {
+      const env = setup(new Map(), typeof waits === 'function' ? waits : () => waits);
+      const p = plan();
+      const observer = env.relay.observer(() => p);
+      env.relay.status(p);
+      env.sent.length = 0;
+      return { ...env, observer, p };
+    }
+
+    it('lets progress wait, and sends it once as the second ends', () => {
+      const { observer, types } = windowOpen();
+
+      observer.onUsageChanged();
+      observer.onTaskChanged();
+      observer.onTick();
+      expect(types()).toEqual([]);
+
+      vi.advanceTimersByTime(1000);
+      expect(types()).toEqual(['status_update']);
+    });
+
+    it('sends a change to what waits on a person at once', () => {
+      const waits: Escalation[] = [];
+      const { observer, store, types } = windowOpen(waits);
+
+      store.markFailed('t3');
+      waits.push({ id: 'failed:t3:1', kind: 'failed', reason: 'It failed.', options: [] });
+      observer.onTaskChanged();
+
+      expect(types()).toEqual(['status_update']);
+    });
+
+    it('lets a task that started or ended wait when it leaves nobody anything to do', () => {
+      const { observer, store, types } = windowOpen();
+
+      store.markInProgress('t3');
+      observer.onTaskChanged();
+      store.markCompleted('t3');
+      observer.onTaskChanged();
+
+      expect(types()).toEqual([]);
+    });
+
+    it('reads what waits on a person only when a status or the run has moved', () => {
+      const escalations = vi.fn((): Escalation[] => []);
+      const { observer, store } = windowOpen(escalations);
+      store.markInProgress('t3');
+      observer.onTaskChanged();
+      escalations.mockClear();
+
+      for (let i = 0; i < 20; i++) observer.onTaskChanged();
+
+      expect(escalations).not.toHaveBeenCalled();
+    });
+
+    it('sends what waited ahead of a checkpoint and of the end of the run, which surfaces read it before', () => {
+      for (const announce of ['checkpoint', 'execution_complete'] as const) {
+        const { observer, types } = windowOpen();
+
+        observer.onUsageChanged();
+        if (announce === 'checkpoint') observer.onCheckpoint({ taskId: 't3', taskTitle: 'Third', summary: '' });
+        else observer.onExecutionComplete();
+
+        expect(types()).toEqual(['status_update', announce]);
+        vi.advanceTimersByTime(1000);
+        expect(types()).toEqual(['status_update', announce]);
+      }
+    });
+
+    it('sends nothing once closed, whatever was left open', () => {
+      const { relay, observer, p, types } = windowOpen();
+
+      observer.onUsageChanged();
+      relay.closeStatus(p);
+      expect(types()).toEqual(['status_update']);
+
+      vi.advanceTimersByTime(5000);
+      expect(types()).toEqual(['status_update']);
+    });
   });
 
   it('holds status updates back until released, then sends one', () => {

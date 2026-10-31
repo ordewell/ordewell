@@ -152,7 +152,7 @@ describe('Session.forkConversation', () => {
 
     // The original was never written to disk here, so everything in the store is the fork.
     const dir = path.join(workspace, '.ordewell', 'sessions');
-    const raw = fs.readdirSync(dir).map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
+    const raw = fs.readdirSync(dir).filter((f) => f.endsWith('.json')).map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
     expect(sessionStore.loadSession(fork.sessionId, workspace)!.plan.isolation).toBeUndefined();
     expect(raw).not.toContain(persisted.isolation!.run.repos[0].integrationBranch);
     expect(raw).not.toContain(persisted.isolation!.run.tasks.first.workspace);

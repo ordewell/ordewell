@@ -36,6 +36,8 @@ interface Setup {
   stranded?: string[];
   /** Tasks a loop carried on with no scheduler starts. */
   carried?: string[];
+  /** Filled with each task whose attempt the list read. */
+  attemptsRead?: string[];
 }
 
 function listFor(tasks: Task[], setup: Setup = {}): Escalation[] {
@@ -65,7 +67,10 @@ function listFor(tasks: Task[], setup: Setup = {}): Escalation[] {
     tasks,
     waits,
     approvals: setup.approvals ?? [],
-    attempt: (t) => setup.attempts?.[t.id] ?? 0,
+    attempt: (t) => {
+      setup.attemptsRead?.push(t.id);
+      return setup.attempts?.[t.id] ?? 0;
+    },
     live: (id) => (setup.live ?? []).includes(id),
     checkpoint: (id) => setup.checkpoints?.[id],
     waitsForApproval: (id) => (setup.added ?? []).includes(id),
@@ -77,6 +82,20 @@ function listFor(tasks: Task[], setup: Setup = {}): Escalation[] {
   };
   return escalations(input);
 }
+
+describe('what the list reads', () => {
+  it('reads the attempt of no task nothing waits on: after a reload each read is a directory listing', () => {
+    const attemptsRead: string[] = [];
+
+    listFor([
+      task('done', 1, { status: 'completed' }),
+      task('next', 2, { dependencies: ['failed'] }),
+      task('failed', 3, { status: 'failed', verdict: failedVerdict('failed') }),
+    ], { attemptsRead });
+
+    expect(attemptsRead).toEqual(['failed']);
+  });
+});
 
 describe('a loop\'s check between rounds that nothing will run (ADR-0045 L5)', () => {
   const check = (bodyStatus: Task['status'] = 'completed') => [

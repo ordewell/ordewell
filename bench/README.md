@@ -92,6 +92,13 @@ still runs a single goal the old way.
 - `pipeline.test.mjs` — runs the driver under `node:test`. Needs core built
   first (`npm run build:core`).
 
+## Scale benchmark (`bench/scale/`)
+
+Where one daemon breaks: what the scheduler, the store, the saves, the view, the
+supervisor's wake-ups, the task logs and the MCP server cost against plan size
+and live sessions, with fake runners. Bundles core's source itself, so it needs
+no build. See [its README](scale/README.md) for the commands and how to read them.
+
 ## Runner-detection lab (`bench/lab/`)
 
 A throwaway `HOME` and a shim bin dir that decide, for one run, which

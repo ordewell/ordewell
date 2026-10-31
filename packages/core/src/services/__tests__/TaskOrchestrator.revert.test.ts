@@ -627,7 +627,7 @@ describe('TaskOrchestrator: a landed task that left the plan (ADR-0054)', () => 
     await leave(env, 't2');
     expect(env.orchestrator.storeInstance.get('t3')!.dependencies).toEqual([]);
 
-    expect(env.orchestrator.revertScope('t1').taskIds.toSorted()).toEqual(['t1', 't2', 't3']);
+    expect([...env.orchestrator.revertScope('t1').taskIds].sort()).toEqual(['t1', 't2', 't3']);
   });
 
   it('keeps the link through a task that landed nothing and left', async () => {

@@ -4,7 +4,7 @@ import type { IsolationRunController } from './IsolationRunController';
 import { classifyAttempt, mergeExcludes } from './attemptKind';
 import { planBlocks } from './blocking';
 import { scriptBodyOf } from '../models/ScriptTask';
-import { betweenRounds, checkOf, loopRoundOf } from '../models/Loop';
+import { betweenRounds, checksOfBodies, loopRoundOf } from '../models/Loop';
 
 /**
  * Why a task cannot start now: the one start rule (ADR-0034), which the
@@ -169,11 +169,14 @@ interface PlanJudgement {
   repeating(): ReadonlySet<string>;
   /** The runners a task waits on the usage limit of. */
   limited(): ReadonlySet<string>;
+  /** The loop's check a body task answers to, by body task. */
+  checks(): ReadonlyMap<string, Readonly<Task>>;
 }
 
 function judgeOnce(store: StartRuleInput['store']): PlanJudgement {
   let blocks: ReturnType<typeof planBlocks> | undefined;
   let limited: ReadonlySet<string> | undefined;
+  let checks: ReadonlyMap<string, Readonly<Task>> | undefined;
   const judged = () => (blocks ??= planBlocks(store.allTasks));
   return {
     blocked: () => judged().blocked,
@@ -181,6 +184,7 @@ function judgeOnce(store: StartRuleInput['store']): PlanJudgement {
     limited: () => (limited ??= new Set(store.allTasks
       .filter((t) => t.status === 'awaiting_user' && t.awaitingReason === 'usage-limit')
       .map((t) => store.resolveTaskRunner(t)))),
+    checks: () => (checks ??= checksOfBodies(store.allTasks)),
   };
 }
 
@@ -210,11 +214,12 @@ function waitsOf(task: Readonly<Task>, input: StartRuleInput, forced: ForcedStar
   // A body runs only for its check: until the check fails this round, that is
   // what it waits for, not a dependency to finish. A force start still queues
   // behind the check, as behind any dependency under way.
-  const check = forced || queued ? undefined : checkOf(store.allTasks, task.id);
+  const check = forced || queued ? undefined : plan.checks().get(task.id);
   const forCheck = !!check && UNDECIDED.has(check.status);
   if (forCheck) waits.push({ kind: 'loop-check', check: check.id });
   // A forced start goes past a failure, so only what is still under way holds it.
-  const deps = (forced || queued ? underWay(task, store, runs, plan) : unmetDependencies(task, store, runs)).filter((id) => !forCheck || id !== check.id);
+  const deps = waitingBehind(heldTo(task, store), store, runs, { pastFailures: !!forced || queued, plan: () => ({ blocked: plan.blocked(), repeating: plan.repeating() }) })
+    .filter((id) => !forCheck || id !== check.id);
   const waiting = [...deps, ...bodyAtWork(task, store, runs)];
   if (waiting.length > 0) waits.push(queued ? { kind: 'queued', waiting } : { kind: 'dependencies', waiting });
   if (input.merging && mergeExcludes(classifyAttempt(opsOf(task, store) ? 'ops' : 'change'))) waits.push({ kind: 'merging' });
@@ -284,25 +289,17 @@ export function unmetDependencies(
   return waitingBehind(heldTo(task, store), store, runs, { pastFailures: false });
 }
 
-/**
- * A task's unmet dependencies, less the failed or blocked ones a forced start
- * goes past. A blocked one is gone past for its failure only: the work under
- * way or yet to run that it waits on is still waited for, through it.
- */
-function underWay(task: Readonly<Task>, store: DependencyStore, runs: Pick<IsolationRunController, 'openRecord'>, plan: PlanJudgement): string[] {
-  return waitingBehind(heldTo(task, store), store, runs, { pastFailures: true, plan: () => ({ blocked: plan.blocked(), repeating: plan.repeating() }) });
-}
-
 /** The blocked rule's reading of the plan a dependency walk needs. */
 type JudgedBlocks = { blocked: ReadonlyMap<string, string[]>; repeating: ReadonlySet<string> };
 
 /**
  * Breadth first, so a task that is also a direct dependency is judged as one.
  * A skipped task is walked through to what it waited on, behind which a
- * failed or blocked task is a dead end. `pastFailures` makes a failed task a
- * dead end anywhere, and walks through a blocked one to what it waits on. A
- * loop's check between rounds whose loop goes on is no failure: it is work
- * under way (ADR-0045 L3).
+ * failed or blocked task is a dead end. `pastFailures`, for a forced start,
+ * makes a failed task a dead end anywhere, and walks through a blocked one to
+ * what it waits on: it is gone past for its failure only, and the work under
+ * way or yet to run behind it is still waited for. A loop's check between
+ * rounds whose loop goes on is no failure: it is work under way (ADR-0045 L3).
  */
 function waitingBehind(
   depIds: readonly string[],

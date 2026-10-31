@@ -84,6 +84,11 @@ export class PlanStore {
     return !!root && runsAsOps(root);
   }
 
+  /** Every task's status and what it waits for, to tell cheaply whether one has changed since this was read. */
+  statusMark(): string {
+    return this._allTasks.map((t) => `${t.status}:${t.awaitingReason ?? ''}:${t.resumeAt ?? ''}`).join();
+  }
+
   /** A copy of the task tree, detached from the store: later status changes do not reach it. */
   snapshot(): Task[] { return cloneTasks(this._planTasks); }
 

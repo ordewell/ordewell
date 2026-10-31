@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { TaskOrchestrator } from '../TaskOrchestrator';
+import { STARTS_AT_ONCE, TaskOrchestrator } from '../TaskOrchestrator';
 import { composeAugmentedPrompt } from '../promptAugment';
 import { createTask } from '../../models/Task';
 import type { IConfig } from '../../interfaces/IConfig';
@@ -1252,20 +1252,23 @@ describe('task attempts', () => {
     expectNoAttemptState(orchestrator);
   });
   describe('a start the scheduler resumes after an in-flight spawn', () => {
+    /** The starts the tick waits on before it comes to t2 and t3. */
+    const aheadIds = Array.from({ length: STARTS_AT_ONCE }, (_, i) => `a${i + 1}`);
+
     function plan() {
       return [
-        createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' }),
-        createTask({ id: 't2', order: 2, title: 'Second', prompt: 'do second' }),
-        createTask({ id: 't3', order: 3, title: 'Third', prompt: 'do third' }),
+        ...aheadIds.map((id, i) => createTask({ id, order: i + 1, title: id, prompt: `do ${id}` })),
+        createTask({ id: 't2', order: STARTS_AT_ONCE + 1, title: 'Second', prompt: 'do second' }),
+        createTask({ id: 't3', order: STARTS_AT_ONCE + 2, title: 'Third', prompt: 'do third' }),
       ];
     }
 
-    async function heldAtFirstSpawn(maxParallelSessions: number) {
+    async function heldAtFirstSpawns(slotsPastThem: number) {
       const held = heldSpawns();
-      const orchestrator = makeOrchestrator({ runner: { spawn: held.spawn }, config: { maxParallelSessions } });
+      const orchestrator = makeOrchestrator({ runner: { spawn: held.spawn }, config: { maxParallelSessions: STARTS_AT_ONCE + slotsPastThem } });
       orchestrator.loadPlan(plan());
       void orchestrator.approveReview();
-      await vi.waitFor(() => expect(held.spawned()).toBe(1));
+      await vi.waitFor(() => expect(held.spawned()).toBe(STARTS_AT_ONCE));
       return { orchestrator, ...held };
     }
 
@@ -1273,12 +1276,12 @@ describe('task attempts', () => {
       spawn.mock.calls.map((call: unknown[]) => (call[0] as { taskId: string }).taskId);
 
     it('does not start a task the user put on hold meanwhile', async () => {
-      const { orchestrator, spawn, settle, spawned } = await heldAtFirstSpawn(3);
+      const { orchestrator, spawn, settle, spawned } = await heldAtFirstSpawns(2);
 
       void orchestrator.markTaskComplete('t2');
-      await vi.waitFor(() => expect(spawned()).toBe(2));
+      await vi.waitFor(() => expect(spawned()).toBe(STARTS_AT_ONCE + 1));
       await orchestrator.markTaskIncomplete('t2');
-      await settle(0, new FakeRunnerSession('s1', 't1'));
+      await settle(0, new FakeRunnerSession('s1', 'a1'));
 
       expect(orchestrator.storeInstance.get('t2')!.status).toBe('pending');
       expect(orchestrator.getAttempt('t2')).toBeUndefined();
@@ -1286,35 +1289,33 @@ describe('task attempts', () => {
     });
 
     it('does not reopen a task the user marked complete meanwhile, nor run more than the parallel limit', async () => {
-      const { orchestrator, spawn, settle, spawned } = await heldAtFirstSpawn(2);
+      const { orchestrator, spawn, settle, spawned } = await heldAtFirstSpawns(1);
 
       void orchestrator.markTaskComplete('t2');
-      await vi.waitFor(() => expect(spawned()).toBe(2));
-      await settle(0, new FakeRunnerSession('s1', 't1'));
-      await settle(1, new FakeRunnerSession('s3', 't3'));
+      await vi.waitFor(() => expect(spawned()).toBe(STARTS_AT_ONCE + 1));
+      for (const [i, id] of [...aheadIds, 't3'].entries()) await settle(i, new FakeRunnerSession(`s${i}`, id));
 
       expect(orchestrator.storeInstance.get('t2')!.status).toBe('completed');
-      expect(spawnedIds(spawn)).toEqual(['t1', 't3']);
-      expect(orchestrator.activeSessionMap.size).toBe(2);
+      expect(spawnedIds(spawn)).toEqual([...aheadIds, 't3']);
+      expect(orchestrator.activeSessionMap.size).toBe(STARTS_AT_ONCE + 1);
     });
 
     it('does not take a slot a force start filled meanwhile', async () => {
-      const { orchestrator, spawn, settle, spawned } = await heldAtFirstSpawn(2);
+      const { orchestrator, spawn, settle, spawned } = await heldAtFirstSpawns(1);
 
       void orchestrator.forceStartTask('t3');
-      await vi.waitFor(() => expect(spawned()).toBe(2));
-      await settle(0, new FakeRunnerSession('s1', 't1'));
-      await settle(1, new FakeRunnerSession('s3', 't3'));
+      await vi.waitFor(() => expect(spawned()).toBe(STARTS_AT_ONCE + 1));
+      for (const [i, id] of [...aheadIds, 't3'].entries()) await settle(i, new FakeRunnerSession(`s${i}`, id));
 
-      expect(spawnedIds(spawn)).toEqual(['t1', 't3']);
+      expect(spawnedIds(spawn)).toEqual([...aheadIds, 't3']);
       expect(orchestrator.storeInstance.get('t2')!.status).toBe('pending');
     });
 
     it('does not start a task a reconcile gave an unmet dependency meanwhile', async () => {
-      const { orchestrator, spawn, settle } = await heldAtFirstSpawn(2);
+      const { orchestrator, spawn, settle } = await heldAtFirstSpawns(1);
 
       orchestrator.reconcilePlan(plan().map((t) => (t.id === 't2' ? { ...t, dependencies: ['t3'] } : t)));
-      await settle(0, new FakeRunnerSession('s1', 't1'));
+      await settle(0, new FakeRunnerSession('s1', 'a1'));
 
       expect(spawnedIds(spawn)).not.toContain('t2');
       expect(orchestrator.storeInstance.get('t2')!.status).toBe('pending');
@@ -1455,42 +1456,38 @@ describe('task attempts', () => {
     expect(orchestrator.isRunning).toBe(false);
   });
 
-  const threeReady = () => [
-    createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first' }),
-    createTask({ id: 't2', order: 2, title: 'Second', prompt: 'do second' }),
-    createTask({ id: 't3', order: 3, title: 'Third', prompt: 'do third' }),
-  ];
+  /** One task more than a tick starts at once, so the last waits for an attach. */
+  const pastTheStarts = () => Array.from({ length: STARTS_AT_ONCE + 1 }, (_, i) => createTask({ id: `t${i + 1}`, order: i + 1, title: `Task ${i + 1}`, prompt: 'do it' }));
 
-  it('stop during the first spawn of a tick starts none of the tasks after it', async () => {
+  it('stop during a tick\'s spawns starts none of the tasks after them', async () => {
     const { spawn, settle, spawned } = heldSpawns();
-    const orchestrator = makeOrchestrator({ runner: { spawn } });
-    orchestrator.loadPlan(threeReady());
+    const orchestrator = makeOrchestrator({ runner: { spawn }, config: { maxParallelSessions: STARTS_AT_ONCE + 1 } });
+    orchestrator.loadPlan(pastTheStarts());
     void orchestrator.approveReview();
-    await vi.waitFor(() => expect(spawned()).toBe(1));
+    await vi.waitFor(() => expect(spawned()).toBe(STARTS_AT_ONCE));
 
     orchestrator.stop();
     await settle(0, new FakeRunnerSession('late', 't1'));
     await flushMicrotasks();
 
-    expect(spawned()).toBe(1);
+    expect(spawned()).toBe(STARTS_AT_ONCE);
     expect(orchestrator.hasLiveWork).toBe(false);
-    expect(orchestrator.storeInstance.allTasks.map((t) => t.status)).toEqual(['pending', 'pending', 'pending']);
+    expect(orchestrator.storeInstance.allTasks.every((t) => t.status === 'pending')).toBe(true);
   });
 
   it('a plan loaded during a tick\'s spawn is not handed tasks the old plan had ready', async () => {
     const { spawn, settle, spawned } = heldSpawns();
-    const orchestrator = makeOrchestrator({ runner: { spawn } });
-    orchestrator.loadPlan(threeReady());
+    const orchestrator = makeOrchestrator({ runner: { spawn }, config: { maxParallelSessions: STARTS_AT_ONCE + 1 } });
+    orchestrator.loadPlan(pastTheStarts());
     void orchestrator.approveReview();
-    await vi.waitFor(() => expect(spawned()).toBe(1));
+    await vi.waitFor(() => expect(spawned()).toBe(STARTS_AT_ONCE));
 
     orchestrator.loadPlan([createTask({ id: 'n1', order: 1, title: 'New', prompt: 'do new' })]);
     await settle(0, new FakeRunnerSession('late', 't1'));
     await flushMicrotasks();
 
     const started = spawn.mock.calls.map((call) => (call as unknown as [{ taskId: string }])[0].taskId);
-    expect(started).not.toContain('t2');
-    expect(started).not.toContain('t3');
+    expect(started).not.toContain(`t${STARTS_AT_ONCE + 1}`);
     expect(orchestrator.storeInstance.get('t2')).toBeUndefined();
   });
 

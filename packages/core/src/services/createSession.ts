@@ -155,6 +155,14 @@ export interface ConversationRewind extends ConversationFork {
   rewoundMessage: string;
 }
 
+/**
+ * How long what no decision depends on waits in memory for a save: usage above
+ * all, which every runner reports many times a minute. A crash loses this much
+ * of it; a saved file holds the whole plan, so saving per report is what a
+ * plan's size multiplies.
+ */
+const SAVE_INTERVAL_MS = 5000;
+
 /** Writes one plan to the saved-session store: {@link saveSession}'s shape, injected so tests never touch disk. */
 export type SaveSession = (plan: LegacyPlanState, goal: string, workspace: string, sessionId: string) => void;
 
@@ -600,6 +608,10 @@ export class Session {
   private saveRefusedFor: string | null = null;
   /** User controls in flight; see {@link withSave}. */
   private controlsInFlight = 0;
+  /** A save is owed, for the end of {@link SAVE_INTERVAL_MS}; see {@link saveSoon}. */
+  private saveTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The store's status mark as last saved, or as loaded. */
+  private savedStatuses: string | undefined;
   /** A whole-plan start opening; a second Execute joins it rather than resetting the run under it. */
   private runOpening: Promise<void> | null = null;
   private unsubObserver: (() => void) | null;
@@ -859,6 +871,10 @@ export class Session {
 
   /** What will not move without a person, derived afresh from the plan, the run and the pending approvals (ADR-0053). */
   escalations(): Escalation[] {
+    return this.orchestrator.judgingOnce(() => this.judgedEscalations());
+  }
+
+  private judgedEscalations(): Escalation[] {
     if (!this.plan) return [];
     const { scheduled, resumable, advancesOnItsOwn } = this.orchestrator.activity;
     const carried = this.orchestrator.carriedTasks();
@@ -1270,11 +1286,11 @@ export class Session {
         if (result.outcome !== 'merged') this.supervision.observe({ kind: 'auto_merge_stopped', ...(taskId === undefined ? {} : { taskId }), detail: mergeStopped(result) });
       },
       onTaskChanged: () => {
-        this.saveForControl();
+        this.saveChange();
         relay.onTaskChanged();
       },
       onTick: () => {
-        this.saveForControl();
+        this.saveChange();
         relay.onTick();
       },
       // Saved the moment it settles: a shared run has no run record to save
@@ -1293,7 +1309,7 @@ export class Session {
         this.supervision.observe({ kind: 'task_idle', taskId, detail: `no output since ${idleSince}` });
       },
       onUsageChanged: () => {
-        this.persist();
+        this.saveSoon();
         relay.onUsageChanged();
       },
       onIsolationChanged: () => {
@@ -1306,6 +1322,7 @@ export class Session {
       onIsolationHandoff: (handoff) => this.broadcast({ type: 'isolation_handoff', ...this.supervision.handoff(handoff) }),
       onExecutionComplete: () => {
         this.persist();
+        this.events.flushStatus(this.plan);
         this.announceClosed();
         relay.onExecutionComplete();
         this.supervision.runFinished();
@@ -1340,6 +1357,8 @@ export class Session {
       this.saveRefused(held);
       return;
     }
+    clearTimeout(this.saveTimer);
+    this.saveTimer = undefined;
     this.syncPlanTasks();
     this.plan.isolation = this.runs.planIsolation ?? undefined;
     this.plan.mergedRun = this.runs.mergedRun ?? undefined;
@@ -1350,6 +1369,41 @@ export class Session {
     this.plan.supervision = this.supervision.snapshot();
     this.plan.lastUpdated = new Date().toISOString();
     this.save(this.plan, this.goal, this.workspace, this.currentSessionId);
+    this.savedStatuses = this.store.statusMark();
+  }
+
+  /**
+   * What a change to the plan owes the disk. A task's status is what a
+   * decision and a reload read, so a changed one is saved at once, and what
+   * changed beside it goes with it; anything else can wait for the timer.
+   */
+  private saveChange(): void {
+    if (this.controlsInFlight > 0) return this.persist();
+    // Saved as it ends, or not at all if it aborts.
+    if (this.events.holdingStatus) return;
+    if (this.store.statusMark() !== this.savedStatuses) this.persist();
+    else this.saveSoon();
+  }
+
+  /** Owe a save, made once however often this is called before it comes. */
+  private saveSoon(): void {
+    if (this.saveTimer || !this.plan) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = undefined;
+      // Outside any observer, whose throw the orchestrator would catch: a full disk must not take the daemon down.
+      try {
+        this.persist();
+      } catch (err) {
+        console.error('[Session] save failed:', err);
+      }
+    }, SAVE_INTERVAL_MS);
+    // A process with nothing else to do does not wait for this: settling and destroy save.
+    this.saveTimer.unref?.();
+  }
+
+  /** Make the save owed, before the plan it is owed for goes. */
+  private settleSaves(): void {
+    if (this.saveTimer) this.persist();
   }
 
   /** A new plan on a long-lived Session gets its own persisted identity (unless the host fixed one). */
@@ -1407,6 +1461,7 @@ export class Session {
    * boundary does not (ADR-0008).
    */
   private dropPlanScope({ keepGrants = false }: { keepGrants?: boolean } = {}): void {
+    this.settleSaves();
     this.escalationNotifier.hush();
     // A turn waiting at the planner gate belongs to this scope too: let open
     // later, it would plan the old goal in whatever scope is held by then.
@@ -1457,6 +1512,7 @@ export class Session {
    * bleed into the next session.
    */
   reset(): void {
+    this.settleSaves();
     // Null the plan first so orchestrator-stop observer callbacks
     // (onTaskChanged → status_update) no-op instead of broadcasting the
     // dying session's tasks.
@@ -2374,14 +2430,12 @@ export class Session {
     try {
       const result = await op();
       this.persist();
+      // The user's own act shows as it ends: nothing of it waits for the second to run out.
+      this.events.flushStatus(this.plan);
       return result;
     } finally {
       this.controlsInFlight--;
     }
-  }
-
-  private saveForControl(): void {
-    if (this.controlsInFlight > 0) this.persist();
   }
 
   /** A control that finishes synchronously: its status is held until it is saved. */
@@ -2509,7 +2563,9 @@ export class Session {
     // attempt logs it left, so upgrading keeps the chats it already had. A
     // manual task's handoff log is not an attempt, and stays no chat.
     if (adopting) this.creditLoggedAttempts(plan.tasks);
-    this.orchestrator.loadPlan(plan.tasks, plan.runners);
+    // Held, so a task the load puts back is not saved here: whether a load saves is the caller's to say.
+    this.events.holdStatus(() => this.orchestrator.loadPlan(plan.tasks, plan.runners));
+    this.savedStatuses = this.store.statusMark();
     // Loading normalizes statuses (a stored `blocked` goes) on the store's
     // copy; the adopted plan shows that result, not the caller's input.
     this.syncPlanTasks();
@@ -2525,6 +2581,7 @@ export class Session {
       this.escalationNotifier.baseline(this.escalations());
     }
     if (opts?.persist !== false) this.persist();
+    this.events.releaseStatus(this.plan);
     // A reopened session shows its token line again without waiting for the
     // next turn: announce the totals the moment the plan is adopted.
     if (this.usage.hasUsage) this.broadcast(this.usage.message());
@@ -2565,6 +2622,8 @@ export class Session {
     this.unsubObserver?.();
     this.unsubObserver = null;
     this.fsAdapter.endSession?.();
+    this.settleSaves();
+    this.events.closeStatus(this.plan);
     // Last: stopping the run above saves what it changed, which needs the lease.
     this.lease.release();
     this.leaseReleased = true;

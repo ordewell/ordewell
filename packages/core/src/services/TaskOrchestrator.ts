@@ -163,6 +163,13 @@ interface QueuedStart {
   asScheduled?: true;
 }
 
+/**
+ * How many runners one tick waits on to attach at once. One at a time, a
+ * fan-out takes attach time times its width; all at once, every harness boots
+ * together on one machine.
+ */
+export const STARTS_AT_ONCE = 8;
+
 /** What keeps a queued force start waiting, with nothing to say: it starts once these clear. */
 const QUEUED_WAITS: ReadonlySet<StartWaitKind> = new Set<StartWaitKind>(['queued', 'completing', 'merging', 'start-hold', 'unapproved']);
 
@@ -292,6 +299,8 @@ export class TaskOrchestrator {
   private runState: RunState = IDLE_RUN;
   /** Planner turns in flight that new starts wait for (ADR-0029); running attempts carry on. */
   private startHolds = 0;
+  /** The judgement a {@link judgingOnce} read shares, while one runs. */
+  private judgement: { waits?: Map<string, StartWait[]> } | undefined;
   /** The {@link revertReach} of each revert under way: unlike a hold, it stops a start admitted before the revert too. */
   private readonly reverting = new Set<ReadonlySet<string>>();
   /** Bumped by the user's Stop: a start admitted under an older generation never takes its claim. */
@@ -820,7 +829,7 @@ export class TaskOrchestrator {
   runMergeView(): RunMergeView | null {
     const handoff = this.runs.view()?.handoff;
     if (!handoff?.landed.length) return null;
-    const waitingAtGate = this.store.allTasks.some((t) => this.getMergeGate(t.id).length > 0);
+    const waitingAtGate = this.judgingOnce(() => this.store.allTasks.some((t) => this.getMergeGate(t.id).length > 0));
     return { waitingAtGate, paused: waitingAtGate && this.startsOnTick && this.attempts.size === 0, repos: handoff.repos, landed: handoff.landed };
   }
 
@@ -848,12 +857,29 @@ export class TaskOrchestrator {
    * Takes the task, not its id: the one the command seam located.
    */
   startWaits(task: Readonly<Task>, forced?: ForcedStart): StartWait[] {
-    return startWaits(task, this.startRule(), forced);
+    const judged = forced || !this.judgement ? undefined : this.planStartWaits().get(task.id);
+    return judged ?? startWaits(task, this.startRule(), forced);
   }
 
   /** Every task's {@link startWaits}, the plan judged once. */
   planStartWaits(): Map<string, StartWait[]> {
-    return planStartWaits(this.startRule());
+    if (!this.judgement) return planStartWaits(this.startRule());
+    return (this.judgement.waits ??= planStartWaits(this.startRule()));
+  }
+
+  /**
+   * Run `read`, a synchronous read of the plan, on one judgement of it: what a
+   * read asks task by task would otherwise judge the whole plan per task.
+   * Nothing can change the plan inside it, so no answer can be stale.
+   */
+  judgingOnce<T>(read: () => T): T {
+    if (this.judgement) return read();
+    this.judgement = {};
+    try {
+      return read();
+    } finally {
+      this.judgement = undefined;
+    }
   }
 
   private startRule(): StartRuleInput {
@@ -1508,8 +1534,11 @@ export class TaskOrchestrator {
     const active = this.attempts.size;
     const readiness = selectReadyTasks({ ...this.startRule(), active, maxParallel, ...(this.isScheduling ? {} : { within: this.carriedTasks() }) });
 
-    for (const { task, waits } of readiness.excluded) {
-      console.log(`[TaskOrchestrator] excluded: ${taskRefOf(this.store.planTasks, task.id) ?? `#${task.order}`} "${task.title}": ${waits.map((w) => w.kind).join(', ')}`);
+    // Counted, not listed: a line per task would make every tick walk the plan's tree once per task.
+    if (readiness.excluded.length > 0) {
+      const kinds = new Map<StartWaitKind, number>();
+      for (const { waits } of readiness.excluded) kinds.set(waits[0].kind, (kinds.get(waits[0].kind) ?? 0) + 1);
+      console.log(`[TaskOrchestrator] excluded: ${readiness.excluded.length} (${[...kinds].map(([kind, count]) => `${kind} ${count}`).join(', ')})`);
     }
     console.log(`[TaskOrchestrator] getReadyTasks: ${readiness.candidateCount} candidates, ${Math.max(0, maxParallel - active)} slots, maxParallel=${maxParallel}`);
     return readiness;
@@ -2353,7 +2382,14 @@ export class TaskOrchestrator {
 
     if (ready.length === 0 && this.attempts.size === 0) return this.settleRun('tick');
 
-    for (const { id } of ready) {
+    const waiting = ready.map(({ id }) => id);
+    await Promise.all(Array.from({ length: Math.min(STARTS_AT_ONCE, waiting.length) }, () => this.startReady(waiting, admission)));
+    this.emit('onTick');
+  }
+
+  /** One of a tick's starters: takes the next of `waiting` as each start it made has attached. */
+  private async startReady(waiting: string[], admission: Admitted): Promise<void> {
+    for (let id = waiting.shift(); id !== undefined; id = waiting.shift()) {
       // Readiness was read before this loop awaited any start: a stop, a plan
       // load, a Merge all, a user control or a concurrent tick may have come
       // since, so each id is judged again — and last with nothing awaited
@@ -2372,7 +2408,6 @@ export class TaskOrchestrator {
       }
       await claimed.spawned;
     }
-    this.emit('onTick');
   }
 
   /**
@@ -2605,7 +2640,7 @@ export class TaskOrchestrator {
   private sayGate(): void {
     // With no scheduler only a carried loop's tasks start, so a gate elsewhere holds nothing back.
     const within = this.isScheduling ? null : this.carriedTasks();
-    const waiting = this.store.allTasks.filter((t) => (!within || within.has(t.id)) && this.getMergeGate(t.id).length > 0);
+    const waiting = this.judgingOnce(() => this.store.allTasks.filter((t) => (!within || within.has(t.id)) && this.getMergeGate(t.id).length > 0));
     const notice = waiting.length === 0
       ? ''
       : `Waiting for Merge all: ${waiting.map((t) => `"${t.title}"`).join(', ')} ${waiting.length === 1 ? 'needs' : 'need'} work that is not merged into your branch yet.`;
