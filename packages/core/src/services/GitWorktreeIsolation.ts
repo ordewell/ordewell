@@ -1043,7 +1043,9 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       .filter((ref) => ref === `refs/heads/${repo.baseBranch}` || !isOwnBranch(ref))
       .map((ref) => ref.replace(/^refs\/heads\//, ''));
     const detached = !(await this.tryGit(repo.root, ['symbolic-ref', '-q', 'HEAD'])).ok;
-    if (!detached || !(await this.tryGit(repo.root, ['merge-base', '--is-ancestor', merge, 'HEAD'])).ok) return holders;
+    if (!detached) return holders;
+    const inHead = await this.tryGit(repo.root, ['merge-base', '--is-ancestor', merge, 'HEAD']);
+    if (!inHead.ok) return inHead.code === 1 ? holders : null;
     const onOwnTip = await this.tryGit(repo.root, ['for-each-ref', '--points-at', 'HEAD', '--format=%(refname)', ...OWN_BRANCHES]);
     if (!onOwnTip.ok) return null;
     return onOwnTip.stdout.trim() ? holders : [...holders, 'HEAD'];
@@ -1060,11 +1062,14 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
    * merge's clean-up — in a repo git can read. Merge all merges that branch by
    * name, so no merge can bring the work in again, and it is not offered as
    * work to merge. A repo git cannot read at all (moved, or git failing)
-   * proves nothing either way and counts as not merged.
+   * proves nothing either way and counts as not merged. So does a ref it cannot
+   * read: `rev-parse --verify -q` exits 1 for that as for one not there, where
+   * this lists nothing and warns, so gone is an empty answer with nothing said.
    */
   private async integrationGone(repo: IsolationRepo): Promise<boolean> {
     if (!(await this.tryGit(repo.root, ['rev-parse', '--verify', '-q', 'HEAD'])).ok) return false;
-    return !(await this.tryGit(repo.root, ['rev-parse', '--verify', '-q', `refs/heads/${repo.integrationBranch}`])).ok;
+    const listed = await this.tryGit(repo.root, ['for-each-ref', '--format=%(refname)', `refs/heads/${repo.integrationBranch}`]);
+    return listed.ok && !listed.stdout.trim() && !listed.stderr.trim();
   }
 
   async snapshotTree(workspaceRoot: string, exclude: readonly string[]): Promise<TreeSnapshot | null> {
@@ -1470,8 +1475,9 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       if (landed.length === 0) continue;
       const unmerged = landed.find(({ taskId }) => landingsOf(run, taskId, repo.path).length === 0 || run.carried?.[taskId]?.[repo.path]);
       if (unmerged) return { ok: false, reason: 'no-own-merge', error: noOwnMerge(run, unmerged, repo.path) };
-      const holder = await this.integrationHeldBy(run, repo);
-      if (holder) return { ok: false, reason: 'checked-out', error: `The integration branch${repo.path === SELF_REPO ? '' : ` of ${repo.path}`} is checked out in ${holder}, and a revert has to commit to it. Check out another branch there first. Nothing was reverted.` };
+      const held = await this.integrationHeldBy(run, repo);
+      if (!held) return { ok: false, reason: 'git', error: `Git could not say where the integration branch${repo.path === SELF_REPO ? '' : ` of ${repo.path}`} is checked out, and a revert that cannot be sure refuses. Nothing was reverted.` };
+      if (held.worktree) return { ok: false, reason: 'checked-out', error: `The integration branch${repo.path === SELF_REPO ? '' : ` of ${repo.path}`} is checked out in ${held.worktree}, and a revert has to commit to it. Check out another branch there first. Nothing was reverted.` };
       const off = await this.integrationOffBranch(run, repo);
       if (off) return { ok: false, reason: 'checked-out', error: `The integration worktree ${this.integrationDir(run, repo)} is ${off}, and a revert has to commit to that branch there. Check it out there first. Nothing was reverted.` };
       const line = await this.tryGit(repo.root, ['rev-list', '--first-parent', repo.integrationBranch]);
@@ -1613,7 +1619,9 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     const made = commit.stdout.trim();
     save(made);
 
-    if ((await this.integrationHeldBy(run, repo)) || (await this.integrationOffBranch(run, repo))) return { strayed: true };
+    const held = await this.integrationHeldBy(run, repo);
+    if (!held) return { error: 'git could not say where the integration branch is checked out' };
+    if (held.worktree || (await this.integrationOffBranch(run, repo))) return { strayed: true };
     const ref = `refs/heads/${repo.integrationBranch}`;
     if (!(await this.tryGit(repo.root, ['update-ref', ref, made, onto])).ok) return { strayed: true };
     const dir = this.integrationDir(run, repo);
@@ -1676,7 +1684,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
    * of git's error, which would otherwise be dropped.
    */
   private async integrationWorktreeError(repo: IsolationRepo, err: unknown): Promise<string> {
-    const holder = await this.worktreeHolding(repo, repo.integrationBranch);
+    const holder = (await this.worktreeHolding(repo, repo.integrationBranch))?.worktree;
     if (holder) return `the integration branch is checked out in ${holder}`;
     return `git could not prepare its integration worktree (${firstLine(err instanceof Error ? err.message : String(err))})`;
   }
@@ -1706,7 +1714,8 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
    * nothing else; anything else is left alone, since
    * resetting it could drop work that is not this landing's. The branch
    * moves with Ordewell's integration worktree if it is checked out there,
-   * and not at all if it is checked out anywhere else.
+   * and not at all if it is checked out anywhere else, or if git cannot say
+   * and that worktree is not on it: a checkout may be under the branch.
    */
   private async restoreTip(run: IsolationRun, repo: IsolationRepo, tip: string, reverts?: IsolationRepoRevert): Promise<boolean> {
     const current = await this.tryGit(repo.root, ['rev-parse', '--verify', '-q', repo.integrationBranch]);
@@ -1715,9 +1724,13 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     if (head === tip) return true;
     if (!(await (reverts ? this.isRevertsOn(repo, head, tip, reverts) : this.isOneMergeOn(repo, head, tip)))) return false;
 
-    const holder = await this.worktreeHolding(repo, repo.integrationBranch);
+    const dir = this.integrationDir(run, repo);
+    const held = await this.worktreeHolding(repo, repo.integrationBranch);
+    // With no list, the run's own worktree can still answer for itself, and a branch moved without it would leave it out of step.
+    if (!held && (!fs.existsSync(path.join(dir, '.git')) || (await this.integrationOffBranch(run, repo)))) return false;
+    const holder = held ? held.worktree : dir;
     if (holder === null) return (await this.tryGit(repo.root, ['update-ref', `refs/heads/${repo.integrationBranch}`, tip, head])).ok;
-    if (!sameDir(holder, this.integrationDir(run, repo))) return false;
+    if (!sameDir(holder, dir)) return false;
     if (reverts) return this.takeCommitsOff(holder, head, tip);
     return (await this.tryGit(holder, ['reset', '-q', '--hard', tip])).ok;
   }
@@ -1761,10 +1774,10 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     return onto === head;
   }
 
-  /** The worktree that has the repo's integration branch checked out, unless it is Ordewell's own: a commit from there cannot reach it. */
-  private async integrationHeldBy(run: IsolationRun, repo: IsolationRepo): Promise<string | null> {
-    const holder = await this.worktreeHolding(repo, repo.integrationBranch);
-    return holder !== null && !sameDir(holder, this.integrationDir(run, repo)) ? holder : null;
+  /** {@link worktreeHolding} for the repo's integration branch, not counting Ordewell's own: a commit from anywhere else cannot reach it. */
+  private async integrationHeldBy(run: IsolationRun, repo: IsolationRepo): Promise<{ worktree: string | null } | null> {
+    const held = await this.worktreeHolding(repo, repo.integrationBranch);
+    return held?.worktree && sameDir(held.worktree, this.integrationDir(run, repo)) ? { worktree: null } : held;
   }
 
   /**
@@ -1781,16 +1794,17 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     return `${head ? `on ${head.replace(/^refs\/heads\//, '')}` : 'detached'}, not on ${repo.integrationBranch}`;
   }
 
-  /** The worktree that has `branch` checked out, or null when none does. */
-  private async worktreeHolding(repo: IsolationRepo, branch: string): Promise<string | null> {
+  /** The worktree that has `branch` checked out, null in it when none does; null for all of it when git cannot say, which is not the same as none. */
+  private async worktreeHolding(repo: IsolationRepo, branch: string): Promise<{ worktree: string | null } | null> {
     // Not `-z`: that needs git 2.36, and the Merge-all fallback serves older git.
     const listed = await this.tryGit(repo.root, ['worktree', 'list', '--porcelain']);
+    if (!listed.ok) return null;
     let worktree: string | null = null;
     for (const line of listed.stdout.split(/\r?\n/)) {
       if (line.startsWith('worktree ')) worktree = line.slice('worktree '.length);
-      else if (line === `branch refs/heads/${branch}`) return worktree;
+      else if (line === `branch refs/heads/${branch}`) return { worktree };
     }
-    return null;
+    return { worktree: null };
   }
 
   /** Whether the task branch holds commits the repo's integration branch does not. */
