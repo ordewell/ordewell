@@ -27,8 +27,11 @@ revert adds commits and rewrites nothing.
   already in the user's branch is refused, with the exact `git revert -m 1
   <commit>` for each repo, newest first, for them to run; Ordewell never writes
   to their branch. Merged means what the merge gate means, and what a clear-up
-  reads before it deletes a branch: the user's branch contains the landing's
-  merge. HEAD holding it is not enough. A checkout that stands on the
+  reads before it deletes a branch: the user's branch contains every merge that
+  landed the task, whatever the current record changed. HEAD holding it is not
+  enough. An integration branch that is gone leaves nothing to merge, but puts
+  nothing in the user's branch either: the revert is refused with no command to
+  run. A checkout that stands on the
   integration branch, by name, detached or a branch cut from it, is no merge,
   only a review: it marks nothing merged, and clears no run. The branch the run
   started on is the user's, a fast-forward of it included, and speaks for a
@@ -68,12 +71,13 @@ revert adds commits and rewrites nothing.
   work keep running: when one lands, a three-way merge from the tip it was cut
   from keeps the revert.
 - **All or nothing.** The tips are recorded as `IsolationRun.landing`, with
-  `reverts` saying it is a revert, and saved before the first commit, across the
+  `reverts` saying it is a revert and how many commits it can make in each repo,
+  and saved before the first commit, across the
   whole set and every repo. A conflict or a failure anywhere puts every tip back
   and names the task, repo and files. A crash does the same through
   `pruneOrphans`, since the saved run still has the tasks landed. The rollback
   moves a branch only when what sits on the tip is plain commits, no more than
-  the revert could have made; anything else stays recorded and holds landings
+  the revert could have made in that repo; anything else stays recorded and holds landings
   and Merge all off it, as a landing's does (ADR-0014). It is judged again with
   its commits made and rolled back if it may no longer go: a plan loaded under
   it, the same run's saved copy too, has not heard of them.
@@ -104,7 +108,8 @@ revert adds commits and rewrites nothing.
   refusal (a live dependent, a conflict and its files, work already merged and
   its `git revert`, a loop still running) is core's own sentence. The button is
   there only where the task's isolation mark says `revertible`, which reads the
-  same landings a revert does, so a task with no record left can carry it. A
+  same landings and `IsolationRun.carried` a revert does, so a task with no
+  record left can carry it and a carried task does not. A
   task is called by its reference, a subtask by its full path.
 - **A user action.** It is in the user's controls at the seam and reaches no
   planner or supervisor tool: taking landed work back is the review's decision.
@@ -189,3 +194,4 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
 - 2026-10-30 — the terminal and VS Code offer it; fully implemented.
 - 2026-10-30 — landed reads `landings` over the record, and a checkout of the integration branch counts as no merge; a claim in a revert's reach is refused, and it is judged again before it settles.
 - 2026-10-31 — merged means the user's branch, not HEAD: any review checkout is no merge, and Merge all makes a merge commit where no base branch says otherwise; `carried` keeps resolver-carried work; what cannot be named refuses the whole revert.
+- 2026-10-31 — merged reads every merge of a task, not the current record; a branch that is gone puts nothing in the user's branch; a rollback holds each repo to its own reverts, and the mark follows `carried`.
