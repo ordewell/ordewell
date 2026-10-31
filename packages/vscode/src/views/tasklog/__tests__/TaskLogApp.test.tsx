@@ -805,151 +805,168 @@ describe('the runner\'s activity, folded (ADR-0017, X1)', () => {
     send({ type: 'init', status: status({ attempts: [1, 2], attempt: 1 }), blocks: [...turn.blocks] });
     expect(groups().map((g) => g.getAttribute('aria-expanded'))).toEqual(['false', 'false']);
   });
+});
 
-  describe('the activity line above the composer (#80)', () => {
-    const thinking = replayTaskLog([{ type: 'turn_start', message: 'go' }, { type: 'thinking_delta', text: 'Hmm' }]);
-    const line = (): HTMLElement | null => document.querySelector('.task-log-activity');
+describe('the activity line above the composer (#80)', () => {
+  beforeEach(() => {
+    cleanup();
+    api.postMessage.mockClear();
+  });
 
-    it('sits between the log body and the composer, outside the scrolling body, and spins while a turn is open', () => {
+  const thinking = replayTaskLog([{ type: 'turn_start', message: 'go' }, { type: 'thinking_delta', text: 'Hmm' }]);
+  const line = (): HTMLElement | null => document.querySelector('.task-log-activity');
+
+  it('sits between the log body and the composer, outside the scrolling body, and spins while a turn is open', () => {
+    render(<TaskLogApp />);
+    init({ working: true }, [...thinking.blocks]);
+
+    expect(line()?.textContent).toContain('Thinking…');
+    expect(line()?.querySelector('.chat-msg-spinner')).not.toBeNull();
+    expect(document.querySelector('.task-log-body')?.contains(line())).toBe(false);
+    const order = [...document.querySelector('.task-log-container')!.children];
+    expect(order.indexOf(line()!)).toBeGreaterThan(order.indexOf(document.querySelector('.task-log-body')!));
+    expect(order.indexOf(line()!)).toBeLessThan(order.indexOf(document.querySelector('.task-log-composer')!));
+  });
+
+  it('keeps Send/Stop where it was', () => {
+    render(<TaskLogApp />);
+    init({ working: true }, [...thinking.blocks]);
+
+    expect(screen.getByRole('button', { name: 'Interrupt' })).toBeTruthy();
+  });
+
+  it('names a pending tool from its headline', () => {
+    const view = replayTaskLog([{ type: 'turn_start', message: 'go' }, { type: 'tool_call', id: 'r1', name: 'Read', args: '{"file_path":"README.md"}' }]);
+    render(<TaskLogApp />);
+    init({ working: true }, [...view.blocks]);
+
+    expect(line()?.textContent).toContain('Running Read(README.md)…');
+  });
+
+  it('goes static, worded as the plan pane words it, once the task is quiet', () => {
+    render(<TaskLogApp />);
+    init({ working: true, idleSince: '2026-08-18T00:00:00.000Z' }, [...thinking.blocks]);
+
+    expect(line()?.textContent).toContain('Stalled');
+    expect(line()?.textContent).toContain('~');
+    expect(line()?.querySelector('.chat-msg-spinner')).toBeNull();
+  });
+
+  it('is absent while a runner request waits', () => {
+    const asked = replayTaskLog([{ type: 'turn_start', message: 'go' }, { type: 'approval_requested', approvalId: 'p1', tool: 'Bash', args: '{}', allowForTask: true }]);
+    render(<TaskLogApp />);
+    init({ working: true }, [...asked.blocks]);
+
+    expect(line()).toBeNull();
+  });
+
+  it('is absent while a checkpoint waits, even with its turn still open', () => {
+    render(<TaskLogApp />);
+    init({ working: true, planStatus: 'awaiting_user', awaitingReason: 'checkpoint' }, [...thinking.blocks]);
+
+    expect(line()).toBeNull();
+  });
+
+  it('is absent once no turn is open', () => {
+    const ended = replayTaskLog([{ type: 'turn_start', message: 'go' }, { type: 'thinking_delta', text: 'Hmm' }, { type: 'turn_end', reason: 'completed' }]);
+    render(<TaskLogApp />);
+    init({ working: false }, [...ended.blocks]);
+
+    expect(line()).toBeNull();
+  });
+
+  it('stays for blocks still streaming, whatever the turn flag says', () => {
+    render(<TaskLogApp />);
+    init({ working: false }, [...thinking.blocks]);
+
+    expect(line()?.textContent).toContain('Thinking…');
+  });
+
+  it('is absent on an earlier attempt, though its log was left on an open turn', () => {
+    render(<TaskLogApp />);
+    init({ working: true, attempts: [1, 2], attempt: 1, turnStartedAt: '2026-10-30T10:00:00.000Z' }, [...thinking.blocks]);
+
+    expect(line()).toBeNull();
+  });
+
+  it('is absent for a finished turn that left a tool call pending', () => {
+    const view = replayTaskLog([{ type: 'turn_start', message: 'go' }, { type: 'tool_call', id: 'c1', name: 'Bash', args: '{"command":"npm test"}' }, { type: 'turn_end', reason: 'completed' }]);
+    render(<TaskLogApp />);
+    init({ working: false, lastTurnEnd: 'completed' }, [...view.blocks]);
+
+    expect(line()).toBeNull();
+  });
+
+  it('stays for a background subagent that outlives the turn', () => {
+    const view = replayTaskLog([{ type: 'turn_start', message: 'go' }, { type: 'subagent_started', subagentId: 's1', brief: 'Scan the repo' }, { type: 'turn_end', reason: 'completed' }]);
+    render(<TaskLogApp />);
+    init({ working: false }, [...view.blocks]);
+
+    expect(line()?.textContent).toContain('Subagent: Scan the repo…');
+  });
+
+  describe('and how long the turn has run (#81)', () => {
+    const startedAt = '2026-10-30T10:00:00.000Z';
+    const at = (seconds: number) => new Date(Date.parse(startedAt) + seconds * 1000);
+    const time = (): string | undefined => line()?.querySelector('.task-log-activity-time')?.textContent ?? undefined;
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('ends the line with the time since the turn began, counting on a timer of its own', () => {
+      vi.setSystemTime(at(42));
       render(<TaskLogApp />);
-      init({ working: true }, [...thinking.blocks]);
+      init({ working: true, turnStartedAt: startedAt }, [...thinking.blocks]);
+      expect(time()).toBe('42s');
 
-      expect(line()?.textContent).toContain('Thinking…');
-      expect(line()?.querySelector('.chat-msg-spinner')).not.toBeNull();
-      expect(document.querySelector('.task-log-body')?.contains(line())).toBe(false);
-      const order = [...document.querySelector('.task-log-container')!.children];
-      expect(order.indexOf(line()!)).toBeGreaterThan(order.indexOf(document.querySelector('.task-log-body')!));
-      expect(order.indexOf(line()!)).toBeLessThan(order.indexOf(document.querySelector('.task-log-composer')!));
+      act(() => { vi.advanceTimersByTime(3000); });
+      expect(time()).toBe('45s');
+      act(() => { vi.advanceTimersByTime(140_000); });
+      expect(time()).toBe('3m 05s');
     });
 
-    it('keeps Send/Stop where it was', () => {
+    it('keeps counting once the task is quiet', () => {
+      vi.setSystemTime(at(185));
       render(<TaskLogApp />);
-      init({ working: true }, [...thinking.blocks]);
-
-      expect(screen.getByRole('button', { name: 'Interrupt' })).toBeTruthy();
-    });
-
-    it('names a pending tool from its headline', () => {
-      const view = replayTaskLog([{ type: 'turn_start', message: 'go' }, { type: 'tool_call', id: 'r1', name: 'Read', args: '{"file_path":"README.md"}' }]);
-      render(<TaskLogApp />);
-      init({ working: true }, [...view.blocks]);
-
-      expect(line()?.textContent).toContain('Running Read(README.md)…');
-    });
-
-    it('goes static, worded as the plan pane words it, once the task is quiet', () => {
-      render(<TaskLogApp />);
-      init({ working: true, idleSince: '2026-08-18T00:00:00.000Z' }, [...thinking.blocks]);
-
+      init({ working: true, idleSince: '2026-10-30T10:01:00.000Z', turnStartedAt: startedAt }, [...thinking.blocks]);
       expect(line()?.textContent).toContain('Stalled');
-      expect(line()?.textContent).toContain('~');
-      expect(line()?.querySelector('.chat-msg-spinner')).toBeNull();
+      expect(time()).toBe('3m 05s');
+
+      act(() => { vi.advanceTimersByTime(5000); });
+      expect(time()).toBe('3m 10s');
     });
 
-    it('is absent while a runner request waits', () => {
-      const asked = replayTaskLog([{ type: 'turn_start', message: 'go' }, { type: 'approval_requested', approvalId: 'p1', tool: 'Bash', args: '{}', allowForTask: true }]);
+    it('shows the spinner with no time for a turn saved before they were dated', () => {
+      vi.setSystemTime(at(42));
       render(<TaskLogApp />);
-      init({ working: true }, [...asked.blocks]);
-
-      expect(line()).toBeNull();
+      init({ working: true }, [...thinking.blocks]);
+      expect(line()?.querySelector('.chat-msg-spinner')).not.toBeNull();
+      expect(time()).toBeUndefined();
     });
 
-    it('is absent while a checkpoint waits, even with its turn still open', () => {
+    it('is kept out of the live region, which would read it out every second', () => {
+      vi.setSystemTime(at(42));
       render(<TaskLogApp />);
-      init({ working: true, planStatus: 'awaiting_user', awaitingReason: 'checkpoint' }, [...thinking.blocks]);
-
-      expect(line()).toBeNull();
+      init({ working: true, turnStartedAt: startedAt }, [...thinking.blocks]);
+      expect(line()?.querySelector('.task-log-activity-time')?.getAttribute('aria-hidden')).toBe('true');
     });
+  });
 
-    it('is absent once no turn is open', () => {
-      const ended = replayTaskLog([{ type: 'turn_start', message: 'go' }, { type: 'thinking_delta', text: 'Hmm' }, { type: 'turn_end', reason: 'completed' }]);
-      render(<TaskLogApp />);
-      init({ working: false }, [...ended.blocks]);
+  it('names a script task\'s running step as the TUI does, above its read-only note', () => {
+    const run = replayTaskLog([{ type: 'script_run', argv: ['npm', 'test'] }, { type: 'script_output', text: 'ok\n' }]);
+    render(<TaskLogApp />);
+    init({ working: true, script: true }, [...run.blocks]);
 
-      expect(line()).toBeNull();
-    });
+    expect(line()?.textContent).toContain('Running Run(npm test)…');
+    expect(line()?.querySelector('.chat-msg-spinner')).not.toBeNull();
+    const order = [...document.querySelector('.task-log-container')!.children];
+    expect(order.indexOf(line()!)).toBeLessThan(order.indexOf(document.querySelector('.task-log-readonly')!));
+  });
 
-    it('stays for blocks still streaming, whatever the turn flag says', () => {
-      render(<TaskLogApp />);
-      init({ working: false }, [...thinking.blocks]);
+  it('has no line for a script task whose step has ended', () => {
+    const run = replayTaskLog([{ type: 'script_run', argv: ['npm', 'test'] }, { type: 'script_exit', code: 0, signal: null, durationMs: 10 }]);
+    render(<TaskLogApp />);
+    init({ working: false, script: true }, [...run.blocks]);
 
-      expect(line()?.textContent).toContain('Thinking…');
-    });
-
-    it('is absent on an earlier attempt, though its log was left on an open turn', () => {
-      render(<TaskLogApp />);
-      init({ working: true, attempts: [1, 2], attempt: 1, turnStartedAt: '2026-10-30T10:00:00.000Z' }, [...thinking.blocks]);
-
-      expect(line()).toBeNull();
-    });
-
-    it('is absent for a finished turn that left a tool call pending', () => {
-      const view = replayTaskLog([{ type: 'turn_start', message: 'go' }, { type: 'tool_call', id: 'c1', name: 'Bash', args: '{"command":"npm test"}' }, { type: 'turn_end', reason: 'completed' }]);
-      render(<TaskLogApp />);
-      init({ working: false, lastTurnEnd: 'completed' }, [...view.blocks]);
-
-      expect(line()).toBeNull();
-    });
-
-    it('stays for a background subagent that outlives the turn', () => {
-      const view = replayTaskLog([{ type: 'turn_start', message: 'go' }, { type: 'subagent_started', subagentId: 's1', brief: 'Scan the repo' }, { type: 'turn_end', reason: 'completed' }]);
-      render(<TaskLogApp />);
-      init({ working: false }, [...view.blocks]);
-
-      expect(line()?.textContent).toContain('Subagent: Scan the repo…');
-    });
-
-    describe('and how long the turn has run (#81)', () => {
-      const startedAt = '2026-10-30T10:00:00.000Z';
-      const at = (seconds: number) => new Date(Date.parse(startedAt) + seconds * 1000);
-      const time = (): string | undefined => line()?.querySelector('.task-log-activity-time')?.textContent ?? undefined;
-      beforeEach(() => { vi.useFakeTimers(); });
-      afterEach(() => { vi.useRealTimers(); });
-
-      it('ends the line with the time since the turn began, counting on a timer of its own', () => {
-        vi.setSystemTime(at(42));
-        render(<TaskLogApp />);
-        init({ working: true, turnStartedAt: startedAt }, [...thinking.blocks]);
-        expect(time()).toBe('42s');
-
-        act(() => { vi.advanceTimersByTime(3000); });
-        expect(time()).toBe('45s');
-        act(() => { vi.advanceTimersByTime(140_000); });
-        expect(time()).toBe('3m 05s');
-      });
-
-      it('keeps counting once the task is quiet', () => {
-        vi.setSystemTime(at(185));
-        render(<TaskLogApp />);
-        init({ working: true, idleSince: '2026-10-30T10:01:00.000Z', turnStartedAt: startedAt }, [...thinking.blocks]);
-        expect(line()?.textContent).toContain('Stalled');
-        expect(time()).toBe('3m 05s');
-
-        act(() => { vi.advanceTimersByTime(5000); });
-        expect(time()).toBe('3m 10s');
-      });
-
-      it('shows the spinner with no time for a turn saved before they were dated', () => {
-        vi.setSystemTime(at(42));
-        render(<TaskLogApp />);
-        init({ working: true }, [...thinking.blocks]);
-        expect(line()?.querySelector('.chat-msg-spinner')).not.toBeNull();
-        expect(time()).toBeUndefined();
-      });
-
-      it('is kept out of the live region, which would read it out every second', () => {
-        vi.setSystemTime(at(42));
-        render(<TaskLogApp />);
-        init({ working: true, turnStartedAt: startedAt }, [...thinking.blocks]);
-        expect(line()?.querySelector('.task-log-activity-time')?.getAttribute('aria-hidden')).toBe('true');
-      });
-    });
-
-    it('is absent for a script task, which runs no model', () => {
-      render(<TaskLogApp />);
-      init({ working: true, script: true }, [...thinking.blocks]);
-
-      expect(line()).toBeNull();
-    });
+    expect(line()).toBeNull();
   });
 });

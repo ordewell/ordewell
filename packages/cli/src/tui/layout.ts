@@ -11,7 +11,7 @@ import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
 import { runnerNamesOr } from '../runnerNames';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
-import { accountLimitsText, attachingLabel, contextMeterText, accountLimitsOf, assignedRunnerOf, describeIsolationPreview, scriptTaskText, getProviderMeta, isApiProvider, blockedByLabel, handoffPeekParts, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeTime, runnerForProvider, taskLogHeaderView, taskActivity, taskRowView, taskStatusKind, tasksTotalText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskLogHeaderTask, type TaskLogHeaderView, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
+import { accountLimitsText, attachingLabel, contextMeterText, accountLimitsOf, assignedRunnerOf, describeIsolationPreview, elapsedSince, scriptTaskText, getProviderMeta, isApiProvider, blockedByLabel, handoffPeekParts, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeTime, runnerForProvider, taskLogHeaderView, taskActivity, taskRowView, taskStatusKind, tasksTotalText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskLogHeaderTask, type TaskLogHeaderView, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
 
 /**
  * What each pane's content actually is, and therefore how far it can scroll.
@@ -364,14 +364,14 @@ export interface ChatActivity {
   since?: string;
 }
 
-/**
- * Whether anything on screen moves with the tick: a running task's plan row,
- * the status row's spinner, or its elapsed time, which a quiet runner's line
- * keeps counting.
- */
+/** Whether a spinner on screen moves with the tick: a running task's plan row, or the status row's. */
 export function animating(state: TuiState): boolean {
-  const activity = chatActivity(state);
-  return state.tasks.some((t) => taskStatusKind(t) === 'running') || !!activity?.busy || !!activity?.since;
+  return state.tasks.some((t) => taskStatusKind(t) === 'running') || !!chatActivity(state)?.busy;
+}
+
+/** The elapsed time the status row would end on at `now`, which a quiet runner's line keeps counting; '' when it has none to show. */
+export function activityTime(state: TuiState, now: number): string {
+  return elapsedSince(chatActivity(state)?.since, now);
 }
 
 /**

@@ -18,4 +18,21 @@ module.exports = {
     '@typescript-eslint/no-explicit-any': 'error',
     'no-empty': 'error',
   },
+  overrides: [
+    {
+      // Typecheck and jsdom tests pass such an import, and only `vite build`
+      // fails on it. Tests are left out: they run in Node and reach no browser.
+      files: ['packages/vscode/src/views/**/*.ts', 'packages/vscode/src/views/**/*.tsx'],
+      excludedFiles: ['**/__tests__/**'],
+      rules: {
+        '@typescript-eslint/no-restricted-imports': ['error', {
+          paths: [{
+            name: '@ordewell/core',
+            allowTypeImports: true,
+            message: 'The root pulls Node modules into the webview bundle: import values from @ordewell/core/plan-utils, and types with `import type`.',
+          }],
+        }],
+      },
+    },
+  ],
 };

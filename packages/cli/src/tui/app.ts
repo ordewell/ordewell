@@ -1,6 +1,6 @@
 import { render } from './render';
 import { initialState, reduce, type Action, type Effect } from './reducer';
-import { animating } from './layout';
+import { activityTime, animating } from './layout';
 import type { TuiState } from './state';
 
 export interface AppDeps {
@@ -41,9 +41,13 @@ export function createApp(deps: AppDeps): App {
   let state = initialState(deps.initial);
   let exited = false;
 
-  // Only while something animates: a repaint every tick is a cost a still screen should not pay.
+  // Only while something moves: a repaint every tick is a cost a still screen
+  // should not pay. The time is read off the clock on every tick, painted or
+  // not, so a start ahead of the clock paints nothing until a correction brings
+  // the clock past it, and a clock moved back takes a time already shown away.
+  let shownTime = '';
   const spinnerInterval = setInterval(() => {
-    if (animating(state)) dispatch({ type: 'spinnerTick' });
+    if (animating(state) || activityTime(state, Date.now()) !== shownTime) dispatch({ type: 'spinnerTick' });
   }, 200);
 
   let renderPending = false;
@@ -62,7 +66,8 @@ export function createApp(deps: AppDeps): App {
     }
     renderPending = false;
     lastPaint = Date.now();
-    deps.draw(render({ ...state, now: Date.now() }));
+    shownTime = activityTime(state, lastPaint);
+    deps.draw(render({ ...state, now: lastPaint }));
   }
 
   function paintKey(): void {

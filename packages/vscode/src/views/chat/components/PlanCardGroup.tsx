@@ -3,7 +3,7 @@ import TaskCard from './TaskCard';
 import NewTaskCard from './NewTaskCard';
 import type { TaskDraft } from './NewTaskCard';
 import type { RunnerMode, RunnerOption } from './TaskCard';
-import { Task, DiscoveredModel, TaskModelAssignment, RunTask, RunView, type AssignmentScope } from '@ordewell/core';
+import type { Task, DiscoveredModel, TaskModelAssignment, RunTask, RunView, AssignmentScope } from '@ordewell/core';
 import { tasksTotalText } from '@ordewell/core/plan-utils';
 
 /** What each level allows, in the picker's tooltip: Act's risk is said where it is chosen (ADR-0029). */
