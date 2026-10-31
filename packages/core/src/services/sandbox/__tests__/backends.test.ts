@@ -300,15 +300,26 @@ describe('BubblewrapBackend.wrap', () => {
 
   it('builds the planner command line ADR-0011 names, without the network', () => {
     expect(bwrap().wrap(SH, profile())).toEqual({
-      file: '/usr/bin/bwrap',
+      file: '/bin/sh',
       args: [
+        '-c', expect.any(String), 'ordewell-shell', '/usr/bin/bwrap',
         '--new-session', '--die-with-parent', '--unshare-pid', '--unshare-ipc', '--unshare-net',
         '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc',
         '--bind', SCRATCH, SCRATCH,
+        '--setenv', 'TMPDIR', SCRATCH,
         '--', '/bin/sh', '-c',
       ],
-      env: { PATH: '/usr/bin:/bin', HOME: '/home/me', TMPDIR: SCRATCH },
+      env: { PATH: '/usr/bin:/bin', HOME: '/home/me' },
     });
+  });
+
+  it('starts a planner command behind the watcher alone, which becomes bubblewrap, so the caller\'s kill still reaches it', () => {
+    const prelude = bwrap().wrap(SH, profile()).args[1];
+    expect(prelude).toMatch(/exec "\$bwrap" --unsetenv \S+ "\$@"$/);
+    expect(prelude).toContain('PATH=/usr/bin:/bin:/run/current-system/sw/bin');
+    // What only a sealed run is held to, and what starting one costs.
+    expect(prelude).not.toContain('ulimit');
+    expect(prelude).not.toContain('VmRSS');
   });
 
   it('refuses a network without this machine\'s own services, which needs a network namespace of its own', () => {
@@ -405,6 +416,13 @@ describe('BubblewrapBackend.wrap', () => {
 
     it('starts the launcher with what the profile keeps of the host, and sets its own variables inside the sandbox', () => {
       const launch = bwrap().wrap({ ...SH, env: { PATH: '/usr/bin', GITHUB_TOKEN: 'x', HOME: '/home/me' } }, sealed());
+      expect(launch.env).toEqual({ PATH: '/usr/bin' });
+      expect(launch.args.slice(-9)).toEqual(['--setenv', 'TMPDIR', SCRATCH, '--setenv', 'HOME', SCRATCH, '--', '/bin/sh', '-c']);
+    });
+
+    it('keeps scratch out of a launcher without limits too, which runs before the sandbox all the same', () => {
+      const launch = bwrap().wrap({ ...SH, env: { PATH: '/usr/bin', GITHUB_TOKEN: 'x', HOME: '/home/me' } }, sealed({ limits: undefined }));
+      expect(launch.file).toBe('/bin/sh');
       expect(launch.env).toEqual({ PATH: '/usr/bin' });
       expect(launch.args.slice(-9)).toEqual(['--setenv', 'TMPDIR', SCRATCH, '--setenv', 'HOME', SCRATCH, '--', '/bin/sh', '-c']);
     });
@@ -522,7 +540,8 @@ describe('probing a backend', () => {
     const { exec, calls } = recording({ code: 0, output: '' });
     expect(await new BubblewrapBackend('/usr/bin/bwrap', { exec }).probe(profile({ write: [] }))).toEqual({ ok: true });
     expect(calls).toHaveLength(1);
-    expect(calls[0].file).toBe('/usr/bin/bwrap');
+    expect(calls[0].file).toBe('/bin/sh');
+    expect(calls[0].args).toContain('/usr/bin/bwrap');
     expect(calls[0].args.slice(-4)).toEqual(['--', '/bin/sh', '-c', 'true']);
     expect(calls[0].args).toContain('--unshare-net');
   });

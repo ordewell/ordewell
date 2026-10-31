@@ -96,7 +96,8 @@ describe('resolvePlannerSandbox', () => {
     // The planner's profile, then the sealed one.
     expect(calls).toHaveLength(2);
     const args = calls[0].args.join(' ');
-    expect(calls[0].file).toBe('/usr/bin/bwrap');
+    expect(calls[0].file).toBe('/bin/sh');
+    expect(calls[0].args).toContain('/usr/bin/bwrap');
     expect(args).toContain('--unshare-net');
     expect(args).toContain('--tmpfs /run/user/1000');
     expect(args).toContain('--tmpfs /tmp/.X11-unix');

@@ -97,8 +97,17 @@ jobs, and its reading of other processes' command lines and environments (B4).
   unprivileged `--proc` needs and which keeps out the host's
   `/proc/<pid>/root` links into a writable mount namespace; in a session of
   its own, with no terminal to type into; and with the host's System V IPC
-  out of reach. The `bwrap` used is the distribution's before one found on
-  PATH. macOS: `sandbox-exec` with a profile that denies everything by
+  out of reach. Bubblewrap arms `--die-with-parent` only after setting the
+  sandbox up, so a Stop in those milliseconds would leave the command running
+  with no caller. Every command therefore starts behind `/bin/sh` and a small
+  watcher outside the sandbox, which then becomes bubblewrap; the watcher looks
+  once a second, and when the launcher has gone it kills what carries the
+  launcher's mark (ADR-0036 S1). That launcher reads no startup file, and what
+  the profile sets is set inside the sandbox with `--setenv`, as for a sealed
+  run. A host with no `sleep` runs the command without
+  the watcher, since this is a window of milliseconds and losing the sandbox
+  over it would be the worse failure. The `bwrap` used is the distribution's
+  before one found on PATH. macOS: `sandbox-exec` with a profile that denies everything by
   default and allows every read, writes to the scratch directory and the
   device files a shell needs, the network for an approved command, and of the
   system services only those a read needs, with name resolution, TLS trust
@@ -240,3 +249,4 @@ that still cannot start the sandbox fails the build instead of skipping.
 - 2026-10-21 — the macOS backend's residuals recorded: job creation denied, existing launchd jobs and other processes' command lines and environments not gated ([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md)).
 - 2026-10-21 — CI runs the real-sandbox suites on Linux with bubblewrap installed and Ubuntu's user-namespace restriction lifted, failing rather than skipping where the probe cannot start.
 - 2026-10-31 — the planner's commands stop sharing their scratch directory with sealed runs ([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md), S8).
+- 2026-10-31 — every command on Linux starts behind the launcher's watcher, so one a Stop catches while bubblewrap sets up dies with its launcher, as a sealed run does (ADR-0036 S1).
