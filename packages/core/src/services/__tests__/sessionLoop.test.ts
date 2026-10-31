@@ -162,3 +162,214 @@ describe('a loop under supervision (ADR-0045)', () => {
     session.destroy();
   });
 });
+
+describe('a loop whose check was started by hand (ADR-0045 L5, L7)', () => {
+  const USER: ExecutionActor = { kind: 'user' };
+  const FIX = 'task #2 "Task fix"';
+  const CHECK = 'Task #1 "Task review"';
+  const RUNS_ON_ITS_OWN = `${CHECK} is between rounds of its loop: it runs again on its own, as round 2 of 3, once ${FIX} has passed and landed. Leave it to the loop.`;
+  const NOTHING_RUNS_IT = `${CHECK} is between rounds of its loop, and nothing runs it on its own now: it can start as round 2 of 3 once ${FIX} has passed and landed.`;
+
+  /** An approved plan never executed: whatever runs, runs from the user's one start. */
+  const unrun = (rounds: number, supervisorLevel: 'off' | 'act', autonomousMode = false): Promise<Env> => supervised(looped(rounds), {
+    execute: false,
+    settings: { supervisorLevel },
+    config: { autonomousMode },
+  });
+
+  const byHand = async (supervisorLevel: 'off' | 'act' = 'off', autonomousMode = false): Promise<Env> => {
+    const env = await unrun(3, supervisorLevel, autonomousMode);
+    expect(await env.session.execute({ command: 'run_task', task: 'review' }, USER)).toMatchObject({ ok: true });
+    return env;
+  };
+
+  /** Stopped between rounds; `fixed` has its body started by hand and landed first. */
+  const stranded = async (fixed: boolean, supervisorLevel: 'off' | 'act' = 'off', autonomousMode = false): Promise<Env> => {
+    const env = await byHand(supervisorLevel, autonomousMode);
+    await finish(env, 'review', 1, 'failed', 'Found it.');
+    await until(() => spawns(env, 'fix') === 1);
+    expect(await env.session.execute({ command: 'stop_run' }, USER)).toMatchObject({ ok: true });
+    if (fixed) {
+      expect(await env.session.execute({ command: 'run_task', task: 'fix' }, USER)).toMatchObject({ ok: true });
+      await finish(env, 'fix', 2, 'done');
+      await settled();
+    }
+    return env;
+  };
+
+  it('goes on by itself to the end, waking no one for a round, and starts no dependent', async () => {
+    const env = await byHand('act');
+
+    await finish(env, 'review', 1, 'failed', 'Found it.');
+    await finish(env, 'fix', 1, 'done');
+    await until(() => spawns(env, 'review') === 2);
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS * 2);
+    await settled();
+    expect(env.planner.calls).toHaveLength(0);
+    expect(env.session.planState!.supervision?.guards).toMatchObject({ retries: {}, failedWith: {} });
+
+    await finish(env, 'review', 2, 'done');
+    await settled();
+    expect(taskOf(env.session, 'review')?.loopRound).toBe(2);
+    expect(spawns(env, 'ship')).toBe(0);
+    env.session.destroy();
+  });
+
+  it('wakes an Act supervisor once, when a loop started by hand runs out of rounds', async () => {
+    const env = await unrun(2, 'act');
+    await env.session.execute({ command: 'run_task', task: 'review' }, USER);
+
+    await finish(env, 'review', 1, 'failed');
+    await finish(env, 'fix', 1, 'done');
+    await finish(env, 'review', 2, 'failed', 'Round two finding.');
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+    await until(() => env.planner.calls.length === 1);
+
+    expect(env.planner.calls[0].message).toContain('its loop ran out of rounds: it failed all 2');
+    env.planner.calls[0].finish(prose('It still fails.'));
+    await settled();
+    env.session.destroy();
+  });
+
+  it('refuses a start of the check while the loop will run it, however the check was started, and says so', async () => {
+    const env = await byHand();
+    await finish(env, 'review', 1, 'failed');
+    await until(() => spawns(env, 'fix') === 1);
+
+    const started = await env.session.execute({ command: 'run_task', task: 'review' }, USER);
+
+    expect(started).toMatchObject({ ok: false, message: RUNS_ON_ITS_OWN });
+    env.session.destroy();
+  });
+
+  it('refuses a start of a check stopped before its body landed by saying what it waits for, not that it runs on its own', async () => {
+    const env = await stranded(false);
+
+    const started = await env.session.execute({ command: 'run_task', task: 'review' }, USER);
+    const supervised = await env.session.execute({ command: 'retry_task', task: 'review', from: 'fresh' }, ACT);
+
+    expect(started).toMatchObject({ ok: false, message: NOTHING_RUNS_IT });
+    expect(supervised).toMatchObject({ ok: false, message: NOTHING_RUNS_IT });
+    expect(spawns(env, 'review')).toBe(1);
+    env.session.destroy();
+  });
+
+  it('says the same of a check whose body is at work with nothing to run it after', async () => {
+    const env = await stranded(false);
+    await env.session.execute({ command: 'run_task', task: 'fix' }, USER);
+    await until(() => spawns(env, 'fix') === 2);
+
+    expect(await env.session.execute({ command: 'run_task', task: 'review' }, USER)).toMatchObject({ ok: false, message: NOTHING_RUNS_IT });
+    env.session.destroy();
+  });
+
+  it('runs the next round on the user\'s start once the body has landed, keeping the count', async () => {
+    const env = await stranded(true);
+    expect(spawns(env, 'review')).toBe(1);
+
+    const started = await env.session.execute({ command: 'run_task', task: 'review' }, USER);
+
+    expect(started).toMatchObject({ ok: true, message: 'Started task #1 "Task review", as round 2 of 3.' });
+    await until(() => spawns(env, 'review') === 2);
+    expect(taskOf(env.session, 'review')).toMatchObject({ status: 'in_progress', loopRound: 2 });
+    env.session.destroy();
+  });
+
+  it.each([
+    ['run_task', { command: 'run_task', task: 'review' }],
+    ['retry_task', { command: 'retry_task', task: 'review', from: 'fresh' }],
+  ] as const)('runs the next round on an Act supervisor\'s %s, which no guard counts as a retry', async (_, command) => {
+    const env = await stranded(true, 'act');
+
+    expect(await env.session.execute(command, ACT)).toMatchObject({ ok: true });
+
+    await until(() => spawns(env, 'review') === 2);
+    expect(taskOf(env.session, 'review')?.loopRound).toBe(2);
+    expect(env.session.planState!.supervision?.guards?.retries).toEqual({});
+    env.session.destroy();
+  });
+
+  it('runs the next round on a planner turn\'s start', async () => {
+    const env = await stranded(true, 'off', true);
+
+    expect(await env.session.execute({ command: 'run_task', task: 'review' }, { kind: 'planner-turn' })).toMatchObject({ ok: true });
+
+    await until(() => spawns(env, 'review') === 2);
+    expect(taskOf(env.session, 'review')?.loopRound).toBe(2);
+    env.session.destroy();
+  });
+
+  it('refuses to continue a stranded check\'s session, which would start its rounds over, and points at the start that does not', async () => {
+    const env = await stranded(true, 'act');
+
+    const continued = await env.session.execute({ command: 'retry_task', task: 'review', from: 'session', message: 'look again' }, ACT);
+
+    expect(continued).toMatchObject({ ok: false, message: `${CHECK} is between rounds of its loop, and nothing runs it on its own now, so a continue would start its rounds over: start it with run_task, which runs round 2 of 3.` });
+    env.session.destroy();
+  });
+
+  it('lets the supervisor skip a check nothing will run, and refuses only while its loop goes on', async () => {
+    const running = await byHand('act');
+    await finish(running, 'review', 1, 'failed');
+    expect((await running.session.execute({ command: 'skip_task', task: 'review', reason: 'enough' }, ACT)).message).toContain('which goes on by itself');
+    running.session.destroy();
+
+    const env = await stranded(true, 'act');
+    expect(await env.session.execute({ command: 'skip_task', task: 'review', reason: 'enough' }, ACT)).toMatchObject({ ok: true });
+    expect(taskOf(env.session, 'review')?.status).toBe('skipped');
+    env.session.destroy();
+  });
+
+  it('starts a new set of rounds on the user\'s retry of a check, even one nothing will run (L7)', async () => {
+    const env = await stranded(true);
+
+    expect(await env.session.execute({ command: 'retry_task', task: 'review', from: 'fresh' }, USER)).toMatchObject({ ok: true });
+
+    await until(() => spawns(env, 'review') === 2);
+    expect(taskOf(env.session, 'review')?.loopRound).toBeUndefined();
+    env.session.destroy();
+  });
+
+  it('keeps the run stoppable while the loop waits for approval: a Stop ends it, and nothing starts', async () => {
+    // Starting the check approves that task alone.
+    const env = await supervised(looped(3), { execute: false, plan: { approved: false, approvedTasks: [] } });
+    expect(await env.session.execute({ command: 'run_task', task: 'review' }, USER)).toMatchObject({ ok: true });
+
+    await finish(env, 'review', 1, 'failed');
+    await settled();
+    expect(spawns(env, 'fix')).toBe(0);
+
+    expect(await env.session.execute({ command: 'stop_run' }, USER)).toMatchObject({ ok: true, message: expect.stringContaining('what was about to start will not') });
+    expect(await env.session.execute({ command: 'run_task', task: 'fix' }, USER)).toMatchObject({ ok: true });
+    await finish(env, 'fix', 1, 'done');
+    await settled();
+    expect(spawns(env, 'review')).toBe(1);
+    env.session.destroy();
+  });
+
+  it('after a reload with no run, says what a check waits for, runs its body alone, then continues the count', async () => {
+    const env = await byHand();
+    await finish(env, 'review', 1, 'failed', 'Found it.');
+    await until(() => spawns(env, 'fix') === 1);
+    const saved = structuredClone(env.session.planState!);
+    env.session.destroy();
+
+    const planner = heldPlanner();
+    const run = recordingRunner();
+    const session = makeSession({ aiService: planner.aiService, runner: run.runner });
+    session.loadPlan(saved, 'build it', testWorkspace);
+
+    expect(await session.execute({ command: 'run_task', task: 'review' }, USER)).toMatchObject({ ok: false, message: NOTHING_RUNS_IT });
+    expect(await session.execute({ command: 'run_task', task: 'fix' }, USER)).toMatchObject({ ok: true });
+    await until(() => run.spawnedIds().includes('fix'));
+    run.of('fix').reportComplete({ status: 'done', summary: 'fixed' });
+    await until(() => taskOf(session, 'fix')?.status === 'completed');
+    await settled();
+    expect(run.spawnedIds()).toEqual(['fix']);
+
+    expect(await session.execute({ command: 'run_task', task: 'review' }, USER)).toMatchObject({ ok: true });
+    await until(() => run.spawnedIds().includes('review'));
+    expect(taskOf(session, 'review')?.loopRound).toBe(2);
+    session.destroy();
+  });
+});

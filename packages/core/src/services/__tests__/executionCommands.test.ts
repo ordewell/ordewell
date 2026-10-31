@@ -974,7 +974,7 @@ describe('the command seam\'s extension points', () => {
   function stubHost(): ExecutionHost {
     const tasks = [task('t1', 1)];
     return {
-      tasks: () => tasks, planApproved: () => true, taskApproved: () => true, waitsForApproval: () => false, approve: vi.fn(), approvePlan: vi.fn(), autonomous: () => true, autorun: () => false,
+      tasks: () => tasks, planApproved: () => true, taskApproved: () => true, waitsForApproval: () => false, approve: vi.fn(), approvePlan: vi.fn(), autonomous: () => true, autorun: () => false, loopRunsOn: () => false,
       scheduling: () => false, startsHeld: () => false, hasLiveWork: () => true, startsPending: () => false, advancesOnItsOwn: () => false, admitStart: admission,
       running: () => true, maxParallel: () => 3, runBlocked: () => false,
       startWaits: () => [], waitingRequests: () => [],

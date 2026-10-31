@@ -16,9 +16,10 @@ export type StartWait =
   /** Under way, waiting on the user, or ended: only a retry, a continue or a resume starts it again. */
   | { kind: 'started' }
   /**
-   * A loop's check between rounds (ADR-0045 L3): the loop runs it again, as
-   * round `round` of `maxRounds`, once its body has passed and landed;
-   * `waiting` is the body that has not yet.
+   * A loop's check between rounds (ADR-0045 L3): it runs again, as round
+   * `round` of `maxRounds`, once its body has passed and landed; `waiting` is
+   * the body that has not yet. Whether anything will run it then is no part
+   * of the rule: a Stop or a reload leaves that to a start of it (L5).
    */
   | { kind: 'repeating'; round: number; maxRounds: number; waiting: string[] }
   /** Mark complete is landing its work. */
@@ -89,6 +90,8 @@ export interface ReadinessInput extends StartRuleInput {
   /** Attempts already holding a slot. */
   active: number;
   maxParallel: number;
+  /** The tasks to pick from; the whole plan unless set. */
+  within?: ReadonlySet<string>;
 }
 
 /** One AI or script task the start rule held back, with why, for the scheduler's log. */
@@ -129,7 +132,9 @@ export function planStartWaits(input: StartRuleInput): Map<string, StartWait[]> 
  */
 export function selectReadyTasks(input: ReadinessInput): Readiness {
   const plan = judgeOnce(input.store);
-  const judged = input.store.allTasks.map((task) => ({ task, waits: waitsOf(task, input, undefined, plan) }));
+  const judged = input.store.allTasks
+    .filter((task) => !input.within || input.within.has(task.id))
+    .map((task) => ({ task, waits: waitsOf(task, input, undefined, plan) }));
   const candidates = judged.filter(({ waits }) => waits.length === 0).map(({ task }) => task).sort((a, b) => a.order - b.order);
   return {
     ready: candidates.slice(0, Math.max(0, input.maxParallel - input.active)),
@@ -180,7 +185,7 @@ function waitsOf(task: Readonly<Task>, input: StartRuleInput, forced: ForcedStar
   const queued = input.queued.has(task.id);
   const waits: StartWait[] = [];
   if (task.status !== 'pending' && task.status !== 'approved') {
-    // The loop starts its check again; nobody has to (ADR-0045 L5).
+    // Its loop starts its check again, or a start of it does the same (ADR-0045 L5).
     if (task.loop && plan.repeating().has(task.id)) {
       const waiting = task.loop.body.filter((id) => !landed(id, store, runs));
       waits.push({ kind: 'repeating', round: loopRoundOf(task) + 1, maxRounds: task.loop.maxRounds, waiting });

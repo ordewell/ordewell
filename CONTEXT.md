@@ -1410,7 +1410,8 @@ gate and the planner's view of the plan (`waits:` on each task's line) read. A
 force start reads it as forced: past a hold, a failure, a usage limit and the
 gate the user confirmed. The claim is separate: it checks only what can change
 at the last moment. A loop's check *between rounds* waits `repeating` in place
-of "it has started": its loop starts it again.
+of "it has started": its loop starts it again, or, with nothing left to run it,
+a start of it does.
 *Avoid:* "readiness gate" for one of its reasons, and "gate" for any reason but
 the *Merge gate*.
 
@@ -1481,8 +1482,11 @@ rounds left, its *body* runs with its report and then the check runs again.
 It ends when the check passes (the body that did not run is skipped as not
 needed), when it runs out of rounds (the check fails, its dependents are
 blocked, the supervisor hears once), or when a body task fails or is skipped,
-which stops it until that task is retried and passes. The plan does not grow:
-each round is a new attempt of the same tasks.
+which stops it until that task is retried and passes. Its rounds run however
+the check was started: a check started by hand is carried on by its run, the
+loop's tasks alone, until the loop ends or a Stop. After a Stop, or a reload
+with no run, nothing of it starts by itself. The plan does not grow: each round
+is a new attempt of the same tasks.
 *Avoid:* "cycle" or "back-edge" — the graph stays acyclic, and the loop is a
 declaration on one task; "retry" for a round — a retry of the check starts its
 rounds over, and the guards count no round; "iteration".
@@ -1511,7 +1515,8 @@ most 10) is the most it runs in one set of rounds. The round is saved on the
 check, so a reload resumes mid-round. A check that failed with rounds left is
 **between rounds** (`betweenRounds`): stored failed, but no failure for the
 blocked rule, the run's end, wake-ups or the loop guards while its loop goes
-on; it runs again once its body has passed and landed.
+on; it runs again once its body has passed and landed. With nothing left to run
+it, a start of it is that next round, and the count stands.
 *Avoid:* "attempt" for a round — a round is the loop's count, and the check's
 attempts are counted apart; "repeating" as a status — it is derived, never
 stored.

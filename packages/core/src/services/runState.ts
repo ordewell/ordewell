@@ -9,7 +9,8 @@ export type HeldFrom = 'idle' | 'scheduling' | 'endedOnFailure';
  * Where the full-plan run stands, as one value; every getter that reports on
  * the run derives from it (ADR-0034; ADR-0018 U1).
  * - `idle`: no full-plan run since the plan loaded or the user stopped one. A
- *   task started on its own may still be at work.
+ *   task started on its own may still be at work, and a loop it started goes
+ *   on (ADR-0045 L5).
  * - `scheduling`: the scheduler drives the plan, starting ready tasks as slots
  *   free. A run that waits on the user, a hold or a merge gate stays here.
  * - `held`: a usage-limit pause holds the run, and `from` is what it goes back

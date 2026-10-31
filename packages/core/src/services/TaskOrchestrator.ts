@@ -53,10 +53,11 @@ export type AutoMergeTrigger = { kind: 'gate'; taskId: string } | { kind: 'run_e
 
 /**
  * Who opened a run (ADR-0029): a call the user made, or one made for them; a
- * call of the supervisor's own; or a usage-limit reset resuming what it paused.
- * Only the user's starts a run's supervision afresh.
+ * call of the supervisor's own; a usage-limit reset resuming what it paused;
+ * or a loop carried on with no scheduler (ADR-0045 L5). Only the user's starts
+ * a run's supervision afresh.
  */
-export type RunOrigin = 'user' | 'supervisor' | 'limit-reset';
+export type RunOrigin = 'user' | 'supervisor' | 'limit-reset' | 'loop';
 
 /** What the scheduler reads of the open run's settings, at each decision it makes from them. */
 export type SchedulerRunSettings = Pick<RunSettings, 'mergeAtGatesAutomatically'>;
@@ -327,6 +328,16 @@ export class TaskOrchestrator {
   /** Conflict repairs owed with every slot taken and no scheduler to claim them: a freed slot starts them. */
   private owedRepairs = new Set<string>();
   /**
+   * The checks whose loop goes on with no scheduler: each failed a round in a
+   * run the scheduler was not driving, so nothing else would start what it
+   * owes (ADR-0045 L5). Held here and not on the plan, because a Stop ends it
+   * and a reload does not bring it back; a loop stopped by its body stays
+   * here, so a retry of that task resumes it (L7).
+   */
+  private readonly carriedLoops = new Set<string>();
+  /** What was last said of a carried loop's approvals, so it is said once. */
+  private loopNotice = '';
+  /**
    * Tasks Mark complete is landing after it ended their attempt, or that
    * their conflict resolver is landing, and that landing: in progress with
    * no attempt for as long as it takes, and not orphans for it. Both can be
@@ -582,7 +593,7 @@ export class TaskOrchestrator {
   }
 
   get isRunning(): boolean {
-    return this.isScheduling || this.attempts.size > 0;
+    return this.isScheduling || this.attempts.size > 0 || this.loopsCarriedOn().length > 0;
   }
   /**
    * A runner is executing *right now*. Narrower than {@link isRunning}, which
@@ -667,12 +678,12 @@ export class TaskOrchestrator {
    * Something can still start that nobody has to ask for again: a start
    * admitted and not yet claimed, a force start queued behind its
    * dependencies, a conflict repair owed a slot or the end of a start hold,
-   * a task that resumes on its own at its usage limit's reset, or a start a
-   * dirty checkout parked for Stash and continue to replay. A Stop is owed to
-   * it, whether or not anything runs.
+   * a task that resumes on its own at its usage limit's reset, a start a
+   * dirty checkout parked for Stash and continue to replay, or a loop carried
+   * on with no scheduler. A Stop is owed to it, whether or not anything runs.
    */
   get startsPending(): boolean {
-    return this.admissions > 0 || this.queuedStarts.size > 0 || this.owedRepairs.size > 0 || this.runs.blocked || this.store.allTasks.some(waitsForReset);
+    return this.admissions > 0 || this.queuedStarts.size > 0 || this.owedRepairs.size > 0 || this.runs.blocked || this.store.allTasks.some(waitsForReset) || this.loopsCarriedOn().length > 0;
   }
 
   /**
@@ -795,7 +806,7 @@ export class TaskOrchestrator {
     const handoff = this.runs.view()?.handoff;
     if (!handoff?.landed.length) return null;
     const waitingAtGate = this.store.allTasks.some((t) => this.getMergeGate(t.id).length > 0);
-    return { waitingAtGate, paused: waitingAtGate && this.isScheduling && this.attempts.size === 0, repos: handoff.repos, landed: handoff.landed };
+    return { waitingAtGate, paused: waitingAtGate && this.startsOnTick && this.attempts.size === 0, repos: handoff.repos, landed: handoff.landed };
   }
 
   /**
@@ -880,6 +891,7 @@ export class TaskOrchestrator {
     // Saved on the task, so another process does not run what the user took back (ADR-0054).
     for (const t of this.store.allTasks) if (t.reverted) this.hold(t.id, REVERTED_HOLD, true);
     this.queuedStarts = new Map(queued.filter(([id]) => this.store.get(id)));
+    this.carriedLoops.clear();
     this.owedRepairs.clear();
     this.recoverOrphans();
     this.limitPauses.rearm();
@@ -1045,6 +1057,8 @@ export class TaskOrchestrator {
     this.runs.interrupt();
     this.releaseUnchosenHolds();
     this.owedRepairs.clear();
+    this.carriedLoops.clear();
+    this.loopNotice = '';
     if (reason === 'user') this.queuedStarts.clear();
     this.limitPauses.cancelAll();
     this.sayStopped(stopped);
@@ -1168,6 +1182,8 @@ export class TaskOrchestrator {
         // starts a round instead is no failure yet (ADR-0045 L3).
         this.store.markFailed(task.id);
         if (!this.startRound(task.id)) this.notifications.error(ended.unresumed ?? failureText(this.store.get(task.id) ?? task, verdict));
+        // A Stop since it was claimed ended its loop with it.
+        else if (!this.isScheduling && ended.attempt.admission.current()) this.carriedLoops.add(task.id);
         if (ended.attempt.worktree) await this.runs.release(task.id, { keep: true });
         this.logAndArchive(task, verdict);
         break;
@@ -1241,7 +1257,7 @@ export class TaskOrchestrator {
     const status = this.store.get(taskId)?.status;
     if (status === 'completed' || status === 'failed' || status === 'awaiting_user') this.emit('onTaskSettled', { taskId });
     this.emit('onTaskChanged');
-    if (this.isScheduling) {
+    if (this.startsOnTick) {
       await this.tick();
       return;
     }
@@ -1343,10 +1359,10 @@ export class TaskOrchestrator {
   }
 
   private readiness(): Readiness {
-    if (!this.isScheduling) return { ready: [], candidateCount: 0, excluded: [], gated: [] };
+    if (!this.startsOnTick) return { ready: [], candidateCount: 0, excluded: [], gated: [] };
     const maxParallel = this.config.maxParallelSessions;
     const active = this.attempts.size;
-    const readiness = selectReadyTasks({ ...this.startRule(), active, maxParallel });
+    const readiness = selectReadyTasks({ ...this.startRule(), active, maxParallel, ...(this.isScheduling ? {} : { within: this.carriedTasks() }) });
 
     for (const { task, waits } of readiness.excluded) {
       console.log(`[TaskOrchestrator] excluded: ${taskRefOf(this.store.planTasks, task.id) ?? `#${task.order}`} "${task.title}": ${waits.map((w) => w.kind).join(', ')}`);
@@ -1373,7 +1389,7 @@ export class TaskOrchestrator {
    * {@link unawaited}, never left unhandled.
    */
   runSettingsChanged(): void {
-    if (!this.runs.isOpen || !this.isScheduling) return;
+    if (!this.runs.isOpen || !this.startsOnTick) return;
     this.unawaited(this.tick(), 'Could not act on the changed run settings');
   }
 
@@ -1943,8 +1959,11 @@ export class TaskOrchestrator {
       const requeued = !forced.queued && task ? this.queueBehindDependencies(task) : null;
       if (requeued) return requeued;
       this.refuseClaim(taskId, admission);
-      // Forced again after a failure, a loop's check starts its rounds over, as a retry does (ADR-0045 L7).
-      if (this.store.isFailed(taskId)) this.store.startRoundsOver(taskId);
+      // Nothing else would run a check whose fix has landed, so this is its next
+      // round. Forced again after any other failure, a check starts its rounds
+      // over, as a retry does (ADR-0045 L5, L7).
+      if (task && this.ownsNextRound(task)) this.repeatCheck(task);
+      else if (this.store.isFailed(taskId)) this.store.startRoundsOver(taskId);
       // A force start is the user's own act, so it ends the task's pause: its
       // resume goes, and the hold with it once nothing else waits (U1).
       this.limitPauses.cancel(taskId);
@@ -2092,7 +2111,7 @@ export class TaskOrchestrator {
     // a failed spawn — so a queued force start waiting on it is started here.
     await this.startQueued();
     this.startOwedRepairs(admission);
-    if (!this.isScheduling) return this.settleRun('tick');
+    if (!this.startsOnTick) return this.settleRun('tick');
 
     // Ahead of the run-complete check too: the turn may add work to a run
     // that would otherwise end under it. Its release ticks again.
@@ -2106,7 +2125,7 @@ export class TaskOrchestrator {
       this.autoMergeBlocked = false;
       readiness = this.readiness();
     }
-    if (!this.isScheduling) return;
+    if (!this.startsOnTick) return;
     if (this.mergesAutomatically() && !this.autoMergeBlocked && !this.merging
       && this.attempts.excludingMerge() === undefined) {
       // Only for a task the merge lets start, or lets the user do: nothing else holds it back.
@@ -2119,7 +2138,7 @@ export class TaskOrchestrator {
         readiness = this.readiness();
       }
     }
-    if (!this.isScheduling) return;
+    if (!this.startsOnTick) return;
     const { ready } = readiness;
     console.log(`[TaskOrchestrator] tick(): ${ready.length} ready, ${this.attempts.size} active, held=${this.startHolds}`);
 
@@ -2130,10 +2149,12 @@ export class TaskOrchestrator {
       // load, a Merge all, a user control or a concurrent tick may have come
       // since, so each id is judged again — and last with nothing awaited
       // between that and the claim.
-      if (!this.isScheduling) return;
+      if (!this.startsOnTick) return;
       if (!this.stillReady(id)) continue;
+      // The run a stopped loop settled is gone by the time a retry resumes it.
+      if (!this.isScheduling) this.openRun('loop');
       if (decidesIsolation(this.attempts.nextKind(id)) && !(await this.runs.decide(() => this.tick()))) continue;
-      if (!this.isScheduling) return;
+      if (!this.startsOnTick) return;
       if (!this.stillReady(id)) continue;
       const claimed = this.claim(id, admission);
       if ('refused' in claimed) {
@@ -2152,7 +2173,8 @@ export class TaskOrchestrator {
    * only an end emits it. A run the scheduler is not driving — tasks started
    * on their own — ends on a verdict; a cancel, Mark complete or failed spawn
    * just closes it, so the next run decides its own mode rather than inherit
-   * this one's.
+   * this one's. A loop carried on outside a scheduled run holds that run open
+   * as a scheduled one is held, on whatever the start rule waits for.
    */
   private async settleRun(after: 'tick' | 'verdict'): Promise<void> {
     // A retry, Mark not done or an added task since leaves the plan unfinished:
@@ -2164,6 +2186,7 @@ export class TaskOrchestrator {
     // over or merged before the work the reset resumes.
     if (this.runState.kind === 'held') return;
     if (this.runState.kind !== 'scheduling') {
+      if (this.loopsCarriedOn().length > 0) return this.waitOnUser();
       if (after === 'tick') {
         if (this.runs.isOpen && this.settled) await this.closeRun();
         return;
@@ -2195,16 +2218,20 @@ export class TaskOrchestrator {
       // Waiting on the user: a user task, a checkpoint, a held task or a merge
       // gate. The scheduler stays armed, because the control that answers it
       // ticks, and a tick schedules only while it is.
-      this.notifications.info('Remaining tasks require user action or are on hold.');
-      this.sayGate();
-      this.emit('onTaskChanged');
-      this.emit('onTick');
-      return;
+      return this.waitOnUser();
     }
     this.emit('onTaskChanged');
     this.emit('onTick');
     await this.closeRun();
     this.emit('onExecutionComplete');
+  }
+
+  private waitOnUser(): void {
+    this.notifications.info('Remaining tasks require user action or are on hold.');
+    this.sayGate();
+    this.sayUnapprovedInLoop();
+    this.emit('onTaskChanged');
+    this.emit('onTick');
   }
 
   /**
@@ -2242,6 +2269,7 @@ export class TaskOrchestrator {
    * skipped, with why. A body task at work is left to finish.
    */
   private closeLoop(check: Readonly<Task>, reason: string): void {
+    this.carriedLoops.delete(check.id);
     for (const id of check.loop?.body ?? []) {
       const task = this.store.get(id);
       if (!task || this.attempts.has(id) || !LEFT_UNDONE.has(task.status)) continue;
@@ -2261,14 +2289,73 @@ export class TaskOrchestrator {
     let repeated = false;
     for (const id of repeatingChecks(this.store.planTasks)) {
       const check = this.store.get(id);
-      if (!check?.loop || this.attempts.has(id) || !check.loop.body.every((b) => landed(b, this.store, this.runs))) continue;
-      this.previousRounds.set(id, { round: loopRoundOf(check), report: check.outputSummary?.report });
-      this.store.repeat(id);
-      this.onHold.delete(id);
+      if (!check?.loop || !(this.isScheduling || this.carriedLoops.has(id)) || this.attempts.has(id) || !check.loop.body.every((b) => landed(b, this.store, this.runs))) continue;
+      this.repeatCheck(check);
       repeated = true;
-      this.notifications.info(`The fix for task "${check.title}" has landed: it checks again, round ${loopRoundOf(check)} of ${check.loop.maxRounds}.`);
     }
     if (repeated) this.emit('onTaskChanged');
+  }
+
+  private repeatCheck(check: Task): void {
+    this.previousRounds.set(check.id, { round: loopRoundOf(check), report: check.outputSummary?.report });
+    this.store.repeat(check.id);
+    this.onHold.delete(check.id);
+    this.notifications.info(`The fix for task "${check.title}" has landed: it checks again, round ${loopRoundOf(check)} of ${check.loop?.maxRounds}.`);
+  }
+
+  /**
+   * Something will run this check between rounds without being asked: a
+   * scheduler, the one a reset gives back, or its loop carried on (ADR-0045
+   * L5). What the seam reads before it says so to anyone.
+   */
+  loopRunsOn(checkId: string): boolean {
+    return this.isScheduling || heldFrom(this.runState) === 'scheduling' || this.carriedLoops.has(checkId);
+  }
+
+  /** A start of this task would be its loop's next round: between rounds, its body landed, and nothing else will run it. */
+  private ownsNextRound(task: Readonly<Task>): boolean {
+    const repeating = waitOf(this.startWaits(task), 'repeating');
+    return !!repeating && repeating.waiting.length === 0 && !this.loopRunsOn(task.id);
+  }
+
+  /** A tick starts something: the scheduler the plan, or the loops carried on, their tasks alone. */
+  private get startsOnTick(): boolean {
+    return this.isScheduling || this.loopsCarriedOn().length > 0;
+  }
+
+  /**
+   * The carried loops with work owed now: a check between rounds whose loop
+   * goes on, or a round waiting to start. None under a scheduler, which owes
+   * them itself, or while a usage limit holds the run, which starts nothing.
+   * One a body task stopped is not here until that task passes (L7).
+   */
+  private loopsCarriedOn(): Task[] {
+    if (this.carriedLoops.size === 0 || this.isScheduling || this.runState.kind === 'held') return [];
+    const repeating = repeatingChecks(this.store.planTasks);
+    return [...this.carriedLoops].flatMap((id) => {
+      const check = this.store.get(id);
+      return check?.loop && (repeating.has(id) || check.status === 'pending' || check.status === 'approved') ? [check] : [];
+    });
+  }
+
+  /** What a tick may start with no scheduler: the loops carried on, and nothing that depends on them. */
+  private carriedTasks(): Set<string> {
+    return new Set(this.loopsCarriedOn().flatMap((check) => [check.id, ...check.loop?.body ?? []]));
+  }
+
+  /**
+   * A task of a carried loop outside the user's approval record waits as any
+   * does (ADR-0045, Consent). Said here, once: in a plan they never approved
+   * no inbox entry singles it out, and the loop's next step would just not come.
+   */
+  private sayUnapprovedInLoop(): void {
+    const waiting = [...this.carriedTasks()].flatMap((id) => this.store.get(id) ?? []).filter((t) => waitOf(this.startWaits(t), 'unapproved'));
+    const notice = waiting.length === 0
+      ? ''
+      : `A loop waits for your approval of ${quotedList(waiting.map((t) => t.title))}: start ${waiting.length === 1 ? 'it' : 'them'}, or execute the plan, and it goes on.`;
+    if (notice === this.loopNotice) return;
+    this.loopNotice = notice;
+    if (notice) this.tell('info', notice);
   }
 
   /** Skipped work is not completed work, so a run with any says so rather than that everything completed. */
@@ -2301,7 +2388,9 @@ export class TaskOrchestrator {
    * the user: which tasks wait, and that Merge all lets them go on (ADR-0020).
    */
   private sayGate(): void {
-    const waiting = this.store.allTasks.filter((t) => this.getMergeGate(t.id).length > 0);
+    // With no scheduler only a carried loop's tasks start, so a gate elsewhere holds nothing back.
+    const within = this.isScheduling ? null : this.carriedTasks();
+    const waiting = this.store.allTasks.filter((t) => (!within || within.has(t.id)) && this.getMergeGate(t.id).length > 0);
     const notice = waiting.length === 0
       ? ''
       : `Waiting for Merge all: ${waiting.map((t) => `"${t.title}"`).join(', ')} ${waiting.length === 1 ? 'needs' : 'need'} work that is not merged into your branch yet.`;
