@@ -455,7 +455,7 @@ export class PlanStore {
 /** Throws for an AI task, subtasks included, assigned to a runner outside `runners`. */
 export function assertAssignedRunners(tasks: ReadonlyArray<Readonly<Task>>, runners: readonly RunnerId[]): void {
   for (const task of flattenTasks(tasks)) {
-    if (task.type !== 'ai') continue;
+    if (task.type !== 'ai' && task.type !== 'delegated') continue;
     if (!runners.includes(task.assignedRunner)) {
       throw new Error(
         `Task "${task.title}" has assignedRunner "${task.assignedRunner}" ` +

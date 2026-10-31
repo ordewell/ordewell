@@ -97,7 +97,7 @@ export type PlanEditOutcome =
 
 /** The runners a set of tasks runs on. A user task runs on none, and a script task on no runner (ADR-0035). */
 export function runnersOf(tasks: readonly Task[]): RunnerId[] {
-  return [...new Set(flattenTasks(tasks).filter((t) => t.type === 'ai').map((t) => t.assignedRunner))];
+  return [...new Set(flattenTasks(tasks).filter((t) => t.type === 'ai' || t.type === 'delegated').map((t) => t.assignedRunner))];
 }
 
 export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {

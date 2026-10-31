@@ -5,6 +5,7 @@ import { taggedReadOnlyMode, type RunnerModeInfo } from './ModeResolver';
 import { resolveAssignment, type AssignmentAdjustment, type AssignmentCatalog } from './TaskAssignment';
 import { notAScriptsFields, scriptBodyErrors } from '../models/ScriptTask';
 import { loopErrors, loopSpec } from '../models/Loop';
+import { DELEGATION_UNAVAILABLE, NOT_A_DELEGATED_TASKS_FIELDS, delegationErrors, notOnADelegatedMessage, type DelegatedBudget, type DelegationRules, type TaskScope } from '../models/Delegation';
 
 /** One reason a planned task was refused, pinned to the task and field it is about. */
 export interface PlanTaskError {
@@ -26,6 +27,14 @@ export interface IntakeCatalog {
    * submitted plan's models are resolved as it lands instead (ADR-0003).
    */
   models?: AssignmentCatalog;
+  /**
+   * Why this planner may not write a delegated task or a read-only script
+   * (ADR-0055 D1, D8), or null when it may. Absent, there is no node to read:
+   * a one-shot planner, or a route that holds no mandate.
+   */
+  delegationRefusal?: string | null;
+  /** A child's script tasks run sealed unless it holds `effect` (ADR-0056 M9), so each lands read-only, on every route. */
+  sealsScripts?: boolean;
 }
 
 /** Where a planned task lands, which decides what it inherits. */
@@ -93,6 +102,32 @@ export function notOnAScript(raw: Record<string, unknown>): string[] {
     const value = raw[f];
     return value !== undefined && value !== null && value !== false && !(Array.isArray(value) && value.length === 0);
   });
+}
+
+/** What a planner wrote on a delegated task that belongs to some other kind of task. */
+function notOnADelegated(raw: Record<string, unknown>): string[] {
+  return NOT_A_DELEGATED_TASKS_FIELDS.filter((f) => {
+    const value = raw[f];
+    return value !== undefined && value !== null && value !== false && !(Array.isArray(value) && value.length === 0);
+  });
+}
+
+/** A planner's fields, as untyped as the rest of its JSON; a rule refuses what is wrong with a value that reached the task. */
+function delegatedFields(raw: Record<string, unknown>, base: Partial<Task>): Pick<Task, 'goal' | 'budget' | 'grants' | 'protectedPaths' | 'scope'> & { readOnly?: true } {
+  const list = (value: unknown): string[] | undefined => (Array.isArray(value) ? value.map(String) : undefined);
+  const goal = text(raw.goal) ?? base.goal;
+  const budget = (isRecord(raw.budget) ? raw.budget as unknown as DelegatedBudget : undefined) ?? base.budget;
+  const grants = (list(raw.grants) ?? base.grants) as Task['grants'];
+  const protectedPaths = list(raw.protectedPaths) ?? base.protectedPaths;
+  const scope = (isRecord(raw.scope) ? raw.scope as TaskScope : undefined) ?? base.scope;
+  return {
+    ...(goal !== undefined ? { goal } : {}),
+    ...(budget ? { budget } : {}),
+    ...(grants ? { grants } : {}),
+    ...(protectedPaths ? { protectedPaths } : {}),
+    ...(scope ? { scope } : {}),
+    ...(raw.readOnly === true || (raw.readOnly === undefined && base.readOnly) ? { readOnly: true as const } : {}),
+  };
 }
 
 /** The refusal of those fields, worded for the planner. */
@@ -209,16 +244,25 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
   const id = freshIds || !plannerId ? newId() : plannerId;
   if (freshIds && plannerId) renamed.set(plannerId, id);
 
-  const type: Task['type'] = raw.type === 'user' || raw.type === 'ai' || raw.type === 'script' ? raw.type : base.type ?? 'ai';
+  const delegating = catalog.delegationRefusal === null;
+  const type: Task['type'] = raw.type === 'user' || raw.type === 'ai' || raw.type === 'script' || raw.type === 'delegated' ? raw.type : base.type ?? 'ai';
   const ai = type === 'ai';
   const script = type === 'script';
+  const delegated = type === 'delegated';
+  // A read-only script exists for a delegated task's check (ADR-0055 D8), so where nothing can delegate it reads as it always did.
+  const sealedScript = script && (catalog.sealsScripts === true || (delegating && raw.readOnly === true));
   const assignedRunner = text(raw.assignedRunner) ?? base.assignedRunner ?? catalog.runners[0] ?? DEFAULT_RUNNERS[0];
   const description = text(raw.description) ?? base.description ?? title;
 
   // What it may not have is refused rather than dropped: a prompt left on a
   // script, or a runner named for it, says the planner meant something else.
-  const notScripts = script ? notOnAScript(raw) : [];
+  const notScripts = script ? notOnAScript(raw).filter((f) => !(sealedScript && f === 'readOnly')) : [];
   if (notScripts.length > 0) errors.push({ taskId: id, field: notScripts[0], message: `${where} ${notOnAScriptMessage(notScripts)}` });
+  if (delegated) {
+    if (!delegating) errors.push({ taskId: id, field: 'type', message: catalog.delegationRefusal ?? `${where} is a delegated task, and ${DELEGATION_UNAVAILABLE}.` });
+    const extra = notOnADelegated(raw);
+    if (extra.length > 0) errors.push({ taskId: id, field: extra[0], message: `${where} ${notOnADelegatedMessage(extra)}` });
+  }
   // A body's shape is judged here, where it is still what the planner wrote: a Task holds only a well-formed one.
   const body = bodyFields(raw, base);
   const shapeErrors = scriptBodyErrors({ type, ...body.raw }).filter((e) => body.malformed.has(e.field));
@@ -228,7 +272,7 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
   if ('error' in loop) errors.push({ taskId: id, field: 'loop', message: `${where} ${loop.error}` });
   // A manual task stores no ops flag, so this is the one place it can still be seen.
   if (raw.ops === true && !ai && !script) errors.push({ taskId: id, field: 'ops', message: `${where} ${opsPlacementRefusal(type, !!parent)}` });
-  if (raw.taskMode !== undefined && !script) ignored.push({ taskId: id, field: 'taskMode', message: `${where}: ${MODE_NOT_THE_PLANNERS}` });
+  if (raw.taskMode !== undefined && !script && !delegated) ignored.push({ taskId: id, field: 'taskMode', message: `${where}: ${MODE_NOT_THE_PLANNERS}` });
   if (type === 'user' && raw.readOnly === true) ignored.push({ taskId: id, field: 'readOnly', message: `${where}: ${MANUAL_NOT_READ_ONLY}` });
   const ops = raw.ops !== undefined ? raw.ops === true : base.ops;
   if (ai && ops && raw.readOnly === true) ignored.push({ taskId: id, field: 'readOnly', message: `${where}: ${OPS_NOT_READ_ONLY}` });
@@ -238,7 +282,7 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
   const readOnly = ai && !ops && (asked ?? from?.readOnly ?? parent?.readOnly ?? false);
   if (raw.research !== undefined && typeof raw.research !== 'boolean') errors.push({ taskId: id, field: 'research', message: `${where}: "research" must be a boolean` });
 
-  const assignedModel = ai ? modelOf(raw, base.assignedModel) : undefined;
+  const assignedModel = ai || delegated ? modelOf(raw, base.assignedModel) : undefined;
   const slice = (value: unknown): 'AFK' | 'HITL' | undefined => (value === 'AFK' || value === 'HITL' ? value : undefined);
   // Explicit child values always win; inheritance only fills a gap, and only for `ai` tasks.
   const autonomy = ai ? slice(raw.autonomy) ?? base.autonomy ?? parent?.autonomy : undefined;
@@ -264,7 +308,7 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
     type,
     dependencies: Array.isArray(raw.dependencies) ? raw.dependencies.map(String) : base.dependencies ?? [],
     // What a merge or split carries over for a runner is nothing a script runs.
-    prompt: script ? undefined : text(raw.prompt) || base.prompt || (ai ? description || title || undefined : undefined),
+    prompt: script || delegated ? undefined : text(raw.prompt) || base.prompt || (ai ? description || title || undefined : undefined),
     userSteps: Array.isArray(raw.userSteps)
       ? raw.userSteps.map((s) => (isRecord(s) ? s : {})).map((s) => ({ order: Number(s.order ?? 0), instruction: String(s.instruction ?? ''), completed: false }))
       : base.userSteps,
@@ -274,15 +318,17 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
     autonomy,
     sliceType,
     userStoriesCovered: Array.isArray(raw.userStoriesCovered) ? raw.userStoriesCovered.map(String) : base.userStoriesCovered,
-    ops: script ? undefined : ops,
+    ops: script || delegated ? undefined : ops,
     research: typeof raw.research === 'boolean' ? raw.research : base.research,
-    skills: script ? undefined : from ? inheritedSkills(raw.skills, base.skills) : skillNames(raw.skills),
+    skills: script || delegated ? undefined : from ? inheritedSkills(raw.skills, base.skills) : skillNames(raw.skills),
     ...body.fields,
     ...('loop' in loop && loop.loop ? { loop: loop.loop } : {}),
+    ...(delegated ? delegatedFields(raw, base) : {}),
+    ...(sealedScript ? { readOnly: true as const } : {}),
   };
-  let taskMode = script ? undefined : base.taskMode;
+  let taskMode = script || delegated ? undefined : base.taskMode;
   let landedModel = assignedModel;
-  if (ai && catalog.runners.includes(assignedRunner)) {
+  if ((ai || delegated) && catalog.runners.includes(assignedRunner)) {
     const resolved = resolveAssignment({
       writer: catalog.models ? 'edit' : 'plan',
       task: { ...createTask(fields), taskMode },
@@ -294,7 +340,8 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
       // The planner names no mode: one it cannot have is about the read-only answer it gave (ADR-0031).
       errors.push({ taskId: id, field: resolved.field === 'taskMode' ? 'readOnly' : resolved.field, message: `${where}: ${resolved.error}` });
     } else {
-      taskMode = resolved.task.taskMode;
+      // A delegated task has no mode on the plan: a subplanner's is the planner's, and a repair's comes from its mandate (ADR-0055 D14).
+      taskMode = delegated ? undefined : resolved.task.taskMode;
       landedModel = resolved.task.assignedModel;
       adjustments.push(...resolved.adjustments);
     }
@@ -311,7 +358,7 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
 export function checkPlanRunners(tasks: readonly Task[], runners: readonly RunnerId[] | undefined): PlanTaskError[] {
   if (!runners) return [];
   return flattenTasksWithParents(tasks)
-    .filter(({ task: t }) => t.type === 'ai' && !runners.includes(t.assignedRunner))
+    .filter(({ task: t }) => (t.type === 'ai' || t.type === 'delegated') && !runners.includes(t.assignedRunner))
     .map(({ task: t, parent }) => ({
       taskId: t.id,
       field: 'assignedRunner',
@@ -332,6 +379,7 @@ export function checkPlanInvariants(
   tasks: readonly Task[],
   runners: readonly RunnerId[] | undefined,
   runnerModes?: Partial<Record<RunnerId, readonly RunnerModeInfo[]>>,
+  delegation: Pick<DelegationRules, 'canSeal'> = {},
 ): PlanTaskError[] {
   const rows = flattenTasksWithParents(tasks);
   const errors: PlanTaskError[] = [];
@@ -364,6 +412,11 @@ export function checkPlanInvariants(
       const extra = notAScriptsFields(t);
       if (extra.length > 0) fail(extra[0], `${where} ${notOnAScriptMessage(extra)}`);
     }
+    if (t.type === 'delegated') {
+      // Top-level like a script task, and its child plan's tasks are the child's own (ADR-0055 D1).
+      if (parent !== null) fail('type', `${where} is a delegated task: only a top-level task can be delegated`);
+      if (t.subtasks?.length) fail('subtasks', `${where} is a delegated task, which has no subtasks: its child plan's tasks are its child's own`);
+    }
     for (const e of scriptBodyErrors(t)) fail(e.field, `${where} ${e.message}`);
     if (t.ops && t.taskMode !== undefined && t.taskMode === taggedReadOnlyMode(runnerModes?.[t.assignedRunner])) {
       fail('taskMode', `${where} is an ops task, which acts in the workspace, so it cannot use the read-only profile`);
@@ -371,6 +424,7 @@ export function checkPlanInvariants(
   }
   errors.push(...checkPlanRunners(tasks, runners));
   errors.push(...loopErrors(tasks));
+  errors.push(...delegationErrors(tasks, { ...(runnerModes ? { runnerModes } : {}), ...delegation }));
   for (const { task: t, parent } of rows) {
     // Self-dependencies are reported with the cycle below, including its full path.
     for (const error of dependencyTargetErrors(tasks, t.id, t.dependencies.filter((id) => id !== t.id))) {

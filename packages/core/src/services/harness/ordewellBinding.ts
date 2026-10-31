@@ -64,7 +64,7 @@ export interface OrdewellToolBinding<Ask = never> {
   /** The name the runner calls an Ordewell tool by, and reports its calls and requests under. */
   toolName(tool: string): string;
   /** Every tool `role` is given, under the runner's names, in the server's order, less those its token hides. */
-  toolNames(role: OrdewellToolRole, hidden?: readonly string[]): string[];
+  toolNames(role: OrdewellToolRole, hidden?: readonly string[], extra?: readonly string[]): string[];
   /**
    * The planner tools this runner's planner token hides, by their names on
    * the server: those it carries natively (ADR-0027), which a model offered
@@ -86,9 +86,9 @@ export interface OrdewellToolBinding<Ask = never> {
 }
 
 /** The tools of a role, by their names on the server, less `hidden`. */
-export function ordewellToolNames(role: OrdewellToolRole, hidden: readonly string[] = []): string[] {
+export function ordewellToolNames(role: OrdewellToolRole, hidden: readonly string[] = [], extra: readonly string[] = []): string[] {
   const tools = role === 'task' ? TASK_TOOLS : role === 'readOnlyTask' ? READ_ONLY_TASK_TOOLS : PLANNER_TOOLS;
-  return tools.map((tool) => tool.name).filter((tool) => !hidden.includes(tool));
+  return [...tools.map((tool) => tool.name).filter((tool) => !hidden.includes(tool)), ...extra];
 }
 
 /** Every tool the server serves, under any role, by its name on the server. */
@@ -99,7 +99,7 @@ export function prefixedToolNames(prefix: string): Pick<OrdewellToolBinding, 'to
   const names = new Set(ORDEWELL_TOOL_NAMES.map((tool) => `${prefix}${tool}`));
   return {
     toolName: (tool) => `${prefix}${tool}`,
-    toolNames: (role, hidden) => ordewellToolNames(role, hidden).map((tool) => `${prefix}${tool}`),
+    toolNames: (role, hidden, extra) => ordewellToolNames(role, hidden, extra).map((tool) => `${prefix}${tool}`),
     // Exact, never by prefix: a server whose name extends Ordewell's (`ordewell__x`, `ordewell_x`) names its tools under the same prefix.
     isToolName: (name) => names.has(name),
   };

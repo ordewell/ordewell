@@ -33,7 +33,7 @@ export interface AssignedTask {
  * the runner through this rather than off the task.
  */
 export function assignedRunnerOf(task: { type: string; assignedRunner?: string }): string | undefined {
-  return task.type === 'ai' ? task.assignedRunner || undefined : undefined;
+  return task.type === 'ai' || task.type === 'delegated' ? task.assignedRunner || undefined : undefined;
 }
 
 export type AssignmentIssue =
@@ -51,7 +51,7 @@ const OVER = new Set(['completed', 'skipped']);
  * model is looked at.
  */
 export function assignmentIssue(task: AssignedTask, scope: AssignmentScope): AssignmentIssue | null {
-  if (task.type !== 'ai' || OVER.has(task.status)) return null;
+  if ((task.type !== 'ai' && task.type !== 'delegated') || OVER.has(task.status)) return null;
   if (!scope.enabledRunners.includes(task.assignedRunner)) return { kind: 'runner-off', runner: task.assignedRunner };
   const model = task.assignedModel;
   const allowed = effectiveAllowlist(scope.allowlist[task.assignedRunner] as string[] | undefined, task.assignedRunner, scope.models as Partial<Record<RunnerId, DiscoveredModel[]>> | undefined);

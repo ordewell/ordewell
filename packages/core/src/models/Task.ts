@@ -7,6 +7,8 @@ import type { SupervisionMemorySnapshot } from '../services/LoopGuards';
 import type { SupervisorSnapshot } from '../services/Supervisor';
 import type { TaskLoop } from './Loop';
 import type { HandoffDigest } from './Handoff';
+import type { DelegatedBudget, TaskScope } from './Delegation';
+import type { Grant } from '../services/Mandate';
 import { SKILL_NAME_PATTERN } from '../conversation/skillTokens';
 import { subtreeIds, walkPlan } from '../services/PlanTree';
 import { migratePlanStateIsolation } from '../services/isolationRecord';
@@ -23,7 +25,7 @@ export interface UserStep {
  * `script_exit` is a script task's exit status, its one evidence (ADR-0035).
  */
 export interface VerificationCheck {
-  name: 'exit_code' | 'completion_marker' | 'task_complete' | 'manual' | 'script_exit';
+  name: 'exit_code' | 'completion_marker' | 'task_complete' | 'manual' | 'script_exit' | 'protected_paths';
   passed: boolean;
   /** A check that did not apply. Skipped checks don't affect the verdict. */
   skipped: boolean;
@@ -57,8 +59,11 @@ export interface TaskOutputSummary {
   capturedAt: string;
 }
 
-/** `script` is an ops task whose body Ordewell runs with no model (ADR-0035). */
-export type TaskType = 'ai' | 'user' | 'script';
+/**
+ * `script` is an ops task whose body Ordewell runs with no model (ADR-0035);
+ * `delegated` holds a goal, and its attempt is a child plan (ADR-0055).
+ */
+export type TaskType = 'ai' | 'user' | 'script' | 'delegated';
 /**
  * `skipped` is terminal and verdict-less: the task will not be waited for, and
  * nothing it did lands. Its dependents go ahead without it once the work it
@@ -363,6 +368,22 @@ export interface Task {
   script?: string;
   /** A script task's time limit; absent means ten minutes (`DEFAULT_SCRIPT_TIMEOUT_MS`). */
   timeoutMs?: number;
+  /** What a delegated task's child plan must achieve, in place of a prompt (ADR-0055 D1). */
+  goal?: string;
+  /** A delegated task's budget (ADR-0056 M5). */
+  budget?: DelegatedBudget;
+  /** What a delegated task asks for past the floor; absent asks for nothing (ADR-0056 M2). */
+  grants?: Grant[];
+  /** The paths a delegated task's child may not change, what its check runs among them (ADR-0055 D7). */
+  protectedPaths?: string[];
+  /** What a delegated task declares it works on (ADR-0057 R6). */
+  scope?: TaskScope;
+  /**
+   * On a delegated task, it answers a question and lands nothing (ADR-0055 D1).
+   * On a script task, it runs sealed in a throwaway worktree, past no gate (D8).
+   * A read-only AI task says so by its mode (ADR-0031) and stores none.
+   */
+  readOnly?: boolean;
   /** Set on a loop's check (ADR-0045): the tasks that fix what it finds, and how many times it may run. */
   loop?: TaskLoop;
   /**
@@ -1021,7 +1042,7 @@ export function createTask(overrides: Partial<Task> = {}): Task {
     assignedModel: overrides.assignedModel,
     assignedRunner: overrides.assignedRunner ?? DEFAULT_RUNNERS[0],
     // A script task runs in no mode (ADR-0035): one given it would read as a mode it runs in.
-    taskMode: overrides.taskMode ?? (type === 'script' ? undefined : 'build'),
+    taskMode: overrides.taskMode ?? (type === 'script' || type === 'delegated' ? undefined : 'build'),
     autonomy: overrides.autonomy,
     sliceType: overrides.sliceType,
     userStoriesCovered: overrides.userStoriesCovered,
@@ -1031,6 +1052,12 @@ export function createTask(overrides: Partial<Task> = {}): Task {
     ...(overrides.commands !== undefined ? { commands: overrides.commands.map((argv) => [...argv]) } : {}),
     ...(overrides.script !== undefined ? { script: overrides.script } : {}),
     ...(overrides.timeoutMs !== undefined ? { timeoutMs: overrides.timeoutMs } : {}),
+    ...(overrides.goal !== undefined ? { goal: overrides.goal } : {}),
+    ...(overrides.budget !== undefined ? { budget: { ...overrides.budget } } : {}),
+    ...(overrides.grants !== undefined ? { grants: [...overrides.grants] } : {}),
+    ...(overrides.protectedPaths !== undefined ? { protectedPaths: [...overrides.protectedPaths] } : {}),
+    ...(overrides.scope !== undefined ? { scope: structuredClone(overrides.scope) } : {}),
+    ...(overrides.readOnly ? { readOnly: true as const } : {}),
     ...(overrides.loop ? { loop: { body: [...overrides.loop.body], maxRounds: overrides.loop.maxRounds } } : {}),
     ...(overrides.loopRound !== undefined ? { loopRound: overrides.loopRound } : {}),
     ...(overrides.research !== undefined ? { research: overrides.research } : {}),
@@ -1084,10 +1111,11 @@ export function opsFlag(value: unknown, type: Task['type'] = 'ai'): true | undef
 
 /**
  * Whether a task runs as an ops task (ADR-0020): an AI task marked so, or a
- * script task, which is one by nature and never marked (ADR-0035).
+ * script task, which is one by nature and never marked (ADR-0035), unless it
+ * is read-only: that one runs sealed in a throwaway worktree (ADR-0055 D8).
  */
-export function runsAsOps(task: Pick<Task, 'ops' | 'type'>): boolean {
-  return task.type === 'script' || opsFlag(task.ops, task.type) === true;
+export function runsAsOps(task: Pick<Task, 'ops' | 'type' | 'readOnly'>): boolean {
+  return (task.type === 'script' && !task.readOnly) || opsFlag(task.ops, task.type) === true;
 }
 
 /**

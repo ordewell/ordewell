@@ -160,6 +160,8 @@ export interface IFileSystem {
   endSession?(): void;
   /** Whether a command can run sealed on this host (ADR-0036 S6); where it cannot, the session's one notice says so. */
   canSeal?(): Promise<boolean>;
+  /** The same adapter at another workspace: what a child's planner reads, its code root being a task's worktree (ADR-0055 D5). */
+  rootedAt?(workspace: string): IFileSystem;
   /** A read-only task's shell at `site`, held to this session's allowlist and never asking (ADR-0046). */
   taskShell?(site: TaskShellSite): TaskShell;
 }

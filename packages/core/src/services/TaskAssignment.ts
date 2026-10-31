@@ -34,6 +34,10 @@ export interface AssignmentCatalog {
   runnerModes?: Partial<Record<RunnerId, readonly RunnerModeInfo[]>>;
   /** Raw (unfiltered) allowlist, keyed by runner; read through {@link effectiveAllowlist}. */
   perRunnerAllowlist?: Partial<Record<RunnerId, string[]>>;
+  /** Why an edit may not write a delegated task, or null when it may; absent, no node is behind it (`IntakeCatalog`). */
+  delegationRefusal?: string | null;
+  /** Whether a script task an edit adds lands sealed (`IntakeCatalog`). */
+  sealsScripts?: boolean;
   /** Full (true) or Guarded: the mode a derived task lands on unless it is read-only (ADR-0001). Full when absent. */
   autonomousDefault?: boolean;
   /**
@@ -204,9 +208,10 @@ export function resolveAssignment(write: AssignmentWrite): AssignmentOutcome {
   if (live && moved) return { ok: false, field: 'assignedRunner', error: liveRunnerRefusal({ title }) };
   if (live && !sameAssignment(before?.assignedModel, written.assignedModel)) return { ok: false, field: 'assignedModel', error: liveModelRefusal({ title }) };
   // A manual task runs on nothing, and a script task on no runner (ADR-0035).
-  if (written.type !== 'ai') return { ok: true, task: written, adjustments: [] };
+  if (written.type !== 'ai' && written.type !== 'delegated') return { ok: true, task: written, adjustments: [] };
 
-  const mode = modeFor(write, written, moved);
+  // A delegated task's runner runs a planner, in no mode the plan holds (ADR-0055 D14).
+  const mode = written.type === 'delegated' ? { ok: true as const, mode: undefined } : modeFor(write, written, moved);
   if (!mode.ok) return { ok: false, field: 'taskMode', error: mode.error };
 
   // A live runner holds its model and effort as they are, even where its model's levels have changed since.

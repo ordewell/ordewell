@@ -20,6 +20,8 @@ export function sessionOwner(task: Task): string | undefined {
  */
 export function continuability(task: Task): Continuability {
   const refuse = (reason: string): Continuability => ({ ok: false, reason: `Task "${task.title}" cannot be continued: ${reason}` });
+  // Reopening a child is ADR-0055 D17's, and not built yet: a fresh retry starts a new child.
+  if (task.type === 'delegated') return refuse('reopening its child plan is not built yet. Retry it fresh, which starts a new child.');
   if (task.type !== 'ai') return refuse('it is not run by an agent.');
   if (task.status === 'awaiting_user' && task.awaitingReason === 'conflict') {
     return refuse('its work is waiting on a merge conflict. Resolve or repair the conflict instead.');

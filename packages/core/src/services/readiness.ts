@@ -146,7 +146,7 @@ export function selectReadyTasks(input: ReadinessInput): Readiness {
   return {
     ready: candidates.slice(0, Math.max(0, input.maxParallel - input.active)),
     candidateCount: candidates.length,
-    excluded: judged.filter(({ task, waits }) => (task.type === 'script' || (task.type === 'ai' && task.prompt)) && waits.length > 0),
+    excluded: judged.filter(({ task, waits }) => (task.type === 'script' || task.type === 'delegated' || (task.type === 'ai' && task.prompt)) && waits.length > 0),
     gated: judged.filter(({ waits }) => onlyAtGate(waits)).map(({ task }) => task),
   };
 }
@@ -205,7 +205,7 @@ function waitsOf(task: Readonly<Task>, input: StartRuleInput, forced: ForcedStar
   if (input.completing.has(task.id)) waits.push({ kind: 'completing' });
   const resolver = input.conflictResolver?.(task.id);
   if (resolver) waits.push({ kind: 'resolver', resolver });
-  if (task.type === 'ai' ? !task.prompt : task.type === 'script' && !scriptBodyOf(task)) waits.push({ kind: 'no-prompt' });
+  if (task.type === 'ai' ? !task.prompt : task.type === 'delegated' ? !task.goal : task.type === 'script' && !scriptBodyOf(task)) waits.push({ kind: 'no-prompt' });
   if (!input.approved(task.id)) waits.push({ kind: 'unapproved' });
   if (!forced && input.onHold.has(task.id)) {
     const reason = input.onHold.get?.(task.id);
@@ -226,7 +226,7 @@ function waitsOf(task: Readonly<Task>, input: StartRuleInput, forced: ForcedStar
   if (waiting.length > 0) waits.push(queued ? { kind: 'queued', waiting } : { kind: 'dependencies', waiting });
   if (input.merging && mergeExcludes(classifyAttempt(opsOf(task, store) ? 'ops' : 'change'))) waits.push({ kind: 'merging' });
   // A script task runs on no runner, so no runner's limit holds it (ADR-0035).
-  if (!forced && task.type === 'ai') {
+  if (!forced && (task.type === 'ai' || task.type === 'delegated')) {
     const runner = store.resolveTaskRunner(task);
     if (plan.limited().has(runner) || input.treeLimited?.has(runner)) waits.push({ kind: 'usage-limit', runner });
   }

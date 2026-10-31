@@ -192,7 +192,7 @@ export class VerdictEngine {
       else if (event.type === 'permission_request' && !event.decided) this.approvalOpened(task.id, event.id);
       else if (event.type === 'permission_decided' || event.type === 'permission_withdrawn') this.approvalClosed(task.id, event.id, gen);
     });
-    session.onTaskComplete((report) => this.signalComplete(task.id, gen, report));
+    session.onTaskComplete((report, refuted) => this.signalComplete(task.id, gen, report, refuted));
     session.onScriptExit((exit) => this.signalScriptExit(task.id, gen, exit));
     session.onToolCheckpoint((question, signal) => this.raiseCheckpoint(task.id, gen, question, signal));
     session.onExit((exitCode: number) => {
@@ -209,9 +209,9 @@ export class VerdictEngine {
    * attempt, unless that attempt is no longer the task's current one or an
    * earlier call already settled it.
    */
-  signalComplete(taskId: string, generation: number, report: TaskCompleteArgs): void {
+  signalComplete(taskId: string, generation: number, report: TaskCompleteArgs, refuted?: VerificationCheck): void {
     if (this.generations.get(taskId) !== generation) return;
-    this.acceptVerdict(taskId, reportedVerdict(report));
+    this.acceptVerdict(taskId, reportedVerdict(report, refuted));
   }
 
   /**
@@ -454,7 +454,12 @@ function durationText(ms: number): string {
   return `${seconds} second${seconds === 1 ? '' : 's'}`;
 }
 
-function reportedVerdict(report: TaskCompleteArgs): Verdict {
+/**
+ * `refuted` is a check of the work the call's own evidence failed, as a
+ * delegated task's protected paths do (ADR-0055 D7): a `done` it refutes fails,
+ * with what failed named, whatever the runner said.
+ */
+function reportedVerdict(report: TaskCompleteArgs, refuted?: VerificationCheck): Verdict {
   const checks: VerificationCheck[] = [
     {
       name: 'task_complete',
@@ -462,10 +467,12 @@ function reportedVerdict(report: TaskCompleteArgs): Verdict {
       skipped: false,
       detail: `the runner called task_complete with status "${report.status}"`,
     },
+    ...(refuted ? [refuted] : []),
   ];
   const decidedAt = new Date().toISOString();
   // Kept apart from the outcome: `blocked` and `failed` fail alike, but only a `failed` check starts a loop's round (ADR-0045 L2).
   const reported = report.status;
+  if (report.status === 'done' && refuted) return { outcome: 'fail', reason: refuted.detail, checks, decidedAt, reported: 'failed' };
   if (report.status === 'done') {
     return { outcome: 'pass', reason: 'Verified: the runner reported completion through task_complete. Task completed successfully.', checks, decidedAt, reported };
   }

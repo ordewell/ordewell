@@ -146,6 +146,7 @@ export function loopErrors(tasks: readonly Task[]): LoopError[] {
     const fail = (message: string) => errors.push({ taskId: check.id, field: 'loop', message: `${where} ${message}` });
     if (parent) fail('has a "loop", but only a top-level task can be a loop\'s check');
     if (check.type === 'user') fail('is a manual task, so it cannot be a loop\'s check: a check is an AI task, which reports through task_complete, or a script task, whose exit status decides');
+    if (check.type === 'delegated') fail('is a delegated task, so it cannot be a loop\'s check: a round would start a new child on what is left of its budget. Add a check that depends on it, and put the loop on that');
     if (check.subtasks?.length) fail('is a loop\'s check, which has no subtasks: each round runs it again whole');
     if (!isRoundCount(loop.maxRounds)) fail(roundsMessage(loop.maxRounds));
     if (!Array.isArray(loop.body) || loop.body.length === 0) fail('has a "loop" with an empty "body": name the tasks that fix what it finds');
@@ -163,6 +164,7 @@ export function loopErrors(tasks: readonly Task[]): LoopError[] {
       bodyOwner.set(id, check);
       if (body.loop) fail(`names "${body.title}" in its loop's "body", which has a loop of its own: a loop has no loop inside its body`);
       if (body.type === 'user') fail(`names manual task "${body.title}" in its loop's "body": a body is AI or script tasks, which Ordewell runs again each round`);
+      if (body.type === 'delegated') fail(`names delegated task "${body.title}" in its loop's "body": a round would start a new child on what is left of its budget`);
       if (body.subtasks?.length) fail(`names "${body.title}" in its loop's "body", which has subtasks: each round runs a body task again whole, so make each step a task of the body`);
     }
   }
@@ -203,7 +205,9 @@ export function loopRemovalRefusal(task: Pick<Task, 'title' | 'loop'>): string |
 }
 
 /** Why tasks in a loop may not be merged or split: a round runs its check and each body task again as they are (ADR-0045 L8). */
-export function loopReshapeRefusal(tasks: readonly Pick<LoopSubject, 'id' | 'loop'>[], target: Pick<Task, 'id' | 'title' | 'loop'>, action: 'merged' | 'split'): string | null {
+export function loopReshapeRefusal(tasks: readonly Pick<LoopSubject, 'id' | 'loop'>[], target: Pick<Task, 'id' | 'title' | 'loop' | 'type'>, action: 'merged' | 'split'): string | null {
+  // A merge or a split makes tasks of another type, and that would lose its goal and budget (ADR-0055 D1).
+  if (target.type === 'delegated') return `"${target.title}" is a delegated task and cannot be ${action}: remove it and add what should replace it`;
   if (target.loop) return `"${target.title}" is a loop's check and cannot be ${action}: drop its loop first ("loop": null)`;
   return checkOf(tasks, target.id) ? `"${target.title}" is in a loop's body and cannot be ${action}: take it out of the loop first` : null;
 }

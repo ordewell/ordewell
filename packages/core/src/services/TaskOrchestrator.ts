@@ -196,6 +196,8 @@ export interface TaskOrchestratorDeps {
   runner: IRunner;
   /** Runs script tasks' bodies (ADR-0035), in place of a registered runner. */
   scriptRunner: IRunner;
+  /** Runs delegated tasks' child plans (ADR-0055 D3). */
+  childPlanRunner: IRunner;
   store: PlanStore;
   output: TaskOutputSource;
   /** The plan's isolation run and the open run's lifecycle (ADR-0013). */
@@ -270,6 +272,7 @@ export interface TaskOrchestratorOptions {
   notifications: INotification;
   runner: IRunner;
   scriptRunner?: IRunner;
+  childPlanRunner?: IRunner;
   store?: PlanStore;
   output?: TaskOutputSource;
   isolation?: IWorktreeIsolation;
@@ -443,6 +446,7 @@ export class TaskOrchestrator {
       notifications: deps.notifications,
       runner: deps.runner,
       scriptRunner: deps.scriptRunner,
+      childPlanRunner: deps.childPlanRunner,
       store: deps.store,
       output: deps.output,
       runs: deps.runs,
@@ -540,6 +544,7 @@ export class TaskOrchestrator {
       notifications: options.notifications,
       runner: options.runner,
       scriptRunner: options.scriptRunner ?? new ScriptRunner(),
+      childPlanRunner: options.childPlanRunner ?? NO_CHILD_PLANS,
       store,
       output,
       runs,
@@ -2488,9 +2493,10 @@ export class TaskOrchestrator {
     return { node: { sessionId: this.sessionId(), ...(taskId !== undefined ? { taskId } : {}) }, role };
   }
 
-  /** What a start of `task` reserves. */
+  /** What a start of `task` reserves: a delegated task takes a node and no slot, or a parent at its limit deadlocks on the children that need them (ADR-0055 D18). */
   private attemptRequest(task: Readonly<Task>): LeaseRequest {
-    return { ...this.leaseRequest(task.type === 'script' ? 'script' : 'task', task.id), runner: this.store.resolveTaskRunner(task) };
+    const role = task.type === 'script' ? 'script' : task.type === 'delegated' ? 'child-plan' : 'task';
+    return { ...this.leaseRequest(role, task.id), runner: this.store.resolveTaskRunner(task) };
   }
 
   private sayQueuedAtGate(task: Readonly<Task>, queued: QueuedStart, unmerged: readonly string[]): void {
@@ -2603,7 +2609,7 @@ export class TaskOrchestrator {
   /** Work is ready and nothing live can free room for it, so no event will tick this again (ADR-0056 M5). */
   private stopIfOutOfBudget(ready: readonly Task[]): void {
     const refused = this.deps.budget?.refusal();
-    if (refused && this.attempts.size === 0 && ready.some((task) => task.type !== 'script' && this.stillReady(task.id))) this.deps.budget?.stop(refused);
+    if (refused && this.attempts.size === 0 && ready.some((task) => task.type !== 'script' && task.type !== 'delegated' && this.stillReady(task.id))) this.deps.budget?.stop(refused);
   }
 
   /** One of a tick's starters: takes the next of `waiting` as each start it made has attached. */
@@ -2931,7 +2937,8 @@ export class TaskOrchestrator {
     if ([...this.reverting].some((reach) => reach.has(taskId))) return `A revert is taking back work task "${task.title}" depends on. Start it again once the revert has ended.`;
     if (!this.isApproved(taskId)) return `Task "${task.title}" waits for the user's approval: they approve it by starting it, or by executing the plan.`;
     // A script spends no tokens (ADR-0035), so a node out of them can still run its checks.
-    return task.type === 'script' ? null : this.deps.budget?.refusal() ?? null;
+    // Nor does a delegated task's own attempt: what it spends is carved, and its carve answers for it.
+    return task.type === 'script' || task.type === 'delegated' ? null : this.deps.budget?.refusal() ?? null;
   }
 
   /** An explicit start's refusal, before it changes anything: its caller's answer, as a {@link TaskControlError}. */
@@ -2991,6 +2998,14 @@ export class TaskOrchestrator {
     if (resume) await resume();
   }
 }
+
+/** A scheduler composed with no Session behind it has nothing to host a child in. */
+const NO_CHILD_PLANS: IRunner = {
+  spawn: () => Promise.reject(new Error('This scheduler has no Session to host a child plan.')),
+  stop: () => Promise.resolve(),
+  stopAll: () => undefined,
+  activeCount: 0,
+};
 
 const LIMIT_RESET_MESSAGE = 'Your usage limit has reset. Carry on with the task from where you stopped.';
 

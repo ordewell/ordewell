@@ -243,6 +243,25 @@ export interface ConversationVariant {
   execution?: boolean;
   /** A submitted plan starts at once (ADR-0030): the planner does not wait for its outline to be confirmed. */
   autorun?: boolean;
+  /** Teaches delegation, only where the mandate grants it: with this absent the prompt does not change by a byte (ADR-0055 D21). */
+  delegation?: PlannerDelegation;
+  /** The planner is a subplanner: its parent's plan stands where the user does (ADR-0055 D4). */
+  subplanner?: SubplannerBrief;
+}
+
+/** What a planner that may delegate is told of its limits (ADR-0055 D19). */
+export interface PlannerDelegation {
+  tokens: number;
+  delegatedTasks: number;
+  /** What a delegated task of this plan can ask for past the floor. */
+  grantable: readonly string[];
+}
+
+/** What a subplanner is told of what it was given (ADR-0055 D4). */
+export interface SubplannerBrief {
+  /** Its own and its ancestors': a change to one fails its verdict (D7). */
+  protectedPaths: readonly string[];
+  readOnly: boolean;
 }
 
 /**

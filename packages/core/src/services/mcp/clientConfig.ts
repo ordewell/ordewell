@@ -13,6 +13,8 @@ export interface McpClientConfig {
   headers: Record<string, string>;
   /** Planner tools the token hides: a runner must neither pre-allow nor mention them. */
   hidden?: readonly string[];
+  /** Tools served past a planner's: a subplanner's, to pre-allow with the rest (ADR-0055 D5). */
+  extraTools?: readonly string[];
   /** A read-only task's token (ADR-0046): `run_command`, `fetch` and `web_search` are among its tools, for the runner to pre-allow and name. */
   readOnly?: true;
 }
@@ -29,6 +31,7 @@ export function mcpClientConfig(credential: McpCredential): McpClientConfig {
     url: credential.url,
     headers: { Authorization: bearerHeaderValue(credential.token) },
     ...(credential.hidden?.length ? { hidden: credential.hidden } : {}),
+    ...(credential.extraTools?.length ? { extraTools: credential.extraTools } : {}),
     ...(credential.readOnly ? { readOnly: true } : {}),
   };
 }

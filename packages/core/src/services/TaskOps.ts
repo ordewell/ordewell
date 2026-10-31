@@ -9,6 +9,7 @@ import { taskPlacement } from './PlanTree';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_OPS_ENVELOPE_KEY } from './JsonExtractor';
 import { validateTaskEdit, lockedTaskRefusal, reshapeRefusal, type TaskEditActor, type TaskEditCheck } from './TaskEditValidator';
 import { resolveAssignment, type AssignmentAdjustment, type AssignmentCatalog } from './TaskAssignment';
+import { DELEGATED_FIELDS, notOnADelegatedMessage } from '../models/Delegation';
 import { plannedTask, checkPlanInvariants, detectCycle, notOnAScriptMessage, taskWhere, MODE_NOT_THE_PLANNERS, MANUAL_NOT_READ_ONLY, OPS_NOT_READ_ONLY, type IntakeCatalog, type PlannedTask, type PlanTaskError } from './PlannedTask';
 import { clearedBodyFields } from '../models/ScriptTask';
 import { loopRemovalRefusal, loopReshapeRefusal, loopSpec } from '../models/Loop';
@@ -168,7 +169,7 @@ function resolveRef(
 /** The fields of a planner's `changes` it may set, with the ops flag read as every entry point reads it. */
 function updatableChanges(raw: Partial<Task> | undefined): Partial<Task> {
   const changes: Partial<Task> = {};
-  for (const key of UPDATABLE_FIELDS) {
+  for (const key of [...UPDATABLE_FIELDS, ...DELEGATED_FIELDS]) {
     if (raw && key in raw) (changes as Record<string, unknown>)[key] = (raw as Record<string, unknown>)[key];
   }
   if ('ops' in changes) changes.ops = opsFlag(changes.ops);
@@ -447,7 +448,7 @@ export function applyTaskOps(
     return { ids, bad };
   };
 
-  const intake: IntakeCatalog = { runners, runnerModes: catalog?.runnerModes, autonomousDefault: catalog?.autonomousDefault, models: catalog };
+  const intake: IntakeCatalog = { runners, runnerModes: catalog?.runnerModes, autonomousDefault: catalog?.autonomousDefault, models: catalog, ...(catalog?.delegationRefusal !== undefined ? { delegationRefusal: catalog.delegationRefusal } : {}), ...(catalog?.sealsScripts ? { sealsScripts: true } : {}) };
 
   /**
    * A planned task's dependency refs, at every depth, as ids: a subtask may
@@ -506,6 +507,7 @@ export function applyTaskOps(
     // What only a runner would read, and that never lands on a task, is refused here for a script (ADR-0035).
     const planners = op.changes ? (['readOnly', 'thinkingEffort'] as const).filter((f) => op.changes?.[f] !== undefined && op.changes?.[f] !== null && op.changes?.[f] !== false) : [];
     if ((op.changes?.type ?? target.type) === 'script' && planners.length > 0) return { error: `"${target.title}" ${notOnAScriptMessage(planners)}` };
+    if (target.type === 'delegated' && planners.length > 0) return { error: `"${target.title}" ${notOnADelegatedMessage(planners)}` };
     if (op.changes && 'taskMode' in op.changes) return { error: MODE_NOT_THE_PLANNERS };
     const changes = updatableChanges(op.changes);
     if (op.changes && 'thinkingEffort' in op.changes) {

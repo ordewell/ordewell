@@ -4,7 +4,7 @@ import { Server as McpProtocolServer } from '@modelcontextprotocol/sdk/server/in
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, CancelledNotificationSchema, ErrorCode, ListToolsRequestSchema, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { extractPresentedToken } from '../../utils/daemonToken';
-import { PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, TASK_TOOLS, toolListing, type McpTool, type PlannerToolHandler, type TaskToolHandler } from './tools';
+import { PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, SUBPLANNER_TOOLS, TASK_TOOLS, plannerToolSet, toolListing, type McpTool, type PlannerToolHandler, type TaskToolHandler } from './tools';
 
 /**
  * The Ordewell MCP server (ADR-0022): one loopback listener per process,
@@ -47,6 +47,10 @@ export interface PlannerTokenScope {
    * model would otherwise pick over its own.
    */
   hidden?: readonly string[];
+  /** Its `submit_plan` takes a delegated task (ADR-0055 D1): a flat planner's list does not change. */
+  delegates?: boolean;
+  /** A subplanner's token (ADR-0055 D5): it serves `task_complete` and `checkpoint` too, which its handler sends to the parent's attempt. */
+  subplanner?: boolean;
 }
 
 /** Where a runner reaches the server and what it presents there. Never put either half in a prompt. */
@@ -55,6 +59,8 @@ export interface McpCredential {
   token: string;
   /** The planner tools the token hides ({@link PlannerTokenScope.hidden}), so the runner is told of and pre-allows only what it is served. */
   hidden?: readonly string[];
+  /** Tools it serves past a planner's, by their names on the server: a subplanner's (ADR-0055 D5). */
+  extraTools?: readonly string[];
   /** The token serves a read-only task's tools ({@link TaskTokenScope.readOnly}), so the runner is told of and pre-allows `run_command`, `fetch` and `web_search`. */
   readOnly?: true;
 }
@@ -131,7 +137,11 @@ export class OrdewellMcpServer {
   async issuePlannerToken(scope: PlannerTokenScope, handler: PlannerToolHandler = {}): Promise<McpCredential> {
     const hidden = [...(scope.hidden ?? [])];
     const credential = await this.issue({ role: 'planner', scope: { ...scope, hidden }, handler, revoked: new AbortController(), calls: new Map() });
-    return hidden.length > 0 ? { ...credential, hidden } : credential;
+    return {
+      ...credential,
+      ...(hidden.length > 0 ? { hidden } : {}),
+      ...(scope.subplanner ? { extraTools: SUBPLANNER_TOOLS.map((tool) => tool.name) } : {}),
+    };
   }
 
   /** Every token still good here: secrets the outbound check keeps out of a URL (ADR-0027). */
@@ -228,7 +238,10 @@ export class OrdewellMcpServer {
     // list and every call are fixed by the token on that very request.
     const mcp = new McpProtocolServer({ name: 'ordewell', version: '1' }, { capabilities: { tools: {} } });
     if (grant.role === 'task') serveTools(mcp, grant.scope.readOnly ? READ_ONLY_TASK_TOOLS : TASK_TOOLS, taskInventory(grant.scope.readOnly), grant.handler, grant, this.heartbeatMs);
-    else serveTools(mcp, PLANNER_TOOLS.filter((tool) => !grant.scope.hidden?.includes(tool.name)), plannerInventory(grant.scope.hidden ?? []), grant.handler, grant, this.heartbeatMs);
+    else {
+      const tools = plannerToolSet(grant.scope);
+      serveTools(mcp, tools.filter((tool) => !grant.scope.hidden?.includes(tool.name)), plannerInventory(grant.scope.hidden ?? [], tools), grant.handler, grant, this.heartbeatMs);
+    }
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {
       void transport.close();
@@ -290,14 +303,14 @@ function taskInventory(readOnly?: boolean): ToolInventory {
   return { served, withheld: withheld.map((name) => ({ name, reason: READ_ONLY_TASK_TOOLS.some((t) => t.name === name) ? 'read-only tasks only' : TASK_TOOLS.some((t) => t.name === name) ? 'change tasks only' : 'planner tokens only' })) };
 }
 
-function plannerInventory(hidden: readonly string[]): ToolInventory {
-  const served = PLANNER_TOOLS.map((t) => t.name).filter((name) => !hidden.includes(name));
+function plannerInventory(hidden: readonly string[], tools: readonly McpTool<PlannerToolHandler>[] = PLANNER_TOOLS): ToolInventory {
+  const served = tools.map((t) => t.name).filter((name) => !hidden.includes(name));
   const taskNames = [...new Set([...TASK_TOOLS, ...READ_ONLY_TASK_TOOLS].map((t) => t.name))];
   return {
     served,
     withheld: [
-      ...taskNames.filter((name) => !PLANNER_TOOLS.some((t) => t.name === name)).map((name) => ({ name, reason: 'task tokens only' })),
-      ...PLANNER_TOOLS.filter((t) => hidden.includes(t.name)).map((t) => ({ name: t.name, reason: 'your runner carries its own' })),
+      ...taskNames.filter((name) => !tools.some((t) => t.name === name)).map((name) => ({ name, reason: 'task tokens only' })),
+      ...tools.filter((t) => hidden.includes(t.name)).map((t) => ({ name: t.name, reason: 'your runner carries its own' })),
     ],
   };
 }

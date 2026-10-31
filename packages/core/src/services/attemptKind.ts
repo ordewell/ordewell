@@ -31,6 +31,9 @@ export interface Continuation {
  * - `carryOver`: a change task paused on `from`'s usage limit and moved to
  *   another runner (ADR-0018, U1). A fresh session — none can cross runners —
  *   in a worktree that starts from the paused attempt's work.
+ * - `delegated`: a delegated task's attempt, a child plan in its worktree
+ *   (ADR-0055 D3). `readOnly` lands nothing, and its worktree goes as a
+ *   read-only task's does.
  */
 export type AttemptKind =
   | { readonly kind: 'change' }
@@ -38,14 +41,16 @@ export type AttemptKind =
   | { readonly kind: 'ops' }
   | { readonly kind: 'repair'; readonly repair: RepairAttempt }
   | ({ readonly kind: 'continuation'; readonly work: TaskWork } & Readonly<Continuation>)
-  | { readonly kind: 'carryOver'; readonly from: RunnerId };
+  | { readonly kind: 'carryOver'; readonly from: RunnerId }
+  | { readonly kind: 'delegated'; readonly readOnly: boolean };
 
 /**
  * What a task's work is, whichever attempt does it: a change that lands, an
  * ops task's effects from the checkout (ADR-0020), or a read-only task's,
- * which lands nothing (ADR-0046).
+ * which lands nothing (ADR-0046), or a child plan's (ADR-0055), which lands
+ * unless it is read-only.
  */
-export type TaskWork = 'change' | 'ops' | 'readOnly';
+export type TaskWork = 'change' | 'ops' | 'readOnly' | 'delegated' | 'delegatedReadOnly';
 
 /**
  * The kind of an attempt about to start, from what its task's work is and
@@ -61,6 +66,7 @@ export function classifyAttempt(
 ): AttemptKind {
   if (owed.continuation) return { kind: 'continuation', work, ...owed.continuation };
   if (owed.repair) return { kind: 'repair', repair: owed.repair };
+  if (work === 'delegated' || work === 'delegatedReadOnly') return { kind: 'delegated', readOnly: work === 'delegatedReadOnly' };
   if (work !== 'change') return { kind: work };
   return owed.carriedFrom ? { kind: 'carryOver', from: owed.carriedFrom } : { kind: 'change' };
 }
@@ -75,7 +81,8 @@ function inCheckout(kind: AttemptKind): boolean {
  * continued. Its worktree goes whatever it changed, and its report is its result.
  */
 export function landsNothing(kind: AttemptKind): boolean {
-  return kind.kind === 'readOnly' || (kind.kind === 'continuation' && kind.work === 'readOnly');
+  if (kind.kind === 'delegated') return kind.readOnly;
+  return kind.kind === 'readOnly' || (kind.kind === 'continuation' && (kind.work === 'readOnly' || kind.work === 'delegatedReadOnly'));
 }
 
 /**
@@ -84,7 +91,8 @@ export function landsNothing(kind: AttemptKind): boolean {
  * Ops and read-only work commits nothing, and a repair resolves a merge.
  */
 export function writesCommit(kind: AttemptKind): boolean {
-  return kind.kind === 'change' || kind.kind === 'carryOver' || (kind.kind === 'continuation' && kind.work === 'change');
+  if (kind.kind === 'delegated') return !kind.readOnly;
+  return kind.kind === 'change' || kind.kind === 'carryOver' || (kind.kind === 'continuation' && (kind.work === 'change' || kind.work === 'delegated'));
 }
 
 /**
@@ -195,5 +203,8 @@ export function attemptPrompt(kind: AttemptKind, src: AttemptPromptSources): str
       return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, loop, readOnly: true });
     case 'carryOver':
       return composeAugmentedPrompt(task, plan, { planMapEnabled, skills: src.skills, carriedOver: { from: kind.from, work: src.previousWork }, loop });
+    case 'delegated':
+      // A subplanner reads its goal, not a runner's brief.
+      return task.goal ?? '';
   }
 }

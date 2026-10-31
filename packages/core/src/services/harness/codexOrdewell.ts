@@ -16,7 +16,7 @@ export interface CodexOrdewellBinding extends OrdewellToolBinding<CodexAsk> {
   /** What a task thread's instructions say about the tools, and how the task is to end. */
   taskInstructions(task?: { readOnly?: boolean; commits?: true }): string;
   /** What a planner thread's instructions add about the tools (ADR-0026), and where its web reads go (ADR-0027). */
-  plannerInstructions(nativeSearch: boolean, hidden?: readonly string[], ownShell?: boolean): string;
+  plannerInstructions(nativeSearch: boolean, hidden?: readonly string[], ownShell?: boolean, extra?: readonly string[]): string;
   /** The planner thread's `web_search` mode. */
   plannerWebSearch(nativeSearch: boolean): CodexWebSearchMode;
 }
@@ -100,11 +100,11 @@ export const CODEX_ORDEWELL: CodexOrdewellBinding = {
    * sandboxed without network, so `gh`, a cloud CLI or `curl` fails there, and
    * a model that tried its shell first concludes the command cannot run.
    */
-  plannerInstructions(nativeSearch, hidden, ownShell = true) {
-    const tools = ordewellToolNames('planner', hidden);
+  plannerInstructions(nativeSearch, hidden, ownShell = true, extra) {
+    const tools = ordewellToolNames('planner', hidden, extra);
     return [
       `You have ${countOf(tools)} tools from the \`${ORDEWELL_MCP_SERVER_NAME}\` MCP server: ${quoted(tools)}.`,
-      `They are not in your tool list up front. Find them with the tool discovery you have (the \`exec\` tool's \`ALL_TOOLS\` list) and call them by their full names, ${quoted(this.toolNames('planner', hidden))}.`,
+      `They are not in your tool list up front. Find them with the tool discovery you have (the \`exec\` tool's \`ALL_TOOLS\` list) and call them by their full names, ${quoted(this.toolNames('planner', hidden, extra))}.`,
       ownShell
         ? `Run shell commands with \`${this.toolName('run_command')}\`, not your own shell: yours is sandboxed without network, so git remotes, gh and cloud CLIs fail there.`
         : `You have no shell of your own on this machine: run every command, reads included, with \`${this.toolName('run_command')}\`.`,

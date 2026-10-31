@@ -83,6 +83,8 @@ export interface SessionOverrides {
   execution?: SessionDeps['execution'];
   eventLog?: SessionDeps['eventLog'];
   notifications?: INotification;
+  delegationOffered?: SessionDeps['delegationOffered'];
+  childDeps?: SessionDeps['childDeps'];
 }
 
 /** Task-log files that live in memory, numbered per task as the real store numbers them. */
@@ -154,6 +156,8 @@ export function makeSession(overrides: SessionOverrides = {}): Session {
     placement: overrides.placement,
     execution: overrides.execution,
     eventLog: overrides.eventLog,
+    delegationOffered: overrides.delegationOffered,
+    childDeps: overrides.childDeps,
   });
   if (!overrides.saveSession && !overrides.placement) saveFakes.set(session, save);
   return session;

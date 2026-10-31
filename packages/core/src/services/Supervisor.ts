@@ -204,6 +204,11 @@ export class Supervisor {
     return this.watching;
   }
 
+  /** Something is gathered that a wake-up will deliver by itself, with a turn behind it. */
+  get wakeOwed(): boolean {
+    return this.watching && this.policy.snapshot().attention.length > 0;
+  }
+
   /**
    * Whether a report the planner asked for may open a turn now: at every
    * level (ADR-0037, R2), until the turns opened without the user have failed

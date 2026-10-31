@@ -5,6 +5,7 @@ import { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { IApproval } from '../interfaces/IApproval';
 import type { RunnerModeInfo } from './ModeResolver';
 import type { PlanIntake } from './PlanChangeCheck';
+import type { PlannerDelegation, SubplannerBrief } from './PlanPrompts';
 import type { PlannerContextStatus } from './plannerContextBudget';
 import { GeminiService } from './GeminiService';
 import { OpenAiService } from './OpenAiService';
@@ -27,6 +28,10 @@ export interface PlannerToolsOffer {
   /** The tools a child's grants leave out of its list, fixed as its session starts (ADR-0056 M6); the root's list is not filtered. */
   withheld?: readonly string[];
   handler: PlannerToolHandler;
+  /** Its `submit_plan` takes a delegated task (ADR-0055 D1). */
+  delegates?: boolean;
+  /** A subplanner's: its token serves `task_complete` and `checkpoint` too, for the handler's `taskComplete` and `checkpoint` (D5). */
+  subplanner?: boolean;
 }
 
 /**
@@ -68,6 +73,10 @@ export interface ConversationRequest {
    */
   initialMessage?: string;
   plannerTools?: PlannerToolsOffer;
+  /** Teaches the planner delegation, only where its mandate holds `delegate` (ADR-0055 D21). */
+  delegation?: PlannerDelegation;
+  /** The prompt is a subplanner's, whose parent stands where the user does (ADR-0055 D4). */
+  subplanner?: SubplannerBrief;
   /**
    * The session's notice channel, for a warning the planner's surface should
    * show once (ADR-0036 N4: the native-shell setting is on but the harness is

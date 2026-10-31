@@ -1,5 +1,5 @@
 import type { ExecutionCommandName, SupervisorLevel } from '../models/Execution';
-import type { RunnerId } from '../models/Task';
+import type { RunnerId, Task } from '../models/Task';
 import type { EffectRules } from './effectAllowlist';
 
 /**
@@ -239,6 +239,17 @@ export function narrow(parent: Mandate, request: MandateRequest): Narrowed {
   return 'refused' in ruled
     ? { ok: false, refusal: { level: request.level, ...ruled.refused } }
     : { ok: true, mandate: ruled.value };
+}
+
+/** What a delegated task asks of the mandate it is given (M4), written the one way plan time and the carve both read. */
+export function delegatedRequest(task: Pick<Task, 'grants' | 'budget' | 'protectedPaths'>, level: number): MandateRequest {
+  return {
+    level,
+    ...(task.grants ? { grants: task.grants } : {}),
+    ...(task.budget?.tokens !== undefined ? { tokens: task.budget.tokens } : {}),
+    ...(task.budget?.wallClockMs !== undefined ? { wallClockMs: task.budget.wallClockMs } : {}),
+    ...(task.protectedPaths ? { protectedPaths: task.protectedPaths } : {}),
+  };
 }
 
 /** The grant each command needs (M2); null for the user's own controls, which no grant reaches. */
