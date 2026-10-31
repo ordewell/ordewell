@@ -4,7 +4,7 @@ import {
   assertLimits,
   assertProfilePaths,
   execProbe,
-  launchEnv,
+  keptEnv,
   MEMORY_LIMIT_SIGNAL,
   probeByRunning,
   SandboxUnsupportedError,
@@ -137,6 +137,8 @@ exec "$bwrap" --unsetenv ${RUN_MARK} "$@"`;
  * where a sealed run is refused, so the watcher leaves it to `--die-with-parent`
  * rather than spin. `/bin/sh` takes no `--norc`, which dash refuses, and needs
  * none: neither dash nor bash under that name reads a startup file for `-c`.
+ * Like the sealed launcher it runs before the sandbox, so what the profile sets
+ * goes in by `--setenv` and never through its environment.
  */
 const LAUNCH_PRELUDE = `${launcherWatcher('command -v sleep >/dev/null || exit')}
 ${BECOME_BUBBLEWRAP}`;
@@ -144,7 +146,11 @@ ${BECOME_BUBBLEWRAP}`;
 /**
  * Runs before bubblewrap, outside it, then becomes it, so the caller's kill
  * at the wall-time limit and `--die-with-parent` reach the sandbox's PID
- * namespace, and every process in it, unchanged (ADR-0036 S1). The memory
+ * namespace, and every process in it, unchanged (ADR-0036 S1). Under `sh -c`,
+ * neither interactive nor a login shell, no shell reads a startup file, and
+ * dash takes no flag to say so. Its environment holds only what the profile
+ * keeps of the host's: the command's own variables are set by `--setenv`
+ * inside the sandbox. The memory
  * watcher starts first, with none of the limits on it, and without a way to
  * wait, to compare namespaces or to find what a killed launcher left the limit
  * cannot be held, so nothing runs.
@@ -227,9 +233,11 @@ export class BubblewrapBackend implements SandboxBackend {
       ...(profile.gitEntries ?? []).map((entry) => entry.path),
     ]);
     for (const gitPath of readOnlyGit) args.push('--ro-bind', gitPath, gitPath);
+
+    for (const [name, value] of Object.entries(profile.env)) args.push('--setenv', name, value);
     args.push('--', invocation.shell, ...invocation.shellArgs);
 
-    const env = launchEnv(invocation, profile);
+    const env = keptEnv(invocation, profile);
     if (!profile.limits) return { file: '/bin/sh', args: ['-c', LAUNCH_PRELUDE, 'ordewell-shell', this.bwrap, ...args], env };
     return { file: '/bin/sh', args: ['-c', limitsPrelude(profile.limits), 'ordewell-sealed', this.bwrap, ...args], env, wallTimeMs: profile.limits.wallTimeMs, memoryBytes: profile.limits.memoryBytes };
   }

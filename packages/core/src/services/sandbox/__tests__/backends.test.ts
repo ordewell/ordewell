@@ -251,21 +251,21 @@ describe('SeatbeltBackend.wrap', () => {
     it('starts behind a bash prelude that sets the limits and owns the process group, and asks the caller to keep the time', () => {
       const launch = seatbelt.wrap(SH, sealed());
       expect(launch.file).toBe('/bin/bash');
-      expect(launch.args[0]).toBe('-c');
-      const prelude = launch.args[1];
+      expect(launch.args.slice(0, 4)).toEqual(['--norc', '--noprofile', '-p', '-c']);
+      const prelude = launch.args[4];
       expect(prelude).toContain('ulimit -u $((n + 64))');
       expect(prelude).toContain(`ulimit -v $((v + ${64 * 1024 * 1024}))`);
       expect(prelude).toContain('set -m');
       expect(prelude).toContain('kill -KILL -$pid');
       // `$0`, then the launcher and the shell, with the command left to come last.
-      expect(launch.args.slice(2, 4)).toEqual(['ordewell-sealed', SANDBOX_EXEC]);
+      expect(launch.args.slice(5, 7)).toEqual(['ordewell-sealed', SANDBOX_EXEC]);
       expect(launch.args.slice(-2)).toEqual(['/bin/sh', '-c']);
       expect(launch.wallTimeMs).toBe(30_000);
     });
 
     it('bounds real memory with a watcher that sums the run\'s process group about once a second, and tells the caller by a signal', () => {
       const launch = seatbelt.wrap(SH, sealed());
-      const prelude = launch.args[1];
+      const prelude = launch.args[4];
       expect(prelude).toContain('/bin/sleep 1');
       expect(prelude).toContain('/bin/ps -o rss= -g $pid');
       expect(prelude).toContain(`-gt ${2 * 1024 * 1024}`);
@@ -275,7 +275,7 @@ describe('SeatbeltBackend.wrap', () => {
     });
 
     it('sets the kernel\'s limits on the command alone, so a fork bomb cannot stop the watcher forking', () => {
-      const prelude = seatbelt.wrap(SH, sealed()).args[1];
+      const prelude = seatbelt.wrap(SH, sealed()).args[4];
       const command = prelude.indexOf('ulimit -u');
       expect(prelude.lastIndexOf('(', command)).toBeGreaterThan(prelude.lastIndexOf('\n', command) - 1);
       expect(prelude.indexOf('exec "$@"')).toBeGreaterThan(command);
@@ -283,13 +283,14 @@ describe('SeatbeltBackend.wrap', () => {
     });
 
     it('puts only numbers from the limits into the script, whatever the limits are', () => {
-      const text = (limits: SandboxLimits) => seatbelt.wrap(SH, sealed({ limits })).args[1].replace(/\d+/g, 'N');
+      const text = (limits: SandboxLimits) => seatbelt.wrap(SH, sealed({ limits })).args[4].replace(/\d+/g, 'N');
       expect(text({ ...LIMITS, memoryBytes: 1024, addressSpaceBytes: 2048, processes: 7 })).toBe(text(LIMITS));
     });
 
-    it('keeps only the environment the profile names, then sets its own', () => {
-      const { env } = seatbelt.wrap({ ...SH, env: { PATH: '/usr/bin', AWS_SECRET_ACCESS_KEY: 'x', HOME: '/home/me' } }, sealed());
-      expect(env).toEqual({ PATH: '/usr/bin', TMPDIR: SCRATCH, HOME: SCRATCH });
+    it('starts the launcher with what the profile keeps of the host, and sets its own variables inside the sandbox', () => {
+      const launch = seatbelt.wrap({ ...SH, env: { PATH: '/usr/bin', AWS_SECRET_ACCESS_KEY: 'x', HOME: '/home/me' } }, sealed());
+      expect(launch.env).toEqual({ PATH: '/usr/bin' });
+      expect(launch.args.slice(-5)).toEqual(['/usr/bin/env', `TMPDIR=${SCRATCH}`, `HOME=${SCRATCH}`, '/bin/sh', '-c']);
     });
   });
 });
@@ -305,9 +306,10 @@ describe('BubblewrapBackend.wrap', () => {
         '--new-session', '--die-with-parent', '--unshare-pid', '--unshare-ipc', '--unshare-net',
         '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc',
         '--bind', SCRATCH, SCRATCH,
+        '--setenv', 'TMPDIR', SCRATCH,
         '--', '/bin/sh', '-c',
       ],
-      env: { PATH: '/usr/bin:/bin', HOME: '/home/me', TMPDIR: SCRATCH },
+      env: { PATH: '/usr/bin:/bin', HOME: '/home/me' },
     });
   });
 
@@ -412,9 +414,17 @@ describe('BubblewrapBackend.wrap', () => {
       expect(text({ ...LIMITS, memoryBytes: 1024, addressSpaceBytes: 2048, processes: 7 })).toBe(text(LIMITS));
     });
 
-    it('keeps only the environment the profile names, then sets its own', () => {
-      const { env } = bwrap().wrap({ ...SH, env: { PATH: '/usr/bin', GITHUB_TOKEN: 'x', HOME: '/home/me' } }, sealed());
-      expect(env).toEqual({ PATH: '/usr/bin', TMPDIR: SCRATCH, HOME: SCRATCH });
+    it('starts the launcher with what the profile keeps of the host, and sets its own variables inside the sandbox', () => {
+      const launch = bwrap().wrap({ ...SH, env: { PATH: '/usr/bin', GITHUB_TOKEN: 'x', HOME: '/home/me' } }, sealed());
+      expect(launch.env).toEqual({ PATH: '/usr/bin' });
+      expect(launch.args.slice(-9)).toEqual(['--setenv', 'TMPDIR', SCRATCH, '--setenv', 'HOME', SCRATCH, '--', '/bin/sh', '-c']);
+    });
+
+    it('keeps scratch out of a launcher without limits too, which runs before the sandbox all the same', () => {
+      const launch = bwrap().wrap({ ...SH, env: { PATH: '/usr/bin', GITHUB_TOKEN: 'x', HOME: '/home/me' } }, sealed({ limits: undefined }));
+      expect(launch.file).toBe('/bin/sh');
+      expect(launch.env).toEqual({ PATH: '/usr/bin' });
+      expect(launch.args.slice(-9)).toEqual(['--setenv', 'TMPDIR', SCRATCH, '--setenv', 'HOME', SCRATCH, '--', '/bin/sh', '-c']);
     });
 
     it("binds a worktree's .git read-only after the writable bind, so the file cannot be rewritten (ADR-0046)", () => {

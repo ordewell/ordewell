@@ -101,7 +101,9 @@ jobs, and its reading of other processes' command lines and environments (B4).
   with no caller. Every command therefore starts behind `/bin/sh` and a small
   watcher outside the sandbox, which then becomes bubblewrap; the watcher looks
   once a second, and when the launcher has gone it kills what carries the
-  launcher's mark (ADR-0036 S1). A host with no `sleep` runs the command without
+  launcher's mark (ADR-0036 S1). That launcher reads no startup file, and what
+  the profile sets is set inside the sandbox with `--setenv`, as for a sealed
+  run. A host with no `sleep` runs the command without
   the watcher, since this is a window of milliseconds and losing the sandbox
   over it would be the worse failure. The `bwrap` used is the distribution's
   before one found on PATH. macOS: `sandbox-exec` with a profile that denies everything by

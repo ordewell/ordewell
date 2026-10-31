@@ -168,6 +168,49 @@ describe('sealed runs', async () => {
       }
     });
 
+    describe('what the launcher reads as it starts', () => {
+      const startupFiles = ['.bashrc', '.bash_profile', '.bash_login', '.bash_logout', '.profile', '.shrc', '.kshrc', '.mkshrc', '.zshenv', '.zprofile', '.zshrc'];
+
+      async function writeStartupFiles(marker: string): Promise<void> {
+        expect((await sealed(`touch '${marker}'`)).code).not.toBe(0);
+        const written = await sealed(`for f in ${startupFiles.join(' ')}; do echo "touch '${marker}'" > "$HOME/$f"; done`);
+        expect(written.code).toBe(0);
+      }
+
+      it('reads no startup file from the scratch directory', async () => {
+        const marker = join(elsewhere, `started-${process.pid}`);
+        try {
+          await writeStartupFiles(marker);
+          expect((await sealed('true')).code).toBe(0);
+          expect(existsSync(marker)).toBe(false);
+        } finally {
+          await sealed(`cd "$HOME" && rm -f ${startupFiles.join(' ')}`);
+          rmSync(marker, { force: true });
+        }
+      });
+
+      it('names nothing in its environment that a sealed run can write', async () => {
+        const launch = await sandbox.launchSealed(POSIX, { workspace });
+        expect(Object.entries(launch.env ?? {}).filter(([, value]) => value?.includes(sandbox.scratchPath()))).toEqual([]);
+        expect(launch.env).not.toHaveProperty('HOME');
+      });
+
+      it('reads no startup file its environment names', async () => {
+        const marker = join(elsewhere, `started-${process.pid}`);
+        const startup = join(sandbox.scratchPath(), 'startup');
+        writeFileSync(startup, `touch '${marker}'\n`);
+        try {
+          const launch = await sandbox.launchSealed(POSIX, { workspace });
+          const env = { ...launch.env, SHLVL: '1', BASH_ENV: startup, ENV: startup };
+          expect((await run({ ...launch, env }, 'true', workspace)).code).toBe(0);
+          expect(existsSync(marker)).toBe(false);
+        } finally {
+          rmSync(startup, { force: true });
+          rmSync(marker, { force: true });
+        }
+      });
+    });
+
     describe('the network', () => {
       let server: Server;
       let port: number;
@@ -278,21 +321,18 @@ describe('sealed runs', async () => {
     });
 
     // macOS has no death signal, and the launcher starts the sandbox before what
-    // reaps it. A hook bash runs as it starts kills the launcher between the two.
-    // SHLVL, since a top-level bash with a socket for its input skips BASH_ENV.
+    // reaps it. A kill written into the launcher's script ends it between the two.
     it.skipIf(process.platform !== 'darwin')('leaves nothing running of a run whose launcher dies the moment it starts the sandbox', async () => {
-      const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-sealed-hook-')));
-      writeFileSync(join(dir, 'hook'), 'set() { builtin set "$@"; if [ "$1" = +m ]; then kill -KILL $$; fi; }\n');
       const launch = await sandbox.launchSealed(POSIX, { workspace });
+      const args = launch.args.map((arg) => (arg.includes('set +m') ? arg.replace('set +m', () => 'set +m; kill -KILL $$') : arg));
       const command = `sleep 30.${process.pid}2`;
-      const child = spawn(launch.file!, [...launch.args, command], { cwd: workspace, env: { ...launch.env, SHLVL: '1', BASH_ENV: join(dir, 'hook') }, stdio: ['pipe', 'ignore', 'ignore'] });
+      const child = spawn(launch.file!, [...args, command], { cwd: workspace, env: launch.env, stdio: ['pipe', 'ignore', 'ignore'] });
       try {
         const [, signal] = await once(child, 'exit');
         expect(signal).toBe('SIGKILL');
         await vi.waitFor(() => expect(runningWith(command)).toEqual([]), { timeout: 20_000, interval: 250 });
       } finally {
         for (const line of runningWith(command)) spawnSync('kill', ['-KILL', line.trim().split(/\s+/)[0]]);
-        rmSync(dir, { recursive: true, force: true });
       }
     });
 
