@@ -127,8 +127,10 @@ function openLoop(tasks: readonly Readonly<Task>[], task: Readonly<Task>): Reado
 
 export function revertScope(taskId: string, { tasks, run, live, resolvers }: RevertScopeInput): RevertScope {
   const task = tasks.find((t) => t.id === taskId);
-  if (!task || !landedWork(run, taskId)) {
-    return { taskIds: [], refusal: { reason: 'no-landing', message: `${task ? `Task "${task.title}"` : 'That task'} landed nothing on the integration branch, so there is nothing to revert.` } };
+  // A ref no task answers to is not a task that landed nothing: every other task command says so.
+  if (!task) return { taskIds: [], refusal: { reason: 'no-landing', message: `There is no task "${taskId}" in this plan.` } };
+  if (!landedWork(run, taskId)) {
+    return { taskIds: [], refusal: { reason: 'no-landing', message: `Task "${task.title}" landed nothing on the integration branch, so there is nothing to revert.` } };
   }
   const reached = dependentIds(tasks, run, taskId);
   const dependents = tasks.filter((t) => reached.has(t.id));

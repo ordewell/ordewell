@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execFileSync } from 'child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createIsolationPreview, createWorktreeIsolation, type GitExecFn } from '../GitWorktreeIsolation';
@@ -125,6 +125,23 @@ describe('IsolationPreview — a workspace inside a repository', () => {
     expect(result.status).toBe('ready');
     expect(result.repos).toEqual([{ path: '.', top: '../..', head: { kind: 'branch', branch: 'main', commit: head(outer) }, dirty: false }]);
     expect(result.shared).toEqual(['other', 'vendored']);
+  });
+
+  it('reads a workspace opened through a symlink as the repository it is, as macOS\'s /var and /tmp are', async () => {
+    const outer = initRepo(tempDir());
+    const link = join(tempDir(), 'link');
+    symlinkSync(outer, link);
+    const nested = join(outer, 'packages', 'app');
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(nested, 'index.ts'), 'x\n');
+    git(outer, 'add', '-A');
+    git(outer, 'commit', '-q', '-m', 'app');
+
+    const root = await preview(link);
+    const inside = await preview(join(link, 'packages', 'app'));
+
+    expect(root.repos).toEqual([{ path: '.', head: { kind: 'branch', branch: 'main', commit: head(outer) }, dirty: false }]);
+    expect(inside.repos).toEqual([{ path: '.', top: '../..', head: { kind: 'branch', branch: 'main', commit: head(outer) }, dirty: false }]);
   });
 
   it('reads a linked worktree, whose .git is a file, on its own branch', async () => {

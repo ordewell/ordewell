@@ -292,9 +292,12 @@ function settleStatus(record: IsolationTaskRecord, status: IsolationTaskRecord['
   delete record.repairBase;
 }
 
+function realDir(p: string): string {
+  try { return fs.realpathSync.native(p); } catch { return path.resolve(p); }
+}
+
 function sameDir(a: string, b: string): boolean {
-  const real = (p: string) => { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } };
-  return real(a) === real(b);
+  return realDir(a) === realDir(b);
 }
 
 function resolves(target: string): boolean {
@@ -406,7 +409,8 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       const head = await this.headOf(root);
       const repo: PreviewRepo = { path: repoPath, head };
       if (scan.toplevel !== undefined) {
-        const top = path.relative(workspaceRoot, scan.toplevel).split(path.sep).join('/');
+        // git names the real path, so a workspace opened through a symlink (macOS's /var, /tmp) is read by its own.
+        const top = path.relative(realDir(workspaceRoot), scan.toplevel).split(path.sep).join('/');
         if (top !== '') repo.top = top;
       }
       if (enabled && (head.kind === 'branch' || head.kind === 'detached')) {

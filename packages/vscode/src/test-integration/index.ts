@@ -1,9 +1,11 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as vscode from 'vscode';
 
 import { RunnerRegistry, StructuredRunner, TaskOrchestrator, createTask, type Task } from '@ordewell/core';
 import { fakeConfig } from '@ordewell/core/testing';
+import { VsCodeConfig } from '../adapters/VsCodeConfig';
 
 const PROBE_FILE = 'integration-probe.txt';
 const REAL_AGENT_TIMEOUT_MS = 240_000;
@@ -69,6 +71,33 @@ async function fakeClaudeCompletesThroughTheTool(): Promise<void> {
   console.log(`  ✓ fake claude did the work and the tool call reached a pass verdict — ${verdict?.reason}`);
 }
 
+/**
+ * The notify command is read from the user's own setting alone (ADR-0053): the
+ * workspace this window opened must not be able to name a program that runs.
+ * Only a real host can say what `inspect().globalValue` and an application-scoped
+ * key do with a workspace write, so a unit test with a stand-in cannot.
+ */
+async function notifyCommandIsTheUsersAlone(): Promise<void> {
+  const settings = vscode.workspace.getConfiguration('ordewell');
+  const theirs = ['sh', '-c', 'true'];
+  try {
+    await settings.update('notifyCommand', theirs, vscode.ConfigurationTarget.Global);
+    assert.deepStrictEqual(new VsCodeConfig().notifyCommand, theirs, 'the user setting was not read');
+
+    // The manifest scopes the key to the application, which refuses a workspace write; whether it does or a
+    // host that took it would, the user's value is what is read.
+    await Promise.resolve(settings.update('notifyCommand', ['sh', '-c', 'false'], vscode.ConfigurationTarget.Workspace)).catch(() => undefined);
+    assert.deepStrictEqual(new VsCodeConfig().notifyCommand, theirs, "the workspace's value was read in place of the user's");
+
+    // A string is not split: that is a shell's job and there is none.
+    await settings.update('notifyCommand', 'notify-send done', vscode.ConfigurationTarget.Global);
+    assert.deepStrictEqual(new VsCodeConfig().notifyCommand, [], 'a string setting was taken as a command');
+    console.log('  ✓ the notify command is the user setting\'s alone, and a string is no command');
+  } finally {
+    await settings.update('notifyCommand', undefined, vscode.ConfigurationTarget.Global);
+  }
+}
+
 async function realAgentReachesAPassVerdict(): Promise<void> {
   const model = process.env.ORDEWELL_TEST_MODEL;
   if (!model || !process.env.OPENROUTER_API_KEY) {
@@ -95,6 +124,7 @@ async function realAgentReachesAPassVerdict(): Promise<void> {
 export async function run(): Promise<void> {
   const scenarios: Array<[string, () => Promise<void>]> = [
     ['a fake claude on PATH completes through task_complete', fakeClaudeCompletesThroughTheTool],
+    ['the notify command is read from the user setting alone', notifyCommandIsTheUsersAlone],
     ['a real agent reaches a pass verdict', realAgentReachesAPassVerdict],
   ];
 
