@@ -50,24 +50,28 @@ Judgment stays the planner's.
     grantable: ReadonlySet<Grant>;   // what it may hand a child
     autonomy: 'full' | 'guarded';    // read in place of the global level
     limits: MandateLimits;           // M3
-    exclusions: MandateExclusions;   // accumulate: protected paths, `!` rules
-    effectRules: readonly EffectRuleList[]; // one list per level (M4)
+    exclusions: MandateExclusions;   // accumulate: protected paths
+    effectRules: readonly EffectRules[]; // one per level, each with its own `!` rules (M4)
   }
   ```
 
   A child's is saved with its plan, as it was given. The root's is derived on each
-  read by `rootMandate(settings)` and never saved: the plan stores no run setting
-  ([ADR-0030](0030-global-run-settings.md)), and a saved Act would outlive the user's
-  change of it. What holds at a node is its saved mandate narrowed by every ancestor's
-  as it stands now, read at each check, so a change at the root reaches the subtree at
-  once (M10).
+  read by `rootMandate` and never saved. It reads each value where it lives today: the
+  supervisor's level from the plan's `runSettings`, the run's own copy
+  ([ADR-0030](0030-global-run-settings.md)), where a guard or a failure lowers it and
+  the user's change lands, and the rest where they are read now. A saved mandate could
+  only disagree with those: an Act that a guard lowered to Watch reads Watch at the
+  next check, and a continued run keeps its level. What holds at a node is its saved
+  mandate narrowed by every ancestor's as it stands now, read at each check, so a
+  change at the root reaches the subtree at once (M10). That reading intersects and
+  refuses nothing.
 - **Grants (M2).** Each grant is a set of things a node may do unasked:
 
   | grant | what it allows |
   |---|---|
   | `observe` | being woken by attention events, and the reads of a wake-up turn |
   | `steer` | `message_task`, `answer_checkpoint`, `answer_approval` (deny or escalate, never allow) |
-  | `control` | `run_plan`, `run_task`, `retry_task`, `stop_task`, `stop_run`, `skip_task` |
+  | `control` | `run_plan`, `run_task`, `run_script`, `retry_task`, `stop_task`, `stop_run`, `skip_task` |
   | `replan` | `edit_plan` in a wake-up turn; a child's `submit_plan` for its own plan |
   | `approve` | what this node's planner writes is approved as it lands |
   | `delegate` | writing a delegated task |
@@ -98,11 +102,15 @@ Judgment stays the planner's.
   `grantable` is what keeps M4 and M7 both true. The default level is Watch, whose
   `control` is absent, and a subplanner is Act with autorun. So delegation on fills
   the root's `grantable` with `observe`, `steer`, `control`, `replan`, `approve`,
-  `research` and `merge`, whatever the supervisor's level: the level says what the
-  root planner does in its own wake-up turns, and the setting says what a subplanner
-  may. `observe`, `steer`, `control`, `replan`, `approve` and `merge` are the floor: a
-  mandate without one of them could not finish, so it is refused. `delegate` and
-  `effect` are grantable only by name.
+  `research`, `merge` and `delegate`, and `effect` while the root holds it, whatever
+  the supervisor's level: the level says what the root planner does in its own wake-up
+  turns, and the setting says what a subplanner may. `observe`, `steer`, `control`,
+  `replan`, `approve` and `merge` are the floor: a mandate without one of them could
+  not finish, so a child holds them without asking and `narrow` refuses a mandate that
+  would lack one. A delegated task's `grants` names what it asks for past the floor,
+  and absent reads as `research`. `delegate` and `effect` are grantable only by name:
+  a child holds one only where its delegated task's `grants` names it, so a subtree
+  grows deeper, or reaches out, only where its parent wrote that down.
 - **Limits (M3).**
 
   | limit | root | child |
@@ -120,21 +128,21 @@ Judgment stays the planner's.
 
   | field | rule |
   |---|---|
-  | `grants` | `request ∩ parent.grantable`, holding the floor |
-  | `grantable` | `request ∩ parent.grantable` |
+  | `grants` | `(floor ∪ request) ∩ parent.grantable`, refused if that loses a floor grant |
+  | `grantable` | the same set: a node hands on what it holds |
   | `autonomy` | the lower |
   | tokens, wall-clock time | carved from what the parent has left |
   | depth | the parent's less one, refused at 0 |
   | delegated tasks, tasks per plan | the lesser |
   | runners, models | intersect |
   | exclusions | accumulate |
-  | `effectRules` | append: a command must match at every level, so no rule is widened by a wildcard, and no rules are intersected as text |
+  | `effectRules` | append: a command must match at every level, so no rule is widened by a wildcard, a `!` rule holds below its level, and no rules are intersected as text |
 
-  The table is a `Record` over `keyof Mandate`, so a new field fails to compile until
-  it has a rule, and a property test proves for every field that no result is wider
-  than its parent. It runs as a delegated task's fields are written
-  (`PlanChangeCheck`, whose `changeScope` holds the plan's rules) and again in
-  `ChildPlanRunner` as the child is built. Every refusal, at any check, names the
+  The table is a `Record` over `keyof Mandate` and, for `limits`, `keyof MandateLimits`,
+  so a new field or limit fails to compile until it has a rule, and a property test
+  proves for each that no result is wider than its parent. It runs as a delegated
+  task's fields are written (`PlanChangeCheck`, through its `PlanChangeScope`) and again
+  in `ChildPlanRunner` as the child is built. Every refusal, at any check, names the
   level that refused.
 - **Budgets are in tokens (M5).** Tokens work where dollars cannot: a subscription has
   no per-token price. Spend is what `UsageTotals` counts, input and output, cache
@@ -225,8 +233,9 @@ Judgment stays the planner's.
     remains. A child has nobody else. A loop guard that would lower a root to Watch ends a
     subplanner `blocked`, and one whose planner fails its restart ends the child `failed`,
     its tasks stopped first. A Continue picks either up.
-- **Outward effects (M9).** No ops task runs below the root (ADR-0055 D2). Without the
-  `effect` grant a child's script tasks run sealed, as a sealed check does (ADR-0055 D8):
+- **Outward effects (M9).** No ops task runs below the root (ADR-0055 D2). A child's
+  script task runs by this rule whether its plan holds it or `run_script` added it.
+  Without the `effect` grant it runs sealed, as a sealed check does (ADR-0055 D8):
   capability is held at the boundary, so a script can test and cannot reach out. With it
   they run in the child's checkout, a worktree, and only a body covered at every level
   of `effectRules`; a script body is covered by nothing (ADR-0035). So an effect in a
@@ -242,21 +251,27 @@ Judgment stays the planner's.
   Act and autorun; turning delegation on accepts it below, and its confirmation says so.
 - **Retries and revocation (M10).** Retries multiply across levels: three at each of three
   levels is twenty-seven times the work. Budgets bound that, and each node keeps its own
-  loop guards (ADR-0029), so a parent's retry of a delegated task is a Continue
-  (ADR-0055 D17) that spends what is left, and no retry mints budget. A provider's error is
-  another thing, and only one layer retries it
+  loop guards (ADR-0029), so a parent's retry of a delegated task, a Continue
+  (ADR-0055 D17) or a fresh retry (D15), spends what is left, and no retry mints
+  budget. A provider's error is another thing, and only one layer retries it
   ([ADR-0058](0058-a-tree-holds-many-nodes-and-few-live-sessions.md) S5). The user can
   narrow or revoke at the root, and that holds for the subtree at once, by M1: a start
-  under a lost grant is refused at its next check, and turning delegation off stops the
-  subtree's starts, so it ends `blocked`. A child's own work in flight finishes.
+  under a lost grant is refused at its next check, which for a child's attempt is
+  `claimRefusal` reading `control`, since a scheduler's start passes no command. Turning
+  delegation off empties the root's `grantable`, so a saved child loses its grants,
+  the floor with them: the floor binds `narrow`, which writes a new child, and not
+  M1's reading. Nothing in the subtree starts, no new turn included, its work in flight
+  finishes, and code then ends each child `blocked` with a derived report.
 
 ## Testing decisions
 
 - A table test holds `rootMandate` to today: for each level, each actor and each
   `ExecutionCommandName`, the answer is what `SUPERVISOR_LEVELS` and `consent()` answered.
   It is what "a flat run does not change" means, and it stays.
-- `narrow` is a property test over generated mandates and requests, for every field, with
-  the type's exhaustiveness behind it.
+- `narrow` is a property test over generated mandates and requests, for every field and
+  limit, with the type's exhaustiveness behind it.
+- M10 is tested on a live child: with delegation turned off nothing starts, its work in flight
+  finishes, and it ends `blocked`. M1 is tested with a guard lowering an Act run.
 - The ledger runs on `FakeRunnerSession` usage: carve, reserve, a claim refused, a stop at
   the limit, a return on close, a raise, across a tree. A start path added past
   `claimRefusal` fails it.
@@ -312,3 +327,4 @@ Judgment stays the planner's.
 ## History
 
 - 2026-10-31 — accepted. Not yet implemented.
+- 2026-10-31 — checked against the code: what the root may hand down, where the root's mandate reads its level, what the floor binds and what a revocation does to a saved child, `run_script`'s grant, a fresh retry, and the names of the types.
