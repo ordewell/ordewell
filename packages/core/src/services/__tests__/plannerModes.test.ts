@@ -8,7 +8,7 @@ describe('planner modes', () => {
     expect(sessionRuntimeSettings({ modelAllowlist: { opencode: ['a/b'] }, enabledRunners: ['codex'] })).toEqual({
       modelAllowlist: { opencode: ['a/b'] },
       enabledRunners: ['codex'],
-      run: { supervisorLevel: 'watch', mergeAtGatesAutomatically: false, autorun: false, plannedWithTrailer: true, supervisorRetryLimit: 2, wakeUpReadBudget: 12 },
+      run: { supervisorLevel: 'watch', mergeAtGatesAutomatically: false, autorun: false, plannedWithTrailer: true, supervisorRetryLimit: 2, wakeUpReadBudget: 12, delegationTokens: 0 },
     });
   });
 

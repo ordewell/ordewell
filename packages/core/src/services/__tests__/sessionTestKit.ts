@@ -76,6 +76,8 @@ export interface SessionOverrides {
   web?: SessionDeps['web'];
   /** What runs the notify command (ADR-0053); a real process unless a test supplies one. */
   runNotifyCommand?: SessionDeps['runNotifyCommand'];
+  /** The node the session is, below the root (ADR-0056); the root unless set. */
+  child?: SessionDeps['child'];
 }
 
 /** Task-log files that live in memory, numbered per task as the real store numbers them. */
@@ -143,6 +145,7 @@ export function makeSession(overrides: SessionOverrides = {}): Session {
     leaseHost: overrides.leaseHost,
     web: overrides.web,
     runNotifyCommand: overrides.runNotifyCommand,
+    child: overrides.child,
   });
   if (!overrides.saveSession) saveFakes.set(session, save);
   return session;

@@ -1,8 +1,8 @@
 ---
 status: accepted
-implemented: none
+implemented: partial
 amends: ["0001", "0008", "0022", "0029", "0030", "0035", "0036", "0037", "0053"]
-note: "Settles #23, #92 and #112 as far as subplanners need. Waits on ADR-0055. A flat run does not change."
+note: "Settles #23, #92 and #112 as far as subplanners need. Built: M1 to M4, the seam and the paths around it in M6. M5 and M7 to M10 wait on ADR-0055, as do `delegate` and a subplanner's harness subagents in M6. A flat run does not change."
 ---
 
 # 0056 — A mandate says what a node may do without a person, and what it can hand on only narrows down the tree
@@ -93,7 +93,7 @@ Judgment stays the planner's.
   | autorun | `approve`, read with `autonomy` as ADR-0030 reads the two together |
   | Full, Guarded | `autonomy` |
   | the effect allowlist | `effect`, its rules in `effectRules` |
-  | delegation on (ADR-0055 D21) | `delegate`, and fills `grantable` |
+  | delegation on (ADR-0055 D21) | `delegate`, the tree's token budget, and fills `grantable` |
 
   The mandate replaces `SUPERVISOR_LEVELS` at the seam, as ADR-0029 said it would.
   A turn the user opened keeps ADR-0029's table: the user is present, and a person
@@ -128,7 +128,9 @@ Judgment stays the planner's.
   (M8).
 - **Narrowing is one pure function (M4).** `narrow(parent, request)` returns a mandate
   or a refusal naming the level that refused, the field, what was asked and what is
-  there:
+  there. A mandate does not say where in the tree it stands, so the request names the
+  level narrowing. `parent` carries what it has left in its limits, which the caller
+  reads from the ledger (M5):
 
   | field | rule |
   |---|---|
@@ -188,18 +190,23 @@ Judgment stays the planner's.
     raises it. The root's own tasks and planner are charged nothing: a flat run has no
     budget.
 - **Authority stays at the seam (M6).** `consent()` in `ExecutionCommands` stays the one
-  place. `ExecutionActor` gains `subplanner`: every turn of a child acts as it, and
-  consent is its grants alone, allow or refuse, never `ask`. `USERS_ONLY` is refused to
-  it as to any model. These paths reach around the seam and are closed:
+  place. `ExecutionActor` gains `subplanner`, at its depth: every turn of a child acts as
+  it, and consent is its grants alone, allow or refuse, never `ask`. `USERS_ONLY` is
+  refused to it as to any model. These paths reach around the seam and are closed:
 
   | path | what goes wrong | closed by |
   |---|---|---|
-  | `adoptPlannerTasks`, `autorunApproves` | a commit approves with no command | `PlanChangeCheck` reads `replan` and `delegate`, and the approval reads `approve` |
-  | `adoptResearch`, `startAtGate` | research is approved and queued as it lands | reads `research` |
-  | `mergeLanded`, from `tick` and the run's end | an automatic merge passes no command | reads `merge`; ADR-0055 D9 |
-  | `{ kind: 'autorun' }` | allowed all but the user's controls | narrowed by `approve` and `control` |
+  | `adoptPlannerTasks`, `autorunApproves` | a commit approves with no command | `PlanChangeCheck` reads `replan`, `delegate`, and `research` for a research task the change brings, and the approval reads `approve` |
+  | `adoptResearch`, `startAtGate` | research is approved and queued as it lands | reads `research`, which every root holds |
+  | `mergeLanded`, from `tick` and the run's end | an automatic merge passes no command | below the root, reads `merge`; ADR-0055 D9. At the root the user's setting is the consent, at any level (ADR-0029) |
+  | `{ kind: 'autorun' }` | allowed all but the user's controls | below the root, narrowed by `approve` and `control`. At the root it is the user's standing instruction, which no level holds back (ADR-0030) |
   | `ModeResolver` | a runner's mode reads global autonomy | a child's reads `autonomy` |
   | `spawn_research_agent`, harness subagents | uncounted fan-out | spend counts usage events with a subagent id; without `research` a subplanner's harness subagents are withheld |
+
+  `PlanChangeCheck` refuses a research task without `research`, as well as the landing
+  leaving it unapproved: a child's `approve` and `run_plan` approve what its plan holds, so
+  a task left in the plan would start with no grant. A child's `replan` is read by the check
+  and not at `run_script`, which `control` allows.
 
   **The tool list is filtered by grants and fixed at session start**, in a stable order,
   through `PlannerTokenScope.hidden`, because a changed list breaks the prompt cache. MCP
@@ -365,3 +372,4 @@ Judgment stays the planner's.
 - 2026-10-31 — checked against the code again: what narrows is `grantable`, a delegated task's absent `grants` ask for nothing, the clock past a reset, who answers a depth-1 question at each level, and a sealed script where nothing can seal.
 - 2026-10-31 — a subplanner's turns come before its carves: a parked subplanner keeps its reserve, a turn past its room takes from its children's, and a turn nothing covers ends the node `blocked`.
 - 2026-10-31 — a parked subplanner's reserve funds its next turn, which spends it before room, and is kept again as it parks; what covers a turn is said.
+- 2026-10-31 — implemented in part: `Mandate`, `rootMandate`, `narrow`, the seam, the paths around it and a child's tool list, on a faked child, and the delegation setting (ADR-0055 D21). Built closest to the text where it could not hold: an automatic merge and `{ kind: 'autorun' }` read their grants below the root only, since Off and Watch hold neither and a flat run does not change; `PlanChangeCheck` reads `research` too; a request names the level narrowing.

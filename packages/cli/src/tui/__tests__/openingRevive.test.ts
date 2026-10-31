@@ -15,7 +15,7 @@ import { messagesOf } from './chat';
 
 const RUN_SETTINGS: GlobalRunSettings = {
   supervisorLevel: 'watch', mergeAtGatesAutomatically: false, plannedWithTrailer: true,
-  autorun: false, supervisorRetryLimit: 3, wakeUpReadBudget: 0,
+  autorun: false, supervisorRetryLimit: 3, wakeUpReadBudget: 0, delegationTokens: 0,
 };
 
 /** A settings answer that says only what these tests read: its run settings. */

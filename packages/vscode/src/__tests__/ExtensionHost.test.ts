@@ -766,6 +766,7 @@ describe("the Settings panel's Run block", () => {
   it.each([
     [{ supervisorLevel: 'act' as const }, /ops tasks included/],
     [{ autorun: true }, /without review/],
+    [{ delegationTokens: 5000000 }, /a plan nobody read/],
   ])('%j asks first; declined, it saves nothing and pushes the unchanged value', async (run, risk) => {
     warning.mockResolvedValue(undefined);
     h.chat.messages.fire({ type: 'changeSettings', change: { run } });

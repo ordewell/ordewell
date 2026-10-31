@@ -218,7 +218,7 @@ function settingsBadge(state: TuiState): string {
 
 function runSettingsBadge(state: TuiState): string {
   if (!state.runSettingsKnown) return style.grey('run settings …');
-  const { supervisorLevel, mergeAtGatesAutomatically, autorun } = state.runSettings;
+  const { supervisorLevel, mergeAtGatesAutomatically, autorun, delegationTokens } = state.runSettings;
   const paint = (text: string, warn: boolean) => (warn ? style.yellow(text) : style.grey(text));
   const run = state.status === 'executing' ? state.runSupervisor : null;
   const actual = run?.unsupervised ? 'unsupervised' : run && run.level !== supervisorLevel ? SUPERVISOR_LEVEL_LABEL[run.level] : null;
@@ -227,6 +227,7 @@ function runSettingsBadge(state: TuiState): string {
     paint(level, supervisorLevel === 'act'),
     ...(mergeAtGatesAutomatically ? [style.grey('auto-merge')] : []),
     ...(autorun ? [style.yellow('autorun')] : []),
+    ...(delegationTokens > 0 ? [style.yellow('delegation')] : []),
   ].join(style.grey(' · '));
 }
 

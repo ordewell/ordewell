@@ -342,18 +342,15 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     };
   }
 
+  /** What the Run block shows: the window's own session holds the copy, and the bare welcome shows the file (ADR-0030). */
+  function shownRunSettings(): GlobalRunSettings {
+    return managerDeps.session.planState ? managerDeps.session.runSettings() : services.settingsService.getRunSettings();
+  }
+
   function sendRunSettings(): void {
-    const session = managerDeps.session;
-    let run: GlobalRunSettings;
-    if (session.planState) {
-      // The window's own session holds the copy its Run block shows (ADR-0030).
-      run = session.runSettings();
-    } else {
-      // The bare welcome shows the file, and a session started next opens with
-      // it (ADR-0030); with no plan open there is no run this can move.
-      run = services.settingsService.getRunSettings();
-      session.applyRunSettings(run);
-    }
+    const run = shownRunSettings();
+    // A session started next opens with the file, and with no plan open there is no run this can move.
+    if (!managerDeps.session.planState) managerDeps.session.applyRunSettings(run);
     services.chatProvider.setRunSettings(services.config.autonomousMode, run, services.config.maxParallelSessions);
   }
 
@@ -372,11 +369,12 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
 
   /**
    * A click in the Settings panel's Run block. Pushed back whatever happens, so
-   * a declined Act or autorun, or a refused number, shows its old value again.
+   * a declined Act, autorun or delegation, or a refused number, shows its old
+   * value again.
    */
   async function changeSettings(change: SettingsChange): Promise<void> {
     if (change.autonomous !== undefined) saveAutonomy(change.autonomous);
-    if (change.run && await confirmRisks(change.run)) changeRunSettings(change.run);
+    if (change.run && await confirmRisks(change.run, shownRunSettings().delegationTokens)) changeRunSettings(change.run);
     const limit = change.maxParallel === undefined ? null : parseMaxParallel(change.maxParallel);
     if (limit !== null) await services.config.update('maxParallelSessions', limit);
     sendRunSettings();

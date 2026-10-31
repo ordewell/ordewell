@@ -61,6 +61,7 @@ function runSettingsSummary(run: GlobalRunSettings | undefined, runSettings: Run
       </span>
       {run.mergeAtGatesAutomatically && <span className="plan-dock-summary">Merge automatically</span>}
       {run.autorun && <span className="plan-dock-summary">Autorun</span>}
+      {run.delegationTokens > 0 && <span className="plan-dock-summary">Delegation</span>}
     </>
   );
 }

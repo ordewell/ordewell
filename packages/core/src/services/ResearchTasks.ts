@@ -21,7 +21,9 @@ export class ResearchTasks {
 
 /** The same authority record as run_script, without inventing consent to a script (ADR-0037 R3). */
 export function researchReportTo(actor: ExecutionActor): TaskReportTo {
-  return actor.kind === 'supervisor'
-    ? { research: true, actor: 'supervisor', level: actor.level }
-    : { research: true, actor: 'planner-turn' };
+  switch (actor.kind) {
+    case 'supervisor': return { research: true, actor: 'supervisor', level: actor.level };
+    case 'subplanner': return { research: true, actor: 'subplanner', depth: actor.depth };
+    default: return { research: true, actor: 'planner-turn' };
+  }
 }

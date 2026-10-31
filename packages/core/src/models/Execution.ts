@@ -12,14 +12,16 @@ export function isSupervisorLevel(value: unknown): value is SupervisorLevel {
 
 /**
  * Who asked the command seam for an action (ADR-0029): the user, a planner
- * turn the user started, or the supervisor at its level.
+ * turn the user started, the supervisor at its level, autorun, or a subplanner.
  */
 export type ExecutionActor =
   | { kind: 'user' }
   | { kind: 'planner-turn' }
   | { kind: 'supervisor'; level: SupervisorLevel }
   /** The user's standing instruction to start each plan the planner submits (ADR-0030); `leavesFailed` is what failed in that reply, which it does not run again. */
-  | { kind: 'autorun'; leavesFailed?: ReadonlySet<string> };
+  | { kind: 'autorun'; leavesFailed?: ReadonlySet<string> }
+  /** Every turn of a child plan's planner (ADR-0056 M6): no person is there, so its grants alone answer. `depth` is its level, the root being 0. */
+  | { kind: 'subplanner'; depth: number };
 
 export type ExecutionCommandName =
   | 'run_plan'
@@ -46,13 +48,14 @@ export type ExecutionCommandName =
 /**
  * How the user consented to the script a `run_script` call ran (ADR-0035):
  * on the approval card, by an effect allowlist rule (by name), by autorun in
- * Full, or by choosing Act for the supervisor.
+ * Full, by choosing Act for the supervisor, or by a subplanner's mandate.
  */
 export type ScriptConsent =
   | { by: 'card' }
   | { by: 'allowlist'; rule: string }
   | { by: 'autorun' }
-  | { by: 'act' };
+  | { by: 'act' }
+  | { by: 'mandate' };
 
 /**
  * Where a `run_script` call's task stood as the call answered, or as it ended

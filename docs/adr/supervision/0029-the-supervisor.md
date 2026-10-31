@@ -6,7 +6,7 @@ amends: ["0009", "0013", "0020", "0022"]
 # 0029 — The supervisor: levels, live planner turns, execution tools and auto-merge
 
 *Pending:* [ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — Stop reaches a subtree, tombstone first; landed work whose check has not passed holds `merge_all` and the automatic merges, and a model may not skip that check.
-*Pending:* [ADR-0056](0056-a-mandate-narrows-down-the-tree.md) — the mandate replaces the level check at the seam, a subplanner is an actor of its own, and a child's questions go to its parent.
+*Pending:* [ADR-0056](0056-a-mandate-narrows-down-the-tree.md) — a child's questions go to its parent, and a loop guard ends a subplanner where it would lower a root.
 *Pending:* [ADR-0057](0057-information-moves-by-reference.md) — `WakePolicy` holds events it would wake on, a wake has a size cap, and the level brief is sent once, then a line on a change.
 
 **Amends:** ADR-0009 and ADR-0022 — the planner gains execution tools, a further
@@ -74,11 +74,12 @@ the guards' memory kept. A lowering takes effect at once, in the wake-up turn
 under way too: what that turn calls or edits next is checked against the lowered
 level.
 
-The levels are a slim precursor of the mandate (#23). Watch is its `observe`
-grant; Act later becomes the bundle of `control` and `replan` (and the merge
-grant #23's comment proposes). Grants given separately, limits, inheritance,
-delegation and revocation stay with #23. Because the check already lives at the
-seam, the mandate replaces the level check there and nothing above it moves.
+The levels are how the root reads its mandate
+([ADR-0056](0056-a-mandate-narrows-down-the-tree.md)). Watch is its `observe`
+grant, and Act adds `steer`, `control`, `replan` and `merge`. The seam checks
+the grant a command needs, and a level's refusal is its own wording for a grant
+it does not hold. A turn the user opened keeps the table below: the user is
+present, and a person needs no mandate.
 
 ### Same conversation, its own message kind
 
@@ -713,3 +714,4 @@ until #30 exists.
 - 2026-10-31 — the user's Stop withdraws what was admitted before it even when it finds nothing to stop, and a plan whose start autorun owes is a run to stop ([ADR-0030](0030-global-run-settings.md)).
 - 2026-10-31 — `run_plan` joins a run that is open with nothing live rather than starting it over: its failures and its usage-limit pause stand.
 - 2026-10-31 — a planner's `run_plan` leaves what failed as it is; a supervisor's is still the retry its guards count.
+- 2026-10-31 — the seam reads the mandate in place of `SUPERVISOR_LEVELS`, and answers as it did at every level ([ADR-0056](0056-a-mandate-narrows-down-the-tree.md)).

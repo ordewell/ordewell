@@ -184,7 +184,7 @@ export type WebviewToHost =
   | { type: 'setPlannerModel'; modelId: string; effort?: string }
   /**
    * One setting changed in the Settings panel's Run block (ADR-0030). The host
-   * validates and asks before Act or autorun; it answers with `setRunSettings`
+   * validates and asks before Act, autorun or delegation; it answers with `setRunSettings`
    * either way, so a declined change shows its old value again.
    */
   | { type: 'changeSettings'; change: SettingsChange }

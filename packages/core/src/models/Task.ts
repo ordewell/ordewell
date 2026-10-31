@@ -387,6 +387,7 @@ export interface Task {
 export type TaskReportTo = ({ consent: ScriptConsent; research?: never } | { research: true; consent?: never }) & (
   | { actor: 'planner-turn' }
   | { actor: 'supervisor'; level: SupervisorLevel }
+  | { actor: 'subplanner'; depth: number }
 );
 
 /** Whose authority a turn opened without the user acts with (ADR-0037, R3): the user's turn, or the supervisor's. */

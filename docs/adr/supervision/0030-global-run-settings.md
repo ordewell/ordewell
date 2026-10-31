@@ -5,7 +5,7 @@ amends: ["0001", "0013", "0020", "0029"]
 
 # 0030 — Run settings are saved once and live per session; autorun
 
-*Pending:* [ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — delegation joins the run settings, off by default, and the Parallel limit counts a whole tree.
+*Pending:* [ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — the Parallel limit counts a whole tree.
 *Pending:* [ADR-0056](0056-a-mandate-narrows-down-the-tree.md) — the root's mandate is derived from these settings on each read; a child's is saved with its plan.
 
 **Amends:** ADR-0029 — the supervisor level, merge at gates automatically, the
@@ -47,10 +47,10 @@ on one machine can disagree.
 ## Decision
 
 **Full/Guarded, the supervisor level, merge at gates automatically, autorun,
-the retry limit and the wake-up read budget are the user's settings, saved
-machine-wide in `settings.json`.** Full/Guarded, the supervisor level, the merge
-setting, autorun and the retry limit are changed through `/settings` (or the
-headless commands behind it). The wake-up read budget and the Planned-with line
+the retry limit, the wake-up read budget and delegation are the user's settings,
+saved machine-wide in `settings.json`.** Full/Guarded, the supervisor level, the
+merge setting, autorun, the retry limit and delegation are changed through
+`/settings` (or the headless commands behind it). The wake-up read budget and the Planned-with line
 have no panel row: only `ordewell supervisor reads <n>` or an edit of the file
 sets the budget, and only `ordewell trailer` or an edit of the file sets the
 line. A change made through `/settings` is saved to the file and applies at once
@@ -79,7 +79,9 @@ There is no per-plan value and no per-workspace override.
   migrated.
 - **A run keeps its own copy, `runSettings`, taken from the session's copy.**
   It is what the run actually used, the record behind the timeline, and the
-  value a guard or a failure lowers.
+  value a guard or a failure lowers. Autorun and delegation are not in it: each is
+  read from the session's copy at the check that needs it, so turning either off
+  holds at once.
 - **Full/Guarded moves too.** On first start, a value in `~/.ordewell/.env` or
   a non-default `ordewell.autonomousMode` is copied into `settings.json` once,
   so nobody's level flips; the VS Code setting is removed from the extension.
@@ -98,6 +100,7 @@ There is no per-plan value and no per-workspace override.
 | Planned-with line in commits Ordewell writes (not in the panels) | on, off | **on** |
 | supervisor retry limit | whole number ≥ 0 | 2 |
 | wake-up read budget (not in the panels) | whole number ≥ 1 | 12 |
+| delegation (ADR-0055 D21) | off, or a tree's budget in tokens | **off** |
 
 Watch becomes the default because it only reads and writes notes to the user:
 it never acts, and it makes the planner's watching of a run something a new
@@ -122,13 +125,19 @@ row.
 | `ordewell automerge [on\|off]` | merge at gates automatically |
 | `ordewell trailer [on\|off]` | Planned-with line in commits Ordewell writes |
 | `ordewell autorun [on\|off]` | autorun |
+| `ordewell delegation [off\|<tokens>]` | delegation, and a tree's token budget |
 | `ordewell parallel [<n>]` | tasks that run at once |
 
 Parallel is the exception to the one store: the TUI keeps it in `.env` and
 VS Code in `ordewell.maxParallelSessions`, not in `settings.json`.
 
 Choosing Act or turning autorun on asks to confirm and says what it allows,
-ops tasks on real systems included. The plan pane's `G`, `W` and `L` and VS
+ops tasks on real systems included. Turning delegation on asks too, and says
+what it accepts below the root
+([ADR-0056](0056-a-mandate-narrows-down-the-tree.md) M9); a change to the budget
+of a tree already on accepts nothing new, so it does not. One value holds both, the
+budget in tokens with 0 for off, so delegation is never on with no budget. The
+plan pane's `G`, `W` and `L` and VS
 Code's plan-card controls are removed: one route per setting. `L` had no job
 left, since lowering the supervisor now lowers the run at once.
 
@@ -154,7 +163,8 @@ so a change reaches the next landing, in any session, without a restart.
 The welcome screen's Setup block, in the TUI and in VS Code's empty chat, gains
 two rows: **Autonomy** (Full/Guarded) and **Run** (supervisor level, auto-merge,
 autorun), both pointing at `/settings`. Act and autorun on are drawn as a
-warning, as the autonomous mode's `⚡` is. A status badge shows the same values
+warning, as the autonomous mode's `⚡` is, and so is delegation, which the rows
+name only while it is on. A status badge shows the same values
 at all times, not only during a run, and during a run shows the run's level
 where it differs from the session's one: `Act → Watch` once the wake-up-rate
 guard has lowered it, with the reason in the supervisor's note. In the TUI the
@@ -482,3 +492,4 @@ the daemon reads it from there at generation.
 - 2026-10-31 — autorun restarts no run a usage limit holds, and skips a scheduled run with nothing live in Guarded as in Full.
 - 2026-10-31 — the plan left to Execute under a usage limit is taken in for the reset to go on with; Execute no longer takes the pause back.
 - 2026-10-31 — a planner's `run_plan` leaves what failed as it is, in Full with autorun as anywhere ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
+- 2026-10-31 — delegation joins the run settings, off by default, with `ordewell delegation`, a `/settings` step after Parallel and a VS Code row; it changes nothing until something can delegate (ADR-0055 D21).

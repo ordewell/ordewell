@@ -12,6 +12,7 @@ import { waitOf, type StartWait } from './readiness';
 import { escalationAct, type Escalation } from './escalations';
 import { revertStopped, type RevertScope } from './taskRevert';
 import { manualOverrideConfirmation, manualOverrideStopFirst, type OverrideDirection } from '../taskRow/texts';
+import { COMMAND_GRANTS, allowsCommand, missingGrant, rootAuthority, type Grant, type Mandate, type NodeAuthority } from './Mandate';
 
 /** One call at the command seam, as every route words it (ADR-0029). Task references are resolved here. */
 export type ExecutionCommand =
@@ -118,24 +119,16 @@ const NO_EFFECTS: EffectAllowlist = () => null;
 export const SCRIPT_ANSWER_WAIT_MS = 60_000;
 
 /**
- * What a supervisor at `level` may do. The mandate (#23) replaces this check;
- * nothing above it moves.
+ * What a supervisor's mandate leaves out, in the words of its level (ADR-0029).
+ * Off: it does not act. Watch: it reads and suggests, and every execution
+ * command it calls is refused. Act holds every grant the commands need; choosing
+ * it is the consent, inside the loop guards, and what a command may never do,
+ * like allowing an approval, is still refused by the command itself.
  */
-export type SupervisorPolicy = (level: SupervisorLevel, command: ExecutionCommandName) => Consent;
-
-/**
- * The supervisor levels (ADR-0029). Off: it does not act. Watch: it reads and
- * suggests, and every execution command it calls is refused. Act: every
- * command runs without asking — choosing Act is the consent — inside the loop
- * guards; what a command may never do, like allowing an approval, is still
- * refused by the command itself.
- */
-export const SUPERVISOR_LEVELS: SupervisorPolicy = (level) => {
-  switch (level) {
-    case 'act': return { kind: 'allow' };
-    case 'watch': return { kind: 'refuse', reason: 'You are the supervisor at Watch: you read and suggest, and cannot run, stop, retry, skip or message tasks, run scripts, answer approvals or merge. Suggest it to the user instead; their reply is an ordinary message, and you can do it then.' };
-    case 'off': return { kind: 'refuse', reason: 'The supervisor is off for this run, so it cannot act. Suggest it to the user instead.' };
-  }
+const LEVEL_REFUSAL: Record<SupervisorLevel, string> = {
+  act: 'That is not the supervisor\'s to do at any level. Suggest it to the user instead.',
+  watch: 'You are the supervisor at Watch: you read and suggest, and cannot run, stop, retry, skip or message tasks, run scripts, answer approvals or merge. Suggest it to the user instead; their reply is an ordinary message, and you can do it then.',
+  off: 'The supervisor is off for this run, so it cannot act. Suggest it to the user instead.',
 };
 
 /**
@@ -298,7 +291,8 @@ export interface ExecutionCommandsDeps {
   host: ExecutionHost;
   /** The approval card channel a Guarded start asks through. */
   consent: Pick<IApproval, 'request'>;
-  supervisor?: SupervisorPolicy;
+  /** What this node may do unasked, read at each check (ADR-0056 M1); a root with nothing past what the host says unless set. */
+  authority?: NodeAuthority;
   guards?: readonly LoopGuard[];
   /** What pre-approves a script's effect (ADR-0035); nothing does unless set. */
   effects?: EffectAllowlist;
@@ -349,6 +343,9 @@ const SKIP_IS_USERS = 'Skipping a task is the user\'s in their own turn: they ar
 const SCRIPTS_ARE_THE_PLANNERS = 'run_script is the planner\'s: a person adds a script task to the plan and starts it themselves.';
 
 const NO_PLAN_FOR_SCRIPT = 'There is no plan yet, so there is nowhere to add a script task. Submit a plan that holds it.';
+
+/** What autorun needs below the root, where it approves a plan and starts it with no user behind it (ADR-0056 M6). */
+const AUTORUN_GRANTS: readonly Grant[] = ['approve', 'control'];
 
 const AUTORUN_JOINS_NOTHING = 'tasks are already running, and in Guarded autorun takes no plan into work under way. Run the plan yourself to start the rest.';
 const AUTORUN_RESTARTS_NOTHING = 'a usage limit holds a task, and autorun takes no plan into that run. It resumes at its reset; run the plan yourself and the rest starts then.';
@@ -403,7 +400,7 @@ type Prepared =
  */
 export class ExecutionCommands {
   private readonly host: ExecutionHost;
-  private readonly supervisor: SupervisorPolicy;
+  private readonly authority: NodeAuthority;
   private readonly guards: readonly LoopGuard[];
   private readonly effects: EffectAllowlist;
   private readonly now: () => string;
@@ -423,7 +420,7 @@ export class ExecutionCommands {
 
   constructor(private readonly deps: ExecutionCommandsDeps) {
     this.host = deps.host;
-    this.supervisor = deps.supervisor ?? SUPERVISOR_LEVELS;
+    this.authority = deps.authority ?? rootAuthority(() => ({ autorun: deps.host.autorun(), autonomous: deps.host.autonomous(), delegationTokens: 0, runners: [], models: {} }));
     this.guards = deps.guards ?? [];
     this.effects = deps.effects ?? NO_EFFECTS;
     this.now = deps.now ?? (() => new Date().toISOString());
@@ -669,13 +666,13 @@ export class ExecutionCommands {
   }
 
   /**
-   * Who may run a script without the mandate (#23), as ADR-0035's table says.
-   * An effect the user's allowlist covers runs in every row but one, and is
-   * recorded by its rule. In the user's turn: otherwise autorun in Full runs
-   * it, on a first plan as on an approved one (ADR-0030), and failing that
-   * they are asked on the card. The supervisor's level decides for it first:
-   * at Watch it is refused, to suggest it instead, covered or not; at Act it
-   * runs, the task it adds being approved (ADR-0029).
+   * Who may run a script, as ADR-0035's table says. An effect the user's
+   * allowlist covers runs in every row but one, and is recorded by its rule.
+   * In the user's turn: otherwise autorun in Full runs it, on a first plan as
+   * on an approved one (ADR-0030), and failing that they are asked on the
+   * card. The supervisor's level decides for it first: at Watch it is refused,
+   * to suggest it instead, covered or not; at Act it runs, the task it adds
+   * being approved (ADR-0029). A subplanner's is its grants alone (ADR-0056 M6).
    */
   private scriptConsent(actor: ExecutionActor, body: ScriptBody | null): { kind: 'allow'; how: ScriptConsent } | { kind: 'ask' } | { kind: 'refuse'; reason: string } {
     // A rule the user wrote covers the whole of a `commands` body, or nothing does.
@@ -687,8 +684,12 @@ export class ExecutionCommands {
       case 'user':
       case 'autorun': return { kind: 'refuse', reason: SCRIPTS_ARE_THE_PLANNERS };
       case 'supervisor': {
-        const level = this.supervisor(actor.level, 'run_script');
+        const level = this.supervisorConsent(actor.level, 'run_script');
         return level.kind === 'allow' ? { kind: 'allow', how: covered() ?? { by: 'act' } } : level;
+      }
+      case 'subplanner': {
+        const held = this.grantConsent(actor, 'run_script');
+        return held.kind === 'allow' ? { kind: 'allow', how: covered() ?? { by: 'mandate' } } : held;
       }
       case 'planner-turn': {
         const how: ScriptConsent | undefined = covered() ?? (this.startsUnattended(actor) ? { by: 'autorun' } : undefined);
@@ -704,10 +705,11 @@ export class ExecutionCommands {
    * in the user's turn, and all but a script task, which runs unasked only
    * where `run_script` would run it unasked (ADR-0035), so under Guarded it
    * waits for the user unless their effect allowlist covers it. Its row shows
-   * the body verbatim, and starting it is their consent.
+   * the body verbatim, and starting it is their consent. Below the root this
+   * is the `approve` grant (ADR-0056 M6).
    */
   autorunApproves(actor: ExecutionActor, written: readonly Readonly<Task>[]): string[] {
-    if (!this.host.autorun()) return [];
+    if (!this.mandateOf(actor).grants.has('approve')) return [];
     if (this.startsUnattended(actor)) return written.map((t) => t.id);
     if (actor.kind !== 'planner-turn') return [];
     return written.filter((t) => t.type !== 'script' || this.scriptConsent(actor, scriptBodyOf(t)).kind === 'allow').map((t) => t.id);
@@ -721,7 +723,7 @@ export class ExecutionCommands {
   scriptEnded(taskId: string, to: TaskReportTo): void {
     const located = this.located(taskId);
     if (!located) return;
-    const actor: ExecutionActor = to.actor === 'supervisor' ? { kind: 'supervisor', level: to.level } : { kind: 'planner-turn' };
+    const actor = reportActor(to);
     this.keep({ command: 'run_script', title: located.task.title }, actor, located, 'done', undefined, { consent: to.consent, result: scriptResultOf(located.task), ended: true });
   }
 
@@ -757,11 +759,20 @@ export class ExecutionCommands {
    * With autorun on and Full, nobody is asked: a planner turn, or a supervisor
    * its level lets act, may start anything, on a first plan as on an approved
    * one (ADR-0030). Read at each start, so switching either off stops it at
-   * once. Below Act the level has refused the call before this is read.
+   * once. Below Act the level has refused the call before this is read. A
+   * subplanner has nobody to ask, so `approve` alone says it: its `autonomy`
+   * says what its runners may do, not whether a person is asked (ADR-0056 M7).
    */
   private startsUnattended(actor: ExecutionActor): boolean {
-    const acts = actor.kind === 'planner-turn' || (actor.kind === 'supervisor' && this.supervisor(actor.level, 'run_plan').kind === 'allow');
-    return acts && this.host.autorun() && this.host.autonomous();
+    const mandate = this.mandateOf(actor);
+    if (actor.kind === 'subplanner') return mandate.grants.has('approve');
+    const acts = actor.kind === 'planner-turn' || (actor.kind === 'supervisor' && this.supervisorConsent(actor.level, 'run_plan').kind === 'allow');
+    return acts && mandate.grants.has('approve') && mandate.autonomy === 'full';
+  }
+
+  /** The mandate that answers for `actor` now: read at each check, so a change reaches the next one (ADR-0056 M1). */
+  private mandateOf(actor: ExecutionActor): Mandate {
+    return this.authority.mandate(actor.kind === 'supervisor' ? actor.level : 'off');
   }
 
   /**
@@ -775,25 +786,51 @@ export class ExecutionCommands {
   }
 
   /**
-   * Who may do what without the mandate (#23): the user's own call needs no
-   * consent, and their own controls are theirs alone; a planner turn may
-   * always end or steer work, and starts it only as the autonomy level says;
-   * the supervisor's level decides for it.
+   * Who may do what, in the one place it is decided (ADR-0056 M6): the user's
+   * own call needs no consent, and their own controls are theirs alone; a turn
+   * the user opened keeps ADR-0029's table, since a person needs no mandate: it
+   * may always end or steer work, and starts it only as the autonomy level says.
+   * The supervisor's level decides for it through its mandate, and a subplanner
+   * has its grants alone, allow or refuse: nobody is there to ask.
    */
-  private consent(actor: ExecutionActor, command: ExecutionCommandName): Consent {
+  consent(actor: ExecutionActor, command: ExecutionCommandName): Consent {
     const control = USERS_ONLY[command];
     if (control && actor.kind !== 'user') return { kind: 'refuse', reason: usersOnly(command, control) };
+    if (actor.kind === 'subplanner') return this.grantConsent(actor, command);
     if (command === 'answer_checkpoint') return this.checkpointConsent(actor);
     switch (actor.kind) {
-      case 'user':
-      case 'autorun': return { kind: 'allow' };
+      case 'user': return { kind: 'allow' };
+      case 'autorun': return this.autorunConsent();
       // A merge by proxy would add a route to the user's branch for nothing: they are present, and can press it (ADR-0029).
       case 'planner-turn': if (command === 'merge_all') return { kind: 'refuse', reason: MERGE_IS_USERS };
         // Skip decides that work will not be waited for: the user decides that, or a supervisor they let act.
         if (command === 'skip_task') return { kind: 'refuse', reason: SKIP_IS_USERS };
         return !STARTS.has(command) || this.host.autonomous() ? { kind: 'allow' } : { kind: 'ask' };
-      case 'supervisor': return this.supervisor(actor.level, command);
+      case 'supervisor': return this.supervisorConsent(actor.level, command);
     }
+  }
+
+  private supervisorConsent(level: SupervisorLevel, command: ExecutionCommandName): Consent {
+    return allowsCommand(this.authority.mandate(level), command) ? { kind: 'allow' } : { kind: 'refuse', reason: LEVEL_REFUSAL[level] };
+  }
+
+  private grantConsent(actor: Extract<ExecutionActor, { kind: 'subplanner' }>, command: ExecutionCommandName): Consent {
+    const mandate = this.mandateOf(actor);
+    return allowsCommand(mandate, command) ? { kind: 'allow' } : { kind: 'refuse', reason: missingGrant(actor.depth, mandate, COMMAND_GRANTS[command] ?? command) };
+  }
+
+  /**
+   * Autorun is the user's standing instruction, so at the root it is not held
+   * to a level: Watch has no `control`, and autorun still starts its plan. Below
+   * the root there is no user behind it, and `approve` and `control` narrow it
+   * (ADR-0056 M6).
+   */
+  private autorunConsent(): Consent {
+    const { depth } = this.authority;
+    if (depth === 0) return { kind: 'allow' };
+    const mandate = this.authority.mandate('off');
+    const lacking = AUTORUN_GRANTS.find((grant) => !mandate.grants.has(grant));
+    return lacking ? { kind: 'refuse', reason: missingGrant(depth, mandate, lacking) } : { kind: 'allow' };
   }
 
   /**
@@ -802,11 +839,11 @@ export class ExecutionCommands {
    * (ADR-0029). A planner turn is in the user's own conversation, and autorun
    * only starts plans.
    */
-  private checkpointConsent(actor: ExecutionActor): Consent {
+  private checkpointConsent(actor: Exclude<ExecutionActor, { kind: 'subplanner' }>): Consent {
     switch (actor.kind) {
       case 'user': return { kind: 'allow' };
       case 'supervisor': {
-        const consent = this.supervisor(actor.level, 'answer_checkpoint');
+        const consent = this.supervisorConsent(actor.level, 'answer_checkpoint');
         return consent.kind === 'refuse' && actor.level !== 'act' ? { kind: 'refuse', reason: CHECKPOINT_BELOW_ACT[actor.level] } : consent;
       }
       case 'planner-turn':
@@ -1594,7 +1631,20 @@ export class ExecutionCommands {
 
 /** Whose turn a `run_script` task's result is owed to, and how it was consented to (ADR-0037, R3). */
 function reportTo(actor: ExecutionActor, consent: ScriptConsent): TaskReportTo {
-  return actor.kind === 'supervisor' ? { actor: 'supervisor', level: actor.level, consent } : { actor: 'planner-turn', consent };
+  switch (actor.kind) {
+    case 'supervisor': return { actor: 'supervisor', level: actor.level, consent };
+    case 'subplanner': return { actor: 'subplanner', depth: actor.depth, consent };
+    default: return { actor: 'planner-turn', consent };
+  }
+}
+
+/** Who a report's turn acts as: the actor its task's start was consented under. */
+function reportActor(to: TaskReportTo): ExecutionActor {
+  switch (to.actor) {
+    case 'supervisor': return { kind: 'supervisor', level: to.level };
+    case 'subplanner': return { kind: 'subplanner', depth: to.depth };
+    case 'planner-turn': return { kind: 'planner-turn' };
+  }
 }
 
 /** Why a model may not use one of the user's own controls. */
@@ -1680,7 +1730,8 @@ const USER_VOICE: Voice = {
 function voiceOf(actor: ExecutionActor): Voice {
   switch (actor.kind) {
     case 'user': return USER_VOICE;
-    case 'supervisor': return SUPERVISOR_VOICE;
+    case 'supervisor':
+    case 'subplanner': return SUPERVISOR_VOICE;
     case 'planner-turn':
     case 'autorun': return MODEL_VOICE;
   }
@@ -1764,6 +1815,7 @@ const WHO: Record<ExecutionActor['kind'], string> = {
   'planner-turn': 'The planner',
   supervisor: 'The supervisor',
   autorun: 'Autorun',
+  subplanner: 'The subplanner',
 };
 
 /** The timeline's line for one call: who asked, what, and how it ended. */
@@ -1848,6 +1900,7 @@ function consentWords(consent: ScriptConsent | undefined): string {
     case 'allowlist': return `, which your effect allowlist rule "${consent.rule}" covers`;
     case 'autorun': return ', under autorun in Full';
     case 'act': return ', at Act';
+    case 'mandate': return ', under its mandate';
     case undefined: return '';
   }
 }

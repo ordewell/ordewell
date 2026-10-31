@@ -31,8 +31,8 @@ Automatic merging is optional, and an Act supervisor can also merge.
 The welcome screen lists the repositories and branches code tasks will use, and
 whether they get isolated worktrees.
 
-`/settings` walks autonomy, supervisor, merge automatically, autorun and parallel
-(research uses the same Parallel slots) in one panel and saves only what you changed. `/planner` walks harness, model and
+`/settings` walks autonomy, supervisor, merge automatically, autorun, parallel
+(research uses the same Parallel slots) and delegation in one panel and saves only what you changed. `/planner` walks harness, model and
 effort in one flow, so there is no separate model or effort command. Press `?` in
 the plan pane for the full key sheet; the footer shows only the keys that apply
 to the selected task.
@@ -45,7 +45,7 @@ in the full-screen terminal, where a shell has no view to switch to
 (`ordewell checkpoint` answers from one); `/inbox` lists everything waiting on you
 and answers it in place, with a count on the status row while anything waits; `/mouse` configures that terminal; and
 `/settings` is a panel over headless commands that remain for scripts
-(`ordewell auto`, `supervisor`, `automerge`, `autorun` and `parallel`);
+(`ordewell auto`, `supervisor`, `automerge`, `autorun`, `parallel` and `delegation`);
 `ordewell supervisor reads` and `ordewell trailer` have no panel row. `/planner` has its own `ordewell planner`, and its model and effort
 steps are `ordewell model` and `ordewell planner-effort`.
 

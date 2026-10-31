@@ -183,8 +183,9 @@ export { plannerNotReady, plannerNotReadyFor, describePlannerNotReady, PlannerNo
 export type { SessionDeps, SessionRuntimeSettings, SessionPlanner, SaveSession, ConversationFork, ConversationRewind } from './services/createSession';
 export type { TaskEditOptions } from './services/PlanEditor';
 export type { RevertPreviewTask, RevertRefusal, RevertRefusalReason, RevertScope, TaskRevertPreview } from './services/taskRevert';
-export { ExecutionCommands, SUPERVISOR_LEVELS } from './services/ExecutionCommands';
-export type { ExecutionCommand, CommandOutcome, CommandPayload, Consent, SupervisorPolicy, LoopGuard, ExecutionHost } from './services/ExecutionCommands';
+export { ExecutionCommands } from './services/ExecutionCommands';
+export type { ExecutionCommand, CommandOutcome, CommandPayload, Consent, LoopGuard, ExecutionHost } from './services/ExecutionCommands';
+export { FLOOR_GRANTS, GRANTS, SHAPE_LIMITS, heldMandate, mandateRefusalText, narrow, rootAuthority, rootMandate, type Grant, type Mandate, type MandateExclusions, type MandateLimits, type MandateRefusal, type MandateRequest, type Narrowed, type NodeAuthority, type RootSettings } from './services/Mandate';
 export { parseExecutionCommand, type ParsedCommand } from './services/executionCommandShape';
 export { DEFAULT_SUPERVISOR_RETRY_LIMIT } from './services/LoopGuards';
 export type { GuardTrip, GuardTarget } from './services/LoopGuards';
@@ -308,7 +309,7 @@ export * from './utils/taskLogStore';
 export { mintSessionId } from './utils/sessionId';
 export { extractPrdBlock, savePrdMarkdown, sanitizeSlug } from './utils/prdStore';
 export type { PrdBlock } from './utils/prdStore';
-export { ACT_RISK, AUTORUN_RISK, PLANNED_WITH_LABEL, SUPERVISOR_LEVEL_LABEL, automergeSummary, autorunSummary, parseCount, parseSwitch, supervisorSummary, trailerSummary } from './services/runSettingsText';
+export { ACT_RISK, AUTORUN_RISK, DELEGATION_RISK, PLANNED_WITH_LABEL, SUPERVISOR_LEVEL_LABEL, automergeSummary, autorunSummary, delegationSummary, parseCount, parseDelegation, parseSwitch, supervisorSummary, trailerSummary } from './services/runSettingsText';
 export { SettingsService, getSettingsPath, runSettingsOf, RUN_SETTINGS_DEFAULTS, RunSettingsError, type GlobalRunSettings, type UserSettings } from './services/SettingsService';
 export {
   PlannerModelMemory,
