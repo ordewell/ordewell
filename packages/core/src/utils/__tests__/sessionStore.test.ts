@@ -74,6 +74,28 @@ describe('sessionStore', () => {
       expect(loadSession(id, tmpDir)!.plan.researchLog ?? []).toEqual([]);
     });
 
+    it('does not bring back the plan before it when a session drops its log a second time', () => {
+      const id = 'session-dddddddddddddddd';
+      saveSession(planWith([entry('r1')]), 'Goal', tmpDir, id);
+      saveSession(planWith(), 'Goal', tmpDir, id);
+      saveSession(planWith([entry('r2')]), 'Goal', tmpDir, id);
+
+      saveSession(planWith(), 'Goal', tmpDir, id);
+
+      expect(loadSession(id, tmpDir)!.plan.researchLog ?? []).toEqual([]);
+    });
+
+    it('is written again when a log returns to a file that has held another since', () => {
+      const id = 'session-eeeeeeeeeeeeeeee';
+      const returning = planWith([entry('r1')]);
+      saveSession(returning, 'Goal', tmpDir, id);
+      saveSession(planWith([entry('r2')]), 'Goal', tmpDir, id);
+
+      saveSession(returning, 'Goal', tmpDir, id);
+
+      expect(loadSession(id, tmpDir)!.plan.researchLog).toEqual([entry('r1')]);
+    });
+
     it('is written again for a session given the same log under a new id, as a fork is', () => {
       const plan = planWith([entry('r1')]);
       saveSession(plan, 'Goal', tmpDir, 'session-aaaaaaaaaaaaaaaa');
