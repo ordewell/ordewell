@@ -1,9 +1,11 @@
 import React from 'react';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, within, fireEvent, cleanup } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings } from '@ordewell/core';
+vi.mock('@ordewell/core/plan-utils', async (importOriginal) => ({ ...await importOriginal<typeof import('@ordewell/core/plan-utils')>(), DELEGATION_OFFERED: true }));
+
 import App from '../App';
 import { api, post as send } from './hostBridge';
 

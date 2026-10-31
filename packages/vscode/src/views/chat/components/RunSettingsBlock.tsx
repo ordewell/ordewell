@@ -1,6 +1,6 @@
 import React, { forwardRef, useEffect, useId, useState } from 'react';
 import type { GlobalRunSettings, SupervisorLevel } from '@ordewell/core';
-import { SUPERVISOR_LEVEL_LABEL, parseCount } from '@ordewell/core/plan-utils';
+import { DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL, parseCount } from '@ordewell/core/plan-utils';
 import type { SettingsChange } from '../../../shared/protocol';
 
 export interface RunSettingsValue {
@@ -107,7 +107,7 @@ const RunSettingsBlock = forwardRef<HTMLElement, { value: RunSettingsValue; expa
     `Automerge ${run.mergeAtGatesAutomatically ? 'on' : 'off'}`,
     `Autorun ${run.autorun ? 'on' : 'off'}`,
     `${value.maxParallel} parallel`,
-    ...(run.delegationTokens > 0 ? ['Delegation on'] : []),
+    ...(DELEGATION_OFFERED && run.delegationTokens > 0 ? ['Delegation on'] : []),
   ].join(' · ');
   return (
     <section ref={ref} tabIndex={-1} className="setup-block run-settings" aria-label="Run">
@@ -132,7 +132,7 @@ function RunSettingsRows({ value, onChange }: { value: RunSettingsValue; onChang
   const { run } = value;
   return (
     <>
-      <div className="setup-block-hint">Supervisor, automerge, autorun and delegation apply to this session; your last change is the default for new ones.</div>
+      <div className="setup-block-hint">{DELEGATION_OFFERED ? 'Supervisor, automerge, autorun and delegation' : 'Supervisor, automerge and autorun'} apply to this session; your last change is the default for new ones.</div>
       <div className="setup-block-hint run-settings-scope-note">Autonomy and Parallel tasks apply to every session.</div>
       <PillRow label="Autonomy" options={AUTONOMY} current={value.autonomous} onPick={(autonomous) => onChange({ autonomous })} />
       <PillRow label="Supervisor" options={SUPERVISOR} current={run.supervisorLevel} onPick={(supervisorLevel) => onChange({ run: { supervisorLevel } })} />
@@ -150,11 +150,14 @@ function RunSettingsRows({ value, onChange }: { value: RunSettingsValue; onChang
         hint={(n) => `Up to ${plural(n, 'AI task', 'AI tasks')} at a time.`}
         onCommit={(maxParallel) => onChange({ maxParallel })}
       />
-      <NumberRow
-        label="Delegation budget" value={run.delegationTokens} min={0} host={value}
-        hint={(n) => (n === 0 ? 'Delegation is off: plans stay flat.' : `A tree of plans may spend up to ${plural(n, 'token', 'tokens')}.`)}
-        onCommit={(delegationTokens) => onChange({ run: { delegationTokens } })}
-      />
+      {/* Not offered until a delegated task exists (ADR-0055 D21). */}
+      {DELEGATION_OFFERED && (
+        <NumberRow
+          label="Delegation budget" value={run.delegationTokens} min={0} host={value}
+          hint={(n) => (n === 0 ? 'Delegation is off: plans stay flat.' : `A tree of plans may spend up to ${plural(n, 'token', 'tokens')}.`)}
+          onCommit={(delegationTokens) => onChange({ run: { delegationTokens } })}
+        />
+      )}
     </>
   );
 }

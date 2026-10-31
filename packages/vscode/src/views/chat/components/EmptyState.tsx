@@ -1,6 +1,6 @@
 import React from 'react';
 import type { GlobalRunSettings } from '@ordewell/core';
-import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
+import { DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
 import type { IsolationPreview } from '@ordewell/core';
 import IsolationNotice from './IsolationNotice';
 import PlanApprovalNote, { type HostRunSettings } from './PlanApprovalNote';
@@ -47,7 +47,7 @@ function RunValue({ run }: { run: GlobalRunSettings }) {
       {run.supervisorLevel === 'act' ? <span className="warn">{level}</span> : level}
       {` · auto-merge ${run.mergeAtGatesAutomatically ? 'on' : 'off'} · `}
       {run.autorun ? <span className="warn">autorun on</span> : 'autorun off'}
-      {run.delegationTokens > 0 && <>{' · '}<span className="warn">delegation on</span></>}
+      {DELEGATION_OFFERED && run.delegationTokens > 0 && <>{' · '}<span className="warn">delegation on</span></>}
     </>
   );
 }

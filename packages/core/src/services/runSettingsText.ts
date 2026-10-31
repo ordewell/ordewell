@@ -16,6 +16,15 @@ export const trailerSummary = (run: GlobalRunSettings): string => `${PLANNED_WIT
 export const autorunSummary = (run: GlobalRunSettings): string => `Autorun: ${onOff(run.autorun)}`;
 export const delegationSummary = (run: GlobalRunSettings): string => `Delegation: ${run.delegationTokens > 0 ? `on, ${run.delegationTokens} tokens for a tree` : 'off'}`;
 
+/**
+ * Whether any surface offers the delegation setting. Off until a delegated task
+ * exists (ADR-0055 D21): until then a control for it promises something that
+ * does nothing and warns about tokens that cannot be spent. The setting, its
+ * validation and its stored value stay in core and stay inert; the delegated-task
+ * slice turns this on, and only here.
+ */
+export const DELEGATION_OFFERED = false;
+
 export const ACT_RISK = 'Tasks it adds run too, ops tasks included, which can act on real systems unattended.';
 export const AUTORUN_RISK = 'Plans start without review, ops tasks included, which can act on real systems unattended. In Full nobody is asked at all: the planner may start anything, script tasks included, from a plan no person read.';
 /** What turning delegation on accepts below the root, as Act and autorun accept it at the root (ADR-0056 M9). */

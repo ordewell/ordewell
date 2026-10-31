@@ -13,6 +13,14 @@ import { RUN_SETTINGS_DEFAULTS,
   AccountLimitMonitor, type AccountLimitCollector, type AccountLimitReading,
   type IIsolationPreview, type IsolationPreview,
 } from '@ordewell/core';
+// Delegation is not offered yet (ADR-0055 D21); the two tests that follow
+// flip the switch to cover it both ways.
+const delegation = vi.hoisted(() => ({ offered: false }));
+vi.mock('@ordewell/core', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@ordewell/core')>(),
+  get DELEGATION_OFFERED() { return delegation.offered; },
+}));
+
 import { ChatViewProvider as RealChatViewProvider } from '../providers/ChatViewProvider';
 import { createExtension, type ExtensionServices } from '../ExtensionHost';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
@@ -666,7 +674,7 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
 });
 
 describe('the planner with no planner chosen and no API key (ADR-0009)', () => {
-  afterEach(() => resetInstalledPlanner());
+  afterEach(() => { resetInstalledPlanner(); delegation.offered = false; });
 
   // The wait itself is the session's planner gate, so a prompt typed during it
   // is held as one typed during the turn (plannerStartWait.test.ts).
@@ -766,7 +774,6 @@ describe("the Settings panel's Run block", () => {
   it.each([
     [{ supervisorLevel: 'act' as const }, /ops tasks included/],
     [{ autorun: true }, /without review/],
-    [{ delegationTokens: 5000000 }, /a plan nobody read/],
   ])('%j asks first; declined, it saves nothing and pushes the unchanged value', async (run, risk) => {
     warning.mockResolvedValue(undefined);
     h.chat.messages.fire({ type: 'changeSettings', change: { run } });
@@ -779,6 +786,30 @@ describe("the Settings panel's Run block", () => {
     warning.mockReset().mockImplementation(async (...args: unknown[]) => args.at(-1));
     h.chat.messages.fire({ type: 'changeSettings', change: { run } });
     await vi.waitFor(() => expect(h.settings.updateRunSettings).toHaveBeenCalledWith(run));
+  });
+
+  it('asks before turning delegation on, once it is offered', async () => {
+    delegation.offered = true;
+    const run = { delegationTokens: 5000000 };
+    warning.mockResolvedValue(undefined);
+    h.chat.messages.fire({ type: 'changeSettings', change: { run } });
+
+    await vi.waitFor(() => expect(h.chat.provider.setRunSettings).toHaveBeenCalled());
+    expect(JSON.stringify(warning.mock.calls[0])).toMatch(/a plan nobody read/);
+    expect(h.settings.updateRunSettings).not.toHaveBeenCalled();
+
+    warning.mockReset().mockImplementation(async (...args: unknown[]) => args.at(-1));
+    h.chat.messages.fire({ type: 'changeSettings', change: { run } });
+    await vi.waitFor(() => expect(h.settings.updateRunSettings).toHaveBeenCalledWith(run));
+  });
+
+  it('does not accept a delegation budget while delegation is not offered, and saves the rest of the change', async () => {
+    delegation.offered = false;
+    h.chat.messages.fire({ type: 'changeSettings', change: { run: { delegationTokens: 5000000, supervisorLevel: 'off' } } });
+
+    await vi.waitFor(() => expect(h.settings.updateRunSettings).toHaveBeenCalledWith({ supervisorLevel: 'off' }));
+    expect(warning).not.toHaveBeenCalled();
+    expect(h.settings.getRunSettings().delegationTokens).toBe(0);
   });
 
   it('saves the parallel limit, and refuses one below 1', async () => {

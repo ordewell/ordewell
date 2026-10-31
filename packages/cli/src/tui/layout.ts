@@ -5,7 +5,7 @@ import { assignmentFlagText, checkpointCardLines, conversationLines, tokenLine }
 import { bodyMode, chatEditorRoomFor, chatPaneWidth, planPaneWidth, stackRows, type BodyMode, type PaneRect } from './geometry';
 import { slashCommandTable, type SlashCategory } from './slash';
 import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, queuedTarget, refFor, scriptTaskView, selectedPlanRow, signedOutWithLogin, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
-import { SUPERVISOR_LEVEL_LABEL, type DiscoveredModel } from '@ordewell/core';
+import { DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL, type DiscoveredModel } from '@ordewell/core';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
@@ -745,7 +745,7 @@ function runSettingsValue(state: TuiState): string {
     supervisorLevel === 'act' ? style.yellow(level) : level,
     `auto-merge ${mergeAtGatesAutomatically ? 'on' : 'off'}`,
     autorun ? style.yellow('autorun on') : 'autorun off',
-    ...(delegationTokens > 0 ? [style.yellow('delegation on')] : []),
+    ...(DELEGATION_OFFERED && delegationTokens > 0 ? [style.yellow('delegation on')] : []),
   ].join(' · ');
 }
 

@@ -20,7 +20,7 @@ export type { HandoffForkRepo } from './services/mergeWording';
 export { blockingFailures, repeatingChecks, planBlocks, type BlockingSubject, type PlanBlocks } from './services/blocking';
 // What a loop's rows say (ADR-0045) is read the way the scheduler reads it.
 export { betweenRounds, outOfRounds, loopRoundOf, checkOf, loopRemovalRefusal, type TaskLoop } from './models/Loop';
-export { PLANNED_WITH_LABEL, SUPERVISOR_LEVEL_LABEL, parseCount } from './services/runSettingsText';
+export { DELEGATION_OFFERED, PLANNED_WITH_LABEL, SUPERVISOR_LEVEL_LABEL, parseCount } from './services/runSettingsText';
 // The shared conversation view (#51) is pure too, so every surface — a webview
 // included — draws from the same reducer.
 export * from './conversation';

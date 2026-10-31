@@ -19,6 +19,7 @@ import { handlePlanner, handlePlannerEffort } from './planner';
 import { handleModel } from './model';
 import { handleParallel } from './parallel';
 import { handleAutomerge, handleAutorun, handleDelegation, handleSupervisor, handleTrailer } from './runSettings';
+import { DELEGATION_OFFERED } from '@ordewell/core';
 import { handleKey } from './key';
 import { handleAuto, handleRefresh, handleRunners } from './runners';
 import { handleApprove } from './approve';
@@ -59,7 +60,8 @@ export const COMMANDS: Record<string, (args: string[]) => Promise<void> | void> 
   automerge: handleAutomerge,
   trailer: handleTrailer,
   autorun: handleAutorun,
-  delegation: handleDelegation,
+  // Not offered until a delegated task exists (ADR-0055 D21).
+  ...(DELEGATION_OFFERED ? { delegation: handleDelegation } : {}),
   refresh: handleRefresh,
   setup: handleSetup,
   skills: handleSkills,

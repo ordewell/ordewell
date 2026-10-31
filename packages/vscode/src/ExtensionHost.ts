@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import {
-  AccountLimitMonitor, assignedRunnerOf, createSession, createSkillsService, detectInstalledPlanner, createEmptyPlan, flattenTasks, parseMaxParallel, sessionRuntimeSettings, taskRefOf,
+  AccountLimitMonitor, DELEGATION_OFFERED, assignedRunnerOf, createSession, createSkillsService, detectInstalledPlanner, createEmptyPlan, flattenTasks, parseMaxParallel, sessionRuntimeSettings, taskRefOf,
   type IIsolationPreview, type PlannerBackendId, type GlobalRunSettings, type LegacyPlanState, type RunnerId, type Session, type SessionDeps,
 } from '@ordewell/core';
 import { registerCommands, type CommandDeps } from './commands/CommandRegistry';
@@ -374,7 +374,11 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
    */
   async function changeSettings(change: SettingsChange): Promise<void> {
     if (change.autonomous !== undefined) saveAutonomy(change.autonomous);
-    if (change.run && await confirmRisks(change.run, shownRunSettings().delegationTokens)) changeRunSettings(change.run);
+    // The panel shows no delegation row until it is offered (ADR-0055 D21), so
+    // a change that carries one did not come from it.
+    const run = change.run && { ...change.run };
+    if (run && !DELEGATION_OFFERED) delete run.delegationTokens;
+    if (run && await confirmRisks(run, shownRunSettings().delegationTokens)) changeRunSettings(run);
     const limit = change.maxParallel === undefined ? null : parseMaxParallel(change.maxParallel);
     if (limit !== null) await services.config.update('maxParallelSessions', limit);
     sendRunSettings();
