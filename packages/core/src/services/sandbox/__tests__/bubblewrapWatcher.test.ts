@@ -87,8 +87,9 @@ describe.each(SHELLS)('the bubblewrap memory watcher, under %s', (shell) => {
     const result = await run(LIMIT_KB + 1);
 
     expect(result).toMatchObject({ code: null, signal: MEMORY_LIMIT_SIGNAL });
-    // The namespace's first process is gone with the rest of it.
-    expect(() => process.kill(Number(result.root), 0)).toThrow();
+    // The watcher signals the launcher first and the namespace's first process next, so the
+    // launch can close between the two kills, and a killed process is there until init reaps it.
+    await vi.waitFor(() => expect(() => process.kill(Number(result.root), 0)).toThrow());
   });
 
   it('sums only the namespace, and leaves a run under the limit to end on its own', async () => {
