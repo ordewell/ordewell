@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { replayTaskLog, type TaskLogEvent } from '@ordewell/core';
+import { replayTaskLog, type Escalation, type TaskLogEvent } from '@ordewell/core';
 import { stripAnsi } from '../ansi';
 import { initialState, reduce, type Action } from '../reducer';
 import { render } from '../render';
@@ -97,6 +97,26 @@ describe('the status row as the activity line', () => {
     expect(row.length).toBeLessThanOrEqual(60);
     expect(row).toContain('…');
     expect(row).toContain('ctrl-x to stop');
+  });
+});
+
+describe('the inbox count on the activity line (ADR-0053)', () => {
+  const waiting: Escalation = { id: 'failed:t2:1', kind: 'failed', reason: 'The build failed.', options: [] } as unknown as Escalation;
+  const withInbox = (state: TuiState): TuiState => ({ ...state, run: { ...state.run, escalations: [waiting] } });
+  const long = 'x'.repeat(300);
+  const busy = [turn, { type: 'tool_call', id: 'r1', name: 'Bash', args: JSON.stringify({ command: long }) }] satisfies TaskLogEvent[];
+
+  it('rides the row beside a short label, after it and before the stop key', () => {
+    expect(activityRows(withInbox(opened([turn, { type: 'thinking_delta', text: 'Hmm' }]))))
+      .toEqual([expect.stringMatching(/^⠋ Thinking… · 1 waiting: \/inbox · ctrl-x to stop/)]);
+  });
+
+  it('never takes room from the label, the time or the stop key', () => {
+    const state = withInbox(opened(busy, {}, { cols: 60 }));
+    const row = activityRows(state).find((l) => l.includes('Running Bash')) ?? '';
+    expect(row.trimEnd().length).toBeLessThanOrEqual(60);
+    expect(row).toContain('ctrl-x to stop');
+    expect(row).not.toContain('/inbox');
   });
 });
 

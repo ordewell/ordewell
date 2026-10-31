@@ -8,11 +8,132 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **An inbox of everything that waits on you.** One list, built from the plan,
+  the run and the approvals pending, names each task that failed, each
+  checkpoint and question, each merge conflict, each approval, and each task
+  or run held on you, with what you can do about it. `/inbox` in the terminal
+  UI lists it, numbered, and answers in place or opens the task; VS Code draws
+  it above the composer. A count shows on the status row while anything waits,
+  and the list stays complete while a planner turn is under way (#30).
+- **A command to run when something new waits on you.** Set
+  `ORDEWELL_NOTIFY_COMMAND` to a JSON array with the program first, or VS
+  Code's `ordewell.notifyCommand`, and it runs once for each new item in the
+  inbox, with no shell and the item in `ORDEWELL_ESCALATION_ID`, `_KIND`,
+  `_TASK` and `_REASON`. A workspace cannot set it, it never affects a run,
+  and a plain string is refused with a warning. With neither set, nothing runs
+  (#30).
+- **Revert one task's landed work.** `/revert <task>` in the terminal UI, a
+  Revert button on a task's card in VS Code, and `ordewell revert <task>` show
+  what would be taken off the branch, the task and every landed task that
+  built on it, newest first, ask, and then revert those merges together, in
+  every repository or none. Each task is left pending and held. A task whose
+  work cannot be taken off cleanly is refused, and the refusal says why (#86).
+- **An activity line above the composer.** In a task's log and in the planner
+  chat, a spinner says what the runner or planner is doing and for how long
+  the turn has been open. It becomes a still marker once the task is quiet,
+  and shows nothing while a request or checkpoint waits on you (#80, #81,
+  #133).
+- **`taskRunnerConfig` for Claude Code tasks.** In `settings.json`, `minimal`
+  loads only what a task needs: Ordewell's server and what the repository
+  ships, leaving out your own connectors, servers, skills, commands and
+  instructions. `user`, the default, loads everything as before. It is in no
+  settings panel; a change reaches the next attempt that starts.
+
+### Changed
+
+- **A failed task stays failed after a reload.** Loading a saved session no
+  longer gives failed or interrupted tasks a fresh chance, so a restart keeps
+  what you came back for in the inbox. Only retrying the task or executing the
+  plan starts it again.
+- **In Full with autorun, script tasks and a first plan run with nobody
+  asked.** The planner can start any task, a script task and the plan's first
+  run included, and the start approves the plan. Before, a first plan could
+  stay unapproved and a script task had to be started by you. Guarded still
+  leaves an unapproved script waiting.
+- **Merge all on a run with no base branch always makes a merge commit.** It
+  no longer fast-forwards, so the merge can be told from a checkout of the
+  integration branch, and be reverted.
+- **The terminal UI no longer offers ctrl-x between turns.** The hint and the
+  key are for stopping a runner's open turn; with none open, there is nothing
+  to stop.
+- **A Stop keeps the supervisor down until the run is started again.** Events
+  that arrive meanwhile are kept, not lost, and reach it when you start work
+  again, at every supervisor level.
+- **The supervisor wakes in batches, so some wakes come later.** What needs
+  you still wakes it at once, after a five-second window to gather what
+  arrives with it: a question, an approval, a conflict left waiting, a usage
+  limit, a stopped auto-merge, a report the planner asked for, and the run's
+  end. A task failing or going quiet no longer wakes it by itself. It waits
+  until nothing else can start, until every task that became ready alongside
+  it has ended, or until a failure holds back work that would be ready, and
+  at the longest until four minutes after the event, which is 80% of a
+  planner's five-minute prompt cache, so a wake finds the cache warm. A failure can therefore reach the supervisor up to about
+  four minutes later than the five seconds it took before; the inbox and the
+  notify command still show it at once. A task that passes wakes nobody and is
+  reported with the next wake, as before. A wake is capped in size: when more
+  than fits happened, the newest update stays whole, older ones become a line
+  each with a count, and `task_query` reads the rest.
+- **References to a task's output name the attempt they came from.** A
+  planner's reference to a finding holds even after the task is retried, and
+  what a task wrote is shown to every reader as data to weigh, not as
+  instructions.
+- **The planner's plan block is bounded.** It lists a bounded set of tasks,
+  failed and waiting ones first, with counts for the rest, and a run wider
+  than that no longer hides what needs a decision.
+- **Tool-call errors name the kind and the place.** A rejected call says
+  whether a parameter is missing, unrecognised, mis-shaped or invalid, gives
+  the path of the argument, and lists the tool's parameters. A call for a tool
+  the task does not have lists the tools it does.
+
 ### Fixed
 
 - **VS Code prompts are keyboard accessible.** Editable task and subtask prompts
   are focusable controls with accessible names; read-only prompts remain
   unchanged.
+- **A branch of yours that holds a task's landing refuses that task's
+  revert.** The refusal names the branch; delete it, or revert by hand, and
+  the revert goes ahead. A review branch counts. Only your own branch reads as
+  merged, and a failed git read refuses the revert rather than reading as
+  nothing landed.
+- **A run started on an earlier version refuses revert, and says why.** It
+  has no record of what its merges carried, so a revert could remove work it
+  still says landed; nothing is reverted, and the task row offers no Revert.
+  Runs started from this version on keep the record.
+- **Reverting a task that is not there names it.** It no longer says it
+  "landed nothing". A workspace opened through a symlink, such as macOS's
+  `/var`, is no longer called a repository above itself.
+- **A merge conflict has one worker.** Stop did nothing on a stuck conflict,
+  and two resolvers could be added with the task's own repair starting beside
+  them. A repair that waits, for a usage limit say, now says so and can be
+  stopped, a Stop or a load leaves the conflict waiting with its options, and
+  a resolver left behind is skipped.
+- **A loop carries on after you start a task by hand.** The rounds of a loop
+  keep running, and a check started by hand is not stranded after a Stop. A
+  loop ends with whatever ends its run: a discard, a clean-up, a Merge all
+  that clears the run, or a lost lease.
+- **Sealed runs can run Node, tests and builds.** The memory limit counted
+  what a program reserves, which V8 does in gigabytes, so ordinary programs
+  died. It now counts what is in use, and a run over it is ended with a note.
+- **A planner turn waiting on agent detection says so.** It read as planning
+  while it waited for the agents to be listed, which can take a while on a
+  first launch; it now reads "Detecting coding agents…" in the terminal UI and
+  VS Code, including in a VS Code chat opened during the wait.
+- **A busy daemon with many sessions stays responsive.** Status updates are
+  merged to about one a second and sent at once only when something waits on
+  you, usage is saved on a timer, and task starts run eight at a time.
+- **Saving that fails no longer leaves a half-finished control.** A load the
+  disk refuses leaves the plan, its run and its lease as they were, and a Stop
+  or close finishes and says so when its save is refused.
+- **Failed tasks are listed before running ones** in the planner's view of
+  the plan, and a wave of failures or checkpoints no longer sends the whole
+  plan once for each task.
+- **Tasks made manual, paused or retried while limits hold no longer strand a
+  run.** An edit that makes a paused task manual ends its pause, a dead runner
+  no longer leaves a Retry the run refuses, and autorun does not restart a run
+  a usage limit held.
+
 ## [0.11.3] - 2026-10-29
 
 ### Fixed
