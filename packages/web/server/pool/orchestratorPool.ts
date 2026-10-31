@@ -1066,11 +1066,12 @@ export function getSession(sessionId: string, workspace: string) { return loadSe
  * A session and the children saved under it. Their runs go first, since the
  * files that go next are the only record that names their worktrees and
  * branches (ADR-0055 D11). What git could not let go stops the delete, with the
- * records still in place, and is named in the error.
+ * records still in place and `close` not called, and is named in the error.
  */
-export async function removeSession(sessionId: string, workspace: string): Promise<boolean> {
+export async function removeSession(sessionId: string, workspace: string, close: () => void): Promise<boolean> {
   const { refused } = await discardChildRuns(sessionId, workspace, createWorktreeIsolation({ config: new WebConfig() }));
   if (refused.length > 0) throw new Error(`The session was kept: ${refused.map(({ worktree, reason }) => `${worktree} (${reason})`).join(', ')}`);
+  close();
   return deleteSession(sessionId, workspace);
 }
 

@@ -200,6 +200,8 @@ export interface ExecutionHost {
   maxParallel(): number;
   /** The run waits on the user to stash or skip isolation before anything starts. */
   runBlocked(): boolean;
+  /** Why nothing may start here, as every surface says it: another host holds the session (ADR-0049). */
+  heldRefusal(): string | null;
   /**
    * Every reason the task cannot start now, from the scheduler's one start
    * rule (ADR-0034). Takes the task, not its id: the one the seam located.
@@ -309,6 +311,14 @@ export interface ExecutionCommandsDeps {
 
 /** Commands that start work: they need the user's approval of what they start, and ask in Guarded. */
 const STARTS: ReadonlySet<ExecutionCommandName> = new Set(['run_plan', 'run_task', 'retry_task', 'force_start', 'approve_review', 'run_script']);
+
+/**
+ * What a session another host holds refuses before anything changes (ADR-0049).
+ * The isolation refuses too, but too late: a new run has cleared the last one's
+ * record by then, and a run without worktrees never reaches it. A skip counts,
+ * since it restarts a run that ended on a failure.
+ */
+const REFUSED_WHILE_HELD: ReadonlySet<ExecutionCommandName> = new Set([...STARTS, 'skip_task']);
 
 /**
  * What waits for a landing override, besides the starts: a skip restarts a run
@@ -654,10 +664,13 @@ export class ExecutionCommands {
 
   /**
    * Why a script task cannot start as `run_script` would start it, but for its
-   * merge gate, at which it waits: a dependency that failed or has not
-   * finished, a Merge all under way, every slot taken. Null when it can.
+   * merge gate, at which it waits: another host holding the session, a
+   * dependency that failed or has not finished, a Merge all under way, every
+   * slot taken. Null when it can.
    */
   private scriptUnready(task: Readonly<Task>): string | null {
+    const held = this.host.heldRefusal();
+    if (held) return held;
     const waits = this.host.startWaits(task);
     const one = (n: number, a: string, b: string) => (n === 1 ? a : b);
     const failed = (waitOf(waits, 'blocked')?.failed ?? []).flatMap((id) => this.located(id) ?? []);
@@ -865,6 +878,8 @@ export class ExecutionCommands {
    * time.
    */
   private prepare(command: ExecutionCommand, actor: ExecutionActor, located: Located | undefined, tasks: readonly Task[] = this.host.tasks() ?? []): Prepared {
+    const held = REFUSED_WHILE_HELD.has(command.command) ? this.host.heldRefusal() : null;
+    if (held) return { refusal: held };
     switch (command.command) {
       case 'run_plan': return this.prepareRunPlan(actor, tasks);
       case 'run_task': return this.prepareStart(located!, actor, 'run', tasks);
