@@ -6,6 +6,8 @@ amends: ["0009", "0029"]
 
 # 0037 — Evidence the planner decides on is a research task, and its report wakes the planner
 
+*Pending:* [ADR-0056](0056-a-mandate-narrows-down-the-tree.md) — in a child plan R4's chain spends from the node's budget, and starting one needs the `research` grant.
+
 ## Problem
 
 A planner turn holds the conversation, and its end gives the conversation

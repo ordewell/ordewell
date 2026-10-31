@@ -515,6 +515,7 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
       else if (run.tasks[id]?.status === 'conflict') run.tasks[id].status = 'kept';
       delete run.landings?.[id];
       delete run.landedTasks?.[id];
+      delete run.landedOn?.[id];
     }
     run.reverted = true;
     watch.settled(taskIds);

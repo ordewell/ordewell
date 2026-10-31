@@ -5,6 +5,8 @@ amends: ["0013", "0014"]
 
 # 0020 — Ops tasks run in the workspace, behind a merge gate
 
+*Pending:* [ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — no ops task runs below the root, a child's gate means the delegated task's branch, and a sealed script check passes no gate.
+
 **Amends:** ADR-0013 (worktree isolation) — what Merge all does to a run still
 going, and when a run decides whether it isolates; ADR-0014 (multi-repo
 workspaces) — which tasks are isolated, where it had rejected the task marker

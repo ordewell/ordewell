@@ -4,6 +4,8 @@ status: accepted
 
 # 0008 — The planner's exploration envelope: tiered commands, confined paths, one approval seam
 
+*Pending:* [ADR-0056](../supervision/0056-a-mandate-narrows-down-the-tree.md) — T6 holds for a subplanner too: anything that would ask a person is refused or sealed.
+
 See also [ADR-0011](0011-sandboxing-the-planners-shell.md): the classifier
 below is a denylist over a real shell, not an OS-level sandbox for it. That
 ADR runs the planner's shell under the same kind of OS sandbox Codex already

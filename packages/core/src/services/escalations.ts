@@ -270,14 +270,20 @@ function awaiting(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait
 /**
  * A check between rounds nothing will run, after a Stop or a reload: Execute
  * goes on from here, and a start runs its next round once its body has landed
- * (ADR-0045 L5, L7), which a retry would not, starting its rounds over.
+ * (ADR-0045 L5, L7), which a retry would not, starting its rounds over. What
+ * holds any start of it holds that one too, so it is named and none is offered.
  */
 function stranded(row: TaskWithParent, repeating: Extract<StartWait, { kind: 'repeating' }>, input: EscalationInput, rows: Rows): Wait {
   const round = `round ${repeating.round} of ${repeating.maxRounds}`;
+  const refOf = (id: string) => rows.get(id)?.ref ?? id;
   if (repeating.waiting.length === 0) {
+    const behind = (input.waits.get(row.task.id) ?? []).flatMap((w) => (w.kind === 'dependencies' || w.kind === 'queued' ? w.waiting : w.kind === 'merge-gate' ? w.unmerged : w.kind === 'loop-check' ? [w.check] : []));
+    if (behind.length > 0) {
+      return { kind: 'failed', reason: `Its fix has landed, and its ${round} waits on ${behind.map(refOf).join(', ')}: nothing runs it now. Execute the plan and the loop goes on.`, options: startedOver(row, input).filter((o) => o.id !== 'retry') };
+    }
     return { kind: 'failed', reason: `Its fix has landed, and nothing runs its ${round}.`, options: [{ id: 'run', label: `Start ${round}` }, ...startedOver(row, input)] };
   }
-  const fix = repeating.waiting.map((id) => rows.get(id)?.ref ?? id);
+  const fix = repeating.waiting.map(refOf);
   return { kind: 'failed', reason: `Its loop stopped between rounds: nothing runs it again, and ${fix.join(', ')} ${fix.length === 1 ? 'has' : 'have'} not landed. Execute the plan and the loop goes on.`, options: startedOver(row, input) };
 }
 

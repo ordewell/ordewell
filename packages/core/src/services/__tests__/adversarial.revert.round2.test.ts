@@ -30,7 +30,7 @@ async function landed(tasks: Task[], landing: string[]) {
   const session = makeSession({
     runner: { spawn, stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 } as IRunner,
     isolation,
-    config: fakeConfig({ autonomousMode: true, maxParallelSessions: 3 }),
+    config: fakeConfig({ autonomousMode: true, maxParallelSessions: 3, conflictRepairAttempts: 0 }),
     broadcast: () => undefined,
   });
   await session.loadPlan(plan(tasks), 'goal', testWorkspace, { persist: false });
@@ -89,5 +89,27 @@ describe('ADVERSARIAL: every reverted task waits in the inbox', () => {
     env.sessions.filter((s) => s.taskId === 't1').at(-1)!.reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(env.status('t1')).toBe('completed'));
     await vi.waitFor(() => expect(entry()?.options.map((o) => o.id)).toEqual(['retry', 'force-start']));
+  });
+
+  it('lists a task whose conflict had a resolver out to it, which the revert retired', async () => {
+    const env = await landed([task('t1', 1)], ['t1']);
+    env.isolation.outcomes.set('t1', 'conflict');
+    expect((await env.session.execute({ command: 'mark_not_done', task: 't1', confirmed: true }, USER)).ok).toBe(true);
+    expect((await env.session.execute({ command: 'retry_task', task: 't1', from: 'fresh' }, USER)).ok).toBe(true);
+    await vi.waitFor(() => expect(env.sessions.filter((s) => s.taskId === 't1')).toHaveLength(2));
+    env.sessions.at(-1)!.reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(env.status('t1')).toBe('awaiting_user'));
+    await env.session.resolveConflictAsTask('t1');
+    const resolver = env.session.planTasks.find((t) => t.id !== 't1')!;
+
+    // At work it is in the way; stopped, it is not, and the revert retires it.
+    expect(await env.session.execute({ command: 'revert_task', task: 't1', confirmed: true }, USER)).toMatchObject({ ok: false, message: expect.stringContaining('Let it finish, or stop it, first') });
+    await vi.waitFor(() => expect(env.status(resolver.id)).toBe('in_progress'));
+    expect(await env.session.execute({ command: 'stop_task', task: resolver.id }, USER)).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(env.status(resolver.id)).not.toBe('in_progress'));
+    expect(await env.session.execute({ command: 'revert_task', task: 't1', confirmed: true }, USER)).toMatchObject({ ok: true });
+
+    expect(env.status(resolver.id)).toBe('skipped');
+    expect(env.session.escalations().find((e) => e.task?.id === 't1')).toMatchObject({ kind: 'on-hold', options: [{ id: 'retry' }, { id: 'force-start' }] });
   });
 });

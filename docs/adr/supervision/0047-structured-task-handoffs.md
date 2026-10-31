@@ -7,6 +7,8 @@ note: "Settles #120 for flat plans; the hierarchy half stays with #34."
 
 # 0047 — Every task ends with a handoff: a short summary, atomic findings and a way to pull the rest
 
+*Pending:* [ADR-0057](0057-information-moves-by-reference.md) — references pin an attempt, a subplanner's handoff promotes by reference, and `read` extends `read_task`.
+
 ## Problem
 
 What one task found reaches the next as a freeform *Report*: the `summary` of

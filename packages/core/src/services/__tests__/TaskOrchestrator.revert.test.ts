@@ -548,3 +548,132 @@ describe('TaskOrchestrator: reverting a landed task (ADR-0054)', () => {
     });
   });
 });
+
+describe('TaskOrchestrator: a revert and a conflict with a resolver out to it (ADR-0054)', () => {
+  /** t1 landed, then another attempt of it conflicted, and a resolver was added for that. */
+  async function conflictedAgain() {
+    const env = await landed([task('t1', 1)], ['t1'], { config: { conflictRepairAttempts: 0 } });
+    env.isolation.outcomes.set('t1', 'conflict');
+    await env.orchestrator.forceStartTask('t1');
+    await vi.waitFor(() => expect(env.started('t1')).toBe(2));
+    env.latest('t1').reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(env.status('t1')).toBe('awaiting_user'));
+    env.isolation.outcomes.delete('t1');
+    const resolver = env.orchestrator.storeInstance.add({ title: 'Resolve', prompt: 'merge it' });
+    env.orchestrator.runs.linkResolver(resolver.id, 't1');
+    return { ...env, resolver };
+  }
+
+  it('retires a resolver not started, so the task can be started again and waits in the inbox', async () => {
+    const { orchestrator, resolver, started, status } = await conflictedAgain();
+
+    expect(await orchestrator.revertTask('t1')).toMatchObject({ outcome: 'reverted' });
+
+    expect(orchestrator.runs.resolversOf('t1')).toEqual([]);
+    expect(orchestrator.storeInstance.get(resolver.id)).toMatchObject({ status: 'skipped', skipReason: 'not needed: the conflict it was added for is gone' });
+    expect(status('t1')).toBe('pending');
+    await orchestrator.forceStartTask('t1');
+    await vi.waitFor(() => expect(started('t1')).toBe(3));
+    expect(started(resolver.id)).toBe(0);
+  });
+
+  it('is refused while the resolver is at work, naming it, and changes nothing', async () => {
+    const { orchestrator, resolver, started, status } = await conflictedAgain();
+    await orchestrator.forceStartTask(resolver.id);
+    await vi.waitFor(() => expect(started(resolver.id)).toBe(1));
+
+    expect(orchestrator.revertScope('t1').refusal).toMatchObject({ reason: 'live-dependent', tasks: [{ taskId: resolver.id }], message: expect.stringContaining('Task "Resolve"') });
+    expect(await orchestrator.revertTask('t1')).toMatchObject({ outcome: 'refused', reason: expect.stringContaining('Task "Resolve"') });
+
+    expect(orchestrator.runs.resolversOf('t1')).toEqual([resolver.id]);
+    expect(status('t1')).toBe('awaiting_user');
+    expect(status(resolver.id)).toBe('in_progress');
+  });
+
+  it('refuses a start of the resolver while the revert is under way', async () => {
+    const { orchestrator, isolation, resolver, started } = await conflictedAgain();
+    const open = isolation.holdRevert();
+    const reverting = orchestrator.revertTask('t1');
+
+    await expect(orchestrator.forceStartTask(resolver.id)).rejects.toThrow('A revert is taking back work');
+
+    open();
+    expect(await reverting).toMatchObject({ outcome: 'reverted' });
+    expect(started(resolver.id)).toBe(0);
+  });
+});
+
+describe('TaskOrchestrator: a landed task that left the plan (ADR-0054)', () => {
+  const leave = async (env: Awaited<ReturnType<typeof landed>>, id: string) => {
+    await env.orchestrator.releaseTask(id);
+    env.orchestrator.storeInstance.remove(id);
+  };
+
+  it('goes with what it depended on, so its merge does not stay on the branch', async () => {
+    const env = await landed([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], ['t1', 't2']);
+    await leave(env, 't2');
+
+    expect(env.orchestrator.revertScope('t1')).toEqual({ taskIds: ['t1', 't2'] });
+    expect(await env.orchestrator.revertPreview('t1')).toMatchObject({ revertible: true, tasks: expect.arrayContaining([expect.objectContaining({ taskId: 't2', dependent: true })]) });
+    expect(await env.orchestrator.revertTask('t1')).toMatchObject({ outcome: 'reverted' });
+
+    expect(env.orchestrator.runs.current?.landings?.t2).toBeUndefined();
+    expect(env.orchestrator.runs.current?.landedTasks?.t2).toBeUndefined();
+    expect(env.status('t1')).toBe('pending');
+  });
+
+  it('still links what stood on it through its dependencies, which the plan let go of', async () => {
+    const env = await landed([task('t1', 1), task('t2', 2, { dependencies: ['t1'] }), task('t3', 3, { dependencies: ['t2'] })], ['t1', 't2', 't3']);
+    await leave(env, 't2');
+    expect(env.orchestrator.storeInstance.get('t3')!.dependencies).toEqual([]);
+
+    expect([...env.orchestrator.revertScope('t1').taskIds].sort()).toEqual(['t1', 't2', 't3']);
+  });
+
+  it('keeps the link through a task that landed nothing and left', async () => {
+    const env = setup();
+    env.isolation.changes.set('t2', []);
+    env.orchestrator.loadPlan([task('t1', 1), task('t2', 2, { dependencies: ['t1'] }), task('t3', 3, { dependencies: ['t2'] })]);
+    await env.orchestrator.approveReview();
+    for (const id of ['t1', 't2', 't3']) {
+      await vi.waitFor(() => expect(env.started(id)).toBeGreaterThan(0));
+      await env.pass(id);
+    }
+    await env.orchestrator.releaseTask('t2');
+    env.orchestrator.storeInstance.remove('t2');
+
+    expect(env.orchestrator.revertScope('t1').taskIds).toEqual(['t1', 't3']);
+  });
+
+  it('holds a start of what stood on it through a task that left', async () => {
+    const env = await landed([task('t1', 1), task('t2', 2, { dependencies: ['t1'] }), task('t3', 3, { dependencies: ['t2'] })], ['t1', 't2', 't3']);
+    await leave(env, 't2');
+    const open = env.isolation.holdRevert();
+    const reverting = env.orchestrator.revertTask('t1');
+
+    await expect(env.orchestrator.forceStartTask('t3')).rejects.toThrow('A revert is taking back work');
+
+    open();
+    await reverting;
+  });
+
+  it('leaves a landing that depended on none of it alone', async () => {
+    const env = await landed([task('t1', 1), task('free', 2)], ['t1', 'free']);
+    await leave(env, 'free');
+
+    expect(env.orchestrator.revertScope('t1')).toEqual({ taskIds: ['t1'] });
+    await env.orchestrator.revertTask('t1');
+
+    expect(env.orchestrator.runs.current?.landings?.free).toBeDefined();
+  });
+
+  it('refuses every revert of the run when nothing says what it depended on', async () => {
+    const env = await landed([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], ['t1', 't2']);
+    await leave(env, 't2');
+    delete env.orchestrator.runs.current!.landedOn!.t2;
+
+    expect(env.orchestrator.revertScope('t1').refusal).toMatchObject({ reason: 'no-own-merge', message: expect.stringContaining('Task "Task t2" landed and left the plan') });
+    expect(await env.orchestrator.revertTask('t1')).toMatchObject({ outcome: 'refused' });
+    expect(env.status('t1')).toBe('completed');
+  });
+});

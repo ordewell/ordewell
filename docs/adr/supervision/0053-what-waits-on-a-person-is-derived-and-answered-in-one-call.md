@@ -4,6 +4,8 @@ status: accepted
 
 # 0053 — What waits on a person is derived, listed once and answered in one call
 
+*Pending:* [ADR-0056](0056-a-mandate-narrows-down-the-tree.md) — a subplanner's question reaches this list as its delegated task's checkpoint, naming the path; a child's own waits never do.
+
 ## Problem
 
 A run that needs a person says so in many separate places: a runner approval
@@ -72,7 +74,7 @@ it on, since the seam refuses it otherwise
 | `files-changed` | `awaiting_user`, `files-changed` | Retry, Skip, Mark complete | as above |
 | `usage-limit` | `awaiting_user`, `usage-limit`, no `resumeAt` | Resume now, or Retry with no session to resume; Skip, Mark complete | `retry_task`, as above |
 | `failed` | `failed`, no loop going on | Retry, Continue, Skip, Mark complete | as above |
-| `failed` | A loop's check between rounds nothing will run ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md) L5), its body landed | Start its next round, Retry, Continue, Skip, Mark complete | `run_task`, then as above |
+| `failed` | A loop's check between rounds nothing will run ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md) L5), its body landed | Start its next round, Retry, Continue, Skip, Mark complete; while a dependency holds any start of it, that wait is named and neither Start nor Retry is offered | `run_task`, then as above |
 | `out-of-rounds` | A loop's check, `outOfRounds` | Retry, Continue, Skip, Mark complete | as above; a retry starts its rounds over ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md)) |
 | `merge-gate` | Not started, held by nothing but its gate | Merge all; Force start, or Mark complete for a user task | `merge_all`, `force_start`, `mark_complete` |
 | `on-hold` | Not started, held by nothing but its hold | Retry, Force start; Force start alone for a reverted task behind a dependency, whose retry the seam refuses until that has finished; Mark complete alone for a user task, which no runner starts | `retry_task`, `force_start`, `mark_complete` |
@@ -184,9 +186,11 @@ reads do.
   reply it follows
   ([ADR-0030](0030-global-run-settings.md)). An edit outside a run asks for neither,
   and leaves a failure and a wait as they are (`resetForRun({ edited: true })`).
-  The one exception is a failed task an edit made manual, in a run or not: it has
-  nothing to retry, so it is the manual task it now is
-  (`PlanStore.releaseMadeManual`).
+  The one exception is a task an edit made manual, in a run or not, failed or
+  waiting on the user: it has nothing to retry, so it is the manual task it now
+  is (`releaseMadeManual`). A runner still at a question keeps its wait while it
+  lives, to be answered; a load releases what it left, where both saved forms
+  are read.
 - **A task running when the host died is failed.** Nothing runs when a plan comes
   off disk, so `failInterruptedTasks` fails a task saved in progress where both
   saved forms are read, `loadSession` and `loadState`. Its reason says it was
@@ -432,3 +436,4 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
 - 2026-10-31 — a repair that will start by itself is left out, a conflict with a resolver nothing will start offers to start it, and a load lists what waited for a repair (ADR-0015).
 - 2026-10-31 — a reverted task is listed behind its dependencies, with what the seam takes then (ADR-0054).
 - 2026-10-31 — a check between rounds nothing will run is listed, a carried loop is an open run for its own tasks, Execute gives its fresh chance to hand-started work it takes in, and an edit keeps every wait and frees a failed task it made manual (#30).
+- 2026-10-31 — a task an edit made manual is released from a wait with no runner behind it too, at the edit or at a load, and a check whose dependency holds its next round names it rather than offering a start that refuses.

@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import type { GlobalRunSettings } from '../SettingsService';
 import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import type { IConfig } from '../../interfaces/IConfig';
@@ -9,6 +12,7 @@ import { ctx, heldPlanner, NOW, prose, recordingRunner, settled, supervised, tas
 import { fakeConfig } from '../../testing';
 import { PlanStore } from '../PlanStore';
 import { createTask } from '../../models/Task';
+import { loadSession, saveSession } from '../../utils/sessionStore';
 
 /**
  * What the reload, loop and autorun fixes (ADR-0053, ADR-0045 L5/L7, ADR-0030)
@@ -27,15 +31,15 @@ const ai = (id: string, dependencies: string[] = []) => ({ id, title: `Task ${id
 const push = [['git', 'push', 'origin', 'main']];
 const check = (maxRounds = 3) => [task('check', 1, { loop: { body: ['fix'], maxRounds } }), task('fix', 2, { dependencies: ['check'] }), task('ship', 3, { dependencies: ['check'] })];
 
-/** A Full-with-autorun session whose planner turns a test answers by hand (as autorun.test.ts builds one). */
-function fullSession() {
+/** An autorun session, Full unless asked otherwise, whose planner turns a test answers by hand (as autorun.test.ts builds one). */
+function fullSession({ full = true }: { full?: boolean } = {}) {
   const planner = heldPlanner();
   const runner = recordingRunner();
   const scripts = recordingRunner();
   const notices: SessionNotice[] = [];
   const messages: SessionMessage[] = [];
   const settings: GlobalRunSettings = { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', autorun: true };
-  const config: IConfig = fakeConfig({ autonomousMode: true } as Partial<IConfig>);
+  const config: IConfig = fakeConfig({ autonomousMode: full } as Partial<IConfig>);
   const session = makeSession({
     aiService: planner.aiService, runner: runner.runner, scriptRunner: scripts.runner, config,
     onNotice: (n) => notices.push(n), broadcast: (m) => messages.push(m), settings: () => ({ run: { ...settings } }),
@@ -414,5 +418,206 @@ describe('an edit adopted between runs', () => {
     expect(taskOf(env.session, 't1')).toMatchObject({ status: 'awaiting_user', awaitingReason });
     expect(env.session.escalations().map((e) => e.kind)).toEqual([kind]);
     env.session.destroy();
+  });
+});
+
+describe('a Stop of a plan the reply submitted, with nothing live yet', () => {
+  it.each([['Full', true], ['Guarded', false]] as const)('withdraws autorun\'s start in %s, and says what it stopped', async (_, full) => {
+    const env = fullSession({ full });
+    const { planned } = await replySubmitted(env, [ai('a')]);
+
+    const stopped = await env.session.execute({ command: 'stop_run' }, USER);
+    expect(stopped).toMatchObject({ ok: true });
+    expect(stopped.message).not.toContain('Nothing is running');
+    await endReply(env, planned);
+    await settled();
+    await settled();
+
+    expect(env.runner.spawnedIds()).toHaveLength(0);
+    expect(env.notices.map((n) => n.message)).toContainEqual(expect.stringContaining('Autorun did not start the plan'));
+    env.session.destroy();
+  });
+
+  /** A session with autorun off, whose reply has submitted [a] with nothing live. */
+  async function submittedWithAutorunOff() {
+    const env = fullSession();
+    env.session.applyRunSettings({ autorun: false });
+    const { planned } = await replySubmitted(env, [ai('a')]);
+    return { env, planned };
+  }
+
+  it('is recorded though it stopped nothing, so autorun turned on after it starts nothing', async () => {
+    const { env, planned } = await submittedWithAutorunOff();
+
+    expect(await env.session.execute({ command: 'stop_run' }, USER)).toMatchObject({ ok: true, message: 'Nothing is running: there is nothing to stop.' });
+    env.session.applyRunSettings({ autorun: true });
+    await endReply(env, planned);
+    await settled();
+
+    expect(env.runner.spawnedIds()).toHaveLength(0);
+    expect(env.notices.map((n) => n.message)).toContainEqual(expect.stringContaining('Autorun did not start the plan'));
+    env.session.destroy();
+  });
+
+  it('has nothing to stop once the reply has ended and its start has gone with it', async () => {
+    const { env, planned } = await submittedWithAutorunOff();
+    await endReply(env, planned);
+    env.session.applyRunSettings({ autorun: true });
+
+    expect(await env.session.execute({ command: 'stop_run' }, USER)).toMatchObject({ ok: true, message: 'Nothing is running: there is nothing to stop.' });
+    env.session.destroy();
+  });
+});
+
+describe('the user\'s Execute after a Stop of a submitted plan', () => {
+  it('leaves no notice that autorun did not start a plan that is running', async () => {
+    const env = fullSession();
+    const { planned } = await replySubmitted(env, [ai('a')]);
+    expect((await env.planner.tools().runTask!({ task: 'a' }, ctx)).isError).toBeFalsy();
+    await until(() => env.runner.spawnedIds().includes('a'));
+    expect(await env.session.execute({ command: 'stop_run' }, USER)).toMatchObject({ ok: true });
+    expect(await env.session.execute({ command: 'run_plan' }, USER)).toMatchObject({ ok: true });
+
+    await endReply(env, planned);
+    await until(() => env.runner.spawnedIds().filter((id) => id === 'a').length === 2);
+
+    expect(env.notices.map((n) => n.message)).not.toContainEqual(expect.stringContaining('Autorun did not start the plan'));
+    env.session.destroy();
+  });
+
+  it('still says so when that Execute was stopped in turn', async () => {
+    const env = fullSession();
+    const { planned } = await replySubmitted(env, [ai('a')]);
+    await env.session.execute({ command: 'stop_run' }, USER);
+    await env.session.execute({ command: 'run_plan' }, USER);
+    await env.session.execute({ command: 'stop_run' }, USER);
+    const spawned = env.runner.spawnedIds().length;
+
+    await endReply(env, planned);
+
+    expect(env.runner.spawnedIds()).toHaveLength(spawned);
+    expect(env.notices.map((n) => n.message)).toContainEqual(expect.stringContaining('Autorun did not start the plan'));
+    env.session.destroy();
+  });
+});
+
+describe('Guarded with autorun and a submitted script task', () => {
+  const pushTask = (dependencies: string[] = []) => ({ id: 's', title: 'Push', description: 'd', type: 'script', commands: push, autonomy: 'AFK', sliceType: 'AFK', dependencies });
+
+  it('leaves the script unapproved and unrun, and runs the rest', async () => {
+    const env = fullSession({ full: false });
+    const { planned } = await replySubmitted(env, [ai('a'), pushTask()]);
+    const scriptId = env.session.planTasks.find((t) => t.type === 'script')!.id;
+    expect(env.session.isApproved(scriptId)).toBe(false);
+
+    await endReply(env, planned);
+    await until(() => env.runner.spawnedIds().includes('a'));
+    await settled();
+
+    expect(env.session.isApproved(scriptId)).toBe(false);
+    expect(env.scripts.spawnedIds()).toHaveLength(0);
+    env.session.destroy();
+  });
+
+  it('lists a plan of nothing else, and the user\'s Start runs it', async () => {
+    const env = fullSession({ full: false });
+    const { planned } = await replySubmitted(env, [pushTask()]);
+    const scriptId = env.session.planTasks.find((t) => t.type === 'script')!.id;
+
+    await endReply(env, planned);
+    await settled();
+
+    expect(env.scripts.spawnedIds()).toHaveLength(0);
+    const entry = env.session.escalations().find((e) => e.task?.id === scriptId)!;
+    expect(entry).toMatchObject({ kind: 'unapproved' });
+    expect(await env.session.answerEscalation(entry.id, 'run')).toMatchObject({ ok: true });
+    await until(() => env.scripts.spawnedIds().includes(scriptId));
+    env.session.destroy();
+  });
+
+  it('under Full, autorun\'s start still approves it', async () => {
+    const env = fullSession();
+    const { planned } = await replySubmitted(env, [pushTask()]);
+    const scriptId = env.session.planTasks.find((t) => t.type === 'script')!.id;
+
+    await endReply(env, planned);
+    await until(() => env.scripts.spawnedIds().includes(scriptId));
+
+    expect(env.session.isApproved(scriptId)).toBe(true);
+    env.session.destroy();
+  });
+});
+
+describe('a stranded check with something else in front of its next round', () => {
+  const stranded = () => {
+    const session = makeSession({ aiService: heldPlanner().aiService, runner: recordingRunner().runner, settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' } }) });
+    session.loadPlan({
+      tasks: [
+        task('dep', 1, { status: 'pending' }),
+        task('check', 2, { status: 'failed', loopRound: 1, loop: { body: ['fix'], maxRounds: 3 }, verdict: { outcome: 'fail', checks: [], reason: 'Found it.', reported: 'failed', decidedAt: NOW.toISOString() }, dependencies: ['dep'] }),
+        task('fix', 3, { status: 'completed', dependencies: ['check'] }),
+      ],
+      generatedAt: NOW.toISOString(), lastUpdated: NOW.toISOString(), status: 'approved', runners: ['claude-code'],
+    } as never, 'goal', process.cwd(), { persist: false });
+    return session;
+  };
+
+  it('names what it waits on, and offers no start the seam would refuse', async () => {
+    const session = stranded();
+    const entry = session.escalations().find((e) => e.task?.id === 'check')!;
+
+    expect(entry.reason).toContain('#1');
+    expect(entry.options.map((o) => o.id)).not.toContain('run');
+    expect(entry.options.map((o) => o.id)).not.toContain('retry');
+    session.destroy();
+  });
+});
+
+describe('an awaiting task an edit makes manual', () => {
+  async function madeManual() {
+    const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'off' } });
+    await until(() => env.run.spawnedIds().includes('t1'));
+    env.run.of('t1').waitForInput();
+    await until(() => taskOf(env.session, 't1')?.status === 'awaiting_user');
+    await settled();
+    void env.session.continueConversation('change it');
+    await until(() => env.planner.calls.length === 1);
+    expect((await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: 't1', changes: { type: 'user', userSteps: ['do it by hand'] } }] } as never, ctx)).isError).toBeFalsy();
+    env.planner.calls[0].finish(prose('Changed.'));
+    await settled();
+    return env;
+  }
+
+  it('keeps the wait of the runner that can still be answered', async () => {
+    const env = await madeManual();
+
+    expect(taskOf(env.session, 't1')).toMatchObject({ type: 'user', status: 'awaiting_user', awaitingReason: 'input' });
+    expect(env.session.escalations().find((e) => e.task?.id === 't1')?.options.map((o) => o.id)).toContain('reply');
+    env.session.destroy();
+  });
+
+  it('is the manual task it now is after a reload, with no Retry that refuses', async () => {
+    const env = await madeManual();
+    const saved = structuredClone(env.session.planState!);
+    env.session.destroy();
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-manual-'));
+    saveSession(saved, 'goal', base, 'manual-await');
+    const reopened = makeSession({ aiService: heldPlanner().aiService, runner: recordingRunner().runner, settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' } }) });
+    reopened.loadPlan(loadSession('manual-await', base)!.plan, 'goal', process.cwd(), { persist: false });
+
+    expect(taskOf(reopened, 't1')).toMatchObject({ type: 'user', status: 'pending' });
+    expect(taskOf(reopened, 't1')?.awaitingReason).toBeUndefined();
+    expect(reopened.escalations().flatMap((e) => e.options.map((o) => o.id))).not.toContain('retry');
+    reopened.destroy();
+    fs.rmSync(base, { recursive: true, force: true });
+  });
+
+  it('with no runner behind it, it is released by the edit itself', () => {
+    const store = new PlanStore();
+    store.load([{ ...createTask({ id: 't1', order: 1, title: 'T1', prompt: 'p', assignedRunner: 'claude-code', type: 'user', status: 'awaiting_user' }), awaitingReason: 'checkpoint' }], ['claude-code']);
+    store.resetForRun({ edited: true });
+
+    expect(store.get('t1')).toMatchObject({ status: 'pending' });
+    expect(store.get('t1')?.awaitingReason).toBeUndefined();
   });
 });

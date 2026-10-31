@@ -175,6 +175,15 @@ describe('StructuredRunner spawn', () => {
     session.kill();
   });
 
+  it('hands the attempt\'s runner config to the Claude start, which narrows what it loads', async () => {
+    const { runner, spawned } = harness([]);
+    const session = await runner.spawn(options({ runnerConfig: 'minimal' }));
+    const args = spawned.lastArgs();
+    expect(args).toContain('--strict-mcp-config');
+    expect(args[args.indexOf('--setting-sources') + 1]).toBe('project,local');
+    session.kill();
+  });
+
   it('asks a change task for its commit in its system prompt, and no other task (ADR-0047)', async () => {
     const { runner, spawned } = harness([]);
     const prompts: string[] = [];

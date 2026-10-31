@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { dropRetiredPlanFields, failInterruptedTasks, LegacyPlanState, migrateLoadedTasks, settleOwedRepairs } from '../models/Task';
+import { dropRetiredPlanFields, failInterruptedTasks, LegacyPlanState, migrateLoadedTasks, releaseMadeManual, settleOwedRepairs } from '../models/Task';
 import { defaultLogger, type ILogger } from '../interfaces/ILogger';
 import { getStateDir, ensureDir, writeFileAtomic } from './fsHelpers';
 import { migratePlanStateIsolation } from '../services/isolationRecord';
@@ -50,6 +50,7 @@ export function loadState(baseDir?: string, logger: ILogger = defaultLogger): Sa
     failInterruptedTasks(plan.tasks, new Date().toISOString());
     migratePlanStateIsolation(plan);
     settleOwedRepairs(plan);
+    releaseMadeManual(plan.tasks);
     migrateLoadedTasks(plan.tasks);
     dropRetiredPlanFields(plan);
     return typeof sessionId === 'string' && sessionId ? { plan, sessionId } : { plan };

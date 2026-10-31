@@ -5,6 +5,9 @@ amends: ["0001", "0013", "0020", "0029"]
 
 # 0030 — Run settings are saved once and live per session; autorun
 
+*Pending:* [ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — delegation joins the run settings, off by default, and the Parallel limit counts a whole tree.
+*Pending:* [ADR-0056](0056-a-mandate-narrows-down-the-tree.md) — the root's mandate is derived from these settings on each read; a child's is saved with its plan.
+
 **Amends:** ADR-0029 — the supervisor level, merge at gates automatically, the
 retry limit and the wake-up read budget stop being per-plan settings saved at
 run start; the default level becomes Watch; "an unapproved task never starts"
@@ -238,8 +241,11 @@ wrong", that users want in either combination.
 - **A Stop since the plan was submitted wins.** Autorun's start is admitted as
   the plan lands, so a Stop after that withdraws it as it withdraws any start
   not yet claimed ([ADR-0029](0029-the-supervisor.md)): the run stays stopped, the
-  plan stays as it is, and a notice says so. A plan submitted after the Stop is
-  a new start.
+  plan stays as it is, and a notice says so. It is a run to stop while the reply
+  it waits on is open, so that Stop is not told there is nothing to stop, and a
+  user's Stop counts even when it finds nothing at all. A plan submitted after
+  the Stop is a new start, and a run opened after it, the user's Execute, has
+  the plan already, so autorun neither starts it nor says it did not.
 - **A failure in the reply stays a failure.** A task or script task that failed
   in the reply is not run again by the run that follows it, on either path: the
   fresh chance is the user's to ask for
@@ -255,7 +261,9 @@ wrong", that users want in either combination.
   runners' safe modes; autorun answers whether the plan waits, not what each
   task may do. ADR-0029's rule that a planner's own `run_task` and
   `retry_task` ask in Guarded is unchanged: autorun is the user's standing
-  instruction, not the planner choosing to start.
+  instruction, not the planner choosing to start. Its start leaves a script task
+  as the commit left it: unapproved, that waits for the user
+  ([ADR-0035](0035-effects-are-consented-and-recorded.md)), and the rest runs.
 - **It starts ops tasks too.** This is a deliberate choice, and it carries the
   risk ADR-0029 names for Act's added tasks, wider: an instruction injected
   into something the planner read can become an ops task that runs on real
@@ -266,7 +274,7 @@ wrong", that users want in either combination.
   they accept it, and its confirmation says so.
 
 This is the exception to ADR-0029's "an unapproved task never starts": under
-autorun, submission is approval.
+autorun, submission is approval, a script task under Guarded apart.
 
 **With autorun on and Full, nobody is asked: a planner turn may start anything,
 on a first plan as on an approved one.** That is `run_task`, `run_plan`,
@@ -461,3 +469,4 @@ the daemon reads it from there at generation.
 - 2026-10-27 — an open session shows and keeps its own run settings, seeded from `settings.json` when it opens; another session's change no longer moves its panel, and the file is the default the next session opens with.
 - 2026-10-31 — in Full with autorun a planner turn or an Act supervisor may start anything, on a first plan too, and such a start makes the plan approved; autorun joins live work in Full rather than doing nothing, and says why when it cannot start a plan.
 - 2026-10-31 — a Stop since the plan was submitted withdraws autorun's start, and what failed in the reply stays failed.
+- 2026-10-31 — a user's Stop withdraws autorun's start even with nothing live, and a run opened after that Stop has the plan; under Guarded autorun's start approves no script task the commit left unapproved.

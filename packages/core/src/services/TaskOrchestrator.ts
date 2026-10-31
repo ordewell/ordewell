@@ -40,7 +40,7 @@ import { capConflictFiles } from './conflictFiles';
 import { resolveWorkspaceEnv, type WorkspaceEnv } from './workspaceEnv';
 import { continuability, sessionOwner } from './continuation';
 import { quotedList } from '../utils/quotedList';
-import { inBranchRefusal, revertReach, revertScope, type RevertScope, type TaskRevertPreview } from './taskRevert';
+import { inBranchRefusal, landedOnOf, revertReach, revertScope, type RevertScope, type TaskRevertPreview } from './taskRevert';
 import type { RunMergeView, RunActivity } from './SessionMessage';
 import { ScriptRunner } from './ScriptRunner';
 import type { StoredHandoff } from '../models/Handoff';
@@ -469,6 +469,7 @@ export class TaskOrchestrator {
         resolversEnded: (resolverIds) => { for (const id of resolverIds) orchestrator.retireResolver(id); },
       },
       liveTasks: (): ReadonlySet<string> => orchestrator.liveTaskIds(),
+      landedOn: (taskId) => landedOnOf(taskId, store.allTasks),
     });
     const landing = new Landing({ runs, config: options.config, tasks: store, ...(options.plannedWith ? { plannedWith: options.plannedWith } : {}) });
     const orchestrator = new TaskOrchestrator({
@@ -738,6 +739,11 @@ export class TaskOrchestrator {
   admittedNow(): Admitted {
     const generation = this.stopGeneration;
     return { current: () => generation === this.stopGeneration };
+  }
+
+  /** The user's Stop found nothing to stop: it still withdraws every start admitted before it, one no live work counts included (ADR-0029). */
+  stopAsked(): void {
+    this.stopGeneration++;
   }
 
   /** Run `work`, which awaits before it claims, under an admission it holds throughout and claims under. */
@@ -1052,7 +1058,7 @@ export class TaskOrchestrator {
     }
 
     this.store.load(adopted, planRunners);
-    this.store.releaseMadeManual();
+    this.store.releaseMadeManual((id) => this.attempts.has(id));
     this.planEdited(before);
     // An edit may have taken the last task waiting on a reset out of the plan, or ended its pause.
     this.limitPauses.recount();
@@ -1149,7 +1155,7 @@ export class TaskOrchestrator {
    * for meanwhile.
    */
   stop(reason: 'user' | 'restart' = 'user'): void {
-    if (reason === 'user') this.stopGeneration++;
+    if (reason === 'user') this.stopAsked();
     this.transition({ type: 'stop' });
     // Interrupted work is kept like a failed attempt's: inspectable, and off
     // `active` so a crash-recovery prune does not sweep it away. A stopped
@@ -1772,7 +1778,7 @@ export class TaskOrchestrator {
     // Mark complete's landing is at work with no attempt, and a usage-limit pause goes on by itself.
     for (const id of this.completing.keys()) live.add(id);
     for (const t of this.store.allTasks) if (pausedOnLimit(t)) live.add(t.id);
-    return revertScope(taskId, { tasks: this.store.allTasks, run: this.runs.current, live });
+    return revertScope(taskId, { tasks: this.store.allTasks, run: this.runs.current, live, resolvers: (id) => this.landing.liveResolvers(id) });
   }
 
   /** What a revert of the task would do now: the tasks, newest landing first, or why it would not go ahead. */
@@ -1799,7 +1805,8 @@ export class TaskOrchestrator {
     const { taskIds, refusal } = this.revertScope(taskId);
     if (refusal) return { outcome: 'refused', reason: refusal.message };
     const releaseStarts = this.holdStarts();
-    const reach = revertReach(taskId, this.store.allTasks);
+    // A resolver's merge would land what this ends, so it may not start either.
+    const reach = new Set([...revertReach(taskId, this.store.allTasks, this.runs.current), ...taskIds.flatMap((id) => this.runs.resolversOf(id))]);
     this.reverting.add(reach);
     let result: IsolationRevertResult;
     try {
@@ -1831,10 +1838,12 @@ export class TaskOrchestrator {
    * Each reverted task goes back to not started, held like a stopped one so
    * the scheduler does not run it again, and starts over when retried: from
    * the current tip, which no longer holds its work. Its completion goes as
-   * Mark not done takes one back; the logs of its attempts stay.
+   * Mark not done takes one back; the logs of its attempts stay. A conflict it
+   * held is over, so a resolver out to it goes too (ADR-0015).
    */
   private takeBack(taskIds: readonly string[]): void {
     for (const id of taskIds) {
+      this.retireResolvers(id);
       const task = this.store.get(id);
       if (!task) continue;
       this.attempts.clear(task);

@@ -101,6 +101,8 @@ function printOneSession(
     if (task.loopStranded) stranded.add(task.id);
     if (task.isolation?.state === 'conflict' && task.isolation.repairWaits) repairs.set(task.id, repairWaitLabel(task.isolation.repairWaits));
   }
+  // A session the daemon does not hold has no run, so nothing will run a check between rounds (ADR-0053).
+  if (!run) for (const id of repeating) stranded.add(id);
   // A check between rounds is stored failed, and no failure while its loop goes on (ADR-0045 L3).
   const goesOn = (id: string) => repeating.has(id) && !stranded.has(id);
   const count = (status: string) => everyTask.filter((t) => (t.status === status && !(status === 'failed' && goesOn(t.id))) || (status === 'blocked' && blocked.has(t.id))).length;

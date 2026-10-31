@@ -19,7 +19,8 @@ import { classifyRunnerStop, type TurnFailure } from './runnerExit';
 import type { PlannerLimit } from './PlannerResend';
 import type { AssignmentScope } from './AssignmentScope';
 import { PlannerBriefing, type TurnBriefing } from './PlannerBriefing';
-import { PromptBlocks, type PlanRow, type PlanView, type TurnBlocks } from './PromptBlocks';
+import { PromptBlocks, type PlanRow, type PlanView, type TurnBlocks, type UnlistedRow } from './PromptBlocks';
+import { listedIds, unlistedSummary } from './planWindow';
 import { joinRuns, noteRun, writtenOver as writtenOverRuns } from './settleReply';
 import type { StartWait, StartWaitKind } from './readiness';
 import { SubagentRuns } from './SubagentRuns';
@@ -577,7 +578,7 @@ export class PlannerConversation {
     turnId: () => this.openTurn?.stream.turnId,
     landed: () => this.landedHistory(),
     checkpoint: (content, keptFrom, id) => this.commitAutoCheckpoint(content, keptFrom, id),
-    planLines: () => this.planRows()?.map(({ line }) => line) ?? null,
+    planLines: () => this.planRows()?.rows.map(({ line }) => line) ?? null,
   };
 
   constructor(private readonly host: PlannerConversationHost) {
@@ -968,7 +969,7 @@ export class PlannerConversation {
 
   private async summarize(signal: AbortSignal): Promise<string> {
     const ai = this.host.aiService();
-    const planLines = this.planRows()?.map(({ line }) => line) ?? null;
+    const planLines = this.planRows()?.rows.map(({ line }) => line) ?? null;
     // Only liveness and spend get through: streamed prose or research steps
     // from this turn would land in the chat as if the planner had said them.
     // Its calls are counted like any turn's, but the context they measure is
@@ -1784,8 +1785,9 @@ export class PlannerConversation {
    */
   private planView(): PlanView | null {
     if (!this.host.plan()) return null;
-    const rows = this.planRows() ?? [];
     const tools = this.host.aiService().plannerToolsAttached?.() ?? false;
+    const { rows, unlisted } = this.planRows() ?? { rows: [], unlisted: [] };
+    const overflow = unlistedSummary(rows.length, unlisted, tools ? 'task_query' : 'a taskQuery');
     // Gated on live runners, not on an armed scheduler: a paused-but-armed run
     // has nothing running to lock, and takes a whole plan as well as an edit.
     const locked = flattenTasksWithParents(this.host.tasks()).filter(({ task }) => task.status === 'in_progress');
@@ -1796,20 +1798,27 @@ export class PlannerConversation {
       '<current_plan>',
       ...rows.map(({ line }) => line),
       '</current_plan>',
+      overflow,
       'The block above is the CURRENT task plan — short fields only. Choose how to respond:',
       '- To answer a question or discuss, reply in plain prose (no JSON).',
       tools ? TASK_READ_TOOLS_REMINDER : TASK_QUERY_REMINDER,
       ...taskOpsProtocol(running && `\n${running}`, tools),
     ].filter(Boolean).join('\n');
-    return { rows, full, running, tools };
+    return { rows, unlisted, overflow, full, running, tools };
   }
 
-  /** One line per task, subtasks indented under their parent, with stable references — null until the plan has tasks. */
-  private planRows(): PlanRow[] | null {
+  /**
+   * One line per task, subtasks indented under their parent, with stable
+   * references — null until the plan has tasks. Past a size only the tasks a
+   * planner acts on get a line (`planWindow`); a line costs a start-rule
+   * walk, so the rest are not built.
+   */
+  private planRows(): { rows: PlanRow[]; unlisted: UnlistedRow[] } | null {
     const tasks = this.host.tasks();
     if (!this.host.plan() || tasks.length === 0) return null;
     const rows = flattenTasksWithParents(tasks);
     const refOf = new Map(rows.map(({ task, ref }) => [task.id, ref]));
+    const shown = listedIds(rows.map(({ task }) => task));
     const { modes } = this.host.catalog();
     const lineOf = ({ task: t, parent }: (typeof rows)[number]): string => {
       const refs = (ids: readonly string[]) => `[${ids.map((d) => refOf.get(d) ?? d).join(', ')}]`;
@@ -1827,7 +1836,11 @@ export class PlannerConversation {
         : `${t.assignedModel ? `model:${t.assignedModel.modelId} ` : ''}${readOnly ? 'read-only ' : ''}effort:${t.assignedModel?.thinkingEffort ?? '-'}`;
       return `${parent ? '  ' : ''}${refOf.get(t.id)} id=${t.id} "${t.title}" [${t.status}] type:${isMan ? 'MAN' : t.ops ? 'AI ops' : 'AI'} ${isMan ? '' : `runner:${t.assignedRunner} `}${runFields} autonomy:${t.autonomy ?? '-'} slice:${t.sliceType ?? '-'} deps:${refs(t.dependencies)}${t.skills?.length ? ` skills:[${t.skills.join(', ')}]` : ''}${waitNote(this.host.startWaits(t), refs)}`;
     };
-    return rows.map((row) => ({ id: row.task.id, ref: row.ref, title: row.task.title, line: lineOf(row) }));
+    const named = (row: (typeof rows)[number]): UnlistedRow => ({ id: row.task.id, ref: row.ref, title: row.task.title, status: row.task.status });
+    return {
+      rows: rows.filter((row) => shown.has(row.task.id)).map((row) => ({ ...named(row), line: lineOf(row) })),
+      unlisted: rows.filter((row) => !shown.has(row.task.id)).map(named),
+    };
   }
 }
 

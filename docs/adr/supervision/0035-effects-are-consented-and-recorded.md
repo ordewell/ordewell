@@ -6,6 +6,9 @@ note: "Settles #95. The mandate (#23) takes over the consent table and the effec
 
 # 0035 — Every effect is consented to and recorded, whoever performs it
 
+*Pending:* [ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — a script task marked `readOnly` runs sealed in a throwaway worktree, past no gate.
+*Pending:* [ADR-0056](0056-a-mandate-narrows-down-the-tree.md) — below the root a mandate replaces the consent table, and the effect allowlist becomes one list per level.
+
 ## Problem
 
 ADR-0008 kept the planner from acting on its own account. Mutation belonged to
@@ -239,7 +242,8 @@ How the user approves what waits, without starting anything early:
 - **A script task is the exception: autorun approves one only where
   `run_script` would run it unasked.** That is Full with autorun, on a first
   plan as on an approved one, or a body the effect allowlist covers. In Guarded, any other script
-  task the planner writes waits for the user's approval, and no card is asked:
+  task the planner writes waits for the user's approval, through autorun's own
+  start of a submitted plan too, and no card is asked:
   its row shows the body verbatim, and starting it, or Execute, is the user's
   consent. Otherwise a Guarded user's turn with autorun on would run a script
   the user was never shown, and a card the user denied could be undone by the
@@ -401,3 +405,4 @@ minute is recorded beside its start.
 - 2026-10-24 — a script attempt's whole output is kept in a file beside its log, named in the verdict and as a handoff artifact; before, the log kept the first 32,000 and last 16,000 characters and the verdict the last 4,000 of stderr, which lost the failure of a long command.
 - 2026-10-26 — `run_script` adds its task to the plan as the turn's committed edits left it, and autorun approves what an edit wrote as it commits: a tool's edit commits as its call answers (ADR-0022, P2).
 - 2026-10-31 — in Full with autorun nobody is asked on a first plan either, and a start there makes the plan approved; an approved plan is no longer a condition of the consent table's autorun row.
+- 2026-10-31 — under Guarded autorun's start of a submitted plan leaves a script task the commit left unapproved; before, that start approved it and ran it.

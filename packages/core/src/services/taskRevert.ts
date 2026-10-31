@@ -10,7 +10,7 @@ import { changedReposOf } from './isolationRecord';
  * is told in. GitWorktreeIsolation answers the other half, in its turn.
  */
 
-export type RevertRefusalReason = 'no-landing' | 'no-own-merge' | 'checked-out' | 'in-a-loop' | 'live-dependent' | 'in-branch' | 'git';
+export type RevertRefusalReason = 'no-landing' | 'no-own-merge' | 'checked-out' | 'uncommitted-changes' | 'in-a-loop' | 'live-dependent' | 'in-branch' | 'git';
 
 export interface RevertRefusal {
   reason: RevertRefusalReason;
@@ -43,6 +43,8 @@ export interface RevertScopeInput {
   run: IsolationRun | null;
   /** Tasks at work, or that go on by themselves: nothing they stand on may be taken from under them. */
   live: ReadonlySet<string>;
+  /** The resolvers out to a task's conflict, which would land the attempt a revert ends. */
+  resolvers: (taskId: string) => readonly Readonly<Task>[];
 }
 
 const ref = ({ id, order, title }: Readonly<Task>): IsolationTaskRef => ({ taskId: id, order, title });
@@ -68,24 +70,53 @@ function unnamedLanding(run: IsolationRun | null, taken: readonly Readonly<Task>
   return taken.find((t) => !run?.tasks[t.id] && !run?.landedTasks?.[t.id]) ?? dependents.find((t) => mayHaveLanded(run, t));
 }
 
-/** Everything that depends on the task, directly or not, a check counting on its body as it does at a merge gate (ADR-0045 L9). */
-function dependentsOf(tasks: readonly Readonly<Task>[], taskId: string): Readonly<Task>[] {
+/** What a task depends on in the plan, a check counting on its body as it does at a merge gate (ADR-0045 L9). */
+const dependenciesOf = (task: Readonly<Task>): string[] => [...task.dependencies, ...task.loop?.body ?? []];
+
+/** What a task depends on, directly or not, for {@link IsolationRun.landedOn} to keep as it lands. */
+export function landedOnOf(taskId: string, tasks: readonly Readonly<Task>[]): string[] {
+  const found = new Set<string>();
+  const queue = [taskId];
+  for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
+    const task = tasks.find((t) => t.id === id);
+    for (const dependency of task ? dependenciesOf(task) : []) {
+      if (found.has(dependency)) continue;
+      found.add(dependency);
+      queue.push(dependency);
+    }
+  }
+  return [...found];
+}
+
+/** Everything that depends on the task, directly or not, by the plan or by what a landing kept: the plan lets go of a task that leaves it, and of what stood on it through that task. */
+function dependentIds(tasks: readonly Readonly<Task>[], run: IsolationRun | null, taskId: string): Set<string> {
+  const edges = new Map(tasks.map((t) => [t.id, dependenciesOf(t)]));
+  for (const [id, landedOn] of Object.entries(run?.landedOn ?? {})) edges.set(id, [...edges.get(id) ?? [], ...landedOn]);
   const found = new Set<string>([taskId]);
   const queue = [taskId];
   for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
-    for (const task of tasks) {
-      if (found.has(task.id) || ![...task.dependencies, ...task.loop?.body ?? []].includes(id)) continue;
-      found.add(task.id);
-      queue.push(task.id);
+    for (const [other, dependencies] of edges) {
+      if (found.has(other) || !dependencies.includes(id)) continue;
+      found.add(other);
+      queue.push(other);
     }
   }
   found.delete(taskId);
-  return tasks.filter((task) => found.has(task.id));
+  return found;
 }
 
 /** The tasks a revert of this one stands to change the ground of, landed or not: no start of one may be claimed while it runs. */
-export function revertReach(taskId: string, tasks: readonly Readonly<Task>[]): ReadonlySet<string> {
-  return new Set([taskId, ...dependentsOf(tasks, taskId).map((t) => t.id)]);
+export function revertReach(taskId: string, tasks: readonly Readonly<Task>[], run: IsolationRun | null): ReadonlySet<string> {
+  return new Set([taskId, ...dependentIds(tasks, run, taskId)]);
+}
+
+/** A task that landed and left the plan with no record of what it depended on, or of what to call it: whether it stands on the work nothing can say. */
+function unreadLanding(run: IsolationRun | null, tasks: readonly Readonly<Task>[]): string | undefined {
+  if (!run) return undefined;
+  const planned = new Set(tasks.map((t) => t.id));
+  const landed = [...Object.keys(run.landings ?? {}), ...Object.keys(run.carried ?? {}), ...Object.keys(run.tasks)].filter((id) => !planned.has(id) && landedWork(run, id));
+  const unread = landed.find((id) => !run.landedOn?.[id] || !(run.tasks[id] ?? run.landedTasks?.[id]));
+  return unread === undefined ? undefined : (run.tasks[unread] ?? run.landedTasks?.[unread])?.title ?? unread;
 }
 
 /** The check of a loop the task is in, while that loop has not ended. */
@@ -94,14 +125,16 @@ function openLoop(tasks: readonly Readonly<Task>[], task: Readonly<Task>): Reado
   return check && !loopEnded(check) ? check : undefined;
 }
 
-export function revertScope(taskId: string, { tasks, run, live }: RevertScopeInput): RevertScope {
+export function revertScope(taskId: string, { tasks, run, live, resolvers }: RevertScopeInput): RevertScope {
   const task = tasks.find((t) => t.id === taskId);
   if (!task || !landedWork(run, taskId)) {
     return { taskIds: [], refusal: { reason: 'no-landing', message: `${task ? `Task "${task.title}"` : 'That task'} landed nothing on the integration branch, so there is nothing to revert.` } };
   }
-  const dependents = dependentsOf(tasks, taskId);
+  const reached = dependentIds(tasks, run, taskId);
+  const dependents = tasks.filter((t) => reached.has(t.id));
   const taken = [task, ...dependents.filter((t) => landedWork(run, t.id))];
-  const taskIds = taken.map((t) => t.id);
+  const leftThePlan = [...reached].filter((id) => !tasks.some((t) => t.id === id) && landedWork(run, id));
+  const taskIds = [...taken.map((t) => t.id), ...leftThePlan];
 
   const looped = taken.find((t) => openLoop(tasks, t));
   if (looped) {
@@ -114,12 +147,23 @@ export function revertScope(taskId: string, { tasks, run, live }: RevertScopeInp
     return { taskIds, refusal: { reason: 'no-own-merge', message: `Ordewell has no record of which merges landed task "${unnamed.title}", so it cannot tell what a revert would have to take. Nothing was reverted.` } };
   }
 
+  const unread = unreadLanding(run, tasks);
+  if (unread !== undefined) {
+    return { taskIds, refusal: { reason: 'no-own-merge', message: `Task "${unread}" landed and left the plan, and Ordewell has no record of what it depended on, so it cannot tell whether that work stands on this. Nothing was reverted.` } };
+  }
+
   const held = [task, ...dependents].filter((t) => live.has(t.id));
   if (held.length > 0) {
     const one = held.length === 1;
     const subject = `${one ? 'Task' : 'Tasks'} ${quotedList(held.map((t) => t.title))}`;
     const stands = held.some((t) => t.id === taskId) ? `${one ? 'is' : 'are'} still running or waiting on you` : `${one ? 'depends' : 'depend'} on it and ${one ? 'is' : 'are'} still running or waiting on you, from a tip that holds this work`;
     return { taskIds, refusal: { reason: 'live-dependent', tasks: held.map(ref), message: `${subject} ${stands}. Nothing was reverted. Let ${one ? 'it' : 'them'} finish, or stop ${one ? 'it' : 'them'}, first.` } };
+  }
+
+  const resolving = taken.flatMap((t) => resolvers(t.id).filter((r) => live.has(r.id)).map((resolver) => ({ resolver, conflicted: t })));
+  if (resolving.length > 0) {
+    const [{ resolver, conflicted }] = resolving;
+    return { taskIds, refusal: { reason: 'live-dependent', tasks: resolving.map((r) => ref(r.resolver)), message: `Task "${resolver.title}" is at work on the conflict of task "${conflicted.title}", and its merge would land what the revert ends. Nothing was reverted. Let it finish, or stop it, first.` } };
   }
   return { taskIds };
 }

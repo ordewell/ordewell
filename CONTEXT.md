@@ -210,7 +210,11 @@ goes whole again when a task's reference changed (a reorder, or an insert or
 removal that renumbers) and after anything that drops the live context or
 leaves the last whole block uncertain: a reset, a compaction, a turn that
 failed, was stopped or was abandoned (ADR-0012 T10). The catalog block follows
-the same rule.
+the same rule. A plan past 60 tasks lists only the ones a planner acts on, the
+running, failed and waiting first (`planWindow`); a line says how many are not
+listed, by status, and that `task_query` reads any of them by reference. A task
+that leaves the list but stays in the plan is named in `<plan_changes>` by its
+status, never as removed.
 The live model context — a vendor service's message list, a harness planner's
 process and native session id — is disposable: dropping it makes the next turn
 replay from the transcript (it is dropped before every replay, so a harness
@@ -1314,6 +1318,18 @@ output and exit notifications. `AbstractRunner` and `AbstractRunnerSession`
 share lifecycle plumbing; `FakeRunnerSession` is the test seam. Structured
 methods are mandatory, with no optional capability or transport discriminator.
 *Avoid:* "terminal runner", "terminal session" for these interfaces.
+
+**Task runner config** (`taskRunnerConfig`, `TaskRunnerConfig`) — what a task
+runner loads of the user's own setup: `user`, the default, is everything the
+runner would load for them; `minimal` is what a task needs, Ordewell's server
+and the repository's instructions, and leaves out the user's own connectors,
+skills, commands and settings. Saved in `settings.json` and read as each attempt
+spawns, so a change reaches the next one in any session; it is in no settings
+panel. Only Claude Code's task runner narrows its setup (`--strict-mcp-config`,
+`--disable-slash-commands`, `--setting-sources`); the others ignore it. A
+Claude task runner's context also compacts at a fixed window of its own
+(`CLAUDE_CODE_AUTO_COMPACT_WINDOW`), which a planner's never does.
+*Avoid:* "lean mode", "safe mode" (that is a Claude Code flag of another kind).
 
 **Task attempt** (`TaskAttempt`, inside `Attempts`) — one run of one
 task, from the moment the scheduler claims it to the moment it ends. It holds
@@ -3053,7 +3069,8 @@ or on the switch being turned on while a plan waits — and starts ops tasks too
 Work already live, a task the planner started with `run_task` in that reply,
 joins it as one scheduled run in Full; in Guarded it does not, and a notice says why, as it
 does whenever autorun cannot start a plan. It skips only a scheduled run already
-going.
+going. A user's Stop after the submission withdraws its start, even one that
+found nothing else to stop.
 Independent of the Supervisor level and of Full/Guarded. Recorded as `run_plan`
 with autorun as who asked. With autorun on and Full nobody is asked: a planner
 turn, or a supervisor at Act, may start anything, a script task or `run_script`
@@ -3061,7 +3078,8 @@ included, on a first plan as on an approved one, and such a start makes the plan
 approved; both settings are read at each start. An edit starts nothing by
 itself. A task the planner adds in the user's turn is approved as its edit
 commits when autorun is on, in Full and in Guarded alike, read as it commits; a
-script task only where `run_script` would run it unasked.
+script task only where `run_script` would run it unasked, which holds of
+autorun's own start too.
 *Avoid:* "auto-execute", "auto-approve" (approval is a consequence, not the
 setting), "autopilot".
 

@@ -5,6 +5,10 @@ amends: ["0009", "0013", "0020", "0022"]
 
 # 0029 — The supervisor: levels, live planner turns, execution tools and auto-merge
 
+*Pending:* [ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — Stop reaches a subtree, tombstone first; a failed check holds `merge_all` and the automatic merges, and a model may not skip that check.
+*Pending:* [ADR-0056](0056-a-mandate-narrows-down-the-tree.md) — the mandate replaces the level check at the seam, a subplanner is an actor of its own, and a child's questions go to its parent.
+*Pending:* [ADR-0057](0057-information-moves-by-reference.md) — `WakePolicy` holds events it would wake on, a wake has a size cap, and the level brief is sent once, then a line on a change.
+
 **Amends:** ADR-0009 and ADR-0022 — the planner gains execution tools, a further
 explicit exception to harness planners being read-only; ADR-0013 — "never
 merged for the user" now has two exits the user opts into; ADR-0020 — the
@@ -217,7 +221,8 @@ since only edits let the user follow what changed.
 when it is asked for, and counts as live work until it claims its task:
 waiting on its approval card, or still opening its run. The user's Stop — `stop_run` from any surface, or the Session's own stop —
 stops these too, so it is never refused, or answered "stopped", while one of
-them could still start. None of them starts afterwards: each is kept in the
+them could still start, and it counts whatever it finds: one that stopped nothing
+still withdraws what was admitted before it. None of them starts afterwards: each is kept in the
 timeline as refused, and said as not done, "stopped before it could start";
 a card still asking is cleared. A start asked for after the Stop is a new one,
 and runs. Every start — the scheduler's, `run_task`, a retry, a continue, a
@@ -368,7 +373,7 @@ its dependencies, and, for the user's Merge all, the whole merge result. A
 Merge all that stops is refused with that result, so the Merge all card can
 show why; whether the merge closed the run is the Session's word, `run_closed`
 ([ADR-0013](../isolation/0013-worktree-isolation.md)), never the payload's. A
-user's Stop with nothing to stop is answered ok and recorded nowhere, since
+user's Stop with nothing to stop is answered ok and kept off the timeline, since
 the surface already shows the run stopped. So is a Merge all, from anyone
 allowed one, once the plan's last isolated run closed with everything it
 landed merged: by the automatic Merge all at its end, by an earlier Merge all,
@@ -705,3 +710,4 @@ until #30 exists.
 - 2026-10-26 — the run update at the run's end says whether its landed work is merged or waits for Merge all, and a Merge all after the plan's last isolated run closed merged is answered ok as nothing to merge, recorded nowhere, across a restart too (`mergedRun`). Seen live: an Act supervisor woken after the automatic Merge all at the run's end called `merge_all`, and the timeline said "refused: This plan has no isolated run".
 - 2026-10-31 — under Full with autorun a supervisor at Act is refused nothing for a plan or task the user has not approved, and its start makes the plan approved ([ADR-0030](0030-global-run-settings.md)); Watch and Off do not change.
 - 2026-10-31 — a supervisor's start or skip of a check between rounds is refused only while something will run it (ADR-0045 L7).
+- 2026-10-31 — the user's Stop withdraws what was admitted before it even when it finds nothing to stop, and a plan whose start autorun owes is a run to stop ([ADR-0030](0030-global-run-settings.md)).

@@ -649,6 +649,7 @@ describe('the revert\'s place on the queue', () => {
       workspaceRoot: () => root,
       listener: { changed: () => undefined, blocked: () => undefined, handoff: () => undefined, closed: () => undefined, notice: () => undefined, resolversEnded: () => undefined },
       liveTasks: () => new Set(),
+      landedOn: () => [],
     });
     await controller.adopt({ run, resolvers: {} });
 
@@ -676,12 +677,14 @@ describe('the revert\'s place on the queue', () => {
 
     await iso.revert(run, [t.id], {
       refusal: () => null,
-      persist: () => seen.push({ landing: run.landing, reverted: git(root, 'log', '-1', '--format=%s', run.repos[0].integrationBranch) }),
+      persist: () => seen.push({ landing: structuredClone(run.landing), reverted: git(root, 'log', '-1', '--format=%s', run.repos[0].integrationBranch) }),
       settled: (taskIds) => seen.push({ taskIds, landing: run.landing, record: run.tasks[t.id], flagged: run.reverted }),
     });
 
+    const commit = git(root, 'rev-parse', run.repos[0].integrationBranch);
     expect(seen).toEqual([
-      { landing: { taskId: t.id, tips: { '.': tip }, reverts: { '.': 1 } }, reverted: 'Merge: Add greeting' },
+      { landing: { taskId: t.id, tips: { '.': tip }, reverts: { '.': { merges: [tip], commits: [] } } }, reverted: 'Merge: Add greeting' },
+      { landing: { taskId: t.id, tips: { '.': tip }, reverts: { '.': { merges: [tip], commits: [commit] } } }, reverted: 'Revert: Add greeting' },
       { taskIds: [t.id], landing: undefined, record: undefined, flagged: true },
     ]);
   });
@@ -724,7 +727,7 @@ describe('a revert a crash interrupted', () => {
     git(dir, 'commit', '-q', '--allow-empty', '-m', 'one too many');
     git(dir, 'commit', '-q', '--allow-empty', '-m', 'two too many');
     const moved = git(root, 'rev-parse', integration);
-    run.landing = { taskId: t.id, tips: { '.': tip }, reverts: { '.': 1 } };
+    run.landing = { taskId: t.id, tips: { '.': tip }, reverts: { '.': { merges: [tip], commits: [] } } };
 
     await isolation().pruneOrphans(run);
 
@@ -747,7 +750,7 @@ describe('a revert a crash interrupted', () => {
     const [apiTip, webTip] = [git(root, '-C', 'api', 'rev-parse', api.integrationBranch), git(root, '-C', 'web', 'rev-parse', web.integrationBranch)];
     const saved = structuredClone(run);
     await iso.revert(run, [first.id, second.id], { ...nothingInTheWay, persist: () => Object.assign(saved, structuredClone(run)) });
-    expect(saved.landing?.reverts).toEqual({ api: 2, web: 1 });
+    expect(Object.values(saved.landing?.reverts ?? {}).map((r) => r.commits.length)).toEqual([2, 1]);
     // A writer outside the queue: one revert on web, and a commit no revert made.
     git(join(root, '.ordewell', 'worktrees', run.id, 'integration', 'web'), 'commit', '-q', '--allow-empty', '-m', 'Work of the user');
     const moved = git(root, '-C', 'web', 'rev-parse', web.integrationBranch);
@@ -1120,7 +1123,7 @@ describe('what a revert cannot be sure of', () => {
     const dependent = { ...conflicted, dependencies: [first.id] };
     const tip = git(root, 'rev-parse', run.repos[0].integrationBranch);
 
-    const scope = revertScope(first.id, { tasks: [first, dependent, resolver], run, live: new Set() });
+    const scope = revertScope(first.id, { tasks: [first, dependent, resolver], run, live: new Set(), resolvers: () => [] });
 
     expect(scope.taskIds).toContain(conflicted.id);
     expect(await iso.revert(run, scope.taskIds, nothingInTheWay)).toMatchObject({ outcome: 'refused', reason: expect.stringContaining('no merge of its own') });
@@ -1154,7 +1157,7 @@ describe('what a revert cannot be sure of', () => {
     expect(run.tasks[dependent.id].status).toBe('active');
     run.tasks[dependent.id].status = 'failed';
 
-    expect(revertScope(base.id, { tasks: [base, dependent], run, live: new Set() }).refusal).toMatchObject({
+    expect(revertScope(base.id, { tasks: [base, dependent], run, live: new Set(), resolvers: () => [] }).refusal).toMatchObject({
       reason: 'no-own-merge', message: expect.stringContaining('"Add farewell"'),
     });
   });
