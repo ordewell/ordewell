@@ -108,7 +108,7 @@ describe('resolvePlannerSandbox', () => {
   it('probes Seatbelt by running sandbox-exec, and reports one that cannot start', async () => {
     const ok = recordingExec({ code: 0, output: '' });
     expect((await resolvePlannerSandbox({ platform: 'darwin', exists: () => true, exec: ok.exec })).available).toBe(true);
-    expect(ok.calls[0].file).toBe('/usr/bin/sandbox-exec');
+    expect(ok.calls[0].args).toContain('/usr/bin/sandbox-exec');
 
     const failing = recordingExec({ code: 71, output: 'sandbox-exec: sandbox_apply: Operation not permitted' });
     const notice = unavailableNotice(await resolvePlannerSandbox({ platform: 'darwin', exists: () => true, exec: failing.exec }));

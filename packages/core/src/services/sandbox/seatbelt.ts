@@ -4,7 +4,6 @@ import {
   assertProfilePaths,
   execProbe,
   keptEnv,
-  launchEnv,
   MEMORY_LIMIT_SIGNAL,
   probeByRunning,
   SandboxUnsupportedError,
@@ -134,6 +133,52 @@ const NO_LOCAL_NETWORK = `(deny network-outbound (remote ip "localhost:*") (remo
 const KEYCHAIN_PROFILE = `(allow mach-lookup
   (global-name "com.apple.SecurityServer"))`;
 
+/** Every launcher runs outside the sandbox: bash reads no startup file and takes no functions or options from the environment. */
+const BASH_FLAGS = ['--norc', '--noprofile', '-p', '-c'];
+
+/**
+ * Seatbelt has no PID namespace to take a command's processes down with it, so
+ * its process group does, except for one that leaves it with `setsid`, which
+ * keeps the profile. The group is killed until it is empty, since the kernel
+ * skips a process still being forked, and a fork bomb always has one. Each
+ * round stops the group before it kills it, with no pause between rounds: the
+ * few that slip through a kill would otherwise fill the group back to its
+ * process limit while the reaper waited, and outlast it.
+ */
+const REAP = 'reap() { i=0; while [ $i -lt 2000 ] && kill -STOP -$pid 2>/dev/null; do kill -KILL -$pid 2>/dev/null; i=$((i + 1)); done; }';
+
+/**
+ * What a command without limits starts behind, outside the sandbox, under
+ * macOS's /bin/bash: a kill reaches only this script, and a compound command's
+ * shell has children (ADR-0011 B4). As with {@link limitsPrelude}, a subshell
+ * the kill never reaches starts the sandbox, and this script only waits for it.
+ * One more process blocks on a pipe only this script keeps open, and reaps the
+ * group if the pipe closes with nothing said, which is how a kill reads from
+ * there. A command that ends by itself gets the line that stands it down, and
+ * what it left running stays, as it does for a command of the host's own shell.
+ * Everything here is a builtin, so a command pays forks and no `exec` beyond
+ * bash: this runs far more often than a sealed run, and needs no clock on it.
+ *
+ * The `;` after the substitution is what closes bash's own copy of the pipe: on
+ * a line of its own the copy would stay open under `-c`, the subshell would
+ * inherit it, and no kill would ever close the pipe.
+ */
+const LAUNCH_PRELUDE = `${REAP}
+exec 3> >({ read -r pid || exit; read -r _ || reap; } >/dev/null 2>&1); (
+  set -m
+  "$@" 3>&- &
+  pid=$!
+  set +m
+  exec >/dev/null 2>&1
+  echo $pid >&3
+  exec 3>&-
+  wait $pid
+) <&0 &
+wait $!
+status=$?
+echo >&3
+exit $status`;
+
 /**
  * Runs before the sandbox, outside it, under macOS's /bin/bash. It starts the
  * sandbox in a process group of its own, under the limits, and kills that
@@ -142,14 +187,7 @@ const KEYCHAIN_PROFILE = `(allow mach-lookup
  * standard input (ADR-0036 S1). Its flags keep bash from reading any startup
  * file and from taking functions or options from the environment, which holds
  * only what the profile keeps of the host's: the command's own variables are
- * set inside the sandbox. Seatbelt has no PID namespace to take the
- * command's processes down with it; the group does, except for one that
- * leaves it with `setsid`, which keeps the profile. The group is killed until
- * it is empty, since the kernel skips a process still being forked, and a
- * fork bomb always has one. Each round stops the group before it kills it,
- * with no pause between rounds: the few that slip through a kill would
- * otherwise fill the group back to its process limit while the reaper waited,
- * and outlast it.
+ * set inside the sandbox.
  *
  * macOS has no death signal to fall back on, so all of that runs in a subshell
  * the caller's kill never reaches, and this script only waits for it. Were the
@@ -174,7 +212,7 @@ function limitsPrelude(limits: SandboxLimits): string {
   const addressSpace = Math.ceil(limits.addressSpaceBytes / 1024);
   return `n=$(/bin/ps -U "$UID" -o pid= | /usr/bin/wc -l) && v=$(/bin/ps -o vsz= -p $$) \\
   || { echo 'The sealed run could not be held to its limits, so it did not run.' >&2; exit 125; }
-reap() { i=0; while [ $i -lt 2000 ] && kill -STOP -$pid 2>/dev/null; do kill -KILL -$pid 2>/dev/null; i=$((i + 1)); done; }
+${REAP}
 watch=0
 if [ -p /dev/stdin ] || [ -S /dev/stdin ]; then watch=1; fi
 exec 3<&0
@@ -280,12 +318,17 @@ export class SeatbeltBackend implements SandboxBackend {
 
     const policy = ['-p', rules.join('\n'), ...params];
     const shell = [invocation.shell, ...invocation.shellArgs];
-    if (!profile.limits) return { file: SANDBOX_EXEC, args: [...policy, ...shell], env: launchEnv(invocation, profile) };
-    const inside = ['/usr/bin/env', ...Object.entries(profile.env).map(([name, value]) => `${name}=${value}`)];
+    // Those two reach bash through any flag, and the launcher cannot run under
+    // them: POSIX mode has no process substitution, and `read` takes TMOUT for a
+    // timeout. A command still gets them, inside the sandbox.
+    const { POSIXLY_CORRECT, TMOUT, ...env } = keptEnv(invocation, profile);
+    const inside = ['/usr/bin/env', ...Object.entries({ POSIXLY_CORRECT, TMOUT, ...profile.env }).flatMap(([name, value]) => (value === undefined ? [] : [`${name}=${value}`]))];
+    const launch = [SANDBOX_EXEC, ...policy, ...inside, ...shell];
+    if (!profile.limits) return { file: '/bin/bash', args: [...BASH_FLAGS, LAUNCH_PRELUDE, 'ordewell-shell', ...launch], env };
     return {
       file: '/bin/bash',
-      args: ['--norc', '--noprofile', '-p', '-c', limitsPrelude(profile.limits), 'ordewell-sealed', SANDBOX_EXEC, ...policy, ...inside, ...shell],
-      env: keptEnv(invocation, profile),
+      args: [...BASH_FLAGS, limitsPrelude(profile.limits), 'ordewell-sealed', ...launch],
+      env,
       wallTimeMs: profile.limits.wallTimeMs,
       memoryBytes: profile.limits.memoryBytes,
     };

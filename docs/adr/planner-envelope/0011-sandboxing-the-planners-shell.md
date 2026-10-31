@@ -112,7 +112,17 @@ jobs, and its reading of other processes' command lines and environments (B4).
   device files a shell needs, the network for an approved command, and of the
   system services only those a read needs, with name resolution, TLS trust
   and the keychain added for an approved command; `defaults write`, for one,
-  is refused, because cfprefsd checks the caller's sandbox. Loading a launchd
+  is refused, because cfprefsd checks the caller's sandbox. Seatbelt has no PID
+  namespace, and a Stop or a time limit reaches one process, so every command
+  starts behind `/bin/bash` outside the sandbox, which puts it in a process
+  group of its own and waits for it; a watcher blocked on a pipe only that
+  launcher holds open kills the group when the launcher is killed. A command
+  that ends by itself leaves what it left running, as before, and a process that
+  leaves the group with `setsid` keeps the profile and outlives a kill. It adds
+  builtins and forks only, since it runs for every command. That launcher reads
+  no startup file, and what the profile sets is set inside the sandbox through
+  `/usr/bin/env`, with the two variables that would change how bash runs it
+  (`POSIXLY_CORRECT`, `TMOUT`). Loading a launchd
   job is denied (`job-creation`), since launchd would run it outside the
   sandbox, as the user. Two things no Seatbelt rule gates stay open: launchd's
   existing jobs, which a command can read, start, unload and enable or disable
@@ -250,3 +260,4 @@ that still cannot start the sandbox fails the build instead of skipping.
 - 2026-10-21 — CI runs the real-sandbox suites on Linux with bubblewrap installed and Ubuntu's user-namespace restriction lifted, failing rather than skipping where the probe cannot start.
 - 2026-10-31 — the planner's commands stop sharing their scratch directory with sealed runs ([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md), S8).
 - 2026-10-31 — every command on Linux starts behind the launcher's watcher, so one a Stop catches while bubblewrap sets up dies with its launcher, as a sealed run does (ADR-0036 S1).
+- 2026-10-31 — every command on macOS starts behind a launcher that owns its process group, so a kill ends a compound command's children too.
