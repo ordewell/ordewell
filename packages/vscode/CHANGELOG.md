@@ -2,10 +2,52 @@
 
 ## [Unreleased]
 
+### Added
+
+- **An inbox above the chat composer.** It lists what waits on you, such as
+  failed tasks, checkpoints, questions, conflicts and approvals, with a count,
+  and answers each in place. It stays complete while a planner turn is under
+  way (#30).
+- **`ordewell.notifyCommand` runs a command when something new waits on you.**
+  Give the program, then each argument as its own item; the item reaches it in
+  `ORDEWELL_ESCALATION_ID`, `_KIND`, `_TASK` and `_REASON`. It runs with no
+  shell, once for each item, and never affects a run. Only your user setting
+  counts; a workspace's value is ignored (#30).
+- **Revert a task's landed work.** A Revert button on a task's or subtask's
+  card shows what would come off the branch, the task and the landed tasks
+  built on it, and asks before it reverts them together. A card with no record
+  of what its merges carried shows no button, and a refusal says why (#86).
+- **An activity line in the task log and the planner chat.** It shows what the
+  runner or planner is doing and how long the turn has been open, and a still
+  marker once the task is quiet (#80, #81, #133).
+
+### Changed
+
+- **A failed task stays failed after a reload** until you retry it or execute
+  the plan.
+- **In Full with autorun, script tasks and a first plan run with nobody
+  asked.** Guarded still leaves an unapproved script waiting.
+- **Merge all on a run with no base branch always makes a merge commit.**
+- **A Stop keeps the supervisor down until the run is started again.**
+- **The supervisor wakes in batches.** What needs you wakes it at once after a
+  five-second window; a task failing or going quiet waits for the plan to have
+  nothing left to start, for the tasks that became ready with it to end, or
+  for a failure to hold work back, and at most four minutes after the event.
+  The inbox and the notify command still show it at once.
+
 ### Fixed
 
 - **Task and subtask prompts are keyboard accessible.** Editable prompts can be
   focused and activated from the keyboard; read-only prompts remain unchanged.
+- **A branch of yours that holds a task's landing refuses that task's
+  revert,** and the refusal names the branch, until it is deleted. **A run
+  started on an earlier version refuses every revert,** and says it holds no
+  record of what its merges carried.
+- **A planner turn waiting on agent detection says "Detecting coding
+  agents…"**, also in a chat opened during the wait, instead of reading as
+  planning.
+- **A workspace opened through a symlink** is no longer called a repository
+  above itself.
 ## [0.11.3] - 2026-10-29
 
 ### Fixed
