@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, act } from '@testing-library/react';
+import { render, act, fireEvent } from '@testing-library/react';
 import type { SessionMessage } from '@ordewell/core';
 import App from '../App';
 import { hostBridge, post } from './hostBridge';
@@ -47,6 +47,16 @@ describe('the planner row\'s elapsed time', () => {
 
     host.session({ type: 'planner_detection', waiting: false });
     expect(row()).toContain('Working');
+  });
+
+  it('shows the wait in a webview that opened after it began, once the turn is out', () => {
+    host.session({ type: 'planner_detection', waiting: true });
+    host.provider.conversation.resync();
+    const input = document.querySelector('.chat-input-row textarea') as HTMLTextAreaElement;
+    act(() => { fireEvent.change(input, { target: { value: 'add a parser' } }); });
+    act(() => { fireEvent.click(document.querySelector('.send-btn') as Element); });
+
+    expect(row()).toContain('Detecting coding agents…');
   });
 
   it('goes back to work once a turn opens, whatever of the answer was lost', () => {
