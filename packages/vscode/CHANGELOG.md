@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-31
+
 ### Added
 
 - **An inbox above the chat composer.** It lists what waits on you, such as
@@ -1344,6 +1346,7 @@ First public release.
 Full project changelog:
 https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/ordewell/ordewell/compare/v0.11.3...v0.12.0
 [0.11.1]: https://github.com/ordewell/ordewell/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/ordewell/ordewell/compare/v0.10.12...v0.11.0
