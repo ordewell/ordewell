@@ -133,7 +133,7 @@ describe('rendering the output read', () => {
       'Findings:',
       '- F1 [major] Refresh swallows errors',
       '  services/Auth.ts drops the 401.',
-      '  Evidence: task #1 F2',
+      '  Evidence: #1/F2',
       '+2 more findings, in the attempt\'s log',
       '',
       'Artifacts: docs/auth.md (unresolved)',

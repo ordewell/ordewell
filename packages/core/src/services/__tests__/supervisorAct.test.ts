@@ -462,7 +462,6 @@ describe('the loop guards', () => {
       await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
       await until(() => env.planner.calls.length === i + 1);
       if (i === WAKE_UP_RATE.max) break;
-      expect(env.planner.calls[i].message).toMatch(/At Act you may act/);
       env.planner.calls[i].finish(prose('Answered task 1.'));
       await settled();
       await env.session.execute({ command: 'message_task', task: 't1', text: 'carry on' }, { kind: 'user' });

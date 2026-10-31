@@ -144,7 +144,7 @@ describe('the task log tab (ADR-0018, V1)', () => {
     expect(screen.getByText(/src\/token.ts:42 \(unresolved\)/)).toBeTruthy();
     expect(screen.getByText(/commit abc123 in core/)).toBeTruthy();
     expect(screen.getByText(/commit abc123 in core/)).not.toHaveTextContent('commit abc123 in core (unresolved)');
-    expect(screen.getByText(/task #3 F2/)).toBeTruthy();
+    expect(screen.getByText(/#3\/F2/)).toBeTruthy();
     expect(screen.getByText(/https:\/\/example.com\/evidence/)).toBeTruthy();
     expect(screen.getByText('docs/result.md (unresolved)')).toBeTruthy();
     expect(document.querySelector('.task-handoff-report')).toHaveTextContent('Report line 8');

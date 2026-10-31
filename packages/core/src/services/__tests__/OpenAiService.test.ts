@@ -504,3 +504,29 @@ describe('OpenAiService execution tools (ADR-0029)', () => {
     expect(systemPrompt()).not.toContain('RUNNING THE PLAN:');
   });
 });
+
+/*
+ * Whether a wake misses the prompt cache because its brief is sent and then
+ * dropped from the history (ADR-0057). It is not dropped: a provider's prefix
+ * cache hits only on a byte-identical prefix, and the live history keeps what
+ * each turn sent, brief and blocks included. The transcript leaves them out,
+ * which only a replay sees, and a replay is one fresh prefix however it reads.
+ */
+describe('OpenAiService: what a wake leaves in the prefix', () => {
+  beforeEach(() => createSpy.mockReset());
+
+  it('sends each call the last call\'s whole message list, unchanged, ahead of the new message', async () => {
+    createSpy.mockImplementation(() => streamOf([{ choices: [{ delta: { content: 'Noted.' }, finish_reason: 'stop' }] }]));
+    const service = new OpenAiService(cfg());
+    await service.startConversation({ goal: 'add a cache', runners: ['claude-code'], modelsByRunner: {}, fs: fakeFileSystem(), onProgress: () => {} });
+
+    await service.continueConversation('Run update:\n- task #1 failed\n\nThe level brief, 2,300 characters of it.', () => {});
+    await service.continueConversation('Run update:\n- task #2 failed', () => {});
+
+    const sent = createSpy.mock.calls.map((call) => (call[0] as { messages: unknown[] }).messages);
+    const [opening, first, second] = sent;
+    expect(first.slice(0, opening.length)).toEqual(opening);
+    expect(second.slice(0, first.length)).toEqual(first);
+    expect(JSON.stringify(second)).toContain('The level brief');
+  });
+});

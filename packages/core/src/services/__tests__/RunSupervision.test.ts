@@ -36,6 +36,8 @@ function harness(user: Partial<GlobalRunSettings> = {}, options: SupervisorOptio
     pump: vi.fn(),
     restartPlanner: vi.fn(),
     abandonTurn: vi.fn(),
+    startWaits: () => new Map(),
+    plannerCache: () => ({ requestAt: null }),
   } satisfies RunSupervisionHost;
   const supervision = new RunSupervision(host, { debounceMs: 10, ...options });
   return { supervision, plan, settings, tasks, transcript, host };

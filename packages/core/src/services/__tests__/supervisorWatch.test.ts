@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HUNG_TURN_GRACE_MS, WAKE_DEBOUNCE_MS, WAKE_UP_TURN_TIMEOUT_MS } from '../Supervisor';
 import { IDLE_TIMEOUT_MS } from '../VerdictEngine';
+import { UNKNOWN_CACHE_TTL_MS } from '../WakePolicy';
 import { EMPTY_CONVERSATION, fromTranscript, reduceConversation } from '../../conversation';
 import { FakeWorktreeIsolation } from '../../testing';
 import { makeSession, saves, taskOf, testWorkspace } from './sessionTestKit';
@@ -8,6 +9,9 @@ import {
   ctx, heldPlanner, hitLimit, LIMIT, NOW, prose, recordingRunner, RESUME_AT, settled, supervised, task, until, waitForInput, wokenUp,
   type Env,
 } from './supervisorTestKit';
+
+/** What a held event waits, with no live context and a planner that states no cache (ADR-0057 R4). */
+const HELD_MAX_AGE_MS = 0.8 * UNKNOWN_CACHE_TTL_MS;
 
 beforeEach(() => {
   vi.useFakeTimers({ now: NOW, toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
@@ -19,8 +23,8 @@ afterEach(() => {
 
 describe('the supervisor at Watch: what wakes it', () => {
   it.each([
-    ['task_failed', (env: Env) => env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'the tests fail' }), /- task #1 "Task t1" failed: .*the tests fail/],
     ['waiting_input', (env: Env) => waitForInput(env.run.of('t1')), /- task #1 "Task t1" is waiting for input/],
+    ['a checkpoint', (env: Env): void => { void env.run.of('t1').callCheckpoint('Drop the table?'); }, /- task #1 "Task t1" is waiting for input: at a checkpoint: Drop the table\?/],
     ['waiting_approval', (env: Env) => env.run.of('t1').requestPermission('p1', 'Bash', { command: 'npm publish' }), /- task #1 "Task t1" is waiting for approval: .*npm publish/],
     ['usage_limit', (env: Env) => hitLimit(env.run.of('t1')), new RegExp(`- task #1 "Task t1" paused on claude-code's usage limit; it resumes on its own at ${RESUME_AT}`)],
   ] as const)('wakes on %s once the debounce window has passed', async (_kind, trigger, line) => {
@@ -35,6 +39,71 @@ describe('the supervisor at Watch: what wakes it', () => {
     await until(() => env.planner.calls.length === 1);
     expect(env.planner.calls[0].message).toMatch(/Run update:\n/);
     expect(env.planner.calls[0].message).toMatch(line);
+  });
+
+  describe('a failure (ADR-0057 R4)', () => {
+    const fail = (env: Env, id: string) => env.run.of(id).reportComplete({ status: 'failed', summary: '', reason: 'the tests fail' });
+
+    it('wakes at once when it blocks work that would otherwise be ready, with other work still running', async () => {
+      const env = await supervised([task('t1', 1), task('t2', 2), task('t3', 3, { dependencies: ['t1'] })]);
+
+      fail(env, 't1');
+      await settled();
+      await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS - 1);
+      expect(env.planner.calls).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await until(() => env.planner.calls.length === 1);
+      expect(env.planner.calls[0].message).toMatch(/- task #1 "Task t1" failed: .*the tests fail; it blocks task #3 "Task t3"/);
+    });
+
+    it('that blocks nothing is held while its cohort runs, and goes when the last of it ends, in a batch', async () => {
+      const env = await supervised([task('t1', 1), task('t2', 2), task('t3', 3)]);
+
+      fail(env, 't1');
+      await settled();
+      await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS * 10);
+      expect(env.planner.calls).toHaveLength(0);
+
+      env.run.of('t2').reportComplete({ status: 'done', summary: '' });
+      await settled();
+      await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS * 10);
+      expect(env.planner.calls).toHaveLength(0);
+
+      fail(env, 't3');
+      await settled();
+      await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+      await until(() => env.planner.calls.length === 1);
+      expect(env.planner.calls[0].message).toMatch(/- task #1 "Task t1" failed[^\n]*\n- task #3 "Task t3" failed/);
+      expect(env.planner.calls[0].message).toContain('- task #2 "Task t2" passed');
+    });
+
+    it('that blocks nothing goes at its maximum age if its cohort is slow', async () => {
+      const env = await supervised([task('t1', 1), task('t2', 2)]);
+
+      fail(env, 't1');
+      await settled();
+      await vi.advanceTimersByTimeAsync(HELD_MAX_AGE_MS - 1);
+      expect(env.planner.calls).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await until(() => env.planner.calls.length === 1);
+      expect(env.planner.calls[0].message).toMatch(/- task #1 "Task t1" failed/);
+    });
+
+    it('rides along with what needs a person, at once', async () => {
+      const env = await supervised([task('t1', 1), task('t2', 2)]);
+
+      fail(env, 't1');
+      await settled();
+      await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS * 10);
+      waitForInput(env.run.of('t2'));
+      await settled();
+      await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+
+      await until(() => env.planner.calls.length === 1);
+      expect(env.planner.calls[0].message).toMatch(/- task #1 "Task t1" failed[^\n]*\n- task #2 "Task t2" is waiting for input/);
+    });
   });
 
   it('names the tasks a failure blocks, and counts them when the run finishes (ADR-0034)', async () => {
@@ -53,7 +122,7 @@ describe('the supervisor at Watch: what wakes it', () => {
     const env = await supervised([task('t1', 1)]);
 
     env.run.of('t1').emitOutput('installing dependencies\n');
-    await vi.advanceTimersByTimeAsync(IDLE_TIMEOUT_MS + WAKE_DEBOUNCE_MS);
+    await vi.advanceTimersByTimeAsync(IDLE_TIMEOUT_MS + HELD_MAX_AGE_MS);
 
     await until(() => env.planner.calls.length === 1);
     const quietSince = new Date(NOW.getTime() + IDLE_TIMEOUT_MS).toISOString();
@@ -64,7 +133,7 @@ describe('the supervisor at Watch: what wakes it', () => {
   it('wakes when a task has printed nothing since it started, and leaves it running', async () => {
     const env = await supervised([task('t1', 1)]);
 
-    await vi.advanceTimersByTimeAsync(IDLE_TIMEOUT_MS + WAKE_DEBOUNCE_MS);
+    await vi.advanceTimersByTimeAsync(IDLE_TIMEOUT_MS + HELD_MAX_AGE_MS);
 
     await until(() => env.planner.calls.length === 1);
     const quietSince = new Date(NOW.getTime() + IDLE_TIMEOUT_MS).toISOString();
@@ -88,7 +157,9 @@ describe('the supervisor at Watch: what wakes it', () => {
     expect(env.planner.calls[0].message).toContain([
       'Run update:',
       '- the run finished: 2 of 2 tasks completed',
-      'Since the last update: tasks #1 "Task t1" and #2 "Task t2" passed.',
+      'Since the last update:',
+      '- task #1 "Task t1" passed',
+      '- task #2 "Task t2" passed',
     ].join('\n'));
   });
 
@@ -136,7 +207,7 @@ describe('the supervisor at Watch: what wakes it', () => {
       'Run update:',
       '- task #2 "Task t2" is waiting for input',
     ].join('\n'));
-    expect(env.planner.calls[0].message).toContain('Since the last update: task #1 "Task t1" passed.');
+    expect(env.planner.calls[0].message).toContain('Since the last update:\n- task #1 "Task t1" passed');
   });
 
   it('merges events close together into one wake-up', async () => {

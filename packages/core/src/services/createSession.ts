@@ -814,6 +814,8 @@ export class Session {
       plan: () => this.plan,
       userSettings: () => this.userRunSettings(),
       tasks: () => this.store.planTasks,
+      startWaits: () => this.orchestrator.planStartWaits(),
+      plannerCache: () => ({ ttlMs: this.backend.current().promptCacheTtlMs?.(), requestAt: this.conversation.lastRequestAt }),
       checkpointQuestion: (taskId) => this.orchestrator.getCheckpointQuestion(taskId) ?? undefined,
       landedWork: () => (this.runMergeView() ? 'pending' : this.runs.mergedRun ? 'merged' : null),
       recentOutput: (taskId) => this.orchestrator.getLiveOutput(taskId, { maxLines: 3 })?.text.trim(),

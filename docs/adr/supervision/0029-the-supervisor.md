@@ -7,7 +7,6 @@ amends: ["0009", "0013", "0020", "0022"]
 
 *Pending:* [ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — Stop reaches a subtree, tombstone first; landed work whose check has not passed holds `merge_all` and the automatic merges, and a model may not skip that check.
 *Pending:* [ADR-0056](0056-a-mandate-narrows-down-the-tree.md) — a child's questions go to its parent, and a loop guard ends a subplanner where it would lower a root.
-*Pending:* [ADR-0057](0057-information-moves-by-reference.md) — `WakePolicy` holds events it would wake on, a wake has a size cap, and the level brief is sent once, then a line on a change.
 
 **Amends:** ADR-0009 and ADR-0022 — the planner gains execution tools, a further
 explicit exception to harness planners being read-only; ADR-0013 — "never
@@ -93,8 +92,9 @@ transcript, no second process.
 ### What wakes it
 
 A wake-up turn is opened by a batch from `WakePolicy`
-(`packages/core/src/services/WakePolicy.ts`), the pure, tested debounce #59
-built. The attention events are:
+(`packages/core/src/services/WakePolicy.ts`), the pure, tested decision #59
+began and [ADR-0057](0057-information-moves-by-reference.md) R4 owns. The
+attention events are:
 
 - a task failed — a loop's check that fails a round with rounds left has not,
   and wakes it once, when its loop runs out of rounds
@@ -108,6 +108,10 @@ built. The attention events are:
 - **new:** a task paused on a usage limit, with the time it resumes (#84).
   Every task one runner's limit pauses is one entry.
 
+A failure and a task gone idle need nobody yet, so they are held until the plan
+says it is time or the planner's prompt cache would go cold (ADR-0057 R4). Every
+other event wakes it at once.
+
 An ordinary pass never wakes it. Passes ride along as "since last time: tasks
 2, 3, 4 passed". A research task's end, passed, failed or blocked, is an
 attention event at every level, Off included: the run update carries its
@@ -118,16 +122,17 @@ between: the chain is deliberately not bounded per user message
 ([ADR-0037](0037-research-tasks-wake-the-planner.md), R4). What bounds it is
 the planner's judgement, the run's Parallel limit for concurrency, `mayReport`
 after two consecutive failed automatic turns, and the user's Stop. Events
-close together — within five seconds of the first — are merged into one
-wake-up; the run's end is delivered at once. The policy is code, not prompt
+close together — within five seconds of the first due at once — are merged into
+one wake-up; the run's end is delivered at once. The policy is code, not prompt
 text, so when the supervisor speaks is testable without a model.
 
 A due batch reaches the conversation as a **run update**: one line per event,
-naming its task and a short detail — the verdict's reason and the tasks the
-failure blocks as the update goes out
+naming its task and a short detail — the verdict's reason and the first tasks
+the failure blocks as the update goes out
 ([ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)), the question,
-the request, the resume time — and the passes since the last one; the run's end
-counts what completed, failed and is blocked. A finished task's handoff is
+the request, the resume time — and a line per pass since the last one, all
+within ADR-0057 R5's cap; the run's end counts what completed, failed and is
+blocked. A finished task's handoff is
 rendered as its summary and whole findings within 4,000 characters, including
 omission and pull pointers; artifacts sit outside that text budget. The long
 report stays in the attempt log, read with `task_output`
@@ -135,7 +140,8 @@ report stays in the attempt log, read with `task_output`
 supervisor reads more with `task_output` and `task_diff`. The run update is
 the supervisor's input (`kind: 'wake_up'`), and what it says in the turn is
 its note (`kind: 'supervisor'`). The rules of its level are told to it after
-the run update, each turn, and never saved.
+the run update, whole once a context and then in a line on a change
+([ADR-0057](0057-information-moves-by-reference.md) R5), and never saved.
 
 ### Live planner turns replace the between-batches queue
 
@@ -715,3 +721,4 @@ until #30 exists.
 - 2026-10-31 — `run_plan` joins a run that is open with nothing live rather than starting it over: its failures and its usage-limit pause stand.
 - 2026-10-31 — a planner's `run_plan` leaves what failed as it is; a supervisor's is still the retry its guards count.
 - 2026-10-31 — the seam reads the mandate in place of `SUPERVISOR_LEVELS`, and answers as it did at every level ([ADR-0056](0056-a-mandate-narrows-down-the-tree.md)).
+- 2026-10-31 — `WakePolicy` holds a failure and a task gone idle, a run update has a size cap, and the level's rules go whole once a context ([ADR-0057](0057-information-moves-by-reference.md) R4, R5).

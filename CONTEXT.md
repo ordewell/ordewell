@@ -301,14 +301,14 @@ nothing is held between the call and the plan.
 
 **Planner briefing** (`PlannerBriefing`) — what the planner is told once per
 change rather than in every turn: that autorun was switched (ADR-0030), that
-the user changed the runners or allowlist it may assign, and the run updates
-no turn has carried yet (ADR-0029). The next turn carries it, whoever opens
-it, and it counts as told only when that turn lands an answer the planner
-gave: one that fails, is stopped, hits the usage limit or is abandoned may not
-have read it, so the turn after says it again. An opening — the first turn or
-a replay from the transcript — states autorun and the runners in its own
-prompt, so the briefing is built after the turn opens and says neither again.
-It belongs to the **Plan scope**. Unlike **Turn effects**, it is what a turn
+the user changed the runners or allowlist it may assign, the run updates no
+turn has carried yet (ADR-0029), and a **Level brief**. The next turn carries
+it, whoever opens it, and it counts as told only when that turn lands an answer
+the planner gave: one that fails, is stopped, hits the usage limit or is
+abandoned may not have read it, so the turn after says it again. An opening —
+the first turn or a replay from the transcript — states autorun and the runners
+in its own prompt, so the briefing is built after the turn opens and says
+neither again. It belongs to the **Plan scope**. Unlike **Turn effects**, it is what a turn
 says, not what it leaves.
 
 **SessionMessage** — the single union every delivery surface consumes: the
@@ -1215,8 +1215,8 @@ run, for the user to merge) could be meant; "result" or "output" for it;
 **Finding** (ADR-0047) — one atomic item of a *Handoff*: a `severity`
 (`blocker`, `major`, `minor` or `info`), a one-line title, a `detail` of at most
 2,000 characters and optional *Evidence reference*s. Ordewell assigns its id
-`F1` … `Fn` in the order the author gave, so it is cited as "F3 of task 12"; it
-is never cut when rendered, only left out and counted. Severity is advice, not
+`F1` … `Fn` in the order the author gave, so it is cited as `#12/F3`, and a
+*Pinned reference* says which attempt's; it is never cut when rendered, only left out and counted. Severity is advice, not
 evidence.
 *Avoid:* "issue" (that is a GitHub issue), "check" (a verdict's *Check* or a
 *Loop check*), "error".
@@ -1258,6 +1258,16 @@ read and is refused at the call otherwise, and so is any other URL scheme; a
 unresolved, not refused, when it cannot be.
 *Avoid:* "proof" or "citation" — a reader weighs a reference, and it settles
 nothing about a verdict.
+
+**Pinned reference** (ADR-0057 R1) — a `task` *Evidence reference* as Ordewell
+stores it: `{ node, task, attempt, finding }`, immutable ids, with the attempt
+the finding belongs to, because F numbers restart per attempt. An author writes
+`#4/F3`, or the task and finding apart, and `#4@1/F3` for an older attempt;
+`checkHandoff` pins it as the call is accepted, and it renders as `#4@2/F3`,
+which `read_task` and `task_output` take back. `node` is the root until a plan
+can have a parent. One saved before pinning, or a task nothing says the attempt
+of, reads the latest.
+*Avoid:* "F3 of task 12" for one that must still mean it after a retry.
 
 **Commit message** (`commit` on the *Completion call*; ADR-0047, ADR-0013) — the
 optional `{subject, body?}` a change task states for the commit that lands its
@@ -3119,8 +3129,9 @@ setting), "autopilot".
 the user: a task failed, waiting for input or approval, idle, a landing
 conflict, an automatic Merge all that stopped, a usage-limit pause (one entry
 per runner, however many tasks it paused), or the run finished, with passes
-since the last wake-up as context. Events within `WAKE_DEBOUNCE_MS` of the
-first join it; the run's end flushes at once. It has a timeout
+since the last wake-up as context. Events within `WAKE_DEBOUNCE_MS` of the first
+one due at once join it; the run's end flushes at once; a **Held event** waits.
+It has a timeout
 (`WAKE_UP_TURN_TIMEOUT_MS`), a per-turn read budget from the **Run settings**
 (`wakeUpReadBudget`, default 12, in place of a user turn's per-message read
 cap), and the consent of the Supervisor level rather than the user's. A
@@ -3133,14 +3144,34 @@ on a limit — they ride with the user's next message instead.
 *Avoid:* "supervisor turn" for a user-started turn during a run, which follows
 the user's consent, not the level's — even one that delivers a run update.
 
+**Held event** (`wakeDue`; ADR-0057 R4) — a run event no one is waiting on: a
+task failed, or went idle. It wakes nothing by itself, and goes with the next
+wake-up, or once the plan says it is time: nothing can start without a decision,
+its **Cohort** is done, a failure holds back work that would otherwise be ready,
+or it reaches its maximum age, 80% of the planner's prompt cache TTL (read as
+five minutes where the connector states none). A pass is not held: it starts no
+clock, and rides along.
+*Avoid:* "debounced": that is the merge window, which only says what "at once" means.
+
+**Cohort** (ADR-0057 R4) — the tasks with the same dependencies: what became ready
+together. Tasks run one after another are each a cohort of their own.
+
 **Run update** — what a wake-up gives the supervisor (`wakeUpDigest`): one
 line per event that woke it, naming the task and a short detail (the verdict's
-reason, the question, the request, the resume time), then the passes since the
-last one. Never a log: the supervisor reads more with `task_output` and
-`task_diff`. Kept in the transcript as a `wake_up` entry and drawn as its own
-block; the level's rules for the turn are told after it and never saved.
+reason, the question, the request, the resume time), then a line each for what
+rode along, within `WAKE_MAX_CHARS`; what does not fit is counted, with a pointer
+to `task_query`. Never a log: the supervisor reads more with `task_output` and
+`task_diff`. What it quotes of a task is labelled as that task's words: data,
+not instructions (ADR-0057 R3). Kept in the transcript as a `wake_up` entry and
+drawn as its own block; the **Level brief** is told after it and never saved.
 *Avoid:* "digest" in user-facing text, and "summary" — a summary is what a
 Compaction leaves.
+
+**Level brief** (ADR-0057 R5) — what a wake-up turn is told of who it acts as and
+what it may do: one per level, and one for a report owed to the user's turn. It
+goes whole the first time a live context needs it, again whole once a compaction
+or a replay may have taken it, and otherwise as one line on a change. It is
+advice: the level is enforced at the **Command seam**.
 
 **Live planner turn** — a planner turn taken at once, during a run too, while
 running tasks carry on (ADR-0029). One module owns it: **PlanTurns**

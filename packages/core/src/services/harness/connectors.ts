@@ -30,7 +30,16 @@ export interface RunnerConnector {
    * text through. May throw on a time it cannot place.
    */
   usageLimitReset?(tail: string, now: Date): Date | null;
+  /**
+   * How long its prompt cache lasts: the shortest it may be, so a wake that
+   * counts on it finds its prefix warm (ADR-0057 R4). Absent where it depends
+   * on a provider Ordewell cannot see.
+   */
+  promptCacheTtlMs?: number;
 }
+
+/** Claude's default, and what an API login gets; a subscription's runs recorded here write the hour-long kind. OpenAI's, which Codex uses, is 5 to 10 minutes idle. */
+const FIVE_MINUTES = 5 * 60_000;
 
 /**
  * The runners Ordewell drives over their own protocols, by runner id. Being
@@ -38,8 +47,8 @@ export interface RunnerConnector {
  * runner that is not here cannot run tasks at all.
  */
 export const CONNECTORS: Readonly<Record<string, RunnerConnector>> = {
-  'claude-code': { create: (deps) => new ClaudeCodeAdapter(deps), ordewellTools: CLAUDE_ORDEWELL, repoConfig: CLAUDE_REPO_CONFIG, usageLimitReset: claudeUsageLimitReset },
-  codex: { create: (deps) => new CodexAdapter(deps), ordewellTools: CODEX_ORDEWELL, repoConfig: CODEX_REPO_CONFIG, usageLimitReset: codexUsageLimitReset },
+  'claude-code': { create: (deps) => new ClaudeCodeAdapter(deps), ordewellTools: CLAUDE_ORDEWELL, repoConfig: CLAUDE_REPO_CONFIG, usageLimitReset: claudeUsageLimitReset, promptCacheTtlMs: FIVE_MINUTES },
+  codex: { create: (deps) => new CodexAdapter(deps), ordewellTools: CODEX_ORDEWELL, repoConfig: CODEX_REPO_CONFIG, usageLimitReset: codexUsageLimitReset, promptCacheTtlMs: FIVE_MINUTES },
   opencode: { create: (deps) => new OpenCodeAdapter(deps), ordewellTools: OPENCODE_ORDEWELL, repoConfig: OPENCODE_REPO_CONFIG },
 };
 

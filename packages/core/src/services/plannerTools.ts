@@ -13,7 +13,7 @@ import type { CheckedChange, PlanChangeError } from './PlanChangeCheck';
 import type { PlanChange, ToolRead } from './PlannerConversation';
 import { commandReply, type McpToolReply, type PlannerToolHandler } from './mcp/tools';
 import type { TaskLogEvent } from '../models/TaskLog';
-import { namedHandoff } from '../models/Handoff';
+import { namedHandoff, resolveWrittenRef } from '../models/Handoff';
 import { renderTaskLog } from './taskLogRead';
 import { taskReadPage } from './taskReadPage';
 import type { TaskDiffRead, TaskDiffResult } from './taskDiffRead';
@@ -217,9 +217,12 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       }));
     },
 
-    async taskOutput({ task: ref, lines, since, attempt, kinds }) {
-      const task = resolveTaskRef(host.tasks(), ref);
-      if (!task) return { isError: true, text: JSON.stringify({ ok: false, error: `No task matches "${ref}" in the current plan.` }) };
+    async taskOutput({ task: ref, lines, since, attempt: asked, kinds }) {
+      // A reference a run update shows, `#4@2/F3`, reads the attempt it names (ADR-0057 R1).
+      const written = resolveWrittenRef(host.tasks(), String(ref));
+      if (!written) return { isError: true, text: JSON.stringify({ ok: false, error: `No task matches "${ref}" in the current plan.` }) };
+      const { task } = written;
+      const attempt = asked ?? written.attempt;
       const maxLines = Math.min(lines ?? OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX);
       return read(host, JSON.stringify(['output', task.id, maxLines, since ?? null, attempt ?? null, kinds ? [...kinds].sort() : null]), async () => {
         const head = { task: taskHead(host.tasks(), task) };

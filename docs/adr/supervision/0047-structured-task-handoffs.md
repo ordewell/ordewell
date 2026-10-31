@@ -7,7 +7,7 @@ note: "Settles #120 for flat plans; the hierarchy half stays with #34."
 
 # 0047 — Every task ends with a handoff: a short summary, atomic findings and a way to pull the rest
 
-*Pending:* [ADR-0057](0057-information-moves-by-reference.md) — references pin an attempt, a subplanner's handoff promotes by reference, and `read` extends `read_task`.
+*Pending:* [ADR-0057](0057-information-moves-by-reference.md) — a subplanner's handoff promotes by reference, and `read` extends `read_task`.
 
 ## Problem
 
@@ -71,7 +71,9 @@ handoff:
   `minor` or `info`, a one-line `title`, a `detail` of at most 2,000
   characters, and optional `evidence`. Ordewell assigns the ids `F1` … `Fn` in
   the order given, so the author's order (most important first) is the
-  rendering order and a finding is cited as "F3 of task 12". Severity is
+  rendering order and a finding is cited as `#12/F3`, which Ordewell pins to
+  its attempt, `#12@2/F3` ([ADR-0057](0057-information-moves-by-reference.md)
+  R1). Severity is
   advice to the reader. It is never evidence: it reaches `VerdictEngine`
   nowhere, and a `done` with a blocker finding is a `done`.
 - **`artifacts`**: typed references to what the task produced, of the same
@@ -94,7 +96,8 @@ trust it:
 
 A `task` reference must resolve to a task the producer may read (the readable
 set below) and, with a finding id, to a finding that exists; the call is
-refused otherwise. A `url` of any other scheme is refused, so no surface
+refused otherwise. It is stored with the attempt it read, since F numbers
+restart per attempt (ADR-0057 R1). A `url` of any other scheme is refused, so no surface
 renders a `javascript:` or `file:` link. A `file` or `commit` is a claim about
 a tree the producer saw: the worktree may be gone when someone reads it, and a
 commit may land after, so Ordewell does not check it at the call and a surface
@@ -139,7 +142,7 @@ sibling's work it was never given. Every call is recorded in the reader's task
 log, with what it asked for, like any tool call. A read-only task's token has
 it too (ADR-0046): it reads Ordewell's own record, not the tree. What it
 returns is the producer's words, untrusted content for the reader as every
-report is (ADR-0037 R3).
+report is (ADR-0037 R3), and labelled so (ADR-0057 R3).
 
 The planner is unchanged in kind: `task_query` returns the digest and
 `task_output` the full handoff and the report, both under the planner's
@@ -300,3 +303,4 @@ merges findings; and any new setting.
 - 2026-10-23 — a change task's handoff carries its commit message, and its summary stops repeating it.
 - 2026-10-24 — a fifth artifact kind, `patch`, which only Ordewell adds, for a read-only task's saved patch (ADR-0050).
 - 2026-10-26 — task handoffs appear in expanded task details and task logs, not collapsed plan cards or rows.
+- 2026-10-31 — a `task` reference is pinned to its attempt, and renders as `#12@2/F3` ([ADR-0057](0057-information-moves-by-reference.md) R1).

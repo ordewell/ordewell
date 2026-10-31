@@ -1885,6 +1885,13 @@ describe('task_output', () => {
       expect(body.outputSummary).toEqual({ reviewReason: 'Verified' });
     });
 
+    it('takes a pinned reference as a run update shows it, and reads the attempt it names (ADR-0057 R1)', async () => {
+      const body = await readOutput({ task: '#2@1/F1', kinds: ['handoff'] });
+
+      expect(body.attempt).toBe(1);
+      expect(body.output).toContain('Reviewed the cache.');
+    });
+
     it('renders the handoff event whole in a read of the saved log', async () => {
       const body = await readOutput({ task: '#2', kinds: ['handoff'] });
 
@@ -1893,7 +1900,7 @@ describe('task_output', () => {
         '',
         'Findings:',
         '- F1 [blocker] Entries never expire',
-        '  Evidence: task a',
+        '  Evidence: a',
         '- F2 [minor] A stale comment',
         '  cache.ts:3',
         '',

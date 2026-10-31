@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createTask, type ConversationMessage, type LegacyPlanState, type ResearchProgress, type SkillLoad, type Task } from '../../models/Task';
 import type { SessionMessage } from '../SessionMessage';
-import type { ConversationTurn, IAiService, TurnRun } from '../AiService';
+import type { ConversationRequest, ConversationTurn, IAiService, TurnRun } from '../AiService';
 import type { TaskOp } from '../TaskOps';
-import { ConversationBusyError, ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnFailedError, PlannerTurnStoppedError, PlannerUsageLimitError, type PlannerConversationHost } from '../PlannerConversation';
+import { type WakeBrief, ConversationBusyError, ConversationEditError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnFailedError, PlannerTurnStoppedError, PlannerUsageLimitError, type PlannerConversationHost } from '../PlannerConversation';
 import type { SkillInfo } from '../SkillsService';
 import type { TurnFailure } from '../runnerExit';
 import { fakePlanChanges, passed, refused } from './planChangesTestKit';
@@ -1713,5 +1713,140 @@ describe('the plan block: whole once per live context, then what changed', () =>
       expect(sent[1]).not.toContain('list_runners');
       expect(sent[1]).toContain('call task_query before editing');
     });
+  });
+});
+
+describe('the level brief, sent once to a context (ADR-0057 R5)', () => {
+  const act: WakeBrief = { key: 'act', whole: 'The whole of Act, 2,300 characters of it.', line: 'You are at Act now.' };
+  const watch: WakeBrief = { key: 'watch', whole: 'The whole of Watch.', line: 'You are at Watch now.' };
+  const report: WakeBrief = { key: 'report', whole: 'The whole of a report turn.', line: 'This is a report turn.' };
+  const wake = (conversation: PlannerConversation, brief: WakeBrief) => conversation.reply('', { wakeUps: ['Run update:\n- task #1 failed'], wakeUp: { readBudget: 3, refused: () => undefined, brief } });
+
+  function counted() {
+    const sent: string[] = [];
+    const next = { failed: false };
+    let compactions = 0;
+    const ai = fakeAi({
+      continueConversation: vi.fn(async (message: string) => {
+        sent.push(message);
+        return { kind: 'message', text: 'ok', researchLog: [], ...(next.failed ? { failed: true } : {}) } satisfies ConversationTurn;
+      }),
+      compactions: () => compactions,
+    });
+    return { ...fakeHost(ai, threeTurnPlan()), sent, ai, next, compact: () => { compactions++; } };
+  }
+
+  it('goes whole once, after the run update, and then not at all while nothing changes', async () => {
+    const { conversation, sent } = counted();
+
+    await wake(conversation, act);
+    await wake(conversation, act);
+
+    expect(sent[0]).toMatch(/Run update:\n- task #1 failed\n\nThe whole of Act/);
+    expect(sent[1]).not.toContain('The whole of Act');
+    expect(sent[1]).not.toContain('You are at Act now.');
+  });
+
+  it('is one line back at a level the context holds, and whole at one it never held', async () => {
+    const { conversation, sent } = counted();
+
+    await wake(conversation, act);
+    await wake(conversation, watch);
+    await wake(conversation, act);
+    await wake(conversation, act);
+
+    expect(sent[1]).toContain('The whole of Watch.');
+    expect(sent[2]).toContain('You are at Act now.');
+    expect(sent[2]).not.toContain('The whole of Act');
+    expect(sent[3]).not.toContain('You are at Act now.');
+  });
+
+  it('says a line when what it states moves, the level the same', async () => {
+    const { conversation, sent } = counted();
+
+    await wake(conversation, act);
+    await wake(conversation, { ...act, line: 'You are at Act now, with 20 reads a turn.' });
+
+    expect(sent[1]).toContain('with 20 reads a turn');
+    expect(sent[1]).not.toContain('The whole of Act');
+  });
+
+  it('tells a report turn apart from the level around it, in a line each way', async () => {
+    const { conversation, sent } = counted();
+
+    await wake(conversation, act);
+    await wake(conversation, report);
+    await wake(conversation, report);
+    await wake(conversation, act);
+
+    expect(sent[1]).toContain('The whole of a report turn.');
+    expect(sent[2]).not.toContain('report turn');
+    expect(sent[3]).toContain('You are at Act now.');
+  });
+
+  it('goes whole again once a compaction may have taken it out', async () => {
+    const { conversation, sent, compact } = counted();
+
+    await wake(conversation, act);
+    compact();
+    await wake(conversation, act);
+
+    expect(sent[1]).toContain('The whole of Act');
+  });
+
+  it('goes whole again on a replay, whose context holds none of it', async () => {
+    let live = true;
+    const started: ConversationRequest[] = [];
+    const ai = fakeAi({
+      hasActiveConversation: () => live,
+      reset: () => { live = false; },
+      continueConversation: vi.fn(async () => ({ kind: 'message', text: 'ok', researchLog: [] } satisfies ConversationTurn)),
+      startConversation: vi.fn(async (request: ConversationRequest) => {
+        started.push(request);
+        live = true;
+        return { kind: 'message', text: 'ok', researchLog: [] } satisfies ConversationTurn;
+      }),
+    });
+    const { conversation } = fakeHost(ai, threeTurnPlan());
+
+    await wake(conversation, act);
+    ai.reset();
+    await wake(conversation, act);
+
+    expect(started.at(-1)?.initialMessage).toContain('The whole of Act');
+  });
+
+  it('goes again after a turn that failed, which may not have read it', async () => {
+    const { conversation, sent, next } = counted();
+
+    next.failed = true;
+    await expect(wake(conversation, act)).rejects.toThrow(PlannerTurnFailedError);
+    next.failed = false;
+    await wake(conversation, act);
+
+    expect(sent[1]).toContain('The whole of Act');
+  });
+
+  it('keeps a turn on many waiting updates inside the wake cap', async () => {
+    const { conversation, sent } = counted();
+
+    await conversation.reply('', { wakeUps: ['a'.repeat(14_000), 'b'.repeat(14_000)], wakeUp: { readBudget: 3, refused: () => undefined } });
+
+    expect(sent[0]).toContain('a'.repeat(14_000));
+    expect(sent[0]).not.toContain('b'.repeat(14_000));
+    expect(sent[0]).toContain('+1 more run update; task_query');
+  });
+
+  it('counts the prompt cache from the turn that opened, and from nothing once its context is gone', async () => {
+    const { conversation, ai } = counted();
+    expect(conversation.lastRequestAt).toBeNull();
+
+    const before = Date.now();
+    await wake(conversation, act);
+    expect(conversation.lastRequestAt).toBeGreaterThanOrEqual(before);
+
+    conversation.reset();
+    expect(conversation.lastRequestAt).toBeNull();
+    expect(ai.reset).toHaveBeenCalled();
   });
 });

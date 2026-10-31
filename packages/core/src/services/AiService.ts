@@ -216,6 +216,8 @@ export interface IAiService {
    * T10). Absent where nothing compacts a context in place.
    */
   compactions?(): number;
+  /** How long this planner's prompt cache lasts, as its connector states it; absent when it states none (ADR-0057 R4). */
+  promptCacheTtlMs?(): number | undefined;
 
   /**
    * Optional: what automatic compaction does for the planner's model now
