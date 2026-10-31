@@ -979,7 +979,7 @@ describe('the command seam\'s extension points', () => {
       scheduling: () => false, startsHeld: () => false, hasLiveWork: () => true, runHeld: () => false, scheduledRun: () => false, startsPending: () => false, loopCarried: () => false, awaitsResume: () => false, submittedStartWaits: () => false, advancesOnItsOwn: () => false, admitStart: admission,
       running: () => true, repairOwed: () => false, maxParallel: () => 3, runBlocked: () => false,
       startWaits: () => [], waitingRequests: () => [],
-      runPlan: vi.fn(), joinRun: vi.fn(async () => ''), readyFailed: vi.fn(), startTask: vi.fn(), forceStart: vi.fn(), markComplete: vi.fn(), markNotDone: vi.fn(), revertScope: () => ({ taskIds: [] }), revertTask: vi.fn(), interrupt: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), stopAsked: vi.fn(), retryTask: vi.fn(), skipTask: vi.fn(), continueTask: vi.fn(), resumeNow: vi.fn(),
+      runPlan: vi.fn(), joinRun: vi.fn(async () => ''), readyFailed: vi.fn(), startTask: vi.fn(), forceStart: vi.fn(), markComplete: vi.fn(), markNotDone: vi.fn(), revertScope: () => ({ taskIds: [] }), revertTask: vi.fn(), interrupt: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), stopAsked: vi.fn(), startAsked: vi.fn(), retryTask: vi.fn(), skipTask: vi.fn(), continueTask: vi.fn(), resumeNow: vi.fn(),
       messageTask: vi.fn(), forceMessage: vi.fn(), forceSendQueued: vi.fn(), removeQueued: vi.fn(), cancelResume: vi.fn(), awaitsCheckpoint: () => false, answerCheckpoint: vi.fn(), approveReview: vi.fn(), answerRequest: vi.fn(), mergeAll: vi.fn(), runMerged: () => false, record: vi.fn(), guardTripped: vi.fn(), turnHandle: () => undefined,
       draftScript: () => ({ ok: false, errors: ['not here'] }), addScript: vi.fn(), startAtGate: vi.fn(), awaitEnd: vi.fn(async () => {}), owe: vi.fn(), reportTail: () => undefined,
       escalations: () => [], resolveConflict: vi.fn(), continueRun: vi.fn(),
@@ -1060,7 +1060,7 @@ describe('the command seam\'s extension points', () => {
 
     expect(await commands.run({ command: 'stop_task', task: 't1' }, { kind: 'supervisor', level: 'act' })).toMatchObject({ ok: true });
     expect(mandate).toHaveBeenCalledWith('act');
-    expect(host.stopTask).toHaveBeenCalledWith('t1');
+    expect(host.stopTask).toHaveBeenCalledWith('t1', { kind: 'supervisor', level: 'act' });
   });
 
   it('refuses a call a loop guard trips, with its note, tells the user, and runs nothing', async () => {

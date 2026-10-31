@@ -68,10 +68,12 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   since attempt logs live as long as their session and a child's sit under the root's
   ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D11); a task
   removed from the plan keeps its log, so a reference pinned to one of its attempts reads that
-  log by the id and attempt it holds. A task's `read_task` takes that read only when a handoff in
-  its readable set cites the attempt: the graph no longer reaches a removed task, and a task still
-  cannot read work it was never given ([ADR-0047](0047-structured-task-handoffs.md)). A saved
-  reference with no attempt reads the latest, as it does today.
+  log by the id and attempt it holds. A task's `read_task` takes that read, and its
+  `task_complete` the citation, only when a handoff in its readable set cites the attempt: the
+  graph no longer reaches a removed task, and a task still cannot read work it was never given
+  ([ADR-0047](0047-structured-task-handoffs.md)). A saved reference with no attempt reads the
+  latest, as it does today, a removed task's included; a reference naming no attempt reads the
+  newest one cited, so it never reaches past what the reader was given.
 - **What is pushed is one size (R2).** A handoff is pushed at most 4,000 characters at every
   level (`HANDOFF_PUSH_CHARS`, its artifacts apart), so a node's inbound context depends on its
   fan-out and not on its subtree. Its Report, the long form of at most 20,000, stays pulled
@@ -283,3 +285,4 @@ Added after R1 to R7, and only if those leave a need; replays of Ordewell's own 
 - 2026-10-31 — checked against the code a third time: a subplanner's references resolve in its own plan, and it may cite its whole subtree.
 - 2026-10-31 — R1, R3, R4 and R5 built for a flat plan: references pinned under the root, reports and handoffs labelled as data, `wakeDue` deciding each wake, and a wake's cap, with a brief per level sent once a context.
 - 2026-10-31 — a removed task's pinned attempt reads from its log, within the readable set by citation; a turn's cap keeps the newest update and names what it leaves out; a digest cuts a title, not what happened.
+- 2026-10-31 — a removed task's attempt can be cited as it can be read, and a saved reference with no attempt reads the latest; a digest line leads with what happened and a task name is short enough to leave it, so a turn's cap keeps it.

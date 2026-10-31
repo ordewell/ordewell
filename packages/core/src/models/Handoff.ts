@@ -281,14 +281,31 @@ export function resolveWrittenRef(plan: readonly Task[], written: string): (Omit
 }
 
 /**
- * What a reference naming no task in the plan is pinned to, if anything: the id
- * it renders with once its task is removed, and the attempt. A removed task
- * keeps its log (ADR-0057 R1). `asked` is an attempt given apart from the text.
+ * The attempt of a removed task a reference naming no task in the plan reaches,
+ * by the id it renders with: a removed task keeps its log (ADR-0057 R1). The
+ * graph no longer reaches that task, so a citation does: a handoff in the
+ * reader's readable set must cite the attempt, since a task cannot read work it
+ * was never given (ADR-0047). A citation saved unpinned cites the latest, and a
+ * reference naming no attempt takes the newest one cited. `asked` is an attempt
+ * given apart from the text. Undefined when nothing it may read cites one.
  */
-export function removedPin(written: string, asked?: number): { taskId: string; attempt: number } | undefined {
-  const { task, attempt } = parseFindingRef(written);
-  const pinned = asked ?? attempt;
-  return pinned === undefined ? undefined : { taskId: task, attempt: pinned };
+export function removedAttempt(plan: readonly Task[], readerId: string, logs: HandoffLogs, written: string, asked?: number): { taskId: string; attempt: number; finding?: string } | undefined {
+  const { task: taskId, attempt, finding } = parseFindingRef(written);
+  const saved = logs.attempts(taskId);
+  const latest = saved.at(-1);
+  if (latest === undefined) return undefined;
+  const readable = readableTaskIds(plan, readerId);
+  const cited = flattenTasks(plan).filter((t) => readable.has(t.id)).flatMap((t) => citedAttempts(t, taskId, latest, logs));
+  const reached = asked ?? attempt ?? Math.max(...cited);
+  if (!cited.includes(reached) || !saved.includes(reached)) return undefined;
+  return { taskId, attempt: reached, ...(finding ? { finding } : {}) };
+}
+
+/** The attempts of `taskId` that any handoff `task` left cites: the plan's digest and each attempt's log. */
+function citedAttempts(task: Task, taskId: string, latest: number, logs: HandoffLogs): number[] {
+  const handoffs = [task.handoff, ...logs.attempts(task.id).map((attempt) => logs.handoff(task.id, attempt))];
+  return handoffs.flatMap((handoff) => [...(handoff?.findings ?? []).flatMap((f) => f.evidence ?? []), ...(handoff?.artifacts ?? [])])
+    .flatMap((ref) => (ref.kind === 'task' && ref.task === taskId ? [ref.attempt ?? latest] : []));
 }
 
 /** The pinned reference as text: `#4@2/F3` (ADR-0057 R1); `task` is how the reader names it. */
@@ -569,7 +586,9 @@ export interface HandoffPins {
  * later edit of the plan does not renumber, and the attempt it read, so a
  * retry or a loop round that numbers its findings anew leaves it meaning what
  * it meant (ADR-0057 R1). A task with nothing to say its attempt by stays
- * unpinned, and reads the latest, as a reference saved before pinning does.
+ * unpinned, and reads the latest, as a reference saved before pinning does. A
+ * removed task may be cited where a handoff the producer may read cites it, so
+ * what it read can be passed on ({@link removedAttempt}).
  */
 export function checkHandoff<H extends Handoff>(handoff: H, producerId: string, plan: readonly Task[], pins: HandoffPins = {}): HandoffCheck<H> {
   const readable = readableTaskIds(plan, producerId);
@@ -580,10 +599,28 @@ export function checkHandoff<H extends Handoff>(handoff: H, producerId: string, 
       return ref;
     }
     if (ref.kind !== 'task') return ref;
+    /** Whichever the text and the field name, or a refusal when they name two. */
+    const oneFinding = (inText: string | undefined): { finding: string | undefined } | null => {
+      if (inText && ref.finding && inText !== ref.finding) {
+        refusals.push(`${field}.finding: ${JSON.stringify(ref.task)} and ${JSON.stringify(ref.finding)} name ${inText} and ${ref.finding}: give one finding.`);
+        return null;
+      }
+      return { finding: inText ?? ref.finding };
+    };
     const written = resolveWrittenRef(plan, ref.task);
     if (!written) {
-      refusals.push(`${field}.task: ${JSON.stringify(ref.task)} names no task in the plan: give its "#order", its id or its title.`);
-      return ref;
+      const removed = pins.logs && removedAttempt(plan, producerId, pins.logs, ref.task);
+      if (!removed) {
+        refusals.push(`${field}.task: ${JSON.stringify(ref.task)} names no task in the plan: give its "#order", its id or its title.`);
+        return ref;
+      }
+      const given = oneFinding(removed.finding);
+      if (!given) return ref;
+      const count = pins.logs?.handoff(removed.taskId, removed.attempt)?.findingCount ?? 0;
+      if (given.finding !== undefined && Number(given.finding.slice(1)) > count) {
+        refusals.push(`${field}.finding: ${JSON.stringify(given.finding)} is not a finding of removed task ${removed.taskId}: its attempt ${removed.attempt} has ${count > 0 ? `F1 to F${count}` : 'none'}.`);
+      }
+      return { kind: 'task', node: ROOT_NODE, task: removed.taskId, attempt: removed.attempt, ...(given.finding !== undefined ? { finding: given.finding } : {}) };
     }
     const target = written.task;
     const named = titledTaskRefOf(plan, target.id) ?? target.id;
@@ -591,11 +628,9 @@ export function checkHandoff<H extends Handoff>(handoff: H, producerId: string, 
       refusals.push(`${field}.task: ${JSON.stringify(ref.task)} is ${named}, which this task may not read: only itself, a task it depends on, or its loop's other end.`);
       return ref;
     }
-    if (written.finding && ref.finding && written.finding !== ref.finding) {
-      refusals.push(`${field}.finding: ${JSON.stringify(ref.task)} and ${JSON.stringify(ref.finding)} name ${written.finding} and ${ref.finding}: give one finding.`);
-      return ref;
-    }
-    const finding = written.finding ?? ref.finding;
+    const given = oneFinding(written.finding);
+    if (!given) return ref;
+    const { finding } = given;
     const latest = target.handoff?.attempt ?? (target.handoff ? pins.logs?.attempts(target.id).at(-1) : undefined);
     // A task naming itself means the attempt making the call and the handoff it is writing, whatever an earlier one left on the plan.
     const own = target.id === producerId && pins.attempt !== undefined && (written.attempt ?? pins.attempt) === pins.attempt;

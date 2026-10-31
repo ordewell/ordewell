@@ -82,7 +82,7 @@ import { EscalationNotifier, runNotifyCommand, type NotifyRun } from './escalati
 import type { TaskRevertPreview } from './taskRevert';
 import { REPORT_TAIL_LINES, reportEnded } from './taskReport';
 import { ResearchTasks, researchReportTo } from './ResearchTasks';
-import type { ExecutionActor, ExecutionRecord } from '../models/Execution';
+import { actorAuthority, type ExecutionActor, type ExecutionRecord } from '../models/Execution';
 import { TurnEffects } from './TurnEffects';
 
 /**
@@ -783,6 +783,7 @@ export class Session {
       conversationBusy: () => this.conversation.isTurnInFlight,
       mayWake: () => this.supervision.mayWake(),
       mayReport: () => this.supervision.mayReport(),
+      stoppedByUser: (tasks) => this.supervision.stoppedByUser(tasks),
       persist: () => this.persist(),
       announce: () => {
         this.persist();
@@ -834,7 +835,8 @@ export class Session {
         const handoff = this.owedHandoff();
         if (handoff) this.broadcast({ type: 'isolation_handoff', ...handoff });
       },
-      deliver: (digest, report, idle) => this.turns.enqueue({ source: 'supervisor', text: digest, ...(report ? { report } : {}), ...(idle ? { idle } : {}) }),
+      // Async so a failed save rejects, as a turn's failure does: the input already waits on the plan, and a Stop that took must not throw.
+      deliver: async (digest, report, idle, tasks) => this.turns.enqueue({ source: 'supervisor', text: digest, ...(report ? { report } : {}), ...(idle ? { idle } : {}), ...(tasks ? { tasks } : {}) }),
       pump: () => this.turns.pump(),
       restartPlanner: () => this.backend.current().restart?.(),
       abandonTurn: () => this.conversation.abandonHungTurn(),
@@ -1027,9 +1029,18 @@ export class Session {
       revertScope: (taskId) => this.orchestrator.revertScope(taskId),
       revertTask: (taskId) => this.withSave(() => this.orchestrator.revertTask(taskId)),
       interrupt: (taskId) => this.withSave(() => this.orchestrator.interruptTask(taskId)),
-      stopTask: (taskId) => this.withSave(() => this.orchestrator.cancelTask(taskId)),
-      stopRun: () => this.stopExecution(),
-      stopAsked: () => this.orchestrator.stopAsked(),
+      stopTask: (taskId, actor) => {
+        // Before it ends: its release can outlast a held event's timer, which must find the stop.
+        if (actorAuthority(actor.kind) === 'user') this.supervision.taskStoppedByUser(taskId);
+        return this.withSave(() => this.orchestrator.cancelTask(taskId));
+      },
+      stopRun: (actor) => this.stopExecution(actor),
+      stopAsked: () => {
+        this.supervision.userStopped();
+        this.orchestrator.stopAsked();
+        this.tryPersist();
+      },
+      startAsked: (actor) => { if (actorAuthority(actor.kind) === 'user') this.supervision.userStarting(); },
       retryTask: (taskId, actor) => this.restartTask(taskId, runOrigin(actor)),
       skipTask: (taskId, reason, actor) => this.withSave(() => this.orchestrator.skipTask(taskId, reason, runOrigin(actor))),
       continueTask: (taskId, message, actor) => this.resumeTask(taskId, message, runOrigin(actor)),
@@ -2149,6 +2160,7 @@ export class Session {
       const to = researchReportTo(this.turnActor());
       this.store.update(task.id, { reportTo: to, researchOrigin: to });
       this.record.approveResearch(task.id);
+      if (actorAuthority(this.turnActor().kind) === 'user') this.supervision.userStarting();
       // Queue only as it lands: re-queuing on each turn would undo the user's Stop (ADR-0037 R4).
       this.orchestrator.startAtGate(task.id);
     }
@@ -2517,10 +2529,14 @@ export class Session {
    * one queued behind a planner turn's edit, one waiting on its card, one
    * still opening its run. A card still asking is cleared, so its start
    * answers as stopped rather than waiting on a question that no longer stands.
+   * The user's stands the supervisor down too; a supervisor's own, for a change
+   * it means to run, does not.
    */
-  stopExecution(): void {
+  stopExecution(actor: ExecutionActor = { kind: 'user' }): void {
     // A Stop is answered whatever the saves before it already said.
     this.saveFailureSaid = false;
+    // First: what the run's stop reports waits with the rest.
+    if (actorAuthority(actor.kind) === 'user') this.supervision.userStopped();
     this.stopRun();
   }
 

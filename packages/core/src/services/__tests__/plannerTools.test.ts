@@ -2039,9 +2039,10 @@ describe('task references in the read tools', () => {
     expect((await handler.taskOutput!({ task: 'gone', attempt: 2 }, context)).isError).toBeUndefined();
   });
 
-  it('refuses a removed task with no attempt pinned, or one its log does not hold', async () => {
-    expect((await handler.taskOutput!({ task: 'gone' }, context)).isError).toBe(true);
+  it('reads the latest of a removed task with no attempt pinned, and refuses one its log does not hold', async () => {
+    expect((await handler.taskOutput!({ task: 'gone' }, context)).isError).toBeUndefined();
     expect((await handler.taskOutput!({ task: 'gone@3' }, context)).isError).toBe(true);
+    expect((await handler.taskOutput!({ task: 'never-there' }, context)).isError).toBe(true);
   });
 });
 

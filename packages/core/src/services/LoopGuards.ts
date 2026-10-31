@@ -1,7 +1,7 @@
 import { flattenTasks, flattenTasksWithParents, type Task } from '../models/Task';
 import { DEFAULT_SCRIPT_TIMEOUT_MS } from '../models/ScriptTask';
 import { betweenRounds, loopRoundOf } from '../models/Loop';
-import type { ExecutionCommandName, ExecutionRecord } from '../models/Execution';
+import { actorAuthority, type ExecutionCommandName, type ExecutionRecord } from '../models/Execution';
 import { UPDATABLE_FIELDS } from './TaskOps';
 import type { ExecutionCommand } from './ExecutionCommands';
 
@@ -97,7 +97,12 @@ export interface SupervisionMemorySnapshot {
   edits: EditMemory;
   /** The keys of the guard trips the user was already told of. */
   told: string[];
+  /** The tasks the user stopped and has not started again. Absent on saves before it. */
+  stopped?: string[];
 }
+
+/** What starts one task: a task the user stopped is theirs to start, as a run they stopped is (ADR-0029). */
+const STARTS_A_TASK: ReadonlySet<ExecutionCommandName> = new Set<ExecutionCommandName>(['run_task', 'retry_task', 'force_start']);
 
 /**
  * Past `limit` retries of one task this run, a retry is refused and the task
@@ -198,6 +203,15 @@ function unSkipped(task: Readonly<Task>): GuardTrip {
   };
 }
 
+/** A task the user stopped stays stopped until they say otherwise: a start of it is refused, whatever woke the supervisor. */
+export function stoppedByUser(task: GuardedTask): GuardTrip {
+  return {
+    key: `user-stopped:${task.id}`,
+    refusal: `Refused: the user stopped ${named(task)}, so it is theirs to start again; nothing was changed. Tell them if you think it should run.`,
+    escalation: `Loop guard: I tried to start ${named(task)} after you stopped it, and was refused. Retry it yourself if it should run again.`,
+  };
+}
+
 function reverted(task: Readonly<Task>, field: string): GuardTrip {
   return {
     key: `revert:${task.id}:${field}`,
@@ -224,6 +238,7 @@ export class SupervisionMemory {
   private failedWith = new Map<string, AttemptShape>();
   private edits = noEdits();
   private told = new Set<string>();
+  private userStopped = new Set<string>();
 
   /**
    * The command seam's check of a supervisor's call. A start of a task that
@@ -231,6 +246,9 @@ export class SupervisionMemory {
    * included, which would start every failed task again.
    */
   check(command: ExecutionCommand, target: GuardTarget | undefined, tasks: readonly Task[], limit: number): GuardTrip | null {
+    if (target && STARTS_A_TASK.has(command.command) && this.userStopped.has(target.task.id)) {
+      return stoppedByUser({ id: target.task.id, ref: target.ref, title: target.task.title });
+    }
     if (command.command === 'skip_task') {
       const retried = target ? this.retries.get(target.task.id) ?? 0 : 0;
       if (!target || retried === 0) return null;
@@ -250,6 +268,7 @@ export class SupervisionMemory {
 
   /** A call at the seam went through: a supervisor's retry is counted, and its skip of a task it retried. */
   done(record: ExecutionRecord, tasks: readonly Task[]): void {
+    if (record.task && record.outcome === 'done' && actorAuthority(record.actor) === 'user' && STARTS_A_TASK.has(record.command)) this.userStopped.delete(record.task.id);
     if (record.actor !== 'supervisor' || record.outcome !== 'done') return;
     const { task: named } = record;
     if (record.command === 'skip_task') {
@@ -280,6 +299,16 @@ export class SupervisionMemory {
     this.edits = recordEdit(this.edits, before, after);
   }
 
+  /** The user stopped this task; it is theirs to start again. */
+  stopped(taskId: string): void {
+    this.userStopped.add(taskId);
+  }
+
+  /** Whether the user stopped every one of these tasks and has started none again. */
+  allStopped(taskIds: readonly string[]): boolean {
+    return taskIds.length > 0 && taskIds.every((id) => this.userStopped.has(id));
+  }
+
   /** Whether the user is yet to hear of this trip; true once per trip, so a model repeating a refused call is not echoed. */
   firstReport(trip: GuardTrip): boolean {
     if (this.told.has(trip.key)) return false;
@@ -295,6 +324,7 @@ export class SupervisionMemory {
       failedWith: Object.fromEntries(this.failedWith),
       edits: { removed: [...this.edits.removed], changed: [...this.edits.changed] },
       told: [...this.told],
+      ...(this.userStopped.size > 0 ? { stopped: [...this.userStopped] } : {}),
     };
   }
 
@@ -310,6 +340,7 @@ export class SupervisionMemory {
       changed: [...(snapshot.edits?.changed ?? [])],
     };
     this.told = new Set(snapshot.told ?? []);
+    this.userStopped = new Set(snapshot.stopped ?? []);
   }
 
   forget(): void {
@@ -318,6 +349,7 @@ export class SupervisionMemory {
     this.failedWith.clear();
     this.edits = noEdits();
     this.told.clear();
+    this.userStopped.clear();
   }
 
   /** The tasks a call would retry, and whether an unchanged retry of each is the identical retry the guard refuses. */

@@ -226,10 +226,14 @@ export interface ExecutionHost {
   /** Revert the task's landed work, through the queue it shares with landings. */
   revertTask(taskId: string): Promise<IsolationRevertResult>;
   interrupt(taskId: string): Promise<void>;
-  stopTask(taskId: string): Promise<void>;
-  stopRun(): void;
+  /** `actor` is who stopped it: the user's stop holds the supervisor back from it (ADR-0029). */
+  stopTask(taskId: string, actor: ExecutionActor): Promise<void>;
+  /** `actor` is who stopped it: the user's Stop stands the supervisor down (ADR-0029). */
+  stopRun(actor: ExecutionActor): void;
   /** The user's Stop found nothing to stop: what was admitted before it is withdrawn all the same. */
   stopAsked(): void;
+  /** A start cleared its last check and is about to act; the user's ends their Stop (ADR-0029). */
+  startAsked(actor: ExecutionActor): void;
   retryTask(taskId: string, actor: ExecutionActor): Promise<void>;
   /** End the task as skipped, landing nothing of it; see {@link TaskOrchestrator.skipTask}. */
   skipTask(taskId: string, reason: string | undefined, actor: ExecutionActor): Promise<void>;
@@ -525,6 +529,7 @@ export class ExecutionCommands {
     // or run it hands over is started by the scheduler.
     this.host.approve(this.consented(command, actor, located, prepared.approves));
     if (STARTS.has(command.command) && this.startsUnattended(actor)) this.host.approvePlan();
+    if (STARTS.has(command.command)) this.host.startAsked(actor);
     let acted: Acted;
     try {
       acted = await prepared.act(stopped);
@@ -608,6 +613,7 @@ export class ExecutionCommands {
    */
   private async startScript(command: RunScript, actor: ExecutionActor, taskId: string, consent: ScriptConsent, signal: AbortSignal | undefined): Promise<CommandOutcome> {
     const to = reportTo(actor, consent);
+    this.host.startAsked(actor);
     const started = this.located(taskId)!;
     const label = `script ${describe(started)}`;
     const answered = (result: ScriptResult, message: string, located: Located = started): CommandOutcome => {
@@ -863,7 +869,7 @@ export class ExecutionCommands {
       case 'retry_task': return command.from === 'fresh'
         ? this.prepareStart(located!, actor, 'retry', tasks)
         : located!.paused ? this.prepareResume(located!, actor, command.message) : this.prepareContinue(located!, actor, command.message);
-      case 'stop_task': return this.prepareStop(located!);
+      case 'stop_task': return this.prepareStop(located!, actor);
       case 'stop_run': return this.prepareStopRun(actor);
       case 'message_task': return this.prepareMessage(located!, command, actor);
       case 'answer_approval': return this.prepareAnswer(located!, command, actor);
@@ -1299,7 +1305,7 @@ export class ExecutionCommands {
     };
   }
 
-  private prepareStop(located: Located): Prepared {
+  private prepareStop(located: Located, actor: ExecutionActor): Prepared {
     const { task } = located;
     const label = describe(located);
     const completing = this.completingRefusal(located);
@@ -1309,7 +1315,7 @@ export class ExecutionCommands {
     }
     return {
       act: async () => {
-        await this.host.stopTask(task.id);
+        await this.host.stopTask(task.id, actor);
         const now = this.located(task.id)?.task;
         if (now?.status === 'awaiting_user' && now.awaitingReason === 'conflict') return { message: `Stopped the repair of ${label}: its merge conflict waits for you, and its work is kept. ${CONFLICT_ANSWERS}` };
         if (task.type === 'script') return { message: `Stopped ${label}: what it was running was ended, and it is back to not started and held until it is retried. A retry runs its body again from the first step.` };
@@ -1339,7 +1345,7 @@ export class ExecutionCommands {
     }
     return {
       act: async () => {
-        this.host.stopRun();
+        this.host.stopRun(actor);
         return {
           message: live.length > 0
             ? `Stopped the run: ${named(live)} ${live.length === 1 ? 'is' : 'are'} back to not started, and the plan is kept. ${voiceOf(actor).startAgain}`

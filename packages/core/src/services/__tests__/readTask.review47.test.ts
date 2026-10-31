@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { storedHandoff } from '../../models/Handoff';
+import { checkHandoff, storedHandoff } from '../../models/Handoff';
 import { createTask, type Task } from '../../models/Task';
 import type { TaskLogEvent } from '../../models/TaskLog';
-import { readTask } from '../readTask';
+import { handoffLogs, readTask } from '../readTask';
 
 /**
  * ADR-0057 R1: a reference is pinned to an attempt, and "a reference stays
@@ -57,7 +57,54 @@ describe('a pinned reference to a task removed from the plan (ADR-0057 R1)', () 
     expect(readTask({ task: 'gone@1' }, 'c', plan, log).isError).toBe(true);
   });
 
-  it('refuses a reference with no attempt pinned', () => {
-    expect(readTask({ task: 'gone' }, 'c', plan, log).isError).toBe(true);
+  it('takes the attempt cited when the reference names none', () => {
+    expect(readTask({ task: 'gone/F1' }, 'c', plan, log).text).toContain('gone, removed from the plan, attempt 2 of 2');
+  });
+
+  it('reads the latest for a citation saved before pinning, as R1 says', () => {
+    const unpinned = { ...citing, artifacts: [{ kind: 'task' as const, task: 'gone', finding: 'F1' }] };
+    const saved = [createTask({ id: 'b', order: 1, title: 'B', handoff: unpinned }), createTask({ id: 'c', order: 2, title: 'C', dependencies: ['b'] })];
+
+    expect(readTask({ task: 'gone/F1' }, 'c', saved, log).text).toContain('gone, removed from the plan, attempt 2 of 2');
+    expect(readTask({ task: 'gone@1' }, 'c', saved, log).isError).toBe(true);
+  });
+
+  it('never reads past the attempt a citation pinned, when a later one exists', () => {
+    const older = { ...citing, artifacts: [{ kind: 'task' as const, task: 'gone', attempt: 1, finding: 'F1' }] };
+    const saved = [createTask({ id: 'b', order: 1, title: 'B', handoff: older }), createTask({ id: 'c', order: 2, title: 'C', dependencies: ['b'] })];
+
+    expect(readTask({ task: 'gone' }, 'c', saved, log).text).toContain('attempt 1 of 2');
+  });
+});
+
+describe('citing a task removed from the plan (ADR-0057 R1)', () => {
+  const cite = (task: string, finding?: string) => ({ summary: 'Passing it on.', findings: [], artifacts: [{ kind: 'task' as const, task, ...(finding ? { finding } : {}) }] });
+  const check = (producer: string, task: string, finding?: string) => checkHandoff(cite(task, finding), producer, plan, { logs: handoffLogs(log) });
+
+  it('pins the attempt a task may read, so what it read can be passed on', () => {
+    const checked = check('c', 'gone@2/F1');
+
+    expect(checked).toMatchObject({ ok: true, handoff: { artifacts: [{ kind: 'task', task: 'gone', attempt: 2, finding: 'F1' }] } });
+  });
+
+  it('pins a reference that names no attempt to the one cited', () => {
+    expect(check('c', 'gone', 'F1')).toMatchObject({ ok: true, handoff: { artifacts: [{ task: 'gone', attempt: 2, finding: 'F1' }] } });
+  });
+
+  it('refuses a producer nothing it may read cites, and a finding the attempt does not hold', () => {
+    expect(check('d', 'gone@2/F1')).toMatchObject({ ok: false, refusal: expect.stringContaining('names no task in the plan') });
+    expect(check('c', 'gone@2/F9')).toMatchObject({ ok: false, refusal: expect.stringContaining('its attempt 2 has F1 to F1') });
+    expect(check('c', 'gone@2/F1', 'F2')).toMatchObject({ ok: false, refusal: expect.stringContaining('give one finding') });
+  });
+
+  it('reads what it cited for the task that depends on it next', () => {
+    const checked = check('c', 'gone@2/F1');
+    if (!checked.ok) throw new Error(checked.refusal);
+    const passedOn = [
+      createTask({ id: 'c', order: 1, title: 'C', handoff: { ...storedHandoff(checked.handoff)!, attempt: 1 } }),
+      createTask({ id: 'e', order: 2, title: 'E', dependencies: ['c'] }),
+    ];
+
+    expect(readTask({ task: 'gone@2/F1' }, 'e', passedOn, log).text).toContain('F1 [major] The race');
   });
 });

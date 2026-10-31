@@ -1,6 +1,6 @@
 import { flattenTasks, type Task } from '../models/Task';
 import type { TaskLogEvent } from '../models/TaskLog';
-import { handoffLines, readableTaskIds, removedPin, resolveWrittenRef, wordsFrom, type HandoffDigest, type HandoffLogs, type HandoffTaskName, type StoredHandoff } from '../models/Handoff';
+import { handoffLines, readableTaskIds, removedAttempt, resolveWrittenRef, wordsFrom, type HandoffDigest, type HandoffLogs, type HandoffTaskName, type StoredHandoff } from '../models/Handoff';
 import type { McpToolReply, ReadTaskArgs } from './mcp/tools';
 import { listed } from './harness/ordewellBinding';
 import { taskRefOf, titledTaskRefOf } from './TaskRefs';
@@ -29,7 +29,8 @@ export function handoffLogs(log: Pick<TaskLogReader, 'attempts' | 'events'>): Ha
  * scopes what one task learns of another's work. It reads a handoff and
  * nothing else: no transcript, no tool calls, no output. A pinned reference
  * pasted as `task`, `#4@2/F3`, reads the attempt it names (ADR-0057 R1), of a
- * task since removed too, when a handoff the reader may read cites it.
+ * task since removed too, when a handoff the reader may read cites it; one with
+ * no attempt reads the newest such attempt.
  */
 export function readTask(args: ReadTaskArgs, readerId: string, plan: readonly Task[], log: TaskLogReader): McpToolReply {
   const written = resolveWrittenRef(plan, String(args.task));
@@ -61,32 +62,15 @@ export function readTask(args: ReadTaskArgs, readerId: string, plan: readonly Ta
   return { text: noHandoff(target, name, attempt === undefined ? undefined : of) };
 }
 
-/**
- * A pinned read of a removed task. The graph no longer reaches it, so a citation
- * does: a task cannot read work it was never given (ADR-0047), and one that
- * cites nothing is told what any unknown reference is told.
- */
+/** A read of a removed task, reached by citation ({@link removedAttempt}); a reader with none is told what any unknown reference is told. */
 function readRemoved(args: ReadTaskArgs, readerId: string, plan: readonly Task[], log: TaskLogReader): McpToolReply | undefined {
-  const pin = removedPin(String(args.task), args.attempt);
-  if (!pin || !log.attempts(pin.taskId).includes(pin.attempt)) return undefined;
-  const readable = readableTaskIds(plan, readerId);
-  const cited = flattenTasks(plan).some((t) => readable.has(t.id) && handoffsOf(t, log).some((h) => cites(h, pin.taskId, pin.attempt)));
-  if (!cited) return undefined;
+  const pin = removedAttempt(plan, readerId, handoffLogs(log), String(args.task), args.attempt);
+  if (!pin) return undefined;
   const handoff = loggedHandoff(log.events(pin.taskId, pin.attempt));
   const name = `${pin.taskId}, removed from the plan`;
   const of = `attempt ${pin.attempt} of ${log.attempts(pin.taskId).length}`;
   if (!handoff) return { text: `${name}, has no handoff from ${of}: it ended without a task_complete call, or ran before handoffs.` };
   return { text: [wordsFrom('Handoff', `${name}, ${of}`), '', ...storedLines(handoff, args.include_report === true, (id) => taskRefOf(plan, id))].join('\n') };
-}
-
-/** Every handoff a task has left: the plan's digest and each attempt's log. */
-function handoffsOf(task: Task, log: TaskLogReader): HandoffDigest[] {
-  const logged = log.attempts(task.id).map((attempt) => loggedHandoff(log.events(task.id, attempt)));
-  return [task.handoff, ...logged].filter((h): h is HandoffDigest => h !== undefined);
-}
-
-function cites(handoff: HandoffDigest, taskId: string, attempt: number): boolean {
-  return [...handoff.findings.flatMap((f) => f.evidence ?? []), ...(handoff.artifacts ?? [])].some((ref) => ref.kind === 'task' && ref.task === taskId && ref.attempt === attempt);
 }
 
 /** The handoff an attempt ended with: the last one its log holds. */

@@ -13,7 +13,7 @@ import type { CheckedChange, PlanChangeError } from './PlanChangeCheck';
 import type { PlanChange, ToolRead } from './PlannerConversation';
 import { commandReply, type McpToolReply, type PlannerToolHandler } from './mcp/tools';
 import type { TaskLogEvent } from '../models/TaskLog';
-import { namedHandoff, removedPin, resolveWrittenRef } from '../models/Handoff';
+import { namedHandoff, parseFindingRef, resolveWrittenRef } from '../models/Handoff';
 import { renderTaskLog } from './taskLogRead';
 import { taskReadPage } from './taskReadPage';
 import type { TaskDiffRead, TaskDiffResult } from './taskDiffRead';
@@ -222,13 +222,14 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       const written = resolveWrittenRef(host.tasks(), String(ref));
       const maxLines = Math.min(lines ?? OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX);
       if (!written) {
-        // A removed task keeps its log, so what is pinned to an attempt of it still reads (ADR-0057 R1).
-        const pin = removedPin(String(ref), asked);
-        const attempts = pin ? host.taskLogAttempts(pin.taskId) : [];
-        if (!pin || !attempts.includes(pin.attempt)) return { isError: true, text: JSON.stringify({ ok: false, error: `No task matches "${ref}" in the current plan.` }) };
-        return read(host, JSON.stringify(['output', pin.taskId, maxLines, since ?? null, pin.attempt, kinds ? [...kinds].sort() : null]), async () => ({
-          task: { id: pin.taskId, removed: true }, attempt: pin.attempt, attempts,
-          ...taskReadPage(renderTaskLog(host.taskLog(pin.taskId, pin.attempt), kinds), { lines: maxLines, since }),
+        // A removed task keeps its log, so a reference to it still reads: the attempt it names, or the latest (ADR-0057 R1).
+        const { task: taskId, attempt: pinned } = parseFindingRef(String(ref));
+        const attempts = host.taskLogAttempts(taskId);
+        const removed = asked ?? pinned ?? attempts.at(-1);
+        if (removed === undefined || !attempts.includes(removed)) return { isError: true, text: JSON.stringify({ ok: false, error: `No task matches "${ref}" in the current plan.` }) };
+        return read(host, JSON.stringify(['output', taskId, maxLines, since ?? null, removed, kinds ? [...kinds].sort() : null]), async () => ({
+          task: { id: taskId, removed: true }, attempt: removed, attempts,
+          ...taskReadPage(renderTaskLog(host.taskLog(taskId, removed), kinds), { lines: maxLines, since }),
         }));
       }
       const { task } = written;

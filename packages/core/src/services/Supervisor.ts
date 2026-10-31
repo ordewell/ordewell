@@ -24,8 +24,12 @@ export const DEFAULT_WAKE_UP_READ_BUDGET = 12;
 /** How long one event's detail runs in a digest: what happened, never the log behind it. */
 const DETAIL_CHARS = 240;
 
-/** The most a digest takes to name a task: a long title goes before the line does, which says what happened (ADR-0057 R5). */
-const TASK_NAME_CHARS = 80;
+/**
+ * The most a digest takes to name a task: a long title goes before the line
+ * does (ADR-0057 R5). Short enough that a line cut to `RIDE_ALONG_CHARS` still
+ * says what happened, whichever event it is.
+ */
+const TASK_NAME_CHARS = 60;
 
 /** How many tasks a digest names in a list before it counts them (ADR-0057 R5). */
 const NAMED_TASKS = 3;
@@ -51,6 +55,8 @@ export interface SupervisorSnapshot {
   policy: WakePolicySnapshot;
   /** When each wake-up since the last pass was delivered, for the wake-up rate guard. */
   wakeUps: number[];
+  /** The user's Stop stands: a reload is not them starting the run again (ADR-0029). */
+  stopped?: true;
 }
 
 export interface SupervisorHost {
@@ -62,13 +68,16 @@ export interface SupervisorHost {
    * planner asked for, which opens a turn at every level, with whose authority
    * (ADR-0037, R2, R3). `idle` marks what a load gave back: it asks for no
    * turn, and waits with the saved inputs while the session stays as loaded
-   * (ADR-0029).
+   * (ADR-0029). `tasks` are the tasks it is wholly about, absent when any of it
+   * is about the run.
    */
-  deliver(digest: string, report?: TurnAuthority, idle?: true): Promise<unknown>;
+  deliver(digest: string, report?: TurnAuthority, idle?: true, tasks?: readonly string[]): Promise<unknown>;
   /** Start whatever planner turn is now due. */
   pump(): void;
   /** Save what the supervisor gathered: a restart must still deliver a debounced batch (ADR-0029). */
   saveState(): void;
+  /** Whether every one of these tasks is one the user stopped: an update about them alone opens no turn (ADR-0029). */
+  stoppedByUser(tasks: readonly string[] | undefined): boolean;
   /** What a digest reads of the plan, built once as it goes out: reading it per name is what made a large one quadratic. */
   digestReader(): DigestReader;
   /** What the plan and the planner's prompt cache say now, for the decision the policy makes (ADR-0057 R4). */
@@ -144,6 +153,8 @@ export class Supervisor {
   private wakeUps: number[] = [];
   /** What it holds came back with a load, and no run event has joined it: going out, it wakes nobody (ADR-0029). */
   private loaded = false;
+  /** The user's Stop stands until they start work again: what it gathers waits for them (ADR-0029). */
+  private stopped = false;
   private readonly debounceMs: number;
   private readonly wakeUpRate: WakeUpRate;
   private readonly turnTimeoutMs: number;
@@ -163,8 +174,17 @@ export class Supervisor {
     return createWakePolicy({ debounceMs: this.debounceMs, facts: () => this.host.wakeFacts() });
   }
 
-  /** The level the supervisor acts at now: the run's, lowered during it perhaps, and Off once it failed. */
+  /**
+   * The level the supervisor acts at now: the run's, lowered during it perhaps,
+   * and Off once it failed, or from the user's Stop until they start work
+   * again, so a turn still open when they pressed it restarts nothing.
+   */
   get level(): SupervisorLevel {
+    return this.stopped ? 'off' : this.runLevel;
+  }
+
+  /** The level that decides what is gathered: a Stop holds events back, and loses none of them. */
+  private get runLevel(): SupervisorLevel {
     const run = this.host.run();
     return !run || run.unsupervised !== undefined ? 'off' : run.level;
   }
@@ -187,11 +207,12 @@ export class Supervisor {
   /**
    * Whether a report the planner asked for may open a turn now: at every
    * level (ADR-0037, R2), until the turns opened without the user have failed
-   * for the run, when another would only fail too. It then waits for the
-   * user's next message, as the supervisor's undelivered wake-ups do.
+   * for the run, when another would only fail too, or the user stopped it
+   * (ADR-0029). It then waits for the user's next message, as the supervisor's
+   * undelivered wake-ups do.
    */
   mayReport(): boolean {
-    return this.failures < 2 && this.host.run()?.unsupervised === undefined;
+    return !this.stopped && this.failures < 2 && this.host.run()?.unsupervised === undefined;
   }
 
   /**
@@ -200,11 +221,18 @@ export class Supervisor {
    * turn may change and run is read as it does it, so a level lowered meanwhile
    * applies at once. The brief is advice, since the seam enforces the level.
    * One on a report for a task the user's turn started acts as that turn did
-   * (ADR-0037, R3).
+   * (ADR-0037, R3), until the user's Stop: nobody asked it to go on past that.
    */
   wakeUpTurn(authority: TurnAuthority = 'supervisor'): WakeUpTurn {
     const readBudget = this.host.readBudget();
-    if (authority === 'user') return { readBudget, refused: () => undefined, brief: reportBrief(readBudget), actor: () => ({ kind: 'planner-turn' }) };
+    if (authority === 'user') {
+      return {
+        readBudget,
+        refused: (change) => (this.stopped ? changeRefusal('off', change) : undefined),
+        brief: reportBrief(readBudget),
+        actor: () => (this.stopped ? { kind: 'supervisor', level: 'off' } : { kind: 'planner-turn' }),
+      };
+    }
     return {
       readBudget,
       refused: (change) => changeRefusal(this.level, change),
@@ -217,10 +245,11 @@ export class Supervisor {
   /**
    * A run event. Ignored unless the supervisor watches — at Off, or once it
    * failed, nothing is gathered — but for a report the planner asked for,
-   * gathered at every level (ADR-0037, R2).
+   * gathered at every level (ADR-0037, R2). Past the user's Stop it goes
+   * straight to the inputs waiting for them.
    */
   observe(event: RunEventInput): void {
-    if (!this.watching && event.kind !== 'task_report') return;
+    if (this.runLevel === 'off' && event.kind !== 'task_report') return;
     if (event.kind === 'run_finished') {
       if (this.finished) return;
       this.finished = true;
@@ -229,13 +258,14 @@ export class Supervisor {
     if (event.kind === 'task_passed' || event.report?.passed) this.wakeUps = [];
     if (event.kind !== 'task_passed') this.loaded = false;
     this.policy.push({ ...event, at: this.now() });
-    this.arm();
+    if (this.stopped) this.standDown();
+    else this.arm();
     this.host.saveState();
   }
 
   /** What it gathered but has not delivered, for the plan (ADR-0029). */
   snapshot(): SupervisorSnapshot {
-    return { policy: this.policy.snapshot(), wakeUps: [...this.wakeUps] };
+    return { policy: this.policy.snapshot(), wakeUps: [...this.wakeUps], ...(this.stopped ? { stopped: true } : {}) };
   }
 
   /**
@@ -250,6 +280,7 @@ export class Supervisor {
     this.disarm();
     this.policy.restore(snapshot?.policy);
     this.wakeUps = [...(snapshot?.wakeUps ?? [])];
+    this.stopped = snapshot?.stopped === true;
     this.loaded = (snapshot?.policy.attention.length ?? 0) > 0;
     if (!this.loaded) return;
     // Not yet: what is due is read from the plan, and this load has not put its tasks in the store.
@@ -290,11 +321,28 @@ export class Supervisor {
     this.wakeUps = [];
   }
 
+  /**
+   * The user's Stop (ADR-0029): nothing it gathered or gathers opens a turn
+   * until they start work again. It all joins the inputs waiting, as a stand
+   * down's does, for the user's next message or the first turn after their
+   * start; the tasks it was about say the same in the plan and the inbox.
+   */
+  userStopped(): void {
+    this.stopped = true;
+    this.standDown();
+  }
+
+  /** The user started work again: what their Stop held goes with the next turn, which this does not open. */
+  userStarted(): void {
+    this.stopped = false;
+  }
+
   /** The plan these events were about is gone: nothing gathered or waited on carries over. */
   reset(): void {
     this.disarm();
     this.discardTurn?.();
     this.failures = 0;
+    this.stopped = false;
     this.finished = false;
     this.runEndPending = false;
     this.wakeUps = [];
@@ -419,9 +467,9 @@ export class Supervisor {
         this.arm();
         return;
       }
-      // A report owed to the user's turn is not the supervisor waking itself.
+      // A report owed to the user's turn is not the supervisor waking itself, nor is an update that opens no turn.
       const own = batch.attention.filter((e) => e.report?.authority !== 'user');
-      if (own.length > 0 && !this.idle(own)) this.countWakeUp();
+      if (own.length > 0 && !this.idle(own) && !this.host.stoppedByUser(tasksOf(own))) this.countWakeUp();
       this.deliver(batch);
     }, Math.max(0, due - this.now()));
   }
@@ -468,16 +516,23 @@ export class Supervisor {
       const runEnd = own.some((e) => e.kind === 'run_finished');
       const asked = own.some((e) => e.kind === 'task_report') ? 'supervisor' : undefined;
       const text = digest({ attention: own, sinceLast: batch.sinceLast });
-      if (this.idle(own)) void this.host.deliver(text, undefined, true).catch(() => {});
-      else void this.host.deliver(text, asked).catch(() => {}).then(() => {
+      const tasks = tasksOf(own);
+      if (this.idle(own)) void this.host.deliver(text, undefined, true, tasks).catch(() => {});
+      else void this.host.deliver(text, asked, undefined, tasks).catch(() => {}).then(() => {
         if (runEnd) this.runEndPending = false;
         this.host.wakeUpEnded();
       });
     }
     if (theirs.length > 0) {
-      void this.host.deliver(digest({ attention: theirs, sinceLast: own.length > 0 ? [] : batch.sinceLast }), 'user').catch(() => {});
+      void this.host.deliver(digest({ attention: theirs, sinceLast: own.length > 0 ? [] : batch.sinceLast }), 'user', undefined, tasksOf(theirs)).catch(() => {});
     }
   }
+}
+
+/** The tasks these events are wholly about; undefined when any of them is about the run. */
+function tasksOf(events: readonly RunEvent[]): string[] | undefined {
+  const tasks = events.map((e) => e.taskIds ?? (e.taskId === undefined ? [] : [e.taskId]));
+  return tasks.some((ids) => ids.length === 0) ? undefined : [...new Set(tasks.flat())];
 }
 
 const EDITS_REFUSED =
@@ -672,12 +727,13 @@ function attentionLine(event: RunEvent, describe: (taskId: string) => string, bl
     case 'task_passed': return `${task} passed`;
     case 'usage_limit': {
       const ids = event.taskIds ?? (event.taskId === undefined ? [] : [event.taskId]);
-      const one = ids.length === 1;
-      const tasks = ids.length === 0 ? 'a task' : `${one ? 'task' : 'tasks'} ${namedFirst(ids, describe)}`;
+      const many = ids.length > 1;
       const resume = event.resumeAt
-        ? `${one ? 'it resumes' : 'they resume'} on ${one ? 'its' : 'their'} own at ${event.resumeAt}`
-        : `${one ? 'it waits' : 'they wait'} for a retry, as the reset time could not be read`;
-      return `${tasks} paused on ${event.runner ?? 'its runner'}'s usage limit; ${resume}`;
+        ? `${many ? 'resume on their' : 'resumes on its'} own at ${event.resumeAt}`
+        : `${many ? 'wait' : 'waits'} for a retry, as the reset time could not be read`;
+      // What happened and when it ends come first: the list of tasks is the part that grows.
+      const paused = `${event.runner ?? 'its runner'}'s usage limit paused ${many ? `${ids.length} tasks` : 'a task'}, which ${resume}`;
+      return ids.length === 0 ? paused : `${paused}: ${namedFirst(ids, describe)}`;
     }
   }
 }

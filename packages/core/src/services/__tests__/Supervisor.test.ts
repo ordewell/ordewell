@@ -25,7 +25,7 @@ describe('wakeUpDigest', () => {
       '- task #4 "Task t4" has gone quiet (no output since 2026-10-11T18:05:00.000Z)',
       '- task #5 "Task t5" finished, but its work conflicts and could not land',
       '- automatic Merge all at the merge gate of task #6 "Task t6" stopped: it conflicts in .: a.ts; the gate waits for the user',
-      '- tasks #7 "Task t7" and #8 "Task t8" paused on codex\'s usage limit; they wait for a retry, as the reset time could not be read',
+      '- codex\'s usage limit paused 2 tasks, which wait for a retry, as the reset time could not be read: #7 "Task t7" and #8 "Task t8"',
       '- the run finished: 5 of 8 tasks completed, 1 failed',
       'Since the last update:',
       '- task #9 "Task t9" passed',
@@ -89,7 +89,8 @@ describe('a wake\'s size (ADR-0057 R5)', () => {
   it('names the first few tasks a usage limit paused and counts the rest', () => {
     const digest = wakeUpDigest({ attention: [{ kind: 'usage_limit', taskId: 't1', taskIds: ids(50), at: 0, runner: 'codex', resumeAt: null }], sinceLast: [] }, describeTask);
 
-    expect(digest).toContain('and 47 more paused on codex\'s usage limit');
+    expect(digest).toContain('codex\'s usage limit paused 50 tasks');
+    expect(digest).toContain('and 47 more');
   });
 
   it('stays inside the cap however many tasks passed, and points at what reads the rest', () => {
@@ -137,9 +138,12 @@ describe('a wake\'s size (ADR-0057 R5)', () => {
 });
 
 describe('Supervisor', () => {
+  /** What each delivery says and whose it is; which tasks it is about is its own test's. */
+  const delivered = (h: { deliver: ReturnType<typeof vi.fn> }) => h.deliver.mock.calls.map((call) => call.slice(0, call[2] ? 3 : 2));
+
   function host(run: SupervisedRun | null): SupervisorHost & { deliver: ReturnType<typeof vi.fn>; dropToWatch: ReturnType<typeof vi.fn> } {
     return {
-      run: () => run, deliver: vi.fn(async () => undefined), pump: vi.fn(), saveState: vi.fn(), digestReader: () => ({ describe: describeTask, blockedBy: () => [] }),
+      run: () => run, deliver: vi.fn(async () => undefined), pump: vi.fn(), saveState: vi.fn(), stoppedByUser: () => false, digestReader: () => ({ describe: describeTask, blockedBy: () => [] }),
       // Nothing left to wait for: what is held goes at the window, as the tests here want it to (WakePolicy.test.ts holds the rest).
       wakeFacts: () => ({ nothingCanStart: true, cohortDone: new Set<string>(), blocksWork: new Set<string>(), requestAt: null }), readBudget: () => 12, retryLimit: () => 2,
       restartPlanner: vi.fn(), abandonTurn: vi.fn(), goUnsupervised: vi.fn(), wakeUpEnded: vi.fn(), dropToWatch: vi.fn(), notice: vi.fn(),
@@ -174,7 +178,7 @@ describe('Supervisor', () => {
       supervisor.observe(report('user'));
       await vi.advanceTimersByTimeAsync(10);
 
-      expect(h.deliver).toHaveBeenCalledWith('Run update:\n- task #1 "Task t1", whose result you asked for, has ended. It passed.\n  It printed nothing.', 'user');
+      expect(h.deliver).toHaveBeenCalledWith('Run update:\n- task #1 "Task t1", whose result you asked for, has ended. It passed.\n  It printed nothing.', 'user', undefined, ['t1']);
       expect(supervisor.mayWake()).toBe(false);
       expect(supervisor.mayReport()).toBe(true);
       vi.useRealTimers();
@@ -190,7 +194,7 @@ describe('Supervisor', () => {
       supervisor.observe(report('supervisor', 't3'));
       await vi.advanceTimersByTimeAsync(10);
 
-      expect(h.deliver.mock.calls).toEqual([
+      expect(delivered(h)).toEqual([
         [expect.stringMatching(/^Run update:\n- task #2 "Task t2" failed: broke\n- task #3 "Task t3", whose result you asked for/), 'supervisor'],
         [expect.stringMatching(/^Run update:\n- task #1 "Task t1", whose result you asked for/), 'user'],
       ]);
@@ -207,7 +211,7 @@ describe('Supervisor', () => {
       supervisor.runStarted();
       await vi.advanceTimersByTimeAsync(10);
 
-      expect(h.deliver.mock.calls).toEqual([[expect.not.stringContaining('failed'), 'user']]);
+      expect(delivered(h)).toEqual([[expect.not.stringContaining('failed'), 'user']]);
       vi.useRealTimers();
     });
 
@@ -224,7 +228,7 @@ describe('Supervisor', () => {
       supervisor.restore(saved);
       await vi.advanceTimersByTimeAsync(10);
 
-      expect(h.deliver.mock.calls).toEqual([
+      expect(delivered(h)).toEqual([
         [expect.stringMatching(/task #2 "Task t2" failed/), undefined, true],
         [expect.stringMatching(/^Run update:\n- task #1 "Task t1", whose result you asked for/), 'user'],
       ]);
@@ -245,7 +249,7 @@ describe('Supervisor', () => {
       supervisor.restore(saved);
       await vi.advanceTimersByTimeAsync(10);
 
-      expect(h.deliver.mock.calls).toEqual([[expect.stringMatching(/failed\n- task #3 "Task t3", whose result you asked for/), 'supervisor']]);
+      expect(delivered(h)).toEqual([[expect.stringMatching(/failed\n- task #3 "Task t3", whose result you asked for/), 'supervisor']]);
       vi.useRealTimers();
     });
 
@@ -300,7 +304,7 @@ describe('Supervisor', () => {
 
       await vi.advanceTimersByTimeAsync(10);
 
-      expect(h.deliver.mock.calls).toEqual([[expect.stringContaining('task #1 "Task t1" failed'), undefined, true]]);
+      expect(delivered(h)).toEqual([[expect.stringContaining('task #1 "Task t1" failed'), undefined, true]]);
       expect(supervisor.snapshot().policy.attention).toEqual([]);
       expect(h.wakeUpEnded).not.toHaveBeenCalled();
       vi.useRealTimers();
@@ -323,7 +327,7 @@ describe('Supervisor', () => {
       supervisor.observe({ kind: 'waiting_input', taskId: 't3' });
       await vi.advanceTimersByTimeAsync(10);
 
-      expect(h.deliver.mock.calls).toEqual([[expect.stringMatching(/failed\n- task #3 "Task t3" is waiting for input$/), undefined]]);
+      expect(delivered(h)).toEqual([[expect.stringMatching(/failed\n- task #3 "Task t3" is waiting for input$/), undefined]]);
       vi.useRealTimers();
     });
 
@@ -334,7 +338,7 @@ describe('Supervisor', () => {
       supervisor.runStarted(true);
       await vi.advanceTimersByTimeAsync(10);
 
-      expect(h.deliver.mock.calls).toEqual([[expect.stringContaining('failed'), undefined]]);
+      expect(delivered(h)).toEqual([[expect.stringContaining('failed'), undefined]]);
       vi.useRealTimers();
     });
 
@@ -345,7 +349,7 @@ describe('Supervisor', () => {
       supervisor.observe({ kind: 'task_passed', taskId: 't2' });
       await vi.advanceTimersByTimeAsync(10);
 
-      expect(h.deliver.mock.calls).toEqual([[expect.stringContaining('failed'), undefined, true]]);
+      expect(delivered(h)).toEqual([[expect.stringContaining('failed'), undefined, true]]);
       vi.useRealTimers();
     });
   });
@@ -394,6 +398,94 @@ describe('Supervisor', () => {
     expect(turn.refused('edit')).toMatch(/^Plan edits are refused: the supervisor was turned off for this run/);
     run = { level: 'act', unsupervised: 'it failed twice' };
     expect(turn.refused('edit')).toMatch(/turned off for this run/);
+  });
+
+  describe('the user\'s Stop (ADR-0029)', () => {
+    const report = { kind: 'task_report', taskId: 't1', report: { authority: 'user', text: 'done', passed: true } } as const;
+
+    it('acts at Off and opens nothing, whatever the run\'s level', () => {
+      const supervisor = new Supervisor(host({ level: 'act' }));
+
+      supervisor.userStopped();
+
+      expect(supervisor.level).toBe('off');
+      expect(supervisor.mayWake()).toBe(false);
+      expect(supervisor.mayReport()).toBe(false);
+      supervisor.userStarted();
+      expect(supervisor.level).toBe('act');
+      expect(supervisor.mayReport()).toBe(true);
+    });
+
+    it('hands what it held to the waiting inputs, and what comes after, with the wake-up rate untouched', () => {
+      const h = host({ level: 'act' });
+      const wakeUps: number[] = [];
+      const supervisor = new Supervisor({ ...h, dropToWatch: () => wakeUps.push(1) }, { wakeUpRate: { max: 0, windowMs: 60_000 } });
+
+      supervisor.observe({ kind: 'task_failed', taskId: 't1' });
+      supervisor.userStopped();
+      supervisor.observe({ kind: 'waiting_input', taskId: 't2' });
+      supervisor.observe(report);
+      supervisor.observe({ kind: 'run_finished', detail: '1 of 2 tasks completed' });
+
+      expect(delivered(h).map(([digest]) => digest)).toEqual([
+        expect.stringContaining('failed'),
+        expect.stringContaining('waiting for input'),
+        expect.stringContaining('done'),
+        expect.stringContaining('the run finished'),
+      ]);
+      expect(supervisor.awaitsRunEnd).toBe(false);
+      expect(wakeUps).toEqual([]);
+    });
+
+    it('stands through a save', () => {
+      const stopped = new Supervisor(host({ level: 'act' }));
+      stopped.userStopped();
+      const reloaded = new Supervisor(host({ level: 'act' }));
+
+      reloaded.restore(stopped.snapshot());
+
+      expect(reloaded.level).toBe('off');
+      expect(reloaded.mayReport()).toBe(false);
+    });
+
+    it('takes a report turn\'s authority away at once, so it cannot start again what was stopped', () => {
+      const supervisor = new Supervisor(host({ level: 'off' }));
+      const turn = supervisor.wakeUpTurn('user');
+      expect(turn.actor?.()).toEqual({ kind: 'planner-turn' });
+      expect(turn.refused('edit')).toBeUndefined();
+
+      supervisor.userStopped();
+
+      expect(turn.actor?.()).toEqual({ kind: 'supervisor', level: 'off' });
+      expect(turn.refused('edit')).toMatch(/^Plan edits are refused/);
+    });
+
+    it('counts no wake-up for an update about tasks the user stopped alone', async () => {
+      vi.useFakeTimers();
+      const h = host({ level: 'act' });
+      const dropToWatch = vi.fn();
+      const supervisor = new Supervisor({ ...h, dropToWatch, stoppedByUser: () => true }, { wakeUpRate: { max: 0, windowMs: 60_000 } });
+
+      supervisor.observe({ kind: 'waiting_input', taskId: 't1' });
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(h.deliver).toHaveBeenCalledWith(expect.any(String), undefined, undefined, ['t1']);
+      expect(dropToWatch).not.toHaveBeenCalled();
+      vi.useRealTimers();
+    });
+
+    it('names no tasks for an update about the run', async () => {
+      vi.useFakeTimers();
+      const h = host({ level: 'act' });
+      const supervisor = new Supervisor(h);
+
+      supervisor.observe({ kind: 'waiting_input', taskId: 't1' });
+      supervisor.observe({ kind: 'run_finished', detail: 'over' });
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(h.deliver).toHaveBeenCalledWith(expect.any(String), undefined, undefined, undefined);
+      vi.useRealTimers();
+    });
   });
 
   describe('the wake-up rate guard', () => {
