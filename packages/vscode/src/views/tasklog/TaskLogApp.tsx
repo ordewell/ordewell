@@ -198,7 +198,7 @@ export default function TaskLogApp() {
   const activity = ((): TaskActivity | null => {
     if (!status || script || !header) return null;
     const archived = status.attempts.length > 0 && status.attempt < Math.max(...status.attempts);
-    return taskActivity({ blocks, turnStartedAt: status.turnStartedAt ?? undefined, working: header.working, archived }, { status: status.taskStatus, idleSince: status.idleSince, awaitingApproval: state?.kind === 'approval' ? 1 : 0 });
+    return taskActivity({ blocks, turnStartedAt: status.turnStartedAt ?? undefined, working: header.working, lastTurnEnd: status.lastTurnEnd ?? undefined, archived }, { status: status.taskStatus, idleSince: status.idleSince, awaitingApproval: state?.kind === 'approval' ? 1 : 0 });
   })();
 
   // One button, as in the planner's composer: Stop only while a turn is live

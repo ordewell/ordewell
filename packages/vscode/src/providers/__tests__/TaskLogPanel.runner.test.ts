@@ -64,3 +64,10 @@ describe('the task log tab tells the webview when the open turn began (#81)', ()
     ]).turnStartedAt).toBeNull();
   });
 });
+
+describe('the task log tab tells the webview how the last turn ended', () => {
+  it('sends the end of a finished turn, and none before one has ended', () => {
+    expect(openedStatus(task({ status: 'in_progress' }), [{ type: 'turn_start', message: 'go' }]).lastTurnEnd).toBeNull();
+    expect(openedStatus(task({ status: 'in_progress' }), [{ type: 'turn_start', message: 'go' }, { type: 'turn_end', reason: 'interrupted' }]).lastTurnEnd).toBe('interrupted');
+  });
+});

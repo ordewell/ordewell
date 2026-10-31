@@ -81,7 +81,7 @@ function status(over: StatusOverrides = {}): TaskLogStatus {
       continuable,
       attemptUsage: ledger,
     }, follow, awaitingApproval, attempt),
-    taskStatus: planStatus, idleSince: null, turnStartedAt: null,
+    taskStatus: planStatus, idleSince: null, turnStartedAt: null, lastTurnEnd: lastTurnEnd ?? null,
     queued: [], attempts, attempt,
     ...rest,
   };
@@ -879,6 +879,14 @@ describe('the runner\'s activity, folded (ADR-0017, X1)', () => {
     it('is absent on an earlier attempt, though its log was left on an open turn', () => {
       render(<TaskLogApp />);
       init({ working: true, attempts: [1, 2], attempt: 1, turnStartedAt: '2026-10-30T10:00:00.000Z' }, [...thinking.blocks]);
+
+      expect(line()).toBeNull();
+    });
+
+    it('is absent for a finished turn that left a tool call pending', () => {
+      const view = replayTaskLog([{ type: 'turn_start', message: 'go' }, { type: 'tool_call', id: 'c1', name: 'Bash', args: '{"command":"npm test"}' }, { type: 'turn_end', reason: 'completed' }]);
+      render(<TaskLogApp />);
+      init({ working: false, lastTurnEnd: 'completed' }, [...view.blocks]);
 
       expect(line()).toBeNull();
     });

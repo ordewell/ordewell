@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { replayTaskLog } from '../taskLog';
 import { activityLabel, taskActivity } from '../activity';
+import type { StructuredTurnEnd } from '../../interfaces/IRunner';
 import type { TaskLogEvent } from '../../models/TaskLog';
 
 const start: TaskLogEvent = { type: 'turn_start', message: 'Do the task' };
@@ -123,5 +124,45 @@ describe('taskActivity', () => {
   it('is absent when the task is not running, as at a checkpoint', () => {
     expect(taskActivity(working, { status: 'awaiting_user' })).toBeNull();
     expect(taskActivity(working, { status: 'completed' })).toBeNull();
+  });
+});
+
+describe('taskActivity, the whole rule', () => {
+  // A line shows if a turn is open, or a subagent is running, or the log has seen
+  // no turn end and holds an open block. Once a turn has ended, a tool, message or
+  // thinking left open is not a turn. Each cell is read as both surfaces read it:
+  // the TUI hands over the whole view, the webview only the blocks, the turn flag
+  // and `lastTurnEnd` (null in its status when absent).
+  const OPEN: Record<string, TaskLogEvent[]> = {
+    tool: [{ type: 'tool_call', id: 'r1', name: 'Bash', args: '{"command":"npm test"}' }],
+    message: [{ type: 'text_delta', runId: 'a', text: 'Here' }],
+    thinking: [{ type: 'thinking_delta', text: 'Hmm' }],
+    subagent: [{ type: 'subagent_started', subagentId: 's1', brief: 'Scan the repo' }],
+    none: [],
+  };
+  const ENDS: Array<StructuredTurnEnd | undefined> = [undefined, 'completed', 'interrupted', 'failed'];
+
+  const cases = [true, false].flatMap((working) => ENDS.flatMap((lastTurnEnd) => Object.keys(OPEN).flatMap((open) => [false, true].map((archived) => ({ working, lastTurnEnd, open, archived })))));
+
+  it.each(cases)('working $working, last turn end $lastTurnEnd, open $open, archived $archived', ({ working, lastTurnEnd, open, archived }) => {
+    // Replayed without a turn end, so the blocks are left open whatever the flags below say.
+    const logged = replayTaskLog(OPEN[open]);
+    const shows = !archived && (working || open === 'subagent' || (lastTurnEnd === undefined && open !== 'none'));
+    const tui = taskActivity({ ...logged, working, lastTurnEnd, archived }, { status: 'in_progress' });
+    const webview = taskActivity({ blocks: logged.blocks, turnStartedAt: undefined, working, lastTurnEnd: lastTurnEnd ?? undefined, archived }, { status: 'in_progress' });
+    for (const activity of [tui, webview]) {
+      if (shows) expect(activity).toMatchObject({ busy: true });
+      else expect(activity).toBeNull();
+    }
+    expect(webview).toEqual(tui);
+  });
+
+  it('is absent for a finished turn that left a tool call pending, or took a late delta', () => {
+    const dangling = replayTaskLog([start, ...OPEN.tool, { type: 'turn_end', reason: 'completed' }]);
+    expect(dangling.blocks.some((b) => b.type === 'tool' && b.status === 'pending')).toBe(true);
+    expect(taskActivity(dangling, { status: 'in_progress' })).toBeNull();
+    const straggler = replayTaskLog([start, { type: 'turn_end', reason: 'completed' }, ...OPEN.message]);
+    expect(straggler.working).toBe(false);
+    expect(taskActivity(straggler, { status: 'in_progress' })).toBeNull();
   });
 });

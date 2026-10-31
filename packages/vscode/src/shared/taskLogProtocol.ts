@@ -1,4 +1,4 @@
-import type { AccountLimitSnapshot, ApprovalDecision, DisplayBlock, TaskLogHeaderView } from '@ordewell/core';
+import type { AccountLimitSnapshot, ApprovalDecision, DisplayBlock, StructuredTurnEnd, TaskLogHeaderView } from '@ordewell/core';
 
 /*
  * The messages between the extension host and a task-log panel (ADR-0018, V1).
@@ -41,6 +41,8 @@ export interface TaskLogStatus {
   idleSince: string | null;
   /** When the open turn began (ISO), which the activity line counts its time from (#81); null between turns and for a log saved before it was kept. */
   turnStartedAt: string | null;
+  /** How the log's last turn ended; null before the first does. The activity line reads blocks a turn left open differently once a turn has ended. */
+  lastTurnEnd: StructuredTurnEnd | null;
   /** Messages the runner has not read yet, oldest first. */
   queued: readonly TaskLogQueuedMessage[];
   /** Attempts that have a saved log, oldest first. */

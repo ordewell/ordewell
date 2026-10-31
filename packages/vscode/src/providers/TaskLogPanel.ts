@@ -286,6 +286,7 @@ export class TaskLogPanel {
       taskStatus: task?.status ?? '',
       idleSince: this.idleSince,
       turnStartedAt: this.follow.view.turnStartedAt ?? null,
+      lastTurnEnd: this.follow.view.lastTurnEnd ?? null,
       queued: this.follow.view.queued,
       attempts: this.follow.attempts,
       attempt: this.follow.attempt,
