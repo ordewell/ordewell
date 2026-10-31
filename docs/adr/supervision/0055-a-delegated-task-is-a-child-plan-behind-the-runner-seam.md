@@ -62,6 +62,7 @@ the child cannot reach follows it in the parent's plan.**
   | `assignedRunner`, `assignedModel` | the subplanner's, resolved as any task's are ([ADR-0003](../routing/0003-per-runner-model-allowlist.md), [ADR-0041](../routing/0041-a-tasks-model-follows-the-runners-own-switch.md)) |
   | `budget` | required: tokens, and optionally wall-clock time (ADR-0056 M5) |
   | `grants`, `protectedPaths`, `scope` | optional: the grants it asks for past the floor (ADR-0056 M2, M4), paths the child may not change (D7), a declared scope (ADR-0057 R6) |
+  | `readOnly` | optional: it answers a question and lands nothing ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)), so D6 asks for no change |
 
   It has no subtasks and is never one: it is top-level, as a script task is, and
   `checkPlanInvariants` holds it to that as it holds a script task. `subtasks`
@@ -76,11 +77,12 @@ the child cannot reach follows it in the parent's plan.**
   what is left of the budget.
   [ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md) leaves a
   delegated body out of scope.
-- **What a child plan may hold (D2).** Change tasks, read-only and research tasks,
-  script tasks (ADR-0056 M9), loops, and delegated tasks while its depth allows
-  (D19) and it holds `delegate` (ADR-0056 M2). `ops` and user tasks are refused in
-  it at plan time: an ops task acts on the user's systems from their checkout, and a
-  user task waits on a person, and neither exists below the root.
+- **What a child plan may hold (D2).** Change tasks, read-only tasks, research tasks
+  while it holds `research`, script tasks (ADR-0056 M9), loops, and delegated tasks
+  while its depth allows (D19) and it holds `delegate` (ADR-0056 M2). `ops` and user
+  tasks are refused in it at plan time: an ops task acts on the user's systems from
+  their checkout, and a user task waits on a person, and neither exists below the
+  root.
 
 ### Hosting
 
@@ -127,7 +129,9 @@ the child cannot reach follows it in the parent's plan.**
   1. the child run has settled: no attempt live, no planner turn live but the one
      making the call, nothing that can start, every task `completed` or `skipped`,
      none failed, blocked or waiting;
-  2. what landed is merged into the delegated task's branch (D10);
+  2. the child did work, and what landed is merged into the delegated task's branch
+     (D10): at least one of its tasks `completed`, and that branch changed since its
+     base unless the delegated task is `readOnly`;
   3. the changes on that branch since its base touch no protected path;
   4. the call came on the attempt's token.
 
@@ -136,12 +140,14 @@ the child cannot reach follows it in the parent's plan.**
   ([ADR-0047](0047-structured-task-handoffs.md)): a subplanner saying done is
   necessary and never sufficient. One that fails 3 fails the verdict, with the
   paths named, and nothing lands. `blocked` and `failed` are taken at any time:
-  that is how a subtree gives up. A subplanner may skip a task under its grants,
-  as a supervisor does, so skipped work can end a child; the skips are counted in
-  its report (ADR-0057 R2), and the check is what judges the result. A turn that
-  ends with the run settled and no call gets the one completion reminder; a second
-  fails the attempt with a derived report, since no person is there to wait for
-  (ADR-0056 M8).
+  that is how a subtree gives up, and how a child that found nothing to change says
+  so, for its parent to decide. `readOnly` is on the parent's plan, which the child
+  cannot edit, so a child cannot excuse itself from 2. A subplanner may skip a task
+  under its grants, as a supervisor does, so skipped work can end a child, though
+  never all of it; the skips are counted in its report (ADR-0057 R2), and the check
+  is what judges the result. A turn that ends with the run settled and no call gets
+  the one completion reminder; a second fails the attempt with a derived report,
+  since no person is there to wait for (ADR-0056 M8).
 - **Protected paths are checked at the verdict, not in the landing (D7).** A
   delegated task may declare paths (tests, CI, scoring) its child may not change.
   A landing never fails a task
@@ -163,8 +169,12 @@ the child cannot reach follows it in the parent's plan.**
     sealed ([ADR-0036](../planner-envelope/0036-the-planners-shell-sealed-runs-and-native-opt-in.md)),
     in a throwaway worktree cut from the integration tip, landing nothing, past no
     gate, its exit status its evidence, and consent to its body as ADR-0035 says. A
-    delegated task's script check must be one. Where no sandbox can seal, it does
-    not run, and the check must be a read-only task.
+    delegated task's script check must be one. Where no sandbox can seal (ADR-0036
+    S6) it cannot run, and the check must be a read-only task. So a script check is
+    refused there on every route, saying why, on `canSeal` read through
+    `PlanChangeScope`, since `checkPlanInvariants` is pure. One a saved plan brings to
+    such a host fails at its start, saying why, and never stays ready with nothing to
+    start it: from there it is a failed check, and a child it stops ends `blocked`.
   - A check may declare a loop whose body fixes what it finds (ADR-0045): the body
     may depend on the delegated task, and the delegated task stays outside it.
   - A failed check blocks its dependents and wakes the planner, as any failure
@@ -239,8 +249,10 @@ the child cannot reach follows it in the parent's plan.**
   `classifyAttempt` already ranks a repair first. A repair lands after the verdict, so
   `Landing.settleRepair` holds it to D7: one whose `repairBase..branch` diff, what the
   branch brings onto the tip it was repaired against, touches a protected path goes
-  `unrepaired`, as one that leaves conflict markers does. It does not land, and its
-  worktree is kept.
+  `unrepaired`, as one that leaves conflict markers does. A repo the landing did not
+  change has no `repairBase`, and a repair can still edit it, so there the diff is
+  `taskTip..branch`, the repair's own commits, read before `integrate` moves
+  `taskTip`. It does not land, and its worktree is kept.
 - **A retry starts a child over (D15).** A fresh retry of a delegated task discards
   its child run as `discardRun` does and starts a new child on what is left of its
   budget; the old child's state stays on disk under the root. Revert
@@ -279,16 +291,21 @@ the child cannot reach follows it in the parent's plan.**
     the pool keeps the Sessions it refused, and each release ticks them, oldest
     first, until no slot is free. A flat run's own events already do this.
   - A pool refusal on a start nobody asked for is a wait, not a failure: `slotsFull`
-    reads the pool, so an owed repair stays owed, and a resume at a limit's reset is
-    kept for the next tick where a flat run drops it to the user. Only an explicit
-    start answers its caller with the refusal.
+    reads the pool, so an owed repair stays owed. A resume at a limit's reset is kept
+    past its time, where a flat run drops it to the user. The reset's timer has fired
+    by then and nothing re-arms it, so the resume calls `reserve` as a refused claim
+    does (ADR-0059 L1), and a tick offers kept resumes beside `startOwedRepairs`,
+    which a held run's tick still reaches. Only an explicit start answers its caller
+    with the refusal.
   - A subplanner between turns holds no process: its adapter is disposed when a
     turn ends and its session id kept, so it is a parked row. A turn's own
     corrective retries stay in that process.
   - A subplanner's turn queues ahead of attempts. If everything that holds a slot
-    is waiting on a planner, it is let in over the limit: a limit that stopped the
-    answer would stop the tree. So a turn never waits on a slot held by something
-    that waits on it.
+    is waiting on a planner, the oldest turn one of them waits on is let in over the
+    limit, one at a time: a limit that stopped the answer would stop the tree. One
+    is enough, since a turn waits on nothing (ADR-0056 M8): when it ends the test is
+    read again. So nothing holds a slot for ever on a turn that waits for that slot,
+    and at most one subplanner turn runs past the limit.
   - The root's planner turn is counted once the tree has a child, and never held:
     it is the user's conversation, and the run does not depend on it. With no
     delegated task live, the Parallel limit is what ADR-0030 says, attempts alone.
@@ -326,18 +343,22 @@ the child cannot reach follows it in the parent's plan.**
   `FakeRunnerSession` behind a child Session, driving Stop, a message, a question,
   a report and a Continue, and asserting what the parent's attempt does.
 - D6, D8 and D9 are held at the seam with a table of child states against the
-  answer to `done`, and the plan-level refusals through `validatePlanTasks` and
-  `applyTaskOps`, as `loop.validation.test.ts` does.
+  answer to `done`, every task skipped and an unchanged branch among them, and the
+  plan-level refusals, a script check where nothing can seal included, through
+  `validatePlanTasks` and `applyTaskOps`, as `loop.validation.test.ts` does.
 - Isolation runs against real repositories. The probe task 32 saved
   (`nestedRun.probe.test.ts`, a two-level climb to main) is the prior art, extended
   with the state root, a prune with a child live, a sweep from a child's HEAD, a
   root's delete and a repo group, which the probe did not reach. It drove `GitWorktreeIsolation`
   alone: a real nested Session is untested.
 - D18 is held by a test that fills every slot with attempts waiting on a checkpoint
-  and asserts the answer still runs, and by one with Parallel 1 across two children:
-  the task the pool refused starts when the other child's ends, and no child waits on
-  a user. Flat runs keep their suites unchanged.
-- D14's rule is tested with a repair that edits a protected path: it does not land.
+  and asserts the answer still runs and that one turn is the most let past the limit,
+  and by one with Parallel 1 across two children: the task the pool refused starts
+  when the other child's ends, and no child waits on a user. A third has the pool
+  refuse a resume at its reset: it starts when a slot frees, in a run still held.
+  Flat runs keep their suites unchanged.
+- D14's rule is tested with a repair that edits a protected path, in a repo the
+  landing changed and in one it did not: it does not land.
 
 ## Out of scope
 
@@ -378,6 +399,10 @@ the child cannot reach follows it in the parent's plan.**
   (#112).
 - **Child worktrees inside the parent's.** The probe's shape, and how it found the
   prune and the swept `.gitignore`. Rejected, not patched: a state root removes both.
+- **Passing on a settled child alone.** Dropped: a child settles by skipping
+  everything, and its check then reads an unchanged tree and goes green.
+- **Every due turn past the limit while the slots wait on planners.** Dropped: it
+  bounds nothing, and the tree needs only one turn to move.
 - **A declared check on the delegated task.** Rejected: a check is a task (#39,
   ADR-0045), with a log, a verdict and a loop.
 - **Instructions not to game the check.** Rejected. METR found o3 reward-hacking in
@@ -425,3 +450,4 @@ the child cannot reach follows it in the parent's plan.**
 
 - 2026-10-31 — accepted. Not yet implemented.
 - 2026-10-31 — checked against the code: what a delegated task's grants ask for, the refusals of it in a loop, the settled test's caller, a repair's protected paths, the child's merge, the two roots on a run and a root's delete, and how the pool reaches a Session it refused.
+- 2026-10-31 — checked against the code again: what wakes a kept resume, a child that did no work and `readOnly`, a script check where nothing can seal, a repair in a repo its landing did not change, the bound on turns past the limit, and `research` in a child plan.

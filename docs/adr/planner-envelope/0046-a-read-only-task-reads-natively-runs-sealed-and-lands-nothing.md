@@ -6,7 +6,7 @@ amends: ["0001", "0013", "0022", "0027", "0028", "0033", "0036", "0037"]
 
 # 0046 — A read-only task is Ordewell's: its runner's reads, a sealed shell, and nothing lands
 
-*Pending:* [ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — a script task may be read-only too: this ADR's worktree and sealed profile, with no runner.
+*Pending:* [ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — a script task may be read-only too: this ADR's worktree and sealed profile, with no runner. A delegated task may be read-only as well, and lands nothing.
 
 ## Problem
 

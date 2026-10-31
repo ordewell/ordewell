@@ -5,7 +5,7 @@ amends: ["0001", "0008", "0022", "0029", "0030", "0035", "0036", "0037", "0053"]
 note: "Settles #23, #92 and #112 as far as subplanners need. Waits on ADR-0055. A flat run does not change."
 ---
 
-# 0056 — A mandate says what a node may do without a person, and only narrows down the tree
+# 0056 — A mandate says what a node may do without a person, and what it can hand on only narrows down the tree
 
 ## Problem
 
@@ -29,7 +29,7 @@ by its prompt.
 **A mandate is a typed object: what a node may do without a person, and within what
 limits. The root's is derived from today's settings, so a flat run does not change.
 A child's is one pure function of its parent's and its request, which can only
-narrow. Authority stays at `consent()`, spending at the claim, and capability at the
+narrow what the parent may hand on. Authority stays at `consent()`, spending at the claim, and capability at the
 boundary a session runs in. Deeper nodes decide how to work without asking, and hold
 less authority over anything shared.**
 
@@ -62,9 +62,9 @@ Judgment stays the planner's.
   the user's change lands, and the rest where they are read now. A saved mandate could
   only disagree with those: an Act that a guard lowered to Watch reads Watch at the
   next check, and a continued run keeps its level. What holds at a node is its saved
-  mandate narrowed by every ancestor's as it stands now, read at each check, so a
-  change at the root reaches the subtree at once (M10). That reading intersects and
-  refuses nothing.
+  mandate narrowed by every ancestor's as it stands now, its grants against each
+  ancestor's `grantable`, read at each check, so a change at the root reaches the
+  subtree at once (M10). That reading intersects and refuses nothing.
 - **Grants (M2).** Each grant is a set of things a node may do unasked:
 
   | grant | what it allows |
@@ -107,10 +107,12 @@ Judgment stays the planner's.
   turns, and the setting says what a subplanner may. `observe`, `steer`, `control`,
   `replan`, `approve` and `merge` are the floor: a mandate without one of them could
   not finish, so a child holds them without asking and `narrow` refuses a mandate that
-  would lack one. A delegated task's `grants` names what it asks for past the floor,
-  and absent reads as `research`. `delegate` and `effect` are grantable only by name:
-  a child holds one only where its delegated task's `grants` names it, so a subtree
-  grows deeper, or reaches out, only where its parent wrote that down.
+  would lack one. So a child can hold a grant the root does not: what narrows is
+  `grantable`, and turning delegation on is the user's consent to that. A delegated
+  task's `grants` names what it asks for past the floor, and absent asks for nothing.
+  `research`, `delegate` and `effect` are grantable only by name: a child holds one
+  only where its delegated task's `grants` names it, so a subtree fans out, grows
+  deeper, or reaches out, only where its parent wrote that down.
 - **Limits (M3).**
 
   | limit | root | child |
@@ -120,8 +122,10 @@ Judgment stays the planner's.
   | depth, delegated tasks per plan, tasks per plan | ADR-0055 D19 | the same or lower |
   | allowed runners and models | what `SessionCatalog` allows | a subset |
 
-  Wall-clock time stops while the tree is held on a usage limit. When it runs out
-  the node stops as a Stop does and ends `blocked`, so nothing waits for ever (M8).
+  Wall-clock time stops while the tree is held on a usage limit, up to that limit's
+  reset: a resume waiting on a slot past it (ADR-0055 D18) is on the clock. When it
+  runs out the node stops as a Stop does and ends `blocked`, so nothing waits for ever
+  (M8).
 - **Narrowing is one pure function (M4).** `narrow(parent, request)` returns a mandate
   or a refusal naming the level that refused, the field, what was asked and what is
   there:
@@ -129,7 +133,7 @@ Judgment stays the planner's.
   | field | rule |
   |---|---|
   | `grants` | `(floor ∪ request) ∩ parent.grantable`, refused if that loses a floor grant |
-  | `grantable` | the same set: a node hands on what it holds |
+  | `grantable` | the same set: a child hands on what it holds |
   | `autonomy` | the lower |
   | tokens, wall-clock time | carved from what the parent has left |
   | depth | the parent's less one, refused at 0 |
@@ -140,10 +144,11 @@ Judgment stays the planner's.
 
   The table is a `Record` over `keyof Mandate` and, for `limits`, `keyof MandateLimits`,
   so a new field or limit fails to compile until it has a rule, and a property test
-  proves for each that no result is wider than its parent. It runs as a delegated
-  task's fields are written (`PlanChangeCheck`, through its `PlanChangeScope`) and again
-  in `ChildPlanRunner` as the child is built. Every refusal, at any check, names the
-  level that refused.
+  proves for each that no result is wider than its parent: `grants` and `grantable`
+  against the parent's `grantable`, and every other field against the same field. It
+  runs as a delegated task's fields are written (`PlanChangeCheck`, through its
+  `PlanChangeScope`) and again in `ChildPlanRunner` as the child is built. Every
+  refusal, at any check, names the level that refused.
 - **Budgets are in tokens (M5).** Tokens work where dollars cannot: a subscription has
   no per-token price. Spend is what `UsageTotals` counts, input and output, cache
   reads included, the same number a surface shows. A long context is what burns them,
@@ -210,10 +215,12 @@ Judgment stays the planner's.
   [ADR-0022](../runners/0022-ordewell-mcp-server.md) V5 says.
   - Only the root reaches the user, through the inbox
     ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)): a
-    subplanner's question there is the delegated task's `checkpoint`, already derived,
-    its reason naming the path. A child's escalation is its parent's to handle and is
-    never a list item for the user. A supervisor at Act answers as it does any
-    checkpoint.
+    depth-1 subplanner's question there is the delegated task's `checkpoint`, already
+    derived at every level, its reason naming the path. A supervisor at Act answers as
+    it does any checkpoint. At Watch the root's planner is woken and holds no `steer`,
+    and at Off it is not woken, so the user answers. Deeper, a question is its parent
+    subplanner's to handle, and is never a list item for the user unless that parent
+    asks it as its own.
   - Whether a question concerns an outward effect stays judgment: a question is free
     text, so ADR-0029's rule that one on an irreversible or outward effect goes to the
     user stays in the brief. What code holds is where an effect can run (M9).
@@ -236,7 +243,8 @@ Judgment stays the planner's.
 - **Outward effects (M9).** No ops task runs below the root (ADR-0055 D2). A child's
   script task runs by this rule whether its plan holds it or `run_script` added it.
   Without the `effect` grant it runs sealed, as a sealed check does (ADR-0055 D8):
-  capability is held at the boundary, so a script can test and cannot reach out. With it
+  capability is held at the boundary, so a script can test and cannot reach out, and
+  where nothing can seal it is refused as a script check is (ADR-0055 D8). With it
   they run in the child's checkout, a worktree, and only a body covered at every level
   of `effectRules`; a script body is covered by nothing (ADR-0035). So an effect in a
   child is a list of commands the user wrote rules for, and anything else goes up, where
@@ -303,6 +311,9 @@ Judgment stays the planner's.
   a budget that ignores them would let context grow unbounded.
 - **What a child leaves flows to its siblings.** Rejected: a return would wake them all, and
   replay would depend on the order children ended.
+- **`research` by default on a delegated task.** Dropped: a harness's subagents pass no
+  claim and their usage arrives afterwards, so a task that left `grants` out would have
+  turned on fan-out that nothing refuses.
 - **Letting a parent allow a child's runner approval.** Rejected: it widens the mode the plan
   set (ADR-0001, ADR-0029).
 - **A separate URL per role's tool list.** Dropped: the MCP specification allows lists to vary
@@ -328,3 +339,4 @@ Judgment stays the planner's.
 
 - 2026-10-31 — accepted. Not yet implemented.
 - 2026-10-31 — checked against the code: what the root may hand down, where the root's mandate reads its level, what the floor binds and what a revocation does to a saved child, `run_script`'s grant, a fresh retry, and the names of the types.
+- 2026-10-31 — checked against the code again: what narrows is `grantable`, a delegated task's absent `grants` ask for nothing, the clock past a reset, who answers a depth-1 question at each level, and a sealed script where nothing can seal.

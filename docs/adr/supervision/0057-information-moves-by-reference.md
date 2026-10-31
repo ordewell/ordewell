@@ -60,7 +60,8 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   must decide. Rendered, by ADR-0047's rule, whole items until the ceiling and then a count:
 
   ```text
-  counts       done, failed, skipped, commits, tokens: derived by Ordewell
+  counts       done, failed, blocked, skipped, commits, tokens: derived by Ordewell
+               findings in the subtree by severity, and how many of each show below
   commit, summary
   open         what the parent must decide
   promoted     each verbatim, with its author's path and its evidence
@@ -68,6 +69,9 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   +N more; read #4
   ```
 
+  The finding counts read the latest attempt of each task in the subtree, and `+N more`
+  counts what the ceiling cut, promoted items included. So what a subplanner leaves out
+  shows without a pull, and `read` on the delegated task lists it, each by its reference.
   A child's finding moves up only by reference. A subplanner adds its judgement as a finding of
   its own; it cannot edit a child's, and no model summarises one. Paths its branch changed
   outside its `scope` join `open`, from code ([ADR-0056](0056-a-mandate-narrows-down-the-tree.md)
@@ -92,7 +96,7 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   | a report arrived | `task_report` ([ADR-0037](0037-research-tasks-wake-the-planner.md)) |
   | the run ended | `run_finished`, with no merge window |
 
-  Any other event, `task_failed`, `task_idle` and the passes among them, is held until the first
+  Any other event but a pass, `task_failed` and `task_idle` among them, is held until the first
   of these, each of which is read from the plan:
   - **nothing can start** on this node without a decision;
   - **the cohort is done**: every task that became ready with this one has ended;
@@ -101,8 +105,10 @@ is no sibling chat, lock tool, wait tool or broadcast.**
     prefix warm. Each connector states its TTL, an unknown one reads as five minutes, and time is
     counted as the provider counts it, from the start of the request.
 
-  Not waiting on the cohort alone is deliberate: it would be bound to its slowest task. There are
-  no keep-warm pings: they are model turns that grow the context.
+  A pass is not held: it wakes nothing and starts no clock, and rides along in the next wake, as it
+  does today, so a plan that only passes opens no turn. A delegated task's pass is a child plan
+  ending, in the table. Not waiting on the cohort alone is deliberate: it would be bound to its
+  slowest task. There are no keep-warm pings: they are model turns that grow the context.
 - **Bounded wakes (R5).** A wake has a size cap, 24,000 characters, with one line per ride-along
   event of at most 120. Overflow becomes counts and a pointer: `task_query` reads the rest. A
   failure blocking many tasks names the first few and the count. The level brief is sent once
@@ -171,7 +177,7 @@ Added after R1 to R7, and only if those leave a need; replays of Ordewell's own 
   counts, as ADR-0047's is. R1 is tested across a retry and a loop round: a reference still reads what
   it named.
 - `WakePolicy` stays pure: a table of event streams against a fake clock asserts when a batch is due,
-  including each flush reason and a flat run's events.
+  including each flush reason, a pass that flushes nothing, and a flat run's events.
 - The tool sets are held by a test that serialises each role's list and fails past a stated size, and
   by one that a role's list does not change across a session.
 - Scope overlap goes through `validatePlanTasks` and the tool's answer; the addressed line through
@@ -194,6 +200,8 @@ Added after R1 to R7, and only if those leave a need; replays of Ordewell's own 
 - **A report that grows with its subtree.** Rejected: the root's context would depend on the tree's size.
 - **Waking per event, or on the debounce alone.** Rejected: it is the cost in the Problem, at each level.
 - **Waking only when a cohort ends.** Rejected: one slow task holds everything.
+- **A pass among the held events.** Dropped: run one at a time, each task is a cohort of its own, so
+  every pass would open a turn over the whole plan, where today none does.
 - **Free messages between siblings.** Rejected. CooperBench found two agents succeeding about 30% less
   working together than on each task alone, and blames communication ("channels become jammed"), though
   it has no silent arm to compare ([arXiv 2601.13295](https://arxiv.org/abs/2601.13295)). On one set of
@@ -220,7 +228,7 @@ Added after R1 to R7, and only if those leave a need; replays of Ordewell's own 
 
 - Flat runs change here, on purpose: ADR-0056's "no change" is the mandate's. A failed task with nothing
   blocked may wake the supervisor minutes later, in a batch. Anything that needs a person still wakes it
-  at once.
+  at once, and a pass still wakes nothing.
 - A subplanner's parent reads less than it could, and pulls by reference when a decision rests on detail.
   If replays show planners pulling most references, the push is too small.
 - The completion call gains two fields, and evidence a pinned attempt.
@@ -230,3 +238,4 @@ Added after R1 to R7, and only if those leave a need; replays of Ordewell's own 
 
 - 2026-10-31 — accepted. Not yet implemented.
 - 2026-10-31 — checked against the code: R2 names the push ceiling and not the Report's limit, and R11 states what its rename does to a flat run's list.
+- 2026-10-31 — checked against the code again: a pass stays a ride-along, and R2's counts show what a subplanner left out of its subtree.

@@ -43,7 +43,8 @@ This is a design target and no promise to a user, and nothing here is a performa
 
 - **The scale goal (S1).** A parked node, between its turns or waiting on its children, holds no process
   (ADR-0055 D18) and costs a few rows. So node count is bounded by money and shape, and live sessions by the
-  root's Parallel limit, which the user sets knowing their machine and account. Anthropic's page says its Pro,
+  root's Parallel limit, which the user sets knowing their machine and account, with two planner turns past it
+  at most: the root's own, and the one D18 lets in for what the slots wait on. Anthropic's page says its Pro,
   Max and Ultra limits "assume ordinary, individual usage"
   ([legal and compliance](https://code.claude.com/docs/en/legal-and-compliance), read 2026-10-31), so a large
   tree belongs on an API key or a cloud provider, and Ordewell says so where delegation is turned on.
@@ -123,3 +124,4 @@ stays possible behind the port or the lease.
 ## History
 
 - 2026-10-31 — accepted. Not yet implemented.
+- 2026-10-31 — S1 names the planner turns that may run past the Parallel limit.
