@@ -978,6 +978,11 @@ export class TaskOrchestrator {
     return blockingFailures(this.store.planTasks).get(taskId) ?? [];
   }
 
+  /** Throws what {@link loadPlan} would, for a caller with work of its own to do before it loads. */
+  assertLoadable(tasks: readonly Task[], planRunners: RunnerId[] = [...DEFAULT_RUNNERS]): void {
+    assertAssignedRunners(tasks, planRunners);
+  }
+
   /**
    * `edited`: the plan is the last one edited, not a new one. Only a Stop
    * withdraws a queued start (ADR-0035), so one of a task the edit keeps
@@ -987,7 +992,7 @@ export class TaskOrchestrator {
   loadPlan(tasks: readonly Task[], planRunners: RunnerId[] = [...DEFAULT_RUNNERS], edited = false): void {
     // Refused before the plan being replaced is ended: a throw past that
     // would leave its run scheduling over a plan half loaded.
-    assertAssignedRunners(tasks, planRunners);
+    this.assertLoadable(tasks, planRunners);
     const queued = edited ? [...this.queuedStarts] : [];
     const carried = edited ? [...this.carriedLoops] : [];
     const chosen = this.chosenHoldsNow();
