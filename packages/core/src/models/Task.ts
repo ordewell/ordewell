@@ -733,6 +733,11 @@ export interface PendingPlanTurn {
    * the user's turn, which the turn then acts as (R3).
    */
   report?: TurnAuthority;
+  /**
+   * The tasks a supervisor input is wholly about, absent when any of it is about
+   * the run. While the user has stopped all of them it opens no turn (ADR-0029).
+   */
+  tasks?: string[];
 }
 
 /**

@@ -102,6 +102,7 @@ export class RunSupervision {
       deliver: (...delivered) => host.deliver(...delivered),
       pump: () => host.pump(),
       saveState: () => host.save(),
+      stoppedByUser: (tasks) => this.stoppedByUser(tasks),
       digestReader: () => this.digestReader(),
       wakeFacts: () => ({ ...planWakeFacts(this.host.tasks(), this.host.startWaits(), this.running), ...this.host.plannerCache() }),
       readBudget: () => this.settings()?.wakeUpReadBudget ?? host.userSettings().wakeUpReadBudget,
@@ -142,6 +143,7 @@ export class RunSupervision {
       };
       this.guards.forget();
     }
+    if (origin === 'user') this.supervisor.userStarted();
     this.running = true;
     this.changedAfterRun = false;
     this.supervisor.runStarted(continued);
@@ -179,6 +181,36 @@ export class RunSupervision {
     if (changes.supervisorRetryLimit !== undefined) settings.supervisorRetryLimit = changes.supervisorRetryLimit;
     if (changes.wakeUpReadBudget !== undefined) settings.wakeUpReadBudget = changes.wakeUpReadBudget;
     this.host.save();
+  }
+
+  /**
+   * The user stopped the run, or found nothing to stop (ADR-0029): the
+   * supervisor stands down until they start work again, and a handoff deferred
+   * to it is theirs now.
+   */
+  userStopped(): void {
+    if (!this.host.plan()) return;
+    this.supervisor.userStopped();
+    this.handOver();
+  }
+
+  /**
+   * The user stopped one task, and the run goes on (ADR-0029). What was
+   * gathered about it, and all that comes, waits for them, and the supervisor
+   * may not start it again.
+   */
+  taskStoppedByUser(taskId: string): void {
+    this.guards.stopped(taskId);
+  }
+
+  /** The user asked for a start, which ends their Stop whatever the run's state: not every start opens a run of its own (ADR-0029). */
+  userStarting(): void {
+    this.supervisor.userStarted();
+  }
+
+  /** Whether an input about these tasks waits for the user: they stopped every one (ADR-0029). */
+  stoppedByUser(tasks: readonly string[] | undefined): boolean {
+    return tasks !== undefined && this.guards.allStopped(tasks);
   }
 
   /** A run event for the supervisor to batch; see {@link Supervisor.observe}. */

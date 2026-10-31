@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createTask, type Task } from '../../models/Task';
+import type { ExecutionRecord } from '../../models/Execution';
 import {
   attemptShape, identicalRetry, noEdits, oscillatingEdit, recordEdit, retryLimit, wakeUpRateTripped,
   SupervisionMemory,
@@ -185,5 +186,29 @@ describe('the wake-up rate', () => {
 
   it('forgets wake-ups older than the window', () => {
     expect(wakeUpRateTripped([0, minute, 12 * minute, 13 * minute], 13 * minute, rate)).toBe(false);
+  });
+});
+
+describe('a task the user stopped (ADR-0029)', () => {
+  const stopped = createTask({ id: 't1', order: 1, title: 'Build', prompt: 'do it', assignedRunner: 'claude-code' });
+  const target = { task: stopped, ref: '#1' };
+  const record = (command: ExecutionRecord['command'], actor: ExecutionRecord['actor']): ExecutionRecord => ({ command, actor, task: { id: 't1', ref: '#1', title: 'Build' }, outcome: 'done', at: '2026-10-31T10:00:00Z' });
+
+  it('refuses a start of it through a save, and lets it through once the user starts it', () => {
+    const memory = new SupervisionMemory();
+    memory.stopped('t1');
+    const reloaded = new SupervisionMemory();
+    reloaded.restore(memory.snapshot());
+
+    expect(reloaded.check({ command: 'retry_task', task: 't1', from: 'fresh' }, target, [stopped], 2)?.key).toBe('user-stopped:t1');
+    expect(reloaded.check({ command: 'run_task', task: 't1' }, target, [stopped], 2)?.key).toBe('user-stopped:t1');
+    expect(reloaded.allStopped(['t1'])).toBe(true);
+    expect(reloaded.allStopped(['t1', 't2'])).toBe(false);
+    expect(reloaded.allStopped([])).toBe(false);
+
+    reloaded.done(record('retry_task', 'supervisor'), [stopped]);
+    expect(reloaded.allStopped(['t1'])).toBe(true);
+    reloaded.done(record('retry_task', 'user'), [stopped]);
+    expect(reloaded.check({ command: 'run_task', task: 't1' }, target, [stopped], 2)).toBeNull();
   });
 });

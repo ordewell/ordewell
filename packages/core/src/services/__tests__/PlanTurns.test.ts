@@ -52,6 +52,7 @@ function fakeHost(current: { plan: LegacyPlanState | null } = { plan: plan() }) 
     plannerDetecting: vi.fn((): Promise<void> | null => null),
     assertPlannerReady: vi.fn(),
     plannerRunner: vi.fn((): string | null => 'claude-code'),
+    stoppedByUser: vi.fn((_tasks: readonly string[] | undefined) => false),
   } satisfies PlanTurnsHost;
   return { host, turns, saved, current, held: () => holds };
 }
@@ -571,5 +572,33 @@ describe('the planner gate', () => {
 
     expect(runner.stopQueued()).toBe(false);
     expect(current.plan!.pendingTurns.map((t) => t.text)).toEqual(['Postgres']);
+  });
+});
+
+describe('an input about tasks the user stopped (ADR-0029)', () => {
+  it('opens no turn, and rides with the next one', async () => {
+    const { host, turns, current } = fakeHost();
+    const runner = new PlanTurns(host);
+    host.stoppedByUser.mockImplementation((tasks) => tasks?.[0] === 't1');
+
+    void runner.enqueue({ source: 'supervisor', text: 'about t1', tasks: ['t1'] }).catch(() => {});
+    await flushMicrotasks();
+    expect(turns).toHaveLength(0);
+    expect(current.plan!.pendingTurns!.map((t) => t.text)).toEqual(['about t1']);
+
+    void runner.enqueue({ source: 'supervisor', text: 'about t2', tasks: ['t2'] }).catch(() => {});
+    await flushMicrotasks();
+    expect(turns.map((t) => t.prompt.wakeUps)).toEqual([['about t1', 'about t2']]);
+  });
+
+  it('holds a report about one too, whatever the level', async () => {
+    const { host, turns } = fakeHost();
+    const runner = new PlanTurns(host);
+    host.stoppedByUser.mockReturnValue(true);
+
+    void runner.enqueue({ source: 'supervisor', text: 'a report', report: 'supervisor', tasks: ['t1'] }).catch(() => {});
+    await flushMicrotasks();
+
+    expect(turns).toHaveLength(0);
   });
 });

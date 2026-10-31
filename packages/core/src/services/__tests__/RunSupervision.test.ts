@@ -61,7 +61,7 @@ describe('whose authority a report opens with', () => {
     supervision.taskSettled(tasks[0]);
     await vi.advanceTimersByTimeAsync(10);
 
-    expect(host.deliver).toHaveBeenCalledWith(expect.any(String), authority);
+    expect(host.deliver).toHaveBeenCalledWith(expect.any(String), authority, undefined, expect.any(Array));
   });
 });
 
@@ -283,7 +283,7 @@ describe('a loop\'s check whose result a planner turn asked for (ADR-0045 L3, L6
 
     expect(host.reported).toHaveBeenCalledTimes(1);
     expect(host.deliver).toHaveBeenCalledTimes(1);
-    expect(host.deliver).toHaveBeenCalledWith(expect.stringContaining('Its loop ran out of rounds: it failed all 3. It failed: two tests fail'), 'user');
+    expect(host.deliver).toHaveBeenCalledWith(expect.stringContaining('Its loop ran out of rounds: it failed all 3. It failed: two tests fail'), 'user', undefined, expect.any(Array));
   });
 
   it('owes its report once a failing body task stops the loop', async () => {
@@ -302,7 +302,7 @@ describe('a loop\'s check whose result a planner turn asked for (ADR-0045 L3, L6
 
     expect(host.reported).toHaveBeenCalledTimes(1);
     expect(host.reported).toHaveBeenCalledWith('t1', expect.anything());
-    expect(host.deliver).toHaveBeenCalledWith(expect.stringContaining('two tests fail'), 'user');
+    expect(host.deliver).toHaveBeenCalledWith(expect.stringContaining('two tests fail'), 'user', undefined, expect.any(Array));
   });
 });
 

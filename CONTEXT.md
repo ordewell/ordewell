@@ -2983,7 +2983,10 @@ seam**.
 It decides what to do next, never whether a task passed — verdicts come from
 evidence. The run never depends on it: a wake-up turn that still fails after one
 restart leaves the run *unsupervised* (carrying on as Off, with a notice and a
-note in the transcript; `runSettings.unsupervised` says why).
+note in the transcript; `runSettings.unsupervised` says why). The user's Stop
+stands it down until they start work again: it acts at Off, and what it held
+waits on the plan for their next message or the first turn after their start. A
+stop of one task holds back only what is about that task.
 *Avoid:* "agent", "orchestrator" (the scheduler is `TaskOrchestrator`),
 "autopilot".
 
@@ -3138,8 +3141,8 @@ cap), and the consent of the Supervisor level rather than the user's. A
 crashed or hung one is retried once with the planner restarted from its saved
 session id; a planner usage limit is waited out. Undelivered batches are
 pending turns (`source: 'supervisor'`): a failed turn leaves them, a reload
-replays them, and while the supervisor may not wake — unsupervised, or waiting
-on a limit — they ride with the user's next message instead.
+replays them, and while the supervisor may not wake — unsupervised, stopped by
+the user, or waiting on a limit — they ride with the user's next message instead.
 *Avoid:* "notification" or "event" for the turn — the event is what woke it;
 *Avoid:* "supervisor turn" for a user-started turn during a run, which follows
 the user's consent, not the level's — even one that delivers a run update.

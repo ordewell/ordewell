@@ -26,7 +26,7 @@ describe('the supervisor at Watch: what wakes it', () => {
     ['waiting_input', (env: Env) => waitForInput(env.run.of('t1')), /- task #1 "Task t1" is waiting for input/],
     ['a checkpoint', (env: Env): void => { void env.run.of('t1').callCheckpoint('Drop the table?'); }, /- task #1 "Task t1" is waiting for input: at a checkpoint: Drop the table\?/],
     ['waiting_approval', (env: Env) => env.run.of('t1').requestPermission('p1', 'Bash', { command: 'npm publish' }), /- task #1 "Task t1" is waiting for approval: .*npm publish/],
-    ['usage_limit', (env: Env) => hitLimit(env.run.of('t1')), new RegExp(`- task #1 "Task t1" paused on claude-code's usage limit; it resumes on its own at ${RESUME_AT}`)],
+    ['usage_limit', (env: Env) => hitLimit(env.run.of('t1')), new RegExp(`- claude-code's usage limit paused a task, which resumes on its own at ${RESUME_AT}: #1 "Task t1"`)],
   ] as const)('wakes on %s once the debounce window has passed', async (_kind, trigger, line) => {
     const env = await supervised();
 
@@ -236,7 +236,7 @@ describe('the supervisor at Watch: what wakes it', () => {
 
     await until(() => env.planner.calls.length === 1);
     const lines = env.planner.calls[0].message.split('\n').filter((l) => l.includes('usage limit'));
-    expect(lines).toEqual([`- tasks #1 "Task t1" and #2 "Task t2" paused on claude-code's usage limit; they resume on their own at ${RESUME_AT}`]);
+    expect(lines).toEqual([`- claude-code's usage limit paused 2 tasks, which resume on their own at ${RESUME_AT}: #1 "Task t1" and #2 "Task t2"`]);
   });
 
   it('does not wake when the user cancels a scheduled resume', async () => {

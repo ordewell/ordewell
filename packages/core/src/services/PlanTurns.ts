@@ -17,6 +17,8 @@ export interface PlanTurnInput {
   skills?: readonly SkillLoad[];
   /** A supervisor input carrying a report the planner asked for; see {@link PendingPlanTurn.report}. */
   report?: TurnAuthority;
+  /** A supervisor input wholly about these tasks; see {@link PendingPlanTurn.tasks}. */
+  tasks?: readonly string[];
   /** A wake-up of what a load gave back: nothing new happened, so while the session stays as loaded it waits with the saved inputs (ADR-0029). */
   idle?: true;
   /** Stops the turn that takes this input. Not saved: a replayed input has no caller left to stop it. */
@@ -52,6 +54,8 @@ export interface PlanTurnsHost {
   mayWake(): boolean;
   /** Whether a report the planner asked for may open a turn now, whatever the supervisor's level (ADR-0037, R2). */
   mayReport(): boolean;
+  /** Whether the user stopped every one of these tasks: an input about them alone rides with a turn, and opens none (ADR-0029). */
+  stoppedByUser(tasks: readonly string[] | undefined): boolean;
   /** Save the pending list. */
   persist(): void;
   /** The wait on the planner's usage limit changed with no turn to say so: save the plan, and announce it. */
@@ -372,6 +376,7 @@ export class PlanTurns {
       ...(input.skills && input.skills.length > 0 ? { skills: [...input.skills] } : {}),
       ...(forced ? { forced: true } : {}),
       ...(input.report ? { report: input.report } : {}),
+      ...(input.tasks?.length ? { tasks: [...input.tasks] } : {}),
     };
   }
 
@@ -521,9 +526,15 @@ export class PlanTurns {
     return authorities.map((authority) => eligible.filter((t) => authorityOf(t) === authority)).find((group) => this.mayOpen(group)) ?? [];
   }
 
-  /** A report the planner asked for opens a turn at every level (ADR-0037, R2); the supervisor's own wake-ups only while it watches. */
+  /**
+   * A report the planner asked for opens a turn at every level (ADR-0037, R2);
+   * the supervisor's own wake-ups only while it watches; and nothing about tasks
+   * the user stopped and nothing else opens one at all (ADR-0029).
+   */
   private mayOpen(wakeUps: readonly PendingPlanTurn[]): boolean {
-    return wakeUps.some((t) => t.report !== undefined) ? this.host.mayReport() : this.host.mayWake();
+    const opening = wakeUps.filter((t) => !this.host.stoppedByUser(t.tasks));
+    if (opening.length === 0) return false;
+    return opening.some((t) => t.report !== undefined) ? this.host.mayReport() : this.host.mayWake();
   }
 
   private async run(plan: LegacyPlanState, batch: readonly PendingPlanTurn[], opts: { recovery?: PlannerContextPause; signal?: AbortSignal } = {}): Promise<Outcome> {

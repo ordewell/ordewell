@@ -224,6 +224,22 @@ replayed when the reply ends. In a wake-up
 turn at Act the supervisor edits task by task; a whole new plan is refused,
 since only edits let the user follow what changed.
 
+**The user's Stop stands the supervisor down.** From it until the user starts
+work again, by any start at the seam or a run they open, nothing gathered opens
+a turn at any level, a report the planner asked for included, and a reload keeps
+it so. What the policy held, what waited behind a turn and what arrives after
+goes to the pending inputs and leaves them with the user's next message or the
+first turn after their start, so nothing is lost: each task says the same in
+the plan and the inbox. It acts at Off meanwhile, so a turn still open when they
+pressed it cannot start anything, a report turn acting for the user's turn
+included. Their start opens no turn on what was held; it goes with the next
+one. The user's stop of one task leaves the run going, so it holds back only
+that: an update wholly about tasks the user stopped opens no turn and rides with
+the next one, and the supervisor's start of such a task is refused by a loop
+guard until the user starts it. Both are the user's, or a turn acting for them.
+A supervisor's own `stop_run` or `stop_task` stands nothing down, since it
+may mean to follow it with a start.
+
 **A Stop withdraws every start asked for before it.** A start is admitted
 when it is asked for, and counts as live work until it claims its task:
 waiting on its approval card, or still opening its run. The user's Stop — `stop_run` from any surface, or the Session's own stop —
@@ -725,3 +741,4 @@ until #30 exists.
 - 2026-10-31 — the seam reads the mandate in place of `SUPERVISOR_LEVELS`, and answers as it did at every level ([ADR-0056](0056-a-mandate-narrows-down-the-tree.md)).
 - 2026-10-31 — `WakePolicy` holds a failure and a task gone idle, a run update has a size cap, and the level's rules go whole once a context ([ADR-0057](0057-information-moves-by-reference.md) R4, R5).
 - 2026-10-31 — what the wake policy saved goes out once due after a load and joins the saved inputs, opening no turn, instead of waiting in the policy for a run event that a quiet or finished run never sends.
+- 2026-10-31 — the user's Stop stands the supervisor down until they start work again, at every level and through a reload, and what was held waits on the plan; their stop of one task holds back only what is about it, and a loop guard refuses the supervisor's start of it. Seen in review: a held failure opened a turn on a stopped run, which at Act could start it again.
