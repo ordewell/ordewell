@@ -40,9 +40,9 @@ cloud-provider credentials only, never a Claude subscription's.**
   step: `claimRefusal` is also asked with no claim to follow. This count is the tree's pool
   ([ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D18): the
   `child-plan` role reserves a node and no slot. Since `refusal` changes nothing, a claim
-  turned down for a slot still calls `reserve`: its `refused` keeps the Session that asked,
-  and each `release` ticks the Sessions kept, oldest first, as a scheduler ticks only on its
-  own Session's events. `open` runs where `attemptCwd` runs in `Attempts`, and around
+  turned down for a slot, or a resume at a limit's reset, still calls `reserve`: its `refused`
+  keeps the Session that asked, and each `release` ticks the Sessions kept, oldest first, as a
+  scheduler ticks only on its own Session's events. `open` runs where `attemptCwd` runs in `Attempts`, and around
   `CliAgentAiService.startAdapter` for a planner, and undoes itself on abort. A later remote backend answers
   `reserve` from a local allocation, or claims become asynchronous, which would be a change to ADR-0029.
 
@@ -193,3 +193,4 @@ for model traffic first. The interface is kept free of anything that blocks thes
 
 - 2026-10-31 — accepted. Not yet implemented.
 - 2026-10-31 — checked against the code: a refusal for a slot keeps the Session, and a release ticks it.
+- 2026-10-31 — a resume at a limit's reset refused for a slot is kept the same way.
