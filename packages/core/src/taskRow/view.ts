@@ -270,10 +270,12 @@ function blockedBy(task: TaskRowSubject, reading: PlanReading | null): string[] 
   return reading.blocks.blocked.get(task.id) ?? [];
 }
 
-/** What moves a check on that nothing will run: a start of it once its body landed, Execute before that (ADR-0045 L5, L7). */
-function strandedDetail(check: LoopCheckFacts, reading: PlanReading | null): string {
-  const landed = reading && check.loop.body.every((id) => reading.tasks.find((t) => t.id === id)?.status === 'completed');
-  return landed ? `Nothing runs it now: start it for round ${loopRoundOf(check) + 1} of ${check.loop.maxRounds}` : 'Nothing runs it now: execute the plan and the loop goes on';
+/** What moves a check on that nothing will run: a start of it once its body landed and its dependencies finished, Execute before that (ADR-0045 L5, L7). */
+function strandedDetail(check: LoopCheckFacts, dependencies: readonly string[], reading: PlanReading | null): string {
+  const status = (id: string) => reading?.tasks.find((t) => t.id === id)?.status;
+  const landed = reading && check.loop.body.every((id) => status(id) === 'completed');
+  const finished = dependencies.every((id) => [undefined, 'completed', 'skipped'].includes(status(id)));
+  return landed && finished ? `Nothing runs it now: start it for round ${loopRoundOf(check) + 1} of ${check.loop.maxRounds}` : 'Nothing runs it now: execute the plan and the loop goes on';
 }
 
 function loopOf(task: TaskRowSubject, reading: PlanReading | null): TaskRowLoop | null {
@@ -292,7 +294,7 @@ function loopOf(task: TaskRowSubject, reading: PlanReading | null): TaskRowLoop 
       ? `Found problems: runs again once ${body.join(', ')} ${body.length === 1 ? 'has' : 'have'} landed`
       : state === 'stopped'
         ? task.loopStranded
-          ? strandedDetail(check, reading)
+          ? strandedDetail(check, task.dependencies, reading)
           : `${refsOf(halted, tasks).join(', ')} did not pass: retry ${halted.length === 1 ? 'it' : 'them'} and the loop goes on`
         : null;
     return { role: 'check', state, label: loopCheckLabel(check, state), detail, body };

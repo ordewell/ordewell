@@ -1,7 +1,7 @@
 import {
   Task, TaskSnapshot, TaskStatus, RunnerId, AwaitingReason, DEFAULT_RUNNERS, flattenTasks,
   addTaskToPlan, removeTaskFromPlan, updateTaskInPlan,
-  runsAsOps,
+  releaseMadeManual, runsAsOps,
 } from '../models/Task';
 import { startAttemptUsage, addAttemptUsage, endAttemptUsage, type RunnerSessionCost, type UsageRecord } from '../models/Usage';
 import { sessionOwner } from './continuation';
@@ -200,7 +200,7 @@ export class PlanStore {
    * readied, and a check between rounds still leaves its body to run first.
    */
   readyFailed(live: (taskId: string) => boolean): void {
-    this.releaseMadeManual();
+    this.releaseMadeManual(live);
     for (const t of this._allTasks) {
       if (t.type === 'user' || t.status !== 'failed' || betweenRounds(t) || live(t.id)) continue;
       delete t.loopRound;
@@ -209,9 +209,9 @@ export class PlanStore {
     this.notifyMutate();
   }
 
-  /** A failed task an edit made manual has nothing to retry, and is the user's to do: it waits as a manual task does. */
-  releaseMadeManual(): void {
-    for (const t of this._allTasks) if (t.type === 'user' && t.status === 'failed') t.status = 'pending';
+  /** See {@link releaseMadeManual}; `live` names what a runner still holds. */
+  releaseMadeManual(live?: (taskId: string) => boolean): void {
+    releaseMadeManual(this._planTasks, live);
   }
 
   private ready(t: Task): void {
