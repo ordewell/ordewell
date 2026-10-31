@@ -61,23 +61,26 @@ the child cannot reach follows it in the parent's plan.**
   | `goal` | what the child plan must achieve, in place of `prompt` |
   | `assignedRunner`, `assignedModel` | the subplanner's, resolved as any task's are ([ADR-0003](../routing/0003-per-runner-model-allowlist.md), [ADR-0041](../routing/0041-a-tasks-model-follows-the-runners-own-switch.md)) |
   | `budget` | required: tokens, and optionally wall-clock time (ADR-0056 M5) |
-  | `grants`, `protectedPaths`, `scope` | optional: narrower grants (ADR-0056 M4), paths the child may not change (D7), a declared scope (ADR-0057 R6) |
+  | `grants`, `protectedPaths`, `scope` | optional: the grants it asks for past the floor (ADR-0056 M2, M4), paths the child may not change (D7), a declared scope (ADR-0057 R6) |
 
-  It has no subtasks and is never one: it is top-level, as a script task is.
-  `subtasks` stays apart. No saved plan uses that field (0 of 760 tasks), and a
+  It has no subtasks and is never one: it is top-level, as a script task is, and
+  `checkPlanInvariants` holds it to that as it holds a script task. `subtasks`
+  stays apart. No saved plan uses that field (0 of 760 tasks), and a
   child plan's tasks are never stored there: they are the child Session's own.
   `walkPlan`, `subtreeIds` and the dotted row renderer are reused as a read-only
   view of them. Only a planner writes a delegated task; surfaces draw it
   read-only, and the user consents to it as they do to any task
   ([ADR-0035](0035-effects-are-consented-and-recorded.md)). It is neither a loop's
-  check nor its body: `loopErrors` already takes only AI and script tasks, and
-  [ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md) leaves that
-  out of scope.
+  check nor its body: `loopErrors` refuses it as either, as it refuses a user task,
+  since a round runs a task again whole, and here that is a new child each round on
+  what is left of the budget.
+  [ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md) leaves a
+  delegated body out of scope.
 - **What a child plan may hold (D2).** Change tasks, read-only and research tasks,
   script tasks (ADR-0056 M9), loops, and delegated tasks while its depth allows
-  (D19). `ops` and user tasks are refused in it at plan time: an ops task acts on
-  the user's systems from their checkout, and a user task waits on a person, and
-  neither exists below the root.
+  (D19) and it holds `delegate` (ADR-0056 M2). `ops` and user tasks are refused in
+  it at plan time: an ops task acts on the user's systems from their checkout, and a
+  user task waits on a person, and neither exists below the root.
 
 ### Hosting
 
@@ -121,8 +124,9 @@ the child cannot reach follows it in the parent's plan.**
 
 - **A verdict is evidence (D6).** `VerdictEngine` stays the only producer. A
   delegated task passes only when all of these hold at the `done` call:
-  1. the child run has settled: no attempt or planner turn live, nothing that can
-     start, every task `completed` or `skipped`, none failed, blocked or waiting;
+  1. the child run has settled: no attempt live, no planner turn live but the one
+     making the call, nothing that can start, every task `completed` or `skipped`,
+     none failed, blocked or waiting;
   2. what landed is merged into the delegated task's branch (D10);
   3. the changes on that branch since its base touch no protected path;
   4. the call came on the attempt's token.
@@ -142,7 +146,8 @@ the child cannot reach follows it in the parent's plan.**
   delegated task may declare paths (tests, CI, scoring) its child may not change.
   A landing never fails a task
   ([ADR-0013](../isolation/0013-worktree-isolation.md)), so the check sits in the
-  last step before one, on the same diff. Paths accumulate down the tree
+  last step before one, on the same diff. A repair lands after that step, and is
+  held to the same paths there (D14). Paths accumulate down the tree
   (ADR-0056 M4): a nested delegated task is held to its ancestors' too.
 - **A check is a task (D8).** `delegationErrors`, in `checkPlanInvariants`, refuses
   on every route a delegated task with no script or read-only task directly
@@ -188,20 +193,32 @@ the child cannot reach follows it in the parent's plan.**
   branch, and `RUN_BRANCH` reads no run id from a deeper name. A child merges into
   the delegated task's branch by itself at its end, through the unchanged
   `mergeIntoCheckedOut`, and the parent's ordinary landing carries it up: two
-  merges per level, each a `--no-ff` merge with `landingMessage`'s words, so
-  nothing in the isolation layer changes for a level. For a child, ops gates and
+  merges per level, and neither changes for a level. The child's has a base branch,
+  so it is a fast-forward while that branch has not moved (`landsAsMergeCommit`); the
+  parent's landing is the `--no-ff` merge with `landingMessage`'s words, the one
+  commit that names the work. For a child, ops gates and
   "Merge all" mean the delegated task's branch.
 - **Code root and state root (D11).** `Session.workspace` splits in two. The code
-  root is the delegated task's worktree. The state root is the root Session's:
-  `.ordewell/sessions/<root>/children/<child>/` holds a child's session file, task
-  logs and patches, and `.ordewell/worktrees/<child-run>/` its worktrees, at every
-  depth. Never inside a task worktree. So `runRoot`, `sweep`, `taskLogLocation` and
-  `getStateDir` read the state root, `ensureStateDirIgnored` never runs on a task
-  worktree, and a prune of the parent's worktree cannot reach a child's. A child's
-  worktrees bootstrap from the root's checkout (ADR-0013), not from a worktree's
-  links. `listSessions` reads `sessions/*.json`, so a child session is never in
-  the list and never offered: it is deleted with its root and adopted only through
-  it.
+  root is the delegated task's worktree. The state root is the root Session's
+  workspace: `.ordewell/sessions/<root>/children/<child>/` holds a child's session
+  file, task logs and patches, and `.ordewell/worktrees/<child-run>/` its worktrees,
+  at every depth. Never inside a task worktree.
+  - `startRun` takes both and a run keeps both, one path on a flat run. Git reads the
+    code root, as `workspaceRoot` is read today, so `repo.root` is the worktree and
+    `baseRef` and `baseBranch` are the delegated task's HEAD and branch, as D10 needs.
+  - Ordewell's own files read the state root: `runRoot`, `sweep`, `taskLogLocation`
+    and `getStateDir`. `ensureStateDirIgnored` runs there and never on a task
+    worktree, and a prune of the parent's worktree cannot reach a child's. The admin
+    lock is keyed by it and is the tree's, since one repository's `git worktree add`s
+    race whichever root asks.
+  - A child's worktrees bootstrap from the repository under the state root, the
+    root's checkout (ADR-0013), and not from `repo.root`, a worktree's links.
+  - The session store keys a path by session id alone, so its helpers take a child's
+    root as well. `listSessions` reads `sessions/*.json`, so a child session is never
+    in the list and never offered: it is deleted with its root and adopted only
+    through it. `deleteSession` removes files and no worktree, so deleting a root
+    first discards each child's run as `discardRun` does, or its worktrees and
+    branches would outlive the only record that names them.
 - **Only the root touches the user's branch (D12).** Enforced where a child is
   built: `ChildPlanRunner` refuses a child whose code root is the user's checkout.
   `mergeLanded` needs no check of its own, since a child's checkout is a worktree
@@ -219,7 +236,11 @@ the child cannot reach follows it in the parent's plan.**
   session that edits files, which a subplanner never is, so a delegated task's
   repair attempt is a plain runner on its `assignedRunner` and `assignedModel`, in
   the kept worktree, in the mode `taskMode` holds for this one use, on a task token.
-  `classifyAttempt` already ranks a repair first.
+  `classifyAttempt` already ranks a repair first. A repair lands after the verdict, so
+  `Landing.settleRepair` holds it to D7: one whose `repairBase..branch` diff, what the
+  branch brings onto the tip it was repaired against, touches a protected path goes
+  `unrepaired`, as one that leaves conflict markers does. It does not land, and its
+  worktree is kept.
 - **A retry starts a child over (D15).** A fresh retry of a delegated task discards
   its child run as `discardRun` does and starts a new child on what is left of its
   budget; the old child's state stays on disk under the root. Revert
@@ -251,6 +272,16 @@ the child cannot reach follows it in the parent's plan.**
   would otherwise deadlock on children that hold them. The `child-plan` lease role
   reserves a node and no slot (ADR-0059 L1). One pool counts every attempt in the
   tree and every running subplanner turn against the root's Parallel limit.
+  - The pool refuses at the claim, and readiness stays each Session's own: it counts
+    that Session's attempts that hold a slot, so a task the pool refused stays ready
+    and its run is not settled, and no child parks on `waitOnUser` for a slot.
+  - A scheduler ticks on its own Session's events, and a slot may free in another. So
+    the pool keeps the Sessions it refused, and each release ticks them, oldest
+    first, until no slot is free. A flat run's own events already do this.
+  - A pool refusal on a start nobody asked for is a wait, not a failure: `slotsFull`
+    reads the pool, so an owed repair stays owed, and a resume at a limit's reset is
+    kept for the next tick where a flat run drops it to the user. Only an explicit
+    start answers its caller with the refusal.
   - A subplanner between turns holds no process: its adapter is disposed when a
     turn ends and its session id kept, so it is a parked row. A turn's own
     corrective retries stay in that process.
@@ -299,11 +330,14 @@ the child cannot reach follows it in the parent's plan.**
   `applyTaskOps`, as `loop.validation.test.ts` does.
 - Isolation runs against real repositories. The probe task 32 saved
   (`nestedRun.probe.test.ts`, a two-level climb to main) is the prior art, extended
-  with the state root, a prune with a child live, a sweep from a child's HEAD and
-  a repo group, which the probe did not reach. It drove `GitWorktreeIsolation`
+  with the state root, a prune with a child live, a sweep from a child's HEAD, a
+  root's delete and a repo group, which the probe did not reach. It drove `GitWorktreeIsolation`
   alone: a real nested Session is untested.
 - D18 is held by a test that fills every slot with attempts waiting on a checkpoint
-  and asserts the answer still runs. Flat runs keep their suites unchanged.
+  and asserts the answer still runs, and by one with Parallel 1 across two children:
+  the task the pool refused starts when the other child's ends, and no child waits on
+  a user. Flat runs keep their suites unchanged.
+- D14's rule is tested with a repair that edits a protected path: it does not land.
 
 ## Out of scope
 
@@ -373,8 +407,8 @@ the child cannot reach follows it in the parent's plan.**
 
 - `TaskType` gains a member, so its 155 `.type` sites each take a decision, and
   `AttemptKind` and `TaskWork` a member; most are AI-against-the-rest.
-- `Session` gains a state root, and everything that read `workspace` for state moves
-  to it.
+- `Session` and an isolation run gain a state root, and everything that read
+  `workspace` for state moves to it.
 - A check can fail after its work landed. Taking that work back stays the user's
   Revert; the parent's way on is a fix task or a loop.
 - A check's hiding is only as good as the runner's reach, until a container backend
@@ -390,3 +424,4 @@ the child cannot reach follows it in the parent's plan.**
 ## History
 
 - 2026-10-31 — accepted. Not yet implemented.
+- 2026-10-31 — checked against the code: what a delegated task's grants ask for, the refusals of it in a loop, the settled test's caller, a repair's protected paths, the child's merge, the two roots on a run and a root's delete, and how the pool reaches a Session it refused.

@@ -32,8 +32,8 @@ what a flat plan gets away with:
 
 ## Decision
 
-**A finding moves by a reference pinned to its attempt. Reports are the same size at every
-level, and a subplanner promotes child findings by reference, for Ordewell to render
+**A finding moves by a reference pinned to its attempt. A pushed handoff is the same size at
+every level, and a subplanner promotes child findings by reference, for Ordewell to render
 verbatim. Everything that crosses a level is untrusted data with its provenance. Code
 decides when a planner wakes. Between siblings the medium is the plan and git: tasks declare
 scopes, and the affected task gets one addressed line. A board comes after those, and there
@@ -52,9 +52,10 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D11); a task
   removed from the plan keeps its log. A saved reference with no attempt reads the latest,
   as it does today.
-- **Reports are one size (R2).** A report is at most 4,000 characters at every level
-  (`HANDOFF_PUSH_CHARS`), so a node's inbound context depends on its fan-out and not on its
-  subtree. A subplanner's `task_complete` adds two fields, refused on any other token:
+- **What is pushed is one size (R2).** A handoff is pushed at most 4,000 characters at every
+  level (`HANDOFF_PUSH_CHARS`, its artifacts apart), so a node's inbound context depends on its
+  fan-out and not on its subtree. Its Report, the long form of at most 20,000, stays pulled
+  ([ADR-0047](0047-structured-task-handoffs.md)). A subplanner's `task_complete` adds two fields, refused on any other token:
   `promote`, up to 8 references to findings in its subtree, and `open`, references its parent
   must decide. Rendered, by ADR-0047's rule, whole items until the ceiling and then a count:
 
@@ -155,7 +156,8 @@ Added after R1 to R7, and only if those leave a need; replays of Ordewell's own 
 - **A small, fixed set per role (R11).** A runner has `task_complete`, `checkpoint`, `read`, `post` and
   `apply_patch`; a read-only task keeps ADR-0046's tools beside the first four. A task with no board has
   no `post`, so a flat run's tool list grows by nothing. `read` extends `read_task`, whose name stays an
-  alias at the call and leaves the list. A planner holding delegated tasks gains `read` and `post`. Each
+  alias at the call and leaves the list. That rename is the one change to a flat list: a session resumed
+  across the build that ships it misses its prompt cache once. A planner holding delegated tasks gains `read` and `post`. Each
   role's set is fixed at session start, in a stable order
   ([ADR-0056](0056-a-mandate-narrows-down-the-tree.md) M6), with a CI test on its serialised size.
   Turning delegation on reaches a planner at its next process.
@@ -227,3 +229,4 @@ Added after R1 to R7, and only if those leave a need; replays of Ordewell's own 
 ## History
 
 - 2026-10-31 — accepted. Not yet implemented.
+- 2026-10-31 — checked against the code: R2 names the push ceiling and not the Report's limit, and R11 states what its rename does to a flat run's list.

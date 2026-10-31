@@ -39,7 +39,10 @@ cloud-provider credentials only, never a Claude subscription's.**
   `claimRefusal` reads `refusal`, in the claim's one step, and `claim()` takes the reservation in that same
   step: `claimRefusal` is also asked with no claim to follow. This count is the tree's pool
   ([ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D18): the
-  `child-plan` role reserves a node and no slot. `open` runs where `attemptCwd` runs in `Attempts`, and around
+  `child-plan` role reserves a node and no slot. Since `refusal` changes nothing, a claim
+  turned down for a slot still calls `reserve`: its `refused` keeps the Session that asked,
+  and each `release` ticks the Sessions kept, oldest first, as a scheduler ticks only on its
+  own Session's events. `open` runs where `attemptCwd` runs in `Attempts`, and around
   `CliAgentAiService.startAdapter` for a planner, and undoes itself on abort. A later remote backend answers
   `reserve` from a local allocation, or claims become asynchronous, which would be a change to ADR-0029.
 
@@ -144,7 +147,7 @@ cloud-provider credentials only, never a Claude subscription's.**
 ## Testing decisions
 
 - The interface is tested through a fake backend, as `FakeWorktreeIsolation` fakes isolation: a claim with no free
-  slot, a Stop between reserve and open, an open that fails, a release that runs twice.
+  slot and the release that ticks it, a Stop between reserve and open, an open that fails, a release that runs twice.
 - `LocalWorktreeLease` passes the suites the code passes today, unchanged. That is what "no change in behaviour" means.
 - The Docker backend's probes run against a real engine, off CI's default path, as the sandbox's Linux end-to-end runs do.
 - A guarantee's probe is tested by a backend built to fail it: an open that requires it refuses.
@@ -189,3 +192,4 @@ for model traffic first. The interface is kept free of anything that blocks thes
 ## History
 
 - 2026-10-31 — accepted. Not yet implemented.
+- 2026-10-31 — checked against the code: a refusal for a slot keeps the Session, and a release ticks it.
