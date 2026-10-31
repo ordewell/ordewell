@@ -36,6 +36,8 @@ export class ConversationViewHost {
   private held: PromptHold = EMPTY_HOLD;
   /** The open turn produced output since the last flush; see `plannerTurnAlive`. */
   private alive = false;
+  /** The planner is parked on the agent probe; a webview that opens now was never told. */
+  private detecting = false;
 
   constructor(private readonly post: (msg: HostToWebview) => void) {}
 
@@ -49,12 +51,14 @@ export class ConversationViewHost {
       return;
     }
     if (msg.type === 'planner_detection') {
+      this.detecting = msg.waiting;
       this.post({ type: 'plannerDetection', waiting: msg.waiting });
       return;
     }
     const wasOpen = this.gate.open;
     this.update(followTurn(this.view, this.gate, msg));
     if (this.gate.open !== wasOpen) {
+      if (this.gate.open !== null) this.detecting = false;
       this.announceTurn();
     } else if (wasOpen !== null && 'turnId' in msg && msg.turnId === wasOpen) {
       // Only an event tagged with the turn the gate holds open: untagged or
@@ -161,6 +165,7 @@ export class ConversationViewHost {
     this.flush();
     this.post({ type: 'heldPrompts', prompts: this.held });
     this.postTurn();
+    if (this.detecting) this.post({ type: 'plannerDetection', waiting: true });
   }
 
   flush(): void {

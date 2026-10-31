@@ -98,6 +98,24 @@ describe('ConversationViewHost', () => {
     expect(screen.posts).toEqual([{ type: 'plannerDetection', waiting: true }, { type: 'plannerDetection', waiting: false }]);
   });
 
+  it('tells a webview that opens during the agent wait, and not once a turn has opened', () => {
+    const detections = () => screen.posts.filter((m) => m.type === 'plannerDetection');
+    host.receive({ type: 'planner_detection', waiting: true });
+    host.resync();
+    expect(detections()).toEqual([{ type: 'plannerDetection', waiting: true }, { type: 'plannerDetection', waiting: true }]);
+
+    host.receive(started);
+    host.resync();
+    expect(detections()).toHaveLength(2);
+  });
+
+  it('does not repeat a wait that has ended', () => {
+    host.receive({ type: 'planner_detection', waiting: true });
+    host.receive({ type: 'planner_detection', waiting: false });
+    host.resync();
+    expect(screen.posts.filter((m) => m.type === 'plannerDetection')).toHaveLength(2);
+  });
+
   describe('plannerTurnAlive', () => {
     const alive = () => screen.posts.filter((m) => m.type === 'plannerTurnAlive').length;
     const readStep: SessionMessage = { type: 'research_step', tool: 'read_file', args: '{"path":"a.ts"}', turnId: TURN };
