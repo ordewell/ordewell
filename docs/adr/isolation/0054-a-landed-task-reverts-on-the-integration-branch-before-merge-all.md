@@ -25,29 +25,45 @@ until it is merged into their branch, with every landed task that depends on
 it, all or nothing, and each reverted task goes back to pending and held.** The
 revert adds commits and rewrites nothing.
 
-- **Only on the integration branch.** It is the one branch Ordewell owns. Work
-  already in the user's branch is refused, with the exact `git revert -m 1
-  <commit>` for each repo, newest first, for them to run; Ordewell never writes
-  to their branch. Merged means what the merge gate means, and what a clear-up
-  reads before it deletes a branch: the user's branch contains every merge that
-  landed the task, whatever the current record changed. So a revert covers only
-  landings that never reached the user's branch, and asks git of each merge every
-  time, wherever the user stands: a fact saved on a record goes with that record.
-  A gate and the handoff read `inHead`, git's answer as last read, and it is read
-  again both ways as a run closes, after Merge all and at each tick while
-  anything reads as merged, so a merge the user takes back out closes its gate
-  and is handed over again. HEAD holding it is not enough. An integration branch that is gone leaves nothing to merge, but puts
-  nothing in the user's branch either: the revert is refused with no command to
-  run. A checkout that stands on the
-  integration branch, by name, detached or a branch cut from it, is no merge,
-  only a review: it marks nothing merged, and clears no run. The branch the run
-  started on is the user's, a fast-forward of it included, from any checkout,
-  under any name its reflog says it was renamed to, and speaks for a detached
-  HEAD; any other local branch has to show a merge, the landing off its
-  first-parent line, whether it is checked out or not. Ordewell's own branches,
-  `ordewell/` and `ordewell-preserved/` alike, are no one's, whatever a runner
-  merged into them. A run with no base branch has only that, and a
-  detached HEAD's own line, to go on, so Merge all makes a merge commit there. A revert cannot commit to the integration
+- **Only on the integration branch.** It is the one branch Ordewell owns, and
+  Ordewell never writes to the user's. Whether it may touch a landing and whether
+  a landing is merged are two questions, and they err opposite ways, so neither
+  is read from the other.
+
+  *May a revert touch this merge?* Not while anything but Ordewell's own branches
+  holds it: any local branch, the branch the run started on under whatever name,
+  or a detached HEAD that does not stand on a tip of Ordewell's. `ordewell/` and
+  `ordewell-preserved/` are no one's, whatever a runner merged into them, and a
+  review checkout of the integration tip stands on one. It is refused, naming
+  what holds it, with the exact `git revert -m 1 <commit>` for each repo, newest
+  first, for the user to run. This reads no reflog or first parent, so a rename,
+  or a new branch taking the old name, cannot get past it. A review
+  branch refuses too, since it holds the work as a merge would; the refusal says
+  to delete it first, and to check out something else from a detached HEAD, and
+  never says that of the user's own branch. That is the trade-off: a user who
+  only cut a branch to read has one more step, and a revert that cannot be sure
+  refuses. It covers only landings nothing of the user's holds, and asks git of
+  each merge every time, wherever the user stands: a fact saved on a record goes
+  with that record.
+
+  *Is this work merged, so a gate may open and a run may close?* Only if the
+  user's own branch contains every merge that landed the task, whatever the
+  current record changed. A false yes clears a run, a false no keeps it open, so
+  nothing else counts: not a merge by hand into another branch, a preserved tip
+  or a review checkout. The user's own branch is the branch the run started on, a
+  fast-forward of it included, from any checkout, under any name its reflog says
+  it was renamed to, and it speaks for a detached HEAD. A run with no base branch
+  has only what is checked out, which has to show a merge: the landing off its
+  first-parent line, and no tip of Ordewell's holding it on that line. So Merge
+  all makes a merge commit there. It is the same reading a clear-up takes before
+  it deletes a branch. A gate and the handoff read `inHead`, git's answer as last
+  read, and it is read again both ways as a run closes, after Merge all and at
+  each tick while anything reads as merged, so a merge the user takes back out
+  closes its gate and is handed over again. An integration branch that is gone
+  leaves nothing to merge, but puts nothing in the user's branch either: the
+  revert is refused with no command to run.
+
+  A revert cannot commit to the integration
   branch where it is checked out, so that is refused, in the preview too, naming
   where. Nor can it from Ordewell's own integration worktree with anything else
   checked out there, by name or detached, since git commits to whatever HEAD
@@ -114,7 +130,10 @@ revert adds commits and rewrites nothing.
   nothing else: the line it saved, each on the last. In the integration worktree
   it takes them off by a two-tree read, so a change made there since stays as it
   was, staged or not; git refuses over a path those commits touched, and the
-  revert then stays recorded until that change is cleared. A crash can come between a
+  revert then stays recorded until that change is cleared. A revert stopped before
+  its commit is cleared by the same read, from a tree built of what it could have
+  written, and a change it conflicted with, or wrote over, is left there and
+  reported the same way. A crash can come between a
   commit and its save, so one more may follow that line, on it, if its message
   holds Ordewell's sentence naming one of the merges. Anything else stays recorded and holds landings
   and Merge all off it, as a landing's does (ADR-0014). It is judged again with
@@ -232,8 +251,17 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
 - **Keep the found-merged fact per merge, or on the run.** Rejected: git can answer
   it, and a saved answer goes stale both ways, keeping a merge the user has since
   taken out and missing one made after it was read.
-- **Read only the base branch and HEAD for merged.** Rejected: a merge by hand into
-  a feature branch would stop counting the moment the user left it.
+- **One answer for both questions, any branch that shows a merge counting.**
+  Rejected: it had to guess whose a branch was from its name, reflog and first
+  parents, and each guess that erred one way undid work the user had and each
+  that erred the other cleared a run. A renamed base branch shadowed by a new one
+  let a revert through; a detached HEAD on a preserved tip read as merged.
+- **Tell a review branch from a merge, so a review does not stop a revert.**
+  Rejected: a review and a merge by hand look alike to git, which is what the
+  guessing above kept getting wrong. Deleting a review branch is one command.
+- **Clear a stopped revert with `git reset --hard`.** Rejected: it takes whatever
+  else is staged there. Restoring only the revert's paths by name would overwrite
+  a change on one of them, where the two-tree read refuses.
 - **Make the commits with `commit-tree`, so each is saved before the branch moves
   and a crash can leave none unsaved.** Rejected: it would go past the commit
   hooks and signing that the commits Ordewell writes go through.
@@ -257,17 +285,21 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
   merged, and its integration branch stays, since HEAD does not contain it. It
   holds nothing the user lacks but the reverted work; deleting it is theirs.
 - A reverted task has no diff to show: that read goes through the record.
-- A user who fast-forwards by hand on a run with no base branch, or on a branch
-  other than the base branch, has their merge read as a review: it stays not
-  merged until Merge all or a merge commit says otherwise, which errs towards
-  keeping the branch.
-- A merge by hand into a throwaway branch counts, as one into any branch of the
-  user's does: a gate can open and a run can clear with the checked-out branch
-  lacking the work. Its integration branch stays, since HEAD does not contain it.
+- A merge by hand into any branch but the base branch reads as not merged: its
+  gate stays closed and the run stays open until Merge all or a merge into the
+  base branch, which errs towards keeping the branch. It still stops a revert.
+- A run with no base branch reads what is checked out, so its merge reads as
+  merged only from there, and a fast-forward by hand as a review.
+- A branch cut from the integration branch stops a revert until it is deleted,
+  though it marks nothing merged. That includes a branch a runner cut.
+- A change staged in the integration worktree after the last check, on a path the
+  revert then merges cleanly, cannot be told from the revert: `git revert
+  --no-commit` merges into the index. A stop clears it with the revert.
 - A merge the user rebases or squashes away reads as taken out, since git no
   longer shows it: its gate closes until Merge all brings it in again.
 - A renamed base branch is followed for what merged means, through a reflog that
-  can expire. Merge all still names the branch the run started on, and refuses
+  can expire; a revert needs no reflog, since the branch holds the work under any
+  name. Merge all still names the branch the run started on, and refuses
   any other as the wrong branch, so it waits for that name to come back.
 - The resolver of a conflict and the task it carried stay on the integration
   branch for good; only discarding the run takes them back.
@@ -283,3 +315,4 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
 - 2026-10-31 — a revert knows its commits by the SHAs it saves and their parent line, not a count; tracked changes in the integration worktree refuse it; a resolver of a reverted task is retired, and refuses it while at work; `landedOn` keeps a dependent that left the plan.
 - 2026-10-31 — merged is asked of git for each merge across the user's branches, not read from `inHead`; `landedOn` is kept from when a worktree is cut; tracked changes are checked before every revert commit and a rollback keeps them; a claim refuses a task skipped since its start was asked for; resolvers are retired last.
 - 2026-10-31 — `ordewell-preserved/` branches count as Ordewell's own; a renamed base branch is followed; `inHead` is read both ways; a Stop puts a reverted task's hold back; a dirty tree's replay is the start it parked.
+- 2026-10-31 — whether a revert may touch a merge and whether work is merged are two questions: anything of the user's holding a merge refuses a revert, a review branch included, and only the user's own branch reads as merged; a stopped revert is cleared by the two-tree read.

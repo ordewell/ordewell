@@ -97,6 +97,9 @@ describe('a revert with the integration worktree off the integration branch', ()
     expect(await iso.revert(run, [t.id], nothingInTheWay)).toMatchObject({ outcome: 'refused' });
 
     git(dir, 'checkout', '-q', integration);
+    expect(await iso.revert(run, [t.id], nothingInTheWay)).toMatchObject({ outcome: 'in-branch' });
+
+    git(root, 'branch', '-D', 'review');
     expect(await iso.revert(run, [t.id], nothingInTheWay)).toMatchObject({ outcome: 'reverted' });
 
     expect(treeOf(root, integration)).toEqual(['README.md']);

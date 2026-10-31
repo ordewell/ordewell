@@ -268,7 +268,7 @@ describe('work already in the user\'s branch', () => {
 
     expect(result).toEqual({
       outcome: 'in-branch',
-      commands: [{ task: { taskId: merged.id, order: 1, title: 'Add greeting' }, repo: '.', commit: merge, command: `git revert -m 1 ${merge}` }],
+      commands: [{ task: { taskId: merged.id, order: 1, title: 'Add greeting' }, repo: '.', commit: merge, command: `git revert -m 1 ${merge}`, heldBy: ['main'], merged: true }],
     });
     expect([git(root, 'rev-parse', 'HEAD'), git(root, 'rev-parse', integration)]).toEqual([head, tip]);
     expect(run.tasks[merged.id].status).toBe('merged');
@@ -1184,13 +1184,13 @@ describe('a checkout that holds the work with no merge of it', () => {
     expect(git(root, 'branch', '--list', integration)).toContain(integration);
   });
 
-  it('counts a branch cut from the integration branch as no merge, with commits of its own or not', async () => {
+  it('counts a branch cut from the integration branch as no merge, with commits of its own or not, though it stops a revert', async () => {
     const { root, iso, run, landed, integration } = await landedOne();
     git(root, 'checkout', '-q', '-b', 'review', integration);
     git(root, 'commit', '-q', '--allow-empty', '-m', 'A note of the reviewer');
 
     expect(await iso.findInHead(run)).toEqual([]);
-    expect(await iso.readLanded(run, [landed.id])).toMatchObject({ ok: true, inBranch: [] });
+    expect(await iso.readLanded(run, [landed.id])).toMatchObject({ ok: true, inBranch: [{ heldBy: ['review'], merged: false }] });
     await iso.discard(run, { integration: 'delete-merged' });
     expect(git(root, 'branch', '--list', integration)).toContain(integration);
   });
@@ -1216,13 +1216,16 @@ describe('a checkout that holds the work with no merge of it', () => {
     expect(git(root, 'branch', '--list', integration)).toBe('');
   });
 
-  it('still reads a hand merge into another branch as a merge', async () => {
+  it('reads a hand merge into another branch as not merged, and it still stops a revert', async () => {
     const { root, iso, run, landed, integration } = await landedOne();
     git(root, 'checkout', '-q', '-b', 'feature', 'main');
     git(root, 'commit', '-q', '--allow-empty', '-m', 'Work of the user');
     git(root, 'merge', '-q', '--no-edit', integration);
 
-    expect(await iso.findInHead(run)).toEqual([landed.id]);
+    expect(await iso.findInHead(run)).toEqual([]);
+    expect(await iso.readLanded(run, [landed.id])).toMatchObject({ ok: true, inBranch: [{ heldBy: ['feature'], merged: false }] });
+    await iso.discard(run, { integration: 'delete-merged' });
+    expect(git(root, 'branch', '--list', integration)).toContain(integration);
   });
 
   it('still reads a fast-forward of the branch the run started on as a merge', async () => {

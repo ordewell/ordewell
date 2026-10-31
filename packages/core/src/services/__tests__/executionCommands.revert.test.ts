@@ -141,14 +141,14 @@ describe('revert_task', () => {
 
   it('shows the exact git revert for work in the user\'s branch', async () => {
     const env = await landed([task('t1', 1)], ['t1']);
-    const command = { task: { taskId: 't1', order: 1, title: 'Task t1' }, repo: '.', commit: 'abc1234', command: 'git revert -m 1 abc1234' };
+    const command = { task: { taskId: 't1', order: 1, title: 'Task t1' }, repo: '.', commit: 'abc1234', command: 'git revert -m 1 abc1234', heldBy: ['main'], merged: true };
     env.isolation.inBranch.set('t1', [command]);
 
     const outcome = await env.run({ command: 'revert_task', task: 't1', confirmed: true });
 
     expect(outcome).toMatchObject({
       ok: false,
-      message: 'This work is already merged into your branch, which Ordewell never writes to. To undo it there, run this: git revert -m 1 abc1234',
+      message: 'This work is already in "main", which Ordewell never writes to. To undo it there, run this: git revert -m 1 abc1234',
       payload: { kind: 'revert', result: { outcome: 'in-branch', commands: [command] } },
     });
   });

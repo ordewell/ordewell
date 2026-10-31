@@ -535,7 +535,7 @@ describe('TaskOrchestrator: reverting a landed task (ADR-0054)', () => {
 
     it('answers work in the user\'s branch with the commands, ahead of anything else in the way', async () => {
       const { orchestrator, isolation } = await landed([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], ['t1']);
-      const command = { task: { taskId: 't1', order: 1, title: 'Task t1' }, repo: '.', commit: 'abc', command: 'git revert -m 1 abc' };
+      const command = { task: { taskId: 't1', order: 1, title: 'Task t1' }, repo: '.', commit: 'abc', command: 'git revert -m 1 abc', heldBy: ['main'], merged: true };
       isolation.inBranch.set('t1', [command]);
       await vi.waitFor(() => expect(orchestrator.getAttempt('t2')?.phase).toBe('running'));
 
@@ -543,7 +543,7 @@ describe('TaskOrchestrator: reverting a landed task (ADR-0054)', () => {
         revertible: false,
         reason: 'in-branch',
         commands: [command],
-        message: 'This work is already merged into your branch, which Ordewell never writes to. To undo it there, run this: git revert -m 1 abc',
+        message: 'This work is already in "main", which Ordewell never writes to. To undo it there, run this: git revert -m 1 abc',
       });
     });
   });

@@ -508,21 +508,25 @@ export interface IsolationRevertTask extends IsolationTaskRef {
 }
 
 /**
- * What undoes a task's landing once it is in the user's branch: a command for
- * them to run, which Ordewell shows and never runs (ADR-0054).
+ * What undoes a task's landing once something of the user's holds it: a command
+ * for them to run, which Ordewell shows and never runs (ADR-0054).
  */
 export interface RevertCommand {
   task: IsolationTaskRef;
   repo: string;
-  /** The task's merge commit, which their branch holds. */
+  /** The task's merge commit, which `heldBy` holds. */
   commit: string;
   /** Ready to type at the workspace root. */
   command: string;
+  /** What holds it and stops a revert: local branches by name, and 'HEAD' for a detached HEAD. */
+  heldBy: string[];
+  /** Whether the user's own branch is among them; if not, `heldBy` may be only a review. */
+  merged: boolean;
 }
 
 /**
  * What git says of the landed work a revert would take, newest landing first.
- * `inBranch`: the part already in the user's branch, which no revert touches;
+ * `inBranch`: the part something of the user's holds, which no revert touches;
  * newest first too, the order to run the commands in. `no-own-merge`: a task's
  * work came in through another's merge, a conflict resolver's, so no merge of
  * its own can undo it. `uncommitted-changes`: tracked changes in the integration
@@ -549,7 +553,7 @@ export interface RevertWatch {
  * back stay recorded on the run, which holds landings and Merge all off them.
  *
  * - `reverted`: `tasks`, newest landing first, in every repo each changed.
- * - `in-branch`: part of it is in the user's branch already: `commands` undo it.
+ * - `in-branch`: something of the user's holds part of it: `commands` undo it there.
  * - `refused`: {@link RevertWatch.refusal} said no, or git found work with no
  *   merge of its own, or the integration branch checked out where a revert
  *   cannot commit to it.

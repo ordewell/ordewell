@@ -124,7 +124,7 @@ describe('the base branch under another name', () => {
     git(root, 'branch', '-D', 'main');
 
     expect(await iso.findInHead(run)).toEqual([]);
-    expect(await iso.readLanded(run, [landed.id])).toMatchObject({ ok: true, inBranch: [] });
+    expect(await iso.readLanded(run, [landed.id])).toMatchObject({ ok: true, inBranch: [{ heldBy: ['cut'], merged: false }] });
   });
 });
 
