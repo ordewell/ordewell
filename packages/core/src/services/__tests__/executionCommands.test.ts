@@ -7,6 +7,7 @@ import type { SessionMessage } from '../SessionMessage';
 import type { ExecutionActor } from '../../models/Execution';
 import type { ConversationRequest, ConversationTurn } from '../AiService';
 import { ExecutionCommands, type ExecutionCommand, type ExecutionHost } from '../ExecutionCommands';
+import { rootAuthority } from '../Mandate';
 import { STOPPED_BEFORE_START } from '../TaskOrchestrator';
 import { EMPTY_CONVERSATION, fromTranscript, reduceConversation } from '../../conversation';
 
@@ -1051,13 +1052,14 @@ describe('the command seam\'s extension points', () => {
     expect(host.startTask).not.toHaveBeenCalled();
   });
 
-  it('asks the supervisor policy, given the level and the command', async () => {
+  it('reads the mandate at the supervisor\'s level', async () => {
     const host = stubHost();
-    const supervisor = vi.fn(() => ({ kind: 'allow' as const }));
-    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() }, supervisor });
+    const authority = rootAuthority(() => ({ autorun: false, autonomous: true, delegationTokens: 0, runners: [], models: {} }));
+    const mandate = vi.spyOn(authority, 'mandate');
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() }, authority });
 
     expect(await commands.run({ command: 'stop_task', task: 't1' }, { kind: 'supervisor', level: 'act' })).toMatchObject({ ok: true });
-    expect(supervisor).toHaveBeenCalledWith('act', 'stop_task');
+    expect(mandate).toHaveBeenCalledWith('act');
     expect(host.stopTask).toHaveBeenCalledWith('t1');
   });
 
@@ -1221,7 +1223,7 @@ describe('the command seam\'s extension points', () => {
   it('in Guarded, refuses the supervisor\'s start of a task the user has not approved, without asking', async () => {
     const host = { ...stubHost(), autonomous: () => false, running: () => false, hasLiveWork: () => false, taskApproved: () => false };
     const request = vi.fn(async () => true);
-    const commands = new ExecutionCommands({ host, consent: { request }, supervisor: () => ({ kind: 'ask' }) });
+    const commands = new ExecutionCommands({ host, consent: { request } });
 
     expect(await commands.run({ command: 'run_task', task: 't1' }, { kind: 'supervisor', level: 'act' })).toEqual({
       ok: false, outcome: 'refused', message: 'Task #1 "Task t1" was added after the user approved the plan, so it is not approved to run. Ask the user to start it, or to execute the plan, which approves it.',

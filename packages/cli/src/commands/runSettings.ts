@@ -2,7 +2,7 @@ import type { GlobalRunSettings } from '@ordewell/core';
 import type { ApiClient } from '../apiClient';
 import { positionals } from '../utils';
 import {
-  ACT_RISK, AUTORUN_RISK, SUPERVISOR_LEVEL_LABEL, PLANNED_WITH_LABEL, automergeSummary, autorunSummary, parseCount, parseSwitch, supervisorSummary, trailerSummary,
+  ACT_RISK, AUTORUN_RISK, DELEGATION_RISK, SUPERVISOR_LEVEL_LABEL, PLANNED_WITH_LABEL, automergeSummary, autorunSummary, delegationSummary, parseCount, parseDelegation, parseSwitch, supervisorSummary, trailerSummary,
 } from '@ordewell/core';
 import { connect, fail } from './shared';
 
@@ -16,6 +16,7 @@ const SUPERVISOR_USAGE = 'Usage: ordewell supervisor [off|watch|act] · ordewell
 const AUTOMERGE_USAGE = 'Usage: ordewell automerge [on|off]';
 const TRAILER_USAGE = 'Usage: ordewell trailer [on|off]';
 const AUTORUN_USAGE = 'Usage: ordewell autorun [on|off]';
+const DELEGATION_USAGE = 'Usage: ordewell delegation [off|<tokens>]';
 
 async function save(api: ApiClient, changes: Partial<GlobalRunSettings>): Promise<void> {
   await api.updateRunSettings(changes);
@@ -86,6 +87,22 @@ export async function handleAutorun(subArgs: string[], injectedApi?: ApiClient):
   await save(api, { autorun: enabled });
   console.log(`Autorun: ${enabled ? 'on: each plan the planner submits starts at once' : 'off: plans wait for your review'}.`);
   if (enabled) console.log(AUTORUN_RISK);
+}
+
+export async function handleDelegation(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
+  const [arg] = positionals(subArgs);
+  const tokens = arg === undefined ? null : parseDelegation(arg);
+  if (arg !== undefined && tokens === null) fail(DELEGATION_USAGE);
+
+  const api = await connect(subArgs, injectedApi);
+  if (tokens === null) {
+    console.log(delegationSummary((await api.getSettings()).run));
+    console.log(`  ${DELEGATION_USAGE}`);
+    return;
+  }
+  await save(api, { delegationTokens: tokens });
+  console.log(`${delegationSummary({ ...(await api.getSettings()).run, delegationTokens: tokens })}, for new sessions.`);
+  if (tokens > 0) console.log(DELEGATION_RISK);
 }
 
 function maybe<T>(n: number | null, wrap: (n: number) => T): T | null {

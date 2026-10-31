@@ -136,11 +136,11 @@ describe('/settings', () => {
   it('has no Supervisor reads step, at Watch, Off or Act, including after switching level with the panel open', () => {
     const labels = (state: TuiState): string[] => stepper(state).trail.map((t) => t.label);
     const watch = typed(base(), '/settings').state;
-    expect(labels(watch)).toEqual(['Autonomy', 'Supervisor', 'Supervisor retries', 'Automerge', 'Autorun', 'Parallel']);
+    expect(labels(watch)).toEqual(['Autonomy', 'Supervisor', 'Supervisor retries', 'Automerge', 'Autorun', 'Parallel', 'Delegation']);
     expect(labels(watch)).not.toContain('Supervisor reads');
 
     const off = press(walk(watch, 'tab', 'up'), 'enter').state;
-    expect(labels(off)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Autorun', 'Parallel']);
+    expect(labels(off)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Autorun', 'Parallel', 'Delegation']);
     expect(labels(off)).not.toContain('Supervisor reads');
 
     const asked = press(walk(watch, 'tab', 'down'), 'enter');
@@ -221,11 +221,11 @@ describe('/settings', () => {
 
   it('hides the supervisor retries step as soon as the supervisor is saved Off', () => {
     const atOff = typed(base({ runSettings: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' } }), '/settings').state;
-    expect(stepper(atOff).trail.map((t) => t.label)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Autorun', 'Parallel']);
+    expect(stepper(atOff).trail.map((t) => t.label)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Autorun', 'Parallel', 'Delegation']);
 
     const { state, effects } = press(walk(typed(base(), '/settings').state, 'tab', 'up'), 'enter');
     expect(effects).toEqual([save({ supervisorLevel: 'off' }, 'Settings: Supervisor Off')]);
-    expect(stepper(state).trail.map((t) => t.label)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Autorun', 'Parallel']);
+    expect(stepper(state).trail.map((t) => t.label)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Autorun', 'Parallel', 'Delegation']);
     expect(onScreen(state).step).toBe('Supervisor');
     expect(onScreen(walk(state, 'right')).step).toBe('Automerge');
   });
@@ -263,6 +263,38 @@ describe('/settings', () => {
     const declined = press(asked.state, 'escape');
     expect(marked(declined.state)).toBe('Off');
     expect(onScreen(declined.state).step).toBe('Autorun');
+  });
+
+  describe('Delegation', () => {
+    const atDelegation = () => walk(typed(base(), '/settings').state, ...Array<string>(6).fill('tab'));
+
+    it('is off by default, and a number sets the tree\'s budget', () => {
+      expect(onScreen(atDelegation())).toEqual({ step: 'Delegation', highlighted: '0' });
+    });
+
+    it('asks before turning it on, saying what it accepts, and returns to the step either way', () => {
+      const asked = press(type(atDelegation(), '5000000'), 'enter');
+      expect(asked.state.overlay).toMatchObject({ kind: 'confirm', message: 'Settings: Delegation on, 5000000 tokens' });
+      const note = asked.state.overlay?.kind === 'confirm' ? asked.state.overlay.note : '';
+      expect(note).toContain('a plan nobody read');
+      expect(asked.effects).toEqual([]);
+
+      const confirmed = press(asked.state, 'enter');
+      expect(confirmed.effects).toEqual([save({ delegationTokens: 5000000 }, 'Settings: Delegation on, 5000000 tokens')]);
+      expect(onScreen(confirmed.state).step).toBe('Delegation');
+
+      const declined = press(asked.state, 'escape');
+      expect(declined.effects).toEqual([]);
+      expect(declined.state.runSettings.delegationTokens).toBe(0);
+    });
+
+    it('changes the budget of a tree already on, and turns it off, without asking', () => {
+      const on = base({ runSettings: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'watch', delegationTokens: 100 } });
+      const open = walk(typed(on, '/settings').state, ...Array<string>(6).fill('tab'));
+
+      expect(press(type(open, '200'), 'enter').effects).toEqual([save({ delegationTokens: 200 }, 'Settings: Delegation on, 200 tokens')]);
+      expect(press(type(open, '0'), 'enter').effects).toEqual([save({ delegationTokens: 0 }, 'Settings: Delegation off')]);
+    });
   });
 
   it('saves any whole number typed for Parallel, staying on the step', () => {

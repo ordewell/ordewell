@@ -47,6 +47,7 @@ function RunValue({ run }: { run: GlobalRunSettings }) {
       {run.supervisorLevel === 'act' ? <span className="warn">{level}</span> : level}
       {` · auto-merge ${run.mergeAtGatesAutomatically ? 'on' : 'off'} · `}
       {run.autorun ? <span className="warn">autorun on</span> : 'autorun off'}
+      {run.delegationTokens > 0 && <>{' · '}<span className="warn">delegation on</span></>}
     </>
   );
 }

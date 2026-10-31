@@ -1,12 +1,12 @@
 import type { GlobalRunSettings, SupervisorLevel } from '@ordewell/core';
-import { ACT_RISK, AUTORUN_RISK, SUPERVISOR_LEVEL_LABEL, autonomyLevelLabel, codexSandboxNotice } from '@ordewell/core';
+import { ACT_RISK, AUTORUN_RISK, DELEGATION_RISK, SUPERVISOR_LEVEL_LABEL, autonomyLevelLabel, codexSandboxNotice } from '@ordewell/core';
 import type { ConfirmAction, PickerItem, TuiState } from '../state';
 import { openStepper, reopenStepper, type StepChoices, type StepperDefinition } from './stepper';
 import { step, type Effect, type Step } from './shared';
 
 /**
- * `/settings`: autonomy, supervisor, merging, autorun and parallel tasks in one
- * stepped panel. Each enter saves its step, and only if it changed, through the
+ * `/settings`: autonomy, supervisor, merging, autorun, parallel tasks and
+ * delegation in one stepped panel. Each enter saves its step, and only if it changed, through the
  * same paths the headless commands save them.
  */
 
@@ -33,7 +33,7 @@ const supervisorOff = (_state: TuiState, choices: StepChoices): boolean => choic
 export const SETTINGS: StepperDefinition = {
   title: 'Settings',
   afterSave: 'stay',
-  hint: 'Supervisor, automerge and autorun apply to this session; your last change is the default for new ones. Autonomy and Parallel tasks apply to every session.',
+  hint: 'Supervisor, automerge, autorun and delegation apply to this session; your last change is the default for new ones. Autonomy and Parallel tasks apply to every session.',
   steps: [
     {
       id: 'autonomy',
@@ -86,6 +86,12 @@ export const SETTINGS: StepperDefinition = {
       hint: 'How many AI tasks run at once, a live run included',
       number: { min: 1, current: (state) => state.maxParallel },
     },
+    {
+      id: 'delegation',
+      label: 'Delegation',
+      hint: 'The token budget of a tree of plans; 0 keeps delegation off',
+      number: { min: 0, current: (state) => state.runSettings.delegationTokens },
+    },
   ],
   save: saveChoices,
 };
@@ -127,10 +133,16 @@ function saveChoices(state: TuiState, choices: StepChoices): Step {
     save.maxParallel = parallel;
     changed.push(`Parallel ${parallel}`);
   }
+  const delegationTokens = Number(choices.delegation);
+  if (delegationTokens !== state.runSettings.delegationTokens) {
+    run.delegationTokens = delegationTokens;
+    changed.push(delegationTokens > 0 ? `Delegation on, ${delegationTokens} tokens` : 'Delegation off');
+  }
 
   if (changed.length === 0) return step(state);
   const effect: SaveSettingsEffect = { ...save, message: `Settings: ${changed.join(' · ')}` };
-  const risks = [...(run.supervisorLevel === 'act' ? [ACT_RISK] : []), ...(run.autorun ? [AUTORUN_RISK] : [])];
+  const delegationOn = state.runSettings.delegationTokens === 0 && (run.delegationTokens ?? 0) > 0;
+  const risks = [...(run.supervisorLevel === 'act' ? [ACT_RISK] : []), ...(run.autorun ? [AUTORUN_RISK] : []), ...(delegationOn ? [DELEGATION_RISK] : [])];
   if (risks.length === 0) return saveSettings(state, effect);
   // The same warning the headless `ordewell supervisor act` and
   // `ordewell autorun on` ask behind; picking the row in a list is no more

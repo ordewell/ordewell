@@ -64,6 +64,7 @@ Planner, models and runners:
   ordewell automerge [on|off]     (headless) Merge at merge gates and at the end of a run; /settings covers it
   ordewell trailer [on|off]       (headless) End Ordewell's commits with "Planned-with: Ordewell"; set only here or in settings.json
   ordewell autorun [on|off]       (headless) Start each plan the planner submits, without review; /settings covers it
+  ordewell delegation [off|<tokens>]  (headless) Whether a plan may delegate, and a tree's token budget; /settings covers it
   ordewell parallel [<n>]         (headless) How many AI tasks run at once, a live run included; /settings covers it
   ordewell refresh                Re-check runners; reread settings and cached models
   ordewell models                 List every provider's catalog (works without a server)

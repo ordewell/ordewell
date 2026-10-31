@@ -739,12 +739,13 @@ function runSettingsValue(state: TuiState): string {
   // After a switch the previous session's values are not this one's; say
   // nothing rather than paint a guess until its own read lands.
   if (!state.runSettingsKnown) return style.grey('…');
-  const { supervisorLevel, mergeAtGatesAutomatically, autorun } = state.runSettings;
+  const { supervisorLevel, mergeAtGatesAutomatically, autorun, delegationTokens } = state.runSettings;
   const level = `supervisor ${SUPERVISOR_LEVEL_LABEL[supervisorLevel]}`;
   return [
     supervisorLevel === 'act' ? style.yellow(level) : level,
     `auto-merge ${mergeAtGatesAutomatically ? 'on' : 'off'}`,
     autorun ? style.yellow('autorun on') : 'autorun off',
+    ...(delegationTokens > 0 ? [style.yellow('delegation on')] : []),
   ].join(' · ');
 }
 

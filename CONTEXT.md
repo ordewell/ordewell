@@ -2996,17 +2996,37 @@ run; the user's `/settings` sets it, up or down, at once in the session it is
 changed in, lifting such a lowering with the guards' memory kept. A run the
 supervisor restarts itself, or a usage-limit reset resumes, keeps the level the
 run had; a start of the user's copies the session's value afresh (see **Run
-origin**). A slim precursor of the mandate (#23): Watch is `observe`, Act
-becomes `control` + `replan`.
+origin**). The root's **Mandate** reads it: Watch is `observe`, and Act adds
+`steer`, `control`, `replan` and `merge`.
 *Avoid:* "autonomous", "autonomy" or "auto" for it — those name the runner
 permission modes and the Full/Guarded autonomy level (ADR-0001), a separate
-setting; a Guarded session can have an Act supervisor. *Avoid:* "mandate" until
-#23 defines one.
+setting; a Guarded session can have an Act supervisor.
+
+**Mandate** — what a node may do without a person, and within what limits
+(`Mandate`, ADR-0056): its **Grants**, what of them it may hand a child
+(`grantable`), `autonomy`, limits, exclusions and effect rules. The root's is
+derived on each read from today's settings (`rootMandate`) and never saved; a
+child's is `narrow` of its parent's and its request, which can only narrow. A
+turn the user opened has none: a person needs no mandate. What holds at a node
+is read at each check through its `NodeAuthority`.
+*Avoid:* "permissions" — those are a runner's modes (ADR-0001); a mandate gives
+no capability, only authority.
+
+**Grant** — one thing a node may do unasked, named in a **Mandate**: `observe`,
+`steer`, `control`, `replan`, `approve`, `delegate`, `effect`, `research` or
+`merge`. A command needs the one `COMMAND_GRANTS` names; the user's own controls
+need one no grant gives. A subplanner, the actor a child plan's turns act as, has
+its grants alone at the **Command seam**: allow or refuse, never ask.
+
+**Delegation** — the **Run setting** that lets a plan hand a separable part of
+its goal to a child plan (ADR-0055 D21): `delegationTokens`, a tree's token budget,
+0 being off. Off by default, and read from the session's copy at each check, so a
+run keeps no copy of it. Nothing can delegate yet.
 
 **Run settings** — the user settings that say how a run is
 started, watched and merged: **Supervisor level**, **Auto-merge at gates**,
-**Autorun**, the supervisor's retry limit (ADR-0030) and the wake-up read
-budget (`wakeUpReadBudget`). The budget has no row in the UI: it is set only by
+**Autorun**, **Delegation**, the supervisor's retry limit (ADR-0030) and the
+wake-up read budget (`wakeUpReadBudget`). The budget has no row in the UI: it is set only by
 `ordewell supervisor reads <n>` or in `settings.json`, never by `/settings`.
 All of them are saved in `settings.json` beside the Planned-with trailer, which
 is not a panel value; the rows `/settings` shows are changed only by the user
@@ -3179,7 +3199,7 @@ approval, checkpoint answers, Merge all and a runner request's answers keep
 routes of their own, as they answer more than the seam's line. The CLI sends the task as typed and prints the daemon's
 line; the TUI adds no notice of its own beside the timeline's line, and shows a
 refusal as the daemon worded it. No planner tool reaches into
-`TaskOrchestrator` directly, and the mandate (#23) plugs in here. Plan approval
+`TaskOrchestrator` directly, and the **Mandate** is read here. Plan approval
 is the user's: executing the plan approves every task in it, and a task the
 user starts, retries or adds by hand is approved too (`approvedTasks` on the
 plan, kept by `ApprovalRecord` and read through `Session.isApproved`); a start from anyone else is refused

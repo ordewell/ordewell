@@ -394,6 +394,26 @@ describe('ordewell supervisor, automerge, trailer and autorun (ADR-0030)', () =>
     d.close();
   });
 
+  it('turns delegation on with the tree\'s budget, and off again, saying what it accepts', async () => {
+    const d = await fakeDaemon({ settings: { run: { ...RUN, delegationTokens: 0 } } });
+    const { handleDelegation } = await import('../runSettings');
+
+    const shown = await capture(() => handleDelegation([], new ApiClient(d.port)));
+    expect(shown.stdout).toContain('Delegation: off');
+    expect(d.sent).toEqual([]);
+
+    const on = await capture(() => handleDelegation(['5000000'], new ApiClient(d.port)));
+    expect(d.sent.at(-1)?.body).toMatchObject({ run: { delegationTokens: 5000000 } });
+    expect(on.stdout).toContain('Delegation: on, 5000000 tokens for a tree');
+    expect(on.stdout).toMatch(/a plan nobody read/);
+
+    const off = await capture(() => handleDelegation(['off'], new ApiClient(d.port)));
+    expect(d.sent.at(-1)?.body).toMatchObject({ run: { delegationTokens: 0 } });
+    expect(off.stdout).toContain('Delegation: off');
+    expect(off.stdout).not.toMatch(/a plan nobody read/);
+    d.close();
+  });
+
   it('says what Act and autorun allow when it turns them on', async () => {
     const d = await fakeDaemon({ settings: { run: RUN } });
     const { handleSupervisor, handleAutorun } = await import('../runSettings');
@@ -405,6 +425,7 @@ describe('ordewell supervisor, automerge, trailer and autorun (ADR-0030)', () =>
   it.each([
     ['handleSupervisor', ['boss']], ['handleSupervisor', ['reads', '0']], ['handleSupervisor', ['retries', 'many']],
     ['handleAutomerge', ['maybe']], ['handleAutorun', ['yes']], ['handleTrailer', ['sometimes']],
+    ['handleDelegation', ['on']], ['handleDelegation', ['0']], ['handleDelegation', ['1.5']],
   ] as const)('%s refuses %j, sending nothing', async (handler, args) => {
     const d = await fakeDaemon({ settings: { run: RUN } });
     const commands = await import('../runSettings');

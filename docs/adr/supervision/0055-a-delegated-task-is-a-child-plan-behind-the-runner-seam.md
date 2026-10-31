@@ -1,8 +1,8 @@
 ---
 status: accepted
-implemented: none
+implemented: partial
 amends: ["0009", "0013", "0015", "0018", "0020", "0022", "0029", "0030", "0035", "0045", "0046", "0049", "0054"]
-note: "Settles #33. Decided ahead of its code: what a node may do is ADR-0056, how it reports is ADR-0057."
+note: "Settles #33. Built: D21's run setting. The rest is decided ahead of its code: what a node may do is ADR-0056, how it reports is ADR-0057."
 ---
 
 # 0055 — A delegated task is a child plan behind the runner seam
@@ -566,3 +566,4 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-10-31 — checked against the code a fourth time: a re-run takes its checks back, only landed work holds a merge, a script is no check of a `readOnly` delegated task, and what `taskTip`'s diff holds.
 - 2026-10-31 — checked against the code a fifth time: a fresh attempt takes its checks back at the claim, Execute and a force start included, and a delegated task that lands must name its protected paths.
 - 2026-10-31 — checked against the code a sixth time: a subplanner's handoff is checked against its own plan, a body on a delegated task's check is a worktree task, a repair's mode comes from the mandate, and a child run is discarded on any fresh attempt or removal.
+- 2026-10-31 — D21's run setting implemented, off by default; nothing can delegate yet, so the planner is not taught it, and it moves only the root's mandate ([ADR-0030](0030-global-run-settings.md)).

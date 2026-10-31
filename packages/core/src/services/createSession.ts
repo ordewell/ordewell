@@ -22,7 +22,8 @@ import { TaskControlError, TaskOrchestrator, type OrchestratorObserver, type Run
 import { PlanStore } from './PlanStore';
 import { ApprovalPolicy, effectiveApprovalMode } from './ApprovalPolicy';
 import { DEFAULT_PLANNER_ALLOWLIST } from './plannerAllowlist';
-import { effectRuleFor, parseEffectAllowlist } from './effectAllowlist';
+import { effectRuleFor, parseEffectAllowlist, type EffectRules } from './effectAllowlist';
+import { autonomousAt, rootAuthority, withheldPlannerTools, type Mandate, type NodeAuthority, type RootSettings } from './Mandate';
 import { PendingApprovals, type PendingApproval } from './PendingApprovals';
 import { RunnerApprovals } from './RunnerApprovals';
 import { approvalScopes, isRunnerApproval, type ApprovalAnswer, type ApprovalRequest } from '../interfaces/IApproval';
@@ -242,6 +243,8 @@ export interface SessionDeps {
   web?: { transport?: WebTransport; resolveHost?: ResolveAll; cache?: WebResponseCache; searchProvider?: ISearchProvider };
   /** What runs the user's notify command (ADR-0053); the real process unless a test supplies one. */
   runNotifyCommand?: NotifyRun;
+  /** The node this session is, below the root (ADR-0056); absent, it is the root, whose mandate its settings hold. */
+  child?: NodeAuthority;
 }
 
 /**
@@ -368,6 +371,8 @@ export function createSession(deps: SessionDeps): Session {
     research: {
       started: (task) => session.research.started(task),
     },
+    // At the root the user's setting is the consent, at any level (ADR-0029); `merge` is what a child's asks (ADR-0056 M6).
+    mayMergeUnasked: () => !deps.child || deps.child.mandate('off').grants.has('merge'),
     // The planner's command rules, at the read-only task's own working directory (ADR-0046).
     taskShell: (site) => deps.fsAdapter.taskShell?.(site),
     // The planner's web-read policy with a budget per attempt, never prompting (ADR-0046).
@@ -446,6 +451,7 @@ export function createSession(deps: SessionDeps): Session {
 
   const catalog = new SessionCatalog({
     config: deps.config,
+    autonomous: () => autonomousAt(deps.child, deps.config.autonomousMode),
     registry: deps.registry,
     modelResolver: deps.modelResolver,
     settings: deps.settings,
@@ -485,6 +491,7 @@ export function createSession(deps: SessionDeps): Session {
       return host ? host.lease(onLost) : UNLEASED;
     },
     conversation: (host) => (conversation = new PlannerConversation(host)),
+    child: deps.child,
   });
   return session;
 }
@@ -537,6 +544,8 @@ export interface SessionParts {
   lease: (onLost: (held: SessionHeld) => void) => SessionLease;
   /** The conversation's host is the Session itself, so only the Session can make it. */
   conversation: (host: PlannerConversationHost) => PlannerConversation;
+  /** The node this session is, below the root. */
+  child?: NodeAuthority;
 }
 
 /**
@@ -617,6 +626,9 @@ export class Session {
   /** A whole-plan start opening; a second Execute joins it rather than resetting the run under it. */
   private runOpening: Promise<void> | null = null;
   private unsubObserver: (() => void) | null;
+  /** This session's node below the root; undefined at the root, where a person remains. */
+  private readonly child: NodeAuthority | undefined;
+  private readonly authority: NodeAuthority;
   private readonly hostSessionId?: string;
   private currentSessionId: string;
   private readonly skillsService: Pick<SkillsService, 'findSkill' | 'listSkills' | 'searchedDirs' | 'forRoot'>;
@@ -640,7 +652,7 @@ export class Session {
   private turnEffects = new TurnEffects();
   private unlistenApprovals: (() => void) | null;
   /** The one check of a planner's change to the plan; an Act supervisor's edits meet its guard. */
-  private readonly planChanges = new PlanChangeCheck(this.changeScope(() => this.supervisorEditing()));
+  private readonly planChanges = new PlanChangeCheck({ ...this.changeScope(() => this.supervisorEditing()), child: () => this.child });
   private readonly plannerTools: PlannerToolHandler = plannerToolHandler({
     skills: () => this.workspaceSkills().listSkills(),
     turnId: () => this.conversation.currentTurnId,
@@ -688,6 +700,8 @@ export class Session {
     // A planner shell without an OS sandbox is said once, here, rather than in every command's output (ADR-0011 B5).
     this.fsAdapter.setNotice?.((message) => this.notice('warn', message));
     this.modelResolver = parts.modelResolver;
+    this.child = parts.child;
+    this.authority = parts.child ?? rootAuthority(() => this.rootSettings());
     this.settingsFn = parts.settings;
     this.runSettingsValue = { ...RUN_SETTINGS_DEFAULTS, ...(parts.settings().run ?? {}) };
     this.hostSessionId = parts.hostSessionId;
@@ -847,9 +861,10 @@ export class Session {
       // A Guarded start asks on the card the planner's other requests use.
       consent: { request: (request) => this.approvals.ask(request) },
       guards: [this.supervision.guard],
+      authority: this.authority,
       // Read per request, like the planner allowlist, so an edited rule applies to the next script (ADR-0035).
       effects: (body) => {
-        const rules = parseEffectAllowlist(this.config.effectAllowlist, plannerAllowlistOf(this.config));
+        const rules = this.effectRules();
         for (const { rule, warning } of rules.ignored) {
           if (this.ignoredEffectRules.has(rule)) continue;
           this.ignoredEffectRules.add(rule);
@@ -976,7 +991,7 @@ export class Session {
       waitsForApproval: (taskId) => this.record.waitsForApproval(taskId),
       approve: (taskIds) => this.record.approve(taskIds),
       approvePlan: () => this.record.approvePlan(),
-      autonomous: () => this.config.autonomousMode,
+      autonomous: () => this.autonomous(),
       autorun: () => this.userRunSettings().autorun,
       scheduling: () => this.orchestrator.isScheduling,
       startsHeld: () => this.orchestrator.startsHeld,
@@ -1162,6 +1177,7 @@ export class Session {
    * report turn for a task that turn started acts as (ADR-0037, R3).
    */
   private turnActor(): ExecutionActor {
+    if (this.child) return { kind: 'subplanner', depth: this.child.depth };
     const wakeUp = this.conversation.currentWakeUp;
     if (!wakeUp) return { kind: 'planner-turn' };
     return wakeUp.actor?.() ?? { kind: 'supervisor', level: this.supervision.level };
@@ -1181,6 +1197,33 @@ export class Session {
   /** The user's run settings as they stand for this session (ADR-0030). */
   private userRunSettings(): GlobalRunSettings {
     return this.runSettingsValue;
+  }
+
+  /** What this node may do without a person, as it stands now (ADR-0056 M1): derived at the root, and never saved. */
+  mandate(): Mandate {
+    return this.authority.mandate(this.supervision.level);
+  }
+
+  /** Each value where it lives today; the level is the caller's to name (ADR-0056 M1). */
+  private rootSettings(): Omit<RootSettings, 'level'> {
+    const { autorun, delegationTokens } = this.userRunSettings();
+    return {
+      autorun,
+      autonomous: this.config.autonomousMode,
+      delegationTokens,
+      effects: this.effectRules(),
+      runners: this.catalog.runnersFor('plan') ?? [],
+      models: this.catalog.allowlist(),
+    };
+  }
+
+  private effectRules(): EffectRules {
+    return parseEffectAllowlist(this.config.effectAllowlist, plannerAllowlistOf(this.config));
+  }
+
+  /** Whether this node's tasks default to their runner's autonomous mode. */
+  private autonomous(): boolean {
+    return autonomousAt(this.child, this.config.autonomousMode);
   }
 
   /**
@@ -1734,7 +1777,7 @@ export class Session {
     const generated = await this.conversation.hold(options?.signal, async (turn) => {
       const { modelsByRunner, runnerModes } = await this.catalog.planning(chosenRunners);
       const settings = this.settingsFn();
-      const modes = { ...plannerModesFrom(this.config.autonomousMode), isolatedExecution: await this.runs.plannerLayout(), taskSkills: this.workspaceSkills() };
+      const modes = { ...plannerModesFrom(this.autonomous()), isolatedExecution: await this.runs.plannerLayout(), taskSkills: this.workspaceSkills() };
       const subagents = new SubagentRuns();
 
       const { skillWarnings = [], ...plan } = await this.planner.generate({
@@ -1742,7 +1785,7 @@ export class Session {
         runners: chosenRunners,
         modelsByRunner,
         runnerModes,
-        autonomousDefault: this.config.autonomousMode,
+        autonomousDefault: this.autonomous(),
         fs: this.fsAdapter,
         fetcher: this.fetcher,
         onProgress: (p) => {
@@ -2021,14 +2064,14 @@ export class Session {
       runnerModes,
       // An envelope's plan is parsed against what submit_plan checks a plan against.
       liveScope: () => this.planChanges.intake(),
-      autonomousDefault: this.config.autonomousMode,
+      autonomousDefault: this.autonomous(),
       autorun: this.userRunSettings().autorun,
       isolatedExecution: await this.runs.plannerLayout(),
       fs: this.fsAdapter,
       fetcher: this.fetcher,
       approval: this.approvalPolicy,
       notice: (level, message) => this.notice(level, message),
-      plannerTools: { sessionId: this.sessionId, handler: this.plannerTools },
+      plannerTools: { sessionId: this.sessionId, handler: this.plannerTools, ...(this.child ? { withheld: withheldPlannerTools(this.child.mandate('off')) } : {}) },
       skills: this.workspaceSkills().listSkills(),
     };
   }
@@ -2076,6 +2119,8 @@ export class Session {
     const known = new Map(flattenTasks(before).map((t) => [t.id, t]));
     for (const task of this.store.planTasks) {
       if (!task.research || known.get(task.id)?.research) continue;
+      // A generated plan meets no change check, so a child's grant is read here too (ADR-0056 M6).
+      if (!this.mandate().grants.has('research')) continue;
       const to = researchReportTo(this.turnActor());
       this.store.update(task.id, { reportTo: to, researchOrigin: to });
       this.record.approveResearch(task.id);

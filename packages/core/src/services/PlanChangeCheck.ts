@@ -1,10 +1,11 @@
-import type { RunnerId, Task } from '../models/Task';
+import { flattenTasks, type RunnerId, type Task } from '../models/Task';
 import type { RunnerModeInfo } from './ModeResolver';
 import { validatePlanTasks, type PlanTasksResult } from './PlanValidator';
 import { checkPlanInvariants } from './PlannedTask';
 import { applyTaskOps, opRefusalText, type OpRef, type TaskOp } from './TaskOps';
 import { resolveAssignments, type AssignmentAdjustment, type AssignmentCatalog } from './TaskAssignment';
 import { checkOpSkills, checkPlanSkills, type SkillCheck, type SkillLookup } from './taskSkills';
+import { missingGrant, type Grant, type NodeAuthority } from './Mandate';
 
 /**
  * When a planner's change is checked: as the planner submits it, where a
@@ -77,6 +78,8 @@ export interface PlanChangeScope {
   handles?(): ReadonlyMap<string, string>;
   /** A further refusal of what the change leaves: the supervisor's oscillation guard (ADR-0029). */
   guard?(before: readonly Task[], after: readonly Task[]): string | undefined;
+  /** The node, below the root: a child's change is held to its mandate, where a commit would otherwise approve with no command (ADR-0056 M6). Absent, or undefined, at the root. */
+  child?(): NodeAuthority | undefined;
 }
 
 /** What a whole plan's JSON is held to as it is submitted. */
@@ -145,6 +148,8 @@ export class PlanChangeCheck {
 
     if (change.kind === 'plan') {
       const tasks = read?.ok ? read.tasks : [...landing(change)];
+      const ungranted = this.ungranted(before, tasks);
+      if (ungranted.length > 0) return this.refused(change, ungranted);
       // A landing plan waited out the rest of its reply, so the runners it was accepted against may be gone (ADR-0003 V1).
       const broken = phase === 'land' ? checkPlanInvariants(tasks, runners, catalog.runnerModes) : [];
       if (broken.length > 0 || skillErrors.length > 0) return this.refused(change, [...broken, ...skillErrors]);
@@ -156,6 +161,8 @@ export class PlanChangeCheck {
     if (skillErrors.length > 0) return this.refused(change, skillErrors);
     const applied = applyTaskOps(before, change.ops, runners, catalog, this.scope.handles?.());
     if (!applied.ok) return this.refused(change, applied.refusals);
+    const ungranted = this.ungranted(before, applied.tasks);
+    if (ungranted.length > 0) return this.refused(change, ungranted);
     const tripped = this.scope.guard?.(before, applied.tasks);
     if (tripped) return this.refused(change, [{ message: tripped }]);
     // Then what landing changes besides the edit's own ops: an untouched task's effort the catalog no longer offers, say.
@@ -168,6 +175,16 @@ export class PlanChangeCheck {
       summary: applied.summary,
       handles: applied.handles ?? new Map(),
     };
+  }
+
+  /** What a child's mandate leaves out of this change: `replan` for any, and `research` for a research task it brings. */
+  private ungranted(before: readonly Task[], after: readonly Task[]): PlanChangeError[] {
+    const node = this.scope.child?.();
+    if (!node) return [];
+    const mandate = node.mandate('off');
+    const was = new Map(flattenTasks(before).map((task) => [task.id, task]));
+    const needs: Grant[] = ['replan', ...flattenTasks(after).some((task) => task.research && !was.get(task.id)?.research) ? ['research' as const] : []];
+    return needs.filter((grant) => !mandate.grants.has(grant)).map((grant) => ({ field: 'tasks', message: missingGrant(node.depth, mandate, grant) }));
   }
 
   private refused(change: PlannerChange, errors: PlanChangeError[]): CheckedChange {

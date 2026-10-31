@@ -743,7 +743,10 @@ export class CliAgentAiService implements IAiService {
     const spawned = await spawnAttached({
       runner: this.runner,
       create: () => this.newAdapter(),
-      issueToken: () => server.issuePlannerToken({ sessionId: tools.sessionId, hidden: connectorFor(this.runner)?.ordewellTools.plannerHidden(start) }, tools.handler),
+      issueToken: () => {
+        const hidden = connectorFor(this.runner)?.ordewellTools.plannerHidden(start);
+        return server.issuePlannerToken({ sessionId: tools.sessionId, hidden: tools.withheld ? [...hidden ?? [], ...tools.withheld] : hidden }, tools.handler);
+      },
       revoke: (token) => server.revoke(token),
       start: async (adapter, credential) => {
         starting = adapter;
