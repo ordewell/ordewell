@@ -74,7 +74,7 @@ it on, since the seam refuses it otherwise
 | `failed` | `failed`, no loop going on | Retry, Continue, Skip, Mark complete | as above |
 | `out-of-rounds` | A loop's check, `outOfRounds` | Retry, Continue, Skip, Mark complete | as above; a retry starts its rounds over ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md)) |
 | `merge-gate` | Not started, held by nothing but its gate | Merge all; Force start, or Mark complete for a user task | `merge_all`, `force_start`, `mark_complete` |
-| `on-hold` | Not started, held by nothing but its hold | Retry, Force start; Mark complete alone for a user task, which no runner starts | `retry_task`, `force_start`, `mark_complete` |
+| `on-hold` | Not started, held by nothing but its hold | Retry, Force start; Force start alone for a reverted task behind a dependency, whose retry the seam refuses until that has finished; Mark complete alone for a user task, which no runner starts | `retry_task`, `force_start`, `mark_complete` |
 | `unapproved` | Not started, nothing else holds it, added since the plan was approved ([ADR-0035](0035-effects-are-consented-and-recorded.md)) | Start | `run_task` |
 | `no-prompt` | Not started, nothing to run | Skip | `skip_task` |
 | `by-hand` | A user task nothing else holds | Mark complete | `mark_complete` |
@@ -87,6 +87,8 @@ Outside one nothing was going to start them, so nothing is late. A reverted task
 ([ADR-0054](../isolation/0054-a-landed-task-reverts-on-the-integration-branch-before-merge-all.md))
 is the exception: it is `on-hold` in any run, because the user took it back,
 usually after the last task landed, and whether it runs again is theirs to say.
+It is listed behind a dependency or a blocked one too: a chain revert leaves each
+task behind the one before it, and none of that lifts a hold only the user can.
 
 The three options that dispatch past the seam's commands are the ones that have
 no command: adding a resolver task is a plan edit, and a blocked run's two answers
@@ -411,3 +413,4 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
 - 2026-10-31 — a load keeps a failed task failed, and a task saved in progress loads failed as interrupted; the fresh chance is Execute's alone (#30).
 - 2026-10-31 — the notify command runs through a bounded queue, two at a time, and a host's teardown stops one still running (#30).
 - 2026-10-31 — a repair that will start by itself is left out, a conflict with a resolver nothing will start offers to start it, and a load lists what waited for a repair (ADR-0015).
+- 2026-10-31 — a reverted task is listed behind its dependencies, with what the seam takes then (ADR-0054).

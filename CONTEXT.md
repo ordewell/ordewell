@@ -1857,9 +1857,10 @@ a later attempt left of their records. It takes
 its turn on the landing queue, and no new start is claimed meanwhile. It is
 refused for a task that landed nothing, while a dependent is live, for a task
 in a loop that has not ended, while the integration branch is checked out
-outside Ordewell's own worktree, and wherever it cannot be sure what it covers:
-work a conflict's resolver carried (`IsolationRun.carried`), whichever of the two
-tasks is asked, or merges no record can name. Work already in the user's branch is refused with
+outside Ordewell's own worktree or that worktree stands on anything else, and
+wherever it cannot be sure what it covers: work a conflict's resolver carried
+(`IsolationRun.carried`), whichever of the two tasks is asked, or merges no
+record can name. Work already in the user's branch is refused with
 the exact `git revert` to run, which Ordewell never runs: a checkout that only
 stands on the integration branch is not that. A conflict or a failure
 puts every recorded tip back and names the task, repo and files. Each reverted

@@ -119,7 +119,7 @@ describe('REGRESSION: the per-repo rollback fix', () => {
     const second = task(2, 'Touch web again');
     await land(iso, run, first, { 'api/one.txt': '1\n', 'web/one.txt': '1\n' });
     await land(iso, run, second, { 'web/two.txt': '2\n' });
-    const [apiTip, webTip] = [git(root, '-C', 'api', 'rev-parse', api.integrationBranch), git(root, '-C', 'web', 'rev-parse', web.integrationBranch)];
+    const webTip = git(root, '-C', 'web', 'rev-parse', web.integrationBranch);
     const saved = structuredClone(run);
     await iso.revert(run, [first.id, second.id], { ...nothingInTheWay, persist: () => Object.assign(saved, structuredClone(run)) });
     // api made 1 revert, web 2: each repo is held to its own count.
