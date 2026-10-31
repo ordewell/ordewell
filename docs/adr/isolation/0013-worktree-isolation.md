@@ -4,6 +4,10 @@ status: accepted
 
 # 0013 — Worktree isolation: one checkout per task, one branch per run
 
+*Pending:* [ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — a run may nest in a delegated task's worktree, with worktrees and state under the root's state directory; a subplanner starts in a worktree; a child refuses the user's checkout; a failed check holds automatic merges.
+*Pending:* [ADR-0057](../supervision/0057-information-moves-by-reference.md) — tasks may declare an advisory scope, overlap is answered at plan time, and a landing that touches one sends one line.
+*Pending:* [ADR-0059](0059-an-execution-lease-reserves-in-the-claim-and-opens-after-it.md) — `prepare` and the runner's cwd sit behind an execution lease, local by default.
+
 ## Problem
 
 Every AI task ran in the same working directory — the workspace root. With

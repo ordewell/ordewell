@@ -5,6 +5,8 @@ amends: ["0013"]
 
 # 0015 — Conflict repair: the task repairs its own conflict, bounded and evidenced
 
+*Pending:* [ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — a delegated task's repair runs a plain runner on its assigned runner and model, since a subplanner writes no files.
+
 **Amends:** ADR-0013 (worktree isolation), which surfaces every merge conflict
 for a human and rejected letting a model resolve one.
 

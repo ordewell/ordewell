@@ -5,6 +5,8 @@ amends: ["0013"]
 
 # 0049 — A session has one live host: the session lease
 
+*Pending:* [ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — the root's lease covers its tree, and a child session holds none of its own.
+
 ## Problem
 
 Nothing stopped two Ordewell processes from running one session at once.

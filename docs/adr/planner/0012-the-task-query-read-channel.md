@@ -4,6 +4,8 @@ status: accepted
 
 # 0012 — The task-query read channel: reading a task before rewriting it
 
+*Pending:* [ADR-0057](../supervision/0057-information-moves-by-reference.md) — the plan block a planner is sent has a size cap, past which it carries live tasks, counts and a pointer.
+
 ## Problem
 
 The plan block (`PlannerConversation.planView`), which a turn's message

@@ -5,6 +5,10 @@ amends: ["0009", "0013", "0020", "0022"]
 
 # 0029 — The supervisor: levels, live planner turns, execution tools and auto-merge
 
+*Pending:* [ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — Stop reaches a subtree, tombstone first; a failed check holds `merge_all` and the automatic merges, and a model may not skip that check.
+*Pending:* [ADR-0056](0056-a-mandate-narrows-down-the-tree.md) — the mandate replaces the level check at the seam, a subplanner is an actor of its own, and a child's questions go to its parent.
+*Pending:* [ADR-0057](0057-information-moves-by-reference.md) — `WakePolicy` holds events it would wake on, a wake has a size cap, and the level brief is sent once, then a line on a change.
+
 **Amends:** ADR-0009 and ADR-0022 — the planner gains execution tools, a further
 explicit exception to harness planners being read-only; ADR-0013 — "never
 merged for the user" now has two exits the user opts into; ADR-0020 — the

@@ -4,6 +4,8 @@ status: accepted
 
 # 0018 — Structured runner transport: drive task runners through their programmatic protocol
 
+*Pending:* [ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — Continue of a delegated task reopens its child session, and its `runnerSessionId` names that session.
+
 ## Problem
 
 Runner screen scraping cannot reliably distinguish a completed task, a

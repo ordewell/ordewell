@@ -4,6 +4,11 @@ status: accepted
 
 # 0022 — The Ordewell MCP server: task and planner tools behind per-caller tokens
 
+*Pending:* [ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — a subplanner's token is a planner token that also serves `task_complete` and `checkpoint` (A1 to A3).
+*Pending:* [ADR-0056](../supervision/0056-a-mandate-narrows-down-the-tree.md) — below the root the tool list is filtered by grants and fixed at session start; a subplanner's `checkpoint` parks instead of waiting (V5).
+*Pending:* [ADR-0057](../supervision/0057-information-moves-by-reference.md) — the task tools gain `read` and `post`, `task_complete` gains `promote` and `open`, and references pin an attempt.
+*Pending:* [ADR-0059](../isolation/0059-an-execution-lease-reserves-in-the-claim-and-opens-after-it.md) — a container reaches this server through the lease's endpoint, not loopback (T1, T2).
+
 ## Problem
 
 Task completion and checkpoints need signals bound to the current attempt,

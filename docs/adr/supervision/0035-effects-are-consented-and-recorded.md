@@ -6,6 +6,9 @@ note: "Settles #95. The mandate (#23) takes over the consent table and the effec
 
 # 0035 — Every effect is consented to and recorded, whoever performs it
 
+*Pending:* [ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — a script task marked `readOnly` runs sealed in a throwaway worktree, past no gate.
+*Pending:* [ADR-0056](0056-a-mandate-narrows-down-the-tree.md) — below the root a mandate replaces the consent table, and the effect allowlist becomes one list per level.
+
 ## Problem
 
 ADR-0008 kept the planner from acting on its own account. Mutation belonged to

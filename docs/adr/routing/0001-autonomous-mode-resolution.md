@@ -6,6 +6,8 @@ folds:
 
 # 0001 — Autonomous mode resolution: the level picks the mode, the planner says only read-only
 
+*Pending:* [ADR-0056](../supervision/0056-a-mandate-narrows-down-the-tree.md) — a child's runner modes are read from its mandate's `autonomy` in place of the global level, at planning as ever.
+
 ## Problem
 
 Generating a plan means picking a runner mode per task — Claude's
