@@ -49,27 +49,27 @@ const handoffFinding = z.object({
 const handoffCommit = z.object({
   subject: z.string().trim()
     .min(1, 'The commit subject is required: one line saying what changed.')
-    .max(HANDOFF_LIMITS.commitSubject, `The commit subject is at most ${HANDOFF_LIMITS.commitSubject} characters: keep it to 72 or fewer and put the why in body.`)
+    .max(HANDOFF_LIMITS.commitSubject, 'Keep it to 72 or fewer and put the why in body.')
     .regex(/^[^\r\n]*$/, 'The commit subject is one line: put the why in body.')
     .describe('One line of 72 characters or fewer, in the imperative mood: "Add a daily version check behind ORDEWELL_NO_VERSION_CHECK".'),
-  body: z.string().max(HANDOFF_LIMITS.commitBody, `The commit body is at most ${HANDOFF_LIMITS.commitBody} characters: one to three lines on why; the specifics go in summary.`).optional()
+  body: z.string().max(HANDOFF_LIMITS.commitBody, 'One to three lines on why; the specifics go in summary.').optional()
     .describe('One to three lines on why. No trailers: those are Ordewell\'s to add.'),
 });
 
 const taskCompleteInput = z.object({
   status: z.enum(['done', 'blocked', 'failed'])
     .describe("'done' only when the task is fully complete. 'blocked' or 'failed' end the attempt without passing."),
-  summary: z.string().max(HANDOFF_LIMITS.summary, `The summary is at most ${HANDOFF_LIMITS.summary} characters: put the long form in report.`)
-    .describe('The handoff the next task reads first, written for that reader: what changed, what is left, what to watch.'),
+  summary: z.string().max(HANDOFF_LIMITS.summary, 'Put the long form in report.')
+    .describe(`The handoff the next task reads first, written for that reader: what changed, what is left, what to watch. At most ${HANDOFF_LIMITS.summary} characters; the long form goes in report.`),
   reason: z.string().optional().describe("Why the task is blocked or failed. Expected for anything but 'done'."),
   commit: handoffCommit.optional()
-    .describe("A change task's commit message, for a human reviewer: what changed and why. Only kept with status 'done'."),
+    .describe(`A change task's commit message, for a human reviewer: what changed and why. Only kept with status 'done'. The subject is one line of 72 characters or fewer (at most ${HANDOFF_LIMITS.commitSubject}), the body at most ${HANDOFF_LIMITS.commitBody}.`),
   findings: z.array(handoffFinding).max(HANDOFF_LIMITS.findings).optional()
-    .describe('What the next reader must act on, one item each, most important first. Ordewell numbers them F1, F2, … in this order.'),
+    .describe(`What the next reader must act on, one item each, most important first. At most ${HANDOFF_LIMITS.findings}; a title is one line of at most ${HANDOFF_LIMITS.title} characters, a detail at most ${HANDOFF_LIMITS.detail}, and a finding has at most ${HANDOFF_LIMITS.evidence} pieces of evidence. Ordewell numbers them F1, F2, … in this order.`),
   artifacts: z.array(handoffReference).max(HANDOFF_LIMITS.artifacts).optional()
-    .describe('What this task produced, for the next reader to start from.'),
+    .describe(`What this task produced, for the next reader to start from. At most ${HANDOFF_LIMITS.artifacts}; a path or URL is at most ${HANDOFF_LIMITS.reference} characters.`),
   report: z.string().max(HANDOFF_LIMITS.report).optional()
-    .describe('The long form, for a reader who needs it all: kept with this attempt and read only on demand, never put in another task\'s prompt.'),
+    .describe(`The long form, for a reader who needs it all: kept with this attempt and read only on demand, never put in another task's prompt. At most ${HANDOFF_LIMITS.report} characters.`),
 });
 
 const checkpointInput = z.object({
@@ -465,7 +465,10 @@ function boundedRefusal(issue: z.core.$ZodIssue, args: unknown): string | undefi
   if (size === undefined) return undefined;
   const unit = issue.origin === 'string' ? 'characters' : 'items';
   const hint = issue.message.startsWith('Too big:') ? '' : ` ${issue.message}`;
-  return `${fieldPath(issue.path)} is ${size} ${unit}; the limit is ${issue.maximum}.${hint}`;
+  const over = size - Number(issue.maximum);
+  // What to do about it, so the next call is the right one.
+  const cut = issue.origin === 'string' ? `cut at least ${over} character${over === 1 ? '' : 's'}` : `drop at least ${over} item${over === 1 ? '' : 's'}`;
+  return `${fieldPath(issue.path)} is ${size} ${unit}; the limit is ${issue.maximum}, ${over} over: ${cut}.${hint}`;
 }
 
 const LEAKED_PARAMETER = /<\/parameter>|<parameter\s+name\s*=\s*"([^"]*)">/g;
@@ -567,7 +570,7 @@ export const TASK_COMPLETE_TOOL = 'task_complete';
  */
 export const TASK_COMPLETION_CONTRACT = [
   `When you have fully completed this task, call the \`${TASK_COMPLETE_TOOL}\` tool with status \`done\` and your handoff. If you cannot complete it, call \`${TASK_COMPLETE_TOOL}\` with status \`blocked\` or \`failed\` and the reason instead. Call it once, as your last action.`,
-  `Its \`summary\` is this task's handoff to the next task: the planner and the tasks that depend on this one read it first, and nothing else you write reaches them unless they ask. Write it for that reader, not as a log: what changed, what is left, what to watch.`,
+  `Its \`summary\` is this task's handoff to the next task: the planner and the tasks that depend on this one read it first, and nothing else you write reaches them unless they ask. Write it for that reader, not as a log: what changed, what is left, what to watch. It is at most ${HANDOFF_LIMITS.summary} characters, and a call over a limit is refused: the long form goes in \`report\`.`,
   `Put anything the next reader must act on in \`findings\`, one item each, most important first, each with a severity, a one-line title, its detail and evidence to check it by: a file (and line), a commit, a task (and one of its findings, as "F3") or a URL. Ordewell numbers them F1, F2, … so a later task can cite one. List what you produced in \`artifacts\`.`,
   `The long story, if there is one, goes in \`report\`: it is kept with this attempt and read only on demand. A review or other read-only task especially: its findings are its result, so state each one, and do not write the report to a file.`,
 ].join('\n\n');
@@ -581,7 +584,7 @@ export function taskCompletionContract(opts: { commits?: true }): string {
 
 /** What every task has: it ends, asks, and reads the record (ADR-0022, ADR-0047). */
 const SHARED_TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
-  tool(TASK_COMPLETE_TOOL, 'Report that this task has ended, and how, with its handoff for the tasks that read it. Call it once, as your last action.',
+  tool(TASK_COMPLETE_TOOL, `Report that this task has ended, and how, with its handoff for the tasks that read it. Call it once, as your last action. A call over a limit (the summary is at most ${HANDOFF_LIMITS.summary} characters; the long form goes in report) is refused whole and recorded as nothing: the refusal says by how much, so shorten and call again.`,
     taskCompleteInput, (h) => h.taskComplete?.bind(h)),
   tool('checkpoint', "Ask the user a question and wait for the answer, which is this call's result.",
     checkpointInput, (h) => h.checkpoint?.bind(h)),

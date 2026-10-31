@@ -317,9 +317,9 @@ describe('the handoff a task_complete call carries (ADR-0047)', () => {
 
   it.each([
     ['a subject of two lines', { subject: 'Add the check\nand its setting' }, /commit subject is one line/],
-    ['a subject past 100 characters', { subject: 'A'.repeat(101) }, /commit subject is at most 100 characters: keep it to 72 or fewer/],
+    ['a subject past 100 characters', { subject: 'A'.repeat(101) }, /commit\.subject is 101 characters; the limit is 100, 1 over: cut at least 1 character\. Keep it to 72 or fewer/],
     ['an empty subject', { subject: '  ' }, /commit subject is required/],
-    ['a body past 500 characters', { subject: 'Add the check', body: 'x'.repeat(501) }, /commit body is at most 500 characters/],
+    ['a body past 500 characters', { subject: 'Add the check', body: 'x'.repeat(501) }, /commit\.body is 501 characters; the limit is 500, 1 over: cut at least 1 character\./],
   ])('refuses %s, saying what to fix, and keeps the attempt open for a resend', async (_name, commit, says) => {
     const { complete, get } = await completing();
 
@@ -367,7 +367,7 @@ describe('the handoff a task_complete call carries (ADR-0047)', () => {
 
     expect(refused.isError).toBe(true);
     expect(text(refused)).toMatch(/summary/);
-    expect(text(refused)).toMatch(/1500 characters: put the long form in report/);
+    expect(text(refused)).toMatch(/the limit is 1500, 1 over: cut at least 1 character\. Put the long form in report/);
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(get('t1').status).toBe('in_progress');
 

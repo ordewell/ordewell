@@ -7,6 +7,7 @@ import { ConversationBusyError, ConversationEditError, PlannerConversation, Plan
 import type { SkillInfo } from '../SkillsService';
 import type { TurnFailure } from '../runnerExit';
 import { fakePlanChanges, passed, refused } from './planChangesTestKit';
+import { PLAN_BLOCK_MAX_TASKS } from '../planWindow';
 
 function dialoguePlan(): LegacyPlanState {
   return {
@@ -1413,6 +1414,86 @@ describe('the plan block: whole once per live context, then what changed', () =>
     expect(sent[1]).toMatch(WHOLE);
     expect(sent[1]).not.toContain('<plan_changes>');
     expect(sent[1].length).toBeLessThan(sent[0].length);
+  });
+
+  describe('on a plan too large to list', () => {
+    const LIMIT = PLAN_BLOCK_MAX_TASKS;
+    /** Every id the plan block names, in the order it lists them. */
+    const listed = (message: string): string[] => [...message.matchAll(/^\s*#[\d.]+ id=(\S+)/gm)].map((m) => m[1]);
+
+    /** `done` completed tasks, then the rest pending, so a plan is bigger than the block lists. */
+    const grown = (total: number, done: number, over: Record<number, Partial<Task>> = {}): Task[] =>
+      Array.from({ length: total }, (_, i) => task(`t${i + 1}`, i + 1, { status: i < done ? 'completed' : 'pending', ...over[i + 1] }));
+
+    it('lists the running, failed and waiting tasks first, counts the rest by status, and says how to read them', async () => {
+      const tasks = grown(LIMIT + 190, 100, {
+        [LIMIT + 185]: { status: 'in_progress' },
+        [LIMIT + 188]: { status: 'failed' },
+        [LIMIT + 190]: { status: 'awaiting_user' },
+      });
+      const { conversation, sent } = planned(tasks);
+
+      await conversation.reply('where are we?');
+
+      expect(sent[0]).toMatch(WHOLE);
+      const ids = listed(sent[0]);
+      expect(ids).toHaveLength(LIMIT);
+      expect(ids).toEqual(expect.arrayContaining([`t${LIMIT + 185}`, `t${LIMIT + 188}`, `t${LIMIT + 190}`]));
+      expect(ids).not.toContain('t1');
+      // Plan order within the lines, whatever order they were chosen in.
+      expect(ids).toEqual([...ids].sort((a, b) => Number(a.slice(1)) - Number(b.slice(1))));
+      expect(sent[0]).toContain(`${LIMIT} of ${LIMIT + 190} tasks are listed`);
+      expect(sent[0]).toContain('100 completed');
+      expect(sent[0]).toMatch(/task_query|taskQuery/);
+      expect(sent[0]).toContain('"taskOps"');
+    });
+
+    it('is unbounded no longer: the block is as long at ten times the tasks', async () => {
+      const [small, large] = [planned(grown(LIMIT + 20, 20)), planned(grown(LIMIT * 10, 20))];
+
+      await small.conversation.reply('one');
+      await large.conversation.reply('one');
+
+      expect(large.sent[0].length).toBeLessThan(small.sent[0].length * 1.1);
+    });
+
+    it('says only that nothing changed on a second turn, and still how many tasks are not listed', async () => {
+      const { conversation, sent } = planned(grown(LIMIT + 30, 30));
+
+      await conversation.reply('one');
+      await conversation.reply('two');
+
+      expect(sent[1]).not.toMatch(WHOLE);
+      expect(listed(sent[1])).toEqual([]);
+      expect(sent[1]).toMatch(/<plan_changes>[^\n]*unchanged/);
+      expect(sent[1]).toContain(`${LIMIT} of ${LIMIT + 30} tasks are listed`);
+    });
+
+    it('sends the line of a task that entered the list, and names one that left it by its status, not as removed', async () => {
+      const tasks = grown(LIMIT + 5, 0, { 1: { status: 'in_progress' } });
+      const { conversation, sent, live } = planned(tasks);
+
+      await conversation.reply('one');
+      live.tasks = [{ ...tasks[0], status: 'completed' }, ...tasks.slice(1)];
+      await conversation.reply('two');
+
+      expect(changes(sent[1])).toEqual([
+        expect.stringMatching(new RegExp(`^#${LIMIT + 1} id=t${LIMIT + 1} "Task t${LIMIT + 1}" \\[pending\\]`)),
+        'no longer listed: #1 id=t1 "Task t1" [completed]',
+      ]);
+      expect(sent[1]).not.toContain('removed:');
+    });
+
+    it('still names a listed task that was removed from the plan', async () => {
+      const tasks = grown(LIMIT + 1, 1);
+      const { conversation, sent, live } = planned(tasks);
+
+      await conversation.reply('one');
+      live.tasks = tasks.slice(0, -1);
+      await conversation.reply('two');
+
+      expect(changes(sent[1])).toContain(`removed: #${LIMIT + 1} id=t${LIMIT + 1} "Task t${LIMIT + 1}"`);
+    });
   });
 
   /** Turn one, then a turn that ends as `second` makes it, then turn three after a status change. */

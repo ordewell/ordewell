@@ -1013,6 +1013,7 @@ export class StructuredRunner extends AbstractRunner<StructuredSession> {
         resumeSessionId: opts.resumeSessionId,
         resumeCost: opts.resumeCost,
         ...(opts.commits ? { commits: true } : {}),
+        ...(opts.runnerConfig ? { runnerConfig: opts.runnerConfig } : {}),
       },
       interruptGraceMs: this.interruptGraceMs,
       tools: {
