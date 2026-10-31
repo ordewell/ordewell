@@ -170,7 +170,7 @@ describe('which tasks a surface offers Revert on', () => {
   });
   const repos = [{ path: '.', root: '/work', baseRef: 'base', integrationBranch: 'ordewell/r1/integration' }];
   const run = (tasks: Record<string, IsolationTaskRecord>, landings?: Record<string, Record<string, string[]>>): IsolationRun => ({
-    id: 'r1', workspaceRoot: '/work', repos, shared: [], sharedRepos: [], tasks, ...(landings ? { landings } : {}),
+    id: 'r1', workspaceRoot: '/work', repos, shared: [], sharedRepos: [], tasks, carried: {}, ...(landings ? { landings } : {}),
   });
   const landings = { t: { '.': ['aaaa'] } };
 
@@ -211,6 +211,23 @@ describe('which tasks a surface offers Revert on', () => {
 
     expect(taskIsolationsOf({ ...run({ t: merged() }, landings), carried }).t).not.toHaveProperty('revertible');
     expect(taskIsolationsOf({ ...run({}, landings), carried }).t).toBeUndefined();
+  });
+
+  it('marks nothing in a run with no `carried` record, live or saved', () => {
+    const older = run({ t: merged(), u: merged({ taskId: 'u' }) }, { v: { '.': ['bbbb'] } });
+    delete older.carried;
+
+    const marks = Object.values(taskIsolationsOf(older));
+    expect(marks.map((mark) => mark.state)).toEqual(['integrated', 'integrated']);
+    expect(marks.filter((mark) => mark.state !== 'none' && mark.revertible)).toEqual([]);
+    expect(isolationViewOfPlan({ isolation: { run: older, resolvers: {} } })?.tasks.t).not.toHaveProperty('revertible');
+  });
+
+  it('marks nothing in a run migrated from ADR-0013, which never had the record', () => {
+    const plan: Adr0013PlanIsolation = { resolvers: {}, run: { id: 'r0', workspaceRoot: '/work', baseRef: 'base', integrationBranch: 'ordewell/r0/integration', tasks: { t: { taskId: 't', order: 1, title: 'Task t', branch: 'ordewell/r0/1-t', worktree: '/work/1-t', status: 'merged', linked: [] } } } };
+
+    expect(isolationViewOfPlan({ isolation: plan })?.tasks.t).toMatchObject({ state: 'integrated' });
+    expect(isolationViewOfPlan({ isolation: plan })?.tasks.t).not.toHaveProperty('revertible');
   });
 });
 

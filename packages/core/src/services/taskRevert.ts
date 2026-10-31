@@ -49,6 +49,11 @@ export interface RevertScopeInput {
 
 const ref = ({ id, order, title }: Readonly<Task>): IsolationTaskRef => ({ taskId: id, order, title });
 
+/** Every run started now holds {@link IsolationRun.carried}, empty or not, so one without it was saved by a build that kept no such record. */
+export const startedOlder = (run: IsolationRun): boolean => run.carried === undefined;
+
+export const OLDER_RUN_REFUSAL = 'This run started on an older version of Ordewell, so Ordewell cannot tell what its merges carried, and a revert could take work that another task still counts as landed. Nothing was reverted.';
+
 /**
  * Whether a task has work of its own on the integration branch, this attempt's
  * or an earlier one's. A retry, a failed spawn or a continue that conflicted
@@ -129,6 +134,7 @@ export function revertScope(taskId: string, { tasks, run, live, resolvers }: Rev
   const task = tasks.find((t) => t.id === taskId);
   // A ref no task answers to is not a task that landed nothing: every other task command says so.
   if (!task) return { taskIds: [], refusal: { reason: 'no-landing', message: `There is no task "${taskId}" in this plan.` } };
+  if (run && startedOlder(run)) return { taskIds: [], refusal: { reason: 'no-own-merge', message: OLDER_RUN_REFUSAL } };
   if (!landedWork(run, taskId)) {
     return { taskIds: [], refusal: { reason: 'no-landing', message: `Task "${task.title}" landed nothing on the integration branch, so there is nothing to revert.` } };
   }

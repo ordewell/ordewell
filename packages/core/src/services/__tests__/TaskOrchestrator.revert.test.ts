@@ -52,6 +52,37 @@ async function landed(tasks: Task[], landing: string[], opts: Parameters<typeof 
 }
 
 describe('TaskOrchestrator: reverting a landed task (ADR-0054)', () => {
+  describe('a run with no `carried` record', () => {
+    const older = 'This run started on an older version of Ordewell, so Ordewell cannot tell what its merges carried, and a revert could take work that another task still counts as landed. Nothing was reverted.';
+
+    it('refuses in the preview and the revert, says why in those words, and offers nothing', async () => {
+      const { orchestrator, isolation, status } = await landed([task('t1', 1), task('t2', 2)], ['t1']);
+      delete orchestrator.runs.current!.carried;
+
+      expect(await orchestrator.revertPreview('t1')).toEqual({ revertible: false, reason: 'no-own-merge', message: older });
+      expect(await orchestrator.revertTask('t1')).toEqual({ outcome: 'refused', reason: older });
+      expect(orchestrator.runs.taskIsolation('t1')).not.toHaveProperty('revertible');
+      expect(status('t1')).toBe('completed');
+      expect(isolation.calls.filter((call) => call.op === 'revert' || call.op === 'readLanded')).toEqual([]);
+    });
+
+    it('refuses for a task that shows no landing too: what it carried is what no record says', async () => {
+      const { orchestrator } = await landed([task('t1', 1), task('t2', 2)], ['t1']);
+      delete orchestrator.runs.current!.carried;
+
+      expect(orchestrator.revertScope('t2')).toEqual({ taskIds: [], refusal: { reason: 'no-own-merge', message: older } });
+    });
+
+    it('leaves a run started on this build alone, holding the record while it is empty', async () => {
+      const { orchestrator } = await landed([task('t1', 1)], ['t1']);
+
+      expect(orchestrator.runs.current?.carried).toEqual({});
+      expect(orchestrator.runs.taskIsolation('t1')).toMatchObject({ revertible: true });
+      expect(await orchestrator.revertPreview('t1')).toMatchObject({ revertible: true });
+      expect(await orchestrator.revertTask('t1')).toMatchObject({ outcome: 'reverted' });
+    });
+  });
+
   describe('the task afterwards', () => {
     it('is back to pending, held with a note, its verdict gone and its record no longer landed', async () => {
       const { orchestrator, status } = await landed([task('t1', 1)], ['t1']);

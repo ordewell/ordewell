@@ -409,6 +409,7 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
       sharedRepos: [...this.sharedRepos],
       tasks: {},
       keepsEveryLanding: true,
+      carried: {},
     };
   }
 
