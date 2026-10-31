@@ -479,9 +479,11 @@ accepted. Each tripped guard also posts a supervisor message to the user.
   resend ([ADR-0044](../planner/0044-the-planners-usage-limit-waits-and-resends.md)); one
   whose reset cannot be read leaves the run unsupervised.
 - **Loading a session never opens a planner turn or starts execution.**
-  Undelivered wake-up batches and user inputs are preserved for a new input;
-  the supervisor's saved debounce is not rearmed on load. Autorun applies to
-  a new plan submission, never to opening a saved session.
+  Undelivered wake-up batches and user inputs are preserved for a new input.
+  What the wake policy saved goes out once due and joins them, opening no turn,
+  so a held failure or a run's end reaches the next input however quiet the run
+  is; a run event joining it first wakes the supervisor as usual. Autorun applies
+  to a new plan submission, never to opening a saved session.
 
 ### Usage limits
 
@@ -722,3 +724,4 @@ until #30 exists.
 - 2026-10-31 — a planner's `run_plan` leaves what failed as it is; a supervisor's is still the retry its guards count.
 - 2026-10-31 — the seam reads the mandate in place of `SUPERVISOR_LEVELS`, and answers as it did at every level ([ADR-0056](0056-a-mandate-narrows-down-the-tree.md)).
 - 2026-10-31 — `WakePolicy` holds a failure and a task gone idle, a run update has a size cap, and the level's rules go whole once a context ([ADR-0057](0057-information-moves-by-reference.md) R4, R5).
+- 2026-10-31 — what the wake policy saved goes out once due after a load and joins the saved inputs, opening no turn, instead of waiting in the policy for a run event that a quiet or finished run never sends.

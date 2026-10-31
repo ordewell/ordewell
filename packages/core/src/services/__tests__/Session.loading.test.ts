@@ -52,11 +52,15 @@ describe('loading a session spends no tokens', () => {
     await vi.advanceTimersByTimeAsync(24 * 60 * 60_000);
     expect(planner.calls).toHaveLength(0);
     expect(run.runner.spawn).not.toHaveBeenCalled();
+    expect(session.planState!.supervision?.wake?.policy.attention).toEqual([]);
+    expect(session.planState!.pendingTurns).toEqual([expect.objectContaining({ source: 'supervisor', text: expect.stringContaining('waiting for input') })]);
 
     const sent = session.continueConversation('what happened?');
     await until(() => planner.calls.length === 1);
+    expect(JSON.stringify(planner.calls[0])).toContain('waiting for input');
     planner.calls[0].finish(prose('The previous task failed.'));
     await sent;
+    expect(session.planState!.pendingTurns ?? []).toEqual([]);
     session.destroy();
   });
 });

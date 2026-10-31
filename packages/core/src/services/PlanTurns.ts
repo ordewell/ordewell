@@ -17,6 +17,8 @@ export interface PlanTurnInput {
   skills?: readonly SkillLoad[];
   /** A supervisor input carrying a report the planner asked for; see {@link PendingPlanTurn.report}. */
   report?: TurnAuthority;
+  /** A wake-up of what a load gave back: nothing new happened, so while the session stays as loaded it waits with the saved inputs (ADR-0029). */
+  idle?: true;
   /** Stops the turn that takes this input. Not saved: a replayed input has no caller left to stop it. */
   signal?: AbortSignal;
 }
@@ -302,6 +304,12 @@ export class PlanTurns {
     // A wake-up is never refused: it waits for the conversation like any input
     // that arrives during a turn, and is delivered when it frees.
     if (input.source === 'user' && this.host.plan() && !this.running && this.host.conversationBusy()) return Promise.reject(new ConversationBusyError('send a message'));
+    const plan = this.host.plan();
+    if (input.idle && this.restored && plan) {
+      plan.pendingTurns = [...(plan.pendingTurns ?? []), this.pending(input, false)];
+      this.host.persist();
+      return Promise.resolve(plan);
+    }
     return this.admit(input, false);
   }
 

@@ -99,7 +99,7 @@ export class RunSupervision {
         const settings = this.settings();
         return settings ? { level: settings.supervisorLevel ?? 'off', ...(settings.unsupervised ? { unsupervised: settings.unsupervised } : {}) } : null;
       },
-      deliver: (digest, report) => host.deliver(digest, report),
+      deliver: (...delivered) => host.deliver(...delivered),
       pump: () => host.pump(),
       saveState: () => host.save(),
       digestReader: () => this.digestReader(),
@@ -227,7 +227,8 @@ export class RunSupervision {
   }
 
   private reportOf(task: Readonly<Task>, to: TaskReportTo): RunEventInput['report'] {
-    const authority: TurnAuthority = to.actor === 'supervisor' ? 'supervisor' : 'user';
+    // A child has no user's turn: its report wakes it as any event does, under its own wake-up rules (ADR-0056 M6).
+    const authority: TurnAuthority = to.actor === 'supervisor' || to.actor === 'subplanner' ? 'supervisor' : 'user';
     const rounds = outOfRoundsNote(task);
     const tail = this.host.reportTail(task.id);
     const named = (id: string) => taskRefOf([...this.host.tasks()], id);

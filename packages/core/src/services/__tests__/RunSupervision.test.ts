@@ -47,6 +47,24 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe('whose authority a report opens with', () => {
+  it.each([
+    ['a subplanner', { actor: 'subplanner', depth: 1 }, 'supervisor'],
+    ['the supervisor', { actor: 'supervisor', level: 'act' }, 'supervisor'],
+    ['the user\'s turn', { actor: 'planner-turn' }, 'user'],
+  ] as const)('reads %s\'s from the task it owes', async (_who, actor, authority) => {
+    vi.useFakeTimers();
+    const { supervision, plan, tasks, host } = harness({ supervisorLevel: 'act' });
+    plan.runSettings = { supervisorLevel: 'act' } as RunSettings;
+    tasks[0] = { ...tasks[0], status: 'completed', reportTo: { ...actor, research: true } };
+
+    supervision.taskSettled(tasks[0]);
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(host.deliver).toHaveBeenCalledWith(expect.any(String), authority);
+  });
+});
+
 describe('a run starting', () => {
   it('copies the user\'s settings when the user starts it', () => {
     const { supervision, plan } = harness({ supervisorLevel: 'act', mergeAtGatesAutomatically: true, supervisorRetryLimit: 4, wakeUpReadBudget: 7 });

@@ -12,7 +12,8 @@ import { surfacePlan, type SessionMessage, type SessionNotice } from '../Session
 import type { SkillInfo, SkillsService } from '../SkillsService';
 import type { SkillLookup } from '../taskSkills';
 import { PlanChangeCheck, requestScope } from '../PlanChangeCheck';
-import { createTask, flattenTasks, type DiscoveredModel } from '../../models/Task';
+import { createTask, flattenTasks, type DiscoveredModel, type Task } from '../../models/Task';
+import { storedHandoff } from '../../models/Handoff';
 import { execFileSync } from 'child_process';
 import { writeFileSync } from 'fs';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
@@ -2063,11 +2064,11 @@ describe('a one-shot coding-agent planner', () => {
 describe('saved attempt reads through MCP', () => {
   interface Page { output: string; nextOffset: number; hasMore: boolean; attempt: number; attempts: number[] }
 
-  async function withLogs(turn: (client: Client) => Promise<void>) {
+  async function withLogs(turn: (client: Client) => Promise<void>, over: Partial<Task> = {}) {
     const workspace = mkdtempSync(join(tmpdir(), 'ordewell-attempt-read-'));
     const { session } = plannerSession(fakeClaude({ turn: async (mcp) => { await turn(mcp!); return 'Read it.'; } }));
     session.loadPlan({
-      tasks: [createTask({ id: 'a', order: 1, title: 'Setup', assignedRunner: 'claude-code', status: 'failed' })],
+      tasks: [createTask({ id: 'a', order: 1, title: 'Setup', assignedRunner: 'claude-code', status: 'failed', ...over })],
       generatedAt: '2026-10-05T09:00:00Z', lastUpdated: '2026-10-05T09:00:00Z', status: 'approved', runners: ['claude-code'],
       conversationHistory: [{ role: 'user', content: 'set it up', timestamp: '2026-10-05T09:00:00Z' }],
     }, 'set it up', workspace, { persist: false });
@@ -2116,6 +2117,16 @@ describe('saved attempt reads through MCP', () => {
     expect(pages.length).toBeGreaterThan(1);
     expect(pages[0].output).toContain(`[truncated; continue with since: ${pages[0].nextOffset}]`);
     expect(pages.map((p) => p.output.replace(/\n\[truncated; continue with since: \d+\]$/, '')).join('')).toBe('[2 text] start-' + 'x'.repeat(24000) + '-end\n');
+  });
+
+  it('reads the plan\'s digest for a pinned attempt no saved log holds', async () => {
+    const digest = storedHandoff({ summary: 'Found it.', findings: [{ severity: 'major', title: 'The race' }] })!;
+    let answer: { isError: boolean; body: unknown } | undefined;
+    await withLogs(async (mcp) => {
+      answer = await call(mcp, 'task_output', { task: '#1@7/F1' });
+    }, { handoff: { ...digest, attempt: 7 } });
+
+    expect(answer).toMatchObject({ isError: false, body: { attempt: 7, attempts: [1, 2], handoff: { summary: 'Found it.' } } });
   });
 
   it('reports missing attempts and shared-run diffs clearly, with no filesystem paths disclosed', async () => {

@@ -60,9 +60,11 @@ export interface SupervisorHost {
    * Hand the planner a wake-up digest as the supervisor's input; it settles as
    * the turn that takes it does. `report` marks one carrying a report the
    * planner asked for, which opens a turn at every level, with whose authority
-   * (ADR-0037, R2, R3).
+   * (ADR-0037, R2, R3). `idle` marks what a load gave back: it asks for no
+   * turn, and waits with the saved inputs while the session stays as loaded
+   * (ADR-0029).
    */
-  deliver(digest: string, report?: TurnAuthority): Promise<unknown>;
+  deliver(digest: string, report?: TurnAuthority, idle?: true): Promise<unknown>;
   /** Start whatever planner turn is now due. */
   pump(): void;
   /** Save what the supervisor gathered: a restart must still deliver a debounced batch (ADR-0029). */
@@ -140,6 +142,8 @@ export class Supervisor {
   private discardTurn: (() => void) | null = null;
   /** When each wake-up since the last pass was delivered, for the wake-up rate guard. */
   private wakeUps: number[] = [];
+  /** What it holds came back with a load, and no run event has joined it: going out, it wakes nobody (ADR-0029). */
+  private loaded = false;
   private readonly debounceMs: number;
   private readonly wakeUpRate: WakeUpRate;
   private readonly turnTimeoutMs: number;
@@ -223,6 +227,7 @@ export class Supervisor {
       this.runEndPending = true;
     }
     if (event.kind === 'task_passed' || event.report?.passed) this.wakeUps = [];
+    if (event.kind !== 'task_passed') this.loaded = false;
     this.policy.push({ ...event, at: this.now() });
     this.arm();
     this.host.saveState();
@@ -234,16 +239,24 @@ export class Supervisor {
   }
 
   /**
-   * Keep a save's gathered state without waking the supervisor just because
-   * the session was opened (ADR-0029): its own events wait for a new run event
-   * to arm it again. A report the planner asked for is owed at every level,
-   * and is delivered once due (ADR-0037, R2).
+   * Take a save's gathered state back. All of it goes out once due, so a held
+   * failure or a run's end is not stranded in the policy, but the session being
+   * opened wakes nobody (ADR-0029): the supervisor's own events join the saved
+   * inputs for the next one, unless a run event has joined them by then. A
+   * report the planner asked for is owed at every level, and opens its turn
+   * (ADR-0037, R2).
    */
   restore(snapshot: SupervisorSnapshot | undefined): void {
     this.disarm();
     this.policy.restore(snapshot?.policy);
     this.wakeUps = [...(snapshot?.wakeUps ?? [])];
-    if (snapshot?.policy.attention.some((e) => e.kind === 'task_report')) this.arm(true);
+    this.loaded = (snapshot?.policy.attention.length ?? 0) > 0;
+    if (!this.loaded) return;
+    // Not yet: what is due is read from the plan, and this load has not put its tasks in the store.
+    this.tick = setTimeout(() => {
+      this.tick = null;
+      this.arm();
+    }, 0);
   }
 
   /**
@@ -253,6 +266,7 @@ export class Supervisor {
    */
   runStarted(continues = false): void {
     this.finished = false;
+    this.loaded = false;
     if (continues) return;
     this.failures = 0;
     this.wakeUps = [];
@@ -284,6 +298,7 @@ export class Supervisor {
     this.finished = false;
     this.runEndPending = false;
     this.wakeUps = [];
+    this.loaded = false;
     this.policy = this.newPolicy();
   }
 
@@ -392,21 +407,21 @@ export class Supervisor {
     if (held) this.deliver(held);
   }
 
-  /** Deliver what is gathered once due; `reportsOnly` leaves the supervisor's own events to wait for a run event. */
-  private arm(reportsOnly = false): void {
+  /** Deliver what is gathered once due. */
+  private arm(): void {
     const due = this.policy.dueAt();
     if (due === null) return;
     this.disarm();
     this.tick = setTimeout(() => {
       this.tick = null;
-      const polled = this.policy.poll(this.now());
-      if (!polled) {
-        this.arm(reportsOnly);
+      const batch = this.policy.poll(this.now());
+      if (!batch) {
+        this.arm();
         return;
       }
-      const batch = reportsOnly ? this.takeReports(polled) : polled;
       // A report owed to the user's turn is not the supervisor waking itself.
-      if (batch.attention.some((e) => e.report?.authority !== 'user')) this.countWakeUp();
+      const own = batch.attention.filter((e) => e.report?.authority !== 'user');
+      if (own.length > 0 && !this.idle(own)) this.countWakeUp();
       this.deliver(batch);
     }, Math.max(0, due - this.now()));
   }
@@ -427,12 +442,9 @@ export class Supervisor {
     this.host.dropToWatch(`woke ${count} times in ${minutes} minute${minutes === 1 ? '' : 's'} with no task passing in between`);
   }
 
-  /** A batch's reports, the rest put back with the passes, which are the supervisor's context. */
-  private takeReports(batch: WakeBatch): WakeBatch {
-    const held = batch.attention.filter((e) => e.kind !== 'task_report');
-    if (held.length === 0) return batch;
-    this.policy.restore({ attention: held, sinceLast: batch.sinceLast });
-    return { attention: batch.attention.filter((e) => e.kind === 'task_report'), sinceLast: [] };
+  /** The supervisor's own events are what a load gave back, with no report to ask for a turn. */
+  private idle(own: readonly RunEvent[]): boolean {
+    return this.loaded && !own.some((e) => e.kind === 'task_report');
   }
 
   private disarm(): void {
@@ -455,7 +467,9 @@ export class Supervisor {
     if (own.length > 0) {
       const runEnd = own.some((e) => e.kind === 'run_finished');
       const asked = own.some((e) => e.kind === 'task_report') ? 'supervisor' : undefined;
-      void this.host.deliver(digest({ attention: own, sinceLast: batch.sinceLast }), asked).catch(() => {}).then(() => {
+      const text = digest({ attention: own, sinceLast: batch.sinceLast });
+      if (this.idle(own)) void this.host.deliver(text, undefined, true).catch(() => {});
+      else void this.host.deliver(text, asked).catch(() => {}).then(() => {
         if (runEnd) this.runEndPending = false;
         this.host.wakeUpEnded();
       });
