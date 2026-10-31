@@ -65,7 +65,15 @@ macOS](#what-holds-on-linux-and-on-macos)).
   ([below](#the-limits-of-a-sealed-run)); and it dies with its parent. What it can
   read outside the workspace is fixed by the profile, the same for every
   command, and holds no user data (on macOS but for the here-document files
-below), so no path is asked about. Where the
+below, and on Linux but for what `/etc/hosts` lists), so no path is asked about.
+  On Linux the configuration files include the host's `/etc/hosts`, because
+  programs resolve `localhost` before they listen on it: Vite does at startup,
+  and a sealed `vitest` stopped there without the file. A run's `localhost` is
+  the loopback of its own network namespace, which reaches no service of the
+  host, and with no `/etc/resolv.conf` only the names the file lists resolve,
+  which lead nowhere but that loopback. What the file gives a run is those
+  names and addresses, which a user may have added by hand. On macOS
+  `/private/etc` is readable whole, so a run there reads the same file. Where the
   platform offers a throwaway overlay, the workspace may be mounted with one
   instead of read-only, so a tool that writes a cache beside the code still
   runs; nothing written reaches the workspace either way. The profile takes
@@ -163,14 +171,16 @@ under real bubblewrap.
 
 What still fails is what S1 keeps out. On macOS a run cannot listen on a socket,
 loopback included: 379 of those 9,598 tests failed sealed, nearly all because a
-local server could not `listen`, and a few on writing the host's `/tmp`.
+local server could not `listen`, and a few on writing the host's `/tmp`. On
+Linux a run can listen on the loopback of its own network namespace, and nothing
+outside the run can reach it there.
 
 ### What holds on Linux and on macOS
 
 Linux's PID namespace leaves a sealed run no other process to look at, and its
-mount namespace leaves it no file of the user's but the workspace, so S1 holds
-as written. On macOS, Seatbelt enforces S1's files, home directory,
-environment and network. Three things it promises are not held there, because
+mount namespace leaves it no file of the user's but the workspace and the
+entries of `/etc/hosts`, so S1 holds as written. On macOS, Seatbelt enforces
+S1's files, home directory, environment and network. Three things it promises are not held there, because
 no Seatbelt rule gates them (checked on macOS 26). They are open to every
 command in the planner's sandbox, sealed or not.
 
@@ -419,6 +429,13 @@ shell.
   the proxy and a container or VM backend.
 - **Give sealed runs the network now.** Rejected until #88: an unclassified
   command with a network can carry anything it read to any address.
+- **A fixed `/etc/hosts` for a sealed run, naming only `localhost`.** Rejected:
+  bubblewrap takes generated content only through an open file descriptor, so
+  the profile would need a new kind of entry and the launcher a descriptor to
+  hand over, to hide a file the planner's own shell reads and a sealed run on
+  macOS already can, from a run with no way to send it anywhere.
+- **`/etc/resolv.conf` beside `/etc/hosts`.** Rejected: a run has no resolver to
+  ask, so the file could only name one it cannot reach.
 - **Seal with the home directory mounted read-only**, as ADR-0011's profile for
   classified commands does. Rejected: an unclassified command would read
   `~/.ssh` with none of the path checks that ask about it today.
@@ -476,3 +493,4 @@ shell.
 - 2026-10-21 — OpenCode 2.x's native shell wired (#110): the launch environment and `OPENCODE_CONFIG_CONTENT` both name the same launcher, so a config layer cannot choose another shell; `bash` and `shell` ask instead of denying, the request becomes the `native-shell` kind, every `shell.created` is checked against the launcher and an escaped shell fails its call and the turn, the server starts without the user's credential variables (N2.2) but keeps its own login (N3), and its commands reach the timeline as `bash` steps. OpenCode 1.x keeps `run_command` alone. The setting is implemented in full.
 - 2026-10-21 — the native shell's network stops at the machine (N2.2): its profile refuses loopback addresses and local Unix sockets (but name resolution and syslog), since a command that read the harness server's password from its environment could otherwise have that server run a command outside the sandbox; bubblewrap, which cannot keep one without the other, refuses the profile. The planner is told of its own shell only in a process that was given one.
 - 2026-10-31 — `memoryBytes` is real memory, held by a watcher that sums the run's resident memory about once a second and ends it with a note of its own; the address limit stops being the memory bound and becomes a 256 GiB ceiling (`addressSpaceBytes`), measured under The limits of a sealed run, so Node, vitest and the build run sealed.
+- 2026-10-31 — a sealed run on Linux reads `/etc/hosts`, so `localhost` resolves to its own loopback and `vitest` starts: S1's read list had no name table, and the network stays as it was.

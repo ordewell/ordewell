@@ -272,6 +272,40 @@ describe('sealed runs', async () => {
         expect(result.code).toBe(0);
       });
 
+      // Seatbelt refuses a listening socket, loopback included, so only bubblewrap's run has a loopback of its own.
+      it.skipIf(process.platform !== 'linux')("finds localhost on its own loopback, where the host's services are not", async () => {
+        const hostService = createServer((socket) => socket.end());
+        await new Promise<void>((resolve) => hostService.listen(0, '127.0.0.1', resolve));
+        writeFileSync(join(workspace, 'reach.js'), `
+          const net = require('net');
+          const reach = (port, host) => new Promise((done) => {
+            const socket = net.connect(port, host);
+            socket.on('connect', () => { socket.destroy(); done('connected'); });
+            socket.on('error', (err) => done(err.code));
+          });
+          const own = net.createServer((socket) => socket.end());
+          own.listen(0, 'localhost', async () => {
+            console.log('own', await reach(own.address().port, 'localhost'));
+            console.log('host', await reach(Number(process.argv[2]), 'localhost'));
+            console.log('outside', await reach(443, '192.0.2.1'));
+            console.log('name', await require('dns').promises.lookup('example.com').catch((err) => err.code));
+            own.close();
+          });
+        `);
+        try {
+          const port = (hostService.address() as { port: number }).port;
+          const result = await run(await launchWithNode({ workspace }), `'${node}' reach.js ${port}`, workspace);
+          expect(result.out).toContain('own connected\n');
+          expect(result.out).toContain('host ECONNREFUSED\n');
+          expect(result.out).toContain('outside ENETUNREACH\n');
+          expect(result.out).toMatch(/^name (EAI_AGAIN|ENOTFOUND)$/m);
+          expect(result.code).toBe(0);
+        } finally {
+          await new Promise<void>((resolve) => hostService.close(() => resolve()));
+          rmSync(join(workspace, 'reach.js'), { force: true });
+        }
+      });
+
       describe('a real vitest run', () => {
         let project: string;
 
