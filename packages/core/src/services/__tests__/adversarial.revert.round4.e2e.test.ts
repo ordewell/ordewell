@@ -122,8 +122,8 @@ describe('REGRESSION: the per-repo rollback fix', () => {
     const webTip = git(root, '-C', 'web', 'rev-parse', web.integrationBranch);
     const saved = structuredClone(run);
     await iso.revert(run, [first.id, second.id], { ...nothingInTheWay, persist: () => Object.assign(saved, structuredClone(run)) });
-    // api made 1 revert, web 2: each repo is held to its own count.
-    expect(saved.landing?.reverts).toEqual({ api: 1, web: 2 });
+    // api made 1 revert, web 2: each repo is held to its own commits.
+    expect(Object.values(saved.landing?.reverts ?? {}).map((r) => r.commits.length)).toEqual([1, 2]);
     // A crash after: api made its 1 revert and one extra plain commit follows.
     git(join(root, '.ordewell', 'worktrees', run.id, 'integration', 'api'), 'commit', '-q', '--allow-empty', '-m', 'mine');
     const apiMoved = git(root, '-C', 'api', 'rev-parse', api.integrationBranch);

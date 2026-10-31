@@ -144,7 +144,7 @@ describe('a revert with the integration worktree off the integration branch', ()
     const [api, web] = run.repos;
     const tips = { api: git(join(root, 'api'), 'rev-parse', api.integrationBranch), web: git(join(root, 'web'), 'rev-parse', web.integrationBranch) };
 
-    const result = await iso.revert(run, [t.id], { ...nothingInTheWay, persist: () => git(join(root, '.ordewell', 'worktrees', run.id, 'integration', 'web'), 'checkout', '-q', '-b', 'review') });
+    const result = await iso.revert(run, [t.id], { ...nothingInTheWay, persist: () => git(join(root, '.ordewell', 'worktrees', run.id, 'integration', 'web'), 'checkout', '-q', '-B', 'review') });
 
     expect(result).toMatchObject({ outcome: 'failed', repo: 'web' });
     expect(git(join(root, 'api'), 'rev-parse', api.integrationBranch)).toBe(tips.api);

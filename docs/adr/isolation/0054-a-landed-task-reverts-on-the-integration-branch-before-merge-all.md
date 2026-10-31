@@ -41,7 +41,11 @@ revert adds commits and rewrites nothing.
   branch where it is checked out, so that is refused, in the preview too, naming
   where. Nor can it from Ordewell's own integration worktree with anything else
   checked out there, by name or detached, since git commits to whatever HEAD
-  says: that is refused the same way, and it is the user's to put back.
+  says: that is refused the same way, and it is the user's to put back. Tracked
+  changes in that worktree, staged or not, are refused the same way too, naming
+  them and where, in the preview and again just before the first commit: a
+  commit would take in what is staged, and a rollback's reset would lose the
+  lot. An untracked file goes in no commit and survives a reset, so it stays.
 - **A revert commit per landing.** Each is `git revert -m 1` of a merge that
   landed the task, worded `Revert: <subject>` beside the other messages Ordewell
   writes (ADR-0013). A continue or a retry lands a task again under a new record,
@@ -50,9 +54,10 @@ revert adds commits and rewrites nothing.
   A merge whose work a later landing already took out has nothing to commit and
   counts as reverted. A landing with the integration worktree off the branch
   fails, naming where, as one with the branch checked out elsewhere does. What
-  either made is read off the branch, never HEAD: a landing's merge is the tip
-  with the tip it recorded and the task's for parents, and a revert's commits
-  are counted on the branch, so a checkout there mid-way fails it, and it
+  either made is read off the branch, never off HEAD alone: a landing's merge is
+  the tip with the tip it recorded and the task's for parents, and a revert's
+  commit is the one HEAD names, as the branch's tip, with the commit before it
+  its one parent. A checkout or anyone's commit there mid-way fails it, and it
   records nothing it did not make.
 - **Landed dependents go with it.** Every task that depends on it, directly or
   not, and has landed goes too, newest landing first. A dependent that landed
@@ -61,7 +66,12 @@ revert adds commits and rewrites nothing.
   not the current record: a retry, a failed spawn or a continue that conflicted
   leaves a record that is not `merged`, or none, over merges still on the branch.
   Those merges go; such a record stays, `kept`, for the worktree only it names,
-  and a conflict it held is over. If any of what goes cannot be named, nothing
+  and a conflict it held is over. Depends reads the plan and
+  `IsolationRun.landedOn`, what each task depended on, directly or not, when it
+  landed: a task that leaves the plan takes its dependencies with it, and the
+  plan's links through it, while its merges stay. So a dependent that left goes
+  too, and one that stood on the work through a task that left still does. If
+  any of what goes cannot be named, nothing
   does: a revert that took some of it would leave the rest standing on work that
   is gone. Newest means the first-parent order of the
   integration branch: the landing queue makes it one line, and git knows that
@@ -74,17 +84,22 @@ revert adds commits and rewrites nothing.
 - **Refused while a dependent is live.** A dependent at work was cut from a tip
   holding the work being removed. It is named, as `refuseWhileLive` names what
   stops a clean-up. Live here also means Mark complete landing it, or paused on
-  a usage limit, whose reset would resume it. Tasks that do not depend on the
+  a usage limit, whose reset would resume it. A resolver at work on a conflict
+  of a task that goes is refused the same way: its merge would land the attempt
+  the revert ends. Tasks that do not depend on the
   work keep running: when one lands, a three-way merge from the tip it was cut
   from keeps the revert.
 - **All or nothing.** The tips are recorded as `IsolationRun.landing`, with
-  `reverts` saying it is a revert and how many commits it can make in each repo,
+  `reverts` saying it is a revert and which merges it takes in each repo,
   and saved before the first commit, across the
-  whole set and every repo. A conflict or a failure anywhere puts every tip back
+  whole set and every repo; each commit it makes is saved there as it is made. A
+  conflict or a failure anywhere puts every tip back
   and names the task, repo and files. A crash does the same through
   `pruneOrphans`, since the saved run still has the tasks landed. The rollback
-  moves a branch only when what sits on the tip is plain commits, no more than
-  the revert could have made in that repo; anything else stays recorded and holds landings
+  moves a branch only when what sits on the tip is that revert's own commits and
+  nothing else: the line it saved, each on the last. A crash can come between a
+  commit and its save, so one more may follow that line, on it, if its message
+  holds Ordewell's sentence naming one of the merges. Anything else stays recorded and holds landings
   and Merge all off it, as a landing's does (ADR-0014). It is judged again with
   its commits made and rolled back if it may no longer go: a plan loaded under
   it, the same run's saved copy too, has not heard of them.
@@ -105,7 +120,9 @@ revert adds commits and rewrites nothing.
   releases it and starts from the current integration tip. Its run record goes,
   and every reading of landed work follows: the handoff, the merge gates, Merge
   all's message. A dependent that waited at a gate for it now waits for the task
-  itself. `IsolationRun.reverted` keeps the run going with no record left,
+  itself. A resolver out to a conflict of it is retired, as when a retry ends the
+  conflict (ADR-0015), so a retry is free and the task stays in the inbox.
+  `IsolationRun.reverted` keeps the run going with no record left,
   because its branch holds commits no record names and a retry starts from it.
 - **Not while a loop decides.** A task in a loop that has not ended is refused:
   ADR-0045 owns those rounds, and they land and run tasks again by themselves.
@@ -153,6 +170,9 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
   name it, which only a build between the two could save: refused, not previewed.
 - A merge two tasks are recorded as landed by, which only a landing that took the
   branch's tip for its own could save: refused, whichever of them is asked.
+- A task that landed and left the plan with no `landedOn`, or no name, which only
+  a run from before `landedOn` was kept can hold: nothing shows it stands apart
+  from the work, so every revert of that run is refused.
 - Reverting after Merge all, and any write to the user's branch.
 
 ## Considered options
@@ -182,6 +202,18 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
 - **Find a dependent's forgotten merges by reading the branch's messages.**
   Rejected: a merge's message is words a task chose, and a wrong match reverts
   work the user did not ask to lose. Not being sure refuses.
+- **Count a revert's commits on the branch.** Rejected: a count says nothing of
+  whose they are. Anyone's plain commit on the tip filled it, so a revert that
+  had missed the branch said it had reverted, and a rollback dropped the commit.
+- **Make the commits with `commit-tree`, so each is saved before the branch moves
+  and a crash can leave none unsaved.** Rejected: it would go past the commit
+  hooks and signing that the commits Ordewell writes go through.
+- **Refuse a commit left unsaved by a crash.** Rejected: a crash between two
+  steps would hold the run off every landing over a commit it made itself, and
+  its own sentence on the saved parent leaves no plain commit in that place.
+- **Refuse every revert while any landing's task has left the plan.** Rejected:
+  a task that stood apart from the work would stop it for good, when its
+  dependencies can be kept as it lands.
 - **Commit past an integration worktree that is off its branch, through a
   temporary worktree or `commit-tree`, or move it back first.** Rejected: that
   worktree was moved by someone, for a reason Ordewell cannot read, and it may
@@ -211,3 +243,4 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
 - 2026-10-31 — merged means the user's branch, not HEAD: any review checkout is no merge, and Merge all makes a merge commit where no base branch says otherwise; `carried` keeps resolver-carried work; what cannot be named refuses the whole revert.
 - 2026-10-31 — merged reads every merge of a task, not the current record; a branch that is gone puts nothing in the user's branch; a rollback holds each repo to its own reverts, and the mark follows `carried`.
 - 2026-10-31 — a landing and a revert refuse an integration worktree off the branch and read what they made off the branch; a merge two tasks are recorded as landed by is refused; a reverted task is listed behind its dependencies.
+- 2026-10-31 — a revert knows its commits by the SHAs it saves and their parent line, not a count; tracked changes in the integration worktree refuse it; a resolver of a reverted task is retired, and refuses it while at work; `landedOn` keeps a dependent that left the plan.

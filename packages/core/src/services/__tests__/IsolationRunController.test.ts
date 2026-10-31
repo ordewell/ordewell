@@ -18,7 +18,7 @@ function setup(isolation = new FakeWorktreeIsolation()) {
   const notifications = fakeNotification();
   /** Tasks the plan has live: an attempt running, or in progress or waiting on the user. */
   const live = new Set<string>();
-  const runs = new IsolationRunController({ isolation, config: fakeConfig(), notifications, workspaceRoot: () => '/repo', listener, liveTasks: () => live });
+  const runs = new IsolationRunController({ isolation, config: fakeConfig(), notifications, workspaceRoot: () => '/repo', listener, liveTasks: () => live, landedOn: () => [] });
   return { runs, isolation, listener, notifications, live };
 }
 
