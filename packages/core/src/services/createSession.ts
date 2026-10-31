@@ -1440,9 +1440,9 @@ export class Session {
 
   /**
    * The live plan in the shape a saved session is read back as. The disk
-   * boundary rewrites `in_progress` to `pending` — nothing is running when a
-   * session comes off a file — so a surface that re-reads the plan mid-run must
-   * come here instead, or every task it is watching reads as never started.
+   * boundary fails an `in_progress` task — nothing is running when a session
+   * comes off a file — so a surface that re-reads the plan mid-run must come
+   * here instead, or every task it is watching reads as interrupted.
    * An archived snapshot carries the task as it is now: a retry or continue
    * keeps the archive while the live task runs on and spends more.
    */
@@ -2471,8 +2471,8 @@ export class Session {
     // manual task's handoff log is not an attempt, and stays no chat.
     if (adopting) this.creditLoggedAttempts(plan.tasks);
     this.orchestrator.loadPlan(plan.tasks, plan.runners);
-    // Loading normalizes statuses (a failed task gets a fresh chance) on the
-    // store's copy; the adopted plan shows that result, not the caller's input.
+    // Loading normalizes statuses (a stored `blocked` goes) on the store's
+    // copy; the adopted plan shows that result, not the caller's input.
     this.syncPlanTasks();
     // The run record is taken synchronously; the orphan prune and the look at
     // what the user has merged since are awaited in the background, and git

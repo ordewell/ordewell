@@ -102,9 +102,9 @@ round *r* and round *r* + 1 the body runs once.
   cleared from the task (they stay in its attempt's log), the round counted
   in `loopRound`. The round is saved on the check, and the loop's state is
   read from statuses at every tick, so a reload or a daemon restart resumes
-  mid-round: a plan load and a new run keep a check between rounds failed
-  rather than giving it the fresh chance a failed task gets, so its body runs
-  first. The rounds take the one start rule: approval, holds, the Merge-all
+  mid-round: a plan load changes no check, and a new run keeps one between
+  rounds failed rather than giving it the fresh chance a failed task gets, so
+  its body runs first. The rounds take the one start rule: approval, holds, the Merge-all
   exclusion of ops work and the merge gate apply to them as to any start, and
   a Stop ends a round's running attempt as it ends any.
   A check started again from outside while a fix of its body is still at work
@@ -128,7 +128,7 @@ round *r* and round *r* + 1 the body runs once.
   fails, is skipped or is blocked stops the loop: the check is then the
   failure it is stored as, and its dependents are blocked until what stopped
   the loop is retried and passes. A retry of the check — the user's, a
-  `rearm`, a force start after a failure, a fresh chance on load or Execute —
+  `rearm`, a force start after a failure, the fresh chance Execute gives —
   starts a new set of rounds: `loopRound` goes, and the body waits for the
   check again. The loop's own run of the check is no retry: the retry limit
   and the identical-retry guard (ADR-0029) count none of its rounds. A resume
@@ -242,3 +242,4 @@ as check or body; a user editing a loop's `loop` field by hand from a surface.
 - 2026-10-22 — implemented handoffs in both loop directions and scoped reads between check and body (step 3, L1; ADR-0047, #120).
 - 2026-10-26 — the planner prompt and the diagnose skill add a loop only for an explicit iterate-until goal or a specific acceptance gate, not for routine validation.
 - 2026-10-30 — #39 closed: a check is a task in the plan, so no declared check is planned.
+- 2026-10-31 — a load no longer starts a failed check's rounds over; Execute and a retry do (L5, L7; [ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).

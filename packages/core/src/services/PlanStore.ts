@@ -115,28 +115,20 @@ export class PlanStore {
     return this._allTasks.filter((t) => t.status === status).length;
   }
 
-  /**
-   * `keepFailed` adopts failed tasks as failed: an edit reconciled into a run
-   * is not a retry, and the tasks it blocks wait for one (ADR-0034).
-   */
-  load(tasks: ReadonlyArray<Readonly<Task>>, runners: readonly RunnerId[], opts: { keepFailed?: boolean } = {}): void {
+  load(tasks: ReadonlyArray<Readonly<Task>>, runners: readonly RunnerId[]): void {
     // Before anything is swapped: a refused plan leaves the one held in place.
     assertAssignedRunners(tasks, runners);
     this._planTasks = cloneTasks(tasks);
     this._planRunners = [...runners];
     this.rebuild();
-    // Completed tasks survive a reload so a half-finished plan resumes the
-    // remainder (their output summaries still feed dependents). Failed tasks
-    // get a fresh chance, a loop's check its rounds over — but not one between
-    // rounds, whose loop resumes where it was (ADR-0045 L5). In-progress is
-    // left alone — load() also runs while a task's runner session is live
-    // (forceStartTask); orphaned in_progress from a saved session is
-    // normalized at the disk-load boundary instead.
+    // A load changes no outcome. Completed tasks survive so a half-finished
+    // plan resumes the remainder, and a failed task stays failed, with its
+    // verdict and the tasks it blocks, until the user answers it: a retry, or
+    // Execute (`resetForRun`) (ADR-0053). In-progress is left alone too: an
+    // edit reconciled into a run loads over live attempts. A task saved in
+    // progress is interrupted work, settled where it comes off disk
+    // (`failInterruptedTasks`).
     for (const task of this._allTasks) {
-      if (task.status === 'failed' && !opts.keepFailed && !betweenRounds(task)) {
-        task.status = 'pending';
-        delete task.loopRound;
-      }
       // Files from before ADR-0034 stored blocked tasks; the derived rule
       // decides that now, so an old one is the pending task it was.
       if ((task.status as string) === 'blocked') task.status = 'pending';
@@ -176,18 +168,23 @@ export class PlanStore {
    * Run preparation as one named op: flip every AI and script task to 'approved'. By
    * default completed tasks keep their status so a reloaded half-finished plan
    * resumes the remainder instead of re-running work that already succeeded,
-   * and skipped ones stay skipped: a new run is not a retry of them.
+   * and skipped ones stay skipped: a new run is not a retry of them. A failed
+   * task gets its fresh chance here, not at a load (ADR-0053).
    * `preserveCompleted: false` is for a freshly committed plan, where
-   * everything starts over. `keepScheduledResumes` leaves a task waiting on
-   * its runner's usage-limit reset waiting: an edit adopted between runs is
-   * not the user starting over.
+   * everything starts over. `edited` is an edit adopted between runs, which is
+   * not the user starting over: a failed task stays failed, and a task waiting
+   * on its runner's usage-limit reset stays waiting.
    */
-  resetForRun(opts: { preserveCompleted?: boolean; keepScheduledResumes?: boolean } = {}): void {
+  resetForRun(opts: { preserveCompleted?: boolean; edited?: boolean } = {}): void {
     const preserveCompleted = opts.preserveCompleted ?? true;
     for (const t of this._allTasks) {
-      if (t.type === 'user') continue;
+      if (opts.edited && (t.status === 'failed' || waitsForReset(t))) continue;
+      if (t.type === 'user') {
+        // No run readies a manual task, but one an edit made manual after it failed still has its fresh chance.
+        if (t.status === 'failed') t.status = 'pending';
+        continue;
+      }
       if (preserveCompleted && (t.status === 'completed' || t.status === 'skipped')) continue;
-      if (opts.keepScheduledResumes && waitsForReset(t)) continue;
       // A check between rounds runs again once its body lands, not now (ADR-0045 L5).
       if (preserveCompleted && betweenRounds(t)) continue;
       // A failed check runs again as a retry would run it: its rounds start over (ADR-0045 L7).

@@ -10,6 +10,7 @@ import type { HandoffDigest } from './Handoff';
 import { SKILL_NAME_PATTERN } from '../conversation/skillTokens';
 import { subtreeIds, walkPlan } from '../services/PlanTree';
 import { migratePlanStateIsolation } from '../services/isolationRecord';
+import { interruptedVerdict } from '../services/VerdictEngine';
 
 export interface UserStep {
   order: number;
@@ -41,7 +42,8 @@ export interface Verdict {
    * `done` on exit 0, `failed` on a non-zero exit, a signal or its time limit,
    * `blocked` when it could not start. A loop starts a round only on `failed`
    * (ADR-0045 L2). Absent when nothing reported: a runner that exited without
-   * the call, Mark complete, a stopped script, a verdict saved before it was kept.
+   * the call, Mark complete, a stopped script, an attempt the host died in, a
+   * verdict saved before it was kept.
    */
   reported?: 'done' | 'failed' | 'blocked';
 }
@@ -118,6 +120,20 @@ export function migrateLoadedTasks(tasks: readonly Task[]): void {
     if (typeof effort === 'string' && task.assignedModel && !task.assignedModel.thinkingEffort) task.assignedModel.thinkingEffort = effort;
     delete (task as { thinkingEffort?: unknown }).thinkingEffort;
     migrateLoadedTasks(task.subtasks ?? []);
+  }
+}
+
+/**
+ * Nothing is running when a plan comes off disk, so a task saved in progress
+ * lost its attempt with the host that ran it. It is failed, in place, so the
+ * inbox lists it and what depends on it waits (ADR-0053). Its attempts and
+ * logs are left as they are.
+ */
+export function failInterruptedTasks(tasks: readonly Task[], now: string): void {
+  for (const task of flattenTasks(tasks)) {
+    if (task.status !== 'in_progress') continue;
+    task.status = 'failed';
+    task.verdict = interruptedVerdict(now);
   }
 }
 

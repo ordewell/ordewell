@@ -216,7 +216,7 @@ describe('the loop\'s derived state (ADR-0045 L3)', () => {
     expect(blockingFailures(plain)).toEqual(new Map([['b', ['a']]]));
   });
 
-  it('keeps a check between rounds failed through a load and a new run, and starts the rounds of one out of them over', () => {
+  it('keeps a check failed through a load, and a new run keeps one between rounds and starts the rounds of one out of them over', () => {
     const store = new PlanStore();
     store.load([check({ status: 'failed', verdict: failed('failed') }), body(), ship], ['claude-code']);
     expect(store.get('review')?.status).toBe('failed');
@@ -224,7 +224,9 @@ describe('the loop\'s derived state (ADR-0045 L3)', () => {
     expect(store.get('review')?.status).toBe('failed');
 
     store.load([check({ status: 'failed', verdict: failed('failed'), loopRound: 2 }), body({ status: 'completed' }), ship], ['claude-code']);
-    expect(store.get('review')).toMatchObject({ status: 'pending' });
+    expect(store.get('review')).toMatchObject({ status: 'failed', loopRound: 2 });
+    store.resetForRun();
+    expect(store.get('review')).toMatchObject({ status: 'approved' });
     expect(store.get('review')?.loopRound).toBeUndefined();
   });
 

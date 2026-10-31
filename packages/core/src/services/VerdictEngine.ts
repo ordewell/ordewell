@@ -389,6 +389,14 @@ function exitVerdict(exitCode: number): Verdict {
   };
 }
 
+/**
+ * The host died during the attempt, so nothing was checked. Nothing was
+ * reported either, so no loop reads it as a finding (ADR-0045 L2).
+ */
+export function interruptedVerdict(decidedAt: string): Verdict {
+  return { outcome: 'fail', reason: 'It was interrupted when Ordewell stopped, and nothing is running it now.', checks: [], decidedAt };
+}
+
 /** How a status reads in a reason: its exit code, the signal that ended it, or why it never started. */
 function statusText(status: ScriptStatus): string {
   if (status.error !== undefined) return `could not start: ${status.error}`;

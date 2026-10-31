@@ -17,7 +17,8 @@ Owns structural CRUD (`add`/`remove`/
 `update`), status mutations (`markCompleted`/`markFailed`/
 `markInProgress`/`retry`), the named run-preparation op (`resetForRun` — flip
 AI tasks to approved, preserving completed ones unless the plan was freshly
-generated), runner-set validation, and the `rebuild` internal seam. Completed
+generated; it is what gives a failed task a fresh chance, which a load never
+does), runner-set validation, and the `rebuild` internal seam. Completed
 and failed are read from `task.status` alone — there is no second record — so
 `isCompleted`, `completedCount`, `isAllComplete` and the scheduler's
 dependency checks always agree. The store owns its task objects: `load` copies
@@ -1382,7 +1383,9 @@ dependents, which then start. A run with nothing running and only failed and blo
 counting completed, failed and blocked; a retry of a task in it continues that
 run (`TaskOrchestrator.awaitsResume`), and a planner edit made meanwhile is
 reconciled into it rather than reloaded over it, leaving the failed task failed:
-an edit is not a retry. A task at work — force-started, or waiting on the user —
+an edit is not a retry. A load or an edit outside a run leaves a failure and its
+block too; a task saved in progress loads failed, as interrupted, since nothing
+is running it (`failInterruptedTasks`, ADR-0053). A task at work — force-started, or waiting on the user —
 is never blocked. A usage-limit pause with a reset holds the whole run until it;
 one without a time keeps only its own runner's tasks from starting, and a
 merge gate keeps the run waiting; neither is a block. A *Loop*'s check
@@ -1431,7 +1434,9 @@ dependents. Answered only by the user, through `answerEscalation` on the
 *Command seam*, which derives the list afresh, refuses a stale id, and
 dispatches to the existing command for that wait, so it adds no authority. Every
 status update carries the list whole, and it is in the *Run view*. A surface's
-list of them is the *inbox*.
+list of them is the *inbox*. A reload keeps what is saved: a failed task, an
+interrupted one, a checkpoint with no runner left, but no hold, runner approval
+or parked start, which stay in memory.
 *Avoid:* "notification" (how one might reach a person, not what it is);
 "alert", "ticket"; "pending decision" (a decision the maintainers have not
 made); "blocked" for one — that is a dependency term, and a blocked task is not

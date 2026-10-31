@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { LegacyPlanState, PlanState } from '../models/Task';
-import { dropRetiredPlanFields, migratePlanState, migrateLoadedTasks } from '../models/Task';
+import { dropRetiredPlanFields, failInterruptedTasks, migratePlanState, migrateLoadedTasks } from '../models/Task';
 import { migratePlanStateIsolation } from '../services/isolationRecord';
 import type { SessionMeta, SessionData } from '../models/Session';
 import { defaultLogger, type ILogger } from '../interfaces/ILogger';
@@ -202,11 +202,7 @@ export function loadSession(sessionId: string, baseDir?: string, logger: ILogger
       }
       const session = parsed as SessionData;
       const plan = session.plan as LegacyPlanState;
-      // Nothing is running when a session comes off disk — an in_progress
-      // status is an orphan from an interrupted run; give it a fresh chance.
-      for (const t of plan.tasks.flatMap((task) => [task, ...(task.subtasks ?? [])])) {
-        if (t.status === 'in_progress') t.status = 'pending';
-      }
+      failInterruptedTasks(plan.tasks, new Date().toISOString());
       migratePlanStateIsolation(plan);
       migrateLoadedTasks(plan.tasks);
       dropRetiredPlanFields(plan);
