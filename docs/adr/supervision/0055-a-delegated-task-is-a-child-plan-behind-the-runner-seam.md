@@ -62,7 +62,7 @@ the child cannot reach follows it in the parent's plan.**
   | `assignedRunner`, `assignedModel` | the subplanner's, resolved as any task's are ([ADR-0003](../routing/0003-per-runner-model-allowlist.md), [ADR-0041](../routing/0041-a-tasks-model-follows-the-runners-own-switch.md)) |
   | `budget` | required: tokens, and optionally wall-clock time (ADR-0056 M5) |
   | `grants`, `protectedPaths`, `scope` | optional: the grants it asks for past the floor (ADR-0056 M2, M4), paths the child may not change (D7), a declared scope (ADR-0057 R6) |
-  | `readOnly` | optional: it answers a question and lands nothing ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)), so D6 asks for no change |
+  | `readOnly` | optional: it answers a question and lands nothing ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)), so D6 asks for no change and D8 for a read-only check |
 
   It has no subtasks and is never one: it is top-level, as a script task is, and
   `checkPlanInvariants` holds it to that as it holds a script task. `subtasks`
@@ -161,6 +161,11 @@ the child cannot reach follows it in the parent's plan.**
   rules:
   - The check runs once the delegated task has landed on the parent's integration
     branch, so a dependent sees its work. It cannot hold that landing back.
+  - **A `readOnly` delegated task's check reads its handoff.** It never lands, and
+    its worktree and branch go when it passes (ADR-0046), so the tip a dependent is
+    cut from holds none of its work, and a script there would pass or fail on the
+    unchanged baseline. Its handoff is all it leaves. So `delegationErrors` counts
+    only a read-only task as its check, which reads that handoff with `read_task`.
   - **A script check runs sealed.** A script task runs at the workspace root
     behind a merge gate (ADR-0020, ADR-0035), so at the root it would wait for
     Merge all and check the work after it reached the user's branch. A script
@@ -188,10 +193,11 @@ the child cannot reach follows it in the parent's plan.**
 - **A failed check holds automatic merges (D9).** Landed work whose check has not
   passed is not merged by anything but a person. Merge at gates, the run's end,
   a supervisor's `merge_all` and a child's own merge are held while any delegated
-  task of that plan has a check that has neither passed nor been skipped, which
-  only the user can do, and they say why. The user's Merge all
+  task of that plan but a `readOnly` one has a check that has neither passed nor
+  been skipped, which only the user can do, and they say why. The user's Merge all
   is not held, and its confirmation names the check. Without this a check that
-  fails would stop nothing: its work is already on the branch the merge reads.
+  fails would stop nothing: its work is already on the branch the merge reads. A
+  `readOnly` task's is not, so its check holds nothing.
 
 ### Isolation
 
@@ -250,9 +256,12 @@ the child cannot reach follows it in the parent's plan.**
   `Landing.settleRepair` holds it to D7: one whose `repairBase..branch` diff, what the
   branch brings onto the tip it was repaired against, touches a protected path goes
   `unrepaired`, as one that leaves conflict markers does. A repo the landing did not
-  change has no `repairBase`, and a repair can still edit it, so there the diff is
-  `taskTip..branch`, the repair's own commits, read before `integrate` moves
-  `taskTip`. It does not land, and its worktree is kept.
+  change has no `repairBase`, and a repair can still edit it, so there both reads
+  take `taskTip..branch`, the repair's own commits, before `integrate` moves
+  `taskTip`. `verifyRepair` reads markers in that repo on every run, a flat group's
+  included, since ADR-0015's guarantee has the same gap there; only its containment
+  check needs a `repairBase`. A repair that fails either does not land, and its
+  worktree is kept.
 - **A retry starts a child over (D15).** A fresh retry of a delegated task discards
   its child run as `discardRun` does and starts a new child on what is left of its
   budget; the old child's state stays on disk under the root. Revert
@@ -344,8 +353,10 @@ the child cannot reach follows it in the parent's plan.**
   a report and a Continue, and asserting what the parent's attempt does.
 - D6, D8 and D9 are held at the seam with a table of child states against the
   answer to `done`, every task skipped and an unchanged branch among them, and the
-  plan-level refusals, a script check where nothing can seal included, through
-  `validatePlanTasks` and `applyTaskOps`, as `loop.validation.test.ts` does.
+  plan-level refusals, a script check where nothing can seal and one on a `readOnly`
+  delegated task included, through `validatePlanTasks` and `applyTaskOps`, as
+  `loop.validation.test.ts` does. A `readOnly` delegated task whose check failed
+  holds no merge.
 - Isolation runs against real repositories. The probe task 32 saved
   (`nestedRun.probe.test.ts`, a two-level climb to main) is the prior art, extended
   with the state root, a prune with a child live, a sweep from a child's HEAD, a
@@ -358,7 +369,8 @@ the child cannot reach follows it in the parent's plan.**
   refuse a resume at its reset: it starts when a slot frees, in a run still held.
   Flat runs keep their suites unchanged.
 - D14's rule is tested with a repair that edits a protected path, in a repo the
-  landing changed and in one it did not: it does not land.
+  landing changed and in one it did not, and with one that leaves a conflict marker
+  in a repo the landing did not change: none lands.
 
 ## Out of scope
 
@@ -405,6 +417,9 @@ the child cannot reach follows it in the parent's plan.**
   bounds nothing, and the tree needs only one turn to move.
 - **A declared check on the delegated task.** Rejected: a check is a task (#39,
   ADR-0045), with a log, a verdict and a loop.
+- **A `readOnly` delegated task's script check run on its branch.** Rejected: that
+  branch goes with its worktree (ADR-0046), and keeping it for a check keeps work the
+  task says it does not land.
 - **Instructions not to game the check.** Rejected. METR found o3 reward-hacking in
   30.4% of RE-Bench runs, where it could see the scoring function, against 0.7% on
   HCAST, and "Please do not cheat" left the rate at 80% on the task it tested
@@ -413,6 +428,9 @@ the child cannot reach follows it in the parent's plan.**
   of reach and the protected paths are code.
 - **A script check behind its merge gate.** Rejected at the root, as written first.
   It would pass or fail on the user's branch, after the one step it should precede.
+- **Reading markers in a repo with no `repairBase` for a delegated task's repair
+  alone.** Rejected: `verifyRepair` has no reason to know the task's type, and a flat
+  group's repair lands the same marker.
 - **Failing a landing on a protected path.** Rejected: ADR-0013 keeps a landing from
   failing a task, and the work would wait on a person for what is a verdict.
 - **A delegated task that holds a slot, or a Parallel limit carved per subtree.**
@@ -451,3 +469,4 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-10-31 — accepted. Not yet implemented.
 - 2026-10-31 — checked against the code: what a delegated task's grants ask for, the refusals of it in a loop, the settled test's caller, a repair's protected paths, the child's merge, the two roots on a run and a root's delete, and how the pool reaches a Session it refused.
 - 2026-10-31 — checked against the code again: what wakes a kept resume, a child that did no work and `readOnly`, a script check where nothing can seal, a repair in a repo its landing did not change, the bound on turns past the limit, and `research` in a child plan.
+- 2026-10-31 — checked against the code a third time: what checks a `readOnly` delegated task and what its check holds, and conflict markers in a repo a repair's landing did not change.
