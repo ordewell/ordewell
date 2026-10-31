@@ -40,8 +40,13 @@ function researchLogPath(sessionId: string, baseDir?: string): string {
 /** What stands for a plan with no log, so that one also has a write to remember. */
 const NO_RESEARCH_LOG: readonly ResearchLogEntry[] = [];
 
-/** Where each log object was last written, and how long it was: the plan replaces its log to change it, so most saves find it here. */
-const writtenLogs = new WeakMap<readonly ResearchLogEntry[], { file: string; length: number }>();
+/**
+ * What each file last took, and how long it was: the plan replaces its log to
+ * change it, so most saves find it here. Kept by file because a log object can
+ * come back to a file that has held another since, as the one for no log does.
+ * Weak so that a comparison does not keep a closed session's trace in memory.
+ */
+const writtenLogs = new Map<string, { log: WeakRef<readonly ResearchLogEntry[]>; length: number }>();
 
 /**
  * A session's research trace is kept with its task logs, not in its file: it
@@ -51,11 +56,11 @@ const writtenLogs = new WeakMap<readonly ResearchLogEntry[], { file: string; len
  * without it.
  */
 function saveResearchLog(log: readonly ResearchLogEntry[], file: string): void {
-  const written = writtenLogs.get(log);
-  const unchanged = fs.existsSync(file) ? written?.file === file && written.length === log.length : log.length === 0;
+  const written = writtenLogs.get(file);
+  const unchanged = fs.existsSync(file) ? written?.log.deref() === log && written.length === log.length : log.length === 0;
   if (unchanged) return;
   writeFileAtomic(file, JSON.stringify(log));
-  writtenLogs.set(log, { file, length: log.length });
+  writtenLogs.set(file, { log: new WeakRef(log), length: log.length });
 }
 
 /** A file from before the log moved out holds its own, and the next save moves it. */
