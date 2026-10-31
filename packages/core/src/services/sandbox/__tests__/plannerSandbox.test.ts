@@ -145,6 +145,15 @@ describe('resolvePlannerSandbox', () => {
     expect(notice).toContain('a command those rules refuse, such as a loop or a script for an interpreter, is refused rather than run sealed');
   });
 
+  it("gives a Linux sealed run the host's name table, and no resolver to ask past it", async () => {
+    const { exec } = recordingExec({ code: 0, output: '' });
+    const sealed = sealedOf(await resolvePlannerSandbox(linux(['/usr/bin/bwrap'], exec, { dirs: ['/etc/hosts', '/etc/resolv.conf'] })));
+    if (!sealed.available) throw new Error('expected sealed runs');
+    const read = sealed.profile({ workspace: '/w' }).read;
+    expect(read).toContain('/etc/hosts');
+    expect(read).not.toContain('/etc/resolv.conf');
+  });
+
   it("names macOS's links as the links themselves, and Apple's developer directory where it points", async () => {
     const real: Record<string, string> = { '/private/var/select/developer_dir': '/Applications/Xcode.app/Contents/Developer' };
     const present = new Set(['/usr', '/private/etc', '/private/var/db', '/private/var/db/xcode_select_link', '/opt/homebrew', '/opt/homebrew/var', '/private/var/select/developer_dir', '/private/tmp']);

@@ -185,6 +185,10 @@ const SEALED_READS: Partial<Record<NodeJS.Platform, readonly string[]>> = {
     '/usr', '/bin', '/sbin', '/lib', '/lib32', '/lib64', '/libx32',
     '/etc/alternatives', '/etc/ld.so.cache', '/etc/ld.so.conf', '/etc/ld.so.conf.d',
     '/etc/passwd', '/etc/group', '/etc/nsswitch.conf', '/etc/localtime',
+    // How `localhost` resolves, which Vite does at startup. The address is the
+    // run's own loopback, since `--unshare-net` leaves it no other, and without
+    // `/etc/resolv.conf` only the names listed here resolve (ADR-0036 S1).
+    '/etc/hosts',
     // NixOS keeps every program in its store.
     '/nix/store', '/run/current-system',
   ],

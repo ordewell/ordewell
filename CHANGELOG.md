@@ -116,6 +116,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **Sealed runs can run Node, tests and builds.** The memory limit counted
   what a program reserves, which V8 does in gigabytes, so ordinary programs
   died. It now counts what is in use, and a run over it is ended with a note.
+  On Linux a sealed run also reads `/etc/hosts`, since vitest stops at startup
+  when `localhost` does not resolve; `localhost` is the run's own loopback.
 - **A planner turn waiting on agent detection says so.** It read as planning
   while it waited for the agents to be listed, which can take a while on a
   first launch; it now reads "Detecting coding agents…" in the terminal UI and

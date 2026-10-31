@@ -69,7 +69,8 @@ their own repositories. The parts most worth your attention:
 - **Sealed runs.** A sealed run executes a command no classifier vouched for,
   so its profile is the whole guarantee: the workspace read-only (or under a
   throwaway overlay), the session's scratch directory its only writable place
-  and its home, no network, nothing of yours outside the workspace readable,
+  and its home, no network, nothing of yours outside the workspace readable
+  but the machine's `/etc/hosts` (its `localhost` is the run's own loopback),
   none of the credentials in Ordewell's environment, and limits on processes,
   memory and time. A way for one to change the workspace, read your home
   directory or another repository, reach the network or a local service, see
