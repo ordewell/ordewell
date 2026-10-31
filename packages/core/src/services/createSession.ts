@@ -51,6 +51,8 @@ import { ScriptRunner, type ScriptRunnerDeps } from './ScriptRunner';
 import { rewrittenScripts } from '../models/ScriptTask';
 import { taskRefOf } from './TaskRefs';
 import { SessionWindows, withContextWindows } from './ContextWindowFill';
+import { withTaskRunnerConfig } from './taskRunnerConfig';
+import type { TaskRunnerConfig } from './harness/AgentAdapter';
 import { PlannerUsageLedger } from './PlannerUsage';
 import { plannerContextFill } from '../models/Usage';
 import { TurnBudgets, contextLine, taskReadsLine, webReadsLine } from './PlannerBudgets';
@@ -116,6 +118,8 @@ export interface SessionRuntimeSettings {
   run?: GlobalRunSettings;
   /** Whether an API planner compacts its own context before a call that would not fit; absent means on. */
   plannerAutoCompaction?: boolean;
+  /** What a task runner loads of the user's own setup; absent means all of it. */
+  taskRunnerConfig?: TaskRunnerConfig;
 }
 
 /** Calls an ops retry is told about; earlier ones are counted, not listed (ADR-0020). */
@@ -135,6 +139,7 @@ export function sessionRuntimeSettings(settings: UserSettings): SessionRuntimeSe
     enabledRunners: settings.enabledRunners,
     run: runSettingsOf(settings),
     ...(settings.plannerAutoCompaction !== undefined ? { plannerAutoCompaction: settings.plannerAutoCompaction } : {}),
+    ...(settings.taskRunnerConfig !== undefined ? { taskRunnerConfig: settings.taskRunnerConfig } : {}),
   };
 }
 
@@ -334,7 +339,7 @@ export function createSession(deps: SessionDeps): Session {
   const orchestrator = TaskOrchestrator.compose({
     config: deps.config,
     notifications: deps.notifications,
-    runner: taskLogs.wrap(runnerApprovals.wrap(withContextWindows(deps.runner, windows))),
+    runner: taskLogs.wrap(runnerApprovals.wrap(withContextWindows(withTaskRunnerConfig(deps.runner, () => deps.settings().taskRunnerConfig), windows))),
     scriptRunner: taskLogs.wrap(deps.scriptRunner ?? new ScriptRunner(scriptRunnerDeps)),
     store,
     output: deps.taskOutput,

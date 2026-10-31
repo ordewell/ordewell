@@ -1,4 +1,4 @@
-import type { AgentEvent } from '../services/harness/AgentAdapter';
+import type { AgentEvent, TaskRunnerConfig } from '../services/harness/AgentAdapter';
 import type { ApplyPatchArgs, CheckpointAnswer, McpToolReply, ReadTaskArgs, TaskCompleteArgs } from '../services/mcp/tools';
 import type { ApprovalDecision } from './IApproval';
 import type { TaskSkillSnapshot } from '../models/Task';
@@ -275,6 +275,8 @@ export interface IRunner {
     cancelled?: AbortSignal;
     /** The attempt's work lands as a commit (ADR-0047): its runner is told to write the message in `task_complete`. */
     commits?: true;
+    /** What the runner loads of the user's own setup (the `taskRunnerConfig` setting); absent means all of it. Runners that cannot narrow it ignore it. */
+    runnerConfig?: TaskRunnerConfig;
     /** A script task's body (ADR-0035): only the script runner reads it, and it runs nothing else. */
     script?: ScriptBody;
     /**

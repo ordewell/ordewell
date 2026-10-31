@@ -1,17 +1,28 @@
-/** A task as the plan block shows it: its line, under the reference the line names it by. */
-export interface PlanRow {
+import type { TaskStatus } from '../models/Task';
+
+/** A task the plan block does not list, which it can still name by its reference. */
+export interface UnlistedRow {
   id: string;
   /** `#order`, or a subtask's dotted label. */
   ref: string;
   title: string;
+  status: TaskStatus;
+}
+
+/** A task as the plan block shows it: its line, under the reference the line names it by. */
+export interface PlanRow extends UnlistedRow {
   line: string;
 }
 
 /** The plan as the planner is shown it now. */
 export interface PlanView {
-  /** In plan order. */
+  /** The tasks the block lists, in plan order: all of them unless the plan is too large (`planWindow`). */
   rows: readonly PlanRow[];
-  /** The whole block: every line, then the read and edit protocol. */
+  /** The rest, in plan order: counted in the block, not listed. */
+  unlisted: readonly UnlistedRow[];
+  /** What the block says of the unlisted tasks; empty when there are none. */
+  overflow: string;
+  /** The whole block: every listed line, then the read and edit protocol. */
   full: string;
   /** What runs and which tasks it locks; empty while nothing runs. */
   running: string;
@@ -117,14 +128,18 @@ export class PromptBlocks {
 /** The whole block where the planner holds none, else what changed since its last view; nothing when the plan has no tasks and the planner was never sent any. */
 function planBlock(plan: PlanView, held: ReadonlyMap<string, PlanRow> | null, mayHoldTasks: boolean): string | null {
   if (plan.rows.length === 0) {
-    if (held && held.size > 0) return changesBlock(plan, [], [...held.values()]);
+    if (held && held.size > 0) return changesBlock(plan, [], [...held.values()], []);
     return mayHoldTasks ? noTasksBlock(plan) : null;
   }
-  if (!held || renumbered(plan.rows, held)) return plan.full;
-  const now = new Set(plan.rows.map((row) => row.id));
+  const everyRow = [...plan.rows, ...plan.unlisted];
+  if (!held || renumbered(everyRow, held)) return plan.full;
+  const listed = new Set(plan.rows.map((row) => row.id));
+  const exists = new Set(everyRow.map((row) => row.id));
   const changed = plan.rows.filter((row) => held.get(row.id)?.line !== row.line);
-  const removed = [...held.values()].filter((row) => !now.has(row.id));
-  const changes = changesBlock(plan, changed, removed);
+  const removed = [...held.values()].filter((row) => !exists.has(row.id));
+  // Still in the plan, but out of the list the planner holds a line of.
+  const left = plan.unlisted.filter((row) => held.has(row.id) && !listed.has(row.id));
+  const changes = changesBlock(plan, changed, removed, left);
   return changes.length < plan.full.length ? changes : plan.full;
 }
 
@@ -134,7 +149,7 @@ function planBlock(plan: PlanView, held: ReadonlyMap<string, PlanRow> | null, ma
  * dependencies by reference, so a change block would be read against the
  * wrong tasks.
  */
-function renumbered(rows: readonly PlanRow[], held: ReadonlyMap<string, PlanRow>): boolean {
+function renumbered(rows: readonly UnlistedRow[], held: ReadonlyMap<string, PlanRow>): boolean {
   const heldRefs = new Set([...held.values()].map(({ ref }) => ref));
   return rows.some((row) => {
     const was = held.get(row.id);
@@ -142,14 +157,21 @@ function renumbered(rows: readonly PlanRow[], held: ReadonlyMap<string, PlanRow>
   });
 }
 
-function changesBlock(plan: PlanView, changed: readonly PlanRow[], removed: readonly PlanRow[]): string {
-  const listed = changed.length === 0 && removed.length === 0
+function changesBlock(plan: PlanView, changed: readonly PlanRow[], removed: readonly PlanRow[], left: readonly UnlistedRow[]): string {
+  const listed = changed.length === 0 && removed.length === 0 && left.length === 0
     ? ['<plan_changes>The plan is unchanged since it was last shown above.</plan_changes>']
-    : ['<plan_changes>', ...changed.map((row) => row.line), ...removed.map((row) => `removed: ${row.ref} id=${row.id} "${row.title}"`), '</plan_changes>'];
+    : [
+      '<plan_changes>',
+      ...changed.map((row) => row.line),
+      ...left.map((row) => `no longer listed: ${row.ref} id=${row.id} "${row.title}" [${row.status}]`),
+      ...removed.map((row) => `removed: ${row.ref} id=${row.id} "${row.title}"`),
+      '</plan_changes>',
+    ];
   const reread = plan.tools ? 'call task_query' : 'read the tasks with a taskQuery';
   return [
     ...listed,
     ...(plan.rows.length === 0 ? ['The plan now has no tasks.'] : []),
+    ...(plan.overflow ? [plan.overflow] : []),
     plan.running || NOT_RUNNING,
     `Tasks not listed are as last shown, and the protocol sent with the last <current_plan> still applies. If you no longer have that block, ${reread} before editing.`,
   ].join('\n');

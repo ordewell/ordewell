@@ -91,6 +91,41 @@ function nativeShellSettings(launcher: NativeShellLauncher): string {
 const NO_AUTO_MEMORY = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' };
 
 /**
+ * Which settings a task's runner reads. A read-only one reads the user's alone
+ * with the planner's hooks-off settings on top (ADR-0046), as ever; `minimal`
+ * drops the user's source from it, or for a task that writes keeps the
+ * repository's alone. The empty value is the form the account query uses.
+ */
+function settingSources(readOnly: boolean, minimal: boolean): string[] {
+  if (readOnly) return [...(minimal ? ['--setting-sources='] : ['--setting-sources', 'user']), '--settings', PLANNER_SETTINGS];
+  return minimal ? ['--setting-sources', 'project,local'] : [];
+}
+
+/**
+ * Where a task's own context compacts. The 1M window of the large models
+ * would otherwise never trigger the CLI's auto-compaction, and past this size
+ * each call re-reads a long prefix for little new information. Compaction
+ * starts somewhat below the window (the CLI keeps a buffer for its summary).
+ * The completion contract rides in the system prompt, where a summary cannot
+ * drop it. A planner is left alone: its conversation is the user's. The
+ * variable, which an older CLI ignores, is read by 2.1.314 (`--autocompact`
+ * is the same setting as a flag); a plain integer, because a `k` suffix is
+ * only read by newer ones.
+ */
+const TASK_COMPACT_WINDOW_TOKENS = 150_000;
+const TASK_ENV = { ...NO_AUTO_MEMORY, CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(TASK_COMPACT_WINDOW_TOKENS) };
+
+/**
+ * What a `minimal` task runner leaves out of its context (`taskRunnerConfig`):
+ * the servers and slash commands and skills of the user's own setup, and the
+ * user's settings and instructions. The repository's instructions stay, and so
+ * does Ordewell's server, which arrives as an explicit `--mcp-config` that the
+ * strict flag admits. A task's skills are written into its prompt, not loaded
+ * from here.
+ */
+const MINIMAL_TASK_ARGS = ['--strict-mcp-config', '--disable-slash-commands'];
+
+/**
  * Whether `abs` is in the folder Claude Code saves this session's long tool
  * results to, `<config>/projects/<project>/<session>/tool-results/`, before
  * telling the model to read them back (checked live on 2.1.296). The project
@@ -646,6 +681,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    */
   private taskSpawnSpec(opts: TaskStartOptions): SpawnSpec {
     const readOnly = readOnlyTask(opts);
+    const minimal = opts.runnerConfig === 'minimal';
     if (!readOnly) assertNoClaudeTaskCollision(opts.cwd);
     this.readOnlySite = readOnly ? opts : null;
     this.requestedMode = readOnly ? PLANNER_PERMISSION_MODE : opts.flags.permissionMode;
@@ -655,7 +691,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       '--permission-prompt-tool', 'stdio',
       '--permission-mode', this.requestedMode,
       '--disallowedTools', [...TASK_DISALLOWED_TOOLS, ...(readOnly ? DISALLOWED_TOOLS : [])].join(','),
-      ...(readOnly ? ['--setting-sources', 'user', '--settings', PLANNER_SETTINGS] : []),
+      ...settingSources(readOnly, minimal),
+      ...(minimal ? MINIMAL_TASK_ARGS : []),
       ...(opts.flags.effort ? claudeThinkingArgs(opts.flags.effort) : []),
     ];
     if (opts.model) args.push('--model', opts.model);
@@ -665,7 +702,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       this.pendingResume = opts.resumeSessionId;
     }
     if (opts.mcp) args.push('--append-system-prompt', taskCompletionContract(opts), ...this.ordewellServerArgs(opts.mcp, readOnly ? 'readOnlyTask' : 'task'));
-    return { command: 'claude', args, env: NO_AUTO_MEMORY };
+    return { command: 'claude', args, env: TASK_ENV };
   }
 
   /**

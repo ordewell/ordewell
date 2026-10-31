@@ -224,6 +224,15 @@ export interface TaskRunnerFlags {
   modeSettings: Record<string, string>;
 }
 
+/**
+ * What a task runner loads of the user's own setup (the `taskRunnerConfig`
+ * setting): `user` is everything the runner would load for the user,
+ * `minimal` only what a task needs — Ordewell's server, the repository's
+ * instructions — so the user's connectors, skills and settings do not ride in
+ * every attempt's context. Runners that cannot narrow their setup ignore it.
+ */
+export type TaskRunnerConfig = 'user' | 'minimal';
+
 /** A plan task driven over the runner's programmatic protocol (ADR-0018, C1). */
 export interface TaskStartOptions extends AgentStartCommon {
   kind: 'task';
@@ -232,6 +241,8 @@ export interface TaskStartOptions extends AgentStartCommon {
   /** The task's runner mode id, as the plan names it. */
   mode: string;
   flags: TaskRunnerFlags;
+  /** What the runner loads of the user's setup; absent means `user`. */
+  runnerConfig?: TaskRunnerConfig;
   /** The attempt's work lands as a commit (ADR-0047): its completion contract asks for the message. */
   commits?: true;
   /**

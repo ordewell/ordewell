@@ -206,7 +206,11 @@ goes whole again when a task's reference changed (a reorder, or an insert or
 removal that renumbers) and after anything that drops the live context or
 leaves the last whole block uncertain: a reset, a compaction, a turn that
 failed, was stopped or was abandoned (ADR-0012 T10). The catalog block follows
-the same rule.
+the same rule. A plan past 60 tasks lists only the ones a planner acts on, the
+running, failed and waiting first (`planWindow`); a line says how many are not
+listed, by status, and that `task_query` reads any of them by reference. A task
+that leaves the list but stays in the plan is named in `<plan_changes>` by its
+status, never as removed.
 The live model context — a vendor service's message list, a harness planner's
 process and native session id — is disposable: dropping it makes the next turn
 replay from the transcript (it is dropped before every replay, so a harness
@@ -1310,6 +1314,18 @@ output and exit notifications. `AbstractRunner` and `AbstractRunnerSession`
 share lifecycle plumbing; `FakeRunnerSession` is the test seam. Structured
 methods are mandatory, with no optional capability or transport discriminator.
 *Avoid:* "terminal runner", "terminal session" for these interfaces.
+
+**Task runner config** (`taskRunnerConfig`, `TaskRunnerConfig`) — what a task
+runner loads of the user's own setup: `user`, the default, is everything the
+runner would load for them; `minimal` is what a task needs, Ordewell's server
+and the repository's instructions, and leaves out the user's own connectors,
+skills, commands and settings. Saved in `settings.json` and read as each attempt
+spawns, so a change reaches the next one in any session; it is in no settings
+panel. Only Claude Code's task runner narrows its setup (`--strict-mcp-config`,
+`--disable-slash-commands`, `--setting-sources`); the others ignore it. A
+Claude task runner's context also compacts at a fixed window of its own
+(`CLAUDE_CODE_AUTO_COMPACT_WINDOW`), which a planner's never does.
+*Avoid:* "lean mode", "safe mode" (that is a Claude Code flag of another kind).
 
 **Task attempt** (`TaskAttempt`, inside `Attempts`) — one run of one
 task, from the moment the scheduler claims it to the moment it ends. It holds

@@ -265,6 +265,19 @@ describe('SettingsService', () => {
     expect(sessionRuntimeSettings(service.getAll()).plannerAutoCompaction).toBeUndefined();
   });
 
+  it('reads taskRunnerConfig from the file, keeps it through other writes, and drops a value that is not one of the two', () => {
+    fs.writeFileSync(tempFile, JSON.stringify({ taskRunnerConfig: 'minimal' }));
+    expect(service.getAll().taskRunnerConfig).toBe('minimal');
+    expect(sessionRuntimeSettings(service.getAll()).taskRunnerConfig).toBe('minimal');
+
+    service.setEnabledRunners(['codex']);
+    expect(JSON.parse(fs.readFileSync(tempFile, 'utf-8'))).toEqual({ taskRunnerConfig: 'minimal', enabledRunners: ['codex'] });
+
+    fs.writeFileSync(tempFile, JSON.stringify({ taskRunnerConfig: 'lean' }));
+    expect(service.getAll()).toEqual({});
+    expect(sessionRuntimeSettings(service.getAll()).taskRunnerConfig).toBeUndefined();
+  });
+
   it('getSettingsPath returns the path in the user data directory', () => {
     const p = getSettingsPath();
     expect(p).toContain('.ordewell');

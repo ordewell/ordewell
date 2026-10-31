@@ -153,7 +153,7 @@ export type { IAiService, ConversationRequest, ConversationTurn } from './servic
 export { CliAgentAiService } from './services/harness/CliAgentAiService';
 export type { CliAgentAiServiceDeps } from './services/harness/CliAgentAiService';
 export { LineBuffer, TaskModeUnsupportedError } from './services/harness/AgentAdapter';
-export type { SpawnFn, AgentAdapter, AgentEvent, AgentStartOptions, PlannerStartOptions, TaskStartOptions, TaskRunnerFlags, TaskModeAgentAdapter, AgentProcessDeps, AgentAdapterFactory } from './services/harness/AgentAdapter';
+export type { SpawnFn, AgentAdapter, AgentEvent, AgentStartOptions, PlannerStartOptions, TaskStartOptions, TaskRunnerFlags, TaskRunnerConfig, TaskModeAgentAdapter, AgentProcessDeps, AgentAdapterFactory } from './services/harness/AgentAdapter';
 export { supportsTaskMode, createTaskAdapter } from './services/harness/connectors';
 export { StdioAgentAdapter } from './services/harness/StdioAgentAdapter';
 export type { SpawnSpec } from './services/harness/StdioAgentAdapter';

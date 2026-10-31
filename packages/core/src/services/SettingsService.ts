@@ -6,6 +6,7 @@ import type { SupervisorLevel } from '../models/Execution';
 import { DEFAULT_SUPERVISOR_RETRY_LIMIT } from './LoopGuards';
 import { DEFAULT_WAKE_UP_READ_BUDGET } from './Supervisor';
 import { parseAutonomyFlag } from './ModeResolver';
+import type { TaskRunnerConfig } from './harness/AgentAdapter';
 
 /** How a run is started, watched and merged: the user's, not a plan's (ADR-0030). */
 export interface GlobalRunSettings {
@@ -92,6 +93,12 @@ export interface UserSettings {
    * no surface offers it.
    */
   plannerAutoCompaction?: boolean;
+  /**
+   * What a task runner loads of the user's own setup: all of it (`user`) or
+   * what a task needs (`minimal`). Absent means `user`. Set in the file only:
+   * no surface offers it.
+   */
+  taskRunnerConfig?: TaskRunnerConfig;
 }
 
 /**
@@ -442,6 +449,9 @@ export class SettingsService {
     }
     if (typeof raw.plannerAutoCompaction === 'boolean') {
       settings.plannerAutoCompaction = raw.plannerAutoCompaction;
+    }
+    if (raw.taskRunnerConfig === 'user' || raw.taskRunnerConfig === 'minimal') {
+      settings.taskRunnerConfig = raw.taskRunnerConfig;
     }
     // A value it cannot use is left out, so its default stands.
     for (const key of RUN_SETTING_KEYS) {
