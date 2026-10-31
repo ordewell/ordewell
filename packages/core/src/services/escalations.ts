@@ -271,20 +271,23 @@ function awaiting(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait
  * A check between rounds nothing will run, after a Stop or a reload: Execute
  * goes on from here, and a start runs its next round once its body has landed
  * (ADR-0045 L5, L7), which a retry would not, starting its rounds over. What
- * holds any start of it holds that one too, so it is named and none is offered.
+ * holds any start of it holds a retry and a continue too, so it is named and
+ * none of them is offered.
  */
 function stranded(row: TaskWithParent, repeating: Extract<StartWait, { kind: 'repeating' }>, input: EscalationInput, rows: Rows): Wait {
   const round = `round ${repeating.round} of ${repeating.maxRounds}`;
   const refOf = (id: string) => rows.get(id)?.ref ?? id;
+  const behind = (input.waits.get(row.task.id) ?? []).flatMap((w) => (w.kind === 'dependencies' || w.kind === 'queued' ? w.waiting : w.kind === 'merge-gate' ? w.unmerged : w.kind === 'loop-check' ? [w.check] : []));
+  const waitsOn = behind.map(refOf).join(', ');
+  const options = behind.length > 0 ? startedOver(row, input).filter((o) => o.id !== 'retry' && o.id !== 'continue') : startedOver(row, input);
   if (repeating.waiting.length === 0) {
-    const behind = (input.waits.get(row.task.id) ?? []).flatMap((w) => (w.kind === 'dependencies' || w.kind === 'queued' ? w.waiting : w.kind === 'merge-gate' ? w.unmerged : w.kind === 'loop-check' ? [w.check] : []));
-    if (behind.length > 0) {
-      return { kind: 'failed', reason: `Its fix has landed, and its ${round} waits on ${behind.map(refOf).join(', ')}: nothing runs it now. Execute the plan and the loop goes on.`, options: startedOver(row, input).filter((o) => o.id !== 'retry') };
-    }
-    return { kind: 'failed', reason: `Its fix has landed, and nothing runs its ${round}.`, options: [{ id: 'run', label: `Start ${round}` }, ...startedOver(row, input)] };
+    if (behind.length > 0) return { kind: 'failed', reason: `Its fix has landed, and its ${round} waits on ${waitsOn}: nothing runs it now. Execute the plan and the loop goes on.`, options };
+    return { kind: 'failed', reason: `Its fix has landed, and nothing runs its ${round}.`, options: [{ id: 'run', label: `Start ${round}` }, ...options] };
   }
   const fix = repeating.waiting.map(refOf);
-  return { kind: 'failed', reason: `Its loop stopped between rounds: nothing runs it again, and ${fix.join(', ')} ${fix.length === 1 ? 'has' : 'have'} not landed. Execute the plan and the loop goes on.`, options: startedOver(row, input) };
+  const unlanded = `${fix.join(', ')} ${fix.length === 1 ? 'has' : 'have'} not landed`;
+  const left = behind.length > 0 ? `${unlanded}, and it waits on ${waitsOn}` : `and ${unlanded}`;
+  return { kind: 'failed', reason: `Its loop stopped between rounds: nothing runs it again, ${left}. Execute the plan and the loop goes on.`, options };
 }
 
 /**
@@ -309,11 +312,12 @@ function unstarted(row: TaskWithParent, input: EscalationInput, rows: Rows): Wai
   const { task } = row;
   const waits = input.waits.get(task.id) ?? [];
   const carried = input.carried(task.id);
-  // A reverted task's hold outlasts its dependencies: a chain revert leaves each task behind the one before it, and only the user lifts any of those holds (ADR-0054).
+  // A reverted task's hold outlasts its dependencies and its loop's check: a chain revert leaves each task behind the one before it, and only the user lifts any of those holds (ADR-0054).
   const reverted = task.reverted && waitOf(waits, 'on-hold');
-  const behind = reverted ? [...waitOf(waits, 'blocked')?.failed ?? [], ...waitOf(waits, 'dependencies')?.waiting ?? []] : [];
+  const check = waitOf(waits, 'loop-check')?.check;
+  const behind = reverted ? [...waitOf(waits, 'blocked')?.failed ?? [], ...(check ? [check] : []), ...waitOf(waits, 'dependencies')?.waiting ?? []] : [];
   // A reverted task waits for the user's decision however the run stands: it is reverted before Merge all, usually after the last task landed (ADR-0054).
-  if (!(input.run.open || carried || task.reverted) || waits.some((w) => !ONLY_A_PERSON[w.kind] && !(reverted && (w.kind === 'blocked' || w.kind === 'dependencies')))) return null;
+  if (!(input.run.open || carried || task.reverted) || waits.some((w) => !ONLY_A_PERSON[w.kind] && !(reverted && (w.kind === 'blocked' || w.kind === 'loop-check' || w.kind === 'dependencies')))) return null;
   // In a plan nobody has approved yet nothing is theirs to start, but what a loop carried on waits on, and a manual task needs no approval to be done.
   if (waitOf(waits, 'unapproved') && task.type !== 'user' && !carried && !input.waitsForApproval(task.id)) return null;
   if (waitOf(waits, 'no-prompt')) {

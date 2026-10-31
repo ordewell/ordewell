@@ -74,7 +74,7 @@ it on, since the seam refuses it otherwise
 | `files-changed` | `awaiting_user`, `files-changed` | Retry, Skip, Mark complete | as above |
 | `usage-limit` | `awaiting_user`, `usage-limit`, no `resumeAt` | Resume now, or Retry with no session to resume; Skip, Mark complete | `retry_task`, as above |
 | `failed` | `failed`, no loop going on | Retry, Continue, Skip, Mark complete | as above |
-| `failed` | A loop's check between rounds nothing will run ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md) L5), its body landed | Start its next round, Retry, Continue, Skip, Mark complete; while a dependency holds any start of it, that wait is named and neither Start nor Retry is offered | `run_task`, then as above |
+| `failed` | A loop's check between rounds nothing will run ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md) L5), its body landed | Start its next round, Retry, Continue, Skip, Mark complete; while a dependency holds any start of it, that wait is named and none of Start, Retry and Continue is offered, with its body landed or not | `run_task`, then as above |
 | `out-of-rounds` | A loop's check, `outOfRounds` | Retry, Continue, Skip, Mark complete | as above; a retry starts its rounds over ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md)) |
 | `merge-gate` | Not started, held by nothing but its gate | Merge all; Force start, or Mark complete for a user task | `merge_all`, `force_start`, `mark_complete` |
 | `on-hold` | Not started, held by nothing but its hold | Retry, Force start; Force start alone for a reverted task behind a dependency, whose retry the seam refuses until that has finished; Mark complete alone for a user task, which no runner starts | `retry_task`, `force_start`, `mark_complete` |
@@ -95,8 +95,9 @@ since the loop's next step waits on it. A reverted task
 ([ADR-0054](../isolation/0054-a-landed-task-reverts-on-the-integration-branch-before-merge-all.md))
 is the exception: it is `on-hold` in any run, because the user took it back,
 usually after the last task landed, and whether it runs again is theirs to say.
-It is listed behind a dependency or a blocked one too: a chain revert leaves each
-task behind the one before it, and none of that lifts a hold only the user can.
+It is listed behind a dependency, a blocked one or its loop's check too: a chain
+revert leaves each task behind the one before it, and none of that lifts a hold
+only the user can.
 
 The three options that dispatch past the seam's commands are the ones that have
 no command: adding a resolver task is a plan edit, and a blocked run's two answers
@@ -189,8 +190,8 @@ reads do.
   The one exception is a task an edit made manual, in a run or not, failed or
   waiting on the user: it has nothing to retry, so it is the manual task it now
   is (`releaseMadeManual`). A runner still at a question keeps its wait while it
-  lives, to be answered; a load releases what it left, where both saved forms
-  are read.
+  lives, to be answered; its end releases what it left, and so does a load, where
+  both saved forms are read.
 - **A task running when the host died is failed.** Nothing runs when a plan comes
   off disk, so `failInterruptedTasks` fails a task saved in progress where both
   saved forms are read, `loadSession` and `loadState`. Its reason says it was
@@ -437,3 +438,4 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
 - 2026-10-31 — a reverted task is listed behind its dependencies, with what the seam takes then (ADR-0054).
 - 2026-10-31 — a check between rounds nothing will run is listed, a carried loop is an open run for its own tasks, Execute gives its fresh chance to hand-started work it takes in, and an edit keeps every wait and frees a failed task it made manual (#30).
 - 2026-10-31 — a task an edit made manual is released from a wait with no runner behind it too, at the edit or at a load, and a check whose dependency holds its next round names it rather than offering a start that refuses.
+- 2026-10-31 — a stranded check behind a dependency offers no Continue either, and the seam refuses one; a task made manual is released when the runner it kept its wait for ends; a reverted task is listed behind its loop's check too.

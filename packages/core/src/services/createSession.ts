@@ -930,8 +930,10 @@ export class Session {
    * timeline says autorun started it. Read now, not when the turn opened: the
    * switch is the user's to flip at any time. Work already live, a task the
    * planner started with `run_task` in that turn, joins it as one scheduled
-   * run, so autorun skips only a run the scheduler already drives; in Guarded
-   * only one at work, and the seam keeps it out of any other live work there.
+   * run, in Full; the seam keeps it out of live work in Guarded. A scheduled
+   * run has the plan's tasks, waiting on a person or a reset or not, so autorun
+   * skips it, and starts nothing over what a usage limit holds: a restart
+   * would take back that run's pause and failures (ADR-0053).
    * A plan it could not start says why, and a Stop since the plan was submitted
    * withdraws the start as it withdraws any (ADR-0029), unless a run opened
    * after that Stop has the plan already. What failed in that turn stays
@@ -943,7 +945,7 @@ export class Session {
       if (!effects.ranSinceStop) this.notice('info', 'Autorun did not start the plan: the run was stopped after the planner submitted it. Execute it to start it.');
       return;
     }
-    if (this.orchestrator.isScheduling && (this.config.autonomousMode || this.orchestrator.hasLiveWork)) return;
+    if (this.orchestrator.scheduledRun) return;
     void this.execute({ command: 'run_plan' }, { kind: 'autorun', leavesFailed: effects.failedSince(this.failedTasks()) })
       .then((outcome) => { if (!outcome.ok) this.notice('warn', `Autorun could not start the plan: ${outcome.message}`); })
       .catch((err: unknown) => this.notice('error', `Autorun could not start the plan: ${err instanceof Error ? err.message : String(err)}`));
@@ -966,6 +968,7 @@ export class Session {
       scheduling: () => this.orchestrator.isScheduling,
       startsHeld: () => this.orchestrator.startsHeld,
       hasLiveWork: () => this.orchestrator.hasLiveWork,
+      runHeld: () => this.orchestrator.runHeld,
       startsPending: () => this.orchestrator.startsPending,
       submittedStartWaits: () => this.turnEffects.startWaits && this.userRunSettings().autorun,
       loopRunsOn: (taskId) => this.orchestrator.loopRunsOn(taskId),
