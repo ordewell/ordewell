@@ -212,6 +212,18 @@ describe('ordewell run on a loop (ADR-0045)', () => {
     expect(out).toContain('#0002 pending · ↻ runs if #0001 fails');
   });
 
+  it('shows a check nothing will run as stopped, not as fixing', async () => {
+    const out = await follow([
+      { type: 'status_update', tasks: [
+        { id: 'task-0001', status: 'failed', verdict: found, loop, loopStranded: true },
+        { id: 'task-0002', status: 'pending', verdict: null },
+      ] },
+      { type: 'execution_complete', summary: { total: 2, completed: 0, failed: 0, blocked: 0, skipped: 0 } },
+    ]);
+
+    expect(out).toContain('#0001 failed: FAIL: two tests fail · ↻ stopped in round 1 of 3');
+  });
+
   it('shows a check between rounds as fixing, not as failed, with the round its body fixes', async () => {
     const out = await follow([
       { type: 'status_update', tasks: [

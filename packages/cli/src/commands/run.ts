@@ -15,13 +15,13 @@ const refOf = (id: string): string => `#${id.slice(-4)}`;
  * What a loop's check or body task says of its place in the loop (ADR-0045),
  * read off the statuses the stream has sent; null for a task in no loop.
  * `repeating` is whether a check between rounds goes on, which a body task
- * that failed or was skipped stops.
+ * that failed or was skipped stops, and so does nothing being left to run it.
  */
 function loopNote(task: SerializedTaskStatus, all: readonly SerializedTaskStatus[]): { text: string; repeating: boolean } | null {
   if (task.loop) {
     const check = { id: task.id, status: task.status, loop: task.loop, loopRound: task.loopRound, ...(task.verdict ? { verdict: task.verdict } : {}) };
     const halted = task.loop.body.some((id) => ['failed', 'skipped'].includes(all.find((t) => t.id === id)?.status ?? ''));
-    const state = loopCheckState(check, !halted);
+    const state = loopCheckState(check, !halted && !task.loopStranded);
     return { text: loopCheckLabel(check, state), repeating: state === 'repeating' };
   }
   const check = all.find((t) => t.loop?.body.includes(task.id));

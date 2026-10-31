@@ -72,10 +72,11 @@ it on, since the seam refuses it otherwise
 | `files-changed` | `awaiting_user`, `files-changed` | Retry, Skip, Mark complete | as above |
 | `usage-limit` | `awaiting_user`, `usage-limit`, no `resumeAt` | Resume now, or Retry with no session to resume; Skip, Mark complete | `retry_task`, as above |
 | `failed` | `failed`, no loop going on | Retry, Continue, Skip, Mark complete | as above |
+| `failed` | A loop's check between rounds nothing will run ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md) L5), its body landed | Start its next round, Retry, Continue, Skip, Mark complete | `run_task`, then as above |
 | `out-of-rounds` | A loop's check, `outOfRounds` | Retry, Continue, Skip, Mark complete | as above; a retry starts its rounds over ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md)) |
 | `merge-gate` | Not started, held by nothing but its gate | Merge all; Force start, or Mark complete for a user task | `merge_all`, `force_start`, `mark_complete` |
 | `on-hold` | Not started, held by nothing but its hold | Retry, Force start; Force start alone for a reverted task behind a dependency, whose retry the seam refuses until that has finished; Mark complete alone for a user task, which no runner starts | `retry_task`, `force_start`, `mark_complete` |
-| `unapproved` | Not started, nothing else holds it, added since the plan was approved ([ADR-0035](0035-effects-are-consented-and-recorded.md)) | Start | `run_task` |
+| `unapproved` | Not started, nothing else holds it, added since the plan was approved ([ADR-0035](0035-effects-are-consented-and-recorded.md)), or waited on by a loop carried on | Start | `run_task` |
 | `no-prompt` | Not started, nothing to run | Skip | `skip_task` |
 | `by-hand` | A user task nothing else holds | Mark complete | `mark_complete` |
 | `merge-all` | Landed work, nothing moving and no gate listed | Merge all | `merge_all` |
@@ -83,7 +84,12 @@ it on, since the seam refuses it otherwise
 
 `merge-gate`, `on-hold`, `unapproved`, `no-prompt` and `by-hand` are listed only
 in an open run: one scheduling, held, or ended on a failure a retry continues.
-Outside one nothing was going to start them, so nothing is late. A reverted task
+Outside one nothing was going to start them, so nothing is late. A loop carried
+on with no scheduler
+([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md) L5) is an open
+run for its own tasks alone: the rest of the plan does not start, so nothing
+there is late. In a plan nobody approved, its task is `unapproved` all the same,
+since the loop's next step waits on it. A reverted task
 ([ADR-0054](../isolation/0054-a-landed-task-reverts-on-the-integration-branch-before-merge-all.md))
 is the exception: it is `on-hold` in any run, because the user took it back,
 usually after the last task landed, and whether it runs again is theirs to say.
@@ -105,13 +111,13 @@ to compile until someone decides it.
 | A usage-limit pause with `resumeAt` | It resumes by itself at the reset. |
 | A conflict repair that will start by itself | It waits for a slot, a planner's turn or a usage limit ([ADR-0015](../isolation/0015-conflict-repair.md)). A Stop or a reload leaves its conflict waiting, which is listed. |
 | A conflict with a resolver out to it | The resolver moves it on, or is listed in its place. |
-| A loop's check between rounds whose loop goes on | The loop runs it again ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md) L3). |
+| A loop's check between rounds whose loop goes on | Something will run it again: a scheduler, the one a usage-limit reset gives back, or its carried loop ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md) L3, L5). After a Stop or a reload nothing will, so it is listed as `failed`, and its row says so. |
 | A loop's check stopped by a body task that failed or is blocked | Retrying that task lets the loop go on, so the task is listed and the check would be the same wait twice. A check stopped by a skipped body task alone is listed as `failed`: nothing else speaks for it. |
 | A blocked task | Its cause is listed, once ([ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)). |
 | `dependencies`, `queued` | Work still at work, which ends by itself, or a cause listed in its place. |
 | `loop-check` | A body task runs only if its check fails. |
 | `usage-limit`, `start-hold`, `merging`, `completing`, `resolver` | Each clears by itself, or its cause is listed. |
-| `started`, `repeating` | A task under way, or a check its loop starts again. |
+| `started`, `repeating` | A task under way, or a check between rounds, listed above by whether anything will run it. |
 | A task with any of these besides a wait of its own | Its turn comes once they clear: it waits on a person only then. |
 | A merge gate while Ordewell merges at gates by itself | The scheduler merges it, unless a merge stopped, which lists it again. |
 | Landed work while anything could still land more | Merge all is offered at a gate or once nothing moves. |
@@ -163,13 +169,24 @@ reads do.
   listed with its usual options. A loop's check keeps its round, so one out of
   rounds is listed as `out-of-rounds`, and one between rounds is read as it was
   before the load
-  ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md) L5).
+  ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md) L5), and
+  listed, since no run comes back to run it.
 - **The fresh chance is given where the user asks for it.** A retry starts that
   one task: a load brings no run back, so what its pass unblocks waits for
   Execute. Execute readies every failed task (`PlanStore.resetForRun`), a loop's
   failed check with its rounds started over (L7), and leaves one between rounds
-  for its body to run first. An edit outside a run asks for neither, and leaves
-  a failure as it is (`resetForRun({ edited: true })`).
+  for its body to run first. With tasks started by hand at work it does the same
+  as it takes them into the plan's run (`PlanStore.readyFailed`). A scheduled run
+  under way keeps its failures: a retry continues them
+  ([ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)), and Execute only
+  approves what waits in it. Neither a planner's `run_plan` nor autorun asks: a
+  join leaves a failure as it is, and autorun's run leaves what failed in the
+  reply it follows
+  ([ADR-0030](0030-global-run-settings.md)). An edit outside a run asks for neither,
+  and leaves a failure and a wait as they are (`resetForRun({ edited: true })`).
+  The one exception is a failed task an edit made manual, in a run or not: it has
+  nothing to retry, so it is the manual task it now is
+  (`PlanStore.releaseMadeManual`).
 - **A task running when the host died is failed.** Nothing runs when a plan comes
   off disk, so `failInterruptedTasks` fails a task saved in progress where both
   saved forms are read, `loadSession` and `loadState`. Its reason says it was
@@ -414,3 +431,4 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
 - 2026-10-31 — the notify command runs through a bounded queue, two at a time, and a host's teardown stops one still running (#30).
 - 2026-10-31 — a repair that will start by itself is left out, a conflict with a resolver nothing will start offers to start it, and a load lists what waited for a repair (ADR-0015).
 - 2026-10-31 — a reverted task is listed behind its dependencies, with what the seam takes then (ADR-0054).
+- 2026-10-31 — a check between rounds nothing will run is listed, a carried loop is an open run for its own tasks, Execute gives its fresh chance to hand-started work it takes in, and an edit keeps every wait and frees a failed task it made manual (#30).

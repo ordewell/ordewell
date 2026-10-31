@@ -856,6 +856,7 @@ export class Session {
   escalations(): Escalation[] {
     if (!this.plan) return [];
     const { scheduled, resumable, advancesOnItsOwn } = this.orchestrator.activity;
+    const carried = this.orchestrator.carriedTasks();
     return escalations({
       tasks: this.store.planTasks,
       waits: this.orchestrator.planStartWaits(),
@@ -866,6 +867,8 @@ export class Session {
       waitsForApproval: (taskId) => this.record.waitsForApproval(taskId),
       startQueued: (taskId) => this.orchestrator.startQueuedFor(taskId),
       holdReason: (taskId) => this.orchestrator.holdReason(taskId),
+      loopRunsOn: (taskId) => this.orchestrator.loopRunsOn(taskId),
+      carried: (taskId) => carried.has(taskId),
       run: {
         open: scheduled || resumable,
         advancing: advancesOnItsOwn,
@@ -886,9 +889,14 @@ export class Session {
 
   /** Run one planner turn with its own {@link TurnEffects}, which only a turn that lands hands back. */
   private async openTurn<T>(turn: () => Promise<T>): Promise<{ landed: T; effects: TurnEffects }> {
-    const effects = new TurnEffects();
+    const effects = new TurnEffects(this.failedTasks());
     this.turnEffects = effects;
     return { landed: await turn(), effects };
+  }
+
+  /** Each failed task, with the attempt that failed. */
+  private failedTasks(): Map<string, number> {
+    return new Map(this.store.allTasks.filter((t) => t.status === 'failed').map((t) => [t.id, this.orchestrator.latestAttempt(t)]));
   }
 
   /**
@@ -899,12 +907,18 @@ export class Session {
    * planner started with `run_task` in that turn, joins it as one scheduled
    * run, so autorun skips only a run the scheduler already drives; in Guarded
    * only one at work, and the seam keeps it out of any other live work there.
-   * A plan it could not start says why.
+   * A plan it could not start says why, and a Stop since the plan was submitted
+   * withdraws the start as it withdraws any (ADR-0029). What failed in that
+   * turn stays failed: the fresh chance is the user's to ask for (ADR-0053).
    */
   private autorunSubmitted(effects: TurnEffects): void {
     if (!effects.planSubmitted || !this.userRunSettings().autorun) return;
+    if (effects.submissionStopped) {
+      this.notice('info', 'Autorun did not start the plan: the run was stopped after the planner submitted it. Execute it to start it.');
+      return;
+    }
     if (this.orchestrator.isScheduling && (this.config.autonomousMode || this.orchestrator.hasLiveWork)) return;
-    void this.execute({ command: 'run_plan' }, { kind: 'autorun' })
+    void this.execute({ command: 'run_plan' }, { kind: 'autorun', leavesFailed: effects.failedSince(this.failedTasks()) })
       .then((outcome) => { if (!outcome.ok) this.notice('warn', `Autorun could not start the plan: ${outcome.message}`); })
       .catch((err: unknown) => this.notice('error', `Autorun could not start the plan: ${err instanceof Error ? err.message : String(err)}`));
   }
@@ -938,8 +952,9 @@ export class Session {
       waitingRequests: (taskId) => this.approvals.outstanding()
         .filter(({ request }) => isRunnerApproval(request) && request.taskId === taskId)
         .map(({ id, request }) => ({ id, subject: request.subject })),
-      runPlan: (actor) => this.runWholePlan(runOrigin(actor)),
+      runPlan: (actor) => this.runWholePlan(runOrigin(actor), actor.kind === 'autorun' ? actor.leavesFailed : undefined),
       joinRun: (approved, left) => this.joinRun(approved, left),
+      readyFailed: () => this.orchestrator.readyFailed(),
       startTask: (taskId, actor) => this.startOneTask(taskId, runOrigin(actor)),
       forceStart: (taskId) => this.withSave(() => this.orchestrator.forceStartTask(taskId, 'user')),
       markComplete: (taskId) => this.withSave(() => this.orchestrator.markTaskComplete(taskId)),
@@ -1921,7 +1936,7 @@ export class Session {
    * tasks, and `rearm`, the one op meant to change a status, must stand.
    */
   private adoptPlannerTasks(tasks: readonly Task[], how: 'edit' | 'commit'): number {
-    this.turnEffects.landed(how);
+    this.turnEffects.landed(how, this.orchestrator.admittedNow());
     // A runner the planner was allowed to use joins the plan as its tasks land (#69).
     for (const runner of runnersOf(tasks)) this.editor.admitRunner(runner, this.catalog.known(runner));
     const runners = this.plan!.runners;
@@ -2013,7 +2028,7 @@ export class Session {
     return this.plan;
   }
 
-  private runWholePlan(origin: RunOrigin): Promise<void> {
+  private runWholePlan(origin: RunOrigin, keepFailed?: ReadonlySet<string>): Promise<void> {
     // Before the first await: two Executes can arrive while the run is still
     // opening, and the second must join the one under way rather than load the
     // plan over it and spawn its tasks a second time.
@@ -2023,7 +2038,7 @@ export class Session {
       // Approved first: the scheduler reads the record at each start.
       this.record.approvePlan();
       plan.status = 'approved';
-      await this.orchestrator.beginRun(origin);
+      await this.orchestrator.beginRun(origin, keepFailed);
     });
     this.runOpening = opening;
     return opening.finally(() => {

@@ -101,7 +101,9 @@ starting as usual.
   reconciled into that run rather than reloaded over it
   (`TaskOrchestrator.adoptEdit`), so the failed task stays failed: an edit is
   not a retry, and a reload would drop the review approval the retry continues.
-  An edit outside a run leaves a failure as it is too.
+  An edit outside a run leaves a failure as it is too. A failed task an edit
+  makes manual is the exception, in a run or not: it has nothing to retry, so it
+  waits as a manual task does.
   Loading another plan, starting a run (`beginRun`) or stopping one forgets it.
   Every one of these is an event of the run's state, and one pure function
   (`nextRunState`, `packages/core/src/services/runState.ts`) says what each
@@ -173,3 +175,4 @@ attempt. This decides what a failure stops, not how a verdict is reached.
 - 2026-10-24 — the run's state changes only through `nextRunState`; Execute begins a run with `beginRun` and a planner edit is adopted with `adoptEdit`; a retry while a usage-limit pause holds a run that ended on a failure keeps it held until the reset.
 - 2026-10-24 — a hold set by a stop or a taken-back completion survives starting the plan again, the user's Stop of the run and an edit of the same plan; it was cleared by all three.
 - 2026-10-31 — a load and an edit outside a run leave a failed task failed, so its block stands; Execute gives the fresh chance ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
+- 2026-10-31 — a failed task an edit makes manual has nothing to retry, so it stops being failed, in a run or not ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).

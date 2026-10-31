@@ -22,7 +22,7 @@ export interface SessionEventRelayDeps {
   /** Where isolation notices go, for a host whose notifications are not seen by the user. */
   onNotice?: (notice: SessionNotice) => void;
   store: Pick<PlanStore, 'allTasks' | 'snapshot'>;
-  orchestrator: Pick<TaskOrchestrator, 'getIdleSince' | 'getCompletionReceipt' | 'getToolsAttaching' | 'getQueuedTaskMessages' | 'getMergeGate' | 'holdReason' | 'runMergeView' | 'activity' | 'taskIsolation'>;
+  orchestrator: Pick<TaskOrchestrator, 'getIdleSince' | 'getCompletionReceipt' | 'getToolsAttaching' | 'getQueuedTaskMessages' | 'getMergeGate' | 'holdReason' | 'loopStranded' | 'runMergeView' | 'activity' | 'taskIsolation'>;
   /** Shared with the Session, which snapshots, restores and clears it. */
   usage: PlannerUsageLedger;
   /** How many of a task's runner requests wait for an answer (ADR-0018, A1). */
@@ -146,6 +146,7 @@ export class SessionEventRelay {
         this.orchestrator.holdReason(t.id),
         this.orchestrator.getCompletionReceipt(t.id),
         this.orchestrator.getToolsAttaching(t.id),
+        this.orchestrator.loopStranded(t.id),
       )),
       ...(runMerge ? { runMerge } : {}),
       activity: this.orchestrator.activity,

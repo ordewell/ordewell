@@ -107,6 +107,7 @@ function runTaskToView(t: RunTask): TaskView {
     awaitingApproval: t.awaitingApproval,
     ...(t.waitsForApproval === true ? { waitsForApproval: true } : {}),
     ...(typeof t.holdReason === 'string' && t.holdReason.trim() ? { holdReason: sanitize(t.holdReason) } : {}),
+    ...(t.loopStranded === true ? { loopStranded: true } : {}),
     ...(t.ops === true ? { ops: true } : {}),
     ...(t.research === true ? { research: true } : {}),
     // Drawn through the same sanitize/wrap as any other plan text; keeping the

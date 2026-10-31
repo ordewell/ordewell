@@ -95,12 +95,15 @@ function printOneSession(
   // A hold is live session state; a saved plan has none, and a surface does not rebuild one from it.
   const holds = new Map<string, string>();
   const repairs = new Map<string, string>();
+  const stranded = new Set<string>();
   for (const { task } of walkPlan(run?.tasks ?? [])) {
     if (task.holdReason) holds.set(task.id, task.holdReason);
+    if (task.loopStranded) stranded.add(task.id);
     if (task.isolation?.state === 'conflict' && task.isolation.repairWaits) repairs.set(task.id, repairWaitLabel(task.isolation.repairWaits));
   }
   // A check between rounds is stored failed, and no failure while its loop goes on (ADR-0045 L3).
-  const count = (status: string) => everyTask.filter((t) => (t.status === status && !(status === 'failed' && repeating.has(t.id))) || (status === 'blocked' && blocked.has(t.id))).length;
+  const goesOn = (id: string) => repeating.has(id) && !stranded.has(id);
+  const count = (status: string) => everyTask.filter((t) => (t.status === status && !(status === 'failed' && goesOn(t.id))) || (status === 'blocked' && blocked.has(t.id))).length;
 
   console.log(`Session:  ${sessionId}`);
   console.log(`Goal:     ${meta.goal}`);
@@ -119,8 +122,8 @@ function printOneSession(
   for (const t of allTasks) {
     const model = t.assignedModel ? ` (${t.assignedModel.modelLabel})` : '';
     const shortId = (t.id ?? '').slice(-8);
-    const row = taskRowView({ ...t, dependencies: t.dependencies ?? [], waitsForApproval: waitsForApproval(t, record), holdReason: holds.get(t.id) }, { tasks: allTasks, runnerScope });
-    const icon = iconFor(blocked.has(t.id) ? 'blocked' : repeating.has(t.id) ? 'pending' : t.status);
+    const row = taskRowView({ ...t, dependencies: t.dependencies ?? [], waitsForApproval: waitsForApproval(t, record), holdReason: holds.get(t.id), loopStranded: stranded.has(t.id) }, { tasks: allTasks, runnerScope });
+    const icon = iconFor(blocked.has(t.id) ? 'blocked' : goesOn(t.id) ? 'pending' : t.status);
     console.log(`  ${taskOrderLabel(t).padStart(2)}. ${icon} [${shortId}]${row.kind === 'script' ? ' [SCR]' : row.research ? ' [RES]' : ''} ${t.title}${model}`);
     // What the user approves and what runs: the body as the plan holds it, not a summary (ADR-0035).
     if (t.type === 'script') {

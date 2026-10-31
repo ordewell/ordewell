@@ -25,7 +25,7 @@ function setup(holds: ReadonlyMap<string, string> = new Map()) {
     broadcast: (m) => sent.push(m),
     onNotice: (n) => notices.push(n),
     store,
-    orchestrator: { getIdleSince: () => null, getCompletionReceipt: () => null, getToolsAttaching: () => null, getQueuedTaskMessages: () => [], getMergeGate: () => [], holdReason: (id) => holds.get(id) ?? null, runMergeView: () => null, activity: { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false }, taskIsolation: () => null },
+    orchestrator: { getIdleSince: () => null, getCompletionReceipt: () => null, getToolsAttaching: () => null, getQueuedTaskMessages: () => [], getMergeGate: () => [], holdReason: (id) => holds.get(id) ?? null, loopStranded: (id) => id === 't2', runMergeView: () => null, activity: { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false }, taskIsolation: () => null },
     usage,
   });
   const types = () => sent.map((m) => m.type);
@@ -53,6 +53,16 @@ describe('SessionEventRelay', () => {
     const [update] = sent;
     expect(update.type === 'status_update' && update.tasks.find((t) => t.id === 't3')?.holdReason)
       .toBe('could not connect to Ordewell\'s tools; start it again');
+  });
+
+  it('tells every surface of a loop\'s check nothing will run, and of no other task', () => {
+    const { relay, sent } = setup();
+
+    relay.status(plan());
+
+    const [update] = sent;
+    const tasks = update.type === 'status_update' ? update.tasks : [];
+    expect(tasks.filter((t) => t.loopStranded).map((t) => t.id)).toEqual(['t2']);
   });
 
   it('carries what marks a research task to every surface', () => {

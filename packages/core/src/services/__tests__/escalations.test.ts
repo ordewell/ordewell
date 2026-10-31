@@ -32,6 +32,10 @@ interface Setup {
   /** Conflicted task id → the task out to resolve it. */
   resolvers?: Record<string, string>;
   startsAlone?: string[];
+  /** Loops' checks between rounds that nothing will run. */
+  stranded?: string[];
+  /** Tasks a loop carried on with no scheduler starts. */
+  carried?: string[];
 }
 
 function listFor(tasks: Task[], setup: Setup = {}): Escalation[] {
@@ -67,10 +71,46 @@ function listFor(tasks: Task[], setup: Setup = {}): Escalation[] {
     waitsForApproval: (id) => (setup.added ?? []).includes(id),
     startQueued: (id) => (setup.startsAlone ?? []).includes(id),
     holdReason: (id) => onHold.get(id),
+    loopRunsOn: (id) => !(setup.stranded ?? []).includes(id),
+    carried: (id) => (setup.carried ?? []).includes(id),
     run: { ...OPEN, ...setup.run },
   };
   return escalations(input);
 }
+
+describe('a loop\'s check between rounds that nothing will run (ADR-0045 L5)', () => {
+  const check = (bodyStatus: Task['status'] = 'completed') => [
+    task('c', 1, { status: 'failed', verdict: failedVerdict('failed'), loop: { body: ['b'], maxRounds: 3 } }),
+    task('b', 2, { status: bodyStatus, dependencies: ['c'] }),
+  ];
+
+  it('offers its next round once its body has landed', () => {
+    const [entry] = listFor(check(), { stranded: ['c'] });
+    expect(entry).toMatchObject({ kind: 'failed', reason: 'Its fix has landed, and nothing runs its round 2 of 3.' });
+    expect(entry.options[0]).toEqual({ id: 'run', label: 'Start round 2 of 3' });
+    expect(entry.options.map((o) => o.id)).toContain('retry');
+  });
+
+  it('says what is left before that, with no start the seam would refuse', () => {
+    const [entry] = listFor(check('pending'), { stranded: ['c'] });
+    expect(entry.reason).toBe('Its loop stopped between rounds: nothing runs it again, and #2 has not landed. Execute the plan and the loop goes on.');
+    expect(entry.options.map((o) => o.id)).not.toContain('run');
+  });
+
+  it('is left out once anything will run it', () => {
+    expect(listFor(check('pending')).filter((e) => e.task?.id === 'c')).toEqual([]);
+  });
+});
+
+describe('a loop carried on with no scheduler (ADR-0045 L5)', () => {
+  const closed = { run: { open: false } };
+  const body = () => [task('b', 1, { status: 'approved' })];
+
+  it('opens the run for its own tasks, and no others', () => {
+    expect(listFor(body(), { ...closed, added: ['b'] })).toEqual([]);
+    expect(listFor(body(), { ...closed, added: ['b'], carried: ['b'] }).map((e) => e.kind)).toEqual(['unapproved']);
+  });
+});
 
 /** Each row's id, and the option ids it offers: what the table pins. */
 const shape = (list: readonly Escalation[]) => list.map(({ id, kind, options }) => ({ id, kind, options: options.map((o) => o.id) }));

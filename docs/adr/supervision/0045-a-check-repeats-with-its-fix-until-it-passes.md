@@ -114,11 +114,14 @@ round *r* and round *r* + 1 the body runs once.
   what its loop owes, the body and then the next round with the count kept,
   and nothing else. Its other dependents and the rest of the plan do not start.
   The run stays open while the loop goes on, as a scheduled run stays open on
-  what it waits for, and when the loop ends it settles as a lone start does.
+  what it waits for, so a task of the loop that waits on the user is listed
+  ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)),
+  and when the loop ends it settles as a lone start does.
   What is carried is held in memory, not on the plan: a Stop ends it and a
   reload does not bring it back, so nothing of that loop starts by itself
   afterwards, and a body task started by hand then runs alone. Such a check is
-  not stranded: a start of it runs its next round (L7).
+  not stranded: its row says nothing runs it, it is listed as `failed`, and a
+  start of it runs its next round (L7).
   A check started again from outside while a fix of its body is still at work
   or has passed and not landed (a retry, a force start) waits for that fix to
   finish and land, as it waits on its dependencies, so it checks the fix
@@ -286,3 +289,4 @@ as check or body; a user editing a loop's `loop` field by hand from a surface.
 - 2026-10-30 — #39 closed: a check is a task in the plan, so no declared check is planned.
 - 2026-10-31 — a load no longer starts a failed check's rounds over; Execute and a retry do (L5, L7; [ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
 - 2026-10-31 — a loop's rounds run however its check was started, in a run carrying on the loop alone until it ends or a Stop (L5); a start of a check nothing will run keeps the count, and the refusal stands only while something will (L7).
+- 2026-10-31 — a check nothing will run is drawn and listed as the failure it is, with its next round offered, and what a carried loop waits on is listed (L5; [ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).

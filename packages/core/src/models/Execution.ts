@@ -18,8 +18,8 @@ export type ExecutionActor =
   | { kind: 'user' }
   | { kind: 'planner-turn' }
   | { kind: 'supervisor'; level: SupervisorLevel }
-  /** The user's standing instruction to start each plan the planner submits (ADR-0030). */
-  | { kind: 'autorun' };
+  /** The user's standing instruction to start each plan the planner submits (ADR-0030); `leavesFailed` is what failed in that reply, which it does not run again. */
+  | { kind: 'autorun'; leavesFailed?: ReadonlySet<string> };
 
 export type ExecutionCommandName =
   | 'run_plan'

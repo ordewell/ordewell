@@ -78,6 +78,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
     isolation,
     mergeGate: run?.mergeGate,
     holdReason: run?.holdReason,
+    loopStranded: run?.loopStranded === true,
     continuable: run?.continuable === true,
     waitsForApproval: run?.waitsForApproval === true,
     attempted: run?.attempted ?? task.attempted,

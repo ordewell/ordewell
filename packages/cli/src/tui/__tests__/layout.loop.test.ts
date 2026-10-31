@@ -80,6 +80,15 @@ describe('a loop from the run view', () => {
     expect(findTask(state.tasks, 'f')?.loop).toBeUndefined();
     expect(frame(state)).toContain('↻ round 2 of 3: fixing');
   });
+
+  it('draws a check nothing will run as stopped, off the status stream, and no longer once a run takes it back', () => {
+    const tasks = (loopStranded: boolean) => [{ id: 'c', status: 'failed', loopRound: 1, loop: { body: ['f'], maxRounds: 3 }, verdict: { outcome: 'fail', reason: 'two problems', checks: [], reported: 'failed' }, ...(loopStranded ? { loopStranded: true } : {}) }] as Extract<Action, { type: 'statusUpdate' }>['tasks'];
+    const stranded = reduce(loaded(), { type: 'statusUpdate', sessionId: 's1', tasks: tasks(true) }).state;
+
+    expect(frame(stranded)).toContain('↻ stopped in round 1 of 3 · nothing runs it');
+    expect(frame(stranded)).not.toContain('fixing');
+    expect(frame(reduce(stranded, { type: 'statusUpdate', sessionId: 's1', tasks: tasks(false) }).state)).toContain('↻ round 1 of 3: fixing');
+  });
 });
 
 describe('removing a task in a loop (ADR-0045 L8)', () => {

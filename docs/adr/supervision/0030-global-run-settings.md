@@ -235,6 +235,19 @@ wrong", that users want in either combination.
   not join, since a join would approve a script task the user was never shown
   ([ADR-0035](0035-effects-are-consented-and-recorded.md)). The refusal is in
   the timeline, and whenever autorun cannot start a plan a notice says why.
+- **A Stop since the plan was submitted wins.** Autorun's start is admitted as
+  the plan lands, so a Stop after that withdraws it as it withdraws any start
+  not yet claimed ([ADR-0029](0029-the-supervisor.md)): the run stays stopped, the
+  plan stays as it is, and a notice says so. A plan submitted after the Stop is
+  a new start.
+- **A failure in the reply stays a failure.** A task or script task that failed
+  in the reply is not run again by the run that follows it, on either path: the
+  fresh chance is the user's to ask for
+  ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)),
+  and a failure nobody saw retried would go unread. It is listed, and blocks its
+  dependents, as any does. A task that failed before the reply gets the chance a
+  run gives, as it does from Execute: resubmitting a plan after a failed run is
+  asking for it again.
 - **The approval and the start are recorded** in the timeline as `run_plan`
   through the command seam, with autorun as who asked, and drawn as
   "Started by autorun".
@@ -447,3 +460,4 @@ the daemon reads it from there at generation.
 - 2026-10-26 — a start in the reply that adds the task goes through at once: the edit commits as its call answers (ADR-0022, P2).
 - 2026-10-27 — an open session shows and keeps its own run settings, seeded from `settings.json` when it opens; another session's change no longer moves its panel, and the file is the default the next session opens with.
 - 2026-10-31 — in Full with autorun a planner turn or an Act supervisor may start anything, on a first plan too, and such a start makes the plan approved; autorun joins live work in Full rather than doing nothing, and says why when it cannot start a plan.
+- 2026-10-31 — a Stop since the plan was submitted withdraws autorun's start, and what failed in the reply stays failed.
