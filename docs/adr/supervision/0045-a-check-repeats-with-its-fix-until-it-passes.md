@@ -105,12 +105,25 @@ round *r* and round *r* + 1 the body runs once.
   mid-round: a plan load and a new run keep a check between rounds failed
   rather than giving it the fresh chance a failed task gets, so its body runs
   first. The rounds take the one start rule: approval, holds, the Merge-all
-  exclusion of ops work and the merge gate apply to them as to any start, and
-  a Stop ends a round's running attempt as it ends any.
+  exclusion of ops work, usage limits and the merge gate apply to them as to
+  any start, a task not approved waits for approval (see *Consent*), and a Stop
+  ends a round's running attempt as it ends any.
+  They run however the check was started. A check that fails a round in a run
+  the scheduler is not driving, started by `run_task` or a force start, is
+  carried on by that run (`TaskOrchestrator.carriedLoops`): each tick starts
+  what its loop owes, the body and then the next round with the count kept,
+  and nothing else. Its other dependents and the rest of the plan do not start.
+  The run stays open while the loop goes on, as a scheduled run stays open on
+  what it waits for, and when the loop ends it settles as a lone start does.
+  What is carried is held in memory, not on the plan: a Stop ends it and a
+  reload does not bring it back, so nothing of that loop starts by itself
+  afterwards, and a body task started by hand then runs alone. Such a check is
+  not stranded: a start of it runs its next round (L7).
   A check started again from outside while a fix of its body is still at work
   or has passed and not landed (a retry, a force start) waits for that fix to
   finish and land, as it waits on its dependencies, so it checks the fix
-  rather than racing it. It then runs as round 1 of a new set of rounds (L7).
+  rather than racing it. It then runs as round 1 of a new set of rounds (L7),
+  or, with nothing else left to run it, as its next round.
 - **A loop ends once (L6).** A pass, a Mark complete or a skip of the check, or
   its last round failing, closes the loop: what of the body has not run or did
   not pass ends skipped with why, and a body task at work is left to finish.
@@ -127,14 +140,30 @@ round *r* and round *r* + 1 the body runs once.
 - **What stops a loop, and what starts its rounds over (L7).** A body task that
   fails, is skipped or is blocked stops the loop: the check is then the
   failure it is stored as, and its dependents are blocked until what stopped
-  the loop is retried and passes. A retry of the check — the user's, a
+  the loop is retried and passes. A carried loop stops the same way: its run
+  settles as a lone start does, and a retry that passes resumes the loop,
+  unless a Stop or a reload came first. A retry of the check — the user's, a
   `rearm`, a force start after a failure, a fresh chance on load or Execute —
   starts a new set of rounds: `loopRound` goes, and the body waits for the
   check again. The loop's own run of the check is no retry: the retry limit
   and the identical-retry guard (ADR-0029) count none of its rounds. A resume
-  after a usage limit goes on in the round it was in. A supervisor or planner
-  start of a check between rounds is refused, with the line that the loop runs
-  it again itself, and the supervisor does not skip it: it needs no one.
+  after a usage limit goes on in the round it was in.
+  A start of a check between rounds depends on whether anything will run it
+  (`TaskOrchestrator.loopRunsOn`): a scheduler, the one a usage-limit reset
+  gives back, or its carried loop. While something will, a supervisor's or
+  planner's start, and anyone's `run_task`, is refused with the line that the
+  loop runs it again itself, and the supervisor does not skip it: it needs no
+  one. When nothing will, after a Stop or a reload with no run open, the
+  refusal would strand it. Once its body has passed and landed, a `run_task`,
+  a supervisor's or planner's fresh `retry_task` or a force start runs its next
+  round, keeping the count, and no guard counts it as a retry; its loop then
+  goes on as any check started by hand does. Before that the same starts but
+  the force start are refused with what it waits for, which says that nothing
+  runs it on its own. A continue, which would start its rounds over, is refused
+  to the supervisor and the planner, and points at the start. The supervisor
+  may skip such a check as it may any failed task. The user's Retry still
+  starts a new set, and so does a force start of a check whose body is neither
+  landed nor at work.
   A new round revives only the skips the loop made itself, the body that went
   unrun when the loop closed; a body task the user skipped stays skipped, and
   keeps stopping the loop, until they retry it.
@@ -203,6 +232,19 @@ as check or body; a user editing a loop's `loop` field by hand from a surface.
 - **The loop approving its body each round.** Rejected: approval is the user's
   word on a task, kept until the task changes or leaves the plan; a body task
   the user never approved must not run because a loop asked.
+- **Making a hand start of a check a scheduled run.** Rejected: its loop would
+  go on, but so would the check's dependents and the rest of the plan, and
+  starting one task by hand starts that task alone. A tick with no scheduler
+  starts the carried loops' tasks and nothing else.
+- **Saving a carried loop on the plan.** Rejected: a reload would start work
+  with nobody asking, which loading never does (ADR-0044), and a Stop would
+  have a field to clear on every path. A check between rounds is already
+  saved, so a start of it picks the count up.
+- **Letting a body task started by hand after a Stop carry the loop on.**
+  Rejected: a Stop ends the loop, and starting one task starts that task alone.
+  The check's next round is one start away, with the count kept.
+- **Leaving the refusal and pointing at a rearm.** Rejected: that is what ran,
+  and a rearm starts the count again, so `maxRounds` stops bounding the spend.
 - **Fixing up a loop whose check is removed.** Rejected: its body would become
   tasks that run unconditionally, which is not what anyone removed.
 
@@ -242,3 +284,4 @@ as check or body; a user editing a loop's `loop` field by hand from a surface.
 - 2026-10-22 — implemented handoffs in both loop directions and scoped reads between check and body (step 3, L1; ADR-0047, #120).
 - 2026-10-26 — the planner prompt and the diagnose skill add a loop only for an explicit iterate-until goal or a specific acceptance gate, not for routine validation.
 - 2026-10-30 — #39 closed: a check is a task in the plan, so no declared check is planned.
+- 2026-10-31 — a loop's rounds run however its check was started, in a run carrying on the loop alone until it ends or a Stop (L5); a start of a check nothing will run keeps the count, and the refusal stands only while something will (L7).

@@ -1,5 +1,6 @@
 import { flattenTasks, flattenTasksWithParents, type Task } from '../models/Task';
 import { DEFAULT_SCRIPT_TIMEOUT_MS } from '../models/ScriptTask';
+import { betweenRounds, loopRoundOf } from '../models/Loop';
 import type { ExecutionCommandName, ExecutionRecord } from '../models/Execution';
 import { UPDATABLE_FIELDS } from './TaskOps';
 import type { ExecutionCommand } from './ExecutionCommands';
@@ -235,6 +236,8 @@ export class SupervisionMemory {
       if (!target || retried === 0) return null;
       return retryLimit({ id: target.task.id, ref: target.ref, title: target.task.title }, retried, limit, 'skip', this.skips.get(target.task.id) ?? 0);
     }
+    // Whatever command asks for it, a start of a check between rounds is its loop's next round (ADR-0045 L7).
+    if (target && betweenRounds(target.task)) return null;
     const from = command.command === 'retry_task' ? command.from : undefined;
     for (const { task, ref, unchangedCounts } of this.retried(command.command, from, target, tasks)) {
       const guarded = { id: task.id, ref, title: task.title };
@@ -254,6 +257,8 @@ export class SupervisionMemory {
       return;
     }
     const found = named ? flattenTasks([...tasks]).find((t) => t.id === named.id) : undefined;
+    // A retry resets a check's round, so one past round 1 went on as its loop's next round (ADR-0045 L7).
+    if (found?.loop && loopRoundOf(found) > 1) return;
     const target = found && named ? { task: found, ref: named.ref } : undefined;
     for (const { task } of this.retried(record.command, undefined, target, tasks)) {
       this.retries.set(task.id, (this.retries.get(task.id) ?? 0) + 1);

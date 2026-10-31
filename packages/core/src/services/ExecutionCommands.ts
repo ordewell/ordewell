@@ -180,6 +180,8 @@ export interface ExecutionHost {
   hasLiveWork(): boolean;
   /** Something will start without being asked again: a start admitted and not yet claimed, or a scheduled resume. */
   startsPending(): boolean;
+  /** Something will run this loop's check between rounds without being asked; see {@link TaskOrchestrator.loopRunsOn}. */
+  loopRunsOn(taskId: string): boolean;
   /** Something could move a task on without being asked: a start, an attempt in any phase, the scheduler or a usage-limit hold. */
   advancesOnItsOwn(): boolean;
   /** Admit a start that waits before it claims; see {@link StartAdmission}. */
@@ -877,9 +879,12 @@ export class ExecutionCommands {
     const skipped = this.skippedRefusal(located, actor);
     if (skipped) return { refusal: skipped };
     // Only the user's retry starts a check's rounds over (ADR-0045 L7).
-    const repeating = how === 'run' || actor.kind !== 'user' ? this.betweenRounds(located, tasks) : null;
+    const keepsRounds = how === 'run' || actor.kind !== 'user';
+    const repeating = keepsRounds ? this.betweenRounds(located, tasks) : null;
     if (repeating) return { refusal: repeating };
-    const settled = task.status === 'failed' || task.status === 'awaiting_user' || task.status === 'skipped';
+    // Past that refusal, nothing else will run a check between rounds: this start is its next round.
+    const nextRound = keepsRounds ? waitOf(this.host.startWaits(task), 'repeating') : undefined;
+    const settled = !nextRound && (task.status === 'failed' || task.status === 'awaiting_user' || task.status === 'skipped');
     if (how === 'run' && settled) {
       const next = task.status === 'awaiting_user' && task.awaitingReason === 'input'
         ? voice.answerOrRetry
@@ -927,10 +932,10 @@ export class ExecutionCommands {
         if (stopped()) throw new Error(STOPPED_BEFORE_START);
         if (!this.host.running(task.id) && !(settled && this.host.scheduling())) await this.host.startTask(task.id, actor);
         if (this.host.runBlocked()) return { message: voice.blockedRun };
-        const verb = how === 'run' ? 'Started' : 'Retrying';
+        const verb = how === 'run' || nextRound ? 'Started' : 'Retrying';
         return {
           message: this.host.running(task.id)
-            ? `${verb} ${label}.`
+            ? `${verb} ${label}${nextRound ? `, as round ${nextRound.round} of ${nextRound.maxRounds}` : ''}.`
             : `${capitalize(label)} is back in the run and starts when a slot is free.`,
         };
       },
@@ -1135,8 +1140,12 @@ export class ExecutionCommands {
     }
     const skipped = this.skippedRefusal(located, actor);
     if (skipped) return { refusal: skipped };
-    const repeating = actor.kind !== 'user' ? this.betweenRounds(located) : null;
-    if (repeating) return { refusal: repeating };
+    if (actor.kind !== 'user') {
+      const repeating = this.betweenRounds(located);
+      if (repeating) return { refusal: repeating };
+      const nextRound = waitOf(this.host.startWaits(task), 'repeating');
+      if (nextRound) return { refusal: `${capitalize(label)} is between rounds of its loop, and nothing runs it on its own now, so a continue would start its rounds over: start it with run_task, which runs round ${nextRound.round} of ${nextRound.maxRounds}.` };
+    }
     const eligible = continuability(task);
     if (!eligible.ok) return { refusal: `${eligible.reason} ${voice.startOver}` };
     if (!message?.trim()) return { refusal: `Continuing ${label} in its saved session needs a message: what the runner should do next.` };
@@ -1326,16 +1335,21 @@ export class ExecutionCommands {
   }
 
   /**
-   * Why a loop's check between rounds is not started from the seam: its loop
-   * runs it again itself, once its body has landed (ADR-0045 L5). Null for
-   * any other task.
+   * Why a loop's check between rounds is not started from the seam: something
+   * will run it, once its body has landed, or nothing will and its body has
+   * yet to land (ADR-0045 L5). Each says only what is true of it. Null for any
+   * other task, and for a check whose fix has landed that nothing else will
+   * run, which a start runs as its next round rather than leave it stranded.
    */
   private betweenRounds(located: Located, tasks?: readonly Task[]): string | null {
     const repeating = waitOf(this.host.startWaits(located.task), 'repeating');
     if (!repeating) return null;
     const fix = repeating.waiting.flatMap((id) => this.located(id, tasks) ?? []);
-    const when = fix.length > 0 ? `once ${named(fix)} ${fix.length === 1 ? 'has' : 'have'} passed and landed` : 'next';
-    return `${capitalize(describe(located))} is between rounds of its loop: it runs again on its own, as round ${repeating.round} of ${repeating.maxRounds}, ${when}. Leave it to the loop.`;
+    const round = `round ${repeating.round} of ${repeating.maxRounds}`;
+    const landed = `once ${named(fix)} ${fix.length === 1 ? 'has' : 'have'} passed and landed`;
+    const between = `${capitalize(describe(located))} is between rounds of its loop`;
+    if (this.host.loopRunsOn(located.task.id)) return `${between}: it runs again on its own, as ${round}, ${fix.length > 0 ? landed : 'next'}. Leave it to the loop.`;
+    return fix.length > 0 ? `${between}, and nothing runs it on its own now: it can start as ${round} ${landed}.` : null;
   }
 
   /**
@@ -1356,8 +1370,8 @@ export class ExecutionCommands {
     if (actor.kind !== 'user') {
       if (!why) return { refusal: `Skipping ${label} needs a reason: it is shown to the user and told to the tasks that depend on it.` };
       const waits = this.host.startWaits(task);
-      // A check between rounds needs no one: its loop goes on (ADR-0045 L3).
-      if (waitOf(waits, 'repeating')) return { refusal: `${capitalize(label)} is between rounds of its loop, which goes on by itself: it needs no one, so the supervisor does not skip it.` };
+      // A check between rounds needs no one while something runs it on (ADR-0045 L3); stranded, it is failed like any task.
+      if (waitOf(waits, 'repeating') && this.host.loopRunsOn(task.id)) return { refusal: `${capitalize(label)} is between rounds of its loop, which goes on by itself: it needs no one, so the supervisor does not skip it.` };
       const needsSomeone = task.status === 'failed' || task.status === 'awaiting_user' || waitOf(waits, 'blocked') !== undefined;
       if (!needsSomeone) return { refusal: `${capitalize(label)} has not started and nothing blocks it: the supervisor skips only a task that failed, is blocked or is waiting for input.` };
     }

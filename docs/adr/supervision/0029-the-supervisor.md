@@ -420,9 +420,11 @@ Checked at the seam, where the action executes:
   between drops the run to Watch, with a notice. A supervisor that keeps waking
   and nothing passes is spinning.
 - **A loop's rounds are no retries**: the loop runs its check again itself, so
-  neither the retry limit nor the identical-retry guard counts a round, and a
-  supervisor's start or skip of a check between rounds is refused, since its
-  loop goes on without anyone (ADR-0045 L7).
+  neither the retry limit nor the identical-retry guard counts a round. While
+  something will run a check between rounds, a supervisor's start or skip of it
+  is refused, since its loop goes on without anyone; when nothing will, its
+  start runs the next round, uncounted, and it may skip it as any failed task
+  (ADR-0045 L7).
 
 A start of a task that failed is a retry however it is asked for — `run_task`,
 or `run_plan`, which would start every failed task again. What the guards
@@ -694,3 +696,4 @@ until #30 exists.
 - 2026-10-25 — Mark complete and Mark not done on an AI or script task are refused while a run could advance the task and otherwise need the user's explicit yes, in both directions; a manual task's sign-off is never held up by a run.
 - 2026-10-26 — a planner's edit commits as its `edit_plan` call answers (ADR-0022, P2), so a start asked for after it goes through the seam at once against the plan as edited; the starts deferred behind a held edit, their replay and their "not done" notices are gone.
 - 2026-10-26 — the run update at the run's end says whether its landed work is merged or waits for Merge all, and a Merge all after the plan's last isolated run closed merged is answered ok as nothing to merge, recorded nowhere, across a restart too (`mergedRun`). Seen live: an Act supervisor woken after the automatic Merge all at the run's end called `merge_all`, and the timeline said "refused: This plan has no isolated run".
+- 2026-10-31 — a supervisor's start or skip of a check between rounds is refused only while something will run it (ADR-0045 L7).

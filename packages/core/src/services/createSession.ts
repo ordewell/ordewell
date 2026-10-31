@@ -919,6 +919,7 @@ export class Session {
       startsHeld: () => this.orchestrator.startsHeld,
       hasLiveWork: () => this.orchestrator.hasLiveWork,
       startsPending: () => this.orchestrator.startsPending,
+      loopRunsOn: (taskId) => this.orchestrator.loopRunsOn(taskId),
       advancesOnItsOwn: () => this.orchestrator.advancesOnItsOwn,
       admitStart: () => this.orchestrator.admitStart(),
       running: (taskId) => this.orchestrator.getAttempt(taskId) !== undefined,
