@@ -55,7 +55,10 @@ revert adds commits and rewrites nothing.
   it was renamed to, and it speaks for a detached HEAD. The reflog speaks before
   the name: with a branch renamed from it that holds the commit the run started
   from, a new branch taking the old name is a review. A git query that fails is
-  no answer, so it reads as not merged, and a revert refuses. A run with no base branch
+  no answer, so it reads as not merged, and a revert refuses. That is any exit
+  but `merge-base --is-ancestor`'s 0 and 1, and a `for-each-ref` that warns
+  beside its list, which it does as it passes over a ref it cannot read and
+  exits 0. A run with no base branch
   has only what is checked out, which has to show a merge: the landing off its
   first-parent line, and no tip of Ordewell's holding it on that line. So Merge
   all makes a merge commit there. It is the same reading a clear-up takes before
@@ -206,7 +209,9 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
   the resolver that carried it, is refused rather than leaving a record that
   says landed over work that is gone. `IsolationRun.carried` keeps it from the
   moment that merge lands, so the refusal outlives the carried task's record and
-  stands after it lands a merge of its own, which holds only its later work.
+  stands after it lands a merge of its own, which holds only its later work. A
+  tip git cannot say of then is kept too: that moment does not come again, and
+  a record too many only refuses a revert.
 - A task saved with neither `landedTip` nor a `landings` entry, as ADR-0013 ran:
   no record says which merge is its, so it is refused, in those words.
 - A dependent in a run started before every merge was kept
@@ -334,3 +339,4 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
 - 2026-10-31 — `ordewell-preserved/` branches count as Ordewell's own; a renamed base branch is followed; `inHead` is read both ways; a Stop puts a reverted task's hold back; a dirty tree's replay is the start it parked.
 - 2026-10-31 — whether a revert may touch a merge and whether work is merged are two questions: anything of the user's holding a merge refuses a revert, a review branch included, and only the user's own branch reads as merged; a stopped revert is cleared by the two-tree read.
 - 2026-10-31 — a revert is plumbing, off the worktree, so the tracked-changes refusal and the clearing of a stopped revert go, and each commit is saved before the branch moves; the reflog speaks before the base name; a failed git query refuses.
+- 2026-10-31 — every ancestor read goes through one yes, no or unknown helper; a warning beside a ref list is no answer; a landing keeps a tip it cannot read as carried, and stops when it cannot say what a task brings.
