@@ -58,7 +58,8 @@ macOS](#what-holds-on-linux-and-on-macos)).
   repository; none of the environment Ordewell runs with beyond what programs
   need to find themselves and print (`PATH`, the locale), since credentials
   live there too; no network; a fresh `/dev`, `/proc` and `/tmp`; limits on
-  processes, memory and wall time; and it dies with its parent. What it can
+  processes, real memory, address space and wall time
+  ([below](#the-limits-of-a-sealed-run)); and it dies with its parent. What it can
   read outside the workspace is fixed by the profile, the same for every
   command, and holds no user data (on macOS but for the here-document files
 below), so no path is asked about. Where the
@@ -95,6 +96,71 @@ below), so no path is asked about. Where the
 - **The classifier is not widened for convenience (S7).** A construct it
   cannot read is not taught to it to save a refusal; where a sandbox runs, it
   runs sealed. Fixes for commands it misreads go on as before.
+
+### The limits of a sealed run
+
+Part of S1. `SandboxLimits` holds four numbers, and only numbers from it enter
+the script that runs before the sandbox, outside it.
+
+- **Processes** are the kernel's limit, 256 beyond what the user runs now.
+  macOS, and older Linux kernels, count them per user rather than per run, so a
+  run's fork bomb can make the forks of another sealed run beside it fail until
+  it ends. Processes of the user's that run outside a sealed run hold no such
+  limit and go on.
+- **Real memory** (`memoryBytes`, 4 GiB) is what the run actually holds. A
+  watcher beside the launcher, outside the sandbox, sums resident memory about
+  once a second: across the run's process group on macOS, and on Linux across
+  its PID namespace, which no process can leave. Past the limit it ends the
+  launcher by a signal, then the run. A signal rather than an exit status,
+  which could be any command's own: only what runs outside the sandbox can
+  send it, since Seatbelt lets a command signal its own sandbox alone and
+  bubblewrap's namespace hides the launcher from it. The result then carries
+  a note of its own (`sealedMemoryLimitNote`), as the wall-time limit does, in
+  place of a note about reach. The watcher starts free of the kernel's limits,
+  so a fork bomb at its process limit cannot stop it starting `ps` or `sleep`,
+  and on Linux it finds `sleep` on a fixed path, since a PATH entry could name
+  a directory the sandbox may write. Where it cannot run, the run does not.
+- **Address space** (`addressSpaceBytes`, 256 GiB per process) is the kernel's
+  limit too, a backstop against a runaway allocator and no measure of memory:
+  on macOS it is added to what the shell already maps, as the process limit is
+  to what the user runs. It is set far above what V8 reserves, by the
+  measurements below.
+- **Wall time** is the caller's clock: `SEALED_LIMITS` one minute,
+  `TASK_SEALED_LIMITS` ten (ADR-0046).
+
+The memory limit is a bound on what a run holds, not a guarantee to the byte.
+A run can pass it by what it touches in the second between polls. A page
+shared between processes counts once for each, which errs toward ending a run
+early. On macOS a compressed page is not resident, and a process that left the
+group with `setsid` is not counted; the address-space ceiling still holds it.
+On Linux the pages of the run's own `/tmp` and overlay are held by a tmpfs and
+by no process, so they are not counted either.
+
+Measured on 2026-10-31 on macOS 26 (arm64, 10 cores, 32 GiB), Node 26.10.0,
+under the real sealed profile with the address limit raised out of the way,
+sampling the run's processes every 250 ms. A shell maps 421.4 GiB as it starts
+there, and Node 1.5 GiB more; each `WebAssembly.Memory` adds 8 GiB of reservation
+for a page of memory.
+
+| Sealed command | Most address space in one process, over the shell's | Peak resident memory, summed | Processes |
+| --- | --- | --- | --- |
+| `vitest run` over one test file | 18.7 GiB | 0.8 GiB | 16 |
+| `npm run build` (four packages, tsup with its DTS step) | 11.7 GiB | 1.8 GiB | 10 |
+| `vitest run` over `packages/core` (9,598 tests, 164 s) | 18.9 GiB | 1.9 GiB | 23 |
+| Node with 16 Wasm memories and 8 workers holding one each | 196 GiB | not sampled | 1 |
+
+The 4 GiB limit this replaced as an address limit stopped the first two
+outright. The ceiling is thirteen times what a test run reserves, and clears a
+program built to reserve far more. Resident memory grows with a test runner's
+workers, so a machine with many more cores than this one can pass 4 GiB where
+this one held 1.9; the note tells the task to run fewer. Bubblewrap's limit
+had the same shape, with no base added and the same reservations to fail on.
+Linux was not measured: `scripts/linux-sandbox-e2e.sh` runs the same tests
+under real bubblewrap.
+
+What still fails is what S1 keeps out. On macOS a run cannot listen on a socket,
+loopback included: 379 of those 9,598 tests failed sealed, nearly all because a
+local server could not `listen`, and a few on writing the host's `/tmp`.
 
 ### What holds on Linux and on macOS
 
@@ -323,6 +389,15 @@ shell.
 
 ## Considered options
 
+- **The address limit as the memory bound.** `ulimit -v` at 4 GiB, on top of
+  what the shell maps on macOS. The design until 2026-10-31. Rejected: it
+  limits what a process reserves, not what it uses. V8 reserves 8 GiB for a
+  page of WebAssembly memory, so ordinary programs died (`mmap error: 12`, exit
+  134; vitest in es-module-lexer's Wasm, the build's DTS step by SIGTRAP) while
+  a run of many small processes could hold many times the limit.
+- **A cgroup's `memory.max` on Linux.** Rejected: it needs a delegated cgroup,
+  which an unprivileged process does not have on every host a sealed run must
+  work on, and macOS has no counterpart, so the watcher would still be needed.
 - **Teach the classifier loops** (unroll a literal `for` list, parse compound
   commands). Rejected: every construct it learns is another place to read a
   different command from the one the shell runs (ADR-0008's history), for a
@@ -371,9 +446,9 @@ shell.
 - Seatbelt has no PID namespace, so on macOS a sealed run's processes are
   killed as one process group, at its end, at its wall-time limit and when
   Ordewell dies. A process that leaves the group with `setsid` outlives the
-  run, still sealed. Its process and memory limits are counted on top of what
-  the user already runs and what every macOS program maps as it starts. A
-  sealed run there still has the three residuals above: what the user's other
+  run, still sealed, and its memory is not counted. Its process limit and
+  address-space ceiling are counted on top of what the user already runs and
+  what every macOS program maps as it starts. A sealed run there still has the three residuals above: what the user's other
   processes hold in their command lines and environments, their launchd jobs,
   and the shared here-document files. No Seatbelt rule closes them; Linux's
   PID and mount namespaces leave a sealed run none of them. SECURITY.md says
@@ -397,3 +472,4 @@ shell.
 - 2026-10-21 — Claude Code's native shell wired (#110): `CLAUDE_CODE_SHELL_PREFIX` names a launcher built on the sealed profile, with the network (N3), the workspace read-only, the session scratch and a short `CLAUDE_CODE_TMPDIR` writable; both variables go in the `--settings` `env` block, Claude Code's own sandbox is off, `Bash` and `Monitor` are asked and allowed through the `native-shell` kind, and the planner process starts without the user's credential variables (N2.2), the keychain included. `Monitor` is withheld whenever the opt-in is off (N6), and its commands are `bash` steps on the timeline.
 - 2026-10-21 — OpenCode 2.x's native shell wired (#110): the launch environment and `OPENCODE_CONFIG_CONTENT` both name the same launcher, so a config layer cannot choose another shell; `bash` and `shell` ask instead of denying, the request becomes the `native-shell` kind, every `shell.created` is checked against the launcher and an escaped shell fails its call and the turn, the server starts without the user's credential variables (N2.2) but keeps its own login (N3), and its commands reach the timeline as `bash` steps. OpenCode 1.x keeps `run_command` alone. The setting is implemented in full.
 - 2026-10-21 — the native shell's network stops at the machine (N2.2): its profile refuses loopback addresses and local Unix sockets (but name resolution and syslog), since a command that read the harness server's password from its environment could otherwise have that server run a command outside the sandbox; bubblewrap, which cannot keep one without the other, refuses the profile. The planner is told of its own shell only in a process that was given one.
+- 2026-10-31 — `memoryBytes` is real memory, held by a watcher that sums the run's resident memory about once a second and ends it with a note of its own; the address limit stops being the memory bound and becomes a 256 GiB ceiling (`addressSpaceBytes`), measured under The limits of a sealed run, so Node, vitest and the build run sealed.

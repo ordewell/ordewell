@@ -162,7 +162,8 @@ describe('a patch saved from a read-only task', async () => {
           'rm del.txt',
           'mv src/old.ts src/renamed.ts',
           'head -c 4096 /dev/urandom > logo.bin',
-          'mkdir assets && head -c 1024 /dev/urandom > assets/new.bin',
+          // Git calls a file binary for a NUL, which 1024 random bytes lack about one time in fifty.
+          'mkdir assets && { printf "\\000"; head -c 1023 /dev/urandom; } > assets/new.bin',
           'chmod +x LICENSE',
         ].join(' && '));
         // A link leading out of the worktree that is not Ordewell's; the sealed profile refuses to make one, so it is made from here.

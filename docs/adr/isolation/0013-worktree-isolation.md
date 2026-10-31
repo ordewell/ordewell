@@ -192,7 +192,12 @@ everything below applies per repo of the group.
   `worktreeLinks`) that the main checkout has installed and the worktree has the
   folder for. Its entries are linked one by one, going one level into `@scope`
   directories and `.bin`. A real package is linked to the main checkout's copy,
-  so the install stays shared. A link is recreated: a relative one keeps its
+  so the install stays shared. Tools' own caches at its top level (`.cache`,
+  `.vite`, `.vite-temp`, `.vitest`) are not linked, so each tool makes its own
+  in the worktree: Vite and Vitest take `node_modules/.vite` under the nearest
+  `package.json` and read no environment to say otherwise, a link would have a
+  task writing the main checkout's cache, and a sealed run cannot (ADR-0046). A
+  link is recreated: a relative one keeps its
   text, so a workspace link (`node_modules/@scope/pkg -> ../../packages/pkg`)
   resolves to the worktree's own package and a `.bin` link through the
   worktree's `node_modules`; an absolute one into the main checkout outside any
@@ -535,3 +540,4 @@ literal git command lines or private fields.
 - 2026-10-24 — only the host holding the session's lease adopts, continues or changes its run (ADR-0049).
 - 2026-10-24 — preparing a task prunes stale worktree registrations and clears an unrecorded leftover at the task's path or branch, keeping its work first.
 - 2026-10-30 — one task's landing can be reverted on the integration branch before Merge all, and a run that reverted one continues (ADR-0054).
+- 2026-10-31 — tools' caches in `node_modules` are left out of the mirror, so a task keeps its own and a sealed run can run vitest.

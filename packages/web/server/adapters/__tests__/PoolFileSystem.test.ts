@@ -335,6 +335,14 @@ describe('PoolFileSystem', () => {
       expect(result.output).toContain('hello.txt');
     });
 
+    it('hands the signal that ended a command to core, which reads the memory limit from it', async () => {
+      class Exposed extends PoolFileSystem {
+        exec(command: string) { return this.execBashImpl(command, { file: '/bin/sh', args: ['-c'], wallTimeMs: 5_000 }, undefined, tmpDir); }
+      }
+      expect(await new Exposed(tmpDir).exec('kill -USR2 $$')).toMatchObject({ success: false, signal: 'SIGUSR2' });
+      expect(await new Exposed(tmpDir).exec('exit 3')).not.toHaveProperty('signal');
+    });
+
     it('denies an ask-tier command when no approval channel is wired', async () => {
       const result = await fsAdapter.bash('npm test');
       expect(result.success).toBe(false);

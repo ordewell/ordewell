@@ -13,7 +13,7 @@ import {
 import { IApproval, DENY_ALL, type ApprovalRequest, type StandingDecision } from '../interfaces/IApproval';
 import { cdUnfollowed, classifyCommand, excludedBy, innerCommandScopes, pathRefs, type CommandPolicyOptions } from './commandPolicy';
 import { resolveResearchShell, researchShellWarning, researchPolicyOptions, type ResearchShell, type ShellLaunch } from './researchShell';
-import { PlannerShellSandbox, SEALED_FAILURE_NOTE, TASK_SEALED_FAILURE_NOTE, TASK_SEALED_LIMITS, sandboxedFailureNote, sealedRunHeader, sealedTimeLimitNote, type SealedRunOptions, type SealedRunReason } from './sandbox/plannerSandbox';
+import { PlannerShellSandbox, SEALED_FAILURE_NOTE, TASK_SEALED_FAILURE_NOTE, TASK_SEALED_LIMITS, sandboxedFailureNote, sealedMemoryLimitNote, sealedRunHeader, sealedTimeLimitNote, type SealedRunOptions, type SealedRunReason } from './sandbox/plannerSandbox';
 import { parseAllowlist } from './plannerAllowlist';
 import { resolveWithin, resolveRef, grantScopeFor, isInertDevice } from './pathScope';
 import { definitionPattern, referencePattern, languageForId, includeGlobFor } from './symbolPatterns';
@@ -530,7 +530,7 @@ export abstract class BaseFileSystem implements IFileSystem {
     if (signal?.aborted) return { ...outcome, output: `${outcome.output}${swept}` };
     const failed = outcome.timedOut && shell.wallTimeMs !== undefined
       ? sealedTimeLimitNote(shell.wallTimeMs, site.task !== undefined)
-      : site.task ? TASK_SEALED_FAILURE_NOTE : SEALED_FAILURE_NOTE;
+      : sealedMemoryLimitNote(outcome, shell.memoryBytes, site.task !== undefined) ?? (site.task ? TASK_SEALED_FAILURE_NOTE : SEALED_FAILURE_NOTE);
     const output = `${sealedRunHeader(why, site.task && { worktree: site.task.worktree, first })}\n${outcome.output}${outcome.success ? '' : `\n\n[${failed}]`}${swept}`;
     return { ...outcome, output };
   }

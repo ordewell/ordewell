@@ -4,6 +4,7 @@ import {
   assertProfilePaths,
   execProbe,
   launchEnv,
+  MEMORY_LIMIT_SIGNAL,
   probeByRunning,
   SandboxUnsupportedError,
   type ProbeExec,
@@ -133,8 +134,8 @@ const KEYCHAIN_PROFILE = `(allow mach-lookup
   (global-name "com.apple.SecurityServer"))`;
 
 /**
- * Runs before the sandbox, outside it, under macOS's /bin/bash. It sets the
- * limits, starts the sandbox in a process group of its own, and kills that
+ * Runs before the sandbox, outside it, under macOS's /bin/bash. It starts the
+ * sandbox in a process group of its own, under the limits, and kills that
  * group when the command ends, when the caller kills this script at the
  * wall-time limit, or when the caller dies, which closes the pipe on its
  * standard input (ADR-0036 S1). Seatbelt has no PID namespace to take the
@@ -146,31 +147,47 @@ const KEYCHAIN_PROFILE = `(allow mach-lookup
  * otherwise fill the group back to its process limit while the reaper waited,
  * and outlast it.
  *
+ * About once a second a watcher sums the group's resident memory, and past the
+ * limit it ends this script by {@link MEMORY_LIMIT_SIGNAL}, as the caller's
+ * clock would, then the group: the caller reads the signal, and the group goes
+ * the same way whichever comes first. The kernel's limits are set on the
+ * command alone, so a fork bomb at its process limit leaves the watcher able
+ * to start `ps`.
+ *
  * macOS counts processes per user and maps hundreds of gigabytes into every
- * program as it starts, so both limits are added to what is measured here.
- * Only numbers from {@link SandboxLimits} enter the text, and the command
- * reaches it as the last of its arguments.
+ * program as it starts, so both kernel limits are added to what is measured
+ * here. Only numbers from {@link SandboxLimits} enter the text, and the
+ * command reaches it as the last of its arguments.
  */
 function limitsPrelude(limits: SandboxLimits): string {
-  const kilobytes = Math.ceil(limits.memoryBytes / 1024);
+  const memory = Math.ceil(limits.memoryBytes / 1024);
+  const addressSpace = Math.ceil(limits.addressSpaceBytes / 1024);
   return `n=$(/bin/ps -U "$UID" -o pid= | /usr/bin/wc -l) && v=$(/bin/ps -o vsz= -p $$) \\
-  && ulimit -u $((n + ${limits.processes})) && ulimit -v $((v + ${kilobytes})) \\
   || { echo 'The sealed run could not be held to its limits, so it did not run.' >&2; exit 125; }
 reap() { i=0; while [ $i -lt 2000 ] && kill -STOP -$pid 2>/dev/null; do kill -KILL -$pid 2>/dev/null; i=$((i + 1)); done; }
 watch=0
 if [ -p /dev/stdin ] || [ -S /dev/stdin ]; then watch=1; fi
 exec 3<&0
 set -m
-"$@" </dev/null 3<&- &
+( ulimit -u $((n + ${limits.processes})) && ulimit -v $((v + ${addressSpace})) \\
+    || { echo 'The sealed run could not be held to its limits, so it did not run.' >&2; exit 125; }
+  exec "$@" ) </dev/null 3<&- &
 pid=$!
 set +m
 if [ $watch = 1 ]; then { /bin/cat >/dev/null; reap; } <&3 >/dev/null 2>&1 & watcher=$!; fi
+while kill -0 $$ 2>/dev/null; do
+  /bin/sleep 1
+  kb=0
+  for rss in $(/bin/ps -o rss= -g $pid); do kb=$((kb + rss)); done
+  if [ $kb -gt ${memory} ]; then kill -${MEMORY_LIMIT_SIGNAL.slice(3)} $$; reap; break; fi
+done </dev/null >/dev/null 2>&1 3<&- &
+memory=$!
 exec 3<&-
 wait $pid
 status=$?
-# Reap the watcher with its own wait, so monitor mode does not print a stray
-# "Killed" line to the command's output that reads as a crash, and only when
-# one was started: otherwise $! is the command itself, already waited for.
+# Reap the watchers with their own waits, so monitor mode does not print a
+# stray "Killed" line to the command's output that reads as a crash.
+kill -KILL $memory 2>/dev/null; wait $memory 2>/dev/null
 if [ $watch = 1 ]; then kill -KILL $watcher 2>/dev/null; wait $watcher 2>/dev/null; fi
 reap
 exit $status`;
@@ -248,7 +265,7 @@ export class SeatbeltBackend implements SandboxBackend {
     const sandboxed = [SANDBOX_EXEC, '-p', rules.join('\n'), ...params, invocation.shell, ...invocation.shellArgs];
     const env = launchEnv(invocation, profile);
     if (!profile.limits) return { file: sandboxed[0], args: sandboxed.slice(1), env };
-    return { file: '/bin/bash', args: ['-c', limitsPrelude(profile.limits), 'ordewell-sealed', ...sandboxed], env, wallTimeMs: profile.limits.wallTimeMs };
+    return { file: '/bin/bash', args: ['-c', limitsPrelude(profile.limits), 'ordewell-sealed', ...sandboxed], env, wallTimeMs: profile.limits.wallTimeMs, memoryBytes: profile.limits.memoryBytes };
   }
 }
 
