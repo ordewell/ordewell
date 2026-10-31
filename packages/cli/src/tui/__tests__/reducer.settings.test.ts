@@ -1,9 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { RUN_SETTINGS_DEFAULTS } from '@ordewell/core';
 import { initialState, reduce, type Step } from '../reducer';
 import type { StepperState } from '../reducers/stepper';
 import type { TuiState } from '../state';
 import { lastMessage } from './chat';
+
+vi.mock('@ordewell/core', async (importOriginal) => ({ ...await importOriginal<typeof import('@ordewell/core')>(), DELEGATION_OFFERED: true }));
 
 const key = (name: string, char?: string) => ({ type: 'key' as const, key: { name, char } });
 const press = (state: TuiState, name: string, char?: string): Step => reduce(state, key(name, char));

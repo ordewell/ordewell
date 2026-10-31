@@ -309,7 +309,7 @@ export * from './utils/taskLogStore';
 export { mintSessionId } from './utils/sessionId';
 export { extractPrdBlock, savePrdMarkdown, sanitizeSlug } from './utils/prdStore';
 export type { PrdBlock } from './utils/prdStore';
-export { ACT_RISK, AUTORUN_RISK, DELEGATION_RISK, PLANNED_WITH_LABEL, SUPERVISOR_LEVEL_LABEL, automergeSummary, autorunSummary, delegationSummary, parseCount, parseDelegation, parseSwitch, supervisorSummary, trailerSummary } from './services/runSettingsText';
+export { ACT_RISK, AUTORUN_RISK, DELEGATION_OFFERED, DELEGATION_RISK, PLANNED_WITH_LABEL, SUPERVISOR_LEVEL_LABEL, automergeSummary, autorunSummary, delegationSummary, parseCount, parseDelegation, parseSwitch, supervisorSummary, trailerSummary } from './services/runSettingsText';
 export { SettingsService, getSettingsPath, runSettingsOf, RUN_SETTINGS_DEFAULTS, RunSettingsError, type GlobalRunSettings, type UserSettings } from './services/SettingsService';
 export {
   PlannerModelMemory,

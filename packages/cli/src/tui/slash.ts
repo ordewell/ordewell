@@ -1,4 +1,4 @@
-import { findRunnerCommand, type RunnerCommand } from '@ordewell/core';
+import { DELEGATION_OFFERED, findRunnerCommand, type RunnerCommand } from '@ordewell/core';
 import { runnerIdList } from '../runnerNames';
 
 export interface ParsedCommand {
@@ -59,7 +59,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'allowlist', usage: '/allowlist [set <runner> <ids> | clear <runner>]', description: 'Limit which models a runner may use', category: 'models' },
   { name: 'runners', usage: '/runners [<id> on|off]', description: `Enable or disable runners (${runnerIdList()})`, category: 'models' },
   { name: 'login', usage: '/login [<runner>]', description: 'Sign the active coding agent in, or the one named, in this terminal', category: 'models' },
-  { name: 'settings', usage: '/settings', description: 'Run settings: autonomy, supervisor, merging, autorun, parallel tasks and delegation', category: 'models' },
+  { name: 'settings', usage: '/settings', description: `Run settings: autonomy, supervisor, merging, autorun, parallel tasks${DELEGATION_OFFERED ? ' and delegation' : ''}`, category: 'models' },
   { name: 'refresh', usage: '/refresh', description: 'Re-check runners; reread settings and cached models', category: 'models' },
 
   // Sessions

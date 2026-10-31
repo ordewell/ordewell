@@ -21,7 +21,7 @@ import CheckpointPanel from './components/CheckpointPanel';
 import RunSettingsBlock from './components/RunSettingsBlock';
 import type { TaskDraft } from './components/NewTaskCard';
 import type { CompactionBlock, GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId, RunnerAuth } from '@ordewell/core';
-import { accountLimitsOf, compactionText, SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
+import { accountLimitsOf, compactionText, DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
 import { planSummaryLabel, nextDock } from './planDock';
 import { OpenPatchContext } from './openPatch';
 import { useFollowOutput } from './followOutput';
@@ -61,7 +61,7 @@ function runSettingsSummary(run: GlobalRunSettings | undefined, runSettings: Run
       </span>
       {run.mergeAtGatesAutomatically && <span className="plan-dock-summary">Merge automatically</span>}
       {run.autorun && <span className="plan-dock-summary">Autorun</span>}
-      {run.delegationTokens > 0 && <span className="plan-dock-summary">Delegation</span>}
+      {DELEGATION_OFFERED && run.delegationTokens > 0 && <span className="plan-dock-summary">Delegation</span>}
     </>
   );
 }

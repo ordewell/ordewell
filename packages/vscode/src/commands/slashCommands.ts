@@ -3,6 +3,8 @@
  * (SlashParser), the input suggests them, and /help lists them. Plain data,
  * so the webview can import it as well as the host.
  */
+import { DELEGATION_OFFERED } from '@ordewell/core/plan-utils';
+
 export interface SlashCommandSpec {
   label: string;
   detail: string;
@@ -24,7 +26,7 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   { label: '/compact', detail: 'Condense this conversation into a summary; the last two exchanges and all tasks are kept', insertText: '/compact' },
   { label: '/allowlist', detail: 'Restrict which models the planner may auto-assign per runner', insertText: '/allowlist' },
   { label: '/refresh', detail: 'Re-discover runner models (e.g. after enabling an opencode backend)', insertText: '/refresh' },
-  { label: '/settings', detail: 'Open the run settings: autonomy, supervisor, merging, autorun, parallel tasks, delegation', insertText: '/settings' },
+  { label: '/settings', detail: `Open the run settings: autonomy, supervisor, merging, autorun, parallel tasks${DELEGATION_OFFERED ? ', delegation' : ''}`, insertText: '/settings' },
   { label: '/help', detail: 'Show all available commands', insertText: '/help' },
 ];
 

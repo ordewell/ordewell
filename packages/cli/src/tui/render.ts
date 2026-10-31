@@ -18,7 +18,7 @@ import { currentHandoff, diffRoom, handoffActions } from './handoff';
 import { capConflictFiles, elapsedSince, handoffBaseLine, handoffBranchName, isRepoGroup, repoResultLines, taskLogCommands, titledTaskRef, titledTaskRefOf, type RunnerCommand } from '@ordewell/core';
 import { matchingItems, scriptTaskView, visibleItems, type Overlay, type PickerItem, type PickerState, type TuiState } from './state';
 import type { StepperState } from './reducers/stepper';
-import { SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
+import { DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
 
 /**
  * The whole frame as `state.rows` lines, each at most `state.cols` columns
@@ -227,7 +227,7 @@ function runSettingsBadge(state: TuiState): string {
     paint(level, supervisorLevel === 'act'),
     ...(mergeAtGatesAutomatically ? [style.grey('auto-merge')] : []),
     ...(autorun ? [style.yellow('autorun')] : []),
-    ...(delegationTokens > 0 ? [style.yellow('delegation')] : []),
+    ...(DELEGATION_OFFERED && delegationTokens > 0 ? [style.yellow('delegation')] : []),
   ].join(style.grey(' · '));
 }
 
