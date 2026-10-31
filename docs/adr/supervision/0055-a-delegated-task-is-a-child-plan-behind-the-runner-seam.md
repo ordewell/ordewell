@@ -110,7 +110,8 @@ the child cannot reach follows it in the parent's plan.**
   same `checkpoint`. There is no `plan_complete` and no `ask_parent`. Delegating
   is a task type in `submit_plan` and `edit_plan`, not a tool. It writes no
   repository files (ADR-0035): a planner never implements, and a worker never
-  plans.
+  plans. Its `task_complete` is checked against its own child plan, and what it
+  may cite is its whole subtree (ADR-0057 R1).
 - **A subplanner is a harness planner (D5).** The plan gives it a runner, and an
   API planner is not one and has no Ordewell token
   ([ADR-0022](../runners/0022-ordewell-mcp-server.md) S1). An API planner at the
@@ -210,6 +211,11 @@ the child cannot reach follows it in the parent's plan.**
     takes nothing back.
   - A check may declare a loop whose body fixes what it finds (ADR-0045): the body
     may depend on the delegated task, and the delegated task stays outside it.
+    `delegationErrors` refuses, on every route, a body that is not a worktree task,
+    meaning a script task or an ops AI task, when its check depends on a delegated
+    task, directly or through other tasks. Such a body waits at a merge gate
+    (ADR-0020) for that task's work, which D9 holds until the check passes, and the
+    check waits on the body for its next round. So no body waits on a merge D9 holds.
   - A failed check blocks its dependents and wakes the planner, as any failure
     does. A model is refused `skip_task` on it: that would let the work past its
     only check. The user's Skip stands.
@@ -283,7 +289,11 @@ the child cannot reach follows it in the parent's plan.**
   conflict. Its repair ([ADR-0015](../isolation/0015-conflict-repair.md)) needs a
   session that edits files, which a subplanner never is, so a delegated task's
   repair attempt is a plain runner on its `assignedRunner` and `assignedModel`, in
-  the kept worktree, in the mode `taskMode` holds for this one use, on a task token.
+  the kept worktree, on a task token. It runs in the runner's mode for the delegated
+  task's mandate `autonomy`, read by `ModeResolver` as ADR-0056 M6 reads a child's
+  tasks, and set on the repair attempt for that one use. A delegated task has no
+  `taskMode` on the plan, so a repair never falls to the spawn's `build`, which is
+  wider than a Guarded run's mode on one runner and no mode at all on another.
   `classifyAttempt` already ranks a repair first. A repair lands after the verdict, so
   `Landing.settleRepair` holds it to D7: one whose `repairBase..branch` diff, what the
   branch brings onto the tip it was repaired against, touches a protected path goes
@@ -296,9 +306,16 @@ the child cannot reach follows it in the parent's plan.**
   `verifyRepair` reads markers in that repo on every run, a flat group's included,
   since ADR-0015's guarantee has the same gap there; only its containment check needs
   a `repairBase`. A repair that fails either does not land, and its worktree is kept.
-- **A retry starts a child over (D15).** A fresh retry of a delegated task discards
-  its child run as `discardRun` does and starts a new child on what is left of its
-  budget; the old child's state stays on disk under the root. Revert
+- **A fresh attempt starts a child over (D15).** When a delegated task's next
+  attempt is fresh by any route, Execute, a force start, a retry, or Mark not done
+  then a start, its child run is discarded as `discardRun` does and a new child
+  starts on what is left of its budget. A Continue never discards it: D17 reopens
+  that child. A delegated task removed, merged or split out of the plan has its
+  child run discarded too, or its worktrees and branches would outlive the only
+  record that names them (D11). The Session or `PlanEditor` path that applies the
+  change does this, never `PlanStore`, which reaches no run: for a fresh attempt at
+  the claim, where D8 takes its checks back, and for an edit as it is applied. The
+  old child's state stays on disk under the root. Revert
   ([ADR-0054](../isolation/0054-a-landed-task-reverts-on-the-integration-branch-before-merge-all.md))
   takes the one landing whole: it is the user's, and it never reaches inside a
   child.
@@ -388,8 +405,9 @@ the child cannot reach follows it in the parent's plan.**
 - D6, D8 and D9 are held at the seam with a table of child states against the
   answer to `done`, every task skipped and an unchanged branch among them, and the
   plan-level refusals, a script check where nothing can seal and one on a `readOnly`
-  delegated task included, a `readOnly` script among them, and a delegated task that
-  lands with no protected paths, through
+  delegated task included, a `readOnly` script among them, a delegated task that
+  lands with no protected paths, and a script or ops AI body whose check depends on a
+  delegated task, directly or not, through
   `validatePlanTasks` and `applyTaskOps`, as `loop.validation.test.ts` does. A merge
   is held by landed work whose check is pending, blocked or failed, and not by a
   delegated task that has not landed, a `readOnly` one included, nor by work the user
@@ -411,7 +429,11 @@ the child cannot reach follows it in the parent's plan.**
   Flat runs keep their suites unchanged.
 - D14's rule is tested with a repair that edits a protected path, in a repo the
   landing changed and in one it did not, and with one that leaves a conflict marker
-  in a repo the landing did not change: none lands.
+  in a repo the landing did not change: none lands. A repair spawns in the mode its
+  mandate's `autonomy` resolves to, at both levels, and the plan gains no `taskMode`.
+- D15 is tested with each route to a fresh attempt, a removal, a merge and a split:
+  the old child's worktrees and branches go and its state stays. A Continue, a repair
+  and a resume leave them.
 
 ## Out of scope
 
@@ -468,6 +490,10 @@ the child cannot reach follows it in the parent's plan.**
   runs would carry the work past it, which is what D9 is for.
 - **A check that keeps its pass through a re-run.** Dropped: ADR-0054 leaves it as it
   is, so new work merged on the old pass, and a new handoff went unread.
+- **A gate that opens without its merge for a body on a delegated task's check.**
+  Rejected: a script or ops body acts on a checkout that does not hold the work it
+  should fix, and merging it gives up D9. Refusing the plan leaves the fix to a
+  worktree task, which is cut from the integration tip and passes no gate.
 - **Taking a check back in `PlanStore.retry` alone.** Dropped: Execute readies a failed
   task without it and a force start claims one as it stands, so a skipped check stayed
   skipped over the new result, and D9 released it. Adding each route was rejected for
@@ -490,6 +516,14 @@ the child cannot reach follows it in the parent's plan.**
   group's repair lands the same marker.
 - **Failing a landing on a protected path.** Rejected: ADR-0013 keeps a landing from
   failing a task, and the work would wait on a person for what is a verdict.
+- **A delegated task's repair in a `taskMode` on the plan.** Dropped: a delegated
+  task never has one, since `plannedTask` resolves a mode only for an AI task and
+  the planner cannot set it, so the repair read nothing and got `build`.
+- **Discarding a child on a retry alone.** Dropped: Execute and a force start make a
+  fresh attempt without `PlanStore.retry`, and a removal makes none, so each left the
+  old child's worktrees and branches with no record naming them.
+- **Discarding a child in `PlanStore`.** Rejected: it applies plan changes and has no
+  run or isolation to discard.
 - **A delegated task that holds a slot, or a Parallel limit carved per subtree.**
   Rejected: the first deadlocks a parent at its limit, the second leaves slots idle
   in a quiet subtree while another waits.
@@ -531,3 +565,4 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-10-31 — checked against the code a third time: what checks a `readOnly` delegated task and what its check holds, and conflict markers in a repo a repair's landing did not change.
 - 2026-10-31 — checked against the code a fourth time: a re-run takes its checks back, only landed work holds a merge, a script is no check of a `readOnly` delegated task, and what `taskTip`'s diff holds.
 - 2026-10-31 — checked against the code a fifth time: a fresh attempt takes its checks back at the claim, Execute and a force start included, and a delegated task that lands must name its protected paths.
+- 2026-10-31 — checked against the code a sixth time: a subplanner's handoff is checked against its own plan, a body on a delegated task's check is a worktree task, a repair's mode comes from the mandate, and a child run is discarded on any fresh attempt or removal.
