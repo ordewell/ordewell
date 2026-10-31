@@ -137,7 +137,31 @@ the script that runs before the sandbox, outside it.
   to what the user runs. It is set far above what V8 reserves, by the
   measurements below.
 - **Wall time** is the caller's clock: `SEALED_LIMITS` one minute,
-  `TASK_SEALED_LIMITS` ten (ADR-0046).
+  `TASK_SEALED_LIMITS` ten (ADR-0046). The clock ends in a kill of the launcher
+  alone, and a Stop can land the same kill at any moment of a launch, so the run
+  has to die with the launcher wherever the launcher had got to. A run a kill
+  caught as it started lasts at most until the watcher's next look, about a
+  second, under its profile and the kernel's limits:
+  - On Linux the launcher becomes bubblewrap, whose `--die-with-parent` takes
+    the namespace down. Bubblewrap arms that in its child only after the child
+    has set the sandbox up, and a death signal armed once the parent has died
+    never comes. A launcher killed in those milliseconds would leave the
+    sandbox running, or the child blocked for good waiting to be released, with
+    no limit on it but the kernel's. So the watcher, which outlives the
+    launcher, goes on past it: the launcher starts bubblewrap with a mark in its
+    arguments (`--unsetenv` of a name no environment holds, with the launcher's
+    pid in it), the child keeps them because it never execs, and the watcher
+    kills what carries the mark, which ends the namespace. The launcher's parent
+    dying before bubblewrap armed the signal for the launcher itself is the same
+    gap one step up, with no clock left on the run, so the watcher then ends the
+    launcher too.
+  - On macOS there is no death signal, and the launcher does not start the
+    sandbox. A subshell the caller's kill never reaches does, and then what
+    reaps it, and the launcher only waits for the subshell: a launcher that
+    started both itself could be killed between them, which would leave a
+    sandbox nothing ever reaped. The watcher reaps the group once the launcher
+    has gone, as the reaper does when the caller closes the pipe on standard
+    input, so a launcher with no pipe there goes the same way.
 
 The memory limit is a bound on what a run holds, not a guarantee to the byte.
 A run can pass it by what it touches in the second between polls. A page
@@ -436,6 +460,18 @@ shell.
   macOS already can, from a run with no way to send it anywhere.
 - **`/etc/resolv.conf` beside `/etc/hosts`.** Rejected: a run has no resolver to
   ask, so the file could only name one it cannot reach.
+- **Bubblewrap's `--info-fd`, to tell the watcher its child's pid.** Rejected: it
+  writes the pid after the `clone`, so a kill between the two leaves a child no
+  one was told of, blocked for good. It also needs a pipe to the watcher, which
+  a POSIX shell can only make through a file.
+- **Bubblewrap's `--block-fd`, to hold the child until the launcher is ready.**
+  Rejected: an end of file releases it as a byte does, so the launcher's death
+  would open the gate, and the child reads it before it arms the signal anyway.
+- **The launcher staying a shell, with bubblewrap its child.** Rejected: bubblewrap
+  arms its own signal late as well, so the gap moves one step up and stays open,
+  and the caller's kill no longer reaches bubblewrap.
+- **Waiting a moment before a run may be killed, or before it starts.** Rejected:
+  no wait is long enough on a loaded machine, and the kill is not ours to delay.
 - **Seal with the home directory mounted read-only**, as ADR-0011's profile for
   classified commands does. Rejected: an unclassified command would read
   `~/.ssh` with none of the path checks that ask about it today.
@@ -494,3 +530,4 @@ shell.
 - 2026-10-21 — the native shell's network stops at the machine (N2.2): its profile refuses loopback addresses and local Unix sockets (but name resolution and syslog), since a command that read the harness server's password from its environment could otherwise have that server run a command outside the sandbox; bubblewrap, which cannot keep one without the other, refuses the profile. The planner is told of its own shell only in a process that was given one.
 - 2026-10-31 — `memoryBytes` is real memory, held by a watcher that sums the run's resident memory about once a second and ends it with a note of its own; the address limit stops being the memory bound and becomes a 256 GiB ceiling (`addressSpaceBytes`), measured under The limits of a sealed run, so Node, vitest and the build run sealed.
 - 2026-10-31 — a sealed run on Linux reads `/etc/hosts`, so `localhost` resolves to its own loopback and `vitest` starts: S1's read list had no name table, and the network stays as it was.
+- 2026-10-31 — a run killed as it starts dies with its launcher: on Linux the watcher kills what carries the launcher's mark once the launcher has gone, since bubblewrap arms `--die-with-parent` only after setting up, and ends the launcher if its parent goes; on macOS a subshell starts the sandbox and its reaper, and the watcher reaps too.

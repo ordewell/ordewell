@@ -378,7 +378,7 @@ describe('BubblewrapBackend.wrap', () => {
       const processes = '$(($(set -- /proc/[0-9]*; echo $#) + 64))';
       expect(prelude).toContain(`ulimit -u ${processes} 2>/dev/null || ulimit -p ${processes}`);
       expect(prelude).toContain(`ulimit -v ${64 * 1024 * 1024}`);
-      expect(prelude).toMatch(/exec "\$@"$/);
+      expect(prelude).toMatch(/exec "\$bwrap" --unsetenv \S+ "\$@"$/);
       expect(launch.args.slice(2, 4)).toEqual(['ordewell-sealed', '/usr/bin/bwrap']);
       expect(launch.args).toContain('--die-with-parent');
       expect(launch.wallTimeMs).toBe(30_000);

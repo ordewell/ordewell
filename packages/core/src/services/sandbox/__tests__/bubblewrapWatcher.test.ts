@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BubblewrapBackend } from '../bubblewrap';
 import { MEMORY_LIMIT_SIGNAL, type SandboxProfile } from '../SandboxBackend';
 
@@ -34,7 +34,15 @@ describe.each(SHELLS)('the bubblewrap memory watcher, under %s', (shell) => {
     };
     const [, script] = new BubblewrapBackend('/usr/bin/bwrap').wrap({ shell: '/bin/sh', shellArgs: ['-c'], env: {} }, profile).args;
     // Linux's `/proc/$$` is there from the start, and the watcher takes its going to mean the run ended.
-    return `mkdir -p '${proc}/'$$\n${script.replaceAll('/proc/', `${proc}/`)}`;
+    return `mkdir -p '${proc}/'$$ '${proc}/'$PPID\n${script.replaceAll('/proc/', `${proc}/`)}`;
+  }
+
+  /** The launcher's last argument: a program file, since bubblewrap takes the arguments the prelude adds. */
+  function program(body: string): string {
+    const file = join(proc, 'bwrap');
+    writeFileSync(file, `#!${shell}\n${body}\n`);
+    chmodSync(file, 0o755);
+    return file;
   }
 
   /**
@@ -61,7 +69,7 @@ describe.each(SHELLS)('the bubblewrap memory watcher, under %s', (shell) => {
 
   function run(rssKb: number): Promise<{ code: number | null; signal: NodeJS.Signals | null; root: string }> {
     return new Promise((resolve, reject) => {
-      const child = spawn(shell, ['-c', prelude(), 'ordewell-sealed', shell, '-c', bubblewrap(rssKb)], { stdio: ['ignore', 'pipe', 'ignore'] });
+      const child = spawn(shell, ['-c', prelude(), 'ordewell-sealed', program(bubblewrap(rssKb))], { stdio: ['ignore', 'pipe', 'ignore'] });
       let out = '';
       child.stdout.on('data', (chunk) => { out += String(chunk); });
       child.on('error', reject);
@@ -81,5 +89,77 @@ describe.each(SHELLS)('the bubblewrap memory watcher, under %s', (shell) => {
 
   it('sums only the namespace, and leaves a run under the limit to end on its own', async () => {
     expect(await run(LIMIT_KB - 2048)).toMatchObject({ code: 7, signal: null });
+  });
+
+  /**
+   * Stands for bubblewrap killed before its child armed the death signal: a
+   * child that outlives it, and whose parent no longer says whose it was. Its
+   * `cmdline` is bubblewrap's own, as a clone's is, so a fake `/proc` says of it
+   * what the real one would. A neighbour has the same but for the pid, which
+   * is the launcher's with a digit more, so it is another run's.
+   */
+  function orphaned(): string {
+    return [
+      'exec 3>&1 >/dev/null 2>&1',
+      'sleep 30 & root=$!',
+      'sleep 30 & other=$!',
+      `mkdir -p '${proc}/'$root '${proc}/'$other`,
+      `printf '%s\\000' "$0" "$@" > '${proc}/'$root/cmdline`,
+      `printf '%s\\000' "$0" "$@" | sed "s/$$/$$0/g" > '${proc}/'$other/cmdline`,
+      'echo "root=$root other=$other launcher=$$" >&3',
+      'wait $root',
+    ].join('\n');
+  }
+
+  function start(args: string[]): { child: ReturnType<typeof spawn>; pids: Promise<{ root: number; other: number; launcher: number }> } {
+    const child = spawn(shell, args, { stdio: ['ignore', 'pipe', 'ignore'] });
+    const pids = new Promise<{ root: number; other: number; launcher: number }>((resolve) => {
+      let out = '';
+      child.stdout!.on('data', (chunk) => {
+        out += String(chunk);
+        const found = /root=(\d+) other=(\d+) launcher=(\d+)/.exec(out);
+        if (found) resolve({ root: Number(found[1]), other: Number(found[2]), launcher: Number(found[3]) });
+      });
+    });
+    return { child, pids };
+  }
+
+  function alive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  it("ends a sandbox the launcher's death left behind, and no other run's", async () => {
+    const { child, pids } = start(['-c', prelude(), 'ordewell-sealed', program(orphaned())]);
+    const { root, other } = await pids;
+    try {
+      child.kill('SIGKILL');
+      rmSync(join(proc, String(child.pid)), { recursive: true });
+
+      await vi.waitFor(() => expect(alive(root)).toBe(false));
+      expect(alive(other)).toBe(true);
+    } finally {
+      for (const pid of [root, other]) if (alive(pid)) process.kill(pid, 'SIGKILL');
+    }
+  });
+
+  it('ends the launcher, and so the sandbox, when its caller died before the launcher armed its own death signal', async () => {
+    // The caller: a shell that can be killed while the launcher, in the background, goes on.
+    const { child, pids } = start(['-c', '"$@" & wait', 'caller', shell, '-c', prelude(), 'ordewell-sealed', program(orphaned())]);
+    const { root, other, launcher } = await pids;
+    try {
+      child.kill('SIGKILL');
+      rmSync(join(proc, String(child.pid)), { recursive: true });
+
+      await vi.waitFor(() => expect(alive(launcher)).toBe(false));
+      rmSync(join(proc, String(launcher)), { recursive: true });
+      await vi.waitFor(() => expect(alive(root)).toBe(false));
+    } finally {
+      for (const pid of [root, other, launcher]) if (alive(pid)) process.kill(pid, 'SIGKILL');
+    }
   });
 });

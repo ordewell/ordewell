@@ -46,11 +46,25 @@ function shallowFirst(paths: readonly string[]): string[] {
 }
 
 /**
- * Where the watcher finds `sleep`, in place of a PATH the host gave it: the
+ * Where the watcher finds `sleep` and `grep`, in place of a PATH the host gave it: the
  * watcher runs outside the sandbox, and a relative PATH entry can name a
  * directory the sandbox may write.
  */
 const WATCHER_PATH = '/usr/bin:/bin:/run/current-system/sw/bin';
+
+/**
+ * Passed to `--unsetenv`, as a name no environment holds, so that it changes
+ * nothing in the sandbox and marks bubblewrap's arguments as this launcher's.
+ * Ended by a dash, since a pid can be the start of a longer one. An argument
+ * rather than a variable: `/proc/<pid>/cmdline` can be read whatever the
+ * process has done to its privileges, which its `environ` cannot. Found by
+ * `grep` rather than the shell's `read`, which reads a byte at a time, for as
+ * long a line as a command cares to give itself, and on some shells stops at
+ * the first of the NULs between arguments. The bracket keeps `grep` from
+ * finding its own arguments.
+ */
+const RUN_MARK = 'ordewell-sealed-$$-';
+const RUN_MARK_PATTERN = `[${RUN_MARK[0]}]${RUN_MARK.slice(1)}`;
 
 /**
  * Sums the sandbox's resident memory about once a second, in the shell's own
@@ -60,6 +74,18 @@ const WATCHER_PATH = '/usr/bin:/bin:/run/current-system/sw/bin';
  * namespace can leave it, so nothing can hide from the sum as a process can
  * leave a process group. Its streams are its own, since one it held open would
  * keep the caller waiting for the run's output.
+ *
+ * With the launcher gone it ends what the launcher left. Bubblewrap arms
+ * `--die-with-parent` in its child only after setting the sandbox up, and a
+ * signal armed once the parent has died never comes, so a launcher killed
+ * first leaves the sandbox running, or that child blocked for good waiting to
+ * be released (ADR-0036 S1). Its parent no longer says whose it is by then, but
+ * it never execs, so it keeps bubblewrap's arguments and {@link RUN_MARK} in
+ * them. Past the memory limit the watcher exits instead: the launcher bears the
+ * mark too, and this kill must not overtake the signal the caller reads. A
+ * caller that dies before bubblewrap has armed the signal for the launcher
+ * itself leaves the same gap one step up, with no clock left on the run, so
+ * the watcher ends the launcher then.
  */
 function memoryWatcher(limits: SandboxLimits): string {
   const memory = Math.ceil(limits.memoryBytes / 1024);
@@ -67,6 +93,7 @@ function memoryWatcher(limits: SandboxLimits): string {
   field() { f=; while read -r k w _; do if [ "$k" = "$1" ]; then f=$w; return; fi; done < "$2/status"; }
   root=
   while [ -d /proc/$$ ]; do
+    [ -d /proc/$PPID ] || kill -KILL $$
     sleep 1
     if [ ! -d "$root" ]; then
       root=
@@ -83,7 +110,11 @@ function memoryWatcher(limits: SandboxLimits): string {
       field VmRSS: "$p"
       kb=$((kb + \${f:-0}))
     done
-    if [ $kb -gt ${memory} ]; then kill -${MEMORY_LIMIT_SIGNAL.slice(3)} $$; kill -KILL \${root##*/}; break; fi
+    if [ $kb -gt ${memory} ]; then kill -${MEMORY_LIMIT_SIGNAL.slice(3)} $$; kill -KILL \${root##*/}; exit; fi
+  done
+  for p in $(grep -l "${RUN_MARK_PATTERN}" /proc/[0-9]*/cmdline); do
+    p=\${p%/cmdline}
+    kill -KILL \${p##*/}
   done
 } </dev/null >/dev/null 2>&1 &`;
 }
@@ -93,7 +124,8 @@ function memoryWatcher(limits: SandboxLimits): string {
  * at the wall-time limit and `--die-with-parent` reach the sandbox's PID
  * namespace, and every process in it, unchanged (ADR-0036 S1). The memory
  * watcher starts first, with none of the limits on it, and without a way to
- * wait or to compare namespaces the limit cannot be held, so nothing runs.
+ * wait, to compare namespaces or to find what a killed launcher left the limit
+ * cannot be held, so nothing runs.
  * Older kernels count the process limit against all of the user's processes
  * and newer ones against the sandbox's own, so it is set above every process
  * the host runs now: never already spent, and still a bound. Dash names that
@@ -103,12 +135,14 @@ function memoryWatcher(limits: SandboxLimits): string {
 function limitsPrelude(limits: SandboxLimits): string {
   const processes = `$(($(set -- /proc/[0-9]*; echo $#) + ${limits.processes}))`;
   const refused = `{ echo 'The sealed run could not be held to its limits, so it did not run.' >&2; exit 125; }`;
-  return `(PATH=${WATCHER_PATH}; command -v sleep >/dev/null && [ / -ef / ]) 2>/dev/null \\
+  return `(PATH=${WATCHER_PATH}; command -v sleep >/dev/null && command -v grep >/dev/null && [ / -ef / ]) 2>/dev/null \\
   || ${refused}
 ${memoryWatcher(limits)}
 { ulimit -u ${processes} 2>/dev/null || ulimit -p ${processes}; } && ulimit -v ${Math.ceil(limits.addressSpaceBytes / 1024)} \\
   || ${refused}
-exec "$@"`;
+bwrap=$1
+shift
+exec "$bwrap" --unsetenv ${RUN_MARK} "$@"`;
 }
 
 /**
