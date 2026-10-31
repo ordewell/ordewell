@@ -873,7 +873,9 @@ export class TaskOrchestrator {
   resolverRefusal(taskId: string): string | null {
     const task = this.store.get(taskId);
     if (!task) return null;
-    if (this.runs.current?.tasks[taskId]?.status === 'repairing') return `Task "${task.title}" is repairing its conflict: stop it, then add a resolver if its conflict still waits.`;
+    const record = this.runs.current?.tasks[taskId]?.status;
+    // Claimed, an attempt already has the conflict: the record reads `conflict` until its prepare reopens it.
+    if (record === 'repairing' || (record === 'conflict' && this.attempts.has(taskId))) return `Task "${task.title}" is repairing its conflict: stop it, then add a resolver if its conflict still waits.`;
     if (this.owesRepair(task)) return `Task "${task.title}" waits to repair its conflict. Stop it to withdraw the repair, then add a resolver.`;
     const [resolver] = this.landing.liveResolvers(taskId);
     if (resolver) return `Task "${resolver.title}" already resolves the conflict of task "${task.title}". Skip or remove it to add another.`;
@@ -885,7 +887,12 @@ export class TaskOrchestrator {
     const task = this.store.get(taskId);
     if (!task || !this.owesRepair(task)) return null;
     if (this.startHolds > 0) return 'planner';
-    return this.runState.kind === 'held' || waitOf(this.startWaits(task), 'usage-limit') ? 'usage-limit' : 'slot';
+    return this.onUsageLimit(task) ? 'usage-limit' : 'slot';
+  }
+
+  /** A usage limit keeps this task from starting by itself: the hold on the run, or its own runner's limit with no reset to wait for. */
+  private onUsageLimit(task: Readonly<Task>): boolean {
+    return this.runState.kind === 'held' || !!waitOf(this.startWaits(task), 'usage-limit');
   }
 
   /** Where a task's isolated work stands, and who has its conflict: the record says the first, the scheduler the second. */
@@ -1366,15 +1373,16 @@ export class TaskOrchestrator {
    * Work that did not land waits on the user — it never fails the task or
    * blocks its dependents — unless its conflict is owed a repair, which takes
    * the slot the ending attempt freed and never one more than the run allows.
-   * A planner turn's start hold holds it as it holds any new spawn (ADR-0029).
-   * The repair follows on from the start whose work it repairs: a Stop since
-   * that was admitted withdraws it.
+   * A planner turn's start hold holds it as it holds any new spawn (ADR-0029),
+   * and a usage limit does too: `reopen` spends a repair, so one the runner
+   * would refuse is not tried. The repair follows on from the start whose work
+   * it repairs: a Stop since that was admitted withdraws it.
    */
   private settleUnlanded(task: Task, outcome: UnlandedOutcome, admission: Admitted): void {
     this.store.markAwaitingUser(task.id, 'conflict');
     this.say(outcome.messages);
     if (outcome.kind !== 'repair-needed') return;
-    const waitsFor = this.startHolds > 0 ? 'the planner\'s turn ends' : this.slotsFull() ? 'a slot is free' : null;
+    const waitsFor = this.startHolds > 0 ? 'the planner\'s turn ends' : this.onUsageLimit(task) ? 'the usage limit resets' : this.slotsFull() ? 'a slot is free' : null;
     if (!waitsFor) {
       const claimed = this.claim(task.id, admission);
       if ('refused' in claimed) this.tell('warn', `The conflict of task "${task.title}" is not repaired: ${claimed.refused}`);
@@ -2016,6 +2024,8 @@ export class TaskOrchestrator {
       const continuation = resumeSessionId ? { message, resumeSessionId } : null;
       const started = this.claimed(taskId, admission, continuation, { autoResumed: true });
       const resumed = this.limitPauses.resumed() ? this.start(origin) : Promise.resolve();
+      // No tick follows a task started alone, and a repair the limit held is owed its start now.
+      this.startOwedRepairs(admission);
       // Both are awaited even if one fails: the claimed attempt's start must not
       // be left unhandled because restarting the run threw.
       await Promise.all([resumed, started]);
