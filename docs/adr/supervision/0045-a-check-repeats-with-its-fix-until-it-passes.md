@@ -123,7 +123,9 @@ round *r* and round *r* + 1 the body runs once.
   what it waits for, so a task of the loop that waits on the user is listed
   ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)),
   and when the loop ends it settles as a lone start does.
-  What is carried is held in memory, not on the plan: a Stop ends it and a
+  What is carried is held in memory, not on the plan: a Stop ends it, one a body
+  task stopped included, which is a run to stop though nothing of it starts by
+  itself (`TaskOrchestrator.loopCarried`), and a
   reload does not bring it back, so nothing of that loop starts by itself
   afterwards, and a body task started by hand then runs alone. Such a check is
   not stranded: its row says nothing runs it, it is listed as `failed`, and a
@@ -299,4 +301,5 @@ as check or body; a user editing a loop's `loop` field by hand from a surface.
 - 2026-10-31 — a check nothing will run is drawn and listed as the failure it is, with its next round offered, and what a carried loop waits on is listed (L5; [ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
 - 2026-10-31 — a check nothing will run offers its next round only once its dependencies have finished too (L5; [ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
 - 2026-10-31 — a round leaves a body task the user reverted on hold (L5; [ADR-0054](../isolation/0054-a-landed-task-reverts-on-the-integration-branch-before-merge-all.md)).
+- 2026-10-31 — a Stop ends a carried loop a body task stopped, which it found nothing to stop in before, so the retry that passes runs that task alone (L5, L7).
 - 2026-10-31 — L4: a continue of a failed body task waits on its undecided check as a retry does.

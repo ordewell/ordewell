@@ -652,7 +652,7 @@ const PLANNER_EXECUTES = { readOnlyHint: false };
  * one, and records it. The API planner offers the same tools as its own.
  */
 export const PLANNER_EXECUTION_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
-  tool('run_plan', 'Start the whole plan, as the user\'s Execute plan does, or make the tasks already running one scheduled run, so their dependents start. Only a plan the user has approved, and in Guarded the user is asked first; with autorun on in Full nobody is asked, on a first plan too.',
+  tool('run_plan', 'Start the whole plan, as the user\'s Execute plan does, or make the tasks already running one scheduled run, so their dependents start. What failed stays failed, and blocks what depends on it: retry_task gives it a new attempt. Only a plan the user has approved, and in Guarded the user is asked first; with autorun on in Full nobody is asked, on a first plan too.',
     runPlanInput, (h) => h.runPlan?.bind(h), PLANNER_EXECUTES),
   tool('run_task', 'Start one task now. Refused, with the reason, for a task whose dependencies have not finished, one waiting for Merge all, or one the user has not approved; in Guarded the user is asked first, and with autorun on in Full nobody is. Nothing starts after it on its own: run_plan is what starts the rest. A task an edit_plan call of this reply added is in the plan already: name it by the id or handle that call answered with, or its title.',
     oneTaskInput, (h) => h.runTask?.bind(h), PLANNER_EXECUTES),

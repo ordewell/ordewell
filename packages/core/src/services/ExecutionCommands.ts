@@ -188,6 +188,10 @@ export interface ExecutionHost {
   startsPending(): boolean;
   /** A plan the turn in flight submitted, whose start autorun makes as the turn ends (ADR-0030): a start on its way that no run holds yet. */
   submittedStartWaits(): boolean;
+  /** A loop is carried on, one a body task stopped included; see {@link TaskOrchestrator.loopCarried}. */
+  loopCarried(): boolean;
+  /** A run with nothing starting that something still resumes: a usage limit's reset, or a retry of a failure; see {@link TaskOrchestrator.awaitsResume}. */
+  awaitsResume(): boolean;
   /** Something will run this loop's check between rounds without being asked; see {@link TaskOrchestrator.loopRunsOn}. */
   loopRunsOn(taskId: string): boolean;
   /** Something could move a task on without being asked: a start, an attempt in any phase, the scheduler or a usage-limit hold. */
@@ -849,9 +853,9 @@ export class ExecutionCommands {
     const working = this.host.hasLiveWork();
     // No plan submitted asks to take a hold's run on (ADR-0030): that is the user's Execute.
     if (actor.kind === 'autorun' && !working && this.host.runHeld()) return { refusal: AUTORUN_RESTARTS_NOTHING };
-    // A run that is open with nothing live is joined too: a new run would take back its pause and what failed in it (ADR-0018 U1, ADR-0053).
-    // One a dirty checkout turned away has neither, and only a new run looks at the checkout again.
-    if (working || this.host.runHeld() || (this.host.scheduledRun() && !this.host.runBlocked())) {
+    // A run that is open with nothing live is joined too, one a dirty checkout parked included: a new run would take back its pause and what failed in it (ADR-0018 U1, ADR-0053).
+    // A planner joins one that ended on a failure as well: a retry continues that run, and the fresh chance a new one gives is not the planner's to ask for.
+    if (working || this.host.runHeld() || this.host.scheduledRun() || (actor.kind === 'planner-turn' && this.host.awaitsResume())) {
       const waiting = all.filter(({ task }) => this.host.waitsForApproval(task.id) && !this.carded.has(task.id));
       // Autorun under Guarded stays out of it: its join would approve a script task the user was never shown (ADR-0035).
       if (actor.kind === 'autorun' && !this.host.autonomous()) return { refusal: AUTORUN_JOINS_NOTHING };
@@ -861,7 +865,8 @@ export class ExecutionCommands {
           act: async () => {
             // The fresh chance is the user's to ask for: autorun's join leaves a failure as it is (ADR-0053).
             if (actor.kind === 'user') this.host.readyFailed();
-            return { message: await this.host.joinRun(waiting.length, 0) };
+            const joined = await this.host.joinRun(waiting.length, 0);
+            return { message: this.host.runBlocked() ? voiceOf(actor).blockedRun : joined };
           },
         };
       }
@@ -875,10 +880,11 @@ export class ExecutionCommands {
       return {
         act: async () => {
           await (unattended ? this.host.joinRun(waiting.length, 0) : this.host.joinRun(0, waiting.length));
+          if (this.host.runBlocked()) return { message: voiceOf(actor).blockedRun };
           const held = unattended || waiting.length === 0 ? '' : ` ${capitalize(named(waiting))} ${waiting.length === 1 ? 'was' : 'were'} added after the user approved the plan, so ${waiting.length === 1 ? 'it waits' : 'they wait'} until they start ${waiting.length === 1 ? 'it' : 'them'} or execute the plan.`;
           const under = live.length === 0 ? '' : `${named(live)} ${live.length === 1 ? 'is' : 'are'} already running, and `;
           const limit = this.host.runHeld() ? ' A usage limit holds the run, so nothing starts before its reset.' : '';
-          return { message: `The plan is running: ${under}each approved task starts as its dependencies finish.${limit}${held}` };
+          return { message: this.runningLine(actor, `The plan is running: ${under}each approved task starts as its dependencies finish.${limit}${held}`) };
         },
       };
     }
@@ -892,7 +898,8 @@ export class ExecutionCommands {
       if (!this.host.planApproved()) {
         return { refusal: NOT_APPROVED_YET };
       }
-      approves = toRun.filter(({ task }) => !this.host.taskApproved(task.id));
+      // A planner's run leaves what failed as it is, so no card asks to run it.
+      approves = toRun.filter(({ task }) => !this.host.taskApproved(task.id) && !(actor.kind === 'planner-turn' && task.status === 'failed'));
       if (approves.length > 0 && !this.asksToApprove(actor)) {
         const one = approves.length === 1;
         return { refusal: `${capitalize(named(approves))} ${one ? 'was' : 'were'} added after the user approved the plan, so ${one ? 'it is' : 'they are'} not approved to run. Ask the user to execute the plan themselves, which approves ${one ? 'it' : 'them'}.` };
@@ -904,14 +911,26 @@ export class ExecutionCommands {
         await this.host.runPlan(actor);
         if (this.host.runBlocked()) return { message: voiceOf(actor).blockedRun };
         const started = this.all().filter(({ task }) => this.host.running(task.id));
-        if (started.length > 0) return { message: `The plan is running: ${named(started)} started, and the rest start as their dependencies finish.` };
+        if (started.length > 0) return { message: this.runningLine(actor, `The plan is running: ${named(started)} started, and the rest start as their dependencies finish.`) };
         return {
-          message: this.host.startsHeld()
+          message: this.runningLine(actor, this.host.startsHeld()
             ? 'The plan is running: what is ready starts once this reply ends, and the rest as their dependencies finish.'
-            : 'The plan is running; nothing could start yet. Read the plan to see what each task waits on.',
+            : 'The plan is running; nothing could start yet. Read the plan to see what each task waits on.'),
         };
       },
     };
+  }
+
+  /**
+   * What a planner is told of its `run_plan`: it leaves a failure as it is
+   * (ADR-0053), so the line says so, and where nothing was left to start the
+   * run has ended again and the line does not say it runs.
+   */
+  private runningLine(actor: ExecutionActor, running: string): string {
+    const failed = actor.kind === 'planner-turn' ? this.all().filter(({ task }) => task.status === 'failed') : [];
+    if (failed.length === 0) return running;
+    const left = `${capitalize(named(failed))} failed and ${failed.length === 1 ? 'stays' : 'stay'} failed, and run_plan gives no fresh chance. ${MODEL_VOICE.retry}`;
+    return this.host.scheduling() || this.host.hasLiveWork() || this.host.runHeld() ? `${running} ${left}` : `Nothing could start. ${left}`;
   }
 
   /** A start of one task: `run_task`, or a fresh `retry_task`, which also takes a task that failed or waits on the user. */
@@ -1273,7 +1292,9 @@ export class ExecutionCommands {
     const live = this.all().filter(({ task }) => this.host.running(task.id));
     // A start admitted but not yet claimed would begin after a refused Stop, so it is a run to stop too, as is the one a submitted plan waits on (ADR-0030).
     const pending = this.host.startsPending() || this.host.submittedStartWaits();
-    if (!this.host.hasLiveWork() && !this.host.scheduling() && !pending) {
+    // A loop a body task stopped starts nothing, but the retry that passes would resume it unless a Stop ends it first (ADR-0045 L7).
+    const carried = this.host.loopCarried();
+    if (!this.host.hasLiveWork() && !this.host.scheduling() && !pending && !carried) {
       if (actor.kind !== 'user') return { refusal: 'Nothing is running: there is no run to stop.' };
       // The user's Stop pressed after the run ended is no request to refuse: the surface already shows it stopped. It still stands against what was admitted before it.
       this.host.stopAsked();
@@ -1287,7 +1308,9 @@ export class ExecutionCommands {
             ? `Stopped the run: ${named(live)} ${live.length === 1 ? 'is' : 'are'} back to not started, and the plan is kept. ${voiceOf(actor).startAgain}`
             : pending
               ? 'Stopped the run before anything more started: nothing was running, and what was about to start will not. The plan is kept.'
-              : 'Stopped the run; nothing was running. The plan is kept.',
+              : carried
+                ? 'Stopped the loop carried on: nothing was running, and a retry that passes no longer resumes it. The plan is kept.'
+                : 'Stopped the run; nothing was running. The plan is kept.',
         };
       },
     };

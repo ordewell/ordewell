@@ -167,7 +167,9 @@ everything below applies per repo of the group.
   task: an `isolation_blocked` message names the dirty repos, and the start is
   parked until `Session.continueWithStash` (a `git stash push` in every dirty
   repo, through the module like every other git operation) or
-  `Session.continueWithoutIsolation` (this run only, the whole group) replays it.
+  `Session.continueWithoutIsolation` (this run only, the whole group) replays it,
+  or Execute does, which reads the tree again and keeps the run and what failed
+  in it ([ADR-0053](../supervision/0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
   Ops tasks already running carry on meanwhile. Continuing a run on a dirty tree
   is not blocked — its base is already fixed, so the user's edits could not
   reach it either way.
@@ -548,3 +550,4 @@ literal git command lines or private fields.
 - 2026-10-30 — one task's landing can be reverted on the integration branch before Merge all, and a run that reverted one continues (ADR-0054).
 - 2026-10-31 — `resolveConflictAsTask` adds one worker per conflict and starts it where no scheduler would (ADR-0015).
 - 2026-10-31 — tools' caches in `node_modules` are left out of the mirror, so a task keeps its own and a sealed run can run vitest.
+- 2026-10-31 — Execute on a run a dirty tree parked replays the parked start rather than beginning a new run (ADR-0053).

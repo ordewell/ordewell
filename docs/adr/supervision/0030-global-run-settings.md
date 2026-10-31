@@ -294,7 +294,9 @@ refused `run_plan` for the rest of the session.
   task for later stays possible, and autorun still fires on a whole submitted
   plan only. `run_plan` starts the whole plan, or makes the work already live
   one scheduled run and approves what waits, so the planner never needs to drive
-  tasks one by one.
+  tasks one by one. It leaves what failed as it is, as it does anywhere
+  ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)):
+  a planner's `retry_task` is what starts a failed task again.
 - **Such a start makes the plan approved**, as autorun's own start does, so
   nothing later in the session is refused for it.
 - **A start in the reply that adds the task goes through at once**, since the
@@ -479,3 +481,4 @@ the daemon reads it from there at generation.
 - 2026-10-31 — a user's Stop withdraws autorun's start even with nothing live, and a run opened after that Stop has the plan; under Guarded autorun's start approves no script task the commit left unapproved.
 - 2026-10-31 — autorun restarts no run a usage limit holds, and skips a scheduled run with nothing live in Guarded as in Full.
 - 2026-10-31 — the plan left to Execute under a usage limit is taken in for the reset to go on with; Execute no longer takes the pause back.
+- 2026-10-31 — a planner's `run_plan` leaves what failed as it is, in Full with autorun as anywhere ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
