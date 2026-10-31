@@ -832,7 +832,7 @@ export class Session {
         const handoff = this.owedHandoff();
         if (handoff) this.broadcast({ type: 'isolation_handoff', ...handoff });
       },
-      deliver: (digest, report) => this.turns.enqueue({ source: 'supervisor', text: digest, ...(report ? { report } : {}) }),
+      deliver: (digest, report, idle) => this.turns.enqueue({ source: 'supervisor', text: digest, ...(report ? { report } : {}), ...(idle ? { idle } : {}) }),
       pump: () => this.turns.pump(),
       restartPlanner: () => this.backend.current().restart?.(),
       abandonTurn: () => this.conversation.abandonHungTurn(),

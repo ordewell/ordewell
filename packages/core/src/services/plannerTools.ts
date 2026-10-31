@@ -230,6 +230,10 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
           const attempts = host.taskLogAttempts(task.id);
           const selected = attempt ?? attempts.at(-1);
           if (selected === undefined || !attempts.includes(selected)) {
+            // A forked session has the plan's digests and none of the logs behind them (ADR-0057 R1).
+            if (selected !== undefined && task.handoff?.attempt === selected) {
+              return { ...head, attempt: selected, attempts, reason: 'No saved log holds this attempt: this is what the plan keeps of it.', handoff: namedHandoff(host.tasks(), task.handoff) };
+            }
             return { ok: false, error: selected === undefined ? 'No saved task log is available for this task.' : `No saved log for attempt ${selected}.`, attempts };
           }
           const output = renderTaskLog(host.taskLog(task.id, selected), kinds);

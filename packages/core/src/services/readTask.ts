@@ -42,20 +42,21 @@ export function readTask(args: ReadTaskArgs, readerId: string, plan: readonly Ta
     return { isError: true, text: `${name} is not a task this one may read. It may read itself, the tasks it depends on, directly or not, and its loop's other end: ${listed(allowed)}.` };
   }
   const attempts = log.attempts(target.id);
+  const latest = attempts.at(-1);
   const asked = args.attempt ?? written.attempt;
-  if (asked !== undefined && !attempts.includes(asked)) {
+  // A forked session has the plan's digests and none of the logs behind them, so a digest answers for the attempt it is from.
+  const digested = asked !== undefined && target.handoff !== undefined && (target.handoff.attempt ?? latest) === asked;
+  if (asked !== undefined && !attempts.includes(asked) && !digested) {
     return { isError: true, text: `${name} has no saved attempt ${asked}: ${attempts.length > 0 ? `its saved attempts are ${listed(attempts.map(String))}` : 'it has none'}.` };
   }
-  const latest = attempts.at(-1);
   const attempt = asked ?? latest;
   const of = `attempt ${attempt} of ${attempts.length}`;
   const taskName: HandoffTaskName = (id) => taskRefOf(plan, id);
   const logged = attempt === undefined ? undefined : loggedHandoff(log.events(target.id, attempt));
   if (logged) return { text: [wordsFrom('Handoff', `${name}, ${of}`), '', ...storedLines(logged, args.include_report === true, taskName)].join('\n') };
-  // What the plan keeps is the latest attempt's, so it stands in for no other.
-  if (attempt !== latest) return { text: `${name} has no handoff from ${of}: it ended without a task_complete call, or ran before handoffs.` };
-  // A forked session has the plan's digests and none of the logs behind them.
-  if (target.handoff) return { text: [`${name}: no saved log of this session holds its handoff, so this is what the plan keeps of it.`, '', wordsFrom('Handoff', name), ...digestLines(target.handoff, taskName)].join('\n') };
+  // What the plan keeps is one attempt's, so it stands in for no other.
+  if (attempt !== latest && !digested) return { text: `${name} has no handoff from ${of}: it ended without a task_complete call, or ran before handoffs.` };
+  if (target.handoff && (asked === undefined || digested)) return { text: [`${name}: no saved log of this session holds its handoff, so this is what the plan keeps of it.`, '', wordsFrom('Handoff', name), ...digestLines(target.handoff, taskName)].join('\n') };
   return { text: noHandoff(target, name, attempt === undefined ? undefined : of) };
 }
 

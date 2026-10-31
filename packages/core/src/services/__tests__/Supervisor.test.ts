@@ -211,7 +211,7 @@ describe('Supervisor', () => {
       vi.useRealTimers();
     });
 
-    it('is delivered once due after a restart that restored it inside its debounce window, without the supervisor\'s own events', async () => {
+    it('is delivered once due after a restart that restored it, opening a turn of its own while the supervisor\'s events go idle', async () => {
       vi.useFakeTimers();
       const before = new Supervisor(host({ level: 'watch' }), { debounceMs: 10 });
       before.observe({ kind: 'task_failed', taskId: 't2' });
@@ -224,14 +224,28 @@ describe('Supervisor', () => {
       supervisor.restore(saved);
       await vi.advanceTimersByTimeAsync(10);
 
-      expect(h.deliver.mock.calls).toEqual([[expect.stringMatching(/^Run update:\n- task #1 "Task t1", whose result you asked for/), 'user']]);
-      expect(supervisor.snapshot().policy.attention).toEqual([expect.objectContaining({ kind: 'task_failed', taskId: 't2' })]);
+      expect(h.deliver.mock.calls).toEqual([
+        [expect.stringMatching(/task #2 "Task t2" failed/), undefined, true],
+        [expect.stringMatching(/^Run update:\n- task #1 "Task t1", whose result you asked for/), 'user'],
+      ]);
+      expect(supervisor.snapshot().policy.attention).toEqual([]);
+      vi.useRealTimers();
+    });
 
-      supervisor.observe({ kind: 'waiting_input', taskId: 't3' });
+    it('takes a restored failure into the turn a restored report of the supervisor\'s opens', async () => {
+      vi.useFakeTimers();
+      const before = new Supervisor(host({ level: 'act' }), { debounceMs: 10 });
+      before.observe({ kind: 'task_failed', taskId: 't2' });
+      before.observe(report('supervisor', 't3'));
+      const saved = before.snapshot();
+      before.reset();
+      const h = host({ level: 'act' });
+      const supervisor = new Supervisor(h, { debounceMs: 10 });
+
+      supervisor.restore(saved);
       await vi.advanceTimersByTimeAsync(10);
 
-      expect(h.deliver).toHaveBeenCalledTimes(2);
-      expect(h.deliver.mock.calls[1]).toEqual([expect.stringMatching(/failed\n- task #3 "Task t3" is waiting for input$/), undefined]);
+      expect(h.deliver.mock.calls).toEqual([[expect.stringMatching(/failed\n- task #3 "Task t3", whose result you asked for/), 'supervisor']]);
       vi.useRealTimers();
     });
 
@@ -268,21 +282,72 @@ describe('Supervisor', () => {
     });
   });
 
-  it('does not wake on the events a restart restored, with no report among them: a session opening is not a run event', async () => {
-    vi.useFakeTimers();
-    const before = new Supervisor(host({ level: 'watch' }), { debounceMs: 10 });
-    before.observe({ kind: 'task_failed', taskId: 't1' });
-    const saved = before.snapshot();
-    before.reset();
-    const h = host({ level: 'watch' });
-    const supervisor = new Supervisor(h, { debounceMs: 10 });
+  describe('what a restart restored, with no report among it', () => {
+    const restored = (run: SupervisedRun = { level: 'act' }) => {
+      const before = new Supervisor(host({ level: 'watch' }), { debounceMs: 10 });
+      before.observe({ kind: 'task_failed', taskId: 't1' });
+      const saved = before.snapshot();
+      before.reset();
+      const h = host(run);
+      const supervisor = new Supervisor(h, { debounceMs: 10 });
+      supervisor.restore(saved);
+      return { h, supervisor };
+    };
 
-    supervisor.restore(saved);
-    await vi.advanceTimersByTimeAsync(100);
+    it('goes out idle once due and leaves the policy: a session opening is not a run event', async () => {
+      vi.useFakeTimers();
+      const { h, supervisor } = restored();
 
-    expect(h.deliver).not.toHaveBeenCalled();
-    expect(supervisor.snapshot().policy.attention).toHaveLength(1);
-    vi.useRealTimers();
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(h.deliver.mock.calls).toEqual([[expect.stringContaining('task #1 "Task t1" failed'), undefined, true]]);
+      expect(supervisor.snapshot().policy.attention).toEqual([]);
+      expect(h.wakeUpEnded).not.toHaveBeenCalled();
+      vi.useRealTimers();
+    });
+
+    it('does not count as a wake-up', async () => {
+      vi.useFakeTimers();
+      const { supervisor } = restored();
+
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(supervisor.snapshot().wakeUps).toEqual([]);
+      vi.useRealTimers();
+    });
+
+    it('wakes the supervisor with a run event that joins it', async () => {
+      vi.useFakeTimers();
+      const { h, supervisor } = restored();
+
+      supervisor.observe({ kind: 'waiting_input', taskId: 't3' });
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(h.deliver.mock.calls).toEqual([[expect.stringMatching(/failed\n- task #3 "Task t3" is waiting for input$/), undefined]]);
+      vi.useRealTimers();
+    });
+
+    it('wakes the supervisor once a run carries on past it', async () => {
+      vi.useFakeTimers();
+      const { h, supervisor } = restored();
+
+      supervisor.runStarted(true);
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(h.deliver.mock.calls).toEqual([[expect.stringContaining('failed'), undefined]]);
+      vi.useRealTimers();
+    });
+
+    it('goes out idle with a pass beside it: a pass wakes nobody', async () => {
+      vi.useFakeTimers();
+      const { h, supervisor } = restored();
+
+      supervisor.observe({ kind: 'task_passed', taskId: 't2' });
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(h.deliver.mock.calls).toEqual([[expect.stringContaining('failed'), undefined, true]]);
+      vi.useRealTimers();
+    });
   });
 
   it('tells a wake-up turn at Watch its read budget, and refuses every change to the plan', () => {

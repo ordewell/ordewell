@@ -586,16 +586,17 @@ export function checkHandoff<H extends Handoff>(handoff: H, producerId: string, 
     }
     const finding = written.finding ?? ref.finding;
     const latest = target.handoff?.attempt ?? (target.handoff ? pins.logs?.attempts(target.id).at(-1) : undefined);
-    // A task naming itself means the attempt making the call, whatever an earlier one left on the plan.
-    const attempt = written.attempt ?? (target.id === producerId ? pins.attempt : undefined) ?? latest;
+    // A task naming itself means the attempt making the call and the handoff it is writing, whatever an earlier one left on the plan.
+    const own = target.id === producerId && pins.attempt !== undefined && (written.attempt ?? pins.attempt) === pins.attempt;
+    const attempt = own ? pins.attempt : written.attempt ?? latest;
     const held = written.attempt === undefined || written.attempt === latest ? target.handoff : pins.logs?.handoff(target.id, written.attempt);
-    if (written.attempt !== undefined && written.attempt !== latest && !pins.logs?.attempts(target.id).includes(written.attempt)) {
+    if (!own && written.attempt !== undefined && written.attempt !== latest && !pins.logs?.attempts(target.id).includes(written.attempt)) {
       refusals.push(`${field}.task: ${named} has no saved attempt ${written.attempt}.`);
       return ref;
     }
     if (finding !== undefined) {
-      const count = held?.findingCount ?? 0;
-      const whose = written.attempt === undefined ? 'its latest handoff' : `its attempt ${written.attempt}`;
+      const count = own ? handoff.findings?.length ?? 0 : held?.findingCount ?? 0;
+      const whose = own ? 'this handoff' : written.attempt === undefined ? 'its latest handoff' : `its attempt ${written.attempt}`;
       if (Number(finding.slice(1)) > count) {
         refusals.push(`${field}.finding: ${JSON.stringify(finding)} is not a finding of ${named}: ${count > 0 ? `${whose} has F1 to F${count}` : `${whose} has none`}.`);
       }
