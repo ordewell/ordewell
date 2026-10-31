@@ -191,7 +191,7 @@ the same seam through its own tool definitions.
 
 | tool | does |
 |---|---|
-| `run_plan` | start the approved plan, or any plan under Full with autorun ([ADR-0030](0030-global-run-settings.md)); with work live or a run open, make it one scheduled run, under a usage limit from its reset |
+| `run_plan` | start the approved plan, or any plan under Full with autorun ([ADR-0030](0030-global-run-settings.md)); with work live or a run open, make it one scheduled run, under a usage limit from its reset. A planner's leaves what failed as it is ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)) |
 | `run_task` | start one ready task; refuses one whose dependencies or merge gate are not met, and says which |
 | `stop_task` | stop one task, denying its open approvals as stop does |
 | `stop_run` | stop every running task, keep the plan |
@@ -434,7 +434,7 @@ Checked at the seam, where the action executes:
   (ADR-0045 L7).
 
 A start of a task that failed is a retry however it is asked for — `run_task`,
-or `run_plan`, which would start every failed task again. What the guards
+or a supervisor's `run_plan`, which starts every failed task again. What the guards
 remember lasts from the user's start of a run to their next: a run the
 supervisor restarts itself, or a usage-limit reset resumes, continues the one
 before, its level as lowered included, or each restart would wipe the count.
@@ -712,3 +712,4 @@ until #30 exists.
 - 2026-10-31 — a supervisor's start or skip of a check between rounds is refused only while something will run it (ADR-0045 L7).
 - 2026-10-31 — the user's Stop withdraws what was admitted before it even when it finds nothing to stop, and a plan whose start autorun owes is a run to stop ([ADR-0030](0030-global-run-settings.md)).
 - 2026-10-31 — `run_plan` joins a run that is open with nothing live rather than starting it over: its failures and its usage-limit pause stand.
+- 2026-10-31 — a planner's `run_plan` leaves what failed as it is; a supervisor's is still the retry its guards count.

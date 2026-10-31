@@ -925,6 +925,17 @@ export class Session {
   }
 
   /**
+   * What a run this actor begins leaves failed. The fresh chance is the user's
+   * to ask for (ADR-0053), and a supervisor's `run_plan` is a retry its guards
+   * count (ADR-0029), so only autorun and a planner leave any; autorun only what
+   * failed in the reply it follows (ADR-0030).
+   */
+  private failuresLeftBy(actor: ExecutionActor): ReadonlySet<string> | undefined {
+    if (actor.kind === 'autorun') return actor.leavesFailed;
+    return actor.kind === 'planner-turn' ? new Set(this.failedTasks().keys()) : undefined;
+  }
+
+  /**
    * Autorun (ADR-0030): a plan the planner submitted in the turn that just
    * ended starts as if the user had pressed Execute, through the seam, so the
    * timeline says autorun started it. Read now, not when the turn opened: the
@@ -971,6 +982,8 @@ export class Session {
       runHeld: () => this.orchestrator.runHeld,
       scheduledRun: () => this.orchestrator.scheduledRun,
       startsPending: () => this.orchestrator.startsPending,
+      loopCarried: () => this.orchestrator.loopCarried,
+      awaitsResume: () => this.orchestrator.awaitsResume,
       submittedStartWaits: () => this.turnEffects.startWaits && this.userRunSettings().autorun,
       loopRunsOn: (taskId) => this.orchestrator.loopRunsOn(taskId),
       advancesOnItsOwn: () => this.orchestrator.advancesOnItsOwn,
@@ -983,7 +996,7 @@ export class Session {
       waitingRequests: (taskId) => this.approvals.outstanding()
         .filter(({ request }) => isRunnerApproval(request) && request.taskId === taskId)
         .map(({ id, request }) => ({ id, subject: request.subject })),
-      runPlan: (actor) => this.runWholePlan(runOrigin(actor), actor.kind === 'autorun' ? actor.leavesFailed : undefined),
+      runPlan: (actor) => this.runWholePlan(runOrigin(actor), this.failuresLeftBy(actor)),
       joinRun: (approved, left) => this.joinRun(approved, left),
       readyFailed: () => this.orchestrator.readyFailed(),
       startTask: (taskId, actor) => this.startOneTask(taskId, runOrigin(actor)),
@@ -2140,7 +2153,8 @@ export class Session {
         : scheduling ? 'The plan is already running, and no task waits for your approval.' : 'The plan is running: each task starts once its dependencies finish.'
       : approved === 1 ? 'Approved 1 task; it starts once its dependencies finish.' : `Approved ${approved} tasks; each starts once its dependencies finish.`;
     const said = this.orchestrator.runHeld ? `${line} A usage limit holds the run, so nothing starts before its reset.` : line;
-    this.notice('info', said);
+    // A checkout that turned the start away again has said so itself, and nothing the line names starts.
+    if (!this.runs.blocked) this.notice('info', said);
     return said;
   }
 

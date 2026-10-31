@@ -704,9 +704,20 @@ export class TaskOrchestrator {
    * a task that resumes on its own at its usage limit's reset, a start a
    * dirty checkout parked for Stash and continue to replay, or a loop carried
    * on with no scheduler. A Stop is owed to it, whether or not anything runs.
+   * A carried loop a body task stopped starts nothing, so it is not here: see
+   * {@link loopCarried}.
    */
   get startsPending(): boolean {
     return this.admissions > 0 || this.queuedStarts.size > 0 || this.owedRepairs.size > 0 || this.runs.blocked || this.store.allTasks.some(waitsForReset) || this.loopsCarriedOn().length > 0;
+  }
+
+  /**
+   * A loop is carried on, one a body task stopped included. Nothing of that
+   * one starts by itself, so nothing here moves a task on, but a retry that
+   * passes would resume it: a Stop is owed to it too (ADR-0045 L7).
+   */
+  get loopCarried(): boolean {
+    return [...this.carriedLoops].some((id) => this.store.get(id)?.loop);
   }
 
   /**
@@ -1119,10 +1130,15 @@ export class TaskOrchestrator {
    * first: a scheduled run starts them as their dependencies finish, and one
    * the scheduler was not driving — tasks started on their own — becomes the
    * plan's run, as Execute would make it. A hold starts nothing either way:
-   * the plan's run is what its reset gives back (ADR-0018 U1).
+   * the plan's run is what its reset gives back (ADR-0018 U1). A start a dirty
+   * checkout parked in a scheduled run is replayed, which reads the checkout
+   * again; a new run would take back the run's failures (ADR-0053).
    */
   async joinRun(origin: RunOrigin): Promise<void> {
-    if (this.isScheduling) return this.tick();
+    if (this.isScheduling) {
+      await this.continueBlockedRun('reread');
+      return this.tick();
+    }
     if (!this.reviewApproved) return this.approveReview(origin);
     if (this.runHeld) return this.joinHold();
     return this.start(origin);
@@ -2763,9 +2779,10 @@ export class TaskOrchestrator {
   /**
    * Replay the start a dirty tree turned away. `stash` puts the user's tracked
    * changes on the git stash first, so the run isolates; `shared` runs this one
-   * run in the workspace root, knowingly.
+   * run in the workspace root, knowingly; `reread` reads the tree again, which
+   * may turn the start away again.
    */
-  async continueBlockedRun(how: 'stash' | 'shared'): Promise<void> {
+  async continueBlockedRun(how: 'stash' | 'shared' | 'reread'): Promise<void> {
     const resume = await this.runs.continueBlocked(how);
     if (resume) await resume();
   }

@@ -397,10 +397,11 @@ export class IsolationRunController {
   /**
    * Go on with the start a dirty tree turned away. `stash` puts the user's
    * tracked changes on the git stash first, so the run isolates; `shared` runs
-   * this one run in the workspace root, knowingly. Returns the parked start for
-   * the caller to replay; null when nothing was parked.
+   * this one run in the workspace root, knowingly; `reread` does nothing to the
+   * tree, so the replay asks about it again (ADR-0053). Returns the parked start
+   * for the caller to replay; null when nothing was parked.
    */
-  async continueBlocked(how: 'stash' | 'shared'): Promise<(() => Promise<void>) | null> {
+  async continueBlocked(how: 'stash' | 'shared' | 'reread'): Promise<(() => Promise<void>) | null> {
     const resume = this.blockedStart;
     if (!resume) return null;
     if (how === 'stash') {
@@ -412,6 +413,8 @@ export class IsolationRunController {
         ? `Stashed your uncommitted changes in ${repos.join(', ')}: \`git stash pop\` in each brings them back.`
         : 'Stashed your uncommitted changes: `git stash pop` brings them back.');
       if (this.blockedStart !== resume) return null;
+      this.blockedStart = null;
+    } else if (how === 'reread') {
       this.blockedStart = null;
     } else {
       this.blockedStart = null;

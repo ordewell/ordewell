@@ -189,13 +189,16 @@ reads do.
   as it takes them into the plan's run (`PlanStore.readyFailed`), and so with a
   usage limit holding them, which takes no resume back: that run goes on at the
   reset ([ADR-0018](../runners/0018-structured-runner-transport.md) U1). A
-  scheduled run keeps its failures, with work live or not, one waiting on a person
-  or held by a usage limit included: a retry continues them
-  ([ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)), and Execute only
-  approves what waits in it. Neither a planner's `run_plan` nor autorun asks: a
-  join leaves a failure as it is, and autorun's run leaves what failed in the
-  reply it follows
-  ([ADR-0030](0030-global-run-settings.md)). An edit outside a run asks for neither,
+  scheduled run keeps its failures, with work live or not, one waiting on a person,
+  parked by a dirty checkout or held by a usage limit included: a retry continues
+  them ([ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)), and Execute
+  only approves what waits in it, and replays a parked start, which reads the
+  checkout again. A planner's `run_plan` does not ask: it joins a run that ended
+  on a failure, which a retry continues, and a run it begins leaves what failed
+  as it is. Autorun does not ask either: a join leaves a failure as it is, and a
+  run it begins leaves what failed in the reply it follows
+  ([ADR-0030](0030-global-run-settings.md)). A supervisor's `run_plan` is the retry
+  its guards count ([ADR-0029](0029-the-supervisor.md)). An edit outside a run does not ask,
   and leaves a failure and a wait as they are (`resetForRun({ edited: true })`).
   The one exception is a task an edit made manual, by the planner or by hand, in a
   run or not, failed or waiting on the user: it has nothing to retry, so it is the
@@ -453,3 +456,4 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
 - 2026-10-31 — a stranded check behind a dependency offers no Continue either, and the seam refuses one; a task made manual is released when the runner it kept its wait for ends; a reverted task is listed behind its loop's check too.
 - 2026-10-31 — an ended attempt's entry names what holds any start of its task and offers no Retry or Continue the seam would refuse; a usage limit that ends a task made manual holds nothing.
 - 2026-10-31 — a task an edit made manual is released as a direct edit lands too; a scheduled or held run keeps its failures and pauses through Execute with nothing live; a conflict, changed files and a pause with no session offer no Retry the seam would refuse, and a seam Continue is refused behind a loop's undecided check.
+- 2026-10-31 — Execute on a scheduled run a dirty checkout parked replays its start instead of beginning a new run, and a planner's `run_plan` joins a run that ended on a failure and leaves what failed in a run it begins.
