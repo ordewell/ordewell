@@ -82,7 +82,7 @@ describe('AUDIT revert: a dependent whose record a retry dropped', () => {
     expect(run.tasks[dependent.id]).toBeUndefined();
     expect(run.landings?.[dependent.id]?.['.']).toHaveLength(1);
 
-    const scope = revertScope(base.id, { tasks: [base, dependent], run, live: new Set() });
+    const scope = revertScope(base.id, { tasks: [base, dependent], run, live: new Set(), resolvers: () => [] });
 
     expect(scope.taskIds).toContain(dependent.id);
     expect(await iso.revert(run, scope.taskIds, nothingInTheWay)).toMatchObject({ outcome: 'reverted' });
@@ -125,6 +125,7 @@ describe('AUDIT revert: the integration branch checked out for review', () => {
       workspaceRoot: () => root,
       listener: { changed: () => undefined, blocked: () => undefined, handoff: () => undefined, closed: () => undefined, notice: () => undefined, resolversEnded: () => undefined },
       liveTasks: () => new Set(),
+      landedOn: () => [],
     });
 
     expect(await controller.adopt({ run, resolvers: {} })).not.toBe('cleared');
@@ -143,6 +144,7 @@ describe('AUDIT revert: a retry that lands nothing over a landing still unmerged
       workspaceRoot: () => root,
       listener: { changed: () => undefined, blocked: () => undefined, handoff: () => undefined, closed: () => undefined, notice: () => undefined, resolversEnded: () => undefined },
       liveTasks: () => new Set(),
+      landedOn: () => [],
     });
   }
 

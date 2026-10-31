@@ -430,6 +430,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
       workspaceRoot: () => root,
       listener: { changed: () => undefined, blocked: () => undefined, handoff: () => undefined, closed: () => undefined, notice: () => undefined, resolversEnded: () => undefined },
       liveTasks: () => new Set(),
+      landedOn: () => [],
     });
   }
 

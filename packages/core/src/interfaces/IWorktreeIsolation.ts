@@ -201,11 +201,18 @@ export interface IsolationLanding {
   /** Keyed by repo path. */
   tips: Record<string, string>;
   /**
-   * Set when this is a revert rather than a landing (ADR-0054): by repo path,
-   * the most revert commits it can put on that repo's tip, which is what a
-   * rollback may prove it made and take off again.
+   * Set when this is a revert rather than a landing (ADR-0054), by repo path:
+   * what a rollback has to find on that repo's tip to take it off again.
    */
-  reverts?: Record<string, number>;
+  reverts?: Record<string, IsolationRepoRevert>;
+}
+
+/** A revert's share of one repo, saved so that it can tell its own commits from anyone else's. */
+export interface IsolationRepoRevert {
+  /** The merges it takes back, newest first. */
+  merges: string[];
+  /** The commits it has made, oldest first, each saved as soon as it is made. */
+  commits: string[];
 }
 
 /**
@@ -283,6 +290,14 @@ export interface IsolationRun {
    * merges on the branch.
    */
   landedTasks?: Record<string, LandedTask>;
+  /**
+   * What each landed task depended on when it landed, directly or not, by task
+   * id. Leaving the plan takes a task's dependencies with it, and those of the
+   * tasks that named it, while its merges stay on the branch, so this is what
+   * finds a dependent the plan has lost. A landed task the plan no longer has
+   * and this does not name refuses every revert of the run (ADR-0054).
+   */
+  landedOn?: Record<string, string[]>;
   /**
    * A task's revert was committed on this run (ADR-0054): the integration
    * branch holds commits no record names, so the run carries on even with no
@@ -506,17 +521,19 @@ export interface RevertCommand {
  * `inBranch`: the part already in the user's branch, which no revert touches;
  * newest first too, the order to run the commands in. `no-own-merge`: a task's
  * work came in through another's merge, a conflict resolver's, so no merge of
- * its own can undo it. `git`: git could not read what the record names.
+ * its own can undo it. `uncommitted-changes`: tracked changes in the integration
+ * worktree, which a revert would commit or lose. `git`: git could not read what
+ * the record names.
  */
 export type LandedWork =
   | { ok: true; tasks: IsolationRevertTask[]; inBranch: RevertCommand[] }
-  | { ok: false; reason: 'no-own-merge' | 'checked-out' | 'git'; error: string };
+  | { ok: false; reason: 'no-own-merge' | 'checked-out' | 'uncommitted-changes' | 'git'; error: string };
 
 /** What {@link IWorktreeIsolation.revert} asks of its caller, in its turn. */
 export interface RevertWatch {
   /** Why the revert may no longer go ahead, read once it has its turn and again with its commits made, which it then rolls back; null when it may. */
   refusal: () => string | null;
-  /** Called once the tips are recorded and before the first commit, as a landing's `persist` is. */
+  /** Called once the tips are recorded and before the first commit, as a landing's `persist` is, and again as each commit is made. */
   persist: () => void;
   /** Called in the one synchronous step that lets the records go, so a save never sees them gone with the tasks not yet back. */
   settled: (taskIds: readonly string[]) => void;

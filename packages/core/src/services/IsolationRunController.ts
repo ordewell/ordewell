@@ -98,6 +98,8 @@ export interface IsolationRunControllerDeps {
    * the user mid-attempt.
    */
   liveTasks: () => ReadonlySet<string>;
+  /** What a task depends on now, directly or not, read as it lands: the plan may let go of that later, and a revert may not (ADR-0054). */
+  landedOn: (taskId: string) => readonly string[];
 }
 
 type SharedRootReason = Exclude<IsolationInactiveReason, 'dirty'>;
@@ -181,6 +183,7 @@ export class IsolationRunController {
   private readonly workspaceRoot: () => string;
   private readonly listener: IsolationRunListener;
   private readonly liveTasks: () => ReadonlySet<string>;
+  private readonly landedOn: IsolationRunControllerDeps['landedOn'];
 
   private run: IsolationRun | null = null;
   /** See {@link mergedRun}. */
@@ -216,6 +219,7 @@ export class IsolationRunController {
     this.workspaceRoot = deps.workspaceRoot;
     this.listener = deps.listener;
     this.liveTasks = deps.liveTasks;
+    this.landedOn = deps.landedOn;
   }
 
   /** The plan's run record, open or not; null when the plan has not isolated. */
@@ -475,6 +479,7 @@ export class IsolationRunController {
     const run = this.run;
     if (!run) return 'failed';
     const outcome = await this.isolation.integrate(task, run, () => this.listener.changed(), commit).catch((): IsolationOutcome => 'failed');
+    if (outcome === 'merged') (run.landedOn ??= {})[task.id] = [...new Set([...run.landedOn?.[task.id] ?? [], ...this.landedOn(task.id)])];
     this.listener.changed();
     return outcome;
   }
@@ -668,7 +673,8 @@ export class IsolationRunController {
   /**
    * Revert tasks' landings on the integration branches (ADR-0054). The record
    * is reported changed once the tips are set and before the first commit,
-   * and again once it settles, as a landing's is. Bound to the run it was
+   * again as each commit is made, so a crash leaves it to tell them from
+   * anyone's, and once it settles. Bound to the run it was
    * asked in: a plan loaded meanwhile has records of its own under these ids,
    * and is saved without what this would write to that run's branches, so it
    * stops the revert and leaves them as they were.
