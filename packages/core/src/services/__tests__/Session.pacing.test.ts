@@ -110,6 +110,22 @@ describe('a status update', () => {
       expect(update?.type === 'status_update' && update.tasks.find((t) => t.id === 't2')?.status).toBe('failed');
     });
 
+    it('sends a wave of tasks waiting on a person at the same pace, and every wait by the end of the second', async () => {
+      const tasks = wide(20);
+      const env = await quietRun(tasks);
+      reportUsage(env, 't1');
+      env.messages.length = 0;
+
+      for (const { id } of tasks) env.run.of(id).waitForInput();
+      await settled();
+      expect(statuses(env.messages)).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(statuses(env.messages)).toHaveLength(2);
+      const last = statuses(env.messages).at(-1);
+      expect(last?.type === 'status_update' && last.escalations).toHaveLength(20);
+    });
+
     it('sends the fan-out of a run as a status or so a second, not one per start', async () => {
       const env = await supervised(wide(20), { execute: false, config: { maxParallelSessions: 20 } });
       await vi.advanceTimersByTimeAsync(2000);

@@ -574,7 +574,7 @@ describe('composeAugmentedPrompt', () => {
     expect(taskCompletionContract({})).toBe(TASK_COMPLETION_CONTRACT);
     expect(TASK_COMPLETION_CONTRACT).not.toContain('`commit`');
     expect(change.startsWith(TASK_COMPLETION_CONTRACT)).toBe(true);
-    expect(change).toMatch(/`commit`.*72 characters or fewer.*imperative mood/);
+    expect(change).toMatch(/`commit`.*at most 100 characters and best 72 or fewer.*imperative mood/);
     expect(change).toMatch(/tells a human reviewer what changed and why/);
     expect(change).toMatch(/summary no longer repeats that/);
     expect(change).toMatch(/paths, symbols, decisions.*`artifacts`.*what is left and what to watch/);

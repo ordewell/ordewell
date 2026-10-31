@@ -401,6 +401,8 @@ describe('one worker per conflict', () => {
   });
 });
 
+// The conflict goes out at once and the repair's wait is the second change of
+// its second, so a surface reads it as that second ends: these wait for it.
 describe('a repair that waits for a slot', () => {
   const statusOf = (env: { status: ReturnType<typeof host>['status'] }, id: string) => env.status()!.tasks.find((t) => t.id === id)!;
   const rowOf = (env: Parameters<typeof statusOf>[0], id: string) => {
@@ -411,7 +413,7 @@ describe('a repair that waits for a slot', () => {
   it.each([['a scheduled run', waitingRepair], ['tasks started by hand', waitingRepairByHand]])('reads as waiting for a free slot in %s, not as a conflict to act on', async (_, reach) => {
     const env = await reach();
 
-    expect(statusOf(env, 't1').isolation).toMatchObject({ state: 'conflict', repairWaits: 'slot', conflictFiles: ['a.ts'] });
+    await vi.waitFor(() => expect(statusOf(env, 't1').isolation).toMatchObject({ state: 'conflict', repairWaits: 'slot', conflictFiles: ['a.ts'] }));
     const row = rowOf(env, 't1');
     expect(row.conflict).toBeNull();
     expect(row.repairWaiting).toMatchObject({ label: 'Repair waits for a free slot', files: 'a.ts' });
@@ -420,6 +422,7 @@ describe('a repair that waits for a slot', () => {
 
   it('says so in the task log\'s header', async () => {
     const env = await waitingRepair();
+    await vi.waitFor(() => expect(statusOf(env, 't1').isolation).toMatchObject({ repairWaits: 'slot' }));
     const { status: taskStatus, isolation } = statusOf(env, 't1');
 
     const header = taskLogHeaderView({ status: taskStatus, repairWaits: isolation?.state === 'conflict' ? isolation.repairWaits : undefined }, EMPTY_TASK_LOG_FOLLOW, 0, 0);
@@ -446,7 +449,7 @@ describe('a repair that waits for a slot', () => {
     await env.orchestrator.markTaskComplete('t1');
     env.orchestrator.storeInstance.onMutate?.();
 
-    expect(rowOf(env, 't1').repairWaiting?.label).toBe('Repair waits for the planner\'s turn to end');
+    await vi.waitFor(() => expect(rowOf(env, 't1').repairWaiting?.label).toBe('Repair waits for the planner\'s turn to end'));
     release();
   });
 
@@ -495,7 +498,7 @@ describe('a repair that waits for a slot', () => {
 
     expect(env.spawned()).toHaveLength(before);
     expect(env.orchestrator.startsPending).toBe(true);
-    expect(rowOf(env, 't1').repairWaiting?.label).toBe('Repair waits for its runner\'s usage limit to reset');
+    await vi.waitFor(() => expect(rowOf(env, 't1').repairWaiting?.label).toBe('Repair waits for its runner\'s usage limit to reset'));
   });
 });
 

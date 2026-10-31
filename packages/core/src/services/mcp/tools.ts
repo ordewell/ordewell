@@ -49,9 +49,9 @@ const handoffFinding = z.object({
 const handoffCommit = z.object({
   subject: z.string().trim()
     .min(1, 'The commit subject is required: one line saying what changed.')
-    .max(HANDOFF_LIMITS.commitSubject, 'Keep it to 72 or fewer and put the why in body.')
+    .max(HANDOFF_LIMITS.commitSubject, 'Put the why in body.')
     .regex(/^[^\r\n]*$/, 'The commit subject is one line: put the why in body.')
-    .describe('One line of 72 characters or fewer, in the imperative mood: "Add a daily version check behind ORDEWELL_NO_VERSION_CHECK".'),
+    .describe(`One line of at most ${HANDOFF_LIMITS.commitSubject} characters, best 72 or fewer, in the imperative mood: "Add a daily version check behind ORDEWELL_NO_VERSION_CHECK".`),
   body: z.string().max(HANDOFF_LIMITS.commitBody, 'One to three lines on why; the specifics go in summary.').optional()
     .describe('One to three lines on why. No trailers: those are Ordewell\'s to add.'),
 });
@@ -63,7 +63,7 @@ const taskCompleteInput = z.object({
     .describe(`The handoff the next task reads first, written for that reader: what changed, what is left, what to watch. At most ${HANDOFF_LIMITS.summary} characters; the long form goes in report.`),
   reason: z.string().optional().describe("Why the task is blocked or failed. Expected for anything but 'done'."),
   commit: handoffCommit.optional()
-    .describe(`A change task's commit message, for a human reviewer: what changed and why. Only kept with status 'done'. The subject is one line of 72 characters or fewer (at most ${HANDOFF_LIMITS.commitSubject}), the body at most ${HANDOFF_LIMITS.commitBody}.`),
+    .describe(`A change task's commit message, for a human reviewer: what changed and why. Only kept with status 'done'. The subject is one line of at most ${HANDOFF_LIMITS.commitSubject} characters, best 72 or fewer, the body at most ${HANDOFF_LIMITS.commitBody}.`),
   findings: z.array(handoffFinding).max(HANDOFF_LIMITS.findings).optional()
     .describe(`What the next reader must act on, one item each, most important first. At most ${HANDOFF_LIMITS.findings}; a title is one line of at most ${HANDOFF_LIMITS.title} characters, a detail at most ${HANDOFF_LIMITS.detail}, and a finding has at most ${HANDOFF_LIMITS.evidence} pieces of evidence. Ordewell numbers them F1, F2, … in this order.`),
   artifacts: z.array(handoffReference).max(HANDOFF_LIMITS.artifacts).optional()
@@ -369,6 +369,11 @@ export interface McpTool<H> {
   call(handler: H, args: unknown, context: McpToolContext): Promise<McpToolReply>;
 }
 
+/** A tool set as `tools/list` answers with it: what a runner is sent, and pays for. */
+export function toolListing<H>(tools: readonly McpTool<H>[]) {
+  return tools.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, ...(annotations ? { annotations } : {}) }));
+}
+
 /**
  * One rejected slot of a tool call, said so the caller can mend the call in
  * one try. Three kinds cover every schema failure: a count problem (a missing
@@ -575,7 +580,7 @@ export const TASK_COMPLETION_CONTRACT = [
   `The long story, if there is one, goes in \`report\`: it is kept with this attempt and read only on demand. A review or other read-only task especially: its findings are its result, so state each one, and do not write the report to a file.`,
 ].join('\n\n');
 
-const COMMIT_CONTRACT = 'This task\'s work lands as a commit, so with status `done` also give `commit`: a `subject` of one line, 72 characters or fewer, in the imperative mood ("Add a daily version check behind ORDEWELL_NO_VERSION_CHECK"), and a `body` of one to three lines on why, with no trailers. The commit tells a human reviewer what changed and why, so the summary no longer repeats that: it holds the exact specifics the next agent needs (paths, symbols, decisions) alongside `artifacts`, plus what is left and what to watch, and the summary may be empty when there is nothing to add.';
+const COMMIT_CONTRACT = `This task's work lands as a commit, so with status \`done\` also give \`commit\`: a \`subject\` of one line, at most ${HANDOFF_LIMITS.commitSubject} characters and best 72 or fewer, in the imperative mood ("Add a daily version check behind ORDEWELL_NO_VERSION_CHECK"), and a \`body\` of one to three lines on why, with no trailers. The commit tells a human reviewer what changed and why, so the summary no longer repeats that: it holds the exact specifics the next agent needs (paths, symbols, decisions) alongside \`artifacts\`, plus what is left and what to watch, and the summary may be empty when there is nothing to add.`;
 
 /** The completion contract for one attempt: only one whose work lands as a commit is asked for its message (ADR-0047). */
 export function taskCompletionContract(opts: { commits?: true }): string {

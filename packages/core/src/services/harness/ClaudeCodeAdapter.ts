@@ -116,14 +116,22 @@ const TASK_COMPACT_WINDOW_TOKENS = 150_000;
 const TASK_ENV = { ...NO_AUTO_MEMORY, CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(TASK_COMPACT_WINDOW_TOKENS) };
 
 /**
- * What a `minimal` task runner leaves out of its context (`taskRunnerConfig`):
- * the servers and slash commands and skills of the user's own setup, and the
- * user's settings and instructions. The repository's instructions stay, and so
- * does Ordewell's server, which arrives as an explicit `--mcp-config` that the
- * strict flag admits. A task's skills are written into its prompt, not loaded
- * from here.
+ * A `minimal` task runner's context (`taskRunnerConfig`). Its setting sources
+ * ({@link settingSources}) leave out the user's servers, skills, commands,
+ * settings and instructions and keep the repository's, which is the toolchain
+ * a task was started to use (ADR-0028), so a task must not lose them to save
+ * tokens. Connectors come from the account and no source governs them, hence
+ * the variable; a CLI that ignores it costs tokens and breaks nothing.
  */
-const MINIMAL_TASK_ARGS = ['--strict-mcp-config', '--disable-slash-commands'];
+const MINIMAL_TASK_ENV = { ...TASK_ENV, ENABLE_CLAUDEAI_MCP_SERVERS: 'false' };
+
+/**
+ * A read-only task loads nothing of the repository's in any case (ADR-0046),
+ * so `minimal` can leave it Ordewell's server alone, the explicit
+ * `--mcp-config` the strict flag admits. Its skills are written into its
+ * prompt, not loaded from here.
+ */
+const MINIMAL_READ_ONLY_ARGS = ['--strict-mcp-config', '--disable-slash-commands'];
 
 /**
  * Whether `abs` is in the folder Claude Code saves this session's long tool
@@ -692,7 +700,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       '--permission-mode', this.requestedMode,
       '--disallowedTools', [...TASK_DISALLOWED_TOOLS, ...(readOnly ? DISALLOWED_TOOLS : [])].join(','),
       ...settingSources(readOnly, minimal),
-      ...(minimal ? MINIMAL_TASK_ARGS : []),
+      ...(minimal && readOnly ? MINIMAL_READ_ONLY_ARGS : []),
       ...(opts.flags.effort ? claudeThinkingArgs(opts.flags.effort) : []),
     ];
     if (opts.model) args.push('--model', opts.model);
@@ -702,7 +710,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       this.pendingResume = opts.resumeSessionId;
     }
     if (opts.mcp) args.push('--append-system-prompt', taskCompletionContract(opts), ...this.ordewellServerArgs(opts.mcp, readOnly ? 'readOnlyTask' : 'task'));
-    return { command: 'claude', args, env: TASK_ENV };
+    return { command: 'claude', args, env: minimal ? MINIMAL_TASK_ENV : TASK_ENV };
   }
 
   /**

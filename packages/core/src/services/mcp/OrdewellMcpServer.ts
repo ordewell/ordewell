@@ -4,7 +4,7 @@ import { Server as McpProtocolServer } from '@modelcontextprotocol/sdk/server/in
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, CancelledNotificationSchema, ErrorCode, ListToolsRequestSchema, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { extractPresentedToken } from '../../utils/daemonToken';
-import { PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, TASK_TOOLS, type McpTool, type PlannerToolHandler, type TaskToolHandler } from './tools';
+import { PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, TASK_TOOLS, toolListing, type McpTool, type PlannerToolHandler, type TaskToolHandler } from './tools';
 
 /**
  * The Ordewell MCP server (ADR-0022): one loopback listener per process,
@@ -308,9 +308,7 @@ function serveTools<H>(mcp: McpProtocolServer, tools: readonly McpTool<H>[], inv
     for (const call of calls.get(String(params.requestId)) ?? []) call.abort();
   });
 
-  mcp.setRequestHandler(ListToolsRequestSchema, () => ({
-    tools: tools.map(({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, ...(annotations ? { annotations } : {}) })),
-  }));
+  mcp.setRequestHandler(ListToolsRequestSchema, () => ({ tools: toolListing(tools) }));
   mcp.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const tool = tools.find((t) => t.name === request.params.name);
     if (!tool) throw new McpError(ErrorCode.InvalidParams, unknownToolMessage(request.params.name, inventory));

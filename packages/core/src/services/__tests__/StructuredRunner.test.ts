@@ -179,7 +179,7 @@ describe('StructuredRunner spawn', () => {
     const { runner, spawned } = harness([]);
     const session = await runner.spawn(options({ runnerConfig: 'minimal' }));
     const args = spawned.lastArgs();
-    expect(args).toContain('--strict-mcp-config');
+    expect(args).not.toContain('--strict-mcp-config');
     expect(args[args.indexOf('--setting-sources') + 1]).toBe('project,local');
     session.kill();
   });
