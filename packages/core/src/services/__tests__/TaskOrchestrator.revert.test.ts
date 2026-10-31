@@ -372,6 +372,12 @@ describe('TaskOrchestrator: reverting a landed task (ADR-0054)', () => {
       expect(await orchestrator.revertPreview('other')).toMatchObject({ revertible: false, reason: 'no-landing' });
     });
 
+    it('says there is no such task for a ref no task answers to', async () => {
+      const { orchestrator } = await landed([task('t1', 1)], ['t1']);
+
+      expect(await orchestrator.revertPreview('99')).toMatchObject({ revertible: false, reason: 'no-landing', message: 'There is no task "99" in this plan.' });
+    });
+
     it('refuses a read-only task, whose record lands nothing', async () => {
       const { orchestrator } = await landed([task('t1', 1), task('other', 2)], ['t1']);
       await vi.waitFor(() => expect(orchestrator.runs.current?.tasks.other).toBeDefined());
