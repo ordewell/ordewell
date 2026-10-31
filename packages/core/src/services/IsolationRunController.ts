@@ -452,7 +452,7 @@ export class IsolationRunController {
 
   /**
    * The working directory of an attempt that may run in a worktree — which
-   * attempts do is the attempt kind's to say (see `attemptKind.attemptCwd`):
+   * attempts do is the attempt kind's to say (see `attemptKind.attemptWorkspace`):
    * the worktree prepared for it in an isolated run, the kept one for a
    * conflict repair, else the workspace root. `worktree` says which. Does not
    * itself report a worktree it creates as a change — the caller does once

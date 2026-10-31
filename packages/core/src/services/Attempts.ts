@@ -21,7 +21,7 @@ import { taskRefOf } from './TaskRefs';
 import { classifyRunnerStop, stopsRunner, type AttemptEnd, type TurnFailure } from './runnerExit';
 import type { ResearchTasks } from './ResearchTasks';
 import {
-  attemptCwd, attemptPrompt, checksTree, classifyAttempt, landsNothing, mergeExcludes, takesSkills, writesCommit,
+  attemptPrompt, attemptWorkspace, checksTree, classifyAttempt, landsNothing, mergeExcludes, takesSkills, writesCommit,
   type AttemptKind, type Continuation, type TaskWork,
 } from './attemptKind';
 import { resolveTaskSkills, TaskSkillsError, type SkillLookup } from './taskSkills';
@@ -41,6 +41,7 @@ import { TaskControlError } from './TaskControlError';
 import { TaskWebReader } from './taskWebReads';
 import type { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { OrchestratorObserver, StartAdmission } from './TaskOrchestrator';
+import type { ExecutionBackend, OpenLease, ReservedLease } from './executionLease';
 
 class TaskStartConfigError extends Error {
   constructor(paths: string[]) {
@@ -91,7 +92,7 @@ interface TaskAttempt extends EndedAttempt {
    */
   phase: AttemptPhase;
   session: IRunnerSession | null;
-  /** Null until {@link attemptCwd} settles. */
+  /** Null until its lease opens. */
   cwd: string | null;
   worktree: boolean;
   integration: Promise<LandingOutcome> | null;
@@ -147,6 +148,10 @@ interface TaskAttempt extends EndedAttempt {
    * tools to attach, or respawning — is taken back then, not once it reports.
    */
   readonly spawning: AbortController;
+  /** What the claim reserved; released as the attempt ends (ADR-0059 L1). */
+  readonly lease: ReservedLease;
+  /** What its lease opened, which the attempt's result is read from (L2); null until then. */
+  opened: OpenLease | null;
 }
 
 const DEFAULT_GIT: GitInvoker = { exec: defaultExecFile, resolvePath: () => augmentedPath() };
@@ -226,6 +231,8 @@ export interface AttemptClaim {
   /** A continue of the task's saved session (ADR-0018, K1); a fresh session when absent. */
   continuation?: Continuation | null;
   autoResumed?: boolean;
+  /** Reserved in the claim's own synchronous step (ADR-0059 L1). */
+  lease: ReservedLease;
 }
 
 /** What a control on a running task's turn is, as a refused {@link TaskControlError} names it: "no turn to …". */
@@ -255,8 +262,10 @@ export interface AttemptsDeps {
   scriptRunner: IRunner;
   store: PlanStore;
   output: TaskOutputSource;
-  /** Where an attempt runs, and its worktree once it ends. */
-  runs: Pick<IsolationRunController, 'attemptCwd' | 'workspaceCwd' | 'snapshotWorkspace' | 'filesChangedSince' | 'release' | 'openRecord' | 'skillLayout' | 'current' | 'epoch'>;
+  /** The run an attempt works in. */
+  runs: Pick<IsolationRunController, 'snapshotWorkspace' | 'filesChangedSince' | 'openRecord' | 'skillLayout' | 'current' | 'epoch'>;
+  /** What becomes of a workspace an attempt ended while opening. */
+  leases: Pick<ExecutionBackend, 'letGo'>;
   /** A passed attempt's work, or a repair's, onto the integration branch, while the attempt stays live. */
   landing: Pick<Landing, 'landPassed' | 'settleRepair' | 'nextRepair' | 'repairPrompt'>;
   registry: RunnerRegistry | null;
@@ -361,9 +370,18 @@ export class Attempts {
     return this.live.has(taskId);
   }
 
-  /** How many attempts are live: what the run's Parallel limit counts. */
+  /** How many attempts are live. */
   get size(): number {
     return this.live.size;
+  }
+
+  /** How many of them hold a slot: what this Session's readiness counts, the pool being the tree's (ADR-0055 D18). */
+  get slotsHeld(): number {
+    return [...this.live.values()].filter((a) => a.lease.holdsSlot).length;
+  }
+
+  holdsSlot(taskId: string): boolean {
+    return this.live.get(taskId)?.lease.holdsSlot ?? false;
   }
 
   taskIds(): string[] {
@@ -459,6 +477,8 @@ export class Attempts {
       receipt: null,
       attaching: null,
       spawning: new AbortController(),
+      lease: claim.lease,
+      opened: null,
     };
     this.spawnCounts.set(task.id, attempt.attempt);
     this.live.set(task.id, attempt);
@@ -500,12 +520,15 @@ export class Attempts {
       attempt.shell?.end();
       attempt.web?.end();
     }
-    if (attempt && session) this.saveNativeSession(taskId, nativeSessionId, attempt.runner);
+    // A branch is not the whole result: this is what a Continue resumes (ADR-0059 L2).
+    const result = attempt && session ? attempt.opened?.exportResult({ runner: attempt.runner, nativeSessionId }) : undefined;
+    if (attempt && result) this.saveNativeSession(taskId, result.sessionState.nativeSessionId, attempt.runner);
     if (stopsRunner(reason)) {
       const task = store.get(taskId);
       if (task) this.verifier.clear(task);
       if (attempt) this.stopRunner(attempt);
     }
+    attempt?.lease.release(reason);
     return attempt;
   }
 
@@ -712,7 +735,8 @@ export class Attempts {
         const paths = await this.startConfig.check(runs.current, task.id, { epoch: runs.epoch, root: this.deps.workspaceRoot(), cwd: null, worktree: true });
         if (paths.length) throw new TaskStartConfigError(paths);
       }
-      const { cwd, worktree, previousWork, workspace } = await attemptCwd(kind, task, runs);
+      attempt.opened = await attempt.lease.open({ task, workspace: attemptWorkspace(kind), required: [] }, attempt.spawning.signal);
+      const { cwd, worktree, previousWork, writable } = attempt.opened.workspace;
       attempt.cwd = cwd;
       attempt.worktree = worktree;
       // A read-only task withholds project configuration (ADR-0046), so none reaches it.
@@ -726,14 +750,14 @@ export class Attempts {
         // not release it. A newer attempt's own prepare replaces it instead,
         // and a Mark complete lands what is in it. A repair's worktree holds
         // work that passed, so it is only handed back.
-        if (attempt.worktree && !this.live.has(task.id) && !this.host.completing(task.id)) await runs.release(task.id, { keep: kind.kind === 'repair' });
+        if (attempt.worktree && !this.live.has(task.id) && !this.host.completing(task.id)) await this.deps.leases.letGo(task.id, { keep: kind.kind === 'repair', reason: 'ended while opening' });
         this.abandonSpawn(task, attempt);
         return false;
       }
       this.verifier.starting(task.id);
       const session = attempt.script
         ? await this.spawnScript(task, attempt, cwd)
-        : await this.spawnRunner(task, attempt, cwd, worktree ? workspace : undefined, previousWork);
+        : await this.spawnRunner(task, attempt, cwd, writable, previousWork);
 
       // Stop/load/cancel can end the attempt while the async adapter is
       // starting. Do not resurrect that execution after the surface already

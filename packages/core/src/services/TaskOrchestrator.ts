@@ -48,6 +48,9 @@ import type { StoredHandoff } from '../models/Handoff';
 import { userTaskHandoff } from '../models/DerivedHandoff';
 import type { TaskLogReader } from './readTask';
 import { leasedIsolation } from './leasedIsolation';
+import { LocalWorktreeLease } from './LocalWorktreeLease';
+import { SlotPool, type PoolNode } from './SlotPool';
+import type { ExecutionBackend, LeaseRequest, ReservedLease } from './executionLease';
 import type { SessionHeld } from './sessionLease';
 
 export { TaskControlError } from './TaskControlError';
@@ -240,6 +243,16 @@ export interface TaskOrchestratorDeps {
   recordHandoff: (sessionId: string | undefined, taskId: string, handoff: StoredHandoff) => void;
   /** The session's saved task logs, which a task's `read_task` reads handoffs from (ADR-0047). */
   taskLog: TaskLogReader;
+  /** Where sessions run (ADR-0059). */
+  leases: ExecutionBackend;
+  /** The tree's slots and usage limits (ADR-0055 D18), which the backend reserves from. */
+  pool: SlotPool;
+  /** The Session's id, as it saves under it. */
+  sessionId: () => string;
+  /** Tell the tree this Session found a runner's usage limit; the reset as the tree has it. */
+  limitFound: (runner: string, at: Date) => Date;
+  /** This Session is done with the tree. */
+  leaveTree: () => void;
 }
 
 /**
@@ -283,6 +296,14 @@ export interface TaskOrchestratorOptions {
    * to the run (ADR-0049); the run is changed only while it answers null.
    */
   sessionHeld?: () => SessionHeld | null;
+  /** Where sessions run (ADR-0059), given the local worktrees: those, unless a test supplies another. */
+  execution?: (local: ExecutionBackend) => ExecutionBackend;
+  /** The root's pool, handed down to a child (ADR-0055 D18); absent, this is a root, with a pool of its own. */
+  pool?: SlotPool;
+  /** The Session's id, as it saves under it. */
+  sessionId?: () => string;
+  /** The pool has a slot for the planner turn it refused this Session. */
+  openTurn?: () => void;
 }
 
 /**
@@ -373,6 +394,11 @@ export class TaskOrchestrator {
   private releasing = new Set<string>();
   /** Tasks paused on a usage limit, the run's hold on them, and each runner's wait for its reset (ADR-0018, U1). */
   private readonly limitPauses: LimitPauses;
+  /**
+   * Resumes whose reset came with every slot of the tree taken: past their
+   * time, with no timer to fire again, so a tick offers them (ADR-0055 D18).
+   */
+  private readonly keptResumes = new Set<string>();
 
   /**
    * The plan's isolation run and the open run's lifecycle (ADR-0013); see
@@ -381,6 +407,11 @@ export class TaskOrchestrator {
    * ops tasks and starts the tasks its merge lets through.
    */
   readonly runs: IsolationRunController;
+  /** Where a session runs (ADR-0059): every start reserves here in its claim, and opens here after it. */
+  private readonly leases: ExecutionBackend;
+  /** The tree's slots and usage limits (ADR-0055 D18); a flat run's own. */
+  private readonly pool: SlotPool;
+  private readonly sessionId: () => string;
   /** A passed attempt's work onto the integration branch, and the conflict repair a landing may need. */
   private landing: Landing;
 
@@ -390,11 +421,14 @@ export class TaskOrchestrator {
   private isApproved: (taskId: string) => boolean;
   private mayMergeUnasked: () => boolean;
 
-  constructor(deps: TaskOrchestratorDeps) {
+  constructor(private readonly deps: TaskOrchestratorDeps) {
     this.config = deps.config;
     this.notifications = deps.notifications;
     this.store = deps.store;
     this.runs = deps.runs;
+    this.leases = deps.leases;
+    this.pool = deps.pool;
+    this.sessionId = deps.sessionId;
     this.landing = deps.landing;
     this.runSettings = deps.runSettings;
     this.isApproved = deps.isApproved;
@@ -407,6 +441,7 @@ export class TaskOrchestrator {
       store: deps.store,
       output: deps.output,
       runs: deps.runs,
+      leases: deps.leases,
       landing: deps.landing,
       registry: deps.registry,
       workspaceRoot: deps.workspaceRoot,
@@ -442,12 +477,15 @@ export class TaskOrchestrator {
       waitChanged: (wait) => this.emit('onUsageLimitWait', wait),
       changed: () => this.emit('onTaskChanged'),
       unawaited: (work, failure) => this.unawaited(work, failure),
-      keepWorktree: (taskId) => this.runs.release(taskId, { keep: true }),
+      keepWorktree: (taskId) => this.leases.letGo(taskId, { keep: true, reason: 'usage limit' }),
       settled: (taskId) => this.afterVerdict(taskId),
       resume: (taskId, now) => this.resumeTask(taskId, now),
+      limitFound: (runner, at) => deps.limitFound(runner, at),
     });
 
     this.store.onMutate = () => this.emit('onTaskChanged');
+    // What an attempt waits on decides whether a planner turn may pass the limit (ADR-0055 D18).
+    this.subscribe({ onTaskSettled: () => this.pool.waitsChanged() });
   }
 
   /**
@@ -484,6 +522,13 @@ export class TaskOrchestrator {
       landedOn: (taskId) => landedOnOf(taskId, store.allTasks),
     });
     const landing = new Landing({ runs, config: options.config, tasks: store, ...(options.plannedWith ? { plannedWith: options.plannedWith } : {}) });
+    const pool = options.pool ?? new SlotPool(() => options.config.maxParallelSessions);
+    const node: PoolNode = {
+      tick: () => orchestrator.offered(),
+      openTurn: () => options.openTurn?.(),
+      waitsOnPlanner: (taskId) => orchestrator.waitsOnPlanner(taskId),
+      limitFound: (runner, at) => orchestrator.limitFoundElsewhere(runner, at),
+    };
     const orchestrator = new TaskOrchestrator({
       config: options.config,
       notifications: options.notifications,
@@ -509,6 +554,11 @@ export class TaskOrchestrator {
       ...(options.keepPatch ? { keepPatch: options.keepPatch } : {}),
       recordHandoff: options.recordHandoff ?? (() => undefined),
       taskLog: options.taskLog ?? { attempts: () => [], events: () => [] },
+      leases: (options.execution ?? ((local) => local))(new LocalWorktreeLease({ pool, node, runs, workspaceRoot })),
+      pool,
+      sessionId: options.sessionId ?? (() => ''),
+      limitFound: (runner, at) => pool.limitFound(node, runner, at),
+      leaveTree: pool.join(node),
     });
     return orchestrator;
   }
@@ -803,13 +853,19 @@ export class TaskOrchestrator {
     this.mergesInFlight++;
     this.merging = true;
     let result: IsolationMergeResult;
+    let lease: ReservedLease | undefined;
     try {
+      // An automatic merge passes here as Merge all does: it reaches a checkout, and no claim would ever see it (ADR-0059 L1).
+      const reserved = this.leases.reserve(this.leaseRequest('merge'));
+      if ('refused' in reserved) throw new TaskControlError(reserved.refused);
+      lease = reserved.lease;
       result = await this.runs.merge();
     } catch (err) {
       if (!trigger) throw err;
       result = { outcome: 'failed', repo: SELF_REPO };
       this.tell('error', `Automatic Merge all could not finish: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
+      lease?.release('merged');
       this.merging = --this.mergesInFlight > 0;
     }
     if (!trigger && result.outcome === 'merged') this.autoMergeBlocked = false;
@@ -921,6 +977,7 @@ export class TaskOrchestrator {
       completing: this.completing,
       queued: this.queuedStarts,
       conflictResolver: (taskId) => this.landing.liveResolvers(taskId)[0]?.id,
+      ...(this.pool.shared ? { treeLimited: this.pool.limited() } : {}),
     };
   }
 
@@ -1011,7 +1068,7 @@ export class TaskOrchestrator {
     // Ended before the plan is swapped, so nothing of the plan being replaced reaches the next one.
     const repairs = this.attempts.unload().filter((a) => a.kind.kind === 'repair' && a.worktree);
     this.store.load(tasks, planRunners);
-    for (const a of repairs) this.unawaited(this.runs.release(a.taskId, { keep: true }, a.integration), `Could not keep the worktree of task "${this.store.get(a.taskId)?.title ?? a.taskId}"`);
+    for (const a of repairs) this.unawaited(this.leases.letGo(a.taskId, { keep: true, landing: a.integration, reason: 'stopped' }), `Could not keep the worktree of task "${this.store.get(a.taskId)?.title ?? a.taskId}"`);
     // A plan committed while the scheduler runs keeps that run, and its mode
     // with it; otherwise the next start decides afresh.
     this.runs.interrupt({ keepOpen: this.isScheduling });
@@ -1032,6 +1089,8 @@ export class TaskOrchestrator {
     for (const id of carried) if (this.store.get(id)?.loop) this.carriedLoops.add(id);
     this.owedRepairs.clear();
     this.recoverOrphans();
+    // Whatever the plan left behind for a slot, a resume past its time is armed again below.
+    this.keptResumes.clear();
     this.limitPauses.rearm();
   }
 
@@ -1219,7 +1278,7 @@ export class TaskOrchestrator {
         this.store.markPending(a.taskId);
         stopped.push(a);
       }
-      if (a.worktree) this.unawaited(this.runs.release(a.taskId, { keep: true }, a.integration), `Could not keep the worktree of task "${this.store.get(a.taskId)?.title ?? a.taskId}"`);
+      if (a.worktree) this.unawaited(this.leases.letGo(a.taskId, { keep: true, landing: a.integration, reason: 'stopped' }), `Could not keep the worktree of task "${this.store.get(a.taskId)?.title ?? a.taskId}"`);
     }
     this.runs.interrupt();
     this.releaseUnchosenHolds();
@@ -1227,6 +1286,7 @@ export class TaskOrchestrator {
     this.endCarriedLoops();
     if (reason === 'user') this.withdrawQueuedStarts();
     this.limitPauses.cancelAll();
+    this.keptResumes.clear();
     this.sayStopped(stopped);
     this.recoverOrphans();
     this.emit('onTaskChanged');
@@ -1372,7 +1432,7 @@ export class TaskOrchestrator {
         if (!this.startRound(task.id)) this.notifications.error(ended.unresumed ?? failureText(this.store.get(task.id) ?? task, verdict));
         // A Stop since it was claimed ended its loop with it.
         else if (!this.isScheduling && ended.attempt.admission.current()) this.carriedLoops.add(task.id);
-        if (ended.attempt.worktree) await this.runs.release(task.id, { keep: true });
+        if (ended.attempt.worktree) await this.leases.letGo(task.id, { keep: true, reason: 'failed' });
         this.logAndArchive(task, verdict);
         break;
       }
@@ -1399,7 +1459,7 @@ export class TaskOrchestrator {
         this.hold(task.id, failure.hold, false);
       }
       if (failure.leaves !== 'held' || !failure.preserveWorktree) {
-        await this.runs.release(task.id, { keep: failure.leaves === 'failed' && failure.keepWorktree });
+        await this.leases.letGo(task.id, { keep: failure.leaves === 'failed' && failure.keepWorktree, reason: 'spawn failed' });
       }
       const { level, text, toastOnly } = failure.notice;
       if (toastOnly) this.notifications[level](text);
@@ -1422,7 +1482,7 @@ export class TaskOrchestrator {
       else this.store.markFailed(taskId);
       this.store.setTaskOutputSummary(taskId, summarizeOutput(reason, ''));
       // Its landing may be what threw, so the release does not wait on it.
-      if (attempt.worktree) this.unawaited(this.runs.release(taskId, { keep: true }), `Could not keep the worktree of task "${title}"`);
+      if (attempt.worktree) this.unawaited(this.leases.letGo(taskId, { keep: true, reason: 'unsettled' }), `Could not keep the worktree of task "${title}"`);
     }
     this.tell('error', attempt ? `Task "${title}" could not be settled: ${reason}` : `Task "${title}" settled, but what follows it could not be scheduled: ${reason}`);
     this.unawaited(this.afterVerdict(taskId), 'The run could not be closed');
@@ -1457,6 +1517,7 @@ export class TaskOrchestrator {
     // so what was queued behind this task starts here too.
     await this.startQueued();
     this.startOwedRepairs(this.admittedNow());
+    this.offerKeptResumes();
     await this.settleRun('verdict');
   }
 
@@ -1593,7 +1654,8 @@ export class TaskOrchestrator {
   private readiness(): Readiness {
     if (!this.startsOnTick) return { ready: [], candidateCount: 0, excluded: [], gated: [] };
     const maxParallel = this.config.maxParallelSessions;
-    const active = this.attempts.size;
+    // This Session's own: a task the pool refuses stays ready, and its run is not settled (ADR-0055 D18).
+    const active = this.attempts.slotsHeld;
     const readiness = selectReadyTasks({ ...this.startRule(), active, maxParallel, ...(this.isScheduling ? {} : { within: this.carriedTasks() }) });
 
     // Counted, not listed: a line per task would make every tick walk the plan's tree once per task.
@@ -1721,7 +1783,7 @@ export class TaskOrchestrator {
       this.hold(taskId, 'cancelled; retry or force start to run it again', true);
     }
     this.emit('onTaskChanged');
-    await this.runs.release(taskId, worktree, ended?.integration);
+    await this.leases.letGo(taskId, { ...worktree, landing: ended?.integration, reason: 'cancelled' });
     await this.tick();
   }
 
@@ -1756,7 +1818,7 @@ export class TaskOrchestrator {
         this.attempts.end(taskId, 'release');
         // Not left in progress while its worktree goes: it is leaving the plan, not running.
         if (this.store.get(taskId)?.status === 'in_progress') this.store.markPending(taskId);
-        await this.runs.release(taskId, { keep: false });
+        await this.leases.letGo(taskId, { keep: false, reason: 'left the plan' });
       }
     } finally {
       this.releasing.delete(taskId);
@@ -1943,7 +2005,7 @@ export class TaskOrchestrator {
       this.onHold.delete(taskId);
       this.notifications.info(`Task "${task.title}" skipped: none of its work lands, and the tasks that depend on it go ahead without it once the work it waited on is done.`);
       this.emit('onTaskChanged');
-      await this.runs.release(taskId, { keep: true }, ended?.integration);
+      await this.leases.letGo(taskId, { keep: true, landing: ended?.integration, reason: 'skipped' });
       // A Stop while the worktree was kept leaves the run stopped: the skip
       // stands, and nothing it released starts.
       if (admission.current()) await (this.continueRun(origin) ?? this.tick());
@@ -1989,7 +2051,7 @@ export class TaskOrchestrator {
       } else {
         // A retry starts over from the integration tip, which by now holds what its
         // predecessors landed; the old attempt's worktree has nothing to offer it.
-        await this.runs.release(taskId, { keep: false }, ended?.integration);
+        await this.leases.letGo(taskId, { keep: false, landing: ended?.integration, reason: 'retried' });
       }
       // A Stop while the worktree went leaves the run stopped, the task back to not started.
       if (!admission.current()) return;
@@ -2143,6 +2205,7 @@ export class TaskOrchestrator {
       const resumed = this.limitPauses.resumed() ? this.start(origin) : Promise.resolve();
       // No tick follows a task started alone, and a repair the limit held is owed its start now.
       this.startOwedRepairs(admission);
+      this.offerKeptResumes();
       // Both are awaited even if one fails: the claimed attempt's start must not
       // be left unhandled because restarting the run threw.
       await Promise.all([resumed, started]);
@@ -2160,6 +2223,12 @@ export class TaskOrchestrator {
     const refused = this.claimRefusal(task.id, admission);
     if (!refused) return true;
     if (!admission.current()) return false;
+    // In a tree a slot is a wait, not a failure: nobody asked for this start, and its timer has fired, so it is kept for a tick to offer (ADR-0055 D18).
+    if (!swept && this.pool.shared && this.startRefusal(task.id, admission) === null) {
+      this.keptResumes.add(task.id);
+      this.leases.reserve(this.leaseRequest('task', task.id));
+      return false;
+    }
     if (swept) {
       this.tell('info', `Task "${task.title}" did not resume now: ${refused} It still resumes on its own at its usage limit's reset.`);
     } else {
@@ -2349,8 +2418,72 @@ export class TaskOrchestrator {
     return !!task && this.startWaits(task, forced).some((w) => QUEUED_WAITS.has(w.kind) || w.kind === 'dependencies' || w.kind === 'merge-gate');
   }
 
+  /**
+   * Whether a start nobody asked for has to wait for a slot, wherever in the
+   * tree they are held. Asked with no claim to follow, so it reserves to be
+   * refused: the refusal is what has a slot freed elsewhere tick this Session
+   * (ADR-0059 L1).
+   */
   private slotsFull(): boolean {
-    return this.attempts.size >= this.config.maxParallelSessions;
+    const request = this.leaseRequest('task');
+    if (this.leases.refusal(request) === null) return false;
+    this.leases.reserve(request);
+    return true;
+  }
+
+  /** The kept resumes the tree has room for now. A Stop or a retry since has cancelled the rest. */
+  private offerKeptResumes(): void {
+    for (const id of [...this.keptResumes]) {
+      const task = this.store.get(id);
+      if (task && waitsForReset(task) && this.slotsFull()) return;
+      this.keptResumes.delete(id);
+      if (task && waitsForReset(task)) this.unawaited(this.resumeTask(id), `Could not resume task "${task.title}"`);
+    }
+  }
+
+  /** A pool's tick: it has nobody to tell of a failure, so it is said. */
+  async offered(): Promise<void> {
+    await this.tick().catch((err: unknown) => this.tell('error', `Could not start what waited for a slot: ${err instanceof Error ? err.message : String(err)}`));
+  }
+
+  /** The task's live attempt holds a slot: every one does but a delegated task's (ADR-0055 D18). */
+  holdsSlot(taskId: string): boolean {
+    return this.attempts.holdsSlot(taskId);
+  }
+
+  /** The task's live attempt waits on this Session's planner: what lets a turn pass the limit (ADR-0055 D18). */
+  waitsOnPlanner(taskId: string): boolean {
+    const task = this.store.get(taskId);
+    return !!task && waitsMidAttempt(task) && this.attempts.has(taskId);
+  }
+
+  limitFoundElsewhere(runner: string, at: Date): void {
+    this.limitPauses.foundElsewhere(runner, at);
+    this.emit('onTaskChanged');
+  }
+
+  /** A planner turn's lease (ADR-0059 L1): a subplanner's waits its turn for a slot, and a root's is never held (ADR-0055 D18). */
+  reserveTurn(): { lease: ReservedLease } | { refused: string } {
+    return this.leases.reserve(this.leaseRequest('planner'));
+  }
+
+  /** The tree's pool, which a child joins (ADR-0055 D18). */
+  get slotPool(): SlotPool {
+    return this.pool;
+  }
+
+  /** The Session is closing: the tree stops counting on it. */
+  leaveTree(): void {
+    this.deps.leaveTree();
+  }
+
+  private leaseRequest(role: LeaseRequest['role'], taskId?: string): LeaseRequest {
+    return { node: { sessionId: this.sessionId(), ...(taskId !== undefined ? { taskId } : {}) }, role };
+  }
+
+  /** What a start of `task` reserves. */
+  private attemptRequest(task: Readonly<Task>): LeaseRequest {
+    return { ...this.leaseRequest(task.type === 'script' ? 'script' : 'task', task.id), runner: this.store.resolveTaskRunner(task) };
   }
 
   private sayQueuedAtGate(task: Readonly<Task>, queued: QueuedStart, unmerged: readonly string[]): void {
@@ -2420,6 +2553,7 @@ export class TaskOrchestrator {
     // a failed spawn — so a queued force start waiting on it is started here.
     await this.startQueued();
     this.startOwedRepairs(admission);
+    this.offerKeptResumes();
     if (!this.startsOnTick) return this.settleRun('tick');
 
     // Ahead of the run-complete check too: the turn may add work to a run
@@ -2500,6 +2634,7 @@ export class TaskOrchestrator {
     // A task on a usage limit keeps the run open: closed, it would be handed
     // over or merged before the work the reset resumes.
     if (this.runState.kind === 'held') return;
+    if (this.waitsOnTree()) return;
     if (this.runState.kind !== 'scheduling') {
       if (this.loopsCarriedOn().length > 0) return this.waitOnUser();
       if (after === 'tick') {
@@ -2539,6 +2674,22 @@ export class TaskOrchestrator {
     this.emit('onTick');
     await this.closeRun();
     this.emit('onExecutionComplete');
+  }
+
+  /**
+   * What holds this run back is another Session's, not the user's: a slot, or a
+   * usage limit a sibling found. Nothing here will tick for it, and what frees
+   * it does, so no child parks waiting on a user (ADR-0055 D18). A flat run has
+   * no such wait: an idle Session of one has its slots free.
+   */
+  private waitsOnTree(): boolean {
+    if (!this.pool.shared) return false;
+    if (this.keptResumes.size > 0 || (this.queuedStarts.size > 0 && this.slotsFull())) return true;
+    const limited = this.pool.limited();
+    return limited.size > 0 && this.judgingOnce(() => this.store.allTasks.some((t) => {
+      const wait = waitOf(this.startWaits(t), 'usage-limit');
+      return !!wait && limited.has(wait.runner);
+    }));
   }
 
   private waitOnUser(): void {
@@ -2713,7 +2864,7 @@ export class TaskOrchestrator {
   /** Whether the scheduler may start `id` now: nothing in the start rule holds it back, and a slot is free. */
   private stillReady(id: string): boolean {
     const task = this.store.get(id);
-    if (!task || this.attempts.has(id) || this.attempts.size >= this.config.maxParallelSessions) return false;
+    if (!task || this.attempts.has(id) || this.attempts.slotsHeld >= this.config.maxParallelSessions) return false;
     return this.startWaits(task).length === 0;
   }
 
@@ -2739,13 +2890,22 @@ export class TaskOrchestrator {
    * marked complete, a resolver has its conflict, so a start of it would be a
    * second worker on it (ADR-0015), a revert is taking back work it depends on
    * or skipped it since (ADR-0054), it
-   * is outside the user's approval record (ADR-0035), or every slot is taken.
-   * Read in the same synchronous step as the claim it
-   * guards, so nothing can change in between. `revives` is a start asked of a
-   * task already skipped, as a force start or a continue may be: only that runs
-   * one again. A retry has made it pending by the time it claims.
+   * is outside the user's approval record (ADR-0035), or its lease cannot be
+   * reserved, every slot being taken (ADR-0059 L1). Read in the same
+   * synchronous step as the claim it guards, so nothing can change in between.
    */
-  private claimRefusal(taskId: string, admission: Admitted, { revives = false }: { revives?: boolean } = {}): string | null {
+  private claimRefusal(taskId: string, admission: Admitted, opts: { revives?: boolean } = {}): string | null {
+    return this.startRefusal(taskId, admission, opts) ?? this.leases.refusal(this.attemptRequest(this.store.get(taskId)!));
+  }
+
+  /**
+   * All of {@link claimRefusal} short of the lease: what a refusal keeps nobody
+   * for. Whatever else a start spends is checked here, since every attempt
+   * passes it. `revives` is a start asked of a task already skipped, as a force
+   * start or a continue may be: only that runs one again. A retry has made it
+   * pending by the time it claims.
+   */
+  private startRefusal(taskId: string, admission: Admitted, { revives = false }: { revives?: boolean } = {}): string | null {
     if (!admission.current()) return STOPPED_BEFORE_START;
     const task = this.store.get(taskId);
     if (!task) return `There is no task "${taskId}" in this plan any more.`;
@@ -2755,10 +2915,6 @@ export class TaskOrchestrator {
     if (resolver) return `Task "${resolver.title}" already resolves the conflict of task "${task.title}": skip or remove it first, or let it finish.`;
     if ([...this.reverting].some((reach) => reach.has(taskId))) return `A revert is taking back work task "${task.title}" depends on. Start it again once the revert has ended.`;
     if (!this.isApproved(taskId)) return `Task "${task.title}" waits for the user's approval: they approve it by starting it, or by executing the plan.`;
-    const live = this.attempts.size;
-    if (live >= this.config.maxParallelSessions) {
-      return `${live} ${live === 1 ? 'task is' : 'tasks are'} already running, the most this session runs at once. Wait for one to finish, or stop one first.`;
-    }
     return null;
   }
 
@@ -2777,8 +2933,10 @@ export class TaskOrchestrator {
   /**
    * The one claim every attempt start passes — the scheduler's, a run or force
    * start, a retry's, a continue, a resume, a repair. Checked and taken in one
-   * synchronous step ({@link claimRefusal}, then {@link Attempts.start}), so
-   * no other start can take the same task or slot.
+   * synchronous step ({@link startRefusal}, the lease's `reserve`, then
+   * {@link Attempts.start}), so no other start can take the same task or slot.
+   * `reserve` rather than `refusal` answers for the slot, since being turned
+   * down is what keeps this Session for the slot that frees (ADR-0059 L1).
    * The task is read here, as it stands: a start that awaited first — its run
    * opening, the user's answer — runs what the plan holds now, not what it
    * held when it was asked for. A task already claimed is not claimed again:
@@ -2786,9 +2944,12 @@ export class TaskOrchestrator {
    */
   private claim(taskId: string, admission: Admitted, continuation: Continuation | null = null, opts: { autoResumed?: boolean; revives?: boolean } = {}): Claim {
     if (this.attempts.has(taskId)) return { spawned: Promise.resolve() };
-    const refused = this.claimRefusal(taskId, admission, opts);
+    const refused = this.startRefusal(taskId, admission, opts);
     if (refused) return { refused };
-    return { spawned: this.attempts.start(this.store.get(taskId)!, { admission, continuation, autoResumed: opts.autoResumed === true }) };
+    const task = this.store.get(taskId)!;
+    const reserved = this.leases.reserve(this.attemptRequest(task));
+    if ('refused' in reserved) return { refused: reserved.refused };
+    return { spawned: this.attempts.start(task, { admission, continuation, autoResumed: opts.autoResumed === true, lease: reserved.lease }) };
   }
 
   private tell(level: 'info' | 'warn' | 'error', message: string): void {

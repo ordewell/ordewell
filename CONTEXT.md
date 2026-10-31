@@ -151,6 +151,29 @@ never claims it back on its own.
 *Avoid:* "session lock" (the lease outlives no holder, and is taken over
 rather than waited for), "owner" for anything but the holder.
 
+**Execution lease** (`services/executionLease.ts`, `LocalWorktreeLease`,
+ADR-0059) — where a session runs, taken in two steps: `reserve`, synchronous and
+inside the claim, and `open`, asynchronous, where an attempt's workspace is made
+and around a planner's adapter. Every attempt, planner turn and merge holds one.
+A *backend* answers both and proves what it guarantees by a probe at open, never
+declaring it: the default, local worktrees, proves nothing, since a local runner
+reaches what the user reaches. `release` gives back what was reserved as the
+attempt ends; `letGo` decides its worktree, which can outlive the lease. A result
+is the task's branches and the runner's session, which a Continue resumes.
+*Avoid:* "lease" alone where the *session lease* could be meant: that one says
+which host holds a session, and this one where a session runs.
+
+**Slot pool** (`services/SlotPool.ts`, ADR-0055 D18) — the Parallel limit across a
+tree, the root's and shared by every Session under it. It counts every attempt and
+every running subplanner turn, and the root's planner turn once the tree has a
+child, which it never holds. A delegated task and a merge hold no slot. A flat run
+has a pool of its own with one node, which is the Parallel limit over attempts
+alone. Refused, a Session is kept and ticked when a slot frees in another, and a
+subplanner's turn goes ahead of attempts; if everything that holds a slot waits on
+a planner, the oldest turn one of them waits on passes the limit, one at a time.
+*Avoid:* "semaphore", "queue" (readiness stays each Session's own, and a task the
+pool refused stays ready).
+
 **SessionCatalog** (`services/SessionCatalog.ts`) — what one session may
 assign, behind one interface: the enabled runners, their manifest modes, the
 models discovery found for them, and the allowlist narrowing those. Built in
@@ -1382,14 +1405,14 @@ and the *Start admission* it was asked under. It reads the task there, so a
 start that awaited first runs the task as the plan holds it then, and checks
 in the same synchronous step that the task is in the user's approval record,
 that no Stop came since the start was admitted, that Mark complete is not
-landing it and that a slot is free; `Attempts.start` then marks the attempt
-claimed before anything is awaited. The attempt keeps that admission, and the
+landing it and that its *Execution lease* can be reserved, a slot being free;
+`Attempts.start` then marks the attempt claimed before anything is awaited. The attempt keeps that admission, and the
 repair its conflict is owed claims under it. The scheduler also judges each
 task by the *Start rule* again right before claiming it, because a start it
 awaited, a user control or a concurrent tick may have changed it, so it never
 starts held, finished or newly blocked work, nor more than
 `maxParallelSessions` at once.
-The working directory is decided in one place (`attemptKind.attemptCwd`): the
+The working directory is decided in one place (`attemptKind.attemptWorkspace`): the
 workspace root for an attempt that acts from the checkout, else what the
 `IsolationRunController` gives it — the workspace root when the run does not
 isolate, or in an isolated run the worktree `WorktreeIsolation.prepare` made for
@@ -1617,7 +1640,7 @@ is: `change`, `ops`, `repair` (a *conflict repair*, ADR-0015), `continuation`
 (a *Continue*, ADR-0018, which carries whether its task is ops) or `carryOver`
 (a *Carry-over*, which carries the runner it left). Everything that
 differs between attempts is read from it, never from loose flags: where the
-attempt runs (`attemptCwd`), the prompt (`attemptPrompt`), whether the run
+attempt runs (`attemptWorkspace`), the prompt (`attemptPrompt`), whether the run
 decides to isolate when it starts (`decidesIsolation` — not for work in the checkout),
 whether the workspace's tracked files are compared across it (`checksTree` —
 ops work in the checkout, which can be caught writing but not stopped), and

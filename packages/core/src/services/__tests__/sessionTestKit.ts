@@ -80,6 +80,8 @@ export interface SessionOverrides {
   child?: SessionDeps['child'];
   /** Where a child session sits (ADR-0055 D11): it saves and logs through the real store, under its root. */
   placement?: SessionDeps['placement'];
+  execution?: SessionDeps['execution'];
+  notifications?: INotification;
 }
 
 /** Task-log files that live in memory, numbered per task as the real store numbers them. */
@@ -116,7 +118,7 @@ export function makeSession(overrides: SessionOverrides = {}): Session {
   const save = vi.fn<SaveSession>();
   const session = createSession({
     config: overrides.config ?? fakeConfig(),
-    notifications: fakeNotification(),
+    notifications: overrides.notifications ?? fakeNotification(),
     runner,
     scriptRunner: overrides.scriptRunner,
     registry: overrides.registry ?? new RunnerRegistry(),
@@ -149,6 +151,7 @@ export function makeSession(overrides: SessionOverrides = {}): Session {
     runNotifyCommand: overrides.runNotifyCommand,
     child: overrides.child,
     placement: overrides.placement,
+    execution: overrides.execution,
   });
   if (!overrides.saveSession && !overrides.placement) saveFakes.set(session, save);
   return session;

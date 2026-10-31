@@ -1,7 +1,7 @@
 ---
 status: accepted
-implemented: none
-note: "States the scale goal behind ADR-0055. The EventStore (S3) is built as trees need it; the AIMD window (S4) is later."
+implemented: partial
+note: "States the scale goal behind ADR-0055. Built: S4's admission, the pool at `reserve`. The EventStore (S3) is built as trees need it; the AIMD window (S4) is later."
 ---
 
 # 0058 — A tree holds many nodes and few live sessions
@@ -125,3 +125,4 @@ stays possible behind the port or the lease.
 
 - 2026-10-31 — accepted. Not yet implemented.
 - 2026-10-31 — S1 names the planner turns that may run past the Parallel limit.
+- 2026-10-31 — S4's admission implemented: the pool of ADR-0055 D18, at `reserve`.

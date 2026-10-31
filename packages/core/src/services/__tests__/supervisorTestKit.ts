@@ -110,6 +110,8 @@ export interface Options {
   leaseHost?: SessionDeps['leaseHost'];
   /** The node the session is, below the root (ADR-0056); the root unless set. */
   child?: SessionDeps['child'];
+  /** Where its sessions run (ADR-0059); the local worktrees unless set. */
+  execution?: SessionDeps['execution'];
 }
 
 /** A session running `tasks` under the user's supervisor level, Watch unless the options say otherwise. */
@@ -128,6 +130,7 @@ export async function supervised(tasks: Task[] = [task('t1', 1), task('t2', 2)],
     isolation: options.isolation,
     leaseHost: options.leaseHost,
     child: options.child,
+    execution: options.execution,
     broadcast: (m) => messages.push(m),
     onNotice: (n) => notices.push(n),
     config: fakeConfig(options.config),

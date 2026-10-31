@@ -8,6 +8,9 @@ import { TaskControlError } from '../TaskControlError';
 import { McpAttachError, McpAttachTimeout, RunnerStartupExit } from '../harness/ordewellBinding';
 import { TaskSkillsError } from '../taskSkills';
 import type { LandingOutcome } from '../Landing';
+import type { IsolationRunController } from '../IsolationRunController';
+import { LocalWorktreeLease } from '../LocalWorktreeLease';
+import { SlotPool } from '../SlotPool';
 import type { IRunner, IRunnerSession } from '../../interfaces/IRunner';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
 import { fakeConfig, FakeRunnerSession } from '../../testing';
@@ -50,7 +53,7 @@ function setup(opts: { tasks?: Task[]; spawn?: Spawn; repairs?: string[]; landPa
     unawaited: (work) => { void work.catch(() => undefined); },
   };
   const repairs = new Set(opts.repairs ?? []);
-  const runs: AttemptsDeps['runs'] = {
+  const runs: AttemptsDeps['runs'] & Pick<IsolationRunController, 'attemptCwd' | 'workspaceCwd' | 'release'> = {
     attemptCwd: async () => ({ cwd: '/repo/.ordewell/worktrees/t1', worktree: true }),
     workspaceCwd: async () => ({ cwd: '/repo', worktree: false }),
     snapshotWorkspace: async () => null,
@@ -68,6 +71,12 @@ function setup(opts: { tasks?: Task[]; spawn?: Spawn; repairs?: string[]; landPa
     repairPrompt: () => 'Repair the conflict.',
   };
   const notifications = fakeNotification();
+  const leases = new LocalWorktreeLease({ pool: new SlotPool(() => Infinity), node: { tick: async () => undefined, openTurn: () => undefined, waitsOnPlanner: () => false, limitFound: () => undefined }, runs, workspaceRoot: () => '/repo' });
+  const leaseOf = () => {
+    const reserved = leases.reserve({ node: { sessionId: 's' }, role: 'task' });
+    if ('refused' in reserved) throw new Error(reserved.refused);
+    return reserved.lease;
+  };
   const attempts = new Attempts({
     config: fakeConfig(),
     notifications,
@@ -76,6 +85,7 @@ function setup(opts: { tasks?: Task[]; spawn?: Spawn; repairs?: string[]; landPa
     store,
     output: new BufferedTaskOutputSource(),
     runs,
+    leases,
     landing,
     registry: null,
     workspaceRoot: () => '/repo',
@@ -88,7 +98,7 @@ function setup(opts: { tasks?: Task[]; spawn?: Spawn; repairs?: string[]; landPa
     taskLog: { attempts: () => [], events: () => [] },
     host,
   });
-  const start = (taskId = 't1', claim: Partial<Parameters<Attempts['start']>[1]> = {}) => attempts.start(store.get(taskId)!, { admission: admitted, ...claim });
+  const start = (taskId = 't1', claim: Partial<Parameters<Attempts['start']>[1]> = {}) => attempts.start(store.get(taskId)!, { admission: admitted, lease: leaseOf(), ...claim });
   return { attempts, store, runner, runs, landing, sessions, ended, events, told, notifications, start, task: (id = 't1') => store.get(id)! };
 }
 

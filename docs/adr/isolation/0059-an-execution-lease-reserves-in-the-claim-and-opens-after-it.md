@@ -1,8 +1,8 @@
 ---
 status: accepted
-implemented: none
+implemented: partial
 amends: ["0013", "0022", "0036"]
-note: "Settles #97, #98, #99 and #93 as direction. Local worktrees stay the default; the container backend is opt-in and later."
+note: "Settles #97, #98, #99 and #93 as direction. Built: L1 to L4 as the local backend needs them, `services/executionLease.ts` and `LocalWorktreeLease`. L5 to L7, the container backend and the broker, are later and opt-in."
 ---
 
 # 0059 — An execution lease reserves in the claim, opens after it, and proves what it guarantees
@@ -42,9 +42,21 @@ cloud-provider credentials only, never a Claude subscription's.**
   `child-plan` role reserves a node and no slot. Since `refusal` changes nothing, a claim
   turned down for a slot, or a resume at a limit's reset, still calls `reserve`: its `refused`
   keeps the Session that asked, and each `release` ticks the Sessions kept, oldest first, as a
-  scheduler ticks only on its own Session's events. `open` runs where `attemptCwd` runs in `Attempts`, and around
-  `CliAgentAiService.startAdapter` for a planner, and undoes itself on abort. A later remote backend answers
-  `reserve` from a local allocation, or claims become asynchronous, which would be a change to ADR-0029.
+  scheduler ticks only on its own Session's events. `open` runs where an attempt's workspace is made in `Attempts`,
+  and around `CliAgentAiService.startAdapter` for a planner. Once aborted it makes nothing, and one aborted while it
+  worked is undone by `letGo`, since only the attempt knows what became of the task since. A later remote backend
+  answers `reserve` from a local allocation, or claims become asynchronous, which would be a change to ADR-0029.
+
+  What ends with an attempt is its lease; its worktree need not. A repair reopens it and a continue restores it, and a
+  task with no attempt can still have one, so `release` gives the slot back, synchronously since a repair claims the
+  slot its attempt freed in the same step, and `letGo` decides the workspace, with no lease needed. `Landing`'s own
+  release stays beneath the seam: it comes while the attempt is live, and its slot is held. A merge starts no session
+  and passes no claim, so it reserves a `merge` lease, which holds no slot: every route to a checkout, an automatic
+  merge's included, is one a backend hears of and can refuse.
+
+  This is the interface as the local backend needs it, in `services/executionLease.ts`. What only a container needs
+  (`prepare`, `renew`, `revoked`, `repos`, `network`, `caches`, `credentials`, `limits`, `endpoints`, `spawn`,
+  `setNetwork`) comes with the first backend that does.
 
   ```ts
   interface ExecutionBackend {
@@ -52,21 +64,23 @@ cloud-provider credentials only, never a Claude subscription's.**
     prepare(env: EnvSpec): Promise<EnvHandle>;             // image, repos, dependencies; keyed by content
     refusal(request: LeaseRequest): string | null;         // synchronous, and changes nothing
     reserve(request: LeaseRequest): { lease: ReservedLease } | { refused: string }; // synchronous
+    letGo(taskId: string, how: { keep: boolean; landing?: Promise<unknown> | null; reason: string }): Promise<void>;
     list(): Promise<readonly LeaseRecord[]>;               // what a restart finds; starts nothing
     renew(ids: readonly string[], ttlMs: number): Promise<void>;
   }
 
   interface LeaseRequest {
     node: { sessionId: string; taskId?: string; attempt?: number; parent?: string };
-    role: 'planner' | 'task' | 'script' | 'child-plan';
+    role: 'planner' | 'task' | 'script' | 'child-plan' | 'merge';
     runner?: RunnerId;
   }
 
   interface ReservedLease {
     readonly id: string;
     readonly revoked: AbortSignal;
+    readonly holdsSlot: boolean;
     open(spec: LeaseSpec, signal: AbortSignal): Promise<OpenLease>;
-    release(how: { keep: boolean; landing?: Promise<unknown> | null; reason: string }): Promise<void>; // idempotent
+    release(reason: string): void;                         // idempotent and synchronous
   }
 
   interface LeaseSpec {
@@ -88,7 +102,7 @@ cloud-provider credentials only, never a Claude subscription's.**
     guarantees: Record<Guarantee, { proven: boolean; by: string; at: string }>;
     spawn(command: RunnerCommand): Promise<RunnerHandle>;
     setNetwork(profile: NetworkProfile): Promise<void>;    // setup and agent phases differ
-    exportResult(): Promise<{ refs: Record<string, string>; sessionState: ArtifactRef }>;
+    exportResult(session: LeaseSessionState): { refs: Record<string, string>; sessionState: LeaseSessionState };
   }
   ```
 
@@ -97,7 +111,8 @@ cloud-provider credentials only, never a Claude subscription's.**
   A role is policy input, resolved to a `LeaseSpec` before a backend sees it.
 - **Results include session state (L2).** A branch is not the whole result. A saved runner session is what a
   Continue resumes, and in a container it dies with the container unless `exportResult` brings it back or a
-  per-task volume keeps it. Repositories are plural, as a repo group's are
+  per-task volume keeps it. An attempt's end reads the result synchronously, since it saves the session before anything
+  can read it; a backend that has files to copy out does so behind that. Repositories are plural, as a repo group's are
   ([ADR-0014](0014-multi-repo-workspaces.md)), and caches are named, so nothing in a spec assumes one host's
   paths.
 - **Guarantees are proven (L3).** `fs.hostHidden`, `fs.writeScope`, `net.allowlist`, `net.noMetadata`,
@@ -106,7 +121,7 @@ cloud-provider credentials only, never a Claude subscription's.**
   declares none. A spec's `required` fails the open, and an in-process check relaxes only on a proven entry. An
   exit reports `oom`, `expired` or `killed` as a typed reason.
 - **Local worktrees stay the default (L4).** `LocalWorktreeLease` wraps today's code with no setup and no change
-  in behaviour: `reserve` is the Parallel limit, `open` is `attemptCwd`, and `list` reads the session's records.
+  in behaviour: `reserve` is the Parallel limit, `open` is `attemptWorkspace`'s answer to the run, and `list` reads the session's records.
   It proves what it can, which is little: its report is that a local runner reaches what the user reaches.
 - **The first container backend (L5).** The Docker API through the docker CLI, so one code path serves any engine
   that speaks it. It is opt-in. On a laptop it is one container per attempt, started idle with the runner launched
@@ -146,9 +161,11 @@ cloud-provider credentials only, never a Claude subscription's.**
 
 ## Testing decisions
 
-- The interface is tested through a fake backend, as `FakeWorktreeIsolation` fakes isolation: a claim with no free
-  slot and the release that ticks it, a Stop between reserve and open, an open that fails, a release that runs twice.
-- `LocalWorktreeLease` passes the suites the code passes today, unchanged. That is what "no change in behaviour" means.
+- The interface is tested through a fake backend, `FakeExecutionBackend`, as `FakeWorktreeIsolation` fakes isolation: a
+  claim with no free slot and the release that ticks it, a Stop between reserve and open, an open that fails, a release
+  that runs twice.
+- `LocalWorktreeLease` passes the suites the code passes today, unchanged, and `executionLease.flatRun.test.ts` is a table
+  over Parallel limits that passed on the scheduler before the lease went in. That is what "no change in behaviour" means.
 - The Docker backend's probes run against a real engine, off CI's default path, as the sandbox's Linux end-to-end runs do.
 - A guarantee's probe is tested by a backend built to fail it: an open that requires it refuses.
 
@@ -164,6 +181,9 @@ for model traffic first. The interface is kept free of anything that blocks thes
 
 - **One asynchronous `acquire` in the claim.** Rejected: it reopens the race ADR-0029 closed, or makes every claim
   asynchronous.
+- **`release(how)` deciding the worktree too.** Dropped once it met the code. A slot goes back as an attempt ends, before
+  the scheduler has decided what becomes of its worktree, and many of those decisions have no attempt in hand: a cancel of
+  a task with none live, a skip, a retry.
 - **Declared guarantees.** Rejected: a guarantee nobody tested is a label, and an in-process check would relax on it.
 - **One repository and host mounts in the spec.** Rejected: it leaks a local assumption into every backend.
 - **Static network at acquire.** Rejected: installing dependencies and running an agent want different networks.
@@ -194,3 +214,4 @@ for model traffic first. The interface is kept free of anything that blocks thes
 - 2026-10-31 — accepted. Not yet implemented.
 - 2026-10-31 — checked against the code: a refusal for a slot keeps the Session, and a release ticks it.
 - 2026-10-31 — a resume at a limit's reset refused for a slot is kept the same way.
+- 2026-10-31 — L1 to L4 implemented for the local backend: `release` frees the slot and `letGo` decides the worktree, a merge reserves a lease with no slot, and a result is read synchronously.

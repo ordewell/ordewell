@@ -68,6 +68,8 @@ export interface LimitPausesHost {
   settled(taskId: string): Promise<void>;
   /** Start the next attempt of a task its reset, or `now`, resumes, as a continue of its saved session. */
   resume(taskId: string, now?: ResumeNow): Promise<void>;
+  /** The reset of a limit this Session found, as its tree has it: a runner's limit is the account's, not one Session's (ADR-0055 D18). */
+  limitFound?(runner: string, at: Date): Date;
 }
 
 /**
@@ -227,6 +229,13 @@ export class LimitPauses {
     this.host.waitChanged({ taskId: task.id, runner: attempt.runner, resumeAt: resumeAt.toISOString() });
   }
 
+  /** Another Session of the tree found `runner`'s limit: what waits on it here resumes at that reset too (ADR-0055 D18). */
+  foundElsewhere(runner: string, at: Date): void {
+    if (this.waitingOn(runner).length === 0) return;
+    const resets = this.waits.arm(runner, at);
+    for (const t of this.waitingOn(runner)) this.host.store.setTaskResumeAt(t.id, resets.toISOString());
+  }
+
   private async resumeRunner(runner: string, now?: ResumeNow): Promise<void> {
     const asked = now ? this.host.store.get(now.taskId) : undefined;
     const due = [...(asked ? [asked] : []), ...this.waitingOn(runner).filter((t) => t.id !== asked?.id)];
@@ -255,8 +264,8 @@ export class LimitPauses {
    * put that time on each of them, so they resume together.
    */
   private arm(runner: string): Date {
-    const latest = Math.max(...this.waitingOn(runner).map((t) => Date.parse(t.resumeAt ?? '')));
-    const at = this.waits.arm(runner, new Date(latest));
+    const latest = new Date(Math.max(...this.waitingOn(runner).map((t) => Date.parse(t.resumeAt ?? ''))));
+    const at = this.waits.arm(runner, this.host.limitFound?.(runner, latest) ?? latest);
     for (const t of this.waitingOn(runner)) this.host.store.setTaskResumeAt(t.id, at.toISOString());
     return at;
   }

@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0009", "0013", "0015", "0018", "0020", "0022", "0029", "0030", "0035", "0045", "0046", "0049", "0054"]
-note: "Settles #33. Built: D21's run setting, and what makes a child run safe: D10 to D13 and D17's prune, reached by `Session.hostChild`. No delegated task or `ChildPlanRunner` exists yet. The rest is decided ahead of its code: what a node may do is ADR-0056, how it reports is ADR-0057."
+note: "Settles #33. Built: D21's run setting, and what makes a child run safe: D10 to D13, D17's prune and D18's pool, reached by `Session.hostChild`. No delegated task or `ChildPlanRunner` exists yet, so nothing but a test reserves the `child-plan` role. The rest is decided ahead of its code: what a node may do is ADR-0056, how it reports is ADR-0057."
 ---
 
 # 0055 — A delegated task is a child plan behind the runner seam
@@ -372,7 +372,9 @@ the child cannot reach follows it in the parent's plan.**
     with the refusal.
   - A subplanner between turns holds no process: its adapter is disposed when a
     turn ends and its session id kept, so it is a parked row. A turn's own
-    corrective retries stay in that process.
+    corrective retries stay in that process. An opening waits for a slot at the
+    gate `PlanTurns` does not reach, and a Stop reaches a turn waiting for one as
+    it reaches a turn at that gate.
   - A subplanner's turn queues ahead of attempts. If everything that holds a slot
     is waiting on a planner, the oldest turn one of them waits on is let in over the
     limit, one at a time: a limit that stopped the answer would stop the tree. One
@@ -383,7 +385,9 @@ the child cannot reach follows it in the parent's plan.**
     it is the user's conversation, and the run does not depend on it. With no
     delegated task live, the Parallel limit is what ADR-0030 says, attempts alone.
   - A usage limit found by one node holds for the whole tree: `LimitPauses`' waits
-    are the tree's, keyed by runner.
+    are the tree's, keyed by runner. A sibling's work on that runner waits for the
+    reset, which ticks every node, and two nodes' limits on one runner end at the
+    later of the two. A flat run's waits stay its own.
 
 ### Shape, surfaces and the setting
 
@@ -440,7 +444,9 @@ the child cannot reach follows it in the parent's plan.**
   and by one with Parallel 1 across two children: the task the pool refused starts
   when the other child's ends, and no child waits on a user. A third has the pool
   refuse a resume at its reset: it starts when a slot frees, in a run still held.
-  Flat runs keep their suites unchanged.
+  These run real Sessions side by side in `treeSlots.test.ts`, and the pool's own
+  rules are tested alone in `SlotPool.test.ts`. Flat runs keep their suites unchanged,
+  and `executionLease.flatRun.test.ts` holds them with a table over Parallel limits.
 - D14's rule is tested with a repair that edits a protected path, in a repo the
   landing changed and in one it did not, and with one that leaves a conflict marker
   in a repo the landing did not change: none lands. A repair spawns in the mode its
@@ -585,3 +591,4 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-10-31 — checked against the code a sixth time: a subplanner's handoff is checked against its own plan, a body on a delegated task's check is a worktree task, a repair's mode comes from the mandate, and a child run is discarded on any fresh attempt or removal.
 - 2026-10-31 — D21's run setting implemented, off by default; nothing can delegate yet, so the planner is not taught it, and it moves only the root's mandate ([ADR-0030](0030-global-run-settings.md)).
 - 2026-10-31 — D10 to D13 and D17's prune implemented, reached by `Session.hostChild`: `createSession` is where a child is refused the user's checkout until `ChildPlanRunner` exists, a child takes its parent's isolation and never sweeps, a delete stops on what git could not let go, and a run a held lease refuses does not fall back to the checkout.
+- 2026-10-31 — D18 implemented in `SlotPool`, behind the lease (ADR-0059 L1): the root's pool reaches a child through `ChildPlacement`, and the subplanner's opening waits for a slot.

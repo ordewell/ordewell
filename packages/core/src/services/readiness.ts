@@ -88,6 +88,8 @@ export interface StartRuleInput {
   queued: Pick<ReadonlySet<string>, 'has'>;
   /** The task out to resolve this task's conflict, if one is; none when the caller knows of no conflicts. */
   conflictResolver?: (taskId: string) => string | undefined;
+  /** The runners whose usage limit another Session of the tree found (ADR-0055 D18). */
+  treeLimited?: ReadonlySet<string>;
 }
 
 /** What the scheduler picks from: the start rule's input, and the slots. */
@@ -226,7 +228,7 @@ function waitsOf(task: Readonly<Task>, input: StartRuleInput, forced: ForcedStar
   // A script task runs on no runner, so no runner's limit holds it (ADR-0035).
   if (!forced && task.type === 'ai') {
     const runner = store.resolveTaskRunner(task);
-    if (plan.limited().has(runner)) waits.push({ kind: 'usage-limit', runner });
+    if (plan.limited().has(runner) || input.treeLimited?.has(runner)) waits.push({ kind: 'usage-limit', runner });
   }
   if (input.startsHeld && !byHand && forced?.queued !== false) waits.push({ kind: 'start-hold' });
   // A start forced now passes the whole gate, which the user confirmed; a queued one only what they confirmed then.

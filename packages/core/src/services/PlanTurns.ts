@@ -67,6 +67,14 @@ export interface PlanTurnsHost {
   interrupt(): void;
   /** Hold the scheduler's new starts; the returned release is idempotent. */
   holdStarts(): () => void;
+  /**
+   * Whether a slot of the tree is this turn's, taken for it if so. False, the
+   * pool has kept this Session and calls {@link PlanTurns.pump} when one frees
+   * (ADR-0055 D18). Absent, a turn takes none.
+   */
+  turnRoom?(): boolean;
+  /** A turn of these is over, whether or not the conversation ever held it: what {@link turnRoom} took goes back. */
+  turnSettled?(): void;
   /** Tick after a release, so what became ready during the turn starts: the armed scheduler's work, and queued force starts. */
   resumeStarts(): Promise<void>;
   /**
@@ -155,6 +163,8 @@ export class PlanTurns {
   private running: Running | null = null;
   /** A turn is due but waits for the planner to be found. */
   private detecting = false;
+  /** A turn is due but waits for a slot of the tree; the pool pumps when one frees. */
+  private awaitingSlot = false;
   /** The refusal last told to the user, so an input that keeps arriving is not refused aloud again and again. */
   private refusalTold: string | null = null;
   /** The user stopped the turn wake-ups waited behind: they wait for the next input to open one, not for the stop's release. */
@@ -411,7 +421,14 @@ export class PlanTurns {
       return;
     }
     this.refusalTold = null;
+    this.awaitingSlot = this.host.turnRoom?.() === false;
+    if (this.awaitingSlot) return;
     void this.run(plan, batch);
+  }
+
+  /** A turn of these is under way, however many times it takes the conversation. */
+  get turnRunning(): boolean {
+    return this.running !== null;
   }
 
   /**
@@ -448,17 +465,19 @@ export class PlanTurns {
    * answered: they stay undelivered, as a reload keeps them (ADR-0029), and go
    * with the next turn something else opens — the user's next message or the
    * supervisor's next wake-up — never off the release of the turn the user
-   * stopped. A force send never comes here: it keeps the queue (ADR-0023).
+   * stopped. A turn waiting for a slot of the tree stands where one at the
+   * gate does (ADR-0055 D18). A force send never comes here: it keeps the queue (ADR-0023).
    * False when nothing waited.
    */
   stopQueued(): boolean {
     const plan = this.host.plan();
     // Paused, nothing but a Retry (`running`) carries the turn on: a /compact the user runs meanwhile is stopped with it, and the pause ends.
     if (plan && this.paused() && !this.running) return this.dropPause(plan);
-    if (!plan || (!this.detecting && !this.running && !this.host.conversationBusy())) return false;
+    const atGate = this.detecting || this.awaitingSlot;
+    if (!plan || (!atGate && !this.running && !this.host.conversationBusy())) return false;
     const live = this.running?.ids;
     const waiting = (plan.pendingTurns ?? []).filter((t) => !live?.has(t.id));
-    const stopped = this.detecting ? waiting : waiting.filter((t) => t.source === 'user');
+    const stopped = atGate ? waiting : waiting.filter((t) => t.source === 'user');
     if (stopped.length < waiting.length) this.quiet = true;
     if (stopped.length === 0) return false;
     this.take(plan, new Set(stopped.map((t) => t.id)));
@@ -495,6 +514,7 @@ export class PlanTurns {
     this.reportWake = null;
     this.running?.release();
     this.running = null;
+    this.host.turnSettled?.();
     this.quiet = false;
     this.restored = false;
     for (const waiter of this.waiters.values()) waiter.reject(new PlannerTurnDiscardedError());
@@ -596,6 +616,7 @@ export class PlanTurns {
     } finally {
       running.release();
       this.running = null;
+      this.host.turnSettled?.();
       const ended = outcome;
       const waiting = new Set((plan.pendingTurns ?? []).map((t) => t.id));
       for (const t of batch) {
