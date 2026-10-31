@@ -1,4 +1,5 @@
 import { isTaskRunning, STALLED_LABEL, taskStatusKind } from '../taskRow/status';
+import type { StructuredTurnEnd } from '../interfaces/IRunner';
 import type { DisplayBlock, SubagentBlock } from './blocks';
 
 /** What the label reads: a `TaskLogView`'s blocks, which is all a webview holds of one. */
@@ -8,6 +9,8 @@ type LoggedBlocks = { readonly blocks: readonly DisplayBlock[]; readonly turnSta
 type LoggedTurn = LoggedBlocks & {
   /** A turn is open in the log, as its `turn_start` said; a log that streams without one has open blocks but this unset. Absent where a surface holds no such flag, which reads as open. */
   readonly working?: boolean;
+  /** How the last turn ended, as the view says; set means the log has seen a turn end, so what it left open is not a turn. */
+  readonly lastTurnEnd?: StructuredTurnEnd;
   /** The log is an earlier attempt, browsed: whatever it left open ended with it. */
   readonly archived?: boolean;
 };
@@ -26,9 +29,17 @@ export function activityLabel(view: LoggedBlocks): string {
   return 'Working…';
 }
 
-/** Something in the log is still going: a turn's end seals its streams, so only a live log, or a subagent the turn outlived, has one. */
-function hasOpenBlock(view: LoggedBlocks): boolean {
-  return view.blocks.some((b) => openLabel(b, view) !== null);
+/**
+ * Whether the runner is at work, which is the one rule for the line showing:
+ * a turn is open (`working`, absent reading as open); or a subagent is running,
+ * which a turn's end does not stop; or the log has seen no turn end yet and
+ * holds an open block (a stream whose `turn_start` this view never saw). Once a
+ * turn has ended, a dangling tool call or a late delta is not a turn.
+ */
+function isAtWork(view: LoggedTurn): boolean {
+  if (view.working !== false) return true;
+  if (view.blocks.some((b) => b.type === 'subagent' && b.status === 'running')) return true;
+  return view.lastTurnEnd === undefined && view.blocks.some((b) => openLabel(b, view) !== null);
 }
 
 function openLabel(block: DisplayBlock, view: LoggedBlocks): string | null {
@@ -63,9 +74,9 @@ export interface TaskActivity {
  * already asks the user. A running task whose runner has gone quiet is named
  * as the plan pane names it and is never `busy`, so a runner that is not
  * producing anything cannot look as if it were. Nor can a runner between
- * turns: `busy` needs an open turn, or a block still open in the log (a
- * background subagent that outlived the turn, or a stream whose `turn_start`
- * this view never saw).
+ * turns: `busy` needs an open turn, a running subagent that outlived it, or,
+ * in a log that has seen no turn end, a block still open (a stream whose
+ * `turn_start` this view never saw).
  * A browsed earlier attempt has no line, whatever its log was left open on.
  */
 export function taskActivity(view: LoggedTurn, task: { status: string; idleSince?: string | null; awaitingApproval?: number }): TaskActivity | null {
@@ -73,6 +84,6 @@ export function taskActivity(view: LoggedTurn, task: { status: string; idleSince
   if (task.awaitingApproval || view.blocks.some((b) => b.type === 'approval' && b.status === 'pending')) return null;
   const since = view.turnStartedAt ? { since: view.turnStartedAt } : {};
   if (taskStatusKind(task) === 'quiet') return { label: STALLED_LABEL, busy: false, ...since };
-  if (view.working === false && !hasOpenBlock(view)) return null;
+  if (!isAtWork(view)) return null;
   return { label: activityLabel(view), busy: true, ...since };
 }

@@ -57,6 +57,17 @@ describe('the status row as the activity line', () => {
     expect(activityRows(state)).toEqual([expect.stringMatching(/^⠋ Thinking… · ctrl-x to stop/)]);
   });
 
+  it('shows no line, and offers no stop key, for a finished turn that left a tool pending or took a late delta', () => {
+    for (const events of [
+      [turn, { type: 'tool_call', id: 'r1', name: 'Bash', args: '{"command":"npm test"}' }, { type: 'turn_end', reason: 'completed' }],
+      [turn, { type: 'turn_end', reason: 'completed' }, { type: 'text_delta', runId: 'a', text: 'Late' }],
+    ] satisfies TaskLogEvent[][]) {
+      const state = opened(events);
+      expect(activityRows(state)).toEqual([]);
+      expect(frame(state)).not.toContain('ctrl-x to stop');
+    }
+  });
+
   it('shows no line while a runner request waits', () => {
     const asked: TaskLogEvent = { type: 'approval_requested', approvalId: 'p1', tool: 'Bash', args: '{}', allowForTask: true };
     expect(activityRows(opened([turn, asked]))).toEqual([]);
