@@ -20,7 +20,7 @@ import type { PlannerLimit } from './PlannerResend';
 import type { AssignmentScope } from './AssignmentScope';
 import { PlannerBriefing, type TurnBriefing } from './PlannerBriefing';
 import { PromptBlocks, type PlanRow, type PlanView, type TurnBlocks, type UnlistedRow } from './PromptBlocks';
-import { listedIds, unlistedSummary } from './planWindow';
+import { listedIds, namedRefs, unlistedSummary } from './planWindow';
 import { joinRuns, noteRun, writtenOver as writtenOverRuns } from './settleReply';
 import type { StartWait, StartWaitKind } from './readiness';
 import { SubagentRuns } from './SubagentRuns';
@@ -1792,7 +1792,7 @@ export class PlannerConversation {
     // has nothing running to lock, and takes a whole plan as well as an edit.
     const locked = flattenTasksWithParents(this.host.tasks()).filter(({ task }) => task.status === 'in_progress');
     const running = this.host.isExecuting()
-      ? `Execution is RUNNING${locked.length ? ` — these tasks are locked: ${locked.map(({ ref }) => ref).join(', ')}` : ''}. No new task starts until your reply ends; ${tools ? 'each edit_plan call applies as it answers' : 'your task edits apply as it ends'}, to tasks that have not started. An edit aimed at a running task is refused — the user can stop it first, or you can change it after it finishes. Do not submit a whole new plan while tasks run.`
+      ? `Execution is RUNNING${locked.length ? ` — these tasks are locked: ${namedRefs(locked.map(({ ref }) => ref))}` : ''}. No new task starts until your reply ends; ${tools ? 'each edit_plan call applies as it answers' : 'your task edits apply as it ends'}, to tasks that have not started. An edit aimed at a running task is refused — the user can stop it first, or you can change it after it finishes. Do not submit a whole new plan while tasks run.`
       : '';
     const full = [
       '<current_plan>',

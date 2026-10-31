@@ -39,6 +39,16 @@ export function listedIds(tasks: readonly PlannedTask[], limit = PLAN_BLOCK_MAX_
   return new Set(chosen.map(({ task }) => task.id));
 }
 
+/**
+ * The references a line naming running tasks gives, in the rows' limit: a run
+ * can be wider than the block, and the refusal of an edit to a running task is
+ * what guards it, so past the limit a count says as much.
+ */
+export function namedRefs(refs: readonly string[], limit = PLAN_BLOCK_MAX_TASKS): string {
+  const more = refs.length - limit;
+  return more > 0 ? `${refs.slice(0, limit).join(', ')} and ${more} more` : refs.join(', ');
+}
+
 const STATUS_ORDER: readonly TaskStatus[] = ['in_progress', 'failed', 'awaiting_user', 'approved', 'pending', 'completed', 'skipped'];
 
 /**

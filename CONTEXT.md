@@ -173,8 +173,9 @@ the *ModelResolver*'s own cache is a different one that this overlays.
 it turns orchestrator events (task changes, ticks, review, checkpoints,
 isolation, execution complete) and planner progress into **SessionMessage**
 broadcasts, and holds status updates back while a mutation is in flight. Status
-updates that report progress go out about once a second; one that changes what
-waits on a person, and the last of a run, goes at once. It holds nothing of a
+updates that report progress go out about once a second; the first in a second
+that changes what waits on a person, and the last of a run, goes at once, and a
+wave of such changes keeps to the same pace. It holds nothing of a
 planner turn — a turn's subagent runs are the turn's own
 (*PlannerConversation*) — and never persists; where an event owes a save, the
 Session saves before handing the event on. A task's status is saved as it
@@ -1322,11 +1323,16 @@ methods are mandatory, with no optional capability or transport discriminator.
 **Task runner config** (`taskRunnerConfig`, `TaskRunnerConfig`) — what a task
 runner loads of the user's own setup: `user`, the default, is everything the
 runner would load for them; `minimal` is what a task needs, Ordewell's server
-and the repository's instructions, and leaves out the user's own connectors,
-skills, commands and settings. Saved in `settings.json` and read as each attempt
-spawns, so a change reaches the next one in any session; it is in no settings
-panel. Only Claude Code's task runner narrows its setup (`--strict-mcp-config`,
-`--disable-slash-commands`, `--setting-sources`); the others ignore it. A
+and what the repository ships or keeps for itself (its instructions, settings,
+MCP servers, skills and commands, and the user's local scope for it), and leaves
+out the user's own connectors, servers, skills, commands, settings and
+instructions. A read-only task loads nothing of the repository's whatever this
+says, so there `minimal` leaves Ordewell's server alone. Saved in
+`settings.json` and read as each attempt spawns, so a change reaches the next
+one in any session; it is in no settings panel. Only Claude Code's task runner
+narrows its setup (`--setting-sources`, `ENABLE_CLAUDEAI_MCP_SERVERS`, and for a
+read-only task `--strict-mcp-config` and `--disable-slash-commands`); the others
+ignore it. A
 Claude task runner's context also compacts at a fixed window of its own
 (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`), which a planner's never does.
 *Avoid:* "lean mode", "safe mode" (that is a Claude Code flag of another kind).

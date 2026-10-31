@@ -80,7 +80,9 @@ export class SessionEventRelay {
   /** Something changed that the last status update did not carry, and it can wait for {@link statusWindow} to end. */
   private statusDue = false;
   /** The ids of what waits on a person, as the last status update carried it. */
-  private sentWaits: string | undefined;
+  private sentWaits = '';
+  /** {@link statusWindow} has sent a change to what waits on a person: the next change waits for it to end. */
+  private waitsSent = false;
   /** The run as {@link statusChanged} last read it. */
   private lastMoved: string | undefined;
   private livePlan: () => LegacyPlanState | null = () => null;
@@ -113,13 +115,15 @@ export class SessionEventRelay {
       },
       onReviewApproved: () => this.broadcast({ type: 'review_approved' }),
       onCheckpoint: (data) => {
-        this.flushStatus(plan());
+        // The message itself tells of the checkpoint, so past the first in a second it needs no status of its own.
+        if (!this.waitsSent) this.flushStatus(plan());
         this.broadcast({ type: 'checkpoint', taskId: data.taskId, taskTitle: data.taskTitle, summary: data.summary });
       },
       onTick: () => this.statusChanged(plan()),
       onUsageChanged: () => this.statusCanWait(plan()),
       // A landing or a conflict: what a merge gate or a person waits on, and git's pace, not a runner's.
-      onIsolationChanged: () => this.status(plan()),
+      // A wave of failures is a wave of worktrees given up too, and those wait with the rest of it.
+      onIsolationChanged: () => (this.waitsSent ? this.statusCanWait(plan()) : this.status(plan())),
       onIsolationBlocked: ({ reason, repos }) => {
         this.flushStatus(plan());
         const where = repos.length > 0 ? ` in ${repos.join(', ')}` : '';
@@ -147,7 +151,9 @@ export class SessionEventRelay {
     // when a status_update arrives, so it has to be current by then.
     plan.tasks = this.store.snapshot();
     const message = this.statusMessage();
-    this.sentWaits = waitIds(message.escalations ?? []);
+    const waits = waitIds(message.escalations ?? []);
+    if (waits !== this.sentWaits) this.waitsSent = true;
+    this.sentWaits = waits;
     this.openStatusWindow();
     this.broadcast(message);
     this.escalationsSent(message.escalations ?? []);
@@ -183,8 +189,7 @@ export class SessionEventRelay {
   }
 
   /**
-   * Whatever changes what waits on a person (ADR-0053) goes out at once, and
-   * the rest waits for the second to end. The list is a judgement of the plan,
+   * The list of what waits on a person (ADR-0053) is a judgement of the plan,
    * so it is read only when something it reads has moved: a task's status, or
    * whether the run is moving. An ending that leaves nobody anything to do, or
    * a start, moves nothing in it, and a fan-out or a wave of verdicts stays
@@ -194,7 +199,19 @@ export class SessionEventRelay {
     const moved = `${Object.values(this.orchestrator.activity).join()}|${this.store.statusMark()}`;
     const unmoved = moved === this.lastMoved;
     this.lastMoved = moved;
-    if (unmoved || !plan || !this.statusWindow || this.statusHeld || waitIds(this.escalations()) === this.sentWaits) this.statusCanWait(plan);
+    if (unmoved) this.statusCanWait(plan);
+    else this.waitsMayHaveChanged(plan);
+  }
+
+  /**
+   * The first change to what waits on a person goes out at once, and the rest
+   * wait for the second to end: every update carries every wait, so a hundred
+   * tasks failing together must not each send the plan with all those before
+   * them. The notifier reads the list as it goes out, so it is told of them
+   * then, each once.
+   */
+  private waitsMayHaveChanged(plan: LegacyPlanState | null): void {
+    if (!plan || !this.statusWindow || this.statusHeld || this.waitsSent || waitIds(this.escalations()) === this.sentWaits) this.statusCanWait(plan);
     else this.status(plan);
   }
 
@@ -202,6 +219,7 @@ export class SessionEventRelay {
     if (this.statusWindow) return;
     this.statusWindow = setTimeout(() => {
       this.statusWindow = undefined;
+      this.waitsSent = false;
       this.flushStatus(this.livePlan());
     }, STATUS_INTERVAL_MS);
     // A second's wait is no reason to keep a process that has finished alive.
