@@ -80,6 +80,8 @@ export interface IsolationRunListener {
   handoff(handoff: IsolationHandoff): void;
   /** The run was cleared up and forgotten: nothing was handed over, or it was discarded. */
   closed(): void;
+  /** The run is over, discarded or cleared up, whether or not its record stays: nothing it carried goes on (ADR-0045 L5). A Merge all it goes on after is not this. */
+  ended(): void;
   /** Already said through the notifications; also for a surface that shows no toasts. */
   notice(level: IsolationNoticeLevel, message: string): void;
   /** A clean-up took the branches these resolver tasks would merge, and their links with them. */
@@ -713,6 +715,7 @@ export class IsolationRunController {
     this.refuseWhileLive(run);
     this.report(await this.isolation.discard(run, { integration: 'keep' }));
     this.endResolvers();
+    this.listener.ended();
     this.listener.changed();
   }
 
@@ -801,6 +804,7 @@ export class IsolationRunController {
     this.run = null;
     this.endResolvers();
     this.merged = merged ?? null;
+    this.listener.ended();
     this.listener.changed();
     this.listener.closed();
   }

@@ -13,6 +13,7 @@ function setup(isolation = new FakeWorktreeIsolation()) {
     blocked: vi.fn(),
     handoff: vi.fn(),
     closed: vi.fn(),
+    ended: vi.fn(),
     notice: vi.fn(), resolversEnded: vi.fn(),
   };
   const notifications = fakeNotification();
@@ -359,6 +360,7 @@ describe('IsolationRunController', () => {
       expect(await runs.merge()).toEqual({ outcome: 'merged' });
 
       expect(listener.closed).toHaveBeenCalledTimes(1);
+      expect(listener.ended).toHaveBeenCalledTimes(1);
       expect(runs.current).toBeNull();
       expect(runs.planIsolation).toBeNull();
     });
@@ -378,12 +380,13 @@ describe('IsolationRunController', () => {
     }
 
     it('keeps the run after Merge all while a task still holds work that has not landed', async () => {
-      const { runs, isolation, notifications } = await closedRun('kept');
+      const { runs, isolation, listener, notifications } = await closedRun('kept');
 
       expect(await runs.merge()).toEqual({ outcome: 'merged' });
 
       expect(ops(isolation)).not.toContain('discard');
       expect(runs.taskIsolation('t2')).toMatchObject({ state: 'kept' });
+      expect(listener.ended).not.toHaveBeenCalled();
       expect(notifications.info).toHaveBeenCalledWith('The run is not cleared up: Task "Task t2" holds work that has not landed, so its worktree stays, and so do the run\'s branches.');
     });
 
@@ -399,14 +402,25 @@ describe('IsolationRunController', () => {
     });
 
     it.each(['cleanup', 'discard'] as const)('refuses %s while a task of the run is live, removing nothing', async (action) => {
-      const { runs, isolation, live } = await closedRun('active');
+      const { runs, isolation, listener, live } = await closedRun('active');
       live.add('t2');
 
       await expect(runs[action]()).rejects.toThrow(PlanEditError);
       await expect(runs[action]()).rejects.toThrow('Task "Task t2" is still running or waiting on you, so its worktree stays.');
 
       expect(ops(isolation)).not.toContain('discard');
+      expect(listener.ended).not.toHaveBeenCalled();
       expect(runs.current).not.toBeNull();
+    });
+
+    it.each(['cleanup', 'discard'] as const)('says the run ended on %s, before the save that records it', async (action) => {
+      const { runs, listener } = await closedRun('kept');
+      vi.mocked(listener.changed).mockClear();
+
+      await runs[action]();
+
+      expect(listener.ended).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(listener.ended).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(listener.changed).mock.invocationCallOrder[0]);
     });
 
     it('says where a removal kept work that had not landed, and which worktree it left in place', async () => {

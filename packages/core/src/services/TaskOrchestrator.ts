@@ -465,6 +465,7 @@ export class TaskOrchestrator {
         blocked: (repos) => orchestrator.emit('onIsolationBlocked', { reason: 'dirty', repos }),
         handoff: (handoff) => orchestrator.emit('onIsolationHandoff', handoff),
         closed: () => orchestrator.emit('onRunClosed'),
+        ended: () => orchestrator.endCarriedLoops(),
         notice: (level, message) => orchestrator.emit('onIsolationNotice', { level, message }),
         resolversEnded: (resolverIds) => { for (const id of resolverIds) orchestrator.retireResolver(id); },
       },
@@ -1206,8 +1207,7 @@ export class TaskOrchestrator {
     this.runs.interrupt();
     this.releaseUnchosenHolds();
     this.withdrawRepairs();
-    this.carriedLoops.clear();
-    this.loopNotice = '';
+    this.endCarriedLoops();
     if (reason === 'user') this.withdrawQueuedStarts();
     this.limitPauses.cancelAll();
     this.sayStopped(stopped);
@@ -2643,6 +2643,15 @@ export class TaskOrchestrator {
       const check = this.store.get(id);
       return check?.loop && (repeating.has(id) || check.status === 'pending' || check.status === 'approved') ? [check] : [];
     });
+  }
+
+  /**
+   * The run that carried them is over, by a Stop or by what gives the run up
+   * or clears it up: a retry of a body task that passes runs that task alone.
+   */
+  private endCarriedLoops(): void {
+    this.carriedLoops.clear();
+    this.loopNotice = '';
   }
 
   /** What a tick may start with no scheduler: the loops carried on, and nothing that depends on them. */

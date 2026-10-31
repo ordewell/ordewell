@@ -7,6 +7,7 @@ import type { ConversationRequest, ConversationTurn } from '../AiService';
 import type { SessionMessage, SessionNotice } from '../SessionMessage';
 import type { McpToolContext, PlannerToolHandler } from '../mcp';
 import { WAKE_DEBOUNCE_MS } from '../Supervisor';
+import type { SessionDeps } from '../createSession';
 import { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings } from '../SettingsService';
 import { flushMicrotasks } from '../../testing';
 import { fakeConfig, FakeRunnerSession, makeSession, testWorkspace } from './sessionTestKit';
@@ -105,6 +106,8 @@ export interface Options {
   execute?: boolean;
   /** What runs script tasks (ADR-0035); the recording runner of {@link supervised}'s `scripts` unless set. */
   scriptRunner?: IRunner;
+  /** The host whose lease the session holds; none unless set. */
+  leaseHost?: SessionDeps['leaseHost'];
 }
 
 /** A session running `tasks` under the user's supervisor level, Watch unless the options say otherwise. */
@@ -121,6 +124,7 @@ export async function supervised(tasks: Task[] = [task('t1', 1), task('t2', 2)],
     runner: run.runner,
     scriptRunner: options.scriptRunner ?? scripts.runner,
     isolation: options.isolation,
+    leaseHost: options.leaseHost,
     broadcast: (m) => messages.push(m),
     onNotice: (n) => notices.push(n),
     config: fakeConfig(options.config),

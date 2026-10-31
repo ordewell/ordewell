@@ -1484,7 +1484,12 @@ export class Session {
   private leaseLost(held: SessionHeld): void {
     this.saveRefusedFor = held.holder.hostId;
     this.notice('error', describeLost(held));
-    if (this.isExecuting || this.orchestrator.isRunning || this.orchestrator.awaitsResume || this.orchestrator.startsPending) this.stopRun();
+    if (this.stopOwed) this.stopRun();
+  }
+
+  /** Something of the run would go on if left: work, a resume, a start on its way, or a loop a retry would carry on (ADR-0045 L5). */
+  private get stopOwed(): boolean {
+    return this.isExecuting || this.orchestrator.isRunning || this.orchestrator.awaitsResume || this.orchestrator.startsPending || this.orchestrator.loopCarried;
   }
 
   /**
@@ -1504,7 +1509,7 @@ export class Session {
     // later, it would plan the old goal in whatever scope is held by then.
     this.endWaiting(() => new PlannerTurnDiscardedError());
     // A start still opening its run belongs to this plan: let through, it would claim a task of the next one that shares its id.
-    if (this.isExecuting || this.orchestrator.isRunning || this.orchestrator.awaitsResume || this.orchestrator.startsPending) this.stopRun();
+    if (this.stopOwed) this.stopRun();
     this.conversation.abandonTurn();
     this.turns.abandon();
     this.supervision.reset();
@@ -2422,6 +2427,11 @@ export class Session {
     this.announceClosed();
   }
 
+  /**
+   * Narrower than {@link stopOwed}: a run that ended on a failure, or whose
+   * loop a body task stopped, is what these are for. Such a loop ends with the
+   * run, once git has let it go, so a refused discard leaves it standing.
+   */
   private requireSettledRun(): void {
     this.runs.requireRun();
     if (this.orchestrator.isRunning) throw new PlanEditError('The run is still running: stop it first');
