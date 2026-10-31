@@ -54,10 +54,10 @@ macOS](#what-holds-on-linux-and-on-macos)).
 ### Sealed runs
 
 - **The profile (S1).** On ADR-0011's backend (bubblewrap on Linux, Seatbelt
-  on macOS): the workspace mounted read-only; the session's scratch folder
-  writable and set as `TMPDIR` and `HOME`; outside the workspace, only what
-  programs need to start (the system's executables, libraries and a minimal
-  set of configuration files), and nothing of the user's home or any other
+  on macOS): the workspace mounted read-only; a scratch folder of its own for
+  the session (S8), writable and set as `TMPDIR` and `HOME`; outside the
+  workspace, only what programs need to start (the system's executables,
+  libraries and a minimal set of configuration files), and nothing of the user's home or any other
   repository; none of the environment Ordewell runs with beyond what programs
   need to find themselves and print (`PATH`, the locale), since credentials
   live there too; no network; a fresh `/dev`, `/proc` and `/tmp`; limits on
@@ -115,6 +115,22 @@ below, and on Linux but for what `/etc/hosts` lists), so no path is asked about.
 - **The classifier is not widened for convenience (S7).** A construct it
   cannot read is not taught to it to save a refusal; where a sandbox runs, it
   runs sealed. Fixes for commands it misreads go on as before.
+- **Nothing a sealed run writes takes effect under a wider profile (S8).** A
+  session keeps a scratch directory for each profile: one for sealed runs, one
+  for the planner's commands (ADR-0011, B2) and one for a native shell (N2).
+  Each is its profile's `TMPDIR`, with npm's, Go's and the XDG caches, Python's
+  bytecode and the lookup cache of Apple's shims beneath it, and for a sealed
+  run and a native shell it is also `HOME`, so a shell's startup files are
+  there too. Tools load all of these without a command naming them, so a
+  sealed run writes its own directory alone and cannot read the others, and no
+  two profiles share a cache, while each keeps its own for the session. Later
+  sealed runs read what an earlier one left. A planner command's `$TMPDIR` is
+  another directory, so what a sealed run left reaches one only as a path it
+  names, as any file of the host does, under the classifier's tier for that
+  command. The home a native shell starts from holds for any shell `$SHELL`
+  names, so none needs a flag of its own. A read-only task's shell keeps
+  ADR-0046's stricter rule, which also covers its worktree. The here-document
+  files of the macOS residuals lie outside scratch and stay as recorded below.
 
 ### The limits of a sealed run
 
@@ -483,6 +499,18 @@ shell.
 - **Seal with the home directory mounted read-only**, as ADR-0011's profile for
   classified commands does. Rejected: an unclassified command would read
   `~/.ssh` with none of the path checks that ask about it today.
+- **One scratch directory for every profile.** The design until 2026-10-31.
+  Rejected: a directory one profile writes and a wider one reads carries what
+  the narrower wrote into the wider, which S8 rules out, and each variable that
+  points at it would need its own answer.
+- **A fresh cache directory for each planner command.** Rejected: it holds S8
+  and leaves `go list` and npm with no cache from one command to the next.
+- **Every planner command sealed once one has run sealed**, as in a read-only
+  task (ADR-0046). Rejected: a planner works for the length of a session, and
+  its first loop would end its network reads for the rest of it.
+- **Startup flags for the native shell (`zsh -f`).** Rejected: they cover the
+  shells someone listed, where `$SHELL` can name any, and a home of its own
+  covers them all.
 - **Seal also what the user denied on the card.** Rejected: a denial is the
   user's answer about that command, sandbox or not.
 - **The harness's own shell by default on the local backend.** Rejected: the
@@ -540,3 +568,4 @@ shell.
 - 2026-10-31 — a sealed run on Linux reads `/etc/hosts`, so `localhost` resolves to its own loopback and `vitest` starts: S1's read list had no name table, and the network stays as it was.
 - 2026-10-31 — a run killed as it starts dies with its launcher: on Linux the watcher kills what carries the launcher's mark once the launcher has gone, since bubblewrap arms `--die-with-parent` only after setting up, and ends the launcher if its parent goes; on macOS a subshell starts the sandbox and its reaper, and the watcher reaps too.
 - 2026-10-31 — the launcher reads no startup file and starts with only what the profile keeps of the host's environment; what names scratch is set inside the sandbox.
+- 2026-10-31 — a scratch directory for each profile, so nothing a sealed run writes takes effect under a wider profile (S8); a planner command's `$TMPDIR` and a native shell's `HOME` are no longer a sealed run's.

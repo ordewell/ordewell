@@ -68,14 +68,16 @@ their own repositories. The parts most worth your attention:
   namespaces close them.
 - **Sealed runs.** A sealed run executes a command no classifier vouched for,
   so its profile is the whole guarantee: the workspace read-only (or under a
-  throwaway overlay), the session's scratch directory its only writable place
+  throwaway overlay), a scratch directory of its own its only writable place
   and its home, no network, nothing of yours outside the workspace readable
   but the machine's `/etc/hosts` (its `localhost` is the run's own loopback),
   none of the credentials in Ordewell's environment, and limits on processes,
   memory and time. A way for one to change the workspace, read your home
   directory or another repository, reach the network or a local service, see
   a credential, or outlive its limits is in scope, as is a way to run a
-  command sealed that a `!` allowlist exclusion names or that you denied. A
+  command sealed that a `!` allowlist exclusion names or that you denied. So
+  is a way for what it writes to take effect under a wider profile: a planner
+  command and a native shell each have a scratch directory of their own. A
   read-only task's sealed runs may also write its own worktree, and in a repo
   group each worktree, while the group's task workspace root is not
   persistently writable
@@ -149,8 +151,8 @@ their own repositories. The parts most worth your attention:
   (`ordewell.plannerNativeShell`, or `ORDEWELL_PLANNER_NATIVE_SHELL`) lets
   Claude Code's `Bash` and `Monitor`, or OpenCode 2.x's `bash` and `shell`, run
   too. Ordewell puts its own launcher in front of each command and holds it to
-  the sealed profile with the network: the workspace is read-only, one scratch
-  directory is writable, there is no home directory, the keychain is withheld,
+  the sealed profile with the network: the workspace is read-only, a scratch
+  directory of its own is writable, there is no home directory, the keychain is withheld,
   and the planner process starts without your credential variables, keeping
   only the harness's own login (ADR-0036 N1–N6). Its network stops at this
   machine: loopback addresses and local Unix sockets are refused, because the

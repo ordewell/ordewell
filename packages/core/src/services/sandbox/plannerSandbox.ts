@@ -466,12 +466,20 @@ export interface PlannerShellLaunch {
 }
 
 /**
- * One session's view of the sandbox: its scratch directory, made on the first
- * command and removed when the session ends, and its one notice when the
- * sandbox, or a sealed run in it, cannot run here.
+ * Whose scratch directory. What a profile points there is loaded by tools
+ * without a command naming it, a cache as much as a home's startup files, so
+ * no two profiles share one: nothing a sealed run writes takes effect under a
+ * wider profile (ADR-0036 S8).
+ */
+type ScratchOwner = 'planner' | 'sealed' | 'native';
+
+/**
+ * One session's view of the sandbox: a scratch directory for each profile,
+ * made on its first command and removed when the session ends, and its one
+ * notice when the sandbox, or a sealed run in it, cannot run here.
  */
 export class PlannerShellSandbox {
-  private scratch: string | null = null;
+  private readonly scratch = new Map<ScratchOwner, string>();
   private noticed = false;
   private notice: (message: string) => void = () => {};
 
@@ -481,7 +489,7 @@ export class PlannerShellSandbox {
     this.notice = notice;
   }
 
-  /** The same host's sandbox for another caller, with a scratch directory of its own: a read-only task's (ADR-0046). */
+  /** The same host's sandbox for another caller, with scratch directories of its own: a read-only task's (ADR-0046). */
   withOwnScratch(): PlannerShellSandbox {
     return new PlannerShellSandbox(this.resolve);
   }
@@ -502,7 +510,7 @@ export class PlannerShellSandbox {
     if (!availability.sealed.available) this.say(availability.sealed.notice);
     const launch = availability.backend.wrap(
       this.invocation(shell),
-      availability.profile({ scratch: this.scratchDir(), network: opts.network }),
+      availability.profile({ scratch: this.scratchDir('planner'), network: opts.network }),
     );
     return { launch, sandboxed: true };
   }
@@ -526,7 +534,7 @@ export class PlannerShellSandbox {
     // Canonical, because Seatbelt matches the path the kernel resolves, and the workspace is where the command starts.
     const canonical = (p: string) => fsSync.realpathSync(p);
     return availability.backend.wrap(this.invocation(shell), availability.sealed.profile({
-      scratch: this.scratchDir(),
+      scratch: this.scratchDir('sealed'),
       workspace: canonical(opts.workspace),
       ...(opts.writable ? { writable: canonical(opts.writable) } : {}),
       ...(opts.worktrees ? { worktrees: opts.worktrees.map(canonical) } : {}),
@@ -538,14 +546,16 @@ export class PlannerShellSandbox {
   /**
    * The launch for a harness's own shell (ADR-0036 N2): the same sealed profile
    * as a sealed run, with the network the harness gives it (N3), plus the
-   * harness's short temporary directory. The workspace stays read-only. Throws
-   * where the sandbox cannot run, so a caller never falls back to the bare shell.
+   * harness's short temporary directory. The workspace stays read-only. Its
+   * home is a scratch directory of its own, so whatever startup files its shell
+   * reads, a sealed run wrote none of them (S8). Throws where the sandbox
+   * cannot run, so a caller never falls back to the bare shell.
    */
   async launchNativeShell(opts: { workspace: string; tmpdir: string; shell: string; shellArgs?: readonly string[]; env?: NodeJS.ProcessEnv }): Promise<SandboxLaunch> {
     const availability = await this.resolve();
     if (!availability.available || !availability.sealed.available) throw new Error('a sandbox for the native shell is unavailable on this machine');
     const profile = availability.sealed.profile({
-      scratch: this.scratchDir(),
+      scratch: this.scratchDir('native'),
       workspace: fsSync.realpathSync(opts.workspace),
       tmpdir: fsSync.realpathSync(opts.tmpdir),
       network: true,
@@ -568,15 +578,15 @@ export class PlannerShellSandbox {
     );
   }
 
-  /** The scratch directory every launch here gets as `$TMPDIR` and `$HOME`, made if it is not there. */
+  /** The scratch directory a sealed run gets as `$TMPDIR` and `$HOME`, made if it is not there. */
   scratchPath(): string {
-    return this.scratchDir();
+    return this.scratchDir('sealed');
   }
 
-  /** The session ended: its scratch directory goes, and a next session starts with a fresh one and its own notice. */
+  /** The session ended: its scratch directories go, and a next session starts with fresh ones and its own notice. */
   end(): void {
-    if (this.scratch) removeScratch(this.scratch);
-    this.scratch = null;
+    for (const dir of this.scratch.values()) removeScratch(dir);
+    this.scratch.clear();
     this.noticed = false;
   }
 
@@ -593,10 +603,14 @@ export class PlannerShellSandbox {
     return { shell: shell.file ?? '/bin/sh', shellArgs: shell.file === null ? ['-c'] : shell.args, env: process.env };
   }
 
-  private scratchDir(): string {
+  private scratchDir(owner: ScratchOwner): string {
     // Made again if something removed it meanwhile, as a temporary-file cleaner may.
-    if (!this.scratch || !fsSync.existsSync(this.scratch)) this.scratch = createScratch();
-    return this.scratch;
+    let dir = this.scratch.get(owner);
+    if (!dir || !fsSync.existsSync(dir)) {
+      dir = createScratch();
+      this.scratch.set(owner, dir);
+    }
+    return dir;
   }
 }
 
@@ -634,7 +648,7 @@ const SEALED_RUN_REASONS: Record<SealedRunReason, string> = {
  */
 export function sealedRunHeader(why: SealedRunReason, task?: { worktree: boolean; first: boolean }): string {
   const how = `${SEALED_RUN_MARK}${SEALED_RUN_REASONS[why]}`;
-  if (!task) return `${how}: no network, no home directory, and nothing it writes reaches the workspace. $HOME and $TMPDIR are this session's scratch directory, the one place it can write, which later commands can read.]`;
+  if (!task) return `${how}: no network, no home directory, and nothing it writes reaches the workspace. $HOME and $TMPDIR are the scratch directory of this session's sealed runs, the one place it can write, which later sealed runs can read.]`;
   // A worktree's `.git` is a file pointing into the repository's own, which stays read-only (ADR-0046).
   const where = task.worktree
     ? "This task's worktree is writable and is thrown away when the task ends. git can read the repository but not record anything in it: a commit, an add or a stash fails, or is gone when the command ends."

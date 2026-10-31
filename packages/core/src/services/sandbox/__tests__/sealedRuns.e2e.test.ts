@@ -5,8 +5,9 @@ import { createServer, type Server } from 'node:net';
 import { createRequire } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import { PlannerShellSandbox, resolvePlannerSandbox, SEALED_LIMITS, TASK_SEALED_LIMITS, type SealedRunOptions } from '../plannerSandbox';
+import { createNativeShellLauncher } from '../nativeShellLauncher';
 import { mirrorDir } from '../../worktreeLink';
 import { BaseFileSystem } from '../../BaseFileSystem';
 import { ApprovalPolicy } from '../../ApprovalPolicy';
@@ -594,6 +595,122 @@ describe('sealed runs', async () => {
         expect(wrapped.output).toContain('The user denied "npm test" this session');
         expect(fs.runs).toBe(0);
         expect(asks).toBe(1);
+      });
+    });
+
+    describe('what it writes, under a wider profile (ADR-0036 S8)', () => {
+      const hasPython = works('python3', ['-c', 'pass']);
+      let project: string;
+      let session: PlannerShellSandbox;
+
+      const inSession = {
+        sealed: async (command: string) => run(await session.launchSealed(POSIX, { workspace: project }), command, project),
+        planner: async (command: string, network = false) => run((await session.launch(POSIX, { network })).launch, command, project),
+      };
+
+      beforeAll(() => {
+        project = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-wider-ws-')));
+        writeFileSync(join(project, 'main.py'), 'import mod\n');
+        writeFileSync(join(project, 'mod.py'), "print('from the source')\n");
+        writeFileSync(join(project, 'cache_mod.py'), [
+          'import importlib._bootstrap_external as external, importlib.util, os',
+          "source = os.path.abspath('mod.py')",
+          'stat = os.stat(source)',
+          "code = compile(\"print('from the cache')\", source, 'exec')",
+          'target = importlib.util.cache_from_source(source)',
+          'os.makedirs(os.path.dirname(target), exist_ok=True)',
+          "with open(target, 'wb') as out:",
+          '    out.write(external._code_to_timestamp_pyc(code, int(stat.st_mtime), stat.st_size))',
+          '',
+        ].join('\n'));
+      });
+
+      beforeEach(() => {
+        session = new PlannerShellSandbox();
+      });
+
+      afterEach(() => {
+        session.end();
+      });
+
+      afterAll(() => {
+        rmSync(project, { recursive: true, force: true });
+      });
+
+      it.skipIf(!hasPython).each([false, true])("leaves the planner's python to its own bytecode (network: %s)", async (network) => {
+        expect((await inSession.sealed('python3 cache_mod.py && python3 main.py')).out).toBe('from the cache\n');
+        expect((await inSession.planner('python3 main.py', network)).out).toBe('from the source\n');
+      });
+
+      it.skipIf(!hasPython)("holds through the planner shell, for a command the user approved", async () => {
+        const fs = new HostFileSystem(project, session);
+        fs.setApproval(new ApprovalPolicy({ ask: async () => true }));
+        await fs.bash('python3 cache_mod.py', undefined, { sealed: true });
+        expect((await fs.bash('python3 main.py')).output).toBe('from the source\n');
+      });
+
+      it.skipIf(!hasPython)('keeps the bytecode each profile compiled for its own later commands', async () => {
+        const cached = 'find "$PYTHONPYCACHEPREFIX" -name "mod.*.pyc"';
+        await inSession.planner('python3 main.py');
+        expect((await inSession.planner(cached)).out).toContain('mod.');
+        await inSession.sealed('python3 main.py');
+        expect((await inSession.sealed(cached)).out).toContain('mod.');
+      });
+
+      // What the planner's profile points at a directory, each read by tools that trust what they find there.
+      it.each([
+        ['TMPDIR', '$TMPDIR/left'],
+        ['npm_config_cache', '$npm_config_cache/left'],
+        ['GOCACHE', '$GOCACHE/left'],
+        ['XDG_CACHE_HOME', '$XDG_CACHE_HOME/left'],
+        ['PYTHONPYCACHEPREFIX', '$PYTHONPYCACHEPREFIX/left'],
+        ...(process.platform === 'darwin' ? [['xcrun_db', '$xcrun_db']] : []),
+      ])('leaves nothing at $%s for a planner command to find', async (_name, file) => {
+        const written = await inSession.sealed(`mkdir -p "$(dirname "${file}")" && echo written > "${file}" && cat "${file}"`);
+        expect(written.out).toBe('written\n');
+        expect((await inSession.planner(`cat "${file}"`)).out).not.toContain('written');
+      });
+
+      it("cannot read or write the planner's scratch directory", async () => {
+        const own = (await inSession.planner('echo private > "$TMPDIR/own" && echo "$TMPDIR"')).out.trim();
+        expect((await inSession.sealed(`cat '${own}/own'`)).code).not.toBe(0);
+        expect((await inSession.sealed(`echo written > '${own}/left'`)).code).not.toBe(0);
+        expect(existsSync(join(own, 'left'))).toBe(false);
+      });
+
+      describe('in a native shell', () => {
+        // N5 offers no native shell on Linux, where bubblewrap refuses a network
+        // without loopback. The rest of its profile is what this holds there.
+        const nativeSession = () => (process.platform === 'linux'
+          ? new PlannerShellSandbox(async () => {
+            const host = await resolvePlannerSandbox();
+            if (!host.available || !host.sealed.available) return host;
+            const { profile } = host.sealed;
+            return { ...host, sealed: { available: true, profile: (opts) => ({ ...profile(opts), localNetwork: true }) } };
+          })
+          : new PlannerShellSandbox());
+
+        const nativeRun = (prefix: string, command: string, cwd: string) => new Promise<string>((resolve) => {
+          execFile(prefix, [command], { cwd, encoding: 'utf8', timeout: 30_000 }, (_err, stdout, stderr) => resolve(`${stdout}${stderr}`));
+        });
+
+        const shells: [string, string][] = process.platform === 'darwin'
+          ? [['/bin/zsh', '.zshenv']]
+          : [['/bin/zsh', '.zshenv'], ['/usr/bin/zsh', '.zshenv'], ['/usr/bin/fish', '.config/fish/config.fish']];
+
+        it.each(shells.filter(([shell]) => existsSync(shell)))('starts %s without reading %s from where a sealed run wrote', async (shell, startup) => {
+          const native = nativeSession();
+          const launcher = await createNativeShellLauncher({ workspace: project, sandbox: native, env: { ...process.env, SHELL: shell } });
+          try {
+            const sealedHere = await native.launchSealed(POSIX, { workspace: project });
+            await run(sealedHere, `mkdir -p "$(dirname "$HOME/${startup}")" && echo "echo from-startup" > "$HOME/${startup}"`, project);
+            expect((await run(sealedHere, `${shell} -c 'echo ran'`, project)).out).toContain('from-startup');
+            expect(await nativeRun(launcher.prefix, 'echo ran', project)).toBe('ran\n');
+          } finally {
+            launcher.remove();
+            native.end();
+          }
+        });
       });
     });
 

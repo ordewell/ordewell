@@ -68,8 +68,9 @@ jobs, and its reading of other processes' command lines and environments (B4).
   read-only. One scratch directory per session is writable and set as
   `TMPDIR`: made under the OS temporary directory, private to the user, on
   the session's first command, and removed when the session ends or resets,
-  or by the next Ordewell process when the one that made it was killed.
-  Tools that write caches or locks as a side effect of reading are pointed at
+  or by the next Ordewell process when the one that made it was killed. A
+  sealed run writes a directory of its own instead, and cannot reach this one
+  (ADR-0036, S8). Tools that write caches or locks as a side effect of reading are pointed at
   it or told not to write: `GIT_OPTIONAL_LOCKS=0`, npm's cache (where it logs
   every command) and update check, `GOCACHE`, `XDG_CACHE_HOME`, Python's
   bytecode, and on macOS the lookup cache of Apple's `/usr/bin` shims
@@ -247,4 +248,5 @@ that still cannot start the sandbox fails the build instead of skipping.
 - 2026-10-21 — a command the envelope would refuse without asking runs sealed under a stricter profile of the same backend, and the notice says loops and scripts are refused where none starts ([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md), #109).
 - 2026-10-21 — the macOS backend's residuals recorded: job creation denied, existing launchd jobs and other processes' command lines and environments not gated ([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md)).
 - 2026-10-21 — CI runs the real-sandbox suites on Linux with bubblewrap installed and Ubuntu's user-namespace restriction lifted, failing rather than skipping where the probe cannot start.
+- 2026-10-31 — the planner's commands stop sharing their scratch directory with sealed runs ([ADR-0036](0036-the-planners-shell-sealed-runs-and-native-opt-in.md), S8).
 - 2026-10-31 — every command on Linux starts behind the launcher's watcher, so one a Stop catches while bubblewrap sets up dies with its launcher, as a sealed run does (ADR-0036 S1).
