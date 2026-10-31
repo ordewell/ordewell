@@ -122,6 +122,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   the first moments of a run could leave it going with nothing watching it, so
   with no time or memory limit: on Linux under bubblewrap, and on macOS with
   nothing left to end it at all. It now ends with its launcher on both.
+- **The sealed launcher reads no shell startup files.**
 - **A planner turn waiting on agent detection says so.** It read as planning
   while it waited for the agents to be listed, which can take a while on a
   first launch; it now reads "Detecting coding agents…" in the terminal UI and

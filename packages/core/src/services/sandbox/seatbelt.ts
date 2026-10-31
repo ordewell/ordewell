@@ -3,6 +3,7 @@ import {
   assertLimits,
   assertProfilePaths,
   execProbe,
+  keptEnv,
   launchEnv,
   MEMORY_LIMIT_SIGNAL,
   probeByRunning,
@@ -138,7 +139,10 @@ const KEYCHAIN_PROFILE = `(allow mach-lookup
  * sandbox in a process group of its own, under the limits, and kills that
  * group when the command ends, when the caller kills this script at the
  * wall-time limit, or when the caller dies, which closes the pipe on its
- * standard input (ADR-0036 S1). Seatbelt has no PID namespace to take the
+ * standard input (ADR-0036 S1). Its flags keep bash from reading any startup
+ * file and from taking functions or options from the environment, which holds
+ * only what the profile keeps of the host's: the command's own variables are
+ * set inside the sandbox. Seatbelt has no PID namespace to take the
  * command's processes down with it; the group does, except for one that
  * leaves it with `setsid`, which keeps the profile. The group is killed until
  * it is empty, since the kernel skips a process still being forked, and a
@@ -274,10 +278,17 @@ export class SeatbeltBackend implements SandboxBackend {
     }
     if (profile.gitless?.length) rules.push(`(deny file-write-create (require-all (regex #"/\\.git$") (require-any ${filters('GITLESS', 'subpath', profile.gitless)})))`);
 
-    const sandboxed = [SANDBOX_EXEC, '-p', rules.join('\n'), ...params, invocation.shell, ...invocation.shellArgs];
-    const env = launchEnv(invocation, profile);
-    if (!profile.limits) return { file: sandboxed[0], args: sandboxed.slice(1), env };
-    return { file: '/bin/bash', args: ['-c', limitsPrelude(profile.limits), 'ordewell-sealed', ...sandboxed], env, wallTimeMs: profile.limits.wallTimeMs, memoryBytes: profile.limits.memoryBytes };
+    const policy = ['-p', rules.join('\n'), ...params];
+    const shell = [invocation.shell, ...invocation.shellArgs];
+    if (!profile.limits) return { file: SANDBOX_EXEC, args: [...policy, ...shell], env: launchEnv(invocation, profile) };
+    const inside = ['/usr/bin/env', ...Object.entries(profile.env).map(([name, value]) => `${name}=${value}`)];
+    return {
+      file: '/bin/bash',
+      args: ['--norc', '--noprofile', '-p', '-c', limitsPrelude(profile.limits), 'ordewell-sealed', SANDBOX_EXEC, ...policy, ...inside, ...shell],
+      env: keptEnv(invocation, profile),
+      wallTimeMs: profile.limits.wallTimeMs,
+      memoryBytes: profile.limits.memoryBytes,
+    };
   }
 }
 
