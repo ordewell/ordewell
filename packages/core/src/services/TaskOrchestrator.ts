@@ -50,6 +50,7 @@ import type { TaskLogReader } from './readTask';
 import { leasedIsolation } from './leasedIsolation';
 import { LocalWorktreeLease } from './LocalWorktreeLease';
 import { SlotPool, type PoolNode } from './SlotPool';
+import type { NodeBudget } from './TreeLedger';
 import type { ExecutionBackend, LeaseRequest, ReservedLease } from './executionLease';
 import type { SessionHeld } from './sessionLease';
 
@@ -253,6 +254,8 @@ export interface TaskOrchestratorDeps {
   limitFound: (runner: string, at: Date) => Date;
   /** This Session is done with the tree. */
   leaveTree: () => void;
+  /** This node's side of the tree's ledger; absent at the root, which is charged nothing, and on a flat run, which has no ledger (ADR-0056 M5). */
+  budget?: NodeBudget;
 }
 
 /**
@@ -304,6 +307,8 @@ export interface TaskOrchestratorOptions {
   sessionId?: () => string;
   /** The pool has a slot for the planner turn it refused this Session. */
   openTurn?: () => void;
+  /** A child's side of the tree's ledger (ADR-0056 M5). */
+  budget?: NodeBudget;
 }
 
 /**
@@ -442,6 +447,7 @@ export class TaskOrchestrator {
       output: deps.output,
       runs: deps.runs,
       leases: deps.leases,
+      ...(deps.budget ? { budget: deps.budget } : {}),
       landing: deps.landing,
       registry: deps.registry,
       workspaceRoot: deps.workspaceRoot,
@@ -559,6 +565,7 @@ export class TaskOrchestrator {
       sessionId: options.sessionId ?? (() => ''),
       limitFound: (runner, at) => pool.limitFound(node, runner, at),
       leaveTree: pool.join(node),
+      ...(options.budget ? { budget: options.budget } : {}),
     });
     return orchestrator;
   }
@@ -2589,7 +2596,14 @@ export class TaskOrchestrator {
 
     const waiting = ready.map(({ id }) => id);
     await Promise.all(Array.from({ length: Math.min(STARTS_AT_ONCE, waiting.length) }, () => this.startReady(waiting, admission)));
+    this.stopIfOutOfBudget(ready);
     this.emit('onTick');
+  }
+
+  /** Work is ready and nothing live can free room for it, so no event will tick this again (ADR-0056 M5). */
+  private stopIfOutOfBudget(ready: readonly Task[]): void {
+    const refused = this.deps.budget?.refusal();
+    if (refused && this.attempts.size === 0 && ready.some((task) => task.type !== 'script' && this.stillReady(task.id))) this.deps.budget?.stop(refused);
   }
 
   /** One of a tick's starters: takes the next of `waiting` as each start it made has attached. */
@@ -2890,7 +2904,8 @@ export class TaskOrchestrator {
    * marked complete, a resolver has its conflict, so a start of it would be a
    * second worker on it (ADR-0015), a revert is taking back work it depends on
    * or skipped it since (ADR-0054), it
-   * is outside the user's approval record (ADR-0035), or its lease cannot be
+   * is outside the user's approval record (ADR-0035), its node's budget has no
+   * room for it (ADR-0056 M5), or its lease cannot be
    * reserved, every slot being taken (ADR-0059 L1). Read in the same
    * synchronous step as the claim it guards, so nothing can change in between.
    */
@@ -2915,7 +2930,8 @@ export class TaskOrchestrator {
     if (resolver) return `Task "${resolver.title}" already resolves the conflict of task "${task.title}": skip or remove it first, or let it finish.`;
     if ([...this.reverting].some((reach) => reach.has(taskId))) return `A revert is taking back work task "${task.title}" depends on. Start it again once the revert has ended.`;
     if (!this.isApproved(taskId)) return `Task "${task.title}" waits for the user's approval: they approve it by starting it, or by executing the plan.`;
-    return null;
+    // A script spends no tokens (ADR-0035), so a node out of them can still run its checks.
+    return task.type === 'script' ? null : this.deps.budget?.refusal() ?? null;
   }
 
   /** An explicit start's refusal, before it changes anything: its caller's answer, as a {@link TaskControlError}. */

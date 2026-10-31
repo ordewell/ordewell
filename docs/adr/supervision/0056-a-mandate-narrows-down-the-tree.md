@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0001", "0008", "0022", "0029", "0030", "0035", "0036", "0037", "0053"]
-note: "Settles #23, #92 and #112 as far as subplanners need. Built: M1 to M4, the seam and the paths around it in M6. M5 and M7 to M10 wait on ADR-0055, as do `delegate` and a subplanner's harness subagents in M6. A flat run does not change."
+note: "Settles #23, #92 and #112 as far as subplanners need. Built: M1 to M4, the seam and the paths around it in M6, and M5's ledger in `TreeLedger`, rebuilt from the tree's log (ADR-0058 S3). `raiseTokens`, a child's report on stopping, its wake on a refused start and D16's subtree stop wait on `ChildPlanRunner`, as do M7 to M10, `delegate` and a subplanner's harness subagents in M6. A flat run does not change."
 ---
 
 # 0056 — A mandate says what a node may do without a person, and what it can hand on only narrows down the tree
@@ -157,17 +157,30 @@ Judgment stays the planner's.
   and measured cost is mostly cache reads.
   - A delegated task must carry one. Each node keeps `limit`, `committed` (what its
     children hold), `spent` and `reserve`, with `spent + committed + reserve ≤ limit`.
-  - Spend is checked in `claimRefusal`, the one point every attempt passes: `tick`,
-    `startRound`, `resumeTask` and `startOwedRepairs` never reach the command seam. The
-    seam may check early for a better refusal, and a subplanner's turn is checked as it
-    starts.
+    A node's `spent` is its own and what its closed children spent, so an open child's
+    spending shows at its parent as what it holds.
+  - Spend is checked in `startRefusal`, which `claim` and `claimRefusal` both read, the
+    one point every attempt passes: `tick`, `startRound`, `resumeTask` and
+    `startOwedRepairs` never reach the command seam. It is the last check before the
+    slot, and a refusal keeps no Session: a budget is not a wait another node's end
+    can answer. The seam may check early for a better refusal, and a subplanner's turn
+    is checked as it starts, at the gate every turn passes. A script task runs no model
+    and spends no tokens, so a node out of them can still run its checks.
   - Nothing can recall a request already sent, so overshoot is bounded instead. The
-    reserve is an allowance per live session for what is in flight. A claim that would
-    breach it is refused; when `spent` reaches `limit` the node stops
-    (ADR-0055 D16) and ends `blocked`. A runner's own subagents add requests nobody
-    sees until their usage arrives, so the reserve is an estimate and not a guarantee.
+    reserve is an allowance per live session for what is in flight, held from the claim
+    to the attempt's end, and what is left of the subplanner's own share beside it. A
+    claim that would breach it is refused. What is live is not logged: nothing is live
+    after a restart, so a rebuilt `reserve` is that share alone. An attempt's spending
+    past the node's room takes its children's room as a turn's does, so a node's own
+    work cannot spend what they hold. When `spent` reaches what that leaves of `limit`
+    the node stops (ADR-0055 D16) and ends `blocked`, as it does when ready work is
+    refused with nothing live to free room, since no event would tick it again. A
+    runner's own subagents add requests nobody sees until their usage arrives, so the
+    reserve is an estimate and not a guarantee.
   - When a child ends, on confirmed close, what it did not spend returns to its parent,
-    and goes no further: a sibling gets it only by its parent's next carve.
+    and goes no further: a sibling gets it only by its parent's next carve. Its parent
+    is charged what it spent, and what still arrives from a runner winding down goes to
+    the nearest node still open.
   - A child that needs more asks with a checkpoint. A raise is `answer_checkpoint` with
     `raiseTokens`, or the same on the inbox's Approve, carved at the call from what the
     parent has left, and recorded as a budget event ([ADR-0058](0058-a-tree-holds-many-nodes-and-few-live-sessions.md) S3)
@@ -308,7 +321,12 @@ Judgment stays the planner's.
   parked subplanner its next turn, which spends its reserve first and keeps it again as
   it parks, questions go on being answered from the child's room, and a turn nothing can
   cover ends the node `blocked`. A start path added past
-  `claimRefusal` fails it.
+  `startRefusal` fails it.
+- `TreeLedger.test.ts` generates histories: nothing carved exceeds a parent's limit, what a
+  node commits is what its children hold, claims made in one step cannot together spend
+  past a tree's budget, and a replay of the log gives the live numbers, after a torn write
+  too. `treeBudget.test.ts` runs the same on real Sessions, and `treeLedger.flatRun.test.ts`
+  holds a flat run to no ledger.
 - Each leak in M6 gets a test through its own path, not through the seam.
 
 ## Out of scope
@@ -376,3 +394,4 @@ Judgment stays the planner's.
 - 2026-10-31 — a parked subplanner's reserve funds its next turn, which spends it before room, and is kept again as it parks; what covers a turn is said.
 - 2026-10-31 — implemented in part: `Mandate`, `rootMandate`, `narrow`, the seam, the paths around it and a child's tool list, on a faked child, and the delegation setting (ADR-0055 D21). Built closest to the text where it could not hold: an automatic merge and `{ kind: 'autorun' }` read their grants below the root only, since Off and Watch hold neither and a flat run does not change; `PlanChangeCheck` reads `research` too; a request names the level narrowing.
 - 2026-10-31 — a subplanner's starts take the supervisor's authority as its report turns do, so a run it opens carries on rather than starting supervision afresh from a user's settings.
+- 2026-10-31 — M5's ledger implemented in `TreeLedger`, rebuilt from the tree's log. Built closest to the text where it could not hold: spend is checked in `startRefusal`; a script holds nothing; an attempt's overrun takes its children's room, and a node stops at what that leaves of `limit`, not at `limit`, or its own work could spend what its children hold; ready work refused with nothing live stops the node too.

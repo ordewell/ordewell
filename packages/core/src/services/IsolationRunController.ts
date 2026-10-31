@@ -364,6 +364,11 @@ export class IsolationRunController {
     return record.childSession;
   }
 
+  /** The child session seated in a task's worktree, if one is. */
+  childSession(taskId: string): string | undefined {
+    return this.run?.tasks[taskId]?.childSession;
+  }
+
   /** Open a run if none is, leaving whether it isolates to its first change task. */
   open(): void {
     if (this.mode) return;

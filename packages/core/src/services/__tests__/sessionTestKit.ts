@@ -81,6 +81,7 @@ export interface SessionOverrides {
   /** Where a child session sits (ADR-0055 D11): it saves and logs through the real store, under its root. */
   placement?: SessionDeps['placement'];
   execution?: SessionDeps['execution'];
+  eventLog?: SessionDeps['eventLog'];
   notifications?: INotification;
 }
 
@@ -152,6 +153,7 @@ export function makeSession(overrides: SessionOverrides = {}): Session {
     child: overrides.child,
     placement: overrides.placement,
     execution: overrides.execution,
+    eventLog: overrides.eventLog,
   });
   if (!overrides.saveSession && !overrides.placement) saveFakes.set(session, save);
   return session;

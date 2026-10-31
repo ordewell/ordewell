@@ -3067,6 +3067,34 @@ no capability, only authority.
 need one no grant gives. A subplanner, the actor a child plan's turns act as, has
 its grants alone at the **Command seam**: allow or refuse, never ask.
 
+**Budget ledger** (`services/TreeLedger.ts`, ADR-0056 M5) — a tree's token budgets,
+the root's and shared with every Session under it. Each node has a `limit`,
+`committed` (what its children hold), `spent` and `reserve`, in tokens, cache reads
+included: the input and output `UsageTotals` counts (`spentTokens`). A *carve* commits
+a child's limit from its parent's *room*, which is `limit` less the other three, and
+what `narrow` is handed as the parent's tokens; a *raise* does the same for a child
+that has one, from a parent's answer; on close, what a child did not spend returns to
+its parent and no further. `reserve` is an allowance per live session and a
+subplanner's share for its next turn, which spends that first. A node's own spending
+past its room takes its children's. Only a child is charged: the root's tasks and
+planner are not, and a flat run has no ledger. Rebuilt from the **Event log** by the
+same fold that keeps it live, never from a save of its own.
+*Avoid:* "quota", "credits", "cost": it counts tokens, and no money; "budget" alone
+for `limit`, one of its four numbers.
+
+**Event log** (`EventStore`, `utils/treeEventLog.ts`, ADR-0058 S3) — one append-only
+log per root, `tree-events.jsonl` in the root's session directory, behind a port. It
+holds what crosses a level, each `TreeEvent` saying what was decided so a replay
+decides nothing; deltas stay in the task logs. One line is one batch, so a batch lands
+whole and a torn last line loses that batch alone. A tree's first carve opens it: a
+flat run writes none.
+*Avoid:* "task log" (one attempt's, ADR-0018), "execution log" (the plan's record of
+commands at the seam).
+
+**Node path** (`NodePath`, ADR-0058 S3) — `root/3/2`, a node's place in its tree, from
+ids that are each a child's number under its parent and never change. So a move in a
+plan rewrites no history.
+
 **Delegation** — the **Run setting** that lets a plan hand a separable part of
 its goal to a child plan (ADR-0055 D21): `delegationTokens`, a tree's token budget,
 0 being off. Off by default, and read from the session's copy at each check, so a

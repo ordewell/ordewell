@@ -42,6 +42,7 @@ import { TaskWebReader } from './taskWebReads';
 import type { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { OrchestratorObserver, StartAdmission } from './TaskOrchestrator';
 import type { ExecutionBackend, OpenLease, ReservedLease } from './executionLease';
+import type { BudgetHold, NodeBudget } from './TreeLedger';
 
 class TaskStartConfigError extends Error {
   constructor(paths: string[]) {
@@ -150,6 +151,8 @@ interface TaskAttempt extends EndedAttempt {
   readonly spawning: AbortController;
   /** What the claim reserved; released as the attempt ends (ADR-0059 L1). */
   readonly lease: ReservedLease;
+  /** What its node's ledger holds for it, below the root and never for a script (ADR-0056 M5). */
+  readonly hold: BudgetHold | null;
   /** What its lease opened, which the attempt's result is read from (L2); null until then. */
   opened: OpenLease | null;
 }
@@ -266,6 +269,8 @@ export interface AttemptsDeps {
   runs: Pick<IsolationRunController, 'snapshotWorkspace' | 'filesChangedSince' | 'openRecord' | 'skillLayout' | 'current' | 'epoch'>;
   /** What becomes of a workspace an attempt ended while opening. */
   leases: Pick<ExecutionBackend, 'letGo'>;
+  /** This node's side of the tree's ledger; absent at the root, and on a flat run, which has none (ADR-0056 M5). */
+  budget?: Pick<NodeBudget, 'hold' | 'spent'>;
   /** A passed attempt's work, or a repair's, onto the integration branch, while the attempt stays live. */
   landing: Pick<Landing, 'landPassed' | 'settleRepair' | 'nextRepair' | 'repairPrompt'>;
   registry: RunnerRegistry | null;
@@ -478,6 +483,7 @@ export class Attempts {
       attaching: null,
       spawning: new AbortController(),
       lease: claim.lease,
+      hold: script ? null : this.deps.budget?.hold() ?? null,
       opened: null,
     };
     this.spawnCounts.set(task.id, attempt.attempt);
@@ -529,6 +535,7 @@ export class Attempts {
       if (attempt) this.stopRunner(attempt);
     }
     attempt?.lease.release(reason);
+    attempt?.hold?.release();
     return attempt;
   }
 
@@ -796,6 +803,7 @@ export class Attempts {
     session.onEvent((event) => {
       if (event.type !== 'usage' || attempt.planScope !== this.planScope || (this.live.get(task.id) !== attempt && !attempt.runnerStopped)) return;
       this.deps.store.recordAttemptUsage(task.id, attempt.attempt, event.record, new Date().toISOString());
+      this.deps.budget?.spent(event.record, { taskId: task.id, attempt: attempt.attempt });
       this.host.emit('onUsageChanged');
     });
     session.onExit(() => this.woundDown(attempt, session));

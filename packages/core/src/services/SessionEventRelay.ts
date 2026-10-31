@@ -12,7 +12,7 @@ import {
   type SessionNotice,
 } from './SessionMessage';
 import { surfaceStep } from '../conversation/records';
-import { planUsage } from '../models/Usage';
+import { planUsage, type UsageRecord } from '../models/Usage';
 import type { LegacyPlanState, ResearchProgress } from '../models/Task';
 import type { Escalation } from './escalations';
 
@@ -32,6 +32,8 @@ export interface SessionEventRelayDeps {
   orchestrator: Pick<TaskOrchestrator, 'judgingOnce' | 'getIdleSince' | 'getCompletionReceipt' | 'getToolsAttaching' | 'getQueuedTaskMessages' | 'getMergeGate' | 'holdReason' | 'loopStranded' | 'runMergeView' | 'activity' | 'taskIsolation'>;
   /** Shared with the Session, which snapshots, restores and clears it. */
   usage: PlannerUsageLedger;
+  /** What a subplanner's budget hears of each planner call (ADR-0056 M5); absent at the root, which is charged nothing. */
+  spent?: (record: UsageRecord) => void;
   /** How many of a task's runner requests wait for an answer (ADR-0018, A1). */
   awaitingApproval?: (taskId: string) => number;
   /** What a task's waiting checkpoint asks, whole. */
@@ -70,6 +72,7 @@ export class SessionEventRelay {
   private readonly store: SessionEventRelayDeps['store'];
   private readonly orchestrator: SessionEventRelayDeps['orchestrator'];
   private readonly usage: PlannerUsageLedger;
+  private readonly spent: (record: UsageRecord) => void;
   private readonly awaitingApproval: (taskId: string) => number;
   private readonly checkpointQuestion: (taskId: string) => string | undefined;
   private readonly waitsForApproval: (taskId: string) => boolean;
@@ -103,6 +106,7 @@ export class SessionEventRelay {
     this.store = deps.store;
     this.orchestrator = deps.orchestrator;
     this.usage = deps.usage;
+    this.spent = deps.spent ?? (() => {});
     this.awaitingApproval = deps.awaitingApproval ?? (() => 0);
     this.checkpointQuestion = deps.checkpointQuestion ?? (() => undefined);
     this.waitsForApproval = deps.waitsForApproval ?? (() => false);
@@ -384,6 +388,7 @@ export class SessionEventRelay {
       case 'usage': {
         if (!progress.record) return;
         this.usage.record(progress.record);
+        this.spent(progress.record);
         this.broadcast(this.usage.message(turnId));
         return;
       }
