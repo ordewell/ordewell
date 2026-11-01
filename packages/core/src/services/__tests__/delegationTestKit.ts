@@ -1,5 +1,5 @@
 import { execFileSync } from 'child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { vi } from 'vitest';
@@ -14,6 +14,8 @@ import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import { fakeConfig, FakeRunnerSession } from '../../testing';
 import { saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
+import { treeEventLogFile } from '../../utils/treeEventLog';
+import type { NodePath, TreeEvent } from '../../models/TreeEvent';
 import { fakeFs, makeSession, scriptedPlanner, type PlannerTurn as Turn } from './sessionTestKit';
 
 /** One real repository, one root Session and a scripted subplanner: a delegated task as a test drives it. */
@@ -130,3 +132,15 @@ export function tree(turns: Turn[], { runner = writingRunner({ a: ['a.txt'], b: 
 }
 
 export const taskOf = (session: Session, id: string) => session.planTasks.find((t) => t.id === id);
+
+/**
+ * Where `taskId`'s child sits in the tree. Siblings open at once, so the number a
+ * node gets is whichever claims the tree first, not the task's order: ask the log.
+ */
+export function nodeOfTask(root: string, taskId: string, rootSessionId = 'session-root'): NodePath {
+  const opened = readFileSync(treeEventLogFile(rootSessionId, root), 'utf8').trim().split('\n')
+    .flatMap((line) => JSON.parse(line) as TreeEvent[])
+    .find((event) => event.kind === 'node_opened' && event.taskId === taskId);
+  if (!opened) throw new Error(`no node was opened for ${taskId}`);
+  return opened.node;
+}
