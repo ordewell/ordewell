@@ -175,6 +175,7 @@ export {
 } from './services/TaskQuery';
 export type { TaskQuery, TaskQueryField, TaskQueryCatalog, LiveOutputLookup } from './services/TaskQuery';
 export { Session, createSession, sessionRuntimeSettings } from './services/createSession';
+export { reclaimContainers } from './services/container/reclaim';
 export { abbreviateHome, resolveSkillInvocation, plannerMessage, plannerTranscript, type SkillInvocation } from './services/skillInvocation';
 export { PlanEditError } from './services/PlanEditError';
 export type * from './daemonContract';

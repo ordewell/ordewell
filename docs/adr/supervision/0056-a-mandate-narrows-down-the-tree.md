@@ -315,12 +315,14 @@ Judgment stays the planner's.
   where the root runs it as a script task under ADR-0035.
 
   The known limit, plainly: a change-task runner in a child keeps the network it has in
-  a flat run until the container backend exists
+  a flat run, unless the `containers` setting runs it in a container
   ([ADR-0059](../isolation/0059-an-execution-lease-reserves-in-the-claim-and-opens-after-it.md)).
+  Then a child's change tasks and repairs take that path as a root's do, each held to
+  its lease's list of hosts, and a script this rule seals runs there with no network.
   Deep autonomy adds no capability today. It does remove a person from plan approval, so
   an instruction injected into something a subplanner read can become a plan nobody read
   and run with that network. ADR-0029 and ADR-0030 accept that risk at the root under
-  Act and autorun; turning delegation on accepts it below, and its confirmation says so, and that a container is opt-in for a task on its own: delegation runs none.
+  Act and autorun; turning delegation on accepts it below, and its confirmation says so, and that delegation starts no container of its own: containers are opt-in.
 - **Retries and revocation (M10).** Retries multiply across levels: three at each of three
   levels is twenty-seven times the work. Budgets bound that, and each node keeps its own
   loop guards (ADR-0029), so a parent's retry of a delegated task, a Continue
@@ -445,3 +447,4 @@ Judgment stays the planner's.
 - 2026-11-01 — from a real run: a claim leaves a whole share for its subplanner's next turn, an approval carries words to a child, a budget stop waits with a question, and the daemon's route, the CLI and the TUI send a raise.
 - 2026-11-01 — VS Code's checkpoint card sends a raise and an answer's words, and M9's confirmation says delegation runs nothing in a container.
 - 2026-11-01 — a raise is a grant to the task: M5 keeps it past its child, and M10 re-carves from the stated tokens plus every raise, less what was spent, its refusal naming that budget.
+- 2026-11-01 — under the `containers` setting a child's change tasks, repairs and scripts take the container path, a sealed script with no network, and the confirmation says delegation starts no container of its own (M9).

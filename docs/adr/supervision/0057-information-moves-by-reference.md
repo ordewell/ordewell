@@ -238,6 +238,8 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   entry is posted, never an author's claim: `sha`, the file as its author had it, hashed with no git
   since a read-only task's worktree may hold a planted repository
   ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)),
+  and read through its lease where one runs the author elsewhere
+  ([ADR-0059](../isolation/0059-an-execution-lease-reserves-in-the-claim-and-opens-after-it.md) L6),
   and `tip`, what the plan's integration branch held then. At read the branch is compared with both, so
   a claim shows `stale` once the branch holds neither: a file its author changed and has not landed
   reads as it should, and so does one that landed as claimed. A branch merged and gone with its run
@@ -372,3 +374,4 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - 2026-11-01 — R1 across plans, R2, R3's checks at every level, R11 and R12 implemented, in `Subtree.ts`, `models/Handoff.ts` and `mcp/tools.ts`: a path is a node's in the tree's log, a report reads what it names once, a child plan's end is a `task_report`, and `read` is listed where a planner may delegate. Built closest to the text where it could not hold: `promote` and `open` are written as text, `open` may name a subplanner's own finding, and a runner's reason says whose words it is. `post` waits for the board.
 - 2026-11-01 — R3 holds for a delegated task's commit, summary, reason, report and output tail: every line is indented in every reading, so none can pass for a line of Ordewell's.
 - 2026-11-01 — R6 to R10 implemented, in `models/Board.ts`, `Board.ts`, `ScopeLines.ts` and `TreeLedger`, behind ADR-0055 D21's switch: a scope stays on a delegated task, its line waits for a subplanner's next turn, a `contract` rises to the parent's board as its task lands, `read` takes `board` so a runner's `read` does not move, `file` evidence holds a branch's blob beside its author's, and a pin goes in a subplanner's opening and a task's prompt.
+- 2026-11-01 — a pin reads its author's file through the lease where one runs the author elsewhere (R9).

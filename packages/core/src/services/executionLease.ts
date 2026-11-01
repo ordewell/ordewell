@@ -107,7 +107,12 @@ export interface RunnerPlacement {
   place(launch: RunnerLaunch): Promise<PlacedLaunch>;
   /** Make a listener on this host's loopback reachable from there, and answer the URL to reach it by (`endpoints.mcp`). */
   reach(url: string): Promise<string>;
+  /** The blob a file holds there, as git would name it, read where the attempt's work is; undefined for what cannot be read. */
+  blob(file: string): Promise<string | undefined>;
 }
+
+/** What a copy of a checkout is on where a backend keeps it: no ref of the user's is at stake, and it stands on HEAD as it is. */
+export const CHECKOUT_BRANCH = 'ordewell/checkout';
 
 /** One repository of an attempt's worktree, for a backend that keeps a copy of it elsewhere. */
 export interface LeaseRepo {
@@ -184,4 +189,12 @@ export interface ExecutionBackend {
    * work is there already. Rejects with why it must not land.
    */
   collect?(taskId: string): Promise<void>;
+  /** The workspace root's repositories, where a run knows them: a repo group's root is no repository to ask. */
+  checkoutRepos?(): readonly LeaseRepo[];
+  /**
+   * Let go of what its tree left where only it can reach, as a Clean up gives the
+   * run up. Absent, there is nothing but the worktrees. Reports what it could not
+   * clear, and never rejects: it is no reason for a clean-up to fail.
+   */
+  reclaim?(): Promise<void>;
 }

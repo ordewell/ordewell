@@ -28,6 +28,9 @@ export interface NodeBoardDeps {
   checks?(): readonly string[];
 }
 
+/** The blob of a file where its author works, as git would name it; undefined for what cannot be read, which goes unpinned. */
+export type WorkBlobs = (file: string) => Promise<string | undefined>;
+
 /** Past this a file is not read: a claim on it goes unpinned, and is never stale. */
 const BLOB_READ_MAX = 16 * 1024 * 1024;
 
@@ -51,6 +54,9 @@ async function workBlob(cwd: string, file: string): Promise<string | undefined> 
     return undefined;
   }
 }
+
+/** An author's files in a directory of this host. */
+export const blobsIn = (cwd: string): WorkBlobs => (file) => workBlob(cwd, file);
 
 /** How a text stands for a match: case and spacing are not what makes a check the same check. */
 const folded = (text: string): string => text.toLowerCase().replace(/\s+/g, ' ').trim();
@@ -83,9 +89,9 @@ export class NodeBoard {
   }
 
   /** The file evidence an entry pins, read now: what its author saw and what the branch held. */
-  private async pinned(files: readonly string[], cwd: string | undefined, branch: string | undefined): Promise<BoardFile[]> {
+  private async pinned(files: readonly string[], work: WorkBlobs | undefined, branch: string | undefined): Promise<BoardFile[]> {
     return Promise.all(files.map(async (file): Promise<BoardFile> => {
-      const sha = cwd === undefined ? undefined : await workBlob(cwd, file);
+      const sha = await work?.(file);
       const tip = branch === undefined ? undefined : await this.deps.git.blob(branch, file);
       return { kind: 'file', path: file, ...(sha ? { sha } : {}), ...(tip ? { tip } : {}) };
     }));
@@ -102,8 +108,8 @@ export class NodeBoard {
       : null;
   }
 
-  /** `cwd` is where the author works: its files are pinned from there (R9). */
-  async post(entry: BoardPost, by: Omit<BoardAuthor, 'node'>, cwd?: string): Promise<McpToolReply> {
+  /** `work` reads where the author works: its files are pinned from there (R9). */
+  async post(entry: BoardPost, by: Omit<BoardAuthor, 'node'>, work?: WorkBlobs): Promise<McpToolReply> {
     const refused = this.refusal(entry);
     if (refused) return { text: refused, isError: true };
     const { files, ...fields } = entry;
@@ -111,7 +117,7 @@ export class NodeBoard {
     const draft: BoardDraft = {
       ...fields,
       by: { ...by, node: this.deps.node },
-      ...(files?.length ? { files: await this.pinned(files, cwd, branch), ...(branch ? { branch } : {}) } : {}),
+      ...(files?.length ? { files: await this.pinned(files, work, branch), ...(branch ? { branch } : {}) } : {}),
     };
     const posted = this.deps.log.post(this.deps.node, draft);
     if (!posted) return { text: `This board is full, at ${BOARD_LIMITS.entries} entries: nothing was posted.`, isError: true };

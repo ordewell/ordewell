@@ -7,7 +7,7 @@ import { join } from 'path';
 import { BOARD_LIMITS, type BoardPost } from '../../models/Board';
 import { ROOT_NODE, type NodePath } from '../../models/TreeEvent';
 import { FakeEventStore } from '../../testing';
-import { NodeBoard, type BoardGit } from '../Board';
+import { blobsIn, NodeBoard, type BoardGit } from '../Board';
 import { rootMandate, type Mandate } from '../Mandate';
 import { TreeLedger } from '../TreeLedger';
 import type { EventStore } from '../eventStore';
@@ -110,8 +110,8 @@ describe('a board (ADR-0057 R8)', () => {
   it('refuses a file outside the workspace, whatever is posted with it', async () => {
     const ledger = await open();
     const board = boardOf(ledger, child(ledger, ROOT_NODE));
-    expect(await board.post(entry({ files: ['../secret'] }), task, '/somewhere')).toMatchObject({ isError: true });
-    expect(await board.post(entry({ files: ['/etc/passwd'] }), task, '/somewhere')).toMatchObject({ isError: true });
+    expect(await board.post(entry({ files: ['../secret'] }), task, blobsIn('/somewhere'))).toMatchObject({ isError: true });
+    expect(await board.post(entry({ files: ['/etc/passwd'] }), task, blobsIn('/somewhere'))).toMatchObject({ isError: true });
     expect(await textOf(board.read('board'))).toContain('nothing on it yet');
   });
 });
@@ -185,7 +185,7 @@ describe('contested and stale are computed (ADR-0057 R9)', () => {
     async function posted(git: BoardGit, cwd: string, file = 'src/a.ts') {
       const ledger = await open();
       const board = boardOf(ledger, child(ledger, ROOT_NODE), git);
-      await board.post(entry({ files: [file] }), task, cwd);
+      await board.post(entry({ files: [file] }), task, blobsIn(cwd));
       return board;
     }
 
@@ -239,7 +239,7 @@ describe('contested and stale are computed (ADR-0057 R9)', () => {
       execFileSync('mkfifo', [join(cwd, 'pipe')]);
       const ledger = await open();
       const node = child(ledger, ROOT_NODE);
-      expect(await boardOf(ledger, node, branch({})).post(entry({ files: ['pipe'] }), task, cwd)).toMatchObject({ text: expect.stringContaining('Posted') });
+      expect(await boardOf(ledger, node, branch({})).post(entry({ files: ['pipe'] }), task, blobsIn(cwd))).toMatchObject({ text: expect.stringContaining('Posted') });
       expect(ledger.board(node)[0].files).toEqual([{ kind: 'file', path: 'pipe' }]);
       rmSync(cwd, { recursive: true });
     }, 5_000);
@@ -256,8 +256,8 @@ describe('contested and stale are computed (ADR-0057 R9)', () => {
       const git = branch({});
       const node = child(ledger, ROOT_NODE);
       const board = boardOf(ledger, node, git);
-      await board.post(entry({ files: ['link'] }), task, cwd);
-      await board.post(entry({ title: 'no files' }), task, cwd);
+      await board.post(entry({ files: ['link'] }), task, blobsIn(cwd));
+      await board.post(entry({ title: 'no files' }), task, blobsIn(cwd));
       git.files.link = 'anything\n';
       expect(await textOf(board.read('board'))).not.toContain('stale');
       expect(ledger.board(node)[0].files).toEqual([{ kind: 'file', path: 'link' }]);

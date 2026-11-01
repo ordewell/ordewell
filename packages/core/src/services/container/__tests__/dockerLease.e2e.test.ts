@@ -1,15 +1,20 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { execFileSync, spawnSync, type ChildProcess } from 'child_process';
+import { execFile, execFileSync, spawnSync, type ChildProcess } from 'child_process';
 import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
+import { createServer as createHttpServer, type IncomingHttpHeaders } from 'http';
+import { createServer, type AddressInfo } from 'net';
+import { lookup } from 'dns/promises';
 import { createWorktreeIsolation } from '../../GitWorktreeIsolation';
 import { LeaseHost } from '../../sessionLease';
 import { RUN_SETTINGS_DEFAULTS } from '../../SettingsService';
 import { StructuredRunner } from '../../StructuredRunner';
 import { BufferedTaskOutputSource } from '../../BufferedTaskOutputSource';
 import { GUARANTEES, type LeaseRepo } from '../../executionLease';
-import { fakeFs, fakeNotification, makeSession } from '../../__tests__/sessionTestKit';
+import { DONE, SUBMIT } from '../../__tests__/delegationTestKit';
+import { fakeFs, fakeNotification, makeSession, scriptedPlanner, type PlannerTurn } from '../../__tests__/sessionTestKit';
+import type { IAiService } from '../../AiService';
 import { createTask, type LegacyPlanState, type Task } from '../../../models/Task';
 import { fakeConfig, FakeExecutionBackend } from '../../../testing';
 import { saveSession } from '../../../utils/sessionStore';
@@ -18,7 +23,9 @@ import { CredentialBroker } from '../credentialBroker';
 import { DockerExecutionBackend } from '../dockerLease';
 import { parseContainerSettings } from '../containerSettings';
 import { SpawnedDockerCli } from '../dockerCli';
+import type { EgressPath } from '../egressSidecar';
 import { LeaseRelay, RELAY_ENTRY } from '../leaseRelay';
+import { reclaimContainers } from '../reclaim';
 
 /*
  * A real task in a real container (ADR-0059 L5, L6). Nothing is faked but the
@@ -42,13 +49,24 @@ COPY fake-claude.mjs /opt/fake-claude.mjs
 COPY claude /usr/local/bin/claude
 USER node
 `;
-/** Says where it ran, in the work it leaves: on any host but Linux, only a container makes this read Linux. */
+/**
+ * Says where it ran, in the work it leaves: on any host but Linux, only a
+ * container makes this read Linux. It takes any branch the attempt was seeded
+ * with into its own, keeping its own side: nothing on a change task, and a
+ * repair's merge, which fake-claude cannot do.
+ */
 const FAKE_LAUNCHER = `#!/bin/sh
 echo "$(uname -s) $(id -u) $HOME" > where-i-ran.txt
 echo run >> "$HOME/runs"
 wc -l < "$HOME/runs" | tr -d ' ' > runs-of-this-home.txt
+for branch in $(git for-each-ref --format='%(refname:short)' refs/heads/); do
+  git merge -q -X ours --no-edit "$branch" >/dev/null 2>&1 || true
+done
 exec node /opt/fake-claude.mjs "$@"
 `;
+
+/** The engine's default network, which limits nothing: what a guarantee was measured to have to stop. */
+const BRIDGE: EgressPath = { open: async () => ({ runArgs: [], env: {}, proxied: false, gateway: null, close: async () => undefined }) };
 
 const env = () => {
   const e = { ...process.env };
@@ -57,9 +75,10 @@ const env = () => {
 };
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, env: env(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const docker = (...args: string[]) => execFileSync('docker', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-const ours = (kind: 'container' | 'volume') => (kind === 'container'
+const ours = (kind: 'container' | 'volume' | 'network') => (kind === 'container'
   ? docker('container', 'ls', '-a', '--filter', 'name=ordewell-', '--format', '{{.Names}}')
-  : docker('volume', 'ls', '--filter', 'name=ordewell-', '--format', '{{.Name}}')).split('\n').filter(Boolean);
+  : docker(kind, 'ls', '--filter', 'name=ordewell-', '--format', '{{.Name}}')).split('\n').filter(Boolean);
+const isAttempt = (name: string) => !name.endsWith('-egress');
 
 const dirs: string[] = [];
 function tempDir(prefix = 'ordewell-container-'): string {
@@ -84,8 +103,17 @@ function repo(): string {
 const cue = (spec: unknown) => `<fake-claude>${JSON.stringify(spec)}</fake-claude>`;
 const settingsOf = (over: Record<string, unknown> = {}) => parseContainerSettings({ image: IMAGE, memory: '512m', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] }, ...over });
 
-function session(root: string, tasks: Task[], settings = settingsOf()) {
+interface SessionOptions {
+  egress?: EgressPath;
+  key?: Record<string, string>;
+  /** Turns of a delegated task's subplanner, which runs on this host in any case. */
+  subplanner?: PlannerTurn[];
+  repairs?: number;
+}
+
+function session(root: string, tasks: Task[], settings = settingsOf(), { egress, key, subplanner, repairs = 0 }: SessionOptions = {}) {
   const told: string[] = [];
+  const planner = subplanner && scriptedPlanner(subplanner);
   const notifications = fakeNotification();
   const taskOutput = new BufferedTaskOutputSource();
   const parent = makeSession({
@@ -93,14 +121,17 @@ function session(root: string, tasks: Task[], settings = settingsOf()) {
     taskOutput,
     isolation: createWorktreeIsolation({ resolvePath: async () => process.env.PATH ?? '', config: fakeConfig({ worktreeIsolation: true }) }),
     workspaceRoot: () => root, saveSession, openTaskLog, leaseHost: new LeaseHost(), sessionId: `docker-e2e-${process.pid}-${tasks[0].id}`,
-    config: fakeConfig({ maxParallelSessions: 2, aiProvider: 'claude-code' }),
+    config: fakeConfig({ maxParallelSessions: 2, aiProvider: 'claude-code', conflictRepairAttempts: repairs }),
     notifications,
-    settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' } }),
-    childDeps: () => ({ fsAdapter: { ...fakeFs(), getWorkspaceRoot: () => root } }),
+    settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: 10_000_000 } }),
+    delegationOffered: subplanner !== undefined,
+    childDeps: () => ({ ...(planner ? { aiService: { reset: vi.fn(), ...planner.service } as unknown as IAiService } : {}), fsAdapter: { ...fakeFs(), getWorkspaceRoot: () => root } }),
     execution: (local, context) => new DockerExecutionBackend(local, {
       settings,
-      broker: new CredentialBroker({ ANTHROPIC_API_KEY: 'sk-ant-api03-not-a-real-key' }),
+      broker: new CredentialBroker(key ?? { ANTHROPIC_API_KEY: 'sk-ant-api03-not-a-real-key' }),
+      ...(egress ? { egress } : {}),
       sessionId: context.sessionId,
+      treeId: context.treeId,
       tell: (level, text) => { told.push(`${level}: ${text}`); context.tell(level, text); },
     }),
   });
@@ -111,11 +142,12 @@ function session(root: string, tasks: Task[], settings = settingsOf()) {
 const settled = (s: ReturnType<typeof session>['parent'], index = 0) => vi.waitFor(() => expect(s.planTasks[index].status).not.toMatch(/approved|pending|in_progress/), { timeout: 60_000, interval: 100 });
 
 describe.skipIf(skip)('a task in a real container', () => {
-  const before: Record<'container' | 'volume', string[]> = { container: [], volume: [] };
+  const before: Record<'container' | 'volume' | 'network', string[]> = { container: [], volume: [], network: [] };
 
   beforeAll(() => {
     before.container = ours('container');
     before.volume = ours('volume');
+    before.network = ours('network');
     const context = tempDir('ordewell-image-');
     writeFileSync(join(context, 'Dockerfile'), DOCKERFILE);
     copyFileSync(FAKE_CLAUDE, join(context, 'fake-claude.mjs'));
@@ -124,8 +156,12 @@ describe.skipIf(skip)('a task in a real container', () => {
     docker('build', '-q', '-t', IMAGE, context);
   }, 180_000);
 
+  /** The attempts in the engine now, with no sidecar beside them. */
+  const attempts = () => ours('container').filter((n) => !before.container.includes(n) && isAttempt(n));
+
   afterAll(() => {
     for (const name of ours('container').filter((n) => !before.container.includes(n))) spawnSync('docker', ['rm', '-f', name]);
+    for (const name of ours('network').filter((n) => !before.network.includes(n))) spawnSync('docker', ['network', 'rm', name]);
     for (const name of ours('volume').filter((n) => !before.volume.includes(n))) spawnSync('docker', ['volume', 'rm', '-f', name]);
     spawnSync('docker', ['image', 'rm', '-f', IMAGE]);
   }, 60_000);
@@ -144,8 +180,9 @@ describe.skipIf(skip)('a task in a real container', () => {
     expect(git(root, 'show', `${integration}:a.txt`)).toBe('written in the container');
     expect(git(root, 'show', `${integration}:where-i-ran.txt`)).toBe('Linux 1000 /task/home');
     expect(git(root, 'rev-parse', 'main')).toBe(main);
-    expect(env.told.filter((line) => line.startsWith('warn')).join()).toContain('network');
+    expect(env.told.filter((line) => line.startsWith('warn')).join()).not.toContain('network');
     await vi.waitFor(() => expect(ours('container').filter((n) => !before.container.includes(n))).toEqual([]), { timeout: 30_000 });
+    await vi.waitFor(() => expect(ours('network').filter((n) => !before.network.includes(n))).toEqual([]), { timeout: 30_000 });
     await vi.waitFor(() => expect(ours('volume').filter((n) => n.startsWith('ordewell-task-') && !before.volume.includes(n))).toEqual([]), { timeout: 30_000 });
 
     expect(await env.parent.execute({ command: 'merge_all' }, { kind: 'user' })).toMatchObject({ ok: true });
@@ -175,7 +212,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     const env = session(root, tasks);
 
     await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
-    await vi.waitFor(() => expect(ours('container').filter((n) => !before.container.includes(n))).toHaveLength(1), { timeout: 60_000, interval: 100 });
+    await vi.waitFor(() => expect(attempts()).toHaveLength(1), { timeout: 60_000, interval: 100 });
     await new Promise((done) => setTimeout(done, 1500));
 
     await env.parent.execute({ command: 'stop_run' }, { kind: 'user' });
@@ -214,8 +251,8 @@ describe.skipIf(skip)('a task in a real container', () => {
     const tasks = [createTask({ id: 'm', order: 1, title: 'Vouch m', prompt: cue({ delayMs: 60_000 }), assignedRunner: 'claude-code' })];
     const env = session(root, tasks);
     await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
-    await vi.waitFor(() => expect(ours('container').filter((n) => !before.container.includes(n))).toHaveLength(1), { timeout: 60_000, interval: 100 });
-    const [box] = ours('container').filter((n) => !before.container.includes(n));
+    await vi.waitFor(() => expect(attempts()).toHaveLength(1), { timeout: 60_000, interval: 100 });
+    const [box] = attempts();
     await vi.waitFor(() => expect(spawnSync('docker', ['exec', box, 'sh', '-c', 'test -d /task/work/.git && echo vouched > /task/work/vouched.txt']).status).toBe(0), { timeout: 30_000, interval: 200 });
 
     await env.parent.execute({ command: 'stop_run' }, { kind: 'user' });
@@ -242,10 +279,10 @@ describe.skipIf(skip)('a task in a real container', () => {
     env.parent.destroy();
   }, 120_000);
 
-  it('refuses the lease, and starts no runner, when the settings require what no probe can prove', async () => {
+  it('refuses the lease, and starts no runner, on a network the probe finds open', async () => {
     const root = repo();
     const tasks = [createTask({ id: 'e', order: 1, title: 'Needs an allowlist', prompt: cue({ write: { 'e.txt': 'x' } }), assignedRunner: 'claude-code' })];
-    const env = session(root, tasks, settingsOf({ required: ['net.allowlist'] }));
+    const env = session(root, tasks, settingsOf(), { egress: BRIDGE });
 
     await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
 
@@ -256,16 +293,25 @@ describe.skipIf(skip)('a task in a real container', () => {
     env.parent.destroy();
   }, 120_000);
 
-  it('proves on a real engine what it says it proves, and that it has no network guarantee', async () => {
+  it('proves on a real engine what it says it proves, the network with it', async () => {
     const backend = new DockerExecutionBackend(new FakeExecutionBackend(), { settings: settingsOf(), sessionId: () => 'probe', tell: () => undefined });
 
     const report = await backend.probe();
 
-    for (const guarantee of ['fs.hostHidden', 'fs.writeScope', 'limits.memory', 'cred.unreadable'] as const) {
+    for (const guarantee of ['fs.hostHidden', 'fs.writeScope', 'limits.memory', 'cred.unreadable', 'net.allowlist', 'net.noMetadata'] as const) {
       expect(report[guarantee], `${guarantee}: ${report[guarantee].by}`).toMatchObject({ proven: true });
     }
-    expect(report['net.allowlist'].proven).toBe(false);
     expect(Object.keys(report).sort()).toEqual([...GUARANTEES].sort());
+    await vi.waitFor(() => expect(ours('network').filter((n) => !before.network.includes(n))).toEqual([]), { timeout: 30_000 });
+  }, 60_000);
+
+  it('catches, by that probe, what the default network was measured to let through', async () => {
+    const backend = new DockerExecutionBackend(new FakeExecutionBackend(), { settings: settingsOf(), egress: BRIDGE, sessionId: () => 'probe', tell: () => undefined });
+
+    const report = await backend.probe();
+
+    expect(report['net.allowlist'], report['net.allowlist'].by).toMatchObject({ proven: false });
+    console.log(`[measure] on the default network: ${report['net.allowlist'].by}`);
   }, 60_000);
 
   it.each<[string, (entry: ChildProcess) => void]>([
@@ -287,11 +333,11 @@ describe.skipIf(skip)('a task in a real container', () => {
   const leaseOverImage = (taskId: string, repos: LeaseRepo[], image: string) => leaseWith(taskId, repos, settingsOf({ image }));
 
   /** One lease on real repositories with no Session around it, to run a command by placement as a runner would be. */
-  function leaseWith(taskId: string, repos: LeaseRepo[], settings: ReturnType<typeof settingsOf>) {
+  function leaseWith(taskId: string, repos: LeaseRepo[], settings: ReturnType<typeof settingsOf>, key: Record<string, string> = { ANTHROPIC_API_KEY: 'sk-ant-api03-x' }) {
     const local = new FakeExecutionBackend();
     local.repos = repos;
     const told: string[] = [];
-    const backend = new DockerExecutionBackend(local, { settings, broker: new CredentialBroker({ ANTHROPIC_API_KEY: 'sk-ant-api03-x' }), sessionId: () => `${taskId}-${process.pid}`, tell: (_level, text) => told.push(text) });
+    const backend = new DockerExecutionBackend(local, { settings, broker: new CredentialBroker(key), sessionId: () => `${taskId}-${process.pid}`, tell: (_level, text) => told.push(text) });
     return {
       backend,
       told,
@@ -299,13 +345,17 @@ describe.skipIf(skip)('a task in a real container', () => {
         const reserved = backend.reserve({ node: { sessionId: taskId, taskId }, role: 'task', runner: 'claude-code' });
         if ('refused' in reserved) throw new Error(reserved.refused);
         const opened = await reserved.lease.open({ task: createTask({ id: taskId, order: 1, title: taskId, prompt: 'x' }), workspace: { kind: 'worktree', intent }, required: [] }, new AbortController().signal);
-        const run = async (script: string, cwd?: string) => {
-          const placed = await opened.placement!.place({ command: 'sh', args: ['-c', cwd ? `cd ${cwd} && ${script}` : script], env: {}, files: [] });
-          const ran = spawnSync('docker', placed.args, { encoding: 'utf8', env: { ...process.env, ...placed.env } });
+        const placedRun = async (command: string, args: string[]) => {
+          const placed = await opened.placement!.place({ command, args, env: {}, files: [] });
+          const ran = await new Promise<{ status: number | null; stdout: string; stderr: string }>((done) => {
+            execFile('docker', placed.args, { encoding: 'utf8', env: { ...process.env, ...placed.env } }, (err, stdout, stderr) => done({ status: err ? (typeof err.code === 'number' ? err.code : 1) : 0, stdout, stderr }));
+          });
           placed.ended();
           return ran;
         };
-        return { opened, run, lease: reserved.lease };
+        const run = (script: string, cwd?: string) => placedRun('sh', ['-c', cwd ? `cd ${cwd} && ${script}` : script]);
+        const node = (code: string) => placedRun('node', ['-e', code]);
+        return { opened, run, node, lease: reserved.lease };
       },
     };
   }
@@ -316,6 +366,319 @@ describe.skipIf(skip)('a task in a real container', () => {
     git(root, 'branch', `${branch}-integration`);
     return { path: '.', root, worktree, branch, integrationBranch: `${branch}-integration`, linked: [] };
   }
+
+  /** Tried from inside, as a process an agent started would try: what each connection did. */
+  const TRY_CONNECT = (targets: string[]) => `
+    const net = require('net');
+    const tried = (target) => new Promise((resolve) => {
+      const at = target.lastIndexOf(':');
+      const socket = net.connect({ host: target.slice(0, at), port: Number(target.slice(at + 1)), timeout: 1500 });
+      const done = (answer) => { socket.destroy(); resolve(target + ' ' + answer); };
+      socket.on('connect', () => done('connected'));
+      socket.on('timeout', () => done('timed out'));
+      socket.on('error', (err) => done(err.code));
+    });
+    Promise.all(${JSON.stringify(targets)}.map(tried)).then((lines) => console.log(lines.join('\\n')));
+  `;
+
+  /** A CONNECT by hand through the lease's proxy, as a client that reads the variable would send it. */
+  const THROUGH_PROXY = (target: string) => `
+    const net = require('net');
+    const { hostname, port } = new URL(process.env.HTTPS_PROXY);
+    const socket = net.connect({ host: hostname, port: Number(port) });
+    socket.on('connect', () => socket.write('CONNECT ${target} HTTP/1.1\\r\\nHost: ${target}\\r\\n\\r\\n'));
+    socket.once('data', (chunk) => { console.log(String(chunk).split('\\r\\n')[0]); socket.destroy(); });
+    socket.on('error', (err) => console.log(err.code));
+  `;
+
+  it('stops the two ways out a bridge container took, for a real process that ignores every setting', async () => {
+    let hits = 0;
+    const listener = createServer((socket) => { hits += 1; socket.destroy(); });
+    await new Promise<void>((done) => { listener.listen(0, '127.0.0.1', done); });
+    const { port } = listener.address() as AddressInfo;
+    const lease = leaseOver('walled', [worktreeOf(repo(), 'ordewell/walled')]);
+    const { opened, node, lease: reserved } = await lease.open();
+
+    expect(opened.guarantees['net.allowlist'], opened.guarantees['net.allowlist'].by).toMatchObject({ proven: true });
+    const direct = (await node(TRY_CONNECT(['1.1.1.1:443', `host.docker.internal:${port}`, `host.lima.internal:${port}`, '169.254.169.254:80']))).stdout.trim().split('\n');
+
+    expect(direct).toHaveLength(4);
+    for (const line of direct) expect(line).not.toContain('connected');
+    expect((await node(THROUGH_PROXY('1.1.1.1:443'))).stdout.trim()).toMatch(/^HTTP\/1\.1 403 /);
+    expect((await node(THROUGH_PROXY(`host.docker.internal:${port}`))).stdout.trim()).toMatch(/^HTTP\/1\.1 403 /);
+    expect((await node(THROUGH_PROXY('169.254.169.254:80'))).stdout.trim()).toMatch(/^HTTP\/1\.1 403 /);
+    expect(hits).toBe(0);
+    // The sidecar's other side: what else is on the bridge is no client of it.
+    const [sidecar] = ours('container').filter((name) => !before.container.includes(name) && !isAttempt(name));
+    const onTheBridge = docker('inspect', '--format', '{{.NetworkSettings.Networks.bridge.IPAddress}}', sidecar);
+    expect(docker('run', '--rm', '--init', '--pids-limit', '8192', '--memory', '256m', IMAGE, 'node', '-e', TRY_CONNECT([`${onTheBridge}:3128`]))).toBe(`${onTheBridge}:3128 ECONNREFUSED`);
+    listener.close();
+    reserved.release('done');
+    await lease.backend.letGo('walled', { keep: false, reason: 'done' });
+  }, 90_000);
+
+  it('opens a listed host through its sidecar, end to end over TLS', async (test) => {
+    if (await lookup('registry.npmjs.org').then(() => false, () => true)) return test.skip();
+    const lease = leaseWith('listed', [worktreeOf(repo(), 'ordewell/listed')], settingsOf({ allow: ['registry.npmjs.org'] }));
+    const { node, lease: reserved } = await lease.open();
+
+    const reached = await node(`
+      const net = require('net');
+      const tls = require('tls');
+      const { hostname, port } = new URL(process.env.HTTPS_PROXY);
+      const socket = net.connect({ host: hostname, port: Number(port) });
+      socket.on('connect', () => socket.write('CONNECT registry.npmjs.org:443 HTTP/1.1\\r\\nHost: registry.npmjs.org\\r\\n\\r\\n'));
+      socket.once('data', () => {
+        const secure = tls.connect({ socket, servername: 'registry.npmjs.org' }, () => secure.write('GET /-/ping HTTP/1.1\\r\\nHost: registry.npmjs.org\\r\\nConnection: close\\r\\n\\r\\n'));
+        secure.once('data', (chunk) => { console.log(String(chunk).split('\\r\\n')[0]); secure.destroy(); });
+      });
+    `);
+
+    expect(reached.stdout.trim()).toMatch(/^HTTP\/1\.1 200/);
+    expect((await node(THROUGH_PROXY('example.com:443'))).stdout.trim()).toMatch(/^HTTP\/1\.1 403 /);
+    reserved.release('done');
+    await lease.backend.letGo('listed', { keep: false, reason: 'done' });
+  }, 90_000);
+
+  it('carries a runner\'s model traffic to the upstream under the key, which it never held', async () => {
+    const heard: { url?: string; headers: IncomingHttpHeaders }[] = [];
+    const upstream = createHttpServer((req, res) => {
+      heard.push({ url: req.url, headers: req.headers });
+      req.resume();
+      res.end('{"answered":true}');
+    });
+    await new Promise<void>((done) => { upstream.listen(0, '127.0.0.1', done); });
+    const key = 'sk-ant-api03-held-at-the-gateway';
+    const url = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+    const lease = leaseWith('gated', [worktreeOf(repo(), 'ordewell/gated')], settingsOf({ login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL'] }, required: ['cred.unreadable'] }), { ANTHROPIC_API_KEY: key, ANTHROPIC_BASE_URL: url });
+    const { opened, node, run, lease: reserved } = await lease.open();
+
+    expect(opened.guarantees['cred.unreadable'], opened.guarantees['cred.unreadable'].by).toMatchObject({ proven: true });
+    const asked = await node(`
+      fetch(process.env.ANTHROPIC_BASE_URL + '/v1/messages', { method: 'POST', headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'content-type': 'application/json' }, body: '{}' })
+        .then(async (res) => console.log(res.status, await res.text()), (err) => console.log('failed', err.cause?.code ?? err.message));
+    `);
+
+    expect(asked.stdout.trim()).toBe('200 {"answered":true}');
+    expect(heard).toHaveLength(1);
+    expect(heard[0].headers['x-api-key']).toBe(key);
+    const everywhere = await run(`cat /proc/*/environ 2>/dev/null | tr '\\0' '\\n' | grep -c held-at-the-gateway; grep -rl held-at-the-gateway /task /tmp 2>/dev/null | wc -l`);
+    expect(everywhere.stdout.trim().split('\n').map(Number)).toEqual([0, 0]);
+    upstream.close();
+    reserved.release('done');
+    await lease.backend.letGo('gated', { keep: false, reason: 'done' });
+  }, 90_000);
+
+  /** All a script printed, from its log. */
+  const printed = (s: ReturnType<typeof session>['parent'], taskId: string) => s.taskLog(taskId, 1).flatMap((event) => (event.type === 'script_output' ? [event.text] : [])).join('');
+
+  const nothingLeft = async () => {
+    await vi.waitFor(() => expect(ours('container').filter((n) => !before.container.includes(n))).toEqual([]), { timeout: 30_000 });
+    await vi.waitFor(() => expect(ours('network').filter((n) => !before.network.includes(n))).toEqual([]), { timeout: 30_000 });
+  };
+
+  it('runs a script over what a container landed in a container too: none of that code runs on this host', async () => {
+    const root = repo();
+    const owned = join(tempDir(), 'owned-by-the-script');
+    const test = `uname -s\nid -u\npwd\ntouch ${owned} 2>/dev/null\necho written > from-the-script.txt\n`;
+    const tasks = [
+      createTask({ id: 'a', order: 1, title: 'Write the test', prompt: cue({ write: { 'test.sh': test }, summary: 'Wrote it.' }), assignedRunner: 'claude-code' }),
+      createTask({ id: 's', order: 2, title: 'Run the test', type: 'script', commands: [['sh', 'test.sh']], dependencies: ['a'], assignedRunner: 'claude-code' }),
+    ];
+    const env = session(root, tasks);
+
+    await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(env.parent.planTasks[0].status).toBe('completed'), { timeout: 60_000, interval: 100 });
+    // Its merge gate, as ever: a script runs over the checkout, so what it runs over must get there first.
+    expect(await env.parent.execute({ command: 'merge_all' }, { kind: 'user' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(env.parent.planTasks[1].status).not.toMatch(/approved|pending|in_progress/), { timeout: 60_000, interval: 100 });
+
+    expect(env.parent.planTasks[1]).toMatchObject({ status: 'completed', verdict: { outcome: 'pass' } });
+    expect(printed(env.parent, 's').trim().split('\n')).toEqual(['Linux', '1000', '/task/work']);
+    expect(existsSync(owned)).toBe(false);
+    expect(existsSync(join(root, 'from-the-script.txt'))).toBe(false);
+    expect(env.told.join()).toContain('committed');
+    await nothingLeft();
+    env.parent.destroy();
+  }, 120_000);
+
+  it('takes the exit status of a script in a container as its evidence', async () => {
+    const root = repo();
+    const tasks = [createTask({ id: 'f', order: 1, title: 'Fail', type: 'script', script: 'echo broke >&2; exit 3', assignedRunner: 'claude-code' })];
+    const env = session(root, tasks);
+
+    await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await settled(env.parent);
+
+    expect(env.parent.planTasks[0]).toMatchObject({ status: 'failed', verdict: { outcome: 'fail' } });
+    expect(printed(env.parent, 'f')).toContain('broke');
+    await nothingLeft();
+    env.parent.destroy();
+  }, 120_000);
+
+  it('ends a script in a container at Stop, and everything it started', async () => {
+    const root = repo();
+    const tasks = [createTask({ id: 'l', order: 1, title: 'Run long', type: 'script', script: 'sleep 300 & echo up; wait', assignedRunner: 'claude-code' })];
+    const env = session(root, tasks);
+
+    await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(printed(env.parent, 'l')).toContain('up'), { timeout: 60_000, interval: 100 });
+
+    await env.parent.execute({ command: 'stop_run' }, { kind: 'user' });
+
+    await nothingLeft();
+    env.parent.destroy();
+  }, 120_000);
+
+  it('holds a read-only script, as a child\'s sealed one is, to no network and no landing', async () => {
+    const root = repo();
+    const volumes = ours('volume');
+    const body = `${TRY_CONNECT(['1.1.1.1:443'])}; require('fs').writeFileSync('left-behind.txt', 'x')`;
+    const tasks = [createTask({ id: 'r', order: 1, title: 'Read only', type: 'script', readOnly: true, commands: [['node', '-e', body]], assignedRunner: 'claude-code' })];
+    const env = session(root, tasks);
+
+    await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await settled(env.parent);
+
+    expect(env.parent.planTasks[0]).toMatchObject({ status: 'completed', verdict: { outcome: 'pass' } });
+    expect(printed(env.parent, 'r')).toContain('1.1.1.1:443 ENETUNREACH');
+    expect(git(root, 'ls-tree', '-r', '--name-only', 'HEAD').split('\n')).toEqual(['README.md']);
+    await nothingLeft();
+    await vi.waitFor(() => expect(ours('volume').filter((n) => n.startsWith('ordewell-task-') && !volumes.includes(n))).toEqual([]), { timeout: 30_000 });
+    env.parent.destroy();
+  }, 120_000);
+
+  describe('a delegated child plan under containers (ADR-0055)', () => {
+    const delegated = (over: Partial<Task> = {}) => createTask({ id: 'd', order: 2, title: 'Delegated subtree', type: 'delegated', goal: 'Write a and b', budget: { tokens: 5_000_000 }, protectedPaths: ['tests/'], assignedRunner: 'claude-code', ...over });
+    const check = (body: string, over: Partial<Task> = {}) => createTask({ id: 'c', order: 3, title: 'Check the subtree', type: 'script', readOnly: true, commands: [['sh', '-c', body]], dependencies: ['d'], assignedRunner: 'claude-code', ...over });
+    const childTask = (id: string, order: number, spec: unknown, dependencies: string[] = []) => ({ id, order, title: `Write ${id}`, description: id, type: 'ai', sliceType: 'AFK', autonomy: 'AFK', dependencies, assignedRunner: 'claude-code', prompt: cue(spec) });
+    const landed = (root: string, env: ReturnType<typeof session>) => git(root, 'ls-tree', '-r', '--name-only', env.integration()).split('\n');
+
+    it('runs its tasks in containers, its subplanner here, and its check in a container over what landed', async () => {
+      const root = repo();
+      const main = git(root, 'rev-parse', 'main');
+      const tasks = [delegated({ order: 1 }), check('test -f a.txt && test -f b.txt && uname -s')];
+      const env = session(root, tasks, settingsOf(), { subplanner: [
+        SUBMIT([childTask('a', 1, { write: { 'a.txt': 'written by a\n' }, summary: 'Wrote a.' }), childTask('b', 2, { write: { 'b.txt': 'written by b\n' }, summary: 'Wrote b.' }, ['a'])]),
+        DONE,
+      ] });
+
+      await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+      await vi.waitFor(() => expect(env.parent.planTasks.map((task) => [task.id, task.status])).toEqual([['d', 'completed'], ['c', 'completed']]), { timeout: 90_000, interval: 200 });
+
+      expect(env.parent.planTasks[0].verdict).toMatchObject({ outcome: 'pass', reported: 'done' });
+      expect(landed(root, env)).toEqual(expect.arrayContaining(['a.txt', 'b.txt', 'where-i-ran.txt']));
+      expect(git(root, 'show', `${env.integration()}:where-i-ran.txt`)).toBe('Linux 1000 /task/home');
+      expect(printed(env.parent, 'c').trim()).toBe('Linux');
+      expect(git(root, 'rev-parse', 'main')).toBe(main);
+      await nothingLeft();
+      env.parent.destroy();
+    }, 180_000);
+
+    it('repairs its conflict in a container: this host has no `claude` for it to run', async () => {
+      const root = repo();
+      const tasks = [
+        createTask({ id: 's', order: 1, title: 'Sibling', prompt: cue({ write: { 'shared.txt': 'from the sibling\n' }, summary: 'Wrote it.' }), assignedRunner: 'claude-code' }),
+        delegated(),
+        check('grep -q delegated shared.txt'),
+      ];
+      const env = session(root, tasks, settingsOf(), { repairs: 1, subplanner: [
+        SUBMIT([childTask('a', 1, { delayMs: 2500, write: { 'shared.txt': 'from the delegated task\n' }, summary: 'Wrote it.' })]),
+        DONE,
+      ] });
+
+      await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+      await vi.waitFor(() => expect(env.parent.planTasks.map((task) => task.status)).toEqual(['completed', 'completed', 'completed']), { timeout: 120_000, interval: 200 });
+
+      expect(git(root, 'show', `${env.integration()}:shared.txt`)).toBe('from the delegated task');
+      expect(git(root, 'log', '--format=%s', env.integration()).split('\n').join()).toContain('Write a and b');
+      expect(landed(root, env)).toContain('fake-claude-output.txt');
+      await nothingLeft();
+      env.parent.destroy();
+    }, 180_000);
+  });
+
+  describe('what a session leaves in the engine (ADR-0059 L6)', () => {
+    const LOGIN = { image: IMAGE, memory: '512m', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } };
+    const leftBy = (volumes: readonly string[]) => ours('volume').filter((name) => !volumes.includes(name));
+    const pinsIn = (mirror: string) => docker('run', '--rm', '--init', '--pids-limit', '8192', '--memory', '256m', '--network', 'none', '-v', `${mirror}:/mirror:ro`, IMAGE, 'sh', '-c', 'for m in /mirror/*.git; do git -C "$m" for-each-ref refs/ordewell/pins; done').split('\n').filter(Boolean);
+    const failing = (id: string) => [createTask({ id, order: 1, title: 'Leave work', prompt: cue({ write: { 'partial.txt': 'half done\n' }, status: 'blocked', reason: 'stuck' }), assignedRunner: 'claude-code' })];
+
+    it('goes with a Clean up: its volumes, and a mirror and caches nothing else leans on', async () => {
+      const volumes = ours('volume');
+      const root = repo();
+      const env = session(root, failing('q'));
+      await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+      await settled(env.parent);
+      await vi.waitFor(() => expect(leftBy(volumes).filter((name) => name.startsWith('ordewell-task-'))).toHaveLength(1), { timeout: 30_000 });
+      expect(leftBy(volumes).some((name) => name.startsWith('ordewell-mirror-'))).toBe(true);
+      expect(leftBy(volumes).some((name) => name.startsWith('ordewell-cache-'))).toBe(true);
+
+      await env.parent.execute({ command: 'stop_run' }, { kind: 'user' });
+      await env.parent.cleanupRun();
+
+      expect(leftBy(volumes)).toEqual([]);
+      env.parent.destroy();
+    }, 120_000);
+
+    it('goes with a session delete, with no Session to ask, whatever a dead host left', async () => {
+      const volumes = ours('volume');
+      const root = repo();
+      const env = session(root, failing('z'));
+      await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+      await settled(env.parent);
+      await vi.waitFor(() => expect(leftBy(volumes).filter((name) => name.startsWith('ordewell-task-'))).toHaveLength(1), { timeout: 30_000 });
+      env.parent.destroy();
+      // What a host that died leaves: its network, which nothing took down.
+      const tree = `docker-e2e-${process.pid}-z`;
+      const stranded = `ordewell-stranded-${process.pid}-net`;
+      docker('network', 'create', '--internal', '--label', `ordewell.tree=${tree}`, stranded);
+
+      await reclaimContainers(tree, LOGIN);
+
+      expect(leftBy(volumes)).toEqual([]);
+      expect(ours('network')).not.toContain(stranded);
+    }, 120_000);
+
+    it('leaves a mirror a session of the same project still pins, and takes it with the last', async () => {
+      const volumes = ours('volume');
+      const root = repo();
+      const first = session(root, failing('p1'));
+      await first.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+      await settled(first.parent);
+      const second = session(root, failing('p2'));
+      await second.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+      await settled(second.parent);
+      const [mirror] = leftBy(volumes).filter((name) => name.startsWith('ordewell-mirror-'));
+      expect(pinsIn(mirror).length).toBeGreaterThan(2);
+      first.parent.destroy();
+      second.parent.destroy();
+
+      await reclaimContainers(`docker-e2e-${process.pid}-p1`, LOGIN);
+
+      expect(ours('volume')).toContain(mirror);
+      expect(pinsIn(mirror)).toHaveLength(2);
+
+      await reclaimContainers(`docker-e2e-${process.pid}-p2`, LOGIN);
+
+      expect(leftBy(volumes)).toEqual([]);
+    }, 120_000);
+  });
+
+  it('reads a board pin\'s file in the container, as git would name it (ADR-0057 R9)', async () => {
+    const lease = leaseOver('pinned', [worktreeOf(repo(), 'ordewell/pinned')]);
+    const { opened, run, lease: reserved } = await lease.open();
+    await run('printf "in the box\\n" > made-here.txt; mkfifo a-pipe; mkdir a-folder');
+    const blob = opened.placement!.blob;
+
+    expect(await blob('made-here.txt')).toBe(execFileSync('git', ['hash-object', '--stdin'], { input: 'in the box\n', encoding: 'utf8' }).trim());
+    expect(await blob('README.md')).toBe(execFileSync('git', ['hash-object', '--stdin'], { input: 'hello\n', encoding: 'utf8' }).trim());
+    expect(await blob('no-such-file')).toBeUndefined();
+    expect(await blob('a-pipe')).toBeUndefined();
+    expect(await blob('a-folder')).toBeUndefined();
+    reserved.release('done');
+    await lease.backend.letGo('pinned', { keep: false, reason: 'done' });
+  }, 90_000);
 
   it('reports a process killed at the memory limit as `oom`', async () => {
     const lease = leaseOver('oom', [worktreeOf(repo(), 'ordewell/oom')], '128m');
@@ -400,8 +763,8 @@ describe.skipIf(skip)('a task in a real container', () => {
     const env = session(root, tasks, parseContainerSettings({ image: HARNESS_IMAGE, memory: '2g', login: { kind: 'own-sign-in' } }));
 
     await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
-    await vi.waitFor(() => expect(ours('container').filter((n) => !before.container.includes(n))).toHaveLength(1), { timeout: 60_000, interval: 100 });
-    const [box] = ours('container').filter((n) => !before.container.includes(n));
+    await vi.waitFor(() => expect(attempts()).toHaveLength(1), { timeout: 60_000, interval: 100 });
+    const [box] = attempts();
     const memory = (file: string) => Number(spawnSync('docker', ['exec', box, 'cat', `/sys/fs/cgroup/${file}`], { encoding: 'utf8' }).stdout.trim());
 
     // Attached: only then is it sent a turn, and without a login that turn ends it waiting on the user.
@@ -428,6 +791,82 @@ describe.skipIf(skip)('a task in a real container', () => {
     }
     await lease.backend.letGo('timing', { keep: false, reason: 'done' });
     console.log(`[measure] a lease's whole open, ms: ${[...opens].sort((a, b) => a - b).join(' ')}`);
+  }, 240_000);
+
+  /*
+   * The real binary through a whole model turn, with nothing faked but the model:
+   * a Messages API on this host's loopback that asks for a file to be written, then
+   * for `task_complete`. So the gateway and the proxy variables meet the client they
+   * are for. What it says of memory is one small turn, not a harness at real work.
+   */
+  function fakeModel() {
+    const heard: { path: string; key: unknown; authorization: unknown; tools: string[] }[] = [];
+    const event = (name: string, data: unknown) => `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
+    const toolUse = (id: string, name: string, input: unknown) => [
+      event('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id, name, input: {} } }),
+      event('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) } }),
+      event('content_block_stop', { type: 'content_block_stop', index: 0 }),
+      event('message_delta', { type: 'message_delta', delta: { stop_reason: 'tool_use', stop_sequence: null }, usage: { output_tokens: 20 } }),
+    ].join('');
+    const text = (words: string) => [
+      event('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }),
+      event('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: words } }),
+      event('content_block_stop', { type: 'content_block_stop', index: 0 }),
+      event('message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 5 } }),
+    ].join('');
+    const server = createHttpServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', () => {
+        const asked = (body ? JSON.parse(body) : {}) as { tools?: { name: string }[]; messages?: { content: unknown }[]; model?: string };
+        const tools = (asked.tools ?? []).map(({ name }) => name);
+        heard.push({ path: req.url ?? '', key: req.headers['x-api-key'], authorization: req.headers.authorization, tools });
+        if (!req.url?.startsWith('/v1/messages') || req.url.includes('count_tokens')) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(req.url?.includes('count_tokens') ? { input_tokens: 10 } : { data: [] }));
+          return;
+        }
+        const said = JSON.stringify(asked.messages ?? []);
+        const complete = tools.find((name) => name.endsWith('task_complete'));
+        const reply = !complete ? text('ok')
+          : !said.includes('from-the-model.txt') ? toolUse('toolu_write', 'Write', { file_path: '/task/work/from-the-model.txt', content: 'written by a model turn\n' })
+            : !said.includes('toolu_done') ? toolUse('toolu_done', complete, { status: 'done', summary: 'Wrote it through the gateway.', commit: { subject: 'Write a file' } })
+              : text('Done.');
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        // Long enough for what watches its memory to read it while it works.
+        setTimeout(() => res.end(event('message_start', { type: 'message_start', message: { id: 'msg_1', type: 'message', role: 'assistant', model: asked.model ?? 'x', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 } } }) + reply + event('message_stop', { type: 'message_stop' })), 1000);
+      });
+    });
+    return { heard, server, listening: new Promise<string>((done) => { server.listen(0, '127.0.0.1', () => done(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)); }) };
+  }
+
+  it.skipIf(!HARNESS_IMAGE)('takes the real harness through a model turn by the gateway, with the key on this host', async () => {
+    const model = fakeModel();
+    const url = await model.listening;
+    const key = 'sk-ant-api03-a-real-turn-through-the-gateway';
+    const root = repo();
+    const tasks = [createTask({ id: 'turn', order: 1, title: 'A real turn', prompt: 'Write the file.', assignedRunner: 'claude-code' })];
+    const env = session(root, tasks, parseContainerSettings({ image: HARNESS_IMAGE, memory: '2g', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL'] }, required: ['fs.hostHidden', 'fs.writeScope', 'limits.memory', 'net.allowlist', 'net.noMetadata', 'cred.unreadable'] }), { key: { ANTHROPIC_API_KEY: key, ANTHROPIC_BASE_URL: url } });
+
+    await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(attempts()).toHaveLength(1), { timeout: 60_000, interval: 100 });
+    const [box] = attempts();
+    let peak = 0;
+    const watching = setInterval(() => {
+      execFile('docker', ['exec', box, 'cat', '/sys/fs/cgroup/memory.peak'], { encoding: 'utf8' }, (err, stdout) => { if (!err) peak = Math.max(peak, Number(stdout.trim())); });
+    }, 300);
+    await vi.waitFor(() => expect(env.parent.planTasks[0].status).not.toMatch(/approved|pending|in_progress/), { timeout: 150_000, interval: 200 }).finally(() => clearInterval(watching));
+
+    console.log(`[measure] one model turn through the gateway: cgroup peak ${Math.round(peak / 1024 ** 2)} MiB, ${model.heard.length} requests: ${[...new Set(model.heard.map(({ path }) => path))].join(' ')}`);
+    expect(env.parent.planTasks[0], JSON.stringify(env.parent.planTasks[0].outputSummary)).toMatchObject({ status: 'completed', verdict: { outcome: 'pass', reported: 'done' } });
+    expect(git(root, 'show', `${env.integration()}:from-the-model.txt`)).toBe('written by a model turn');
+    expect(model.heard.length).toBeGreaterThan(0);
+    for (const { key: sent, authorization } of model.heard) {
+      expect(sent).toBe(key);
+      expect(authorization).toBeUndefined();
+    }
+    model.server.close();
+    env.parent.destroy();
   }, 240_000);
 
   it('cannot reach the mirror for writing, or the host: the guarantees hold against a real process', async () => {

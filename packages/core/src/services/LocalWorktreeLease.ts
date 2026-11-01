@@ -1,5 +1,5 @@
 import type { IsolationRunController } from './IsolationRunController';
-import { GUARANTEES, refuseUnproven, type ExecutionBackend, type GuaranteeReport, type LeaseRecord, type LeaseRepo, type LeaseRequest, type LeaseResult, type LeaseSessionState, type LeaseSpec, type OpenLease, type ReservedLease } from './executionLease';
+import { CHECKOUT_BRANCH, GUARANTEES, refuseUnproven, type ExecutionBackend, type GuaranteeReport, type LeaseRecord, type LeaseRepo, type LeaseRequest, type LeaseResult, type LeaseSessionState, type LeaseSpec, type OpenLease, type ReservedLease } from './executionLease';
 import type { PoolNode, SlotPool } from './SlotPool';
 
 export interface LocalWorktreeLeaseDeps {
@@ -78,6 +78,11 @@ export class LocalWorktreeLease implements ExecutionBackend {
       const entry = record.repos[repo.path];
       return entry ? [{ path: repo.path, root: repo.root, worktree: entry.worktree, branch: record.branch, integrationBranch: repo.integrationBranch, linked: entry.linked }] : [];
     });
+  }
+
+  /** A workspace root's repositories, as a run knows them, for a backend that copies what they have committed (ADR-0059 L6). */
+  checkoutRepos(): readonly LeaseRepo[] {
+    return (this.deps.runs.current?.repos ?? []).map(({ path, root }) => ({ path, root, worktree: root, branch: CHECKOUT_BRANCH, integrationBranch: 'HEAD', linked: [] }));
   }
 
   /** The run's record says where the work is; the runner's session stays where the runner keeps it, on this machine (L2). */

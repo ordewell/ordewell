@@ -99,7 +99,7 @@ export function sessionsRoute(pool: OrchestratorPool) {
     const held = pool.hasSession(id);
     let removed: boolean;
     try {
-      removed = await removeSession(id, ws, () => pool.stopTree(id), () => pool.destroy(id, { notifyClients: true }));
+      removed = await removeSession(id, ws, () => pool.stopTree(id), () => pool.destroy(id, { notifyClients: true }), () => pool.reclaim(id));
     } catch (err) {
       return c.json({ ok: false, message: err instanceof Error ? err.message : String(err) } satisfies OkResponse);
     }
