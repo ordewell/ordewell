@@ -6,7 +6,7 @@ import { applyTaskOps, opRefusalText, type OpRef, type TaskOp } from './TaskOps'
 import { resolveAssignments, type AssignmentAdjustment, type AssignmentCatalog } from './TaskAssignment';
 import { checkOpSkills, checkPlanSkills, type SkillCheck, type SkillLookup } from './taskSkills';
 import { delegatedRequest, mandateRefusalText, missingGrant, narrow, type Grant, type Mandate, type NodeAuthority } from './Mandate';
-import { planSize } from '../models/Delegation';
+import { planSize, scopeOverlaps } from '../models/Delegation';
 import { scriptBodyOf } from '../models/ScriptTask';
 import { effectRuleFor } from './effectAllowlist';
 
@@ -205,7 +205,7 @@ export class PlanChangeCheck {
       ok: true,
       tasks: resolved.tasks,
       adjustments: [...applied.adjustments ?? [], ...resolved.adjustments],
-      warnings: skills.warnings,
+      warnings: [...skills.warnings, ...broughtOverlaps(before, resolved.tasks)],
       summary: applied.summary,
       handles: applied.handles ?? new Map(),
     };
@@ -268,6 +268,12 @@ export class PlanChangeCheck {
  * boundary, so all of them do but a body the rules of every level cover, in a
  * child that holds `effect`. A script body is covered by nothing (ADR-0035).
  */
+/** The overlaps an edit brought (ADR-0057 R6): what stood before it was answered then. */
+function broughtOverlaps(before: readonly Task[], after: readonly Task[]): string[] {
+  const standing = new Set(scopeOverlaps(before));
+  return scopeOverlaps(after).filter((said) => !standing.has(said));
+}
+
 function runsSealed({ grants, effectRules }: Mandate, task: Pick<Task, 'commands' | 'script' | 'timeoutMs'>): boolean {
   const body = scriptBodyOf({ ...task, type: 'script' });
   return !grants.has('effect') || !body || effectRules.length === 0 || !effectRules.every((rules) => effectRuleFor(rules, body));
