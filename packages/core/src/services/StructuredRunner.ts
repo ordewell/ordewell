@@ -226,8 +226,8 @@ interface SessionLaunch {
   interruptGraceMs: number;
   /** Where this attempt's task tools are served (ADR-0022), and a read-only attempt's shell and web reads (ADR-0046) and patch (ADR-0050). */
   tools: { server: OrdewellMcpServer; scope: TaskTokenScope; shell?: TaskShell; savePatch?: (signal: AbortSignal) => Promise<McpToolReply>; webReads?: TaskWebReads };
-  checkHandoff: (completion: TaskCompleteArgs) => HandoffCheck<TaskCompleteArgs>;
-  readTask?: (args: ReadTaskArgs) => McpToolReply;
+  checkHandoff: (completion: TaskCompleteArgs) => HandoffCheck<TaskCompleteArgs> | Promise<HandoffCheck<TaskCompleteArgs>>;
+  readTask?: (args: ReadTaskArgs) => McpToolReply | Promise<McpToolReply>;
   applyPatch?: (args: ApplyPatchArgs) => Promise<McpToolReply>;
   onNotice?: (message: string) => void;
   onAttaching?: (spawn: 1 | 2) => void;
@@ -335,7 +335,7 @@ export class StructuredSession extends AbstractRunnerSession {
       create: () => this.launch.createAdapter(this.launch.runner, this.launch.deps),
       issueToken: () => server.issueTaskToken(scope, {
         taskComplete: async (report) => {
-          const checked = this.launch.checkHandoff(report);
+          const checked = await this.launch.checkHandoff(report);
           if (!checked.ok) return { text: checked.refusal, isError: true };
           this.completionReport = checked.handoff;
           // The runner ends its turn on this reply. One that keeps it open has

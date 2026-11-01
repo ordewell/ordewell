@@ -104,18 +104,21 @@ export interface TreeOptions {
   runner?: IRunner;
   tasks?: Task[];
   settings?: Partial<ReturnType<SessionDeps['settings']>>;
+  /** Turns of the subplanner of a task further down, by that task's id: `turns` are the first level's. */
+  below?: Record<string, Turn[]>;
 }
 
-export function tree(turns: Turn[], { runner = writingRunner({ a: ['a.txt'], b: ['b.txt'] }), tasks = [delegated(), check()], settings = {} }: TreeOptions = {}): Tree {
+export function tree(turns: Turn[], { runner = writingRunner({ a: ['a.txt'], b: ['b.txt'] }), tasks = [delegated(), check()], settings = {}, below = {} }: TreeOptions = {}): Tree {
   const root = repo();
   const planner = scriptedPlanner(turns);
+  const lower = Object.fromEntries(Object.entries(below).map(([id, script]) => [id, scriptedPlanner(script)]));
   const isolation = createWorktreeIsolation({ resolvePath: async () => process.env.PATH ?? '', config: fakeConfig({ worktreeIsolation: true }) });
   const parent = makeSession({
     runner, isolation, workspaceRoot: () => root, saveSession, openTaskLog, leaseHost: new LeaseHost(), sessionId: 'session-root',
     config: fakeConfig({ maxParallelSessions: 3 }),
     settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: 5_000_000 }, ...settings }),
     delegationOffered: true,
-    childDeps: () => ({ aiService: { reset: vi.fn(), ...planner.service } as unknown as IAiService, fsAdapter: { ...fakeFs(), getWorkspaceRoot: () => root } }),
+    childDeps: (task) => ({ aiService: { reset: vi.fn(), ...(lower[task.id] ?? planner).service } as unknown as IAiService, fsAdapter: { ...fakeFs(), getWorkspaceRoot: () => root } }),
   });
   const plan = { tasks, runners: ['claude-code'], status: 'approved', generatedAt: '2026-11-01T10:00:00.000Z' } as unknown as LegacyPlanState;
   parent.loadPlan(plan, 'the root goal', root, { sessionId: 'session-root' });

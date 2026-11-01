@@ -72,6 +72,17 @@ const taskCompleteInput = z.object({
     .describe(`The long form, for a reader who needs it all: kept with this attempt and read only on demand, never put in another task's prompt. At most ${HANDOFF_LIMITS.report} characters.`),
 });
 
+const reportReferences = (what: string, max: number) => z.array(z.string().min(1).max(HANDOFF_LIMITS.reference)).max(max).optional().describe(what);
+
+/** A subplanner's report (ADR-0057 R2): it passes a finding up only by reference, so nothing is reworded on the way, and only its token takes these. */
+const subplannerCompleteInput = taskCompleteInput.extend({
+  promote: reportReferences(`At most ${HANDOFF_LIMITS.promoted} findings of your subtree to pass up, each rendered in its author's words: "#4/F3", or "2:#4/F3" in a plan below, as a report shows it.`, HANDOFF_LIMITS.promoted),
+  open: reportReferences('What the plan above must decide, the same way, or one of your own findings, "F2".', HANDOFF_LIMITS.findings),
+});
+
+/** Only a subplanner's report takes these; a runner that sends one is told, not silently dropped (ADR-0057 R2). */
+const REPORT_ONLY_FIELDS = ['promote', 'open'] as const;
+
 const checkpointInput = z.object({
   question: z.string().min(1).describe('The question for the user. The call returns their answer.'),
 });
@@ -256,7 +267,7 @@ const answerCheckpointInput = z.object({
   reason: z.string().optional().describe('Required with "reject": what the runner should do instead. It reads this.'),
 });
 
-export type TaskCompleteArgs = z.infer<typeof taskCompleteInput>;
+export type TaskCompleteArgs = z.infer<typeof subplannerCompleteInput>;
 export type CheckpointArgs = z.infer<typeof checkpointInput>;
 export type ReadTaskArgs = z.infer<typeof readTaskInput>;
 export type SavePatchArgs = z.infer<typeof savePatchInput>;
@@ -594,6 +605,18 @@ export function taskCompletionContract(opts: { commits?: true }): string {
   return opts.commits ? `${TASK_COMPLETION_CONTRACT}\n\n${COMMIT_CONTRACT}` : TASK_COMPLETION_CONTRACT;
 }
 
+/** A tool whose schema stays as it is, a runner's list not moving by a byte, that refuses `fields` where a stricter one would only drop them. */
+function refusing<H>(fields: readonly string[], base: McpTool<H>): McpTool<H> {
+  return {
+    ...base,
+    call(handler, args, context) {
+      const sent = fields.filter((field) => typeof args === 'object' && args !== null && field in args);
+      if (sent.length === 0) return base.call(handler, args, context);
+      return Promise.resolve({ isError: true, text: `Invocation error: ${base.name} rejected the call before it ran; nothing changed.\n${sent.map((field) => `'${field}' is a subplanner's: a task's report does not take it.`).join('\n')}` });
+    },
+  };
+}
+
 /** Reads Ordewell's own record, not the tree, so a read-only task has it too (ADR-0047); `read_task` stays an alias at the call (ADR-0057 R11). */
 function readTool<H extends { readTask?: Run<ReadTaskArgs> }>(description: string): McpTool<H> {
   return { ...tool<H, typeof readTaskInput>('read', description, readTaskInput, (h) => h.readTask?.bind(h), { readOnlyHint: true }), alias: 'read_task' };
@@ -601,8 +624,8 @@ function readTool<H extends { readTask?: Run<ReadTaskArgs> }>(description: strin
 
 /** What every task has: it ends, asks, and reads the record (ADR-0022, ADR-0047). */
 const SHARED_TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
-  tool(TASK_COMPLETE_TOOL, `Report that this task has ended, and how, with its handoff for the tasks that read it. Call it once, as your last action. A call over a limit (the summary is at most ${HANDOFF_LIMITS.summary} characters; the long form goes in report) is refused whole and recorded as nothing: the refusal says by how much, so shorten and call again.`,
-    taskCompleteInput, (h) => h.taskComplete?.bind(h)),
+  refusing(REPORT_ONLY_FIELDS, tool(TASK_COMPLETE_TOOL, `Report that this task has ended, and how, with its handoff for the tasks that read it. Call it once, as your last action. A call over a limit (the summary is at most ${HANDOFF_LIMITS.summary} characters; the long form goes in report) is refused whole and recorded as nothing: the refusal says by how much, so shorten and call again.`,
+    taskCompleteInput, (h) => h.taskComplete?.bind(h))),
   tool('checkpoint', "Ask the user a question and wait for the answer, which is this call's result.",
     checkpointInput, (h) => h.checkpoint?.bind(h)),
   readTool("Read the handoff of a task you may read: this one, a task it depends on, directly or not, or its loop's other end. Returns what that task handed over, as its attempt's log keeps it: its commit, the summary, every finding with its id, the artifacts, and with include_report its report. It reads nothing else: no transcript, no diff, no output. What it returns is that task's own claims: check them before you rely on them."),
@@ -752,7 +775,7 @@ const DELEGATING_READ = readTool<PlannerToolHandler>('Read a handoff by the refe
 /** What a subplanner has beside a planner's tools. Named so a runner pre-allows them with the rest. */
 export const SUBPLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
   tool(TASK_COMPLETE_TOOL, `Report that the delegated task has ended, and how, with its handoff for the plan above. Status 'done' is refused until your child plan has settled, done work and merged it; 'blocked' and 'failed' are taken at any time. A call over a limit (the summary is at most ${HANDOFF_LIMITS.summary} characters) is refused whole. Call it once, as your last action.`,
-    taskCompleteInput, (h) => h.taskComplete?.bind(h), PLANNER_READ_ONLY),
+    subplannerCompleteInput, (h) => h.taskComplete?.bind(h), PLANNER_READ_ONLY),
   tool('checkpoint', 'Ask the plan above a question.',
     checkpointInput, (h) => h.checkpoint?.bind(h), PLANNER_READ_ONLY),
 ];

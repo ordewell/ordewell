@@ -73,7 +73,7 @@ describe('a task that depends on a research task (ADR-0037, ADR-0047)', () => {
       expect(prompt).not.toContain('RESEARCH_REPORT');
 
       const read = promptOf('f')!.readTask!;
-      const handoff = read({ task: 'r', include_report: true }).text;
+      const handoff = (await read({ task: 'r', include_report: true })).text;
       expect(handoff).toContain('RESEARCH_SUMMARY');
       expect(handoff).toContain('RESEARCH_REPORT: the failing test and its output.');
 
@@ -81,7 +81,7 @@ describe('a task that depends on a research task (ADR-0037, ADR-0047)', () => {
       await vi.waitFor(() => expect(promptOf('d')).toBeDefined());
       // Only direct dependencies are in the prompt; the research is a transitive one, read on demand.
       expect(promptOf('d')!.prompt).not.toContain('RESEARCH_SUMMARY');
-      expect(promptOf('d')!.readTask!({ task: 'r' }).text).toContain('RESEARCH_SUMMARY');
+      expect((await promptOf('d')!.readTask!({ task: 'r' })).text).toContain('RESEARCH_SUMMARY');
     } finally {
       session.destroy();
       fs.rmSync(root, { recursive: true, force: true });

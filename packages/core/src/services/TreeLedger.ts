@@ -1,4 +1,4 @@
-import { childPath, parentPath, ROOT_NODE, type NodePath, type TreeFact } from '../models/TreeEvent';
+import { childPath, isWithin, parentPath, ROOT_NODE, type NodePath, type TreeFact } from '../models/TreeEvent';
 import { spentTokens, type UsageRecord } from '../models/Usage';
 import type { EventStore } from './eventStore';
 import { narrow, type Mandate, type MandateRefusal, type MandateRequest } from './Mandate';
@@ -269,6 +269,16 @@ export class TreeLedger {
         return () => { listeners.delete(listener); };
       },
     };
+  }
+
+  /** Every node ever opened under `path`, closed ones too, nearest first: a reference outlives the child it names (ADR-0057 R1). */
+  below(path: NodePath): TreeNode[] {
+    return [...this.tree.values()].filter((node) => node.path !== path && isWithin(node.path, path));
+  }
+
+  /** What `path` and everything under it spent: a closed child is in its parent's `spent`, an open one still its own (M5). */
+  subtreeSpent(path: NodePath): number {
+    return this.at(path).spent + this.openChildren(path).reduce((sum, child) => sum + this.subtreeSpent(child.path), 0);
   }
 
   /** The open node `sessionId` is, if any: what a reopen finds. */

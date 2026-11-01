@@ -31,9 +31,10 @@ import { supportsTaskMode } from './harness/connectors';
 import { quotedList } from '../utils/quotedList';
 import { scriptBodyOf } from '../models/ScriptTask';
 import { SCRIPT_RUNNER } from './ScriptRunner';
-import { checkHandoff, withPatch, type HandoffPatch, type StoredHandoff } from '../models/Handoff';
+import { checkHandoff, readableTaskIds, withPatch, type HandoffPatch, type StoredHandoff } from '../models/Handoff';
 import { applySavedPatch, capturePatch, patchArtifact, patchReply } from './PatchCapture';
 import { handoffLogs, readTask, type TaskLogReader } from './readTask';
+import type { Subtree } from './Subtree';
 import { defaultExecFile, type GitInvoker } from './gitExec';
 import { augmentedPath } from '../utils/shellPath';
 import type { ApplyPatchArgs, McpToolReply } from './mcp/tools';
@@ -316,6 +317,10 @@ export interface AttemptsDeps {
   recordHandoff: (sessionId: string | undefined, taskId: string, handoff: StoredHandoff) => void;
   /** The session's saved task logs, which a task's `read` reads handoffs from (ADR-0047). */
   taskLog: TaskLogReader;
+  /** The plans below this one (ADR-0057 R1); absent or null with nothing delegated. */
+  subtree?: () => Promise<Subtree | null>;
+  /** This plan's node in its tree, what a reference is pinned under. Absent, the root's. */
+  planNode?: () => string;
   /** What starting a research task owes the planner (ADR-0037 R3). */
   research?: Pick<ResearchTasks, 'started'>;
   host: AttemptsHost;
@@ -815,7 +820,8 @@ export class Attempts {
     session.onEvent((event) => {
       if (event.type !== 'usage' || attempt.planScope !== this.planScope || (this.live.get(task.id) !== attempt && !attempt.runnerStopped)) return;
       this.deps.store.recordAttemptUsage(task.id, attempt.attempt, event.record, new Date().toISOString());
-      this.deps.budget?.spent(event.record, { taskId: task.id, attempt: attempt.attempt });
+      // A delegated task's usage rolled up from its child, whose node was charged as it arrived (ADR-0055 D20, ADR-0056 M5).
+      if (task.type !== 'delegated') this.deps.budget?.spent(event.record, { taskId: task.id, attempt: attempt.attempt });
       this.host.emit('onUsageChanged');
     });
     session.onExit(() => this.woundDown(attempt, session));
@@ -952,8 +958,11 @@ export class Attempts {
       ...(attempt.skills.length > 0 ? { skills: attempt.skills } : {}),
       ...(shell ? { shell } : {}),
       ...(writesCommit(kind) ? { commits: true } : {}),
-      checkHandoff: (completion) => checkHandoff(completion, task.id, store.planTasks, { attempt: attempt.attempt, logs: handoffLogs(this.deps.taskLog) }),
-      readTask: (args) => readTask(args, task.id, store.planTasks, this.deps.taskLog),
+      checkHandoff: async (completion) => {
+        const below = await this.reachOf(task.id);
+        return checkHandoff(completion, task.id, store.planTasks, { attempt: attempt.attempt, logs: handoffLogs(this.deps.taskLog), ...(this.deps.planNode ? { node: this.deps.planNode() } : {}), ...(below ? { below: below.below } : {}) });
+      },
+      readTask: async (args) => readTask(args, task.id, store.planTasks, this.deps.taskLog, await this.reachOf(task.id)),
       ...(shell ? { savePatch: (signal: AbortSignal) => this.savePatch(task, attempt, signal) } : {}),
       ...(web ? { webReads: web } : {}),
       applyPatch: (args) => this.applyPatch(task, attempt, args),
@@ -966,6 +975,12 @@ export class Attempts {
         this.host.emit('onTaskChanged');
       },
     });
+  }
+
+  /** What a task may read below its plan: the subtree of each delegated task its readable set holds (ADR-0057 R1). */
+  private async reachOf(taskId: string): Promise<Subtree | null> {
+    const subtree = await this.deps.subtree?.();
+    return subtree?.reachedBy(readableTaskIds(this.deps.store.planTasks, taskId)) ?? null;
   }
 
   /**
