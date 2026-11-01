@@ -95,7 +95,7 @@ function runConfirm(
   if (overlay.action.kind === 'save-settings') return answerSaveSettings(state, overlay.action, true);
   if (overlay.action.kind === 'answer-escalation') return confirmedAnswer(state, overlay.action.escalationId, overlay.action.option, overlay.action.note);
   if (overlay.action.kind === 'merge-run' || overlay.action.kind === 'discard-run') {
-    return confirmedHandoff(state, overlay.action.kind);
+    return confirmedHandoff(state, overlay.action.kind, overlay.action.kind === 'merge-run' && overlay.action.pastChecks === true);
   }
   if (overlay.action.kind === 'init-workspace') {
     return step({ ...closed, planner: 'planning' }, [{ type: 'startConversation', goal: overlay.action.goal, allowInit: true }]);

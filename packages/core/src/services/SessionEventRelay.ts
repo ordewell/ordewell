@@ -15,6 +15,7 @@ import { surfaceStep } from '../conversation/records';
 import { planUsage, type UsageRecord } from '../models/Usage';
 import type { LegacyPlanState, ResearchProgress } from '../models/Task';
 import type { Escalation } from './escalations';
+import type { DelegatedRow } from '../models/Delegation';
 
 type PlannerCompactionMessage = Extract<SessionMessage, { type: 'planner_compaction' }>;
 
@@ -38,6 +39,8 @@ export interface SessionEventRelayDeps {
   awaitingApproval?: (taskId: string) => number;
   /** What a task's waiting checkpoint asks, whole. */
   checkpointQuestion?: (taskId: string) => string | undefined;
+  /** A delegated task's row (ADR-0055 D20). */
+  delegation?: (taskId: string) => DelegatedRow | undefined;
   /** The task waits for the user's approval to start (ADR-0035). */
   waitsForApproval?: (taskId: string) => boolean;
   /** What waits on a person now (ADR-0053). */
@@ -76,6 +79,7 @@ export class SessionEventRelay {
   private readonly awaitingApproval: (taskId: string) => number;
   private readonly checkpointQuestion: (taskId: string) => string | undefined;
   private readonly waitsForApproval: (taskId: string) => boolean;
+  private readonly delegation: (taskId: string) => DelegatedRow | undefined;
   private readonly escalations: () => Escalation[];
   private readonly escalationsSent: (list: readonly Escalation[]) => void;
   private statusHeld = false;
@@ -110,6 +114,7 @@ export class SessionEventRelay {
     this.awaitingApproval = deps.awaitingApproval ?? (() => 0);
     this.checkpointQuestion = deps.checkpointQuestion ?? (() => undefined);
     this.waitsForApproval = deps.waitsForApproval ?? (() => false);
+    this.delegation = deps.delegation ?? (() => undefined);
     this.escalations = deps.escalations ?? (() => []);
     this.escalationsSent = deps.escalationsSent ?? (() => {});
   }
@@ -147,6 +152,11 @@ export class SessionEventRelay {
       },
       onExecutionComplete: () => this.executionComplete(plan()),
     };
+  }
+
+  /** A delegated task's row moved: it can wait for the window, as usage does. */
+  rowsMoved(plan: LegacyPlanState | null): void {
+    this.statusCanWait(plan);
   }
 
   /** Send every task's status now, whatever was sent a moment ago: for what a surface must not wait for. */
@@ -272,6 +282,7 @@ export class SessionEventRelay {
         this.orchestrator.getCompletionReceipt(t.id),
         this.orchestrator.getToolsAttaching(t.id),
         this.orchestrator.loopStranded(t.id),
+        t.type === 'delegated' ? this.delegation(t.id) : undefined,
       )),
       ...(runMerge ? { runMerge } : {}),
       activity: this.orchestrator.activity,

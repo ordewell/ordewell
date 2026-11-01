@@ -55,7 +55,7 @@ export interface HostState {
   runnerNotice: { line: string; docs: string } | null;
   modelConfig: { orchestrator: string; orchestratorProvider?: string } | null;
   /** The user's autonomy level, run settings (ADR-0030) and parallel limit; null until the host sends them. */
-  runSettings: { autonomous: boolean; run: GlobalRunSettings; maxParallel: number } | null;
+  runSettings: { autonomous: boolean; run: GlobalRunSettings; maxParallel: number; delegationOffered?: boolean } | null;
   /** Bumped by each `/settings`: App opens the Settings panel at its Run block. */
   settingsRequest: number;
   modelOptions: ModelOption[];
@@ -76,7 +76,7 @@ export interface HostState {
   modelDiscoveryErrors: Record<string, string>;
   skills: { name: string; description: string; appliesTo?: 'planner' | 'task' }[];
   taskSkills: { name: string; description: string }[];
-  checkpoint: { taskId: string; taskTitle: string; summary: string; pausedAt: number } | null;
+  checkpoint: { taskId: string; taskTitle: string; summary: string; pausedAt: number; delegated: boolean } | null;
   /**
    * The checkpoint the user answered, by task id and question. A run view that
    * still carries the question — the status update clearing the task has not
@@ -503,7 +503,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
       return { ...state, isolationPreview: action.preview };
 
     case 'setRunSettings':
-      return { ...state, runSettings: { autonomous: action.autonomous, run: action.run, maxParallel: action.maxParallel } };
+      return { ...state, runSettings: { autonomous: action.autonomous, run: action.run, maxParallel: action.maxParallel, delegationOffered: action.delegationOffered === true } };
 
     case 'openSettings':
       return { ...state, settingsRequest: state.settingsRequest + 1 };
@@ -514,11 +514,11 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 }
 
 /** The task, if any, parked at a checkpoint: the whole question the panel draws. */
-function checkpointOf(view: RunView): { taskId: string; taskTitle: string; summary: string } | null {
-  const find = (tasks: readonly RunTask[]): { taskId: string; taskTitle: string; summary: string } | null => {
+function checkpointOf(view: RunView): { taskId: string; taskTitle: string; summary: string; delegated: boolean } | null {
+  const find = (tasks: readonly RunTask[]): { taskId: string; taskTitle: string; summary: string; delegated: boolean } | null => {
     for (const task of tasks) {
       if (task.status === 'awaiting_user' && task.awaitingReason === 'checkpoint' && task.checkpoint) {
-        return { taskId: task.id, taskTitle: task.title, summary: task.checkpoint };
+        return { taskId: task.id, taskTitle: task.title, summary: task.checkpoint, delegated: task.type === 'delegated' };
       }
       const nested = find(task.subtasks);
       if (nested) return nested;

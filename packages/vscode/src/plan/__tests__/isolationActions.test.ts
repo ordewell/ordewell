@@ -133,6 +133,39 @@ describe('handoff actions (ADR-0013)', () => {
     expect(session.execute).toHaveBeenCalledWith({ command: 'merge_all' }, { kind: 'user' });
   });
 
+  describe('past a check that has not passed (ADR-0055 D9)', () => {
+    const ASKED = 'This merges work no check has passed: #2 "Check the subtree" has not.';
+    const held = { ok: false, outcome: 'refused', message: ASKED, payload: { kind: 'merge_hold', checks: ['#2 "Check the subtree"'] } };
+    const merged = { ok: true, message: 'Merged.', payload: { kind: 'merge', result: { outcome: 'merged' } } };
+
+    it('asks again, naming the check, and sends the yes with the merge', async () => {
+      showWarningMessage.mockResolvedValueOnce('Merge').mockResolvedValueOnce('Merge anyway');
+      const { d, session } = deps();
+      session.execute.mockResolvedValueOnce(held).mockResolvedValueOnce(merged);
+      await handleIsolationAction('merge', undefined, d);
+
+      expect(showWarningMessage).toHaveBeenCalledTimes(2);
+      const [message, options, choice] = showWarningMessage.mock.calls[1] as unknown as [string, { modal?: boolean }, string];
+      expect(message).toContain(ASKED);
+      expect(options).toMatchObject({ modal: true });
+      expect(choice).toBe('Merge anyway');
+      expect(session.execute.mock.calls).toEqual([
+        [{ command: 'merge_all' }, { kind: 'user' }],
+        [{ command: 'merge_all', pastChecks: true }, { kind: 'user' }],
+      ]);
+    });
+
+    it('merges nothing when the second question is dismissed, and shows no error', async () => {
+      showWarningMessage.mockResolvedValueOnce('Merge').mockResolvedValueOnce(undefined);
+      const { d, session, chatProvider } = deps();
+      session.execute.mockResolvedValueOnce(held);
+      await handleIsolationAction('merge', undefined, d);
+
+      expect(session.execute).toHaveBeenCalledTimes(1);
+      expect(chatProvider.showError).not.toHaveBeenCalled();
+    });
+  });
+
   const handoffOn = (...repos: [string, string | undefined][]) => ({
     tasks: {},
     handoff: {

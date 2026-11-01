@@ -26,7 +26,7 @@ import { NodeBoard } from './Board';
 import { ScopeLines } from './ScopeLines';
 import { isBoardRef } from '../models/Board';
 import { DELEGATION_OFFERED } from './runSettingsText';
-import { checkWords, checksDelegatedTask } from '../models/Delegation';
+import { checkWords, checksDelegatedTask, type DelegatedRow } from '../models/Delegation';
 import type { SlotPool } from './SlotPool';
 import type { OpenLease, ReservedLease } from './executionLease';
 import { PlanStore } from './PlanStore';
@@ -460,6 +460,7 @@ export function createSession(deps: SessionDeps): Session {
     changedPaths: (taskId) => session.changedPaths(taskId),
     stopped: () => session.underStop,
     passUp: (record) => deps.subplanner?.usage(record),
+    moved: () => events.rowsMoved(session.planState),
   };
   const childPlans = new ChildPlanRunner(childHost);
   const taskLogs: TaskLogRecorder = new TaskLogRecorder({
@@ -576,6 +577,7 @@ export function createSession(deps: SessionDeps): Session {
     awaitingApproval: (taskId) => runnerApprovals.waiting(taskId),
     checkpointQuestion: (taskId) => orchestrator.getCheckpointQuestion(taskId),
     waitsForApproval: (taskId): boolean => session.waitsForApproval(taskId),
+    delegation: (taskId) => session.delegatedRow(taskId),
     escalations: (): Escalation[] => session.escalations(),
     escalationsSent: (list) => escalationNotifier.changed(list),
   });
@@ -753,7 +755,7 @@ export interface SessionParts {
   subplanner?: SubplannerLink;
   brief?: SubplannerBrief;
   delegationOffered: boolean;
-  childPlans: Pick<ChildPlanRunner, 'stopEvery' | 'activeCount'>;
+  childPlans: Pick<ChildPlanRunner, 'stopEvery' | 'activeCount' | 'progressOf'>;
   childSession: (spec: ChildSpec) => Session;
 }
 
@@ -1781,6 +1783,23 @@ export class Session {
   async raiseChild(taskId: string, tokens: number): Promise<string | null> {
     const node = (await this.currentTree()).nodeOf(this.runs.childSession(taskId) ?? '');
     return node ? node.tree.raise(node.path, tokens) : 'That task has no child to raise.';
+  }
+
+  /** A delegated task's row (ADR-0055 D20), read afresh each time a status goes out: nothing of it is kept. */
+  delegatedRow(taskId: string): DelegatedRow | undefined {
+    const task = this.store.get(taskId);
+    if (task?.type !== 'delegated') return undefined;
+    const tasks = this.childPlans.progressOf(taskId);
+    const budget = task.budget?.tokens;
+    const tree = this.tree;
+    const open = tree?.nodeOf(this.runs.childSession(taskId) ?? '');
+    const spent = tree ? open ? tree.taskSpent(open.path) : tree.spentOn(this.nodePath, taskId) : 0;
+    const row: DelegatedRow = {
+      ...(tasks ? { tasks } : {}),
+      ...(budget !== undefined ? { tokens: { budget, left: Math.max(0, budget - spent) } } : {}),
+      ...(this.orchestrator.windingDown(taskId) ? { stopping: true as const } : {}),
+    };
+    return Object.keys(row).length > 0 ? row : undefined;
   }
 
   /** The child in `taskId` confirmed closed: what it did not spend comes back here (M5). */

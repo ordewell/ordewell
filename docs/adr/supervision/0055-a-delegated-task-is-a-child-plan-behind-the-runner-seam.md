@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0009", "0013", "0015", "0018", "0020", "0022", "0029", "0030", "0035", "0045", "0046", "0049", "0054"]
-note: "Settles #33. Built: D1 to D19 and D21, so a child plan runs end to end behind the build's switch, asks up a level, stops as a subtree and comes back on a Continue, its conflicts and merges with it. Not built: a subplanner's native resume, so a reopened one replays its Model context. D20's minimum is built: one row and its usage, a log of what its child's tasks become; a tree view, the row's live counts and D16's stopping row are later."
+note: "Settles #33. Built: D1 to D19 and D21, so a child plan runs end to end behind the build's switch, asks up a level, stops as a subtree and comes back on a Continue, its conflicts and merges with it. Not built: a subplanner's native resume, so a reopened one replays its Model context. D20 is built for the TUI and VS Code: a row with its goal, budget left and live counts, D16's stopping row, a log of what its child's tasks become, and a report's open and promoted findings; a tree view is later."
 ---
 
 # 0055 — A delegated task is a child plan behind the runner seam
@@ -248,8 +248,10 @@ the child cannot reach follows it in the parent's plan.**
   the run's end, a supervisor's `merge_all` and a child's own merge are held while
   any delegated task of that plan has landed work not yet merged, read as ADR-0054
   reads both, and a check that has neither passed nor been skipped, which only the
-  user can do, and they say why. The user's Merge all is not held, and its
-  confirmation names the check. Without this a check that fails would stop nothing:
+  user can do, and they say why. The user's Merge all is not held, but it asks: the
+  seam answers it with the checks it would go past, named as the plan names them, and
+  merges only when the command carries `pastChecks`. Every surface asks that second
+  question and sends the yes; a supervisor or a planner is refused whatever it carries. Without this a check that fails would stop nothing:
   its work is already on the branch the merge reads. Work that has not landed holds
   nothing, so a check waiting on its delegated task, or blocked behind one that
   failed, stays out of every other task's merge, and a `readOnly` task, which never
@@ -461,16 +463,24 @@ the child cannot reach follows it in the parent's plan.**
 
   A root plan has no task limit, so a flat run does not change.
 - **Surfaces (D20).** The root shows a delegated task as one row, of `kind`
-  `delegated`, with derived counts in its report, and its log shows the child's
-  activity, one line each time a child task's status changes, projected into its task
-  log. A child's `broadcast` carries nothing to a surface: its planner messages, cards
+  `delegated`. Its status carries a `delegation` row, derived each time one goes out and
+  kept nowhere: where its child's tasks stand now, what is left of its budget across
+  every child the task has had (ADR-0056 M10), and, while a Stop is still winding its
+  subtree down, that it is stopping (D16), since by then the task already reads as not
+  started. A surface draws these beside the goal, and a finished child's counts come
+  from its report. Its log shows the child's activity, one line each time a child task's
+  status changes, projected into its task log, and its handoff draws what a report adds
+  to any task's: Ordewell's counts, what the plan above must decide (`open`), and what
+  its subplanner passed up (`promoted`), each by the reference that names it
+  (ADR-0057 R2). A surface draws none of it unless delegation is offered, and a webview,
+  which cannot read the checkout it was built from, is told by its host. A child's `broadcast` carries nothing to a surface: its planner messages, cards
   and status never reach the user directly. Usage rolls up: each record its planner or
   a task spends goes up as it arrives, a level at a time, onto the delegated task's
   attempt, so `planUsage` and the row add it as they add any task's. It was charged
   where it was spent (ADR-0056 M5), so an attempt of a delegated task charges nothing,
   and the row has no context meter: no one session's context is a subtree's. A child
-  session is never offered: `listSessions` does not see it (D11). A full tree view and
-  live counts on the row are later.
+  session is never offered: `listSessions` does not see it (D11). A full tree view is
+  later.
 - **Off unless turned on (D21).** Delegation is a run setting, off by default
   ([ADR-0030](0030-global-run-settings.md)), and turning it on sets the tree's token
   budget (ADR-0056 M5). While the rest of this ADR is unbuilt a build holds it back
@@ -692,4 +702,5 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-11-01 — a subplanner's question goes up, and D8's take-back, D9's merge hold, D14's repair and M9's rules for a child's scripts are implemented. A run that closed with its merge held owes it to the next tick, and a resolver of a delegated task's conflict takes the mode a repair does.
 - 2026-11-01 — D20's minimum: a delegated row, usage rolled up a level at a time and charged once, and the child's activity in its log. D1's `read` is the runner's tool (ADR-0057 R11).
 - 2026-11-01 — from a real run: a Continue with nothing left to run goes to its subplanner's turn, where it had failed on Execute's refusal; a report counts every opening of its task; a Stop says what a Continue keeps and Execute discards.
+- 2026-11-01 — D20 on the TUI and VS Code: a delegated row's `delegation` (child counts, budget left, stopping), a report's `open` and `promoted`, VS Code's raise and answer words, and a Merge all that asks before it goes past a check. A webview is told by its host that delegation is offered, which it could not read itself.
 - 2026-11-01 — from review and a real run: a ready check starts by itself once its delegated task passes, on every route (D8, D9); a check whose runner cannot be read holds as any does; a restart says a parked question is lost, and Continue picks the child up (D17).

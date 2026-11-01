@@ -33,6 +33,8 @@ export interface TaskView {
   prompt?: string;
   /** What a delegated task's child plan must achieve, in place of a prompt (ADR-0055 D1). */
   goal?: string;
+  /** A delegated task's row: its child's tasks, what is left of its budget, a Stop still winding down (ADR-0055 D20). */
+  delegation?: RunTask['delegation'];
   type: TaskType;
   status: string;
   /** Advisory silence timestamp from VerdictEngine — set while the task's runner has gone quiet. */
@@ -320,7 +322,8 @@ export type ConfirmAction =
   | { kind: 'save-settings'; effect: SaveSettingsEffect; menu?: StepperState }
   /** `seen` is the task ids the user was shown, which the daemon holds the revert to (ADR-0054). */
   | { kind: 'revert-task'; taskId: string; seen: string[] }
-  | { kind: 'merge-run' }
+  /** `pastChecks`: the user was asked about the checks that have not passed, and said yes (ADR-0055 D9). */
+  | { kind: 'merge-run'; pastChecks?: true }
   | { kind: 'discard-run' }
   | { kind: 'init-workspace'; goal: string; workspace: string }
   | { kind: 'rewind'; index: number }

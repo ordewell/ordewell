@@ -10,6 +10,7 @@ import type { GuardTarget, GuardTrip } from './LoopGuards';
 import { STOPPED_BEFORE_START, type StartAdmission } from './TaskOrchestrator';
 import { waitOf, type StartWait } from './readiness';
 import { escalationAct, type Escalation } from './escalations';
+import { mergePastChecksConfirmation } from './mergeWording';
 import { revertStopped, type RevertScope } from './taskRevert';
 import { manualOverrideConfirmation, manualOverrideStopFirst, type OverrideDirection } from '../taskRow/texts';
 import { COMMAND_GRANTS, allowsCommand, missingGrant, rootAuthority, type Grant, type Mandate, type NodeAuthority } from './Mandate';
@@ -31,7 +32,7 @@ export type ExecutionCommand =
   /** `answer` is checked here rather than typed: an `allow` must reach the seam to be refused with its reason. */
   | { command: 'answer_approval'; task: string; approval?: string; answer: string; note?: string }
   /** Merge all: the run's landed work into the user's branch (ADR-0013). */
-  | { command: 'merge_all' }
+  | { command: 'merge_all'; pastChecks?: true }
   /** End a task as skipped: nothing it did lands, and its dependents go ahead without it once the work it waited on is done. `reason` is required of anyone but the user. */
   | { command: 'skip_task'; task: string; reason?: string }
   /** The user's force start: past a failed dependency or a merge gate, queued behind dependencies still under way (ADR-0035). */
@@ -91,7 +92,9 @@ export type CommandPayload =
    */
   | { kind: 'merge'; result: IsolationMergeResult }
   /** The user's `revert_task`, reverted or stopped: which tasks, or the task and files, or the commands that do it by hand. */
-  | { kind: 'revert'; result: IsolationRevertResult };
+  | { kind: 'revert'; result: IsolationRevertResult }
+  /** The user's `merge_all` asked first: what it would merge past are these checks, named as the plan names them, and `pastChecks` is the yes (ADR-0055 D9). */
+  | { kind: 'merge_hold'; checks: string[] };
 
 /**
  * What a call came to: `message` is written for the caller, a model included,
@@ -407,6 +410,8 @@ interface Acted {
  */
 type Prepared =
   | { refusal: string }
+  /** A question for the user rather than a refusal: nothing is wrong, and it is not kept in the timeline as one. */
+  | { confirm: string; payload: CommandPayload }
   /** Nothing to do and nothing to keep: answered ok, recorded nowhere. */
   | { nothing: string }
   | { act: (stopped: () => boolean) => Promise<Acted>; approves?: Located[] };
@@ -472,6 +477,7 @@ export class ExecutionCommands {
 
     const first = this.prepare(command, actor, located);
     if ('refusal' in first) return this.refuse(command, actor, located, first.refusal);
+    if ('confirm' in first) return { ok: false, outcome: 'refused', message: first.confirm, payload: first.payload };
     if ('nothing' in first) return { ok: true, message: first.nothing };
     // After the call's own refusals, which name the task an override is landing.
     if (this.overriding.size > 0 && HELD_BY_LANDING_OVERRIDE.has(command.command)) return this.refuse(command, actor, located, OVERRIDE_LANDING);
@@ -537,6 +543,7 @@ export class ExecutionCommands {
       if (this.host.tasks() !== plan) return this.refuse(command, actor, located, 'The plan changed while the user was asked, so nothing was done.');
       const again = this.prepare(command, actor, located);
       if ('refusal' in again) return this.refuse(command, actor, located, again.refusal);
+      if ('confirm' in again) return { ok: false, outcome: 'refused', message: again.confirm, payload: again.payload };
       if ('nothing' in again) return { ok: true, message: again.nothing };
       prepared = again;
     }
@@ -896,7 +903,7 @@ export class ExecutionCommands {
       case 'stop_run': return this.prepareStopRun(actor);
       case 'message_task': return this.prepareMessage(located!, command, actor);
       case 'answer_approval': return this.prepareAnswer(located!, command, actor);
-      case 'merge_all': return this.prepareMergeAll(actor);
+      case 'merge_all': return this.prepareMergeAll(actor, command);
       case 'skip_task': return this.prepareSkip(located!, actor, command.reason);
       case 'force_start': return this.prepareForceStart(located!);
       case 'mark_complete': return this.prepareMarkComplete(located!, command);
@@ -1470,7 +1477,7 @@ export class ExecutionCommands {
     };
   }
 
-  private prepareMergeAll(actor: ExecutionActor): Prepared {
+  private prepareMergeAll(actor: ExecutionActor, command: Extract<ExecutionCommand, { command: 'merge_all' }>): Prepared {
     const users = actor.kind === 'user';
     // A Merge all asked for after the run's own merged everything and closed it
     // — at its end, or as the run settled mid-turn — is a request with nothing
@@ -1481,6 +1488,8 @@ export class ExecutionCommands {
     }
     const held = this.host.mergeHold();
     if (held.length > 0 && !users) return { refusal: `Merge all waits on ${held.join(', ')}: work a delegated task landed merges once its check has passed, or the user has skipped it.` };
+    // The user may merge past a check, and is asked first, the checks named: every surface's Merge all asks the same way, and the yes is the command's own.
+    if (held.length > 0 && !command.pastChecks) return { confirm: mergePastChecksConfirmation(held), payload: { kind: 'merge_hold', checks: [...held] } };
     return {
       act: async () => {
         const result = await this.host.mergeAll();

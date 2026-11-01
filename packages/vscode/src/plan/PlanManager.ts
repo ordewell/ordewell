@@ -419,11 +419,15 @@ function showRefusal(err: unknown): void {
   void vscode.window.showWarningMessage(err instanceof Error ? err.message : String(err));
 }
 
-/** A rejection resumes the paused agent with the reason, rather than cancelling the task. */
-export async function handleCheckpointAnswer(taskId: string, approved: boolean, reason: string | undefined, deps: Pick<PlanManagerDeps, 'session'>): Promise<void> {
+/**
+ * A rejection resumes the paused agent with the reason, rather than cancelling
+ * the task. A delegated task's approval carries words and a raise of its budget
+ * too (ADR-0056 M5, M8); the seam refuses them for any other task.
+ */
+export async function handleCheckpointAnswer(taskId: string, approved: boolean, reason: string | undefined, deps: Pick<PlanManagerDeps, 'session'>, raiseTokens?: number): Promise<void> {
   try {
     await executeUserCommand(deps.session, approved
-      ? { command: 'answer_checkpoint', task: taskId, answer: 'approve' }
+      ? { command: 'answer_checkpoint', task: taskId, answer: 'approve', ...(reason ? { reason } : {}), ...(raiseTokens !== undefined ? { raiseTokens } : {}) }
       : { command: 'answer_checkpoint', task: taskId, answer: 'reject', ...(reason ? { reason } : {}) });
   } catch (err) {
     showRefusal(err);

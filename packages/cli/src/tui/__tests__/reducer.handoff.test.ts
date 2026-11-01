@@ -177,6 +177,35 @@ describe('the handoff overlay', () => {
     expect(confirmed.state.overlay).toBeNull();
   });
 
+  describe('a Merge all the daemon holds for a check that has not passed (ADR-0055 D9)', () => {
+    const ASKED = 'This merges work no check has passed: #2 "Check the subtree" has not.';
+
+    it('asks again, naming the check, and merges past it only on the yes', () => {
+      const asked = apply(withHandoff(), { type: 'mergeHeld', message: ASKED, sessionId: 's1' });
+
+      expect(asked.effects).toEqual([]);
+      expect(asked.state.overlay).toMatchObject({ kind: 'confirm', title: 'Merge past a check that has not passed?', action: { kind: 'merge-run', pastChecks: true } });
+      expect((asked.state.overlay as { message: string }).message).toContain(ASKED);
+      expect((asked.state.overlay as { message: string }).message).toContain('ordewell/r1/integration');
+
+      const confirmed = press(asked.state, 'enter');
+      expect(confirmed.effects).toEqual([{ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration', pastChecks: true }]);
+      expect(confirmed.state.overlay).toBeNull();
+    });
+
+    it('merges nothing when the user declines', () => {
+      const asked = apply(withHandoff(), { type: 'mergeHeld', message: ASKED, sessionId: 's1' });
+      const declined = press(asked.state, 'escape');
+      expect(declined.effects).toEqual([]);
+      expect(declined.state.overlay).toBeNull();
+    });
+
+    it('is ignored for another session', () => {
+      const asked = apply(withHandoff(), { type: 'mergeHeld', message: ASKED, sessionId: 'other' });
+      expect(asked.state.overlay).toBeNull();
+    });
+  });
+
   it('carries a repaired landed task on the merge effect, so the result can name it too (ADR-0015)', () => {
     const repaired = { ...handoff, landed: [{ ...handoff.landed[0], repairedFiles: ['a.ts'] }, handoff.landed[1]] };
     const asked = press(press(session({ handoff: repaired, overlay: { kind: 'handoff', index: 0, diff: null } }), 'down').state, 'enter');

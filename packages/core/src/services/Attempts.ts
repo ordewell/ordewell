@@ -1376,6 +1376,11 @@ export class Attempts {
     return attempt.kind.kind === 'continuation' && session !== null && !session.nativeSessionId();
   }
 
+  /** A runner let go for this task has not gone yet: what a delegated task's row shows as stopping (ADR-0055 D16). */
+  windingDown(taskId: string): boolean {
+    return this.windDowns.has(taskId);
+  }
+
   /** Every runner let go has gone: what a subtree's stop waits on (ADR-0055 D16). */
   async allWoundDown(): Promise<void> {
     await Promise.all(this.windDowns.values());
@@ -1394,7 +1399,9 @@ export class Attempts {
     // A stop that failed leaves nothing to wait for, and nothing awaits this but a continue.
     const runner = attempt.script ? this.deps.scriptRunner : attempt.delegated ? this.deps.childPlanRunner : this.deps.runner;
     const windDown = Promise.all([this.windDowns.get(taskId), runner.stop(session.id)]).catch(() => undefined).then(() => {
-      if (this.windDowns.get(taskId) === windDown) this.windDowns.delete(taskId);
+      if (this.windDowns.get(taskId) !== windDown) return;
+      this.windDowns.delete(taskId);
+      if (attempt.delegated) this.host.emit('onTaskChanged');
     });
     this.windDowns.set(taskId, windDown);
   }
