@@ -74,7 +74,7 @@ get it from [Open VSX](https://open-vsx.org/extension/ordewell/ordewell). The
 extension bundles its own core and needs nothing from npm.
 
 **Requirements:** Node.js 20.3 or newer, at least one of Claude Code, Codex or
-OpenCode, and git for task isolation.
+OpenCode, and git 2.38 or newer for task isolation.
 
 ### Windows
 

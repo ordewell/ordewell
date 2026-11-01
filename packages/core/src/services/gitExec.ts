@@ -5,7 +5,7 @@ import { withPath } from '../utils/shellPath';
 export type GitExecFn = (
   file: string,
   args: string[],
-  opts: { cwd?: string; env: NodeJS.ProcessEnv },
+  opts: { cwd?: string; env: NodeJS.ProcessEnv; input?: string },
 ) => Promise<{ stdout: string; stderr: string }>;
 
 export interface GitResult { ok: boolean; stdout: string; stderr: string; code?: string | number }
@@ -29,7 +29,7 @@ const GIT_TIMEOUT_MS = 10 * 60 * 1000;
 export function execFileWithTimeout(timeoutMs: number): GitExecFn {
   return async (file, args, opts) => {
     try {
-      const { stdout, stderr } = await execFileAsync(file, args, {
+      const running = execFileAsync(file, args, {
         cwd: opts.cwd,
         env: opts.env,
         maxBuffer: MAX_BUFFER,
@@ -40,6 +40,12 @@ export function execFileWithTimeout(timeoutMs: number): GitExecFn {
         killSignal: 'SIGTERM',
         windowsHide: true,
       });
+      if (opts.input !== undefined) {
+        // A git that dies before reading says so by how it exits; the write's own EPIPE would only crash us.
+        running.child.stdin?.on('error', () => undefined);
+        running.child.stdin?.end(opts.input);
+      }
+      const { stdout, stderr } = await running;
       return { stdout: String(stdout), stderr: String(stderr) };
     } catch (err) {
       if (!timedOut(err)) throw err;
@@ -84,10 +90,10 @@ export function cleanEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-export async function tryGit(invoker: GitInvoker, cwd: string | undefined, args: string[]): Promise<GitResult> {
+export async function tryGit(invoker: GitInvoker, cwd: string | undefined, args: string[], input?: string): Promise<GitResult> {
   try {
     const env = withPath(cleanEnv(), await invoker.resolvePath());
-    const { stdout, stderr } = await invoker.exec('git', args, { cwd, env });
+    const { stdout, stderr } = await invoker.exec('git', args, { cwd, env, ...(input === undefined ? {} : { input }) });
     return { ok: true, stdout, stderr };
   } catch (err) {
     const e = err as { stdout?: unknown; stderr?: unknown; code?: string | number };

@@ -30,6 +30,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **Reverting a task works on git 2.38 and 2.39.** Version 0.12.0 refused a revert
+  on anything older than 2.40, which took it away on Debian 12 and everywhere else
+  that ships git 2.39; nothing was harmed, it just would not run. Ordewell now
+  states what it needs: git 2.38 or newer. An older git still runs tasks, and a run
+  says at its start what that costs. See
+  [Ordewell needs a newer git](docs/troubleshooting.md#ordewell-needs-a-newer-git).
 - **Stopping a planner command on macOS ends all of it.** A Stop or a time limit
   now ends a compound command's or a pipeline's child processes along with its
   shell, and the result comes back at once rather than when they finish.

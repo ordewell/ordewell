@@ -185,7 +185,8 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
   host holds at each attempt, and the runner's home.
   - Work leaves through a ref-scoped gate on the host (`pushGate.ts`), with the attempt's container already gone, so no
     process of it can change what is read. A helper bundles a snapshot of the workspace on one ref. The gate takes that
-    ref alone, named for the attempt, under git's object checks, only on the attempt's base, moving no ref of the
+    ref alone, named for the attempt, under git's object checks, which it runs itself over a pack of what the ref brings,
+    since a fetch from a bundle skips them on an older git (2.40 skips them, 2.47 does not), only on the attempt's base, moving no ref of the
     repository, and never believes what the bundle says of itself. There is no listener: the bundle comes over the helper's
     stdout. The snapshot then goes into the host's worktree as a local attempt would have left it, its commits on the
     branch and the rest uncommitted, for Landing to commit under the handoff's message.
@@ -353,3 +354,4 @@ for model traffic first. The interface is kept free of anything that blocks thes
 - 2026-11-01 — L5, L6 and L7's broker implemented: a Docker backend, a mirror and task volumes in the engine, a push gate, `collect` on a backend, and the relay as the container's entry and its route to the MCP server. `ttlMs`, `renew`, `revoked` and `prepare` dropped.
 - 2026-11-01 — L7 implemented: the egress sidecar and the model gateway behind `EgressPath`, and `net.allowlist` proven by probe and required by default. `setNetwork` dropped. Scripts run in containers, a child's tasks and repairs are proven there, a pin reads through the lease, and `reclaim` clears what a tree leaves. The terms check before a subscription path ships dropped: which login someone uses is up to them.
 - 2026-11-01 — A container session's git runs with hooks off and the gate takes nothing in a tracked hooks folder; work not brought back stops a next attempt; a close waits on `settle`; a child takes its root's backend; a probe reports `cred.unreadable` unproven. Refusing hooks alone dropped.
+- 2026-11-01 — the gate runs git's object checks itself, since a fetch from a bundle does not on an older git.

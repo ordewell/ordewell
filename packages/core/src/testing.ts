@@ -442,6 +442,8 @@ export type FakeIsolationCall =
  */
 export class FakeWorktreeIsolation implements IWorktreeIsolation {
   availability: IsolationAvailability = { active: true };
+  /** What `gitShortfall` answers. */
+  gitShortfallText: string | null = null;
   /** The repo paths `startRun` groups: a group of one at `.` unless set. */
   repos: string[] = [SELF_REPO];
   /** Per task id, the repos it changes; every repo of the group when not listed. */
@@ -515,6 +517,10 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
     let open!: () => void;
     this.verifyHolds.set(taskId, new Promise<void>((resolve) => { open = resolve; }));
     return open;
+  }
+
+  async gitShortfall(): Promise<string | null> {
+    return this.gitShortfallText;
   }
 
   async isActive(workspaceRoot: string): Promise<IsolationAvailability> {

@@ -117,8 +117,8 @@ describe('the push gate (ADR-0059 L6)', () => {
     expect(git(host, 'for-each-ref', 'refs/ordewell')).toBe('');
   });
 
-  it('refuses a tree that would write into a `.git` directory', async () => {
-    const { host, box, base, out } = setup();
+  /** A bundle holding a tree with a `.git` directory in it. */
+  function dotgitBundle({ box, base, out }: { box: string; base: string; out: string }): string {
     // `git add` will not take this path, so the tree is written as a container could write it.
     const blob = git(box, 'rev-parse', 'HEAD:a.txt');
     const hooks = execFileSync('git', ['mktree'], { cwd: box, env: env(), input: `100755 blob ${blob}\tpost-merge\n`, encoding: 'utf8' }).trim();
@@ -128,9 +128,25 @@ describe('the push gate (ADR-0059 L6)', () => {
     git(box, 'update-ref', REF, snapshot);
     const file = join(out, 'dotgit.bundle');
     git(box, 'bundle', 'create', '-q', file, REF, `^${base}`);
+    return file;
+  }
 
-    await expect(takeThroughGate(GIT, host, file, ticket(base))).rejects.toBeInstanceOf(PushRefused);
-    expect(git(host, 'for-each-ref', 'refs/ordewell')).toBe('');
+  it('refuses a tree that would write into a `.git` directory', async () => {
+    const gate = setup();
+
+    await expect(takeThroughGate(GIT, gate.host, dotgitBundle(gate), ticket(gate.base))).rejects.toBeInstanceOf(PushRefused);
+    expect(git(gate.host, 'for-each-ref', 'refs/ordewell')).toBe('');
+  });
+
+  it('refuses it on a git whose fetch from a bundle checks nothing, as 2.40 and older', async () => {
+    const gate = setup();
+    const unchecked: GitInvoker = {
+      ...GIT,
+      exec: (file, args, opts) => defaultExecFile(file, args.filter((arg, i) => !arg.includes('fsckObjects') && !args[i + 1]?.includes('fsckObjects')), opts),
+    };
+
+    await expect(takeThroughGate(unchecked, gate.host, dotgitBundle(gate), ticket(gate.base))).rejects.toThrow(/hasDotgit/);
+    expect(git(gate.host, 'for-each-ref', 'refs/ordewell')).toBe('');
   });
 
   it('refuses what is not a bundle at all', async () => {
