@@ -612,6 +612,18 @@ export default function App() {
     return undefined;
   };
 
+  // With no plan yet, the last word the planner had is what a reply answers.
+  // The tip has taken the placeholder, so this cue sits under the input instead
+  // of replacing it (#137).
+  const replyCue = (): string | undefined => {
+    if (getPlaceholder() !== undefined) return undefined;
+    if (plan && plan.tasks.length > 0) return undefined;
+    const last = blocks[blocks.length - 1];
+    return last?.type === 'message' && last.role === 'planner' && !last.streaming
+      ? 'Reply to the planner'
+      : undefined;
+  };
+
   const vendorModels = useMemo<DiscoveredModel[]>(() =>
     // Carry the serving apiProvider through as runnerProvider (grouping key)
     // plus its display label, so the dropdown groups and labels each model by
@@ -1199,6 +1211,7 @@ export default function App() {
         onEscape={handleEscape}
         disabled={false}
         placeholder={getPlaceholder()}
+        hint={replyCue()}
         isTurnRunning={plannerBusy}
         unsent={unsent}
         skills={skills}

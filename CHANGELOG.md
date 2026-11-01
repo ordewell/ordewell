@@ -8,6 +8,16 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **The empty planner chat composer shows a command tip.** With nothing typed,
+  the TUI and the VS Code chat suggest one planner chat command, weighted toward
+  `/allowlist`; typing hides it and clearing shows the next. In the TUI a tip is
+  not drawn while mouse capture is off, because the terminal's own selection
+  would copy it as if it were typed. In the VS Code chat the tip is in the
+  composer's accessible description, and a "Reply to the planner" cue sits under
+  it once the planner has just spoken.
+
 ## [0.12.1] - 2026-11-01
 
 ### Added

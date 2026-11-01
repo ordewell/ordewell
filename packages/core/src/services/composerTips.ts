@@ -23,26 +23,30 @@ export const COMPOSER_TIPS: readonly ComposerTip[] = [
 ];
 
 /**
- * One cycle of `tips`, each appearing exactly its weight times. Every slot takes
- * the tip with the most weight left other than the one just taken, so a heavy
- * tip is spread out rather than shown twice running; only when nothing else
- * has weight left does it repeat.
+ * One cycle of `tips`, each appearing exactly its weight times. Heavier tips
+ * take their slots first, at the midpoints of equal shares of the free slots, so
+ * raising a weight spreads it out instead of leaving it to run together at the
+ * end of the cycle; where a tip outnumbers all the others, the touches it
+ * cannot avoid are spread as evenly as the counts allow. The cycle starts on
+ * the heaviest tip, so the first seq is the one the table weights most.
  */
 export function tipCycle(tips: readonly ComposerTip[]): ComposerTip[] {
-  const left = tips.map((tip) => tip.weight);
-  const cycle: ComposerTip[] = [];
-  let last = -1;
-  for (let slot = 0, total = left.reduce((a, b) => a + b, 0); slot < total; slot++) {
-    let pick = -1;
-    for (let i = 0; i < tips.length; i++) {
-      if (left[i] <= 0 || (i === last && left.some((n, j) => j !== last && n > 0))) continue;
-      if (pick < 0 || left[i] > left[pick]) pick = i;
+  const total = tips.reduce((sum, tip) => sum + Math.max(0, tip.weight), 0);
+  if (total === 0) return [];
+  const slots = new Array<ComposerTip | undefined>(total).fill(undefined);
+  const order = tips
+    .map((tip, index) => ({ tip, index }))
+    .filter(({ tip }) => tip.weight > 0)
+    .sort((a, b) => b.tip.weight - a.tip.weight || a.index - b.index);
+  for (const { tip } of order) {
+    const free = slots.flatMap((slot, at) => (slot === undefined ? [at] : []));
+    for (let k = 0; k < tip.weight; k++) {
+      slots[free[Math.floor(((k + 0.5) * free.length) / tip.weight)]] = tip;
     }
-    left[pick]--;
-    cycle.push(tips[pick]);
-    last = pick;
   }
-  return cycle;
+  const cycle = slots.filter((tip): tip is ComposerTip => tip !== undefined);
+  const start = cycle.indexOf(order[0].tip);
+  return [...cycle.slice(start), ...cycle.slice(0, start)];
 }
 
 /**

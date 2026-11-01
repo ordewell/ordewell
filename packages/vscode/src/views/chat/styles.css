@@ -3872,6 +3872,14 @@ body.vscode-high-contrast-light .task-card.expanded {
   font-size: 13px;
 }
 
+/* The host's reply cue (#137), under the input as the send-key hint is. */
+.chat-input-hint {
+  padding: 0 10px 6px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-hint);
+}
+
 .slash-suggestion-item.skill .slash-suggestion-label {
   color: var(--slash-token-fg);
 }

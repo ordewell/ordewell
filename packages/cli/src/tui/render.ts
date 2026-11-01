@@ -416,9 +416,14 @@ const PLANNER_COMMANDS: ReadonlySet<string> = new Set(SLASH_COMMANDS.map((comman
  * in the grey the slash hint uses. It is painted only while the editor is live
  * (a blurred composer and one under an overlay show none) and is never part of
  * the editor's text, so the caret and the slash hint are untouched.
+ *
+ * With mouse capture off, `/mouse` hands drag-selection to the terminal, which
+ * copies painted cells; a copied tip would land back in the composer as user
+ * input. Nothing painted can be withheld from that selection, so this mode
+ * shows no tip rather than one the terminal can copy.
  */
 function composerTipHint(state: TuiState, room: number): string {
-  if (state.taskView || state.editor.text !== '' || room < 12) return '';
+  if (state.taskView || !state.mouseCapture || state.editor.text !== '' || room < 12) return '';
   const text = composerTip(state.composerTipSeq, PLANNER_COMMANDS);
   return text ? style.bandGrey(` ${truncate(text, room - 1)}`) : '';
 }
