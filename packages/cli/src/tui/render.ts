@@ -1,6 +1,6 @@
 import { firstGrapheme, graphemes, pad, sanitize, stripAnsi, style, truncate, width, wrap } from './ansi';
 import { cursorInLines } from './editor';
-import { activeToken, composerCompletions, runnerCommandFor, skillMatchKind, slashTokens } from './slash';
+import { SLASH_COMMANDS, activeToken, composerCompletions, runnerCommandFor, skillMatchKind, slashTokens } from './slash';
 import {
   approvalLayout, bodyPanes, bodyRows, composerView, selectionArea, selectionColumns, chatLayout, footerHints, helpLayout, type HelpSheet, packHints, planLayout, planOffset,
   stopHint,
@@ -19,6 +19,7 @@ import { capConflictFiles, elapsedSince, handoffBaseLine, handoffBranchName, isR
 import { matchingItems, scriptTaskView, visibleItems, type Overlay, type PickerItem, type PickerState, type TuiState } from './state';
 import type { StepperState } from './reducers/stepper';
 import { DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
+import { composerTip } from '@ordewell/core/plan-utils';
 
 /**
  * The whole frame as `state.rows` lines, each at most `state.cols` columns
@@ -27,8 +28,11 @@ import { DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
  *
  * What each pane's content *is* — and therefore how far it scrolls — belongs to
  * `layout.ts`, which the reducer reads too. This file paints, fits and joins.
+ *
+ * `tip: false` leaves out the empty composer's tip, as a copied selection reads
+ * the frame (#137).
  */
-export function render(state: TuiState): string[] {
+export function render(state: TuiState, { tip = true }: { tip?: boolean } = {}): string[] {
   const { rows, cols } = state;
   const rowsForBody = bodyRows(state);
   // Measured once per frame: stacked, it costs a pass over both panes' content.
@@ -41,7 +45,7 @@ export function render(state: TuiState): string[] {
   const lines = [
     ...body,
     renderStatus(state, cols, panes),
-    ...renderInput(state),
+    ...renderInput(state, tip),
     ...renderFooter(state, cols),
   ];
 
@@ -186,7 +190,8 @@ function highlightSelection(frame: string[], state: TuiState, panes: BodyPanes):
 export function selectedText(state: TuiState): string {
   const spans = selectionSpans(state, bodyPanes(state));
   if (spans.length === 0) return '';
-  const frame = render(state);
+  // The composer's tip is a hint, never text the user wrote, so it is not copied (#137).
+  const frame = render(state, { tip: false });
   return spans
     .map(({ row, from, to }) => cells(frame[row - 1] ?? '').slice(from - 1, to).join('').replace(/\s+$/, ''))
     .join('\n');
@@ -339,9 +344,9 @@ function paintSpans(text: string, base: number, spans: Array<{ start: number; en
  * same width. With colour off the empty rows stay, so the row count the layout
  * reserves does not depend on the terminal's palette.
  */
-function renderInput(state: TuiState): string[] {
+function renderInput(state: TuiState, tip: boolean): string[] {
   const view = composerView(state);
-  const rows = ['', ...composerLines(state, view), ''];
+  const rows = ['', ...composerLines(state, view, tip), ''];
   // The last band row carries the count of what the window leaves out, so a
   // pasted draft never looks complete when it is not.
   if (view && (view.hiddenBefore > 0 || view.hiddenAfter > 0)) rows[rows.length - 1] = style.bandGrey(hiddenDraftNote(view));
@@ -356,7 +361,7 @@ function hiddenDraftNote({ hiddenBefore, hiddenAfter }: ComposerView): string {
   return `… ${parts.join(' and ')} characters not shown`;
 }
 
-function composerLines(state: TuiState, view: ComposerView | null): string[] {
+function composerLines(state: TuiState, view: ComposerView | null, tip: boolean): string[] {
   // A script's log is output only (ADR-0035): say so where the composer would be.
   if (scriptTaskView(state)) {
     return [style.bandGrey(`${chatPromptLabel(state)}  ·  this script task runs no model, so it takes no messages`)];
@@ -398,8 +403,29 @@ function composerLines(state: TuiState, view: ComposerView | null): string[] {
     // still lands next to a `/skill` typed mid-sentence.
     const used = width(line.slice(0, col)) + width(caretChar);
     const hint = suggest(state, room - used);
-    return prefix + before + style.inverse(caretChar) + hint + after;
+    const tipHint = tip ? composerTipHint(state, room - used) : '';
+    return prefix + before + style.inverse(caretChar) + hint + tipHint + after;
   });
+}
+
+/** The built-in commands the planner chat answers: the only ones a tip may name. */
+const PLANNER_COMMANDS: ReadonlySet<string> = new Set(SLASH_COMMANDS.map((command) => command.name));
+
+/**
+ * The empty planner composer's tip (#137), right after the caret on the band,
+ * in the grey the slash hint uses. It is painted only while the editor is live
+ * (a blurred composer and one under an overlay show none) and is never part of
+ * the editor's text, so the caret and the slash hint are untouched.
+ *
+ * With mouse capture off, `/mouse` hands drag-selection to the terminal, which
+ * copies painted cells; a copied tip would land back in the composer as user
+ * input. Nothing painted can be withheld from that selection, so this mode
+ * shows no tip rather than one the terminal can copy.
+ */
+function composerTipHint(state: TuiState, room: number): string {
+  if (state.taskView || !state.mouseCapture || state.editor.text !== '' || room < 12) return '';
+  const text = composerTip(state.composerTipSeq, PLANNER_COMMANDS);
+  return text ? style.bandGrey(` ${truncate(text, room - 1)}`) : '';
 }
 
 /** Inline hint of matching commands, shown right after a `/word` being actively typed. */

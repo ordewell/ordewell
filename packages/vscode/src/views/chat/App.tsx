@@ -603,14 +603,25 @@ export default function App() {
     handleIsolationAction('resolveConflict', taskId);
   }, [handleIsolationAction]);
 
-  const getPlaceholder = (): string => {
+  // Only what is happening now; an idle composer shows a command tip instead (#137).
+  const getPlaceholder = (): string | undefined => {
     if (compacting) return 'Queue a message for when the context is compacted...';
     if (isResearchActive) return 'Queue a message for when the planner is done...';
     if (isExecuting) return 'AI is working...';
     if (isStarting) return 'Starting the plan...';
-    if (plan && plan.tasks.length > 0) return 'Modify the plan...';
-    if (blocks.some((b) => b.type === 'message' && b.role === 'planner')) return 'Reply to the planner...';
-    return 'Describe what you want to build...';
+    return undefined;
+  };
+
+  // With no plan yet, the last word the planner had is what a reply answers.
+  // The tip has taken the placeholder, so this cue sits under the input instead
+  // of replacing it (#137).
+  const replyCue = (): string | undefined => {
+    if (getPlaceholder() !== undefined) return undefined;
+    if (plan && plan.tasks.length > 0) return undefined;
+    const last = blocks[blocks.length - 1];
+    return last?.type === 'message' && last.role === 'planner' && !last.streaming
+      ? 'Reply to the planner'
+      : undefined;
   };
 
   const vendorModels = useMemo<DiscoveredModel[]>(() =>
@@ -1200,6 +1211,7 @@ export default function App() {
         onEscape={handleEscape}
         disabled={false}
         placeholder={getPlaceholder()}
+        hint={replyCue()}
         isTurnRunning={plannerBusy}
         unsent={unsent}
         skills={skills}

@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import ChatInput, { getLeadingSlashToken } from '../ChatInput';
 
@@ -282,3 +282,134 @@ describe('slash token highlight', () => {
   });
 });
 
+describe('the empty composer tip (#137)', () => {
+  const ALLOWLIST_TIP = 'Tip: Use /allowlist to limit which models the planner assigns per runner.';
+  const placeholder = () => (screen.getByRole('textbox') as HTMLTextAreaElement).placeholder;
+
+  it('shows the /allowlist tip in an empty composer that has no state of its own to say', () => {
+    renderInput();
+    expect(placeholder()).toBe(ALLOWLIST_TIP);
+  });
+
+  it('gives way to a placeholder that says what is happening, and to a disabled reason', () => {
+    const { unmount } = renderInput({ placeholder: 'Queue a message for when the planner is done...' });
+    expect(placeholder()).toBe('Queue a message for when the planner is done...');
+    // The queue instruction is live state, so it is described too, not only drawn.
+    expect(screen.getByRole('textbox')).toHaveAccessibleDescription('Queue a message for when the planner is done...');
+    unmount();
+    renderInput({ disabled: true, disabledReason: 'Sign the planner in first' });
+    expect(placeholder()).toBe('Sign the planner in first');
+  });
+
+  it('names the input for assistive technology without relying on the placeholder', () => {
+    renderInput();
+    expect(screen.getByRole('textbox', { name: 'Message the planner' })).toBeTruthy();
+  });
+
+  it('also describes the input with the tip, so the placeholder is not visual-only', () => {
+    renderInput();
+    expect(screen.getByRole('textbox')).toHaveAccessibleDescription(ALLOWLIST_TIP);
+  });
+
+  it('describes a disabled composer with its reason, not only the generic name', () => {
+    renderInput({ disabled: true, disabledReason: 'Sign the planner in first' });
+    expect(screen.getByRole('textbox')).toHaveAccessibleDescription('Sign the planner in first');
+  });
+
+  it('stops describing the tip once there is a draft, which the tip no longer speaks for', () => {
+    renderInput();
+    type('add a login route');
+    expect(screen.getByRole('textbox')).toHaveAccessibleDescription('');
+  });
+
+  it('is never part of the text: typed or pasted text is exactly what is there, and an empty Enter sends nothing', () => {
+    const { onSend } = renderInput();
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+    expect(onSend).not.toHaveBeenCalled();
+    expect((type('add a login route') as HTMLTextAreaElement).value).toBe('add a login route');
+    // A paste reaches the textarea as one change carrying the pasted text.
+    expect((type('pasted\nfrom elsewhere') as HTMLTextAreaElement).value).toBe('pasted\nfrom elsewhere');
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+    expect(onSend).toHaveBeenCalledWith('pasted\nfrom elsewhere');
+  });
+
+  it('holds still while the composer stays empty, and moves on once the text has been cleared', () => {
+    const { rerender, onSend, onStop } = renderInput();
+    rerender(<ChatInput onSend={onSend} onStop={onStop} disabled={false} />);
+    expect(placeholder()).toBe(ALLOWLIST_TIP);
+    type('x');
+    type('');
+    expect(placeholder()).toBe("Tip: Use /planner to pick the planner's harness, model and effort.");
+  });
+
+  it('only names commands this chat answers: never /runners, over a whole cycle', () => {
+    renderInput();
+    const seen = new Set<string>([placeholder()]);
+    for (let i = 0; i < 6; i++) {
+      type('x');
+      type('');
+      seen.add(placeholder());
+    }
+    expect(seen.size).toBe(4);
+    expect([...seen].every((tip) => tip.startsWith('Tip: '))).toBe(true);
+    expect([...seen].some((tip) => tip.includes('/runners'))).toBe(false);
+  });
+});
+
+// jsdom draws nothing, so the wrapping these tests measure is simulated: the
+// stubbed scrollHeight is the row count the placeholder needs at the current
+// width. The component under test still decides when to measure.
+describe('the composer heights itself to what it shows (#137)', () => {
+  let charsPerRow = 40;
+  const realScrollHeight = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollHeight');
+
+  beforeEach(() => {
+    charsPerRow = 40;
+    Object.defineProperty(Element.prototype, 'scrollHeight', {
+      configurable: true,
+      get(this: Element) {
+        const field = this as HTMLTextAreaElement;
+        if (field.tagName !== 'TEXTAREA') return 0;
+        const shown = field.value || field.placeholder || '';
+        return Math.max(1, Math.ceil(shown.length / charsPerRow)) * 20;
+      },
+    });
+  });
+
+  afterEach(() => {
+    if (realScrollHeight) Object.defineProperty(Element.prototype, 'scrollHeight', realScrollHeight);
+    else delete (Element.prototype as { scrollHeight?: number }).scrollHeight;
+  });
+
+  const heightFor = (text: string): string => `${Math.ceil(text.length / charsPerRow) * 20}px`;
+
+  it('re-measures when the placeholder changes, not only when the text does', () => {
+    const { rerender, onSend, onStop } = renderInput({ placeholder: 'AI is working...' });
+    const field = screen.getByRole('textbox') as HTMLTextAreaElement;
+    expect(field.style.height).toBe(heightFor('AI is working...'));
+    // The status ends and the longer tip takes its place.
+    rerender(<ChatInput onSend={onSend} onStop={onStop} disabled={false} />);
+    expect(field.style.height).toBe(heightFor('Tip: Use /allowlist to limit which models the planner assigns per runner.'));
+  });
+
+  it('re-measures when the panel narrows, although the text and placeholder did not change', () => {
+    const observers: ResizeObserverCallback[] = [];
+    vi.stubGlobal('ResizeObserver', class {
+      cb: ResizeObserverCallback;
+      constructor(cb: ResizeObserverCallback) { this.cb = cb; observers.push(cb); }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+    try {
+      renderInput();
+      const field = screen.getByRole('textbox') as HTMLTextAreaElement;
+      expect(field.style.height).toBe(heightFor('Tip: Use /allowlist to limit which models the planner assigns per runner.'));
+      charsPerRow = 20;
+      observers.at(-1)!([{ contentRect: { width: 160 } } as ResizeObserverEntry], {} as ResizeObserver);
+      expect(field.style.height).toBe(heightFor('Tip: Use /allowlist to limit which models the planner assigns per runner.'));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
