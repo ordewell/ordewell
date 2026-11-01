@@ -11,9 +11,10 @@ import {
 import type { TaskOp } from './TaskOps';
 import type { CheckedChange, PlanChangeError } from './PlanChangeCheck';
 import type { PlanChange, ToolRead } from './PlannerConversation';
-import { commandReply, type McpToolReply, type PlannerToolHandler } from './mcp/tools';
+import { commandReply, type McpToolReply, type PlannerToolHandler, type ReadTaskArgs } from './mcp/tools';
 import type { TaskLogEvent } from '../models/TaskLog';
-import { namedHandoff, parseFindingRef, resolveWrittenRef } from '../models/Handoff';
+import { namedHandoff, parseFindingRef, parsePlanPath, resolveWrittenRef } from '../models/Handoff';
+import type { Subtree } from './Subtree';
 import { renderTaskLog } from './taskLogRead';
 import { taskReadPage } from './taskReadPage';
 import type { TaskDiffRead, TaskDiffResult } from './taskDiffRead';
@@ -49,6 +50,10 @@ export interface PlannerToolsHost {
   lastAttempt(taskId: string): string | null;
   taskLogAttempts(taskId: string): number[];
   taskLog(taskId: string, attempt: number): TaskLogEvent[];
+  /** A handoff by reference, its whole plan and what is below it (ADR-0057 R11). */
+  readHandoff?(args: ReadTaskArgs): Promise<McpToolReply>;
+  /** The plans below this one; null with nothing delegated. */
+  below?(): Promise<Subtree | null>;
   taskDiff(taskId: string, options: TaskDiffRead): Promise<TaskDiffResult>;
   /** The planner's research shell: classified, confined and approved as the API planner's `bash` is (ADR-0026), or sealed (ADR-0036). */
   runCommand(command: string, signal: AbortSignal, opts?: BashOptions): Promise<ToolOutcome>;
@@ -217,10 +222,32 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       }));
     },
 
+    async readTask(args) {
+      return read(host, JSON.stringify(['read', args]), async () => {
+        const reply = await host.readHandoff?.(args);
+        return !reply || reply.isError ? { ok: false, error: reply?.text ?? 'Nothing here reads a handoff by reference.' } : { handoff: reply.text };
+      });
+    },
+
     async taskOutput({ task: ref, lines, since, attempt: asked, kinds }) {
       // A reference a run update shows, `#4@2/F3`, reads the attempt it names (ADR-0057 R1).
       const written = resolveWrittenRef(host.tasks(), String(ref));
       const maxLines = Math.min(lines ?? OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX);
+      const across = written ? undefined : parsePlanPath(String(ref));
+      if (across) {
+        // A plan below: what a report's reference names, read as a planner reads a removed task, by the log it left (ADR-0057 R1).
+        const subtree = await host.below?.();
+        const lower = subtree?.at(across.path);
+        const found = lower && resolveWrittenRef(lower.tasks, across.rest);
+        if (!lower || !found) return { isError: true, text: JSON.stringify({ ok: false, error: `No task below this plan matches "${ref}".` }) };
+        const attempts = lower.logs.attempts(found.task.id);
+        const selected = asked ?? found.attempt ?? attempts.at(-1);
+        if (selected === undefined || !attempts.includes(selected)) return { isError: true, text: JSON.stringify({ ok: false, error: `"${ref}" has no saved log for that attempt.`, attempts }) };
+        return read(host, JSON.stringify(['output', lower.node, found.task.id, maxLines, since ?? null, selected, kinds ? [...kinds].sort() : null]), async () => ({
+          task: { node: lower.node, id: found.task.id, title: found.task.title, status: found.task.status }, attempt: selected, attempts,
+          ...taskReadPage(renderTaskLog(lower.logs.events(found.task.id, selected), kinds), { lines: maxLines, since }),
+        }));
+      }
       if (!written) {
         // A removed task keeps its log, so a reference to it still reads: the attempt it names, or the latest (ADR-0057 R1).
         const { task: taskId, attempt: pinned } = parseFindingRef(String(ref));

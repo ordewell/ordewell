@@ -19,12 +19,12 @@ describe('the planner tool set', () => {
     expect(submitType(toolListing(PLANNER_TOOLS))).toEqual(['ai', 'user', 'script']);
   });
 
-  it('takes a delegated task in submit_plan only where one may be written, and changes no other tool', () => {
+  it('takes a delegated task in submit_plan only where one may be written, adds `read`, and changes no other tool', () => {
     const on = listOf(true, false);
     expect(submitType(on)).toEqual(['ai', 'user', 'script', 'delegated']);
     const flat = toolListing(PLANNER_TOOLS);
-    expect(on.map((t) => t.name)).toEqual(flat.map((t) => t.name));
-    expect(on.filter((t) => t.name !== 'submit_plan')).toEqual(flat.filter((t) => t.name !== 'submit_plan'));
+    expect(on.map((t) => t.name)).toEqual([...flat.map((t) => t.name), 'read']);
+    expect(on.filter((t) => t.name !== 'submit_plan' && t.name !== 'read')).toEqual(flat.filter((t) => t.name !== 'submit_plan'));
   });
 
   it('gives a subplanner task_complete and checkpoint, and no plan_complete or ask_parent', () => {

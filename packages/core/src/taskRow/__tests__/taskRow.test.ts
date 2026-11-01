@@ -386,6 +386,8 @@ describe('the row view, every status against every annotation', () => {
     // An ops task by nature (ADR-0035), but drawn with its body, so it has a kind of its own.
     expect(taskRowView(subject({ type: 'script' })).kind).toBe('script');
     expect(taskRowView(subject({ type: 'script', ops: true })).kind).toBe('script');
+    // One row for a whole child plan (ADR-0055 D20).
+    expect(taskRowView(subject({ type: 'delegated' })).kind).toBe('delegated');
   });
 
   it('offers a script task the force start an AI task gets, but never the ops toggle', () => {

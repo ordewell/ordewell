@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0009", "0013", "0015", "0018", "0020", "0022", "0029", "0030", "0035", "0045", "0046", "0049", "0054"]
-note: "Settles #33. Built: D1 to D8's plan rules and verdict, D10 to D13, D17's prune, D18's pool and D21, so one child plan runs end to end behind the build's switch. Not built: D8's taking a check back with a new result, D9's merge hold, D14's repair, D15's discards, D16's subtree stop, D17's Continue, which is refused, and a subplanner's question, which is refused so its turn goes on. D20's roll-up and a surface's row wait on ADR-0057's reports."
+note: "Settles #33. Built: D1 to D8's plan rules and verdict, D10 to D13, D17's prune, D18's pool and D21, so one child plan runs end to end behind the build's switch. Not built: D8's taking a check back with a new result, D9's merge hold, D14's repair, D15's discards, D16's subtree stop, D17's Continue, which is refused, and a subplanner's question, which is refused so its turn goes on. D20's minimum is built: one row and its usage, a log of what its child's tasks become; a tree view and the row's live counts are later."
 ---
 
 # 0055 — A delegated task is a child plan behind the runner seam
@@ -177,7 +177,7 @@ the child cannot reach follows it in the parent's plan.**
     cut from holds none of its work, and a script there would pass or fail on the
     unchanged baseline. Its handoff is all it leaves. So `delegationErrors` counts
     only a read-only AI task as its check, which reads that handoff with
-    `read_task`, and refuses a script there on every route, `readOnly` or not.
+    `read`, and refuses a script there on every route, `readOnly` or not.
   - **A script check runs sealed.** A script task runs at the workspace root
     behind a merge gate (ADR-0020, ADR-0035), so at the root it would wait for
     Merge all and check the work after it reached the user's branch. A script
@@ -401,11 +401,17 @@ the child cannot reach follows it in the parent's plan.**
   | tasks per child plan | 30 | 100 |
 
   A root plan has no task limit, so a flat run does not change.
-- **Surfaces (D20).** The root shows a delegated task as one row with derived
-  counts, and its log shows the child's activity, projected into its task log. A
-  child's `broadcast` carries nothing to a surface: its planner messages, cards and
-  status never reach the user directly. Usage rolls up: a delegated task's usage
-  adds its child's planner and tasks to `planUsage`. A full tree view is later.
+- **Surfaces (D20).** The root shows a delegated task as one row, of `kind`
+  `delegated`, with derived counts in its report, and its log shows the child's
+  activity, one line each time a child task's status changes, projected into its task
+  log. A child's `broadcast` carries nothing to a surface: its planner messages, cards
+  and status never reach the user directly. Usage rolls up: each record its planner or
+  a task spends goes up as it arrives, a level at a time, onto the delegated task's
+  attempt, so `planUsage` and the row add it as they add any task's. It was charged
+  where it was spent (ADR-0056 M5), so an attempt of a delegated task charges nothing,
+  and the row has no context meter: no one session's context is a subtree's. A child
+  session is never offered: `listSessions` does not see it (D11). A full tree view and
+  live counts on the row are later.
 - **Off unless turned on (D21).** Delegation is a run setting, off by default
   ([ADR-0030](0030-global-run-settings.md)), and turning it on sets the tree's token
   budget (ADR-0056 M5). While the rest of this ADR is unbuilt a build holds it back
@@ -463,6 +469,8 @@ the child cannot reach follows it in the parent's plan.**
   real server and a token bound to the attempt. The parent's deadlock is held there
   with real Sessions. `delegation.validation.test.ts` holds the plan rules on both
   routes, and `delegation.session.test.ts` who may write one.
+- What a child sends up runs end to end in `delegatedReports.e2e.test.ts`: a report, a
+  finding climbing two levels, the usage it rolls up and a child session never listed.
 - D15 is tested with each route to a fresh attempt, a removal, a merge and a split:
   the old child's worktrees and branches go and its state stays. A Continue, a repair
   and a resume leave them.
@@ -605,3 +613,4 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-10-31 — D10 to D13 and D17's prune implemented, reached by `Session.hostChild`: `createSession` is where a child is refused the user's checkout until `ChildPlanRunner` exists, a child takes its parent's isolation and never sweeps, a delete stops on what git could not let go, and a run a held lease refuses does not fall back to the checkout.
 - 2026-10-31 — D18 implemented in `SlotPool`, behind the lease (ADR-0059 L1): the root's pool reaches a child through `ChildPlacement`, and the subplanner's opening waits for a slot.
 - 2026-11-01 — one child plan end to end: D1, D2, D3 to D7, D8's plan rules and read-only script, and D19, in `ChildPlanRunner`, `models/Delegation.ts` and `PlanChangeCheck`. D21 gains the build's switch, and a protected path is one more check of the verdict.
+- 2026-11-01 — D20's minimum: a delegated row, usage rolled up a level at a time and charged once, and the child's activity in its log. D1's `read` is the runner's tool (ADR-0057 R11).

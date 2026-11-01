@@ -32,6 +32,8 @@ export interface PlannerToolsOffer {
   delegates?: boolean;
   /** A subplanner's: its token serves `task_complete` and `checkpoint` too, for the handler's `taskComplete` and `checkpoint` (D5). */
   subplanner?: boolean;
+  /** Its harness's own subagents are withheld: nothing refuses what they spend, so a subplanner has them only with `research` (ADR-0056 M6). */
+  noSubagents?: true;
 }
 
 /**

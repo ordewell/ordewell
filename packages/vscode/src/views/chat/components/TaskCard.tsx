@@ -573,7 +573,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             <TaskCheck row={row} />
             <span className="task-order">{row.orderLabel}</span>
             <span className={`task-type-badge ${task.type}`}>
-              {isUserTask ? 'Manual' : row.kind === 'script' ? 'Script' : 'AI'}
+              {isUserTask ? 'Manual' : row.kind === 'script' ? 'Script' : row.kind === 'delegated' ? 'Delegated' : 'AI'}
             </span>
             {row.research && (
               <span className="task-type-badge research" title="A research task: read-only, it lands nothing. Its report comes back to the planner and wakes it when the task ends.">Research</span>

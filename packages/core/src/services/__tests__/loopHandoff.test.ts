@@ -93,13 +93,13 @@ it('a dependent pulls the repair result from attempt 2 after a conflicting landi
     agents[1].reportComplete({ status: 'done', summary: 'Repair result', findings: [{ severity: 'info', title: 'Repaired' }], report: 'Repair report' });
     await vi.waitFor(() => expect(agents).toHaveLength(3));
     const read = spawn.mock.calls[2][0].readTask!;
-    const latest = read({ task: 'a', include_report: true }).text;
+    const latest = (await read({ task: 'a', include_report: true })).text;
     expect(latest).toContain('attempt 2 of 2');
     expect(latest).toContain('Repair result');
     expect(latest).toContain('F1 [info] Repaired');
     expect(latest).toContain('Repair report');
     expect(latest).not.toContain('Original report');
-    expect(read({ task: 'a', attempt: 1, include_report: true }).text).toContain('Original report');
+    expect((await read({ task: 'a', attempt: 1, include_report: true })).text).toContain('Original report');
   } finally {
     session.destroy();
     fs.rmSync(root, { recursive: true, force: true });

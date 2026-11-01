@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0012", "0013", "0022", "0029", "0047"]
-note: "Settles #34, and #36 and #38 as far as this goes. R1, R3, R4 and R5 are built for a flat plan, under the root; promote, open and a child's plan are the next of it: a subplanner's handoff cites no task until then. R6 to R12 come after them, the board (R8 to R10) last."
+note: "Settles #34, and #36 and #38 as far as this goes. R1 to R5, R11 and R12 are built, a child's plan and `promote` and `open` with them, and R4's waking reads a child plan's end. R6 and R7 come next, and the board (R8 to R10) last: `post` comes with it."
 ---
 
 # 0057 — Information moves by reference: reports stay one size at every level, and code decides when a planner wakes
@@ -47,9 +47,14 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   of immutable ids, pinned by Ordewell as the call is accepted: an author writes `#4/F3` and
   `checkHandoff` stores the attempt that finding belongs to, as it does for the `{ task, finding }`
   an author may also send, and `#4@1/F3` names an attempt outright. It renders as `#4@2/F3`, and
-  that text is what `read_task` and `task_output` take back. Across plans it carries the derived
+  that text is what `read` and `task_output` take back. Across plans it carries the derived
   path, `3/2:#4@2/F3`: `TaskRefs`' grammar is not overloaded, and the separator is one a task label
-  cannot hold.
+  cannot hold. The path is the node's in the tree's log
+  ([ADR-0058](0058-a-tree-holds-many-nodes-and-few-live-sessions.md) S3), each id a child's place
+  among its parent's, so a fresh retry, a new child, leaves a reference to the old one meaning what
+  it meant. A reader writes the path a report showed it. Reports show it from the root and an author
+  may write it from its own plan, so a path that starts at the reader's node and goes on is read as
+  shown, and any other from the reader's plan.
 
   A subplanner's `task_complete` is checked against its own plan, the child plan, not the
   parent's, whose attempt handles the call
@@ -61,14 +66,20 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   those plans, so `checkHandoff` is handed that set: `readableTaskIds` cannot derive it. A pinned
   reference holds the child task's immutable id and the attempt, under the `node` of its plan,
   and renders with the node path, so a later read reaches that attempt whatever the reader's
-  plan holds.
+  plan holds. One that has crossed a level also keeps `label`, the name its own plan gave the task:
+  ids can repeat between plans, so no other plan may name it.
+
+  A planner reads its whole subtree. A task reads below only through a delegated task in its
+  readable set, so a check reads what its delegated task did, and reading goes down and never up
+  or across: a child's tools reach nothing of the plan that holds its check
+  ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D8).
 
   The digest on a task says which attempt it is from, and a digest saved before it did takes the
   newest attempt the logs hold. A reference stays valid for the life of the root plan,
   since attempt logs live as long as their session and a child's sit under the root's
   ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D11); a task
   removed from the plan keeps its log, so a reference pinned to one of its attempts reads that
-  log by the id and attempt it holds. A task's `read_task` takes that read, and its
+  log by the id and attempt it holds. A task's `read` takes that read, and its
   `task_complete` the citation, only when a handoff in its readable set cites the attempt: the
   graph no longer reaches a removed task, and a task still cannot read work it was never given
   ([ADR-0047](0047-structured-task-handoffs.md)). A saved reference with no attempt reads the
@@ -96,16 +107,28 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   counts what the ceiling cut, promoted items included. So what a subplanner leaves out
   shows without a pull, and `read` on the delegated task lists it, each by its reference.
   A child's finding moves up only by reference. A subplanner adds its judgement as a finding of
-  its own; it cannot edit a child's, and no model summarises one. Paths its branch changed
+  its own; it cannot edit a child's, and no model summarises one. `open` may also name one of its
+  own findings, `F2`, which moves there. Paths its branch changed
   outside its `scope` join `open`, from code ([ADR-0056](0056-a-mandate-narrows-down-the-tree.md)
   M7). The attempt logs keep the rest, to pull.
+
+  Each item is read once, as the report is taken, and kept in the handoff: its reference is pinned,
+  so its words cannot have moved, and the renderer stays a pure function of the digest. A child that
+  ends with no call gets the same counts in a derived report. `blocked` counts every task that did
+  not end, `commits` the tasks that passed with a commit message. A listing `read` gives stops at 100
+  findings and counts the rest. The fields are written as text, `"#4/F3"`, since a reference is
+  what a report shows, and `open` has the limit `findings` has.
 - **What crosses a level is untrusted (R3).** Reports, boards and handoffs are data, shown with
   their provenance and never as instructions: the block says whose words they are, by path, in one
   short label on each dependency and each report (`wordsFrom`), and the planner's prompt says what
-  that means once. ADR-0037 R3 and ADR-0047 say this for one level. A tree makes
+  that means once. A reason a runner gave for failing is its words too, and says so where a report
+  opens with it; a script's is its exit status, and is not. ADR-0037 R3 and ADR-0047 say this for one
+  level. A tree makes
   each report a way into every node above it, and into each task that reads it, so a report
   never becomes a plan's text unless a planner writes it, and that planner is then answerable
-  for it.
+  for it. A promoted finding is its author's and not the subplanner's, so it carries that author's
+  reference; a detail is indented under it and a run update's report under its line, so neither can
+  pass for a line of Ordewell's.
 
 ### Waking
 
@@ -134,7 +157,8 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 
   A pass is not held: it wakes nothing and starts no clock, and rides along in the next wake, as it
   does today, so a plan that only passes opens no turn. A delegated task's pass is a child plan
-  ending, in the table. Not waiting on the cohort alone is deliberate: it would be bound to its
+  ending, in the table: its end reads as a `task_report`, so its report is what wakes the planner,
+  and one with `open` needs nothing more. Not waiting on the cohort alone is deliberate: it would be bound to its
   slowest task. There are no keep-warm pings: they are model turns that grow the context.
 - **Bounded wakes (R5).** A wake has a size cap, 24,000 characters, with one line per ride-along
   event of at most 120: a pass, or a held event that holds no work back. A digest names a task in at
@@ -198,7 +222,10 @@ Added after R1 to R7, and only if those leave a need; replays of Ordewell's own 
   `apply_patch`; a read-only task keeps ADR-0046's tools beside the first four. A task with no board has
   no `post`, so a flat run's tool list grows by nothing. `read` extends `read_task`, whose name stays an
   alias at the call and leaves the list. That rename is the one change to a flat list: a session resumed
-  across the build that ships it misses its prompt cache once. A planner holding delegated tasks gains `read` and `post`. Each
+  across the build that ships it misses its prompt cache once. A planner holding delegated tasks gains `read` and `post`.
+  It holds them from the moment its mandate lets it write one, since a list that grew with its first
+  delegated task would break its cache. An API planner has no server list: `task_output` takes the same
+  references for it. A role is one list, whichever attempt asks. Each
   role's set is fixed at session start, in a stable order
   ([ADR-0056](0056-a-mandate-narrows-down-the-tree.md) M6), with a CI test on its serialised size.
   Turning delegation on reaches a planner at its next process.
@@ -286,3 +313,4 @@ Added after R1 to R7, and only if those leave a need; replays of Ordewell's own 
 - 2026-10-31 — R1, R3, R4 and R5 built for a flat plan: references pinned under the root, reports and handoffs labelled as data, `wakeDue` deciding each wake, and a wake's cap, with a brief per level sent once a context.
 - 2026-10-31 — a removed task's pinned attempt reads from its log, within the readable set by citation; a turn's cap keeps the newest update and names what it leaves out; a digest cuts a title, not what happened.
 - 2026-10-31 — a removed task's attempt can be cited as it can be read, and a saved reference with no attempt reads the latest; a digest line leads with what happened and a task name is short enough to leave it, so a turn's cap keeps it.
+- 2026-11-01 — R1 across plans, R2, R3's checks at every level, R11 and R12 implemented, in `Subtree.ts`, `models/Handoff.ts` and `mcp/tools.ts`: a path is a node's in the tree's log, a report reads what it names once, a child plan's end is a `task_report`, and `read` is listed where a planner may delegate. Built closest to the text where it could not hold: `promote` and `open` are written as text, `open` may name a subplanner's own finding, and a runner's reason says whose words it is. `post` waits for the board.

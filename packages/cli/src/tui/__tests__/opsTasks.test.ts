@@ -126,6 +126,16 @@ describe('ops tasks and merge gates in the TUI (ADR-0020)', () => {
   });
 });
 
+describe('a delegated task in the plan pane (ADR-0055 D20)', () => {
+  const subtree: TaskView = { id: 'd', order: 3, title: 'Move the API', type: 'delegated', status: 'pending', dependencies: [], goal: 'The API serves v2' };
+
+  it('tags the one row SUB, apart from AI', () => {
+    const out = frame(plan([change(), subtree]));
+    expect(out).toContain('SUB Move the API');
+    expect(out).not.toMatch(/AI Move the API/);
+  });
+});
+
 describe('script tasks in the plan pane (ADR-0035)', () => {
   const script = (over: Partial<TaskView> = {}): TaskView => ({
     id: 's2', order: 2, title: 'Tag the release', type: 'script', status: 'pending', dependencies: ['t1'],

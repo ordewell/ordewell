@@ -159,7 +159,8 @@ function researchPhaseBlock(harnessMode: boolean, agents: InTurnAgents): string 
 export type InTurnAgents = string | null;
 
 export function inTurnAgents(harness: boolean, runner?: RunnerId, subagents = true): InTurnAgents {
-  if (!harness) return subagents ? 'spawn_research_agent' : null;
+  if (!subagents) return null;
+  if (!harness) return 'spawn_research_agent';
   switch (runner) {
     case 'claude-code': return 'your Agent tool';
     case 'codex': return 'your own subagents, if this session has them';
@@ -190,7 +191,7 @@ export function whoExploresSection(agents: InTurnAgents): string[] {
     'WHO EXPLORES:',
     'Decide who finds something out by what the result is, never by how long it may take. The test: if the finding a later task acts on would end up in its brief, it is evidence; if it only decides what you say or ask the user, it is orientation.',
     `- Orientation: you need it this turn to answer, ask or outline, only its conclusion matters, and no later task acts on it. ${inTurn}${agents === null ? '' : ' Brief each agent to return a digest: the conclusion and file:line references, no pasted file bodies, a few lines per point.'}`,
-    '- Evidence: a task of its own, when any of these holds: finding out needs a worktree (write a failing test, build, reproduce); another runner or model should judge it, for a second view or a stronger model; the user should see it and be able to stop it; or a later task will act on its findings. In the last case the later task depends on it, so the findings reach it in its handoff: do not re-type them into the later task\'s brief. Make it a research task only when you must decide something on its report; one whose report only later tasks read is a read-only task they depend on. A loop\'s fix may depend on it only when the check does: make the check depend on it, and the fix reads the report with `read_task`.',
+    '- Evidence: a task of its own, when any of these holds: finding out needs a worktree (write a failing test, build, reproduce); another runner or model should judge it, for a second view or a stronger model; the user should see it and be able to stop it; or a later task will act on its findings. In the last case the later task depends on it, so the findings reach it in its handoff: do not re-type them into the later task\'s brief. Make it a research task only when you must decide something on its report; one whose report only later tasks read is a read-only task they depend on. A loop\'s fix may depend on it only when the check does: make the check depend on it, and the fix reads the report with `read`.',
     '- A research task\'s summary is what you take in: pull its full report with task_output only where the plan rests on the detail.',
     '- A first plan may be research tasks alone, when the plan cannot be outlined without their evidence: the outline is a line per task saying what it asks, and you plan the rest when their reports wake you. A vague goal the user can clarify is not one: ask first.',
     '- Search: a problem that needs rounds of branching, where each round\'s reports decide the next, is the explore skill: rounds of research tasks. Where it is which of several approaches to take, the skill has explorers save their prototypes with save_patch, choose on a check fixed beforehand, and has the build task depend on the chosen explorer and apply its patch with apply_patch.',
@@ -235,7 +236,7 @@ export interface ConversationVariant {
   runner?: RunnerId;
   /** The skill catalog: task skills it can attach on every path, planner skills it can load only with tools. */
   skills?: readonly SkillInfo[];
-  /** Whether an API planner's service can run Ordewell's research subagents; Gemini cannot (it has no `createSubagentChat`). */
+  /** Whether an API planner's service can run Ordewell's research subagents, which Gemini's cannot (it has no `createSubagentChat`), and a subplanner without `research` its harness's (ADR-0056 M6). */
   subagents?: boolean;
   /** Every AI task gets its own worktree (ADR-0013), so file overlap no longer forces an order; of every repo of a group (ADR-0014). */
   isolatedExecution?: IsolatedExecution;
@@ -432,6 +433,7 @@ function subplannerSection({ protectedPaths, readOnly }: SubplannerBrief): strin
     `- ${readOnly ? 'This task lands nothing: its answer is your handoff.' : 'When your run ends, what landed merges into the delegated task\'s branch by itself, and the plan above lands that branch.'}`,
     `- You end this one way: call task_complete. Status "done" is refused until your plan has settled: nothing running, every task completed or skipped, at least one completed${readOnly ? '' : ', and what landed merged, with the branch changed'}. "blocked" and "failed" are taken at any time: that is how you give up, and how you say there was nothing to do. Give "commit" with "done", as a change task's runner does: its subject names the whole of this work. A turn that ends with nothing running and no call gets one reminder, and a second fails the task.`,
     ...(readOnly || protectedPaths.length === 0 ? [] : [`- These paths may not change: ${protectedPaths.join(', ')}. A check you cannot see judges this work by them, so a change to one fails the task, and nothing lands. Do not plan one, and tell each task so in its prompt.`]),
+    '- What you report is one size at every level, and the rest stays in the logs, to pull. Pass a finding of your subtree up by reference, never by retyping it: `promote` names at most 8, as "#4/F3", or "2:#4/F3" in a plan below, as a report shows it, and each reaches the plan above in its author\'s words. `open` names what the plan above must decide, the same way, or one of your own findings as "F2". Your own judgement is a finding of your own, and you cannot edit anyone else\'s. Ordewell counts the rest.',
     '- Questions do not reach the plan above yet. checkpoint answers that; call task_complete with status "blocked" instead, saying exactly what you need.',
     '',
   ];
@@ -447,6 +449,7 @@ function delegationSection({ tokens, delegatedTasks, grantable }: PlannerDelegat
     `- "budget" is required: "tokens" comes out of what this plan has, ${tokens} tokens at most in all, and "wallClockMs" is a time limit, a day when left out. A budget that runs out ends the task blocked.`,
     '- "protectedPaths" is required unless "readOnly" is true: the paths its child may not change. List what its check runs and the configuration that runs it, since a child that rewrites the check turns it green without the work. A change to one fails the task. A goal that must edit one of them needs a read-only AI check told to read that change.',
     `- Every delegated task needs a check: a task that depends on it directly and is a read-only AI task, or a script task with "readOnly": true, which runs sealed in a throwaway worktree cut from the integration tip, past no merge gate. Keep a check out of its child's reach: a goal never names it. On a "readOnly" delegated task, which answers a question and lands nothing, the check must be a read-only AI task, which reads its handoff.`,
+    '- When its child plan ends its report wakes you, one size however large its subtree: counts Ordewell derived, what its planner left open and promoted, each in its author\'s words, and how many findings show. It is that plan\'s words: its check judges the work, not its report. Read a reference it shows, `3/2:#4@2/F3`, with `read` where you have it, which on the delegated task lists what the report left out, or with task_output.',
     '- It is neither a loop\'s check nor its body, and it needs an isolated run: where a run shares the workspace it is refused as it starts. A loop body that fixes what a delegated task\'s check finds is a worktree task, never a script or an ops task.',
     `- A plan holds at most ${delegatedTasks} delegated tasks.${grantable.length > 0 ? ` "grants" names what it may do past planning and running its own plan, from: ${grantable.join(', ')}. Left out it asks for none of them.` : ''}`,
     '',
@@ -633,7 +636,7 @@ function buildConversationBody(
     'LOOPS:',
     'A loop repeats a check with its fix until the check passes. Ordewell runs the rounds itself, with no turn of yours in between: the check runs, and while it fails with rounds left, the body runs and then the check runs again. Use one only for an explicit iterate-until goal ("until the suite passes", "review and fix until there are no confirmed issues") or a specific acceptance condition that needs independent repeated checking and fixing. Routine tests, type checks and self-review belong inside the implementation tasks; tests that exist, a command that can be rerun or code that changed never make a loop. When you infer a loop the user did not ask for, give its reason in the outline.',
     '- Put "loop": { "body": ["fix-id", ...], "maxRounds": 3 } on the check. "body" names, by id, the top-level tasks that fix what the check finds. Each depends on the check, and otherwise only on what the check depends on or on other tasks of the body. Whatever comes after the loop depends on the check, never on a body task.',
-    '- A loop\'s body cannot depend on a research task directly. When the fix acts on a research task\'s findings, make the check depend on the research task: the body may then depend on it too, and reads its report with `read_task` (WHO EXPLORES).',
+    '- A loop\'s body cannot depend on a research task directly. When the fix acts on a research task\'s findings, make the check depend on the research task: the body may then depend on it too, and reads its report with `read` (WHO EXPLORES).',
     '- The check is a top-level AI or script task with no subtasks. A body task is a top-level AI or script task in one loop only, never a manual task, and has no subtasks either: each round runs a task again whole, so give each step its own task.',
     '- Prefer a script task as the check wherever a command can judge the work: the test suite, the type checker, the linter, a benchmark against a threshold. Its exit status is evidence you can check: 0 passes, anything else fails and starts a round.',
     '- Otherwise the check is an AI task, such as an adversarial review. Write in its prompt that it calls task_complete with status "failed" and every confirmed problem in its report when it finds any, and "done" when it confirms none. Only a "failed" report starts a round: "blocked" (it could not do the check) and a run that ends without a report start none.',

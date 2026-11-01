@@ -271,6 +271,8 @@ export class RunSupervision {
 
   private reportAddress(task: Readonly<Task>): TaskReportTo | undefined {
     if (task.reportTo) return task.reportTo;
+    // A child plan ending is what its parent decides on, so its report wakes it at once, as research does (ADR-0057 R4).
+    if (task.type === 'delegated') return researchReportTo({ kind: 'supervisor', level: this.level });
     if (!task.research) return;
     return task.researchOrigin ?? researchReportTo(task.addedBy === 'supervisor'
       ? { kind: 'supervisor', level: this.level } : { kind: 'planner-turn' });
