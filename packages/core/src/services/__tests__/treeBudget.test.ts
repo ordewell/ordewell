@@ -327,7 +327,8 @@ describe('a subplanner\'s turn (ADR-0056 M5)', () => {
     const a = await child('a', 2 * R, [task('a1', 1)]);
     await run(a);
     await until(() => started(a).includes('a1'));
-    report(a, 'a1', used(2 * R - 1));
+    // What a1 holds for its own calls is no turn's to spend, so one token short of that is too little.
+    report(a, 'a1', used(1));
     await settled();
     expect(a.session.outOfBudget).toBeNull();
 

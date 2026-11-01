@@ -1491,9 +1491,12 @@ export class TaskOrchestrator {
     if (stopped.length === 0) return;
     const one = stopped.length === 1;
     const named = quotedList(stopped.map((a) => this.store.get(a.taskId)?.title ?? a.taskId));
-    const kept = stopped.some((a) => a.worktree)
-      ? ` What ${one ? 'it' : 'they'} did is kept in ${one ? 'its worktree' : 'their worktrees'}: Mark complete lands it; Retry starts over and keeps it on a branch.`
-      : '';
+    const delegated = stopped.every((a) => this.store.get(a.taskId)?.type === 'delegated');
+    const kept = delegated
+      ? ` Continue keeps what ${one ? 'its child' : 'their children'} landed; anything else that starts ${one ? 'it' : 'them'} starts over with a new child.`
+      : stopped.some((a) => a.worktree)
+        ? ` What ${one ? 'it' : 'they'} did is kept in ${one ? 'its worktree' : 'their worktrees'}: Mark complete lands it; Retry starts over and keeps it on a branch.`
+        : '';
     this.tell('info', `Stopped ${named}: back to not started.${kept}`);
   }
 

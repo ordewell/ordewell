@@ -18,7 +18,25 @@ function captureExit(): { exitCode: () => number | null; restore: () => void } {
   return { exitCode: () => code, restore: () => spy.mockRestore() };
 }
 
+describe('add-task', () => {
+  it('leaves the mode for the runner to resolve, since no name holds on every runner', async () => {
+    const api = client([]);
+
+    await handleAddTask(['--title', 'New', '--session-id', 's1'], api);
+
+    expect(vi.mocked(api.addTask).mock.calls[0][1]).not.toHaveProperty('taskMode');
+  });
+});
+
 describe('add-task --depends-on', () => {
+  it('reads the plan from the workspace it was told, not the one the daemon started in', async () => {
+    const api = client([{ id: 'task-abc', order: 2, title: 'Two', status: 'pending' }]);
+
+    await handleAddTask(['--title', 'New', '--depends-on', '2', '--session-id', 's1', '--workspace', '/elsewhere'], api);
+
+    expect(api.getSession).toHaveBeenCalledWith('s1', '/elsewhere');
+  });
+
   it('resolves an order number to the task id before sending it', async () => {
     const api = client([{ id: 'task-abc', order: 2, title: 'Two', status: 'pending' }]);
 

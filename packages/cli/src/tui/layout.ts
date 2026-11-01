@@ -279,6 +279,7 @@ const STATUS_WORD: Record<TaskStatusKind, string> = {
 function logHeaderTask(task: TaskView | undefined): TaskLogHeaderTask {
   return {
     status: task?.status ?? '',
+    ...(task ? { type: task.type } : {}),
     ...(task?.awaitingReason ? { awaitingReason: task.awaitingReason } : {}),
     ...(task?.skipReason !== undefined ? { skipReason: task.skipReason } : {}),
     resumeAt: task?.resumeAt ?? null,

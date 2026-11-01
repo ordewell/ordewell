@@ -413,8 +413,9 @@ the child cannot reach follows it in the parent's plan.**
   tied to that path: a record that names a child keeps its parent's run continuing,
   whether or not a Stop has yet taken it off `active`, and a child whose path moved
   anyway is refused, `blocked`, rather than mint a run and leave what it landed behind. A stopped delegated task
-  reads as not started and may be continued, since its child is still there; one
-  that landed may not, since its child has gone with the work. A subplanner a guard
+  reads as not started and may be continued, since its child is still there: a surface's
+  composer continues it, as it does a finished task, and every other start discards that
+  child (D15). One that landed may not, since its child has gone with the work. A subplanner a guard
   lowered, or that failed its restart, is Act again (ADR-0056 M8). A parent's adoption does not prune a task that names a child:
   `pruneOrphans` keeps a record with a `childSession` as it keeps kept work, a
   read-only one too, and a restore carries the name. A child's worktrees are out of
@@ -469,8 +470,10 @@ the child cannot reach follows it in the parent's plan.**
   A root plan has no task limit, so a flat run does not change.
 - **Surfaces (D20).** The root shows a delegated task as one row, of `kind`
   `delegated`. Its status carries a `delegation` row, derived each time one goes out and
-  kept nowhere: where its child's tasks stand now, what is left of its budget across
-  every child the task has had (ADR-0056 M10), and, while a Stop is still winding its
+  kept nowhere: where its child's tasks stand now, what is left of what the tree granted
+  it, its budget and every raise, across every child the task has had (ADR-0056 M5, M10),
+  or nothing on that until the ledger is read for a task that ran, since a restart has
+  yet to read what it spent, and, while a Stop is still winding its
   subtree down, that it is stopping (D16), since by then the task already reads as not
   started. A surface draws these beside the goal, and a finished child's counts come
   from its report. Its log shows the child's activity, one line each time a child task's
@@ -582,8 +585,7 @@ the child cannot reach follows it in the parent's plan.**
   one Stop and one restart, which D16 and D17 get for far less, and it would rewrite
   the two largest modules.
 - **A separate process per child, now.** Rejected for now. Tokens and the MCP port
-  die with the parent, the daemon's `execute-command` route acts as the user, and a
-  host killed outright leaves its runners, which sit in their own process groups.
+  die with the parent, and the daemon's `execute-command` route acts as the user.
   Nested Sessions share a host's failure and one event loop, which
   [ADR-0058](0058-a-tree-holds-many-nodes-and-few-live-sessions.md) sizes for.
 - **`subtasks` as the recursion.** Rejected. A subtask shares its parent's plan,
@@ -710,3 +712,4 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-11-01 — D20 on the TUI and VS Code: a delegated row's `delegation` (child counts, budget left, stopping), a report's `open` and `promoted`, VS Code's raise and answer words, and a Merge all that asks before it goes past a check. A webview is told by its host that delegation is offered, which it could not read itself.
 - 2026-11-01 — from review and a real run: a ready check starts by itself once its delegated task passes, on every route (D8, D9); a check whose runner cannot be read holds as any does; a restart says a parked question is lost, and Continue picks the child up (D17).
 - 2026-11-01 — from review: a repair is charged to the ledger and leaves the child's names and the report as they stood (D14).
+- 2026-11-01 — from real runs: a surface's composer continues a stopped delegated task and one whose question was lost (D17), and its row counts raises and says no budget it has not read (D20).

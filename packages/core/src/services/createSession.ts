@@ -30,7 +30,7 @@ import { checkWords, checksDelegatedTask, type DelegatedRow } from '../models/De
 import type { SlotPool } from './SlotPool';
 import type { OpenLease, ReservedLease } from './executionLease';
 import { PlanStore } from './PlanStore';
-import { ApprovalPolicy, effectiveApprovalMode } from './ApprovalPolicy';
+import { ApprovalPolicy, effectiveApprovalMode, type ApprovalModeSetting } from './ApprovalPolicy';
 import { DEFAULT_PLANNER_ALLOWLIST } from './plannerAllowlist';
 import { effectRuleFor, parseEffectAllowlist, type EffectRules } from './effectAllowlist';
 import { SCRIPT_PAST_THE_RULES, autonomousAt, delegatedRequest, heldMandate, mandateRefusalText, narrow, rootAuthority, withheldPlannerTools, type Mandate, type MandateRequest, type NodeAuthority, type RootSettings } from './Mandate';
@@ -324,11 +324,13 @@ const SILENT: INotification = { info() {}, warn() {}, error() {}, confirm: async
 function subplannerConfig(config: IConfig, task: Task): IConfig {
   const provider = providerForRunner(task.assignedRunner);
   if (!provider) throw new Error(`Task "${task.title}" names runner "${task.assignedRunner}", and a subplanner is a harness planner: no planner runs on it.`);
+  // `allowlist` is only the setting's spelling. A policy reads it as neither allow nor deny, and asks.
+  const approvalMode: ApprovalModeSetting = 'deny';
   return Object.create(config, {
     aiProvider: { value: provider, enumerable: true },
     orchestratorModel: { value: task.assignedModel?.modelId ?? '', enumerable: true },
     plannerThinkingEffort: { value: task.assignedModel?.thinkingEffort, enumerable: true },
-    approvalMode: { value: 'allowlist', enumerable: true },
+    approvalMode: { value: approvalMode, enumerable: true },
     notifyCommand: { value: [], enumerable: true },
   }) as IConfig;
 }
@@ -1811,13 +1813,16 @@ export class Session {
     const task = this.store.get(taskId);
     if (task?.type !== 'delegated') return undefined;
     const tasks = this.childPlans.progressOf(taskId);
-    const budget = task.budget?.tokens;
     const tree = this.tree;
+    const stated = task.budget?.tokens;
+    const budget = stated === undefined ? undefined : stated + (tree?.raisedOn(this.nodePath, taskId) ?? 0);
     const open = tree?.nodeOf(this.runs.childSession(taskId) ?? '');
     const spent = tree ? open ? tree.taskSpent(open.path) : tree.spentOn(this.nodePath, taskId) : 0;
+    // Spending is the log's, read when something first asks: before that a task that ran would read as untouched.
+    const known = budget !== undefined && (tree !== null || !task.attempted);
     const row: DelegatedRow = {
       ...(tasks ? { tasks } : {}),
-      ...(budget !== undefined ? { tokens: { budget, left: Math.max(0, budget - spent) } } : {}),
+      ...(known ? { tokens: { budget, left: Math.max(0, budget - spent) } } : {}),
       ...(this.orchestrator.windingDown(taskId) ? { stopping: true as const } : {}),
     };
     return Object.keys(row).length > 0 ? row : undefined;

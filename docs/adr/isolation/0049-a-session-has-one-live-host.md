@@ -72,7 +72,13 @@ lets go of nothing.
   process). Even then it is refused while any process group the holder recorded
   still has members: a host killed outright never ran the teardown that stops
   its runners, and they go on writing in the worktrees a new holder would
-  prepare. The refusal names those groups and how to stop them.
+  prepare. The refusal names those groups and how to stop them. A host does not
+  leave its runners to that: each group it starts has a small shell waiting on a
+  pipe only that host writes, which the kernel closes as the host dies, however
+  it dies, and the shell stops the group as a Stop does, SIGTERM and, after the
+  grace, SIGKILL. A host going politely has asked already, so it says so down the
+  pipe and the shell owes only the SIGKILL. So the refusal covers the moments
+  that takes, and Windows, which has no such group.
 - **Every write holds the lock (L4).** Taking the lease, its heartbeat and
   letting it go each run holding `lease.json.lock` (`withFileLock`, the settings
   file's lock), and write by rename. A takeover and the old holder's heartbeat
@@ -171,6 +177,12 @@ throwaway HTTP server, the TUI effect and the CLI command against a refusal.
   lease it holds, which can refuse a takeover over a runner of another of its
   sessions, and never lets one through beside a live runner.
 
+- **Stopping a killed host's runners only from the next host.** Dropped: a real
+  run's runner went on for as long as its turn lasted, committed to its task's
+  branch and spent tokens no ledger heard of, with nobody starting a next host. A
+  runner ends its turn when its stdin closes, so nothing it does by itself is
+  soon enough.
+
 ## Consequences
 
 - A second TUI, CLI daemon or VS Code window opening a running session is told
@@ -192,4 +204,5 @@ throwaway HTTP server, the TUI effect and the CLI command against a refusal.
 - 2026-10-31 — the root's lease covers its tree, and a child session holds none of its own (ADR-0055 D13).
 - 2026-11-01 — L5 covers planner turns and resolving a conflict as a task: neither read the lease, so a host that had lost a session ran its planner and wrote its PRD.
 - 2026-11-01 — L5 reaches a turn already live at a takeover, and a cleanup's write to the tree log: both ran on past the lease.
+- 2026-11-01 — from a real run: L3's runners no longer wait for a next host, a small shell stops a group whose host has gone.
 - 2026-11-01 — L7 waits out what the run has under way: a release still in git as a Session closed ran with the lease let go, in a tree a next host could hold.
