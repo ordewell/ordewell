@@ -2,7 +2,8 @@ import { vi, type Mock } from 'vitest';
 import { createSession, type SaveSession, type Session, type SessionDeps, type SessionPlanner } from '../createSession';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { ModelResolver } from '../ModelResolver';
-import type { IAiService } from '../AiService';
+import type { ConversationRequest, ConversationTurn, IAiService } from '../AiService';
+import type { PlannerToolHandler } from '../mcp';
 import type { INotification } from '../../interfaces/INotification';
 import type { IRunner } from '../../interfaces/IRunner';
 import type { IFileSystem } from '../../interfaces/IFileSystem';
@@ -107,6 +108,37 @@ export function saves(session: Session): Mock<SaveSession> {
   const fake = saveFakes.get(session);
   if (!fake) throw new Error('This session was given its own saveSession; assert on that instead');
   return fake;
+}
+
+/** One planner turn: the tools it calls, as a harness planner would, and the text it opened with. */
+export type PlannerTurn = (tools: PlannerToolHandler, text: string) => Promise<unknown>;
+
+/** A planner with no process: each of its turns calls the tools a harness planner would, in order. */
+export function scriptedPlanner(turns: PlannerTurn[]): { service: Partial<IAiService>; requests: ConversationRequest[]; asked: string[] } {
+  const requests: ConversationRequest[] = [];
+  const asked: string[] = [];
+  let handler: PlannerToolHandler | undefined;
+  const next = async (text: string): Promise<ConversationTurn> => {
+    asked.push(text);
+    const turn = turns.shift();
+    if (turn && handler) await turn(handler, text);
+    return { kind: 'message', text: 'Done with this turn.', researchLog: [] };
+  };
+  return {
+    requests,
+    asked,
+    service: {
+      hasActiveConversation: () => handler !== undefined,
+      plannerToolsAttached: () => true,
+      restart: () => undefined,
+      startConversation: async (req) => {
+        requests.push(req);
+        handler = req.plannerTools?.handler;
+        return next(req.initialMessage ?? req.goal);
+      },
+      continueConversation: (text) => next(text),
+    },
+  };
 }
 
 /** A Session over fully faked deps, built through the real composition root. */

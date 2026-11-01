@@ -133,6 +133,12 @@ export function delegationErrors(tasks: readonly Task[], rules: DelegationRules 
   return errors;
 }
 
+/** Whether `task` is the check of a delegated task of `tasks`: what a model may not skip past, since that lets the work past its only check (D8). */
+export function checksDelegatedTask(tasks: readonly Task[], task: Task, rules: Pick<DelegationRules, 'runnerModes'> = {}): boolean {
+  if (!readsOnly(task, rules.runnerModes) && !(task.type === 'script' && task.readOnly)) return false;
+  return tasks.some((t) => t.type === 'delegated' && task.dependencies.includes(t.id));
+}
+
 /** The tasks a child's plan counts: its whole list, subtasks included. */
 export function planSize(tasks: readonly Task[]): number {
   return flattenTasks(tasks).length;

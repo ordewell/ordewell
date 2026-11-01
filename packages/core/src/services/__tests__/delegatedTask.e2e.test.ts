@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { execFileSync } from 'child_process';
+import { execFileSync, spawnSync } from 'child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -7,7 +7,8 @@ import { createWorktreeIsolation } from '../GitWorktreeIsolation';
 import { LeaseHost } from '../sessionLease';
 import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import type { Session } from '../createSession';
-import type { ConversationRequest, ConversationTurn, IAiService } from '../AiService';
+import type { IAiService } from '../AiService';
+import type { IFileSystem, OwnSealedRuns, TaskShell, ToolOutcome } from '../../interfaces/IFileSystem';
 import type { IRunner } from '../../interfaces/IRunner';
 import type { IWorktreeIsolation } from '../../interfaces/IWorktreeIsolation';
 import type { PlannerToolHandler } from '../mcp';
@@ -15,7 +16,7 @@ import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import { fakeConfig, FakeRunnerSession } from '../../testing';
 import { saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
-import { fakeFs, makeSession } from './sessionTestKit';
+import { fakeFs, makeSession, scriptedPlanner, type PlannerTurn as Turn } from './sessionTestKit';
 
 /*
  * A delegated task end to end, on real repositories (ADR-0055): a root plan
@@ -31,7 +32,8 @@ const env = () => {
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, env: env(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
 const roots: string[] = [];
-afterEach(() => { while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true }); });
+// What a closing child still saves may land a moment after its parent's `destroy`.
+afterEach(() => { while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
 
 function repo(): string {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-delegated-')));
@@ -48,38 +50,8 @@ function repo(): string {
   return root;
 }
 
-type Turn = (tools: PlannerToolHandler, text: string) => Promise<unknown>;
-
-/** A subplanner with no process: each of its turns calls the tools a harness planner would, in order. */
-function scriptedPlanner(turns: Turn[]): { service: Partial<IAiService>; requests: ConversationRequest[]; asked: string[] } {
-  const requests: ConversationRequest[] = [];
-  const asked: string[] = [];
-  let handler: PlannerToolHandler | undefined;
-  const next = async (text: string): Promise<ConversationTurn> => {
-    asked.push(text);
-    const turn = turns.shift();
-    if (turn && handler) await turn(handler, text);
-    return { kind: 'message', text: 'Done with this turn.', researchLog: [] };
-  };
-  return {
-    requests,
-    asked,
-    service: {
-      hasActiveConversation: () => handler !== undefined,
-      plannerToolsAttached: () => true,
-      restart: () => undefined,
-      startConversation: async (req) => {
-        requests.push(req);
-        handler = req.plannerTools?.handler;
-        return next(req.initialMessage ?? req.goal);
-      },
-      continueConversation: (text) => next(text),
-    },
-  };
-}
-
 /** Writes each task's files in the worktree it was handed, then reports done; a task with none reports done at once. */
-function writingRunner(files: Record<string, string[]>, { usage = 0 }: { usage?: number } = {}): IRunner & { spawned: string[] } {
+function writingRunner(files: Record<string, string[]>, { usage = 0, asks }: { usage?: number; asks?: (session: FakeRunnerSession) => void } = {}): IRunner & { spawned: string[] } {
   const spawned: string[] = [];
   return {
     spawned,
@@ -87,6 +59,10 @@ function writingRunner(files: Record<string, string[]>, { usage = 0 }: { usage?:
       spawned.push(opts.taskId);
       const session = new FakeRunnerSession(`s-${opts.taskId}-${spawned.length}`, opts.taskId);
       setTimeout(() => {
+        if (asks) {
+          asks(session);
+          session.requestPermission('perm-1', 'Bash', { command: 'rm -rf /' });
+        }
         for (const file of files[opts.taskId] ?? []) {
           mkdirSync(dirname(join(opts.cwd, file)), { recursive: true });
           writeFileSync(join(opts.cwd, file), `written by ${opts.taskId}\n`);
@@ -146,6 +122,24 @@ const childTask = (id: string, order: number, dependencies: string[] = []) => ({
   id, order, title: `Write ${id}`, description: id, type: 'ai', prompt: `write ${id}`, sliceType: 'AFK', autonomy: 'AFK', dependencies,
 });
 
+const NOTHING_THEN_BLOCKED: Turn = async (tools) => {
+  await tools.taskComplete!({ status: 'blocked', summary: 'Not now.', reason: 'Nothing is ready.' }, { signal: new AbortController().signal });
+};
+
+/** Writes `a.txt` and passes every task but the check, which fails. */
+function failingCheck(): IRunner {
+  const inner = writingRunner({ a: ['a.txt'] });
+  return {
+    ...inner,
+    spawn: vi.fn(async (opts) => {
+      if (opts.taskId !== 'c') return inner.spawn(opts);
+      const session = new FakeRunnerSession(`s-${opts.taskId}`, opts.taskId);
+      setTimeout(() => session.reportComplete({ status: 'failed', summary: 'It does not hold.', reason: 'It does not hold.' }), 5);
+      return session;
+    }),
+  };
+}
+
 const DONE: Turn = async (tools) => {
   const reply = await tools.taskComplete!({ status: 'done', summary: 'Both files are written.', commit: { subject: 'Write a and b' } }, { signal: new AbortController().signal });
   if (reply.isError) throw new Error(reply.text);
@@ -157,17 +151,18 @@ interface Tree {
   planner: ReturnType<typeof scriptedPlanner>;
 }
 
-interface TreeOptions { runner?: IRunner; tasks?: Task[]; tokens?: number; parallel?: number; offered?: boolean; runners?: string[] }
+interface TreeOptions { runner?: IRunner; tasks?: Task[]; tokens?: () => number; parallel?: number; offered?: boolean; runners?: string[]; fsAdapter?: IFileSystem }
 
-function tree(turns: Turn[], { runner = writingRunner({ a: ['a.txt'], b: ['b.txt'] }), tasks = [delegated(), check()], tokens = 5_000_000, parallel = 3, offered = true, runners = ['claude-code'] }: TreeOptions = {}): Tree {
+function tree(turns: Turn[], { runner = writingRunner({ a: ['a.txt'], b: ['b.txt'] }), tasks = [delegated(), check()], tokens = () => 5_000_000, parallel = 3, offered = true, runners = ['claude-code'], fsAdapter }: TreeOptions = {}): Tree {
   const root = repo();
   const planner = scriptedPlanner(turns);
   const parent = makeSession({
     runner, isolation: isolation(), workspaceRoot: () => root, saveSession, openTaskLog, leaseHost: new LeaseHost(), sessionId: 'session-root',
     config: fakeConfig({ maxParallelSessions: parallel }),
-    settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: tokens } }),
+    ...(fsAdapter ? { fsAdapter } : {}),
+    settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: tokens() } }),
     delegationOffered: offered,
-    childDeps: () => ({ aiService: { reset: vi.fn(), ...planner.service } as unknown as IAiService, fsAdapter: { ...fakeFs(), getWorkspaceRoot: () => root } }),
+    childDeps: () => ({ aiService: { reset: vi.fn(), ...planner.service } as unknown as IAiService, fsAdapter: fsAdapter ?? { ...fakeFs(), getWorkspaceRoot: () => root } }),
   });
   parent.loadPlan({ ...planOf(tasks), runners }, 'the root goal', root, { sessionId: 'session-root' });
   return { root, parent, planner };
@@ -370,6 +365,156 @@ describe('the verdict (ADR-0055 D6)', () => {
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('failed'), { timeout: 20_000 });
     expect(answers[0]).toMatchObject({ isError: true, text: expect.stringContaining('status "blocked"') });
+    parent.destroy();
+  });
+});
+
+describe('a sealed script (ADR-0055 D8, ADR-0056 M9)', () => {
+  /** A shell that runs what it is handed in `sh`, and keeps what it ran: a real seal is the sandbox's own suite. */
+  function sealedFs() {
+    const ran: { script: string; cwd: string }[] = [];
+    const run = async (script: string, cwd: string): Promise<ToolOutcome> => {
+      ran.push({ script, cwd });
+      const result = spawnSync('sh', ['-c', script], { cwd, encoding: 'utf8' });
+      return { success: result.status === 0, output: `${result.stdout}${result.stderr}`, truncated: false };
+    };
+    const fsAdapter: IFileSystem = {
+      ...fakeFs(),
+      canSeal: async () => true,
+      taskShell: ({ cwd, writable, worktrees }) => {
+        const shell: TaskShell = {
+          run: () => Promise.reject(new Error('a script runs through hold')),
+          hold: <T>(work: (runs: OwnSealedRuns) => Promise<T>) => work({ worktrees: worktrees?.length ? worktrees : [writable ?? cwd], touched: false, scratch: '', run }),
+          end: () => undefined,
+        };
+        return shell;
+      },
+    };
+    return { fsAdapter, ran };
+  }
+  const script = (over: Partial<Task> = {}) => createTask({ id: 'c', order: 2, title: 'Run the suite', type: 'script', commands: [['cat', 'a.txt']], readOnly: true, dependencies: ['d'], ...over });
+
+  it('runs sealed in a worktree cut from the integration tip, past no merge gate, and lands nothing', async () => {
+    const { fsAdapter, ran } = sealedFs();
+    const { root, parent } = tree([SUBMIT([childTask('a', 1)]), DONE], { tasks: [delegated(), script()], fsAdapter });
+    const main = git(root, 'rev-parse', 'main');
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('completed'), { timeout: 20_000 });
+
+    expect(ran[0].cwd).not.toBe(root);
+    expect(git(root, 'rev-parse', 'main')).toBe(main);
+    expect(existsSync(ran[0].cwd)).toBe(false);
+    const integration = parent.planState?.isolation?.run.repos[0].integrationBranch ?? '';
+    expect(git(root, 'ls-tree', '-r', '--name-only', integration).split('\n')).toEqual(['README.md', 'a.txt', 'tests/guard.txt']);
+    parent.destroy();
+  });
+
+  it('fails on its exit status, and its dependents are held', async () => {
+    const { fsAdapter } = sealedFs();
+    const { parent } = tree([SUBMIT([childTask('a', 1)]), DONE], { tasks: [delegated(), script({ commands: [['cat', 'no-such-file']] }), createTask({ id: 'n', order: 3, title: 'After', prompt: 'after', dependencies: ['c'] })], fsAdapter });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('failed'), { timeout: 20_000 });
+    expect(parent.planTasks.find((t) => t.id === 'c')?.verdict?.reported).toBe('failed');
+    expect(statusOf(parent, 'n')).not.toBe('in_progress');
+    parent.destroy();
+  });
+
+  it('fails at its start where the host has no sealed shell, and never sits ready', async () => {
+    const { parent } = tree([SUBMIT([childTask('a', 1)]), DONE], { tasks: [delegated(), script()] });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(parent.escalations().map((e) => e.reason).join()).toContain('must run sealed'), { timeout: 20_000 });
+    parent.destroy();
+  });
+
+  it('is what a child\'s own script task is, with no `effect` to run otherwise', async () => {
+    const { fsAdapter, ran } = sealedFs();
+    const script = { id: 't', order: 2, title: 'Test it', description: 'test', type: 'script', sliceType: 'AFK', commands: [['cat', 'a.txt']], dependencies: ['a'] };
+    const { parent } = tree([SUBMIT([childTask('a', 1), script]), DONE], { fsAdapter });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    expect(ran).toHaveLength(1);
+    parent.destroy();
+  });
+});
+
+describe('what a model may not do to a check (ADR-0055 D8)', () => {
+  it('refuses a supervisor\'s skip of a failed check, and leaves the user\'s', async () => {
+    const { parent } = tree([SUBMIT([childTask('a', 1)]), DONE], { runner: failingCheck(), tasks: [delegated(), check({ taskMode: 'plan' })] });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('failed'), { timeout: 20_000 });
+    const refused = await parent.execute({ command: 'skip_task', task: 'c', reason: 'it is fine' }, { kind: 'supervisor', level: 'act' });
+    expect(refused).toMatchObject({ ok: false, message: expect.stringContaining('a model does not skip it') });
+    expect(await parent.execute({ command: 'skip_task', task: 'c' }, { kind: 'user' })).toMatchObject({ ok: true });
+    parent.destroy();
+  });
+});
+
+describe('what ends a child with nobody to ask (ADR-0056 M3, M8, M10)', () => {
+  it('denies a runner\'s approval at once: nobody below the root may allow it', async () => {
+    const asked = { session: null as FakeRunnerSession | null };
+    const runner = writingRunner({ a: ['a.txt'] }, { asks: (session) => { asked.session = session; } });
+    const { parent } = tree([SUBMIT([childTask('a', 1)]), DONE], { runner });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    expect(asked.session?.answers[0]?.decision).toMatchObject({ decision: 'deny' });
+    parent.destroy();
+  });
+
+  it('ends blocked when its time runs out, its run stopped first', async () => {
+    const held = heldTasks({ a: ['a.txt'] }, ['a']);
+    const { parent } = tree([SUBMIT([childTask('a', 1)])], { runner: held.runner, tasks: [delegated({ budget: { tokens: 2_000_000, wallClockMs: 150 } }), check()] });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('failed'), { timeout: 20_000 });
+    expect(parent.planTasks.find((t) => t.id === 'd')?.verdict).toMatchObject({ reported: 'blocked', reason: expect.stringContaining('ran out') });
+    expect(held.stopped).toContain('a');
+    parent.destroy();
+  });
+
+  it('ends blocked once delegation is turned off above it, its work in flight finished', async () => {
+    let tokens = 5_000_000;
+    const held = heldTasks({ a: ['a.txt'] }, ['a']);
+    const { parent } = tree([SUBMIT([childTask('a', 1), childTask('b', 2, ['a'])])], { runner: held.runner, tokens: () => tokens });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(held.runner.spawned).toContain('a'));
+    tokens = 0;
+    parent.applyRunSettings({ delegationTokens: 0 });
+    held.release('a');
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('failed'), { timeout: 20_000 });
+    expect(parent.planTasks.find((t) => t.id === 'd')?.verdict).toMatchObject({ reported: 'blocked', reason: expect.stringContaining('withdrawn') });
+    expect(held.runner.spawned).not.toContain('b');
+    parent.destroy();
+  });
+});
+
+describe('a child\'s budget', () => {
+  it('comes back when it closes, for the next carve', async () => {
+    const turns = [SUBMIT([childTask('a', 1)]), DONE, SUBMIT([{ ...childTask('b', 1), id: 'b' }]), DONE];
+    const { parent } = tree(turns, {
+      tokens: () => 3_000_000,
+      tasks: [delegated({ budget: { tokens: 2_500_000 } }), check(), delegated({ id: 'e', order: 3, dependencies: ['c'], budget: { tokens: 2_500_000 } }), check({ id: 'f', order: 4, dependencies: ['e'] })],
+    });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'f')).toBe('completed'), { timeout: 20_000 });
+    parent.destroy();
+  });
+
+  it('starts over on a fresh retry, in a new child', async () => {
+    const { parent, planner } = tree([NOTHING_THEN_BLOCKED, SUBMIT([childTask('a', 1)]), DONE]);
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('failed'), { timeout: 20_000 });
+    const first = parent.planState?.isolation?.run.tasks.d.childSession;
+    expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'fresh' }, { kind: 'user' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    expect(planner.requests).toHaveLength(2);
+    expect(parent.planState?.isolation?.run.tasks.d.childSession).not.toBe(first);
+    parent.destroy();
+  });
+
+  it('is refused a Continue, saying a fresh retry starts it over', async () => {
+    const { parent } = tree([NOTHING_THEN_BLOCKED]);
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('failed'), { timeout: 20_000 });
+    expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'session', message: 'go on' }, { kind: 'user' })).toMatchObject({ ok: false, message: expect.stringContaining('Retry it fresh') });
     parent.destroy();
   });
 });

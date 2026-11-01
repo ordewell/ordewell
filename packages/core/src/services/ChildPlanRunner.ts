@@ -55,8 +55,8 @@ export interface ChildHost {
   openChild(task: Task, cwd: string, link: SubplannerLink): Promise<ChildNode>;
   /** What the delegated task's branch changed since its base, relative to the workspace root. */
   changedPaths(taskId: string): Promise<string[]>;
-  /** The child is gone: what it did not spend comes back (ADR-0056 M5). */
-  closeChild(taskId: string): Promise<void>;
+  /** The child is gone: what it did not spend comes back (ADR-0056 M5). By its id, since its task's record may have gone with a landing. */
+  closeNode(sessionId: string): Promise<void>;
 }
 
 /** Once per attempt: a subplanner told this has no second turn to end without the call (ADR-0055 D6). */
@@ -144,7 +144,8 @@ export class ChildPlanSession extends AbstractRunnerSession {
       () => this.turnSettled(),
       (err: unknown) => {
         this.turnSettled();
-        if (!this.stopping) this.end('failed', `Its planner could not go on: ${err instanceof Error ? err.message : String(err)}`);
+        // A turn this ended itself is no failure of its planner.
+        if (!this.stopping && !this.halting) this.end('failed', `Its planner could not go on: ${err instanceof Error ? err.message : String(err)}`);
       },
     );
   }
@@ -307,7 +308,7 @@ export class ChildPlanSession extends AbstractRunnerSession {
         await node.halt();
       } finally {
         node.close();
-        await this.setup.host.closeChild(this.taskId).catch(() => undefined);
+        await this.setup.host.closeNode(node.sessionId).catch(() => undefined);
       }
     }
     this.ended = true;

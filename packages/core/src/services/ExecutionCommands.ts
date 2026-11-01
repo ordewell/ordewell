@@ -239,6 +239,8 @@ export interface ExecutionHost {
   /** A start cleared its last check and is about to act; the user's ends their Stop (ADR-0029). */
   startAsked(actor: ExecutionActor): void;
   retryTask(taskId: string, actor: ExecutionActor): Promise<void>;
+  /** Whether the task is a delegated task's check (ADR-0055 D8). */
+  checksDelegatedTask(taskId: string): boolean;
   /** End the task as skipped, landing nothing of it; see {@link TaskOrchestrator.skipTask}. */
   skipTask(taskId: string, reason: string | undefined, actor: ExecutionActor): Promise<void>;
   continueTask(taskId: string, message: string, actor: ExecutionActor): Promise<void>;
@@ -1520,6 +1522,8 @@ export class ExecutionCommands {
     if (task.status === 'completed') return { refusal: `${capitalize(label)} has completed: its work landed, so there is nothing to skip.` };
     if (task.status === 'skipped') return { refusal: `${capitalize(label)} is already skipped.` };
     if (actor.kind !== 'user') {
+      // That would let the work past its only check (ADR-0055 D8); the user's Skip stands.
+      if (this.host.checksDelegatedTask(task.id)) return { refusal: `${capitalize(label)} is a delegated task's check, so a model does not skip it: that would let the work past its only check. Fix what it found, or leave it for the user.` };
       if (!why) return { refusal: `Skipping ${label} needs a reason: it is shown to the user and told to the tasks that depend on it.` };
       const waits = this.host.startWaits(task);
       // A check between rounds needs no one while something runs it on (ADR-0045 L3); stranded, it is failed like any task.

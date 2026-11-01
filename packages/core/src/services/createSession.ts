@@ -21,6 +21,7 @@ import { Planner } from './Planner';
 import { TaskControlError, TaskOrchestrator, type OrchestratorObserver, type RunOrigin, type TaskOrchestratorOptions } from './TaskOrchestrator';
 import { ChildPlanRunner, ownedRunner, type ChildHost, type ChildNode, type NodeState, type SubplannerLink } from './ChildPlanRunner';
 import { DELEGATION_OFFERED } from './runSettingsText';
+import { checksDelegatedTask } from '../models/Delegation';
 import type { SlotPool } from './SlotPool';
 import type { OpenLease, ReservedLease } from './executionLease';
 import { PlanStore } from './PlanStore';
@@ -425,7 +426,7 @@ export function createSession(deps: SessionDeps): Session {
   const childHost: ChildHost = {
     openChild: (...open) => session.openChild(...open),
     changedPaths: (taskId) => session.changedPaths(taskId),
-    closeChild: (taskId) => session.closeChild(taskId),
+    closeNode: (sessionId) => session.closeNode(sessionId),
   };
   const childPlans = new ChildPlanRunner(childHost);
   const taskLogs: TaskLogRecorder = new TaskLogRecorder({
@@ -1250,6 +1251,10 @@ export class Session {
       },
       startAsked: (actor) => { if (actorAuthority(actor.kind) === 'user') this.supervision.userStarting(); },
       retryTask: (taskId, actor) => this.restartTask(taskId, runOrigin(actor)),
+      checksDelegatedTask: (taskId) => {
+        const task = this.store.get(taskId);
+        return task !== undefined && checksDelegatedTask(this.store.planTasks, task, { runnerModes: this.catalog.edit().runnerModes });
+      },
       skipTask: (taskId, reason, actor) => this.withSave(() => this.orchestrator.skipTask(taskId, reason, runOrigin(actor))),
       continueTask: (taskId, message, actor) => this.resumeTask(taskId, message, runOrigin(actor)),
       resumeNow: (taskId, message, actor) => this.withSave(() => this.orchestrator.resumeNow(taskId, runOrigin(actor), message)),
@@ -1669,9 +1674,8 @@ export class Session {
   }
 
   /** The child in `taskId` confirmed closed: what it did not spend comes back here (M5). */
-  async closeChild(taskId: string): Promise<void> {
-    const node = (await this.ledger()).nodeOf(this.runs.childSession(taskId) ?? '');
-    if (node) node.tree.close(node.path);
+  closeChild(taskId: string): Promise<void> {
+    return this.closeNode(this.runs.childSession(taskId) ?? '');
   }
 
   /**
@@ -1688,8 +1692,19 @@ export class Session {
     // A change at any level above reaches the subtree at its next check (ADR-0056 M1).
     const authority: NodeAuthority = { depth: this.authority.depth + 1, mandate: () => heldMandate(mandate, [this.mandate()]) };
     const brief: SubplannerBrief = { protectedPaths: mandate.exclusions.protectedPaths, readOnly: task.readOnly === true };
-    const child = this.childSession({ task, cwd, placement: this.hostChild(task.id), authority, brief, link });
-    return child.asNode(mandate);
+    const placement = this.hostChild(task.id);
+    try {
+      return this.childSession({ task, cwd, placement, authority, brief, link }).asNode(mandate);
+    } catch (err) {
+      await this.closeNode(placement.sessionId);
+      throw err;
+    }
+  }
+
+  /** The child `sessionId` is gone: what it did not spend comes back here (ADR-0056 M5). */
+  async closeNode(sessionId: string): Promise<void> {
+    const node = (await this.ledger()).nodeOf(sessionId);
+    if (node) node.tree.close(node.path);
   }
 
   /** This session as its parent's attempt drives it. */
