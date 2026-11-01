@@ -1,11 +1,12 @@
 import { hasFlag, positionals } from '../utils';
 import { DaemonError, type ApiClient } from '../apiClient';
-import { checkoutRule, handoffBaseLine, handoffBranchName, isRepoGroup, isolationViewOfPlan, mergeOutcome, mergeTarget, repairedLanded, repairedNotice, repoResultLines } from '@ordewell/core';
+import { DELEGATION_OFFERED, checkoutRule, handoffBaseLine, handoffBranchName, isRepoGroup, isolationViewOfPlan, mergeOutcome, mergeTarget, repairedLanded, repairedNotice, repoResultLines } from '@ordewell/core';
 import { HANDOFF_ACTIONS } from '../tui/handoff';
 import { adopted } from './conversation';
 import { askYesNo, fail } from './shared';
 
-const USAGE = 'Usage: ordewell handoff [review|merge|discard|cleanup] [--session-id <id>] [--workspace /path] [--yes] [--past-checks]';
+// The flag is named only where delegation is offered: a check that has not passed exists nowhere else (ADR-0055 D21).
+const USAGE = `Usage: ordewell handoff [review|merge|discard|cleanup] [--session-id <id>] [--workspace /path] [--yes]${DELEGATION_OFFERED ? ' [--past-checks]' : ''}`;
 
 /**
  * Land an isolated run's branch (ADR-0013) — the terminal counterpart of the

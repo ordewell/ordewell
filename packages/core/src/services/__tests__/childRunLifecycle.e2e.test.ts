@@ -14,7 +14,7 @@ import type { IRunner } from '../../interfaces/IRunner';
 import type { IWorktreeIsolation } from '../../interfaces/IWorktreeIsolation';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import { fakeConfig, FakeRunnerSession } from '../../testing';
-import { loadChildSession, loadSession, saveChildSession, saveSession } from '../../utils/sessionStore';
+import { listChildSessions, listSessions, loadChildSession, loadSession, saveChildSession, saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
 import { fakeFs, makeSession, type PlannerTurn as Turn } from './sessionTestKit';
 
@@ -813,6 +813,19 @@ describe('a delegated task\'s row (ADR-0055 D16, D20)', () => {
     runner.letStop('a');
     await gone;
     await vi.waitFor(() => expect(rowOf(parent, 'd')?.stopping).toBeUndefined());
+    parent.destroy();
+  });
+
+  it('offers no child session to open, while the child runs and after it has ended (ADR-0055 D11)', async () => {
+    const { parent, root } = tree([SUBMIT([childTask('a', 1)]), DONE]);
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    const child = childIdOf(parent, 'd');
+    expect(child).toBeDefined();
+    // The child's file exists, under its root, and is nobody's session to open.
+    expect(loadChildSession({ baseDir: root, rootSessionId: 'session-root', sessionId: child! })).not.toBeNull();
+    expect(listSessions(root).map((meta) => meta.id)).not.toContain(child);
+    expect(listChildSessions('session-root', root)).toContain(child);
     parent.destroy();
   });
 
