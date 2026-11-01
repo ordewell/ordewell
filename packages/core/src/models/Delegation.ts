@@ -9,6 +9,44 @@ export interface DelegatedBudget {
   wallClockMs?: number;
 }
 
+/** Where a child plan's tasks stand now: the counts a delegated task's row shows while its child runs (ADR-0055 D20). */
+export interface ChildTaskCounts {
+  completed: number;
+  running: number;
+  /** Waiting on a person, a checkpoint among them. */
+  waiting: number;
+  pending: number;
+  failed: number;
+  skipped: number;
+}
+
+/**
+ * What a delegated task's row says beyond any task's (ADR-0055 D16, D20): all of
+ * it derived where it is read, from the child's plan, the tree's ledger and the
+ * Stop, never kept. Every part is absent when there is nothing to say.
+ */
+export interface DelegatedRow {
+  /** The child's tasks by where they stand; absent with no child session open. */
+  tasks?: ChildTaskCounts;
+  /** The task's token budget, and what the tree has not yet spent of it, across every child it has had (ADR-0056 M10). */
+  tokens?: { budget: number; left: number };
+  /** A Stop is still winding the subtree down, though the task already reads as not started (D16). */
+  stopping?: true;
+}
+
+export function countChildTasks(statuses: readonly Task['status'][]): ChildTaskCounts {
+  const counts: ChildTaskCounts = { completed: 0, running: 0, waiting: 0, pending: 0, failed: 0, skipped: 0 };
+  for (const status of statuses) {
+    if (status === 'completed') counts.completed += 1;
+    else if (status === 'in_progress') counts.running += 1;
+    else if (status === 'awaiting_user') counts.waiting += 1;
+    else if (status === 'failed') counts.failed += 1;
+    else if (status === 'skipped') counts.skipped += 1;
+    else counts.pending += 1;
+  }
+  return counts;
+}
+
 /** What a task declares it works on (ADR-0057 R6). Advisory: nothing gates on it. */
 export interface TaskScope {
   paths?: string[];

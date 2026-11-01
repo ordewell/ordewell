@@ -766,3 +766,59 @@ describe('a subplanner that fails its restart (ADR-0056 M8)', () => {
     parent.destroy();
   });
 });
+
+const rowOf = (session: Session, id: string) => session.runSnapshot().tasks.find((task) => task.id === id)?.delegation;
+
+describe('a delegated task\'s row (ADR-0055 D16, D20)', () => {
+  it('says where its child\'s tasks stand and what is left of its budget, while the child runs', async () => {
+    const runner = fakeRunner({ a: ['a.txt'], b: ['b.txt'] }, { held: ['a'], usage: 100_000 });
+    const LIVE: Turn = async (tools) => {
+      await SUBMIT([childTask('a', 1), childTask('b', 2, ['a'])])(tools, '');
+      await tools.runPlan!({}, { signal: SIGNAL });
+      await new Promise<void>(() => undefined);
+    };
+    const { parent } = tree([LIVE], { runner });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(runner.spawned).toContain('a'));
+    await vi.waitFor(() => expect(rowOf(parent, 'd')?.tasks).toEqual({ completed: 0, running: 1, waiting: 0, pending: 1, failed: 0, skipped: 0 }));
+    expect(rowOf(parent, 'd')?.tokens).toEqual({ budget: 2_000_000, left: 2_000_000 });
+    expect(rowOf(parent, 'd')?.stopping).toBeUndefined();
+    runner.release('a');
+    await vi.waitFor(() => expect(rowOf(parent, 'd')?.tasks).toMatchObject({ completed: 1, running: 1 }));
+    // What the first task spent is no longer left.
+    expect(rowOf(parent, 'd')?.tokens?.left).toBe(1_900_000);
+    await parent.stopSubtree();
+    parent.destroy();
+  });
+
+  it('is stopping from a Stop until the subtree has gone, and not after', async () => {
+    const runner = fakeRunner({ a: ['a.txt'] }, { held: ['a'], heldStops: ['a'] });
+    const LIVE: Turn = async (tools) => {
+      await SUBMIT([childTask('a', 1)])(tools, '');
+      await tools.runPlan!({}, { signal: SIGNAL });
+      await new Promise<void>(() => undefined);
+    };
+    const { parent } = tree([LIVE], { runner });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(runner.spawned).toContain('a'));
+    expect(rowOf(parent, 'd')?.stopping).toBeUndefined();
+
+    parent.stopExecution();
+    const gone = parent.stopSubtree();
+    await wait(50);
+    // The task already reads as not started, though its child is still winding down.
+    expect(statusOf(parent, 'd')).toBe('pending');
+    expect(rowOf(parent, 'd')?.stopping).toBe(true);
+
+    runner.letStop('a');
+    await gone;
+    await vi.waitFor(() => expect(rowOf(parent, 'd')?.stopping).toBeUndefined());
+    parent.destroy();
+  });
+
+  it('says nothing of delegation on a flat plan\'s tasks', async () => {
+    const { parent } = tree([], { tasks: [createTask({ id: 'f', order: 1, title: 'Flat', prompt: 'x' })] });
+    expect(rowOf(parent, 'f')).toBeUndefined();
+    parent.destroy();
+  });
+});

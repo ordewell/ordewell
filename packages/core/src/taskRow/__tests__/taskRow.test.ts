@@ -700,3 +700,32 @@ describe('a task row\'s usage', () => {
     expect(usage?.contextFill).toEqual({ usedTokens: 20 });
   });
 });
+
+describe('a delegated task\'s row (ADR-0055 D16, D20)', () => {
+  const counts = { completed: 2, running: 1, waiting: 0, pending: 1, failed: 0, skipped: 0 };
+
+  it('says its goal, where its child stands and what is left of its budget', () => {
+    const row = taskRowView(subject({ type: 'delegated', goal: 'Write a and b', delegation: { tasks: counts, tokens: { budget: 2_000_000, left: 1_300_000 } } }));
+    expect(row.delegated).toEqual({ goal: 'Write a and b', counts: '2 of 4 done, 1 running', tokens: '1.3M of 2M tokens left', stopping: null });
+  });
+
+  it('names what waits, failed and was skipped, and nothing that is none', () => {
+    const row = taskRowView(subject({ type: 'delegated', delegation: { tasks: { completed: 0, running: 0, waiting: 1, pending: 0, failed: 2, skipped: 1 } } }));
+    expect(row.delegated?.counts).toBe('0 of 4 done, 1 waiting, 2 failed, 1 skipped');
+  });
+
+  it('reads a finished child\'s counts from its report', () => {
+    const subtree = { node: 'root/1', counts: { done: 3, failed: 1, blocked: 0, skipped: 0, commits: 3, tokens: 5 }, findings: { blocker: 0, major: 0, minor: 0, info: 0 }, open: [], promoted: [] };
+    const row = taskRowView(subject({ type: 'delegated', status: 'completed', handoff: { summary: 'x', findings: [], findingCount: 0, subtree } }));
+    expect(row.delegated?.counts).toBe('3 of 4 done, 1 failed');
+  });
+
+  it('says it is stopping while its child winds down, and shows no counts with no child', () => {
+    const row = taskRowView(subject({ type: 'delegated', status: 'pending', delegation: { stopping: true } }));
+    expect(row.delegated).toEqual({ goal: null, counts: null, tokens: null, stopping: 'Stopping: its child plan is still winding down.' });
+  });
+
+  it('is nothing on any other task', () => {
+    expect(taskRowView(subject({ delegation: { stopping: true } })).delegated).toBeNull();
+  });
+});

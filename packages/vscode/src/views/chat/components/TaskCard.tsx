@@ -10,7 +10,7 @@ import { QUEUE_TITLE, SendKeyHint, isSendNowKey } from './PendingMessages';
 import { lastLine } from '../taskOutput';
 import { checkLabel } from '../checkLabel';
 import { useFollowOutput } from '../followOutput';
-import { blockedByLabel, dependencyCandidates, capConflictFiles, cardEditable, holdLabel, loopRowParts, pausedOnLimit, scriptTaskText, skippedLabel, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
+import { DELEGATION_OFFERED, blockedByLabel, dependencyCandidates, capConflictFiles, cardEditable, holdLabel, loopRowParts, pausedOnLimit, scriptTaskText, skippedLabel, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, RunTask, TaskRowAction, TaskRowView, TaskStatusKind, AssignmentScope } from '@ordewell/core';
 
 export interface RunnerMode {
@@ -33,7 +33,7 @@ export interface RunnerOption {
  * streams — `task_started` reaches it before the plan refresh does — so the
  * card's editability reads it when present.
  */
-export type TaskCardRun = Pick<RunTask, 'idleSince' | 'completionReceived' | 'attaching' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'loopStranded' | 'handoff' | 'verdict' | 'loopRound' | 'attempted' | 'attemptUsage'> & { status?: Task['status'] };
+export type TaskCardRun = Pick<RunTask, 'idleSince' | 'completionReceived' | 'attaching' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'loopStranded' | 'handoff' | 'verdict' | 'loopRound' | 'attempted' | 'attemptUsage' | 'delegation'> & { status?: Task['status'] };
 
 interface TaskCardProps {
   task: Task;
@@ -498,8 +498,11 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
     waitsForApproval: run?.waitsForApproval === true,
     attempted: run?.attempted ?? task.attempted,
     ...(run?.attemptUsage ? { attemptUsage: run.attemptUsage } : {}),
+    ...(run?.delegation ? { delegation: run.delegation } : {}),
     ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}),
   }, { tasks: siblings, modes: activeModes, runnerScope });
+  // Nothing of a delegated task's child shows where delegation is not offered (ADR-0055 D21).
+  const delegated = DELEGATION_OFFERED ? row.delegated : null;
   // Its chat exists only once an attempt has started; status alone never says so.
   const chatAvailable = row.chatAvailable;
   const conflictFiles = isolatedWork?.conflictFiles ?? [];
@@ -590,6 +593,12 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             </button>
             {/* Outside the heading button, so Open chat can share its line without nesting a button in a button. */}
             <TaskAssignment task={task} />
+            {delegated && (delegated.counts || delegated.tokens || delegated.stopping) && (
+              <span className="task-delegated-meta">
+                {(delegated.counts || delegated.tokens) && <span className="task-delegated-line">{[delegated.counts, delegated.tokens].filter(Boolean).join(' · ')}</span>}
+                {delegated.stopping && <span className="task-delegated-stopping">{delegated.stopping}</span>}
+              </span>
+            )}
             {onOpenLog && chatAvailable && (
               <button type="button" className="task-log-open-btn task-log-open-btn-stacked"
                 aria-label="Open chat"
@@ -613,6 +622,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
         {expanded && (
           <div className="task-card-body">
             <p className="task-description">{task.description}</p>
+            {delegated?.goal && <div className="task-delegated-goal"><span className="task-isolation-label">Goal</span> {delegated.goal}</div>}
 
             {handoff && <TaskHandoff handoff={handoff} taskName={(id) => taskRefOf(siblings ?? [], id)}
               onReadFull={onOpenLog && chatAvailable ? () => onOpenLog(task.id) : undefined} />}

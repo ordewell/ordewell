@@ -22,7 +22,7 @@ function child(wallClockMs: number) {
     takeReport: (report) => ({ ok: true, handoff: report }),
   };
   const links: SubplannerLink[] = [];
-  const host: ChildHost = { openChild: async (_task, _cwd, link) => { links.push(link); return node; }, changedPaths: async () => [], stopped: () => false, passUp: () => undefined };
+  const host: ChildHost = { openChild: async (_task, _cwd, link) => { links.push(link); return node; }, changedPaths: async () => [], stopped: () => false, passUp: () => undefined, moved: () => undefined };
   return { held, node, state, links, runner: new ChildPlanRunner(host) };
 }
 

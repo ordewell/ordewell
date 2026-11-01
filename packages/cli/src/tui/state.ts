@@ -33,6 +33,8 @@ export interface TaskView {
   prompt?: string;
   /** What a delegated task's child plan must achieve, in place of a prompt (ADR-0055 D1). */
   goal?: string;
+  /** A delegated task's row: its child's tasks, what is left of its budget, a Stop still winding down (ADR-0055 D20). */
+  delegation?: RunTask['delegation'];
   type: TaskType;
   status: string;
   /** Advisory silence timestamp from VerdictEngine — set while the task's runner has gone quiet. */

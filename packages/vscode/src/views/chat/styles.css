@@ -3018,6 +3018,25 @@ body.vscode-high-contrast-light .task-card.expanded {
   overflow: hidden;
 }
 
+.task-heading-block > .task-delegated-meta {
+  grid-area: meta;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--vscode-descriptionForeground, var(--text-muted));
+}
+
+.task-delegated-stopping {
+  color: var(--vscode-editorWarning-foreground, var(--text-muted));
+}
+
+.task-delegated-goal {
+  margin: 4px 0;
+  font-size: 12px;
+}
+
 .task-heading-block > .task-log-open-btn {
   grid-area: actions;
   align-self: stretch;

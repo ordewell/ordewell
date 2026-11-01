@@ -16,3 +16,5 @@ export { assignedRunnerOf, assignmentIssue, assignmentIssueText } from '../servi
 export type { AssignmentScope, AssignmentIssue } from '../services/AssignmentScope';
 export { loopCheckState, loopCheckLabel, loopBodyRound, loopBodyLabel } from './loop';
 export type { LoopCheckState, LoopCheckFacts } from './loop';
+export { delegatedRowView, STOPPING_LABEL } from './delegated';
+export type { TaskRowDelegated } from './delegated';
