@@ -31,6 +31,8 @@ export interface TaskView {
   title: string;
   description?: string;
   prompt?: string;
+  /** What a delegated task's child plan must achieve, in place of a prompt (ADR-0055 D1). */
+  goal?: string;
   type: TaskType;
   status: string;
   /** Advisory silence timestamp from VerdictEngine — set while the task's runner has gone quiet. */
