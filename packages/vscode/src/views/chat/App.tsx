@@ -618,7 +618,10 @@ export default function App() {
   const replyCue = (): string | undefined => {
     if (getPlaceholder() !== undefined) return undefined;
     if (plan && plan.tasks.length > 0) return undefined;
-    const last = blocks[blocks.length - 1];
+    // The usage line always sits last (core keeps it there), so look for the
+    // last thing said rather than the last block. A later user message answers
+    // the planner, and streaming text is not a settled reply yet.
+    const last = [...blocks].reverse().find((b) => b.type === 'message');
     return last?.type === 'message' && last.role === 'planner' && !last.streaming
       ? 'Reply to the planner'
       : undefined;
