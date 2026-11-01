@@ -6,7 +6,6 @@ note: "Settles #95. The mandate (#23) takes over the consent table and the effec
 
 # 0035 — Every effect is consented to and recorded, whoever performs it
 
-*Pending:* [ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — a script task marked `readOnly` runs sealed in a throwaway worktree, past no gate.
 *Pending:* [ADR-0056](0056-a-mandate-narrows-down-the-tree.md) — below the root a mandate replaces the consent table, and the effect allowlist becomes one list per level.
 
 ## Problem
@@ -103,6 +102,8 @@ writes repository files.**
   it first (`edit_plan`), so the plan holds what ran. The supervisor's
   identical-retry guard (ADR-0029) reads the body as it reads a prompt; the
   user may retry an unchanged script.
+
+- **A read-only script ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D8).** A script task marked `readOnly`, which only a planner that may delegate can write, is no ops task: it runs sealed in a throwaway worktree cut from the integration tip, past no gate, its exit status its evidence and consent to its body as above. It is a delegated task's check, and what a child's script task is unless it holds `effect` (ADR-0056 M9). Where nothing can seal it is refused as it is written, and one a saved plan brings fails at its start, saying why.
 
 ### Running one from a planner turn
 
@@ -406,3 +407,4 @@ minute is recorded beside its start.
 - 2026-10-26 — `run_script` adds its task to the plan as the turn's committed edits left it, and autorun approves what an edit wrote as it commits: a tool's edit commits as its call answers (ADR-0022, P2).
 - 2026-10-31 — in Full with autorun nobody is asked on a first plan either, and a start there makes the plan approved; an approved plan is no longer a condition of the consent table's autorun row.
 - 2026-10-31 — under Guarded autorun's start of a submitted plan leaves a script task the commit left unapproved; before, that start approved it and ran it.
+- 2026-11-01 — a script task marked `readOnly` runs sealed in a throwaway worktree, past no gate (ADR-0055 D8).

@@ -1895,6 +1895,11 @@ its type, with no `ops` mark.
 task", "checkout task" — it runs at the workspace root, which in a group is not
 one checkout.
 
+**Read-only script** (`readOnly` on a **Script task**, ADR-0055 D8) — a script task
+that runs sealed in a throwaway worktree cut from the integration tip, past no merge
+gate, and lands nothing: no ops task. A **Delegated task**'s check, and what a
+**Child plan**'s script task is unless it holds `effect`.
+
 **Script task** (`type: 'script'`, `models/ScriptTask.ts`; ADR-0035) — an ops
 task whose body is a literal script that Ordewell runs itself, with no runner,
 model or mode. The body is `commands`, argument vectors run in order with no
@@ -3098,7 +3103,37 @@ plan rewrites no history.
 **Delegation** — the **Run setting** that lets a plan hand a separable part of
 its goal to a child plan (ADR-0055 D21): `delegationTokens`, a tree's token budget,
 0 being off. Off by default, and read from the session's copy at each check, so a
-run keeps no copy of it. Nothing can delegate yet.
+run keeps no copy of it. A build offers it only with `ORDEWELL_DELEGATION=1` when it
+runs from a git checkout of this repository (`DELEGATION_OFFERED`), so a published
+package ignores the variable.
+
+**Delegated task** (`type: 'delegated'`, `models/Delegation.ts`, ADR-0055) — a
+top-level task that holds a `goal`, not a prompt: its attempt is a **Child plan**. It
+carries a required `budget` and, unless it is `readOnly`, `protectedPaths`, the paths
+its child may not change, and it needs a check: a task that depends on it directly and
+is a read-only AI task or a read-only **Script task**. Neither a loop's check nor its
+body. It holds no slot (`child-plan`), and it passes only on evidence: its child has
+settled and done work, that work is merged into its branch, no protected path changed,
+and its subplanner called `task_complete` on the attempt's token (D6).
+*Avoid:* "subtask" (`subtasks` share their parent's plan, planner and branch).
+
+**Child plan** — what a **Delegated task** runs: a Session of its own in that task's
+worktree, its state under the root's (`ChildPlanSession` behind `ChildPlanRunner`, the
+runner seam, ADR-0055 D3). Its plan is approved as it lands, and it merges into the
+delegated task's branch by itself at its run's end, so only the root touches the
+user's branch. Nothing of it reaches a surface directly.
+
+**Subplanner** — a **Child plan**'s planner: a harness planner on the runner its
+delegated task names, in that task's worktree, Act with autorun inside its
+**Mandate**. It writes no repository file. It has a planner's tools, `task_complete`
+and `checkpoint`, on a token bound to the attempt, and it is parked between turns. A
+turn that ends with nothing running and no call gets one reminder, and a second fails
+the attempt with a derived report. *Avoid:* "worker", "child agent" (a task's runner is
+neither planner nor node); a subplanner never implements.
+
+**Protected paths** — what a **Delegated task** names its child may not change,
+accumulating down the tree: a change to one fails the verdict, and nothing lands. A
+list the planner wrote, so a pass rests on it being whole (ADR-0055 D7).
 
 **Run settings** — the user settings that say how a run is
 started, watched and merged: **Supervisor level**, **Auto-merge at gates**,

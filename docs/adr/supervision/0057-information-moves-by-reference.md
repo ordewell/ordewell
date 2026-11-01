@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0012", "0013", "0022", "0029", "0047"]
-note: "Settles #34, and #36 and #38 as far as this goes. R1, R3, R4 and R5 are built for a flat plan, under the root; promote, open and a child's plan come with the delegated task (ADR-0055), and R6 to R12 after them, the board (R8 to R10) last."
+note: "Settles #34, and #36 and #38 as far as this goes. R1, R3, R4 and R5 are built for a flat plan, under the root; promote, open and a child's plan are the next of it: a subplanner's handoff cites no task until then. R6 to R12 come after them, the board (R8 to R10) last."
 ---
 
 # 0057 — Information moves by reference: reports stay one size at every level, and code decides when a planner wakes

@@ -336,12 +336,18 @@ function subplannerSettings(settings: SessionRuntimeSettings): SessionRuntimeSet
  * that stops only what it started.
  */
 function childSessionDeps(deps: SessionDeps, { task, cwd, placement, authority, brief, link }: ChildSpec): SessionDeps {
-  const { sessionId: _id, isolation: _isolation, saveSession: _save, leaseHost: _lease, aiService: _ai, planner: _planner, skillsService: _skills, taskOutput: _output, runNotifyCommand: _notify, eventLog: _log, onNotice: _notice, ...shared } = deps;
   const given = deps.childDeps?.(task) ?? {};
   const fsAdapter = given.fsAdapter ?? deps.fsAdapter.rootedAt?.(cwd);
   if (!fsAdapter) throw new Error('This host cannot root a planner in a task\'s worktree, so it cannot run a child plan.');
   return {
-    ...shared,
+    registry: deps.registry,
+    modelResolver: deps.modelResolver,
+    ...(deps.openTaskLog ? { openTaskLog: deps.openTaskLog } : {}),
+    ...(deps.mcpServer ? { mcpServer: deps.mcpServer } : {}),
+    ...(deps.web ? { web: deps.web } : {}),
+    ...(deps.execution ? { execution: deps.execution } : {}),
+    ...(deps.delegationOffered !== undefined ? { delegationOffered: deps.delegationOffered } : {}),
+    ...(deps.childDeps ? { childDeps: deps.childDeps } : {}),
     config: subplannerConfig(deps.config, task),
     notifications: SILENT,
     broadcast: () => link.changed(),
@@ -1685,8 +1691,7 @@ export class Session {
    */
   async openChild(task: Task, cwd: string, link: SubplannerLink): Promise<ChildNode> {
     if (!this.delegationOffered) throw new Error(`Task "${task.title}" is a delegated task, and delegation is off here.`);
-    const { level: _level, ...request } = delegatedRequest(task, this.authority.depth);
-    const carved = await this.carveChild(task.id, request);
+    const carved = await this.carveChild(task.id, delegatedRequest(task, this.authority.depth));
     if (!carved.ok) throw new Error(mandateRefusalText(carved.refusal));
     const { mandate } = carved;
     // A change at any level above reaches the subtree at its next check (ADR-0056 M1).

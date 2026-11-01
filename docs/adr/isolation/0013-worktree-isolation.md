@@ -4,7 +4,7 @@ status: accepted
 
 # 0013 — Worktree isolation: one checkout per task, one branch per run
 
-*Pending:* [ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — a subplanner starts in a worktree, and a failed check holds automatic merges.
+*Pending:* [ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — a failed check holds automatic merges.
 *Pending:* [ADR-0057](../supervision/0057-information-moves-by-reference.md) — tasks may declare an advisory scope, overlap is answered at plan time, and a landing that touches one sends one line.
 
 ## Problem
@@ -556,3 +556,4 @@ literal git command lines or private fields.
 - 2026-10-31 — Execute on a run a dirty tree parked replays the parked start rather than beginning a new run (ADR-0053).
 - 2026-10-31 — a run may nest in a delegated task's worktree, with its worktrees under the root's state directory, and a child refuses the user's checkout (ADR-0055).
 - 2026-10-31 — `prepare` and the runner's cwd sit behind an execution lease, local by default (ADR-0059).
+- 2026-11-01 — a subplanner starts in its delegated task's worktree (ADR-0055 D5).

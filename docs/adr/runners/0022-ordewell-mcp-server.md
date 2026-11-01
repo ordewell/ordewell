@@ -4,7 +4,6 @@ status: accepted
 
 # 0022 — The Ordewell MCP server: task and planner tools behind per-caller tokens
 
-*Pending:* [ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — a subplanner's token is a planner token that also serves `task_complete` and `checkpoint` (A1 to A3).
 *Pending:* [ADR-0056](../supervision/0056-a-mandate-narrows-down-the-tree.md) — below the root the tool list is filtered by grants and fixed at session start; a subplanner's `checkpoint` parks instead of waiting (V5).
 *Pending:* [ADR-0057](../supervision/0057-information-moves-by-reference.md) — the task tools gain `read` and `post`, `task_complete` gains `promote` and `open`, and references pin an attempt.
 *Pending:* [ADR-0059](../isolation/0059-an-execution-lease-reserves-in-the-claim-and-opens-after-it.md) — a container reaches this server through the lease's endpoint, not loopback (T1, T2).
@@ -73,6 +72,8 @@ on the same mechanism.
   separates roles and attempts, keeps stale and misdirected calls out, and
   keeps the planner's one write path (`submit_plan`, `edit_plan`) out of a task
   runner's tool list.
+
+- **A subplanner's token (A1 to A3).** A planner token that also serves `task_complete` and `checkpoint`, bound to its delegated task's attempt ([ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D5): planner tools are handled by the child Session, those two by the parent's attempt. It is reissued with each process, as a planner token is, and ends with the attempt, as a task token does. `plannerToolSet` is what a token lists, and with neither delegation nor a subplanner behind it that is `PLANNER_TOOLS` itself. A planner that may delegate has one `submit_plan` schema more.
 
 ### Transport
 
@@ -353,3 +354,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-25 — a read-only task's token serves `fetch` and `web_search` (ADR-0046); a caller's cancellation aborts the token's call it names.
 - 2026-10-26 — P2: an edit's scope is the enabled runners alone, not the plan's own as well (ADR-0003, V1).
 - 2026-10-26 — P2: a successful `submit_plan` or `edit_plan` commits, saves and broadcasts before it answers, each `edit_plan` call a batch of its own; the turn's held edit, its preview and the starts deferred behind it are gone.
+- 2026-11-01 — a subplanner's token serves `task_complete` and `checkpoint` (ADR-0055 D5), and `submit_plan` takes a delegated task only where one may be written.

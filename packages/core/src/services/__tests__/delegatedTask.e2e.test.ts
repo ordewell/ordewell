@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { execFileSync, spawnSync } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
@@ -58,17 +58,24 @@ function writingRunner(files: Record<string, string[]>, { usage = 0, asks }: { u
     spawn: vi.fn(async (opts) => {
       spawned.push(opts.taskId);
       const session = new FakeRunnerSession(`s-${opts.taskId}-${spawned.length}`, opts.taskId);
-      setTimeout(() => {
-        if (asks) {
-          asks(session);
-          session.requestPermission('perm-1', 'Bash', { command: 'rm -rf /' });
-        }
+      const finish = () => {
         for (const file of files[opts.taskId] ?? []) {
           mkdirSync(dirname(join(opts.cwd, file)), { recursive: true });
           writeFileSync(join(opts.cwd, file), `written by ${opts.taskId}\n`);
         }
         if (usage > 0) session.emitEvent({ type: 'usage', record: { source: 'claude-code', inputTokens: usage, outputTokens: 0 } } as never);
         session.reportComplete({ status: 'done', summary: 'Done.' });
+      };
+      setTimeout(() => {
+        if (!asks) { finish(); return; }
+        // It goes on only once it is answered: an attempt's end denies what it left open, which would prove nothing.
+        asks(session);
+        session.requestPermission('perm-1', 'Bash', { command: 'rm -rf /' });
+        const answered = setInterval(() => {
+          if (session.answers.length === 0) return;
+          clearInterval(answered);
+          finish();
+        }, 5);
       }, 5);
       return session;
     }),
@@ -284,6 +291,25 @@ describe('the verdict (ADR-0055 D6)', () => {
     parent.destroy();
   });
 
+  it('refuses a done from a child that skipped everything: skipped work can end a child, but never all of it', async () => {
+    const signal = new AbortController().signal;
+    const SKIP: Turn = async (tools) => { await tools.skipTask!({ task: 'a', reason: 'It cannot be done.' }, { signal }); };
+    const inner = writingRunner({});
+    const failing: IRunner = {
+      ...inner,
+      spawn: vi.fn(async (opts) => {
+        const session = new FakeRunnerSession(`s-${opts.taskId}`, opts.taskId);
+        setTimeout(() => session.reportComplete({ status: 'failed', summary: 'It failed.', reason: 'It failed.' }), 5);
+        return session;
+      }),
+    };
+    const { parent } = tree([SUBMIT([childTask('a', 1)]), SKIP, SAYS_DONE, CALL({ status: 'blocked', summary: 'Nothing could be done.' })], { runner: failing });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('failed'), { timeout: 20_000 });
+    expect(REPLIES[0]).toMatchObject({ isError: true, text: expect.stringContaining('no task of the child plan completed') });
+    parent.destroy();
+  });
+
   it('fails the verdict when the branch touched a protected path, naming it, and lands nothing', async () => {
     const { root, parent } = tree([SUBMIT([childTask('a', 1)]), SAYS_DONE], { runner: writingRunner({ a: ['a.txt', 'tests/guard.txt'] }) });
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
@@ -365,6 +391,24 @@ describe('the verdict (ADR-0055 D6)', () => {
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('failed'), { timeout: 20_000 });
     expect(answers[0]).toMatchObject({ isError: true, text: expect.stringContaining('status "blocked"') });
+    parent.destroy();
+  });
+});
+
+describe('a landing that conflicts', () => {
+  it('waits on the user, its work kept, and starts no new child: a repair is a runner\'s (D14)', async () => {
+    const held = heldTasks({ a: ['x.txt'], s: ['x.txt'] }, ['a', 's']);
+    const { parent, planner } = tree([SUBMIT([childTask('a', 1)]), DONE], {
+      runner: held.runner,
+      tasks: [delegated(), check(), createTask({ id: 's', order: 3, title: 'Sibling', prompt: 'sibling' })],
+    });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(held.runner.spawned).toEqual(expect.arrayContaining(['a', 's'])), { timeout: 20_000 });
+    held.release('s');
+    await vi.waitFor(() => expect(statusOf(parent, 's')).toBe('completed'), { timeout: 20_000 });
+    held.release('a');
+    await vi.waitFor(() => expect(parent.planTasks.find((t) => t.id === 'd')).toMatchObject({ status: 'awaiting_user', awaitingReason: 'conflict' }), { timeout: 20_000 });
+    expect(planner.requests).toHaveLength(1);
     parent.destroy();
   });
 });
@@ -457,6 +501,22 @@ describe('what ends a child with nobody to ask (ADR-0056 M3, M8, M10)', () => {
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
     expect(asked.session?.answers[0]?.decision).toMatchObject({ decision: 'deny' });
+    parent.destroy();
+  });
+
+  it('stops only what it started: a child\'s end leaves its parent\'s sibling running', async () => {
+    const held = heldTasks({ a: ['a.txt'], s: ['s.txt'] }, ['a', 's']);
+    const { parent } = tree([SUBMIT([childTask('a', 1)])], {
+      runner: held.runner,
+      tasks: [delegated({ budget: { tokens: 2_000_000, wallClockMs: 200 } }), check(), createTask({ id: 's', order: 3, title: 'Sibling', prompt: 'sibling' })],
+    });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('failed'), { timeout: 20_000 });
+    expect([...new Set(held.stopped)]).toEqual(['a']);
+    expect(held.runner.stopAll).not.toHaveBeenCalled();
+    expect(statusOf(parent, 's')).toBe('in_progress');
+    held.release('s');
+    await vi.waitFor(() => expect(statusOf(parent, 's')).toBe('completed'), { timeout: 20_000 });
     parent.destroy();
   });
 

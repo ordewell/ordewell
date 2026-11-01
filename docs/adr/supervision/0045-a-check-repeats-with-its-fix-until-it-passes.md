@@ -5,7 +5,7 @@ amends: ["0029", "0034"]
 
 # 0045 — A check repeats with its fix until it passes
 
-*Pending:* [ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — a script check marked `readOnly` runs in a worktree of its own, so L9 does not hold it at a gate, and a retry or fresh attempt of a delegated task retries its check, which L7 reads as any retry: its rounds start over.
+*Pending:* [ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — a retry or fresh attempt of a delegated task retries its check, which L7 reads as any retry: its rounds start over.
 
 ## Problem
 
@@ -309,3 +309,4 @@ as check or body; a user editing a loop's `loop` field by hand from a surface.
 - 2026-10-31 — a Stop ends a carried loop a body task stopped, which it found nothing to stop in before, so the retry that passes runs that task alone (L5, L7).
 - 2026-10-31 — L4: a continue of a failed body task waits on its undecided check as a retry does.
 - 2026-10-31 — what ends a run ends the loop it carried, as a Stop does: a discard, a clean-up, a Merge all that clears the run up, the lease lost (L5).
+- 2026-11-01 — a script check marked `readOnly` runs in a worktree of its own, so L9 does not hold it at a gate (ADR-0055 D8).

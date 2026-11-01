@@ -177,9 +177,12 @@ export class Landing {
   /**
    * The repair a conflicted task is owed next; null when repair is off, used
    * up, or there is no isolated run to repair it in. A resolver takes the
-   * conflict instead: a conflict has one worker (ADR-0015).
+   * conflict instead: a conflict has one worker (ADR-0015). A delegated task's
+   * repair is a plain runner's and not built yet (ADR-0055 D14), and a new child
+   * would redo the work, so it waits on the user as a spent repair does.
    */
   nextRepair(taskId: string): RepairAttempt | null {
+    if (this.tasks.get(taskId)?.type === 'delegated') return null;
     const record = this.runs.openRecord(taskId);
     const limit = this.config.conflictRepairAttempts;
     const spent = record?.repairs ?? 0;

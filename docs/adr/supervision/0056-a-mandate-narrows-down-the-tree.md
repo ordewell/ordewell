@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0001", "0008", "0022", "0029", "0030", "0035", "0036", "0037", "0053"]
-note: "Settles #23, #92 and #112 as far as subplanners need. Built: M1 to M4, the seam and the paths around it in M6, and M5's ledger in `TreeLedger`, rebuilt from the tree's log (ADR-0058 S3). `raiseTokens`, a child's report on stopping, its wake on a refused start and D16's subtree stop wait on `ChildPlanRunner`, as do M7 to M10, `delegate` and a subplanner's harness subagents in M6. A flat run does not change."
+note: "Settles #23, #92 and #112 as far as subplanners need. Built: M1 to M4, M6's seam, its paths and `delegate`, M5's ledger in `TreeLedger`, a child's derived report on stopping, M7's autonomy, M9, and what M3, M8 and M10 end a child for: its clock, a guard, a lost grant. Not built: `raiseTokens`, a child's wake on a refused start, D16's subtree stop, questions going up in M8, the paths M7 derives past `scope`, and a subplanner's harness subagents in M6, which still run without `research`. A flat run does not change."
 ---
 
 # 0056 — A mandate says what a node may do without a person, and what it can hand on only narrows down the tree
@@ -395,3 +395,4 @@ Judgment stays the planner's.
 - 2026-10-31 — implemented in part: `Mandate`, `rootMandate`, `narrow`, the seam, the paths around it and a child's tool list, on a faked child, and the delegation setting (ADR-0055 D21). Built closest to the text where it could not hold: an automatic merge and `{ kind: 'autorun' }` read their grants below the root only, since Off and Watch hold neither and a flat run does not change; `PlanChangeCheck` reads `research` too; a request names the level narrowing.
 - 2026-10-31 — a subplanner's starts take the supervisor's authority as its report turns do, so a run it opens carries on rather than starting supervision afresh from a user's settings.
 - 2026-10-31 — M5's ledger implemented in `TreeLedger`, rebuilt from the tree's log. Built closest to the text where it could not hold: spend is checked in `startRefusal`; a script holds nothing; an attempt's overrun takes its children's room, and a node stops at what that leaves of `limit`, not at `limit`, or its own work could spend what its children hold; ready work refused with nothing live stops the node too.
+- 2026-11-01 — a child runs under its mandate: `delegate` and D19's limits are held as a change is written, nobody below the root may allow a runner's request, a child's script runs sealed without `effect`, and a child that may do nothing more ends `blocked` with a derived report. Wall-clock time runs from the child's start: it does not stop yet for a usage limit.

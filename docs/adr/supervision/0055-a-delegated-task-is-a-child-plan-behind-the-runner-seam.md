@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0009", "0013", "0015", "0018", "0020", "0022", "0029", "0030", "0035", "0045", "0046", "0049", "0054"]
-note: "Settles #33. Built: D21's run setting, and what makes a child run safe: D10 to D13, D17's prune and D18's pool, reached by `Session.hostChild`. No delegated task or `ChildPlanRunner` exists yet, so nothing but a test reserves the `child-plan` role. The rest is decided ahead of its code: what a node may do is ADR-0056, how it reports is ADR-0057."
+note: "Settles #33. Built: D1 to D8's plan rules and verdict, D10 to D13, D17's prune, D18's pool and D21, so one child plan runs end to end behind the build's switch. Not built: D8's taking a check back with a new result, D9's merge hold, D14's repair, D15's discards, D16's subtree stop, D17's Continue, which is refused, and a subplanner's question, which is refused so its turn goes on. D20's roll-up and a surface's row wait on ADR-0057's reports."
 ---
 
 # 0055 — A delegated task is a child plan behind the runner seam
@@ -408,7 +408,13 @@ the child cannot reach follows it in the parent's plan.**
   adds its child's planner and tasks to `planUsage`. A full tree view is later.
 - **Off unless turned on (D21).** Delegation is a run setting, off by default
   ([ADR-0030](0030-global-run-settings.md)), and turning it on sets the tree's token
-  budget (ADR-0056 M5). The planner is taught delegation only then. A flat plan
+  budget (ADR-0056 M5). While the rest of this ADR is unbuilt a build holds it back
+  as well: `DELEGATION_OFFERED` is on only with `ORDEWELL_DELEGATION=1` in a build run
+  from a git checkout of this repository, so a published package ignores the variable,
+  no surface shows the setting, and what a saved setting asks for stays inert. A
+  saved plan that holds a delegated task there ends it `blocked`. The planner is
+  taught delegation only where its mandate holds `delegate`: anywhere else its
+  prompts and its tools do not change by a byte. A flat plan
   stays the default even so: the prompt teaches delegating only a separable
   subdomain with a clear boundary, and preferring a flat plan for one coherent
   feature or a change with cross-cutting invariants. Delegation and parallelism are
@@ -451,6 +457,12 @@ the child cannot reach follows it in the parent's plan.**
   landing changed and in one it did not, and with one that leaves a conflict marker
   in a repo the landing did not change: none lands. A repair spawns in the mode its
   mandate's `autonomy` resolves to, at both levels, and the plan gains no `taskMode`.
+- A delegated task runs end to end on real repositories in `delegatedTask.e2e.test.ts`,
+  a scripted planner calling the tools a harness planner would, and in
+  `delegatedTask.harness.e2e.test.ts` with only the binary faked: the real adapter, the
+  real server and a token bound to the attempt. The parent's deadlock is held there
+  with real Sessions. `delegation.validation.test.ts` holds the plan rules on both
+  routes, and `delegation.session.test.ts` who may write one.
 - D15 is tested with each route to a fresh attempt, a removal, a merge and a split:
   the old child's worktrees and branches go and its state stays. A Continue, a repair
   and a resume leave them.
@@ -563,7 +575,7 @@ the child cannot reach follows it in the parent's plan.**
 ## Consequences
 
 - `TaskType` gains a member, so its 155 `.type` sites each take a decision, and
-  `AttemptKind` and `TaskWork` a member; most are AI-against-the-rest.
+  `AttemptKind` a member and `TaskWork` two; most are AI-against-the-rest.
 - `Session` and an isolation run gain a state root, and everything that read
   `workspace` for state moves to it.
 - A check can fail after its work landed. Taking that work back stays the user's
@@ -592,3 +604,4 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-10-31 — D21's run setting implemented, off by default; nothing can delegate yet, so the planner is not taught it, and it moves only the root's mandate ([ADR-0030](0030-global-run-settings.md)).
 - 2026-10-31 — D10 to D13 and D17's prune implemented, reached by `Session.hostChild`: `createSession` is where a child is refused the user's checkout until `ChildPlanRunner` exists, a child takes its parent's isolation and never sweeps, a delete stops on what git could not let go, and a run a held lease refuses does not fall back to the checkout.
 - 2026-10-31 — D18 implemented in `SlotPool`, behind the lease (ADR-0059 L1): the root's pool reaches a child through `ChildPlacement`, and the subplanner's opening waits for a slot.
+- 2026-11-01 — one child plan end to end: D1, D2, D3 to D7, D8's plan rules and read-only script, and D19, in `ChildPlanRunner`, `models/Delegation.ts` and `PlanChangeCheck`. D21 gains the build's switch, and a protected path is one more check of the verdict.

@@ -6,7 +6,6 @@ amends: ["0001", "0013", "0022", "0027", "0028", "0033", "0036", "0037"]
 
 # 0046 — A read-only task is Ordewell's: its runner's reads, a sealed shell, and nothing lands
 
-*Pending:* [ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — a script task may be read-only too: this ADR's worktree and sealed profile, with no runner. A delegated task may be read-only as well, and lands nothing.
 
 ## Problem
 
@@ -279,6 +278,8 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 - **A continue starts clean.** Its worktree is fresh, and it is told that
   nothing its earlier attempt changed was kept.
 
+- **Read-only without a runner ([ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D1, D8).** A script task may be read-only too, this ADR's worktree and sealed profile with no runner: its steps run through the shell's own sealed runs. A delegated task may be as well: its child's worktree goes as a read-only task's does, and it lands nothing.
+
 ## Testing decisions
 
 - The task shell is tested through `BaseFileSystem.taskShell` with a sandbox
@@ -446,3 +447,4 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 - 2026-10-25 — a task's web-read decisions are recorded in its attempt's log, an allowed read's naming what allowed it, and never in the planner's conversation; a read answered after its attempt ended hands the runner nothing; a cancelled allowed read keeps its count.
 - 2026-10-31 — a sealed run's memory limit is real memory, and a run ended at it says so (ADR-0036).
 - 2026-10-31 — a task's commands before its first sealed run have a scratch directory apart from its sealed runs' (ADR-0036 S8).
+- 2026-11-01 — a script task and a delegated task may be read-only (ADR-0055 D1, D8).
