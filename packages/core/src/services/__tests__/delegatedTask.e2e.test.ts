@@ -916,10 +916,10 @@ describe('a landing that conflicts (ADR-0055 D14)', () => {
   const withSibling = () => [delegated(), check({ taskMode: 'plan' }), createTask({ id: 's', order: 3, title: 'Sibling', prompt: 'sibling' })];
 
   it.each([[false], [true]])('is repaired by a plain runner in the mode its autonomy gives, autonomous %s, in the kept worktree, and lands', async (autonomous) => {
-    let session: Session | undefined;
-    const { runner, held, repairs } = conflicted(() => session!);
+    const on: { session?: Session } = {};
+    const { runner, held, repairs } = conflicted(() => on.session!);
     const made = tree([SUBMIT([childTask('a', 1)]), DONE], { runner, tasks: withSibling(), config: { autonomousMode: autonomous, conflictRepairAttempts: 1 } });
-    session = made.parent;
+    on.session = made.parent;
     await siblingFirst(made.parent, held);
     await vi.waitFor(() => expect(statusOf(made.parent, 'd')).toBe('completed'), { timeout: 20_000 });
     expect(repairs).toHaveLength(1);
@@ -933,10 +933,10 @@ describe('a landing that conflicts (ADR-0055 D14)', () => {
   });
 
   it('does not land a repair that changes a protected path, and waits on the user', async () => {
-    let session: Session | undefined;
-    const { runner, held, repairs } = conflicted(() => session!, { edit: (cwd) => writeFileSync(join(cwd, 'tests', 'guard.txt'), 'the check reads nothing\n') });
+    const on: { session?: Session } = {};
+    const { runner, held, repairs } = conflicted(() => on.session!, { edit: (cwd) => writeFileSync(join(cwd, 'tests', 'guard.txt'), 'the check reads nothing\n') });
     const made = tree([SUBMIT([childTask('a', 1)]), DONE], { runner, tasks: withSibling(), config: { conflictRepairAttempts: 1 } });
-    session = made.parent;
+    on.session = made.parent;
     await siblingFirst(made.parent, held);
     await vi.waitFor(() => expect(task(made.parent, 'd')).toMatchObject({ status: 'awaiting_user', awaitingReason: 'conflict' }), { timeout: 20_000 });
     expect(repairs).toHaveLength(1);
@@ -945,10 +945,10 @@ describe('a landing that conflicts (ADR-0055 D14)', () => {
   });
 
   it('takes no check back: it goes on with the result its verdict judged', async () => {
-    let session: Session | undefined;
-    const { runner, held, repairs } = conflicted(() => session!, { waitsFor: () => statusOf(session!, 'c') === 'skipped' });
+    const on: { session?: Session } = {};
+    const { runner, held, repairs } = conflicted(() => on.session!, { waitsFor: () => statusOf(on.session!, 'c') === 'skipped' });
     const made = tree([SUBMIT([childTask('a', 1)]), DONE], { runner, tasks: withSibling(), config: { conflictRepairAttempts: 1 } });
-    session = made.parent;
+    on.session = made.parent;
     await siblingFirst(made.parent, held);
     await vi.waitFor(() => expect(repairs).toHaveLength(1), { timeout: 20_000 });
     await made.parent.execute({ command: 'skip_task', task: 'c' }, { kind: 'user' });
@@ -958,10 +958,10 @@ describe('a landing that conflicts (ADR-0055 D14)', () => {
   });
 
   it('gives a resolver the mode its autonomy gives, as a delegated task has none to hand on', async () => {
-    let session: Session | undefined;
-    const { runner, held } = conflicted(() => session!);
+    const on: { session?: Session } = {};
+    const { runner, held } = conflicted(() => on.session!);
     const made = tree([SUBMIT([childTask('a', 1)]), DONE], { runner, tasks: withSibling(), config: { conflictRepairAttempts: 0, autonomousMode: false } });
-    session = made.parent;
+    on.session = made.parent;
     await siblingFirst(made.parent, held);
     await vi.waitFor(() => expect(task(made.parent, 'd')?.awaitingReason).toBe('conflict'), { timeout: 20_000 });
     const asked = made.parent.escalations().find((e) => e.kind === 'conflict');
@@ -972,10 +972,10 @@ describe('a landing that conflicts (ADR-0055 D14)', () => {
   });
 
   it('waits in the inbox once no repair is left, its work kept, and starts no new child', async () => {
-    let session: Session | undefined;
-    const { runner, held, repairs } = conflicted(() => session!);
+    const on: { session?: Session } = {};
+    const { runner, held, repairs } = conflicted(() => on.session!);
     const made = tree([SUBMIT([childTask('a', 1)]), DONE], { runner, tasks: withSibling(), config: { conflictRepairAttempts: 0 } });
-    session = made.parent;
+    on.session = made.parent;
     await siblingFirst(made.parent, held);
     await vi.waitFor(() => expect(task(made.parent, 'd')).toMatchObject({ status: 'awaiting_user', awaitingReason: 'conflict' }), { timeout: 20_000 });
     expect(repairs).toHaveLength(0);
