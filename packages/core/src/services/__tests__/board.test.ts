@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
+import { execFileSync } from 'child_process';
 import { createHash } from 'crypto';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -232,6 +233,16 @@ describe('contested and stale are computed (ADR-0057 R9)', () => {
       expect(await textOf(board.read('board'))).toContain('stale');
       rmSync(cwd, { recursive: true });
     });
+
+    it.skipIf(process.platform === 'win32')('pins no pipe a run left at a path, which no read would ever finish', async () => {
+      const cwd = worktree();
+      execFileSync('mkfifo', [join(cwd, 'pipe')]);
+      const ledger = await open();
+      const node = child(ledger, ROOT_NODE);
+      expect(await boardOf(ledger, node, branch({})).post(entry({ files: ['pipe'] }), task, cwd)).toMatchObject({ text: expect.stringContaining('Posted') });
+      expect(ledger.board(node)[0].files).toEqual([{ kind: 'file', path: 'pipe' }]);
+      rmSync(cwd, { recursive: true });
+    }, 5_000);
 
     it('claims nothing of a branch it cannot read, a link out of the worktree, or an entry with no files', async () => {
       const cwd = worktree();

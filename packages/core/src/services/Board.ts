@@ -37,14 +37,15 @@ const BLOB_READ_MAX = 16 * 1024 * 1024;
  * (ADR-0046). A file a clean filter rewrites hashes as it stands, so it can read
  * stale once landed, which a scope's being advisory covers.
  */
-function workBlob(cwd: string, file: string): string | undefined {
+async function workBlob(cwd: string, file: string): Promise<string | undefined> {
   try {
-    const root = fs.realpathSync(cwd);
-    const full = fs.realpathSync(path.join(root, file));
+    const root = await fs.promises.realpath(cwd);
+    const full = await fs.promises.realpath(path.join(root, file));
     if (!full.startsWith(`${root}${path.sep}`)) return undefined;
-    const { size } = fs.statSync(full);
-    if (size > BLOB_READ_MAX) return undefined;
-    const bytes = fs.readFileSync(full);
+    // A run chose what is at this path: a pipe there would never end the read.
+    const stat = await fs.promises.stat(full);
+    if (!stat.isFile() || stat.size > BLOB_READ_MAX) return undefined;
+    const bytes = await fs.promises.readFile(full);
     return createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
   } catch {
     return undefined;
@@ -84,7 +85,7 @@ export class NodeBoard {
   /** The file evidence an entry pins, read now: what its author saw and what the branch held. */
   private async pinned(files: readonly string[], cwd: string | undefined, branch: string | undefined): Promise<BoardFile[]> {
     return Promise.all(files.map(async (file): Promise<BoardFile> => {
-      const sha = cwd === undefined ? undefined : workBlob(cwd, file);
+      const sha = cwd === undefined ? undefined : await workBlob(cwd, file);
       const tip = branch === undefined ? undefined : await this.deps.git.blob(branch, file);
       return { kind: 'file', path: file, ...(sha ? { sha } : {}), ...(tip ? { tip } : {}) };
     }));

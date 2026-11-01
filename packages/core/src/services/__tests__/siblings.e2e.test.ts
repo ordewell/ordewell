@@ -98,6 +98,25 @@ describe('two siblings and a provided interface', () => {
     parent.destroy();
   });
 
+  it('reaches a sibling that declared a path the landing changed, read from what git says landed', async () => {
+    const built = tree([], {
+      slots: 5,
+      runner: gatedRunner({ pa: ['shared/types.ts', 'api/users.ts'], ca: ['web/client.ts'] }, { ca: () => lined }),
+      tasks: [sibling('p', 1, { paths: ['api/'] }), guard('pc', 2, 'p'), sibling('c', 3, { paths: ['shared/', 'web/'] }), guard('cc', 4, 'c')],
+      below: {
+        p: [SUBMIT([childTask('pa', 1)]), REPORT('Serve it')],
+        c: [SUBMIT([childTask('ca', 1)]), REPORT('Call it')],
+      },
+    });
+    const { parent, root, lower } = built;
+    const lined = lineWaits(root, parent, 'c');
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await allDone(parent);
+    const line = lower.c.asked[1].split('\n').filter((text) => text.startsWith('Ordewell: '));
+    expect(line).toEqual(['Ordewell: what you declared moved. "Sibling p" landed. It changed "shared/types.ts". Read "board" before you build on what you had.']);
+    parent.destroy();
+  });
+
   it('opens no turn for a line, and tells a sibling that declared nothing it touched nothing', async () => {
     const built = tree([], {
       slots: 5,
