@@ -64,9 +64,16 @@ export class Subtree {
     return tasks && { node: node.path, tasks, logs: this.source.logs(node) };
   }
 
-  /** Every plan below that has been saved, nearest first. */
+  /** Every plan below that has been saved, nearest first, each once: a Continue opens a new node for the same child and its one plan (ADR-0055 D17). */
   plans(): NodePlan[] {
-    return this.nodes().flatMap((node) => this.planOf(node) ?? []);
+    const latest = new Map(this.nodes().map((node) => [node.sessionId, node]));
+    return [...latest.values()].flatMap((node) => this.planOf(node) ?? []);
+  }
+
+  /** The plan a pinned reference names, whichever of a child's nodes it was pinned against. */
+  planAt(path: NodePath): NodePlan | undefined {
+    const node = this.nodes().find((one) => one.path === path);
+    return node && this.planOf(node);
   }
 
   /**
@@ -154,7 +161,7 @@ export function takeReport<H extends Handoff & { promote?: string[]; open?: stri
       refusals.push(`${field}: ${JSON.stringify(written)} names no finding: give one, as "#4/F3".`);
       return undefined;
     }
-    const from = ref.node === plan.node ? plan : below.find((one) => one.node === ref.node);
+    const from = ref.node === plan.node ? plan : below.find((one) => one.node === ref.node) ?? (ref.node ? subtree?.planAt(ref.node) : undefined);
     const finding = from && handoffOf(from, ref.task, ref.attempt)?.findings.find((f) => f.id === ref.finding);
     if (!from || !finding) {
       refusals.push(`${field}: ${JSON.stringify(written)} cannot be read: neither its attempt's log nor the plan keeps that finding's words.`);

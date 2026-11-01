@@ -25,6 +25,7 @@ function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
     plannerCompaction: vi.fn().mockReturnValue(undefined),
     streamPosition: vi.fn().mockReturnValue({ stream: 'daemon', seq: 12 }),
     hasSession: vi.fn().mockReturnValue(false),
+    stopTree: vi.fn(async () => undefined),
     destroy: vi.fn(),
     ...overrides,
   } as unknown as OrchestratorPool;
@@ -255,6 +256,7 @@ describe('DELETE /api/sessions/:id', () => {
     const meta = saveSession(savedPlan as never, 'g', ws, 's1');
     const filesWhenDestroyed: boolean[] = [];
     const pool = fakePool({
+      stopTree: vi.fn(async () => undefined),
       destroy: vi.fn(() => { filesWhenDestroyed.push(listSessions(ws).some((s) => s.id === meta.id)); }),
     } as Partial<OrchestratorPool>);
     const app = new Hono();

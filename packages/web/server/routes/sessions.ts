@@ -92,14 +92,14 @@ export function sessionsRoute(pool: OrchestratorPool) {
 
   // The live session goes before its files: it persists as it changes, so one
   // left running would write its file back and reappear in the list. A delete
-  // refused before that point leaves it open and its run going.
+  // refused before that point leaves it open, its tree stopped.
   router.delete('/:id', async (c) => {
     const ws = c.req.query('workspace') || process.cwd();
     const id = c.req.param('id');
     const held = pool.hasSession(id);
     let removed: boolean;
     try {
-      removed = await removeSession(id, ws, () => pool.destroy(id, { notifyClients: true }));
+      removed = await removeSession(id, ws, () => pool.stopTree(id), () => pool.destroy(id, { notifyClients: true }));
     } catch (err) {
       return c.json({ ok: false, message: err instanceof Error ? err.message : String(err) } satisfies OkResponse);
     }

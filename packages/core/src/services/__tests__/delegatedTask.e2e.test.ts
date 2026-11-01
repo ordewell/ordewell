@@ -572,14 +572,6 @@ describe('a child\'s budget', () => {
     expect(parent.planState?.isolation?.run.tasks.d.childSession).not.toBe(first);
     parent.destroy();
   });
-
-  it('is refused a Continue, saying a fresh retry starts it over', async () => {
-    const { parent } = tree([NOTHING_THEN_BLOCKED]);
-    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
-    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('failed'), { timeout: 20_000 });
-    expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'session', message: 'go on' }, { kind: 'user' })).toMatchObject({ ok: false, message: expect.stringContaining('Retry it fresh') });
-    parent.destroy();
-  });
 });
 
 describe('a Stop', () => {

@@ -28,7 +28,9 @@ import type {
   TaskIsolation,
   TreeSnapshot,
 } from '../interfaces/IWorktreeIsolation';
+import { discardChildRun } from './childRuns';
 import { describeMergeResult, repairedLanded } from './mergeResultNotice';
+import type { ChildSessionPlace } from '../utils/sessionStore';
 import { quotedList } from '../utils/quotedList';
 import { handoffOf, layoutOf, PrepareFailedError, SELF_REPO, taskIsolationsOf } from './isolationRecord';
 import { handoffBranchName } from './mergeWording';
@@ -115,6 +117,8 @@ type RunDecision =
   | { mode: 'shared'; reason: SharedRootReason; repos: string[] };
 
 const SHARED_ROOT_TAIL = 'tasks run in the workspace root without worktree isolation.';
+
+const NO_SEAT = 'A delegated task needs an isolated run, with a worktree of its own: this one has none, and a child plan never runs in the user\'s checkout.';
 
 const PLAN_REPLACED_REVERT = 'Another plan was loaded while this revert was under way, so nothing was reverted.';
 
@@ -348,6 +352,11 @@ export class IsolationRunController {
     return this.isOpen ? 'changed' : 'cleared';
   }
 
+  /** Throws, as {@link hostChild} does, for a task with no worktree: read before a carve, so one that cannot seat a child spends nothing. */
+  requireChildSeat(taskId: string): void {
+    if (!this.run?.tasks[taskId]) throw new PlanEditError(NO_SEAT);
+  }
+
   /**
    * The child session a task's worktree is the code root of, named on the
    * task's record so a reopen knows that worktree is a child's (ADR-0055 D17),
@@ -357,7 +366,7 @@ export class IsolationRunController {
    */
   hostChild(taskId: string, mintSessionId: () => string): string {
     const record = this.run?.tasks[taskId];
-    if (!record) throw new PlanEditError('A delegated task needs an isolated run, with a worktree of its own: this one has none, and a child plan never runs in the user\'s checkout.');
+    if (!record) throw new PlanEditError(NO_SEAT);
     if (record.childSession) return record.childSession;
     record.childSession = mintSessionId();
     this.listener.changed();
@@ -367,6 +376,13 @@ export class IsolationRunController {
   /** The child session seated in a task's worktree, if one is. */
   childSession(taskId: string): string | undefined {
     return this.run?.tasks[taskId]?.childSession;
+  }
+
+  /** A child's run goes, and what that kept or could not let go is said, as a run's own discard says it (ADR-0055 D15). */
+  async discardChild(place: ChildSessionPlace): Promise<IsolationRemoval> {
+    const removal = await discardChildRun(place, this.isolation);
+    this.report(removal);
+    return removal;
   }
 
   /** Open a run if none is, leaving whether it isolates to its first change task. */
@@ -921,11 +937,13 @@ export class IsolationRunController {
    * predecessors' work, and anything held — a kept attempt, a conflict, a
    * repair — is work the user may still want, which a fresh run's mint would
    * delete. Only a run with no records at all is superseded, and not one that
-   * reverted the tasks it had: a retry starts from its tip (ADR-0054).
+   * reverted the tasks it had: a retry starts from its tip (ADR-0054). A record
+   * that names a child holds a code root, on a path that child's own run is tied
+   * to, whether or not a Stop has yet taken it off `active` (ADR-0055 D17).
    */
   private continuableRun(root: string): IsolationRun | null {
     const run = this.run;
-    return run && run.workspaceRoot === root && (run.reverted || Object.values(run.tasks).some((r) => r.status !== 'active')) ? run : null;
+    return run && run.workspaceRoot === root && (run.reverted || Object.values(run.tasks).some((r) => r.status !== 'active' || r.childSession)) ? run : null;
   }
 
   /**

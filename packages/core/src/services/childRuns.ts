@@ -1,5 +1,5 @@
 import type { IsolationRemoval, IsolationRun, IWorktreeIsolation } from '../interfaces/IWorktreeIsolation';
-import { listChildSessions, loadChildSession } from '../utils/sessionStore';
+import { listChildSessions, loadChildSession, type ChildSessionPlace } from '../utils/sessionStore';
 import { absorbRemoval, noRemoval, repoRootOf } from './isolationRecord';
 import { stateRootOf } from './stateRoot';
 
@@ -10,6 +10,22 @@ import { stateRootOf } from './stateRoot';
  */
 function fromCheckout(run: IsolationRun): IsolationRun {
   return { ...run, repos: run.repos.map((repo) => ({ ...repo, root: repoRootOf(stateRootOf(run), repo.path) })) };
+}
+
+/**
+ * One child's run, with everything under it, for a fresh attempt or a removal
+ * of its delegated task (ADR-0055 D15). Its state stays on disk under the root:
+ * only the worktrees and branches its records name go.
+ */
+export async function discardChildRun(place: ChildSessionPlace, isolation: Pick<IWorktreeIsolation, 'discard'>): Promise<IsolationRemoval> {
+  const removal = noRemoval();
+  const run = loadChildSession(place)?.plan.isolation?.run;
+  if (!run) return removal;
+  for (const { childSession } of Object.values(run.tasks)) {
+    if (childSession) absorbRemoval(removal, await discardChildRun({ ...place, sessionId: childSession }, isolation));
+  }
+  absorbRemoval(removal, await isolation.discard(fromCheckout(run), { integration: 'delete' }));
+  return removal;
 }
 
 /**

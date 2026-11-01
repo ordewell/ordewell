@@ -9,7 +9,7 @@ import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import { StructuredRunner } from '../StructuredRunner';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import { fakeConfig } from '../../testing';
-import { saveSession } from '../../utils/sessionStore';
+import { loadChildSession, saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
 import { fakeFs, makeSession } from './sessionTestKit';
 
@@ -105,4 +105,48 @@ describe('a delegated task on a real harness', () => {
     for (const file of ['a.txt', 'b.txt', 's.txt']) expect(existsSync(join(root, file))).toBe(true);
     parent.destroy();
   }, 90_000);
+
+  it('stops at every process, and a Continue replays the subplanner where it was (ADR-0055 D16, D17)', async () => {
+    process.env.PATH = [FAKE_CLAUDE, savedPath].filter(Boolean).join(delimiter);
+    process.env.FAKE_CLAUDE_STATE = tempDir();
+    const root = repo();
+    const turnsFrom = join(process.env.FAKE_CLAUDE_STATE, 'subplanner-turns.json');
+    const slow = { ...childTask('b', 2, ['a']), prompt: cue({ delayMs: 1500, write: { 'b.txt': 'written by b\n' }, summary: 'Wrote b.' }) };
+    writeFileSync(turnsFrom, JSON.stringify([[['submit_plan', { tasks: [childTask('a', 1), slow] }]]]));
+    const goal = `Write a and b. ${cue({ turnsFrom })}`;
+    const tasks: Task[] = [
+      createTask({ id: 'd', order: 1, title: 'Delegated subtree', type: 'delegated', goal, budget: { tokens: 5_000_000 }, protectedPaths: ['tests/'], assignedRunner: 'claude-code' }),
+      createTask({ id: 'c', order: 2, title: 'Check it', prompt: cue({ write: { 'c.txt': 'checked\n' } }), dependencies: ['d'], assignedRunner: 'claude-code' }),
+    ];
+    const parent = makeSession({
+      runner: new StructuredRunner(),
+      isolation: createWorktreeIsolation({ resolvePath: async () => process.env.PATH ?? '', config: fakeConfig({ worktreeIsolation: true }) }),
+      workspaceRoot: () => root, saveSession, openTaskLog, leaseHost: new LeaseHost(), sessionId: 'session-root',
+      config: fakeConfig({ maxParallelSessions: 2, aiProvider: 'claude-code' }),
+      settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: 10_000_000 } }),
+      delegationOffered: true,
+      childDeps: () => ({ fsAdapter: { ...fakeFs(), getWorkspaceRoot: () => root } }),
+    });
+    parent.loadPlan({ tasks, runners: ['claude-code'], status: 'approved', generatedAt: '2026-11-01T10:00:00.000Z' } as unknown as LegacyPlanState, 'the root goal', root, { sessionId: 'session-root' });
+
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    const child = () => parent.planState?.isolation?.run.tasks.d?.childSession;
+    // A load reads a task saved in progress as interrupted: this is `b` at work.
+    await vi.waitFor(() => expect(child() && loadChildSession({ baseDir: root, rootSessionId: 'session-root', sessionId: child()! })?.plan.tasks.find((t) => t.id === 'b')?.status).toBe('failed'), { timeout: 30_000, interval: 50 });
+    const reopened = child();
+
+    parent.stopExecution();
+    await parent.stopSubtree();
+    expect(parent.planTasks[0].status).toBe('pending');
+
+    // A new process replays the Model context, its goal and cue with it: what it does next is read from the top.
+    writeFileSync(turnsFrom, JSON.stringify([[], [['task_complete', { status: 'done', summary: 'a and b are written.', commit: { subject: 'Write a and b' } }]]]));
+    expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'session', message: 'Carry on.' }, { kind: 'user' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(parent.planTasks[0].status).not.toMatch(/approved|pending|in_progress/), { timeout: 60_000, interval: 100 });
+    expect(parent.planTasks[0].verdict).toMatchObject({ outcome: 'pass', reported: 'done' });
+    expect(parent.planTasks[0].runnerSessionId).toBe(reopened);
+    const integration = parent.planState?.isolation?.run.repos[0].integrationBranch ?? '';
+    expect(git(root, 'ls-tree', '-r', '--name-only', integration).split('\n')).toEqual(expect.arrayContaining(['a.txt', 'b.txt']));
+    parent.destroy();
+  }, 120_000);
 });

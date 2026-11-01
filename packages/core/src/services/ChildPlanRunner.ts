@@ -8,20 +8,28 @@ import type { UsageRecord } from '../models/Usage';
 import { AbstractRunner, AbstractRunnerSession, type RunnerSpawnOptions } from './AbstractRunner';
 import type { CheckpointAnswer, McpToolReply, TaskCompleteArgs } from './mcp/tools';
 
+/** Why a node may do nothing more, and the status that ends it with (ADR-0056 M5, M8). */
+export interface NodeEnd {
+  why: string;
+  ends: 'blocked' | 'failed';
+}
+
 /** What a parent reads of a child (ADR-0055 D6), all of it read afresh from the child's plan and run. */
 export interface NodeState {
   /** What keeps a `done` from being taken, in the words of a refusal; empty once the run has settled and landed. */
   unfinished: readonly string[];
   /** Tasks that finished with a pass. */
   completed: number;
-  /** An attempt is live, or a run is scheduled and can still start one. */
+  /** An attempt is live, or a run is opening or merging. */
   live: boolean;
   /** A planner turn holds the conversation, or waits for it. */
   plannerBusy: boolean;
   /** Something gathered for the subplanner will open a turn by itself. */
   wakeOwed: boolean;
-  /** Why this node may do nothing more, or null: what ends it `blocked`, with no call of its own. */
-  stoppedFor: string | null;
+  /** Why this node stops now, or null: what ends it with no call of its own. */
+  stoppedFor: NodeEnd | null;
+  /** Why nothing may start here though what is in flight may finish, or null (ADR-0056 M10). */
+  withdrawn: string | null;
   /** One line per task, as a derived report lists them. */
   tasks: readonly { label: string; status: Task['status'] }[];
 }
@@ -38,13 +46,15 @@ export interface ChildNode {
   readonly wallClockMs: number | null;
   startPlanning(goal: string): Promise<unknown>;
   continueConversation(text: string): Promise<unknown>;
+  /** Reopened (ADR-0055 D17): acts as Execute there, and its subplanner goes on with `text`; one that never wrote a plan plans `goal`. */
+  goOn(text: string, goal: string): Promise<unknown>;
   state(): NodeState;
   /** A report held to its plan and subtree, its references pinned and what crosses a level read verbatim (ADR-0057 R1, R2). */
   takeReport(report: TaskCompleteArgs): HandoffCheck<TakenReport>;
-  /** End its run and its planner turn. Resolves once nothing of either is left. */
+  /** End its subtree (D16). Resolves once nothing of it is left, however long that takes. */
   halt(): Promise<void>;
-  /** Let its Session go. */
-  close(): void;
+  /** Let its Session go, and what it did not spend return (ADR-0056 M5). */
+  close(): Promise<void>;
 }
 
 /** What a subplanner's token calls and what its Session tells of itself, bound to one attempt (ADR-0055 D5). */
@@ -53,18 +63,24 @@ export interface SubplannerLink {
   checkpoint(): Promise<McpToolReply>;
   /** Something changed that a verdict or the completion reminder may read. */
   changed(): void;
+  /** A Stop stands over this node, its own or an ancestor's (ADR-0055 D16). */
+  stopped(): boolean;
   /** What its planner or a task spent, as it arrives: charged where it was spent, and rolled up to each level for its row (ADR-0055 D20). */
   usage(record: UsageRecord): void;
 }
 
 /** The parent, as a child's attempt needs it. */
 export interface ChildHost {
-  /** Carve the child's mandate and budget, and build it in `cwd` (ADR-0056 M4, M5). Rejects, naming the level, for what cannot be carved. */
-  openChild(task: Task, cwd: string, link: SubplannerLink): Promise<ChildNode>;
+  /**
+   * Carve the child's mandate and budget, and build it in `cwd` (ADR-0056 M4,
+   * M5), or the child `reopening` from its saved file (ADR-0055 D17). Rejects,
+   * naming the level, for what cannot be carved.
+   */
+  openChild(task: Task, cwd: string, link: SubplannerLink, reopening?: string): Promise<ChildNode>;
   /** What the delegated task's branch changed since its base, relative to the workspace root. */
   changedPaths(taskId: string): Promise<string[]>;
-  /** The child is gone: what it did not spend comes back (ADR-0056 M5). By its id, since its task's record may have gone with a landing. */
-  closeNode(sessionId: string): Promise<void>;
+  /** A Stop stands over this node: what its children read of their ancestors (D16). */
+  stopped(): boolean;
   /** Usage on its way up the tree, past this level's row. */
   passUp(record: UsageRecord): void;
 }
@@ -90,6 +106,8 @@ interface ChildPlanSetup {
   task: Task;
   cwd: string;
   host: ChildHost;
+  /** A Continue (ADR-0055 D17): the child it reopens, and what its parent says to it. */
+  resume?: { sessionId: string; message: string };
 }
 
 /**
@@ -116,7 +134,11 @@ export class ChildPlanSession extends AbstractRunnerSession {
   private accepted: { report: TaskCompleteArgs; refuted?: VerificationCheck } | null = null;
   /** The attempt has its end: nothing after it counts. */
   private ended = false;
-  private halting: string | null = null;
+  private halting: NodeEnd | null = null;
+  /** The Stop, recorded before anything is ended (D16): it is this attempt's, so a later attempt starts clear of it. */
+  private tombstone = false;
+  /** The child opening, which a Stop waits for: it cannot end what it has not got. */
+  private seating: Promise<void> | undefined;
   private checkQueued = false;
   private graceTimer: ReturnType<typeof setTimeout> | undefined;
   private wallClock: ReturnType<typeof setTimeout> | undefined;
@@ -131,32 +153,34 @@ export class ChildPlanSession extends AbstractRunnerSession {
 
   /** Whoever spawned it attaches its listeners when the spawn resolves, so the child starts a macrotask later. */
   begin(): void {
-    setImmediate(() => { void this.run(); });
+    setImmediate(() => { this.seating = this.run(); });
   }
 
   private async run(): Promise<void> {
-    const { task, cwd, host } = this.setup;
+    if (this.tombstone) return;
+    const { task, cwd, host, resume } = this.setup;
     try {
       this.node = await host.openChild(task, cwd, {
         taskComplete: (report) => this.taskComplete(report),
         checkpoint: () => Promise.resolve({ text: NO_QUESTIONS_YET, isError: true }),
         changed: () => this.queueCheck(),
+        stopped: () => this.tombstone || this.halting !== null || host.stopped(),
         usage: (record) => {
           this.emitEvent({ type: 'usage', record: rolledUp(record) });
           host.passUp(record);
         },
-      });
+      }, resume?.sessionId);
     } catch (err) {
       // Refused, not failed: nothing ran, and what can be changed is the plan above (ADR-0056 M4).
-      this.end('blocked', err instanceof Error ? err.message : String(err));
+      if (!this.tombstone) this.end('blocked', err instanceof Error ? err.message : String(err));
       return;
     }
-    if (this.stopping) return;
+    if (this.tombstone) return;
     if (this.node.wallClockMs !== null) {
       this.wallClock = setTimeout(() => this.haltFor(`its time of ${this.node?.wallClockMs} ms ran out`), this.node.wallClockMs);
       this.wallClock.unref?.();
     }
-    this.opened(this.node.startPlanning(task.goal ?? ''));
+    this.opened(resume ? this.node.goOn(resume.message, task.goal ?? '') : this.node.startPlanning(task.goal ?? ''));
   }
 
   /** A turn this opened: its end is one a check reads, and a failure in it ends the attempt, since no person reads it (ADR-0056 M8). */
@@ -166,8 +190,11 @@ export class ChildPlanSession extends AbstractRunnerSession {
       () => this.turnSettled(),
       (err: unknown) => {
         this.turnSettled();
-        // A turn this ended itself is no failure of its planner.
-        if (!this.stopping && !this.halting) this.end('failed', `Its planner could not go on: ${err instanceof Error ? err.message : String(err)}`);
+        // A turn this ended itself is no failure of its planner, and nor is one refused at the gate: the check owes that end.
+        if (this.tombstone || this.halting) return;
+        const state = this.node?.state();
+        if (state?.stoppedFor || state?.withdrawn) return;
+        this.end('failed', `Its planner could not go on: ${err instanceof Error ? err.message : String(err)}`);
       },
     );
   }
@@ -192,7 +219,7 @@ export class ChildPlanSession extends AbstractRunnerSession {
    */
   private check(): void {
     const node = this.node;
-    if (!node || this.ended || this.stopping) return;
+    if (!node || this.ended || this.tombstone) return;
     const state = node.state();
     this.say(state);
     if (this.accepted) {
@@ -201,8 +228,13 @@ export class ChildPlanSession extends AbstractRunnerSession {
     }
     const stopped = this.halting ?? state.stoppedFor;
     if (stopped) {
-      if (!state.live && !state.plannerBusy) this.end('blocked', this.derived(stopped, state));
-      else this.haltFor(stopped);
+      if (!state.live && !state.plannerBusy) this.end(stopped.ends, this.derived(stopped.why, state));
+      else this.haltFor(stopped.why, stopped.ends);
+      return;
+    }
+    // Nothing starts now, and what is in flight finishes first (ADR-0056 M10).
+    if (state.withdrawn) {
+      if (!state.live && !state.plannerBusy) this.end('blocked', this.derived(state.withdrawn, state));
       return;
     }
     if (state.live || state.plannerBusy || state.wakeOwed || this.opening > 0) return;
@@ -215,9 +247,9 @@ export class ChildPlanSession extends AbstractRunnerSession {
   }
 
   /** The node stops as a Stop does, and the attempt ends once it has (ADR-0056 M3, M5). */
-  private haltFor(why: string): void {
+  private haltFor(why: string, ends: NodeEnd['ends'] = 'blocked'): void {
     if (this.halting) return;
-    this.halting = why;
+    this.halting = { why, ends };
     void this.node?.halt().then(() => this.queueCheck(), () => this.queueCheck());
   }
 
@@ -250,7 +282,7 @@ export class ChildPlanSession extends AbstractRunnerSession {
    * `blocked` and `failed` are taken at any time: that is how a subtree gives up.
    */
   private async taskComplete(report: TaskCompleteArgs): Promise<McpToolReply> {
-    if (this.ended || this.accepted || this.stopping) return { text: 'This attempt has ended: nothing was recorded.', isError: true };
+    if (this.ended || this.accepted || this.tombstone) return { text: 'This attempt has ended: nothing was recorded.', isError: true };
     // Its references resolve in its own plan and what is below it, never the parent's (ADR-0057 R1).
     const checked: HandoffCheck<TakenReport> = this.node?.takeReport(report) ?? checkHandoff(report, this.taskId, []);
     if (!checked.ok) return { text: checked.refusal, isError: true };
@@ -261,7 +293,7 @@ export class ChildPlanSession extends AbstractRunnerSession {
       refuted = await this.protectedPathsTouched();
     }
     const outsideScope = await this.outsideScope();
-    if (this.ended || this.accepted || this.stopping) return { text: 'This attempt has ended: nothing was recorded.', isError: true };
+    if (this.ended || this.accepted || this.tombstone) return { text: 'This attempt has ended: nothing was recorded.', isError: true };
     const { subtree } = checked.handoff;
     const taken = subtree && outsideScope ? { ...checked.handoff, subtree: { ...subtree, outsideScope } } : checked.handoff;
     this.accepted = { report: taken, ...(refuted ? { refuted } : {}) };
@@ -332,12 +364,15 @@ export class ChildPlanSession extends AbstractRunnerSession {
   }
 
   /**
-   * The child goes as an attempt's runner does: its run ended, then its
-   * Session let go, while its parent can still read the lease it depends on
-   * (ADR-0055 D13), and what it did not spend returned (ADR-0056 M5). Reopening
-   * it and a subtree's tombstone are D16's and D17's, and not built yet.
+   * A tombstone first (ADR-0055 D16): every start under it reads this at once,
+   * before anything has stopped. Then the child goes as an attempt's runner
+   * does: its subtree ended, leaves first, then its Session let go, while its
+   * parent can still read the lease it depends on (D13), and what it did not
+   * spend returned (ADR-0056 M5). Resolves when all of that is done, with no
+   * timeout of its own: a runner's grace is the runner's (ADR-0018).
    */
   stop(): Promise<void> {
+    this.tombstone = true;
     this.stopping ??= this.wind();
     return this.stopping;
   }
@@ -345,14 +380,11 @@ export class ChildPlanSession extends AbstractRunnerSession {
   private async wind(): Promise<void> {
     clearTimeout(this.graceTimer);
     clearTimeout(this.wallClock);
+    if (!this.node) await this.seating;
     const node = this.node;
     if (node) {
-      try {
-        await node.halt();
-      } finally {
-        node.close();
-        await this.setup.host.closeNode(node.sessionId).catch(() => undefined);
-      }
+      await node.halt().catch(() => undefined);
+      await node.close().catch(() => undefined);
     }
     this.ended = true;
     this.baseHandleExit(0);
@@ -415,10 +447,9 @@ export class ChildPlanRunner extends AbstractRunner<ChildPlanSession> {
   async spawn(opts: RunnerSpawnOptions): Promise<IRunnerSession> {
     const task = opts.delegated;
     if (!task) throw new Error(`Task "${opts.title ?? opts.taskId}" has no goal: only a delegated task runs here.`);
-    // D17's, and not built yet: the claim's Continue is refused in `continuability`, so this is only the last line.
-    if (opts.resumeSessionId) throw new Error(`Task "${opts.title ?? opts.taskId}" cannot reopen its child yet: retry it fresh.`);
     this.spawned += 1;
-    const session = new ChildPlanSession(`child-${opts.taskId.slice(0, 8)}-${this.spawned}`, opts.taskId, { task, cwd: opts.cwd, host: this.host });
+    const resume = opts.resumeSessionId ? { resume: { sessionId: opts.resumeSessionId, message: opts.prompt } } : {};
+    const session = new ChildPlanSession(`child-${opts.taskId.slice(0, 8)}-${this.spawned}`, opts.taskId, { task, cwd: opts.cwd, host: this.host, ...resume });
     this.registerSession(session.id, session);
     session.begin();
     return session;
