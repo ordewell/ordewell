@@ -19,20 +19,20 @@ describe('the planner tool set', () => {
     expect(submitType(toolListing(PLANNER_TOOLS))).toEqual(['ai', 'user', 'script']);
   });
 
-  it('takes a delegated task in submit_plan and a raise in answer_checkpoint only where one may be written, adds `read`, and changes no other tool', () => {
+  it('takes a delegated task in submit_plan and a raise in answer_checkpoint only where one may be written, adds `read` and `post`, and changes no other tool', () => {
     const on = listOf(true, false);
     expect(submitType(on)).toEqual(['ai', 'user', 'script', 'delegated']);
     const flat = toolListing(PLANNER_TOOLS);
-    expect(on.map((t) => t.name)).toEqual([...flat.map((t) => t.name), 'read']);
-    const others = (tools: typeof flat) => tools.filter((t) => t.name !== 'submit_plan' && t.name !== 'answer_checkpoint' && t.name !== 'read');
+    expect(on.map((t) => t.name)).toEqual([...flat.map((t) => t.name), 'read', 'post']);
+    const others = (tools: typeof flat) => tools.filter((t) => t.name !== 'submit_plan' && t.name !== 'answer_checkpoint' && t.name !== 'read' && t.name !== 'post');
     expect(others(on)).toEqual(others(flat));
     const raise = (tools: typeof flat) => JSON.stringify(tools.find((t) => t.name === 'answer_checkpoint')).includes('raiseTokens');
     expect([raise(on), raise(flat)]).toEqual([true, false]);
   });
 
-  it('gives a subplanner task_complete and checkpoint, and no plan_complete or ask_parent', () => {
+  it('gives a subplanner its board, task_complete and checkpoint, and no plan_complete or ask_parent', () => {
     const names = listOf(false, true).map((t) => t.name);
-    expect(names).toEqual([...PLANNER_TOOLS.map((t) => t.name), 'task_complete', 'checkpoint']);
+    expect(names).toEqual([...PLANNER_TOOLS.map((t) => t.name), 'read', 'post', 'task_complete', 'checkpoint']);
     expect(names).not.toContain('plan_complete');
     expect(names).not.toContain('ask_parent');
   });
@@ -49,7 +49,7 @@ describe('a subplanner\'s token', () => {
     const flat = await server.issuePlannerToken({ sessionId: 's' });
     const subplanner = await server.issuePlannerToken({ sessionId: 's', subplanner: true });
     expect(flat.extraTools).toBeUndefined();
-    expect(subplanner.extraTools).toEqual(['task_complete', 'checkpoint']);
+    expect(subplanner.extraTools).toEqual(['read', 'post', 'task_complete', 'checkpoint']);
     await server.dispose();
   });
 });

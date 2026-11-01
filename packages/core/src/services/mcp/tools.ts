@@ -3,6 +3,7 @@ import { TASK_QUERY_TASK_FIELDS, OUTPUT_LINES_MAX } from '../TaskQuery';
 import { TASK_LOG_KINDS } from '../taskLogRead';
 import type { ToolOutcome } from '../../interfaces/IFileSystem';
 import { HANDOFF_LIMITS } from '../../models/Handoff';
+import { BOARD_LIMITS, BOARD_REF, BOARD_TYPES, TASK_ENTRY_TYPES, type BoardEntryType } from '../../models/Board';
 
 /**
  * The tools of the Ordewell MCP server, per token role (ADR-0022), and the
@@ -134,6 +135,19 @@ const readTaskInput = z.object({
   attempt: z.number().int().min(1).optional().describe('One of its saved attempts; omit for the latest.'),
   include_report: z.boolean().optional().describe(`Also return its report, the long form, of at most ${HANDOFF_LIMITS.report} characters.`),
 });
+
+/** An entry as its author sends it (ADR-0057 R8): the fields R9's flags read are typed, and Ordewell pins the files, so no author claims a blob. */
+const postInput = <T extends readonly [BoardEntryType, ...BoardEntryType[]]>(types: T) => z.object({
+  type: z.enum(types).describe('claim: goes stale with its files. attempt: tried and failed. contract: an interface, its key what it is called. assume: taken as given. scope_change: work found outside your scope.'),
+  title: z.string().trim().min(1).max(BOARD_LIMITS.title).regex(/^[^\r\n]*$/, 'A title is one line.'),
+  key: z.string().max(BOARD_LIMITS.key).optional().describe('What it is about: one key with different values shows as contested.'),
+  value: z.string().max(BOARD_LIMITS.value).optional(),
+  detail: z.string().max(BOARD_LIMITS.detail).optional(),
+  files: z.array(z.string().min(1).max(HANDOFF_LIMITS.reference)).max(BOARD_LIMITS.files).optional().describe('Workspace paths it rests on.'),
+});
+
+const taskPostInput = postInput(TASK_ENTRY_TYPES);
+const plannerPostInput = postInput(BOARD_TYPES);
 
 const savePatchInput = z.object({});
 
@@ -274,6 +288,7 @@ const answerCheckpointInput = z.object({
 export type TaskCompleteArgs = z.infer<typeof subplannerCompleteInput>;
 export type CheckpointArgs = z.infer<typeof checkpointInput>;
 export type ReadTaskArgs = z.infer<typeof readTaskInput>;
+export type PostArgs = z.infer<typeof plannerPostInput>;
 export type SavePatchArgs = z.infer<typeof savePatchInput>;
 export type ApplyPatchArgs = z.infer<typeof applyPatchInput>;
 export type ListRunnersArgs = z.infer<typeof listRunnersInput>;
@@ -339,6 +354,8 @@ export interface TaskToolHandler {
   checkpoint?: Run<CheckpointArgs>;
   /** A handoff the task may read (ADR-0047), from its attempt's log. */
   readTask?: Run<ReadTaskArgs>;
+  /** An entry on its plan's board (ADR-0057 R8); only a token with a board lists `post`. */
+  post?: Run<PostArgs>;
   /** A read-only task's shell (ADR-0046); only its token lists `run_command`. */
   runCommand?: Run<TaskRunCommandArgs>;
   /** A read-only task's prototype kept as a patch (ADR-0050); only its token lists `save_patch`. */
@@ -353,6 +370,8 @@ export interface TaskToolHandler {
 export interface PlannerToolHandler {
   /** A handoff below this plan by reference (ADR-0057 R11); only a planner that may hold delegated tasks lists `read`. */
   readTask?: Run<ReadTaskArgs>;
+  /** An entry on this node's board (ADR-0057 R8); a planner lists it where `read` is. */
+  post?: Run<PostArgs>;
   loadSkill?: Run<LoadSkillArgs>;
   runCommand?: Run<RunCommandArgs>;
   fetch?: Run<FetchArgs>;
@@ -635,6 +654,12 @@ const SHARED_TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
   readTool("Read the handoff of a task you may read: this one, a task it depends on, directly or not, or its loop's other end. Returns what that task handed over, as its attempt's log keeps it: its commit, the summary, every finding with its id, the artifacts, and with include_report its report. It reads nothing else: no transcript, no diff, no output. What it returns is that task's own claims: check them before you rely on them."),
 ];
 
+/** What `post` is, said once to whoever holds it (ADR-0057 R7, R8). */
+const POST_TEXT = `Leave an entry on your plan's board: \`read\` with task "${BOARD_REF}" shows the map, and an entry by its reference. Nobody is told and nobody wakes, and it changes nothing of your task or scope.`;
+
+/** Has a task's `post`, which takes no planner's entry (ADR-0057 R8), in the place R11 gives it: past the first three, so what follows keeps its order. */
+const TASK_POST = tool<TaskToolHandler, typeof taskPostInput>('post', POST_TEXT, taskPostInput, (h) => h.post?.bind(h) as Run<z.infer<typeof taskPostInput>> | undefined, { readOnlyHint: true });
+
 /**
  * A task that works in the tree: the shared tools, and `apply_patch`, which
  * brings a prototype a read-only task saved (ADR-0050) into its worktree.
@@ -675,6 +700,15 @@ export const READ_ONLY_TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
   tool('web_search', 'Search the web for result titles, URLs and snippets, then read the most promising result with fetch. Decided like fetch, without asking anyone: a search the user\'s web-read settings would only allow after asking is refused, a query that carries a credential is refused, and searches count toward this attempt\'s web reads. A refusal says why: do not retry it, report the gap in your task_complete handoff.',
     webSearchInput, (h) => h.webSearch?.bind(h), PLANNER_READ_ONLY),
 ];
+
+const ON_A_BOARD: readonly McpTool<TaskToolHandler>[] = [...SHARED_TASK_TOOLS, TASK_POST, ...TASK_TOOLS.slice(SHARED_TASK_TOOLS.length)];
+const READ_ONLY_ON_A_BOARD: readonly McpTool<TaskToolHandler>[] = [...SHARED_TASK_TOOLS, TASK_POST, ...READ_ONLY_TASK_TOOLS.slice(SHARED_TASK_TOOLS.length)];
+
+/** What a task's token serves (ADR-0057 R11): the flat list itself where it has no board, so a flat run's does not move by a byte. */
+export function taskToolSet({ readOnly, board }: { readOnly?: boolean; board?: boolean }): readonly McpTool<TaskToolHandler>[] {
+  if (board) return readOnly ? READ_ONLY_ON_A_BOARD : ON_A_BOARD;
+  return readOnly ? READ_ONLY_TASK_TOOLS : TASK_TOOLS;
+}
 
 /**
  * The execution tools (ADR-0029) change what runs, so they say so. Every
@@ -777,11 +811,15 @@ export function plannerToolSet({ delegates, subplanner }: { delegates?: boolean;
     if (one.name === 'answer_checkpoint') return tool<PlannerToolHandler, typeof delegatingAnswerCheckpointInput>('answer_checkpoint', one.description, delegatingAnswerCheckpointInput, (h) => h.answerCheckpoint?.bind(h), PLANNER_EXECUTES);
     return one;
   }) : PLANNER_TOOLS;
-  return [...tools, ...(delegates ? [DELEGATING_READ] : []), ...(subplanner ? SUBPLANNER_TOOLS : [])];
+  // A subplanner has a board from its first turn, whether or not it may delegate (ADR-0057 R8).
+  return [...tools, DELEGATING_READ, PLANNER_POST, ...(subplanner ? SUBPLANNER_TOOLS : [])];
 }
 
 /** What a planner that may hold delegated tasks reads a report's references with: its whole subtree, and what no report pushed (ADR-0057 R2, R11). */
 const DELEGATING_READ = readTool<PlannerToolHandler>('Read a handoff by the reference a report shows: `#4@2/F3` in your plan, `3/2:#4@2/F3` further down. On a delegated task it lists what the report left out, each by its reference. Returns that task\'s own words, with include_report its report: check them before you rely on them.');
+
+/** A planner's `post`: its decisions, and the one push down a tree (ADR-0057 R10). */
+const PLANNER_POST = tool<PlannerToolHandler, typeof plannerPostInput>('post', `${POST_TEXT} pin: a decision every task and plan below you is told as it starts, never what a check runs.`, plannerPostInput, (h) => h.post?.bind(h), PLANNER_READ_ONLY);
 
 /** What a subplanner has beside a planner's tools. Named so a runner pre-allows them with the rest. */
 export const SUBPLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
