@@ -83,6 +83,7 @@ function setup(opts: { tasks?: Task[]; spawn?: Spawn; repairs?: string[]; landPa
     runner,
     scriptRunner: runner,
     childPlanRunner: runner,
+    autonomous: () => false,
     store,
     output: new BufferedTaskOutputSource(),
     runs,

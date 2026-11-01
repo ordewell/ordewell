@@ -493,6 +493,8 @@ export function createSession(deps: SessionDeps): Session {
     ...(deps.placement?.budget ? { budget: deps.placement.budget } : {}),
     ...(deps.execution ? { execution: deps.execution } : {}),
     startRefused: (why) => session.startRefused(why),
+    autonomous: () => autonomousAt(deps.child, deps.config.autonomousMode),
+    ...(deps.child ? { inheritedProtectedPaths: () => deps.child?.mandate('off').exclusions.protectedPaths ?? [] } : {}),
     sessionId: () => session.sessionId,
     openTurn: () => session.turnRoomFreed(),
     skillsAt: (roots) => (deps.skillsService ?? new SkillsService(roots)).forRoot(roots),

@@ -5,6 +5,8 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
 import { LeaseHost } from '../sessionLease';
+import { resolveDefaultMode } from '../ModeResolver';
+import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import type { Session } from '../createSession';
 import type { IAiService } from '../AiService';
@@ -175,14 +177,14 @@ interface Tree {
   planner: ReturnType<typeof scriptedPlanner>;
 }
 
-interface TreeOptions { runner?: IRunner; tasks?: Task[]; tokens?: () => number; parallel?: number; offered?: boolean; runners?: string[]; fsAdapter?: IFileSystem; merges?: boolean }
+interface TreeOptions { runner?: IRunner; tasks?: Task[]; tokens?: () => number; parallel?: number; offered?: boolean; runners?: string[]; fsAdapter?: IFileSystem; merges?: boolean; config?: Parameters<typeof fakeConfig>[0] }
 
-function tree(turns: Turn[], { runner = writingRunner({ a: ['a.txt'], b: ['b.txt'] }), tasks = [delegated(), check()], tokens = () => 5_000_000, parallel = 3, offered = true, runners = ['claude-code'], fsAdapter, merges = false }: TreeOptions = {}): Tree {
+function tree(turns: Turn[], { runner = writingRunner({ a: ['a.txt'], b: ['b.txt'] }), tasks = [delegated(), check()], tokens = () => 5_000_000, parallel = 3, offered = true, runners = ['claude-code'], fsAdapter, merges = false, config = {} }: TreeOptions = {}): Tree {
   const root = repo();
   const planner = scriptedPlanner(turns);
   const parent = makeSession({
     runner, isolation: isolation(), workspaceRoot: () => root, saveSession, openTaskLog, leaseHost: new LeaseHost(), sessionId: 'session-root',
-    config: fakeConfig({ maxParallelSessions: parallel }),
+    config: fakeConfig({ maxParallelSessions: parallel, ...config }),
     ...(fsAdapter ? { fsAdapter } : {}),
     settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: tokens(), mergeAtGatesAutomatically: merges } }),
     delegationOffered: offered,
@@ -777,21 +779,105 @@ describe('a new result is checked again (ADR-0055 D8)', () => {
   });
 });
 
-describe('a landing that conflicts', () => {
-  it('waits on the user, its work kept, and starts no new child: a repair is a runner\'s (D14)', async () => {
+describe('a landing that conflicts (ADR-0055 D14)', () => {
+  const task = (session: Session, id: string) => session.planTasks.find((t) => t.id === id);
+  const integrationOf = (session: Session) => session.planState?.isolation?.run.repos[0].integrationBranch ?? '';
+
+  /**
+   * `s` and the child's `a` both write `x.txt`, so whichever lands last conflicts.
+   * The delegated task's repair merges the tip in by hand, as a repair's prompt
+   * tells a runner to, and `edit` is what it does beside that.
+   */
+  function conflicted(session: () => Session, { edit, waitsFor }: { edit?: (cwd: string) => void; waitsFor?: () => boolean } = {}) {
     const held = heldTasks({ a: ['x.txt'], s: ['x.txt'] }, ['a', 's']);
-    const { parent, planner } = tree([SUBMIT([childTask('a', 1)]), DONE], {
-      runner: held.runner,
-      tasks: [delegated(), check(), createTask({ id: 's', order: 3, title: 'Sibling', prompt: 'sibling' })],
-    });
+    const repairs: { mode: string | undefined; cwd: string; prompt: string }[] = [];
+    const runner: IRunner & { spawned: string[] } = {
+      ...held.runner,
+      spawn: vi.fn(async (opts) => {
+        if (opts.taskId !== 'd') return held.runner.spawn(opts);
+        repairs.push({ mode: opts.mode, cwd: opts.cwd, prompt: opts.prompt });
+        const repair = new FakeRunnerSession(`repair-${repairs.length}`, 'd');
+        const finish = () => {
+          if (waitsFor && !waitsFor()) {
+            setTimeout(finish, 5);
+            return;
+          }
+          spawnSync('git', ['merge', '--no-edit', integrationOf(session())], { cwd: opts.cwd, env: env() });
+          writeFileSync(join(opts.cwd, 'x.txt'), 'both\n');
+          edit?.(opts.cwd);
+          git(opts.cwd, 'add', '-A');
+          git(opts.cwd, 'commit', '-q', '--no-edit');
+          repair.reportComplete({ status: 'done', summary: 'Repaired.' });
+        };
+        setTimeout(finish, 5);
+        return repair;
+      }),
+    };
+    return { runner, held, repairs };
+  }
+
+  const siblingFirst = async (parent: Session, held: ReturnType<typeof heldTasks>) => {
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(held.runner.spawned).toEqual(expect.arrayContaining(['a', 's'])), { timeout: 20_000 });
     held.release('s');
     await vi.waitFor(() => expect(statusOf(parent, 's')).toBe('completed'), { timeout: 20_000 });
     held.release('a');
-    await vi.waitFor(() => expect(parent.planTasks.find((t) => t.id === 'd')).toMatchObject({ status: 'awaiting_user', awaitingReason: 'conflict' }), { timeout: 20_000 });
-    expect(planner.requests).toHaveLength(1);
-    parent.destroy();
+  };
+  const withSibling = () => [delegated(), check({ taskMode: 'plan' }), createTask({ id: 's', order: 3, title: 'Sibling', prompt: 'sibling' })];
+
+  it.each([[false], [true]])('is repaired by a plain runner in the mode its autonomy gives, autonomous %s, in the kept worktree, and lands', async (autonomous) => {
+    let session: Session | undefined;
+    const { runner, held, repairs } = conflicted(() => session!);
+    const made = tree([SUBMIT([childTask('a', 1)]), DONE], { runner, tasks: withSibling(), config: { autonomousMode: autonomous, conflictRepairAttempts: 1 } });
+    session = made.parent;
+    await siblingFirst(made.parent, held);
+    await vi.waitFor(() => expect(statusOf(made.parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    expect(repairs).toHaveLength(1);
+    expect(repairs[0].mode).toBe(resolveDefaultMode(new RunnerRegistry().get('claude-code')?.manifest.modes, autonomous));
+    expect(repairs[0].mode).not.toBe('build');
+    expect(repairs[0].prompt).toContain('tests/');
+    expect(task(made.parent, 'd')?.taskMode).toBeUndefined();
+    expect(made.planner.requests).toHaveLength(1);
+    expect(git(made.root, 'show', `${integrationOf(made.parent)}:x.txt`)).toBe('both');
+    made.parent.destroy();
+  });
+
+  it('does not land a repair that changes a protected path, and waits on the user', async () => {
+    let session: Session | undefined;
+    const { runner, held, repairs } = conflicted(() => session!, { edit: (cwd) => writeFileSync(join(cwd, 'tests', 'guard.txt'), 'the check reads nothing\n') });
+    const made = tree([SUBMIT([childTask('a', 1)]), DONE], { runner, tasks: withSibling(), config: { conflictRepairAttempts: 1 } });
+    session = made.parent;
+    await siblingFirst(made.parent, held);
+    await vi.waitFor(() => expect(task(made.parent, 'd')).toMatchObject({ status: 'awaiting_user', awaitingReason: 'conflict' }), { timeout: 20_000 });
+    expect(repairs).toHaveLength(1);
+    expect(git(made.root, 'show', `${integrationOf(made.parent)}:tests/guard.txt`)).toBe('the check reads this');
+    made.parent.destroy();
+  });
+
+  it('takes no check back: it goes on with the result its verdict judged', async () => {
+    let session: Session | undefined;
+    const { runner, held, repairs } = conflicted(() => session!, { waitsFor: () => statusOf(session!, 'c') === 'skipped' });
+    const made = tree([SUBMIT([childTask('a', 1)]), DONE], { runner, tasks: withSibling(), config: { conflictRepairAttempts: 1 } });
+    session = made.parent;
+    await siblingFirst(made.parent, held);
+    await vi.waitFor(() => expect(repairs).toHaveLength(1), { timeout: 20_000 });
+    await made.parent.execute({ command: 'skip_task', task: 'c' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(made.parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    expect(statusOf(made.parent, 'c')).toBe('skipped');
+    made.parent.destroy();
+  });
+
+  it('waits in the inbox once no repair is left, its work kept, and starts no new child', async () => {
+    let session: Session | undefined;
+    const { runner, held, repairs } = conflicted(() => session!);
+    const made = tree([SUBMIT([childTask('a', 1)]), DONE], { runner, tasks: withSibling(), config: { conflictRepairAttempts: 0 } });
+    session = made.parent;
+    await siblingFirst(made.parent, held);
+    await vi.waitFor(() => expect(task(made.parent, 'd')).toMatchObject({ status: 'awaiting_user', awaitingReason: 'conflict' }), { timeout: 20_000 });
+    expect(repairs).toHaveLength(0);
+    expect(made.planner.requests).toHaveLength(1);
+    expect(made.parent.escalations().find((e) => e.kind === 'conflict')?.task?.id).toBe('d');
+    made.parent.destroy();
   });
 });
 

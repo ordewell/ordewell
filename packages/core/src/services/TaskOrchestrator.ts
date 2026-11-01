@@ -261,6 +261,8 @@ export interface TaskOrchestratorDeps {
   budget?: NodeBudget;
   /** What is ready cannot start, and nothing live will free room for it, so nothing ticks this again. */
   startRefused: (why: string) => void;
+  /** This node's autonomy, as its mandate reads it (ADR-0056 M6). */
+  autonomous: () => boolean;
 }
 
 /**
@@ -317,6 +319,10 @@ export interface TaskOrchestratorOptions {
   budget?: NodeBudget;
   /** What follows a start its budget refuses with nothing live; the node stops, unless a subplanner can ask. */
   startRefused?: (why: string) => void;
+  /** This node's autonomy, as its mandate reads it (ADR-0056 M6); the config's, at a root. */
+  autonomous?: () => boolean;
+  /** What this node's ancestors protect (ADR-0056 M4). */
+  inheritedProtectedPaths?: () => readonly string[];
 }
 
 /**
@@ -474,6 +480,7 @@ export class TaskOrchestrator {
       recordHandoff: deps.recordHandoff,
       taskLog: deps.taskLog,
       ...(deps.research ? { research: deps.research } : {}),
+      autonomous: deps.autonomous,
       host: {
         settle: (ended) => this.settle(ended),
         completing: (taskId) => this.completing.has(taskId),
@@ -539,7 +546,7 @@ export class TaskOrchestrator {
       liveTasks: (): ReadonlySet<string> => orchestrator.liveTaskIds(),
       landedOn: (taskId) => landedOnOf(taskId, store.allTasks),
     });
-    const landing = new Landing({ runs, config: options.config, tasks: store, ...(options.plannedWith ? { plannedWith: options.plannedWith } : {}) });
+    const landing = new Landing({ runs, config: options.config, tasks: store, ...(options.plannedWith ? { plannedWith: options.plannedWith } : {}), ...(options.inheritedProtectedPaths ? { inheritedProtectedPaths: options.inheritedProtectedPaths } : {}) });
     const pool = options.pool ?? new SlotPool(() => options.config.maxParallelSessions);
     const node: PoolNode = {
       tick: () => orchestrator.offered(),
@@ -568,6 +575,7 @@ export class TaskOrchestrator {
       isApproved: options.isApproved ?? (() => true),
       mayMergeUnasked: options.mayMergeUnasked ?? (() => true),
       research: options.research,
+      autonomous: options.autonomous ?? (() => options.config.autonomousMode),
       ...(options.taskShell ? { taskShell: options.taskShell } : {}),
       ...(options.taskWebFetcher ? { taskWebFetcher: options.taskWebFetcher } : {}),
       ...(options.keepPatch ? { keepPatch: options.keepPatch } : {}),
@@ -2538,8 +2546,13 @@ export class TaskOrchestrator {
   }
 
   /** What a start of `task` reserves: a delegated task takes a node and no slot, or a parent at its limit deadlocks on the children that need them (ADR-0055 D18). */
+  /** Whether a start of `task` is its child plan's: a delegated task's repair is a plain runner's, which holds a slot and spends tokens (ADR-0055 D14). */
+  private startsChildPlan(task: Readonly<Task>): boolean {
+    return task.type === 'delegated' && this.landing.nextRepair(task.id) === null;
+  }
+
   private attemptRequest(task: Readonly<Task>): LeaseRequest {
-    const role = task.type === 'script' ? 'script' : task.type === 'delegated' ? 'child-plan' : 'task';
+    const role = task.type === 'script' ? 'script' : this.startsChildPlan(task) ? 'child-plan' : 'task';
     return { ...this.leaseRequest(role, task.id), runner: this.store.resolveTaskRunner(task) };
   }
 
@@ -2994,7 +3007,7 @@ export class TaskOrchestrator {
     if (!this.isApproved(taskId)) return `Task "${task.title}" waits for the user's approval: they approve it by starting it, or by executing the plan.`;
     // A script spends no tokens (ADR-0035), so a node out of them can still run its checks.
     // Nor does a delegated task's own attempt: what it spends is carved, and its carve answers for it.
-    return task.type === 'script' || task.type === 'delegated' ? null : this.deps.budget?.refusal() ?? null;
+    return task.type === 'script' || this.startsChildPlan(task) ? null : this.deps.budget?.refusal() ?? null;
   }
 
   /** An explicit start's refusal, before it changes anything: its caller's answer, as a {@link TaskControlError}. */

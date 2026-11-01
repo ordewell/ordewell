@@ -678,6 +678,14 @@ export interface IWorktreeIsolation {
   verifyRepair(task: Task, run: IsolationRun): Promise<RepairEvidence>;
 
   /**
+   * The paths a repair brings onto the integration tip, by their place in the
+   * workspace: `repairBase` to the branch where the landing changed a repo, and
+   * the task's tip to it where it did not, since a repair can still edit that
+   * repo. Read after {@link verifyRepair} commits, before `integrate` moves the tip.
+   */
+  repairPaths?(task: Task, run: IsolationRun): Promise<string[]>;
+
+  /**
    * Land the task atomically across the repos it changed: commit each
    * worktree, then `git merge --no-ff` the task branch into each changed
    * repo's integration branch. If any merge conflicts or fails, it is aborted
