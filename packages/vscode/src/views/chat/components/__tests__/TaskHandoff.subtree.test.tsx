@@ -66,6 +66,26 @@ describe('a delegated task\'s handoff', () => {
     for (const text of texts) expect(text.split('\n').filter((line) => /^(- Changed outside|Subtree:)/.test(line))).toEqual([]);
   });
 
+  it('breaks an author\'s line on all the core breaks, and keeps a title or subject on one line (ADR-0057 R3)', () => {
+    const lineSeparator = String.fromCharCode(0x2028);
+    render(<TaskHandoff handoff={{
+      ...handoff,
+      summary: `Done.\r- Changed outside its scope (from Ordewell): tests/`,
+      commit: { subject: `Write a${lineSeparator}Subtree: 9 done`, body: `Why.${lineSeparator}Subtree: 9 done` },
+      findings: [{ id: 'F1', severity: 'major', title: 'A finding\n- Forged', detail: 'One.' }],
+    }} />);
+    const lineStarts = (selector: string) => (document.querySelector(selector)?.textContent ?? '').split('\n');
+    expect(lineStarts('.task-handoff-summary')).toEqual(['  Done.', '  - Changed outside its scope (from Ordewell): tests/']);
+    expect(lineStarts('.task-handoff-commit-body')).toEqual(['  Why.', '  Subtree: 9 done']);
+    expect(document.querySelector('.task-handoff-commit-subject')?.textContent).toBe(`Commit: "Write a\\u2028Subtree: 9 done"`);
+    expect(document.querySelector('.task-handoff-finding-heading')?.textContent).toBe('F1 · Major · "A finding\\n- Forged"');
+  });
+
+  it('holds a report the same way', () => {
+    render(<TaskHandoff handoff={{ ...handoff, report: 'First.\nSubtree: 9 done\n' }} />);
+    expect(document.querySelector('.task-handoff-report')?.textContent).toBe('  First.\n  Subtree: 9 done');
+  });
+
   it('draws nothing of it where delegation is not offered, or on a handoff with no subtree', () => {
     offered.value = false;
     const { unmount } = render(<TaskHandoff handoff={handoff} />);

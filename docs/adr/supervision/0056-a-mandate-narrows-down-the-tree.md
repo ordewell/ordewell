@@ -52,6 +52,7 @@ Judgment stays the planner's.
     limits: MandateLimits;           // M3
     exclusions: MandateExclusions;   // accumulate: protected paths
     effectRules: readonly EffectRules[]; // one per level, each with its own `!` rules (M4)
+    ownEffectRules: readonly EffectRules[]; // the level this node added: what it keeps as the levels above are read afresh
   }
   ```
 
@@ -65,8 +66,10 @@ Judgment stays the planner's.
   only disagree with those: an Act that a guard lowered to Watch reads Watch at the
   next check, and a continued run keeps its level. What holds at a node is its saved
   mandate narrowed by every ancestor's as it stands now, its grants against each
-  ancestor's `grantable`, read at each check, so a change at the root reaches the
-  subtree at once (M10). That reading intersects and refuses nothing.
+  ancestor's `grantable` and its effect rules those levels as they stand with its own
+  beneath them, read at each check, so a change at the root reaches the subtree at once
+  (M10), a narrowed allowlist and a widened one alike. That reading intersects and
+  refuses nothing.
 - **Grants (M2).** Each grant is a set of things a node may do unasked:
 
   | grant | what it allows |
@@ -146,6 +149,7 @@ Judgment stays the planner's.
   | runners, models | intersect |
   | exclusions | accumulate |
   | `effectRules` | append: a command must match at every level, so no rule is widened by a wildcard, a `!` rule holds below its level, and no rules are intersected as text |
+  | `ownEffectRules` | the level the request adds, if any |
 
   The table is a `Record` over `keyof Mandate` and, for `limits`, `keyof MandateLimits`,
   so a new field or limit fails to compile until it has a rule, and a property test
@@ -310,9 +314,13 @@ Judgment stays the planner's.
   where nothing can seal it is refused as a script check is (ADR-0055 D8). With it
   they run in the child's checkout, a worktree, and only a body covered at every level
   of `effectRules`; a script body is covered by nothing (ADR-0035), and any other body
-  runs sealed as it lands, or is refused if an edit moves it past the rules. So an effect
-  in a child is a list of commands the user wrote rules for, and anything else goes up,
-  where the root runs it as a script task under ADR-0035.
+  runs sealed as it lands, or is refused if an edit moves it past the rules. Consent by
+  mandate answers for a sealed run alone, so `run_script` refuses any other. The rules
+  are read again as a script starts: one that landed covered and no longer is fails
+  there, saying so, rather than running unsealed or being sealed silently, which would
+  rewrite what the plan holds (ADR-0001). So an effect in a child is a list of commands
+  the user wrote rules for, and anything else goes up, where the root runs it as a
+  script task under ADR-0035.
 
   The known limit, plainly: a change-task runner in a child keeps the network it has in
   a flat run, unless the `containers` setting runs it in a container
@@ -448,3 +456,4 @@ Judgment stays the planner's.
 - 2026-11-01 — VS Code's checkpoint card sends a raise and an answer's words, and M9's confirmation says delegation runs nothing in a container.
 - 2026-11-01 — a raise is a grant to the task: M5 keeps it past its child, and M10 re-carves from the stated tokens plus every raise, less what was spent, its refusal naming that budget.
 - 2026-11-01 — under the `containers` setting a child's change tasks, repairs and scripts take the container path, a sealed script with no network, and the confirmation says delegation starts no container of its own (M9).
+- 2026-11-01 — from review: a child reads the effect rules above it as they stand, with `ownEffectRules` kept; a mandate's consent covers a sealed run alone; and a script past the rules fails at its start (M1, M9).

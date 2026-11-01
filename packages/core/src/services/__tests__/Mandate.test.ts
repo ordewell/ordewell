@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { ExecutionCommandName, SupervisorLevel } from '../../models/Execution';
-import { parseEffectAllowlist, type EffectRules } from '../effectAllowlist';
+import { effectRuleFor, parseEffectAllowlist, type EffectRules } from '../effectAllowlist';
 import {
   COMMAND_GRANTS, FLOOR_GRANTS, GRANTS, SHAPE_LIMITS, heldMandate, mandateRefusalText, narrow, rootMandate, withheldPlannerTools,
   type Grant, type Mandate, type MandateLimits, type MandateRequest, type RootSettings,
@@ -145,6 +145,7 @@ function someMandate(r: Random): Mandate {
     limits,
     exclusions: { protectedPaths: r.some(PATHS) },
     effectRules: r.some(EFFECTS),
+    ownEffectRules: [],
   };
 }
 
@@ -190,6 +191,7 @@ const NOT_WIDER: { [K in keyof Mandate]: (child: Mandate, parent: Mandate) => bo
   limits: (c, p) => Object.values(NOT_WIDER_LIMIT).every((notWider) => notWider(c.limits, p.limits)),
   exclusions: (c, p) => within(p.exclusions.protectedPaths, c.exclusions.protectedPaths),
   effectRules: (c, p) => p.effectRules.every((rules, level) => c.effectRules[level] === rules),
+  ownEffectRules: (c) => c.ownEffectRules.every((rules) => c.effectRules.includes(rules)),
 };
 
 describe('narrow is one pure function that cannot widen (ADR-0056 M4)', () => {
@@ -361,6 +363,41 @@ describe('what holds at a node is its saved mandate within every ancestor\'s (AD
 
   it('leaves the limits as the child was given them', () => {
     expect(heldMandate(saved(), [root()]).limits).toEqual(saved().limits);
+  });
+
+  describe('its effect rules', () => {
+    const rules = (...written: string[]) => parseEffectAllowlist(written, []);
+    const rootOf = (...written: string[]) => root({ delegationTokens: 1000, effects: rules(...written) });
+    const carved = (parent: Mandate, own?: EffectRules): Mandate => {
+      const result = narrow(parent, { level: 0, tokens: 100, ...(own ? { effectRules: own } : {}) });
+      if (!result.ok) throw new Error('refused');
+      return result.mandate;
+    };
+    const covers = (held: Mandate, command: string[]) => held.effectRules.every((level) => effectRuleFor(level, { commands: [command], timeoutMs: 1000 }));
+    const push = ['git', 'push', 'origin', 'main'];
+    const tag = ['git', 'tag', 'v1'];
+
+    it('reads the levels above as they stand, not as they stood at the carve', () => {
+      const child = carved(rootOf('git push origin *'));
+      expect(covers(child, push)).toBe(true);
+      expect(covers(heldMandate(child, [rootOf('git tag *')]), push)).toBe(false);
+      expect(covers(heldMandate(child, [rootOf('git tag *')]), tag)).toBe(true);
+    });
+
+    it('keeps the level a child added itself, as a rule at the root changes', () => {
+      const child = carved(rootOf('git *'), rules('git tag *'));
+      const held = heldMandate(child, [rootOf('git push origin *', 'git tag *')]);
+      expect(held.effectRules).toHaveLength(2);
+      expect(covers(held, tag)).toBe(true);
+      expect(covers(held, push)).toBe(false);
+    });
+
+    it('reaches a grandchild through the level between', () => {
+      const child = carved(rootOf('git push origin *'));
+      const grandchild = carved({ ...child, grantable: rootOf('git push origin *').grantable, limits: { ...child.limits, depth: 1 } });
+      const between = heldMandate(child, [rootOf('git tag *')]);
+      expect(covers(heldMandate(grandchild, [between]), push)).toBe(false);
+    });
   });
 });
 

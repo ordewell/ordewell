@@ -53,6 +53,9 @@ class TaskStartConfigError extends Error {
   }
 }
 
+/** A child's script past the effect rules: starting it again changes nothing until they do, so it fails rather than waits (ADR-0056 M9). */
+class UnsealedScriptError extends Error {}
+
 /** Where a start stands against the user's Stop (ADR-0029): no longer current once one comes. */
 export type Admitted = Pick<StartAdmission, 'current'>;
 
@@ -331,6 +334,8 @@ export interface AttemptsDeps {
   research?: Pick<ResearchTasks, 'started'>;
   /** This node's autonomy, as its mandate reads it (ADR-0056 M6). */
   autonomous: () => boolean;
+  /** Why a script that would land its work may not run unsealed now; absent at a root, whose scripts ADR-0035 answers for. */
+  unsealedRefusal?: (task: Readonly<Task>) => string | null;
   host: AttemptsHost;
 }
 
@@ -917,6 +922,9 @@ export class Attempts {
       this.deps.store.setTaskAttemptSkills(task.id, undefined);
       return failed({ leaves: 'failed', summary: summarizeOutput(message, ''), keepWorktree: false, notice: { level: 'error', text: message } });
     }
+    if (err instanceof UnsealedScriptError) {
+      return failed({ leaves: 'failed', summary: summarizeOutput(message, ''), keepWorktree: false, notice: { level: 'error', text: message } });
+    }
     if (err instanceof McpAttachError || err instanceof RunnerStartupExit) {
       return failed({ leaves: 'failed', summary: summarizeOutput(message, message), keepWorktree: true, notice: { level: 'error', text: message } });
     }
@@ -1098,6 +1106,9 @@ export class Attempts {
   private async spawnScript(task: Task, attempt: TaskAttempt, cwd: string, writable: string | undefined): Promise<IRunnerSession> {
     const body = scriptBodyOf(task);
     if (!body) throw new Error(`Task "${task.title}" has no script to run: give it "commands" or a "script".`);
+    // The rules it landed under may be gone: read at the last point before it runs, whoever started it (ADR-0056 M9).
+    const refused = landsNothing(attempt.kind) ? null : this.deps.unsealedRefusal?.(task);
+    if (refused) throw new UnsealedScriptError(refused);
     const placement = attempt.opened?.placement;
     // A container holds it in a seal's place, and the workspace's variables stay on this host (ADR-0059 L5).
     const env = placement ? {} : await this.envForTask(cwd);

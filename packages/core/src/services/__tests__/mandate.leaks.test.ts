@@ -6,6 +6,7 @@ import { COMMAND_GRANTS, FLOOR_GRANTS, GRANTS, type Grant, type Mandate, type No
 import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import { makeSession, taskOf } from './sessionTestKit';
 import { ctx, heldPlanner, NOW, prose, recordingRunner, settled, supervised, task, until, waitForInput, type Options } from './supervisorTestKit';
+import { fakeFs, sealingFs } from './sessionTestKit';
 import { WAKE_DEBOUNCE_MS } from '../Supervisor';
 import { WAKE_UP_RATE } from '../LoopGuards';
 
@@ -24,6 +25,7 @@ function mandateOf(grants: readonly Grant[], over: Partial<Mandate> = {}): Manda
     limits: { tokens: 1000, wallClockMs: 1000, depth: 1, delegatedTasks: 2, tasksPerPlan: 5, runners: ['claude-code'], models: {} },
     exclusions: { protectedPaths: [] },
     effectRules: [],
+    ownEffectRules: [],
     ...over,
   };
 }
@@ -280,13 +282,23 @@ describe('through a session (ADR-0056 M6)', () => {
       expect(env.run.spawnedIds()).toEqual([]);
     });
 
-    it('records a script it ran as consented to by its mandate', async () => {
+    it('refuses a script its mandate would run unsealed, rather than falling back to it (M9)', async () => {
       const env = await below(child(['control', 'approve']), { scriptRunner: recordingRunner().runner });
+
+      const refused = await env.session.execute({ command: 'run_script', title: 'Tag it', commands: [['git', 'tag', 'v1']] }, SUBPLANNER);
+
+      expect(refused).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringContaining('effect rules') });
+      expect(env.session.planTasks.some((t) => t.title === 'Tag it')).toBe(false);
+    });
+
+    it('records a sealed script it ran as consented to by its mandate', async () => {
+      const env = await below(child(['control', 'approve']), { scriptRunner: recordingRunner().runner, delegationOffered: true, fsAdapter: { ...fakeFs(), ...sealingFs() } });
       env.session.execute({ command: 'run_script', title: 'Tag it', commands: [['git', 'tag', 'v1']] }, SUBPLANNER).catch(() => undefined);
       await until(() => env.session.planTasks.some((t) => t.title === 'Tag it'));
       await settled();
 
       const tagged = env.session.planTasks.find((t) => t.title === 'Tag it')!;
+      expect(tagged.readOnly).toBe(true);
       expect(env.session.planState!.approvedTasks).toContain(tagged.id);
     });
   });
