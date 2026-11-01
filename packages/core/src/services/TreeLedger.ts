@@ -1,4 +1,5 @@
 import { childPath, isWithin, parentPath, ROOT_NODE, SESSION_RESERVE_TOKENS, type NodePath, type TreeFact } from '../models/TreeEvent';
+import { BOARD_LIMITS, type BoardDraft, type BoardEntry } from '../models/Board';
 import { spentTokens, type UsageRecord } from '../models/Usage';
 import type { EventStore } from './eventStore';
 import { narrow, type Mandate, type MandateRefusal, type MandateRequest } from './Mandate';
@@ -20,6 +21,8 @@ export interface TreeNode {
   open: boolean;
   /** Children it has ever opened: the next one's id. */
   opened: number;
+  /** What was posted on its board, oldest first; absent on a node nothing was (ADR-0057 R8). */
+  board?: BoardEntry[];
 }
 
 export type TreeState = Map<NodePath, TreeNode>;
@@ -67,6 +70,9 @@ function applyFact(tree: TreeState, fact: TreeFact): void {
       return;
     case 'limit_set':
       if (node) node.limit = fact.limit;
+      return;
+    case 'board_posted':
+      if (node) (node.board ??= []).push(fact.entry);
   }
 }
 
@@ -283,6 +289,29 @@ export class TreeLedger {
   /** Every node ever opened under `path`, closed ones too, nearest first: a reference outlives the child it names (ADR-0057 R1). */
   below(path: NodePath): TreeNode[] {
     return [...this.tree.values()].filter((node) => node.path !== path && isWithin(node.path, path));
+  }
+
+  /**
+   * A node's board, every opening of one child's together: a Continue opens a
+   * new node for the same child and its one plan (ADR-0055 D17).
+   */
+  board(path: NodePath): readonly BoardEntry[] {
+    const { sessionId } = this.at(path);
+    return [...this.tree.values()].filter((node) => node.sessionId === sessionId).flatMap((node) => node.board ?? []);
+  }
+
+  /** Every entry a task's children ever posted, for what its landing raises. */
+  boardsOf(parent: NodePath, taskId: string): readonly BoardEntry[] {
+    return [...this.tree.values()].filter((node) => node.taskId === taskId && parentPath(node.path) === parent).flatMap((node) => node.board ?? []);
+  }
+
+  /** Put an entry on `path`'s board, or null where that board is full. */
+  post(path: NodePath, draft: BoardDraft): BoardEntry | null {
+    if (this.board(path).length >= BOARD_LIMITS.entries) return null;
+    const at = this.at(path);
+    const entry: BoardEntry = { ...draft, node: path, id: (at.board?.length ?? 0) + 1, at: new Date().toISOString() };
+    this.write({ kind: 'board_posted', node: path, entry });
+    return entry;
   }
 
   /** What `path` and everything under it spent: a closed child is in its parent's `spent`, an open one still its own (M5). */
