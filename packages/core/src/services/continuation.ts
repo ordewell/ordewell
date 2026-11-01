@@ -16,7 +16,8 @@ export function sessionOwner(task: Task): string | undefined {
  * The rule every surface offers Continue by and the orchestrator enforces: a
  * completed, failed or skipped task, or one paused on a usage limit, whose last
  * attempt left a session id behind. A conflict is resolved by its repair, not a
- * new turn — Retry covers it.
+ * new turn — Retry covers it. A delegated task whose question a restart lost
+ * still has its child, so Continue is what keeps that work (ADR-0055 D17).
  */
 export function continuability(task: Task): Continuability {
   const refuse = (reason: string): Continuability => ({ ok: false, reason: `Task "${task.title}" cannot be continued: ${reason}` });
@@ -27,7 +28,7 @@ export function continuability(task: Task): Continuability {
   if (task.status === 'awaiting_user' && task.awaitingReason === 'conflict') {
     return refuse('its work is waiting on a merge conflict. Resolve or repair the conflict instead.');
   }
-  const finished = task.status === 'completed' || task.status === 'failed' || task.status === 'skipped' || (delegated && task.status === 'pending');
+  const finished = task.status === 'completed' || task.status === 'failed' || task.status === 'skipped' || (delegated && (task.status === 'pending' || task.awaitingReason === 'question-lost'));
   if (!finished && !pausedOnLimit(task)) return refuse('only a completed, failed or skipped task, or one paused on a usage limit, can be.');
   if (!task.runnerSessionId) return refuse(delegated ? 'it has no child to reopen. Use Retry instead, which starts one.' : 'its runner left no saved session to resume. Use Retry instead.');
   const owner = sessionOwner(task);

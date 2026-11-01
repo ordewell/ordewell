@@ -172,6 +172,17 @@ the child cannot reach follows it in the parent's plan.**
   marked `readOnly`. What follows from the existing rules:
   - The check runs once the delegated task has landed on the parent's integration
     branch, so a dependent sees its work. It cannot hold that landing back.
+  - **A check starts by itself.** When a delegated task passes and its check is ready,
+    the check starts, on every route that started the task: Execute, a `run_task`, a
+    retry or a Continue. A scheduler does this anyway. With none, the passing attempt
+    carries the check on, as a loop's rounds are carried on (ADR-0045 L5): the run
+    stays open for it alone, and closes when it ends, so nothing reads as finished
+    with the work unjudged. It is read off the plan as it stands, so a check behind a
+    failure, or behind a task nothing is running, is not carried and holds nothing open.
+    A Stop withdraws it, and a restart forgets it, since loading starts nothing (D17).
+    It takes the start rule whole. A check outside the user's approval record is not
+    started: a start consents to the task it names and a script's consent is to its body
+    (ADR-0035), so it waits in the inbox, and the run says so and stays open for the answer.
   - **A `readOnly` delegated task's check reads its handoff.** It never lands, and
     its worktree and branch go when it passes (ADR-0046), so the tip a dependent is
     cut from holds none of its work, and a script there would pass or fail on the
@@ -219,6 +230,14 @@ the child cannot reach follows it in the parent's plan.**
   - A failed check blocks its dependents and wakes the planner, as any failure
     does. A model is refused `skip_task` on it: that would let the work past its
     only check. The user's Skip stands.
+  - **A check this host cannot read is still a check.** What makes an AI task a check
+    is its mode, read from its runner's manifest. A runner switched off since, removed
+    or absent from this machine leaves that unreadable, so every AI task directly on the
+    delegated task and on such a runner counts as one: it holds the merge (D9), may not be
+    skipped by a model, is taken back and refuses a retry beside it. That fails closed, and
+    a change task on such a runner holds too, until the user skips it or merges. Only a
+    plan being written is held to the modes it can read: a task nothing can read is no
+    check to accept one on.
   - **Reach.** The child's tools read its own plan and its ancestors' boards, never
     the parent's plan, so nothing hands it the check, and its plan's prompts do
     not name one. That is scope, not a boundary: a runner in a write-capable mode
@@ -237,6 +256,9 @@ the child cannot reach follows it in the parent's plan.**
   lands, holds nothing. A held merge is no merge that stopped: the hold ends with
   the check's pass or Skip, and the next tick merges, a run that closed with its
   merge held included, which owes that merge rather than handing it to the user.
+  A delegated task started alone leaves no such hold behind it unasked: its ready check
+  starts by itself (D8), so the run closes after the check and merges as its settings
+  say. The hold fails closed: a check whose runner cannot be read here holds as any does (D8).
 
 ### Isolation
 
@@ -373,7 +395,11 @@ the child cannot reach follows it in the parent's plan.**
   subplanner replays its Model context with the message: a planner's native session
   is held in memory and saved nowhere, so a new process has none to resume. A child
   whose plan never reached the disk plans its goal again, and one with nothing left to
-  run goes straight to that turn: it may owe only its report. Its node closed as it ended,
+  run goes straight to that turn: it may owe only its report. A delegated task parked
+  at its subplanner's question reloads waiting, with no answer left to wait for: what
+  would hear one is held in memory, so the question is lost. It says so, in its row
+  (`question-lost`) and in the inbox, which quotes the question, saved beside the wait for
+  this alone, and offers Continue, since its child and its work are still there. Its node closed as it ended,
   or a crash left it open, so a Continue carves again, under the same child, from
   what the task has left, after `Session.ledger()` has answered. The task's worktree
   is restored in place, on the same path, read-only or not, since a child's run is
@@ -575,6 +601,17 @@ the child cannot reach follows it in the parent's plan.**
   Rejected: a script or ops body acts on a checkout that does not hold the work it
   should fix, and merging it gives up D9. Refusing the plan leaves the fix to a
   worktree task, which is cut from the integration tip and passes no gate.
+- **A queued start for a delegated task's check.** Rejected: a queued start outlives what
+  it waits for, so it stayed pending behind a failed task and read as a run still
+  advancing. Carrying the check is read off the plan each time, so one that stops being
+  ready stops holding the run open.
+- **A check left for the next Execute.** Dropped: a delegated task started alone closed
+  its run with everything reading as finished, its check pending and its merge held.
+- **Starting a delegated task approves its check.** Rejected: ADR-0035's consent is to what
+  will run, and a start names one task.
+- **A check on a runner this host cannot read falling back to the literal `plan` mode.**
+  Rejected: a mode's id is the runner's own (ADR-0031), so it would still fail open on any
+  runner whose read-only mode has another name.
 - **Taking a check back in `PlanStore.retry` alone.** Dropped: Execute readies a failed
   task without it and a force start claims one as it stands, so a skipped check stayed
   skipped over the new result, and D9 released it. Adding each route was rejected for
@@ -655,3 +692,4 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-11-01 — a subplanner's question goes up, and D8's take-back, D9's merge hold, D14's repair and M9's rules for a child's scripts are implemented. A run that closed with its merge held owes it to the next tick, and a resolver of a delegated task's conflict takes the mode a repair does.
 - 2026-11-01 — D20's minimum: a delegated row, usage rolled up a level at a time and charged once, and the child's activity in its log. D1's `read` is the runner's tool (ADR-0057 R11).
 - 2026-11-01 — from a real run: a Continue with nothing left to run goes to its subplanner's turn, where it had failed on Execute's refusal; a report counts every opening of its task; a Stop says what a Continue keeps and Execute discards.
+- 2026-11-01 — from review and a real run: a ready check starts by itself once its delegated task passes, on every route (D8, D9); a check whose runner cannot be read holds as any does; a restart says a parked question is lost, and Continue picks the child up (D17).

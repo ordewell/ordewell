@@ -1060,7 +1060,10 @@ queue, not out of it; and "lost".
 
 **Checkpoint** (task) — a task asking a person to approve its work before it
 goes on: the `checkpoint` tool call. The task is `awaiting_user` with reason
-`checkpoint`, and its status carries the whole question (`checkpoint`).
+`checkpoint`, and its status carries the whole question (`checkpoint`). A
+**Delegated task** parked at its subplanner's question comes back from a restart with
+reason `question-lost`: nothing is left to hear an answer, its row and the inbox say so,
+and Continue picks up its **Child plan**.
 Answered with approve — which carries no note, but on a delegated task can carry the
 answer to its subplanner's question and a raise — or reject with a reason: the
 TUI task view's *checkpoint card* (`enter` replies with the composer text as
@@ -3135,8 +3138,9 @@ the root's and shared with every Session under it. Each node has a `limit`,
 `committed` (what its children hold), `spent` and `reserve`, in tokens, cache reads
 included: the input and output `UsageTotals` counts (`spentTokens`). A *carve* commits
 a child's limit from its parent's *room*, which is `limit` less the other three, and
-what `narrow` is handed as the parent's tokens; a *raise* does the same for a child
-that has one, from a parent's answer; on close, what a child did not spend returns to
+what `narrow` is handed as the parent's tokens; a *raise* does the same for an open
+child, from a parent's answer, and is a grant to its task, so a later child of that task
+is carved from the stated budget plus every raise, less what was spent; on close, what a child did not spend returns to
 its parent and no further, on every end but a crash, whose node closes at the next
 carve of its task. `reserve` is an allowance per live session and a
 subplanner's share for its next turn, which spends that first. A node's own spending
@@ -3170,7 +3174,9 @@ package ignores the variable.
 top-level task that holds a `goal`, not a prompt: its attempt is a **Child plan**. It
 carries a required `budget` and, unless it is `readOnly`, `protectedPaths`, the paths
 its child may not change, and it needs a check: a task that depends on it directly and
-is a read-only AI task or a read-only **Script task**, which a new attempt takes back.
+is a read-only AI task or a read-only **Script task**, which a new attempt takes back
+and which starts by itself once the task passes and it is ready, with no scheduler too.
+An AI task whose runner this host cannot read counts as one, so the merge hold fails closed.
 Neither a loop's check nor its body. It holds no slot (`child-plan`), and it passes only
 on evidence: its child has settled and done work, that work is merged into its branch,
 no protected path changed, and its subplanner called `task_complete` on the attempt's

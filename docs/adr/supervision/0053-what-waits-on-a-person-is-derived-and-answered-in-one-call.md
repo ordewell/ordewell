@@ -65,6 +65,7 @@ it on, since the seam refuses it otherwise
 | `approval` | A pending runner approval of a task in the plan | Allow, Allow for this task where the runner proposed it, Deny | `answer_approval` |
 | `checkpoint` | `awaiting_user`, `checkpoint`, runner there; a delegated task's is its subplanner's question, its reason naming the child that asks (ADR-0056 M8), and a child's own waits are never listed | Approve, Reject, Skip; Approve may carry a raise (ADR-0056 M5) | `answer_checkpoint`, `skip_task` |
 | `checkpoint` | The same, no runner left to hear it | Retry, Skip, Mark complete | `retry_task`, `skip_task`, `mark_complete` |
+| `checkpoint` | `awaiting_user`, `question-lost`: a restart took a delegated task's parked question (ADR-0055 D17), which its reason quotes | Retry, Continue, Skip, Mark complete | `retry_task`, `skip_task`, `mark_complete` |
 | `input` | `awaiting_user`, `input` or no saved reason, runner there | Reply, Skip, Mark complete | `message_task`, `skip_task`, `mark_complete` |
 | `input` | The same, no runner left to read a reply | Retry, Skip, Mark complete | as above |
 | `conflict` | `awaiting_user`, `conflict`, no resolver out to it | Add a resolver task, Retry, Skip, Mark complete | `Session.resolveConflictAsTask`, then as above |
@@ -216,7 +217,8 @@ reads do.
   Execute starts it again. Its verdict reports nothing, as a runner's that exited
   without reporting, so it starts no round (L2). Its attempts and logs stay.
 - **The other saved waits.** A checkpoint or a task waiting for input is saved,
-  and is listed with no runner behind it. A usage-limit pause loses its saved
+  and is listed with no runner behind it. A delegated task's checkpoint says its
+  question is lost, and quotes it (ADR-0055 D17). A usage-limit pause loses its saved
   resume on load
   ([ADR-0044](../planner/0044-the-planners-usage-limit-waits-and-resends.md)), so
   it is listed. A loop's rounds and the merge the run owes are saved. A reverted
@@ -467,3 +469,4 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
 - 2026-10-31 — Execute on a scheduled run a dirty checkout parked replays its start instead of beginning a new run, and a planner's `run_plan` joins a run that ended on a failure and leaves what failed in a run it begins.
 - 2026-10-31 — the list does not read a planner turn's start hold, which no status update marks, so a client's list stays what a fresh read says.
 - 2026-11-01 — a subplanner's question reaches the list as its delegated task's checkpoint, naming the child, and Approve may carry a raise (ADR-0056 M5, M8). Merge all names a check that has not passed in its confirmation (ADR-0055 D9).
+- 2026-11-01 — a parked question a restart lost is listed, quoting it, and a delegated task's check that waits on approval says its delegated task has ended (ADR-0055 D8, D17).

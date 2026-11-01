@@ -68,7 +68,7 @@ describe('two siblings and a provided interface', () => {
     const read: string[] = [];
     const replies: { text: string; isError?: boolean }[] = [];
     const built = tree([], {
-      slots: 5,
+      parallel: 5,
       runner: gatedRunner({ pa: ['api/users.ts'], ca: ['web/client.ts'] }, { ca: () => providerLanded }),
       tasks: [sibling('p', 1, { paths: ['api/'], provides: ['users-api'] }), guard('pc', 2, 'p'), sibling('c', 3, { paths: ['web/'], consumes: ['users-api'] }), guard('cc', 4, 'c')],
       below: {
@@ -100,7 +100,7 @@ describe('two siblings and a provided interface', () => {
 
   it('reaches a sibling that declared a path the landing changed, read from what git says landed', async () => {
     const built = tree([], {
-      slots: 5,
+      parallel: 5,
       runner: gatedRunner({ pa: ['shared/types.ts', 'api/users.ts'], ca: ['web/client.ts'] }, { ca: () => lined }),
       tasks: [sibling('p', 1, { paths: ['api/'] }), guard('pc', 2, 'p'), sibling('c', 3, { paths: ['shared/', 'web/'] }), guard('cc', 4, 'c')],
       below: {
@@ -119,7 +119,7 @@ describe('two siblings and a provided interface', () => {
 
   it('opens no turn for a line, and tells a sibling that declared nothing it touched nothing', async () => {
     const built = tree([], {
-      slots: 5,
+      parallel: 5,
       runner: gatedRunner({ pa: ['api/users.ts'], oa: ['other.ts'], ca: ['web/client.ts'] }, { oa: () => lined, ca: () => lined }, { pa: async (opts) => { await opts.post!({ type: 'finding', title: 'Nobody hears this' }); } }),
       tasks: [sibling('p', 1, { provides: ['users-api'] }), guard('pc', 2, 'p'), sibling('c', 3, { consumes: ['users-api'] }), guard('cc', 4, 'c'), sibling('o', 5, { paths: ['docs/'] }), guard('oc', 6, 'o')],
       below: {

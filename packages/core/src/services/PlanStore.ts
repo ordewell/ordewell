@@ -262,6 +262,12 @@ export class PlanStore {
     if (task) delete task.waitsEnded;
   }
 
+  /** Saved beside the wait it explains: see {@link Task.parkedQuestion}. */
+  parkQuestion(id: string, question: string): void {
+    const task = this._taskMap.get(id);
+    if (task) task.parkedQuestion = question;
+  }
+
   markAwaitingUser(id: string, reason?: AwaitingReason): void {
     const task = this._taskMap.get(id);
     if (!task) return;
@@ -370,6 +376,7 @@ export class PlanStore {
     this.leaveStatus(task, status);
     task.status = status;
     delete task.awaitingReason;
+    delete task.parkedQuestion;
     delete task.resumeAt;
     delete task.skipReason;
     delete task.reverted;

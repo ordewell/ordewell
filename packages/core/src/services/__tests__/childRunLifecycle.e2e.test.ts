@@ -6,6 +6,7 @@ import { dirname, join } from 'path';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
 import { LeaseHost } from '../sessionLease';
 import { Subtree } from '../Subtree';
+import { taskRowView } from '../../taskRow';
 import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import type { Session } from '../createSession';
 import type { ConversationRequest, ConversationTurn, IAiService } from '../AiService';
@@ -565,7 +566,7 @@ describe('a Continue (ADR-0055 D17)', () => {
     parent.destroy();
   });
 
-  it('spends what is left, and no more than the task was given', async () => {
+  it('spends what is left of its stated budget when nothing raised it', async () => {
     const runner = fakeRunner({ a: ['a.txt'] }, { usage: 1_500_000, held: [] });
     const { parent } = tree([SUBMIT([childTask('a', 1)]), BLOCKED, DONE], { runner });
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
@@ -574,6 +575,34 @@ describe('a Continue (ADR-0055 D17)', () => {
     await parent.execute({ command: 'retry_task', task: 'd', from: 'session', message: 'finish' }, { kind: 'user' });
     await vi.waitFor(() => expect(carves).toHaveBeenCalled(), { timeout: 20_000 });
     expect(carves.mock.calls[0][2].tokens).toBe(500_000);
+    parent.destroy();
+  });
+
+  /** A child stopped at its only task, then raised by `raise`, whose usage comes as that task ends. */
+  async function raisedThenBlocked(raise: number, usage: number) {
+    const runner = fakeRunner({ a: ['a.txt'] }, { usage, held: ['a'] });
+    const built = tree([SUBMIT([childTask('a', 1)]), BLOCKED, DONE], { runner });
+    await built.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(runner.spawned).toContain('a'), { timeout: 20_000 });
+    expect(await built.parent.raiseChild('d', raise)).toBeNull();
+    runner.release('a');
+    await vi.waitFor(() => expect(statusOf(built.parent, 'd')).toBe('failed'), { timeout: 20_000 });
+    return built;
+  }
+
+  it('re-carves its stated budget and every raise, less what it spent: a raise is the task\'s, and outlives its child', async () => {
+    const { parent } = await raisedThenBlocked(1_000_000, 2_500_000);
+    const carves = vi.spyOn(await parent.ledger(), 'carve');
+    expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'session', message: 'finish' }, { kind: 'user' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(carves).toHaveBeenCalled(), { timeout: 20_000 });
+    expect(carves.mock.calls[0][2].tokens).toBe(500_000);
+    parent.destroy();
+  });
+
+  it('names what the tree granted when that is spent too', async () => {
+    const { parent } = await raisedThenBlocked(500_000, 2_600_000);
+    expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'fresh' }, { kind: 'user' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(taskOf(parent, 'd').verdict).toMatchObject({ reported: 'blocked', reason: expect.stringContaining('its budget of 2500000 tokens') }), { timeout: 20_000 });
     parent.destroy();
   });
 
@@ -605,6 +634,30 @@ describe('a reopened child, read from above (ADR-0057 R1)', () => {
 
   it('still reads what a reference pinned against its first node', () => {
     expect(reopened.planAt('root/1')?.node).toBe('root/1');
+  });
+});
+
+describe('a delegated task started alone, on a Continue (ADR-0055 D8)', () => {
+  it('starts its check by itself once the child reports', async () => {
+    const { parent } = tree([SUBMIT([childTask('a', 1)]), BLOCKED, DONE], { tasks: [delegated(), check({ taskMode: 'plan' })] });
+    await parent.execute({ command: 'run_task', task: 'd' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('failed'), { timeout: 20_000 });
+    expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'session', message: 'finish' }, { kind: 'user' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('completed'), { timeout: 20_000 });
+    parent.destroy();
+  });
+
+  it('asks for what the user has not approved, and says so rather than read as finished', async () => {
+    const { parent } = tree([SUBMIT([childTask('a', 1)]), DONE], { tasks: [delegated(), check({ taskMode: 'plan' })] });
+    Object.assign(parent.planState!, { approved: false, approvedTasks: [] });
+    await parent.execute({ command: 'run_task', task: 'd' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    await vi.waitFor(() => expect(parent.escalations().find((e) => e.task?.id === 'c')).toMatchObject({ kind: 'unapproved', reason: expect.stringContaining('Its delegated task has ended') }), { timeout: 20_000 });
+    expect(statusOf(parent, 'c')).toBe('pending');
+    expect(parent.startsPending).toBe(true);
+    parent.stopExecution();
+    expect(parent.startsPending).toBe(false);
+    parent.destroy();
   });
 });
 
@@ -650,6 +703,33 @@ describe('a crash in the middle of a child run (ADR-0055 D17)', () => {
     expect(parent.escalations().map((e) => e.task?.id)).toContain('d');
     // Its worktree is the child's code root, so the adoption's prune left it.
     expect(parent.planState?.isolation?.run.tasks.d.status).toBe('kept');
+    parent.destroy();
+  });
+
+  it('says it lost a parked question, in the row and the inbox, and a Continue keeps the child', async () => {
+    const ASK: Turn = async (tools) => { await tools.checkpoint!({ question: 'Which schema?' }, { signal: SIGNAL }); };
+    const dead = tree([SUBMIT([childTask('a', 1)]), ASK], { runner: fakeRunner({ a: ['a.txt'] }) });
+    await dead.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(taskOf(dead.parent, 'd')).toMatchObject({ status: 'awaiting_user', awaitingReason: 'checkpoint', parkedQuestion: 'Which schema?' }), { timeout: 20_000 });
+    await wait(50);
+    const image = crashImage(dead.root);
+    const child = childIdOf(dead.parent, 'd')!;
+    dead.parent.destroy();
+    await dead.parent.gone;
+
+    const { parent, planner } = restart(dead.root, image, [DONE], fakeRunner({}));
+    expect(taskOf(parent, 'd')).toMatchObject({ status: 'awaiting_user', awaitingReason: 'question-lost', runnerSessionId: child });
+    expect(taskRowView(taskOf(parent, 'd')).awaiting).toBe('Question lost in a restart');
+    const listed = parent.escalations().find((e) => e.task?.id === 'd')!;
+    expect(listed.reason).toContain('Which schema?');
+    expect(listed.reason).toContain('Ordewell stopped before anyone answered it');
+    expect(listed.options.map((o) => o.id)).toContain('continue');
+    expect(planner.asked).toEqual([]);
+
+    expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'session', message: 'Use the first.' }, { kind: 'user' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    expect(taskOf(parent, 'd').parkedQuestion).toBeUndefined();
+    expect(childIdOf(parent, 'd')).toBe(child);
     parent.destroy();
   });
 

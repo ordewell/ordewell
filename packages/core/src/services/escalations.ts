@@ -133,7 +133,7 @@ export interface EscalationInput {
   holdReason: (taskId: string) => string | null | undefined;
   /** Something will run this check between rounds without being asked (ADR-0045 L5). */
   loopRunsOn: (taskId: string) => boolean;
-  /** A loop carried on with no scheduler starts this task, so the run is open for it alone (ADR-0045 L5). */
+  /** A loop or a delegated task's check carried on with no scheduler starts this task, so the run is open for it alone (ADR-0045 L5, ADR-0055 D8). */
   carried: (taskId: string) => boolean;
   run: EscalationRun;
 }
@@ -275,6 +275,8 @@ function awaiting(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait
         options: [{ id: 'approve', label: 'Approve' }, { id: 'reject', label: 'Reject', note: 'optional' }, SKIP],
       };
     }
+    case 'question-lost':
+      return { kind: 'checkpoint', ...ended(row, `Its child plan asked a question, and Ordewell stopped before anyone answered it, so nothing is left to hear an answer${task.parkedQuestion ? `: "${task.parkedQuestion}"` : ''}. Continue it and its subplanner can ask again.`, input, rows) };
     case 'conflict': {
       const resolver = waitOf(input.waits.get(task.id) ?? [], 'resolver');
       if (resolver) return conflictWithResolver(row, resolver.resolver, input, rows);
@@ -389,7 +391,8 @@ function unstarted(row: TaskWithParent, input: EscalationInput, rows: Rows): Wai
   }
   if (task.type === 'user') return waitOf(waits, 'by-hand') ? { kind: 'by-hand', reason: BY_HAND, options: completeOption(row, input.run) } : null;
   if (waitOf(waits, 'unapproved')) {
-    return { kind: 'unapproved', reason: input.waitsForApproval(task.id) ? 'Added since you approved the plan, so it waits for you to start it.' : 'Its loop is carried on, and waits for you to start it.', options: [{ id: 'run', label: 'Start' }] };
+    const afterDelegated = task.dependencies.some((id) => rows.get(id)?.task.type === 'delegated');
+    return { kind: 'unapproved', reason: input.waitsForApproval(task.id) ? 'Added since you approved the plan, so it waits for you to start it.' : afterDelegated ? 'Its delegated task has ended, and it waits for you to start it.' : 'Its loop is carried on, and waits for you to start it.', options: [{ id: 'run', label: 'Start' }] };
   }
   return null;
 }

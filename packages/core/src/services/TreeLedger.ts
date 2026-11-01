@@ -18,6 +18,8 @@ export interface TreeNode {
   spent: number;
   /** The subplanner's share of `reserve`, held for its next turn. */
   kept: number;
+  /** What raises gave it: a grant to its task, which outlives this node, so what a parent's turn takes back comes off `limit` and not off this (M5). */
+  raised: number;
   open: boolean;
   /** Children it has ever opened: the next one's id. */
   opened: number;
@@ -38,7 +40,7 @@ function applyFact(tree: TreeState, fact: TreeFact): void {
   const parent = parentOf(tree, fact.node);
   switch (fact.kind) {
     case 'node_opened':
-      tree.set(fact.node, { path: fact.node, sessionId: fact.sessionId, ...(fact.taskId !== undefined ? { taskId: fact.taskId } : {}), limit: fact.limit, committed: 0, spent: 0, kept: fact.kept, open: true, opened: 0 });
+      tree.set(fact.node, { path: fact.node, sessionId: fact.sessionId, ...(fact.taskId !== undefined ? { taskId: fact.taskId } : {}), limit: fact.limit, committed: 0, spent: 0, kept: fact.kept, raised: 0, open: true, opened: 0 });
       if (parent) {
         parent.committed += fact.limit;
         parent.opened += 1;
@@ -58,7 +60,10 @@ function applyFact(tree: TreeState, fact: TreeFact): void {
       if (fact.turn) node.kept = Math.max(0, node.kept - fact.tokens);
       return;
     case 'budget_raised':
-      if (node) node.limit += fact.tokens;
+      if (node) {
+        node.limit += fact.tokens;
+        node.raised += fact.tokens;
+      }
       if (parent) parent.committed += fact.tokens;
       return;
     case 'budget_taken':
@@ -334,7 +339,16 @@ export class TreeLedger {
 
   /** What every child `parent` opened for `taskId` has spent, closed ones included: a retry's budget is what they left (ADR-0056 M10). */
   spentOn(parent: NodePath, taskId: string): number {
-    return [...this.tree.values()].filter((node) => node.taskId === taskId && parentPath(node.path) === parent).reduce((total, node) => total + node.spent, 0);
+    return this.childrenFor(parent, taskId).reduce((total, node) => total + node.spent, 0);
+  }
+
+  /** What raises gave every child `parent` opened for `taskId`: the tree granted it to the task, on top of its stated budget (ADR-0056 M5, M10). */
+  raisedOn(parent: NodePath, taskId: string): number {
+    return this.childrenFor(parent, taskId).reduce((total, node) => total + node.raised, 0);
+  }
+
+  private childrenFor(parent: NodePath, taskId: string): TreeNode[] {
+    return [...this.tree.values()].filter((node) => node.taskId === taskId && parentPath(node.path) === parent);
   }
 
   /** Close the children of `parent` that `gone` picks by their task: no session is live in them, so what they hold would stay committed for good. */

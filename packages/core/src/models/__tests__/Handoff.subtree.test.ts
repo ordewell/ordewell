@@ -95,9 +95,9 @@ describe('a report (R2)', () => {
     expect(lines).toEqual([
       'Subtree: 3 done, 1 failed, 0 blocked, 1 skipped; 2 commits; 1200 tokens.',
       'Findings below: 1 blocker (1 shown), 2 major (1 shown).',
-      'Commit: Do it',
+      '  Commit: Do it',
       '',
-      'It is done.',
+      '  It is done.',
       '',
       'Open, for you to decide (each in its author\'s words):',
       '- 1:#2@1/F1 [major] Which schema?',
