@@ -15,6 +15,12 @@ export interface TaskLogReader {
   patch?(taskId: string, attempt: number): Buffer | undefined;
 }
 
+/** The attempt a read that names none reads: the latest, but a delegated task's report outlasts the attempt of a repair (ADR-0057 R2). */
+export function handoffAttempt(task: Task | undefined, attempts: readonly number[]): number | undefined {
+  const report = task?.type === 'delegated' ? task.handoff?.attempt : undefined;
+  return report !== undefined && attempts.includes(report) ? report : attempts.at(-1);
+}
+
 /** The saved logs as a reference is pinned against (ADR-0057 R1). */
 export function handoffLogs(log: Pick<TaskLogReader, 'attempts' | 'events'>): HandoffLogs {
   return {
@@ -80,7 +86,7 @@ function readIn(args: ReadTaskArgs, scope: ReadScope): McpToolReply {
   if (asked !== undefined && !attempts.includes(asked) && !digested) {
     return { isError: true, text: `${name} has no saved attempt ${asked}: ${attempts.length > 0 ? `its saved attempts are ${listed(attempts.map(String))}` : 'it has none'}.` };
   }
-  const attempt = asked ?? latest;
+  const attempt = asked ?? handoffAttempt(target, attempts);
   const of = `attempt ${attempt} of ${attempts.length}`;
   const taskName: HandoffTaskName = (id) => { const ref = taskRefOf(plan, id); return ref && `${path}${ref}`; };
   const logged = attempt === undefined ? undefined : loggedHandoff(log.events(target.id, attempt));

@@ -1,5 +1,6 @@
 import { formatTokenCount } from '../models/Usage';
 import type { ChildTaskCounts, DelegatedRow } from '../models/Delegation';
+import { onOneLine } from '../models/lineBreaks';
 import { handoffReferenceText, severityLabel, type FindingSeverity, type HandoffDigest, type ReportItem, type SubtreeReport } from '../models/Handoff';
 
 /**
@@ -69,7 +70,7 @@ const SEVERITIES: readonly FindingSeverity[] = ['blocker', 'major', 'minor', 'in
 function itemView({ ref, finding }: ReportItem): SubtreeItemView {
   return {
     reference: ref ? handoffReferenceText(ref) : null,
-    heading: `${finding.id} · ${severityLabel(finding.severity)} · ${finding.title}`,
+    heading: `${finding.id} · ${severityLabel(finding.severity)} · ${onOneLine(finding.title)}`,
     ...(finding.detail ? { detail: finding.detail } : {}),
   };
 }
@@ -88,7 +89,7 @@ export function subtreeView(subtree: SubtreeReport): SubtreeView {
   return {
     summary,
     outsideScope: outsideScope && outsideScope.count > 0
-      ? `Changed outside its declared scope: ${outsideScope.paths.join(', ')}${outsideScope.count > outsideScope.paths.length ? ` (+${outsideScope.count - outsideScope.paths.length} more)` : ''}`
+      ? `Changed outside its declared scope: ${outsideScope.paths.map(onOneLine).join(', ')}${outsideScope.count > outsideScope.paths.length ? ` (+${outsideScope.count - outsideScope.paths.length} more)` : ''}`
       : null,
     open: subtree.open.map(itemView),
     promoted: subtree.promoted.map(itemView),

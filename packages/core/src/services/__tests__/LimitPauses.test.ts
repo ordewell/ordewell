@@ -52,7 +52,7 @@ function setup(opts: { run?: 'idle' | 'scheduling'; tasks?: Task[] } = {}) {
 }
 
 function attempt(overrides: Partial<LimitedAttempt> = {}): LimitedAttempt {
-  return { runner: 'claude-code', worktree: true, autoResumed: false, startedAt: NOW.toISOString(), ...overrides };
+  return { runner: 'claude-code', kind: { kind: 'change' }, worktree: true, autoResumed: false, startedAt: NOW.toISOString(), ...overrides };
 }
 
 beforeEach(() => {
@@ -87,6 +87,20 @@ describe('LimitPauses: the three ways a limit arrives are one pause', () => {
     expect(waits).toEqual([{ taskId: 't1', runner: 'claude-code', resumeAt: RESUME_AT }]);
     expect(told).toEqual([{ level: 'info', message: expect.stringContaining('resumes on its own at') }]);
     expect(steps).toEqual(['keep t1', 'settled t1']);
+  });
+
+  it("leaves a delegated task's report through its repair's pause, and clears any other's", async () => {
+    const { pauses, store, task } = setup();
+    const repair = { kind: 'repair', repair: { n: 1, limit: 2 } } as const;
+    const report = { summary: 'The report.', findings: [], findingCount: 0 };
+    const paused = store.get('t1') as Task;
+    paused.type = 'delegated';
+    paused.handoff = report;
+    await pauses.pause('t1', attempt({ kind: repair }), { message: LIMIT }, '');
+    expect(task('t1').handoff).toEqual(report);
+    paused.type = 'ai';
+    await pauses.pause('t1', attempt({ kind: repair }), { message: LIMIT }, '');
+    expect(task('t1').handoff).toBeUndefined();
   });
 
   it('keeps no worktree for an attempt that had none, and still settles', async () => {

@@ -87,7 +87,9 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - **What is pushed is one size (R2).** A handoff is pushed at most 4,000 characters at every
   level (`HANDOFF_PUSH_CHARS`, its artifacts apart), so a node's inbound context depends on its
   fan-out and not on its subtree. Its Report, the long form of at most 20,000, stays pulled
-  ([ADR-0047](0047-structured-task-handoffs.md)). A subplanner's `task_complete` adds two fields, refused on any other token:
+  ([ADR-0047](0047-structured-task-handoffs.md)). A delegated task's report stands through a repair
+  of its conflict, which reports in its own attempt's log (ADR-0055 D14), and a read that names no
+  attempt reads the report. A subplanner's `task_complete` adds two fields, refused on any other token:
   `promote`, up to 8 references to findings in its subtree, and `open`, references its parent
   must decide, both pinned and scoped as R1 says. Rendered, by ADR-0047's rule, whole items until
   the ceiling and then a count:
@@ -128,7 +130,12 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   for it. A promoted finding is its author's and not the subplanner's, so it carries that author's
   reference; a detail is indented under it, a run update's report under its line, and every line a
   delegated task wrote of its report, its commit, summary, reason and tail included, so none can
-  pass for a line of Ordewell's.
+  pass for a line of Ordewell's. That holds with no report to say whose they are, a repair's words
+  among them, by a mark the handoff carries wherever it is rendered. A line break is every one git
+  or a terminal would honour (`models/lineBreaks.ts`), not only `\n`. A path, a title or a
+  reference goes on Ordewell's line whole, a filename a branch chose as much as what an author
+  wrote: `task_complete` and `post` refuse a break in one, and what reaches a line anyway is
+  quoted there.
 
 ### Waking
 
@@ -261,7 +268,9 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   it is data as the rest of a board is: it says what was decided, labelled with whose decision it is.
   Each descendant is told once, at its start, so a pin reaches no one already running. A check never
   goes in one: `post` refuses a pin that holds whole what this plan's checks read or run, which is the
-  part code can see, and the prompt teaches the rest.
+  part code can see, and the prompt teaches the rest. A check's title and prompt count from twelve
+  characters, shorter prose being too common to say; a command it runs counts at any length, whole
+  and at the edges of its words, a script's one by one.
 
 ### Tools
 
@@ -416,3 +425,4 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - 2026-11-01 — a pin reads its author's file through the lease where one runs the author elsewhere (R9).
 - 2026-11-01 — R11: an API planner holds `post` where a harness planner does, as the last entry of its list, so an API root can pin.
 - 2026-11-01 — from real runs of where a subplanner's tokens go: R5 tells it less and R11 narrows its process, in `ClaudeCodeAdapter`, `PlanPrompts`, `PlannerConversation` and `Supervisor`.
+- 2026-11-01 — from review: a report outlasts a repair (R2), a line break is one set everywhere and no path or title can make one (R3), and a check's command counts in a pin at any length (R10).

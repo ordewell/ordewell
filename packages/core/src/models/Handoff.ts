@@ -1,5 +1,6 @@
 import { flattenTasks, type Task } from './Task';
 import { checkOf } from './Loop';
+import { onOneLine, splitLines } from './lineBreaks';
 import { resolveTaskRef, taskRefOf, titledTaskRefOf } from '../services/TaskRefs';
 
 /*
@@ -168,6 +169,8 @@ export interface HandoffDigest {
   attempt?: number;
   /** A delegated task's: what Ordewell derived of its subtree. */
   subtree?: SubtreeReport;
+  /** A delegated task's words with no {@link subtree} to say whose they are: a repair's, or a report that never opened a child. */
+  held?: true;
 }
 
 /** The whole handoff, as the attempt's log keeps it. */
@@ -278,6 +281,7 @@ export function handoffDigest(handoff: StoredHandoff): HandoffDigest {
     ...(handoff.artifacts ? { artifacts: handoff.artifacts } : {}),
     ...(handoff.attempt !== undefined ? { attempt: handoff.attempt } : {}),
     ...(handoff.subtree ? { subtree: handoff.subtree } : {}),
+    ...(handoff.held ? { held: true } : {}),
   };
 }
 
@@ -375,10 +379,10 @@ export function findingRefText(task: string, ref: Pick<WrittenTaskRef, 'attempt'
 /** A typed reference as a reader says it: `src/a.ts:42`, `commit abc`, `#2@1/F1`, a URL, a saved patch. */
 export function handoffReferenceText(ref: HandoffArtifact, taskName: HandoffTaskName = () => undefined): string {
   switch (ref.kind) {
-    case 'file': return `${ref.line !== undefined ? `${ref.path}:${ref.line}` : ref.path}${ref.resolved === true ? '' : ' (unresolved)'}`;
-    case 'commit': return `commit ${ref.sha}${ref.repo ? ` in ${ref.repo}` : ''}${ref.resolved === true ? '' : ' (unresolved)'}`;
-    case 'task': return findingRefText(ref.label !== undefined ? `${nodeText(ref.node ?? ROOT_NODE)}:${ref.label}` : taskName(ref.task) ?? ref.task, ref);
-    case 'url': return ref.url;
+    case 'file': return `${onOneLine(ref.line !== undefined ? `${ref.path}:${ref.line}` : ref.path)}${ref.resolved === true ? '' : ' (unresolved)'}`;
+    case 'commit': return `commit ${ref.sha}${ref.repo ? ` in ${onOneLine(ref.repo)}` : ''}${ref.resolved === true ? '' : ' (unresolved)'}`;
+    case 'task': return onOneLine(findingRefText(ref.label !== undefined ? `${nodeText(ref.node ?? ROOT_NODE)}:${ref.label}` : taskName(ref.task) ?? ref.task, ref));
+    case 'url': return onOneLine(ref.url);
     case 'patch': return patchText(ref);
   }
 }
@@ -404,7 +408,7 @@ export function byteSize(bytes: number): string {
 /** One flag of a saved patch as text: what it is, how many, and the paths it names. */
 export function patchFlagText(flag: PatchFlag): string {
   const more = flag.count - flag.paths.length;
-  return `${FLAG_WORDS[flag.kind]}: ${counted(flag.count, 'file')}${flag.paths.length ? ` (${flag.paths.join(', ')}${more > 0 ? `, +${more} more` : ''})` : ''}`;
+  return `${FLAG_WORDS[flag.kind]}: ${counted(flag.count, 'file')}${flag.paths.length ? ` (${flag.paths.map(onOneLine).join(', ')}${more > 0 ? `, +${more} more` : ''})` : ''}`;
 }
 
 /** What a saved patch changes, once: files, binary files, lines and size (ADR-0050). */
@@ -485,8 +489,8 @@ export function savedPatchView(handoff: HandoffDigest | undefined): PatchView | 
 /** One finding as text: its id, severity and title, then its detail and evidence under it. */
 export function findingLines(f: HandoffFinding, taskName: HandoffTaskName = () => undefined): string[] {
   return [
-    `- ${f.id} [${f.severity}] ${f.title}`,
-    ...(f.detail ? f.detail.split('\n').map((l) => `  ${l}`) : []),
+    `- ${f.id} [${f.severity}] ${onOneLine(f.title)}`,
+    ...(f.detail ? splitLines(f.detail).map((l) => `  ${l}`) : []),
     ...(f.evidence?.length ? [`  Evidence: ${f.evidence.map((e) => handoffReferenceText(e, taskName)).join('; ')}`] : []),
   ];
 }
@@ -498,14 +502,27 @@ export function artifactLines(handoff: HandoffDigest, taskName: HandoffTaskName 
 
 /** A delegated task's words as its parent's update holds them, every line indented, so none can pass for a line of Ordewell's (ADR-0057 R3). */
 export function heldWords(text: string): string[] {
-  return text.split(/\r\n|\r|\n/).map((line) => (line ? `  ${line}` : line));
+  return splitLines(text).map((line) => (line ? `  ${line}` : line));
 }
+
+/** The same handoff, marked as a delegated task's where no report already says so: a mark that travels with it to whatever renders it. */
+export function heldHandoff<H extends HandoffDigest>(task: { type?: string }, handoff: H): H {
+  return task.type === 'delegated' && !handoff.subtree ? { ...handoff, held: true } : handoff;
+}
+
+const holdsWords = (handoff: HandoffDigest): boolean => handoff.subtree !== undefined || handoff.held === true;
 
 /** A handoff's opening as text: its commit, subject then body, then the summary. */
 export function openingLines(handoff: HandoffDigest): string[] {
   const { commit, summary } = handoff;
   if (!commit) return [summary];
-  return [`Commit: ${commit.subject}`, ...(commit.body ? commit.body.split('\n') : []), ...(summary ? ['', summary] : [])];
+  return [`Commit: ${onOneLine(commit.subject)}`, ...(commit.body ? splitLines(commit.body) : []), ...(summary ? ['', summary] : [])];
+}
+
+/** {@link openingLines} as its reader is given them: held, when they are a delegated task's. */
+function heldOpening(handoff: HandoffDigest): string[] {
+  const lines = openingLines(handoff);
+  return holdsWords(handoff) ? lines.flatMap(heldWords) : lines;
 }
 
 /**
@@ -543,7 +560,7 @@ const OPEN_HEADING = 'Open, for you to decide (each in its author\'s words):';
 const PROMOTED_HEADING = 'Promoted (each in its author\'s words):';
 
 function outsideScopeLine({ paths, count }: NonNullable<SubtreeReport['outsideScope']>): string {
-  return `- Changed outside its scope (from Ordewell): ${paths.join(', ')}${count > paths.length ? `, +${count - paths.length} more` : ''}.`;
+  return `- Changed outside its scope (from Ordewell): ${paths.map(onOneLine).join(', ')}${count > paths.length ? `, +${count - paths.length} more` : ''}.`;
 }
 
 /** Each section of what a report names, whole items of it in order: what is open comes first, since a cut leaves what matters least out. */
@@ -564,7 +581,7 @@ function boundedReportLines(handoff: HandoffDigest, subtree: SubtreeReport, omis
   // Every item shown is the widest this line can be, so what fits here still fits with the counts it ends on.
   const widest = heads(sections.flatMap((section) => section.items));
   const items = sections.reduce((sum, { items: listed }) => sum + listed.length, 0) + handoff.findingCount - sections[2].items.length - subtree.open.filter((item) => !item.ref).length;
-  const body = [...openingLines(handoff).flatMap(heldWords), ...(scope.length > 0 ? ['', OPEN_HEADING, ...scope] : [])];
+  const body = [...heldOpening(handoff), ...(scope.length > 0 ? ['', OPEN_HEADING, ...scope] : [])];
   const shown: ReportItem[] = [];
   const closing = (count: number) => [...(items > count ? [omission(items - count)] : []), ...(footer ? ['', footer] : [])];
   let full = false;
@@ -588,7 +605,7 @@ function boundedReportLines(handoff: HandoffDigest, subtree: SubtreeReport, omis
 /** Shared push rendering: reserve the closing pointer before accepting each whole finding. */
 export function boundedHandoffLines(handoff: HandoffDigest, omission: (more: number) => string, taskName: HandoffTaskName = () => undefined, footer = ''): string[] {
   if (handoff.subtree) return boundedReportLines(handoff, handoff.subtree, omission, taskName, footer);
-  const lines = openingLines(handoff);
+  const lines = heldOpening(handoff);
   let shown = 0;
   const closing = (count: number) => [
     ...(handoff.findingCount > count ? [omission(handoff.findingCount - count)] : []),
@@ -629,12 +646,12 @@ export function handoffPreviewLines(handoff: HandoffDigest, options: HandoffPrev
   const patches = (handoff.artifacts ?? []).filter((a): a is HandoffPatch => a.kind === 'patch');
   const others = (handoff.artifacts ?? []).filter((a) => a.kind !== 'patch');
   const artifacts = others.length ? artifactLines({ ...handoff, artifacts: others }, options.taskName) : [];
-  const authored = (text: string) => (handoff.subtree ? heldWords(text) : text.split('\n'));
+  const authored = (text: string) => (holdsWords(handoff) ? heldWords(text) : text.split('\n'));
   return [
     ...(handoff.subtree ? [subtreeCountLine(handoff.subtree)] : []),
-    ...(commit ? [...authored(`Commit: ${commit.subject}`), ...(commit.body ? authored(commit.body) : [])] : []),
+    ...(commit ? [...authored(`Commit: ${onOneLine(commit.subject)}`), ...(commit.body ? authored(commit.body) : [])] : []),
     ...(summary ? authored(summary) : []),
-    ...shown.map((f) => `${f.id} [${f.severity}] ${f.title}`),
+    ...shown.map((f) => `${f.id} [${f.severity}] ${onOneLine(f.title)}`),
     ...(more > 0 ? [`+${more} more finding${more === 1 ? '' : 's'}, in the attempt's log`] : []),
     ...artifacts,
     ...patches.flatMap(patchLines),
@@ -661,8 +678,8 @@ export function handoffWakeLines(handoff: HandoffDigest, taskName: HandoffTaskNa
 export function handoffLines(handoff: HandoffDigest | StoredHandoff, taskName: HandoffTaskName = () => undefined): string[] {
   const { subtree } = handoff;
   const lines = subtree
-    ? [subtreeCountLine(subtree), subtreeFindingLine(subtree, [...subtree.open, ...subtree.promoted]), ...openingLines(handoff).flatMap(heldWords)]
-    : openingLines(handoff);
+    ? [subtreeCountLine(subtree), subtreeFindingLine(subtree, [...subtree.open, ...subtree.promoted]), ...heldOpening(handoff)]
+    : heldOpening(handoff);
   if (subtree) {
     const scope = subtree.outsideScope ? [outsideScopeLine(subtree.outsideScope)] : [];
     for (const { heading, items } of reportSections(handoff, subtree)) {
@@ -674,7 +691,7 @@ export function handoffLines(handoff: HandoffDigest | StoredHandoff, taskName: H
   if (more > 0) lines.push(`+${more} more finding${more === 1 ? '' : 's'}, in the attempt's log`);
   const artifacts = artifactLines(handoff, taskName);
   if (artifacts.length > 0) lines.push('', ...artifacts);
-  if ('report' in handoff && handoff.report) lines.push('', 'Report:', ...(subtree ? heldWords(handoff.report) : [handoff.report]));
+  if ('report' in handoff && handoff.report) lines.push('', 'Report:', ...(holdsWords(handoff) ? heldWords(handoff.report) : [handoff.report]));
   return lines;
 }
 

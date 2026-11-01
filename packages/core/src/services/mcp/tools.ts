@@ -3,6 +3,7 @@ import { TASK_QUERY_TASK_FIELDS, OUTPUT_LINES_MAX } from '../TaskQuery';
 import { TASK_LOG_KINDS } from '../taskLogRead';
 import type { ToolOutcome } from '../../interfaces/IFileSystem';
 import { HANDOFF_LIMITS } from '../../models/Handoff';
+import { ONE_LINE } from '../../models/lineBreaks';
 import { BOARD_LIMITS, BOARD_REF, BOARD_TYPES, TASK_ENTRY_TYPES, type BoardEntryType } from '../../models/Board';
 
 /**
@@ -15,16 +16,19 @@ import { BOARD_LIMITS, BOARD_REF, BOARD_TYPES, TASK_ENTRY_TYPES, type BoardEntry
  * how far the wiring has got.
  */
 
+/** A refinement and not a pattern: a refusal says the same, and a pattern's text would go out on every spawn. */
+const oneLine = (text: string): boolean => ONE_LINE.test(text);
+
 const handoffReference = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('file'),
-    path: z.string().min(1).max(HANDOFF_LIMITS.reference).describe('A path in the repository.'),
+    path: z.string().min(1).max(HANDOFF_LIMITS.reference).refine(oneLine, 'A path is one line.').describe('A path in the repository.'),
     line: z.number().int().min(1).optional(),
   }),
   z.object({
     kind: z.literal('commit'),
     sha: z.string().regex(/^[0-9a-fA-F]{4,64}$/, 'A commit sha is 4 to 64 hex characters.'),
-    repo: z.string().min(1).max(HANDOFF_LIMITS.reference).optional().describe('The repository it is in, where the run has several.'),
+    repo: z.string().min(1).max(HANDOFF_LIMITS.reference).refine(oneLine, 'A repository is one line.').optional().describe('The repository it is in, where the run has several.'),
   }),
   z.object({
     kind: z.literal('task'),
@@ -35,14 +39,14 @@ const handoffReference = z.discriminatedUnion('kind', [
   }),
   z.object({
     kind: z.literal('url'),
-    url: z.string().min(1).max(HANDOFF_LIMITS.reference).describe('An http or https URL.'),
+    url: z.string().min(1).max(HANDOFF_LIMITS.reference).refine(oneLine, 'A URL is one line.').describe('An http or https URL.'),
   }),
 ]);
 
 const handoffFinding = z.object({
   severity: z.enum(['blocker', 'major', 'minor', 'info'])
     .describe('How much it matters to the next reader. Advice only: it never changes the verdict.'),
-  title: z.string().trim().min(1).max(HANDOFF_LIMITS.title).regex(/^[^\r\n]*$/, 'A title is one line.').describe('One line.'),
+  title: z.string().trim().min(1).max(HANDOFF_LIMITS.title).refine(oneLine, 'A title is one line.').describe('One line.'),
   detail: z.string().max(HANDOFF_LIMITS.detail).optional(),
   evidence: z.array(handoffReference).max(HANDOFF_LIMITS.evidence).optional().describe('Where a reader can check it.'),
 });
@@ -51,7 +55,7 @@ const handoffCommit = z.object({
   subject: z.string().trim()
     .min(1, 'The commit subject is required: one line saying what changed.')
     .max(HANDOFF_LIMITS.commitSubject, 'Put the why in body.')
-    .regex(/^[^\r\n]*$/, 'The commit subject is one line: put the why in body.')
+    .refine(oneLine, 'The commit subject is one line: put the why in body.')
     .describe(`One line of at most ${HANDOFF_LIMITS.commitSubject} characters, best 72 or fewer, in the imperative mood: "Add a daily version check behind ORDEWELL_NO_VERSION_CHECK".`),
   body: z.string().max(HANDOFF_LIMITS.commitBody, 'One to three lines on why; the specifics go in summary.').optional()
     .describe('One to three lines on why. No trailers: those are Ordewell\'s to add.'),
@@ -139,7 +143,7 @@ const readTaskInput = z.object({
 /** An entry as its author sends it (ADR-0057 R8): the fields R9's flags read are typed, and Ordewell pins the files, so no author claims a blob. */
 const postInput = <T extends readonly [BoardEntryType, ...BoardEntryType[]]>(types: T) => z.object({
   type: z.enum(types).describe('claim: goes stale with its files. attempt: tried and failed. contract: an interface, its key what it is called. assume: taken as given. scope_change: work found outside your scope.'),
-  title: z.string().trim().min(1).max(BOARD_LIMITS.title).regex(/^[^\r\n]*$/, 'A title is one line.'),
+  title: z.string().trim().min(1).max(BOARD_LIMITS.title).refine(oneLine, 'A title is one line.'),
   key: z.string().max(BOARD_LIMITS.key).optional().describe('What it is about: one key with different values shows as contested.'),
   value: z.string().max(BOARD_LIMITS.value).optional(),
   detail: z.string().max(BOARD_LIMITS.detail).optional(),

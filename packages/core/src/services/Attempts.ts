@@ -21,7 +21,7 @@ import { taskRefOf } from './TaskRefs';
 import { classifyRunnerStop, stopsRunner, type AttemptEnd, type TurnFailure } from './runnerExit';
 import type { ResearchTasks } from './ResearchTasks';
 import {
-  attemptPrompt, attemptWorkspace, checksTree, classifyAttempt, landsNothing, mergeExcludes, takesSkills, writesCommit,
+  attemptPrompt, attemptWorkspace, checksTree, classifyAttempt, handoffKept, landsNothing, mergeExcludes, repairsChild, takesSkills, writesCommit,
   type AttemptKind, type Continuation, type TaskWork,
 } from './attemptKind';
 import { resolveTaskSkills, TaskSkillsError, type SkillLookup } from './taskSkills';
@@ -31,7 +31,7 @@ import { supportsTaskMode } from './harness/connectors';
 import { quotedList } from '../utils/quotedList';
 import { scriptBodyOf } from '../models/ScriptTask';
 import { SCRIPT_RUNNER } from './ScriptRunner';
-import { checkHandoff, readableTaskIds, withPatch, type HandoffPatch, type StoredHandoff } from '../models/Handoff';
+import { checkHandoff, heldHandoff, readableTaskIds, withPatch, type HandoffPatch, type StoredHandoff } from '../models/Handoff';
 import { applySavedPatch, capturePatch, patchArtifact, patchReply } from './PatchCapture';
 import { handoffLogs, readTask, type TaskLogReader } from './readTask';
 import type { Subtree } from './Subtree';
@@ -369,6 +369,7 @@ export class Attempts {
       const task = this.deps.store.get(taskId);
       if (!task) return;
       this.deps.store.markAwaitingUser(taskId, 'checkpoint');
+      // A repair's too: a restart loses it the same way, and the child is what is left to Continue (ADR-0055 D17).
       if (task.type === 'delegated') this.deps.store.parkQuestion(taskId, summary);
       this.verifier.pauseIdle(taskId);
       this.host.emit('onTaskSettled', { taskId });
@@ -517,7 +518,7 @@ export class Attempts {
     store.markAttempted(task.id);
     // A script spends nothing a ledger counts: no model, no tokens (ADR-0035).
     if (!script) store.startAttemptUsage(task.id, attempt.attempt, attempt.runner, attempt.startedAt);
-    store.setTaskOutputSummary(task.id, undefined);
+    store.setTaskOutputSummary(task.id, undefined, handoffKept(task, kind));
     store.markAttemptStarted(task.id);
     this.host.emit('onTaskChanged');
     return this.run(task, attempt, continuation);
@@ -551,7 +552,7 @@ export class Attempts {
     }
     // A branch is not the whole result: this is what a Continue resumes (ADR-0059 L2).
     const result = attempt && session ? attempt.opened?.exportResult({ runner: attempt.runner, nativeSessionId }) : undefined;
-    if (attempt && result) this.saveNativeSession(taskId, result.sessionState.nativeSessionId, attempt.runner);
+    if (attempt && result && !repairsChild(store.get(taskId), attempt.kind)) this.saveNativeSession(taskId, result.sessionState.nativeSessionId, attempt.runner);
     if (stopsRunner(reason)) {
       const task = store.get(taskId);
       if (task) this.verifier.clear(task);
@@ -613,10 +614,13 @@ export class Attempts {
    * plan keeps the digest and the attempt's log the whole of it. One path for
    * an attempt a runner or a script ran, and for the completion a user marked.
    */
-  handOver(taskId: string, summary: Task['outputSummary'], handoff: StoredHandoff | undefined, from?: Pick<TaskAttempt, 'attempt' | 'session'>): void {
+  handOver(taskId: string, summary: Task['outputSummary'], handoff: StoredHandoff | undefined, from?: Pick<TaskAttempt, 'attempt' | 'session' | 'kind'>): void {
+    const task = this.deps.store.get(taskId);
+    const held = handoff && task ? heldHandoff(task, handoff) : handoff;
     // The digest says whose it is: a reference to it is pinned to that attempt (ADR-0057 R1).
-    const told = handoff && from ? { ...handoff, attempt: from.attempt } : handoff;
-    this.deps.store.setTaskOutputSummary(taskId, summary, told);
+    const told = held && from ? { ...held, attempt: from.attempt } : held;
+    // A repair's own goes to its attempt's log, where a read of that attempt finds it; the plan keeps the report (ADR-0057 R2).
+    this.deps.store.setTaskOutputSummary(taskId, summary, from && repairsChild(task, from.kind) ? task?.handoff : told);
     if (told) this.deps.recordHandoff(from?.session?.id, taskId, told);
   }
 
@@ -808,8 +812,8 @@ export class Attempts {
       attempt.phase = 'running';
       attempt.attaching = null;
       attempt.session = session;
-      // A child's id is written as it is seated, and is what a crash leaves to reopen or discard it by (ADR-0055 D17).
-      if (!attempt.delegated) store.setTaskRunnerSessionId(task.id, undefined);
+      // A child's id is written as it is seated, and is what a crash leaves to reopen or discard it by, a repair or no (ADR-0055 D17).
+      if (task.type !== 'delegated') store.setTaskRunnerSessionId(task.id, undefined);
       store.clearCarriedFrom(task.id);
       if (kind.kind === 'carryOver' && previousWork?.outcome === 'fallback') {
         this.host.tell('warn', `Task "${task.title}" starts fresh on ${attempt.runner}: the work its paused attempt on ${kind.from} left conflicts with the integration tip, so it was not carried over. It is kept on branch ${quotedList([...new Set(previousWork.preserved.map((kept) => kept.branch))])}.`);
@@ -836,7 +840,7 @@ export class Attempts {
       if (event.type !== 'usage' || attempt.planScope !== this.planScope || (this.live.get(task.id) !== attempt && !attempt.runnerStopped)) return;
       this.deps.store.recordAttemptUsage(task.id, attempt.attempt, event.record, new Date().toISOString());
       // A delegated task's usage rolled up from its child, whose node was charged as it arrived (ADR-0055 D20, ADR-0056 M5).
-      if (task.type !== 'delegated') this.deps.budget?.spent(event.record, { taskId: task.id, attempt: attempt.attempt });
+      if (!attempt.delegated) this.deps.budget?.spent(event.record, { taskId: task.id, attempt: attempt.attempt });
       this.host.emit('onUsageChanged');
     });
     session.onExit(() => this.woundDown(attempt, session));

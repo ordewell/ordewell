@@ -1,4 +1,5 @@
 import { SESSION_RESERVE_TOKENS } from '../models/TreeEvent';
+import { onOneLine } from '../models/lineBreaks';
 import { DiscoveredModel, RunnerId, type Task } from '../models/Task';
 import { readOnlyRunners, type RunnerModeInfo } from './ModeResolver';
 import { DEFAULT_PLANNER_MODES, type IsolatedExecution, type PlannerModes } from './plannerModes';
@@ -1040,7 +1041,7 @@ export function buildConflictRepairPrompt(
 ): string {
   const { branch } = conflict;
   const ref = taskRefOf(plan ?? [], task.id) ?? `#${task.order}`;
-  const files = conflict.conflictFiles ?? [];
+  const files = (conflict.conflictFiles ?? []).map(onOneLine);
   const merge = `git merge --no-edit ${quotedMessageArgs(conflict.message)} ${integrationBranch}`;
   const asked = `What the task was asked to do:\n${task.prompt ?? task.description}`;
   const resolve = 'resolve every conflict so that both sides\' intent survives: keep the work already integrated and add what the task contributed.';
