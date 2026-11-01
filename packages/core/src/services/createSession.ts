@@ -985,7 +985,12 @@ export class Session {
         if (!this.turns.turnRunning) this.endTurnLease();
         this.subplanner?.changed();
       },
-      usageLimit: (said, answered) => this.turns.usageLimit(said, answered),
+      usageLimit: (said, answered) => {
+        const limit = this.turns.usageLimit(said, answered);
+        const runner = runnerForProvider(this.config.aiProvider);
+        if (this.placement && limit.resendAt && runner) this.orchestrator.plannerLimited(runner, limit.resendAt);
+        return limit;
+      },
       contextPaused: (details) => this.turns.contextPaused(details),
     });
 
@@ -1728,6 +1733,7 @@ export class Session {
       sessionId: this.sessionId,
       protectedPaths: mandate.exclusions.protectedPaths,
       wallClockMs: mandate.limits.wallClockMs,
+      heldSince: (since) => this.placement?.pool.heldSince(since) ?? 0,
       startPlanning: (goal) => this.startPlanning(goal),
       continueConversation: (text) => this.continueConversation(text),
       state: () => this.nodeState(),
@@ -1753,7 +1759,7 @@ export class Session {
       completed: tasks.filter((task) => task.status === 'completed').length,
       live,
       plannerBusy: this.isPlannerBusy || this.turns.turnRunning,
-      wakeOwed: this.supervision.wakeOwed,
+      wakeOwed: this.supervision.wakeOwed || this.plan?.plannerResend?.at !== undefined,
       stoppedFor: this.stoppedFor(),
       startRefused: this.orchestrator.refusedStart,
       tasks: tasks.map((task) => ({ label: label(task), status: task.status })),

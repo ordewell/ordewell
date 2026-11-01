@@ -2521,6 +2521,11 @@ export class TaskOrchestrator {
     return !!task && waitsMidAttempt(task) && this.attempts.has(taskId);
   }
 
+  /** A subplanner's turn found its runner's limit, the account's and so the tree's (ADR-0055 D18). */
+  plannerLimited(runner: string, at: Date): void {
+    this.deps.limitFound(runner, at);
+  }
+
   limitFoundElsewhere(runner: string, at: Date): void {
     this.limitPauses.foundElsewhere(runner, at);
     this.emit('onTaskChanged');

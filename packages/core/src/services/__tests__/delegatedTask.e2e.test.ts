@@ -1017,6 +1017,54 @@ describe('what ends a child with nobody to ask (ADR-0056 M3, M8, M10)', () => {
   });
 });
 
+describe('wall-clock time (ADR-0056 M3)', () => {
+  /** A runner's own words for a limit that resets well past any test, read from the clock so the hour never matters. */
+  const limitWords = () => {
+    const at = new Date(Date.now() + 3 * 3_600_000);
+    const hours = at.getUTCHours() % 12 || 12;
+    return `You've hit your session limit · resets ${hours}:${String(at.getUTCMinutes()).padStart(2, '0')}${at.getUTCHours() < 12 ? 'am' : 'pm'} (UTC)`;
+  };
+  const shortly = () => new Promise((resolve) => { setTimeout(resolve, 3500); });
+
+  it('stops while the tree is held on a usage limit found by a task, so its time does not run out', async () => {
+    const spawned: string[] = [];
+    const runner: IRunner = {
+      spawn: vi.fn(async (opts) => {
+        spawned.push(opts.taskId);
+        const session = new FakeRunnerSession(`s-${opts.taskId}`, opts.taskId);
+        setTimeout(() => {
+          const said = limitWords();
+          session.emitEvent({ type: 'error', message: said });
+          session.emitOutput(`${said}\n`);
+          session.emitTurnEnd('failed');
+        }, 5);
+        return session;
+      }),
+      stop: vi.fn(),
+      stopAll: vi.fn(),
+      activeCount: 0,
+    };
+    const { parent, planner } = tree([SUBMIT([childTask('a', 1)])], { runner, tasks: [delegated({ budget: { tokens: 2_000_000, wallClockMs: 1500 } }), check()] });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(spawned).toContain('a'), { timeout: 20_000 });
+    await shortly();
+    expect(statusOf(parent, 'd')).toBe('in_progress');
+    expect(planner.asked).toHaveLength(1);
+    parent.destroy();
+  });
+
+  it('stops for a subplanner\'s own limit too, and sends it no reminder while it waits to resend', async () => {
+    const { parent, planner } = tree([async () => undefined, async () => ({ kind: 'message', text: limitWords(), failed: true, researchLog: [] })], { tasks: [delegated({ budget: { tokens: 2_000_000, wallClockMs: 1500 } }), check()] });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(planner.asked).toHaveLength(2), { timeout: 20_000 });
+    await shortly();
+    expect(parent.planTasks.find((t) => t.id === 'd')?.verdict?.reason).toBeUndefined();
+    expect(statusOf(parent, 'd')).toBe('in_progress');
+    expect(planner.asked).toHaveLength(2);
+    parent.destroy();
+  });
+});
+
 describe('a child\'s budget', () => {
   it('comes back when it closes, for the next carve', async () => {
     const turns = [SUBMIT([childTask('a', 1)]), DONE, SUBMIT([{ ...childTask('b', 1), id: 'b' }]), DONE];

@@ -34,6 +34,8 @@ export interface ChildNode {
   readonly protectedPaths: readonly string[];
   /** The time it has to run in (ADR-0056 M3). */
   readonly wallClockMs: number | null;
+  /** How much of the time since `since` its tree is held on a usage limit, which is not on its clock (M3). */
+  heldSince(since: number): number;
   startPlanning(goal: string): Promise<unknown>;
   continueConversation(text: string): Promise<unknown>;
   state(): NodeState;
@@ -145,11 +147,20 @@ export class ChildPlanSession extends AbstractRunnerSession {
       return;
     }
     if (this.stopping) return;
-    if (this.node.wallClockMs !== null) {
-      this.wallClock = setTimeout(() => this.haltFor(`its time of ${this.node?.wallClockMs} ms ran out`), this.node.wallClockMs);
-      this.wallClock.unref?.();
-    }
+    this.watchClock(this.node, Date.now());
     this.opened(this.node.startPlanning(task.goal ?? ''));
+  }
+
+  /** Read again as it runs out, so a hold found meanwhile moves it on (ADR-0056 M3). */
+  private watchClock(node: ChildNode, started: number): void {
+    if (node.wallClockMs === null) return;
+    const left = started + node.wallClockMs + node.heldSince(started) - Date.now();
+    if (left <= 0) {
+      this.haltFor(`its time of ${node.wallClockMs} ms ran out`);
+      return;
+    }
+    this.wallClock = setTimeout(() => this.watchClock(node, started), left);
+    this.wallClock.unref?.();
   }
 
   /** A turn this opened: its end is one a check reads, and a failure in it ends the attempt, since no person reads it (ADR-0056 M8). */
@@ -159,8 +170,10 @@ export class ChildPlanSession extends AbstractRunnerSession {
       () => this.turnSettled(),
       (err: unknown) => {
         this.turnSettled();
-        // A turn this ended itself is no failure of its planner.
-        if (!this.stopping && !this.halting) this.end('failed', `Its planner could not go on: ${err instanceof Error ? err.message : String(err)}`);
+        const state = this.node?.state();
+        // A turn this ended itself is no failure of its planner, a limit's resend opens the next, and a node stopped ends by what stopped it.
+        if (this.stopping || this.halting || state?.wakeOwed || state?.stoppedFor) return;
+        this.end('failed', `Its planner could not go on: ${err instanceof Error ? err.message : String(err)}`);
       },
     );
   }
