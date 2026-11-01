@@ -76,7 +76,8 @@ revert adds commits and rewrites nothing.
   `git revert -m 1` would, worded `Revert: <subject>` beside the other messages
   Ordewell writes (ADR-0013). It is made by plumbing and never in a worktree:
   `git merge-tree --write-tree` with the merge as base and the branch's tip and
-  the merge's first parent as its sides, `commit-tree`, signed where
+  the merge's first parent as its sides, each side a commit off to the side whose
+  one parent is the merge, so that git finds that base itself, `commit-tree`, signed where
   `commit.gpgsign` says, then `update-ref` from the tip it expected. So nothing
   staged anywhere can go in a commit, and a revert that conflicts has written
   nothing to clear. It needs no integration worktree and makes none. Where there
@@ -320,8 +321,11 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
 - A revert's commits go past commit hooks, since `commit-tree` runs none: a
   repository that polices commits there does not see them. A signing key still
   signs them.
-- A revert needs git 2.40, for `merge-tree --merge-base`, and an older git is
-  refused in the preview, naming the version. The rest of a run does not.
+- A revert needs git 2.38, for `merge-tree --write-tree`, and an older git is
+  refused in the preview, naming the version. `merge-tree --merge-base` would save
+  two side commits a revert, but it came in git 2.40, and two ways to make one
+  merge would leave the older way run only where it is needed. Those commits are
+  never referred to, and git prunes them in time.
 - A change on a path a revert touches is found only when the two-tree read
   refuses it, past the preview, and nothing has moved by then.
 - A crash between a branch's move and its read, in a chain of reverts that touch
@@ -347,6 +351,7 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
 
 - 2026-10-30 — accepted; core, the command seam and the daemon contract implemented.
 - 2026-10-30 — the terminal and VS Code offer it; fully implemented.
+- 2026-11-01 — a revert's merge takes its base from two side commits, not `--merge-base`, so it needs git 2.38 rather than 2.40.
 - 2026-10-30 — landed reads `landings` over the record, and a checkout of the integration branch counts as no merge; a claim in a revert's reach is refused, and it is judged again before it settles.
 - 2026-10-31 — merged means the user's branch, not HEAD: any review checkout is no merge, and Merge all makes a merge commit where no base branch says otherwise; `carried` keeps resolver-carried work; what cannot be named refuses the whole revert.
 - 2026-10-31 — merged reads every merge of a task, not the current record; a branch that is gone puts nothing in the user's branch; a rollback holds each repo to its own reverts, and the mark follows `carried`.

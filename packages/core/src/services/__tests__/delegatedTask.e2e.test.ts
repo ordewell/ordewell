@@ -1302,7 +1302,7 @@ describe('what a model may not do to a check (ADR-0055 D8)', () => {
 describe('what ends a child with nobody to ask (ADR-0056 M3, M8, M10)', () => {
   it('denies a runner\'s approval at once, and tells the next run update: nobody below the root may allow it', async () => {
     const asked = { session: null as FakeRunnerSession | null };
-    const runner = writingRunner({ a: ['a.txt'] }, { asks: (session) => { asked.session = session; } });
+    const runner = writingRunner({ a: ['a.txt'] }, { asks: (session) => { asked.session ??= session; } });
     const { parent, planner } = tree([SUBMIT([childTask('a', 1)]), DONE], { runner });
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });

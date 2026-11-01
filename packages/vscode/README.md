@@ -18,9 +18,9 @@ for versions available to install and their release notes.
   asks clarifying questions, and then hands you the plan.
 - **Choose models per task.** Review and edit each AI task's model and thinking
   effort before execution. Planning uses the selected planner model too.
-- **Worktree isolation for code tasks.** With isolation enabled, code tasks run
-  in separate worktrees and passing changes land on an integration branch for
-  review. Ops and script tasks run at the workspace root. Without a git repository,
+- **Worktree isolation for code tasks.** With isolation enabled and git 2.38 or
+  newer, code tasks run in separate worktrees and passing changes land on an
+  integration branch for review. Ops and script tasks run at the workspace root. Without a git repository,
   or with isolation disabled, tasks share your workspace folder.
 - **Skills your team shares.** Write a skill once and commit it. The planner
   attaches it to the tasks it fits, and it shows as a chip on each task card.
