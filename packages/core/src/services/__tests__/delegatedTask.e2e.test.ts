@@ -430,6 +430,28 @@ describe('a question (ADR-0056 M8)', () => {
     parent.destroy();
   });
 
+  it('carries the words of an approval to the subplanner, where a question wants an answer and not a yes', async () => {
+    const heard: string[] = [];
+    const HEAR = (turn: Turn): Turn => async (tools, text) => { heard.push(text); await turn(tools, text); };
+    const { parent } = tree([asks('Which rounding?'), HEAR(SUBMIT([childTask('a', 1)])), DONE]);
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(awaiting(parent, 'd')?.awaitingReason).toBe('checkpoint'), { timeout: 20_000 });
+    expect(await parent.execute({ command: 'answer_checkpoint', task: 'd', answer: 'approve', reason: 'Round half away from zero.', raiseTokens: 100_000 }, { kind: 'user' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    expect(heard[0]).toContain('Round half away from zero.');
+    expect(heard[0]).toContain('100000');
+    expect(heard[0]).not.toContain('rejected');
+    parent.destroy();
+  });
+
+  it('tells a subplanner its run merged into the delegated task\'s branch, never the user\'s', async () => {
+    const { parent, planner } = tree([SUBMIT([childTask('a', 1)]), DONE]);
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    expect(planner.asked[1]).toContain('merged into the delegated task\'s branch');
+    parent.destroy();
+  });
+
   it('takes one question at a time', async () => {
     const replies: { text: string; isError?: boolean }[] = [];
     const { parent } = tree([async (tools) => {
@@ -517,6 +539,50 @@ describe('a raise (ADR-0056 M5)', () => {
     parent.destroy();
   });
 
+  describe('a child its budget stops while its question waits', () => {
+    const stopped = async (session: Session) => {
+      const tree = await session.ledger();
+      tree.nodeOf(session.planState?.isolation?.run.tasks.d.childSession ?? '')!.stop('Level 1 refused this turn: a turn here needs 200000 tokens to start, and 14810 are left.');
+      for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    };
+
+    it('keeps waiting, since the answer is what can give it room, and a raise carries it on', async () => {
+      const { parent } = tree([ASK, SUBMIT([childTask('a', 1)]), DONE]);
+      await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+      await asking(parent);
+      await stopped(parent);
+      expect(parent.awaitsCheckpoint('d')).toBe(true);
+      expect(await parent.execute({ command: 'answer_checkpoint', task: 'd', answer: 'approve', raiseTokens: 500_000 }, { kind: 'user' })).toMatchObject({ ok: true });
+      await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+      parent.destroy();
+    });
+
+    it('tells the plan above that a child with everything finished owes only its report, and a Continue is what keeps its work', async () => {
+      const { parent } = tree([SUBMIT([childTask('a', 1)]), ASK, AWAIT]);
+      await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+      await asking(parent);
+      await stopped(parent);
+      await parent.execute({ command: 'answer_checkpoint', task: 'd', answer: 'approve' }, { kind: 'user' });
+      await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('failed'), { timeout: 20_000 });
+      const reason = parent.planTasks.find((t) => t.id === 'd')?.verdict?.reason ?? '';
+      expect(reason).toContain('only its report is missing');
+      expect(reason).toContain('Continue');
+      expect(reason).not.toContain('..');
+      parent.destroy();
+    });
+
+    it('ends blocked once an answer brings no room', async () => {
+      const { parent } = tree([ASK, AWAIT]);
+      await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+      await asking(parent);
+      await stopped(parent);
+      await parent.execute({ command: 'answer_checkpoint', task: 'd', answer: 'approve' }, { kind: 'user' });
+      await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('failed'), { timeout: 20_000 });
+      expect(parent.planTasks.find((t) => t.id === 'd')?.verdict).toMatchObject({ reported: 'blocked', reason: expect.stringContaining('refused this turn') });
+      parent.destroy();
+    });
+  });
+
   describe('a start its budget refuses', () => {
     /** One tenth of a session past the reserve its subplanner keeps: a turn can start, and a task cannot. */
     const small = () => [delegated({ budget: { tokens: 220_000 } }), check()];
@@ -526,6 +592,7 @@ describe('a raise (ADR-0056 M5)', () => {
       await parent.execute({ command: 'run_plan' }, { kind: 'user' });
       await asking(parent);
       expect(planner.asked[1]).toContain('could not start');
+      expect(planner.asked[1]).not.toContain('are left..');
       expect(await parent.execute({ command: 'answer_checkpoint', task: 'd', answer: 'approve', raiseTokens: 500_000 }, { kind: 'user' })).toMatchObject({ ok: true });
       await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
       parent.destroy();

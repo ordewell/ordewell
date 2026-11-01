@@ -1061,7 +1061,8 @@ queue, not out of it; and "lost".
 **Checkpoint** (task) — a task asking a person to approve its work before it
 goes on: the `checkpoint` tool call. The task is `awaiting_user` with reason
 `checkpoint`, and its status carries the whole question (`checkpoint`).
-Answered with approve — which carries no note — or reject with a reason: the
+Answered with approve — which carries no note, but on a delegated task can carry the
+answer to its subplanner's question and a raise — or reject with a reason: the
 TUI task view's *checkpoint card* (`enter` replies with the composer text as
 the reason and the task goes on in the same session following it; `ctrl-y`
 approves; `ctrl-g` rejects, with nothing typed a plain no), `/checkpoint <id> approve|reject [reason]`, `ordewell checkpoint`,

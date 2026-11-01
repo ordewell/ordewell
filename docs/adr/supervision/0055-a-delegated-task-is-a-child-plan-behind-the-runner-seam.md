@@ -372,7 +372,8 @@ the child cannot reach follows it in the parent's plan.**
   `PlanStore.resetForRun` readies what failed, so they are retried, and its
   subplanner replays its Model context with the message: a planner's native session
   is held in memory and saved nowhere, so a new process has none to resume. A child
-  whose plan never reached the disk plans its goal again. Its node closed as it ended,
+  whose plan never reached the disk plans its goal again, and one with nothing left to
+  run goes straight to that turn: it may owe only its report. Its node closed as it ended,
   or a crash left it open, so a Continue carves again, under the same child, from
   what the task has left, after `Session.ledger()` has answered. The task's worktree
   is restored in place, on the same path, read-only or not, since a child's run is
@@ -653,3 +654,4 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-11-01 — one child plan end to end: D1, D2, D3 to D7, D8's plan rules and read-only script, and D19, in `ChildPlanRunner`, `models/Delegation.ts` and `PlanChangeCheck`. D21 gains the build's switch, and a protected path is one more check of the verdict.
 - 2026-11-01 — a subplanner's question goes up, and D8's take-back, D9's merge hold, D14's repair and M9's rules for a child's scripts are implemented. A run that closed with its merge held owes it to the next tick, and a resolver of a delegated task's conflict takes the mode a repair does.
 - 2026-11-01 — D20's minimum: a delegated row, usage rolled up a level at a time and charged once, and the child's activity in its log. D1's `read` is the runner's tool (ADR-0057 R11).
+- 2026-11-01 — from a real run: a Continue with nothing left to run goes to its subplanner's turn, where it had failed on Execute's refusal; a report counts every opening of its task; a Stop says what a Continue keeps and Execute discards.

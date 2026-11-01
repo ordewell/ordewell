@@ -1,15 +1,9 @@
-import { childPath, isWithin, parentPath, ROOT_NODE, type NodePath, type TreeFact } from '../models/TreeEvent';
+import { childPath, isWithin, parentPath, ROOT_NODE, SESSION_RESERVE_TOKENS, type NodePath, type TreeFact } from '../models/TreeEvent';
 import { spentTokens, type UsageRecord } from '../models/Usage';
 import type { EventStore } from './eventStore';
 import { narrow, type Mandate, type MandateRefusal, type MandateRequest } from './Mandate';
 
-/**
- * A live session's allowance for what it has in flight (ADR-0056 M5), which is
- * one model call: a long context's prompt, its cache reads included, and a reply.
- * An estimate: a runner's own subagents add requests nobody sees until their
- * usage arrives.
- */
-export const SESSION_RESERVE_TOKENS = 200_000;
+export { SESSION_RESERVE_TOKENS };
 
 /** One node as the log leaves it. */
 export interface TreeNode {
@@ -233,6 +227,17 @@ export class TreeLedger {
     return node.open ? Math.max(0, this.free(node) - node.kept - this.liveReserve(node.path)) : 0;
   }
 
+  /**
+   * What a claim can take. A turn spends its subplanner's share down until it
+   * parks, and a claim comes at that turn's end: read as it stands, the share
+   * would pay for the claim, and the turn that follows the work would find
+   * nothing and could not report it.
+   */
+  private claimRoom(path: NodePath): number {
+    const node = this.at(path);
+    return node.open ? Math.max(0, this.free(node) - Math.max(node.kept, this.reserve) - this.liveReserve(path)) : 0;
+  }
+
   numbers(path: NodePath): BudgetNumbers {
     const node = this.at(path);
     const { limit, committed, spent, kept } = node;
@@ -251,7 +256,7 @@ export class TreeLedger {
       sessionId,
       tree: this,
       refusal: () => {
-        const left = this.left(path);
+        const left = this.claimRoom(path);
         return left >= this.reserve ? null : `Level ${levelOf(path)} refused this start: a session here needs ${this.reserve} tokens to start, and ${left} of its ${this.at(path).limit} are left.`;
       },
       hold: () => this.hold(path),
@@ -283,6 +288,14 @@ export class TreeLedger {
   /** What `path` and everything under it spent: a closed child is in its parent's `spent`, an open one still its own (M5). */
   subtreeSpent(path: NodePath): number {
     return this.at(path).spent + this.openChildren(path).reduce((sum, child) => sum + this.subtreeSpent(child.path), 0);
+  }
+
+  /** What a node's task has cost so far: this opening's subtree and every opening before it, since a report of the last alone reads as the whole (ADR-0056 M10). */
+  taskSpent(path: NodePath): number {
+    const { taskId, spent } = this.at(path);
+    const parent = parentPath(path);
+    const earlier = parent === null || taskId === undefined ? 0 : this.spentOn(parent, taskId) - spent;
+    return earlier + this.subtreeSpent(path);
   }
 
   /** The open node `sessionId` is, if any: what a reopen finds. */

@@ -387,7 +387,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
     // checkpoint; a refusal (settled elsewhere, withdrawn) surfaces as the
     // failure the daemon words.
     case 'answerTaskCheckpoint':
-      if (effect.answer === 'approve') await api.approveTaskCheckpoint(effect.sessionId, effect.taskId);
+      if (effect.answer === 'approve') await api.approveTaskCheckpoint(effect.sessionId, effect.taskId, { ...(effect.reason ? { reason: effect.reason } : {}), ...(effect.raiseTokens !== undefined ? { raiseTokens: effect.raiseTokens } : {}) });
       else await api.rejectTaskCheckpoint(effect.sessionId, effect.taskId, effect.reason);
       return;
 

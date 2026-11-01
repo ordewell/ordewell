@@ -38,7 +38,8 @@ function firstLine(text: string): string {
 export function landingMessage(kind: LandingCommit, from: LandingSubject, plannedWith = false): string {
   const subject = firstLine(from.commit?.subject ?? '') || firstLine(from.title);
   const head = kind === 'work' ? subject
-    : kind === 'merge' ? `Merge: ${subject}`
+    // A delegated task's subject can be its child plan's own landing.
+    : kind === 'merge' ? `Merge: ${subject.replace(/^Merge: /, '')}`
     : kind === 'rescue' ? `WIP: ${subject}`
     : kind === 'restore-merge' ? `Merge: ${subject} (resume its kept work)`
     : `Merge: ${subject} (resolve conflicts with integration)`;

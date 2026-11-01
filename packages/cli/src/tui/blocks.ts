@@ -536,14 +536,14 @@ function approvalKeysLine(block: ApprovalBlock, cols: number): string {
  * line of it is cut — a long one wraps and the pane scrolls. The keys come
  * after it, and say so when a tool request has to be answered first.
  */
-export function checkpointCardLines(order: number, question: string, cols: number, approvalFirst: boolean): string[] {
+export function checkpointCardLines(order: number, question: string, cols: number, approvalFirst: boolean, delegated = false): string[] {
   const room = Math.max(1, cols - 2);
   const first = approvalFirst ? wrap('answer the tool request above first (ctrl-y / ctrl-g), then:', room) : [];
   return [
     truncate(`${style.accent('◆')} ${style.bold(`Task ${order} asks`)}`, cols),
     ...wrap(sanitize(question).trim(), room).map((line) => `  ${line}`),
     ...first.map((line) => style.grey(`  ${line}`)),
-    ...CHECKPOINT_CHOICES.flatMap(([key, text]) => choiceLines(key, text, room)),
+    ...(delegated ? DELEGATED_CHOICES : CHECKPOINT_CHOICES).flatMap(([key, text]) => choiceLines(key, text, room)),
   ];
 }
 
@@ -552,6 +552,8 @@ const CHECKPOINT_CHOICES: ReadonlyArray<readonly [string, string]> = [
   ['ctrl-y', 'approve as is'],
   ['ctrl-g', 'reject (with nothing typed, a plain no)'],
 ];
+/** A delegated task's Approve can carry a raise (ADR-0056 M5). */
+const DELEGATED_CHOICES: ReadonlyArray<readonly [string, string]> = CHECKPOINT_CHOICES.map(([key, text]) => (key === 'ctrl-y' ? [key, 'approve as is, or with a number typed here as a raise of its tokens'] : [key, text]));
 const CHOICE_KEY_WIDTH = 6;
 
 /** The key in the accent, then its meaning wrapped under itself, so a narrow pane never cuts either. */

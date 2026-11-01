@@ -760,6 +760,7 @@ const delegatingSubmitPlanInput = z.object({
 });
 
 const delegatingAnswerCheckpointInput = answerCheckpointInput.extend({
+  reason: z.string().optional().describe('What the runner is told: why, with "reject". With "approve", on a delegated task: the answer to its question.'),
   raiseTokens: z.number().int().positive().optional().describe('With "approve", on a delegated task: raise its budget by this many tokens from what this plan has left.'),
 });
 

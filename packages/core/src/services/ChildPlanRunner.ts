@@ -252,7 +252,8 @@ export class ChildPlanSession extends AbstractRunnerSession {
       if (!state.plannerBusy) this.publish();
       return;
     }
-    const stopped = this.halting ?? state.stoppedFor;
+    // A stop that came while a question waits waits with it: the answer is what can bring room, and M8 gives that wait only the wall clock.
+    const stopped = this.halting ?? (this.asking ? null : state.stoppedFor);
     if (stopped) {
       if (!state.live && !state.plannerBusy) this.end(stopped.ends, this.derived(stopped.why, state));
       else this.haltFor(stopped.why, stopped.ends);
@@ -286,7 +287,10 @@ export class ChildPlanSession extends AbstractRunnerSession {
   /** A report nobody wrote, since no one is left to: only what the plan and run show, for the plan above to decide on. */
   private derived(why: string, state: NodeState): string {
     const tasks = state.tasks.map((t) => `${t.label}: ${t.status}`).join('; ');
-    return `The child plan ended without a report: ${why}.${tasks ? ` Its tasks: ${tasks}.` : ' It holds no tasks.'}`;
+    const owed = state.completed > 0 && state.unfinished.length === 0
+      ? ' Everything it ran finished and only its report is missing: give it room and Continue it, since a fresh attempt starts its child over and discards that work.'
+      : '';
+    return `The child plan ended without a report: ${why.replace(/\.$/, '')}.${tasks ? ` Its tasks: ${tasks}.` : ' It holds no tasks.'}${owed}`;
   }
 
   /** The child's activity, as this attempt's log shows it (ADR-0055 D20): what a task became, not what its runner said. */

@@ -513,7 +513,7 @@ export function chatLayout(state: TuiState, rows: number, cols: number): ChatLay
   const welcome = !tv && state.tasks.length === 0;
   // Not a block of the runner's log, so it stays out of the memoised body.
   const checkpoint = tv ? waitingCheckpoint(findTask(state.tasks, tv.taskId)) : undefined;
-  const card = tv && checkpoint ? checkpointCardLines(findTask(state.tasks, tv.taskId)?.order ?? 0, checkpoint, cols, waitingApproval(tv) !== undefined) : [];
+  const card = tv && checkpoint ? checkpointCardLines(findTask(state.tasks, tv.taskId)?.order ?? 0, checkpoint, cols, waitingApproval(tv) !== undefined, findTask(state.tasks, tv.taskId)?.type === 'delegated') : [];
   const answering = chatBodyLines(blocks, cols, state.detailAll, tv ? waitingApproval(tv) : undefined);
   const body = card.length > 0 ? [...answering, ...card] : answering;
   const transcript = !welcome ? body : body.length === 0 ? welcomeLines(state, rows, cols) : [...welcomeLines(state, rows, cols), '', ...body];

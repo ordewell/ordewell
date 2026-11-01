@@ -1270,7 +1270,10 @@ export class ExecutionCommands {
         // Carved at the call: one the parent cannot pay for leaves the question waiting, and says so.
         const refused = raise === undefined ? null : await this.host.raiseChild(located.task.id, raise);
         if (refused) throw new Error(refused);
-        this.host.answerCheckpoint(located.task.id, approve, reason, raise === undefined ? undefined : `Your budget was raised by ${raise} tokens.`);
+        // A child's question wants an answer, not a yes: only a rejection carries words to a runner.
+        const said = located.task.type === 'delegated' ? reason : undefined;
+        const note = [said, raise === undefined ? undefined : `Your budget was raised by ${raise} tokens.`].filter(Boolean).join(' ') || undefined;
+        this.host.answerCheckpoint(located.task.id, approve, reason, note);
         const told = actor.kind === 'user' ? 'your reason' : 'the reason';
         return { message: approve ? `Approved the checkpoint of ${label}: it goes on${raise === undefined ? '' : `, with ${raise} more tokens`}.` : `Rejected the checkpoint of ${label}: the runner is told${reason ? ` ${told}` : ''}.` };
       },
@@ -1362,6 +1365,8 @@ export class ExecutionCommands {
 
   private prepareStopRun(actor: ExecutionActor): Prepared {
     const live = this.all().filter(({ task }) => this.host.running(task.id));
+    // Execute is a fresh attempt, which discards a child (ADR-0055 D15), so the usual advice would lose what it landed.
+    const children = live.filter(({ task }) => task.type === 'delegated');
     // A start admitted but not yet claimed would begin after a refused Stop, so it is a run to stop too, as is the one a submitted plan waits on (ADR-0030).
     const pending = this.host.startsPending() || this.host.submittedStartWaits();
     // A loop a body task stopped starts nothing, but the retry that passes would resume it unless a Stop ends it first (ADR-0045 L7).
@@ -1377,7 +1382,7 @@ export class ExecutionCommands {
         this.host.stopRun(actor);
         return {
           message: live.length > 0
-            ? `Stopped the run: ${named(live)} ${live.length === 1 ? 'is' : 'are'} back to not started, and the plan is kept. ${voiceOf(actor).startAgain}`
+            ? `Stopped the run: ${named(live)} ${live.length === 1 ? 'is' : 'are'} back to not started, and the plan is kept. ${children.length > 0 ? `Continue ${named(children)} to keep what its child landed: running the plan starts its child over.` : voiceOf(actor).startAgain}`
             : pending
               ? 'Stopped the run before anything more started: nothing was running, and what was about to start will not. The plan is kept.'
               : carried

@@ -64,6 +64,35 @@ describe('ordewell checkpoint', () => {
     srv.close();
   });
 
+  it('sends a raise with an approval, for a delegated task\'s child', async () => {
+    const { srv, hits, api } = await daemon();
+    const { handleCheckpoint } = await import('../task-control');
+    await capture(() => handleCheckpoint(['--session-id', 'session-1', '3', 'approve', '--raise', '800000'], api));
+    expect(hits).toEqual(['POST /api/plans/session-1/tasks/3/checkpoint/approve {"raiseTokens":800000}']);
+    srv.close();
+  });
+
+  it('sends the words of --answer with an approval, for a delegated task\'s answer', async () => {
+    const { srv, hits, api } = await daemon();
+    const { handleCheckpoint } = await import('../task-control');
+    await capture(() => handleCheckpoint(['--session-id', 'session-1', '3', 'approve', '--answer', 'Half away from zero.'], api));
+    expect(hits).toEqual(['POST /api/plans/session-1/tasks/3/checkpoint/approve {"reason":"Half away from zero."}']);
+    srv.close();
+  });
+
+  it('refuses a raise that is not a whole number, and one that goes with a rejection', async () => {
+    const { srv, hits, api } = await daemon();
+    const { handleCheckpoint } = await import('../task-control');
+    const notANumber = await capture(() => handleCheckpoint(['--session-id', 'session-1', '3', 'approve', '--raise', 'lots'], api));
+    const onReject = await capture(() => handleCheckpoint(['--session-id', 'session-1', '3', 'reject', '--raise', '5', 'no'], api));
+    const wordsOnReject = await capture(() => handleCheckpoint(['--session-id', 'session-1', '3', 'reject', '--answer', 'Half up.', 'no'], api));
+    expect(notANumber.exitCode).toBe(1);
+    expect(onReject.exitCode).toBe(1);
+    expect(wordsOnReject.exitCode).toBe(1);
+    expect(hits).toEqual([]);
+    srv.close();
+  });
+
   it('rejects with the rest of the line as the reason', async () => {
     const { srv, hits, api } = await daemon();
     const { handleCheckpoint } = await import('../task-control');

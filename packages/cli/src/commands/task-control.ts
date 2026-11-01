@@ -2,7 +2,7 @@ import { flag, hasFlag, positionals, readLastSession, resolveTaskId } from '../u
 import { askYesNo, fail } from './shared';
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient, type PlanBody } from '../apiClient';
-import { pastGateConfirmation, taskActionCommand, titledTaskRef, type TaskAction } from '@ordewell/core';
+import { DELEGATION_OFFERED, parseCount, pastGateConfirmation, taskActionCommand, titledTaskRef, type TaskAction } from '@ordewell/core';
 
 type Action = Extract<TaskAction, 'run' | 'force-start' | 'retry' | 'cancel'>;
 
@@ -151,11 +151,18 @@ export async function handleContinue(subArgs: string[], injectedApi?: ApiClient)
  * dropped; a rejection's reason is the rest of the line.
  */
 export async function handleCheckpoint(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
-  const usage = 'Usage: ordewell checkpoint <task-id-or-order> approve|reject [reason] [--session-id <id>] [--workspace /path]';
+  const usage = `Usage: ordewell checkpoint <task-id-or-order> approve|reject [reason]${DELEGATION_OFFERED ? ' [--raise <tokens>] [--answer <words>]' : ''} [--session-id <id>] [--workspace /path]`;
   const [, answer, ...words] = positionals(subArgs);
   const reason = words.join(' ').trim();
   if (answer !== 'approve' && answer !== 'reject') {
     console.error(usage);
+    process.exit(1);
+  }
+  const said = flag(subArgs, '--answer')?.trim();
+  const raiseText = flag(subArgs, '--raise');
+  const raiseTokens = raiseText === undefined ? undefined : parseCount(raiseText, 1);
+  if (raiseTokens === null || (answer === 'reject' && (raiseTokens !== undefined || said !== undefined))) {
+    console.error(`A raise is a whole number of tokens, and it and --answer go with approve.\n${usage}`);
     process.exit(1);
   }
   if (answer === 'approve' && reason) {
@@ -165,7 +172,7 @@ export async function handleCheckpoint(subArgs: string[], injectedApi?: ApiClien
   await withTaskRef(subArgs, usage, injectedApi, async (api, sessionId, ref) => {
     try {
       const sent = answer === 'approve'
-        ? await api.approveTaskCheckpoint(sessionId, ref)
+        ? await api.approveTaskCheckpoint(sessionId, ref, { ...(said ? { reason: said } : {}), ...(raiseTokens !== undefined ? { raiseTokens } : {}) })
         : await api.rejectTaskCheckpoint(sessionId, ref, reason || undefined);
       console.log(sent.message ?? (answer === 'approve' ? 'Checkpoint approved.' : 'Checkpoint rejected.'));
     } catch (err) {

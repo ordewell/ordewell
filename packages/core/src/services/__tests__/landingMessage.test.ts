@@ -4,6 +4,10 @@ import { landingMessage, messageArgs, quotedMessageArgs, runMergeMessage } from 
 import { storedHandoff } from '../../models/Handoff';
 
 describe('landingMessage', () => {
+  it('does not say Merge twice for a subject that already says it, as a child plan\'s landing does', () => {
+    expect(landingMessage('merge', { title: 'Import', commit: { subject: 'Merge: Add parseCsv' } })).toBe('Merge: Add parseCsv');
+  });
+
   const stated = { title: 'Add greeting', commit: { subject: 'Greet the user on start', body: 'The banner was empty.\nNow it says hi.' } };
 
   it('writes the stated subject and body on the work and its landing merge', () => {
