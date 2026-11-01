@@ -357,6 +357,15 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     return readTaskDiff(this.gitInvoker, run, taskId, options);
   }
 
+  async blobOn(root: string, branch: string, file: string): Promise<string | null | undefined> {
+    const named = await tryGit(this.gitInvoker, root, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`]);
+    const tip = named.ok ? named : await tryGit(this.gitInvoker, root, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
+    if (!tip.ok) return undefined;
+    // `./` reads from the workspace, which may sit below the repository's top.
+    const blob = await tryGit(this.gitInvoker, root, ['rev-parse', '--verify', '--quiet', `${tip.stdout.trim()}:./${file}`]);
+    return blob.ok ? blob.stdout.trim() : null;
+  }
+
   async isActive(workspaceRoot: string): Promise<IsolationAvailability> {
     if (!this.deps.config.worktreeIsolation) return { active: false, reason: 'disabled' };
 

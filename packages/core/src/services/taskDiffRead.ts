@@ -26,7 +26,7 @@ interface DiffFile {
   patch(): Promise<string>;
 }
 
-function allowedPath(file: string): boolean {
+export function allowedPath(file: string): boolean {
   return file.length > 0 && !path.isAbsolute(file) && !/^[A-Za-z]:/.test(file)
     && !file.split(/[\\/]/).some((part) => part === '..' || part === '.git' || part === '.ordewell');
 }

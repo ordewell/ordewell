@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, TASK_TOOLS, plannerToolSet, toolListing, type McpTool } from '../tools';
+import { PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, TASK_TOOLS, plannerToolSet, taskToolSet, toolListing, type McpTool } from '../tools';
 
 /**
  * What each role's tool list costs before its first word: a runner is sent
@@ -18,11 +18,14 @@ describe('the tool list a runner is actually sent', () => {
     ['PLANNER_TOOLS', PLANNER_TOOLS, 23_400],
     ['TASK_TOOLS', TASK_TOOLS, 8_200],
     ['READ_ONLY_TASK_TOOLS', READ_ONLY_TASK_TOOLS, 10_700],
-    // Delegation's cost, past the flat list (ADR-0057 R11): what `submit_plan` adds to take a delegated task, `read`, and a raise on `answer_checkpoint` (ADR-0056 M5).
-    ['a delegating planner', plannerToolSet({ delegates: true }), 25_700],
-    // A subplanner's `task_complete` and `checkpoint`, with `promote` and `open`, and that its question parks it (ADR-0056 M8).
-    ['a subplanner', plannerToolSet({ subplanner: true }), 29_700],
-    ['a subplanner that may delegate', plannerToolSet({ delegates: true, subplanner: true }), 31_900],
+    // A board's cost to a runner in a subtree (ADR-0057 R8, R11): `post` and nothing else, `read` taking "board" as it stands.
+    ['a task on a board', taskToolSet({ board: true }), 9_500],
+    ['a read-only task on a board', taskToolSet({ readOnly: true, board: true }), 12_000],
+    // Delegation's cost, past the flat list (ADR-0057 R11): what `submit_plan` adds to take a delegated task, `read`, `post`, and a raise on `answer_checkpoint` (ADR-0056 M5).
+    ['a delegating planner', plannerToolSet({ delegates: true }), 27_000],
+    // A subplanner's `task_complete` and `checkpoint`, with `promote` and `open`, and that its question parks it (ADR-0056 M8), and its board's `read` and `post`.
+    ['a subplanner', plannerToolSet({ subplanner: true }), 31_900],
+    ['a subplanner that may delegate', plannerToolSet({ delegates: true, subplanner: true }), 33_200],
   ])('keeps %s under its ceiling, counting annotations', (_name, tools, ceiling) => {
     expect(sentSize(tools)).toBeLessThanOrEqual(ceiling);
   });

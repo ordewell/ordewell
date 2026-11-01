@@ -54,6 +54,9 @@ export interface TaskScope {
   consumes?: string[];
 }
 
+/** How long a scope's item is, and how many of each it holds: each can reach a line Ordewell writes (ADR-0057 R6). */
+export const SCOPE_LIMITS = { item: 200, items: 50 } as const;
+
 /** What a delegated task does not have: it holds a goal, not a runner prompt, so it has no mode, skills or steps, and it never runs in the checkout (ADR-0055 D1). */
 export const NOT_A_DELEGATED_TASKS_FIELDS = ['prompt', 'taskMode', 'skills', 'userSteps', 'ops', 'commands', 'script', 'timeoutMs', 'research'] as const satisfies readonly (keyof Task)[];
 
@@ -144,6 +147,7 @@ export function delegationErrors(tasks: readonly Task[], rules: DelegationRules 
     if (!task.readOnly && (!Array.isArray(paths) || paths.length === 0 || !paths.every((p) => typeof p === 'string' && p.trim()))) {
       fail(task, 'protectedPaths', `${where} is a delegated task that lands, with no "protectedPaths": name the paths its child may not change, what its check runs and the configuration that runs it`);
     }
+    if (task.scope !== undefined && !scopeOk(task.scope)) fail(task, 'scope', `${where} has a "scope" that is not lists of text: "paths", "provides" and "consumes", at most ${SCOPE_LIMITS.items} items of one line and ${SCOPE_LIMITS.item} characters each`);
     const unknown = (task.grants ?? []).filter((grant) => !GRANTS.includes(grant as Grant));
     if (unknown.length > 0) fail(task, 'grants', `${where} asks in "grants" for ${unknown.map((g) => `"${g}"`).join(', ')}, which no grant is: one of ${GRANTS.join(', ')}`);
 
@@ -175,6 +179,13 @@ export function delegationErrors(tasks: readonly Task[], rules: DelegationRules 
   return errors;
 }
 
+function scopeOk(scope: unknown): boolean {
+  if (typeof scope !== 'object' || scope === null) return false;
+  const { paths, provides, consumes } = scope as Record<string, unknown>;
+  const itemOk = (item: unknown) => typeof item === 'string' && item.trim().length > 0 && item.length <= SCOPE_LIMITS.item && !/[\r\n]/.test(item);
+  return [paths, provides, consumes].every((list) => list === undefined || (Array.isArray(list) && list.length <= SCOPE_LIMITS.items && list.every(itemOk)));
+}
+
 /** Whether `task` can judge `delegated`: a read-only AI task, or a read-only script of one that lands (D8). */
 function judges(task: Task, delegated: Task, runnerModes: DelegationRules['runnerModes']): boolean {
   return readsOnly(task, runnerModes) || (!delegated.readOnly && task.type === 'script' && task.readOnly === true);
@@ -203,6 +214,16 @@ export function checksHoldingMerge(tasks: readonly Task[], awaitsMerge: (taskId:
     .filter((check) => check.status !== 'completed' && check.status !== 'skipped');
 }
 
+/**
+ * What this plan's checks are made of (ADR-0057 R10): the words of whatever
+ * depends directly on a delegated task, which is all a pure reader of the plan
+ * can tell a check by. A pin may hold none of them whole.
+ */
+export function checkWords(tasks: readonly Task[]): string[] {
+  const delegated = new Set(tasks.filter((t) => t.type === 'delegated').map((t) => t.id));
+  return tasks.filter((t) => t.dependencies.some((id) => delegated.has(id))).flatMap((t) => [t.title, t.prompt ?? '', t.script ?? '', ...(t.commands ?? []).map((argv) => argv.join(' '))]);
+}
+
 /** Whether `task` is the check of a delegated task of `tasks`: what a model may not skip past, since that lets the work past its only check (D8). */
 export function checksDelegatedTask(tasks: readonly Task[], task: Task, rules: Pick<DelegationRules, 'runnerModes'> = {}): boolean {
   if (!readsOnly(task, rules.runnerModes) && !runnerUnread(task, rules.runnerModes) && !(task.type === 'script' && task.readOnly)) return false;
@@ -226,6 +247,57 @@ export function underProtectedPath(file: string, protectedPath: string): boolean
   if (rule.includes('*')) return globRegExp(rule).test(file);
   const bare = rule.replace(/\/+$/, '');
   return file === bare || file.startsWith(`${bare}/`);
+}
+
+/** What comes before a rule's first `*`: all two patterns can be told apart by without matching one against the other. */
+function fixedStart(rule: string): string {
+  const bare = rule.trim().replace(/^\.\//, '').replace(/\\/g, '/');
+  const star = bare.indexOf('*');
+  return star === -1 ? bare : bare.slice(0, star);
+}
+
+/** Whether two declared paths can name one file. Advisory, so two patterns are read generously: what they start with decides it. */
+export function pathsMeet(a: string, b: string): boolean {
+  if (underProtectedPath(a.replace(/\/+$/, ''), b) || underProtectedPath(b.replace(/\/+$/, ''), a)) return true;
+  if (!a.includes('*') || !b.includes('*')) return false;
+  const [one, other] = [fixedStart(a), fixedStart(b)];
+  return one.startsWith(other) || other.startsWith(one);
+}
+
+/** The narrower of two declared paths that meet: what a planner reads the overlap as. */
+function narrower(a: string, b: string): string {
+  return b.includes('*') || (!a.includes('*') && a.length >= b.length) ? a : b;
+}
+
+/** Whether an edge of the plan puts one of two tasks after the other. */
+function ordered(tasks: readonly Task[], a: Task, b: Task): boolean {
+  return reaches(tasks, a, (t) => t.id === b.id) || reaches(tasks, b, (t) => t.id === a.id);
+}
+
+/**
+ * What a plan's scopes leave for its planner to settle (ADR-0057 R6), a
+ * sentence each. It refuses nothing, since a scope is advisory: this is the
+ * answer the tool gives, and two tasks an edge orders have nothing to settle.
+ */
+export function scopeOverlaps(tasks: readonly Task[]): string[] {
+  const scoped = tasks.filter((t) => t.type === 'delegated' && t.scope);
+  const said: string[] = [];
+  scoped.forEach((a, i) => {
+    for (const b of scoped.slice(i + 1)) {
+      if (ordered(tasks, a, b)) continue;
+      const declared = (a.scope?.paths ?? []).flatMap((one) => (b.scope?.paths ?? []).filter((other) => pathsMeet(one, other)).map((other) => narrower(one, other)));
+      if (declared.length > 0) said.push(`Tasks "${a.title}" and "${b.title}" both declare ${[...new Set(declared)].join(', ')}, and nothing orders them: give one a dependency on the other, or name an owner.`);
+      for (const name of a.scope?.provides ?? []) {
+        if (b.scope?.provides?.includes(name)) said.push(`Tasks "${a.title}" and "${b.title}" both provide "${name}", and nothing orders them: name one owner.`);
+      }
+      for (const [producer, consumer] of [[a, b], [b, a]] as const) {
+        for (const name of producer.scope?.provides ?? []) {
+          if (consumer.scope?.consumes?.includes(name)) said.push(`Task "${consumer.title}" consumes "${name}", which "${producer.title}" provides, and nothing orders them: a dependency puts the producer first; without one it gets a line when "${producer.title}" lands.`);
+        }
+      }
+    }
+  });
+  return said;
 }
 
 function globRegExp(rule: string): RegExp {

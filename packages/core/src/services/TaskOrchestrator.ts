@@ -49,6 +49,7 @@ import type { StoredHandoff } from '../models/Handoff';
 import { userTaskHandoff } from '../models/DerivedHandoff';
 import type { TaskLogReader } from './readTask';
 import type { Subtree } from './Subtree';
+import type { NodeBoard } from './Board';
 import { leasedIsolation } from './leasedIsolation';
 import { LocalWorktreeLease } from './LocalWorktreeLease';
 import { SlotPool, type PoolNode } from './SlotPool';
@@ -254,6 +255,10 @@ export interface TaskOrchestratorDeps {
   subtree?: () => Promise<Subtree | null>;
   /** This plan's node in its tree, what a reference is pinned under. Absent, the root's. */
   planNode?: () => string;
+  /** This plan's board; null for a flat plan, which has none (ADR-0057 R8). */
+  board?: () => Promise<NodeBoard | null>;
+  /** What a landing owes the tasks beside it (ADR-0057 R6); undefined where it owes nothing, as on a flat plan. */
+  landed?: (task: Readonly<Task>) => Promise<void> | undefined;
   /** Where sessions run (ADR-0059). */
   leases: ExecutionBackend;
   /** The tree's slots and usage limits (ADR-0055 D18), which the backend reserves from. */
@@ -288,6 +293,10 @@ export interface TaskOrchestratorOptions {
   subtree?: () => Promise<Subtree | null>;
   /** This plan's node in its tree, what a reference is pinned under. Absent, the root's. */
   planNode?: () => string;
+  /** This plan's board; null for a flat plan, which has none (ADR-0057 R8). */
+  board?: () => Promise<NodeBoard | null>;
+  /** What a landing owes the tasks beside it (ADR-0057 R6); undefined where it owes nothing, as on a flat plan. */
+  landed?: (task: Readonly<Task>) => Promise<void> | undefined;
   /** What starting a research task owes the planner (ADR-0037 R3). */
   research?: Pick<ResearchTasks, 'started'>;
   config: IConfig;
@@ -509,6 +518,7 @@ export class TaskOrchestrator {
       taskLog: deps.taskLog,
       ...(deps.subtree ? { subtree: deps.subtree } : {}),
       ...(deps.planNode ? { planNode: deps.planNode } : {}),
+      ...(deps.board ? { board: deps.board } : {}),
       ...(deps.research ? { research: deps.research } : {}),
       autonomous: deps.autonomous,
       host: {
@@ -613,6 +623,8 @@ export class TaskOrchestrator {
       taskLog: options.taskLog ?? { attempts: () => [], events: () => [] },
       ...(options.subtree ? { subtree: options.subtree } : {}),
       ...(options.planNode ? { planNode: options.planNode } : {}),
+      ...(options.board ? { board: options.board } : {}),
+      ...(options.landed ? { landed: options.landed } : {}),
       leases: (options.execution ?? ((local) => local))(new LocalWorktreeLease({ pool, node, runs, workspaceRoot })),
       pool,
       sessionId: options.sessionId ?? (() => ''),
@@ -665,6 +677,11 @@ export class TaskOrchestrator {
   /** Whether the task waits at a checkpoint its live attempt can still answer. */
   awaitsCheckpoint(taskId: string): boolean {
     return this.attempts.awaitsCheckpoint(taskId);
+  }
+
+  /** A line from Ordewell to a running task (ADR-0057 R6); false where nothing is running. */
+  addressTask(taskId: string, line: string): boolean {
+    return this.attempts.address(taskId, line);
   }
 
   /**
@@ -1638,7 +1655,14 @@ export class TaskOrchestrator {
     this.carryChecks(task, admission);
     onLanded();
     this.say(outcome.messages);
+    await this.owedByLanding(task, outcome);
     await this.landResolved(task.id, admission);
+  }
+
+  /** Before anything the landing lets start: what a dependent reads of it should be there (ADR-0057 R6). A flat plan owes nothing, and waits on nothing. */
+  private async owedByLanding(task: Readonly<Task>, outcome: LandingOutcome): Promise<void> {
+    const owed = outcome.kind === 'landed' ? this.deps.landed?.(task) : undefined;
+    if (owed) await owed;
   }
 
   /**
@@ -1975,6 +1999,7 @@ export class TaskOrchestrator {
       this.onHold.delete(taskId);
       this.notifications.info(`Task "${task.title}" marked complete.`);
       this.say(landing.messages);
+      await this.owedByLanding(task, landing);
       await this.landResolved(taskId, admission);
     }
 

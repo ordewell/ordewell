@@ -4,8 +4,6 @@ status: accepted
 
 # 0013 — Worktree isolation: one checkout per task, one branch per run
 
-*Pending:* [ADR-0057](../supervision/0057-information-moves-by-reference.md) — tasks may declare an advisory scope, overlap is answered at plan time, and a landing that touches one sends one line.
-
 ## Problem
 
 Every AI task ran in the same working directory — the workspace root. With
@@ -424,7 +422,10 @@ literal git command lines or private fields.
 - Isolation for non-git version control (Mercurial, SVN). The fallback is
   shared-root execution; only git worktrees are in scope.
 - Overlap-aware scheduling from a declared per-task file scope. The concurrency
-  policy trusts the dependency graph; conflicts are handled, not predicted.
+  policy trusts the dependency graph; conflicts are handled, not predicted. A
+  delegated task may declare an advisory scope, which is answered at plan time
+  and sends one line on a landing, and gates nothing
+  ([ADR-0057](../supervision/0057-information-moves-by-reference.md) R6).
   File-scope-gated scheduling is the obvious follow-up if conflicts prove
   frequent.
 - Pushing, pull requests, or any remote operation.
@@ -559,3 +560,4 @@ literal git command lines or private fields.
 - 2026-10-31 — `prepare` and the runner's cwd sit behind an execution lease, local by default (ADR-0059).
 - 2026-11-01 — a subplanner starts in its delegated task's worktree (ADR-0055 D5).
 - 2026-11-01 — landed work whose check has not passed holds the automatic merges (ADR-0055 D9).
+- 2026-11-01 — a delegated task may declare an advisory scope: overlap is answered at plan time, and a landing that touches one sends one line (ADR-0057 R6).

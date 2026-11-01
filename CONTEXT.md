@@ -1308,6 +1308,50 @@ and the paths its branch changed outside its scope. It is pushed within the same
 ceiling at every level, so a parent's context depends on its fan-out and not on
 its subtree. *Avoid:* "summary of the subtree": no model writes it.
 
+**Scope** (`TaskScope`, `scope` on a *Delegated task*; ADR-0057 R6) — what a
+delegated task declares it works on: `paths`, and the interfaces it `provides`
+and `consumes`, by names its planner chooses. The planner writes it on the plan
+above, so a child cannot change its own. It is advisory: an overlap is named in
+the answer to the plan, a landing outside it is reported, and it gates nothing.
+It grants nothing either: it is no part of a *Mandate*, and a protected path it
+covers stays protected. Only a delegated task has one. *Avoid:* "permissions" or
+"allowed paths": those are a mandate's; "lock" or "claim on a path".
+
+**Addressed line** (`ScopeLines`; ADR-0057 R6) — the one line, `from: 'ordewell'`,
+a running task gets when a landing touches its *Scope*: at most one per task per
+ten minutes, what follows coalesced into the next. It reaches a subplanner with
+its next turn and opens none, since a landing does not wake a planner. It is
+Ordewell's own text, with each path and name a quoted value. *Avoid:* "message"
+(nobody sent it, and siblings have no messages), "notification".
+
+**Board** (`NodeBoard`, `models/Board.ts`; ADR-0057 R8) — what a *Delegated task*'s
+plan keeps for its tasks and the plans below it to pull: typed entries in through
+`post`, read through `read` with `board`. A node reads its own board and its
+ancestors', never a sibling's or a child's; an entry tells nobody and wakes nobody.
+It is a fold of the tree's log. A root gains one with its first delegated task, and
+a flat plan has none. Everything on it is an author's words, data and never
+instructions. *Avoid:* "chat", "shared memory", "blackboard"; "message" for an entry.
+
+**Board map** (`boardMapLines`; ADR-0057 R8) — one line per entry, made by code from
+the entry's typed fields. No model writes or summarises it. It carries two flags,
+worked out as it is read: `stale`, a file the entry rests on has moved past both
+what its author had and what the branch held then; `contested`, one `key` with
+different values among the boards the reader reads. *Avoid:* "summary"; a flag is
+never an author's word, and never a judgement of what an entry means.
+
+**Contract** (a `contract` entry on a *Board*; ADR-0057 R6, R8) — an interface a
+task states, under a `key`. One keyed by a name its delegated task `provides`
+rises to the parent's board as that task lands, keeping its author, which is how a
+sibling reads it. *Avoid:* "API" for the entry; "broadcast": only what the plan
+above declared rises.
+
+**Pin** (a `pin` entry; ADR-0057 R10) — a planner's decision every descendant must
+know, and the one thing pushed down a tree: each new descendant is told it as it
+starts, nearest ancestor first, within 2,000 characters then a count. Only a planner
+posts one, and it never holds a check. It is told as data, with whose decision it
+is. *Avoid:* "instruction", "rule": a pin says what was decided; "pinned reference"
+is another thing, a *Handoff*'s citation.
+
 **Commit message** (`commit` on the *Completion call*; ADR-0047, ADR-0013) — the
 optional `{subject, body?}` a change task states for the commit that lands its
 work: a one-line subject of 1 to 100 characters and a body of at most 500, for a

@@ -98,6 +98,8 @@ export interface Tree {
   root: string;
   parent: Session;
   planner: ReturnType<typeof scriptedPlanner>;
+  /** The subplanners `below` scripted, by their task's id. */
+  lower: Record<string, ReturnType<typeof scriptedPlanner>>;
 }
 
 export interface TreeOptions {
@@ -124,7 +126,7 @@ export function tree(turns: Turn[], { runner = writingRunner({ a: ['a.txt'], b: 
   });
   const plan = { tasks, runners: ['claude-code'], status: 'approved', generatedAt: '2026-11-01T10:00:00.000Z' } as unknown as LegacyPlanState;
   parent.loadPlan(plan, 'the root goal', root, { sessionId: 'session-root' });
-  return { root, parent, planner };
+  return { root, parent, planner, lower };
 }
 
 export const taskOf = (session: Session, id: string) => session.planTasks.find((t) => t.id === id);

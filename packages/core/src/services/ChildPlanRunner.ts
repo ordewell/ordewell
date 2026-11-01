@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredEvent, StructuredTurnEnd } from '../interfaces/IRunner';
+import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredEvent, StructuredTurnEnd, TaskMessageFrom } from '../interfaces/IRunner';
 import type { RunnerCommand } from '../models/RunnerCommand';
 import type { Task, VerificationCheck } from '../models/Task';
 import { checkHandoff, type HandoffCheck, type SubtreeReport } from '../models/Handoff';
@@ -52,6 +52,8 @@ export interface ChildNode {
   continueConversation(text: string): Promise<unknown>;
   /** Reopened (ADR-0055 D17): acts as Execute there, and its subplanner goes on with `text`; one that never wrote a plan plans `goal`. */
   goOn(text: string, goal: string): Promise<unknown>;
+  /** A line for the subplanner's next turn, which opens none (ADR-0057 R6): a landing is no reason to wake it. */
+  hear(line: string): void;
   state(): NodeState;
   /** A report held to its plan and subtree, its references pinned and what crosses a level read verbatim (ADR-0057 R1, R2). */
   takeReport(report: TaskCompleteArgs): HandoffCheck<TakenReport>;
@@ -468,9 +470,12 @@ export class ChildPlanSession extends AbstractRunnerSession {
   onTurnEnd(listener: (reason: StructuredTurnEnd) => void): void { this.turnEnds.push(listener); }
   onEvent(listener: (event: StructuredEvent) => void): void { this.events.on('event', listener); }
 
-  /** A parent's message goes to the subplanner's next turn (D3). */
-  sendMessage(text: string): string {
-    if (this.node && !this.ended) this.opened(this.node.continueConversation(text));
+  /** A parent's message opens the subplanner's next turn (D3); Ordewell's own line waits for one. */
+  sendMessage(text: string, from?: TaskMessageFrom): string {
+    if (this.node && !this.ended) {
+      if (from === 'ordewell') this.node.hear(text);
+      else this.opened(this.node.continueConversation(text));
+    }
     return `${this.id}-message`;
   }
 
