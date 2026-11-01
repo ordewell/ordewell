@@ -1252,8 +1252,12 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
     ? `${inRow(row.approvals)}: enter opens it`
     : row.awaiting ? inRow(row.awaiting) : row.receipt ? inRow(row.receipt) : row.attaching ? inRow(row.attaching) : '';
   const skills = (task.skills ?? []).join(' · ');
+  // A delegated task has no runner or model: its child's tasks and what is left of its budget take their place.
+  const delegated = DELEGATION_OFFERED ? row.delegated : null;
   // A running row's tag says RUN, so the mark moves to the line beneath it.
-  const meta = [activity, ...(row.research && row.running ? [style.cyan('research')] : []), runner, model];
+  const meta = delegated
+    ? [activity, inRow(delegated.counts ?? ''), inRow(delegated.tokens ?? '')]
+    : [activity, ...(row.research && row.running ? [style.cyan('research')] : []), runner, model];
   // The variant rides on the meta line only when the whole line still fits;
   // when it does not, the effort gives way rather than truncating the model.
   const variant = task.type === 'ai' ? sanitize(task.assignedModel?.thinkingEffort ?? '') : '';
@@ -1266,6 +1270,8 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   // keep the shallower `bodyPad`: they need the room more than the alignment.
   if (metaText) lines.push(style.grey(truncate(`${continuation}${metaText}`, cols)));
   if (row.loop) lines.push(...loopLines(row.loop, cols, bodyPad));
+  // The task already reads as not started, so without this a Stop that is still waiting on a subtree looks finished (ADR-0055 D16).
+  if (delegated?.stopping) lines.push(...statusLines(style.yellow, '⏸', inRow(delegated.stopping), cols, bodyPad));
   // The one isolation state that needs the user; every other stays out of the
   // row and shows only in the expanded detail below.
   if (row.conflict) {

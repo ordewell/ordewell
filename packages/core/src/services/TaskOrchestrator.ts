@@ -2593,6 +2593,11 @@ export class TaskOrchestrator {
     return this.pool;
   }
 
+  /** A runner let go for the task has not gone yet. */
+  windingDown(taskId: string): boolean {
+    return this.attempts.windingDown(taskId);
+  }
+
   /** Every runner this Session let go has gone. */
   woundDown(): Promise<void> {
     return this.attempts.allWoundDown();

@@ -8,6 +8,7 @@ import type { TaskLogEvent } from '../models/TaskLog';
 import type { ApprovalKind } from '../interfaces/IApproval';
 import type { ApprovalSource } from './ApprovalPolicy';
 import type { Escalation } from './escalations';
+import type { DelegatedRow } from '../models/Delegation';
 import type { AutoMergeTrigger } from './TaskOrchestrator';
 import type { IsolationHandoff, IsolationMergeResult, TaskIsolation } from '../interfaces/IWorktreeIsolation';
 import type { QueuedTaskMessage } from '../interfaces/IRunner';
@@ -86,6 +87,8 @@ export type SerializedTaskStatus = {
   loop?: TaskLoop;
   /** The round a loop's check is in, past its first (ADR-0045 L5); absent on round 1 and on any other task. */
   loopRound?: number;
+  /** A delegated task's row: its child's tasks, what is left of its budget, a Stop still winding down (ADR-0055 D20); absent on any other task and when it has nothing to say. */
+  delegation?: DelegatedRow;
 };
 
 /**
@@ -142,6 +145,8 @@ export type SerializedTask = {
   loop?: TaskLoop;
   /** As on {@link SerializedTaskStatus}: only on a loop's check past its first round. */
   loopRound?: number;
+  /** What a delegated task's child plan must achieve (ADR-0055 D1); absent on any other task. */
+  goal?: string;
 };
 
 /** Skill loads go out as notices: their bodies are for the planner, and stay in the session. */
@@ -396,7 +401,7 @@ export type PlanSnapshot = { type: 'plan_snapshot'; plan: SurfacePlan | SurfaceP
 /** What only the status stream says about a task; a plan refresh keeps these as they were. */
 export type RunTaskStatus = Partial<Pick<
   SerializedTaskStatus,
-  'verdict' | 'idleSince' | 'completionReceived' | 'attaching' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval' | 'holdReason' | 'loopStranded' | 'handoff' | 'attempted'
+  'verdict' | 'idleSince' | 'completionReceived' | 'attaching' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval' | 'holdReason' | 'loopStranded' | 'handoff' | 'attempted' | 'delegation'
 >>;
 
 /** A task in the run view: the plan's fields, then the status stream's. */
@@ -495,6 +500,7 @@ export function serializeTask(t: SurfaceTask): SerializedTask {
     ...(t.timeoutMs !== undefined ? { timeoutMs: t.timeoutMs } : {}),
     ...(t.loop ? { loop: { body: [...t.loop.body], maxRounds: t.loop.maxRounds } } : {}),
     ...(t.loop && t.loopRound !== undefined ? { loopRound: t.loopRound } : {}),
+    ...(t.goal !== undefined ? { goal: t.goal } : {}),
   };
 }
 
@@ -511,6 +517,7 @@ export function serializeTaskStatus(
   completionReceived: Verdict['reported'] | null = null,
   attaching: 1 | 2 | null = null,
   loopStranded = false,
+  delegation: DelegatedRow | undefined = undefined,
 ): SerializedTaskStatus {
   return {
     id: t.id,
@@ -541,6 +548,7 @@ export function serializeTaskStatus(
     ...(t.handoff ? { handoff: structuredClone(t.handoff) } : {}),
     ...(t.loop ? { loop: { body: [...t.loop.body], maxRounds: t.loop.maxRounds } } : {}),
     ...(t.loop && t.loopRound !== undefined ? { loopRound: t.loopRound } : {}),
+    ...(delegation ? { delegation: structuredClone(delegation) } : {}),
   };
 }
 

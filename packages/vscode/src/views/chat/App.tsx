@@ -21,7 +21,8 @@ import CheckpointPanel from './components/CheckpointPanel';
 import RunSettingsBlock from './components/RunSettingsBlock';
 import type { TaskDraft } from './components/NewTaskCard';
 import type { CompactionBlock, GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId, RunnerAuth } from '@ordewell/core';
-import { accountLimitsOf, compactionText, DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
+import { accountLimitsOf, compactionText, SUPERVISOR_LEVEL_LABEL } from '@ordewell/core/plan-utils';
+import { DelegationOfferedContext, useDelegationOffered } from './delegationOffered';
 import { planSummaryLabel, nextDock } from './planDock';
 import { OpenPatchContext } from './openPatch';
 import { useFollowOutput } from './followOutput';
@@ -48,7 +49,7 @@ type Updatable<T> = T | ((prev: T) => T);
  * run the run's own where a guard, a failure or another window left it
  * different.
  */
-function runSettingsSummary(run: GlobalRunSettings | undefined, runSettings: RunSettings | undefined, isExecuting: boolean): React.ReactNode {
+function runSettingsSummary(run: GlobalRunSettings | undefined, runSettings: RunSettings | undefined, isExecuting: boolean, delegationOffered: boolean): React.ReactNode {
   if (!run) return null;
   const level = SUPERVISOR_LEVEL_LABEL[run.supervisorLevel];
   const actual = !isExecuting || !runSettings ? null
@@ -61,7 +62,7 @@ function runSettingsSummary(run: GlobalRunSettings | undefined, runSettings: Run
       </span>
       {run.mergeAtGatesAutomatically && <span className="plan-dock-summary">Merge automatically</span>}
       {run.autorun && <span className="plan-dock-summary">Autorun</span>}
-      {DELEGATION_OFFERED && run.delegationTokens > 0 && <span className="plan-dock-summary">Delegation</span>}
+      {delegationOffered && run.delegationTokens > 0 && <span className="plan-dock-summary">Delegation</span>}
     </>
   );
 }
@@ -70,6 +71,9 @@ const DETECTING = 'Detecting coding agents…';
 
 export default function App() {
   const [host, dispatch] = useReducer(reduceHost, INITIAL_HOST_STATE);
+  // The webview's own switch is false in any build; the host says (ADR-0055 D21).
+  const told = host.runSettings?.delegationOffered === true;
+  const delegationOffered = useDelegationOffered() || told;
   const {
     conversation, plan, isExecuting, isResearchActive, error, models, modelsByRunner,
     runnerList, enabledRunnerIds, pendingRunners, modelAllowlist, held, unsent, modesByRunner, runnerNotice, modelConfig,
@@ -557,9 +561,9 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [stopArmed, plannerBusy]);
 
-  const handleApproveCheckpoint = useCallback(() => {
+  const handleApproveCheckpoint = useCallback((words?: string, raiseTokens?: number) => {
     if (!checkpoint) return;
-    vscode.postMessage({ type: 'answerCheckpoint', taskId: checkpoint.taskId, approved: true });
+    vscode.postMessage({ type: 'answerCheckpoint', taskId: checkpoint.taskId, approved: true, ...(words ? { reason: words } : {}), ...(raiseTokens !== undefined ? { raiseTokens } : {}) });
     dispatch({ type: 'checkpointAnswered' });
   }, [checkpoint]);
 
@@ -770,7 +774,7 @@ export default function App() {
           </span>
           <span className="plan-dock-title">Plan</span>
           <span className="plan-dock-summary">{planSummaryLabel(plan.tasks)}</span>
-          {runSettingsSummary(host.runSettings?.run, plan.runSettings, isExecuting)}
+          {runSettingsSummary(host.runSettings?.run, plan.runSettings, isExecuting, delegationOffered)}
           {/* A collapse is always honoured, including mid-run — so the bar has to
               say when a task is blocked on the user, or the approval would sit
               unseen behind it. */}
@@ -788,6 +792,7 @@ export default function App() {
               taskTitle={checkpoint.taskTitle}
               summary={checkpoint.summary}
               pausedAt={checkpoint.pausedAt}
+              delegated={delegationOffered && checkpoint.delegated}
               onApprove={handleApproveCheckpoint}
               onReject={handleRejectCheckpoint}
             />
@@ -886,6 +891,7 @@ export default function App() {
   };
 
   return (
+    <DelegationOfferedContext.Provider value={delegationOffered}>
     <OpenPatchContext.Provider value={handleOpenPatch}>
     {/* Focus targets for a mouse selection, never tab stops. VS Code 1.143+
         answers a Cmd/Ctrl+C in a webview by refocusing the last-focused
@@ -1185,5 +1191,6 @@ export default function App() {
       />
     </div>
     </OpenPatchContext.Provider>
+    </DelegationOfferedContext.Provider>
   );
 }

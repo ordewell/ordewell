@@ -32,6 +32,9 @@ core stack:
   chat webview in a browser with a mocked VS Code API, replay a full planning
   conversation, assert the sequential-timeline UI contract, and capture
   screenshots.
+- `webview-delegation.mjs` — draws the delegation views of the same bundle
+  (a delegated task's card, its checkpoint, its handoff) and asserts them, with
+  the host telling the page delegation is offered and not (ADR-0055 D21).
 
 ### Kinds of goal (#108)
 

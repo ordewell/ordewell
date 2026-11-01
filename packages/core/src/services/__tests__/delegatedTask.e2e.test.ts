@@ -818,6 +818,33 @@ describe('the merge hold (ADR-0055 D9)', () => {
     parent.destroy();
   });
 
+  it('asks the user\'s own Merge all to confirm first, naming the check, and merges once told to', async () => {
+    const { root, parent } = tree([SUBMIT([childTask('a', 1)]), DONE], { runner: failingCheck(), tasks: [delegated(), readOnlyCheck()] });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('failed'), { timeout: 20_000 });
+
+    const asked = await parent.execute({ command: 'merge_all' }, { kind: 'user' });
+    expect(asked).toMatchObject({
+      ok: false, outcome: 'refused',
+      message: expect.stringContaining('This merges work no check has passed: #2 "Check the subtree" has not'),
+      payload: { kind: 'merge_hold', checks: ['#2 "Check the subtree"'] },
+    });
+    expect(changed(root)).not.toContain('a.txt');
+
+    expect(await parent.execute({ command: 'merge_all', pastChecks: true }, { kind: 'user' })).toMatchObject({ ok: true, payload: { kind: 'merge' } });
+    expect(changed(root)).toContain('a.txt');
+    parent.destroy();
+  });
+
+  it('never lets a supervisor or a planner past a check, whatever it carries', async () => {
+    const { root, parent } = tree([SUBMIT([childTask('a', 1)]), DONE], { runner: failingCheck(), tasks: [delegated(), readOnlyCheck()] });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('failed'), { timeout: 20_000 });
+    expect(await parent.execute({ command: 'merge_all', pastChecks: true }, { kind: 'supervisor', level: 'act' })).toMatchObject({ ok: false, message: expect.stringContaining('Check the subtree') });
+    expect(changed(root)).not.toContain('a.txt');
+    parent.destroy();
+  });
+
   it('is not held by a delegated task that has not landed: a sibling\'s work merges', async () => {
     const { root, parent } = tree([NOTHING_THEN_BLOCKED], {
       tasks: [delegated(), readOnlyCheck(), createTask({ id: 's', order: 3, title: 'Sibling', prompt: 'sibling' })],

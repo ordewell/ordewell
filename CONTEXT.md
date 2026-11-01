@@ -3138,6 +3138,10 @@ on evidence: its child has settled and done work, that work is merged into its b
 no protected path changed, and its subplanner called `task_complete` on the attempt's
 token (D6). Its conflict is repaired by a plain runner in the mode its node's autonomy
 gives, held to its protected paths (D14).
+Its row (`delegation`, a `DelegatedRow`) is derived when a status goes out and kept
+nowhere: where its child's tasks stand, what is left of its budget across every child it
+has had, and *stopping* while a Stop still winds its subtree down, though the task
+already reads as not started (D16, D20).
 *Avoid:* "subtask" (`subtasks` share their parent's plan, planner and branch).
 
 **Child plan** — what a **Delegated task** runs: a Session of its own in that task's
@@ -3167,7 +3171,10 @@ list the planner wrote, so a pass rests on it being whole (ADR-0055 D7).
 whose check has neither passed nor been skipped keeps every merge but the user's from
 running: at gates, at the run's end, a supervisor's `merge_all` and a child's own. Work
 that has not landed holds nothing. It is no merge that stopped: the next tick after the
-pass or Skip merges. *Avoid:* "merge gate", which holds a task until a merge has run.
+pass or Skip merges. The user's own Merge all is not held but asked: the seam answers it
+with the checks it would go past, and merges only when the command carries `pastChecks`,
+which every surface sends after a second question naming them. *Avoid:* "merge gate",
+which holds a task until a merge has run.
 
 **Run settings** — the user settings that say how a run is
 started, watched and merged: **Supervisor level**, **Auto-merge at gates**,

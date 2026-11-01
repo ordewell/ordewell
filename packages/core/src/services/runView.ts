@@ -12,8 +12,8 @@ type PlanFields = Omit<RunTask, keyof RunTaskStatus>;
  * no plan carries, so only a status update changes it and a plan refresh
  * keeps it. Everything else is the plan's.
  */
-function split({ verdict, idleSince, completionReceived, attaching, isolation, checkpoint, queued, continuable, awaitingApproval, mergeGate, forcedPastGate, waitsForApproval, holdReason, loopStranded, handoff, attempted, ...plan }: RunTask): { plan: PlanFields; status: RunTaskStatus } {
-  return { plan, status: { verdict, idleSince, completionReceived, attaching, isolation, checkpoint, queued, continuable, awaitingApproval, mergeGate, forcedPastGate, waitsForApproval, holdReason, loopStranded, handoff, attempted } };
+function split({ verdict, idleSince, completionReceived, attaching, isolation, checkpoint, queued, continuable, awaitingApproval, mergeGate, forcedPastGate, waitsForApproval, holdReason, loopStranded, handoff, attempted, delegation, ...plan }: RunTask): { plan: PlanFields; status: RunTaskStatus } {
+  return { plan, status: { verdict, idleSince, completionReceived, attaching, isolation, checkpoint, queued, continuable, awaitingApproval, mergeGate, forcedPastGate, waitsForApproval, holdReason, loopStranded, handoff, attempted, delegation } };
 }
 
 /**
@@ -62,7 +62,7 @@ function changeTask(tasks: RunTask[], taskId: string, change: (task: RunTask) =>
 const PATCHABLE: ReadonlySet<string> = new Set<keyof PlanFields>([
   'order', 'title', 'type', 'status', 'description', 'dependencies', 'assignedRunner', 'assignedModel', 'taskMode', 'prompt',
   'userSteps', 'autonomy', 'sliceType', 'userStoriesCovered', 'awaitingReason', 'resumeAt', 'skipReason', 'ops', 'skills', 'addedBy', 'attemptUsage',
-  'commands', 'script', 'timeoutMs', 'loop', 'loopRound', 'research',
+  'commands', 'script', 'timeoutMs', 'loop', 'loopRound', 'research', 'goal',
 ]);
 
 function patchTask(task: RunTask, changes: Record<string, unknown>): RunTask {

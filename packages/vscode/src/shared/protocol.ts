@@ -124,8 +124,8 @@ export type WebviewToHost =
   /** Asks the host to remove a task; the host confirms first, naming what depends on it. */
   | { type: 'removeTask'; taskId: string }
   | { type: 'addTask'; draft: TaskDraft }
-  /** The user's answer to a task paused at a checkpoint; a rejection resumes the agent with the reason. */
-  | { type: 'answerCheckpoint'; taskId: string; approved: boolean; reason?: string }
+  /** The user's answer to a task paused at a checkpoint; a rejection resumes the agent with the reason. A delegated task's approval may carry words and a raise of its budget (ADR-0056 M5, M8). */
+  | { type: 'answerCheckpoint'; taskId: string; approved: boolean; reason?: string; raiseTokens?: number }
   /** A user message to a structured task (ADR-0018): queued behind its turn, or delivered at once if it waits for input. */
   | { type: 'sendTaskMessage'; taskId: string; text: string }
   /** Take back a message still queued behind a structured task's turn. */
@@ -268,7 +268,8 @@ export type HostToWebview =
   /** The remembered plan dock height in px; absent until the user first drags it. */
   | { type: 'planDockHeight'; height?: number }
   /** The user's autonomy level, run settings (ADR-0030) and parallel limit, sent on ready and after each change. */
-  | { type: 'setRunSettings'; autonomous: boolean; run: GlobalRunSettings; maxParallel: number }
+  /** `delegationOffered`: whether this build offers delegation, which only the host can read (ADR-0055 D21). */
+  | { type: 'setRunSettings'; autonomous: boolean; run: GlobalRunSettings; maxParallel: number; delegationOffered?: boolean }
   /** `/settings`: open the Settings panel at its Run block. */
   | { type: 'openSettings' }
   /** Discovered skills (global ~/.ordewell/skills/ + workspace .ordewell/skills/, global wins over workspace) for the /skill-name suggestion dropdown. */

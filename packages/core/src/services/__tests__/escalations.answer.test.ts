@@ -41,7 +41,7 @@ const CASES: { [K in EscalationOptionId]?: [Partial<Escalation>, string | undefi
   'force-start': [{ kind: 'on-hold' }, undefined, { command: 'force_start', task: 't1' }],
   skip: [{ kind: 'failed' }, 'not needed', { command: 'skip_task', task: 't1', reason: 'not needed' }],
   complete: [{ kind: 'by-hand' }, undefined, { command: 'mark_complete', task: 't1', confirmed: true }],
-  'merge-all': [{ kind: 'merge-all', task: undefined }, undefined, { command: 'merge_all' }],
+  'merge-all': [{ kind: 'merge-all', task: undefined }, undefined, { command: 'merge_all', pastChecks: true }],
 };
 
 describe('answerEscalation', () => {

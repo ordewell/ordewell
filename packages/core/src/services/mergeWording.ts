@@ -82,3 +82,12 @@ export function handoffBaseLine(handoff: { repos: readonly HandoffForkRepo[] }, 
 export function repoResultLines(handoff: { repos: readonly { path: string; landed: readonly unknown[] }[] }): string[] {
   return handoff.repos.map(({ path, landed }) => `${path}: ${landed.length === 0 ? 'nothing to merge' : `${landed.length} task${landed.length === 1 ? '' : 's'} landed`}`);
 }
+
+/**
+ * What a Merge all asks the user to confirm when a delegated task's check has
+ * not passed (ADR-0055 D9), the checks named as the plan names them. Every
+ * surface asks with these words, and the inbox's option carries them.
+ */
+export function mergePastChecksConfirmation(checks: readonly string[]): string {
+  return `This merges work no check has passed: ${checks.join(', ')} ${checks.length === 1 ? 'has' : 'have'} not.`;
+}

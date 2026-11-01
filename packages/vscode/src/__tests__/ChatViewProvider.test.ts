@@ -56,6 +56,16 @@ describe('ChatViewProvider.reveal', () => {
   });
 });
 
+describe('ChatViewProvider.setRunSettings', () => {
+  it('tells the webview whether delegation is offered, which only the host can read (ADR-0055 D21)', () => {
+    const { provider, posted } = providerWithCapture();
+
+    provider.setRunSettings(true, { supervisorLevel: 'off' } as never, 5);
+
+    expect(posted).toEqual([{ type: 'setRunSettings', autonomous: true, run: { supervisorLevel: 'off' }, maxParallel: 5, delegationOffered: false }]);
+  });
+});
+
 describe('ChatViewProvider after its webview is disposed', () => {
   it('stops posting to the dead webview and focuses the view again on reveal', () => {
     const { provider, posted, view, dispose } = providerWithCapture();

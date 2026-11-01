@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { type AccountLimitSnapshot, type GlobalRunSettings, type IsolationPreview, surfacePlan, type AiProvider, type LegacyPlanState, type DiscoveredModel, type PlanStatus, type RunnerId, type RunActivity, type RunView } from '@ordewell/core';
+import { DELEGATION_OFFERED, type AccountLimitSnapshot, type GlobalRunSettings, type IsolationPreview, surfacePlan, type AiProvider, type LegacyPlanState, type DiscoveredModel, type PlanStatus, type RunnerId, type RunActivity, type RunView } from '@ordewell/core';
 import { ConversationViewHost, type SavedConversation } from '../ConversationViewHost';
 import { RunViewHost } from '../RunViewHost';
 import { renderWebviewHtml } from './webviewHtml';
@@ -84,7 +84,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.postMessage({ type: 'planDockHeight', height });
   }
   setRunSettings(autonomous: boolean, run: GlobalRunSettings, maxParallel: number): void {
-    this.postMessage({ type: 'setRunSettings', autonomous, run, maxParallel });
+    this.postMessage({ type: 'setRunSettings', autonomous, run, maxParallel, delegationOffered: DELEGATION_OFFERED });
   }
   openSettings(): void { this.postMessage({ type: 'openSettings' }); }
   setTaskSkills(skills: { name: string; description: string }[]): void {

@@ -60,7 +60,13 @@ export async function handleIsolationAction(
         // other controls are. A merge git stopped is an outcome the handoff
         // card shows, not an error here; a refusal without one is thrown for
         // the catch below.
-        const merged = await deps.session.execute({ command: 'merge_all' }, { kind: 'user' });
+        let merged = await deps.session.execute({ command: 'merge_all' }, { kind: 'user' });
+        // Work whose check has not passed is the seam's to name, and the yes goes with the next call (ADR-0055 D9).
+        if (merged.payload?.kind === 'merge_hold') {
+          const past = await vscode.window.showWarningMessage(`${merged.message} Merge ${target} anyway?`, { modal: true }, 'Merge anyway');
+          if (past !== 'Merge anyway') return;
+          merged = await deps.session.execute({ command: 'merge_all', pastChecks: true }, { kind: 'user' });
+        }
         if (merged.payload?.kind === 'merge') break;
         if (!merged.ok) throw new Error(merged.message);
         throw new Error('Merge all answered without its result.');

@@ -45,7 +45,7 @@ export type Effect =
   | { type: 'retryPlannerCompaction'; sessionId: string }
   | { type: 'isolationReviewDiff'; sessionId: string }
   /** `branch` is only for the words the result is reported in; `repaired` likewise (ADR-0015). */
-  | { type: 'isolationMerge'; sessionId: string; branch: string; group?: boolean; repaired?: LandedTaskView[] }
+  | { type: 'isolationMerge'; sessionId: string; branch: string; group?: boolean; repaired?: LandedTaskView[]; pastChecks?: true }
   | { type: 'isolationDiscard'; sessionId: string; branch: string }
   | { type: 'isolationCleanup'; sessionId: string; branch: string }
   /** Replays a run a dirty tree parked; `stash` puts tracked changes aside first, `shared` runs in the working tree this once. */
@@ -174,6 +174,8 @@ export type Action =
   | { type: 'handoffDiff'; diff: string; sessionId?: string }
   /** The run and its record are gone; nothing is left to hand off or to mark. */
   | { type: 'isolationMerged'; result: IsolationMergeResult; sessionId?: string }
+  /** The daemon would not merge past a check that has not passed until asked: `message` names it (ADR-0055 D9). */
+  | { type: 'mergeHeld'; message: string; sessionId?: string }
   | { type: 'runClosed'; sessionId?: string }
   /** The scheduled expiry of an armed stop; the arm simply lapses. */
   | { type: 'stopDisarmed'; arm: number }
