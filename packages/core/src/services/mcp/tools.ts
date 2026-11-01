@@ -88,7 +88,7 @@ const checkpointInput = z.object({
 });
 
 const subplannerCheckpointInput = z.object({
-  question: z.string().min(1).describe('The question for the plan above. The call returns at once: its answer opens your next turn.'),
+  question: z.string().min(1).describe('The question for the plan above.'),
 });
 
 const listRunnersInput = z.object({});
@@ -760,7 +760,7 @@ const delegatingSubmitPlanInput = z.object({
 });
 
 const delegatingAnswerCheckpointInput = answerCheckpointInput.extend({
-  raiseTokens: z.number().int().positive().optional().describe('With "approve", on a delegated task\'s question: raise its budget by this many tokens, from what this plan has left. A raise this plan cannot pay for is refused, and the question still waits.'),
+  raiseTokens: z.number().int().positive().optional().describe('With "approve", on a delegated task: raise its budget by this many tokens from what this plan has left.'),
 });
 
 /**
@@ -786,7 +786,7 @@ const DELEGATING_READ = readTool<PlannerToolHandler>('Read a handoff by the refe
 export const SUBPLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
   tool(TASK_COMPLETE_TOOL, `Report that the delegated task has ended, and how, with its handoff for the plan above. Status 'done' is refused until your child plan has settled, done work and merged it; 'blocked' and 'failed' are taken at any time. A call over a limit (the summary is at most ${HANDOFF_LIMITS.summary} characters) is refused whole. Call it once, as your last action.`,
     subplannerCompleteInput, (h) => h.taskComplete?.bind(h), PLANNER_READ_ONLY),
-  tool('checkpoint', 'Ask the plan above a question, and end your turn. It answers at once that the question is asked, and the answer opens your next turn; a parent never answers in this call. One at a time. Use it for what your goal does not decide, and for more budget: say how many tokens you need.',
+  tool('checkpoint', 'Ask the plan above a question, then end your turn: the call returns at once, and the answer opens your next turn. One at a time.',
     subplannerCheckpointInput, (h) => h.checkpoint?.bind(h), PLANNER_READ_ONLY),
 ];
 
