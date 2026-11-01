@@ -142,6 +142,37 @@ describe('two siblings and a provided interface', () => {
   });
 });
 
+describe('a contract of a child that failed (ADR-0057 R6)', () => {
+  it('stays behind with it: a fresh retry raises its own, and only what landed reaches a sibling', async () => {
+    const FAILS: Turn = inTurn(
+      POST({ type: 'contract', title: 'What the failed attempt meant', key: 'users-api', value: 'v1' }),
+      CALL({ status: 'failed', summary: 'It cannot.', reason: 'It cannot.' }),
+    );
+    const LANDS: Turn = inTurn(
+      POST({ type: 'contract', title: 'What landed', key: 'users-api', value: 'v2' }),
+      REPORT('Serve it'),
+    );
+    const built = tree([], {
+      runner: gatedRunner({ a: ['a.txt'] }, {}),
+      tasks: [delegated({ scope: { provides: ['users-api'] } }), check()],
+      below: { d: [FAILS, SUBMIT([childTask('a', 1)]), LANDS] },
+    });
+    const { parent } = built;
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(taskOf(parent, 'd')?.status).toBe('failed'), { timeout: 20_000 });
+    expect((await parent.readBelow({ task: 'board' })).text).toContain('nothing on it yet');
+
+    expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'fresh' }, { kind: 'user' })).toMatchObject({ ok: true });
+    await allDone(parent);
+
+    const map = (await parent.readBelow({ task: 'board' })).text;
+    expect(map).toContain('"What landed"');
+    expect(map).not.toContain('What the failed attempt meant');
+    expect(map).not.toContain('contested');
+    parent.destroy();
+  });
+});
+
 describe('a scope never widens authority (ADR-0057 R6)', () => {
   it('leaves a protected path protected, however wide the scope', async () => {
     const { parent } = tree([SUBMIT([childTask('a', 1)]), REPORT('Touch the tests')], {
