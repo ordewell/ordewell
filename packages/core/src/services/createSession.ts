@@ -1049,7 +1049,7 @@ export class Session {
       },
       notice: (message) => this.notice('error', message),
       plannerDetecting: () => (installedPlannerAnswered() ? null : this.plannerDetected()),
-      assertPlannerReady: () => this.assertPlannerReady(),
+      assertPlannerReady: () => this.assertTurnMayRun(),
       plannerRunner: () => runnerForProvider(this.config.aiProvider),
     });
 
@@ -1638,6 +1638,16 @@ export class Session {
   }
 
   /**
+   * A goal or a compaction refused after {@link plannerTurnMayOpen} let it in:
+   * no turn opened, so nothing else would end it, and the slot it took would
+   * stay out of the tree's pool (ADR-0055 D18). A turn holding the lease by
+   * then is its own to end.
+   */
+  private dropUnopenedTurn(): void {
+    if (!this.turns.turnRunning && !this.conversation.isTurnInFlight) this.endTurnLease();
+  }
+
+  /**
    * The tree's ledger, opened from the log if nothing has yet. A Continue asks
    * before {@link hostChild}, whose placement names a child's node only once
    * this has answered. A flat run has no reason to ask.
@@ -2054,6 +2064,12 @@ export class Session {
     return this.lease.hold(this.currentSessionId, this.stateRoot);
   }
 
+  /** Work on the session this Session has open is refused while another host holds it (ADR-0049 L5). */
+  private refuseHeld(): void {
+    const held = this.heldElsewhere();
+    if (held) throw new SessionHeldError(held);
+  }
+
   /**
    * A new plan under the host's fixed id writes that session's file: refused
    * before any planner turn while another host has it open (ADR-0049). A
@@ -2230,6 +2246,17 @@ export class Session {
   }
 
   /**
+   * What a turn on the session this Session has open passes. Not part of
+   * {@link assertPlannerReady}, which a new goal passes too: under a minted id
+   * that goal leaves a held session behind, and {@link claimHostSession} judges
+   * a fixed one.
+   */
+  private assertTurnMayRun(): void {
+    this.refuseHeld();
+    this.assertPlannerReady();
+  }
+
+  /**
    * The planner gate for a turn {@link PlanTurns} does not open — an opening,
    * plan generation, a compaction — the same one its turns pass: wait for the
    * installed-planner probe, then judge the planner in use now. A wait is
@@ -2371,10 +2398,16 @@ export class Session {
     // A new goal replaces whatever still waits to open: the latest intent wins.
     this.endWaiting(() => new PlannerTurnDiscardedError());
     // Before the plan scope is dropped, so a refusal leaves the plan held now as it was.
-    const opening = this.plannerTurnMayOpen(options?.signal);
-    if (opening) await opening;
-    const chosenRunners = this.chosenRunners(runners);
-    this.claimHostSession();
+    let chosenRunners: RunnerId[];
+    try {
+      const opening = this.plannerTurnMayOpen(options?.signal);
+      if (opening) await opening;
+      chosenRunners = this.chosenRunners(runners);
+      this.claimHostSession();
+    } catch (err) {
+      this.dropUnopenedTurn();
+      throw err;
+    }
     this.plan = null;
     this.goal = goal;
     this.remintSessionId();
@@ -2446,6 +2479,7 @@ export class Session {
       this.plan = { tasks: [], generatedAt: now, status: 'draft', runners: chosenRunners, lastUpdated: now };
       opened = this.openTurn(() => this.conversation.start(this.resolveSkillInvocation(goal), () => this.conversationOpening(chosenRunners), options?.signal));
     } catch (err) {
+      this.dropUnopenedTurn();
       // What was sent behind an opening that never opened shares its end: a
       // stop, a newer goal, a refusal its sender must hear as the goal's.
       if (this.opening === pending) this.opening = null;
@@ -2563,9 +2597,17 @@ export class Session {
    */
   async compactConversation(signal?: AbortSignal): Promise<ConversationCompaction> {
     if (!this.plan) throw new ConversationEditError('No planning conversation to condense');
-    const opening = this.plannerTurnMayOpen(signal);
-    if (opening) await opening;
-    const compaction = await this.conversation.compact(signal);
+    let compaction: ConversationCompaction;
+    try {
+      const opening = this.plannerTurnMayOpen(signal);
+      if (opening) await opening;
+      // After the wait, which a takeover can land in.
+      this.refuseHeld();
+      compaction = await this.conversation.compact(signal);
+    } catch (err) {
+      this.dropUnopenedTurn();
+      throw err;
+    }
     // The backend's live context is gone: the next prompt replays the
     // condensed context, so the size of the last call before it says
     // nothing of how full that prompt is. It is a reset with no size stated,
@@ -3011,8 +3053,7 @@ export class Session {
   /** Replay a run a dirty tree blocked, in the workspace root, for this run only. */
   async continueWithoutIsolation(): Promise<void> {
     // Refused here, with the choice still parked: a shared run asks the leased isolation nothing (ADR-0049).
-    const held = this.heldElsewhere();
-    if (held) throw new SessionHeldError(held);
+    this.refuseHeld();
     await this.withSave(() => this.orchestrator.continueBlockedRun('shared'));
   }
 
@@ -3117,6 +3158,8 @@ export class Session {
 
   /** Add the task that merges a conflicted task's branch by hand; see {@link PlanEditor.addConflictResolver}. */
   async resolveConflictAsTask(taskId: string): Promise<LegacyPlanState | null> {
+    // It adds an approved task and starts it, which the seam's refusal never sees (ADR-0049 L5).
+    this.refuseHeld();
     return this.editor.addConflictResolver(taskId);
   }
 
