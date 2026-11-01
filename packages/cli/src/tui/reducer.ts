@@ -845,7 +845,7 @@ function submit(state: TuiState): Step {
       if (waitingApproval(state.taskView)) {
         return step(say(state, 'system', 'A tool request is waiting ahead of the checkpoint: answer it first (ctrl-y to allow, ctrl-g to deny), then enter replies to the checkpoint.'));
       }
-      return answerCheckpoint(cleared, state.sessionId, taskId, 'reject', text);
+      return answerCheckpoint(cleared, state.sessionId, taskId, task?.type === 'delegated' ? 'approve' : 'reject', text);
     }
     // A resumed runner reads a command that opens its first turn as it would any.
     if (continuesTask(task)) return continueTaskStep(cleared, state.sessionId, taskId, text);

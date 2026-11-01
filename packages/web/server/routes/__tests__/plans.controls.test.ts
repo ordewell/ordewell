@@ -181,6 +181,44 @@ describe('a control from the daemon lands one execution_action line, worded by t
     expect(await json(none)).toMatchObject({ code: 'checkpoint_not_waiting' });
   });
 
+  it('hands a raise on an approval to the seam, and leaves a bare approval without one', async () => {
+    const h = start([task('t1', 1)]);
+    await h.session.execute({ command: 'run_plan' }, { kind: 'user' });
+    h.latest('t1').callCheckpoint('More budget?');
+    await vi.waitFor(() => expect(h.session.awaitsCheckpoint('t1')).toBe(true));
+
+    // A task with no budget: the seam's own refusal proves the raise reached it.
+    const res = await h.post('tasks/t1/checkpoint/approve', { raiseTokens: 800000 });
+
+    expect(res.status).toBe(400);
+    expect(await json(res)).toMatchObject({ error: 'Task #1 "Task t1" holds no budget: only a delegated task\'s child can be raised.' });
+    expect(h.session.awaitsCheckpoint('t1')).toBe(true);
+  });
+
+  it('hands an approval\'s words to the seam, for a delegated task\'s answer', async () => {
+    const h = start([task('t1', 1)]);
+    const execute = vi.spyOn(h.session, 'execute');
+    await h.session.execute({ command: 'run_plan' }, { kind: 'user' });
+    h.latest('t1').callCheckpoint('Which rounding?');
+    await vi.waitFor(() => expect(h.session.awaitsCheckpoint('t1')).toBe(true));
+
+    await h.post('tasks/t1/checkpoint/approve', { reason: ' Half away from zero. ' });
+
+    expect(execute).toHaveBeenCalledWith({ command: 'answer_checkpoint', task: 't1', answer: 'approve', reason: 'Half away from zero.' }, expect.anything());
+  });
+
+  it('refuses a raise that is not a whole number of tokens', async () => {
+    const h = start([task('t1', 1)]);
+    await h.session.execute({ command: 'run_plan' }, { kind: 'user' });
+    h.latest('t1').callCheckpoint('More budget?');
+    await vi.waitFor(() => expect(h.session.awaitsCheckpoint('t1')).toBe(true));
+
+    const res = await h.post('tasks/t1/checkpoint/approve', { raiseTokens: 'lots' });
+
+    expect(res.status).toBe(400);
+    expect(h.session.awaitsCheckpoint('t1')).toBe(true);
+  });
+
   it('finds the checkpoint of a task named by its order, as the seam does', async () => {
     const h = start([task('t1', 1)]);
     await h.session.execute({ command: 'run_plan' }, { kind: 'user' });

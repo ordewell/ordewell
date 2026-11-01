@@ -462,6 +462,35 @@ describe('a subplanner\'s own turns (ADR-0056 M5)', () => {
     expect(parent.turnRefusal()).toBe('Level 1 refused this turn: a turn here needs 10 tokens to start, and 0 are left across this node and its children.');
   });
 
+  it('refuses a claim that would take what its subplanner needs for its next turn, though a turn has just spent its share', async () => {
+    const ledger = await open(100);
+    const budget = child(ledger, ROOT_NODE, 28);
+    budget.turnSpent(used(10));
+
+    // 18 are free and 10 are the subplanner's: a turn spent its share down, and nothing has parked yet.
+    expect(budget.refusal()).toBe('Level 1 refused this start: a session here needs 10 tokens to start, and 8 of its 28 are left.');
+    budget.turnSpent(used(0));
+    budget.parked();
+    expect(budget.refusal()).toBe('Level 1 refused this start: a session here needs 10 tokens to start, and 8 of its 28 are left.');
+  });
+
+  it('adds what earlier openings of a task spent to what the task has cost, and nothing of a sibling', async () => {
+    const ledger = await open(1000);
+    const first = ledger.carve(ROOT_NODE, delegating(1000), { level: 1, tokens: 100 }, { sessionId: 'a', taskId: 't' });
+    if (!first.ok) throw new Error('refused');
+    first.budget.turnSpent(used(30));
+    ledger.close(first.budget.path);
+    const other = child(ledger, ROOT_NODE, 100);
+    other.turnSpent(used(40));
+    const again = ledger.carve(ROOT_NODE, delegating(1000), { level: 1, tokens: 100 }, { sessionId: 'b', taskId: 't' });
+    if (!again.ok) throw new Error('refused');
+    again.budget.turnSpent(used(5));
+    const below = child(ledger, again.budget.path, 20);
+    below.turnSpent(used(2));
+
+    expect(ledger.taskSpent(again.budget.path)).toBe(37);
+  });
+
   it('counts a carve too small for a turn as a turn it cannot start, and says so when asked', async () => {
     const ledger = await open(100);
     const budget = child(ledger, ROOT_NODE, 6);

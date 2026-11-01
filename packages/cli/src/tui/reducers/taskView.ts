@@ -1,5 +1,5 @@
 import { observeTaskServedModel } from '../accountLimits';
-import { EMPTY_TASK_LOG_FOLLOW, followTaskLog, resumeLabel, runnerToolSubject, taskRowView, truncateCheckpointSummary, type ApprovalDecision } from '@ordewell/core';
+import { EMPTY_TASK_LOG_FOLLOW, followTaskLog, parseCount, resumeLabel, runnerToolSubject, taskRowView, truncateCheckpointSummary, type ApprovalDecision } from '@ordewell/core';
 import { commit } from '../editor';
 import type { Key } from '../keys';
 import { continuesTask, findTask, refFor, queuedTarget, resumesTask, scriptTaskView, waitingApproval, waitingCheckpoint, type TaskLogState, type TuiState } from '../state';
@@ -123,11 +123,12 @@ function answerApproval(state: TuiState, tv: TaskLogState, sessionId: string, de
  * an approval has nowhere to put a note. The daemon says if the task is no
  * longer waiting, so a checkpoint settled elsewhere is not pre-judged here.
  */
-export function answerCheckpoint(state: TuiState, sessionId: string, taskId: string, answer: 'approve' | 'reject', reason = ''): Step {
+export function answerCheckpoint(state: TuiState, sessionId: string, taskId: string, answer: 'approve' | 'reject', reason = '', raiseTokens?: number): Step {
   const task = findTask(state.tasks, taskId);
   if (!waitingCheckpoint(task)) return step(say(state, 'system', `Task ${task?.order ?? taskId} is not waiting at a checkpoint.`));
-  const note = answer === 'reject' ? reason.trim() : '';
-  return step(state, [{ type: 'answerTaskCheckpoint', sessionId, taskId, answer, ...(note ? { reason: note } : {}) }]);
+  // A delegated task's approval reaches its subplanner, and only there does one carry words (ADR-0056 M8).
+  const note = answer === 'reject' || task?.type === 'delegated' ? reason.trim() : '';
+  return step(state, [{ type: 'answerTaskCheckpoint', sessionId, taskId, answer, ...(note ? { reason: note } : {}), ...(raiseTokens !== undefined ? { raiseTokens } : {}) }]);
 }
 
 /**
@@ -137,7 +138,12 @@ export function answerCheckpoint(state: TuiState, sessionId: string, taskId: str
  */
 function answerWaiting(state: TuiState, tv: TaskLogState, sessionId: string, decision: 'allow' | 'deny'): Step {
   if (waitingApproval(tv) || !waitingCheckpoint(findTask(state.tasks, tv.taskId))) return answerApproval(state, tv, sessionId, decision);
-  if (decision === 'allow') return answerCheckpoint(state, sessionId, tv.taskId, 'approve');
+  if (decision === 'allow') {
+    // A delegated task's Approve can carry a raise (ADR-0056 M5): only its budget is a number to type here.
+    const raiseTokens = findTask(state.tasks, tv.taskId)?.type === 'delegated' ? parseCount(state.editor.text.trim(), 1) ?? undefined : undefined;
+    const approved = answerCheckpoint(state, sessionId, tv.taskId, 'approve', '', raiseTokens);
+    return raiseTokens === undefined ? approved : { ...approved, state: { ...approved.state, editor: { ...approved.state.editor, text: '', cursor: 0 } } };
+  }
   const answered = answerCheckpoint(state, sessionId, tv.taskId, 'reject', state.editor.text);
   return state.editor.text.trim() ? { ...answered, state: { ...answered.state, editor: { ...answered.state.editor, text: '', cursor: 0 } } } : answered;
 }

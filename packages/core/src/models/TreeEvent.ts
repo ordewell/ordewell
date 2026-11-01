@@ -1,3 +1,11 @@
+/**
+ * A live session's allowance for what it has in flight (ADR-0056 M5), which is
+ * one model call: a long context's prompt, its cache reads included, and a reply.
+ * An estimate: a runner's own subagents add requests nobody sees until their
+ * usage arrives.
+ */
+export const SESSION_RESERVE_TOKENS = 200_000;
+
 /*
  * What a tree's log holds (ADR-0058 S3). State is a fold of these, so an event
  * says what was decided, amounts included, and a replay decides nothing. A new

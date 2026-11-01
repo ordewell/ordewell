@@ -427,9 +427,9 @@ export class ApiClient {
     return this.call('POST', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/commands`, 'Command failed', { name, args });
   }
 
-  /** Let a task go on from the checkpoint it waits at; refused, with the reason, when none waits. */
-  approveTaskCheckpoint(sessionId: string, taskId: string): Promise<OkResponse> {
-    return this.call('POST', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/checkpoint/approve`, 'Approve checkpoint failed');
+  /** Let a task go on from the checkpoint it waits at, a delegated task's child with an answer's words and a raise; refused, with the reason, when none waits. */
+  approveTaskCheckpoint(sessionId: string, taskId: string, child: { reason?: string; raiseTokens?: number } = {}): Promise<OkResponse> {
+    return this.call('POST', `/api/plans/${sessionId}/tasks/${encodeURIComponent(taskId)}/checkpoint/approve`, 'Approve checkpoint failed', Object.keys(child).length > 0 ? child : undefined);
   }
 
   /** Turn a task back at its checkpoint; `reason` is what the agent is told. */

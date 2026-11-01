@@ -1085,6 +1085,7 @@ export class Session {
       plannerCache: () => ({ ttlMs: this.backend.current().promptCacheTtlMs?.(), requestAt: this.conversation.lastRequestAt }),
       checkpointQuestion: (taskId) => this.orchestrator.getCheckpointQuestion(taskId) ?? undefined,
       landedWork: () => (this.runMergeView() ? 'pending' : this.runs.mergedRun ? 'merged' : null),
+      mergeTarget: () => (this.subplanner ? 'the delegated task\'s branch' : 'the user\'s branch'),
       recentOutput: (taskId) => this.orchestrator.getLiveOutput(taskId, { maxLines: 3 })?.text.trim(),
       reportTail: (taskId) => this.reportTail(taskId),
       reported: (taskId, to) => {
@@ -1861,11 +1862,18 @@ export class Session {
     };
   }
 
-  /** Reopened (ADR-0055 D17): as Execute, so what failed is retried, and then its subplanner goes on. One whose plan never reached the disk plans its goal. */
+  /**
+   * Reopened (ADR-0055 D17): as Execute, so what failed is retried, and then its
+   * subplanner goes on. One whose plan never reached the disk plans its goal, and
+   * one with nothing left to run goes straight to its turn: it may owe only its report.
+   */
   private async goOn(text: string, goal: string): Promise<unknown> {
     if (this.store.planTasks.length === 0) return this.startPlanning(goal);
-    const run = await this.execute({ command: 'run_plan' }, this.turnActor());
-    if (!run.ok) throw new Error(run.message);
+    const left = flattenTasks(this.store.planTasks).some((task) => task.type !== 'user' && task.status !== 'completed' && task.status !== 'skipped');
+    if (left) {
+      const run = await this.execute({ command: 'run_plan' }, this.turnActor());
+      if (!run.ok) throw new Error(run.message);
+    }
     return this.continueConversation(text);
   }
 
@@ -1903,7 +1911,7 @@ export class Session {
     return takeReport(report, {
       plan: { node, tasks: this.store.planTasks, logs: this.taskLogReader },
       subtree: tree && this.subtreeOn(tree),
-      tokens: tree?.subtreeSpent(node) ?? 0,
+      tokens: tree?.taskSpent(node) ?? 0,
     });
   }
 
@@ -1989,7 +1997,7 @@ export class Session {
     }
     if (this.toldStartRefused) return;
     this.toldStartRefused = true;
-    this.supervision.observe({ kind: 'start_refused', detail: why });
+    this.supervision.observe({ kind: 'start_refused', detail: why.replace(/\.$/, '') });
   }
 
   /** A raise only moves numbers: what its room lets start is this run's to start (ADR-0056 M5). */

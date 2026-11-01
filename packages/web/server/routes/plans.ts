@@ -172,22 +172,26 @@ export function plansRoute(pool: OrchestratorPool) {
     }
   });
 
-  // Answer the checkpoint a task waits at: approve lets it go on, reject sends
-  // it the reason. Nothing waiting — settled elsewhere, withdrawn, or no runner
-  // left to hear it — is a 409, so a surface says so instead of claiming success.
+  // Answer the checkpoint a task waits at: approve lets it go on, a delegated
+  // task's child with its words and a raise, reject sends it the reason. Nothing
+  // waiting — settled elsewhere, withdrawn, or no runner left to hear it — is a
+  // 409, so a surface says so instead of claiming success.
   // The seam refuses a checkpoint nobody waits at too; this route keeps that
   // case apart as its own 409 and code.
   for (const answer of ['approve', 'reject'] as const) {
     router.post(`/:sessionId/tasks/:taskId/checkpoint/${answer}`, async (c) => {
       try {
-        const body: unknown = answer === 'reject' ? await c.req.json().catch(() => ({})) : {};
+        const body: unknown = await c.req.json().catch(() => ({}));
         const reason = typeof body === 'object' && body !== null && 'reason' in body && typeof body.reason === 'string' ? body.reason.trim() : '';
+        const raiseTokens = typeof body === 'object' && body !== null && 'raiseTokens' in body ? body.raiseTokens : undefined;
+        const raise = typeof raiseTokens === 'number' && Number.isSafeInteger(raiseTokens) && raiseTokens > 0 ? raiseTokens : undefined;
+        if (raiseTokens !== undefined && raise === undefined) return refuse(c, 400, 'A raise is a whole number of tokens, 1 or more.', 'refused');
         const session = pool.session(c.req.param('sessionId'));
         const taskId = idOfRef(session, c.req.param('taskId'));
         // Resolved once: the pre-check and the seam judge the same task, the
         // user's unique id prefix included (ADR-0029).
         if (!session.awaitsCheckpoint(taskId)) return refuse(c, 409, NO_CHECKPOINT, 'checkpoint_not_waiting');
-        const { message } = await runUserCommand(session, { command: 'answer_checkpoint', task: taskId, answer, ...(reason ? { reason } : {}) });
+        const { message } = await runUserCommand(session, { command: 'answer_checkpoint', task: taskId, answer, ...(reason ? { reason } : {}), ...(raise !== undefined ? { raiseTokens: raise } : {}) });
         return c.json({ ok: true, message } satisfies OkResponse);
       } catch (err) {
         return failure(c, err, 'task edit');

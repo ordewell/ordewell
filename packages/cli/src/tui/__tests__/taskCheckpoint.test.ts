@@ -110,11 +110,37 @@ describe('the checkpoint card', () => {
   });
 });
 
+describe('a delegated task\'s card', () => {
+  it('says a number typed there goes as a raise', () => {
+    expect(bodyAt(opened({ tasks: [task({ type: 'delegated' })] }), 120).join('\n')).toContain('approve as is, or with a number typed here as a raise of its tokens');
+  });
+});
+
 describe('answering from the task view', () => {
   it('ctrl-y approves, carrying no note', () => {
     const { state, effects } = reduce(withDraft(opened(), 'half-typed message'), key('ctrl-y'));
     expect(effects).toEqual([{ type: 'answerTaskCheckpoint', sessionId: 's1', taskId: 't1', answer: 'approve' }]);
     expect(state.editor.text).toBe('half-typed message');
+  });
+
+  it('ctrl-y on a delegated task takes a number in the composer as a raise, and empties it', () => {
+    const delegated = opened({ tasks: [task({ type: 'delegated' })] });
+    const { state, effects } = reduce(withDraft(delegated, ' 800000 '), key('ctrl-y'));
+    expect(effects).toEqual([{ type: 'answerTaskCheckpoint', sessionId: 's1', taskId: 't1', answer: 'approve', raiseTokens: 800000 }]);
+    expect(state.editor.text).toBe('');
+  });
+
+  it('ctrl-y leaves a number alone on any other task, and words alone on a delegated one', () => {
+    expect(reduce(withDraft(opened(), '800000'), key('ctrl-y')).effects).toEqual([{ type: 'answerTaskCheckpoint', sessionId: 's1', taskId: 't1', answer: 'approve' }]);
+    const delegated = opened({ tasks: [task({ type: 'delegated' })] });
+    const { state, effects } = reduce(withDraft(delegated, 'more please'), key('ctrl-y'));
+    expect(effects).toEqual([{ type: 'answerTaskCheckpoint', sessionId: 's1', taskId: 't1', answer: 'approve' }]);
+    expect(state.editor.text).toBe('more please');
+  });
+
+  it('enter on a delegated task answers with an approval, so its subplanner does not read the answer as a refusal', () => {
+    const { effects } = run(' Round half away from zero. ', opened({ tasks: [task({ type: 'delegated' })] }));
+    expect(effects).toEqual([{ type: 'answerTaskCheckpoint', sessionId: 's1', taskId: 't1', answer: 'approve', reason: 'Round half away from zero.' }]);
   });
 
   it('ctrl-g rejects with the composer text as the reason, and empties the composer', () => {
@@ -332,7 +358,7 @@ describe('the answer effect', () => {
     await runEffect({ type: 'answerTaskCheckpoint', sessionId: 's1', taskId: 't1', answer: 'approve' }, effectDeps);
     await runEffect({ type: 'answerTaskCheckpoint', sessionId: 's1', taskId: 't1', answer: 'reject', reason: 'keep it' }, effectDeps);
 
-    expect(approveTaskCheckpoint).toHaveBeenCalledWith('s1', 't1');
+    expect(approveTaskCheckpoint).toHaveBeenCalledWith('s1', 't1', {});
     expect(rejectTaskCheckpoint).toHaveBeenCalledWith('s1', 't1', 'keep it');
     expect(actions).toEqual([]);
   });

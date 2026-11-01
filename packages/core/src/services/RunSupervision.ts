@@ -54,6 +54,8 @@ export interface RunSupervisionHost extends Pick<SupervisorHost, 'deliver' | 'pu
    * isolate, or landed nothing.
    */
   landedWork(): 'merged' | 'pending' | null;
+  /** Where a merge of this run's work goes, as an update names it. */
+  mergeTarget?(): string;
   /** The last few lines a task's runner wrote. */
   recentOutput(taskId: string): string | undefined;
   /** The tail of a task's output a report carries; see {@link taskReport}. */
@@ -290,7 +292,7 @@ export class RunSupervision {
     this.reportStoppedLoops(repeatingChecks([...this.host.tasks()]));
     const { total, completed, failed, blocked, skipped } = executionSummary(flattenTasks([...this.host.tasks()]));
     const landed = this.host.landedWork();
-    const merge = landed === 'merged' ? '; everything it landed is merged into the user\'s branch, so there is nothing to merge'
+    const merge = landed === 'merged' ? `; everything it landed is merged into ${this.host.mergeTarget?.() ?? 'the user\'s branch'}, so there is nothing to merge`
       : landed === 'pending' ? '; its landed work waits for Merge all' : '';
     this.supervisor.observe({ kind: 'run_finished', detail: `${completed} of ${total} tasks completed${failed > 0 ? `, ${failed} failed` : ''}${blocked > 0 ? `, ${blocked} blocked` : ''}${skipped > 0 ? `, ${skipped} skipped` : ''}${merge}` });
     if (!this.supervisor.awaitsRunEnd) this.handOver();

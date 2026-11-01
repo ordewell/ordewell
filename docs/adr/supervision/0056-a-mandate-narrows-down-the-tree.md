@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0001", "0008", "0022", "0029", "0030", "0035", "0036", "0037", "0053"]
-note: "Settles #23, #92 and #112 as far as subplanners need. Built: M1 to M10 in core. Not built: a surface's raise: the inbox's Approve takes one in core, and no surface sends it while ADR-0055 D21 holds delegation back. A flat run does not change."
+note: "Settles #23, #92 and #112 as far as subplanners need. Built: M1 to M10 in core. Not built: VS Code's raise: the daemon's route, the CLI and the TUI send one, the inbox's Approve takes one in core, and VS Code sends none while ADR-0055 D21 holds delegation back. A flat run does not change."
 ---
 
 # 0056 — A mandate says what a node may do without a person, and what it can hand on only narrows down the tree
@@ -191,8 +191,8 @@ Judgment stays the planner's.
     ledger shuts only once its children have gone, so what they still spend, and their
     close, reach the log.
   - A child that needs more asks with a checkpoint. A raise is `answer_checkpoint` with
-    `raiseTokens`, or the same on the inbox's Approve, carved at the call from what the
-    parent has left, and recorded as a budget event ([ADR-0058](0058-a-tree-holds-many-nodes-and-few-live-sessions.md) S3)
+    `raiseTokens`, or the same on the inbox's Approve or a surface's, carved at the call
+    from what the parent has left, and recorded as a budget event ([ADR-0058](0058-a-tree-holds-many-nodes-and-few-live-sessions.md) S3)
     and in the timeline. It goes only with an approval, and one the parent cannot pay
     for is refused and leaves the question waiting. It moves numbers, so the child's
     Session starts its run again as it hears of one.
@@ -201,8 +201,10 @@ Judgment stays the planner's.
     one session's `reserve` for its next turn while it is parked ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D18), so a carve of
     everything leaves it a turn to answer a `checkpoint` or call `task_complete`. That
     share is the turn's own allowance, not a second one. The turn spends it first,
-    `reserve` falling as `spent` rises, so nothing carved or claimed meanwhile can take
-    it. Past it the turn spends room, then its children's room, the child that woke it
+    `reserve` falling as `spent` rises, so nothing carved meanwhile can take it, and a
+    claim leaves a whole share beside it however far the turn has spent it down: a
+    claim comes at the end of the turn that started the run, and read as it stands the
+    share would pay for work the next turn then could not report. Past it the turn spends room, then its children's room, the child that woke it
     first: that child's `limit` and the parent's `committed` fall together, as a budget
     event. As it parks it keeps one session's `reserve` again, from the same two. So a
     child pays for answers its parent cannot, and only a raise needs the parent's own
@@ -262,7 +264,11 @@ Judgment stays the planner's.
   that the question is asked, its turn ends and it parks, and the answer opens its next
   turn: a blocking call would hold a process and a slot for as long as a person takes
   (ADR-0055 D18), where a runner's `checkpoint` waits as
-  [ADR-0022](../runners/0022-ordewell-mcp-server.md) V5 says.
+  [ADR-0022](../runners/0022-ordewell-mcp-server.md) V5 says. A question wants an
+  answer and not a yes, so on a delegated task an approval's `reason` reaches the
+  subplanner, where a runner's approval carries no words. A stop of its budget that
+  comes while a question waits waits with it, since the answer is what can bring room:
+  it ends the node only if the turn that answer opens is refused.
   - Only the root reaches the user, through the inbox
     ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)): a
     depth-1 subplanner's question there is the delegated task's `checkpoint`, already
@@ -425,3 +431,4 @@ Judgment stays the planner's.
 - 2026-11-01 — a child runs under its mandate: `delegate` and D19's limits are held as a change is written, nobody below the root may allow a runner's request, a child's script runs sealed without `effect`, and a child that may do nothing more ends `blocked` with a derived report. Wall-clock time runs from the child's start: it does not stop yet for a usage limit.
 - 2026-11-01 — M8's questions, `raiseTokens` and a child's wake on a refused start implemented, what a refused start ends in rewritten from a stop to a wake, a wall clock that stops for a tree's usage limits, and a body `effect` does not cover runs sealed. A denied runner request rides along in the next run update.
 - 2026-11-01 — a subplanner's harness subagents are withheld without `research`, per runner, and its prompt names none; M7's paths reach its report; a subtree's task runners load `minimal` unless the settings file says otherwise.
+- 2026-11-01 — from a real run: a claim leaves a whole share for its subplanner's next turn, an approval carries words to a child, a budget stop waits with a question, and the daemon's route, the CLI and the TUI send a raise.

@@ -484,6 +484,37 @@ describe('a Continue (ADR-0055 D17)', () => {
     parent.destroy();
   });
 
+  it('says on a Stop that a Continue keeps a child\'s work and running the plan starts it over', async () => {
+    const runner = fakeRunner({ a: ['a.txt'], b: ['b.txt'] }, { held: ['b'] });
+    const { parent } = tree([SUBMIT([childTask('a', 1), childTask('b', 2, ['a'])])], { runner });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(runner.spawned).toContain('b'), { timeout: 20_000 });
+
+    const stopped = await parent.execute({ command: 'stop_run' }, { kind: 'user' });
+
+    expect(stopped.message).toContain('Continue');
+    expect(stopped.message).toContain('starts its child over');
+    expect(stopped.message).not.toContain('Run the plan or a task to start again');
+    await parent.stopSubtree();
+    parent.destroy();
+  });
+
+  it('gives the subplanner its turn where nothing is left to run, so a child that only owes its report can file it', async () => {
+    const runner = fakeRunner({ a: ['a.txt'] });
+    const { root, parent, planner } = tree([SUBMIT([childTask('a', 1)]), BLOCKED, DONE], { runner });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('failed'), { timeout: 20_000 });
+
+    expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'session', message: 'file your report' }, { kind: 'user' })).toMatchObject({ ok: true });
+
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    expect(planner.asked.join('\n')).toContain('file your report');
+    expect(runner.spawned.filter((id) => id === 'a')).toHaveLength(1);
+    const integration = parent.planState?.isolation?.run.repos[0].integrationBranch ?? '';
+    expect(git(root, 'ls-tree', '-r', '--name-only', integration).split('\n')).toContain('a.txt');
+    parent.destroy();
+  });
+
   it('reopens in the same run while a Stop has yet to take the record off active, or the child\'s landed work is left behind', async () => {
     const runner = fakeRunner({ a: ['a.txt'], b: ['b.txt'] }, { held: ['b'] });
     const { root, parent } = tree([SUBMIT([childTask('a', 1), childTask('b', 2, ['a'])]), NOTHING, DONE], { runner });
