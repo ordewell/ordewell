@@ -2865,7 +2865,7 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
         const { iso, run, second, b } = await webOnlyConflict();
         writeFileSync(join(b.cwd, 'api', 'api.txt'), 'edited by the repair\n');
         expect(await iso.verifyRepair(second, run)).toEqual({ ok: true });
-        expect(await iso.repairPaths(second, run)).toEqual(['api/api.txt', 'web/web.txt']);
+        expect(await iso.repairPaths?.(second, run)).toEqual(['api/api.txt', 'web/web.txt']);
       });
     });
 

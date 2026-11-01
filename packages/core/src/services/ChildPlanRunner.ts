@@ -21,6 +21,8 @@ export interface NodeState {
   wakeOwed: boolean;
   /** Why this node may do nothing more, or null: what ends it `blocked`, with no call of its own. */
   stoppedFor: string | null;
+  /** Its planner failed its restart: what a stop then ends as is `failed`, not `blocked` (ADR-0056 M8). */
+  plannerFailed: boolean;
   /** Why what is ready cannot start, with nothing live to free room: its subplanner is told first, and it ends `blocked` if nothing comes of that (ADR-0056 M5). */
   startRefused: string | null;
   /** One line per task, as a derived report lists them. */
@@ -207,7 +209,7 @@ export class ChildPlanSession extends AbstractRunnerSession {
     }
     const stopped = this.halting ?? state.stoppedFor;
     if (stopped) {
-      if (!state.live && !state.plannerBusy) this.end('blocked', this.derived(stopped, state));
+      if (!state.live && !state.plannerBusy) this.end(state.plannerFailed ? 'failed' : 'blocked', this.derived(stopped, state));
       else this.haltFor(stopped);
       return;
     }

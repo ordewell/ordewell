@@ -599,6 +599,46 @@ describe('two levels down (ADR-0056 M8, ADR-0055 D9, D14)', () => {
     parent.destroy();
   }, 60_000);
 
+  it('repairs a child\'s delegated task in the mode its mandate gives, held to what its ancestors protect too', async () => {
+    const held = heldTasks({ a: ['x.txt'], s: ['x.txt'] }, ['a', 's']);
+    const repairs: { mode: string | undefined }[] = [];
+    const heard: string[] = [];
+    const runner: IRunner & { spawned: string[] } = {
+      ...held.runner,
+      spawn: vi.fn(async (opts) => {
+        if (opts.taskId !== 'e') return held.runner.spawn(opts);
+        repairs.push({ mode: opts.mode });
+        const repair = new FakeRunnerSession('repair-e', 'e');
+        setTimeout(() => {
+          const [integration] = /ordewell\/[^\s`]+\/integration/.exec(opts.prompt) ?? [''];
+          spawnSync('git', ['merge', '--no-edit', integration], { cwd: opts.cwd, env: env() });
+          writeFileSync(join(opts.cwd, 'x.txt'), 'both\n');
+          writeFileSync(join(opts.cwd, 'tests', 'guard.txt'), 'the root protects this\n');
+          git(opts.cwd, 'add', '-A');
+          git(opts.cwd, 'commit', '-q', '--no-edit');
+          repair.reportComplete({ status: 'done', summary: 'Repaired.' });
+        }, 5);
+        return repair;
+      }),
+    };
+    const { parent } = nested([
+      SUBMIT([{ ...nestedChild, protectedPaths: ['docs/'] }, nestedCheck, { ...childTask('s', 3) }]),
+      async (tools, text) => {
+        heard.push(text);
+        await tools.taskComplete!({ status: 'blocked', summary: 'It conflicts.', reason: 'It conflicts.' }, quiet());
+      },
+    ], [SUBMIT([childTask('a', 1)]), DONE], { runner, config: { conflictRepairAttempts: 1, autonomousMode: false } });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(held.runner.spawned).toEqual(expect.arrayContaining(['a', 's'])), { timeout: 30_000 });
+    held.release('s');
+    await new Promise((resolve) => { setTimeout(resolve, 500); });
+    held.release('a');
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('failed'), { timeout: 40_000 });
+    expect(repairs).toEqual([{ mode: resolveDefaultMode(new RunnerRegistry().get('claude-code')?.manifest.modes, false) }]);
+    expect(heard[0]).toContain('conflicts');
+    parent.destroy();
+  }, 60_000);
+
   it('wakes the subplanner on a conflict with no repair left: nobody below the root waits on a person', async () => {
     const held = heldTasks({ a: ['x.txt'], s: ['x.txt'] }, ['a', 's']);
     const heard: string[] = [];
@@ -914,6 +954,20 @@ describe('a landing that conflicts (ADR-0055 D14)', () => {
     await made.parent.execute({ command: 'skip_task', task: 'c' }, { kind: 'user' });
     await vi.waitFor(() => expect(statusOf(made.parent, 'd')).toBe('completed'), { timeout: 20_000 });
     expect(statusOf(made.parent, 'c')).toBe('skipped');
+    made.parent.destroy();
+  });
+
+  it('gives a resolver the mode its autonomy gives, as a delegated task has none to hand on', async () => {
+    let session: Session | undefined;
+    const { runner, held } = conflicted(() => session!);
+    const made = tree([SUBMIT([childTask('a', 1)]), DONE], { runner, tasks: withSibling(), config: { conflictRepairAttempts: 0, autonomousMode: false } });
+    session = made.parent;
+    await siblingFirst(made.parent, held);
+    await vi.waitFor(() => expect(task(made.parent, 'd')?.awaitingReason).toBe('conflict'), { timeout: 20_000 });
+    const asked = made.parent.escalations().find((e) => e.kind === 'conflict');
+    expect(await made.parent.answerEscalation(asked!.id, 'resolve-conflict')).toMatchObject({ ok: true });
+    const resolver = made.parent.planTasks.find((t) => t.title.startsWith('Resolve merge conflict'));
+    expect(resolver?.taskMode).toBe(resolveDefaultMode(new RunnerRegistry().get('claude-code')?.manifest.modes, false));
     made.parent.destroy();
   });
 

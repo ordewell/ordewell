@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { ChildPlanRunner, type ChildHost, type ChildNode, type NodeState } from '../ChildPlanRunner';
+import { ChildPlanRunner, type ChildHost, type ChildNode, type NodeState, type SubplannerLink } from '../ChildPlanRunner';
 import { createTask } from '../../models/Task';
 
-const IDLE_BUT_LIVE: NodeState = { unfinished: [], completed: 0, live: true, plannerBusy: false, wakeOwed: false, stoppedFor: null, startRefused: null, tasks: [] };
+const IDLE_BUT_LIVE: NodeState = { unfinished: [], completed: 0, live: true, plannerBusy: false, wakeOwed: false, stoppedFor: null, plannerFailed: false, startRefused: null, tasks: [] };
 
 /** A child whose state a test sets, behind the runner seam: what its clock does, with no Session under it. */
 function child(wallClockMs: number) {
@@ -19,8 +19,9 @@ function child(wallClockMs: number) {
     close: vi.fn(),
     heldSince: () => held.ms,
   };
-  const host: ChildHost = { openChild: async () => node, changedPaths: async () => [], closeNode: async () => undefined };
-  return { held, node, runner: new ChildPlanRunner(host) };
+  const links: SubplannerLink[] = [];
+  const host: ChildHost = { openChild: async (_task, _cwd, link) => { links.push(link); return node; }, changedPaths: async () => [], closeNode: async () => undefined };
+  return { held, node, state, links, runner: new ChildPlanRunner(host) };
 }
 
 async function started(runner: ChildPlanRunner) {
@@ -30,6 +31,23 @@ async function started(runner: ChildPlanRunner) {
   await vi.advanceTimersByTimeAsync(1);
   return { reports };
 }
+
+describe('a child stopped from above or below (ADR-0056 M8)', () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setImmediate', 'Date'] }); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it.each([
+    ['a guard lowered it', false, 'blocked'],
+    ['its planner failed its restart', true, 'failed'],
+  ])('ends as what stopped it says: %s', async (_case, plannerFailed, status) => {
+    const { links, runner, state } = child(60_000);
+    const { reports } = await started(runner);
+    Object.assign(state, { live: false, stoppedFor: 'it stopped', plannerFailed });
+    links[0].changed();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reports[0]).toMatchObject({ status });
+  });
+});
 
 describe('a child\'s wall clock (ADR-0056 M3)', () => {
   beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setImmediate', 'Date'] }); });

@@ -1772,6 +1772,7 @@ export class Session {
       plannerBusy: this.isPlannerBusy || this.turns.turnRunning,
       wakeOwed: this.supervision.wakeOwed || this.plan?.plannerResend?.at !== undefined,
       stoppedFor: this.stoppedFor(),
+      plannerFailed: this.plan?.runSettings?.unsupervised !== undefined,
       startRefused: this.orchestrator.refusedStart,
       tasks: tasks.map((task) => ({ label: label(task), status: task.status })),
     };
