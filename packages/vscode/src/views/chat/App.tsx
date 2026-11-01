@@ -592,14 +592,13 @@ export default function App() {
     handleIsolationAction('resolveConflict', taskId);
   }, [handleIsolationAction]);
 
-  const getPlaceholder = (): string => {
+  // Only what is happening now; an idle composer shows a command tip instead (#137).
+  const getPlaceholder = (): string | undefined => {
     if (compacting) return 'Queue a message for when the context is compacted...';
     if (isResearchActive) return 'Queue a message for when the planner is done...';
     if (isExecuting) return 'AI is working...';
     if (isStarting) return 'Starting the plan...';
-    if (plan && plan.tasks.length > 0) return 'Modify the plan...';
-    if (blocks.some((b) => b.type === 'message' && b.role === 'planner')) return 'Reply to the planner...';
-    return 'Describe what you want to build...';
+    return undefined;
   };
 
   const vendorModels = useMemo<DiscoveredModel[]>(() =>

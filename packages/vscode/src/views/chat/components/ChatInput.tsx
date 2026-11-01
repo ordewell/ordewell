@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { aheadOfDraft } from '@ordewell/core/plan-utils';
-import { ALL_SLASH_COMMANDS, isBuiltinSlashCommand } from '../../../commands/slashCommands';
+import { aheadOfDraft, composerTip } from '@ordewell/core/plan-utils';
+import { ALL_SLASH_COMMANDS, SLASH_COMMAND_NAMES, isBuiltinSlashCommand } from '../../../commands/slashCommands';
 import { QUEUE_TITLE, SendKeyHint, isSendNowKey } from './PendingMessages';
 
 interface SlashSuggestion {
@@ -200,6 +200,10 @@ export default function ChatInput({
   // highlighted row into view for arrow-key navigation but NOT on mouse hover
   // (hovering a row that's already under the cursor must never move the list).
   const scrollOnSelectRef = useRef(false);
+  // Which command tip the empty composer shows (#137). It moves on only when the
+  // text is emptied, so a tip stays put while the user reads it.
+  const [tipSeq, setTipSeq] = useState(0);
+  const hadTextRef = useRef(false);
 
   // The `/word` the caret is actively composing when it is *not* at the very
   // start of the message — e.g. "explain this bug /gri" with the caret right
@@ -272,8 +276,14 @@ export default function ChatInput({
     }
   };
 
+  // A new tip is a new placeholder, which can need a different height.
   useEffect(() => {
     autoResize();
+  }, [text, tipSeq]);
+
+  useEffect(() => {
+    if (hadTextRef.current && text === '') setTipSeq((seq) => seq + 1);
+    hadTextRef.current = text !== '';
   }, [text]);
 
   // Applies a caret position queued by a mid-prompt splice, once React has
@@ -416,7 +426,7 @@ export default function ChatInput({
 
   const getPlaceholderText = () => {
     if (disabled && disabledReason) return disabledReason;
-    return placeholder || 'Type / for commands or describe what you want to build...';
+    return placeholder || composerTip(tipSeq, SLASH_COMMAND_NAMES) || 'Type / for commands or describe what you want to build...';
   };
 
   const renderedSuggestions = () => suggestions.map((s, i) => (
@@ -465,6 +475,7 @@ export default function ChatInput({
                 onKeyDown={handleKeyDown}
                 onScroll={syncBackdropScroll}
                 placeholder={getPlaceholderText()}
+                aria-label="Message the planner"
                 disabled={disabled}
                 rows={1}
               />
