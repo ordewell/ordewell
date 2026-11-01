@@ -377,8 +377,9 @@ Close the session in that host, or quit it, and load the session again. A host
 that crashed or was killed lets the session go once its pid is gone, or a minute
 after it last refreshed its lease.
 
-If the host is gone but its runners are not, stop the process groups the
-message names before loading again:
+Its runners stop by themselves within seconds of a host dying, so try again
+first. If the message still names process groups, or you are on Windows, stop
+them before loading again:
 
 ```bash
 ps -eo pid,pgid,command | awk '$2 == <group>'   # what is still running in that group

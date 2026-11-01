@@ -39,6 +39,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **Stopping a planner command on macOS ends all of it.** A Stop or a time limit
   now ends a compound command's or a pipeline's child processes along with its
   shell, and the result comes back at once rather than when they finish.
+- **A runner no longer outlives a daemon that was killed.** A crash or `kill -9`
+  used to leave a task's runner working on, editing and committing in its worktree
+  until its turn ended. It now stops within seconds. On Windows nothing has changed:
+  such a runner still has to be stopped by hand.
 
 ## [0.12.0] - 2026-10-31
 

@@ -582,8 +582,7 @@ the child cannot reach follows it in the parent's plan.**
   one Stop and one restart, which D16 and D17 get for far less, and it would rewrite
   the two largest modules.
 - **A separate process per child, now.** Rejected for now. Tokens and the MCP port
-  die with the parent, the daemon's `execute-command` route acts as the user, and a
-  host killed outright leaves its runners, which sit in their own process groups.
+  die with the parent, and the daemon's `execute-command` route acts as the user.
   Nested Sessions share a host's failure and one event loop, which
   [ADR-0058](0058-a-tree-holds-many-nodes-and-few-live-sessions.md) sizes for.
 - **`subtasks` as the recursion.** Rejected. A subtask shares its parent's plan,
