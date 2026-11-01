@@ -934,7 +934,7 @@ export class TaskOrchestrator {
 
   /** A hold is no merge that stopped (ADR-0055 D9): the tick after its check's pass or Skip merges, the run closed or not. */
   private async mergeOwedAfterHold(): Promise<void> {
-    if (!this.mergeOwedAtClose || !this.mergesAtGates || this.merging || !this.settled || this.runMergeView() === null) return;
+    if (!this.mergesAtGates || this.merging || !this.settled || this.runMergeView() === null) return;
     this.mergeOwedAtClose = false;
     await this.mergeLanded({ kind: 'run_end' });
   }
@@ -1047,6 +1047,7 @@ export class TaskOrchestrator {
 
   /** What holds every merge but the user's (ADR-0055 D9), named as a refusal names it. */
   get mergeHold(): readonly Task[] {
+    if (!this.store.allTasks.some((t) => t.type === 'delegated')) return [];
     return checksHoldingMerge(this.store.allTasks, (id) => this.runs.awaitsMerge(id), this.checkRules);
   }
 
@@ -2146,6 +2147,7 @@ export class TaskOrchestrator {
     const eligible = continuability(task);
     if (!eligible.ok) throw new TaskControlError(eligible.reason);
     if (pausedOnLimit(task)) return this.resumeNow(taskId, origin, text);
+    this.refuseBesideLiveCheck(taskId);
     await this.whileAdmitted(async (admission) => {
       if (!(await this.openForAdmitted(taskId, origin, () => this.continueTask(taskId, message, origin, revives), admission))) return;
       // The run may have started it while opening, or the task changed: the
@@ -2625,23 +2627,23 @@ export class TaskOrchestrator {
     await this.start(origin);
   }
 
-  async tick(): Promise<void> {
-    await this.deciding(() => this.ticked());
+  tick(): Promise<void> {
+    return this.deciding(() => this.ticked());
   }
 
   /**
    * A tick or an attempt's end is under way, so the run may yet go on or end,
    * and tell its supervisor which. A child read in that gap has neither, and
-   * would be taken for one that sits on nothing (ADR-0056 M8).
+   * would be taken for one that sits on nothing (ADR-0056 M8). Only a child is
+   * read that way, so a flat run's ticks take the turns they always took.
    */
-  private async deciding(work: () => Promise<void>): Promise<void> {
+  private deciding(work: () => Promise<void>): Promise<void> {
+    if (!this.deps.decided) return work();
     this.decisions += 1;
-    try {
-      await work();
-    } finally {
+    return work().finally(() => {
       this.decisions -= 1;
       if (this.decisions === 0) this.deps.decided?.();
-    }
+    });
   }
 
   private async ticked(): Promise<void> {
@@ -2655,7 +2657,7 @@ export class TaskOrchestrator {
     await this.startQueued();
     this.startOwedRepairs(admission);
     this.offerKeptResumes();
-    await this.mergeOwedAfterHold();
+    if (this.mergeOwedAtClose) await this.mergeOwedAfterHold();
     if (!this.startsOnTick) return this.settleRun('tick');
 
     // Ahead of the run-complete check too: the turn may add work to a run
@@ -2699,7 +2701,7 @@ export class TaskOrchestrator {
   get refusedStart(): string | null {
     const refused = this.deps.budget?.refusal() ?? null;
     if (!refused || this.attempts.size > 0) return null;
-    return this.readiness().ready.some((task) => task.type !== 'script' && task.type !== 'delegated' && this.stillReady(task.id)) ? refused : null;
+    return this.readyNow().some((task) => task.type !== 'script' && task.type !== 'delegated' && this.stillReady(task.id)) ? refused : null;
   }
 
   /**
@@ -2709,7 +2711,13 @@ export class TaskOrchestrator {
    */
   get movesUnasked(): boolean {
     if (this.decisions > 0 || this.attempts.size > 0 || this.runHeld || this.keptResumes.size > 0 || this.owedRepairs.size > 0 || this.store.allTasks.some(waitsForReset)) return true;
-    return this.isScheduling && (this.waitsOnTree() || (this.refusedStart === null && this.readiness().ready.length > 0));
+    return this.isScheduling && (this.waitsOnTree() || (this.refusedStart === null && this.readyNow().length > 0));
+  }
+
+  /** What is ready now, for a reader that asks far more often than a tick does, so it logs nothing. */
+  private readyNow(): readonly Task[] {
+    if (!this.startsOnTick) return [];
+    return selectReadyTasks({ ...this.startRule(), active: this.attempts.slotsHeld, maxParallel: this.config.maxParallelSessions, ...(this.isScheduling ? {} : { within: this.carriedTasks() }) }).ready;
   }
 
   /** One of a tick's starters: takes the next of `waiting` as each start it made has attached. */
