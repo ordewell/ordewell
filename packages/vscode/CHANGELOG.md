@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-11-01
+
 ### Added
 
 - **The empty chat composer shows a command tip.** With nothing typed it
@@ -1394,7 +1396,8 @@ First public release.
 Full project changelog:
 https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.12.1...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.12.2...HEAD
+[0.12.2]: https://github.com/ordewell/ordewell/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/ordewell/ordewell/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/ordewell/ordewell/compare/v0.11.3...v0.12.0
 [0.11.1]: https://github.com/ordewell/ordewell/compare/v0.11.0...v0.11.1
