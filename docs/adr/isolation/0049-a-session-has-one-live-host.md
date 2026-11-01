@@ -82,7 +82,13 @@ lets go of nothing.
   isolation is wrapped (`leasedIsolation`) so that every change to the run —
   start, prepare, reopen, land, release, prune, merge, discard, sweep — is
   refused without the lease; reads of git go through. VS Code's own direct
-  save checks too.
+  save checks too. A planner turn on the session is refused the same way, and
+  so is resolving a conflict as a task: a turn runs the user's agent and writes
+  a PRD into their checkout, and the task would start work the host could not
+  save. A child's turns go by its root's hold. A new goal is judged by the
+  session it writes: under a host's fixed id that is the held session, and
+  under a minted id it is a new one, so a Session that lost its lease may still
+  plan.
 - **A lost lease stays lost (L6).** A holder whose heartbeat finds another host
   in its lease file has lost the session: it is told so, stops its run, and
   saves nothing more. What it holds is older than what the new holder has saved,
@@ -179,3 +185,4 @@ throwaway HTTP server, the TUI effect and the CLI command against a refusal.
 - 2026-10-31 — L1 covers a load the disk refuses: a Session that kept the plan after its save failed would run tasks the user never saw.
 - 2026-10-31 — L1 holds both leases until the plan held now has gone: its last saves re-claimed the old lease and let the picked one go, and a host opening it then won.
 - 2026-10-31 — the root's lease covers its tree, and a child session holds none of its own (ADR-0055 D13).
+- 2026-11-01 — L5 covers planner turns and resolving a conflict as a task: neither read the lease, so a host that had lost a session ran its planner and wrote its PRD.
