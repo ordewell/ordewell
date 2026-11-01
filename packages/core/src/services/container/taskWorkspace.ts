@@ -68,7 +68,7 @@ git config user.name "$ORDEWELL_GIT_NAME"
 git config user.email "$ORDEWELL_GIT_EMAIL"
 git fetch -q origin "+refs/ordewell/pins/$ORDEWELL_PIN/*:refs/ordewell/seed/*"
 git checkout -q -f -B "$ORDEWELL_BRANCH" refs/ordewell/seed/head
-git branch -q -f "$ORDEWELL_INTEGRATION" refs/ordewell/seed/integration
+[ "$ORDEWELL_INTEGRATION" = HEAD ] || git branch -q -f "$ORDEWELL_INTEGRATION" refs/ordewell/seed/integration
 git clean -fdq
 `;
 

@@ -338,6 +338,8 @@ export class FakeExecutionBackend implements ExecutionBackend {
   placement: RunnerPlacement | null = null;
   /** Brings a task's work back; absent, it is where the attempt ran. */
   collect?: (taskId: string) => Promise<void>;
+  /** The workspace root's repositories; absent, none is known. */
+  checkoutRepos?: () => readonly LeaseRepo[];
   records: LeaseRecord[] = [];
   freed: () => void = () => undefined;
   private openHold: Promise<void> | null = null;

@@ -4,17 +4,33 @@ import { CredentialBroker, parseLogin } from '../credentialBroker';
 const key = 'sk-ant-api03-not-a-real-key';
 
 describe('the credential broker (ADR-0059 L7)', () => {
-  it('hands a lease the API keys it holds', () => {
+  it('keeps an API key back for the gateway, so no runner holds it', () => {
     const broker = new CredentialBroker({ ANTHROPIC_API_KEY: key });
 
-    expect(broker.issue(['ANTHROPIC_API_KEY'])).toEqual({ ANTHROPIC_API_KEY: key });
+    expect(broker.issue(['ANTHROPIC_API_KEY'])).toEqual({ gated: { key, upstream: 'https://api.anthropic.com' }, handed: {} });
   });
 
-  it('holds cloud credentials as it holds API keys', () => {
+  it('sends model traffic where the login says, once it names a base URL', () => {
+    const broker = new CredentialBroker({ ANTHROPIC_API_KEY: key, ANTHROPIC_BASE_URL: 'https://llm.example.com/anthropic' });
+
+    expect(broker.issue(['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL'])).toEqual({ gated: { key, upstream: 'https://llm.example.com/anthropic' }, handed: {} });
+  });
+
+  it('ignores a base URL the login does not name: a person chooses what a lease takes', () => {
+    const broker = new CredentialBroker({ ANTHROPIC_API_KEY: key, ANTHROPIC_BASE_URL: 'https://llm.example.com' });
+
+    expect(broker.issue(['ANTHROPIC_API_KEY']).gated?.upstream).toBe('https://api.anthropic.com');
+  });
+
+  it.each([['not a url'], ['file:///etc/passwd']])('refuses a base URL it cannot use: %s', (url) => {
+    expect(() => new CredentialBroker({ ANTHROPIC_API_KEY: key, ANTHROPIC_BASE_URL: url }).issue(['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL'])).toThrow(/ANTHROPIC_BASE_URL/);
+  });
+
+  it('hands over by name what no gateway can carry: a cloud provider signs its own requests', () => {
     const cloud = { AWS_ACCESS_KEY_ID: 'AKIAEXAMPLE', AWS_SECRET_ACCESS_KEY: 'secret', CLAUDE_CODE_USE_BEDROCK: '1' };
     const broker = new CredentialBroker(cloud);
 
-    expect(broker.issue(Object.keys(cloud))).toEqual(cloud);
+    expect(broker.issue(Object.keys(cloud))).toEqual({ gated: null, handed: cloud });
   });
 
   it('refuses a variable it does not hold, so a lease never starts without its login', () => {

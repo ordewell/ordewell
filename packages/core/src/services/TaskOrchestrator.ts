@@ -286,6 +286,8 @@ export interface TaskOrchestratorDeps {
 /** What a backend hears of the Session it serves, past the local lease it wraps. */
 export interface ExecutionContext {
   sessionId: () => string;
+  /** The root of this Session's tree: what a clean-up at the root finds a child's leavings by. */
+  treeId: () => string;
   tell: (level: 'info' | 'warn' | 'error', text: string) => void;
   /** What a worktree's bootstrap runs on this host, in what was last landed. */
   setupCommand: () => string | undefined;
@@ -347,6 +349,8 @@ export interface TaskOrchestratorOptions {
   pool?: SlotPool;
   /** The Session's id, as it saves under it. */
   sessionId?: () => string;
+  /** Its tree's root's, when it is a child; absent, it is a root. */
+  treeId?: () => string;
   /** The pool has a slot for the planner turn it refused this Session. */
   openTurn?: () => void;
   /** A child's side of the tree's ledger (ADR-0056 M5). */
@@ -635,6 +639,7 @@ export class TaskOrchestrator {
       ...(options.landed ? { landed: options.landed } : {}),
       leases: (options.execution ?? ((local) => local))(new LocalWorktreeLease({ pool, node, runs, workspaceRoot }), {
         sessionId: options.sessionId ?? (() => ''),
+        treeId: options.treeId ?? options.sessionId ?? (() => ''),
         tell: (level, text) => options.notifications[level](text),
         setupCommand: () => options.config.worktreeSetupCommand,
       }),
@@ -2643,6 +2648,11 @@ export class TaskOrchestrator {
   /** The Session is closing: the tree stops counting on it. */
   leaveTree(): void {
     this.deps.leaveTree();
+  }
+
+  /** What the run left past its worktrees, as a Clean up gives it up (ADR-0059 L6). */
+  async reclaimLeases(): Promise<void> {
+    await this.leases.reclaim?.();
   }
 
   private leaseRequest(role: LeaseRequest['role'], taskId?: string): LeaseRequest {

@@ -6,6 +6,14 @@
 const SUBSCRIPTION_VARIABLE = 'CLAUDE_CODE_OAUTH_TOKEN';
 const SUBSCRIPTION_VALUE = /^sk-ant-o[ar]t|claudeAiOauth/;
 
+/** What the gateway holds in a runner's place, and where it sends model traffic unless the login names somewhere else. */
+export const GATED_KEY = 'ANTHROPIC_API_KEY';
+export const BASE_URL = 'ANTHROPIC_BASE_URL';
+const MODEL_API = 'https://api.anthropic.com';
+
+/** Where a person's own sign-in talks to Anthropic, and which a broker's lease never needs: its model traffic takes the gateway. */
+export const SIGN_IN_HOSTS: readonly string[] = ['api.anthropic.com', 'claude.ai', 'platform.claude.com'];
+
 /**
  * Which login a container runs under, which a person chooses and nothing here
  * guesses: `broker`, API keys or cloud credentials from this host's environment,
@@ -28,18 +36,37 @@ export function parseLogin(raw: unknown): LeaseLogin | { refused: string } {
   return { refused: 'containers.login must be {"kind":"broker","variables":[...]} or {"kind":"own-sign-in"}' };
 }
 
+/** What a lease's login comes to. */
+export interface IssuedLogin {
+  /** The API key and where it goes, held on this host by the lease's gateway. */
+  gated: { key: string; upstream: string } | null;
+  /** What no gateway can carry, for the runner by name, which it can read. */
+  handed: Record<string, string>;
+}
+
+function upstreamOf(url: string | undefined): string {
+  if (url === undefined) return MODEL_API;
+  const protocol = URL.canParse(url) ? new URL(url).protocol : '';
+  if (protocol !== 'https:' && protocol !== 'http:') throw new Error(`${BASE_URL} must be an http or https address.`);
+  return url;
+}
+
 /**
  * Holds API keys and cloud-provider credentials for leases, and never a Claude
  * subscription's: Anthropic's terms forbid a product collecting, storing or
- * intermediating one (ADR-0059 L7). What a lease gets today is the variable
- * itself, which its runner can read, so such a lease reports `cred.unreadable`
- * unproven; the gateway of L7 is where a key stops reaching the container.
+ * intermediating one (ADR-0059 L7). An API key stops at the gateway. What a cloud
+ * provider's client signs with has to reach it, so a lease with one reports
+ * `cred.unreadable` unproven.
  */
 export class CredentialBroker {
   constructor(private readonly source: Record<string, string | undefined>) {}
 
-  issue(variables: readonly string[]): Record<string, string> {
-    return Object.fromEntries(variables.map((variable) => [variable, this.hold(variable)]));
+  issue(variables: readonly string[]): IssuedLogin {
+    const held = Object.fromEntries(variables.map((variable) => [variable, this.hold(variable)]));
+    const { [GATED_KEY]: key, ...rest } = held;
+    if (key === undefined) return { gated: null, handed: held };
+    const { [BASE_URL]: url, ...handed } = rest;
+    return { gated: { key, upstream: upstreamOf(url) }, handed };
   }
 
   private hold(variable: string): string {
