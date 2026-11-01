@@ -3053,7 +3053,7 @@ export class TaskOrchestrator {
     });
   }
 
-  /** A delegated task passed, and nothing scheduled follows it. A Stop since it was claimed leaves its checks where they are. */
+  /** A delegated task passed, and nothing scheduled follows it. A Stop since the start that landed it leaves its checks where they are: a resolver's landing outlives one, with this task waiting on the user and no attempt to stop. */
   private carryChecks(task: Readonly<Task>, admission: Admitted): void {
     if (task.type !== 'delegated' || this.scheduledRun || !admission.current()) return;
     for (const check of this.store.checksOf(task)) if (check.status === 'pending' || check.status === 'approved') this.carriedChecks.add(check.id);
