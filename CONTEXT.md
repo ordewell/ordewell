@@ -164,25 +164,41 @@ backend that keeps the work elsewhere brings it to the worktree with `collect`.
 *Avoid:* "lease" alone where the *session lease* could be meant: that one says
 which host holds a session, and this one where a session runs.
 
-**Container lease** (`services/container/`, ADR-0059 L5, L6) — an *Execution lease*
+**Container lease** (`services/container/`, ADR-0059 L5 to L7) — an *Execution lease*
 from `DockerExecutionBackend`, opt-in by the `containers` setting, for a change task
-of a runner proven there. The host's worktree stays where the task's result lives;
-a copy runs in one container per attempt, reached by exec. What a lease cannot be it
-refuses: nothing runs on the host in a container's place. It proves what it can, and
-is **no network guarantee** until the egress sidecar lands. Its parts: a **mirror**,
-one bare repository per repo in a volume of the engine, read-only to an attempt; a
-**task volume**, which keeps the task's clone and the runner's home across attempts;
-a **relay**, the container's idle entry, which carries connections to this host over
-its stdio and ends the container when its host goes; and a **push gate**, the only
-way work comes back, which takes one ref of one attempt as a bundle.
+of a runner proven there and for every script task. The host's worktree stays where
+a task's result lives; a copy runs in one container per attempt, reached by exec. A
+script of the workspace root runs on a copy of what that root has committed, and
+nothing of it comes back. What a lease cannot be it refuses: nothing runs on the host
+in a container's place. Its parts: a **mirror**, one bare repository per repo in a
+volume of the engine, read-only to an attempt; a **task volume**, which keeps the
+task's clone and the runner's home across attempts; a **relay**, the container's idle
+entry, which carries connections to this host over its stdio and ends the container
+when its host goes; an **egress sidecar**, a lease's one way out; a **model gateway**,
+which holds its API key; and a **push gate**, the only way work comes back, which
+takes one ref of one attempt as a bundle.
 *Avoid:* "sandbox" (a *Sealed run*'s word: that holds a read-only process on this
 host, and this moves a writing one off it), "push" for anything but the gate.
 
+**Egress sidecar** (`services/container/egressSidecar.ts`, ADR-0059 L7) — the one
+container of a lease on both its internal network and the bridge: a proxy that opens
+port 443 of the hosts on the lease's list, and reads none of what passes. A client
+that ignores it reaches nothing, which the probe proves as `net.allowlist`.
+*Avoid:* "firewall": it is a route, and a host on its list is a way out.
+
+**Model gateway** (`services/container/modelGateway.ts`, ADR-0059 L7) — the listener
+on this host, reached through the relay, that carries a broker lease's model traffic
+under the real key. The runner holds a token that means nothing past it, so an API
+key never enters the engine. A subscription's token never reaches it.
+*Avoid:* "broker" for it: the *Credential broker* decides what a lease gets, and this
+is where a key goes instead of the runner.
+
 **Credential broker** (`services/container/credentialBroker.ts`, ADR-0059 L7) —
 what hands a *Container lease* API keys and cloud-provider credentials, from this
-host's environment. It never holds a Claude subscription's token. A person chooses a
-lease's login, `broker` or `own-sign-in`, the person's own sign-in inside a container
-in a volume Ordewell never reads, and it has no default.
+host's environment: an API key to its *Model gateway*, and what a cloud provider signs
+with to the runner by name. It never holds a Claude subscription's token. A person
+chooses a lease's login, `broker` or `own-sign-in`, the person's own sign-in inside a
+container in a volume Ordewell never reads, and it has no default.
 *Avoid:* "login" for an API key held here, except as the setting names it.
 
 **Slot pool** (`services/SlotPool.ts`, ADR-0055 D18) — the Parallel limit across a

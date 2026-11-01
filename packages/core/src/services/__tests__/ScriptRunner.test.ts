@@ -7,6 +7,7 @@ import * as path from 'path';
 import { ScriptRunner, type ScriptRunnerDeps, type ScriptSpawnFn } from '../ScriptRunner';
 import type { ScriptExit, StructuredEvent } from '../../interfaces/IRunner';
 import { DEFAULT_SCRIPT_TIMEOUT_MS, type ScriptBody } from '../../models/ScriptTask';
+import type { PlacedLaunch, RunnerLaunch, RunnerPlacement } from '../executionLease';
 
 /**
  * A script task's body as it really runs (ADR-0035): real processes, at a real
@@ -27,10 +28,10 @@ function workspace(): string {
   return dir;
 }
 
-async function start(body: Partial<ScriptBody> & ({ commands: string[][] } | { script: string }), opts: { env?: Record<string, string>; deps?: ScriptRunnerDeps; cwd?: string; attempt?: number } = {}) {
+async function start(body: Partial<ScriptBody> & ({ commands: string[][] } | { script: string }), opts: { env?: Record<string, string>; deps?: ScriptRunnerDeps; cwd?: string; attempt?: number; placement?: RunnerPlacement } = {}) {
   const cwd = opts.cwd ?? workspace();
   const runner = new ScriptRunner(opts.deps);
-  const session = await runner.spawn({ taskId: 't1', runner: 'script', prompt: '', cwd, env: opts.env, attempt: opts.attempt, script: { timeoutMs: DEFAULT_SCRIPT_TIMEOUT_MS, ...body } as ScriptBody });
+  const session = await runner.spawn({ taskId: 't1', runner: 'script', prompt: '', cwd, env: opts.env, attempt: opts.attempt, ...(opts.placement ? { placement: opts.placement } : {}), script: { timeoutMs: DEFAULT_SCRIPT_TIMEOUT_MS, ...body } as ScriptBody });
   const events: StructuredEvent[] = [];
   let output = '';
   session.onEvent((event) => events.push(event));
@@ -212,6 +213,107 @@ describe('ScriptRunner: ending early', () => {
     expect(await run.exit).toMatchObject({ outcome: 'stopped' });
     expect(ofType(run.events, 'script_run')).toEqual([]);
     expect(fs.existsSync(path.join(run.cwd, 'first'))).toBe(false);
+  });
+});
+
+describe('ScriptRunner: placed in a lease (ADR-0059 L5)', () => {
+  /** What a container would do with a step, as a process on this host: `run` is what this host launches in its place. */
+  function placement(run: (asked: RunnerLaunch) => string[], env: Record<string, string> = {}) {
+    const asked: RunnerLaunch[] = [];
+    const stop = vi.fn();
+    const ended = vi.fn();
+    const place = vi.fn(async (launch: RunnerLaunch): Promise<PlacedLaunch> => {
+      asked.push(launch);
+      const [command, ...args] = run(launch);
+      return { command, args, env, stop, ended };
+    });
+    return { asked, stop, ended, lease: { place, reach: async (url: string) => url, blob: async () => undefined } satisfies RunnerPlacement };
+  }
+
+  const says = js('process.stdout.write(process.argv.slice(1).join("|"))');
+
+  it('hands each command to the lease as it was written, with none of this host\'s variables', async () => {
+    const { asked, lease } = placement(() => says);
+
+    const run = await start({ commands: [['npm', 'test', '--', 'a b']] }, { placement: lease, env: { WORKSPACE_SECRET: 'stays here' } });
+
+    expect(await run.exit).toEqual({ outcome: 'passed' });
+    expect(asked).toEqual([{ command: 'npm', args: ['test', '--', 'a b'], env: {}, files: [] }]);
+  });
+
+  it('runs a script in the container\'s own shell, not the one this host would pick', async () => {
+    const { asked, lease } = placement(() => says);
+
+    const run = await start({ script: 'npm ci && npm test' }, { placement: lease });
+
+    await run.exit;
+    expect(asked).toEqual([{ command: 'sh', args: ['-c', 'npm ci && npm test'], env: {}, files: [] }]);
+  });
+
+  it('takes the exit status of what ran there as the evidence', async () => {
+    const { lease } = placement(() => js('process.stderr.write("broke"); process.exit(3)'));
+
+    const run = await start({ commands: [['npm', 'test']] }, { placement: lease });
+
+    expect(await run.exit).toMatchObject({ outcome: 'failed', status: { code: 3 }, errorTail: 'broke' });
+  });
+
+  it('logs what it ran there as a step like any other', async () => {
+    const { lease } = placement(() => js('console.log("in the box")'));
+
+    const run = await start({ commands: [['npm', 'test']] }, { placement: lease });
+
+    await run.exit;
+    expect(run.output()).toContain('in the box');
+    expect(ofType(run.events, 'script_run')).toEqual([expect.objectContaining({ argv: ['npm', 'test'] })]);
+  });
+
+  it('gives the client on this host what the lease hands over by name', async () => {
+    const { lease } = placement(() => js('console.log(process.env.HANDED)'), { HANDED: 'by name' });
+
+    const run = await start({ commands: [['x']] }, { placement: lease });
+
+    await run.exit;
+    expect(run.output()).toContain('by name');
+  });
+
+  it('stops at the first that fails, and says each one ended', async () => {
+    const { asked, ended, lease } = placement((launch) => (launch.command === 'bad' ? js('process.exit(1)') : js('')));
+
+    const run = await start({ commands: [['good'], ['bad'], ['never']] }, { placement: lease });
+
+    await run.exit;
+    expect(asked.map(({ command }) => command)).toEqual(['good', 'bad']);
+    expect(ended).toHaveBeenCalledTimes(2);
+  });
+
+  it('ends a step where it runs when stopped: killing the client here does not reach it', async () => {
+    const { stop, ended, lease } = placement(() => js('setInterval(() => {}, 1000); console.log("up")'));
+    const run = await start({ commands: [['slow']] }, { placement: lease });
+    await vi.waitFor(() => expect(run.output()).toContain('up'));
+
+    await run.session.stop();
+
+    expect(stop).toHaveBeenCalled();
+    expect(ended).toHaveBeenCalledTimes(1);
+    expect(await run.exit).toMatchObject({ outcome: 'stopped' });
+  });
+
+  it('ends a step where it runs at its time limit', async () => {
+    const { stop, lease } = placement(() => js('setInterval(() => {}, 1000)'));
+
+    const run = await start({ commands: [['slow']], timeoutMs: 100 }, { placement: lease });
+
+    expect(await run.exit).toMatchObject({ outcome: 'timed-out' });
+    expect(stop).toHaveBeenCalled();
+  });
+
+  it('says a step it could not place failed to start', async () => {
+    const lease: RunnerPlacement = { place: async () => { throw new Error('the container is gone'); }, reach: async (url) => url, blob: async () => undefined };
+
+    const run = await start({ commands: [['x']] }, { placement: lease });
+
+    expect(await run.exit).toMatchObject({ outcome: 'failed', status: { error: 'the container is gone' } });
   });
 });
 

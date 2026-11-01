@@ -286,6 +286,8 @@ export interface TaskOrchestratorDeps {
 /** What a backend hears of the Session it serves, past the local lease it wraps. */
 export interface ExecutionContext {
   sessionId: () => string;
+  /** The root of this Session's tree: what a clean-up at the root finds a child's leavings by. */
+  treeId: () => string;
   tell: (level: 'info' | 'warn' | 'error', text: string) => void;
   /** What a worktree's bootstrap runs on this host, in what was last landed. */
   setupCommand: () => string | undefined;
@@ -347,6 +349,8 @@ export interface TaskOrchestratorOptions {
   pool?: SlotPool;
   /** The Session's id, as it saves under it. */
   sessionId?: () => string;
+  /** Its tree's root's, when it is a child; absent, it is a root. */
+  treeId?: () => string;
   /** The pool has a slot for the planner turn it refused this Session. */
   openTurn?: () => void;
   /** A child's side of the tree's ledger (ADR-0056 M5). */
@@ -635,6 +639,7 @@ export class TaskOrchestrator {
       ...(options.landed ? { landed: options.landed } : {}),
       leases: (options.execution ?? ((local) => local))(new LocalWorktreeLease({ pool, node, runs, workspaceRoot }), {
         sessionId: options.sessionId ?? (() => ''),
+        treeId: options.treeId ?? options.sessionId ?? (() => ''),
         tell: (level, text) => options.notifications[level](text),
         setupCommand: () => options.config.worktreeSetupCommand,
       }),
@@ -2645,6 +2650,11 @@ export class TaskOrchestrator {
     this.deps.leaveTree();
   }
 
+  /** What the run left past its worktrees, as a Clean up gives it up (ADR-0059 L6). */
+  async reclaimLeases(): Promise<void> {
+    await this.leases.reclaim?.();
+  }
+
   private leaseRequest(role: LeaseRequest['role'], taskId?: string): LeaseRequest {
     return { node: { sessionId: this.sessionId(), ...(taskId !== undefined ? { taskId } : {}) }, role };
   }
@@ -3053,7 +3063,7 @@ export class TaskOrchestrator {
     });
   }
 
-  /** A delegated task passed, and nothing scheduled follows it. A Stop since it was claimed leaves its checks where they are. */
+  /** A delegated task passed, and nothing scheduled follows it. A Stop since the start that landed it leaves its checks where they are: a resolver's landing outlives one, with this task waiting on the user and no attempt to stop. */
   private carryChecks(task: Readonly<Task>, admission: Admitted): void {
     if (task.type !== 'delegated' || this.scheduledRun || !admission.current()) return;
     for (const check of this.store.checksOf(task)) if (check.status === 'pending' || check.status === 'approved') this.carriedChecks.add(check.id);

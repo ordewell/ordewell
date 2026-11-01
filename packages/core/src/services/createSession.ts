@@ -22,7 +22,7 @@ import { TaskControlError, TaskOrchestrator, type OrchestratorObserver, type Run
 import { ChildPlanRunner, ownedRunner, type ChildHost, type ChildNode, type NodeEnd, type NodeState, type SubplannerLink, type TakenReport } from './ChildPlanRunner';
 import { readTask, type TaskLogReader } from './readTask';
 import { Subtree, takeReport } from './Subtree';
-import { NodeBoard } from './Board';
+import { blobsIn, NodeBoard } from './Board';
 import { ScopeLines } from './ScopeLines';
 import { isBoardRef } from '../models/Board';
 import { DELEGATION_OFFERED } from './runSettingsText';
@@ -540,6 +540,7 @@ export function createSession(deps: SessionDeps): Session {
     board: () => session.board(),
     landed: (task) => session.taskLanded(task),
     sessionId: () => session.sessionId,
+    treeId: () => session.rootSessionId,
     openTurn: () => session.turnRoomFreed(),
     skillsAt: (roots) => (deps.skillsService ?? new SkillsService(roots)).forRoot(roots),
     previousAttemptFromLog: (taskId) => lastAttemptDigest(session.taskLogLocation, taskId),
@@ -1663,7 +1664,7 @@ export class Session {
   }
 
   /** The root Session's id, under which a tree's state sits (ADR-0055 D11). */
-  private get rootSessionId(): string {
+  get rootSessionId(): string {
     return this.placement?.rootSessionId ?? this.currentSessionId;
   }
 
@@ -1973,7 +1974,7 @@ export class Session {
   async postOnBoard(args: PostArgs): Promise<McpToolReply> {
     const board = await this.board();
     if (!board) return { text: 'This plan has no board: it gains one with its first delegated task. Nothing was posted.', isError: true };
-    return board.post(args, {}, this.workspaceRoot);
+    return board.post(args, {}, blobsIn(this.workspaceRoot));
   }
 
   /**
@@ -3428,6 +3429,7 @@ export class Session {
     await this.withSave(async () => {
       await this.discardChildren();
       await this.runs.cleanup();
+      await this.orchestrator.reclaimLeases();
     });
   }
 
@@ -3443,6 +3445,7 @@ export class Session {
     await this.withSave(async () => {
       await this.discardChildren();
       await this.runs.discard();
+      await this.orchestrator.reclaimLeases();
     });
     this.announceClosed();
   }

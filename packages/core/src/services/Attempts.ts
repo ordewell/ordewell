@@ -35,7 +35,7 @@ import { checkHandoff, readableTaskIds, withPatch, type HandoffPatch, type Store
 import { applySavedPatch, capturePatch, patchArtifact, patchReply } from './PatchCapture';
 import { handoffLogs, readTask, type TaskLogReader } from './readTask';
 import type { Subtree } from './Subtree';
-import type { NodeBoard } from './Board';
+import { blobsIn, type NodeBoard, type WorkBlobs } from './Board';
 import { isBoardRef } from '../models/Board';
 import { defaultExecFile, type GitInvoker } from './gitExec';
 import { augmentedPath } from '../utils/shellPath';
@@ -983,7 +983,7 @@ export class Attempts {
         return checkHandoff(completion, task.id, store.planTasks, { attempt: attempt.attempt, logs: handoffLogs(this.deps.taskLog), ...(this.deps.planNode ? { node: this.deps.planNode() } : {}), ...(below ? { below: below.below } : {}) });
       },
       readTask: async (args) => (board && isBoardRef(String(args.task)) ? board.read(String(args.task)) : readTask(args, task.id, store.planTasks, this.deps.taskLog, await this.reachOf(task.id))),
-      ...(board ? { post: (args: PostArgs) => board.post(args, { task: taskRefOf(store.planTasks, task.id) ?? task.id, attempt: attempt.attempt }, cwd) } : {}),
+      ...(board ? { post: (args: PostArgs) => board.post(args, { task: taskRefOf(store.planTasks, task.id) ?? task.id, attempt: attempt.attempt }, this.blobsOf(attempt, cwd)) } : {}),
       ...(shell ? { savePatch: (signal: AbortSignal) => this.savePatch(task, attempt, signal) } : {}),
       ...(web ? { webReads: web } : {}),
       applyPatch: (args) => this.applyPatch(task, attempt, args),
@@ -996,6 +996,12 @@ export class Attempts {
         this.host.emit('onTaskChanged');
       },
     });
+  }
+
+  /** Where a pin of this attempt reads its author's files: through a lease that runs it elsewhere, since its worktree here holds what it was seeded with. */
+  private blobsOf(attempt: TaskAttempt, cwd: string): WorkBlobs {
+    const placement = attempt.opened?.placement;
+    return placement ? (file) => placement.blob(file) : blobsIn(cwd);
   }
 
   /**
@@ -1084,8 +1090,10 @@ export class Attempts {
   private async spawnScript(task: Task, attempt: TaskAttempt, cwd: string, writable: string | undefined): Promise<IRunnerSession> {
     const body = scriptBodyOf(task);
     if (!body) throw new Error(`Task "${task.title}" has no script to run: give it "commands" or a "script".`);
-    const env = await this.envForTask(cwd);
-    if (landsNothing(attempt.kind)) attempt.shell = this.sealedShell(task, cwd, writable);
+    const placement = attempt.opened?.placement;
+    // A container holds it in a seal's place, and the workspace's variables stay on this host (ADR-0059 L5).
+    const env = placement ? {} : await this.envForTask(cwd);
+    if (landsNothing(attempt.kind) && !placement) attempt.shell = this.sealedShell(task, cwd, writable);
     return this.deps.scriptRunner.spawn({
       taskId: task.id,
       runner: attempt.runner,
@@ -1097,6 +1105,7 @@ export class Attempts {
       attempt: attempt.attempt,
       script: body,
       ...(attempt.shell ? { sealed: attempt.shell } : {}),
+      ...(placement ? { placement } : {}),
     });
   }
 

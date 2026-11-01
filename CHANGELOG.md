@@ -12,10 +12,14 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 - **A task can run in a container.** With the `containers` setting, a change task
   runs in a Docker container you build the image for, with your files out of its
-  reach and its work coming back through one checked route before it lands. Any
-  engine the `docker` command talks to will do, and nothing changes unless you set
-  it: local worktrees stay the default. Claude Code is the runner proven there so
-  far. A container does not limit the network yet. See
+  reach, a short list of hosts as its only way out, an API key left on your machine,
+  and its work coming back through one checked route before it lands. A script task
+  runs in one too, on a copy of what your checkout has committed, and a delegated
+  task's tasks and repairs take the same path. Each container proves what it
+  guarantees as it opens, or the task does not start, and Clean up and deleting a
+  session clear what it left in the engine. Any engine the `docker` command talks to
+  will do, and nothing changes unless you set it: local worktrees stay the default.
+  Claude Code is the runner proven there so far. See
   [Running tasks in containers](docs/containers.md).
 
 ### Changed
