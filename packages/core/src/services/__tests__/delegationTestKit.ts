@@ -9,6 +9,7 @@ import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import type { Session, SessionDeps } from '../createSession';
 import type { IAiService } from '../AiService';
 import type { IRunner } from '../../interfaces/IRunner';
+import type { IConfig } from '../../interfaces/IConfig';
 import type { PlannerToolHandler } from '../mcp';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import { fakeConfig, FakeRunnerSession } from '../../testing';
@@ -16,7 +17,7 @@ import { saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
 import { treeEventLogFile } from '../../utils/treeEventLog';
 import type { NodePath, TreeEvent } from '../../models/TreeEvent';
-import { fakeFs, makeSession, scriptedPlanner, type PlannerTurn as Turn } from './sessionTestKit';
+import { fakeFs, makeSession, sealingFs, scriptedPlanner, type PlannerTurn as Turn } from './sessionTestKit';
 
 /** One real repository, one root Session and a scripted subplanner: a delegated task as a test drives it. */
 
@@ -28,9 +29,11 @@ const env = () => {
 export const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, env: env(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
 const roots: string[] = [];
+const closing: Session[] = [];
 
-/** Call from `afterEach`: what a closing child still saves may land a moment after its parent's `destroy`. */
-export function removeRepos(): void {
+/** Call from `afterEach`: a Session's `destroy` returns with its release of a worktree still in git, and `gone` is what says it ended. */
+export async function removeRepos(): Promise<void> {
+  await Promise.all(closing.splice(0).map((session) => session.gone));
   while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 }
 
@@ -102,6 +105,8 @@ export interface Tree {
   planner: ReturnType<typeof scriptedPlanner>;
   /** The subplanners `below` scripted, by their task's id. */
   lower: Record<string, ReturnType<typeof scriptedPlanner>>;
+  /** The root's config, which a test may change under a running child. */
+  config: IConfig;
 }
 
 export interface TreeOptions {
@@ -112,23 +117,31 @@ export interface TreeOptions {
   below?: Record<string, Turn[]>;
   /** The root's Parallel limit, which holds across the tree (ADR-0055 D18). */
   parallel?: number;
+  /** The root's config, when a test changes a live setting under a running child. */
+  config?: IConfig;
+  /** What runs script tasks, as a test watches what a child's script was given. */
+  scriptRunner?: IRunner;
+  /** Whether a child can seal a script. */
+  seals?: boolean;
 }
 
-export function tree(turns: Turn[], { runner = writingRunner({ a: ['a.txt'], b: ['b.txt'] }), tasks = [delegated(), check()], settings = {}, below = {}, parallel = 3 }: TreeOptions = {}): Tree {
+export function tree(turns: Turn[], { runner = writingRunner({ a: ['a.txt'], b: ['b.txt'] }), tasks = [delegated(), check()], settings = {}, below = {}, parallel = 3, config, scriptRunner, seals = false }: TreeOptions = {}): Tree {
   const root = repo();
+  const rootConfig = config ?? fakeConfig({ maxParallelSessions: parallel });
   const planner = scriptedPlanner(turns);
   const lower = Object.fromEntries(Object.entries(below).map(([id, script]) => [id, scriptedPlanner(script)]));
   const isolation = createWorktreeIsolation({ resolvePath: async () => process.env.PATH ?? '', config: fakeConfig({ worktreeIsolation: true }) });
   const parent = makeSession({
-    runner, isolation, workspaceRoot: () => root, saveSession, openTaskLog, leaseHost: new LeaseHost(), sessionId: 'session-root',
-    config: fakeConfig({ maxParallelSessions: parallel }),
+    runner, scriptRunner, isolation, workspaceRoot: () => root, saveSession, openTaskLog, leaseHost: new LeaseHost(), sessionId: 'session-root',
+    config: rootConfig,
     settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: 5_000_000 }, ...settings }),
     delegationOffered: true,
-    childDeps: (task) => ({ aiService: { reset: vi.fn(), ...(lower[task.id] ?? planner).service } as unknown as IAiService, fsAdapter: { ...fakeFs(), getWorkspaceRoot: () => root } }),
+    childDeps: (task) => ({ aiService: { reset: vi.fn(), ...(lower[task.id] ?? planner).service } as unknown as IAiService, fsAdapter: { ...fakeFs(), ...(seals ? sealingFs() : {}), getWorkspaceRoot: () => root } }),
   });
   const plan = { tasks, runners: ['claude-code'], status: 'approved', generatedAt: '2026-11-01T10:00:00.000Z' } as unknown as LegacyPlanState;
   parent.loadPlan(plan, 'the root goal', root, { sessionId: 'session-root' });
-  return { root, parent, planner, lower };
+  closing.push(parent);
+  return { root, parent, planner, lower, config: rootConfig };
 }
 
 export const taskOf = (session: Session, id: string) => session.planTasks.find((t) => t.id === id);

@@ -1,10 +1,13 @@
 import React from 'react';
 import type { HandoffDigest, StoredHandoff } from '@ordewell/core';
-import { handoffFindingsText, handoffReferenceText, savedPatchViews, severityLabel, subtreeView, worstSeverity } from '@ordewell/core/plan-utils';
+import { handoffFindingsText, handoffReferenceText, heldWords, onOneLine, savedPatchViews, severityLabel, subtreeView, worstSeverity } from '@ordewell/core/plan-utils';
 import type { SubtreeItemView } from '@ordewell/core/plan-utils';
 import { useOpenPatch } from '../openPatch';
 import { useDelegationOffered } from '../delegationOffered';
 import ReportBody from './ReportBody';
+
+/** An author's words under this panel's own lines: `pre-wrap` honours every break, so each line is indented as core and the TUI indent it, and none passes for Ordewell's (ADR-0057 R3). */
+const held = (text: string): string => heldWords(text).join('\n');
 
 function SubtreeItems({ title, items }: { title: string; items: SubtreeItemView[] }) {
   if (items.length === 0) return null;
@@ -14,7 +17,7 @@ function SubtreeItems({ title, items }: { title: string; items: SubtreeItemView[
       {items.map((item, i) => (
         <div key={i} className="task-handoff-finding">
           <div className="task-handoff-finding-heading">{item.heading}</div>
-          {item.detail && <div className="task-handoff-detail">{item.detail}</div>}
+          {item.detail && <div className="task-handoff-detail">{held(item.detail)}</div>}
           {item.reference && <div className="task-handoff-evidence">{item.reference}</div>}
         </div>
       ))}
@@ -42,15 +45,15 @@ export default function TaskHandoff({ handoff, taskName, onReadFull }: {
       <div className="task-handoff-heading">Handoff · {handoffFindingsText(handoff.findingCount)}{severity ? ` · ${severityLabel(severity)}` : ''}</div>
       {handoff.commit && (
         <div className="task-handoff-commit">
-          <div className="task-handoff-commit-subject">Commit: {handoff.commit.subject}</div>
-          {handoff.commit.body && <div className="task-handoff-commit-body">{handoff.commit.body}</div>}
+          <div className="task-handoff-commit-subject">Commit: {onOneLine(handoff.commit.subject)}</div>
+          {handoff.commit.body && <div className="task-handoff-commit-body">{held(handoff.commit.body)}</div>}
         </div>
       )}
-      {handoff.summary && <div className="task-handoff-summary">{handoff.summary}</div>}
+      {handoff.summary && <div className="task-handoff-summary">{held(handoff.summary)}</div>}
       {handoff.findings.map((finding) => (
         <div key={finding.id} className="task-handoff-finding" data-severity={finding.severity}>
-          <div className="task-handoff-finding-heading">{finding.id} · {severityLabel(finding.severity)} · {finding.title}</div>
-          {finding.detail && <div className="task-handoff-detail">{finding.detail}</div>}
+          <div className="task-handoff-finding-heading">{finding.id} · {severityLabel(finding.severity)} · {onOneLine(finding.title)}</div>
+          {finding.detail && <div className="task-handoff-detail">{held(finding.detail)}</div>}
           {finding.evidence?.length ? (
             <div className="task-handoff-evidence">Evidence: {finding.evidence.map((ref) => handoffReferenceText(ref, taskName)).join('; ')}</div>
           ) : null}
@@ -87,7 +90,7 @@ export default function TaskHandoff({ handoff, taskName, onReadFull }: {
       {report && (
         <div className="chat-report">
           <div className="chat-report-head">Report</div>
-          <ReportBody lines={report.replace(/\n+$/, '').split('\n')} className="chat-report-body task-handoff-report" />
+          <ReportBody lines={heldWords(report.replace(/\n+$/, ''))} className="chat-report-body task-handoff-report" />
         </div>
       )}
       {onReadFull && <button type="button" className="task-log-open-btn" onClick={onReadFull}>Read full handoff</button>}

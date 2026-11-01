@@ -50,7 +50,7 @@ import { userTaskHandoff } from '../models/DerivedHandoff';
 import type { TaskLogReader } from './readTask';
 import type { Subtree } from './Subtree';
 import type { NodeBoard } from './Board';
-import { leasedIsolation } from './leasedIsolation';
+import { leasedIsolation, type RunChanges } from './leasedIsolation';
 import { LocalWorktreeLease } from './LocalWorktreeLease';
 import { SlotPool, type PoolNode } from './SlotPool';
 import type { NodeBudget } from './TreeLedger';
@@ -238,8 +238,12 @@ export interface TaskOrchestratorDeps {
   isApproved: (taskId: string) => boolean;
   /** Read beside the run's setting at each automatic merge, which passes no command (ADR-0056 M6). */
   mayMergeUnasked: () => boolean;
+  /** The run's changes to git in flight; absent where no session's lease stands behind them. */
+  runChanges?: RunChanges;
   /** A read-only attempt's shell (ADR-0046); absent, its runner is given no `run_command`. */
   taskShell?: (site: TaskShellSite) => TaskShell | undefined;
+  /** Why a script that would land its work may not run unsealed now; absent at a root, whose scripts ADR-0035 answers for. */
+  unsealedRefusal?: (task: Readonly<Task>) => string | null;
   /** The session's web fetcher for one read-only attempt (ADR-0046); absent, its `fetch` and `web_search` are not available. */
   taskWebFetcher?: (task: string) => IWebFetcher | undefined;
   /** Keep a read-only attempt's saved patch beside its log (ADR-0050); absent, `save_patch` is not available. */
@@ -334,6 +338,8 @@ export interface TaskOrchestratorOptions {
   /** Whether this node's mandate lets an automatic merge run; true unless set. */
   mayMergeUnasked?: () => boolean;
   taskShell?: (site: TaskShellSite) => TaskShell | undefined;
+  /** See {@link TaskOrchestratorDeps.unsealedRefusal}. */
+  unsealedRefusal?: (task: Readonly<Task>) => string | null;
   taskWebFetcher?: (task: string) => IWebFetcher | undefined;
   keepPatch?: (taskId: string, attempt: number, patch: Buffer) => string;
   recordHandoff?: (sessionId: string | undefined, taskId: string, handoff: StoredHandoff) => void;
@@ -468,6 +474,8 @@ export class TaskOrchestrator {
    * time, with no timer to fire again, so a tick offers them (ADR-0055 D18).
    */
   private readonly keptResumes = new Set<string>();
+  /** What a close waits out past the runners: ticks, attempt ends, and work nothing awaits, a Stop's release of a worktree chiefly. */
+  private readonly loose = new Set<Promise<unknown>>();
 
   /**
    * The plan's isolation run and the open run's lifecycle (ADR-0013); see
@@ -524,6 +532,7 @@ export class TaskOrchestrator {
       previousHandoffFromLog: deps.previousHandoffFromLog,
       lastLoggedAttempt: deps.lastLoggedAttempt,
       ...(deps.taskShell ? { taskShell: deps.taskShell } : {}),
+      ...(deps.unsealedRefusal ? { unsealedRefusal: deps.unsealedRefusal } : {}),
       ...(deps.taskWebFetcher ? { taskWebFetcher: deps.taskWebFetcher } : {}),
       ...(deps.keepPatch ? { keepPatch: deps.keepPatch } : {}),
       recordHandoff: deps.recordHandoff,
@@ -576,7 +585,8 @@ export class TaskOrchestrator {
     const store = options.store ?? new PlanStore();
     const output = options.output ?? new BufferedTaskOutputSource();
     const git = options.isolation ?? createWorktreeIsolation({ config: options.config, ...(options.plannedWith ? { plannedWith: options.plannedWith } : {}), ...(options.execution ? { noHooks: true } : {}) });
-    const isolation = options.sessionHeld ? leasedIsolation(git, options.sessionHeld) : git;
+    const leased = options.sessionHeld ? leasedIsolation(git, options.sessionHeld) : undefined;
+    const isolation = leased ?? git;
     const workspaceRoot = options.workspaceRoot ?? (() => process.cwd());
     // The listener callbacks fire only after construction, so the reference
     // below is settled by the time any of them runs.
@@ -629,6 +639,7 @@ export class TaskOrchestrator {
       research: options.research,
       autonomous: options.autonomous ?? (() => options.config.autonomousMode),
       ...(options.taskShell ? { taskShell: options.taskShell } : {}),
+      ...(options.unsealedRefusal ? { unsealedRefusal: options.unsealedRefusal } : {}),
       ...(options.taskWebFetcher ? { taskWebFetcher: options.taskWebFetcher } : {}),
       ...(options.keepPatch ? { keepPatch: options.keepPatch } : {}),
       recordHandoff: options.recordHandoff ?? (() => undefined),
@@ -652,6 +663,7 @@ export class TaskOrchestrator {
       ...(options.decided ? { decided: options.decided } : {}),
       ...(options.nodeRefusal ? { nodeRefusal: options.nodeRefusal } : {}),
       ...(options.discardChild ? { discardChild: options.discardChild } : {}),
+      ...(leased ? { runChanges: leased } : {}),
     });
     return orchestrator;
   }
@@ -1628,7 +1640,7 @@ export class TaskOrchestrator {
 
   /** Work nothing awaits: a rejection is said, not left unhandled. */
   private unawaited(work: Promise<unknown>, failure: string): void {
-    work.catch((err: unknown) => {
+    this.underWay(work).catch((err: unknown) => {
       const message = `${failure}: ${err instanceof Error ? err.message : String(err)}`;
       try {
         this.tell('error', message);
@@ -2647,13 +2659,15 @@ export class TaskOrchestrator {
 
   /** Nothing the run started is still going, so a close has nothing to wait for. */
   get leftNothing(): boolean {
-    return !this.attempts.anyWindingDown && !this.leases.settle;
+    return !this.attempts.anyWindingDown && !this.leases.settle && this.loose.size === 0 && !this.deps.runChanges?.changing;
   }
 
-  /** Every runner let go has gone, and whatever a backend had running past one. What a next attempt comes back to stays. */
+  /** Every runner let go has gone, with what a Stop left to end after it and whatever a backend had running past one, and the run changes git no more. What a next attempt comes back to stays. */
   async allGone(): Promise<void> {
     await this.attempts.allWoundDown();
+    await Promise.all(this.loose);
     await this.leases.settle?.();
+    await this.deps.runChanges?.closeChanges();
   }
 
   /** The Session is closing: the tree stops counting on it. */
@@ -2746,15 +2760,23 @@ export class TaskOrchestrator {
    * A tick or an attempt's end is under way, so the run may yet go on or end,
    * and tell its supervisor which. A child read in that gap has neither, and
    * would be taken for one that sits on nothing (ADR-0056 M8). Only a child is
-   * read that way, so a flat run's ticks take the turns they always took.
+   * read that way, so a flat run's ticks take the turns they always took. A
+   * close waits one out, at any level: its next step may be a release.
    */
   private deciding(work: () => Promise<void>): Promise<void> {
-    if (!this.deps.decided) return work();
+    if (!this.deps.decided) return this.underWay(work());
     this.decisions += 1;
-    return work().finally(() => {
+    return this.underWay(work().finally(() => {
       this.decisions -= 1;
       if (this.decisions === 0) this.deps.decided?.();
-    });
+    }));
+  }
+
+  /** `work`, unchanged, as a close waits for it. */
+  private underWay<T>(work: Promise<T>): Promise<T> {
+    const ended: Promise<unknown> = work.catch(() => undefined).finally(() => this.loose.delete(ended));
+    this.loose.add(ended);
+    return work;
   }
 
   private async ticked(): Promise<void> {

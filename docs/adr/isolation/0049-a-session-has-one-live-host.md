@@ -98,7 +98,10 @@ lets go of nothing.
   the user's.
 - **Released on close and shutdown (L7).** `Session.destroy` lets the lease go
   and the Session never takes it again: a save that settles afterwards is
-  dropped, not a reason to hold the session from every other host. A new plan
+  dropped, not a reason to hold the session from every other host. What the run
+  has under way goes first, its ticks, attempt ends and a Stop's releases, every
+  change to git among them, and `gone` says so; a change asked for past that is
+  refused, since the lease no longer stands behind it. A new plan
   under a fresh id lets it go too; the daemon's shutdown destroys its sessions,
   VS Code's deactivation its Session, and the process lease host lets every
   lease go on exit. A host in one process holds a lease once for all its
@@ -189,3 +192,4 @@ throwaway HTTP server, the TUI effect and the CLI command against a refusal.
 - 2026-10-31 — the root's lease covers its tree, and a child session holds none of its own (ADR-0055 D13).
 - 2026-11-01 — L5 covers planner turns and resolving a conflict as a task: neither read the lease, so a host that had lost a session ran its planner and wrote its PRD.
 - 2026-11-01 — L5 reaches a turn already live at a takeover, and a cleanup's write to the tree log: both ran on past the lease.
+- 2026-11-01 — L7 waits out what the run has under way: a release still in git as a Session closed ran with the lease let go, in a tree a next host could hold.
