@@ -174,12 +174,18 @@ export class NodeBoard {
     for (const entry of from) {
       if (entry.type !== 'contract' || entry.key === undefined || !provides.includes(entry.key)) continue;
       if (held.some(({ raisedFrom }) => raisedFrom?.node === entry.node && raisedFrom.id === entry.id)) continue;
-      const { node, id, at: _at, files, branch: _branch, ...fields } = entry;
+      const { type, title, detail, key, value, by, files } = entry;
       const repinned = files && await Promise.all(files.map(async (file) => {
         const tip = branch === undefined ? undefined : await this.deps.git.blob(branch, file.path);
         return { ...file, ...(tip ? { tip } : {}) };
       }));
-      this.deps.log.post(this.deps.node, { ...fields, raisedFrom: { node, id }, ...(repinned ? { files: repinned, ...(branch ? { branch } : {}) } : {}) });
+      this.deps.log.post(this.deps.node, {
+        type, title, key, by,
+        ...(detail !== undefined ? { detail } : {}),
+        ...(value !== undefined ? { value } : {}),
+        raisedFrom: { node: entry.node, id: entry.id },
+        ...(repinned ? { files: repinned, ...(branch ? { branch } : {}) } : {}),
+      });
     }
   }
 }
