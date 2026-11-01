@@ -763,10 +763,10 @@ const delegatingSubmitPlanInput = z.object({
  */
 export function plannerToolSet({ delegates, subplanner }: { delegates?: boolean; subplanner?: boolean } = {}): readonly McpTool<PlannerToolHandler>[] {
   if (!delegates && !subplanner) return PLANNER_TOOLS;
-  const tools = delegates ? [...PLANNER_TOOLS.map((one) => (one.name === 'submit_plan'
+  const tools = delegates ? PLANNER_TOOLS.map((one) => (one.name === 'submit_plan'
     ? tool<PlannerToolHandler, typeof delegatingSubmitPlanInput>('submit_plan', one.description, delegatingSubmitPlanInput, (h) => h.submitPlan?.bind(h) as Run<z.infer<typeof delegatingSubmitPlanInput>> | undefined, PLANNER_READ_ONLY)
-    : one)), DELEGATING_READ] : PLANNER_TOOLS;
-  return subplanner ? [...tools, ...SUBPLANNER_TOOLS] : tools;
+    : one)) : PLANNER_TOOLS;
+  return [...tools, ...(delegates ? [DELEGATING_READ] : []), ...(subplanner ? SUBPLANNER_TOOLS : [])];
 }
 
 /** What a planner that may hold delegated tasks reads a report's references with: its whole subtree, and what no report pushed (ADR-0057 R2, R11). */
