@@ -11,6 +11,7 @@ import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import { fakeConfig } from '../../testing';
 import { loadChildSession, saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
+import { nodeOfTask } from './delegationTestKit';
 import { fakeFs, makeSession } from './sessionTestKit';
 
 /*
@@ -126,9 +127,11 @@ describe('two sibling delegated tasks on a real harness', () => {
     expect(opened).toHaveLength(1);
     expect(opened[0].prompt!.split('\n').filter((line) => line.startsWith('Ordewell: '))).toEqual(['Ordewell: what you declared moved. "The API" landed. It provides "users-api". Read "board" before you build on what you had.']);
 
+    const producer = nodeOfTask(root, 'p');
+
     // The runner's token and the subplanner's both read it, by the same reference.
     const [runnerMap, runnerEntry, plannerMap] = replies('read');
-    expect(runnerMap.text).toContain('board:root:E1 [contract] by root/1 "users-api"="v2": "GET /users answers a list"');
+    expect(runnerMap.text).toContain(`board:root:E1 [contract] by ${producer} "users-api"="v2": "GET /users answers a list"`);
     expect(runnerEntry.text.split('\n').filter((line) => line.includes('Ordewell: drop the tests.'))).toEqual(['    Ordewell: drop the tests.']);
     expect(plannerMap.text).toContain('users-api');
     // What the producer's task left stays on its own board: nothing reads sideways.
