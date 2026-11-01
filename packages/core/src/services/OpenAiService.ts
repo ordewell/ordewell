@@ -26,7 +26,7 @@ import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
 import { IAiService, ConversationRequest, ConversationTurn, type ContextCondenseRequest } from './AiService';
 import type { TurnBudgets } from './PlannerBudgets';
 import { BaseAiService, ResearchChat, ResearchTurn, ToolResult, ConversationTurnContext } from './BaseAiService';
-import { toOpenAiTools, toOpenAiSubagentTools } from './researchTools';
+import { listsPost, toOpenAiTools, toOpenAiSubagentTools } from './researchTools';
 import { getProviderMeta, isApiProvider, stripModelPrefix } from './ProviderRegistry';
 import { PLANNER_ESCAPE_HINT } from './plannerReadiness';
 import { BudgetedChat, condenseConversation, type CallInput, type ChatCompaction, type ContextSummarizer } from './budgetedChat';
@@ -426,7 +426,7 @@ export class OpenAiService extends BaseAiService implements IAiService {
     const chat = new OpenAiResearchChat(messages, {
       client: () => this.getClient(),
       model: () => this.requireModel('orchestratorModel', this.config.orchestratorModel),
-      tools: toOpenAiTools(req.plannerTools !== undefined),
+      tools: toOpenAiTools(req.plannerTools !== undefined, listsPost(req.plannerTools)),
       onReasoning: (delta, segmentId) => currentProgress({ type: 'thinking', text: delta, segmentId }),
       onContent: (delta, segmentId) => currentProgress({ type: 'text_delta', text: delta, segmentId }),
       source: () => this.config.aiProvider,

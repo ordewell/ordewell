@@ -11,7 +11,7 @@ import { compactResearchResults, type CompactableMessage } from './contextCompac
 import type { RunnerModeInfo } from './ModeResolver';
 import type { PlanIntake } from './PlanChangeCheck';
 import { collectResearchContext } from './ContextCollector';
-import { PLANNER_EXECUTION_TOOLS, PLANNER_TASK_READ_TOOLS, type PlannerToolHandler } from './mcp/tools';
+import { PLANNER_EXECUTION_TOOLS, PLANNER_POST, PLANNER_TASK_READ_TOOLS, type PlannerToolHandler } from './mcp/tools';
 import { redactSecrets } from '../utils/redactSecrets';
 import { executeTool, STOPPED_TOOL_RESULT } from './executeTool';
 import { runResearchAgent, mapWithConcurrency, SUBAGENT_LIMITS } from './ResearchSubagents';
@@ -35,13 +35,13 @@ const PARALLEL_SAFE_TOOLS = new Set(['read_file', 'read_files', 'glob', 'grep', 
 const TOOL_ROUND_CONCURRENCY = 8;
 
 /**
- * A task read or an execution tool call (ADR-0029), answered by the session's
+ * A task read, a `post` or an execution tool call (ADR-0029), answered by the session's
  * planner tools through the same handler and argument check the MCP route
  * uses. Undefined for any other tool, or when the session offered no handler.
  */
 async function callPlannerTool(handler: PlannerToolHandler | undefined, name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<ToolOutcome | undefined> {
   const read = PLANNER_TASK_READ_TOOLS.find((t) => t.name === name);
-  const tool = handler ? read ?? PLANNER_EXECUTION_TOOLS.find((t) => t.name === name) : undefined;
+  const tool = handler ? read ?? [...PLANNER_EXECUTION_TOOLS, PLANNER_POST].find((t) => t.name === name) : undefined;
   if (!handler || !tool) return undefined;
   if (signal?.aborted) return { success: false, output: STOPPED_TOOL_RESULT, truncated: false };
   const reply = await tool.call(handler, args, { signal: signal ?? new AbortController().signal });
@@ -49,11 +49,11 @@ async function callPlannerTool(handler: PlannerToolHandler | undefined, name: st
 }
 
 /**
- * How a step names its tool: an execution tool has no research tool type, so
- * it is an agent tool under its own name, as a harness planner's is.
+ * How a step names its tool: an execution tool or `post` has no research tool
+ * type, so it is an agent tool under its own name, as a harness planner's is.
  */
 function stepTool(name: string, handler: PlannerToolHandler | undefined): { tool: string; toolLabel?: string } {
-  return handler && isExecutionTool(name) ? { tool: 'agent_tool', toolLabel: name } : { tool: name };
+  return handler && (isExecutionTool(name) || name === PLANNER_POST.name) ? { tool: 'agent_tool', toolLabel: name } : { tool: name };
 }
 
 export interface ToolCall {

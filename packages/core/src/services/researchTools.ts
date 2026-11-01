@@ -1,4 +1,4 @@
-import { PLANNER_EXECUTION_TOOLS, PLANNER_TASK_READ_TOOLS, SEALED_PARAM, SEALED_RUNS, type McpTool, type PlannerToolHandler } from './mcp/tools';
+import { PLANNER_EXECUTION_TOOLS, PLANNER_POST, PLANNER_TASK_READ_TOOLS, SEALED_PARAM, SEALED_RUNS, type McpTool, type PlannerToolHandler } from './mcp/tools';
 import type OpenAI from 'openai';
 import { SchemaType, type FunctionDeclaration, type Schema } from '@google/generative-ai';
 
@@ -222,6 +222,16 @@ function conversationSpecs(execution: boolean, subagents: boolean): ResearchTool
   return execution ? [...withSpawn(subagents), ...executionToolSpecs()] : withSpawn(subagents);
 }
 
+/** Whether a planner's list holds `post`: where a board can reach it, as `plannerToolSet` serves it (ADR-0057 R11). */
+export function listsPost(offer: { delegates?: boolean; subplanner?: boolean } | undefined): boolean {
+  return offer?.delegates === true || offer?.subplanner === true;
+}
+
+/** The planner's tools declared as their MCP schemas stand. `post` comes last, so a list with it starts as the flat list does, byte for byte. */
+function plannerListed(board: boolean): readonly McpTool<PlannerToolHandler>[] {
+  return board ? [...PLANNER_TASK_READ_TOOLS, PLANNER_POST] : PLANNER_TASK_READ_TOOLS;
+}
+
 function projectOpenAi(specs: ResearchToolSpec[]): OpenAI.Chat.Completions.ChatCompletionTool[] {
   return specs.map((t) => ({
     type: 'function',
@@ -242,9 +252,9 @@ function projectOpenAi(specs: ResearchToolSpec[]): OpenAI.Chat.Completions.ChatC
   }));
 }
 
-/** Project the canonical tools into OpenAI's chat-completions tool format; `plannerTools` adds the task reads and the execution tools. */
-export function toOpenAiTools(plannerTools = false): OpenAI.Chat.Completions.ChatCompletionTool[] {
-  return [...projectOpenAi(conversationSpecs(plannerTools, true)), ...(plannerTools ? PLANNER_TASK_READ_TOOLS.map((t): OpenAI.Chat.Completions.ChatCompletionTool => ({
+/** Project the canonical tools into OpenAI's chat-completions tool format; `plannerTools` adds the task reads and the execution tools, and `board` adds `post` to them. */
+export function toOpenAiTools(plannerTools = false, board = false): OpenAI.Chat.Completions.ChatCompletionTool[] {
+  return [...projectOpenAi(conversationSpecs(plannerTools, true)), ...(plannerTools ? plannerListed(board).map((t): OpenAI.Chat.Completions.ChatCompletionTool => ({
     type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema },
   })) : [])];
 }
@@ -263,10 +273,11 @@ const SCHEMA_TYPE: Record<ParamType, SchemaType> = {
 
 /**
  * Project the canonical tools into Gemini's function-declaration format;
- * `plannerTools` adds the task reads and the execution tools, and `subagents`
- * withholds the spawn tool, which this backend cannot run (ADR-0005).
+ * `plannerTools` adds the task reads and the execution tools, `board` adds
+ * `post` to them, and `subagents` withholds the spawn tool, which this backend
+ * cannot run (ADR-0005).
  */
-export function toGeminiToolDeclarations(plannerTools = false, subagents = true): FunctionDeclaration[] {
+export function toGeminiToolDeclarations(plannerTools = false, subagents = true, board = false): FunctionDeclaration[] {
   const tools = conversationSpecs(plannerTools, subagents).map((t) => {
     const properties: Record<string, Schema> = {};
     for (const [key, param] of Object.entries(t.properties)) {
@@ -282,7 +293,7 @@ export function toGeminiToolDeclarations(plannerTools = false, subagents = true)
       ? { name: t.name, description: t.description }
       : { name: t.name, description: t.description, parameters: { type: SchemaType.OBJECT, properties, required: t.required } };
   });
-  const reads = plannerTools ? PLANNER_TASK_READ_TOOLS.map((t): FunctionDeclaration => {
+  const reads = plannerTools ? plannerListed(board).map((t): FunctionDeclaration => {
     const schema = geminiSchema(t.inputSchema);
     return { name: t.name, description: t.description,
       parameters: { ...schema, type: SchemaType.OBJECT, properties: schema.properties ?? {} },
