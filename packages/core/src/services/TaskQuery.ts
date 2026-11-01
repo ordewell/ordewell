@@ -339,7 +339,7 @@ export function readTask(plan: readonly Task[], task: Task, fields: readonly Tas
     fields,
     ...(loop ? { loop } : {}),
     ...(wants('description') ? { description: task.description || null } : {}),
-    ...(wants('prompt') ? (task.type === 'script' ? { body: scriptBodyOf(task) } : { prompt: task.prompt || null }) : {}),
+    ...(wants('prompt') ? (task.type === 'script' ? { body: scriptBodyOf(task) } : { prompt: task.prompt || task.goal || null }) : {}),
     ...(wants('userSteps') ? { userSteps: task.userSteps?.length ? task.userSteps.map((s) => ({ order: s.order, instruction: s.instruction, completed: s.completed === true })) : null } : {}),
     ...(wants('verdict') ? { verdict: verdictRead(task.verdict) } : {}),
     ...(wants('outputSummary') ? { outputSummary: outputSummaryRead(task) } : {}),
@@ -468,7 +468,7 @@ function renderField(read: TaskRead, field: TaskQueryField, ctx: OutputRenderCon
   }
 }
 
-const TYPE_LABELS: Record<Task['type'], string> = { ai: 'AI', user: 'MAN', script: 'SCRIPT' };
+const TYPE_LABELS: Record<Task['type'], string> = { ai: 'AI', user: 'MAN', script: 'SCRIPT', delegated: 'DELEGATED' };
 
 /** A script task's body in place of a prompt (ADR-0035): each command as typed, or the script, and its time limit. */
 function scriptBodyLines(body: ScriptBody | null): string[] {

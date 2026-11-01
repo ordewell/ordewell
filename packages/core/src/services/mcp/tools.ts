@@ -358,6 +358,9 @@ export interface PlannerToolHandler {
   answerCheckpoint?: Run<AnswerCheckpointArgs>;
   mergeAll?: Run<RunPlanArgs>;
   runScript?: Run<RunScriptArgs>;
+  /** A subplanner's end and its questions, handled by the parent's attempt (ADR-0055 D5); only its token lists them. */
+  taskComplete?: Run<TaskCompleteArgs>;
+  checkpoint?: Run<CheckpointArgs>;
 }
 
 export interface McpTool<H> {
@@ -703,6 +706,45 @@ export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
   tool('load_skill', 'Load an Ordewell planner skill by name. Returns its instructions; only model-invocable planner skills can be loaded.',
     loadSkillInput, (h) => h.loadSkill?.bind(h), PLANNER_READ_ONLY),
   ...PLANNER_EXECUTION_TOOLS,
+];
+
+/** A task as a planner that may delegate writes it: the same list, and `type` takes one more value (ADR-0055 D1). */
+const delegatingPlanTask = planTask.extend({
+  type: z.enum(['ai', 'user', 'script', 'delegated']).optional(),
+  goal: z.string().optional().describe('A delegated task\'s goal: what its child plan must achieve, in place of a prompt.'),
+  budget: z.looseObject({ tokens: z.number(), wallClockMs: z.number().optional() }).optional()
+    .describe('A delegated task\'s budget, required: tokens, and a time limit in milliseconds if it has one. Carved from what this plan has left.'),
+  protectedPaths: z.array(z.string()).optional()
+    .describe('The paths a delegated task\'s child may not change: what its check runs and the configuration that runs it. Required unless it is readOnly.'),
+  grants: z.array(z.string()).optional().describe('What a delegated task asks for past the floor, by name: research, delegate or effect.'),
+  scope: z.looseObject({ paths: z.array(z.string()).optional(), provides: z.array(z.string()).optional(), consumes: z.array(z.string()).optional() }).optional()
+    .describe('What a delegated task declares it works on. Advisory.'),
+});
+
+const delegatingSubmitPlanInput = z.object({
+  tasks: z.array(delegatingPlanTask).min(1).describe('The whole plan, in order.'),
+});
+
+/**
+ * What a planner's token serves (ADR-0056 M6): the list as a flat planner has
+ * it unless delegation reaches it, so a flat session's tools do not change by
+ * a byte (ADR-0055 D21). A subplanner ends and asks with the tools a runner
+ * does (D4), read-only by the hint since they change no file of the workspace.
+ */
+export function plannerToolSet({ delegates, subplanner }: { delegates?: boolean; subplanner?: boolean } = {}): readonly McpTool<PlannerToolHandler>[] {
+  if (!delegates && !subplanner) return PLANNER_TOOLS;
+  const tools = delegates ? PLANNER_TOOLS.map((one) => (one.name === 'submit_plan'
+    ? tool<PlannerToolHandler, typeof delegatingSubmitPlanInput>('submit_plan', one.description, delegatingSubmitPlanInput, (h) => h.submitPlan?.bind(h) as Run<z.infer<typeof delegatingSubmitPlanInput>> | undefined, PLANNER_READ_ONLY)
+    : one)) : PLANNER_TOOLS;
+  return subplanner ? [...tools, ...SUBPLANNER_TOOLS] : tools;
+}
+
+/** What a subplanner has beside a planner's tools. Named so a runner pre-allows them with the rest. */
+export const SUBPLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
+  tool(TASK_COMPLETE_TOOL, `Report that the delegated task has ended, and how, with its handoff for the plan above. Status 'done' is refused until your child plan has settled, done work and merged it; 'blocked' and 'failed' are taken at any time. A call over a limit (the summary is at most ${HANDOFF_LIMITS.summary} characters) is refused whole. Call it once, as your last action.`,
+    taskCompleteInput, (h) => h.taskComplete?.bind(h), PLANNER_READ_ONLY),
+  tool('checkpoint', 'Ask the plan above a question.',
+    checkpointInput, (h) => h.checkpoint?.bind(h), PLANNER_READ_ONLY),
 ];
 
 export const PLANNER_TASK_READ_TOOLS = PLANNER_TOOLS.filter((t) => ['task_query', 'task_output', 'task_diff'].includes(t.name));

@@ -318,7 +318,7 @@ export class CliAgentAiService implements IAiService {
       req.modelsByRunner,
       req.runners,
       req.runnerModes,
-      { harness: true, runner: this.runner, isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined, autorun: req.autorun },
+      { harness: true, runner: this.runner, isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined, autorun: req.autorun, delegation: req.delegation, subplanner: req.subplanner },
     );
 
     const fetcher = req.fetcher;
@@ -755,7 +755,12 @@ export class CliAgentAiService implements IAiService {
       create: () => this.newAdapter(),
       issueToken: () => {
         const hidden = connectorFor(this.runner)?.ordewellTools.plannerHidden(start);
-        return server.issuePlannerToken({ sessionId: tools.sessionId, hidden: tools.withheld ? [...hidden ?? [], ...tools.withheld] : hidden }, tools.handler);
+        return server.issuePlannerToken({
+          sessionId: tools.sessionId,
+          hidden: tools.withheld ? [...hidden ?? [], ...tools.withheld] : hidden,
+          ...(tools.delegates ? { delegates: true } : {}),
+          ...(tools.subplanner ? { subplanner: true } : {}),
+        }, tools.handler);
       },
       revoke: (token) => server.revoke(token),
       start: async (adapter, credential) => {

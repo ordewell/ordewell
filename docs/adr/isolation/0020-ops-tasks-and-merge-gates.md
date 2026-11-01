@@ -5,7 +5,6 @@ amends: ["0013", "0014"]
 
 # 0020 — Ops tasks run in the workspace, behind a merge gate
 
-*Pending:* [ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — no ops task runs below the root, a child's gate means the delegated task's branch, and a sealed script check passes no gate.
 
 **Amends:** ADR-0013 (worktree isolation) — what Merge all does to a run still
 going, and when a run decides whether it isolates; ADR-0014 (multi-repo
@@ -168,6 +167,8 @@ that depends on.**
   to make that call, so its evidence is its exit status, handed to
   `VerdictEngine` (ADR-0035).
 
+- **Below the root (ADR-0055 D2, D10).** No ops task runs in a child plan: it is refused at plan time. A child's gate means the delegated task's branch, and a script task marked `readOnly` runs sealed in a worktree of its own, so it is no ops task and passes no gate ([ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D8).
+
 ### Isolation is decided at the first change task
 
 An ops task needs no isolation, so a run decides whether it isolates **when its
@@ -245,3 +246,4 @@ it.
 - 2026-10-18 — a force start queued behind its dependencies passes only the gate the user confirmed when forcing it, and an automatic merge at a gate is made only for a task nothing else holds back: one the user has not approved no longer triggers it ([ADR-0034](../supervision/0034-a-failed-task-blocks-only-its-dependents.md)'s one start rule).
 - 2026-10-21 — a script task is an ops task Ordewell runs from a literal script with no model, whose evidence is its exit status, and the planner may add and start one; the planner no longer "never carries out an effect itself" ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)).
 - 2026-10-22: merge automatically is set in `/settings`; `ordewell automerge` stays headless.
+- 2026-11-01 — no ops task runs below the root, and a read-only script task passes no gate (ADR-0055 D2, D8).

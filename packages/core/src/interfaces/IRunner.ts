@@ -1,7 +1,7 @@
 import type { AgentEvent, TaskRunnerConfig } from '../services/harness/AgentAdapter';
 import type { ApplyPatchArgs, CheckpointAnswer, McpToolReply, ReadTaskArgs, TaskCompleteArgs } from '../services/mcp/tools';
 import type { ApprovalDecision } from './IApproval';
-import type { TaskSkillSnapshot } from '../models/Task';
+import type { Task, TaskSkillSnapshot, VerificationCheck } from '../models/Task';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type { RunnerCommand } from '../models/RunnerCommand';
 import type { RunnerSessionCost } from '../models/Usage';
@@ -195,7 +195,7 @@ export interface IRunnerSession {
    * The runner's `task_complete` calls on this attempt's token (ADR-0022):
    * the only completion evidence, for `VerdictEngine` to weigh.
    */
-  onTaskComplete(listener: (report: TaskCompleteArgs) => void): void;
+  onTaskComplete(listener: (report: TaskCompleteArgs, refuted?: VerificationCheck) => void): void;
   /**
    * Answers the runner's `checkpoint` calls (ADR-0022, V5): the call stays
    * open until the returned promise settles, and its result is the answer.
@@ -238,6 +238,8 @@ export interface IRunner {
      * manifest's env still wins over them.
      */
     env?: Record<string, string>;
+    /** A delegated task's attempt (ADR-0055 D3): the task, for {@link ChildPlanRunner} to give its child. */
+    delegated?: Task;
     /** The runner's own session to continue in (ADR-0018, K1). */
     resumeSessionId?: string;
     /** What was counted of that session's running cost before, so its first turn is counted from there. */
@@ -279,6 +281,8 @@ export interface IRunner {
     runnerConfig?: TaskRunnerConfig;
     /** A script task's body (ADR-0035): only the script runner reads it, and it runs nothing else. */
     script?: ScriptBody;
+    /** A read-only script's shell (ADR-0055 D8): its body runs sealed there, in the worktree it was cut. */
+    sealed?: TaskShell;
     /**
      * A read-only attempt's shell (ADR-0046): its token serves `run_command`
      * from it, and only an attempt that has one is given that tool.

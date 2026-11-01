@@ -1,7 +1,7 @@
 import { Task, RunnerId, flattenTasksWithParents } from '../models/Task';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, PLAN_ENVELOPE_KEY } from './JsonExtractor';
 import type { RunnerModeInfo } from './ModeResolver';
-import { plannedTask, checkPlanInvariants, taskWhere, type PlanTaskError } from './PlannedTask';
+import { plannedTask, checkPlanInvariants, taskWhere, type IntakeCatalog, type PlanTaskError } from './PlannedTask';
 
 export function parsePlanJson(
   raw: string,
@@ -83,6 +83,7 @@ export function validatePlanTasks(
   runners: RunnerId[],
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
   autonomousDefault = false,
+  delegation: Pick<IntakeCatalog, 'delegationRefusal' | 'sealsScripts'> = {},
 ): PlanTasksResult {
   const rawTasks = isRecord(obj) ? obj.tasks : undefined;
   if (!Array.isArray(rawTasks)) {
@@ -92,7 +93,7 @@ export function validatePlanTasks(
     return { ok: false, errors: [{ field: 'tasks', message: 'Plan contained no tasks' }] };
   }
 
-  const planned = rawTasks.map((t) => plannedTask(t, { runners, runnerModes, autonomousDefault }));
+  const planned = rawTasks.map((t) => plannedTask(t, { runners, runnerModes, autonomousDefault, ...delegation }));
   const tasks = planned.map((p) => p.task);
   const errors = [
     ...sliceRequired(tasks),

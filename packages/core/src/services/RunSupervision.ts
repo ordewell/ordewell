@@ -300,6 +300,11 @@ export class RunSupervision {
     return this.handoffDeferred ? { ...handoff, deferredTo: 'supervisor' } : handoff;
   }
 
+  /** Whether a wake-up will open a planner turn by itself. */
+  get wakeOwed(): boolean {
+    return this.supervisor.wakeOwed;
+  }
+
   /** Whether wake-ups alone may open a planner turn now. */
   mayWake(): boolean {
     return this.supervisor.mayWake();

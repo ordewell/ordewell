@@ -243,6 +243,25 @@ export interface ConversationVariant {
   execution?: boolean;
   /** A submitted plan starts at once (ADR-0030): the planner does not wait for its outline to be confirmed. */
   autorun?: boolean;
+  /** Teaches delegation, only where the mandate grants it: with this absent the prompt does not change by a byte (ADR-0055 D21). */
+  delegation?: PlannerDelegation;
+  /** The planner is a subplanner: its parent's plan stands where the user does (ADR-0055 D4). */
+  subplanner?: SubplannerBrief;
+}
+
+/** What a planner that may delegate is told of its limits (ADR-0055 D19). */
+export interface PlannerDelegation {
+  tokens: number;
+  delegatedTasks: number;
+  /** What a delegated task of this plan can ask for past the floor. */
+  grantable: readonly string[];
+}
+
+/** What a subplanner is told of what it was given (ADR-0055 D4). */
+export interface SubplannerBrief {
+  /** Its own and its ancestors': a change to one fails its verdict (D7). */
+  protectedPaths: readonly string[];
+  readOnly: boolean;
 }
 
 /**
@@ -354,7 +373,84 @@ export function buildConversationSystemPrompt(
   variant: ConversationVariant = {},
 ): string {
   const modelsJson = modelsJsonFor(modelsByRunner, runners);
-  return buildConversationBody(goal, context, modelsJson, runners, readOnlyGuide(runnerModes, variant.harness ?? false, true), variant);
+  const body = buildConversationBody(goal, context, modelsJson, runners, readOnlyGuide(runnerModes, variant.harness ?? false, true), variant);
+  return variant.subplanner ? asSubplanner(body, variant.subplanner) : body;
+}
+
+/**
+ * What the prompt says of whoever stands above a subplanner, one rule per
+ * thing a user does there (ADR-0055 D4). Rewritten here rather than forked,
+ * since a fork means each block written twice (see {@link researchPhaseBlock}):
+ * a test holds what comes out to naming no user. The last rule is what the rest
+ * leave, so a sentence added to the prompt reads for a subplanner as it stands.
+ */
+const SUBPLANNER_WORDING: readonly (readonly [RegExp, string])[] = [
+  [/^You are Ordewell's project planner\. You explore the codebase, ask concise clarifying questions grounded in your findings, /, 'You are a subplanner: Ordewell\'s project planner for one part of a larger plan. You explore the codebase, '],
+  [/^2\. Ask clarifying questions grounded in your findings\. Reference actual files\. When the goal is vague, .*$/m, '2. No person reads this conversation, so nobody answers a question: decide from your findings, and write what you assumed into the task it bears on. What only someone above you can decide ends this with task_complete and status "blocked", saying exactly what is needed.'],
+  [/ Be direct: avoid unnecessary preamble, summaries, or explanations unless the user asks for detail\./, ' Be direct: avoid preamble, summaries and explanations.'],
+  [/Do NOT launch them in the background or async and end your turn saying you will report back later: your turn ending is what hands the conversation back to the user, and anything you say after it never reaches them\./, 'Do NOT launch them in the background or async and end your turn saying you will report back later: anything you say after your turn ends reaches nobody.'],
+  [/ Reads run at once; anything else is approved or refused by the user's settings\./, ' Reads run at once, and nothing asks: what the allowlist does not cover runs sealed, or is refused.'],
+  [/^- Synthesize tool findings into your messages\..*$/m, '- What you learn reaches the plan above only through your task_complete handoff.'],
+  [/^- A first plan may be research tasks alone, (.*?) A vague goal the user can clarify is not one: ask first\./m, '- A first plan may be research tasks alone, $1'],
+  [/^- A small effect you can state as exact commands: one script task\. In the user's turn, run it with run_script; when it belongs to a larger plan, make it a script task in that plan\./m, '- A small effect you can state as exact commands: one script task, in the plan or with run_script.'],
+  [/without the user's review/g, 'without review'],
+  [/; do not wait for the user to confirm it,/g, '; do not wait for anyone to confirm it,'],
+  [/^.*"autonomy": AFK \(agent works autonomously\) or HITL \(needs user confirmation\).*$/m, '- "autonomy": always AFK: nobody below the root confirms anything'],
+  [/^- User tasks \(type "user"\) always have sliceType "HITL"\.$/m, '- There are no manual tasks here: every "sliceType" is "AFK"'],
+  [/an absolute path into the workspace reaches the user's own checkout instead, where the earlier tasks' work is not merged yet/, 'an absolute path into the workspace reaches the delegated task\'s own checkout instead, where the earlier tasks\' work is not merged yet'],
+  [/ Each task runs in its runner's mode for the user's autonomy level \(Full or Guarded\)/, ' Each task runs in its runner\'s mode for this node\'s autonomy level (Full or Guarded)'],
+  [/ the user may enable a runner or edit the model allowlist at any time\./, ' a runner may be enabled or the model allowlist edited at any time.'],
+  [/ If it reports "coerced" changes, tell the user what was changed\./, ' If it reports "coerced" changes, write them into your handoff.'],
+  [/^Three reads per user message;/m, 'Three reads per turn;'],
+  [/^When the user asks you to start, stop or retry work, do it with these tools rather than telling them which button to press\. Ordewell checks every call, may ask the user first, and a refusal says why and what would be accepted\.$/m, 'You start, stop and retry the work yourself with these tools. Ordewell checks every call, and a refusal says why and what would be accepted.'],
+  [/ The user consents to it as written, unless AUTORUN is on and autonomy is Full\./, ' It runs sealed unless you were granted `effect`.'],
+  [/, or escalates it to the user\./, '.'],
+  [/ Only the supervisor at Act may, in a wake-up turn; in the user's own turn they answer it from the task's checkpoint card, so tell them what it asks\./, ''],
+  [/ Only the supervisor at Act may, in a wake-up turn; in the user's own turn they press Merge all themselves\./, ' A run that ends merges what landed by itself.'],
+  [/ Only the supervisor at Act may, in a wake-up turn; in the user's own turn they skip it themselves\./, ''],
+  [/^With AUTORUN on and autonomy Full nobody is asked anything, in the user's turn or in a wake-up turn at Act:/m, 'Nobody is asked anything here:'],
+  [/ Otherwise only tasks the user approved start, and a task you add in the user's turn waits for them\. A task the supervisor adds at Act is approved to run\./, ' What you write is approved as it lands.'],
+  [/merges the run's landed work into the user's branch/g, 'merges the run\'s landed work into the delegated task\'s branch'],
+  [/^USER GOAL:/m, 'YOUR GOAL:'],
+  [/\bthe user's\b/g, 'the plan above\'s'],
+  [/\b[Tt]he user\b/g, 'the plan above'],
+];
+
+function asSubplanner(body: string, brief: SubplannerBrief): string {
+  const worded = SUBPLANNER_WORDING.reduce((text, [rule, words]) => text.replace(rule, words), body);
+  const [lead, ...rest] = worded.split('\n');
+  return [lead, '', ...subplannerSection(brief), ...rest].join('\n');
+}
+
+function subplannerSection({ protectedPaths, readOnly }: SubplannerBrief): string[] {
+  return [
+    'YOU ARE A SUBPLANNER:',
+    '- A plan above you gave you this goal as a delegated task, with a budget. No person reads this conversation. Your plan is approved as it lands and starts when your reply ends: nobody reviews it.',
+    '- You plan and run; you never implement. Change no repository file yourself. Every change is a task of your plan.',
+    '- Your plan may hold change tasks, read-only tasks and loops, and script tasks, which run sealed unless you were granted `effect`. Research tasks and delegated tasks need `research` and `delegate`: a refusal says which you lack. Ops tasks and manual tasks do not exist here: they act on systems outside the repository or wait on a person, and a plan that holds one is refused. An effect outside the repository is for the plan above: report it.',
+    '- Nobody wakes you but Ordewell: a run update opens your next turn when the run ends, a task fails, or something needs a decision. In that turn retry, fix, skip or replan as you see fit.',
+    `- ${readOnly ? 'This task lands nothing: its answer is your handoff.' : 'When your run ends, what landed merges into the delegated task\'s branch by itself, and the plan above lands that branch.'}`,
+    `- You end this one way: call task_complete. Status "done" is refused until your plan has settled: nothing running, every task completed or skipped, at least one completed${readOnly ? '' : ', and what landed merged, with the branch changed'}. "blocked" and "failed" are taken at any time: that is how you give up, and how you say there was nothing to do. Give "commit" with "done", as a change task's runner does: its subject names the whole of this work. A turn that ends with nothing running and no call gets one reminder, and a second fails the task.`,
+    ...(readOnly || protectedPaths.length === 0 ? [] : [`- These paths may not change: ${protectedPaths.join(', ')}. A check you cannot see judges this work by them, so a change to one fails the task, and nothing lands. Do not plan one, and tell each task so in its prompt.`]),
+    '- Questions do not reach the plan above yet. checkpoint answers that; call task_complete with status "blocked" instead, saying exactly what you need.',
+    '',
+  ];
+}
+
+/** The delegated task as a planner writes it (ADR-0055 D1, D21): taught only where the mandate grants it. */
+function delegationSection({ tokens, delegatedTasks, grantable }: PlannerDelegation): string[] {
+  return [
+    'DELEGATED TASKS:',
+    'A delegated task hands one part of the goal to a child plan, with its own planner, worktree and budget. A flat plan stays the default: delegate only a separable subdomain with a clear boundary, such as a service, a package or a research question. One coherent feature, or a change with cross-cutting invariants, stays flat. Delegating is not how work goes parallel: a flat plan already fans out, and a child plan may be serial.',
+    '{ "id": "api-1", "order": 3, "title": "Move the API to v2", "description": "The API serves v2", "type": "delegated", "goal": "What the child plan must achieve, standing alone: it sees nothing of this conversation", "budget": { "tokens": 2000000, "wallClockMs": 7200000 }, "protectedPaths": ["tests/", "package.json"], "dependencies": [], "sliceType": "AFK", "assignedRunner": "..." }',
+    '- Only a top-level task can be one. It has "goal" in place of "prompt", and no "skills", "userSteps", "ops" or subtasks. "assignedRunner" and "assignedModel" are its planner\'s, which runs on that runner. An edit adds one with these same fields, its check in the same batch; it cannot be merged or split, or become another type of task.',
+    `- "budget" is required: "tokens" comes out of what this plan has, ${tokens} tokens at most in all, and "wallClockMs" is a time limit, a day when left out. A budget that runs out ends the task blocked.`,
+    '- "protectedPaths" is required unless "readOnly" is true: the paths its child may not change. List what its check runs and the configuration that runs it, since a child that rewrites the check turns it green without the work. A change to one fails the task. A goal that must edit one of them needs a read-only AI check told to read that change.',
+    `- Every delegated task needs a check: a task that depends on it directly and is a read-only AI task, or a script task with "readOnly": true, which runs sealed in a throwaway worktree cut from the integration tip, past no merge gate. Keep a check out of its child's reach: a goal never names it. On a "readOnly" delegated task, which answers a question and lands nothing, the check must be a read-only AI task, which reads its handoff.`,
+    '- It is neither a loop\'s check nor its body, and it needs an isolated run: where a run shares the workspace it is refused as it starts. A loop body that fixes what a delegated task\'s check finds is a worktree task, never a script or an ops task.',
+    `- A plan holds at most ${delegatedTasks} delegated tasks.${grantable.length > 0 ? ` "grants" names what it may do past planning and running its own plan, from: ${grantable.join(', ')}. Left out it asks for none of them.` : ''}`,
+    '',
+  ];
 }
 
 /**
@@ -545,6 +641,7 @@ function buildConversationBody(
     `- Adding a loop to a plan you already submitted, ${tools ? 'with edit_plan' : 'in a task-ops reply'}, takes three ops in this order, since a handle cannot be referenced before the op that defines it: add the check without "loop", with a "handle"; add each body task, depending on the check's handle, with a handle of its own; then update the check, by its handle, with "loop": {"body": [the body handles], "maxRounds": 3}. ${tools ? 'submit_plan names' : 'A whole plan names'} ids directly, so it needs no handles.`,
     '- Choose "maxRounds" deliberately, from 1 to 10; it is 3 when left out. It is the most times the check runs, so it bounds the spend. Raise it only where each round is cheap and clearly converging. A check that fails its last round fails, and the tasks after it are blocked until someone looks.',
     '',
+    ...(variant.delegation ? delegationSection(variant.delegation) : []),
     'RULES:',
     ...(tools
       ? [

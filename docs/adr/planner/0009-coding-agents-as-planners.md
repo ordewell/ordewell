@@ -4,7 +4,6 @@ status: accepted
 
 # 0009 — Coding agents as planners: the harness planner backend
 
-*Pending:* [ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — a subplanner is a harness planner that parks between turns, which this ADR rejects for the root; its token also serves `task_complete` and `checkpoint`.
 
 ## Problem
 
@@ -227,6 +226,8 @@ model's behalf, which is precisely what a coding agent replaces.
   events from the same `Session`. No surface learns that a coding agent is on
   the other end.
 
+- **A subplanner parks.** One planner this ADR's reasons do not reach is a subplanner ([ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D5): a harness planner its delegated task names, in that task's worktree, with its adapter gone between turns and its session id kept. Its turns are far apart and nobody waits on one, so the cold start rejected here for the root costs it little. Its token also serves `task_complete` and `checkpoint`, and an API planner cannot be one.
+
 ## A runner in the provider axis
 
 The glossary is explicit that **provider** means the LLM vendor and **runner**
@@ -376,3 +377,4 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-10-24 — evidence a later task acts on is a plain read-only task it depends on; only evidence the planner decides on is a research task (ADR-0037 R5).
 - 2026-10-27 — a signed-out harness planner is flagged in the welcome line, the picker and the planner pills; its turn is refused before it is sent with the way to sign in, and `/login` or the chat's Log in runs the runner's own login ([ADR-0052](../routing/0052-a-signed-out-coding-agent-is-flagged-and-signs-in-from-the-chat.md)).
 - 2026-10-31 — a turn waiting on the probe for installed agents says so on every surface.
+- 2026-11-01 — a subplanner is a harness planner that parks between turns (ADR-0055 D5, D18).

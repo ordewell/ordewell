@@ -5,7 +5,8 @@ import { checkPlanInvariants } from './PlannedTask';
 import { applyTaskOps, opRefusalText, type OpRef, type TaskOp } from './TaskOps';
 import { resolveAssignments, type AssignmentAdjustment, type AssignmentCatalog } from './TaskAssignment';
 import { checkOpSkills, checkPlanSkills, type SkillCheck, type SkillLookup } from './taskSkills';
-import { missingGrant, type Grant, type NodeAuthority } from './Mandate';
+import { delegatedRequest, mandateRefusalText, missingGrant, narrow, type Grant, type Mandate, type NodeAuthority } from './Mandate';
+import { planSize } from '../models/Delegation';
 
 /**
  * When a planner's change is checked: as the planner submits it, where a
@@ -72,6 +73,15 @@ export interface PlanChangeScope {
   runners(kind: PlannerChange['kind']): RunnerId[];
   /** What an assignment is resolved against, with the modes of `runners` and of any a task may be left on. */
   catalog(runners: RunnerId[]): AssignmentCatalog & { runnerModes?: Record<RunnerId, RunnerModeInfo[]> };
+  /**
+   * The node a change is made on, with what it holds now and how far below the
+   * root it stands, read as each check runs (ADR-0056 M4). Absent or undefined,
+   * nothing may delegate: a one-shot planner has no node, and a build that does
+   * not offer delegation reads no mandate for it.
+   */
+  node?(): { mandate: Mandate; level: number } | undefined;
+  /** Whether a script can run sealed here (ADR-0036 S6): a change that brings a read-only one waits on this, as an attached skill waits on its lookup. */
+  canSeal?(): Promise<boolean>;
   /** Where attached skill names are looked up; absent, none are. */
   skills?(): SkillLookup;
   /** The handles the open turn's committed edits gave, each with its task's id, for a later batch to name them by (ADR-0022 P2). */
@@ -121,7 +131,8 @@ export class PlanChangeCheck {
     if (read && !read.ok) return this.refused(change, read.errors);
     const lookup = this.scope.skills?.();
     const skills = !lookup ? NO_SKILLS : change.kind === 'ops' ? await checkOpSkills(change.ops, lookup) : await checkPlanSkills(read?.tasks ?? landing(change), lookup);
-    const checked = this.rules(change, phase, skills, read);
+    const sealable = this.bringsSealedScript(change, read) ? await this.scope.canSeal?.() : undefined;
+    const checked = this.rules(change, phase, skills, read, sealable);
     if (checked.ok) then?.(checked);
     return checked;
   }
@@ -137,10 +148,26 @@ export class PlanChangeCheck {
   private read<P extends CheckPhase>(change: PlannerChange<P>, phase: P): PlanTasksResult | undefined {
     if (change.kind !== 'plan' || phase !== 'submit') return undefined;
     const { runners, runnerModes, autonomousDefault } = this.intake();
-    return validatePlanTasks({ tasks: change.tasks }, runners, runnerModes, autonomousDefault);
+    return validatePlanTasks({ tasks: change.tasks }, runners, runnerModes, autonomousDefault, this.delegation());
   }
 
-  private rules<P extends CheckPhase>(change: PlannerChange<P>, phase: P, skills: SkillCheck, read: PlanTasksResult | undefined): CheckedChange {
+  /** Whether this node may write a delegated task: read on every route, since a parse that took one anyway would only be refused later (ADR-0055 D21). */
+  private delegation(): { delegationRefusal?: string | null; sealsScripts?: boolean } {
+    const node = this.scope.node?.();
+    if (!node) return {};
+    return {
+      delegationRefusal: node.mandate.grants.has('delegate') ? null : missingGrant(node.level, node.mandate, 'delegate'),
+      ...(node.level > 0 && !node.mandate.grants.has('effect') ? { sealsScripts: true } : {}),
+    };
+  }
+
+  /** Only such a change waits on the probe, so a flat plan's check takes the turns it always took. */
+  private bringsSealedScript<P extends CheckPhase>(change: PlannerChange<P>, read: PlanTasksResult | undefined): boolean {
+    if (change.kind === 'ops') return change.ops.some((op) => op.op === 'add' && op.task?.readOnly === true && op.task.type === 'script');
+    return (read?.ok ? read.tasks : read ? [] : landing(change)).some((task) => task.type === 'script' && task.readOnly === true);
+  }
+
+  private rules<P extends CheckPhase>(change: PlannerChange<P>, phase: P, skills: SkillCheck, read: PlanTasksResult | undefined, canSeal?: boolean): CheckedChange {
     const runners = this.scope.runners(change.kind);
     const catalog = this.scope.catalog(runners);
     const before = this.scope.tasks();
@@ -148,10 +175,11 @@ export class PlanChangeCheck {
 
     if (change.kind === 'plan') {
       const tasks = read?.ok ? read.tasks : [...landing(change)];
-      const ungranted = this.ungranted(before, tasks);
+      const ungranted = [...this.ungranted(before, tasks), ...this.pastMandate(before, tasks)];
       if (ungranted.length > 0) return this.refused(change, ungranted);
       // A landing plan waited out the rest of its reply, so the runners it was accepted against may be gone (ADR-0003 V1).
-      const broken = phase === 'land' ? checkPlanInvariants(tasks, runners, catalog.runnerModes) : [];
+      const sealing = canSeal === false ? { canSeal } : {};
+      const broken = phase === 'land' || canSeal === false ? checkPlanInvariants(tasks, runners, catalog.runnerModes, sealing) : [];
       if (broken.length > 0 || skillErrors.length > 0) return this.refused(change, [...broken, ...skillErrors]);
       const resolved = resolveAssignments(tasks, before, catalog);
       const warnings = [...(read?.ok ? read.warnings ?? [] : []), ...skills.warnings];
@@ -159,10 +187,14 @@ export class PlanChangeCheck {
     }
 
     if (skillErrors.length > 0) return this.refused(change, skillErrors);
-    const applied = applyTaskOps(before, change.ops, runners, catalog, this.scope.handles?.());
+    const applied = applyTaskOps(before, change.ops, runners, { ...catalog, ...this.delegation() }, this.scope.handles?.());
     if (!applied.ok) return this.refused(change, applied.refusals);
-    const ungranted = this.ungranted(before, applied.tasks);
+    const ungranted = [...this.ungranted(before, applied.tasks), ...this.pastMandate(before, applied.tasks)];
     if (ungranted.length > 0) return this.refused(change, ungranted);
+    if (canSeal === false) {
+      const unsealed = checkPlanInvariants(applied.tasks, runners, catalog.runnerModes, { canSeal }).filter((error) => error.field === 'readOnly');
+      if (unsealed.length > 0) return this.refused(change, unsealed);
+    }
     const tripped = this.scope.guard?.(before, applied.tasks);
     if (tripped) return this.refused(change, [{ message: tripped }]);
     // Then what landing changes besides the edit's own ops: an untouched task's effort the catalog no longer offers, say.
@@ -185,6 +217,40 @@ export class PlanChangeCheck {
     const was = new Map(flattenTasks(before).map((task) => [task.id, task]));
     const needs: Grant[] = ['replan', ...flattenTasks(after).some((task) => task.research && !was.get(task.id)?.research) ? ['research' as const] : []];
     return needs.filter((grant) => !mandate.grants.has(grant)).map((grant) => ({ field: 'tasks', message: missingGrant(node.depth, mandate, grant) }));
+  }
+
+  /**
+   * What a change leaves past this node's limits (ADR-0055 D2, D19): each
+   * delegated task it wrote narrowed as it is written (ADR-0056 M4), so a plan
+   * never holds what its carve would refuse, and a child held to what a child
+   * plan may be. Only what this change wrote: what stands in the plan is not
+   * this edit's to answer for. A root plan has no task limit, so a flat run
+   * does not change.
+   */
+  private pastMandate(before: readonly Task[], after: readonly Task[]): PlanChangeError[] {
+    const node = this.scope.node?.();
+    if (!node) return [];
+    const { mandate, level } = node;
+    const said = ({ status: _status, ...task }: Task) => JSON.stringify(task);
+    const was = new Map(flattenTasks(before).map((task) => [task.id, said(task)]));
+    const written = flattenTasks(after).filter((task) => was.get(task.id) !== said(task));
+    const errors: PlanChangeError[] = [];
+    const past = (field: string, asked: number, there: number) => errors.push({ field: 'tasks', message: mandateRefusalText({ level, field, asked: String(asked), there: String(there) }) });
+    const delegated = written.filter((task) => task.type === 'delegated');
+    for (const task of delegated) {
+      const narrowed = narrow(mandate, delegatedRequest(task, level));
+      if (!narrowed.ok) errors.push({ taskId: task.id, field: 'budget', message: mandateRefusalText(narrowed.refusal) });
+    }
+    const count = after.filter((task) => task.type === 'delegated').length;
+    if (delegated.length > 0 && count > mandate.limits.delegatedTasks) past('limits.delegatedTasks', count, mandate.limits.delegatedTasks);
+    if (level === 0) return errors;
+    const size = planSize(after);
+    if (written.length > 0 && size > mandate.limits.tasksPerPlan) past('limits.tasksPerPlan', size, mandate.limits.tasksPerPlan);
+    for (const task of written) {
+      const refused = task.ops ? 'an ops task acts on the user\'s systems from their checkout, so none runs below the root' : task.type === 'user' ? 'a manual task waits on a person, and none is below the root' : null;
+      if (refused) errors.push({ taskId: task.id, field: 'type', message: `Level ${level} refused Task "${task.title}": ${refused}.` });
+    }
+    return errors;
   }
 
   private refused(change: PlannerChange, errors: PlanChangeError[]): CheckedChange {

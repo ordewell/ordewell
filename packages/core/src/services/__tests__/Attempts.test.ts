@@ -82,6 +82,7 @@ function setup(opts: { tasks?: Task[]; spawn?: Spawn; repairs?: string[]; landPa
     notifications,
     runner,
     scriptRunner: runner,
+    childPlanRunner: runner,
     store,
     output: new BufferedTaskOutputSource(),
     runs,

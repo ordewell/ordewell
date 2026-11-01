@@ -53,6 +53,6 @@ export const CLAUDE_ORDEWELL: ClaudeOrdewellBinding = {
     const config = ownerOnlyConfigFile('mcp.json', JSON.stringify({
       mcpServers: { ...servers, [mcp.name]: { type: 'http', url: mcp.url, headers: mcp.headers, alwaysLoad: true } },
     }));
-    return { args: ['--mcp-config', config.path, '--allowedTools', MCP_CLIENT_TOOL_NAMES.toolNames(role, mcp.hidden).join(',')], config };
+    return { args: ['--mcp-config', config.path, '--allowedTools', MCP_CLIENT_TOOL_NAMES.toolNames(role, mcp.hidden, mcp.extraTools).join(',')], config };
   },
 };

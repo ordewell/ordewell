@@ -16,14 +16,50 @@ export const trailerSummary = (run: GlobalRunSettings): string => `${PLANNED_WIT
 export const autorunSummary = (run: GlobalRunSettings): string => `Autorun: ${onOff(run.autorun)}`;
 export const delegationSummary = (run: GlobalRunSettings): string => `Delegation: ${run.delegationTokens > 0 ? `on, ${run.delegationTokens} tokens for a tree` : 'off'}`;
 
+/** What turns delegation on where it may be turned on at all (ADR-0055 D21). */
+export const DELEGATION_ENV = 'ORDEWELL_DELEGATION';
+
+/** What {@link delegationSwitchedOn} reads of the place it runs in, so a test can put it anywhere. */
+export interface DelegationPlace {
+  /** The variable's value, as this process has it. */
+  env: string | undefined;
+  /** Where this module runs from; null where nothing can say, as in a webview. */
+  moduleDir: string | null;
+  exists(path: string): boolean;
+}
+
 /**
- * Whether any surface offers the delegation setting. Off until a delegated task
- * exists (ADR-0055 D21): until then a control for it promises something that
- * does nothing and warns about tokens that cannot be spent. The setting, its
- * validation and its stored value stay in core and stay inert; the delegated-task
- * slice turns this on, and only here.
+ * Whether delegation is offered here. It stays off in anything published
+ * (ADR-0055 D21): the rest of the feature is unbuilt, a subplanner approves a
+ * plan nobody reads, and a variable a user can set in a shell must not reach
+ * that from a package. So the variable counts only in a build run from a git
+ * checkout of this repository: an installed package sits under `node_modules`,
+ * however that project is kept, and a packaged extension has no checkout above
+ * it. The stored setting stays inert everywhere else.
  */
-export const DELEGATION_OFFERED = false;
+export function delegationSwitchedOn({ env, moduleDir, exists }: DelegationPlace): boolean {
+  if (env !== '1' || moduleDir === null) return false;
+  const parts = moduleDir.split(/[\\/]/);
+  if (parts.includes('node_modules')) return false;
+  const packages = parts.lastIndexOf('packages');
+  if (packages < 1) return false;
+  const root = parts.slice(0, packages).join('/');
+  return exists(`${root}/.git`) && exists(`${root}/packages/core/package.json`);
+}
+
+/** This module's directory, by the build's own means; `fs` comes from the process so a webview, which bundles this file, imports none. */
+function placeHere(): DelegationPlace {
+  const fs = typeof process === 'undefined' ? undefined : process.getBuiltinModule?.('fs');
+  if (!fs) return { env: undefined, moduleDir: null, exists: () => false };
+  const file = typeof __filename !== 'undefined' ? __filename : new URL(
+    // @ts-expect-error - import.meta is only valid under an ESM module setting; see builtinSkills.ts
+    (import.meta as { url: string }).url,
+  ).pathname;
+  return { env: process.env[DELEGATION_ENV], moduleDir: file.replace(/[\\/][^\\/]*$/, ''), exists: (path) => fs.existsSync(path) };
+}
+
+/** Whether any surface offers the delegation setting, and whether a planner may write a delegated task. */
+export const DELEGATION_OFFERED = delegationSwitchedOn(placeHere());
 
 export const ACT_RISK = 'Tasks it adds run too, ops tasks included, which can act on real systems unattended.';
 export const AUTORUN_RISK = 'Plans start without review, ops tasks included, which can act on real systems unattended. In Full nobody is asked at all: the planner may start anything, script tasks included, from a plan no person read.';

@@ -8,6 +8,8 @@ import { stateRootOf } from './stateRoot';
 import type { HandoffPatch } from '../models/Handoff';
 
 export interface TaskDiffRead {
+  /** Only the changed paths, joined by NUL: what a verdict reads (ADR-0055 D6). */
+  names?: boolean;
   repo?: string;
   path?: string;
 }
@@ -210,6 +212,8 @@ export async function readTaskDiff(invoker: GitInvoker, run: IsolationRun, taskI
       for (const file of selected) patches.push(`[repo ${file.repo}] ${file.path}\n${await file.patch()}`);
       return { available: true, text: patches.join('\n') };
     }
+    // NUL-joined for a reader that is no person, since a path can hold anything else.
+    if (options.names) return { available: true, text: files.map((f) => (f.repo === '.' ? f.path : `${f.repo}/${f.path}`)).join('\0') };
     return { available: true, text: files.length ? files.map((f) => `[repo ${f.repo}] ${f.path}: ${f.added === '-' ? 'binary change' : `+${f.added} -${f.removed}`}\n`).join('') : 'No files changed since this task started.\n' };
   } catch (err: unknown) {
     return { available: false, reason: `Task diff is not available: ${err instanceof Error ? err.message : String(err)}` };

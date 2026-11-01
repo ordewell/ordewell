@@ -19,13 +19,16 @@ import { PlanTurns, type PlanTurnInput } from './PlanTurns';
 import { RunSupervision, runOrigin } from './RunSupervision';
 import { Planner } from './Planner';
 import { TaskControlError, TaskOrchestrator, type OrchestratorObserver, type RunOrigin, type TaskOrchestratorOptions } from './TaskOrchestrator';
+import { ChildPlanRunner, ownedRunner, type ChildHost, type ChildNode, type NodeState, type SubplannerLink } from './ChildPlanRunner';
+import { DELEGATION_OFFERED } from './runSettingsText';
+import { checksDelegatedTask } from '../models/Delegation';
 import type { SlotPool } from './SlotPool';
 import type { OpenLease, ReservedLease } from './executionLease';
 import { PlanStore } from './PlanStore';
 import { ApprovalPolicy, effectiveApprovalMode } from './ApprovalPolicy';
 import { DEFAULT_PLANNER_ALLOWLIST } from './plannerAllowlist';
 import { effectRuleFor, parseEffectAllowlist, type EffectRules } from './effectAllowlist';
-import { autonomousAt, narrow, rootAuthority, withheldPlannerTools, type Mandate, type MandateRequest, type NodeAuthority, type RootSettings } from './Mandate';
+import { autonomousAt, delegatedRequest, heldMandate, mandateRefusalText, narrow, rootAuthority, withheldPlannerTools, type Mandate, type MandateRequest, type NodeAuthority, type RootSettings } from './Mandate';
 import { TreeLedger, type Carved, type NodeBudget } from './TreeLedger';
 import type { EventStore } from './eventStore';
 import { ROOT_NODE } from '../models/TreeEvent';
@@ -40,7 +43,7 @@ import type { ISearchProvider } from '../interfaces/ISearchProvider';
 import { WebReadPolicy } from './webReadPolicy';
 import { sharedWebResponseCache, type WebResponseCache } from './WebResponseCache';
 import { sharedSearchProvider } from './DuckDuckGoSearchProvider';
-import { PROVIDER_PRIORITY, runnerForProvider } from './ProviderRegistry';
+import { PROVIDER_PRIORITY, providerForRunner, runnerForProvider } from './ProviderRegistry';
 import { ModelResolver } from './ModelResolver';
 import { plannerModesFrom } from './plannerModes';
 import { RUN_SETTINGS_DEFAULTS, runSettingsOf, type GlobalRunSettings, type UserSettings } from './SettingsService';
@@ -82,6 +85,7 @@ import type { TaskOutputSource } from '../interfaces/TaskOutputSource';
 import type { IsolationHandoff, IsolationMergeResult, IsolationView, IWorktreeIsolation } from '../interfaces/IWorktreeIsolation';
 import type { IsolationRunController } from './IsolationRunController';
 import { PlanEditor, type TaskEditOptions } from './PlanEditor';
+import type { PlannerDelegation, SubplannerBrief } from './PlanPrompts';
 import { PlanEditError } from './PlanEditError';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import { ExecutionCommands, mergeStopped, type CommandOutcome, type ExecutionCommand, type ExecutionHost } from './ExecutionCommands';
@@ -281,6 +285,84 @@ export interface SessionDeps {
   placement?: ChildPlacement;
   /** Where a root's tree keeps its log (ADR-0058 S3): a file in that root's directory, unless a test supplies another. */
   eventLog?: (rootSessionId: string, stateRoot: string) => EventStore;
+  /** How this session answers to its parent's attempt, as a subplanner (ADR-0055 D5); absent at the root. */
+  subplanner?: SubplannerLink;
+  /** What this child was given to do, for its prompt. */
+  brief?: SubplannerBrief;
+  /** Whether a planner may write a delegated task here; the build's own switch (ADR-0055 D21) unless a test sets it. */
+  delegationOffered?: boolean;
+  /** What a test puts in a child's deps, in place of what a real child is built with. */
+  childDeps?: (task: Task) => Partial<SessionDeps>;
+}
+
+/** A session built under a parent's attempt: what {@link Session.openChild} seats and carves, and what the parent hands it. */
+interface ChildSpec {
+  task: Task;
+  cwd: string;
+  placement: ChildPlacement;
+  authority: NodeAuthority;
+  brief: SubplannerBrief;
+  link: SubplannerLink;
+}
+
+const SILENT: INotification = { info() {}, warn() {}, error() {}, confirm: async () => undefined };
+
+/**
+ * The planner a child runs is the runner its delegated task names (ADR-0055
+ * D5): an API planner is none, and has no Ordewell token. Its approvals go by
+ * the allowlist, so what would ask runs sealed: nobody is there (ADR-0056 M8).
+ */
+function subplannerConfig(config: IConfig, task: Task): IConfig {
+  const provider = providerForRunner(task.assignedRunner);
+  if (!provider) throw new Error(`Task "${task.title}" names runner "${task.assignedRunner}", and a subplanner is a harness planner: no planner runs on it.`);
+  return Object.create(config, {
+    aiProvider: { value: provider, enumerable: true },
+    orchestratorModel: { value: task.assignedModel?.modelId ?? '', enumerable: true },
+    plannerThinkingEffort: { value: task.assignedModel?.thinkingEffort, enumerable: true },
+    approvalMode: { value: 'allowlist', enumerable: true },
+    notifyCommand: { value: [], enumerable: true },
+  }) as IConfig;
+}
+
+/** A subplanner is Act with autorun, inside its mandate (ADR-0056 M7), and it merges its own subtree (ADR-0055 D10). */
+function subplannerSettings(settings: SessionRuntimeSettings): SessionRuntimeSettings {
+  return { ...settings, run: { ...RUN_SETTINGS_DEFAULTS, ...settings.run, supervisorLevel: 'act', autorun: true, mergeAtGatesAutomatically: true } };
+}
+
+/**
+ * What a child is built from: what its tree shares, and what is its own. It
+ * takes its parent's isolation through its placement and never one of its own
+ * (ADR-0055 D11), a broadcast that reaches no surface (D20), and a runner view
+ * that stops only what it started.
+ */
+function childSessionDeps(deps: SessionDeps, { task, cwd, placement, authority, brief, link }: ChildSpec): SessionDeps {
+  const given = deps.childDeps?.(task) ?? {};
+  const fsAdapter = given.fsAdapter ?? deps.fsAdapter.rootedAt?.(cwd);
+  if (!fsAdapter) throw new Error('This host cannot root a planner in a task\'s worktree, so it cannot run a child plan.');
+  return {
+    registry: deps.registry,
+    modelResolver: deps.modelResolver,
+    ...(deps.openTaskLog ? { openTaskLog: deps.openTaskLog } : {}),
+    ...(deps.mcpServer ? { mcpServer: deps.mcpServer } : {}),
+    ...(deps.web ? { web: deps.web } : {}),
+    ...(deps.execution ? { execution: deps.execution } : {}),
+    ...(deps.delegationOffered !== undefined ? { delegationOffered: deps.delegationOffered } : {}),
+    ...(deps.childDeps ? { childDeps: deps.childDeps } : {}),
+    config: subplannerConfig(deps.config, task),
+    notifications: SILENT,
+    broadcast: () => link.changed(),
+    onNotice: () => link.changed(),
+    runner: ownedRunner(deps.runner),
+    ...(deps.scriptRunner ? { scriptRunner: ownedRunner(deps.scriptRunner) } : {}),
+    workspaceRoot: () => cwd,
+    settings: () => subplannerSettings(deps.settings()),
+    placement,
+    child: authority,
+    subplanner: link,
+    brief,
+    ...given,
+    fsAdapter,
+  };
 }
 
 /**
@@ -347,6 +429,12 @@ export function createSession(deps: SessionDeps): Session {
   const scriptRunnerDeps: ScriptRunnerDeps = deps.openTaskLog
     ? {}
     : { fullOutputFile: (taskId, attempt) => prepareTaskOutputFile(session.taskLogLocation, taskId, attempt) };
+  const childHost: ChildHost = {
+    openChild: (...open) => session.openChild(...open),
+    changedPaths: (taskId) => session.changedPaths(taskId),
+    closeNode: (sessionId) => session.closeNode(sessionId),
+  };
+  const childPlans = new ChildPlanRunner(childHost);
   const taskLogs: TaskLogRecorder = new TaskLogRecorder({
     broadcast: deps.broadcast,
     // Read through the Session, whose id and workspace are the ones it saves
@@ -365,6 +453,11 @@ export function createSession(deps: SessionDeps): Session {
   const approvals = new PendingApprovals({
     onRequest: ({ id, request }) => {
       if (isRunnerApproval(request)) {
+        // Nobody below the root may allow a runner's request, and absent is denial (ADR-0056 M8).
+        if (deps.child) {
+          approvals.resolve(id, { decision: 'deny', note: 'A person cannot be asked here: do it another way, or report that it needs one.' });
+          return;
+        }
         events.status(session.planState);
         return;
       }
@@ -390,6 +483,7 @@ export function createSession(deps: SessionDeps): Session {
     notifications: deps.notifications,
     runner: taskLogs.wrap(runnerApprovals.wrap(withContextWindows(withTaskRunnerConfig(deps.runner, () => deps.settings().taskRunnerConfig), windows))),
     scriptRunner: taskLogs.wrap(deps.scriptRunner ?? new ScriptRunner(scriptRunnerDeps)),
+    childPlanRunner: taskLogs.wrap(childPlans),
     store,
     output: deps.taskOutput,
     isolation: deps.isolation ?? deps.placement?.isolation,
@@ -504,7 +598,7 @@ export function createSession(deps: SessionDeps): Session {
     liveRunner: (taskId) => orchestrator.getAttempt(taskId) !== undefined,
   });
 
-  const session = new Session({
+  const session: Session = new Session({
     config: deps.config,
     catalog,
     workspace: deps.workspaceRoot(),
@@ -542,6 +636,11 @@ export function createSession(deps: SessionDeps): Session {
       ensureStateDirIgnored(stateRoot);
       return jsonlEventStore(treeEventLogFile(rootSessionId, stateRoot));
     }),
+    subplanner: deps.subplanner,
+    brief: deps.brief,
+    delegationOffered: deps.delegationOffered ?? DELEGATION_OFFERED,
+    childPlans,
+    childSession: (spec) => createSession(childSessionDeps(deps, spec)),
   });
   return session;
 }
@@ -604,6 +703,11 @@ export interface SessionParts {
   /** Where it sits below the root. */
   placement?: ChildPlacement;
   eventLog: (rootSessionId: string, stateRoot: string) => EventStore;
+  subplanner?: SubplannerLink;
+  brief?: SubplannerBrief;
+  delegationOffered: boolean;
+  childPlans: Pick<ChildPlanRunner, 'stopEvery'>;
+  childSession: (spec: ChildSpec) => Session;
 }
 
 /**
@@ -691,6 +795,12 @@ export class Session {
   private readonly authority: NodeAuthority;
   /** Opens the root's log; only a first carve, or a reopen of a tree, asks. */
   private readonly eventLog: (rootSessionId: string, stateRoot: string) => EventStore;
+  /** How this session answers to its parent's attempt; undefined at the root (ADR-0055 D5). */
+  private readonly subplanner: SubplannerLink | undefined;
+  private readonly brief: SubplannerBrief | undefined;
+  private readonly delegationOffered: boolean;
+  private readonly childPlans: SessionParts['childPlans'];
+  private readonly childSession: SessionParts['childSession'];
   /** This node's side of the tree's ledger; undefined at the root, which is charged nothing (ADR-0056 M5). */
   private readonly budget: NodeBudget | undefined;
   /** The tree's ledger, once something asked: a flat run never does, so it has none and writes no log (ADR-0058 S3). */
@@ -780,6 +890,11 @@ export class Session {
     this.placement = parts.placement;
     this.authority = parts.child ?? rootAuthority(() => this.rootSettings());
     this.eventLog = parts.eventLog;
+    this.subplanner = parts.subplanner;
+    this.brief = parts.brief;
+    this.delegationOffered = parts.delegationOffered;
+    this.childPlans = parts.childPlans;
+    this.childSession = parts.childSession;
     this.budget = parts.placement?.budget;
     this.tree = this.budget?.tree ?? null;
     // The node stops, as a Stop does: nothing can recall what is in flight, so this is what bounds it (ADR-0056 M5).
@@ -858,9 +973,11 @@ export class Session {
         if (!this.turns.turnRunning) this.endTurnLease();
         this.backend.settle();
         queueMicrotask(() => this.turns.pump());
+        this.subplanner?.changed();
       },
       turnDropped: () => {
         if (!this.turns.turnRunning) this.endTurnLease();
+        this.subplanner?.changed();
       },
       usageLimit: (said, answered) => this.turns.usageLimit(said, answered),
       contextPaused: (details) => this.turns.contextPaused(details),
@@ -1140,6 +1257,10 @@ export class Session {
       },
       startAsked: (actor) => { if (actorAuthority(actor.kind) === 'user') this.supervision.userStarting(); },
       retryTask: (taskId, actor) => this.restartTask(taskId, runOrigin(actor)),
+      checksDelegatedTask: (taskId) => {
+        const task = this.store.get(taskId);
+        return task !== undefined && checksDelegatedTask(this.store.planTasks, task, { runnerModes: this.catalog.edit().runnerModes });
+      },
       skipTask: (taskId, reason, actor) => this.withSave(() => this.orchestrator.skipTask(taskId, reason, runOrigin(actor))),
       continueTask: (taskId, message, actor) => this.resumeTask(taskId, message, runOrigin(actor)),
       resumeNow: (taskId, message, actor) => this.withSave(() => this.orchestrator.resumeNow(taskId, runOrigin(actor), message)),
@@ -1262,7 +1383,14 @@ export class Session {
       skills: () => this.workspaceSkills(),
       handles: () => this.conversation.turnHandles(),
       guard: (before, after) => (guarded() ? this.supervision.checkEdit(before, after)?.refusal : undefined),
+      // Read only where the build offers delegation, so a flat session's change meets what it always met (ADR-0055 D21).
+      node: () => (this.delegationOffered ? { mandate: this.mandate(), level: this.authority.depth } : undefined),
+      canSeal: async () => (await this.fsAdapter.canSeal?.()) ?? false,
     };
+  }
+
+  private get delegates(): boolean {
+    return this.delegationOffered && this.mandate().grants.has('delegate');
   }
 
   /** A line from Ordewell itself, kept in the transcript where it happened. */
@@ -1547,9 +1675,93 @@ export class Session {
   }
 
   /** The child in `taskId` confirmed closed: what it did not spend comes back here (M5). */
-  async closeChild(taskId: string): Promise<void> {
-    const node = (await this.ledger()).nodeOf(this.runs.childSession(taskId) ?? '');
+  closeChild(taskId: string): Promise<void> {
+    return this.closeNode(this.runs.childSession(taskId) ?? '');
+  }
+
+  /**
+   * A child plan's start (ADR-0055 D3): its mandate and budget carved from what
+   * this node has left, then a Session built in `cwd`, the delegated task's
+   * worktree, that holds both. Rejects with the level that refused.
+   */
+  async openChild(task: Task, cwd: string, link: SubplannerLink): Promise<ChildNode> {
+    if (!this.delegationOffered) throw new Error(`Task "${task.title}" is a delegated task, and delegation is off here.`);
+    const carved = await this.carveChild(task.id, delegatedRequest(task, this.authority.depth));
+    if (!carved.ok) throw new Error(mandateRefusalText(carved.refusal));
+    const { mandate } = carved;
+    // A change at any level above reaches the subtree at its next check (ADR-0056 M1).
+    const authority: NodeAuthority = { depth: this.authority.depth + 1, mandate: () => heldMandate(mandate, [this.mandate()]) };
+    const brief: SubplannerBrief = { protectedPaths: mandate.exclusions.protectedPaths, readOnly: task.readOnly === true };
+    const placement = this.hostChild(task.id);
+    try {
+      return this.childSession({ task, cwd, placement, authority, brief, link }).asNode(mandate);
+    } catch (err) {
+      await this.closeNode(placement.sessionId);
+      throw err;
+    }
+  }
+
+  /** The child `sessionId` is gone: what it did not spend comes back here (ADR-0056 M5). */
+  async closeNode(sessionId: string): Promise<void> {
+    const node = (await this.ledger()).nodeOf(sessionId);
     if (node) node.tree.close(node.path);
+  }
+
+  /** This session as its parent's attempt drives it. */
+  private asNode(mandate: Mandate): ChildNode {
+    return {
+      sessionId: this.sessionId,
+      protectedPaths: mandate.exclusions.protectedPaths,
+      wallClockMs: mandate.limits.wallClockMs,
+      startPlanning: (goal) => this.startPlanning(goal),
+      continueConversation: (text) => this.continueConversation(text),
+      state: () => this.nodeState(),
+      halt: () => this.halt(),
+      close: () => this.destroy(),
+    };
+  }
+
+  /** What its parent reads of it, afresh (ADR-0055 D6). */
+  private nodeState(): NodeState {
+    const planTasks = this.store.planTasks;
+    const tasks = flattenTasks(planTasks);
+    const label = (task: Task) => `${taskRefOf(planTasks, task.id) ?? `#${task.order}`} "${task.title}"`;
+    const live = this.runOpening !== null || this.orchestrator.hasLiveWork || this.orchestrator.isMerging;
+    const open = tasks.filter((task) => task.status !== 'completed' && task.status !== 'skipped');
+    return {
+      unfinished: [
+        ...(tasks.length === 0 ? ['the child plan holds no tasks'] : []),
+        ...(live ? ['its run has not settled'] : []),
+        ...open.map((task) => `${label(task)} is ${task.status}`),
+        ...(this.runMergeView() ? ['what landed is not merged into the delegated task\'s branch'] : []),
+      ],
+      completed: tasks.filter((task) => task.status === 'completed').length,
+      live,
+      plannerBusy: this.isPlannerBusy || this.turns.turnRunning,
+      wakeOwed: this.supervision.wakeOwed,
+      stoppedFor: this.stoppedFor(),
+      tasks: tasks.map((task) => ({ label: label(task), status: task.status })),
+    };
+  }
+
+  /** Why this node may do nothing more: a child has nobody else to wait for (ADR-0056 M5, M8, M10). */
+  private stoppedFor(): string | null {
+    if (this.outOfBudget) return this.outOfBudget;
+    if (!this.mandate().grants.has('control')) return 'what it may do was withdrawn above it';
+    if (this.plan?.runSettings && this.supervision.level !== 'act') return 'its loop guard stopped its subplanner';
+    return null;
+  }
+
+  /** End this node's run and its planner turn, its children first, for a parent that waits on it. */
+  private async halt(): Promise<void> {
+    this.abortPlannerTurn();
+    if (this.orchestrator.hasLiveWork) this.stopRun();
+    await this.childPlans.stopEvery();
+  }
+
+  /** What a delegated task's branch changed since its base. */
+  changedPaths(taskId: string): Promise<string[]> {
+    return this.runs.changedPaths(taskId);
   }
 
   /** Why this node stopped for its budget, or null: a parent's reason for ending it `blocked`. */
@@ -2391,9 +2603,30 @@ export class Session {
       fetcher: this.fetcher,
       approval: this.approvalPolicy,
       notice: (level, message) => this.notice(level, message),
-      plannerTools: { sessionId: this.sessionId, handler: this.plannerTools, ...(this.child ? { withheld: withheldPlannerTools(this.child.mandate('off')) } : {}) },
+      plannerTools: {
+        sessionId: this.sessionId,
+        handler: this.offeredTools(),
+        ...(this.child ? { withheld: withheldPlannerTools(this.child.mandate('off')) } : {}),
+        ...(this.delegates ? { delegates: true } : {}),
+        ...(this.subplanner ? { subplanner: true } : {}),
+      },
+      ...(this.delegates ? { delegation: this.delegationBrief() } : {}),
+      ...(this.brief ? { subplanner: this.brief } : {}),
       skills: this.workspaceSkills().listSkills(),
     };
+  }
+
+  /** A planner's tools, and for a subplanner the two its parent's attempt answers (ADR-0055 D5). */
+  private offeredTools(): PlannerToolHandler {
+    const { subplanner } = this;
+    if (!subplanner) return this.plannerTools;
+    return { ...this.plannerTools, taskComplete: (report) => subplanner.taskComplete(report), checkpoint: () => subplanner.checkpoint() };
+  }
+
+  /** What the prompt says of this node's limits, as it stands when the planner starts (ADR-0055 D19). */
+  private delegationBrief(): PlannerDelegation {
+    const { limits, grants } = this.mandate();
+    return { tokens: limits.tokens, delegatedTasks: limits.delegatedTasks, grantable: [...grants].filter((grant) => grant === 'research' || grant === 'delegate' || grant === 'effect') };
   }
 
   /**

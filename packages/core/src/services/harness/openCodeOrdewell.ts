@@ -25,7 +25,7 @@ export function shadowsOrdewell(server: string): boolean {
 
 /** One allow per tool `role` is served, by its exact name: a pattern would cover another server's tools too. */
 function allowRules(mcp: McpClientConfig, role: OrdewellToolRole): Record<string, 'allow'> {
-  return Object.fromEntries(NAMES.toolNames(role, mcp.hidden).map((name) => [name, 'allow']));
+  return Object.fromEntries(NAMES.toolNames(role, mcp.hidden, mcp.extraTools).map((name) => [name, 'allow']));
 }
 
 /**

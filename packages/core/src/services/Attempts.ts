@@ -126,6 +126,8 @@ interface TaskAttempt extends EndedAttempt {
   readonly planScope: number;
   /** A script task's attempt (ADR-0035): the script runner runs its body, with no model. */
   readonly script: boolean;
+  /** A delegated task's attempt (ADR-0055 D3): a child plan, behind the runner seam. */
+  readonly delegated: boolean;
   /** A read-only attempt's `run_command` (ADR-0046), ended with the attempt. */
   shell: TaskShell | null;
   /** A read-only attempt's `fetch` and `web_search` (ADR-0046), ended with the attempt. */
@@ -263,6 +265,8 @@ export interface AttemptsDeps {
   runner: IRunner;
   /** Runs script tasks' bodies (ADR-0035), in place of a registered runner. */
   scriptRunner: IRunner;
+  /** Runs delegated tasks' child plans (ADR-0055 D3). */
+  childPlanRunner: IRunner;
   store: PlanStore;
   output: TaskOutputSource;
   /** The run an attempt works in. */
@@ -454,6 +458,7 @@ export class Attempts {
     const { store } = this.deps;
     const continuation = claim.continuation ?? null;
     const script = task.type === 'script';
+    const delegated = task.type === 'delegated';
     const attempt: TaskAttempt = {
       taskId: task.id,
       attempt: Math.max(this.spawnCounts.get(task.id) ?? 0, this.deps.lastLoggedAttempt(task.id), ...task.attemptUsage?.map((u) => u.attempt) ?? []) + 1,
@@ -476,6 +481,7 @@ export class Attempts {
       runnerStopped: false,
       planScope: this.planScope,
       script,
+      delegated,
       shell: null,
       web: null,
       patch: null,
@@ -483,7 +489,8 @@ export class Attempts {
       attaching: null,
       spawning: new AbortController(),
       lease: claim.lease,
-      hold: script ? null : this.deps.budget?.hold() ?? null,
+      // A child plan's sessions hold their own; this one is no session (ADR-0056 M5).
+      hold: script || delegated ? null : this.deps.budget?.hold() ?? null,
       opened: null,
     };
     this.spawnCounts.set(task.id, attempt.attempt);
@@ -552,6 +559,7 @@ export class Attempts {
     for (const attempt of this.live.values()) this.stopRunner(attempt);
     this.deps.runner.stopAll();
     this.deps.scriptRunner.stopAll();
+    this.deps.childPlanRunner.stopAll();
     return this.endAll('stop');
   }
 
@@ -690,6 +698,8 @@ export class Attempts {
    */
   private workOf(task: Task): TaskWork {
     if (this.deps.store.isOps(task.id)) return 'ops';
+    if (task.type === 'delegated') return task.readOnly ? 'delegatedReadOnly' : 'delegated';
+    if (task.type === 'script') return task.readOnly ? 'readOnly' : 'change';
     const modes = this.deps.registry?.get(this.deps.store.resolveTaskRunner(task))?.manifest.modes;
     return task.type === 'ai' && task.taskMode !== undefined && task.taskMode === taggedReadOnlyMode(modes) ? 'readOnly' : 'change';
   }
@@ -763,8 +773,10 @@ export class Attempts {
       }
       this.verifier.starting(task.id);
       const session = attempt.script
-        ? await this.spawnScript(task, attempt, cwd)
-        : await this.spawnRunner(task, attempt, cwd, writable, previousWork);
+        ? await this.spawnScript(task, attempt, cwd, writable)
+        : attempt.delegated
+          ? await this.spawnChildPlan(task, attempt, cwd)
+          : await this.spawnRunner(task, attempt, cwd, writable, previousWork);
 
       // Stop/load/cancel can end the attempt while the async adapter is
       // starting. Do not resurrect that execution after the surface already
@@ -1020,10 +1032,11 @@ export class Attempts {
    * so no skills and no account of an earlier attempt: a retry runs the body
    * again as written.
    */
-  private async spawnScript(task: Task, attempt: TaskAttempt, cwd: string): Promise<IRunnerSession> {
+  private async spawnScript(task: Task, attempt: TaskAttempt, cwd: string, writable: string | undefined): Promise<IRunnerSession> {
     const body = scriptBodyOf(task);
     if (!body) throw new Error(`Task "${task.title}" has no script to run: give it "commands" or a "script".`);
     const env = await this.envForTask(cwd);
+    if (landsNothing(attempt.kind)) attempt.shell = this.sealedShell(task, cwd, writable);
     return this.deps.scriptRunner.spawn({
       taskId: task.id,
       runner: attempt.runner,
@@ -1034,6 +1047,34 @@ export class Attempts {
       env,
       attempt: attempt.attempt,
       script: body,
+      ...(attempt.shell ? { sealed: attempt.shell } : {}),
+    });
+  }
+
+  /**
+   * A read-only script's shell (ADR-0055 D8): it runs sealed or not at all, so
+   * a host that cannot seal fails it at its start, and it never sits ready with
+   * nothing to start it.
+   */
+  private sealedShell(task: Task, cwd: string, writable: string | undefined): TaskShell {
+    const worktrees = writable ? Object.values(this.deps.runs.openRecord(task.id)?.repos ?? {}).map((r) => r.worktree) : [];
+    const shell = this.deps.taskShell?.({ cwd, ...(writable ? { writable } : {}), ...(worktrees.length ? { worktrees } : {}) });
+    if (!shell?.hold) throw new Error(`Task "${task.title}" must run sealed, and this host has no sealed shell to run it in: make it a read-only AI task.`);
+    return shell;
+  }
+
+  /** A delegated task's start (ADR-0055 D3): its child plan, in the worktree this attempt opened. No prompt: a subplanner reads its goal. */
+  private spawnChildPlan(task: Task, attempt: TaskAttempt, cwd: string): Promise<IRunnerSession> {
+    return this.deps.childPlanRunner.spawn({
+      taskId: task.id,
+      runner: attempt.runner,
+      prompt: task.goal ?? '',
+      cwd,
+      order: task.order,
+      title: task.title,
+      attempt: attempt.attempt,
+      delegated: task,
+      ...(attempt.kind.kind === 'continuation' ? { resumeSessionId: attempt.kind.resumeSessionId } : {}),
     });
   }
 
@@ -1287,7 +1328,7 @@ export class Attempts {
     attempt.runnerStopped = true;
     const { taskId } = attempt;
     // A stop that failed leaves nothing to wait for, and nothing awaits this but a continue.
-    const runner = attempt.script ? this.deps.scriptRunner : this.deps.runner;
+    const runner = attempt.script ? this.deps.scriptRunner : attempt.delegated ? this.deps.childPlanRunner : this.deps.runner;
     const windDown = Promise.all([this.windDowns.get(taskId), runner.stop(session.id)]).catch(() => undefined).then(() => {
       if (this.windDowns.get(taskId) === windDown) this.windDowns.delete(taskId);
     });

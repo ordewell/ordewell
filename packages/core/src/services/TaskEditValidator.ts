@@ -81,6 +81,8 @@ const NOT_KEPT_BY_A_SCRIPT = [...AI_ONLY_FIELDS, 'prompt', 'skills', 'userSteps'
  */
 function typeCoherenceCheck(target: Task, changes: Partial<Task>): TaskEditCheck | null {
   if (!changes.type || changes.type === target.type) return null;
+  // A goal and a prompt are not the same work, and its child would answer for another (ADR-0055 D1): a new task says so.
+  if (changes.type === 'delegated' || target.type === 'delegated') return { ok: false, error: `"${target.title}" cannot change between a delegated task and any other: add a new task instead` };
   // What runs, and where, is fixed once it has run (ADR-0020): a script's
   // body and a runner's prompt are not the same work, and its log and verdict
   // would describe the other one.

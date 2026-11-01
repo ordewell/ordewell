@@ -677,6 +677,13 @@ export class IsolationRunController {
     return Object.keys(this.resolvers).filter((id) => this.resolvers[id] === conflictedId);
   }
 
+  /** The paths a task's branch changed since its base, by their place in the workspace. Throws where they cannot be read: a verdict that rests on them fails closed (ADR-0055 D6). */
+  async changedPaths(taskId: string): Promise<string[]> {
+    const read = await this.taskDiff(taskId, { names: true });
+    if (!read.available) throw new Error(read.reason);
+    return read.text.split('\0').filter(Boolean);
+  }
+
   async taskDiff(taskId: string, options: TaskDiffRead): Promise<TaskDiffResult> {
     if (!this.run || !this.run.tasks[taskId] || !this.isolation.taskDiff) {
       return { available: false, reason: TASK_DIFF_UNAVAILABLE };
