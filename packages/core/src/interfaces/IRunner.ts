@@ -293,12 +293,12 @@ export interface IRunner {
      * arrives (ADR-0047): a refusal is the call's result, and nothing is
      * recorded. Without one, a `task` reference resolves against no plan.
      */
-    checkHandoff?: (completion: TaskCompleteArgs) => HandoffCheck<TaskCompleteArgs>;
+    checkHandoff?: (completion: TaskCompleteArgs) => HandoffCheck<TaskCompleteArgs> | Promise<HandoffCheck<TaskCompleteArgs>>;
     /**
-     * Answers the attempt's `read_task` calls (ADR-0047), against the plan
+     * Answers the attempt's `read` calls (ADR-0047), against the plan
      * and the session's task logs. Without one the call says it is not available.
      */
-    readTask?: (args: ReadTaskArgs) => McpToolReply;
+    readTask?: (args: ReadTaskArgs) => McpToolReply | Promise<McpToolReply>;
     /**
      * Answers a read-only attempt's `save_patch` calls (ADR-0050): its shell
      * captures the worktree's changes and the attempt keeps them. Without one

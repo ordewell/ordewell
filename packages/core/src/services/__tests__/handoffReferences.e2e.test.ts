@@ -36,7 +36,7 @@ it('resolves file and commit claims on pull, marks missing or escaping claims un
     ] });
     await vi.waitFor(() => expect(agents).toHaveLength(2));
     const read = spawn.mock.calls[1][0].readTask!;
-    const first = read({ task: 'a' }).text;
+    const first = (await read({ task: 'a' })).text;
     expect(first).toContain('missing.ts (unresolved)');
     expect(first).toContain('escape/secret (unresolved)');
     expect(first).toContain('commit deadbeef in api (unresolved)');
@@ -46,7 +46,7 @@ it('resolves file and commit claims on pull, marks missing or escaping claims un
     if (saved?.type !== 'handoff') throw new Error('No saved handoff');
     expect(saved.handoff.artifacts?.[0]).not.toHaveProperty('resolved');
     fs.unlinkSync(path.join(root, 'present.ts'));
-    expect(read({ task: 'a' }).text).toContain('present.ts (unresolved)');
+    expect((await read({ task: 'a' })).text).toContain('present.ts (unresolved)');
     expect(session.taskLog('a', 1).find((e) => e.type === 'handoff')).toMatchObject({ handoff: { artifacts: [{ resolved: false }, { resolved: false }, { resolved: false }, { resolved: true }, { resolved: false }] } });
   } finally {
     session.destroy();

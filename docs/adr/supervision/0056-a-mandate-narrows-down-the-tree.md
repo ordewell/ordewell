@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0001", "0008", "0022", "0029", "0030", "0035", "0036", "0037", "0053"]
-note: "Settles #23, #92 and #112 as far as subplanners need. Built: M1 to M4, M6's seam, its paths and `delegate`, M5's ledger in `TreeLedger`, a child's derived report on stopping, M7's autonomy, M9, M10, and what M3 and M8 end a child for: its clock, a guard, a failed restart. Not built: `raiseTokens`, a child's wake on a refused start, questions going up in M8, the paths M7 derives past `scope`, and a subplanner's harness subagents in M6, which still run without `research`. A flat run does not change."
+note: "Settles #23, #92 and #112 as far as subplanners need. Built: M1 to M4, M6's seam, its paths and `delegate`, M5's ledger in `TreeLedger`, a child's derived report on stopping, M7's autonomy, M9, M10, and what M3 and M8 end a child for: its clock, a guard, a failed restart. Not built: `raiseTokens`, a child's wake on a refused start and questions going up in M8. A flat run does not change."
 ---
 
 # 0056 — A mandate says what a node may do without a person, and what it can hand on only narrows down the tree
@@ -222,12 +222,15 @@ Judgment stays the planner's.
   | `mergeLanded`, from `tick` and the run's end | an automatic merge passes no command | below the root, reads `merge`; ADR-0055 D9. At the root the user's setting is the consent, at any level (ADR-0029) |
   | `{ kind: 'autorun' }` | allowed all but the user's controls | below the root, narrowed by `approve` and `control`. At the root it is the user's standing instruction, which no level holds back (ADR-0030) |
   | `ModeResolver` | a runner's mode reads global autonomy | a child's reads `autonomy` |
-  | `spawn_research_agent`, harness subagents | uncounted fan-out | spend counts usage events with a subagent id; without `research` a subplanner's harness subagents are withheld |
+  | `spawn_research_agent`, harness subagents | uncounted fan-out | spend counts usage events with a subagent id; without `research` a subplanner's harness subagents are withheld, each runner by its own switch: Claude Code's `--disallowedTools`, Codex's `multi_agent` features on the thread, and OpenCode has none for a planner at all, so its prompt says it has none |
 
   `PlanChangeCheck` refuses a research task without `research`, as well as the landing
   leaving it unapproved: a child's `approve` and `run_plan` approve what its plan holds, so
   a task left in the plan would start with no grant. A child's `replan` is read by the check
   and not at `run_script`, which `control` allows.
+
+  What a runner's own subagents do stays the runner's: only a subplanner's are withheld,
+  and a child's task runners keep theirs, whose usage is an estimate until it arrives (M5).
 
   **The tool list is filtered by grants and fixed at session start**, in a stable order,
   through `PlannerTokenScope.hidden`, because a changed list breaks the prompt cache. MCP
@@ -242,7 +245,7 @@ Judgment stays the planner's.
 
   | goes up | held by |
   |---|---|
-  | changing an interface outside its scope | detected: the paths its branch changed outside `scope` are derived at its verdict and put in its report's `open` ([ADR-0057](0057-information-moves-by-reference.md) R2), since scopes are advisory (R6) |
+  | changing an interface outside its scope | detected: the paths its branch changed outside `scope` are derived as its report is taken and put in that report's `open` ([ADR-0057](0057-information-moves-by-reference.md) R2), since scopes are advisory (R6) |
   | widening its scope | `scope` is on the parent's plan, which the child cannot edit |
   | spending more | refused at the claim (M5) |
   | any outward effect | sealed (M9) |
@@ -408,3 +411,4 @@ Judgment stays the planner's.
 - 2026-10-31 — M5's ledger implemented in `TreeLedger`, rebuilt from the tree's log. Built closest to the text where it could not hold: spend is checked in `startRefusal`; a script holds nothing; an attempt's overrun takes its children's room, and a node stops at what that leaves of `limit`, not at `limit`, or its own work could spend what its children hold; ready work refused with nothing live stops the node too.
 - 2026-11-01 — M10 and M5's stop implemented: a lost `control` refuses at the claim and the turn gate and lets what is in flight finish, where it had stopped it; a budget stop reaches the subtree; a Continue and a fresh retry carve what the task has left, so no retry mints budget; a child's mandate is carved as it opens and not saved; a planner that fails its restart ends the child `failed`, as M8 says, where it had read `blocked`.
 - 2026-11-01 — a child runs under its mandate: `delegate` and D19's limits are held as a change is written, nobody below the root may allow a runner's request, a child's script runs sealed without `effect`, and a child that may do nothing more ends `blocked` with a derived report. Wall-clock time runs from the child's start: it does not stop yet for a usage limit.
+- 2026-11-01 — a subplanner's harness subagents are withheld without `research`, per runner, and its prompt names none; M7's paths reach its report; a subtree's task runners load `minimal` unless the settings file says otherwise.

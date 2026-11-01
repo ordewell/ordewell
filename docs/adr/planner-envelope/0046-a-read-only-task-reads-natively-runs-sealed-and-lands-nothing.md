@@ -168,7 +168,7 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
   `Grep`, `Glob` and `LS` are decided automatically by Ordewell against the
   task worktree and session workspace, with symlinks resolved. A read outside
   both is refused, never asked. Edit, write, notebook, shell and plan-mode
-  transition tools are withheld. Ordewell's task tools, including `read_task`,
+  transition tools are withheld. Ordewell's task tools, including `read`,
   are pre-allowed.
   The assigned model runs directly; native plan mode's model pin is gone.
 - **OpenCode 1.x and 2.x** use the `build` agent under Ordewell's read-only
@@ -176,7 +176,7 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
   except the task worktree and session workspace, and writes, shells,
   delegation, browser, LSP and code-mode execution denied. Project config is
   disabled and LSP startup off, as for the planner (ADR-0028). Ordewell's
-  task tools, including `read_task`, are allowed by exact name. 2.x must
+  task tools, including `read`, are allowed by exact name. 2.x must
   expose MCP tools outside code mode or the task cannot start. A read-only attempt never
   resumes a session with old permissions.
 - **Codex** keeps its read-only sandbox setting and declines native file
@@ -441,10 +441,11 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 - 2026-10-22 — a sealed run can no longer rename or remove its worktree root, and every `.git` entry the checkout brought is held by the profile and checked for identity, content and hooks after every run; a repo group's root is described as not persistently writable where bubblewrap overlays it.
 
 - 2026-10-22 — the group-root consequence names the refusal where the root is bound read-only, and the testing decisions say which host proves which rule: macOS for Seatbelt, Linux CI for the bind mount, the group-root overlay and the read-only binds.
-- 2026-10-22 — handoffs carry read-only results and `read_task` joins the allowed task tools (ADR-0047, #120).
+- 2026-10-22 — handoffs carry read-only results and `read` joins the allowed task tools (ADR-0047, #120).
 - 2026-10-24 — a task's saved patch comes back with its handoff, captured by Ordewell's git only inside the task's seal (ADR-0050).
 - 2026-10-25 — a read-only task reads the web through Ordewell's `fetch` and `web_search`, under the planner's web-read policy without prompting and with a budget per attempt; native web tools stay refused.
 - 2026-10-25 — a task's web-read decisions are recorded in its attempt's log, an allowed read's naming what allowed it, and never in the planner's conversation; a read answered after its attempt ended hands the runner nothing; a cancelled allowed read keeps its count.
 - 2026-10-31 — a sealed run's memory limit is real memory, and a run ended at it says so (ADR-0036).
 - 2026-10-31 — a task's commands before its first sealed run have a scratch directory apart from its sealed runs' (ADR-0036 S8).
 - 2026-11-01 — a script task and a delegated task may be read-only (ADR-0055 D1, D8).
+- 2026-11-01 — the task tool is `read` ([ADR-0057](../supervision/0057-information-moves-by-reference.md) R11).

@@ -206,6 +206,8 @@ export interface PlannerStartOptions extends AgentStartCommon {
    * these are the only ones it gets, and each is handed over as parsed.
    */
   projectServers?: ProjectMcpServer[];
+  /** The harness's own subagents are off for this session (ADR-0056 M6), each runner by its own switch. Absent means as the harness has them. */
+  noSubagents?: true;
 }
 
 /**

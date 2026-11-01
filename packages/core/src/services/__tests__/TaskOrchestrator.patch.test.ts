@@ -48,7 +48,7 @@ describe.skipIf(process.platform === 'win32')("a read-only task's saved patch (A
     const requests: RunnerSpawnOptions[] = [];
     const kept: Array<{ taskId: string; attempt: number; patch: string }> = [];
     const recorded: StoredHandoff[] = [];
-    // The session's task logs, as `read_task` and `apply_patch` read them: one attempt each, with what was kept for it.
+    // The session's task logs, as `read` and `apply_patch` read them: one attempt each, with what was kept for it.
     const logged = new Map<string, StoredHandoff>();
     const patches = new Map<string, Buffer>();
     const runner = {

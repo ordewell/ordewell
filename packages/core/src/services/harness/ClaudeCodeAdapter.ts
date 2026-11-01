@@ -610,7 +610,9 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   protected spawnSpec(opts: AgentStartOptions, workspace: Record<string, string>): SpawnSpec {
     if (opts.kind === 'task') return this.taskSpawnSpec(opts);
     const nativeShell = this.nativeShell;
-    const disallowed = nativeShell ? DISALLOWED_TOOLS.filter((tool) => !NATIVE_SHELL_TOOLS.has(tool)) : DISALLOWED_TOOLS;
+    const allowedShell = nativeShell ? DISALLOWED_TOOLS.filter((tool) => !NATIVE_SHELL_TOOLS.has(tool)) : DISALLOWED_TOOLS;
+    // Both names: 2.1.314 lists `Task`, and the flag takes it out of the session's tools (ADR-0056 M6).
+    const disallowed = opts.noSubagents ? [...allowedShell, ...SUBAGENT_TOOLS] : allowedShell;
     const args = [
       ...PROTOCOL_ARGS,
       // The read-only guarantee, enforced at spawn rather than by prompt.

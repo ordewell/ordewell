@@ -5,6 +5,7 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
 import { LeaseHost } from '../sessionLease';
+import { Subtree } from '../Subtree';
 import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import type { Session } from '../createSession';
 import type { ConversationRequest, ConversationTurn, IAiService } from '../AiService';
@@ -556,6 +557,23 @@ describe('a Continue (ADR-0055 D17)', () => {
     await vi.waitFor(() => expect(carves).toHaveBeenCalled(), { timeout: 20_000 });
     expect(carves.mock.calls[0][2].wallClockMs).toBe(3_600_000 - spent);
     parent.destroy();
+  });
+});
+
+describe('a reopened child, read from above (ADR-0057 R1)', () => {
+  const reopened = new Subtree({
+    here: 'root',
+    nodes: () => [{ path: 'root/1', sessionId: 'child', taskId: 'd' }, { path: 'root/2', sessionId: 'child', taskId: 'd' }],
+    plan: () => [delegated()],
+    logs: () => ({ attempts: () => [], events: () => [] }),
+  });
+
+  it('counts its one plan once, though a Continue opened it a second node', () => {
+    expect(reopened.plans().map((plan) => plan.node)).toEqual(['root/2']);
+  });
+
+  it('still reads what a reference pinned against its first node', () => {
+    expect(reopened.planAt('root/1')?.node).toBe('root/1');
   });
 });
 

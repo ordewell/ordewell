@@ -60,7 +60,7 @@ it('is named, with the others, where Codex is told to look for the task tools', 
     mcp: mcpClientConfig({ url: 'http://127.0.0.1:4555/mcp', token: 'tok' }),
   });
 
-  expect(fake.instructions()).toContain('five tools from the `ordewell` MCP server: `task_complete`, `checkpoint`, `read_task`, `apply_patch` and `board_post`.');
-  expect(fake.instructions()).toContain('`mcp__ordewell__task_complete`, `mcp__ordewell__checkpoint`, `mcp__ordewell__read_task`, `mcp__ordewell__apply_patch` and `mcp__ordewell__board_post`');
+  expect(fake.instructions()).toContain('five tools from the `ordewell` MCP server: `task_complete`, `checkpoint`, `read`, `apply_patch` and `board_post`.');
+  expect(fake.instructions()).toContain('`mcp__ordewell__task_complete`, `mcp__ordewell__checkpoint`, `mcp__ordewell__read`, `mcp__ordewell__apply_patch` and `mcp__ordewell__board_post`');
   adapter.dispose();
 });

@@ -118,8 +118,8 @@ whatever the listings say.
 
 - **`apply_patch({task, attempt?})`** is on a change task's token, and a
   read-only task's does not list it. The patch is the artifact of a task the
-  caller may read, the set `read_task` reads (`readableTaskIds`), found as
-  `read_task` finds a handoff: the named attempt's, else the latest's.
+  caller may read, the set `read` reads (`readableTaskIds`), found as
+  `read` finds a handoff: the named attempt's, else the latest's.
 - **It merges into the caller's own worktree**, from the worktree's root, with
   `git apply --3way --whitespace=nowarn`, which stages what it applies. At the
   commit the patch was taken against it reproduces the explorer's tree, mode
@@ -232,7 +232,7 @@ a rename are kept or dropped together, as the one file the patch holds.
   - It comes after the author's own artifacts and outside their limit.
   - It is added whatever the verdict, and an attempt that ended without a
     *Completion call* still hands it on.
-  - It is in the plan's digest, so `read_task`, `task_query` and every surface
+  - It is in the plan's digest, so `read`, `task_query` and every surface
     name it. A row says it and its lines added and removed; the attempt's log
     block adds the base commit, the file to open and every flagged path. One
     view in core words those facts for the TUI, the VS Code webview and the
@@ -252,7 +252,7 @@ pick.
   same for each. An explorer that fails it is out. Exactly one that passes
   needs no pick; none that passes means the round failed.
 - **The judge.** Two or more that pass are a tie on evidence. A read-only judge
-  task that depends on every explorer reads their handoffs with `read_task`,
+  task that depends on every explorer reads their handoffs with `read`,
   and the patch files they name with its runner's own reads, which reach the
   workspace. It recommends one in a finding, and a finding is advice
   (ADR-0047).
@@ -384,3 +384,4 @@ No field records the pick, and core reads nothing from the judge.
 - 2026-10-24 — the apply asks git, against a copy of the index, what the patch would leave, so a patch with no mode line cannot retarget a link the repository tracks.
 - 2026-10-24 — the apply refuses a path that would leave the worktree: under a link on disk, which git's check misses since it reads only the index, or at or under a name Ordewell linked in, in any case; sealing the apply is the follow-up.
 - 2026-10-24 — a second review's fixes: the apply refuses a patch whose trial git stops, walks every path git parses from the patch, refuses a path under a submodule, and answers *Stopped* with what git changed on disk; `task_diff` checks the patch's size and hash.
+- 2026-11-01 — the task tool is `read` ([ADR-0057](../supervision/0057-information-moves-by-reference.md) R11).

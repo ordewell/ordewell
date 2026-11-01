@@ -78,7 +78,7 @@ function indent(text: string): string {
  * first that would pass the ceiling, then the artifacts, which it does not
  * count. A finding is never cut. Those left out are counted from
  * `findingCount`, which includes the ones the plan's digest does not hold,
- * and pointed at where `read_task` finds them.
+ * and pointed at where `read` finds them.
  */
 function handoffText(handoff: HandoffDigest, label: string): string {
   return boundedHandoffLines(handoff, (more) => `(+${more} more finding${more === 1 ? '' : 's'}; read task #${label})`).join('\n');
@@ -107,7 +107,7 @@ function findingRange(count: number): string {
 }
 
 /** The pull beside the push (ADR-0047): the readable set reaches past the direct dependencies the prompt carries. */
-const READ_TASK_NOTE = '`read_task` reads any of these tasks in full, every finding and its report, and the tasks they depend on too.';
+const READ_TASK_NOTE = '`read` reads any of these tasks in full, every finding and its report, and the tasks they depend on too.';
 
 export function renderPriorOutputs(outputs: PriorOutput[]): string {
   if (outputs.length === 0) return '';

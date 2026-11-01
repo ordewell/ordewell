@@ -1088,7 +1088,7 @@ token decides the role), "MCP bridge", "plugin".
 **Task token** — the credential that binds one structured task attempt to the
 *Ordewell MCP server*: one session, one task, one attempt generation (the
 generations `VerdictEngine` tracks). It lists `task_complete`, `checkpoint`
-and `read_task`, and `apply_patch` for a change task; a read-only task gets
+and `read`, and `apply_patch` for a change task; a read-only task gets
 `run_command`, its only shell, and `save_patch` instead of `apply_patch`,
 and `fetch` and `web_search`, its only web reads.
 It is revoked when the attempt ends, and a call carrying it after
@@ -1203,7 +1203,7 @@ explicit signal bound to the attempt, not a judgement anyone weighs), and
 "tool verdict" (the tool produces no verdict).
 
 **Report** — the optional long form of a task's *Handoff*, at most 20,000
-characters, stored in its attempt's *Task log*. It is pulled with `read_task`
+characters, stored in its attempt's *Task log*. It is pulled with `read`
 (`include_report: true`) or the planner's `task_output`, never pushed into a
 dependent's prompt or a wake-up. A completion call superseded by a later turn
 or a message read mid-turn leaves no report. Older saved tasks keep their
@@ -1226,7 +1226,7 @@ event at the end of the attempt's *Task log*; the plan keeps a bounded digest
 dependent's *Prior task outputs* carry at most 4,000 characters of it per
 direct dependency: the summary, then findings whole in the producer's order,
 stopping before one that would not fit, then `+N more findings; read task #x`.
-A task reads the rest with `read_task` — the full handoff, and the report when
+A task reads the rest with `read` — the full handoff, and the report when
 asked, of itself, its transitive dependencies, and its loop's check or body —
 never a transcript. A handoff is not a *Report* (the report is its long form,
 stored and never pushed), and not a *Verdict*: the verdict is what
@@ -1289,10 +1289,20 @@ stores it: `{ node, task, attempt, finding }`, immutable ids, with the attempt
 the finding belongs to, because F numbers restart per attempt. An author writes
 `#4/F3`, or the task and finding apart, and `#4@1/F3` for an older attempt;
 `checkHandoff` pins it as the call is accepted, and it renders as `#4@2/F3`,
-which `read_task` and `task_output` take back. `node` is the root until a plan
-can have a parent. One saved before pinning, or a task nothing says the attempt
-of, reads the latest.
+which `read` and `task_output` take back. `node` is the plan's path in the tree,
+`root` for a flat plan's; across plans it renders with that path, `3/2:#4@2/F3`,
+and keeps `label`, the name its own plan gave the task, for a reader with no such
+plan. One saved before pinning, or a task nothing says the attempt of, reads the
+latest.
 *Avoid:* "F3 of task 12" for one that must still mean it after a retry.
+
+**Subtree report** (`SubtreeReport`, ADR-0057 R2) — what a *Delegated task*'s
+*Handoff* carries past any task's, all from Ordewell: counts of its subtree, its
+findings by severity, what is `open` for the parent to decide and what its
+subplanner `promote`d, each by its *Pinned reference* and in its author's words,
+and the paths its branch changed outside its scope. It is pushed within the same
+ceiling at every level, so a parent's context depends on its fan-out and not on
+its subtree. *Avoid:* "summary of the subtree": no model writes it.
 
 **Commit message** (`commit` on the *Completion call*; ADR-0047, ADR-0013) — the
 optional `{subject, body?}` a change task states for the commit that lands its
@@ -1357,7 +1367,8 @@ methods are mandatory, with no optional capability or transport discriminator.
 
 **Task runner config** (`taskRunnerConfig`, `TaskRunnerConfig`) — what a task
 runner loads of the user's own setup: `user`, the default, is everything the
-runner would load for them; `minimal` is what a task needs, Ordewell's server
+runner would load for them, and below the root `minimal` is unless the settings
+file names one; `minimal` is what a task needs, Ordewell's server
 and what the repository ships or keeps for itself (its instructions, settings,
 MCP servers, skills and commands, and the user's local scope for it), and leaves
 out the user's own connectors, servers, skills, commands, settings and
@@ -3131,7 +3142,8 @@ fresh attempt discards its run, its state staying under the root (D15, D17).
 **Subplanner** — a **Child plan**'s planner: a harness planner on the runner its
 delegated task names, in that task's worktree, Act with autorun inside its
 **Mandate**. It writes no repository file. It has a planner's tools, `task_complete`
-and `checkpoint`, on a token bound to the attempt, and it is parked between turns. A
+and `checkpoint`, on a token bound to the attempt, and it is parked between turns. Its
+harness's own subagents are withheld unless its delegated task named `research`. A
 turn that ends with nothing running and no call gets one reminder, and a second fails
 the attempt with a derived report. *Avoid:* "worker", "child agent" (a task's runner is
 neither planner nor node); a subplanner never implements.

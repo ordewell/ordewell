@@ -332,6 +332,9 @@ const NO_MEMORIES = ['-c', 'features.memories=false'];
  */
 const NO_OWN_SHELL = { shell_tool: false, unified_exec: false };
 
+/** Both generations of Codex's subagents off for a thread, whichever the user's config turned on (codex-cli 0.166.0; ADR-0056 M6). */
+const NO_SUBAGENTS = { multi_agent: false, multi_agent_v2: false };
+
 /** Thread config that keeps these of the user's MCP servers from starting; Codex merges it over their own entries. */
 function withheld(servers: readonly string[]): Record<string, { enabled: false }> {
   return Object.fromEntries(servers.map((name) => [name, { enabled: false }]));
@@ -567,6 +570,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     const features = {
       ...(this.sandbox === 'legacy-landlock' ? { use_legacy_landlock: true } : {}),
       ...(this.ownShellOff ? NO_OWN_SHELL : {}),
+      ...(opts?.kind === 'planner' && opts.noSubagents ? NO_SUBAGENTS : {}),
     };
     const config = {
       ...(Object.keys(features).length > 0 ? { features } : {}),

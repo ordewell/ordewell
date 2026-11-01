@@ -8,6 +8,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **Tasks read each other's handoffs with `read`.** The tool was `read_task`, and
+  that name still works when a runner calls it. A failed task's reason now says it
+  is that task's own words wherever a report opens with it.
+
 ### Fixed
 
 - **Stopping a planner command on macOS ends all of it.** A Stop or a time limit

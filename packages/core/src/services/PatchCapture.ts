@@ -851,7 +851,7 @@ export interface ApplyPatchSite {
 
 /**
  * A task's `apply_patch` call (ADR-0050): the patch of a task it may read, as
- * `read_task` scopes that, applied into its own worktree. The patch is found
+ * `read` scopes that, applied into its own worktree. The patch is found
  * the way the planner's `task_diff` finds it, by the artifact the attempt's
  * handoff names; a patch file that is gone, or cut short, applies nothing.
  */
@@ -878,7 +878,7 @@ export async function applySavedPatch(args: ApplyPatchArgs, site: ApplyPatchSite
   const attempt = args.attempt ?? attempts.at(-1);
   const patchOf = (n: number) => savedPatchOf(loggedHandoff(site.log.events(target.id, n)));
   const logged = attempt === undefined ? undefined : loggedHandoff(site.log.events(target.id, attempt));
-  // A forked session has the plan's digest, the latest attempt's, and none of the logs behind it, as read_task has.
+  // A forked session has the plan's digest, the latest attempt's, and none of the logs behind it, as read has.
   const saved = savedPatchOf(logged ?? (attempt === attempts.at(-1) ? target.handoff : undefined));
   if (!saved) {
     const saving = attempts.filter((n) => patchOf(n));

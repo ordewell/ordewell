@@ -7,7 +7,7 @@ note: "Settles #120 for flat plans; the hierarchy half stays with #34."
 
 # 0047 — Every task ends with a handoff: a short summary, atomic findings and a way to pull the rest
 
-*Pending:* [ADR-0057](0057-information-moves-by-reference.md) — a subplanner's handoff promotes by reference, and `read` extends `read_task`.
+*Pending:* [ADR-0057](0057-information-moves-by-reference.md) — a subplanner's handoff promotes by reference, and `read` extends `read`.
 
 ## Problem
 
@@ -40,7 +40,7 @@ optional atomic findings and artifacts, a change task's commit message, and
 an optional long report that is stored and pulled, never pushed. An AI task
 authors it in `task_complete`; Ordewell derives one for a script task and a user task. A dependent is given
 the summary and as many whole findings as fit; the rest is read with a new
-`read_task` tool.**
+`read` tool.**
 
 ### The envelope
 
@@ -129,7 +129,7 @@ this decision, an attempt that ended without a completion call) falls back to
 
 ### Pulling the rest
 
-A task token gains **`read_task({task, attempt?, include_report?})`**: the full
+A task token gains **`read({task, attempt?, include_report?})`**: the full
 handoff of one task, from its attempt log, and its `report` when
 `include_report` is true. It reads a handoff and nothing else: no transcript,
 no tool calls, no diff, no command output.
@@ -146,7 +146,7 @@ report is (ADR-0037 R3), and labelled so (ADR-0057 R3).
 
 The planner is unchanged in kind: `task_query` returns the digest and
 `task_output` the full handoff and the report, both under the planner's
-existing read budget (ADR-0022 P3). `read_task` is not a planner tool, so the
+existing read budget (ADR-0022 P3). `read` is not a planner tool, so the
 planner's envelope (ADR-0008) does not widen.
 
 ### Where it is stored
@@ -225,7 +225,7 @@ the plan and the rest through the same task log read as everything else.
   `FakeRunnerSession.reportComplete`, as the verdict tests are: the limits, id
   assignment, reference validation and that a refused call leaves the attempt
   open.
-- `read_task` is tested against the readable set from plan graphs with a loop,
+- `read` is tested against the readable set from plan graphs with a loop,
   asserting the refusal outside it and the task-log entry for every call.
 - Loops are driven as `TaskOrchestrator.loop.test.ts` does, asserting what a
   second-round check and a body task are given.
@@ -234,7 +234,7 @@ the plan and the rest through the same task log read as everything else.
 
 Hierarchy (reports across levels, event-log references, a board's scoped
 sharing: #34 beside #32, #33 and #36); cohorts (#38); raw transcripts as a
-handoff or as readable through `read_task`; a model that rewrites, scores or
+handoff or as readable through `read`; a model that rewrites, scores or
 merges findings; and any new setting.
 
 ## Considered options
@@ -291,16 +291,17 @@ merges findings; and any new setting.
 - CONTEXT.md's *Isolation handoff* keeps its meaning (the end of an isolated
   run); the new term is *Handoff* alone for a task's end, and each is named by
   its qualifier where both could be meant.
-- `read_task` joins the task token's tools, so the tools table of ADR-0022
+- `read` joins the task token's tools, so the tools table of ADR-0022
   changes, and a task's reach grows by exactly its readable set.
 
 ## History
 
 - 2026-10-22 — accepted. Not yet implemented (#120).
-- 2026-10-22 — `read_task`'s switch for the report is named `include_report`.
+- 2026-10-22 — `read`'s switch for the report is named `include_report`.
 - 2026-10-22 — bounded reference strings to keep artifacts and the plan digest bounded.
 - 2026-10-22 — implemented the completion envelope, scoped reads, loop context, derived handoffs and all surfaces (#120).
 - 2026-10-23 — a change task's handoff carries its commit message, and its summary stops repeating it.
 - 2026-10-24 — a fifth artifact kind, `patch`, which only Ordewell adds, for a read-only task's saved patch (ADR-0050).
 - 2026-10-26 — task handoffs appear in expanded task details and task logs, not collapsed plan cards or rows.
 - 2026-10-31 — a `task` reference is pinned to its attempt, and renders as `#12@2/F3` ([ADR-0057](0057-information-moves-by-reference.md) R1).
+- 2026-11-01 — the tool is `read`, `read_task` an alias at the call; a runner's stated failure reason says whose words it is; a handoff across levels is ADR-0057's ([ADR-0057](0057-information-moves-by-reference.md) R2, R3, R11).

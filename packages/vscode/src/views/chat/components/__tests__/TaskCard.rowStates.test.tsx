@@ -159,6 +159,11 @@ describe('a task card, pinned before its rules move to core', () => {
     expect(document.querySelector('.task-type-badge.ops')).toBeNull();
   });
 
+  it('badges a delegated task as what it is, one row for a child plan (ADR-0055 D20)', () => {
+    render(<TaskCard task={makeTask({ type: 'delegated', goal: 'Move the API', taskMode: undefined })} models={[]} />);
+    expect(document.querySelector('.task-type-badge.delegated')?.textContent).toBe('Delegated');
+  });
+
   describe('a script task (ADR-0035)', () => {
     const scriptTask = (over: Partial<Task> = {}): Task => makeTask({
       type: 'script', assignedRunner: undefined as never, taskMode: undefined, description: 'Tag it',

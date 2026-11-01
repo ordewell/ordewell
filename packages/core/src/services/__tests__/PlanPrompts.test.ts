@@ -343,7 +343,7 @@ describe('who explores: orientation, evidence, search (ADR-0037 R5)', () => {
     expect(rule).toMatch(inTurn);
     expect(rule).toMatch(/- Evidence: a task of its own, when any of these holds: finding out needs a worktree \(write a failing test, build, reproduce\); another runner or model should judge it.*; the user should see it and be able to stop it; or a later task will act on its findings\./);
     expect(rule).toMatch(/the later task depends on it, so the findings reach it in its handoff: do not re-type them into the later task's brief/);
-    expect(rule).toMatch(/A loop's fix may depend on it only when the check does: make the check depend on it, and the fix reads the report with `read_task`\./);
+    expect(rule).toMatch(/A loop's fix may depend on it only when the check does: make the check depend on it, and the fix reads the report with `read`\./);
     expect(rule).toMatch(/- Search: a problem that needs rounds of branching.* is the explore skill/);
     for (const text of ['WHO EXPLORES:', '- Orientation:', '- Evidence:', '- Search:', 'file:line references, no pasted file bodies', 'The test:', 'A first plan may be research tasks alone', 'pull its full report with task_output']) {
       expect(count(p, text)).toBeLessThanOrEqual(1);
@@ -798,7 +798,7 @@ describe('loops in the conversation prompt (ADR-0045)', () => {
     expect(loops).not.toMatch(/a plan without such a bar/);
     expect(loops).toContain('"loop": { "body": ["fix-id", ...], "maxRounds": 3 }');
     expect(loops).toMatch(/Each depends on the check, and otherwise only on what the check depends on or on other tasks of the body/);
-    expect(loops).toMatch(/A loop's body cannot depend on a research task directly\. When the fix acts on a research task's findings, make the check depend on the research task: the body may then depend on it too, and reads its report with `read_task` \(WHO EXPLORES\)\./);
+    expect(loops).toMatch(/A loop's body cannot depend on a research task directly\. When the fix acts on a research task's findings, make the check depend on the research task: the body may then depend on it too, and reads its report with `read` \(WHO EXPLORES\)\./);
     expect(loops).toMatch(/Whatever comes after the loop depends on the check, never on a body task/);
     expect(loops).toMatch(/top-level AI or script task with no subtasks/);
     expect(loops).toMatch(/never a manual task/);
