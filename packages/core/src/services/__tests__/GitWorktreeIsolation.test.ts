@@ -2836,6 +2836,39 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
       }
     });
 
+    describe('a repair in a repository its landing did not change (ADR-0055 D14)', () => {
+      async function webOnlyConflict() {
+        const dir = pair();
+        const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+        const run = await iso.startRun(dir);
+        const [first, second] = [task(1, 'First'), task(2, 'Second')];
+        const a = await iso.prepare(first, run);
+        const b = await iso.prepare(second, run);
+        writeFileSync(join(a.cwd, 'web', 'web.txt'), 'first\n');
+        writeFileSync(join(b.cwd, 'web', 'web.txt'), 'second\n');
+        expect(await iso.integrate(first, run)).toBe('merged');
+        expect(await iso.integrate(second, run)).toBe('conflict');
+        await iso.reopen(second, run);
+        expect(run.tasks['task-2'].repairBase).toEqual({ web: tip(dir, 'web', run) });
+        expect(() => git(join(b.cwd, 'web'), 'merge', '--no-edit', integrationOf(run))).toThrow();
+        writeFileSync(join(b.cwd, 'web', 'web.txt'), 'first and second\n');
+        return { iso, run, second, b };
+      }
+
+      it('reads conflict markers there, though only a repo with a repair base is held to contain the tip', async () => {
+        const { iso, run, second, b } = await webOnlyConflict();
+        writeFileSync(join(b.cwd, 'api', 'api.txt'), '<<<<<<< ours\nleft\n=======\nright\n>>>>>>> theirs\n');
+        expect(await iso.verifyRepair(second, run)).toEqual({ ok: false, reason: 'conflict-markers', repo: 'api', files: ['api.txt'] });
+      });
+
+      it('lists what the repair brings there, for the protected paths to judge', async () => {
+        const { iso, run, second, b } = await webOnlyConflict();
+        writeFileSync(join(b.cwd, 'api', 'api.txt'), 'edited by the repair\n');
+        expect(await iso.verifyRepair(second, run)).toEqual({ ok: true });
+        expect(await iso.repairPaths(second, run)).toEqual(['api/api.txt', 'web/web.txt']);
+      });
+    });
+
     it('merges nothing for a task that changed nothing, and lands it', async () => {
       const dir = pair();
       const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });

@@ -105,4 +105,41 @@ describe('a delegated task on a real harness', () => {
     for (const file of ['a.txt', 'b.txt', 's.txt']) expect(existsSync(join(root, file))).toBe(true);
     parent.destroy();
   }, 90_000);
+
+  it('asks through the real server, parks its process, and the answer and its raise open the next turn', async () => {
+    process.env.PATH = [FAKE_CLAUDE, savedPath].filter(Boolean).join(delimiter);
+    process.env.FAKE_CLAUDE_STATE = tempDir();
+    const root = repo();
+    const turnsFrom = join(process.env.FAKE_CLAUDE_STATE, 'subplanner-turns.json');
+    writeFileSync(turnsFrom, JSON.stringify([
+      [['checkpoint', { question: 'Should a be written? I need 300000 more tokens.' }]],
+      [['submit_plan', { tasks: [childTask('a', 1)] }]],
+      [['task_complete', { status: 'done', summary: 'a is written.', commit: { subject: 'Write a' } }]],
+    ]));
+    const tasks: Task[] = [
+      createTask({ id: 'd', order: 1, title: 'Delegated subtree', type: 'delegated', goal: `Write a. ${cue({ turnsFrom })}`, budget: { tokens: 1_000_000 }, protectedPaths: ['tests/'], assignedRunner: 'claude-code' }),
+      createTask({ id: 'c', order: 2, title: 'Check it', prompt: cue({ write: { 'c.txt': 'checked\n' } }), dependencies: ['d'], assignedRunner: 'claude-code' }),
+    ];
+    const parent = makeSession({
+      runner: new StructuredRunner(),
+      isolation: createWorktreeIsolation({ resolvePath: async () => process.env.PATH ?? '', config: fakeConfig({ worktreeIsolation: true }) }),
+      workspaceRoot: () => root, saveSession, openTaskLog, leaseHost: new LeaseHost(), sessionId: 'session-root',
+      config: fakeConfig({ maxParallelSessions: 2, aiProvider: 'claude-code' }),
+      settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: 10_000_000 } }),
+      delegationOffered: true,
+      childDeps: () => ({ fsAdapter: { ...fakeFs(), getWorkspaceRoot: () => root } }),
+    });
+    parent.loadPlan({ tasks, runners: ['claude-code'], status: 'approved', generatedAt: '2026-11-01T10:00:00.000Z' } as unknown as LegacyPlanState, 'the root goal', root, { sessionId: 'session-root' });
+
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(parent.planTasks[0]).toMatchObject({ status: 'awaiting_user', awaitingReason: 'checkpoint' }), { timeout: 60_000, interval: 100 });
+    const asked = parent.escalations().find((e) => e.kind === 'checkpoint');
+    expect(asked?.reason).toContain('Should a be written?');
+    expect(await parent.answerEscalation(asked!.id, 'approve', undefined, false, 300_000)).toMatchObject({ ok: true });
+
+    await vi.waitFor(() => expect(parent.planTasks.map((t) => [t.id, t.status])).toEqual([['d', 'completed'], ['c', 'completed']]), { timeout: 60_000, interval: 100 });
+    const integration = parent.planState?.isolation?.run.repos[0].integrationBranch ?? '';
+    expect(git(root, 'ls-tree', '-r', '--name-only', integration).split('\n')).toContain('a.txt');
+    parent.destroy();
+  }, 120_000);
 });
