@@ -650,8 +650,9 @@ export function createSession(deps: SessionDeps): Session {
 /** A subplanner a guard lowered or that failed its restart is Act again on a Continue, which is the plan above picking it up (ADR-0056 M8). */
 function pickedUp(plan: LegacyPlanState): LegacyPlanState {
   if (!plan.runSettings) return plan;
-  const { unsupervised: _unsupervised, ...settings } = plan.runSettings;
-  return { ...plan, runSettings: { ...settings, supervisorLevel: 'act' } };
+  const settings = { ...plan.runSettings, supervisorLevel: 'act' as const };
+  delete settings.unsupervised;
+  return { ...plan, runSettings: settings };
 }
 
 /** A child's saves, which go under its root by the id they are saved under. */

@@ -278,21 +278,19 @@ describe('a Stop, read below it', () => {
   it('closes a child that was opening as the Stop came, so its budget comes back', async () => {
     const root = repo();
     const planner = stoppablePlanner([]);
-    let session: Session | undefined;
     let built = false;
-    const parent = makeSession({
+    const parent: Session = makeSession({
       runner: fakeRunner({}), isolation: isolation(), workspaceRoot: () => root, saveSession, openTaskLog, leaseHost: new LeaseHost(), sessionId: 'session-root',
       config: fakeConfig({ maxParallelSessions: 3 }),
       settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: 5_000_000 } }),
       delegationOffered: true,
       childDeps: () => {
         // As it is built: the carve has taken, and nothing has started.
-        session?.stopExecution();
+        parent.stopExecution();
         built = true;
         return { aiService: planner.service(), fsAdapter: { ...fakeFs(), getWorkspaceRoot: () => root } };
       },
     });
-    session = parent;
     parent.loadPlan(planOf([delegated(), check()]), 'the root goal', root, { sessionId: 'session-root' });
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(built).toBe(true));
