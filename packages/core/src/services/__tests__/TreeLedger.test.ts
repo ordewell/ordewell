@@ -322,6 +322,17 @@ describe('a child closing (ADR-0056 M5)', () => {
 });
 
 describe('a raise (ADR-0056 M5)', () => {
+  it('is the task\'s: it outlives the node it went to, and what a parent\'s turn takes back does not lessen it (M5, M10)', async () => {
+    const ledger = await open(100);
+    const budget = child(ledger, ROOT_NODE, 40);
+    const taskId = [...ledger.below(ROOT_NODE)].find((node) => node.path === budget.path)!.taskId!;
+    expect(ledger.raise(budget.path, 25)).toBeNull();
+    expect(ledger.raisedOn(ROOT_NODE, taskId)).toBe(25);
+    ledger.close(budget.path);
+    expect(ledger.raisedOn(ROOT_NODE, taskId)).toBe(25);
+    expect(ledger.raisedOn(ROOT_NODE, 'another')).toBe(0);
+  });
+
   it('comes from what the parent has left, and moves both numbers', async () => {
     const ledger = await open(100);
     const budget = child(ledger, ROOT_NODE, 40);

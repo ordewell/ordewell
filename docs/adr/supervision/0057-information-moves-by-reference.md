@@ -127,7 +127,8 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   each report a way into every node above it, and into each task that reads it, so a report
   never becomes a plan's text unless a planner writes it, and that planner is then answerable
   for it. A promoted finding is its author's and not the subplanner's, so it carries that author's
-  reference; a detail is indented under it and a run update's report under its line, so neither can
+  reference; a detail is indented under it, a run update's report under its line, and every line a
+  delegated task wrote of its report, its commit, summary, reason and tail included, so none can
   pass for a line of Ordewell's.
 
 ### Waking
@@ -314,3 +315,4 @@ Added after R1 to R7, and only if those leave a need; replays of Ordewell's own 
 - 2026-10-31 — a removed task's pinned attempt reads from its log, within the readable set by citation; a turn's cap keeps the newest update and names what it leaves out; a digest cuts a title, not what happened.
 - 2026-10-31 — a removed task's attempt can be cited as it can be read, and a saved reference with no attempt reads the latest; a digest line leads with what happened and a task name is short enough to leave it, so a turn's cap keeps it.
 - 2026-11-01 — R1 across plans, R2, R3's checks at every level, R11 and R12 implemented, in `Subtree.ts`, `models/Handoff.ts` and `mcp/tools.ts`: a path is a node's in the tree's log, a report reads what it names once, a child plan's end is a `task_report`, and `read` is listed where a planner may delegate. Built closest to the text where it could not hold: `promote` and `open` are written as text, `open` may name a subplanner's own finding, and a runner's reason says whose words it is. `post` waits for the board.
+- 2026-11-01 — R3 holds for a delegated task's commit, summary, reason, report and output tail: every line is indented in every reading, so none can pass for a line of Ordewell's.

@@ -365,6 +365,7 @@ export class Attempts {
       const task = this.deps.store.get(taskId);
       if (!task) return;
       this.deps.store.markAwaitingUser(taskId, 'checkpoint');
+      if (task.type === 'delegated') this.deps.store.parkQuestion(taskId, summary);
       this.verifier.pauseIdle(taskId);
       this.host.emit('onTaskSettled', { taskId });
       this.host.emit('onTaskChanged');

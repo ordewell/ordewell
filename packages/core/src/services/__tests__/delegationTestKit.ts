@@ -106,16 +106,18 @@ export interface TreeOptions {
   settings?: Partial<ReturnType<SessionDeps['settings']>>;
   /** Turns of the subplanner of a task further down, by that task's id: `turns` are the first level's. */
   below?: Record<string, Turn[]>;
+  /** The root's Parallel limit, which holds across the tree (ADR-0055 D18). */
+  parallel?: number;
 }
 
-export function tree(turns: Turn[], { runner = writingRunner({ a: ['a.txt'], b: ['b.txt'] }), tasks = [delegated(), check()], settings = {}, below = {} }: TreeOptions = {}): Tree {
+export function tree(turns: Turn[], { runner = writingRunner({ a: ['a.txt'], b: ['b.txt'] }), tasks = [delegated(), check()], settings = {}, below = {}, parallel = 3 }: TreeOptions = {}): Tree {
   const root = repo();
   const planner = scriptedPlanner(turns);
   const lower = Object.fromEntries(Object.entries(below).map(([id, script]) => [id, scriptedPlanner(script)]));
   const isolation = createWorktreeIsolation({ resolvePath: async () => process.env.PATH ?? '', config: fakeConfig({ worktreeIsolation: true }) });
   const parent = makeSession({
     runner, isolation, workspaceRoot: () => root, saveSession, openTaskLog, leaseHost: new LeaseHost(), sessionId: 'session-root',
-    config: fakeConfig({ maxParallelSessions: 3 }),
+    config: fakeConfig({ maxParallelSessions: parallel }),
     settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: 5_000_000 }, ...settings }),
     delegationOffered: true,
     childDeps: (task) => ({ aiService: { reset: vi.fn(), ...(lower[task.id] ?? planner).service } as unknown as IAiService, fsAdapter: { ...fakeFs(), getWorkspaceRoot: () => root } }),

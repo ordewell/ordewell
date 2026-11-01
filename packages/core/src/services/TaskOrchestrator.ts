@@ -180,6 +180,8 @@ export const STARTS_AT_ONCE = 8;
 
 /** What keeps a queued force start waiting, with nothing to say: it starts once these clear. */
 const QUEUED_WAITS: ReadonlySet<StartWaitKind> = new Set<StartWaitKind>(['queued', 'completing', 'merging', 'start-hold', 'unapproved', 'check-running']);
+/** What keeps a delegated task's check out of the carried work: only something else starting would free it, and a run held open for it would read as advancing (ADR-0055 D8). */
+const CHECK_NOT_READY: ReadonlySet<StartWaitKind> = new Set<StartWaitKind>(['started', 'blocked', 'dependencies', 'on-hold', 'no-prompt', 'resolver']);
 
 /** A force start the user made now: their own act, past the whole merge gate they confirmed. */
 const FORCED_NOW: ForcedStart = { queued: false };
@@ -425,6 +427,8 @@ export class TaskOrchestrator {
    * by its body stays here, so a retry of that task resumes it (L7).
    */
   private readonly carriedLoops = new Set<string>();
+  /** The checks of a delegated task that passed with no scheduler to start them (ADR-0055 D8): carried as a loop is, never queued, since one that stops being ready simply stops being owed. */
+  private readonly carriedChecks = new Set<string>();
   /** What was last said of a carried loop's approvals, so it is said once. */
   private loopNotice = '';
   /**
@@ -735,7 +739,7 @@ export class TaskOrchestrator {
   }
 
   get isRunning(): boolean {
-    return this.isScheduling || this.attempts.size > 0 || this.loopsCarriedOn().length > 0;
+    return this.isScheduling || this.attempts.size > 0 || this.carriedOn().length > 0;
   }
   /**
    * A runner is executing *right now*. Narrower than {@link isRunning}, which
@@ -825,13 +829,14 @@ export class TaskOrchestrator {
    * admitted and not yet claimed, a force start queued behind its
    * dependencies, a conflict repair owed a slot or the end of a start hold,
    * a task that resumes on its own at its usage limit's reset, a start a
-   * dirty checkout parked for Stash and continue to replay, or a loop carried
-   * on with no scheduler. A Stop is owed to it, whether or not anything runs.
+   * dirty checkout parked for Stash and continue to replay, or a loop or a
+   * delegated task's check carried on with no scheduler. A Stop is owed to it,
+   * whether or not anything runs.
    * A carried loop a body task stopped starts nothing, so it is not here: see
    * {@link loopCarried}.
    */
   get startsPending(): boolean {
-    return this.admissions > 0 || this.queuedStarts.size > 0 || this.owedRepairs.size > 0 || this.runs.blocked || this.store.allTasks.some(waitsForReset) || this.loopsCarriedOn().length > 0;
+    return this.admissions > 0 || this.queuedStarts.size > 0 || this.owedRepairs.size > 0 || this.runs.blocked || this.store.allTasks.some(waitsForReset) || this.carriedOn().length > 0;
   }
 
   /**
@@ -1158,6 +1163,7 @@ export class TaskOrchestrator {
     this.assertLoadable(tasks, planRunners);
     const queued = edited ? [...this.queuedStarts] : [];
     const carried = edited ? [...this.carriedLoops] : [];
+    const checks = edited ? [...this.carriedChecks] : [];
     const chosen = this.chosenHoldsNow();
     // Ended before the plan is swapped, so nothing of the plan being replaced reaches the next one.
     const repairs = this.attempts.unload().filter((a) => a.kind.kind === 'repair' && a.worktree);
@@ -1181,6 +1187,8 @@ export class TaskOrchestrator {
     this.queuedStarts = new Map(queued.filter(([id]) => this.store.get(id)));
     this.carriedLoops.clear();
     for (const id of carried) if (this.store.get(id)?.loop) this.carriedLoops.add(id);
+    this.carriedChecks.clear();
+    for (const id of checks) if (this.store.get(id)) this.carriedChecks.add(id);
     this.owedRepairs.clear();
     this.recoverOrphans();
     // Whatever the plan left behind for a slot, a resume past its time is armed again below.
@@ -1627,6 +1635,7 @@ export class TaskOrchestrator {
     this.store.markCompleted(task.id);
     this.retireResolvers(task.id);
     this.closeLoop(task, LOOP_PASSED);
+    this.carryChecks(task, admission);
     onLanded();
     this.say(outcome.messages);
     await this.landResolved(task.id, admission);
@@ -2809,7 +2818,7 @@ export class TaskOrchestrator {
     if (this.runState.kind === 'held') return;
     if (this.waitsOnTree()) return;
     if (this.runState.kind !== 'scheduling') {
-      if (this.loopsCarriedOn().length > 0) return this.waitOnUser();
+      if (this.carriedOn().length > 0) return this.waitOnUser();
       if (after === 'tick') {
         if (this.runs.isOpen && this.settled) await this.closeRun();
         return;
@@ -2967,9 +2976,14 @@ export class TaskOrchestrator {
     return !!task?.loop && !!waitOf(this.startWaits(task), 'repeating') && !this.loopRunsOn(taskId);
   }
 
-  /** A tick starts something: the scheduler the plan, or the loops carried on, their tasks alone. */
+  /** A tick starts something: the scheduler the plan, or what is carried on, those tasks alone. */
   private get startsOnTick(): boolean {
-    return this.isScheduling || this.loopsCarriedOn().length > 0;
+    return this.isScheduling || this.carriedOn().length > 0;
+  }
+
+  /** What is owed with no scheduler: the loops carried on, and the checks of a delegated task that ended. */
+  private carriedOn(): Task[] {
+    return [...this.loopsCarriedOn(), ...this.checksCarriedOn()];
   }
 
   /**
@@ -2988,29 +3002,53 @@ export class TaskOrchestrator {
   }
 
   /**
+   * The checks of a delegated task that ended, ready to start. Whatever start
+   * ended it, a run with no scheduler would otherwise close under them with
+   * their merge still held (ADR-0055 D8, D9). None under a scheduler, which
+   * owes them itself, or while a usage limit holds the run. One behind a
+   * failure or other unfinished work is not here: nothing is moving towards it.
+   */
+  private checksCarriedOn(): Task[] {
+    if (this.carriedChecks.size === 0 || this.isScheduling || this.runState.kind === 'held') return [];
+    return [...this.carriedChecks].flatMap((id) => {
+      const check = this.store.get(id);
+      return check && !this.startWaits(check).some((wait) => CHECK_NOT_READY.has(wait.kind)) ? [check] : [];
+    });
+  }
+
+  /** A delegated task passed, and nothing scheduled follows it. A Stop since it was claimed leaves its checks where they are. */
+  private carryChecks(task: Readonly<Task>, admission: Admitted): void {
+    if (task.type !== 'delegated' || this.scheduledRun || !admission.current()) return;
+    for (const check of this.store.checksOf(task)) if (check.status === 'pending' || check.status === 'approved') this.carriedChecks.add(check.id);
+  }
+
+  /**
    * The run that carried them is over, by a Stop or by what gives the run up
    * or clears it up: a retry of a body task that passes runs that task alone.
    */
   private endCarriedLoops(): void {
     this.carriedLoops.clear();
+    this.carriedChecks.clear();
     this.loopNotice = '';
   }
 
-  /** What a tick may start with no scheduler: the loops carried on, and nothing that depends on them. */
+  /** What a tick may start with no scheduler: what is carried on, and nothing that depends on it. */
   carriedTasks(): Set<string> {
-    return new Set(this.loopsCarriedOn().flatMap((check) => [check.id, ...check.loop?.body ?? []]));
+    return new Set(this.carriedOn().flatMap((check) => [check.id, ...check.loop?.body ?? []]));
   }
 
   /**
-   * A task of a carried loop outside the user's approval record waits as any
-   * does (ADR-0045, Consent). Said here, once, as well as listed: a run they
-   * started one task of says nothing else of why the loop's next step does not come.
+   * A carried task outside the user's approval record waits as any does
+   * (ADR-0045, Consent): starting a delegated task consents to that task alone,
+   * and a script check's consent is to its body (ADR-0035). Said here, once, as
+   * well as listed: a run they started one task of says nothing else of why the
+   * next step does not come.
    */
   private sayUnapprovedInLoop(): void {
     const waiting = [...this.carriedTasks()].flatMap((id) => this.store.get(id) ?? []).filter((t) => waitOf(this.startWaits(t), 'unapproved'));
     const notice = waiting.length === 0
       ? ''
-      : `A loop waits for your approval of ${quotedList(waiting.map((t) => t.title))}: start ${waiting.length === 1 ? 'it' : 'them'}, or execute the plan, and it goes on.`;
+      : `${waiting.every((t) => this.carriedChecks.has(t.id)) ? 'A delegated task has ended, and its check waits' : 'A loop waits'} for your approval of ${quotedList(waiting.map((t) => t.title))}: start ${waiting.length === 1 ? 'it' : 'them'}, or execute the plan, and it goes on.`;
     if (notice === this.loopNotice) return;
     this.loopNotice = notice;
     if (notice) this.tell('info', notice);
@@ -3129,6 +3167,7 @@ export class TaskOrchestrator {
     if ('refused' in reserved) return { refused: reserved.refused };
     // The one point every start passes: Execute's fresh chance and a force start never call `retry` (ADR-0055 D8).
     if (continuation === null && !opts.autoResumed && !this.landing.nextRepair(taskId)) this.store.takeBackChecks(taskId);
+    this.carriedChecks.delete(taskId);
     return { spawned: this.attempts.start(task, { admission, continuation, autoResumed: opts.autoResumed === true, lease: reserved.lease }) };
   }
 
