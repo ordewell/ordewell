@@ -229,6 +229,12 @@ describe('a delegated task\'s attempt (ADR-0055 D3)', () => {
     expect(classifyAttempt('delegated', { repair: { n: 1, limit: 2 } }).kind).toBe('repair');
   });
 
+  it('reopens its child\'s code root on a Continue, read-only or not, and a fresh read-only one is thrown away (ADR-0055 D17)', () => {
+    expect(attemptWorkspace(continued('delegatedReadOnly'))).toEqual({ kind: 'worktree', intent: 'restore' });
+    expect(attemptWorkspace(continued('delegated'))).toEqual({ kind: 'worktree', intent: 'restore' });
+    expect(attemptWorkspace(classifyAttempt('delegatedReadOnly'))).toEqual({ kind: 'worktree', intent: 'readOnly' });
+  });
+
   it('lands unless it is read-only, and names the commit its landing is written from', () => {
     expect(landsNothing(classifyAttempt('delegated'))).toBe(false);
     expect(landsNothing(classifyAttempt('delegatedReadOnly'))).toBe(true);
