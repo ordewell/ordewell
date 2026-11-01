@@ -124,8 +124,8 @@ export type WebviewToHost =
   /** Asks the host to remove a task; the host confirms first, naming what depends on it. */
   | { type: 'removeTask'; taskId: string }
   | { type: 'addTask'; draft: TaskDraft }
-  /** The user's answer to a task paused at a checkpoint; a rejection resumes the agent with the reason. */
-  | { type: 'answerCheckpoint'; taskId: string; approved: boolean; reason?: string }
+  /** The user's answer to a task paused at a checkpoint; a rejection resumes the agent with the reason. A delegated task's approval may carry words and a raise of its budget (ADR-0056 M5, M8). */
+  | { type: 'answerCheckpoint'; taskId: string; approved: boolean; reason?: string; raiseTokens?: number }
   /** A user message to a structured task (ADR-0018): queued behind its turn, or delivered at once if it waits for input. */
   | { type: 'sendTaskMessage'; taskId: string; text: string }
   /** Take back a message still queued behind a structured task's turn. */

@@ -5,17 +5,32 @@ interface CheckpointPanelProps {
   taskTitle: string;
   summary: string;
   pausedAt: number;
-  onApprove: () => void;
+  /** A delegated task's question: its approval can carry the answer's words and a raise of its budget (ADR-0056 M5, M8). */
+  delegated?: boolean;
+  onApprove: (words?: string, raiseTokens?: number) => void;
   onReject: (reason: string) => void;
+}
+
+const NOT_A_RAISE = 'A raise is a whole number of tokens, 1 or more.';
+
+/** The raise as typed: undefined for none, null for what is no number of tokens. */
+function raiseOf(text: string): number | undefined | null {
+  const typed = text.trim();
+  if (!typed) return undefined;
+  const tokens = Number(typed);
+  return Number.isSafeInteger(tokens) && tokens >= 1 ? tokens : null;
 }
 
 const TIMEOUT_MINUTES = 3;
 
-export default function CheckpointPanel({ taskTitle, summary, pausedAt, onApprove, onReject }: CheckpointPanelProps) {
+export default function CheckpointPanel({ taskTitle, summary, pausedAt, delegated = false, onApprove, onReject }: CheckpointPanelProps) {
   const [reason, setReason] = useState('');
   const [showRejectInput, setShowRejectInput] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [showFull, setShowFull] = useState(false);
+  const [words, setWords] = useState('');
+  const [raise, setRaise] = useState('');
+  const raiseTokens = raiseOf(raise);
 
   useEffect(() => {
     const tick = () => setElapsed(Math.floor((Date.now() - pausedAt) / 60000));
@@ -56,9 +71,23 @@ export default function CheckpointPanel({ taskTitle, summary, pausedAt, onApprov
         )}
       </div>
 
+      {delegated && !showRejectInput && (
+        <div className="checkpoint-delegated">
+          <label>
+            Your answer
+            <textarea value={words} onChange={(e) => setWords(e.target.value)} placeholder="What it asked, answered (optional)" rows={2} />
+          </label>
+          <label>
+            Raise its budget by (tokens)
+            <input type="text" inputMode="numeric" value={raise} onChange={(e) => setRaise(e.target.value)} placeholder="none" />
+          </label>
+          {raiseTokens === null && <div className="checkpoint-delegated-error" role="alert">{NOT_A_RAISE}</div>}
+        </div>
+      )}
+
       {!showRejectInput ? (
         <div className="checkpoint-actions">
-          <button className="checkpoint-approve-btn" onClick={onApprove}>
+          <button className="checkpoint-approve-btn" disabled={raiseTokens === null} onClick={() => (delegated ? onApprove(words.trim() || undefined, raiseTokens ?? undefined) : onApprove())}>
             Approve &amp; Continue
           </button>
           <button className="checkpoint-reject-btn" onClick={() => setShowRejectInput(true)}>

@@ -292,6 +292,18 @@ describe('webview messages reach the session through one entry point each', () =
       ]);
     });
 
+    it('approves a delegated task\'s question with words and a raise, as the TUI and the daemon do', async () => {
+      const execute = vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: true, message: 'done' });
+
+      await h.route({ type: 'answerCheckpoint', taskId: 't1', approved: true, reason: 'Round half up.', raiseTokens: 700_000 });
+      await h.route({ type: 'answerCheckpoint', taskId: 't2', approved: true, raiseTokens: 5 });
+
+      expect(execute.mock.calls).toEqual([
+        [{ command: 'answer_checkpoint', task: 't1', answer: 'approve', reason: 'Round half up.', raiseTokens: 700_000 }, { kind: 'user' }],
+        [{ command: 'answer_checkpoint', task: 't2', answer: 'approve', raiseTokens: 5 }, { kind: 'user' }],
+      ]);
+    });
+
     it('answers an escalation through the session and tells the webview what it said, a refusal in its own words', async () => {
       const answer = vi.spyOn(h.session, 'answerEscalation')
         .mockResolvedValueOnce({ ok: true, message: 'Retried.' })

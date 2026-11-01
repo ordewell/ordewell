@@ -557,9 +557,9 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [stopArmed, plannerBusy]);
 
-  const handleApproveCheckpoint = useCallback(() => {
+  const handleApproveCheckpoint = useCallback((words?: string, raiseTokens?: number) => {
     if (!checkpoint) return;
-    vscode.postMessage({ type: 'answerCheckpoint', taskId: checkpoint.taskId, approved: true });
+    vscode.postMessage({ type: 'answerCheckpoint', taskId: checkpoint.taskId, approved: true, ...(words ? { reason: words } : {}), ...(raiseTokens !== undefined ? { raiseTokens } : {}) });
     dispatch({ type: 'checkpointAnswered' });
   }, [checkpoint]);
 
@@ -788,6 +788,7 @@ export default function App() {
               taskTitle={checkpoint.taskTitle}
               summary={checkpoint.summary}
               pausedAt={checkpoint.pausedAt}
+              delegated={DELEGATION_OFFERED && checkpoint.delegated}
               onApprove={handleApproveCheckpoint}
               onReject={handleRejectCheckpoint}
             />

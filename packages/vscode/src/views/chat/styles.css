@@ -4986,8 +4986,11 @@ body.vscode-high-contrast-light .task-card.expanded {
   gap: 8px;
 }
 
-.checkpoint-reject-form textarea {
+.checkpoint-reject-form textarea,
+.checkpoint-delegated textarea,
+.checkpoint-delegated input {
   width: 100%;
+  box-sizing: border-box;
   background: var(--bg-primary);
   color: var(--text-primary);
   border: 1px solid var(--border-color);
@@ -5000,7 +5003,9 @@ body.vscode-high-contrast-light .task-card.expanded {
   outline: none;
 }
 
-.checkpoint-reject-form textarea:focus {
+.checkpoint-reject-form textarea:focus,
+.checkpoint-delegated textarea:focus,
+.checkpoint-delegated input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-glow);
 }
@@ -7056,4 +7061,22 @@ body.vscode-high-contrast-light .pending-message {
 .escalation-refusal-text {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.checkpoint-delegated {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+  font-size: 12px;
+}
+
+.checkpoint-delegated label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.checkpoint-delegated-error {
+  color: var(--vscode-errorForeground, var(--text-muted));
 }
