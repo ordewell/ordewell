@@ -73,6 +73,34 @@ describe('a role\'s tool set (R11)', () => {
   });
 });
 
+describe('what only a subplanner\'s report takes (R2)', () => {
+  const report = { status: 'done', summary: 'It holds.', promote: ['#1/F1'], open: ['#2/F2'] };
+
+  it('reaches its handler on a subplanner\'s token', async () => {
+    const taskComplete = vi.fn(async () => ({ text: 'Recorded.' }));
+    const client = await connect(await newServer().issuePlannerToken({ sessionId: 's', subplanner: true }, { taskComplete }));
+    expect(await client.callTool({ name: 'task_complete', arguments: report })).toMatchObject({ content: [{ text: 'Recorded.' }] });
+    expect(taskComplete).toHaveBeenCalledWith(expect.objectContaining({ promote: ['#1/F1'], open: ['#2/F2'] }), expect.anything());
+  });
+
+  it('is refused on a runner\'s token, and nothing is recorded', async () => {
+    const taskComplete = vi.fn(async () => ({ text: 'Recorded.' }));
+    const client = await connect(await newServer().issueTaskToken({ sessionId: 's', taskId: 't', attempt: 1 }, { taskComplete }));
+    const reply = await client.callTool({ name: 'task_complete', arguments: report });
+    expect(reply.isError).toBe(true);
+    expect(JSON.stringify(reply.content)).toContain('\'promote\' is a subplanner\'s');
+    expect(taskComplete).not.toHaveBeenCalled();
+  });
+
+  it('holds promote to eight', async () => {
+    const taskComplete = vi.fn(async () => ({ text: 'Recorded.' }));
+    const client = await connect(await newServer().issuePlannerToken({ sessionId: 's', subplanner: true }, { taskComplete }));
+    const reply = await client.callTool({ name: 'task_complete', arguments: { ...report, promote: Array.from({ length: 9 }, (_, i) => `#${i + 1}/F1`) } });
+    expect(reply.isError).toBe(true);
+    expect(taskComplete).not.toHaveBeenCalled();
+  });
+});
+
 describe('plain tools/call (R12)', () => {
   it('offers tools and nothing else: no tasks, subscriptions or sampling', async () => {
     const client = await connect(await newServer().issuePlannerToken({ sessionId: 's' }));

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { handoffReferenceText } from '../../models/Handoff';
 import { createTask } from '../../models/Task';
 import { planUsage, taskUsageSummary } from '../../models/Usage';
 import { listChildSessions, listSessions, loadSession } from '../../utils/sessionStore';
@@ -158,19 +159,30 @@ describe('a report by reference (ADR-0057 R1, R2)', () => {
   it('climbs two levels: a finding promoted from a grandchild keeps its author\'s words and path at the root', async () => {
     const task = { id: 'g', order: 1, title: 'Grandchild', description: 'g', type: 'delegated', goal: 'Write a', budget: { tokens: 1_000_000 }, protectedPaths: ['tests/'], sliceType: 'AFK', autonomy: 'AFK', dependencies: [] };
     const gate = { id: 'gc', order: 2, title: 'Read the grandchild', description: 'c', type: 'ai', prompt: 'read it', taskMode: 'plan', readOnly: true, sliceType: 'AFK', autonomy: 'AFK', dependencies: ['g'] };
-    const { parent } = tree([
-      SUBMIT([task, gate]),
-      UNTIL_TAKEN({ status: 'done', summary: 'The child is done.', commit: { subject: 'Write a, once more' }, promote: ['1:#1/F1'] }),
-    ], {
-      runner: runner(),
+    const signal = new AbortController().signal;
+    const read: { handoff?: string; output?: string } = {};
+    const READS_AND_ENDS: Turn = async (tools, text) => {
+      await UNTIL_TAKEN({ status: 'done', summary: 'The child is done.', commit: { subject: 'Write a, once more' }, promote: ['1:#1/F1'] })(tools, text);
+      read.handoff = (await tools.readTask!({ task: '1:#1@1/F1' }, { signal })).text;
+      read.output = (await tools.taskOutput!({ task: '1:#1@1/F1' }, { signal })).text;
+    };
+    const { parent } = tree([SUBMIT([task, gate]), READS_AND_ENDS], {
+      runner: writingRunner({ a: ['a.txt'] }, { usage: 100, reports: FINDINGS }),
       tasks: [delegated({ grants: ['delegate'] }), check()],
       below: { g: [SUBMIT([childTask('a', 1)]), CALL({ status: 'done', summary: 'The grandchild is done.', commit: { subject: 'Write a' }, promote: ['#1/F1'] })] },
     });
     await endsDone(parent);
 
-    const [item] = taskOf(parent, 'd')?.handoff?.subtree?.promoted ?? [];
-    expect(item).toMatchObject({ ref: { node: 'root/1/1', task: 'a', attempt: 1, finding: 'F1', label: '#1' }, finding: { title: 'A race in the writer' } });
+    const report = taskOf(parent, 'd')?.handoff?.subtree;
+    expect(report?.promoted[0]).toMatchObject({ ref: { node: 'root/1/1', task: 'a', attempt: 1, finding: 'F1', label: '#1' }, finding: { title: 'A race in the writer' } });
+    expect(handoffReferenceText(report!.promoted[0].ref!)).toBe('1/1:#1@1/F1');
     expect((await parent.readBelow({ task: '1/1:#1@1/F1' })).text).toContain('A race in the writer');
+    // A path from the subplanner's own plan, the task's words, and its log.
+    expect(read.handoff).toContain('A race in the writer');
+    expect(read.output).toContain('"node":"root/1/1"');
+    // What ran two levels down shows on the root's row, charged once: its task and the child's check.
+    expect(taskUsageSummary(taskOf(parent, 'd')!).totals.inputTokens).toBe(200);
+    expect(report?.counts).toMatchObject({ done: 3, tokens: 200 });
     parent.destroy();
   });
 });
