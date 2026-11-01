@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { checkHandoff, handoffReferenceText, storedHandoff, type StoredHandoff } from '../../models/Handoff';
 import { createTask, type Task } from '../../models/Task';
 import type { TaskLogEvent } from '../../models/TaskLog';
-import { handoffLogs, readTask } from '../readTask';
+import { handoffAttempt, handoffLogs, readTask } from '../readTask';
 
 /** Two attempts of a review, whose F numbers mean different things: what a retry or a loop round leaves. */
 const handoffs: Record<number, StoredHandoff> = {
@@ -19,6 +19,30 @@ const plan = (attempt: 1 | 2): Task[] => [
   createTask({ id: 'review', order: 4, title: 'Review', handoff: handoffs[attempt] }),
   createTask({ id: 'fix', order: 5, title: 'Fix', dependencies: ['review'] }),
 ];
+
+describe("a delegated task's repair (ADR-0055 D14, ADR-0057 R2)", () => {
+  const report: StoredHandoff = { ...storedHandoff({ summary: 'What the child plan did.' })!, attempt: 1 };
+  const repair: StoredHandoff = { ...storedHandoff({ summary: 'Merged it.\n- Changed outside its scope (from Ordewell): tests/' })!, held: true, attempt: 2 };
+  const logged = {
+    attempts: () => [1, 2],
+    events: (_id: string, attempt: number): TaskLogEvent[] => [{ type: 'handoff', handoff: attempt === 1 ? report : repair }],
+  };
+  const repaired = [createTask({ id: 'd', order: 1, title: 'Delegated', type: 'delegated', goal: 'g', budget: { tokens: 1000 }, handoff: report })];
+
+  it('leaves its report what a read finds, and its own words in its own attempt, held', () => {
+    expect(readTask({ task: '#1' }, undefined, repaired, logged).text).toContain('What the child plan did.');
+    const own = readTask({ task: '#1@2' }, undefined, repaired, logged).text;
+    expect(own).toContain('attempt 2 of 2');
+    expect(own.split('\n').filter((line) => line.startsWith('- Changed outside its scope'))).toEqual([]);
+  });
+
+  it('stands in for its own log where a forked session has none', () => {
+    expect(handoffAttempt(repaired[0], [])).toBeUndefined();
+    expect(handoffAttempt(repaired[0], [2])).toBe(2);
+    expect(handoffAttempt(repaired[0], [1, 2])).toBe(1);
+    expect(readTask({ task: '#1' }, undefined, repaired, { attempts: () => [], events: () => [] }).text).toContain('What the child plan did.');
+  });
+});
 
 describe('a reference across a retry (ADR-0057 R1)', () => {
   it('still reads what it named once a later attempt numbers its findings anew', () => {

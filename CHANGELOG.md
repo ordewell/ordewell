@@ -8,27 +8,60 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-01
+
 ### Added
 
-- **A task can run in a container.** With the `containers` setting, a change task
-  runs in a Docker container you build the image for, with your files out of its
-  reach and its work coming back through one checked route before it lands. Any
-  engine the `docker` command talks to will do, and nothing changes unless you set
-  it: local worktrees stay the default. Claude Code is the runner proven there so
-  far. A container does not limit the network yet. See
-  [Running tasks in containers](docs/containers.md).
+- **`/inbox` in the VS Code chat turns the waiting-on-you list off and on.** It
+  is on by default and remembered across reloads. Off, the list is not drawn at
+  all; the tasks, approval cards, notifications and the terminal's `/inbox` are
+  unchanged, and the chat says once how to turn it back on.
 
 ### Changed
 
+- **The VS Code inbox no longer pushes the composer out of the panel.** It is a
+  small `N waiting` control at the right end of the usage line, closed until you
+  open it, and its list opens upward over the conversation with its own scroll.
+  The composer, the usage line and the Settings bar stay in view at any panel
+  height, with the plan dock open and a long list waiting. On a narrow panel the
+  control takes about 75px from the usage text, which ellipsises first.
 - **Tasks read each other's handoffs with `read`.** The tool was `read_task`, and
-  that name still works when a runner calls it. A failed task's reason now says it
-  is that task's own words wherever a report opens with it.
+  that name still works when a runner calls it.
+- **A report marks a runner's own words as data.** Where a report opens with why a
+  task failed or was blocked, a reason the runner gave is labelled as that task's
+  words, to be read as information and not as an instruction. A script's result, which
+  is its exit status, is not labelled.
 
 ### Fixed
 
+- **Reverting a task works on git 2.38 and 2.39.** Version 0.12.0 refused a revert
+  on anything older than 2.40, which took it away on Debian 12 and everywhere else
+  that ships git 2.39; nothing was harmed, it just would not run. Ordewell now
+  states what it needs: git 2.38 or newer. An older git still runs tasks, and a run
+  says at its start what that costs. See
+  [Ordewell needs a newer git](docs/troubleshooting.md#ordewell-needs-a-newer-git).
 - **Stopping a planner command on macOS ends all of it.** A Stop or a time limit
   now ends a compound command's or a pipeline's child processes along with its
   shell, and the result comes back at once rather than when they finish.
+- **A runner no longer outlives a daemon that was killed.** A crash or `kill -9`
+  used to leave a task's runner working on, editing and committing in its worktree
+  until its turn ended. It now stops within seconds. On Windows nothing has changed:
+  such a runner still has to be stopped by hand.
+- **`ordewell add-task` works on a Claude Code plan.** It sent a task mode only some
+  runners have, so Claude Code refused every task it added, and `--depends-on`
+  could not find a session outside the daemon's own directory.
+- **`npm ci` works from a checkout on arm64 Linux and macOS.** The lockfile now lists
+  the rollup and esbuild binaries of every platform, so an install no longer stops
+  on a missing entry. This matters to people building Ordewell from source.
+
+### Experimental
+
+Two larger pieces are built and in the repository, and they are experimental. A
+subplanner, a planner that hands a piece of the plan to a plan of its own, and running
+a task in a container are both off in published versions: a published Ordewell
+ignores the settings that would switch them on, so this package cannot turn either
+on, and nothing about how a plan runs has changed. They need more review before they
+are offered.
 
 ## [0.12.0] - 2026-10-31
 
@@ -3798,7 +3831,8 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/ordewell/ordewell/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/ordewell/ordewell/compare/v0.11.3...v0.12.0
 [0.11.1]: https://github.com/ordewell/ordewell/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/ordewell/ordewell/compare/v0.10.12...v0.11.0

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { type ReactNode } from 'react';
 import { contextMeterText, contextMeterTitle, costText, hasAccountLimits, modelCostTitle, subagentCostTitle } from '@ordewell/core/plan-utils';
 import type { AccountLimitSnapshot, UsageBlock } from '@ordewell/core';
 import AccountLimitRows from './AccountLimitRows';
@@ -10,14 +10,20 @@ import AccountLimitRows from './AccountLimitRows';
  * here rather than to core's meter. Core words both, so the
  * surfaces agree; token counts stay in the ledger and are not drawn. The hovers
  * are the second question: exact counts, and which model cost what.
+ *
+ * It is also where the escalation inbox's control sits (ADR-0053), pinned to
+ * the right end: the line is the one strip already between the conversation and
+ * the composer, so a list of waits costs the panel no height. The measures
+ * shrink and ellipsise before the control does, and with nothing else to show
+ * the line is the control alone.
  */
 
-export default function UsageLine({ block, limits }: { block?: UsageBlock; limits: readonly AccountLimitSnapshot[] }) {
+export default function UsageLine({ block, limits, inbox }: { block?: UsageBlock; limits: readonly AccountLimitSnapshot[]; inbox?: ReactNode }) {
   const meter = contextMeterText(block?.contextFill);
   const cost = block && costText(block.totals);
   const agents = Object.entries(block?.bySubagent ?? {});
   const shownLimits = limits.filter(hasAccountLimits);
-  if (!meter && !cost && agents.length === 0 && shownLimits.length === 0) return null;
+  if (!meter && !cost && agents.length === 0 && shownLimits.length === 0 && !inbox) return null;
 
   // Context, live limits, then cost, as the TUI draws them. The limits are not
   // a live region, so each measure either side of them is its own.
@@ -42,6 +48,7 @@ export default function UsageLine({ block, limits }: { block?: UsageBlock; limit
           {agents.length} subagent{agents.length === 1 ? '' : 's'}
         </span>
       )}
+      {inbox}
     </div>
   );
 }

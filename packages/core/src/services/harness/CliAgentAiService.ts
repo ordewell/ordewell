@@ -330,6 +330,7 @@ export class CliAgentAiService implements IAiService {
       model: this.plannerModel(),
       effort: this.config.plannerThinkingEffort,
       ...(req.plannerTools.noSubagents ? { noSubagents: true } : {}),
+      ...(req.plannerTools.runnerConfig ? { runnerConfig: req.plannerTools.runnerConfig } : {}),
     };
     // Without an approval channel there is no gate, so nothing would decide a search.
     if (req.approval && fetcher?.searchesUnasked) session.searchesUnasked = (provider) => fetcher.searchesUnasked?.(provider) ?? false;

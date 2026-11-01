@@ -265,10 +265,37 @@ describe('SettingsService', () => {
     expect(sessionRuntimeSettings(service.getAll()).plannerAutoCompaction).toBeUndefined();
   });
 
-  it('keeps the containers setting as written, whatever it holds: one it cannot use must reach what refuses it', () => {
-    fs.writeFileSync(tempFile, JSON.stringify({ containers: 'docker' }));
-    expect(service.getAll().containers).toBe('docker');
-    expect(sessionRuntimeSettings(service.getAll()).containers).toBe('docker');
+  describe('the containers setting (ADR-0059 L5)', () => {
+    afterEach(() => vi.unstubAllEnvs());
+
+    it('is read, as written whatever it holds, where ORDEWELL_CONTAINERS=1 is set in a checkout: one it cannot use must reach what refuses it', () => {
+      vi.stubEnv('ORDEWELL_CONTAINERS', '1');
+      fs.writeFileSync(tempFile, JSON.stringify({ containers: 'docker' }));
+      expect(service.getAll().containers).toBe('docker');
+      expect(sessionRuntimeSettings(service.getAll()).containers).toBe('docker');
+    });
+
+    it('does nothing on its own, and says once that this build does not offer containers', () => {
+      vi.stubEnv('ORDEWELL_CONTAINERS', '');
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      fs.writeFileSync(tempFile, JSON.stringify({ containers: { image: 'mine', login: { kind: 'own-sign-in' } } }));
+      expect(service.getAll().containers).toBeUndefined();
+      expect(sessionRuntimeSettings(service.getAll()).containers).toBeUndefined();
+      service.getAll();
+      fs.writeFileSync(tempFile, JSON.stringify({ containers: { image: 'other' } }));
+      expect(service.getAll().containers).toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toContain('does not offer containers');
+      warn.mockRestore();
+    });
+
+    it('says nothing where the setting is absent', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      fs.writeFileSync(tempFile, JSON.stringify({ parallelism: 2 }));
+      service.getAll();
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
   });
 
   it('reads taskRunnerConfig from the file, keeps it through other writes, and drops a value that is not one of the two', () => {

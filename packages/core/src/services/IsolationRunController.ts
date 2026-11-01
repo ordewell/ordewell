@@ -202,6 +202,7 @@ export class IsolationRunController {
   private adoptions = 0;
   /** Copied paths already reported for the current run: every task gets the same copies. */
   private reportedCopies = new Set<string>();
+  private gitShortfallSaid = false;
   private reportedSetupFailures = new Set<string>();
   /**
    * How the open run executes; null while no run is open, `undecided` until
@@ -927,6 +928,7 @@ export class IsolationRunController {
     }
     this.begin('isolated');
     await this.sweep();
+    await this.sayGitShortfall();
     return true;
   }
 
@@ -1022,6 +1024,14 @@ export class IsolationRunController {
         `The worktree setup command (ordewell.worktreeSetupCommand or ORDEWELL_WORKTREE_SETUP) failed in ${where}, so its task worktrees use the default links instead${cause ? `: ${cause}` : ''}`,
       );
     }
+  }
+
+  /** Said at the first isolated run, where Ordewell first leans on git and where `git-missing` is said; a child's parent has said it already. */
+  private async sayGitShortfall(): Promise<void> {
+    if (this.gitShortfallSaid || this.stateRoot) return;
+    this.gitShortfallSaid = true;
+    const shortfall = await this.isolation.gitShortfall().catch((): null => null);
+    if (shortfall) this.tell('warn', shortfall);
   }
 
   private tell(level: IsolationNoticeLevel, message: string): void {

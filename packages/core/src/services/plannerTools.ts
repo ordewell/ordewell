@@ -39,6 +39,8 @@ export interface PlannerToolsHost {
   checkPlan(tasks: unknown): Promise<CheckedChange>;
   /** Commit a checked plan now, in the planner turn `turn` the call was made in (ADR-0022 P2). */
   submitPlan(tasks: Task[], turn: string): Promise<PlanEditOutcome>;
+  /** No person reads this planner's replies, so an answer asks for one line (ADR-0057 R5). */
+  unread?(): boolean;
   /** Check a batch against the live catalog and commit it now, whole or not at all, in the planner turn `turn` the call was made in. */
   editPlan(ops: TaskOp[], turn: string): Promise<PlanEditOutcome>;
   /** The plan's tasks as they are now. */
@@ -214,7 +216,9 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
         tasks: outcome.tasks,
         coerced: outcome.coerced ?? [],
         ...(warnings.length > 0 ? { warnings } : {}),
-        next: 'The plan is committed: it is the current plan now, and the user is shown it. Tell them briefly what you submitted; do not repeat the plan as JSON.',
+        next: host.unread?.()
+          ? 'The plan is committed, and it starts as your turn ends. End your turn now, with one line: nobody reads more.'
+          : 'The plan is committed: it is the current plan now, and the user is shown it. Tell them briefly what you submitted; do not repeat the plan as JSON.',
       });
     },
 

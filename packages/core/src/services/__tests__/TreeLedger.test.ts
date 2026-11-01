@@ -196,6 +196,61 @@ describe('spending (ADR-0056 M5)', () => {
     expect(out.mock.calls).toEqual([['Level 1 is out of budget: it has spent 25 of its 25 tokens, and nothing it holds is left to spend.']]);
   });
 
+  describe('stopping before the limit, since a call\'s usage arrives with the next already sent', () => {
+    /** A real run's numbers: a 750,000 grant, a planning turn, then a runner's calls as they came. */
+    async function realRun(calls: readonly number[]) {
+      const ledger = await TreeLedger.open(new FakeEventStore(), { sessionId: 'root-session', limit: 800_000 }, { sessionReserve: 200_000 });
+      const budget = child(ledger, ROOT_NODE, 750_000);
+      const out = vi.fn();
+      budget.onStop(out);
+      budget.turnSpent(used(63_393));
+      budget.hold();
+      for (const [i, call] of calls.entries()) {
+        budget.spent(used(call), { taskId: 't', attempt: 1 });
+        await flushMicrotasks();
+        if (out.mock.calls.length > 0) {
+          budget.spent(used(calls[i + 1]), { taskId: 't', attempt: 1 });
+          break;
+        }
+      }
+      return { spent: ledger.numbers(budget.path).spent, out };
+    }
+
+    it('stops while what it holds still pays for the call on its way, so nothing passes the grant', async () => {
+      const { spent, out } = await realRun([22_996, 67_824, 90_124, 110_200, 113_809, 117_674, 118_000, 118_500, 119_000]);
+      expect(out).toHaveBeenCalledOnce();
+      expect(spent).toBeLessThanOrEqual(750_000);
+      expect(out.mock.calls[0][0]).toMatch(/^Level 1 is out of budget: it has spent \d+ of its 750000 tokens, and what it holds would not pay for its next model calls\.$/);
+    });
+
+    it('holds at small calls, stopping no sooner than two of them from the end', async () => {
+      const { spent, out } = await realRun(Array.from({ length: 30 }, () => 30_000));
+      expect(out).toHaveBeenCalledOnce();
+      expect(spent).toBe(63_393 + 22 * 30_000);
+    });
+
+    it('asks nothing of what a runner reports winding down, with no session live: no call follows it', async () => {
+      const ledger = await open(100);
+      const budget = child(ledger, ROOT_NODE, 25);
+      const out = vi.fn();
+      budget.onStop(out);
+      budget.spent(used(20), { taskId: 't', attempt: 1 });
+      await flushMicrotasks();
+      expect(out).not.toHaveBeenCalled();
+    });
+
+    it('counts its children\'s room as a turn can reach it, so a node is not stopped for what it can still take', async () => {
+      const ledger = await open(100);
+      const parent = child(ledger, ROOT_NODE, 60);
+      child(ledger, parent.path, 40);
+      const out = vi.fn();
+      parent.onStop(out);
+      parent.turnSpent(used(10));
+      await flushMicrotasks();
+      expect(out).not.toHaveBeenCalled();
+    });
+  });
+
   it('says it again after a raise, once it has reached that too', async () => {
     const ledger = await open(100);
     const budget = child(ledger, ROOT_NODE, 25);

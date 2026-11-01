@@ -5,7 +5,7 @@ import { checkPlanInvariants, type IntakeCatalog } from './PlannedTask';
 import { applyTaskOps, opRefusalText, type OpRef, type TaskOp } from './TaskOps';
 import { resolveAssignments, type AssignmentAdjustment, type AssignmentCatalog } from './TaskAssignment';
 import { checkOpSkills, checkPlanSkills, type SkillCheck, type SkillLookup } from './taskSkills';
-import { delegatedRequest, mandateRefusalText, missingGrant, narrow, type Grant, type Mandate, type NodeAuthority } from './Mandate';
+import { SCRIPT_PAST_THE_RULES, delegatedRequest, mandateRefusalText, missingGrant, narrow, type Grant, type Mandate, type NodeAuthority } from './Mandate';
 import { planSize, scopeOverlaps } from '../models/Delegation';
 import { scriptBodyOf } from '../models/ScriptTask';
 import { effectRuleFor } from './effectAllowlist';
@@ -252,7 +252,7 @@ export class PlanChangeCheck {
       const refused = task.ops ? 'an ops task acts on the user\'s systems from their checkout, so none runs below the root'
         : task.type === 'user' ? 'a manual task waits on a person, and none is below the root'
           // An add lands sealed; an edit that moves a body past the rules keeps what it was.
-          : task.type === 'script' && !task.readOnly && runsSealed(mandate, task) ? 'its body is not covered at every level of the effect rules, and it would run unsealed' : null;
+          : task.type === 'script' && !task.readOnly && runsSealed(mandate, task) ? SCRIPT_PAST_THE_RULES : null;
       if (refused) errors.push({ taskId: task.id, field: 'type', message: `Level ${level} refused Task "${task.title}": ${refused}.` });
     }
     return errors;
@@ -263,18 +263,18 @@ export class PlanChangeCheck {
   }
 }
 
-/**
- * Whether a child's script runs sealed (ADR-0056 M9): capability is held at the
- * boundary, so all of them do but a body the rules of every level cover, in a
- * child that holds `effect`. A script body is covered by nothing (ADR-0035).
- */
 /** The overlaps an edit brought (ADR-0057 R6): what stood before it was answered then. */
 function broughtOverlaps(before: readonly Task[], after: readonly Task[]): string[] {
   const standing = new Set(scopeOverlaps(before));
   return scopeOverlaps(after).filter((said) => !standing.has(said));
 }
 
-function runsSealed({ grants, effectRules }: Mandate, task: Pick<Task, 'commands' | 'script' | 'timeoutMs'>): boolean {
+/**
+ * Whether a child's script runs sealed (ADR-0056 M9): capability is held at the
+ * boundary, so all of them do but a body the rules of every level cover, in a
+ * child that holds `effect`. A script body is covered by nothing (ADR-0035).
+ */
+export function runsSealed({ grants, effectRules }: Mandate, task: Pick<Task, 'commands' | 'script' | 'timeoutMs'>): boolean {
   const body = scriptBodyOf({ ...task, type: 'script' });
   return !grants.has('effect') || !body || effectRules.length === 0 || !effectRules.every((rules) => effectRuleFor(rules, body));
 }

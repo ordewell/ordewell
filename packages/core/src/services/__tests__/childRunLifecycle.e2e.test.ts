@@ -8,7 +8,7 @@ import { LeaseHost } from '../sessionLease';
 import { Subtree } from '../Subtree';
 import { taskRowView } from '../../taskRow';
 import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
-import type { Session } from '../createSession';
+import type { Session, SessionDeps } from '../createSession';
 import type { ConversationRequest, ConversationTurn, IAiService } from '../AiService';
 import type { PlannerToolHandler } from '../mcp';
 import type { IRunner } from '../../interfaces/IRunner';
@@ -143,6 +143,7 @@ interface TreeOptions {
   sessionId?: string;
   /** What the root's own planner does, for a test of its edits. */
   rootTurns?: Turn[];
+  notifications?: SessionDeps['notifications'];
 }
 
 /**
@@ -179,11 +180,12 @@ function stoppablePlanner(turns: Turn[]) {
   return { asked, requests, service };
 }
 
-function tree(turns: Turn[], { runner = fakeRunner({ a: ['a.txt'], b: ['b.txt'] }), tasks = [delegated(), check()], tokens = () => 5_000_000, root = repo(), leaseHost = new LeaseHost(), plan, sessionId = 'session-root', rootTurns }: TreeOptions = {}) {
+function tree(turns: Turn[], { runner = fakeRunner({ a: ['a.txt'], b: ['b.txt'] }), tasks = [delegated(), check()], tokens = () => 5_000_000, root = repo(), leaseHost = new LeaseHost(), plan, sessionId = 'session-root', rootTurns, notifications }: TreeOptions = {}) {
   const planner = stoppablePlanner(turns);
   const parent = makeSession({
     runner, isolation: isolation(), workspaceRoot: () => root, saveSession, openTaskLog, leaseHost, sessionId,
     ...(rootTurns ? { aiService: stoppablePlanner(rootTurns).service() } : {}),
+    ...(notifications ? { notifications } : {}),
     config: fakeConfig({ maxParallelSessions: 3 }),
     settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: tokens() } }),
     delegationOffered: true,
@@ -496,6 +498,23 @@ describe('a Continue (ADR-0055 D17)', () => {
     expect(stopped.message).toContain('Continue');
     expect(stopped.message).toContain('starts its child over');
     expect(stopped.message).not.toContain('Run the plan or a task to start again');
+    await parent.stopSubtree();
+    parent.destroy();
+  });
+
+  it('says the same in what it tells a surface as it stops the task: Mark complete and Retry are not what keeps a child', async () => {
+    const told: string[] = [];
+    const say = (message: string) => { told.push(message); };
+    const runner = fakeRunner({ a: ['a.txt'], b: ['b.txt'] }, { held: ['b'] });
+    const { parent } = tree([SUBMIT([childTask('a', 1), childTask('b', 2, ['a'])])], { runner, notifications: { info: say, warn: say, error: say, confirm: vi.fn().mockResolvedValue(undefined) } });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(runner.spawned).toContain('b'), { timeout: 20_000 });
+
+    await parent.execute({ command: 'stop_run' }, { kind: 'user' });
+
+    const said = told.find((line) => line.startsWith('Stopped'));
+    expect(said).toContain('Continue keeps what its child landed');
+    expect(said).not.toContain('Mark complete');
     await parent.stopSubtree();
     parent.destroy();
   });
@@ -851,7 +870,7 @@ const rowOf = (session: Session, id: string) => session.runSnapshot().tasks.find
 
 describe('a delegated task\'s row (ADR-0055 D16, D20)', () => {
   it('says where its child\'s tasks stand and what is left of its budget, while the child runs', async () => {
-    const runner = fakeRunner({ a: ['a.txt'], b: ['b.txt'] }, { held: ['a'], usage: 100_000 });
+    const runner = fakeRunner({ a: ['a.txt'], b: ['b.txt'] }, { held: ['a', 'b'], usage: 100_000 });
     const LIVE: Turn = async (tools) => {
       await SUBMIT([childTask('a', 1), childTask('b', 2, ['a'])])(tools, '');
       await tools.runPlan!({}, { signal: SIGNAL });
@@ -867,6 +886,33 @@ describe('a delegated task\'s row (ADR-0055 D16, D20)', () => {
     await vi.waitFor(() => expect(rowOf(parent, 'd')?.tasks).toMatchObject({ completed: 1, running: 1 }));
     // What the first task spent is no longer left.
     expect(rowOf(parent, 'd')?.tokens?.left).toBe(1_900_000);
+    await parent.stopSubtree();
+    parent.destroy();
+  });
+
+  it('says no budget for a task that ran until the ledger is open: a restart has not read what it spent', async () => {
+    const { parent } = tree([], { tasks: [{ ...delegated(), attempted: true }, check()] });
+    expect(rowOf(parent, 'd')?.tokens).toBeUndefined();
+    parent.destroy();
+    const fresh = tree([]).parent;
+    expect(rowOf(fresh, 'd')?.tokens).toEqual({ budget: 2_000_000, left: 2_000_000 });
+    fresh.destroy();
+  });
+
+  it('counts a raise in what it says the task was given, or a raised child reads as over a budget it is well within', async () => {
+    const runner = fakeRunner({ a: ['a.txt'] }, { held: ['a'], usage: 100_000 });
+    const LIVE: Turn = async (tools) => {
+      await SUBMIT([childTask('a', 1)])(tools, '');
+      await tools.runPlan!({}, { signal: SIGNAL });
+      await new Promise<void>(() => undefined);
+    };
+    const { parent } = tree([LIVE], { runner });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(runner.spawned).toContain('a'));
+
+    expect(await parent.raiseChild('d', 500_000)).toBeNull();
+
+    expect(rowOf(parent, 'd')?.tokens).toEqual({ budget: 2_500_000, left: 2_500_000 });
     await parent.stopSubtree();
     parent.destroy();
   });

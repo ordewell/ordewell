@@ -1,6 +1,7 @@
 import { underProtectedPath } from '../models/Delegation';
 import type { Task } from '../models/Task';
 import { BOARD_REF } from '../models/Board';
+import { quotedLine } from '../models/lineBreaks';
 
 /** How often a task hears from a landing at most (ADR-0057 R6). */
 export const LINE_WINDOW_MS = 10 * 60_000;
@@ -26,7 +27,7 @@ export interface ScopeLinesHost {
   send(taskId: string, line: string): boolean;
 }
 
-const quoted = (text: string, chars: number): string => JSON.stringify(text.length > chars ? `${text.slice(0, chars)}…` : text);
+const quoted = (text: string, chars: number): string => quotedLine(text.length > chars ? `${text.slice(0, chars)}…` : text);
 
 /** Items as a line lists them. */
 function listed(items: readonly string[]): string {

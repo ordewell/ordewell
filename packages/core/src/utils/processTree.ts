@@ -1,5 +1,5 @@
-import { execFile } from 'child_process';
-import type { ChildProcess } from 'child_process';
+import { ChildProcess, execFile, spawn as spawnProcess } from 'child_process';
+import type { Socket } from 'net';
 
 /**
  * Stopping an agent process, on every platform.
@@ -61,6 +61,8 @@ const stopping = new WeakSet<ChildProcess>();
  */
 const ownGroups = new Map<number, ChildProcess>();
 let hostTeardownHooked = false;
+/** What stops each runner group if the host dies without running any of its code; see {@link watchForHostDeath}. */
+const hostWatches = new Map<number, ChildProcess>();
 /** Told of each runner group as it starts, so a session lease records it at once (ADR-0049). */
 const groupStartListeners = new Set<() => void>();
 /** What else goes with the host: see {@link onHostTeardown}. */
@@ -84,6 +86,7 @@ export function spawnInOwnGroup(spawn: (detached: boolean) => ChildProcess, plat
   if (typeof pgid !== 'number') return proc;
   groupLeaders.add(proc);
   ownGroups.set(pgid, proc);
+  if (proc instanceof ChildProcess) watchForHostDeath(pgid);
   // The leader's exit does not end the group: the shells, MCP servers and dev
   // servers it started outlive it, and those are exactly what Stop and host
   // teardown still have to reach. The entry is dropped only once the group is
@@ -96,13 +99,45 @@ export function spawnInOwnGroup(spawn: (detached: boolean) => ChildProcess, plat
 }
 
 /**
+ * Stop `pgid` when this host is gone, however it went. SIGKILL and a crash run
+ * none of its code, so nothing in it can do this, and a runner in a group of
+ * its own would go on editing, committing and spending with nobody to see
+ * (ADR-0049 L3). A shell waits on a pipe only this host writes: the kernel
+ * closes that as the host dies, and the shell stops the group as `killTree`
+ * would. A line down the pipe is a host going politely, which has asked already
+ * and cannot stay for the forced stop, so that one is all the shell owes. Started
+ * in `/` so no worktree is held open.
+ */
+function watchForHostDeath(pgid: number): void {
+  const group = `-- -${pgid}`;
+  const seconds = HARD_KILL_DELAY_MS / 1000;
+  const stop = `read _ || kill -s TERM ${group} 2>/dev/null; i=0; while [ "$i" -lt ${seconds} ] && kill -s 0 ${group} 2>/dev/null; do sleep 1; i=$((i + 1)); done; kill -s 0 ${group} 2>/dev/null && kill -s KILL ${group} 2>/dev/null`;
+  const watch = spawnProcess('/bin/sh', ['-c', stop], { detached: true, cwd: '/', stdio: ['pipe', 'ignore', 'ignore'] });
+  // No shell to watch with leaves the runner as it was; the lease still names it.
+  watch.on('error', () => { hostWatches.delete(pgid); });
+  watch.stdin?.on('error', () => undefined);
+  (watch.stdin as Socket | null)?.unref();
+  watch.unref();
+  hostWatches.set(pgid, watch);
+}
+
+function endHostWatch(pgid: number): void {
+  hostWatches.get(pgid)?.kill('SIGKILL');
+  hostWatches.delete(pgid);
+}
+
+/**
  * The process groups this host's runners lead that still have members. A
  * session lease records them (ADR-0049): the teardown below cannot run for a
- * host killed outright, and what it would have stopped runs on in the
- * session's worktrees.
+ * host killed outright, and {@link watchForHostDeath} may not have finished as
+ * a new host looks. Asked on every heartbeat, which is also where a group that
+ * outlived its leader and has since emptied is let go.
  */
 export function runnerGroups(): number[] {
-  return [...ownGroups.keys()].filter((pgid) => groupHasMembers(pgid));
+  for (const [pgid, proc] of ownGroups) {
+    if (hasExited(proc) && !groupHasMembers(pgid)) forgetGroup(proc, pgid);
+  }
+  return [...ownGroups.keys()];
 }
 
 /** Hear of each runner group {@link spawnInOwnGroup} starts; the returned function stops it. */
@@ -157,6 +192,7 @@ function groupHasMembers(pgid: number, killImpl: (pid: number, signal: 0) => voi
 function forgetGroup(proc: ChildProcess, pgid: number): void {
   if (ownGroups.get(pgid) === proc) ownGroups.delete(pgid);
   groupLeaders.delete(proc);
+  endHostWatch(pgid);
 }
 
 /**
@@ -176,6 +212,8 @@ function hookHostTeardown(): void {
       try { process.kill(-pgid, 'SIGTERM'); } catch { /* already gone */ }
     }
     ownGroups.clear();
+    for (const watch of hostWatches.values()) watch.stdin?.write('\n');
+    hostWatches.clear();
     for (const stop of teardownListeners) {
       try { stop(); } catch { /* already gone */ }
     }
@@ -267,7 +305,10 @@ export function killTree(proc: ChildProcess | null, deps: KillTreeDeps = {}): vo
     // it fires, so a group that emptied during the grace period is left alone;
     // a stranger taking the id between that probe and the signal is the
     // residual risk.
-    const hardKill = setTimeoutImpl(() => { if (vouched()) signalGroup('SIGKILL'); }, HARD_KILL_DELAY_MS);
+    const hardKill = setTimeoutImpl(() => {
+      if (vouched()) signalGroup('SIGKILL');
+      endHostWatch(pgid);
+    }, HARD_KILL_DELAY_MS);
     hardKill.unref?.();
     if (!hasExited(proc)) {
       proc.once('exit', () => { if (!groupHasMembers(pgid, killImpl)) clearTimeoutImpl(hardKill); });

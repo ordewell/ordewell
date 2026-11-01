@@ -142,6 +142,37 @@ process.
   sealed, all its later commands run sealed too, allowlisted ones
   included, so a `gh` it runs after that has no network.
 
+## Ordewell needs a newer git
+
+Ordewell says **Ordewell needs git 2.38 or newer, and this is git …** when a run
+starts, or **A revert needs git 2.38 or newer** when you revert a task.
+
+### Cause
+
+Ordewell needs git 2.38 or newer, for `git merge-tree --write-tree`, which merges
+without touching a worktree. Runs still start on an older git, with less:
+
+| Git | What you lose |
+| --- | --- |
+| 2.33 to 2.37 | Reverting a task is refused. Merge all goes repository by repository and stops at the first that fails, so a group of repositories can be left part merged. |
+| 2.32 and older | The same, and applying another task's patch fails, or reports conflicts that are not there. Older than 2.31 has not been tested. |
+
+Debian 12 ships git 2.39, which does everything. Ubuntu 22.04 ships 2.34.
+
+### Check it
+
+```bash
+git --version
+```
+
+Ordewell runs the first `git` on the `PATH` of its server, which may not be the
+one your shell finds.
+
+### Fix
+
+Install a newer git; on Ubuntu, the [git maintainers' PPA](https://launchpad.net/~git-core/+archive/ubuntu/ppa)
+has one. Then restart the Ordewell server, so that it finds the new one.
+
 ## Merge all refused: not on the base branch
 
 Ordewell shows **Merged nothing, so every tree is as it was: … is on `<branch>`;
@@ -346,8 +377,9 @@ Close the session in that host, or quit it, and load the session again. A host
 that crashed or was killed lets the session go once its pid is gone, or a minute
 after it last refreshed its lease.
 
-If the host is gone but its runners are not, stop the process groups the
-message names before loading again:
+Its runners stop by themselves within seconds of a host dying, so try again
+first. If the message still names process groups, or you are on Windows, stop
+them before loading again:
 
 ```bash
 ps -eo pid,pgid,command | awk '$2 == <group>'   # what is still running in that group

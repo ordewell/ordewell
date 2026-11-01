@@ -1,7 +1,7 @@
 ---
 status: accepted
 amends: ["0012", "0013", "0022", "0029", "0047"]
-note: "Settles #34, and #36 and #38 as far as this goes. Built behind ADR-0055 D21's switch, so a flat run has no scope and no board. An API planner reads a board through `task_output` and has no `post` (R11)."
+note: "Settles #34, and #36 and #38 as far as this goes. Built behind ADR-0055 D21's switch, so a flat run has no scope and no board. An API planner reads a board through `task_output` and leaves entries with `post` (R11)."
 ---
 
 # 0057 — Information moves by reference: reports stay one size at every level, and code decides when a planner wakes
@@ -87,7 +87,9 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - **What is pushed is one size (R2).** A handoff is pushed at most 4,000 characters at every
   level (`HANDOFF_PUSH_CHARS`, its artifacts apart), so a node's inbound context depends on its
   fan-out and not on its subtree. Its Report, the long form of at most 20,000, stays pulled
-  ([ADR-0047](0047-structured-task-handoffs.md)). A subplanner's `task_complete` adds two fields, refused on any other token:
+  ([ADR-0047](0047-structured-task-handoffs.md)). A delegated task's report stands through a repair
+  of its conflict, which reports in its own attempt's log (ADR-0055 D14), and a read that names no
+  attempt reads the report. A subplanner's `task_complete` adds two fields, refused on any other token:
   `promote`, up to 8 references to findings in its subtree, and `open`, references its parent
   must decide, both pinned and scoped as R1 says. Rendered, by ADR-0047's rule, whole items until
   the ceiling and then a count:
@@ -128,7 +130,12 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   for it. A promoted finding is its author's and not the subplanner's, so it carries that author's
   reference; a detail is indented under it, a run update's report under its line, and every line a
   delegated task wrote of its report, its commit, summary, reason and tail included, so none can
-  pass for a line of Ordewell's.
+  pass for a line of Ordewell's. That holds with no report to say whose they are, a repair's words
+  among them, by a mark the handoff carries wherever it is rendered. A line break is every one git
+  or a terminal would honour (`models/lineBreaks.ts`), not only `\n`. A path, a title or a
+  reference goes on Ordewell's line whole, a filename a branch chose as much as what an author
+  wrote: `task_complete` and `post` refuse a break in one, and what reaches a line anyway is
+  quoted there.
 
 ### Waking
 
@@ -175,6 +182,15 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   rule among them, to a model that was never told them. The plan
   block is bounded too: past its cap it shows live and waiting tasks, a count of the rest and a
   `task_query` pointer. The 24,000 is a tuning value.
+
+  A subplanner is told less again. Its prompt names its own runner and that runner's models, so a
+  plan takes no call to read them and no wake reminds it to ([ADR-0022](../runners/0022-ordewell-mcp-server.md)
+  L3): `submit_plan` refuses what has gone stale, and `list_runners` and `list_models` stay for another
+  runner. Its prompt has no outline, which nobody reads, and no section on ops tasks, which do not exist below the
+  root. `submit_plan`'s answer asks it for one line, and for none would open the nudge an empty reply is owed. Its plan block,
+  once every task has passed or been skipped, is the task rows alone: what is left is its report.
+  Its wake brief is its own, which asks for that report first and names no user
+  ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D4).
 
 ### Between siblings
 
@@ -238,6 +254,8 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   entry is posted, never an author's claim: `sha`, the file as its author had it, hashed with no git
   since a read-only task's worktree may hold a planted repository
   ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)),
+  and read through its lease where one runs the author elsewhere
+  ([ADR-0059](../isolation/0059-an-execution-lease-reserves-in-the-claim-and-opens-after-it.md) L6),
   and `tip`, what the plan's integration branch held then. At read the branch is compared with both, so
   a claim shows `stale` once the branch holds neither: a file its author changed and has not landed
   reads as it should, and so does one that landed as claimed. A branch merged and gone with its run
@@ -250,7 +268,9 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   it is data as the rest of a board is: it says what was decided, labelled with whose decision it is.
   Each descendant is told once, at its start, so a pin reaches no one already running. A check never
   goes in one: `post` refuses a pin that holds whole what this plan's checks read or run, which is the
-  part code can see, and the prompt teaches the rest.
+  part code can see, and the prompt teaches the rest. A check's title and prompt count from twelve
+  characters, shorter prose being too common to say; a command it runs counts at any length, whole
+  and at the edges of its words, a script's one by one.
 
 ### Tools
 
@@ -263,11 +283,21 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   It holds them from the moment its mandate lets it write one, since a list that grew with its first
   delegated task would break its cache, and `post` before there is a board says so. A subplanner holds
   them whether or not it may delegate, since it has a board from its first turn. An API planner has no
-  server list: `task_output` takes the same references for it, `board` among them, and it has no `post`,
-  so an API root pins nothing. A role is one list, whichever attempt asks. Each
+  server list: `task_output` takes the same references for it, `board` among them, and `post` comes last
+  in its list where delegation reaches it, so a flat API list does not move by a byte. A role is one list, whichever attempt asks. Each
   role's set is fixed at session start, in a stable order
   ([ADR-0056](0056-a-mandate-narrows-down-the-tree.md) M6), with a CI test on its serialised size.
   Turning delegation on reaches a planner at its next process.
+
+  A subplanner's process holds that list and little else of its harness, since each of its calls is
+  charged all of it, and nobody is there for the rest. Where its tasks' `taskRunnerConfig` is `minimal`,
+  as it is below the root unless the settings file names one, Claude Code starts with the native tools a
+  planner reads with (`--tools`: `Read`, `Grep`, `Glob`, `WebFetch`, `WebSearch`, `ToolSearch`, with `Agent`
+  under `research` and the shell tools under ADR-0036's opt-in), no setting source, `--strict-mcp-config`, connectors
+  off, and Ordewell's server alone. These go together and never apart: with a connector left on, its tools come along.
+  `ToolSearch` stays though it finds little here: without it a model reopened on a Continue read Ordewell's tools as
+  missing and ended saying it had no `task_complete`. `user` leaves the spawn as a planner's. Ordewell's own list for the role is not cut: it is what the role does. Codex and OpenCode
+  are started as they were.
 - **Plain `tools/call` (R12).** No MCP Tasks, subscriptions, sampling or internal A2A. MCP 2026-07-28 is
   stateless, and references passed as arguments fit it. Delivery goes over each runner's own message path
   (ADR-0023).
@@ -311,6 +341,26 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   sibling's interface does not need a model now. It would buy a turn over the whole context per landing.
 - **An author's own blob sha.** Rejected: R9's flags are computed, and a sha a model sends is a claim.
 
+- **Narrowing a subplanner's native tools alone.** Rejected, by a real run of the flags: with connectors left on
+  and `ToolSearch` gone, every connector's tools were sent whole, far past what the list saved.
+- **Leaving `ToolSearch` out of that list.** Dropped after real runs and a replay of the failing call: the tool list
+  was the one thing whose return stopped reopened children saying they had no `task_complete`. A list that named every
+  tool it held was not enough for the model to believe it.
+- **A pass with no subplanner turn, for a run that ended clean, or a report filed with the plan.** Rejected: a wake
+  costs one call now, and `task_complete` is the only way to a pass
+  ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D6). A report written before the work can
+  say nothing of it.
+- **Fewer of Ordewell's tools for a subplanner.** Not done: they are the largest part left of its context, but each
+  is one the role can need, and a list that grew when a run failed would break the prompt cache.
+- **Ending a subplanner's turn before its last reply.** Tried, at an accepted `submit_plan` and an accepted
+  `task_complete`, and dropped after real runs: each such reply is a call over the whole context, nearly all of it
+  cache reads. A process killed there takes its reported money with it, since Claude Code reports cost in the `result`
+  that ends a turn, and an interrupt instead leaves an empty reply, whose nudge is the call saved. Stopped at a plan, the
+  call stays in a history a wake resumes in its harness's words, the user refused this, stop and wait: one subplanner in
+  fourteen took that as an order and reported blocked with its work passed and merged, naming a user who was never there.
+  Stopped at a report, the turn lands nothing, and that closing line is how a Continue's replay knows it reported: reopened
+  children said they had no `task_complete`, and failed. A hook that ends a turn after a clean tool result might do this
+  without a stop, and would mean a hook in a planner's envelope (ADR-0028).
 - **A model summarising each level.** Rejected. In three open-source deep-research systems, 84.7% of
   AI-Q's final-report errors arose at the orchestrator, while agents summarising a single document were
   nearly clean ([arXiv 2608.24306](https://arxiv.org/abs/2608.24306), EMNLP 2026). That measures AI-Q and
@@ -372,3 +422,8 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - 2026-11-01 — R1 across plans, R2, R3's checks at every level, R11 and R12 implemented, in `Subtree.ts`, `models/Handoff.ts` and `mcp/tools.ts`: a path is a node's in the tree's log, a report reads what it names once, a child plan's end is a `task_report`, and `read` is listed where a planner may delegate. Built closest to the text where it could not hold: `promote` and `open` are written as text, `open` may name a subplanner's own finding, and a runner's reason says whose words it is. `post` waits for the board.
 - 2026-11-01 — R3 holds for a delegated task's commit, summary, reason, report and output tail: every line is indented in every reading, so none can pass for a line of Ordewell's.
 - 2026-11-01 — R6 to R10 implemented, in `models/Board.ts`, `Board.ts`, `ScopeLines.ts` and `TreeLedger`, behind ADR-0055 D21's switch: a scope stays on a delegated task, its line waits for a subplanner's next turn, a `contract` rises to the parent's board as its task lands, `read` takes `board` so a runner's `read` does not move, `file` evidence holds a branch's blob beside its author's, and a pin goes in a subplanner's opening and a task's prompt.
+- 2026-11-01 — a pin reads its author's file through the lease where one runs the author elsewhere (R9).
+- 2026-11-01 — R11: an API planner holds `post` where a harness planner does, as the last entry of its list, so an API root can pin.
+- 2026-11-01 — from real runs of where a subplanner's tokens go: R5 tells it less and R11 narrows its process, in `ClaudeCodeAdapter`, `PlanPrompts`, `PlannerConversation` and `Supervisor`.
+- 2026-11-01 — from review: a report outlasts a repair (R2), a line break is one set everywhere and no path or title can make one (R3), and a check's command counts in a pin at any length (R10).
+- 2026-11-01 — from review: VS Code's handoff panel holds what an author wrote, every line indented on the one set of breaks, as the TUI does for every handoff (R3).

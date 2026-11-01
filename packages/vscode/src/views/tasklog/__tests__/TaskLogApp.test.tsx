@@ -154,7 +154,7 @@ describe('the task log tab (ADR-0018, V1)', () => {
     expect(more).toHaveAttribute('aria-controls', document.querySelector('.task-handoff-report')!.id);
     expect(screen.queryByRole('button', { name: /expand all|collapse all/i })).toBeNull();
     fireEvent.click(more);
-    expect(document.querySelector('.task-handoff-report')?.textContent).toBe(report);
+    expect(document.querySelector('.task-handoff-report')?.textContent).toBe(report.split('\n').map((line) => `  ${line}`).join('\n'));
     expect(more).toHaveAttribute('aria-expanded', 'true');
     fireEvent.click(screen.getByRole('button', { name: 'Show less of the report' }));
     expect(document.querySelector('.task-handoff-report')).not.toHaveTextContent('Report line 9');

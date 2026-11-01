@@ -243,6 +243,26 @@ daemon adds `GET /api/plans/:id/escalations`, and
 ([ADR-0006](../surfaces/0006-tui-pure-core-thin-driver.md) S3), answering in the
 same shapes.
 
+**VS Code draws it as a control on the usage line.** The line is the one strip
+already between the conversation and the composer, so the list costs the panel
+no height. The control sits at its right end and reads `3 waiting` with a
+chevron, is drawn only while something waits (or a refusal is still to be read),
+and is the one part of the line that does not shrink: the usage measures
+ellipsise first. The list is a dropdown upward from it, over the conversation,
+with a capped height and its own scroll, and it does not move the plan dock, the
+composer or the Settings bar. It starts closed, remembers open or closed across
+reloads in the webview's own state, and closes on Esc, after an open question's
+own Esc. It is closed with `hidden`, never unmounted, so an answer being written
+is kept. `/inbox` in the VS Code chat turns the view off and on, remembered the
+same way and on by default (`INBOX_VIEW_DEFAULT`,
+`packages/vscode/src/views/chat/inboxView.ts`); turning it off says once in the
+chat how to bring it back. Off, nothing of the view is drawn, and core's list,
+the notify command, the task rows, the approval cards and the terminal's
+`/inbox` are untouched. The chat keeps the composer, the usage line and the
+Settings bar's toggle inside the panel at any height: the plan dock and the
+Settings panel are what give way, and below a short panel's floor so does the
+conversation.
+
 ## Telling a person
 
 **The user may name one command, and Ordewell runs it once for each new
@@ -342,6 +362,11 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
 - **An `answer_escalation` command at the seam.** Rejected: a name any actor can
   ask for, needing its own refusal for each, and a second timeline record beside
   the command it dispatches to.
+- **A block of its own above the composer, in the VS Code chat.** Tried and
+  dropped: open, three entries took 268px, which pushed the composer past the
+  panel's bottom edge and squeezed the Settings bar to 1px, and a panel 500px
+  tall lost the composer altogether. Collapsing it or capping its body only
+  moved the shortfall; the control on the usage line takes no height.
 - **A planner tool to read or answer the list.** Rejected: it adds a route to
   the user's answers for nothing, since the user is there, and the supervisor
   already has tools for what it may do.
@@ -470,3 +495,4 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
 - 2026-10-31 — the list does not read a planner turn's start hold, which no status update marks, so a client's list stays what a fresh read says.
 - 2026-11-01 — a subplanner's question reaches the list as its delegated task's checkpoint, naming the child, and Approve may carry a raise (ADR-0056 M5, M8). Merge all names a check that has not passed in its confirmation (ADR-0055 D9).
 - 2026-11-01 — a parked question a restart lost is listed, quoting it, and a delegated task's check that waits on approval says its delegated task has ended (ADR-0055 D8, D17).
+- 2026-11-01 — VS Code draws the list as a control on the usage line with a dropdown upward, closed by default, and `/inbox` turns the view off and on (#30).

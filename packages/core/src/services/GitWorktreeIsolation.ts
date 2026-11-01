@@ -46,7 +46,7 @@ import { ensureStateDirIgnored, STATE_DIR } from '../utils/fsHelpers';
 import { sanitizeSlug } from '../utils/prdStore';
 import { absorbRemoval, handoffOf, integrationBranchFor, landedInRepo, noRemoval, PrepareFailedError, repoRootOf, SELF_REPO } from './isolationRecord';
 import { isTaskWorkspaceOf, refuseUsersCheckout, stateRootOf, worktreesDirOf } from './stateRoot';
-import { defaultExecFile, git, isAncestor, tryGit, type Ancestry, type GitExecFn, type GitInvoker, type GitResult } from './gitExec';
+import { defaultExecFile, git, isAncestor, tryGit, withoutHooks, type Ancestry, type GitExecFn, type GitInvoker, type GitResult } from './gitExec';
 import { IsolationLocks } from './isolationLocks';
 import { bootstrap, installDirs, isEnvFile, lexists, LINKED_ARTIFACTS, listDir, SetupCommandError } from './worktreeBootstrap';
 import { linkPath } from './worktreeLink';
@@ -60,6 +60,8 @@ export interface WorktreeIsolationDeps {
   config: Pick<IConfig, 'worktreeIsolation' | 'worktreeSetupCommand' | 'workspaceRepos' | 'worktreeLinks'>;
   /** Test seam: every git invocation goes through this. */
   execFileImpl?: GitExecFn;
+  /** Every git call of this isolation runs with hooks off: what it lands came from a container (ADR-0059 L6). */
+  noHooks?: boolean;
   resolvePath?: () => Promise<string>;
   platform?: NodeJS.Platform;
   mintRunId?: () => string;
@@ -148,6 +150,12 @@ function firstLine(text: string): string {
 function stoppedOn(result: GitResult): string {
   return firstLine(result.stderr) || firstLine(result.stdout) || `exit status ${result.code ?? 'unknown'}`;
 }
+
+/** The oldest git all of Ordewell works on: `merge-tree --write-tree`. */
+const MINIMUM_GIT = '2.38';
+
+/** A repository may set no identity, and these commits are never read for one. */
+const SIDE_COMMIT_IDENTITY = ['-c', 'user.name=ordewell', '-c', 'user.email=ordewell@localhost'];
 
 /** What a failed `git merge-tree --write-tree --name-only -z` conflicted over: exit 1 after a tree is a conflict; without one, git could not even try. */
 function mergeTreeConflict(trial: GitResult): string[] | null {
@@ -348,7 +356,8 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
 
   constructor(private readonly deps: WorktreeIsolationDeps) {
     this.resolvePath = deps.resolvePath ?? (() => augmentedPath());
-    this.gitInvoker = { exec: deps.execFileImpl ?? defaultExecFile, resolvePath: this.resolvePath };
+    const exec = deps.execFileImpl ?? defaultExecFile;
+    this.gitInvoker = { exec: deps.noHooks ? withoutHooks(exec) : exec, resolvePath: this.resolvePath };
     this.platform = deps.platform ?? process.platform;
     this.mintRunId = deps.mintRunId ?? (() => randomBytes(4).toString('hex'));
   }
@@ -1250,6 +1259,15 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     return this.gitAtLeast(2, 38);
   }
 
+  async gitShortfall(): Promise<string | null> {
+    const version = await this.tryGit(undefined, ['--version']);
+    const found = /\d+\.\d+[.\d]*/.exec(version.stdout)?.[0];
+    if (!version.ok || !found || (await this.canPreflight())) return null;
+    // `apply --cached --3way` is refused before 2.32, and on 2.32 calls a clean merge a conflict.
+    const patches = (await this.gitAtLeast(2, 33)) ? '' : " Applying another task's patch fails or reports conflicts that are not there.";
+    return `Ordewell needs git ${MINIMUM_GIT} or newer, and this is git ${found}. Reverting a task is refused, and Merge all cannot check a group of repositories before it starts.${patches}`;
+  }
+
   private async gitAtLeast(wantMajor: number, wantMinor: number): Promise<boolean> {
     const version = await this.tryGit(undefined, ['--version']);
     const [, major, minor] = /(\d+)\.(\d+)/.exec(version.stdout) ?? [];
@@ -1549,7 +1567,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     const records = taskIds.flatMap((id): LandedTask | [] => run.tasks[id] ?? run.landedTasks?.[id] ?? []);
     const lines = new Map<string, RepoLanding[]>();
     const inBranch: RevertCommand[] = [];
-    if (!(await this.gitAtLeast(2, 40))) return { ok: false, reason: 'git', error: 'A revert needs git 2.40 or newer, to merge without touching a worktree. Nothing was reverted.' };
+    if (!(await this.canPreflight())) return { ok: false, reason: 'git', error: `A revert needs git ${MINIMUM_GIT} or newer, to merge without touching a worktree. Nothing was reverted.` };
     for (const repo of run.repos) {
       const landed = records.filter(({ taskId }) => landedIn(run, taskId, repo.path));
       if (landed.length === 0) continue;
@@ -1694,7 +1712,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
    * staged or not (ADR-0054).
    */
   private async revertLanding(run: IsolationRun, repo: IsolationRepo, record: LandedTask, merge: string, onto: string, save: (commit: string) => void): Promise<{ files: string[] } | { error: string } | { strayed: true } | { onto: string }> {
-    const trial = await this.tryGit(repo.root, ['merge-tree', '--write-tree', '--name-only', '--no-messages', '-z', `--merge-base=${merge}`, onto, `${merge}^1`]);
+    const trial = await this.mergeOverLanding(repo, merge, onto);
     if (!trial.ok) {
       const files = mergeTreeConflict(trial);
       return files ? { files } : { error: `git could not revert it (${stoppedOn(trial)})` };
@@ -1721,6 +1739,20 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     // Only the branch moved, so only the branch goes back: a rollback's read would start from a tree this worktree never took.
     if (!(await this.tryGit(repo.root, ['update-ref', ref, onto, made])).ok) return { strayed: true };
     return { error: `a change in ${dir} is in its way (${stoppedOn(read)}): commit or clear it there first` };
+  }
+
+  /**
+   * Merge what the branch held before `merge` into `onto`, with `merge` as the
+   * base. `merge-tree --merge-base` says that only from git 2.40, so two commits
+   * off to the side say it instead: holding those trees, with `merge` as the one
+   * parent of each, they leave git no other base. Nothing refers to them after.
+   */
+  private async mergeOverLanding(repo: IsolationRepo, merge: string, onto: string): Promise<GitResult> {
+    const side = (tree: string) => this.tryGit(repo.root, [...SIDE_COMMIT_IDENTITY, 'commit-tree', tree, '-p', merge, '-m', 'A side of a revert']);
+    const [ours, theirs] = await Promise.all([side(`${onto}^{tree}`), side(`${merge}^1^{tree}`)]);
+    if (!ours.ok) return ours;
+    if (!theirs.ok) return theirs;
+    return this.tryGit(repo.root, ['merge-tree', '--write-tree', '--name-only', '--no-messages', '-z', ours.stdout.trim(), theirs.stdout.trim()]);
   }
 
   private stopLanding(record: IsolationTaskRecord, outcome: Exclude<IsolationOutcome, 'merged'>, repo?: IsolationRepo, files?: string[], error?: string): IsolationOutcome {

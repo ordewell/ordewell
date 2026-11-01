@@ -78,6 +78,20 @@ function disallowedOf(spawned: FakeSpawnResult): string[] {
 }
 
 describe('Claude Code with its own shell under Ordewell\'s sandbox (ADR-0036 N2)', () => {
+  it('keeps both shell tools on a subplanner\'s narrowed list, with the user\'s opt-in (ADR-0057 R11)', async () => {
+    const spawned = fakeSpawn([]);
+    const adapter = new ClaudeCodeAdapter(deps(spawned, nativeSandbox([])));
+    try {
+      await adapter.start({ kind: 'planner', cwd: workspace(), systemPrompt: 'PLAN', nativeShell: true, runnerConfig: 'minimal', noSubagents: true });
+      const args = spawned.lastArgs();
+      expect(args[args.indexOf('--tools') + 1].split(',')).toEqual(['Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch', 'ToolSearch', 'Bash', 'Monitor']);
+      expect(spawned.lastEnv().ENABLE_CLAUDEAI_MCP_SERVERS).toBe('false');
+      expect(spawned.lastEnv().CLAUDE_CODE_SHELL_PREFIX).toBeDefined();
+    } finally {
+      adapter.dispose();
+    }
+  });
+
   it('names the launcher and its short temp folder in --settings env, with Claude\'s own sandbox off and both shell tools let through', async () => {
     const spawned = fakeSpawn([]);
     const profiles: SandboxProfile[] = [];

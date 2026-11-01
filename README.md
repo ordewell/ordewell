@@ -40,7 +40,7 @@ freely within one plan. Try it in your project, with nothing to install:
 npx ordewell
 ```
 
-This README describes 0.12.0. See the [published releases](https://github.com/ordewell/ordewell/releases)
+This README describes 0.12.1. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
 Ordewell is pre-1.0, so minor releases can include breaking changes. Read the
@@ -74,7 +74,7 @@ get it from [Open VSX](https://open-vsx.org/extension/ordewell/ordewell). The
 extension bundles its own core and needs nothing from npm.
 
 **Requirements:** Node.js 20.3 or newer, at least one of Claude Code, Codex or
-OpenCode, and git for task isolation.
+OpenCode, and git 2.38 or newer for task isolation.
 
 ### Windows
 
@@ -135,7 +135,7 @@ the runners each get their models and credentials, see
 [planners and runners](docs/planners-and-runners.md). To write your own
 planner or task skills, see the [skills guide](docs/skills.md). If Codex's
 sandbox cannot start on your machine, see [troubleshooting](docs/troubleshooting.md).
-To keep a task's runner away from your files, see
+For the experimental container mode, off in published versions, see
 [running tasks in containers](docs/containers.md).
 
 ## Where it's going

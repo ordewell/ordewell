@@ -6,7 +6,7 @@ and model assigned to each AI task. With worktree isolation enabled, code tasks
 run in separate worktrees; ops and script tasks run at the workspace root.
 Ordewell records task outcomes and combines code changes for review and merging.
 
-This README describes 0.12.0. See the [published releases](https://github.com/ordewell/ordewell/releases)
+This README describes 0.12.1. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
 ## Installation
@@ -16,7 +16,7 @@ npm install -g @ordewell/cli        # or: npm install -g ordewell
 ```
 
 **Requirements:** Node.js 20.3 or newer, at least one of Claude Code, Codex or
-OpenCode, and git for task isolation. Linux, macOS and Windows are supported;
+OpenCode, and git 2.38 or newer for task isolation. Linux, macOS and Windows are supported;
 on Windows, run the terminal UI under WSL.
 
 ## Usage

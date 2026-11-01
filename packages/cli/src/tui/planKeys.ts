@@ -29,7 +29,7 @@ export const PLAN_KEYS = {
     keys: 'enter',
     meaning: "open the task's log: its output for a script task, or the chat with its runner (and, at a checkpoint, its answer)",
     group: 'Navigation',
-    hint: (task) => (task?.type === 'script' ? 'enter output' : task?.status === 'awaiting_user' && task.awaitingReason === 'checkpoint' ? 'enter answer' : 'enter chat'),
+    hint: (task) => (task?.type === 'script' ? 'enter output' : task?.status === 'awaiting_user' && task.awaitingReason === 'checkpoint' ? 'enter answer' : task?.type === 'delegated' && task.status === 'pending' && task.continuable ? 'enter continue' : 'enter chat'),
   },
   back: { keys: 'esc', meaning: "collapse the task, or leave a task's chat for the plan", group: 'Navigation' },
 

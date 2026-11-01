@@ -12,6 +12,7 @@ import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import type { Session } from '../createSession';
 import type { IAiService } from '../AiService';
 import type { IFileSystem, OwnSealedRuns, TaskShell, ToolOutcome } from '../../interfaces/IFileSystem';
+import type { IApproval } from '../../interfaces/IApproval';
 import type { IRunner } from '../../interfaces/IRunner';
 import type { IWorktreeIsolation } from '../../interfaces/IWorktreeIsolation';
 import type { PlannerToolHandler } from '../mcp';
@@ -35,8 +36,12 @@ const env = () => {
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, env: env(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
 const roots: string[] = [];
+const closing: Session[] = [];
 // What a closing child still saves may land a moment after its parent's `destroy`.
-afterEach(() => { while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); });
+afterEach(async () => {
+  await Promise.all(closing.splice(0).map((session) => session.gone));
+  while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+});
 
 function repo(): string {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-delegated-')));
@@ -195,6 +200,7 @@ function tree(turns: Turn[], { runner = writingRunner({ a: ['a.txt'], b: ['b.txt
     childDeps: () => ({ aiService: { reset: vi.fn(), ...planner.service } as unknown as IAiService, fsAdapter: fsAdapter ?? { ...fakeFs(), getWorkspaceRoot: () => root } }),
   });
   parent.loadPlan({ ...planOf(tasks), runners }, 'the root goal', root, { sessionId: 'session-root' });
+  closing.push(parent);
   return { root, parent, planner };
 }
 
@@ -1031,7 +1037,7 @@ describe('a landing that conflicts (ADR-0055 D14)', () => {
       spawn: vi.fn(async (opts) => {
         if (opts.taskId !== 'd') return held.runner.spawn(opts);
         repairs.push({ mode: opts.mode, cwd: opts.cwd, prompt: opts.prompt });
-        const repair = new FakeRunnerSession(`repair-${repairs.length}`, 'd');
+        const repair = new FakeRunnerSession(`repair-${repairs.length}`, 'd', 'native-repair');
         const finish = () => {
           if (waitsFor && !waitsFor()) {
             setTimeout(finish, 5);
@@ -1074,6 +1080,12 @@ describe('a landing that conflicts (ADR-0055 D14)', () => {
     expect(task(made.parent, 'd')?.taskMode).toBeUndefined();
     expect(made.planner.requests).toHaveLength(1);
     expect(git(made.root, 'show', `${integrationOf(made.parent)}:x.txt`)).toBe('both');
+    // Its child's two names and its report outlast the repair, a plain runner with a session of its own.
+    const child = made.parent.planState?.isolation?.run.tasks.d.childSession;
+    expect(child).toBeDefined();
+    expect(task(made.parent, 'd')?.runnerSessionId).toBe(child);
+    expect(task(made.parent, 'd')?.handoff?.subtree?.counts.done).toBe(1);
+    expect(task(made.parent, 'd')?.handoff?.summary).not.toBe('Repaired.');
     made.parent.destroy();
   });
 
@@ -1086,6 +1098,8 @@ describe('a landing that conflicts (ADR-0055 D14)', () => {
     await vi.waitFor(() => expect(task(made.parent, 'd')).toMatchObject({ status: 'awaiting_user', awaitingReason: 'conflict' }), { timeout: 20_000 });
     expect(repairs).toHaveLength(1);
     expect(git(made.root, 'show', `${integrationOf(made.parent)}:tests/guard.txt`)).toBe('the check reads this');
+    expect(task(made.parent, 'd')?.runnerSessionId).toBe(made.parent.planState?.isolation?.run.tasks.d.childSession);
+    expect(task(made.parent, 'd')?.handoff?.subtree).toBeDefined();
     made.parent.destroy();
   });
 
@@ -1294,12 +1308,25 @@ describe('what a model may not do to a check (ADR-0055 D8)', () => {
 describe('what ends a child with nobody to ask (ADR-0056 M3, M8, M10)', () => {
   it('denies a runner\'s approval at once, and tells the next run update: nobody below the root may allow it', async () => {
     const asked = { session: null as FakeRunnerSession | null };
-    const runner = writingRunner({ a: ['a.txt'] }, { asks: (session) => { asked.session = session; } });
+    const runner = writingRunner({ a: ['a.txt'] }, { asks: (session) => { asked.session ??= session; } });
     const { parent, planner } = tree([SUBMIT([childTask('a', 1)]), DONE], { runner });
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
     expect(asked.session?.answers[0]?.decision).toMatchObject({ decision: 'deny' });
     expect(planner.asked[1]).toContain('denied');
+    parent.destroy();
+  });
+
+  it('refuses what its shell would ask, so it runs sealed: nobody could answer, and the turn would wait out the clock', async () => {
+    const policies: IApproval[] = [];
+    const fsAdapter = { ...fakeFs(), setApproval: (policy: IApproval) => { policies.push(policy); } };
+    const { parent } = tree([SUBMIT([childTask('a', 1)]), DONE], { fsAdapter });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+
+    const subplanners = policies.at(-1)!;
+    const asked = subplanners.request({ kind: 'shell_command', subject: 'sleep 90', scope: 'sleep' });
+    expect(await Promise.race([asked, new Promise((resolve) => setTimeout(() => resolve('still waiting on a person'), 200))])).toBe(false);
     parent.destroy();
   });
 

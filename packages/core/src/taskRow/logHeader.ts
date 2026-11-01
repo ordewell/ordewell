@@ -13,6 +13,7 @@ import { approvalLabel, awaitingLabel, repairWaitLabel, resumeLabel, skippedLabe
  */
 export interface TaskLogHeaderTask {
   status: string;
+  type?: string;
   awaitingReason?: AwaitingReason;
   skipReason?: string;
   resumeAt?: string | null;
@@ -142,9 +143,11 @@ export function taskLogCommands(view: Pick<TaskLogView, 'blocks'>): readonly Run
 }
 
 /** Whether an opened task's composer continues it rather than messaging its turn (ADR-0018, K1). */
-export function logContinues(task: Pick<TaskLogHeaderTask, 'status' | 'awaitingReason' | 'continuable'>): boolean {
+export function logContinues(task: Pick<TaskLogHeaderTask, 'type' | 'status' | 'awaitingReason' | 'continuable'>): boolean {
   const finished = task.status === 'completed' || task.status === 'failed' || task.status === 'skipped';
-  return task.continuable === true && (finished || task.status === 'awaiting_user' && task.awaitingReason === 'usage-limit');
+  // A Stop or a restart leaves a delegated task's child there to reopen, and every other start discards it (ADR-0055 D15, D17).
+  const childLeft = task.type === 'delegated' && (task.status === 'pending' || task.awaitingReason === 'question-lost');
+  return task.continuable === true && (finished || childLeft || task.status === 'awaiting_user' && task.awaitingReason === 'usage-limit');
 }
 
 /** Whether the composer resumes it now, once the user says the limit has reset; a subset of `logContinues`. */

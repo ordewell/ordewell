@@ -455,6 +455,24 @@ export class TreeLedger {
     const { turn, ...on } = tag;
     this.write({ kind: 'tokens_spent', node, tokens, ...on, ...(turn && node === path ? { turn } : {}) });
     this.settle(node);
+    this.stopShortOfLimit(node, tokens, turn === true);
+  }
+
+  /**
+   * A call's usage arrives with the next already sent, and nothing recalls a
+   * request, so a node that stopped at its limit would always pass it, by a call
+   * or more. It stops while what it can reach still pays for what is on its way:
+   * the next call of each live session and the one after, each the size of the
+   * one just reported, which a long context only grows from. An estimate, never
+   * more than the reserve that is held for it. No live session means a runner
+   * winding down, with no call to follow.
+   */
+  private stopShortOfLimit(path: NodePath, call: number, turn: boolean): void {
+    const sessions = (this.live.get(path) ?? 0) + (turn ? 1 : 0);
+    if (sessions === 0) return;
+    const inFlight = sessions * Math.min(2 * call, this.reserve);
+    const reach = this.openChildren(path).reduce((total, child) => total + this.room(child), this.free(this.at(path)));
+    if (reach <= inFlight) this.spentOut(path);
   }
 
   /** Past what it can pay, a node's spending takes its children's room; with none left it is out. */
@@ -494,8 +512,10 @@ export class TreeLedger {
   }
 
   private spentOut(path: NodePath): void {
-    const { spent, limit } = this.at(path);
-    this.stopNode(path, `Level ${levelOf(path)} is out of budget: it has spent ${spent} of its ${limit} tokens, and nothing it holds is left to spend.`);
+    const node = this.at(path);
+    const { spent, limit } = node;
+    const left = this.free(node) > 0 ? 'what it holds would not pay for its next model calls' : 'nothing it holds is left to spend';
+    this.stopNode(path, `Level ${levelOf(path)} is out of budget: it has spent ${spent} of its ${limit} tokens, and ${left}.`);
   }
 
   private stopNode(path: NodePath, why: string): void {

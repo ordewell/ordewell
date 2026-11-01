@@ -7,7 +7,7 @@ import { FakeEventStore, FakeRunnerSession, FakeWorktreeIsolation } from '../../
 import type { ChildPlacement, Session, SessionDeps } from '../createSession';
 import { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings } from '../SettingsService';
 import { foldTree, SESSION_RESERVE_TOKENS as R, type NodeBudget } from '../TreeLedger';
-import { fakeConfig, makeSession, memoryTaskLogs, taskOf } from './sessionTestKit';
+import { fakeConfig, fakeFs, makeSession, memoryTaskLogs, sealingFs, taskOf } from './sessionTestKit';
 import { heldPlanner, NOW, plan, prose, recordingRunner, settled, task, until } from './supervisorTestKit';
 
 /**
@@ -76,6 +76,10 @@ async function tree(tokens: number, seats: readonly string[], settingsOf: Partia
   return { root, rootRun, child, store, open, settings, rootNotices };
 }
 
+/** A child's script as it lands without `effect`: sealed (ADR-0056 M9). */
+const sealedScript = () => task('a1', 1, { type: 'script', script: 'echo hi', readOnly: true, assignedRunner: undefined });
+const seals = () => ({ fsAdapter: { ...fakeFs(), ...sealingFs() } });
+
 describe('a child\'s claim (ADR-0056 M5)', () => {
   it('takes what room there is, and starts the rest as the sessions before it free theirs', async () => {
     const { child } = await tree(10 * R, ['a']);
@@ -105,7 +109,8 @@ describe('a child\'s claim (ADR-0056 M5)', () => {
   it('takes nothing for a script, which spends no tokens', async () => {
     const { child } = await tree(10 * R, ['a']);
     const scripted = vi.fn();
-    const a = await child('a', R, [task('a1', 1, { type: 'script', script: 'echo hi', assignedRunner: undefined })], {
+    const a = await child('a', R, [sealedScript()], {
+      ...seals(),
       scriptRunner: { spawn: scripted.mockImplementation(async ({ taskId }: { taskId: string }) => new FakeRunnerSession('s1', taskId)), stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 },
     });
     expect(a.budget.refusal()).not.toBeNull();
@@ -116,7 +121,8 @@ describe('a child\'s claim (ADR-0056 M5)', () => {
   it('holds no allowance for a script while it runs', async () => {
     const { root, child } = await tree(10 * R, ['a']);
     const scripted = vi.fn(async ({ taskId }: { taskId: string }) => new FakeRunnerSession('s1', taskId));
-    const a = await child('a', 3 * R, [task('a1', 1, { type: 'script', script: 'echo hi', assignedRunner: undefined })], {
+    const a = await child('a', 3 * R, [sealedScript()], {
+      ...seals(),
       scriptRunner: { spawn: scripted, stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 },
     });
     await run(a);
@@ -209,7 +215,7 @@ describe('a start the budget refuses with nothing live', () => {
     const { child } = await tree(10 * R, ['a']);
     const scripted = vi.fn(async ({ taskId }: { taskId: string }) => new FakeRunnerSession('s1', taskId));
     const scriptRunner = { spawn: scripted, stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 };
-    const a = await child('a', R, [task('a1', 1, { type: 'script', script: 'echo hi', assignedRunner: undefined })], { scriptRunner });
+    const a = await child('a', R, [sealedScript()], { ...seals(), scriptRunner });
     await run(a);
     await until(() => scripted.mock.calls.length === 1);
     await settled();
@@ -219,7 +225,8 @@ describe('a start the budget refuses with nothing live', () => {
   it('does not stop for a script whose start failed: what is left of the plan needs no tokens', async () => {
     const { child } = await tree(10 * R, ['a']);
     const scripted = vi.fn(async (): Promise<FakeRunnerSession> => { throw new Error('no shell here'); });
-    const a = await child('a', R, [task('a1', 1, { type: 'script', script: 'echo hi', assignedRunner: undefined })], {
+    const a = await child('a', R, [sealedScript()], {
+      ...seals(),
       scriptRunner: { spawn: scripted, stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 },
     });
     expect(a.budget.refusal()).not.toBeNull();
@@ -320,7 +327,8 @@ describe('a subplanner\'s turn (ADR-0056 M5)', () => {
     const a = await child('a', 2 * R, [task('a1', 1)]);
     await run(a);
     await until(() => started(a).includes('a1'));
-    report(a, 'a1', used(2 * R - 1));
+    // What a1 holds for its own calls is no turn's to spend, so one token short of that is too little.
+    report(a, 'a1', used(1));
     await settled();
     expect(a.session.outOfBudget).toBeNull();
 

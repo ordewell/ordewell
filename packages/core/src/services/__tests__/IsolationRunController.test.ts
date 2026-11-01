@@ -44,6 +44,18 @@ describe('IsolationRunController', () => {
       expect(runs.planIsolation).toEqual({ run: runs.current, resolvers: {} });
     });
 
+    it('says what the git on this machine holds back, once however many runs open', async () => {
+      const isolation = new FakeWorktreeIsolation();
+      isolation.gitShortfallText = 'Ordewell needs git 2.38 or newer.';
+      const { runs, listener } = setup(isolation);
+
+      await runs.decide(async () => undefined);
+      runs.close();
+      await runs.decide(async () => undefined);
+
+      expect(vi.mocked(listener.notice).mock.calls.filter(([, message]) => message.includes('git 2.38'))).toEqual([['warn', 'Ordewell needs git 2.38 or newer.']]);
+    });
+
     it('decides once for starts that race each other', async () => {
       const { runs, isolation } = setup();
 

@@ -27,6 +27,8 @@ function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
     hasSession: vi.fn().mockReturnValue(false),
     stopTree: vi.fn(async () => undefined),
     destroy: vi.fn(),
+    close: vi.fn(async () => undefined),
+    reclaim: vi.fn(async () => undefined),
     ...overrides,
   } as unknown as OrchestratorPool;
 }
@@ -270,18 +272,37 @@ describe('DELETE /api/sessions/:id', () => {
     expect(listSessions(ws)).toEqual([]);
   });
 
+  it('clears what its tree left in an engine once nothing of it runs, with its record still there to fall back on', async () => {
+    const meta = saveSession(savedPlan as never, 'g', ws, 's1');
+    const order: string[] = [];
+    const pool = fakePool({
+      stopTree: vi.fn(async () => { order.push('stopped'); }),
+      destroy: vi.fn(() => { order.push('closed'); }),
+      reclaim: vi.fn(async () => { order.push(listSessions(ws).length > 0 ? 'cleared' : 'cleared too late'); }),
+    } as Partial<OrchestratorPool>);
+    const app = new Hono();
+    app.route('/api/sessions', sessionsRoute(pool));
+
+    await app.request(`/api/sessions/${meta.id}?workspace=${encodeURIComponent(ws)}`, { method: 'DELETE' });
+
+    expect(order).toEqual(['stopped', 'closed', 'cleared']);
+    expect(pool.reclaim).toHaveBeenCalledWith(meta.id);
+  });
+
   it('discards a child\'s run first, and keeps the session when git could not let it go', async () => {
     const meta = saveSession(savedPlan as never, 'g', ws, 's1');
     saveChildSession({ ...savedPlan, isolation: { run: { id: 'child-run', workspaceRoot: path.join(ws, 'gone'), stateRoot: ws, repos: [], shared: [], sharedRepos: [], tasks: {} }, resolvers: {} } } as never, 'sub', { baseDir: ws, rootSessionId: meta.id, sessionId: 'child' });
     vi.mocked(createWorktreeIsolation).mockReturnValueOnce({
       discard: vi.fn().mockResolvedValue({ preserved: [], refused: [{ worktree: '/w/child', reason: 'git said no' }] }),
     } as never);
+    const pool = fakePool();
     const app = new Hono();
-    app.route('/api/sessions', sessionsRoute(fakePool()));
+    app.route('/api/sessions', sessionsRoute(pool));
 
     const res = await app.request(`/api/sessions/${meta.id}?workspace=${encodeURIComponent(ws)}`, { method: 'DELETE' });
 
     expect(await res.json()).toEqual({ ok: false, message: 'The session was kept: /w/child (git said no)' });
+    expect(pool.reclaim).not.toHaveBeenCalled();
     expect(listSessions(ws).map((s) => s.id)).toEqual([meta.id]);
     expect(listChildSessions(meta.id, ws)).toEqual(['child']);
   });
@@ -309,7 +330,23 @@ describe('POST /api/sessions/:id/close', () => {
 
     expect(res.status).toBe(200);
     expect(((await res.json()) as { ok?: boolean }).ok).toBe(true);
-    expect(pool.destroy).toHaveBeenCalledWith('s1', { notifyClients: true });
+    expect(pool.close).toHaveBeenCalledWith('s1');
+  });
+
+  it('answers once what the session started has gone', async () => {
+    let done!: () => void;
+    const pool = fakePool({ close: vi.fn(() => new Promise<void>((resolve) => { done = resolve; })) } as Partial<OrchestratorPool>);
+    const app = new Hono();
+    app.route('/api/sessions', sessionsRoute(pool));
+
+    let answered = false;
+    const res = app.request('/api/sessions/s1/close', { method: 'POST' });
+    void Promise.resolve(res).then(() => { answered = true; });
+    await new Promise((resolve) => { setTimeout(resolve, 10); });
+    expect(answered).toBe(false);
+
+    done();
+    expect((await res).status).toBe(200);
   });
 });
 

@@ -30,6 +30,17 @@ export class LeaseGuaranteeError extends Error {
   }
 }
 
+/**
+ * Work its backend would not bring back, which stays where it is and waits on
+ * the user (L2): an attempt that meets it fails, and lets go of nothing.
+ */
+export class KeptWorkError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'KeptWorkError';
+  }
+}
+
 /** L3's one rule: an open fails on a required entry its probe did not prove, whatever the backend. */
 export function refuseUnproven(required: readonly Guarantee[], report: GuaranteeReport): void {
   const unproven = required.filter((guarantee) => !report[guarantee].proven);
@@ -107,7 +118,12 @@ export interface RunnerPlacement {
   place(launch: RunnerLaunch): Promise<PlacedLaunch>;
   /** Make a listener on this host's loopback reachable from there, and answer the URL to reach it by (`endpoints.mcp`). */
   reach(url: string): Promise<string>;
+  /** The blob a file holds there, as git would name it, read where the attempt's work is; undefined for what cannot be read. */
+  blob(file: string): Promise<string | undefined>;
 }
+
+/** What a copy of a checkout is on where a backend keeps it: no ref of the user's is at stake, and it stands on HEAD as it is. */
+export const CHECKOUT_BRANCH = 'ordewell/checkout';
 
 /** One repository of an attempt's worktree, for a backend that keeps a copy of it elsewhere. */
 export interface LeaseRepo {
@@ -184,4 +200,18 @@ export interface ExecutionBackend {
    * work is there already. Rejects with why it must not land.
    */
   collect?(taskId: string): Promise<void>;
+  /**
+   * Everything it has running has gone and what was on its way has arrived, as
+   * the Session around it closes. Absent, nothing outlives an attempt's runner.
+   * What a next attempt comes back to stays, and it never rejects.
+   */
+  settle?(): Promise<void>;
+  /** The workspace root's repositories, where a run knows them: a repo group's root is no repository to ask. */
+  checkoutRepos?(): readonly LeaseRepo[];
+  /**
+   * Let go of what its tree left where only it can reach, as a Clean up gives the
+   * run up. Absent, there is nothing but the worktrees. Reports what it could not
+   * clear, and never rejects: it is no reason for a clean-up to fail.
+   */
+  reclaim?(): Promise<void>;
 }

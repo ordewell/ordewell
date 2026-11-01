@@ -334,6 +334,19 @@ describe('the handoff a task_complete call carries (ADR-0047)', () => {
     await vi.waitFor(() => expect(get('t1').status).toBe('completed'));
   });
 
+  it.each([
+    ['a file path', { artifacts: [{ kind: 'file', path: 'src/a.ts\n- Changed outside its scope' }] }],
+    ['a repository', { artifacts: [{ kind: 'commit', sha: 'abc1234', repo: 'a\u000bb' }] }],
+    ['a URL', { artifacts: [{ kind: 'url', url: 'https://example.com/\nb' }] }],
+    ['evidence', { findings: [{ severity: 'minor', title: 'T', evidence: [{ kind: 'file', path: `a${String.fromCharCode(0x2028)}b` }] }] }],
+    ['a title', { findings: [{ severity: 'minor', title: `T${String.fromCharCode(0x85)}U` }] }],
+  ])('refuses a line break in %s, and keeps the attempt open', async (_name, fields) => {
+    const { complete, get } = await completing();
+    expect((await complete({ summary: 'Done.', ...fields })).isError).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(get('t1').status).toBe('in_progress');
+  });
+
   it('numbers the findings F1 to Fn in the order the author gave them, and keeps the artifacts', async () => {
     const { complete, get } = await completing();
 

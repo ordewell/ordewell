@@ -723,7 +723,7 @@ function subtreeLines(subtree: SubtreeReport, cols: number): string[] {
   ]);
   return [
     ...wrap(`Subtree: ${view.summary}`, room).map((line) => `${HANDOFF_INDENT}${line}`),
-    ...(view.outsideScope ? wrap(view.outsideScope, room).map((line) => `${HANDOFF_INDENT}${style.yellow(line)}`) : []),
+    ...(view.outsideScope ? wrap(sanitize(view.outsideScope), room).map((line) => `${HANDOFF_INDENT}${style.yellow(line)}`) : []),
     ...(view.open.length > 0 ? [`${HANDOFF_INDENT}${style.grey('Open, for you to decide:')}`, ...itemLines(view.open)] : []),
     ...(view.promoted.length > 0 ? [`${HANDOFF_INDENT}${style.grey('Passed up by its subplanner:')}`, ...itemLines(view.promoted)] : []),
   ];

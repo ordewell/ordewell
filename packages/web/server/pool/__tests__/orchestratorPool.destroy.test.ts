@@ -52,6 +52,42 @@ describe('closing a session', () => {
   });
 });
 
+describe('a session a surface closes', () => {
+  it('is dropped at once, and resolves once all it started has gone', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'ordewell-close-'));
+    mkdirSync(join(workspace, '.git'));
+    vi.stubEnv('ORDEWELL_SETTINGS_PATH', join(workspace, 'settings.json'));
+    const pool = new OrchestratorPool({ accountLimitCollectors: () => [] });
+    hangingPlanner();
+
+    try {
+      const turn = pool.startPlanning('s1', 'ship it', ['claude-code'], workspace);
+      const session = pool.session('s1');
+      let done!: () => void;
+      vi.spyOn(session, 'gone', 'get').mockReturnValue(new Promise<void>((resolve) => { done = resolve; }));
+
+      let closed = false;
+      const closing = pool.close('s1').then(() => { closed = true; });
+
+      expect(pool.hasSession('s1')).toBe(false);
+      await expect(turn).rejects.toBeInstanceOf(PlannerTurnDiscardedError);
+      expect(closed).toBe(false);
+
+      done();
+      await closing;
+    } finally {
+      pool.destroyAll();
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('is a no-op for one that is not there', async () => {
+    const pool = new OrchestratorPool({ accountLimitCollectors: () => [] });
+
+    await expect(pool.close('nobody')).resolves.toBeUndefined();
+  });
+});
+
 describe('re-planning under a live session id', () => {
   it('destroys the previous session rather than orphaning its turn', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'ordewell-replan-'));

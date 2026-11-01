@@ -86,6 +86,8 @@ export interface SupervisorHost {
   readBudget(): number;
   /** Retries the supervisor may make of one task in a run, as the plan sets them. */
   retryLimit(): number;
+  /** This plan is a child's, with no user above it (ADR-0055 D4). */
+  subplanner?(): boolean;
   /** End the planner's process but keep its session id, so the retry resumes it (ADR-0009). */
   restartPlanner(): void;
   /** Free the conversation from a turn that did not end when stopped, taking back what it wrote. */
@@ -241,10 +243,16 @@ export class Supervisor {
     return {
       readBudget,
       refused: (change) => changeRefusal(this.level, change),
-      brief: this.level === 'act' ? actBrief(readBudget, this.host.retryLimit()) : this.level === 'watch' ? watchBrief(readBudget) : offBrief(readBudget),
+      brief: this.wakeBrief(readBudget),
       // A supervisor starts a task only at Act, so a report of one acts at the run's level now: never above the one it started at, and lowered with the run.
       actor: () => ({ kind: 'supervisor', level: this.level }),
     };
+  }
+
+  private wakeBrief(readBudget: number): WakeBrief {
+    if (this.level === 'watch') return watchBrief(readBudget);
+    if (this.level !== 'act') return offBrief(readBudget);
+    return this.host.subplanner?.() ? subplannerBrief(readBudget, this.host.retryLimit()) : actBrief(readBudget, this.host.retryLimit());
   }
 
   /**
@@ -595,6 +603,23 @@ function actBrief(readBudget: number, retryLimit: number): WakeBrief {
       'Then tell the user, in a few lines, what happened, what you did and why, and what needs them.',
     ].join('\n'),
     line: `You are the supervisor at Act now: you act and then tell the user, as you were told, with up to ${readBudget} reads a turn and ${retryLimit} retries of a task.`,
+  };
+}
+
+/**
+ * A subplanner's: nobody stands above it but a plan, which it answers with its
+ * report (ADR-0055 D4), and each line here rides in every call that follows.
+ */
+function subplannerBrief(readBudget: number, retryLimit: number): WakeBrief {
+  return {
+    key: 'act',
+    whole: [
+      'You were woken by the run update above. If the run ended with its work done, call task_complete now.',
+      'Otherwise act on it yourself: run, stop, retry or skip tasks, message their runners, answer their checkpoints, and change tasks with edit_plan, then retry_task in the same reply.',
+      readsLine(readBudget),
+      `Loop guards hold you: you may retry one task up to ${retryLimit} times this run, and a retry after a failure must change its prompt or model. When a guard stops you, end with task_complete and status "blocked".`,
+    ].join('\n'),
+    line: `You have up to ${readBudget} reads a turn and ${retryLimit} retries of a task.`,
   };
 }
 

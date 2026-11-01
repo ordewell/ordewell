@@ -2,8 +2,10 @@ import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { BOARD_LIMITS, BOARD_REF, boardEntryLines, boardMapLines, boardRef, contestedKeys, parseBoardRef, pinLines, type BoardAuthor, type BoardDraft, type BoardEntry, type BoardFile, type BoardMarks, type BoardPost } from '../models/Board';
+import type { CheckWord } from '../models/Delegation';
 import { parentPath, type NodePath } from '../models/TreeEvent';
 import type { McpToolReply } from './mcp/tools';
+import { escapeRegex } from './symbolPatterns';
 import { allowedPath } from './taskDiffRead';
 
 /** Where the board's `file` evidence is compared (ADR-0057 R9). */
@@ -25,8 +27,11 @@ export interface NodeBoardDeps {
   node: NodePath;
   git: BoardGit;
   /** What this plan's checks read and run: what no pin may hold (R10). */
-  checks?(): readonly string[];
+  checks?(): readonly CheckWord[];
 }
+
+/** The blob of a file where its author works, as git would name it; undefined for what cannot be read, which goes unpinned. */
+export type WorkBlobs = (file: string) => Promise<string | undefined>;
 
 /** Past this a file is not read: a claim on it goes unpinned, and is never stale. */
 const BLOB_READ_MAX = 16 * 1024 * 1024;
@@ -52,11 +57,21 @@ async function workBlob(cwd: string, file: string): Promise<string | undefined> 
   }
 }
 
+/** An author's files in a directory of this host. */
+export const blobsIn = (cwd: string): WorkBlobs => (file) => workBlob(cwd, file);
+
 /** How a text stands for a match: case and spacing are not what makes a check the same check. */
 const folded = (text: string): string => text.toLowerCase().replace(/\s+/g, ' ').trim();
 
-/** Shorter than this, a check's words are too common to say a pin holds them. */
+/** Shorter than this, a check's prose is too common to say a pin holds it. */
 const CHECK_TEXT_MIN = 12;
+
+/** Whether folded text holds a check: a command whole at any length, so `make` is in "run make first" and not in "remake". */
+function holdsCheck(said: string, { text, command }: CheckWord): boolean {
+  const words = folded(text);
+  if (command) return new RegExp(`(?<![\\w-])${escapeRegex(words)}(?![\\w-])`).test(said);
+  return words.length >= CHECK_TEXT_MIN && said.includes(words);
+}
 
 /**
  * One node's view of the tree's boards (ADR-0057 R8 to R10): it posts to its
@@ -83,9 +98,9 @@ export class NodeBoard {
   }
 
   /** The file evidence an entry pins, read now: what its author saw and what the branch held. */
-  private async pinned(files: readonly string[], cwd: string | undefined, branch: string | undefined): Promise<BoardFile[]> {
+  private async pinned(files: readonly string[], work: WorkBlobs | undefined, branch: string | undefined): Promise<BoardFile[]> {
     return Promise.all(files.map(async (file): Promise<BoardFile> => {
-      const sha = cwd === undefined ? undefined : await workBlob(cwd, file);
+      const sha = await work?.(file);
       const tip = branch === undefined ? undefined : await this.deps.git.blob(branch, file);
       return { kind: 'file', path: file, ...(sha ? { sha } : {}), ...(tip ? { tip } : {}) };
     }));
@@ -97,13 +112,13 @@ export class NodeBoard {
     if (unsafe !== undefined) return `files: ${JSON.stringify(unsafe)} is not a path in this workspace: give one relative to it, with no "..".`;
     if (type !== 'pin') return null;
     const said = folded(`${title}\n${detail ?? ''}`);
-    return (this.deps.checks?.() ?? []).some((text) => folded(text).length >= CHECK_TEXT_MIN && said.includes(folded(text)))
+    return (this.deps.checks?.() ?? []).some((check) => holdsCheck(said, check))
       ? 'A check never goes in a pin: a pin reaches the tasks a check judges, and a check they can read is one they can pass without the work. Nothing was posted.'
       : null;
   }
 
-  /** `cwd` is where the author works: its files are pinned from there (R9). */
-  async post(entry: BoardPost, by: Omit<BoardAuthor, 'node'>, cwd?: string): Promise<McpToolReply> {
+  /** `work` reads where the author works: its files are pinned from there (R9). */
+  async post(entry: BoardPost, by: Omit<BoardAuthor, 'node'>, work?: WorkBlobs): Promise<McpToolReply> {
     const refused = this.refusal(entry);
     if (refused) return { text: refused, isError: true };
     const { files, ...fields } = entry;
@@ -111,7 +126,7 @@ export class NodeBoard {
     const draft: BoardDraft = {
       ...fields,
       by: { ...by, node: this.deps.node },
-      ...(files?.length ? { files: await this.pinned(files, cwd, branch), ...(branch ? { branch } : {}) } : {}),
+      ...(files?.length ? { files: await this.pinned(files, work, branch), ...(branch ? { branch } : {}) } : {}),
     };
     const posted = this.deps.log.post(this.deps.node, draft);
     if (!posted) return { text: `This board is full, at ${BOARD_LIMITS.entries} entries: nothing was posted.`, isError: true };

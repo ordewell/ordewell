@@ -5,9 +5,11 @@ import { createHash } from 'crypto';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { BOARD_LIMITS, type BoardPost } from '../../models/Board';
+import { checkWords } from '../../models/Delegation';
+import { createTask, type Task } from '../../models/Task';
 import { ROOT_NODE, type NodePath } from '../../models/TreeEvent';
 import { FakeEventStore } from '../../testing';
-import { NodeBoard, type BoardGit } from '../Board';
+import { blobsIn, NodeBoard, type BoardGit } from '../Board';
 import { rootMandate, type Mandate } from '../Mandate';
 import { TreeLedger } from '../TreeLedger';
 import type { EventStore } from '../eventStore';
@@ -25,7 +27,7 @@ function child(ledger: TreeLedger, parent: NodePath, sessionId = `child-${++chil
 }
 
 const noGit: BoardGit = { branch: () => undefined, blob: async () => undefined };
-const boardOf = (ledger: TreeLedger, node: NodePath, git: BoardGit = noGit, checks?: () => readonly string[]) => new NodeBoard({ log: ledger, node, git, ...(checks ? { checks } : {}) });
+const boardOf = (ledger: TreeLedger, node: NodePath, git: BoardGit = noGit, checks?: () => readonly string[]) => new NodeBoard({ log: ledger, node, git, ...(checks ? { checks: () => checks().map((text) => ({ text, command: false })) } : {}) });
 const entry = (over: Partial<BoardPost> = {}): BoardPost => ({ type: 'claim', title: 'The writer is safe', ...over });
 const planner = {};
 const task = { task: '#2', attempt: 1 };
@@ -110,8 +112,8 @@ describe('a board (ADR-0057 R8)', () => {
   it('refuses a file outside the workspace, whatever is posted with it', async () => {
     const ledger = await open();
     const board = boardOf(ledger, child(ledger, ROOT_NODE));
-    expect(await board.post(entry({ files: ['../secret'] }), task, '/somewhere')).toMatchObject({ isError: true });
-    expect(await board.post(entry({ files: ['/etc/passwd'] }), task, '/somewhere')).toMatchObject({ isError: true });
+    expect(await board.post(entry({ files: ['../secret'] }), task, blobsIn('/somewhere'))).toMatchObject({ isError: true });
+    expect(await board.post(entry({ files: ['/etc/passwd'] }), task, blobsIn('/somewhere'))).toMatchObject({ isError: true });
     expect(await textOf(board.read('board'))).toContain('nothing on it yet');
   });
 });
@@ -185,7 +187,7 @@ describe('contested and stale are computed (ADR-0057 R9)', () => {
     async function posted(git: BoardGit, cwd: string, file = 'src/a.ts') {
       const ledger = await open();
       const board = boardOf(ledger, child(ledger, ROOT_NODE), git);
-      await board.post(entry({ files: [file] }), task, cwd);
+      await board.post(entry({ files: [file] }), task, blobsIn(cwd));
       return board;
     }
 
@@ -239,7 +241,7 @@ describe('contested and stale are computed (ADR-0057 R9)', () => {
       execFileSync('mkfifo', [join(cwd, 'pipe')]);
       const ledger = await open();
       const node = child(ledger, ROOT_NODE);
-      expect(await boardOf(ledger, node, branch({})).post(entry({ files: ['pipe'] }), task, cwd)).toMatchObject({ text: expect.stringContaining('Posted') });
+      expect(await boardOf(ledger, node, branch({})).post(entry({ files: ['pipe'] }), task, blobsIn(cwd))).toMatchObject({ text: expect.stringContaining('Posted') });
       expect(ledger.board(node)[0].files).toEqual([{ kind: 'file', path: 'pipe' }]);
       rmSync(cwd, { recursive: true });
     }, 5_000);
@@ -256,8 +258,8 @@ describe('contested and stale are computed (ADR-0057 R9)', () => {
       const git = branch({});
       const node = child(ledger, ROOT_NODE);
       const board = boardOf(ledger, node, git);
-      await board.post(entry({ files: ['link'] }), task, cwd);
-      await board.post(entry({ title: 'no files' }), task, cwd);
+      await board.post(entry({ files: ['link'] }), task, blobsIn(cwd));
+      await board.post(entry({ title: 'no files' }), task, blobsIn(cwd));
       git.files.link = 'anything\n';
       expect(await textOf(board.read('board'))).not.toContain('stale');
       expect(ledger.board(node)[0].files).toEqual([{ kind: 'file', path: 'link' }]);
@@ -305,6 +307,22 @@ describe('pins (ADR-0057 R10)', () => {
     expect(await board.post(entry({ type: 'pin', title: 'Use v2, read it first' }), planner)).toMatchObject({ text: expect.stringContaining('Posted') });
     expect(await board.post(entry({ type: 'decision', title: 'Run the migration test suite twice' }), planner)).toMatchObject({ text: expect.stringContaining('Posted') });
     expect(ledger.board(ROOT_NODE).map(({ type }) => type)).toEqual(['pin', 'decision']);
+  });
+
+  it("refuses a script check's command whatever its length, and only the whole command", async () => {
+    const delegated = createTask({ id: 'd', order: 1, title: 'Delegated', type: 'delegated', goal: 'g', budget: { tokens: 1000 } });
+    const script = (id: string, body: Partial<Task>) => createTask({ id, order: 2, title: 'Check', type: 'script', readOnly: true, dependencies: ['d'], ...body });
+    const pinned = async (check: Task, title: string) => {
+      const ledger = await open();
+      return new NodeBoard({ log: ledger, node: ROOT_NODE, git: noGit, checks: () => checkWords([delegated, check]) }).post(entry({ type: 'pin', title }), planner);
+    };
+    const refused = expect.objectContaining({ isError: true });
+    expect(await pinned(script('c', { commands: [['npm', 'test']] }), 'Run NPM  test first')).toEqual(refused);
+    expect(await pinned(script('c', { commands: [['make']] }), 'Run make first')).toEqual(refused);
+    expect(await pinned(script('c', { script: '#!/bin/sh\nset -e; go vet && npm test | tee out\n' }), 'Run go vet first')).toEqual(refused);
+    expect(await pinned(script('c', { script: 'npm test | tee out' }), 'Then npm test.')).toEqual(refused);
+    expect(await pinned(script('c', { commands: [['make']] }), 'Remake the cache')).toMatchObject({ text: expect.stringContaining('Posted') });
+    expect(await pinned(script('c', { script: '# run it\nnpm test' }), 'Run it in order')).toMatchObject({ text: expect.stringContaining('Posted') });
   });
 });
 

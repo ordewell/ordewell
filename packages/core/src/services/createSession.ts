@@ -6,7 +6,7 @@ import { createAiService, type IAiService } from './AiService';
 import type { PlannerContextDeps } from './plannerContextBudget';
 import { PlannerBackend } from './PlannerBackend';
 import type { TaskOp } from './TaskOps';
-import { PlanChangeCheck, type PlanChangeScope } from './PlanChangeCheck';
+import { PlanChangeCheck, runsSealed, type PlanChangeScope } from './PlanChangeCheck';
 import { carryPlannedModes } from './ModeResolver';
 import { ApprovalRecord } from './ApprovalRecord';
 import type { TaskQueryCatalog } from './TaskQuery';
@@ -22,7 +22,7 @@ import { TaskControlError, TaskOrchestrator, type OrchestratorObserver, type Run
 import { ChildPlanRunner, ownedRunner, type ChildHost, type ChildNode, type NodeEnd, type NodeState, type SubplannerLink, type TakenReport } from './ChildPlanRunner';
 import { readTask, type TaskLogReader } from './readTask';
 import { Subtree, takeReport } from './Subtree';
-import { NodeBoard } from './Board';
+import { blobsIn, NodeBoard } from './Board';
 import { ScopeLines } from './ScopeLines';
 import { isBoardRef } from '../models/Board';
 import { DELEGATION_OFFERED } from './runSettingsText';
@@ -30,10 +30,10 @@ import { checkWords, checksDelegatedTask, type DelegatedRow } from '../models/De
 import type { SlotPool } from './SlotPool';
 import type { OpenLease, ReservedLease } from './executionLease';
 import { PlanStore } from './PlanStore';
-import { ApprovalPolicy, effectiveApprovalMode } from './ApprovalPolicy';
+import { ApprovalPolicy, effectiveApprovalMode, type ApprovalModeSetting } from './ApprovalPolicy';
 import { DEFAULT_PLANNER_ALLOWLIST } from './plannerAllowlist';
 import { effectRuleFor, parseEffectAllowlist, type EffectRules } from './effectAllowlist';
-import { autonomousAt, delegatedRequest, heldMandate, mandateRefusalText, narrow, rootAuthority, withheldPlannerTools, type Mandate, type MandateRequest, type NodeAuthority, type RootSettings } from './Mandate';
+import { SCRIPT_PAST_THE_RULES, autonomousAt, delegatedRequest, heldMandate, mandateRefusalText, narrow, rootAuthority, withheldPlannerTools, type Mandate, type MandateRequest, type NodeAuthority, type RootSettings } from './Mandate';
 import { TreeLedger, type Carved, type NodeBudget } from './TreeLedger';
 import type { EventStore } from './eventStore';
 import { ROOT_NODE, type NodePath } from '../models/TreeEvent';
@@ -324,20 +324,23 @@ const SILENT: INotification = { info() {}, warn() {}, error() {}, confirm: async
 function subplannerConfig(config: IConfig, task: Task): IConfig {
   const provider = providerForRunner(task.assignedRunner);
   if (!provider) throw new Error(`Task "${task.title}" names runner "${task.assignedRunner}", and a subplanner is a harness planner: no planner runs on it.`);
+  // `allowlist` is only the setting's spelling. A policy reads it as neither allow nor deny, and asks.
+  const approvalMode: ApprovalModeSetting = 'deny';
   return Object.create(config, {
     aiProvider: { value: provider, enumerable: true },
     orchestratorModel: { value: task.assignedModel?.modelId ?? '', enumerable: true },
     plannerThinkingEffort: { value: task.assignedModel?.thinkingEffort, enumerable: true },
-    approvalMode: { value: 'allowlist', enumerable: true },
+    approvalMode: { value: approvalMode, enumerable: true },
     notifyCommand: { value: [], enumerable: true },
   }) as IConfig;
 }
 
 /**
  * A subplanner is Act with autorun, inside its mandate (ADR-0056 M7), and it
- * merges its own subtree (ADR-0055 D10). Its runners load what a task needs
- * unless the settings file says otherwise: a subtree multiplies what each
- * attempt's context carries (ADR-0057 R2).
+ * merges its own subtree (ADR-0055 D10). Its runners and its own process load
+ * what they need unless the settings file says otherwise: a subtree multiplies
+ * what each attempt's context carries, and each of a subplanner's calls is
+ * charged all of it (ADR-0057 R2, R11).
  */
 function subplannerSettings(settings: SessionRuntimeSettings): SessionRuntimeSettings {
   return { ...settings, taskRunnerConfig: settings.taskRunnerConfig ?? 'minimal', run: { ...RUN_SETTINGS_DEFAULTS, ...settings.run, supervisorLevel: 'act', autorun: true, mergeAtGatesAutomatically: true } };
@@ -512,7 +515,8 @@ export function createSession(deps: SessionDeps): Session {
   const runnerApprovals = new RunnerApprovals(approvals);
   // What is charged here goes on up, for a row at each level to show (ADR-0055 D20).
   const nodeBudget = deps.placement?.budget && reportingUp(deps.placement.budget, deps.subplanner);
-  const containers = deps.settings().containers;
+  // The setting is session-wide, so a root reads it once and its children take what that decided: read again, a change would put them on this host.
+  const containers = deps.placement ? undefined : deps.settings().containers;
   const execution = deps.execution ?? (containers === undefined ? undefined : containerExecution(containers));
   const orchestrator = TaskOrchestrator.compose({
     config: deps.config,
@@ -531,7 +535,7 @@ export function createSession(deps: SessionDeps): Session {
     startRefused: (why) => session.startRefused(why),
     autonomous: () => autonomousAt(deps.child, deps.config.autonomousMode),
     ...(deps.subplanner ? { decided: () => deps.subplanner?.changed() } : {}),
-    ...(deps.child ? { inheritedProtectedPaths: () => deps.child?.mandate('off').exclusions.protectedPaths ?? [] } : {}),
+    ...(deps.child ? { inheritedProtectedPaths: () => deps.child?.mandate('off').exclusions.protectedPaths ?? [], unsealedRefusal: (task: Readonly<Task>) => session.unsealedRefusal(task) } : {}),
     ...(deps.subplanner ? { nodeRefusal: () => session.nodeRefusal() } : {}),
     discardChild: (task) => session.discardChild(task),
     subtree: () => session.subtree(),
@@ -539,6 +543,7 @@ export function createSession(deps: SessionDeps): Session {
     board: () => session.board(),
     landed: (task) => session.taskLanded(task),
     sessionId: () => session.sessionId,
+    treeId: () => session.rootSessionId,
     openTurn: () => session.turnRoomFreed(),
     skillsAt: (roots) => (deps.skillsService ?? new SkillsService(roots)).forRoot(roots),
     previousAttemptFromLog: (taskId) => lastAttemptDigest(session.taskLogLocation, taskId),
@@ -685,9 +690,10 @@ export function createSession(deps: SessionDeps): Session {
     }),
     subplanner: deps.subplanner,
     brief: deps.brief,
+    runnerConfig: () => deps.settings().taskRunnerConfig,
     delegationOffered: deps.delegationOffered ?? DELEGATION_OFFERED,
     childPlans,
-    childSession: (spec) => createSession(childSessionDeps(deps, spec)),
+    childSession: (spec) => createSession(childSessionDeps(execution ? { ...deps, execution } : deps, spec)),
   });
   return session;
 }
@@ -760,6 +766,7 @@ export interface SessionParts {
   eventLog: (rootSessionId: string, stateRoot: string) => EventStore;
   subplanner?: SubplannerLink;
   brief?: SubplannerBrief;
+  runnerConfig: () => TaskRunnerConfig | undefined;
   delegationOffered: boolean;
   childPlans: Pick<ChildPlanRunner, 'stopEvery' | 'activeCount' | 'progressOf'>;
   childSession: (spec: ChildSpec) => Session;
@@ -853,6 +860,7 @@ export class Session {
   /** How this session answers to its parent's attempt; undefined at the root (ADR-0055 D5). */
   private readonly subplanner: SubplannerLink | undefined;
   private readonly brief: SubplannerBrief | undefined;
+  private readonly runnerConfig: () => TaskRunnerConfig | undefined;
   private readonly delegationOffered: boolean;
   private readonly childPlans: SessionParts['childPlans'];
   private readonly childSession: SessionParts['childSession'];
@@ -915,6 +923,7 @@ export class Session {
       return this.planChanges.check({ kind: 'plan', tasks }, 'submit');
     },
     submitPlan: (tasks, turn) => this.submitPlanFromTool(tasks, turn),
+    unread: () => this.subplanner !== undefined,
     editPlan: (ops, turn) => this.editPlanFromTool(ops, turn),
     tasks: () => this.store.planTasks,
     read: (signature, answer) => this.conversation.read(signature, answer),
@@ -959,6 +968,7 @@ export class Session {
     this.authority = parts.child ?? rootAuthority(() => this.rootSettings());
     this.eventLog = parts.eventLog;
     this.subplanner = parts.subplanner;
+    this.runnerConfig = parts.runnerConfig;
     this.brief = parts.brief;
     this.delegationOffered = parts.delegationOffered;
     this.childPlans = parts.childPlans;
@@ -1011,6 +1021,7 @@ export class Session {
       onProgress: (p) => this.events.progress(p),
       opening: (runners) => this.conversationOpening(runners),
       catalog: () => this.catalog.current(),
+      subplanner: () => this.subplanner !== undefined,
       assignmentScope: () => this.catalog.scope(),
       autorun: () => this.userRunSettings().autorun,
       tasks: () => this.store.planTasks,
@@ -1101,6 +1112,7 @@ export class Session {
 
     this.supervision = new RunSupervision({
       plan: () => this.plan,
+      subplanner: () => this.subplanner !== undefined,
       userSettings: () => this.userRunSettings(),
       tasks: () => this.store.planTasks,
       startWaits: () => this.orchestrator.planStartWaits(),
@@ -1531,6 +1543,11 @@ export class Session {
     return this.authority.mandate(this.supervision.level);
   }
 
+  /** Why this child's script may not land what it does unsealed, as the rules stand now: an effect withdrawn since it landed goes with them (ADR-0056 M9). */
+  unsealedRefusal(task: Readonly<Task>): string | null {
+    return runsSealed(this.mandate(), task) ? `Level ${this.authority.depth} refused Task "${task.title}": ${SCRIPT_PAST_THE_RULES}.` : null;
+  }
+
   /** Each value where it lives today; the level is the caller's to name (ADR-0056 M1). */
   private rootSettings(): Omit<RootSettings, 'level'> {
     const { autorun, delegationTokens } = this.userRunSettings();
@@ -1655,7 +1672,7 @@ export class Session {
   }
 
   /** The root Session's id, under which a tree's state sits (ADR-0055 D11). */
-  private get rootSessionId(): string {
+  get rootSessionId(): string {
     return this.placement?.rootSessionId ?? this.currentSessionId;
   }
 
@@ -1796,13 +1813,16 @@ export class Session {
     const task = this.store.get(taskId);
     if (task?.type !== 'delegated') return undefined;
     const tasks = this.childPlans.progressOf(taskId);
-    const budget = task.budget?.tokens;
     const tree = this.tree;
+    const stated = task.budget?.tokens;
+    const budget = stated === undefined ? undefined : stated + (tree?.raisedOn(this.nodePath, taskId) ?? 0);
     const open = tree?.nodeOf(this.runs.childSession(taskId) ?? '');
     const spent = tree ? open ? tree.taskSpent(open.path) : tree.spentOn(this.nodePath, taskId) : 0;
+    // Spending is the log's, read when something first asks: before that a task that ran would read as untouched.
+    const known = budget !== undefined && (tree !== null || !task.attempted);
     const row: DelegatedRow = {
       ...(tasks ? { tasks } : {}),
-      ...(budget !== undefined ? { tokens: { budget, left: Math.max(0, budget - spent) } } : {}),
+      ...(known ? { tokens: { budget, left: Math.max(0, budget - spent) } } : {}),
       ...(this.orchestrator.windingDown(taskId) ? { stopping: true as const } : {}),
     };
     return Object.keys(row).length > 0 ? row : undefined;
@@ -1833,7 +1853,7 @@ export class Session {
     const { mandate, budget } = carved;
     // A change at any level above reaches the subtree at its next check (ADR-0056 M1).
     const authority: NodeAuthority = { depth: this.authority.depth + 1, mandate: () => heldMandate(mandate, [this.mandate()]) };
-    const brief: SubplannerBrief = { protectedPaths: mandate.exclusions.protectedPaths, readOnly: task.readOnly === true };
+    const brief: SubplannerBrief = { protectedPaths: mandate.exclusions.protectedPaths, readOnly: task.readOnly === true, runner: task.assignedRunner };
     const placement = this.hostChild(task.id);
     // Saved as it is seated: what a crash from here on leaves to reopen it by, or discard it (D17).
     this.store.setTaskRunnerSessionId(task.id, placement.sessionId, this.store.resolveTaskRunner(task));
@@ -1965,7 +1985,7 @@ export class Session {
   async postOnBoard(args: PostArgs): Promise<McpToolReply> {
     const board = await this.board();
     if (!board) return { text: 'This plan has no board: it gains one with its first delegated task. Nothing was posted.', isError: true };
-    return board.post(args, {}, this.workspaceRoot);
+    return board.post(args, {}, blobsIn(this.workspaceRoot));
   }
 
   /**
@@ -3008,6 +3028,7 @@ export class Session {
         ...(this.delegates ? { delegates: true } : {}),
         ...(this.subplanner ? { subplanner: true } : {}),
         ...(this.child && !this.child.mandate('off').grants.has('research') ? { noSubagents: true } : {}),
+        ...(this.subplanner ? { runnerConfig: this.runnerConfig() ?? 'minimal' } : {}),
       },
       ...(this.delegates ? { delegation: this.delegationBrief() } : {}),
       ...(this.brief ? { subplanner: this.brief } : {}),
@@ -3419,6 +3440,7 @@ export class Session {
     await this.withSave(async () => {
       await this.discardChildren();
       await this.runs.cleanup();
+      await this.orchestrator.reclaimLeases();
     });
   }
 
@@ -3434,6 +3456,7 @@ export class Session {
     await this.withSave(async () => {
       await this.discardChildren();
       await this.runs.discard();
+      await this.orchestrator.reclaimLeases();
     });
     this.announceClosed();
   }
@@ -3738,9 +3761,11 @@ export class Session {
     // Last: stopping the run above saves what it changed, which needs the lease.
     // A child reads the lease through this Session (ADR-0055 D13), so with one
     // still stopping it goes only once that child has: read as free, the tree
-    // could be taken from under what it still writes.
-    if (this.childPlans.activeCount === 0) this.letLeaseGo();
-    else this.departed = this.childPlans.stopEvery().catch(() => undefined).then(() => this.letLeaseGo());
+    // could be taken from under what it still writes. So with what this run
+    // started: a runner winding down, a container and all it holds open, or a
+    // release or a merge still changing git.
+    if (this.childPlans.activeCount === 0 && this.orchestrator.leftNothing) this.letLeaseGo();
+    else this.departed = this.childPlans.stopEvery().then(() => this.orchestrator.allGone()).catch(() => undefined).then(() => this.letLeaseGo());
   }
 
   private letLeaseGo(): void {

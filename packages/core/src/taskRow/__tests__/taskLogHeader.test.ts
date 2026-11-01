@@ -93,7 +93,14 @@ describe('whether the composer continues the task (ADR-0018, K1)', () => {
     expect(logResumes(paused)).toBe(true);
   });
 
+  it('a delegated task a Stop left, or whose question a restart lost, is continued: its child is still there (ADR-0055 D17)', () => {
+    expect(logContinues({ type: 'delegated', status: 'pending', continuable: true })).toBe(true);
+    expect(logContinues({ type: 'delegated', status: 'awaiting_user', awaitingReason: 'question-lost', continuable: true })).toBe(true);
+    expect(logContinues({ type: 'delegated', status: 'awaiting_user', awaitingReason: 'checkpoint', continuable: true })).toBe(false);
+  });
+
   it('no saved session, or a status that cannot continue, offers neither', () => {
+    expect(logContinues({ status: 'pending', continuable: true })).toBe(false);
     expect(logContinues({ status: 'completed' })).toBe(false);
     expect(logContinues({ status: 'completed', continuable: false })).toBe(false);
     expect(logContinues({ status: 'in_progress', continuable: true })).toBe(false);

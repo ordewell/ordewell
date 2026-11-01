@@ -316,6 +316,7 @@ describe('the session lease (ADR-0049)', () => {
     logged.mockRestore();
     await vi.waitFor(() => expect(first.activity.running).toBe(false));
     expect(runner.stopAll).toHaveBeenCalled();
+    await first.gone;
     expect(fs.existsSync(path.join(sessionStore.sessionDataDir(SESSION, workspace), 'lease.json'))).toBe(false);
     fs.rmdirSync(file);
     sessionStore.saveSession(savedPlan(), GOAL, workspace, SESSION);
@@ -430,5 +431,53 @@ describe('leasedIsolation (ADR-0049)', () => {
     held = null;
     await isolation.prepare(t1, run);
     expect(git.taskIdsFor('prepare')).toEqual(['t1']);
+  });
+
+  describe('as its Session closes', () => {
+    const run = liveRun('/repo');
+    const paused = () => {
+      const git = new FakeWorktreeIsolation();
+      const real = git.release.bind(git);
+      let finish = () => undefined as void;
+      const finished = new Promise<void>((resolve) => { finish = resolve; });
+      git.release = async (...args) => { await finished; return real(...args); };
+      return { git, finish };
+    };
+
+    it('waits out a change under way, and the one it leads to', async () => {
+      const { git, finish } = paused();
+      const isolation = leasedIsolation(git, () => null);
+      const followed = isolation.release(run, 't1', { keep: true }).then(() => isolation.pruneOrphans(run));
+      expect(isolation.changing).toBe(true);
+
+      let closed = false;
+      const closing = isolation.closeChanges().then(() => { closed = true; });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(closed).toBe(false);
+
+      finish();
+      await closing;
+      await followed;
+      expect(isolation.changing).toBe(false);
+      expect(git.calls.map((c) => c.op)).toEqual(['release', 'pruneOrphans']);
+    });
+
+    it('starts no change once it has closed, so none reaches what a next host holds', async () => {
+      const git = new FakeWorktreeIsolation();
+      const isolation = leasedIsolation(git, () => null);
+      await isolation.closeChanges();
+
+      await expect(isolation.release(run, 't1', { keep: true })).rejects.toThrow('has closed');
+      expect(git.calls).toEqual([]);
+    });
+
+    it('takes a change that failed as ended', async () => {
+      const git = new FakeWorktreeIsolation();
+      git.release = () => Promise.reject(new Error('git failed'));
+      const isolation = leasedIsolation(git, () => null);
+      await expect(isolation.release(run, 't1', { keep: true })).rejects.toThrow('git failed');
+      await isolation.closeChanges();
+      expect(isolation.changing).toBe(false);
+    });
   });
 });

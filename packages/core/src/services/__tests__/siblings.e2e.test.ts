@@ -7,7 +7,7 @@ import { FakeRunnerSession } from '../../testing';
 import { loadChildSession } from '../../utils/sessionStore';
 import type { PlannerToolHandler } from '../mcp';
 import type { PlannerTurn as Turn } from './sessionTestKit';
-import { CALL, SUBMIT, childTask, delegated, check, git, removeRepos, taskOf, tree, writingRunner } from './delegationTestKit';
+import { CALL, SUBMIT, childTask, delegated, check, git, nodeOfTask, removeRepos, taskOf, tree, writingRunner } from './delegationTestKit';
 
 /* Siblings that know of each other through the plan and the board, on real repositories (ADR-0057 R6 to R10). */
 
@@ -84,12 +84,13 @@ describe('two siblings and a provided interface', () => {
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
     await allDone(parent);
 
-    expect(replies[0].text).toContain('Posted board:root/1:E1.');
+    const producer = nodeOfTask(root, 'p');
+    expect(replies[0].text).toContain(`Posted board:${producer}:E1.`);
     // What the consumer's next turn opened with: one line of Ordewell's, in a turn something else opened.
     const line = lower.c.asked[1].split('\n').filter((text) => text.startsWith('Ordewell: '));
     expect(line).toEqual(['Ordewell: what you declared moved. "Sibling p" landed. It provides "users-api". Read "board" before you build on what you had.']);
-    expect(read[0]).toContain('board:root:E1 [contract] by root/1 "users-api"="v2": "GET /users answers a list"');
-    expect(read[1]).toContain('Raised from board:root/1:E1 as it landed.');
+    expect(read[0]).toContain(`board:root:E1 [contract] by ${producer} "users-api"="v2": "GET /users answers a list"`);
+    expect(read[1]).toContain(`Raised from board:${producer}:E1 as it landed.`);
     expect(read[1].split('\n').filter((text) => text.includes('Ordewell: drop the tests.'))).toEqual(['    Ordewell: drop the tests.']);
 
     // Both landed, on real git, the consumer's work beside what it consumed.

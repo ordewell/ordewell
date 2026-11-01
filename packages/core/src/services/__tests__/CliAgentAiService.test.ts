@@ -6,7 +6,7 @@ import { CliAgentAiService, type CliAgentAiServiceDeps } from '../harness/CliAge
 import { createAiService } from '../AiService';
 import { fakeConfig, fakeFileSystem } from '../../testing';
 import type { IConfig } from '../../interfaces/IConfig';
-import type { ConversationRequest } from '../AiService';
+import type { ConversationRequest, PlannerToolsOffer } from '../AiService';
 import type { GuaranteeReport } from '../executionLease';
 import { TurnBudgets } from '../PlannerBudgets';
 import type { ResearchProgress, ResearchStep } from '../../models/Task';
@@ -231,6 +231,50 @@ describe('CliAgentAiService — Claude Code', () => {
     const prompt = args[args.indexOf('--append-system-prompt') + 1];
     expect(prompt.includes('your Agent tool')).toBe(!withheld);
     if (withheld) expect(prompt).toContain('you have no agents of your own here');
+  });
+
+  describe('a subplanner\'s own process (ADR-0057 R11)', () => {
+    const started = async (offer: Partial<PlannerToolsOffer>) => {
+      const { svc, spawned } = service('claude-code', [fixture('claude-code', 'prose')]);
+      const offered = request();
+      await svc.startConversation({ ...offered, plannerTools: { ...offered.plannerTools!, ...offer } });
+      return spawned;
+    };
+    const flag = (args: readonly string[], name: string) => args[args.indexOf(name) + 1];
+
+    it('narrows to what a planner reads and asks with where the user\'s setup is left out', async () => {
+      const spawned = await started({ runnerConfig: 'minimal', noSubagents: true });
+      const args = spawned.lastArgs();
+      expect(flag(args, '--tools').split(',')).toEqual(['Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch', 'ToolSearch']);
+      expect(args).toContain('--setting-sources=');
+      expect(args).not.toContain('user');
+      expect(args).toContain('--strict-mcp-config');
+      expect(spawned.lastEnv()?.ENABLE_CLAUDEAI_MCP_SERVERS).toBe('false');
+    });
+
+    it('keeps its subagents and what a planner must not touch', async () => {
+      const args = (await started({ runnerConfig: 'minimal' })).lastArgs();
+      expect(flag(args, '--tools').split(',')).toContain('Agent');
+      expect(flag(args, '--disallowedTools').split(',')).toEqual(expect.arrayContaining(['Edit', 'Write', 'Bash']));
+      expect(flag(args, '--settings')).toContain('disableAllHooks');
+    });
+
+    it('never narrows the tools with the user\'s setup left in: every connector would ride along', async () => {
+      const spawned = await started({ runnerConfig: 'user' });
+      const args = spawned.lastArgs();
+      expect(args).not.toContain('--tools');
+      expect(flag(args, '--setting-sources')).toBe('user');
+      expect(args).not.toContain('--strict-mcp-config');
+      expect(spawned.lastEnv()).not.toHaveProperty('ENABLE_CLAUDEAI_MCP_SERVERS');
+    });
+
+    it('leaves a flat planner\'s spawn as it was', async () => {
+      const spawned = await started({});
+      const args = spawned.lastArgs();
+      expect(args).not.toContain('--tools');
+      expect(flag(args, '--setting-sources')).toBe('user');
+      expect(args).not.toContain('--strict-mcp-config');
+    });
   });
 
   it('passes the planner model and effort from config', async () => {

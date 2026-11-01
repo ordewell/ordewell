@@ -99,7 +99,7 @@ export function sessionsRoute(pool: OrchestratorPool) {
     const held = pool.hasSession(id);
     let removed: boolean;
     try {
-      removed = await removeSession(id, ws, () => pool.stopTree(id), () => pool.destroy(id, { notifyClients: true }));
+      removed = await removeSession(id, ws, () => pool.stopTree(id), () => pool.destroy(id, { notifyClients: true }), () => pool.reclaim(id));
     } catch (err) {
       return c.json({ ok: false, message: err instanceof Error ? err.message : String(err) } satisfies OkResponse);
     }
@@ -110,10 +110,11 @@ export function sessionsRoute(pool: OrchestratorPool) {
     } satisfies OkResponse);
   });
 
-  // Stops the orchestrator (killing every runner it spawned) and drops the
-  // in-memory planner conversation. No-op if already closed/unregistered.
-  router.post('/:id/close', (c) => {
-    pool.destroy(c.req.param('id'), { notifyClients: true });
+  // Stops the orchestrator (killing every runner it spawned, and every container
+  // with what serves it) and drops the in-memory planner conversation, answering
+  // once they have gone. No-op if already closed/unregistered.
+  router.post('/:id/close', async (c) => {
+    await pool.close(c.req.param('id'));
     return c.json({ ok: true } satisfies OkResponse);
   });
 

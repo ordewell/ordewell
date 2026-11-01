@@ -76,7 +76,10 @@ writes repository files.**
   when it depends on change tasks; never while Merge all runs; and followed by
   the tracked-file check, so a script that leaves a tracked change waits on
   the user. It runs with the workspace's environment (ADR-0016), as a task
-  does.
+  does. Under the `containers` setting it runs in a container instead, on a copy
+  of what the workspace has committed, with none of that environment and nothing
+  brought back: what it runs over is what containers wrote
+  ([ADR-0059](../isolation/0059-an-execution-lease-reserves-in-the-claim-and-opens-after-it.md) L5).
 - **Its verdict is its exit status.** Every command exiting 0, or the script
   exiting 0, passes. Anything else fails, with the status and the tail of the
   error output as the reason. A wall-clock limit, ten minutes unless the task
@@ -411,3 +414,4 @@ minute is recorded beside its start.
 - 2026-10-31 — under Guarded autorun's start of a submitted plan leaves a script task the commit left unapproved; before, that start approved it and ran it.
 - 2026-11-01 — a script task marked `readOnly` runs sealed in a throwaway worktree, past no gate (ADR-0055 D8).
 - 2026-11-01 — below the root a mandate takes over the consent table and the allowlist, one list per level (ADR-0056 M6, M9).
+- 2026-11-01 — under the `containers` setting a script task runs in a container, on a copy of what the workspace has committed, and brings nothing back (ADR-0059 L5).

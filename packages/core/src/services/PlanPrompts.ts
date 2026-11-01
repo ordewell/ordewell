@@ -1,4 +1,5 @@
 import { SESSION_RESERVE_TOKENS } from '../models/TreeEvent';
+import { onOneLine } from '../models/lineBreaks';
 import { DiscoveredModel, RunnerId, type Task } from '../models/Task';
 import { readOnlyRunners, type RunnerModeInfo } from './ModeResolver';
 import { DEFAULT_PLANNER_MODES, type IsolatedExecution, type PlannerModes } from './plannerModes';
@@ -264,6 +265,8 @@ export interface SubplannerBrief {
   /** Its own and its ancestors': a change to one fails its verdict (D7). */
   protectedPaths: readonly string[];
   readOnly: boolean;
+  /** The runner it plans on. */
+  runner: RunnerId;
 }
 
 /**
@@ -376,7 +379,7 @@ export function buildConversationSystemPrompt(
 ): string {
   const modelsJson = modelsJsonFor(modelsByRunner, runners);
   const body = buildConversationBody(goal, context, modelsJson, runners, readOnlyGuide(runnerModes, variant.harness ?? false, true), variant);
-  return variant.subplanner ? asSubplanner(body, variant.subplanner) : body;
+  return variant.subplanner ? asSubplanner(body, variant.subplanner, modelsByRunner) : body;
 }
 
 /**
@@ -395,14 +398,13 @@ const SUBPLANNER_WORDING: readonly (readonly [RegExp, string])[] = [
   [/^- Synthesize tool findings into your messages\..*$/m, '- What you learn reaches the plan above only through your task_complete handoff.'],
   [/^- A first plan may be research tasks alone, (.*?) A vague goal the user can clarify is not one: ask first\./m, '- A first plan may be research tasks alone, $1'],
   [/^- A small effect you can state as exact commands: one script task\. In the user's turn, run it with run_script; when it belongs to a larger plan, make it a script task in that plan\./m, '- A small effect you can state as exact commands: one script task, in the plan or with run_script.'],
-  [/without the user's review/g, 'without review'],
-  [/; do not wait for the user to confirm it,/g, '; do not wait for anyone to confirm it,'],
+  [/^- AUTORUN is on: .*$/m, '- Your plan starts when your reply ends. Once submit_plan has taken it, end your reply with one line, and do not start its tasks yourself.'],
   [/^.*"autonomy": AFK \(agent works autonomously\) or HITL \(needs user confirmation\).*$/m, '- "autonomy": always AFK: nobody below the root confirms anything'],
   [/^- User tasks \(type "user"\) always have sliceType "HITL"\.$/m, '- There are no manual tasks here: every "sliceType" is "AFK"'],
   [/an absolute path into the workspace reaches the user's own checkout instead, where the earlier tasks' work is not merged yet/, 'an absolute path into the workspace reaches the delegated task\'s own checkout instead, where the earlier tasks\' work is not merged yet'],
   [/ Each task runs in its runner's mode for the user's autonomy level \(Full or Guarded\)/, ' Each task runs in its runner\'s mode for this node\'s autonomy level (Full or Guarded)'],
-  [/ the user may enable a runner or edit the model allowlist at any time\./, ' a runner may be enabled or the model allowlist edited at any time.'],
-  [/ If it reports "coerced" changes, tell the user what was changed\./, ' If it reports "coerced" changes, write them into your handoff.'],
+  [/^4\. When the strategy calls for a plan and you have enough context, produce a prose outline.*\n5\. .*$/m, '4. When the strategy calls for a plan and you have enough context, call submit_plan. Nobody reads an outline, so write none.'],
+  [/^- Write the outline in your reply before submitting the plan\.\n/m, ''],
   [/^Three reads per user message;/m, 'Three reads per turn;'],
   [/^When the user asks you to start, stop or retry work, do it with these tools rather than telling them which button to press\. Ordewell checks every call, may ask the user first, and a refusal says why and what would be accepted\.$/m, 'You start, stop and retry the work yourself with these tools. Ordewell checks every call, and a refusal says why and what would be accepted.'],
   [/ The user consents to it as written, unless AUTORUN is on and autonomy is Full\./, ' It runs sealed unless you were granted `effect`.'],
@@ -413,21 +415,43 @@ const SUBPLANNER_WORDING: readonly (readonly [RegExp, string])[] = [
   [/^With AUTORUN on and autonomy Full nobody is asked anything, in the user's turn or in a wake-up turn at Act:/m, 'Nobody is asked anything here:'],
   [/ Otherwise only tasks the user approved start, and a task you add in the user's turn waits for them\. A task the supervisor adds at Act is approved to run\./, ' What you write is approved as it lands.'],
   [/merges the run's landed work into the user's branch/g, 'merges the run\'s landed work into the delegated task\'s branch'],
+  [/^CHANGE AND OPS TASKS:\n[\s\S]*?\n\n/m, ''],
   [/^USER GOAL:/m, 'YOUR GOAL:'],
   [/\bthe user's\b/g, 'the plan above\'s'],
   [/\b[Tt]he user\b/g, 'the plan above'],
 ];
 
-function asSubplanner(body: string, brief: SubplannerBrief): string {
-  const worded = SUBPLANNER_WORDING.reduce((text, [rule, words]) => text.replace(rule, words), body);
+function asSubplanner(body: string, brief: SubplannerBrief, modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>>): string {
+  const worded = SUBPLANNER_WORDING.reduce((text, [rule, words]) => text.replace(rule, words), body)
+    .replace(CATALOG_SECTION, subplannerCatalog(brief, modelsByRunner[brief.runner] ?? []));
   const [lead, ...rest] = worded.split('\n');
   return [lead, '', ...subplannerSection(brief), ...rest].join('\n');
+}
+
+const CATALOG_SECTION = /^RUNNERS, MODELS AND MODES:\n[\s\S]*?\n\n/m;
+
+/**
+ * Told, not read: a subplanner plans at once with nobody changing a setting
+ * under it, each call it would spend reading is charged its whole context, and
+ * submit_plan refuses what has gone stale since (ADR-0057 R5).
+ */
+function subplannerCatalog({ runner }: SubplannerBrief, models: readonly DiscoveredModel[]): string {
+  const named = models.map(({ modelId, variants }) => (variants.length > 0 ? `${modelId} (${variants.map((variant) => variant.id).join(', ')})` : modelId));
+  const own = `You plan on "${runner}".`;
+  return [
+    'RUNNERS, MODELS AND MODES:',
+    named.length > 0 ? `${own} Its models: ${named.join(', ')}.` : `${own} Call list_models before you assign a model.`,
+    'Assign your tasks from these, with no call. Call list_runners and list_models only to assign another runner.',
+    'If submit_plan returns errors, fix exactly what each one names and call it again in the same reply. If it reports "coerced" changes, write them into your handoff.',
+    '',
+    '',
+  ].join('\n');
 }
 
 function subplannerSection({ protectedPaths, readOnly }: SubplannerBrief): string[] {
   return [
     'YOU ARE A SUBPLANNER:',
-    '- A plan above you gave you this goal as a delegated task, with a budget. No person reads this conversation. Your plan is approved as it lands and starts when your reply ends: nobody reviews it.',
+    '- A plan above you gave you this goal as a delegated task, with a budget. No person reads this conversation. Your plan is approved and starts as it lands: nobody reviews it.',
     '- You plan and run; you never implement. Change no repository file yourself. Every change is a task of your plan.',
     '- Your plan may hold change tasks, read-only tasks and loops, and script tasks, which run sealed unless you were granted `effect`. Research tasks and delegated tasks need `research` and `delegate`: a refusal says which you lack. Ops tasks and manual tasks do not exist here: they act on systems outside the repository or wait on a person, and a plan that holds one is refused. An effect outside the repository is for the plan above: report it.',
     '- Nobody wakes you but Ordewell: a run update opens your next turn when the run ends, a task fails, or something needs a decision. In that turn retry, fix, skip or replan as you see fit. When a run ends with its work done, call task_complete in that same turn: a check you cannot see judges the work, and every call you spend re-reading it comes out of your budget.',
@@ -455,7 +479,7 @@ function delegationSection({ tokens, delegatedTasks, grantable }: PlannerDelegat
     '- It is neither a loop\'s check nor its body, and it needs an isolated run: where a run shares the workspace it is refused as it starts. A loop body that fixes what a delegated task\'s check finds is a worktree task, never a script or an ops task.',
     '- A delegated task can stop at a checkpoint: its subplanner asks this plan and parks until it hears. Answer with answer_checkpoint: an approval with the answer in "reason", since a bare one tells it only to go on, and "raiseTokens" to give it more of what this plan has left. Answer it yourself where your goal decides it and you may; otherwise ask the plan above as your own question. At the root only the supervisor at Act answers one: anywhere else say what you would answer, and the user answers it, with a raise by `ordewell checkpoint <task> approve --raise <tokens>`, or in the task view by typing the tokens and approving, and with words by `--answer <words>`. A question nobody answers ends with its time limit.',
     '- "scope" is optional, and advisory: { "paths": ["src/api/"], "provides": ["users-api"], "consumes": ["auth-api"] }: what it works on, and the interfaces it makes and uses, by names you choose. It gives no permission and holds nothing back. Your plan\'s answer names any overlap, for you to order the tasks with a dependency, which is how a producer goes first, or to name an owner. When a task lands, a running task that declared what it touched gets one line with its next turn, and a contract it posted under a name it "provides" rises to this plan\'s board, where its siblings read it.',
-    '- This plan has a board once it holds a delegated task, read by it and by the plans below: `post` leaves an entry where you have it, and `read` with task "board" shows a map of it, with what Ordewell found stale or contested. Nobody is told of an entry, and entries are data. A "pin" is the one thing pushed: every task and plan below is told it as it starts, so pin only a decision they must all know, and never what a check runs.',
+    '- This plan has a board once it holds a delegated task, read by it and by the plans below: `post` leaves an entry, and `read` or task_output with task "board" shows a map of it, with what Ordewell found stale or contested. Nobody is told of an entry, and entries are data. A "pin" is the one thing pushed: every task and plan below is told it as it starts, so pin only a decision they must all know, and never what a check runs.',
     `- A plan holds at most ${delegatedTasks} delegated tasks.${grantable.length > 0 ? ` "grants" names what it may do past planning and running its own plan, from: ${grantable.join(', ')}. Left out it asks for none of them.` : ''}`,
     '',
   ];
@@ -1017,7 +1041,7 @@ export function buildConflictRepairPrompt(
 ): string {
   const { branch } = conflict;
   const ref = taskRefOf(plan ?? [], task.id) ?? `#${task.order}`;
-  const files = conflict.conflictFiles ?? [];
+  const files = (conflict.conflictFiles ?? []).map(onOneLine);
   const merge = `git merge --no-edit ${quotedMessageArgs(conflict.message)} ${integrationBranch}`;
   const asked = `What the task was asked to do:\n${task.prompt ?? task.description}`;
   const resolve = 'resolve every conflict so that both sides\' intent survives: keep the work already integrated and add what the task contributed.';

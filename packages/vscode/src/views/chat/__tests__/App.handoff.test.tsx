@@ -58,7 +58,7 @@ describe('task handoffs in the plan dock (ADR-0047)', () => {
     expect(document.querySelector('.task-handoff-peek')).toBeNull();
     fireEvent.click(screen.getByText('Review boundary'));
     const section = document.querySelector('.task-handoff')!;
-    expect(section.querySelector('.task-handoff-commit')).toHaveTextContent('Commit: Scope the tokenReads stay in the tenant.');
+    expect(section.querySelector('.task-handoff-commit')).toHaveTextContent('Commit: Scope the token Reads stay in the tenant.');
     expect(section.querySelector('.task-handoff-commit')!.compareDocumentPosition(section.querySelector('.task-handoff-summary')!))
       .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     fireEvent.click(screen.getByText('Review boundary'));

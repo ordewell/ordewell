@@ -6,6 +6,7 @@ import { StringDecoder } from 'string_decoder';
 import type { IRunnerSession, QueuedTaskMessage, ScriptExit, ScriptFullOutput, ScriptRun, ScriptStatus, StructuredEvent } from '../interfaces/IRunner';
 import type { RunnerCommand } from '../models/RunnerCommand';
 import { commandLine, type ScriptBody } from '../models/ScriptTask';
+import type { PlacedLaunch, RunnerPlacement } from './executionLease';
 import { planDirectLaunch, type LaunchDeps } from '../utils/launch';
 import { killTree, spawnInOwnGroup } from '../utils/processTree';
 import { augmentedPath } from '../utils/shellPath';
@@ -96,6 +97,8 @@ interface StepLaunch {
   args: string[];
   shell: boolean;
   verbatim?: boolean;
+  /** Where it really runs, when that is not this host. */
+  placed?: PlacedLaunch;
 }
 
 interface ScriptSessionSetup {
@@ -109,6 +112,8 @@ interface ScriptSessionSetup {
   fullOutput?: { file: string; maxChars: number };
   /** A read-only script runs here, or not at all (ADR-0055 D8). */
   sealed?: TaskShell;
+  /** The lease's container, which every step runs in (ADR-0059 L5). */
+  placement?: RunnerPlacement;
 }
 
 /**
@@ -129,6 +134,10 @@ interface ScriptSessionSetup {
  * A read-only script's steps run sealed instead (ADR-0055 D8), in the shell a
  * read-only task's commands use and in its throwaway worktree: Stop and the time
  * limit reach them through its signal, and what they print comes as each ends.
+ *
+ * Under a container lease every step runs there, by the lease's placement, in
+ * place of all of that: the group this host signals is a client, and the
+ * container is the boundary, whatever leaves a process group inside it.
  */
 export class ScriptSession extends AbstractRunnerSession {
   private readonly events = new EventEmitter();
@@ -136,6 +145,8 @@ export class ScriptSession extends AbstractRunnerSession {
   private readonly steps: ScriptRun[];
   private readonly children: ChildProcess[] = [];
   private child: ChildProcess | null = null;
+  /** The step under way, where a lease runs it. */
+  private placed: PlacedLaunch | null = null;
   private output = '';
   private running = true;
   private stopped = false;
@@ -200,10 +211,11 @@ export class ScriptSession extends AbstractRunnerSession {
     try {
       if (this.setup.sealed) status = await this.sealedStep(step, this.setup.sealed);
       else {
-        const launch = await this.launchOf(step);
-        status = this.stopped || this.timedOut
-          ? { code: null, signal: null, error: 'it was ended before it started' }
-          : await this.spawnStep(launch);
+        const launch = this.setup.placement ? await this.placedLaunch(step, this.setup.placement) : await this.launchOf(step);
+        if (this.stopped || this.timedOut) {
+          launch.placed?.ended();
+          status = { code: null, signal: null, error: 'it was ended before it started' };
+        } else status = await this.spawnStep(launch);
       }
     } catch (err) {
       status = { code: null, signal: null, error: err instanceof Error ? err.message : String(err) };
@@ -229,6 +241,17 @@ export class ScriptSession extends AbstractRunnerSession {
       if (outcome.output) this.printError(outcome.output.endsWith('\n') ? outcome.output : `${outcome.output}\n`);
       return sealedStatus(outcome);
     }, this.sealedEnd.signal);
+  }
+
+  /**
+   * What a lease launches for a step. Nothing of this host's goes with it: a
+   * script is the container's own `sh`, whatever shell this host would have
+   * picked, and only what the lease hands over crosses.
+   */
+  private async placedLaunch(step: ScriptRun, placement: RunnerPlacement): Promise<StepLaunch> {
+    const [command, ...args] = 'argv' in step ? step.argv : ['sh', '-c', step.script];
+    const placed = await placement.place({ command, args, env: {}, files: [] });
+    return { file: placed.command, args: placed.args, shell: false, placed };
   }
 
   /**
@@ -265,11 +288,14 @@ export class ScriptSession extends AbstractRunnerSession {
         this.print(stdout.end());
         this.printError(stderr.end());
         this.child = null;
+        this.placed = null;
+        launch.placed?.ended();
         resolve(status);
       };
+      this.placed = launch.placed ?? null;
       const child = spawnInOwnGroup((detached) => this.setup.spawn(launch.file, launch.args, {
         cwd: this.setup.cwd,
-        env: this.setup.env,
+        env: launch.placed ? { ...this.setup.env, ...launch.placed.env } : this.setup.env,
         // Nothing answers a prompt: a step that asks for input fails rather than waits.
         stdio: ['ignore', 'pipe', 'pipe'],
         detached,
@@ -294,7 +320,13 @@ export class ScriptSession extends AbstractRunnerSession {
   private expire(): void {
     if (!this.running) return;
     this.timedOut = true;
+    this.endStep();
+  }
+
+  /** Ends the step under way, at each place it may be: a client killed here leaves what it started in a container running. */
+  private endStep(): void {
     this.sealedEnd.abort();
+    this.placed?.stop();
     if (this.child) killTree(this.child, { platform: this.setup.platform });
   }
 
@@ -382,8 +414,7 @@ export class ScriptSession extends AbstractRunnerSession {
   stop(): Promise<void> {
     if (this.running && !this.stopped) {
       this.stopped = true;
-      this.sealedEnd.abort();
-      if (this.child) killTree(this.child, { platform: this.setup.platform });
+      this.endStep();
     }
     return this.gone;
   }
@@ -449,6 +480,7 @@ export class ScriptRunner extends AbstractRunner<ScriptSession> {
       launch: { ...this.deps.launch, platform, resolvePath },
       shell: this.deps.shell ?? (() => resolveResearchShell()),
       ...(opts.sealed ? { sealed: opts.sealed } : {}),
+      ...(opts.placement ? { placement: opts.placement } : {}),
       ...(fullOutput ? { fullOutput: { file: fullOutput, maxChars: this.deps.fullOutputMaxChars ?? FULL_OUTPUT_MAX_CHARS } } : {}),
     });
     this.registerSession(session.id, session);

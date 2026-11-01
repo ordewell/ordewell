@@ -38,6 +38,8 @@ function outOfRoundsNote(task: Readonly<Task>): string {
 export interface RunSupervisionHost extends Pick<SupervisorHost, 'deliver' | 'pump' | 'restartPlanner' | 'abandonTurn' | 'notice'> {
   /** The plan the run belongs to: its `runSettings` are the run's own, saved with it. Null with no plan. */
   plan(): { runSettings?: RunSettings } | null;
+  /** This plan is a child's, with no user above it (ADR-0055 D4). */
+  subplanner(): boolean;
   /** The user's run settings as they stand now (ADR-0030). */
   userSettings(): GlobalRunSettings;
   /** The plan's task tree, as the guards and the run updates read it. */
@@ -109,6 +111,7 @@ export class RunSupervision {
       wakeFacts: () => ({ ...planWakeFacts(this.host.tasks(), this.host.startWaits(), this.running), ...this.host.plannerCache() }),
       readBudget: () => this.settings()?.wakeUpReadBudget ?? host.userSettings().wakeUpReadBudget,
       retryLimit: () => this.retryLimit(),
+      subplanner: () => host.subplanner(),
       restartPlanner: () => host.restartPlanner(),
       abandonTurn: () => host.abandonTurn(),
       goUnsupervised: (reason) => this.goUnsupervised(reason),

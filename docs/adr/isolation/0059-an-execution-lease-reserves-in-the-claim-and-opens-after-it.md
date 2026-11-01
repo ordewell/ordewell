@@ -1,8 +1,8 @@
 ---
 status: accepted
 implemented: partial
-amends: ["0013", "0022", "0036"]
-note: "Settles #97, #98, #99 and #93 as direction. Built: L1 to L6, in `services/executionLease.ts`, `LocalWorktreeLease` and `services/container/`, and L7's broker. L7's egress sidecar and model gateway are the next change: until they land, a container lease is no network guarantee."
+amends: ["0013", "0022", "0035", "0036", "0056"]
+note: "Settles #97, #98, #99 and #93 as direction. Built: L1 to L7, in `services/executionLease.ts`, `LocalWorktreeLease` and `services/container/`. Open: ADR-0036's third network stage, for which this broker holds nothing yet."
 ---
 
 # 0059 — An execution lease reserves in the claim, opens after it, and proves what it guarantees
@@ -54,9 +54,9 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
   and passes no claim, so it reserves a `merge` lease, which holds no slot: every route to a checkout, an automatic
   merge's included, is one a backend hears of and can refuse.
 
-  This is the interface as built, in `services/executionLease.ts`. L7 adds what only it needs, `setNetwork` and the
-  gateway's credential modes. A lease spec holds no network, caches, credentials or limits of its own: a role is resolved
-  before a backend sees it, and those are the backend's settings.
+  This is the interface as built, in `services/executionLease.ts`. L7 adds nothing to it: a lease's way out, its gateway
+  and its credentials are the backend's own. A lease spec holds no network, caches, credentials or limits of its own: a
+  role is resolved before a backend sees it, and those are the backend's settings.
 
   ```ts
   interface ExecutionBackend {
@@ -66,6 +66,9 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
     letGo(taskId: string, how: { keep: boolean; landing?: Promise<unknown> | null; reason: string }): Promise<void>;
     list(): Promise<readonly LeaseRecord[]>;               // what a restart finds; starts nothing
     collect?(taskId: string): Promise<void>;               // brings work kept elsewhere to its worktree; rejects with why it must not land
+    settle?(): Promise<void>;                              // all it has running has gone, as its Session closes; keeps what a next attempt comes back to; never rejects
+    checkoutRepos?(): readonly LeaseRepo[];                // the workspace root's repositories, where a run knows them
+    reclaim?(): Promise<void>;                             // lets go of what its tree left where only it can reach; never rejects
   }
 
   interface LeaseRequest {
@@ -98,6 +101,7 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
   interface RunnerPlacement {
     place(launch: RunnerLaunch): Promise<PlacedLaunch>;    // what this host launches instead, and how to stop it where it runs
     reach(url: string): Promise<string>;                   // `endpoints.mcp`: a listener on this host's loopback, from there
+    blob(file: string): Promise<string | undefined>;       // a file of the attempt as it stands there, as git would name it
   }
   ```
 
@@ -111,39 +115,65 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
   by task since a landing can come after its attempt, as a Mark complete does. It runs after the runner has gone and
   before Landing, whichever start it; a next attempt of the task waits for it too, since a Continue restores what the
   worktree holds. A backend with none has its work there already, and nothing about a flat run moves. Work it will not
-  bring back lands nothing and waits on the user, as a merge git refused does. Repositories are plural, as a repo group's
+  bring back lands nothing and waits on the user, as a merge git refused does: it stays in the task's volume, a next
+  attempt fails rather than seed over it (`KeptWorkError`, which lets nothing go), and a Retry is what gives it up.
+  What says so is an empty volume of the engine's, by the task's name, so it outlives this Session and no process in a
+  container can lift it. Repositories are plural, as a repo group's
   are ([ADR-0014](0014-multi-repo-workspaces.md)): all of them come through or none, and caches are named, so nothing in a
   spec assumes one host's paths.
 - **Guarantees are proven (L3).** `fs.hostHidden`, `fs.writeScope`, `net.allowlist`, `net.noMetadata`,
   `cred.unreadable`, `kernel.separate`, `limits.memory`. Each is proven by a probe at open, run where the runner will run
   and with what it will hold, and reported with how and when: a canary of this host and the task's own path looked for,
-  every mount accounted for, writes tried, the cgroup read, a connection tried. The host judges what the probe found. A
-  backend declares none. A spec's `required`, and the backend's own, fail the open, and an in-process check relaxes only
-  on a proven entry. An exit reports `oom` or `killed` as a typed reason; `expired` comes with the first backend that has a
+  every mount accounted for, writes tried, the cgroup read, the ways out tried. The host judges what the probe found. A
+  backend declares none. `net.allowlist` is what was tried and stopped, never how the lease was built: an address outside
+  and this host's loopback by every name an engine has for it, each tried straight out as a client that ignores the
+  proxy, a route out, a name only the world's DNS answers, and each of those again through the lease's own proxy, where a
+  403 is the only answer that counts. Those are the ways out a bridge container was measured to reach. The loopback is
+  tried at a listener on this host, whose count a process in the container cannot lie about, and a target the probe says
+  nothing of counts against it. `cred.unreadable` looks for a key held back by a salted digest, in every environment the
+  container can read. A probe with no lease behind it holds no login, so it reports `cred.unreadable` unproven, as it
+  tried nothing a lease would hold. A spec's `required`, and the backend's own, fail the open, and an in-process check
+  relaxes only on a proven entry. An exit reports `oom` or `killed` as a typed reason; `expired` comes with the first backend that has a
   time limit.
 - **Local worktrees stay the default (L4).** `LocalWorktreeLease` wraps today's code with no setup and no change
   in behaviour: `reserve` is the Parallel limit, `open` is `attemptWorkspace`'s answer to the run, and `list` reads the session's records.
   It proves what it can, which is little: its report is that a local runner reaches what the user reaches.
 - **The first container backend (L5).** The Docker API through the docker CLI, so one code path serves any engine
   that speaks it, in `DockerExecutionBackend`, around the local backend, which keeps the slots and the worktrees. It is
-  opt-in, by the `containers` setting, in the file only; one it cannot use refuses every container, where the rest of that
+  opt-in, by the `containers` setting, in the file only, and held out of a published build as delegation is
+  (ADR-0055 D21): the setting is read only with `ORDEWELL_CONTAINERS=1` in a build run from a git checkout
+  (`containersOffered`), and elsewhere it is ignored with one warning that the build offers no containers, since the
+  review's findings are not all closed and nobody may believe they are isolated when they are not; one it cannot use refuses every container, where the rest of that
   file falls back to a default, since a typing mistake must not mean the host. The host's worktree stays where a task's
   result lives, so Landing, a repair and a Continue are what they were. A runner is launched by exec into one container
   per attempt, non-root, capabilities dropped, a read-only root filesystem, `--init --pids-limit 8192 --memory <limit>`
   with swap held to the same limit, on every container a helper's included, and no Docker socket inside.
   - The container's one process is an idle relay, and its stdin is its lease: when the host goes, by any death, the pipe
     closes, the relay exits and `--rm` takes the container with everything in it. Nothing needs a time limit to renew. A
-    killed `docker exec` leaves its process running, so a runner is stopped by its pid inside.
-  - A change task of a runner proven in a container runs there: Claude Code, today. Read-only and planner roles stay out,
-    as does a script's literal body and a subplanner, which stays on the host under its envelope. Work in the user's
-    checkout cannot run there, so an ops task, or a task of a run that shares its workspace, is refused rather than run
-    weaker. That is the laptop's unit. At scale the unit is the trust domain: tasks that share a repository and a
-    credential scope may share one.
+    killed `docker exec` leaves its process running, so a runner is stopped by its pid inside. A Session that closes
+    stops its run, and is `gone` once its runners have and `settle` has taken its containers, relays and gateways: what a
+    close waits on, so a session adopted next finds nothing of it at work. A task's volume stays for a Continue.
+  - A change task of a runner proven in a container runs there: Claude Code, today. So does every script, whatever its
+    runner: a body is a person's or a planner's, but what it runs over is what containers wrote, so `npm test` on the host
+    would run that code outside the boundary. Read-only tasks and planners stay out, under their envelope and their seal,
+    as does a subplanner ([ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md)). A
+    child Session has a backend of its own around its own local lease, built from what its root read of the setting once:
+    the setting is session-wide, so a change to it cannot put a child on this host, or a child alone in a container. So
+    its tasks and scripts and a delegated task's repair, which is role `task`, take the same path. A runner's work in the user's checkout cannot run there, so an ops
+    task of a runner, or a task of a run that shares its workspace, is refused rather than run weaker. That is the laptop's
+    unit. At scale the unit is the trust domain: tasks that share a repository and a credential scope may share one.
+  - A script of the workspace root ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)) runs on a copy
+    of what that root has committed, which its merge gate has brought what landed to first, and its exit status is its
+    evidence as ever. Nothing of it comes back: only a landing brings container-written work to a checkout. It holds no
+    login, and the workspace's variables stay here. So a script that needs this host's credentials fails, saying why, and
+    uncommitted changes do not reach it; the user is told once. A read-only script runs likewise on its throwaway worktree
+    with no network at all, which is what ADR-0056 M9's seal holds a child's script to, and needs no sandbox on this host.
   - Measured on Colima with Docker 29.5, 2026-11-01: a container's start, `docker run` to its entry ready, took 179 to 224
     ms over eleven; a lease's whole open, with mirror, seed and probe, 303 to 909 ms over thirty, by how busy the machine
-    was. Claude Code 2.1.316 at rest, attached to its tools and past a turn refused for want of a login, held 150 to 152
-    MiB of its cgroup at its peak, with an RSS near 227 MB. No credential was available, so no memory of a harness at work
-    has been measured.
+    was, and 441 to 489 ms over ten once it opened a sidecar. Claude Code 2.1.316 at rest, attached to its tools and past a
+    turn refused for want of a login, held 150 to 152 MiB of its cgroup at its peak, with an RSS near 227 MB, and 150 MiB
+    through one turn of a scripted model behind the gateway, a file written and `task_complete`. No credential was
+    available, so no memory of a harness at real work has been measured.
 
   Ordewell ships a Dockerfile the user builds, and no published image holding Claude Code. Anthropic's page says
   preinstalling or running Claude Code in a product or service needs its Commercial Terms and an unmodified binary
@@ -153,38 +183,64 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
   and an APFS clone do not cross it, so no mount reaches this host. A repository's mirror is seeded by git over a helper
   with no network, so only what it lacks crosses. It pins each task's refs for as long as that task's clone leans on it,
   with `gc.pruneExpire=never` and `gc.auto=0`, and never prunes under one: on git 2.56 a pruned mirror broke a `--shared`
-  clone with `bad object HEAD` (measured 2026-10-31). An attempt only ever mounts it read-only: a writable bare repository
+  clone with `bad object HEAD` (measured 2026-10-31). Its pins sit under their tree's name. An attempt only ever mounts it read-only: a writable bare repository
   lets an agent plant hooks and config that later run on the host. Its volume holds the task's clone, put back on what the
   host holds at each attempt, and the runner's home.
   - Work leaves through a ref-scoped gate on the host (`pushGate.ts`), with the attempt's container already gone, so no
     process of it can change what is read. A helper bundles a snapshot of the workspace on one ref. The gate takes that
-    ref alone, named for the attempt, under git's object checks, only on the attempt's base, moving no ref of the
+    ref alone, named for the attempt, under git's object checks, which it runs itself over a pack of what the ref brings,
+    since a fetch from a bundle skips them on an older git (2.40 skips them, 2.47 does not), only on the attempt's base, moving no ref of the
     repository, and never believes what the bundle says of itself. There is no listener: the bundle comes over the helper's
     stdout. The snapshot then goes into the host's worktree as a local attempt would have left it, its commits on the
     branch and the rest uncommitted, for Landing to commit under the handoff's message.
-  - Nothing a container wrote runs on this host on its way there. So a lease refuses a repository with a hook a landing
-    fires, and a worktree setup command, which would run what was last landed in the next worktree. A script task still
-    runs on the host over what landed; that is a person's or a planner's stated command, and the seam does not hide it.
+  - Nothing a container wrote runs on this host on its way there. So a session on such a backend runs every git call of
+    its isolation with hooks off (`withoutHooks`): a commit, a merge, a worktree cut, a Continue's preserve and merge, and
+    Merge all, by `core.hooksPath`, so it names no hook and misses none, one git adds later included. The gate takes
+    nothing where git looks for the repository's hooks, as a folder it tracks is a task's to write: landed there, a hook
+    would be armed in the user's checkout for their next commit. A check the user set up must not go silently, so a lease
+    still refuses a repository with a hook a landing would have fired. That list is what is said, never the boundary. It
+    refuses a worktree setup command too, which would run what was last landed in the next worktree. What still can run
+    is a sealed command, a read-only task's or a planner's, over what landed: inside its seal (ADR-0036), not outside it.
+  - What a tree leaves in the engine goes with it (`reclaim.ts`), by the label every container, network and task volume
+    carries, since a session delete has no Session left to ask: `ExecutionBackend.reclaim` for a Clean up and a Discard,
+    `reclaimContainers` for a delete. Every mirror is read, since a landed task's pin outlives its volume. One it took the
+    last pin from goes whole with its project's caches, the one time nothing leans on either; one it held none in is
+    another project's, and stays. A person's sign-in volume is theirs. Without the setting, Docker is not asked.
+  - A pin on the board (ADR-0057 R9) reads its file through the lease, since until `collect` the worktree here holds what
+    the attempt was seeded with.
   - The Ordewell MCP server is reached with no network at all: the relay listens on the same port of the container's own
     loopback and carries each connection over its stdio, so the URL is unchanged and
     [ADR-0022](../runners/0022-ordewell-mcp-server.md) T2's Host check still holds, on any engine and under any egress. It
     connects only to what was forwarded, whatever a frame says, since a process in the container can write the relay's
     stdout. `apply_patch` is refused in a container: it merges into a worktree the runner does not work in.
-- **Credentials (L7).** An egress sidecar per lease, and a base-URL gateway for model traffic. The sidecar is on an
-  internal network with no other way out, so a client that ignores it fails rather than leaks. TLS is terminated only
-  for a host that needs a credential injected. These two are not built: `EgressPath` is the seam they plug into, and its
-  one path today is the engine's default network, which reaches the internet and this host's loopback. So a container
-  lease alone is no network guarantee: `net.allowlist` is always reported unproven, a setting that requires it refuses
-  every lease, and the user is told as the first one opens.
+- **Credentials and egress (L7).** An egress sidecar per lease, and a base-URL gateway for model traffic, behind
+  `EgressPath`. A bridge container was measured to reach 1.1.1.1:443 and this host's loopback through
+  `host.docker.internal`; on an `--internal` network neither answers, no name outside resolves, and there is no route.
+  - The sidecar (`egressSidecar.ts`) is on that network and the bridge, so a client that ignores it fails rather than
+    leaks. It runs the task's image, needing only node, under the limits of any container, goes with its pipe as the relay
+    does, and listens on the lease's network alone: the bridge joins after it has. It opens a CONNECT to port 443 of a host on the lease's list and nothing else, and reads none of what
+    passes. A name is resolved there and its answer checked and dialed as it stands, so one that answers with a private
+    address is turned down however it is listed: this sidecar's other network reaches the engine's host. The list is
+    `containers.allow`, or the registries of the caches named, and an `own-sign-in` lease adds where it talks to Anthropic.
+    A broker's lease lists no model host: under a key of its own, the model API would be a way out. Any host on a list is a
+    way out for what can use it, and a client can name a listed host and be served another by a shared CDN: a list says
+    where a connection goes, and no more.
+  - The gateway (`modelGateway.ts`) runs on this host and is reached through the relay, with no network. An API key
+    stays here, and the runner holds a token that means nothing past that listener, so `cred.unreadable` is provable for a
+    broker's lease. It carries model traffic alone, to the one upstream, under the real key whatever a client sent: a
+    process in the container can spend the key and cannot read it, send it elsewhere or use the API under its own. TLS
+    ends there, for that one host, which is the only interception a lease does.
   - A person chooses the login, and it has no default: `broker`, API keys or cloud credentials from this host's
-    environment, or `own-sign-in`, made inside a container and kept in a volume Ordewell mounts and never reads.
+    environment, or `own-sign-in`, made inside a container and kept in a volume Ordewell mounts and never reads. Which
+    login someone uses is up to them, API usage or their own subscription, and so are its terms: the maintainer decided so
+    on 2026-11-01. Ordewell's part is what it holds, which is below.
   - A broker holds API keys and cloud-provider credentials only (`CredentialBroker`). It never holds Claude subscription
-    tokens, and refuses one under any name it can recognise. Until the gateway lands, a lease hands a key over by name, so
-    a runner can read it and the lease reports `cred.unreadable` unproven. Anthropic's
+    tokens, and refuses one under any name it can recognise. What a cloud provider's client signs with has to reach it, so
+    those go by name, a runner can read them, and the lease reports `cred.unreadable` unproven. Anthropic's
     page says "developers may not collect, store, or intermediate Claude.ai credentials or session tokens — sign-in to
     a Claude account must complete through Anthropic's own flow". It keeps open an end user signing in to the unmodified
-    binary. So a subscription stays with the user's own sign-in inside the lease, and that lease reports
-    `cred.unreadable` as not proven.
+    binary. So a subscription stays with the user's own sign-in inside the lease, its traffic passing the sidecar
+    unread, and that lease reports `cred.unreadable` as not proven.
   - One Codex `auth.json` never serves concurrent attempts. OpenAI: "Do not share the same file across concurrent jobs
     or multiple machines", and not on public or open-source repositories
     ([CI/CD auth](https://developers.openai.com/codex/auth/ci-cd-auth)). A copy per container is that shape.
@@ -193,7 +249,7 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
     Ordewell carries nothing there.
   - A proxied lease sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`: behind a proxy, Claude Code's memory grew
     until killed in user reports, open at [#67433](https://github.com/anthropics/claude-code/issues/67433). The
-    diagnosis is theirs, and no fix is documented, so a probe watches for it.
+    diagnosis is theirs, and no fix is documented, so the memory limit and its `oom` report are what stand for it.
 
 ## Testing decisions
 
@@ -204,11 +260,13 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
   over Parallel limits that passed on the scheduler before the lease went in. That is what "no change in behaviour" means.
 - `dockerLease.e2e.test.ts` runs against a real engine, off CI's default path, as the sandbox's end-to-end runs do: it
   skips where no engine answers and on CI unless `ORDEWELL_REQUIRE_DOCKER=1`, and is one suite, so one at a time. A fake
-  harness runs in a real container through the real adapter, MCP server and Landing. `ORDEWELL_E2E_HARNESS_IMAGE` adds
-  the real binary, from an image built as `docker/task.Dockerfile` says.
-- A guarantee's probe is tested by a backend built to fail it: an open that requires it refuses. The relay and the gate
-  need no engine: the relay runs as itself on this host's node, and the gate takes real bundles built as a hostile
-  container would build them.
+  harness runs in a real container through the real adapter, MCP server and Landing, a delegated child plan and its
+  repair included. `ORDEWELL_E2E_HARNESS_IMAGE` adds the real binary, from an image built as `docker/task.Dockerfile` says,
+  through a turn of a scripted model behind the gateway.
+- A guarantee's probe is tested by a backend built to fail it: an open that requires it refuses, and the engine's default
+  network is what `net.allowlist` must catch. The relay, the sidecar and the gate need no engine: the relay and the sidecar
+  run as themselves on this host's node, a preload standing in for the world's DNS and sockets, and the gate takes real
+  bundles built as a hostile container would build them.
 
 ## Out of scope
 
@@ -227,12 +285,31 @@ for model traffic first. The interface is kept free of anything that blocks thes
   a task with none live, a skip, a retry.
 - **Declared guarantees.** Rejected: a guarantee nobody tested is a label, and an in-process check would relax on it.
 - **One repository and host mounts in the spec.** Rejected: it leaks a local assumption into every backend.
-- **Static network at acquire.** Rejected: installing dependencies and running an agent want different networks.
+- **`setNetwork`, a network that changes during a lease.** Dropped once it met the code: there is no moment to change it
+  at. Dependencies are the runner's to install as it works, so a lease's one list holds its registries throughout.
 - **A branch as the whole result.** Rejected: Continue would break when a container went.
 - **A broker holding every credential, subscriptions included.** Rejected: Anthropic's page forbids it. The honest lease
   reports a weaker guarantee.
 - **A general TLS-intercepting broker.** Rejected: it needs a CA per lease and breaks pinned clients, and model traffic
   needs only a base URL.
+- **The gateway in the sidecar.** Rejected: the key would live in the engine, in a process on the runner's own network,
+  for what the relay reaches with no network at all.
+- **`--network none` and the proxy on this host, through the relay.** Rejected: the probe's proof would be simpler, but a
+  bug in the proxy would then reach this host's loopback, where a sidecar's worst reach is the engine's.
+- **`api.anthropic.com` on a broker lease's list.** Rejected: a process in the container could then send anything there
+  under a key of its own. It stays on an `own-sign-in` list, which cannot avoid it, and that lease proves less.
+- **An empty list unless `allow` names hosts.** Rejected: naming a cache says a task installs from there, and nothing
+  would install. `"allow": []` is one word away, and the docs say what a registry on the list costs.
+- **A script left on the host as a person's stated command.** Dropped: a stated command over what a container wrote runs
+  that code outside the boundary, whoever stated it.
+- **Refusing a script of the workspace root, as a runner's ops task is.** Rejected: that is every script of a plan that
+  is not read-only, and a script has no work to bring back, so a copy loses nothing a landing needs.
+- **Bringing a checkout script's writes back.** Rejected: only a landing brings container-written work to a checkout, and
+  this would be one nobody reads, past the gate.
+- **Dropping any mirror with no pin.** Rejected: a project of another session may have made one a moment ago. A clean-up
+  takes only what it emptied.
+- **A person or counsel checking provider terms before a subscription path ships.** Dropped on 2026-11-01: which login
+  someone uses is theirs to choose. What Ordewell holds stays as L7 says.
 - **`ttlMs`, `renew` and `revoked` on a lease.** Dropped once it met the engine. They were what keeps a container from
   outliving a dead host, and its stdin does that with nothing to renew. A remote backend, whose lease has no such pipe, is
   where they return.
@@ -243,8 +320,10 @@ for model traffic first. The interface is kept free of anything that blocks thes
   T2's Host check, differs by engine, and asks the network path for what a pipe already gives.
 - **A gate that listens on the host for a real `git push`.** Rejected: it opens a port a container can reach, for what a
   bundle over a helper's stdout does with none.
-- **Landing a container's work with hooks off.** Rejected: it would silently drop a check the user set up, such as a secret
-  scan. Refusing says so, and leaves the choice with them.
+- **Refusing a repository's hooks at the lease, and landing with them on.** Dropped: a check at open sees only the hooks
+  there then, so a task could write one into a tracked folder, and a list of the hooks a landing fires is never whole:
+  it missed `post-index-change`. Hooks off closes it as a kind, and the refusal stays so that no check goes silently.
+- **Hooks off with no refusal.** Rejected: it would silently drop a check the user set up, such as a secret scan.
 - **Falling back to the host when a container cannot start.** Rejected: that is running weaker with nobody told.
 - **One container per attempt as the unit at scale.** Rejected: a container per attempt pays setup every time. It is
   right for one laptop, where the unit and the trust domain coincide.
@@ -259,11 +338,15 @@ for model traffic first. The interface is kept free of anything that blocks thes
 - The Parallel limit gets one owner, and the tree's pool a home.
 - `Attempts` and `CliAgentAiService` open a lease where they make a workspace and start an adapter.
 - A task's reach can be stated, and only a proven entry relaxes anything. On the local backend that is nothing.
-- A repository with git hooks, a worktree setup command, and an ops task do not run under containers yet, and each says so.
-  A project's dependencies are the runner's to install, in a volume cache, since a host's setup does not reach a container.
+- A repository with git hooks, a worktree setup command, and a runner's ops task do not run under containers yet, and each
+  says so. A project's dependencies are the runner's to install, in a volume cache, since a host's setup does not reach a
+  container, and a script's to install too, since it has a task volume of its own.
+- A script that needs this host's credentials or writes to the checkout does not do so under containers: a `git push` fails,
+  and a script's writes stay in its container. The setting is session-wide, so such a step runs in a session without it.
+- A lease takes a network of the engine, whose address pools are finite, and one a dead host left stays until a clean-up.
+- A sealed command over what landed still runs on this host, inside its seal.
 - A check held out of a child's reach (ADR-0055 D8) becomes a boundary only on a backend that proves `fs.hostHidden`.
 - A subscription user in a container has a weaker guarantee, and is told so.
-- Provider terms need a person, or counsel, before a subscription path through a lease ships.
 
 ## History
 
@@ -272,3 +355,7 @@ for model traffic first. The interface is kept free of anything that blocks thes
 - 2026-10-31 — a resume at a limit's reset refused for a slot is kept the same way.
 - 2026-10-31 — L1 to L4 implemented for the local backend: `release` frees the slot and `letGo` decides the worktree, a merge reserves a lease with no slot, and a result is read synchronously.
 - 2026-11-01 — L5, L6 and L7's broker implemented: a Docker backend, a mirror and task volumes in the engine, a push gate, `collect` on a backend, and the relay as the container's entry and its route to the MCP server. `ttlMs`, `renew`, `revoked` and `prepare` dropped.
+- 2026-11-01 — L7 implemented: the egress sidecar and the model gateway behind `EgressPath`, and `net.allowlist` proven by probe and required by default. `setNetwork` dropped. Scripts run in containers, a child's tasks and repairs are proven there, a pin reads through the lease, and `reclaim` clears what a tree leaves. The terms check before a subscription path ships dropped: which login someone uses is up to them.
+- 2026-11-01 — A container session's git runs with hooks off and the gate takes nothing in a tracked hooks folder; work not brought back stops a next attempt; a close waits on `settle`; a child takes its root's backend; a probe reports `cred.unreadable` unproven. Refusing hooks alone dropped.
+- 2026-11-01 — the gate runs git's object checks itself, since a fetch from a bundle does not on an older git.
+- 2026-11-01 — containers are experimental and off in published builds: `containersOffered` reads the `containers` setting only with `ORDEWELL_CONTAINERS=1` from a git checkout, as delegation is held.

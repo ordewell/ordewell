@@ -250,7 +250,10 @@ planner tools are recorded here as an explicit entry against both:
   accepted — so the planner fixes the call instead of guessing.
 - **Pull, not push (L3).** The prompt tells the planner to call `list_runners`
   and `list_models` just before `submit_plan`, so the catalog it plans against
-  is the one the submission is checked against.
+  is the one the submission is checked against. A subplanner is told its own
+  runner's instead: nobody changes a setting under a plan written at once, each
+  call would be charged its whole context, and `submit_plan` refuses what has gone
+  stale ([ADR-0057](../supervision/0057-information-moves-by-reference.md) R5).
 
 ## Considered options
 
@@ -357,3 +360,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-11-01 — the task tools read with `read`, `read_task` an alias at the call, a planner that may delegate lists it too, a server tool may carry an alias no list names, and `task_complete` takes `promote` and `open` on a subplanner's token alone ([ADR-0057](../supervision/0057-information-moves-by-reference.md) R2, R11).
 - 2026-11-01 — a token whose plan has a board lists `post`, and a planner that may delegate or sits under a delegated task lists it with `read` ([ADR-0057](../supervision/0057-information-moves-by-reference.md) R8, R11).
 - 2026-11-01 — a runner in a container reaches this server through its lease's relay, on its own loopback at the same port, so T1 and T2 hold unchanged ([ADR-0059](../isolation/0059-an-execution-lease-reserves-in-the-claim-and-opens-after-it.md) L6).
+- 2026-11-01 — L3: a subplanner is told its runner's catalog in its prompt (ADR-0057 R5).

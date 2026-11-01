@@ -29,6 +29,7 @@ import {
   listSessions,
   loadSession,
   deleteSession,
+  reclaimContainers,
   SettingsService,
   sessionRuntimeSettings,
   type GlobalRunSettings,
@@ -1054,9 +1055,21 @@ export class OrchestratorPool {
     this.clients.delete(sessionId);
   }
 
+  /** Close a session for a surface that is done with it: it is dropped now, and this resolves once all it started has gone. */
+  async close(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    this.destroy(sessionId, { notifyClients: true });
+    await session?.gone;
+  }
+
   /** Stop a session's whole tree, and wait until it has gone; the session stays open (ADR-0055 D16). */
   async stopTree(sessionId: string): Promise<void> {
     await this.sessions.get(sessionId)?.stopSubtree();
+  }
+
+  /** What a session's tree left in the engine, which only the `containers` setting says to look for (ADR-0059 L6). */
+  reclaim(sessionId: string): Promise<void> {
+    return reclaimContainers(sessionId, this.settingsService.getAll().containers);
   }
 
   destroyAll(): void { for (const id of this.sessions.keys()) this.destroy(id); }
@@ -1073,13 +1086,15 @@ export function getSession(sessionId: string, workspace: string) { return loadSe
  * Their runs go next: the files that follow are the only record that names
  * their worktrees and branches (D11). What git could not let go stops the
  * delete, with the records still in place and `close` not called, and is named
- * in the error.
+ * in the error. What the tree left in an engine goes last: its volumes are
+ * nothing a person could go back to once its records have gone.
  */
-export async function removeSession(sessionId: string, workspace: string, stop: () => Promise<void>, close: () => void): Promise<boolean> {
+export async function removeSession(sessionId: string, workspace: string, stop: () => Promise<void>, close: () => void, reclaim: () => Promise<void>): Promise<boolean> {
   await stop();
   const { refused } = await discardChildRuns(sessionId, workspace, createWorktreeIsolation({ config: new WebConfig() }));
   if (refused.length > 0) throw new Error(`The session was kept: ${refused.map(({ worktree, reason }) => `${worktree} (${reason})`).join(', ')}`);
   close();
+  await reclaim();
   return deleteSession(sessionId, workspace);
 }
 

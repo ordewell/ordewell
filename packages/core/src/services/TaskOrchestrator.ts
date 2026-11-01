@@ -35,7 +35,7 @@ import { landed, planStartWaits, selectReadyTasks, startWaits, waitOf, type Forc
 import type { ResearchTasks } from './ResearchTasks';
 import { blockingFailures, planBlocks, repeatingChecks } from './blocking';
 import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
-import { decidesIsolation, type Continuation } from './attemptKind';
+import { decidesIsolation, handoffKept, type Continuation } from './attemptKind';
 import type { SkillLookup } from './taskSkills';
 import { SkillsService } from './SkillsService';
 import { capConflictFiles } from './conflictFiles';
@@ -50,7 +50,7 @@ import { userTaskHandoff } from '../models/DerivedHandoff';
 import type { TaskLogReader } from './readTask';
 import type { Subtree } from './Subtree';
 import type { NodeBoard } from './Board';
-import { leasedIsolation } from './leasedIsolation';
+import { leasedIsolation, type RunChanges } from './leasedIsolation';
 import { LocalWorktreeLease } from './LocalWorktreeLease';
 import { SlotPool, type PoolNode } from './SlotPool';
 import type { NodeBudget } from './TreeLedger';
@@ -238,8 +238,12 @@ export interface TaskOrchestratorDeps {
   isApproved: (taskId: string) => boolean;
   /** Read beside the run's setting at each automatic merge, which passes no command (ADR-0056 M6). */
   mayMergeUnasked: () => boolean;
+  /** The run's changes to git in flight; absent where no session's lease stands behind them. */
+  runChanges?: RunChanges;
   /** A read-only attempt's shell (ADR-0046); absent, its runner is given no `run_command`. */
   taskShell?: (site: TaskShellSite) => TaskShell | undefined;
+  /** Why a script that would land its work may not run unsealed now; absent at a root, whose scripts ADR-0035 answers for. */
+  unsealedRefusal?: (task: Readonly<Task>) => string | null;
   /** The session's web fetcher for one read-only attempt (ADR-0046); absent, its `fetch` and `web_search` are not available. */
   taskWebFetcher?: (task: string) => IWebFetcher | undefined;
   /** Keep a read-only attempt's saved patch beside its log (ADR-0050); absent, `save_patch` is not available. */
@@ -286,6 +290,8 @@ export interface TaskOrchestratorDeps {
 /** What a backend hears of the Session it serves, past the local lease it wraps. */
 export interface ExecutionContext {
   sessionId: () => string;
+  /** The root of this Session's tree: what a clean-up at the root finds a child's leavings by. */
+  treeId: () => string;
   tell: (level: 'info' | 'warn' | 'error', text: string) => void;
   /** What a worktree's bootstrap runs on this host, in what was last landed. */
   setupCommand: () => string | undefined;
@@ -332,6 +338,8 @@ export interface TaskOrchestratorOptions {
   /** Whether this node's mandate lets an automatic merge run; true unless set. */
   mayMergeUnasked?: () => boolean;
   taskShell?: (site: TaskShellSite) => TaskShell | undefined;
+  /** See {@link TaskOrchestratorDeps.unsealedRefusal}. */
+  unsealedRefusal?: (task: Readonly<Task>) => string | null;
   taskWebFetcher?: (task: string) => IWebFetcher | undefined;
   keepPatch?: (taskId: string, attempt: number, patch: Buffer) => string;
   recordHandoff?: (sessionId: string | undefined, taskId: string, handoff: StoredHandoff) => void;
@@ -347,6 +355,8 @@ export interface TaskOrchestratorOptions {
   pool?: SlotPool;
   /** The Session's id, as it saves under it. */
   sessionId?: () => string;
+  /** Its tree's root's, when it is a child; absent, it is a root. */
+  treeId?: () => string;
   /** The pool has a slot for the planner turn it refused this Session. */
   openTurn?: () => void;
   /** A child's side of the tree's ledger (ADR-0056 M5). */
@@ -464,6 +474,8 @@ export class TaskOrchestrator {
    * time, with no timer to fire again, so a tick offers them (ADR-0055 D18).
    */
   private readonly keptResumes = new Set<string>();
+  /** What a close waits out past the runners: ticks, attempt ends, and work nothing awaits, a Stop's release of a worktree chiefly. */
+  private readonly loose = new Set<Promise<unknown>>();
 
   /**
    * The plan's isolation run and the open run's lifecycle (ADR-0013); see
@@ -520,6 +532,7 @@ export class TaskOrchestrator {
       previousHandoffFromLog: deps.previousHandoffFromLog,
       lastLoggedAttempt: deps.lastLoggedAttempt,
       ...(deps.taskShell ? { taskShell: deps.taskShell } : {}),
+      ...(deps.unsealedRefusal ? { unsealedRefusal: deps.unsealedRefusal } : {}),
       ...(deps.taskWebFetcher ? { taskWebFetcher: deps.taskWebFetcher } : {}),
       ...(deps.keepPatch ? { keepPatch: deps.keepPatch } : {}),
       recordHandoff: deps.recordHandoff,
@@ -571,8 +584,9 @@ export class TaskOrchestrator {
   static compose(options: TaskOrchestratorOptions): TaskOrchestrator {
     const store = options.store ?? new PlanStore();
     const output = options.output ?? new BufferedTaskOutputSource();
-    const git = options.isolation ?? createWorktreeIsolation({ config: options.config, ...(options.plannedWith ? { plannedWith: options.plannedWith } : {}) });
-    const isolation = options.sessionHeld ? leasedIsolation(git, options.sessionHeld) : git;
+    const git = options.isolation ?? createWorktreeIsolation({ config: options.config, ...(options.plannedWith ? { plannedWith: options.plannedWith } : {}), ...(options.execution ? { noHooks: true } : {}) });
+    const leased = options.sessionHeld ? leasedIsolation(git, options.sessionHeld) : undefined;
+    const isolation = leased ?? git;
     const workspaceRoot = options.workspaceRoot ?? (() => process.cwd());
     // The listener callbacks fire only after construction, so the reference
     // below is settled by the time any of them runs.
@@ -625,6 +639,7 @@ export class TaskOrchestrator {
       research: options.research,
       autonomous: options.autonomous ?? (() => options.config.autonomousMode),
       ...(options.taskShell ? { taskShell: options.taskShell } : {}),
+      ...(options.unsealedRefusal ? { unsealedRefusal: options.unsealedRefusal } : {}),
       ...(options.taskWebFetcher ? { taskWebFetcher: options.taskWebFetcher } : {}),
       ...(options.keepPatch ? { keepPatch: options.keepPatch } : {}),
       recordHandoff: options.recordHandoff ?? (() => undefined),
@@ -635,6 +650,7 @@ export class TaskOrchestrator {
       ...(options.landed ? { landed: options.landed } : {}),
       leases: (options.execution ?? ((local) => local))(new LocalWorktreeLease({ pool, node, runs, workspaceRoot }), {
         sessionId: options.sessionId ?? (() => ''),
+        treeId: options.treeId ?? options.sessionId ?? (() => ''),
         tell: (level, text) => options.notifications[level](text),
         setupCommand: () => options.config.worktreeSetupCommand,
       }),
@@ -647,6 +663,7 @@ export class TaskOrchestrator {
       ...(options.decided ? { decided: options.decided } : {}),
       ...(options.nodeRefusal ? { nodeRefusal: options.nodeRefusal } : {}),
       ...(options.discardChild ? { discardChild: options.discardChild } : {}),
+      ...(leased ? { runChanges: leased } : {}),
     });
     return orchestrator;
   }
@@ -1474,9 +1491,12 @@ export class TaskOrchestrator {
     if (stopped.length === 0) return;
     const one = stopped.length === 1;
     const named = quotedList(stopped.map((a) => this.store.get(a.taskId)?.title ?? a.taskId));
-    const kept = stopped.some((a) => a.worktree)
-      ? ` What ${one ? 'it' : 'they'} did is kept in ${one ? 'its worktree' : 'their worktrees'}: Mark complete lands it; Retry starts over and keeps it on a branch.`
-      : '';
+    const delegated = stopped.every((a) => this.store.get(a.taskId)?.type === 'delegated');
+    const kept = delegated
+      ? ` Continue keeps what ${one ? 'its child' : 'their children'} landed; anything else that starts ${one ? 'it' : 'them'} starts over with a new child.`
+      : stopped.some((a) => a.worktree)
+        ? ` What ${one ? 'it' : 'they'} did is kept in ${one ? 'its worktree' : 'their worktrees'}: Mark complete lands it; Retry starts over and keeps it on a branch.`
+        : '';
     this.tell('info', `Stopped ${named}: back to not started.${kept}`);
   }
 
@@ -1613,7 +1633,7 @@ export class TaskOrchestrator {
     if (attempt) {
       if (attempt.kind.kind === 'repair') this.store.markAwaitingUser(taskId, 'conflict');
       else this.store.markFailed(taskId);
-      this.store.setTaskOutputSummary(taskId, summarizeOutput(reason, ''));
+      this.store.setTaskOutputSummary(taskId, summarizeOutput(reason, ''), handoffKept(this.store.get(taskId), attempt.kind));
       // Its landing may be what threw, so the release does not wait on it.
       if (attempt.worktree) this.unawaited(this.leases.letGo(taskId, { keep: true, reason: 'unsettled' }), `Could not keep the worktree of task "${title}"`);
     }
@@ -1623,7 +1643,7 @@ export class TaskOrchestrator {
 
   /** Work nothing awaits: a rejection is said, not left unhandled. */
   private unawaited(work: Promise<unknown>, failure: string): void {
-    work.catch((err: unknown) => {
+    this.underWay(work).catch((err: unknown) => {
       const message = `${failure}: ${err instanceof Error ? err.message : String(err)}`;
       try {
         this.tell('error', message);
@@ -2640,9 +2660,27 @@ export class TaskOrchestrator {
     return this.attempts.allWoundDown();
   }
 
+  /** Nothing the run started is still going, so a close has nothing to wait for. */
+  get leftNothing(): boolean {
+    return !this.attempts.anyWindingDown && !this.leases.settle && this.loose.size === 0 && !this.deps.runChanges?.changing;
+  }
+
+  /** Every runner let go has gone, with what a Stop left to end after it and whatever a backend had running past one, and the run changes git no more. What a next attempt comes back to stays. */
+  async allGone(): Promise<void> {
+    await this.attempts.allWoundDown();
+    await Promise.all(this.loose);
+    await this.leases.settle?.();
+    await this.deps.runChanges?.closeChanges();
+  }
+
   /** The Session is closing: the tree stops counting on it. */
   leaveTree(): void {
     this.deps.leaveTree();
+  }
+
+  /** What the run left past its worktrees, as a Clean up gives it up (ADR-0059 L6). */
+  async reclaimLeases(): Promise<void> {
+    await this.leases.reclaim?.();
   }
 
   private leaseRequest(role: LeaseRequest['role'], taskId?: string): LeaseRequest {
@@ -2725,15 +2763,23 @@ export class TaskOrchestrator {
    * A tick or an attempt's end is under way, so the run may yet go on or end,
    * and tell its supervisor which. A child read in that gap has neither, and
    * would be taken for one that sits on nothing (ADR-0056 M8). Only a child is
-   * read that way, so a flat run's ticks take the turns they always took.
+   * read that way, so a flat run's ticks take the turns they always took. A
+   * close waits one out, at any level: its next step may be a release.
    */
   private deciding(work: () => Promise<void>): Promise<void> {
-    if (!this.deps.decided) return work();
+    if (!this.deps.decided) return this.underWay(work());
     this.decisions += 1;
-    return work().finally(() => {
+    return this.underWay(work().finally(() => {
       this.decisions -= 1;
       if (this.decisions === 0) this.deps.decided?.();
-    });
+    }));
+  }
+
+  /** `work`, unchanged, as a close waits for it. */
+  private underWay<T>(work: Promise<T>): Promise<T> {
+    const ended: Promise<unknown> = work.catch(() => undefined).finally(() => this.loose.delete(ended));
+    this.loose.add(ended);
+    return work;
   }
 
   private async ticked(): Promise<void> {
@@ -3053,7 +3099,7 @@ export class TaskOrchestrator {
     });
   }
 
-  /** A delegated task passed, and nothing scheduled follows it. A Stop since it was claimed leaves its checks where they are. */
+  /** A delegated task passed, and nothing scheduled follows it. A Stop since the start that landed it leaves its checks where they are: a resolver's landing outlives one, with this task waiting on the user and no attempt to stop. */
   private carryChecks(task: Readonly<Task>, admission: Admitted): void {
     if (task.type !== 'delegated' || this.scheduledRun || !admission.current()) return;
     for (const check of this.store.checksOf(task)) if (check.status === 'pending' || check.status === 'approved') this.carriedChecks.add(check.id);

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'events';
-import { spawn, type ChildProcess } from 'child_process';
+import { execFileSync, spawn, type ChildProcess } from 'child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -293,6 +293,15 @@ async function gone(pid: number, withinMs = 3000): Promise<boolean> {
   return false;
 }
 
+/** What `pid` has running under it right now. */
+function childrenOf(pid: number): string[] {
+  try {
+    return execFileSync('pgrep', ['-P', String(pid)], { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 /** The first line `proc` prints, as a pid. */
 function firstPid(proc: ChildProcess): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -461,6 +470,82 @@ describe('process groups, for real', () => {
     } finally {
       hostProc.kill('SIGKILL');
       if (grandchild) try { process.kill(grandchild, 'SIGKILL'); } catch { /* gone, as it should be */ }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Nothing of the host runs for SIGKILL, and a runner in a group of its own
+  // goes on working in the session's worktrees unless something else stops it.
+  const killedHost = (name: string, shell: readonly string[]) => {
+    const dir = mkdtempSync(join(tmpdir(), 'ordewell-host-'));
+    const host = join(dir, `${name}.mts`);
+    writeFileSync(host, [
+      `import { spawn } from 'node:child_process';`,
+      `import { spawnInOwnGroup } from ${JSON.stringify(join(__dirname, '..', 'processTree.ts'))};`,
+      `const proc = spawnInOwnGroup((detached) => spawn('sh', ${JSON.stringify(shell)}, { detached, stdio: ['ignore', 'pipe', 'inherit'] }));`,
+      `proc.stdout.pipe(process.stdout);`,
+      `setInterval(() => {}, 1000);`,
+    ].join('\n'));
+    return { dir, hostProc: spawn(process.execPath, ['--experimental-strip-types', '--no-warnings', host], { stdio: ['ignore', 'pipe', 'pipe'] }) };
+  };
+
+  posixIt('a host killed outright takes its runners\' groups with it, though none of its own code runs', async () => {
+    const { dir, hostProc } = killedHost('killed-host', SHELL_WITH_GRANDCHILD);
+    let grandchild = 0;
+    try {
+      grandchild = await firstPid(hostProc);
+      hostProc.kill('SIGKILL');
+      expect(await gone(grandchild)).toBe(true);
+    } finally {
+      hostProc.kill('SIGKILL');
+      if (grandchild) try { process.kill(grandchild, 'SIGKILL'); } catch { /* gone, as it should be */ }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  posixIt('a runner that ignores SIGTERM goes too once its host was killed outright', async () => {
+    const { dir, hostProc } = killedHost('stubborn-host', ['-c', 'trap "" TERM; (trap "" TERM; sleep 30) & echo $!; wait']);
+    let grandchild = 0;
+    try {
+      grandchild = await firstPid(hostProc);
+      hostProc.kill('SIGKILL');
+      expect(await gone(grandchild, 10_000)).toBe(true);
+    } finally {
+      hostProc.kill('SIGKILL');
+      if (grandchild) try { process.kill(grandchild, 'SIGKILL'); } catch { /* gone, as it should be */ }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  posixIt('asks a runner to stop once as its host goes politely: a second SIGTERM reads to some CLIs as quit without cleaning up', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ordewell-term-'));
+    const said = join(dir, 'said');
+    const { dir: hostDir, hostProc } = killedHost('polite-host', ['-c', `trap 'echo term >> ${said}' TERM; echo $$; while :; do sleep 0.1; done`]);
+    let leader = 0;
+    try {
+      leader = await firstPid(hostProc);
+      const exited = new Promise<void>((resolve) => hostProc.once('exit', () => resolve()));
+      hostProc.kill('SIGTERM');
+      await exited;
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      expect(readFileSync(said, 'utf8').trim().split('\n')).toEqual(['term']);
+      // It ignored the one it got, so the follow-up a host cannot stay for still comes.
+      expect(await gone(leader, 10_000)).toBe(true);
+    } finally {
+      hostProc.kill('SIGKILL');
+      if (leader) try { process.kill(-leader, 'SIGKILL'); } catch { /* gone, as it should be */ }
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(hostDir, { recursive: true, force: true });
+    }
+  });
+
+  posixIt('leaves nothing behind it once a runner has ended', async () => {
+    const { dir, hostProc } = killedHost('quiet-host', ['-c', 'echo $$']);
+    try {
+      await firstPid(hostProc);
+      await vi.waitFor(() => expect(childrenOf(hostProc.pid!)).toEqual([]));
+    } finally {
+      hostProc.kill('SIGKILL');
       rmSync(dir, { recursive: true, force: true });
     }
   });
