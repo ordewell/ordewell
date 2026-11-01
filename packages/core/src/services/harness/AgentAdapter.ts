@@ -7,6 +7,7 @@ import type { ProjectMcpServer } from './repoConfig';
 import type { RunnerCommand, RunnerMcpServer, RunnerModelRef } from '../../models/RunnerCommand';
 import type { PlannerShellSandbox } from '../sandbox/plannerSandbox';
 import type { AttachState } from './ordewellBinding';
+import type { RunnerPlacement } from '../executionLease';
 
 
 /**
@@ -442,6 +443,8 @@ export interface AgentProcessDeps {
   workspaceEnv?: (cwd: string) => Promise<Record<string, string>>;
   /** Builds the sandbox around a planner's own shell (ADR-0036 N2). Defaults to the host's probe. */
   nativeShellSandbox?: () => PlannerShellSandbox;
+  /** Where a lease put this runner, when not on this host (ADR-0059 L5). */
+  placement?: RunnerPlacement;
 }
 
 /** Builds the adapter for one runner id, or null when that runner cannot plan. */

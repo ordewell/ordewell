@@ -65,6 +65,7 @@ import { rewrittenScripts } from '../models/ScriptTask';
 import { taskRefOf } from './TaskRefs';
 import { SessionWindows, withContextWindows } from './ContextWindowFill';
 import { withTaskRunnerConfig } from './taskRunnerConfig';
+import { containerExecution } from './container/dockerLease';
 import type { TaskRunnerConfig } from './harness/AgentAdapter';
 import { PlannerUsageLedger } from './PlannerUsage';
 import { plannerContextFill } from '../models/Usage';
@@ -135,6 +136,8 @@ export interface SessionRuntimeSettings {
   plannerAutoCompaction?: boolean;
   /** What a task runner loads of the user's own setup; absent means all of it. */
   taskRunnerConfig?: TaskRunnerConfig;
+  /** The `containers` setting, as written; absent means local worktrees (ADR-0059 L4). */
+  containers?: unknown;
 }
 
 /** Calls an ops retry is told about; earlier ones are counted, not listed (ADR-0020). */
@@ -155,6 +158,7 @@ export function sessionRuntimeSettings(settings: UserSettings): SessionRuntimeSe
     run: runSettingsOf(settings),
     ...(settings.plannerAutoCompaction !== undefined ? { plannerAutoCompaction: settings.plannerAutoCompaction } : {}),
     ...(settings.taskRunnerConfig !== undefined ? { taskRunnerConfig: settings.taskRunnerConfig } : {}),
+    ...(settings.containers !== undefined ? { containers: settings.containers } : {}),
   };
 }
 
@@ -504,6 +508,8 @@ export function createSession(deps: SessionDeps): Session {
   const runnerApprovals = new RunnerApprovals(approvals);
   // What is charged here goes on up, for a row at each level to show (ADR-0055 D20).
   const nodeBudget = deps.placement?.budget && reportingUp(deps.placement.budget, deps.subplanner);
+  const containers = deps.settings().containers;
+  const execution = deps.execution ?? (containers === undefined ? undefined : containerExecution(containers));
   const orchestrator = TaskOrchestrator.compose({
     config: deps.config,
     notifications: deps.notifications,
@@ -517,7 +523,7 @@ export function createSession(deps: SessionDeps): Session {
     workspaceRoot: deps.workspaceRoot,
     ...(deps.placement ? { stateRoot: deps.placement.stateRoot, pool: deps.placement.pool } : {}),
     ...(nodeBudget ? { budget: nodeBudget } : {}),
-    ...(deps.execution ? { execution: deps.execution } : {}),
+    ...(execution ? { execution } : {}),
     startRefused: (why) => session.startRefused(why),
     autonomous: () => autonomousAt(deps.child, deps.config.autonomousMode),
     ...(deps.subplanner ? { decided: () => deps.subplanner?.changed() } : {}),

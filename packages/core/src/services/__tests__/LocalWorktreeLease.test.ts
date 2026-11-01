@@ -64,7 +64,10 @@ describe('LocalWorktreeLease (ADR-0059 L4)', () => {
   it('open is attemptCwd: a fresh worktree', async () => {
     const { open } = setup();
     const { workspace } = await open({ task: t1, workspace: { kind: 'worktree', intent: 'fresh' } });
-    expect(workspace).toEqual({ cwd: '/fake-worktrees/run1/1-t1', writable: '/fake-worktrees/run1/1-t1', worktree: true });
+    expect(workspace).toEqual({
+      cwd: '/fake-worktrees/run1/1-t1', writable: '/fake-worktrees/run1/1-t1', worktree: true,
+      repos: [{ path: '.', root: '/repo', worktree: '/fake-worktrees/run1/1-t1', branch: 'ordewell/run1/1-t1', integrationBranch: 'ordewell/run1/integration', linked: [] }],
+    });
   });
 
   it('open at the checkout is the workspace root, and lets go of a worktree an earlier attempt left', async () => {

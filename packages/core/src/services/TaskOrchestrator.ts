@@ -276,6 +276,14 @@ export interface TaskOrchestratorDeps {
   discardChild?: (task: Readonly<Task>) => Promise<void>;
 }
 
+/** What a backend hears of the Session it serves, past the local lease it wraps. */
+export interface ExecutionContext {
+  sessionId: () => string;
+  tell: (level: 'info' | 'warn' | 'error', text: string) => void;
+  /** What a worktree's bootstrap runs on this host, in what was last landed. */
+  setupCommand: () => string | undefined;
+}
+
 /**
  * What a caller supplies to {@link TaskOrchestrator.compose}; every optional
  * one gets its default there. This is what a host or test chooses, not the
@@ -322,8 +330,8 @@ export interface TaskOrchestratorOptions {
    * to the run (ADR-0049); the run is changed only while it answers null.
    */
   sessionHeld?: () => SessionHeld | null;
-  /** Where sessions run (ADR-0059), given the local worktrees: those, unless a test supplies another. */
-  execution?: (local: ExecutionBackend) => ExecutionBackend;
+  /** Where sessions run (ADR-0059), given the local worktrees: those, unless the `containers` setting or a test supplies another. */
+  execution?: (local: ExecutionBackend, context: ExecutionContext) => ExecutionBackend;
   /** The root's pool, handed down to a child (ADR-0055 D18); absent, this is a root, with a pool of its own. */
   pool?: SlotPool;
   /** The Session's id, as it saves under it. */
@@ -609,7 +617,11 @@ export class TaskOrchestrator {
       taskLog: options.taskLog ?? { attempts: () => [], events: () => [] },
       ...(options.subtree ? { subtree: options.subtree } : {}),
       ...(options.planNode ? { planNode: options.planNode } : {}),
-      leases: (options.execution ?? ((local) => local))(new LocalWorktreeLease({ pool, node, runs, workspaceRoot })),
+      leases: (options.execution ?? ((local) => local))(new LocalWorktreeLease({ pool, node, runs, workspaceRoot }), {
+        sessionId: options.sessionId ?? (() => ''),
+        tell: (level, text) => options.notifications[level](text),
+        setupCommand: () => options.config.worktreeSetupCommand,
+      }),
       pool,
       sessionId: options.sessionId ?? (() => ''),
       limitFound: (runner, at) => pool.limitFound(node, runner, at),
@@ -1947,7 +1959,7 @@ export class TaskOrchestrator {
     const verdict = this.attempts.markComplete(task);
     // The user vouches for the work, so it lands the way a passed verdict's
     // would — including a landing a passed verdict already has in flight.
-    const landed = ended?.integration ?? this.landing.landVouched(task);
+    const landed = ended?.integration ?? this.attempts.afterCollecting(taskId, () => this.landing.landVouched(task));
     const landing = await this.holdWhileLanding(taskId, landed);
 
     // Recorded before the landing settles, as a verdict is: a repair it

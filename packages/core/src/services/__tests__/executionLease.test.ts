@@ -37,7 +37,7 @@ function setup(opts: { limit?: number; isolation?: FakeWorktreeIsolation } & Pic
   const notices: string[] = [];
   orchestrator.subscribe({ onIsolationNotice: ({ message }) => notices.push(message) });
   const store = orchestrator.storeInstance;
-  return { backend, orchestrator, spawn, sessions, store, notifications, notices, isolation, started: () => spawn.mock.calls.map(([o]) => o.taskId), session: (id: string) => sessions.filter((s) => s.taskId === id).at(-1)! };
+  return { backend, orchestrator, runner, spawn, sessions, store, notifications, notices, isolation, started: () => spawn.mock.calls.map(([o]) => o.taskId), session: (id: string) => sessions.filter((s) => s.taskId === id).at(-1)! };
 }
 
 const task = (id: string, order = 1, over: Partial<Task> = {}) => createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, ...over });
@@ -255,5 +255,111 @@ describe('a merge passes the seam (ADR-0059)', () => {
     await landed(env);
     await expect(env.orchestrator.mergeRun()).rejects.toThrow('this host holds no checkout');
     expect(env.orchestrator.isMerging).toBe(false);
+  });
+});
+
+describe('work that comes back from where it ran (ADR-0059 L2)', () => {
+  const placement = { place: vi.fn(), reach: vi.fn() };
+  const running = async (taskId: string, env: ReturnType<typeof setup>) => {
+    env.orchestrator.loadPlan([task(taskId)]);
+    await env.orchestrator.forceStartTask(taskId);
+    await until(() => env.session(taskId) !== undefined);
+    return env.session(taskId);
+  };
+
+  it('hands the runner what the lease opened to place it', async () => {
+    const env = setup();
+    env.backend.placement = placement;
+
+    await running('a', env);
+
+    expect(env.spawn.mock.calls[0][0].placement).toBe(placement);
+  });
+
+  it('collects the work once the runner has gone, and only then lands it', async () => {
+    const env = setup();
+    const order: string[] = [];
+    let collected!: () => void;
+    env.backend.collect = () => {
+      order.push('collect');
+      return new Promise<void>((resolve) => { collected = resolve; });
+    };
+    let woundDown!: () => void;
+    const stop = vi.fn(() => new Promise<void>((resolve) => { woundDown = () => { order.push('runner gone'); resolve(); }; }));
+    env.runner.stop = stop;
+    const session = await running('a', env);
+
+    session.reportComplete({ status: 'done', summary: 'done' });
+    await until(() => stop.mock.calls.length > 0);
+    await flushMicrotasks();
+    expect(order).toEqual([]);
+
+    woundDown();
+    await until(() => order.includes('collect'));
+    expect(order).toEqual(['runner gone', 'collect']);
+    await flushMicrotasks();
+    expect(env.store.get('a')?.status).toBe('in_progress');
+
+    collected();
+    await until(() => env.store.get('a')?.status !== 'in_progress');
+  });
+
+  it('lands nothing of work the gate refused: it waits on the user, with why', async () => {
+    const env = setup();
+    env.backend.collect = () => Promise.reject(new Error('The container\'s work was refused: it holds refs/heads/main.'));
+    const session = await running('a', env);
+
+    session.reportComplete({ status: 'done', summary: 'done' });
+
+    await until(() => env.store.get('a')?.status === 'awaiting_user');
+    expect(env.notices.concat(vi.mocked(env.notifications.error).mock.calls.map(([m]) => m)).join()).toContain('refs/heads/main');
+  });
+
+  it('brings the work back for a Mark complete, with or without a live attempt: no verdict landed it', async () => {
+    const env = setup();
+    const collect = vi.fn(async () => undefined);
+    env.backend.collect = collect;
+    await running('a', env);
+
+    await env.orchestrator.markTaskComplete('a');
+
+    expect(collect).toHaveBeenCalledWith('a');
+    await flushMicrotasks();
+
+    env.orchestrator.loadPlan([task('b')]);
+    env.store.markFailed('b');
+    await env.orchestrator.markTaskComplete('b');
+    expect(collect).toHaveBeenCalledWith('b');
+  });
+
+  it('lands nothing a Mark complete vouched for, if the gate refused it', async () => {
+    const env = setup();
+    env.backend.collect = () => Promise.reject(new Error('The container\'s work was refused: it holds refs/heads/main.'));
+    await running('a', env);
+
+    await env.orchestrator.markTaskComplete('a');
+
+    expect(env.store.get('a')?.status).toBe('awaiting_user');
+    expect(env.notices.concat(vi.mocked(env.notifications.error).mock.calls.map(([m]) => m)).join()).toContain('refs/heads/main');
+  });
+
+  it('collects nothing for a lease that has nothing to bring back', async () => {
+    const env = setup();
+    const session = await running('a', env);
+
+    session.reportComplete({ status: 'done', summary: 'done' });
+
+    await until(() => env.store.get('a')?.status !== 'in_progress');
+    expect(env.backend.collect).toBeUndefined();
+  });
+
+  it('refuses `apply_patch` in a placed attempt: the worktree it would merge into is not where the runner works', async () => {
+    const env = setup();
+    env.backend.placement = placement;
+    await running('a', env);
+
+    const reply = await env.spawn.mock.calls[0][0].applyPatch!({ task: 'b' });
+
+    expect(reply).toMatchObject({ isError: true, text: expect.stringContaining('container') });
   });
 });

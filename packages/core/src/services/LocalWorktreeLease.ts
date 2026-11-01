@@ -1,5 +1,5 @@
 import type { IsolationRunController } from './IsolationRunController';
-import { GUARANTEES, refuseUnproven, type ExecutionBackend, type GuaranteeReport, type LeaseRecord, type LeaseRequest, type LeaseResult, type LeaseSessionState, type LeaseSpec, type OpenLease, type ReservedLease } from './executionLease';
+import { GUARANTEES, refuseUnproven, type ExecutionBackend, type GuaranteeReport, type LeaseRecord, type LeaseRepo, type LeaseRequest, type LeaseResult, type LeaseSessionState, type LeaseSpec, type OpenLease, type ReservedLease } from './executionLease';
 import type { PoolNode, SlotPool } from './SlotPool';
 
 export interface LocalWorktreeLeaseDeps {
@@ -57,8 +57,9 @@ export class LocalWorktreeLease implements ExecutionBackend {
     // Ended since its claim, by a Stop or a cancel: there is no workspace to make, so none is left to undo.
     if (signal.aborted) throw new Error('The lease was given up before it opened.');
     const { cwd, worktree, workspace, previousWork } = await this.workspace(spec);
+    const repos = worktree ? this.repos(spec) : [];
     return {
-      workspace: { cwd, worktree, ...(workspace ? { writable: workspace } : {}), ...(previousWork ? { previousWork } : {}) },
+      workspace: { cwd, worktree, ...(workspace ? { writable: workspace } : {}), ...(previousWork ? { previousWork } : {}), ...(repos.length ? { repos } : {}) },
       guarantees,
       exportResult: (session) => this.result(spec, session),
     };
@@ -67,6 +68,16 @@ export class LocalWorktreeLease implements ExecutionBackend {
   private workspace({ task, workspace }: LeaseSpec): ReturnType<IsolationRunController['attemptCwd']> {
     if (!task) return Promise.resolve({ cwd: this.deps.workspaceRoot(), worktree: false });
     return workspace.kind === 'worktree' ? this.deps.runs.attemptCwd(task, workspace.intent) : this.deps.runs.workspaceCwd(task);
+  }
+
+  private repos({ task }: LeaseSpec): LeaseRepo[] {
+    const run = this.deps.runs.current;
+    const record = task && run?.tasks[task.id];
+    if (!run || !record) return [];
+    return run.repos.flatMap((repo) => {
+      const entry = record.repos[repo.path];
+      return entry ? [{ path: repo.path, root: repo.root, worktree: entry.worktree, branch: record.branch, integrationBranch: repo.integrationBranch, linked: entry.linked }] : [];
+    });
   }
 
   /** The run's record says where the work is; the runner's session stays where the runner keeps it, on this machine (L2). */

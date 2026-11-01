@@ -159,9 +159,31 @@ A *backend* answers both and proves what it guarantees by a probe at open, never
 declaring it: the default, local worktrees, proves nothing, since a local runner
 reaches what the user reaches. `release` gives back what was reserved as the
 attempt ends; `letGo` decides its worktree, which can outlive the lease. A result
-is the task's branches and the runner's session, which a Continue resumes.
+is the task's branches and the runner's session, which a Continue resumes; a
+backend that keeps the work elsewhere brings it to the worktree with `collect`.
 *Avoid:* "lease" alone where the *session lease* could be meant: that one says
 which host holds a session, and this one where a session runs.
+
+**Container lease** (`services/container/`, ADR-0059 L5, L6) — an *Execution lease*
+from `DockerExecutionBackend`, opt-in by the `containers` setting, for a change task
+of a runner proven there. The host's worktree stays where the task's result lives;
+a copy runs in one container per attempt, reached by exec. What a lease cannot be it
+refuses: nothing runs on the host in a container's place. It proves what it can, and
+is **no network guarantee** until the egress sidecar lands. Its parts: a **mirror**,
+one bare repository per repo in a volume of the engine, read-only to an attempt; a
+**task volume**, which keeps the task's clone and the runner's home across attempts;
+a **relay**, the container's idle entry, which carries connections to this host over
+its stdio and ends the container when its host goes; and a **push gate**, the only
+way work comes back, which takes one ref of one attempt as a bundle.
+*Avoid:* "sandbox" (a *Sealed run*'s word: that holds a read-only process on this
+host, and this moves a writing one off it), "push" for anything but the gate.
+
+**Credential broker** (`services/container/credentialBroker.ts`, ADR-0059 L7) —
+what hands a *Container lease* API keys and cloud-provider credentials, from this
+host's environment. It never holds a Claude subscription's token. A person chooses a
+lease's login, `broker` or `own-sign-in`, the person's own sign-in inside a container
+in a volume Ordewell never reads, and it has no default.
+*Avoid:* "login" for an API key held here, except as the setting names it.
 
 **Slot pool** (`services/SlotPool.ts`, ADR-0055 D18) — the Parallel limit across a
 tree, the root's and shared by every Session under it. It counts every attempt and

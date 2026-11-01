@@ -27,7 +27,7 @@ import type {
   TreeSnapshot,
 } from './interfaces/IWorktreeIsolation';
 import { DEFAULT_RUNNERS, type Task } from './models/Task';
-import { GUARANTEES, refuseUnproven, type ExecutionBackend, type Guarantee, type GuaranteeReport, type LeaseRecord, type LeaseRequest, type LeaseSpec, type OpenLease, type ReservedLease } from './services/executionLease';
+import { GUARANTEES, refuseUnproven, type ExecutionBackend, type Guarantee, type GuaranteeReport, type LeaseRecord, type LeaseRepo, type LeaseRequest, type LeaseSpec, type OpenLease, type ReservedLease, type RunnerPlacement } from './services/executionLease';
 import type { EventStore } from './services/eventStore';
 import { isWithin, type NodePath, type TreeEvent, type TreeFact } from './models/TreeEvent';
 import { handoffOf, integrationBranchFor, noRemoval, SELF_REPO } from './services/isolationRecord';
@@ -332,6 +332,12 @@ export class FakeExecutionBackend implements ExecutionBackend {
   provenGuarantees: readonly Guarantee[] = [];
   /** What exportResult reports of a session, in place of what it is told. */
   sessionState: { nativeSessionId: string } | null = null;
+  /** The repositories an open says its worktree holds. */
+  repos: readonly LeaseRepo[] = [];
+  /** Where an open puts its runner, for a lease that does not run it on this host. */
+  placement: RunnerPlacement | null = null;
+  /** Brings a task's work back; absent, it is where the attempt ran. */
+  collect?: (taskId: string) => Promise<void>;
   records: LeaseRecord[] = [];
   freed: () => void = () => undefined;
   private openHold: Promise<void> | null = null;
@@ -392,9 +398,10 @@ export class FakeExecutionBackend implements ExecutionBackend {
     if (this.openError) throw this.openError;
     const worktree = spec.workspace.kind === 'worktree';
     return {
-      workspace: { cwd: worktree ? `/fake-lease/${spec.task?.id}` : '/repo', worktree },
+      workspace: { cwd: worktree ? `/fake-lease/${spec.task?.id}` : '/repo', worktree, ...(this.repos.length ? { repos: this.repos } : {}) },
       guarantees,
       exportResult: (session) => ({ refs: {}, sessionState: { ...session, ...this.sessionState } }),
+      ...(this.placement ? { placement: this.placement } : {}),
     };
   }
 

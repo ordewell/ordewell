@@ -5,7 +5,6 @@ status: accepted
 # 0022 — The Ordewell MCP server: task and planner tools behind per-caller tokens
 
 *Pending:* [ADR-0057](../supervision/0057-information-moves-by-reference.md) — the task tools gain `post` with a board.
-*Pending:* [ADR-0059](../isolation/0059-an-execution-lease-reserves-in-the-claim-and-opens-after-it.md) — a container reaches this server through the lease's endpoint, not loopback (T1, T2).
 
 ## Problem
 
@@ -359,3 +358,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-11-01 — a subplanner's token serves `task_complete` and `checkpoint` (ADR-0055 D5), and `submit_plan` takes a delegated task only where one may be written.
 - 2026-11-01 — V5: a subplanner's `checkpoint` answers at once and parks it, and `answer_checkpoint` takes `raiseTokens` on a delegating planner's list (ADR-0056 M5, M8). A child's tool list is filtered by grants and fixed at its start, as ADR-0056 M6 says.
 - 2026-11-01 — the task tools read with `read`, `read_task` an alias at the call, a planner that may delegate lists it too, a server tool may carry an alias no list names, and `task_complete` takes `promote` and `open` on a subplanner's token alone ([ADR-0057](../supervision/0057-information-moves-by-reference.md) R2, R11).
+- 2026-11-01 — a runner in a container reaches this server through its lease's relay, on its own loopback at the same port, so T1 and T2 hold unchanged ([ADR-0059](../isolation/0059-an-execution-lease-reserves-in-the-claim-and-opens-after-it.md) L6).

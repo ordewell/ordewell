@@ -359,8 +359,9 @@ export class StructuredSession extends AbstractRunnerSession {
         ...(webReads ? { fetch: async ({ url }, { signal }) => webReads.fetch(url, signal), webSearch: async ({ query }, { signal }) => webReads.search(query, signal) } : {}),
       }),
       revoke: (token) => server.revoke(token),
-      start: (adapter, credential) => {
-        this.startOptions = { ...opts, mcp: mcpClientConfig(credential) };
+      start: async (adapter, credential) => {
+        const url = await this.launch.deps.placement?.reach(credential.url) ?? credential.url;
+        this.startOptions = { ...opts, mcp: mcpClientConfig({ ...credential, url }) };
         return this.startAdapter(adapter, this.startOptions);
       },
       dispose: (adapter) => {
@@ -1001,6 +1002,7 @@ export class StructuredRunner extends AbstractRunner<StructuredSession> {
         // Already resolved by the caller (ADR-0016); resolving it again here
         // could disagree with the other tasks in the same run.
         workspaceEnv: async () => env,
+        ...(opts.placement ? { placement: opts.placement } : {}),
       },
       createAdapter: this.createAdapter,
       startOptions: {

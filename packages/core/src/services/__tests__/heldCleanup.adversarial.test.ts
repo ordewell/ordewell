@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import { mkdtempSync, realpathSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -38,7 +39,7 @@ describe('a held session\'s cleanup', () => {
       leaseHost: host,
       saveSession,
       workspaceRoot: () => workspace,
-      settings: () => ({ run: { supervisorLevel: 'off' as const, delegationTokens: 100_000 } }),
+      settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' as const, delegationTokens: 100_000 } }),
       eventLog: () => store,
     });
     try {

@@ -272,8 +272,8 @@ export interface AttemptsDeps {
   output: TaskOutputSource;
   /** The run an attempt works in. */
   runs: Pick<IsolationRunController, 'snapshotWorkspace' | 'filesChangedSince' | 'openRecord' | 'skillLayout' | 'current' | 'epoch'>;
-  /** What becomes of a workspace an attempt ended while opening. */
-  leases: Pick<ExecutionBackend, 'letGo'>;
+  /** What becomes of a workspace an attempt ended while opening, and how work kept elsewhere comes back to one. */
+  leases: Pick<ExecutionBackend, 'letGo' | 'collect'>;
   /** This node's side of the tree's ledger; absent at the root, and on a flat run, which has none (ADR-0056 M5). */
   budget?: Pick<NodeBudget, 'hold' | 'spent'>;
   /** The child a delegated task's last attempt left goes, as its next attempt starts afresh (ADR-0055 D15). */
@@ -967,6 +967,7 @@ export class Attempts {
       attempt: attempt.attempt,
       ...(attempt.skills.length > 0 ? { skills: attempt.skills } : {}),
       ...(shell ? { shell } : {}),
+      ...(attempt.opened?.placement ? { placement: attempt.opened.placement } : {}),
       ...(writesCommit(kind) ? { commits: true } : {}),
       checkHandoff: async (completion) => {
         const below = await this.reachOf(task.id);
@@ -1024,6 +1025,7 @@ export class Attempts {
    * so the patch may not write there.
    */
   private applyPatch(task: Task, attempt: TaskAttempt, args: ApplyPatchArgs): Promise<McpToolReply> {
+    if (attempt.opened?.placement) return Promise.resolve({ text: 'apply_patch is not available in a container: the patch would merge into a worktree this attempt does not work in.', isError: true });
     const repos = Object.values(this.deps.runs.openRecord(task.id)?.repos ?? {});
     return applySavedPatch(args, {
       callerId: task.id,
@@ -1341,8 +1343,25 @@ export class Attempts {
    */
   private land(attempt: TaskAttempt, settle: () => Promise<LandingOutcome>): Promise<LandingOutcome> {
     attempt.phase = 'integrating';
-    attempt.integration = settle();
+    attempt.integration = this.afterCollecting(attempt.taskId, settle);
     return attempt.integration;
+  }
+
+  /**
+   * `settle`, once what a backend keeps elsewhere has come back: after the
+   * task's runner has gone, or Landing would land less than it did (ADR-0059 L2).
+   * Work a backend would not bring back lands nothing and waits on the user with
+   * the reason, as a merge git refused does. The door for a landing no verdict
+   * started, a Mark complete's, as for one that did.
+   */
+  afterCollecting(taskId: string, settle: () => Promise<LandingOutcome>): Promise<LandingOutcome> {
+    const { leases } = this.deps;
+    if (!leases.collect) return settle();
+    return Promise.resolve(this.windDowns.get(taskId)).then(() => leases.collect!(taskId)).then(settle, (err: unknown): LandingOutcome => ({
+      kind: 'awaiting_user',
+      reason: 'landing-failed',
+      messages: [{ level: 'error', text: err instanceof Error ? err.message : String(err) }],
+    }));
   }
 
   /**

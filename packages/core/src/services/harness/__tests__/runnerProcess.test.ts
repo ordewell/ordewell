@@ -5,6 +5,7 @@ import { CodexAdapter } from '../CodexAdapter';
 import type { AgentAdapter, AgentEvent, AgentProcessDeps, TaskStartOptions } from '../AgentAdapter';
 import { fakeSpawn } from '../../__tests__/harnessTestKit';
 import { OPENCODE_PLANNER_PERMISSION } from '../openCodeOrdewell';
+import type { PlacedLaunch, RunnerLaunch } from '../../executionLease';
 
 /**
  * What the harness adapters owe the runner process they start, whatever its
@@ -391,5 +392,78 @@ describe('a runner\'s output split mid-character', () => {
     await turn;
 
     expect(events).toContainEqual({ type: 'error', message: expect.stringContaining('Fehler: Schlüssel ungültig') });
+  });
+});
+
+describe('a runner a lease placed elsewhere (ADR-0059 L5)', () => {
+  const taskWithMcp: TaskStartOptions = { ...taskStart, mcp: { name: 'ordewell', url: 'http://127.0.0.1:9/mcp', headers: { Authorization: 'Bearer secret-token' } } };
+
+  function placement() {
+    const stop = vi.fn();
+    const ended = vi.fn();
+    const place = vi.fn(async (launch: RunnerLaunch): Promise<PlacedLaunch> => ({ command: 'docker', args: ['exec', 'box', launch.command, ...launch.args], env: { FROM_PLACEMENT: '1' }, stop, ended }));
+    return { place, stop, ended, reach: async (url: string) => url };
+  }
+
+  it('launches what the placement answers, with the host\'s workspace variables left behind', async () => {
+    const spawned = fakeSpawn([]);
+    const envs: NodeJS.ProcessEnv[] = [];
+    const placed = placement();
+    const adapter = new ClaudeCodeAdapter({ ...deps(spawned, { WORKSPACE_ONLY: 'x' }, envs), placement: placed });
+
+    await adapter.start(taskStart);
+
+    expect(spawned.lastCommand()).toBe('docker');
+    expect(spawned.lastArgs().slice(0, 3)).toEqual(['exec', 'box', 'claude']);
+    expect(envs[0]).toMatchObject({ FROM_PLACEMENT: '1' });
+    expect(envs[0].WORKSPACE_ONLY).toBeUndefined();
+    adapter.dispose();
+  });
+
+  it('tells it which files of this host the launch reads, so the one holding the token can go too', async () => {
+    const spawned = fakeSpawn([]);
+    const placed = placement();
+    const adapter = new ClaudeCodeAdapter({ ...deps(spawned), placement: placed });
+
+    await adapter.start(taskWithMcp);
+
+    const { args, files, env } = placed.place.mock.calls[0][0];
+    expect(files).toEqual([args[args.indexOf('--mcp-config') + 1]]);
+    expect(JSON.stringify(env)).not.toContain('secret-token');
+    adapter.dispose();
+  });
+
+  it('stops the process where it runs, since killing the client leaves it there', async () => {
+    const spawned = fakeSpawn([]);
+    const placed = placement();
+    const adapter = new ClaudeCodeAdapter({ ...deps(spawned), placement: placed });
+    await adapter.start(taskStart);
+
+    adapter.dispose();
+
+    expect(placed.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('says so too of one that never started, or a lease would wait for it', async () => {
+    const spawned = fakeSpawn([]);
+    const placed = placement();
+    const adapter = new ClaudeCodeAdapter({ ...deps(spawned), exists: () => false, placement: placed });
+
+    await expect(adapter.start(taskStart)).rejects.toThrow();
+
+    expect(placed.ended).toHaveBeenCalledTimes(1);
+    expect(placed.stop).not.toHaveBeenCalled();
+  });
+
+  it('says when the process has ended, so a lease can wait for it', async () => {
+    const spawned = fakeSpawn([]);
+    const placed = placement();
+    const adapter = new ClaudeCodeAdapter({ ...deps(spawned), placement: placed });
+    await adapter.start(taskStart);
+
+    spawned.processes[0].emit('close', 0, null);
+
+    expect(placed.ended).toHaveBeenCalledTimes(1);
+    adapter.dispose();
   });
 });

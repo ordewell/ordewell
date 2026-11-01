@@ -9,6 +9,7 @@ import type { ScriptBody } from '../models/ScriptTask';
 import type { TaskShell } from './IFileSystem';
 import type { HandoffCheck } from '../models/Handoff';
 import type { TaskWebReads } from '../services/taskWebReads';
+import type { RunnerPlacement } from '../services/executionLease';
 /** How a structured turn ended. `failed` carries the agent's own words in the preceding `error` event. */
 export type StructuredTurnEnd = 'completed' | 'interrupted' | 'failed';
 /**
@@ -260,6 +261,8 @@ export interface IRunner {
      * attempt. Runners ignore it; it is for what wraps one to record (task logs).
      */
     skills?: readonly TaskSkillSnapshot[];
+    /** Where the attempt's lease put this runner, when not on this host (ADR-0059 L5). */
+    placement?: RunnerPlacement;
     /** Something the user should know about how the spawn went that did not stop it — a respawn, most often. */
     onNotice?: (message: string) => void;
     /**
