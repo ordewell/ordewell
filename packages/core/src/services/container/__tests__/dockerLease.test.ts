@@ -10,7 +10,7 @@ import { EGRESS_ENTRY } from '../egressSidecar';
 import { RELAY_ENTRY } from '../leaseRelay';
 import type { DockerCall, DockerCli, DockerResult } from '../dockerCli';
 import type { ProbeAsked, ProbeFindings } from '../guaranteeProbe';
-import { LeaseGuaranteeError, type LeaseRepo, type LeaseRequest, type LeaseSpec, type OpenLease } from '../../executionLease';
+import { KeptWorkError, LeaseGuaranteeError, type LeaseRepo, type LeaseRequest, type LeaseSpec, type OpenLease } from '../../executionLease';
 import type { GitInvoker } from '../../gitExec';
 import { createTask } from '../../../models/Task';
 import { FakeExecutionBackend } from '../../../testing';
@@ -95,7 +95,16 @@ const repo: LeaseRepo = { path: '.', root: '/repo', worktree: '/repo/.ordewell/w
 /** git for what the backend asks of this host: every ref is one commit, and no push fails. */
 const git = (hooks = '/no/such/hooks'): GitInvoker => ({ exec: async (_file, args) => ({ stdout: args.includes('--git-path') ? `${hooks}\n` : 'abc123\n', stderr: '' }), resolvePath: async () => '/usr/bin' });
 
-function backendWith(over: { settings?: unknown; cli?: RecordingCli; env?: Record<string, string>; hooks?: string; setupCommand?: string } = {}) {
+/** git for a gate that takes what `cli` last exported: the one ref a bundle may hold. */
+const takingGit = (cli: RecordingCli): GitInvoker => ({
+  exec: async (_file, args) => {
+    const ref = cli.lines().flatMap((line) => /ORDEWELL_REF=(\S+)/.exec(line)?.[1] ?? []).at(-1);
+    return { stdout: args.includes('list-heads') ? `abc123 ${ref}\n` : args.includes('--git-path') ? '/no/such/hooks\n' : 'abc123\n', stderr: '' };
+  },
+  resolvePath: async () => '/usr/bin',
+});
+
+function backendWith(over: { settings?: unknown; cli?: RecordingCli; env?: Record<string, string>; hooks?: string; setupCommand?: string; git?: GitInvoker } = {}) {
   const local = new FakeExecutionBackend();
   local.repos = [repo];
   const cli = over.cli ?? new RecordingCli();
@@ -104,7 +113,7 @@ function backendWith(over: { settings?: unknown; cli?: RecordingCli; env?: Recor
   const backend = new DockerExecutionBackend(local, {
     settings,
     cli,
-    git: git(over.hooks),
+    git: over.git ?? git(over.hooks),
     ...(over.setupCommand ? { setupCommand: () => over.setupCommand } : {}),
     broker: new CredentialBroker(over.env ?? { ANTHROPIC_API_KEY: 'sk-ant-api03-test' }),
     sessionId: () => 'session-1',
@@ -812,7 +821,8 @@ describe('how a lease ended (L3)', () => {
 
 describe('the next attempt of a task', () => {
   it("waits for the last attempt's work before its worktree is prepared: a Continue restores what that worktree holds", async () => {
-    const { backend, cli, local } = backendWith();
+    const cli = new RecordingCli();
+    const { backend, local } = backendWith({ cli, git: takingGit(cli) });
     const first = await opened(backend);
     first.lease.release('failed');
     let preparedBeforeExport: number | null = null;
@@ -922,5 +932,166 @@ describe('the containers setting', () => {
     ['docker', /object/],
   ])('refuses %j: a setting it cannot use must never run a task on the host instead', (raw, why) => {
     expect(parseContainerSettings(raw)).toMatchObject({ refused: expect.stringMatching(why) });
+  });
+});
+
+/*
+ * `probe()` is the report a surface shows before any task runs (L3). It is a
+ * throwaway container with no login and no gateway, so it cannot prove a key it
+ * never held unreadable, and it does not mount the sign-in volume an own-sign-in
+ * lease's runner will read. The lease's own open proves this properly.
+ */
+describe('what a probe reports before any task runs (L3)', () => {
+  it.each([
+    ['broker', { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] }],
+    ['own-sign-in', { kind: 'own-sign-in' }],
+  ])('does not claim cred.unreadable proven for a %s login it never held', async (_case, login) => {
+    const { backend } = backendWith({ settings: { image: 'ordewell-task', login } });
+
+    const report = await backend.probe();
+
+    expect(report['cred.unreadable']).toMatchObject({ proven: false, by: expect.stringContaining('held no login') });
+  });
+
+  it("goes out as an own-sign-in lease does, with Anthropic's hosts on its list", async () => {
+    const cli = new RecordingCli();
+    const { backend } = backendWith({ cli, settings: { image: 'ordewell-task', login: { kind: 'own-sign-in' } } });
+
+    await backend.probe();
+
+    expect(cli.sidecars[0].args.join(' ')).toContain('api.anthropic.com');
+  });
+});
+
+/*
+ * A gate refusal is the case ADR-0059 L2 calls "it will not bring back: lands
+ * nothing and waits on the user". The next attempt would seed the same clone from
+ * the host, resetting its worktree and branch, so nothing starts until the user
+ * gives that work up.
+ */
+describe('work that did not come back (L2)', () => {
+  /** A volume a real engine would keep, which is all that tells a later Session of held work. */
+  class EngineCli extends RecordingCli {
+    volumes = new Set<string>();
+
+    override async call(args: readonly string[], opts?: DockerCall): Promise<DockerResult> {
+      if (args[0] === 'volume' && args[1] === 'create') this.volumes.add(args.at(-1)!);
+      if (args[0] === 'volume' && args[1] === 'rm') this.volumes.delete(args.at(-1)!);
+      if (args[0] === 'volume' && args[1] === 'ls') {
+        const named = args.at(-1)!.slice('name='.length);
+        return { ...OK, stdout: [...this.volumes].filter((volume) => volume.includes(named)).join('\n') };
+      }
+      return super.call(args, opts);
+    }
+  }
+
+  const refused = async () => {
+    const cli = new EngineCli();
+    cli.answers.push({ match: /ORDEWELL_REF=/, result: { code: 1, stderr: 'the gate refused it' } });
+    const made = backendWith({ cli });
+    (await opened(made.backend)).lease.release('failed');
+    await made.backend.letGo('a', { keep: true, reason: 'failed' });
+    return { ...made, cli };
+  };
+
+  it('does not let the next attempt reset the volume its warning says the work stays in', async () => {
+    const { backend, local, cli, told } = await refused();
+    expect(told.some(({ text }) => /stays in its container's volume/.test(text))).toBe(true);
+    const made = local.opened.length;
+
+    await expect(opened(backend)).rejects.toBeInstanceOf(KeptWorkError);
+
+    expect(cli.entries).toHaveLength(1);
+    expect(local.opened).toHaveLength(made);
+    expect(cli.lines().some((line) => /volume rm/.test(line))).toBe(false);
+  });
+
+  it('holds for a Continue as for any start, and before anything that would give its workspace up', async () => {
+    const { backend } = await refused();
+
+    await expect(opened(backend, taskRequest, { ...changeSpec, workspace: { kind: 'worktree', intent: 'restore' } })).rejects.toBeInstanceOf(KeptWorkError);
+    const missing = backendWith({ cli: new EngineCli(), setupCommand: 'npm ci' });
+    await expect(opened(missing.backend)).rejects.toThrow(/setup command/);
+  });
+
+  it('holds past this Session: what says so is in the engine, where no container reaches it', async () => {
+    const { cli, local } = await refused();
+    const later = new DockerExecutionBackend(local, {
+      settings: parseContainerSettings({ image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } }),
+      cli, git: git(), broker: new CredentialBroker({ ANTHROPIC_API_KEY: 'sk-ant-api03-test' }), sessionId: () => 'session-1', tell: () => undefined,
+    });
+
+    await expect(opened(later)).rejects.toBeInstanceOf(KeptWorkError);
+    expect(cli.entries).toHaveLength(1);
+  });
+
+  it('lands nothing: a landing that asks after its box has gone is told so', async () => {
+    const { backend } = await refused();
+
+    await expect(backend.collect('a')).rejects.toBeInstanceOf(KeptWorkError);
+  });
+
+  it('gives a landing its reason, and marks the work held as it refuses', async () => {
+    const cli = new EngineCli();
+    cli.answers.push({ match: /ORDEWELL_REF=/, result: { code: 1, stderr: 'the gate refused it' } });
+    const { backend } = backendWith({ cli });
+    await opened(backend);
+
+    await expect(backend.collect('a')).rejects.toThrow(/stays in its container's volume: Could not read the attempt's work out of its volume: the gate refused it\. Nothing starts/);
+    expect([...cli.volumes].some((volume) => volume.startsWith('ordewell-held-'))).toBe(true);
+    await expect(opened(backend)).rejects.toBeInstanceOf(KeptWorkError);
+  });
+
+  it('starts over once the user retries, which gives that work up', async () => {
+    const { backend, cli } = await refused();
+
+    await backend.letGo('a', { keep: false, reason: 'retried' });
+
+    expect([...cli.volumes].filter((volume) => /ordewell-(held|task)-/.test(volume))).toEqual([]);
+    await opened(backend);
+    expect(cli.entries).toHaveLength(2);
+  });
+
+  it('carries the labels a clean-up finds it by', async () => {
+    const { cli } = await refused();
+
+    const held = cli.lines().find((line) => line.includes('ordewell-held-'))!;
+    expect(held).toContain('--label ordewell.tree=session-1');
+  });
+});
+
+describe('a Session closing (ADR-0059 L5)', () => {
+  it('takes every container with it, with the relay and the way out it holds, and keeps its volume for a Continue', async () => {
+    const { backend, cli } = backendWith();
+    await opened(backend);
+
+    await backend.settle();
+
+    expect(cli.lines().some((line) => line.startsWith('rm -f ordewell-'))).toBe(true);
+    const ended = ({ process }: { process: ChildProcess }) => process.exitCode !== null || process.signalCode !== null;
+    await vi.waitFor(() => expect([...cli.entries, ...cli.sidecars].every(ended)).toBe(true));
+    expect(cli.lines().some((line) => /volume rm/.test(line))).toBe(false);
+  });
+
+  it('waits for work on its way back, as it was let go', async () => {
+    const cli = new RecordingCli();
+    let bring!: () => void;
+    const brought = new Promise<void>((resolve) => { bring = resolve; });
+    const { backend } = backendWith({ cli });
+    const call = cli.call.bind(cli);
+    cli.call = async (args, opts) => {
+      if (args.join(' ').includes('ORDEWELL_REF=')) await brought;
+      return call(args, opts);
+    };
+    (await opened(backend)).lease.release('stopped');
+    void backend.letGo('a', { keep: true, reason: 'stopped' }).catch(() => undefined);
+
+    let settled = false;
+    void backend.settle().then(() => { settled = true; });
+    await new Promise((resolve) => { setTimeout(resolve, 200); });
+    expect(settled).toBe(false);
+
+    bring();
+    await vi.waitFor(() => expect(settled).toBe(true));
   });
 });

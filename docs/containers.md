@@ -118,13 +118,26 @@ Nothing here is declared. Each container runs a probe as it opens, and a guarant
   works in your checkout, and a run without worktree isolation.
 
 A setting Ordewell cannot use refuses every task rather than running it on your
-machine instead. So does a repository with git hooks that a landing would fire, since
-they would run what a container wrote, and a worktree setup command for the same
-reason: remove or unset it for that session. Dependencies are the runner's to install
-inside the container, which is what the caches are for.
+machine instead. The setting is read once, as a session starts, for it and every
+delegated task under it: changing it takes effect in the next session.
+
+A session with containers runs git on your machine with hooks off, since a hook that
+tests or lints would run what a container wrote. So that no check of yours goes
+silently, a repository with hooks a landing would fire refuses every task instead:
+remove them for that session. A worktree setup command is refused for the same reason.
+Dependencies are the runner's to install inside the container, which is what the
+caches are for.
 
 `apply_patch` is not available in a container, and your workspace's own variables
 (`.env`, `direnv`) do not reach one.
+
+## Work that does not come back
+
+A task's work comes back through a check as its attempt ends. Work that fails it lands
+nothing: a bundle git will not take, a change to a hooks folder your repository tracks,
+or more than one attempt's work should be. It stays in the task's volume, and the task
+waits for you: a Continue or a start fails, saying why, rather than starting over that
+work. Retrying the task gives the work up and starts it afresh.
 
 ## Script tasks
 
@@ -142,6 +155,9 @@ exit status is its evidence, as it is on your machine, but a few things differ:
 - A read-only script has no network at all.
 
 ## Cleaning up
+
+Closing a session stops its tasks and removes their containers, sidecars and networks,
+and keeps each task's volume for a Continue.
 
 Clean up, Discard and deleting a session take away what that session left in the
 engine: its containers, networks and task volumes, and its pins in the repository's

@@ -1055,6 +1055,13 @@ export class OrchestratorPool {
     this.clients.delete(sessionId);
   }
 
+  /** Close a session for a surface that is done with it: it is dropped now, and this resolves once all it started has gone. */
+  async close(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    this.destroy(sessionId, { notifyClients: true });
+    await session?.gone;
+  }
+
   /** Stop a session's whole tree, and wait until it has gone; the session stays open (ADR-0055 D16). */
   async stopTree(sessionId: string): Promise<void> {
     await this.sessions.get(sessionId)?.stopSubtree();

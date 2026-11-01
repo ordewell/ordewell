@@ -27,6 +27,7 @@ function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
     hasSession: vi.fn().mockReturnValue(false),
     stopTree: vi.fn(async () => undefined),
     destroy: vi.fn(),
+    close: vi.fn(async () => undefined),
     reclaim: vi.fn(async () => undefined),
     ...overrides,
   } as unknown as OrchestratorPool;
@@ -329,7 +330,23 @@ describe('POST /api/sessions/:id/close', () => {
 
     expect(res.status).toBe(200);
     expect(((await res.json()) as { ok?: boolean }).ok).toBe(true);
-    expect(pool.destroy).toHaveBeenCalledWith('s1', { notifyClients: true });
+    expect(pool.close).toHaveBeenCalledWith('s1');
+  });
+
+  it('answers once what the session started has gone', async () => {
+    let done!: () => void;
+    const pool = fakePool({ close: vi.fn(() => new Promise<void>((resolve) => { done = resolve; })) } as Partial<OrchestratorPool>);
+    const app = new Hono();
+    app.route('/api/sessions', sessionsRoute(pool));
+
+    let answered = false;
+    const res = app.request('/api/sessions/s1/close', { method: 'POST' });
+    void Promise.resolve(res).then(() => { answered = true; });
+    await new Promise((resolve) => { setTimeout(resolve, 10); });
+    expect(answered).toBe(false);
+
+    done();
+    expect((await res).status).toBe(200);
   });
 });
 

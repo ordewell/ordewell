@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { TaskOrchestrator, type TaskOrchestratorOptions } from '../TaskOrchestrator';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
 import { TaskControlError } from '../TaskControlError';
-import { LeaseGuaranteeError, refuseUnproven, GUARANTEES, type ExecutionBackend, type GuaranteeReport, type LeaseRequest } from '../executionLease';
+import { KeptWorkError, LeaseGuaranteeError, refuseUnproven, GUARANTEES, type ExecutionBackend, type GuaranteeReport, type LeaseRequest } from '../executionLease';
 import { createTask, type Task } from '../../models/Task';
 import type { IRunner } from '../../interfaces/IRunner';
 import { fakeConfig, FakeExecutionBackend, FakeRunnerSession, FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
@@ -46,6 +46,22 @@ async function until(condition: () => boolean): Promise<void> {
   for (let i = 0; i < 100 && !condition(); i += 1) await flushMicrotasks();
   expect(condition()).toBe(true);
 }
+
+describe('work a backend holds back (ADR-0059 L2)', () => {
+  it('fails the task for the user to retry, and lets go of nothing that is waiting', async () => {
+    const env = setup();
+    env.orchestrator.loadPlan([task('a')]);
+    env.backend.openError = new KeptWorkError('The work of task a stays in its container\'s volume.');
+
+    await env.orchestrator.forceStartTask('a');
+
+    await until(() => env.backend.held === 0);
+    await until(() => env.store.get('a')?.status === 'failed');
+    expect(env.backend.letGoCalls).toEqual([{ taskId: 'a', keep: true, reason: 'spawn failed' }]);
+    expect(env.spawn).not.toHaveBeenCalled();
+    expect(vi.mocked(env.notifications.error).mock.calls.join()).toContain('stays in its container');
+  });
+});
 
 describe('reserve, then open (ADR-0059 L1)', () => {
   it('reserves in the claim and opens after it, on the workspace the attempt\'s kind asks for', async () => {

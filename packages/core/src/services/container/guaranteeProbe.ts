@@ -163,6 +163,8 @@ export interface ProbeExpected {
   loopbackHits: number;
   /** Its key stays at this host's gateway, so the probe looked for it. */
   gated?: boolean;
+  /** A probe with no lease behind it held none of the login one would: it can say nothing of a credential. */
+  loginUntried?: boolean;
 }
 
 /**
@@ -207,12 +209,13 @@ export function judgeProbe(found: ProbeFindings, expected: ProbeExpected, at: st
       metadataVia === '403' ? `a connection to ${METADATA}: ${found.metadata}` : `its proxy answered "${metadataVia}" for ${METADATA}`,
     ),
     'cred.unreadable': proof(
-      found.credentialsVisible.length === 0 && found.secretsFound === 0 && !found.loginReadable,
-      found.credentialsVisible.length > 0 ? `the runner can read ${found.credentialsVisible.join(', ')}`
-        : found.secretsFound > 0 ? 'a key its gateway should hold is in the container'
-          : found.loginReadable ? "the runner can read the person's own sign-in"
-            : expected.gated ? "the key stays at this host's gateway, and its value is in no environment the container can read"
-              : 'this lease carries no credential',
+      !expected.loginUntried && found.credentialsVisible.length === 0 && found.secretsFound === 0 && !found.loginReadable,
+      expected.loginUntried ? "this probe held no login, so a lease's was not tried"
+        : found.credentialsVisible.length > 0 ? `the runner can read ${found.credentialsVisible.join(', ')}`
+          : found.secretsFound > 0 ? 'a key its gateway should hold is in the container'
+            : found.loginReadable ? "the runner can read the person's own sign-in"
+              : expected.gated ? "the key stays at this host's gateway, and its value is in no environment the container can read"
+                : 'this lease carries no credential',
     ),
     'kernel.separate': proof(found.kernel !== expected.hostKernel, `the container runs ${found.kernel}, this host ${expected.hostKernel}`),
     'limits.memory': proof(

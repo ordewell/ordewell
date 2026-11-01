@@ -513,7 +513,8 @@ export function createSession(deps: SessionDeps): Session {
   const runnerApprovals = new RunnerApprovals(approvals);
   // What is charged here goes on up, for a row at each level to show (ADR-0055 D20).
   const nodeBudget = deps.placement?.budget && reportingUp(deps.placement.budget, deps.subplanner);
-  const containers = deps.settings().containers;
+  // The setting is session-wide, so a root reads it once and its children take what that decided: read again, a change would put them on this host.
+  const containers = deps.placement ? undefined : deps.settings().containers;
   const execution = deps.execution ?? (containers === undefined ? undefined : containerExecution(containers));
   const orchestrator = TaskOrchestrator.compose({
     config: deps.config,
@@ -690,7 +691,7 @@ export function createSession(deps: SessionDeps): Session {
     runnerConfig: () => deps.settings().taskRunnerConfig,
     delegationOffered: deps.delegationOffered ?? DELEGATION_OFFERED,
     childPlans,
-    childSession: (spec) => createSession(childSessionDeps(deps, spec)),
+    childSession: (spec) => createSession(childSessionDeps(execution ? { ...deps, execution } : deps, spec)),
   });
   return session;
 }
@@ -3750,9 +3751,10 @@ export class Session {
     // Last: stopping the run above saves what it changed, which needs the lease.
     // A child reads the lease through this Session (ADR-0055 D13), so with one
     // still stopping it goes only once that child has: read as free, the tree
-    // could be taken from under what it still writes.
-    if (this.childPlans.activeCount === 0) this.letLeaseGo();
-    else this.departed = this.childPlans.stopEvery().catch(() => undefined).then(() => this.letLeaseGo());
+    // could be taken from under what it still writes. So with what this run
+    // started: a runner winding down, or a container and all it holds open.
+    if (this.childPlans.activeCount === 0 && this.orchestrator.leftNothing) this.letLeaseGo();
+    else this.departed = this.childPlans.stopEvery().then(() => this.orchestrator.allGone()).catch(() => undefined).then(() => this.letLeaseGo());
   }
 
   private letLeaseGo(): void {

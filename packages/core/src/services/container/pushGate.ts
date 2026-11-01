@@ -1,16 +1,13 @@
-import { accessSync, constants, mkdtempSync, rmSync } from 'fs';
+import { accessSync, constants, mkdtempSync, realpathSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
-import { join, resolve } from 'path';
-import { git, isAncestor, tryGit, type GitInvoker } from '../gitExec';
-
-/** Nothing a repository's hooks do belongs in this path: what is taken here came from a container. */
-const NO_HOOKS = ['-c', 'core.hooksPath=/dev/null'];
+import { isAbsolute, join, relative, resolve, sep } from 'path';
+import { git, isAncestor, NO_HOOKS, tryGit, type GitInvoker } from '../gitExec';
 
 /** Git's own checks on what it takes from a stranger: a tree that writes into `.git`, a malformed object. */
 const FSCK = ['-c', 'transfer.fsckObjects=true', '-c', 'fetch.fsckObjects=true'];
 
-/** What git runs on this host as a landing commits and merges, and as the next worktree is cut. */
-const LANDING_HOOKS = ['pre-commit', 'prepare-commit-msg', 'commit-msg', 'post-commit', 'pre-merge-commit', 'post-merge', 'post-checkout', 'post-rewrite', 'reference-transaction'];
+/** What git would run on this host as a landing commits and merges, and as the next worktree is cut: what a session with hooks off leaves unchecked. */
+const LANDING_HOOKS = ['pre-commit', 'prepare-commit-msg', 'commit-msg', 'post-commit', 'pre-merge-commit', 'post-merge', 'post-checkout', 'post-rewrite', 'reference-transaction', 'post-index-change'];
 
 /** What came out of a container and may not go further; the attempt's work stays in its volume. */
 export class PushRefused extends Error {
@@ -33,9 +30,10 @@ export interface GateTicket {
  * container hands over, so nothing of a repository's hooks or config can come
  * with it, as it could from a writable bare repository the host later runs git
  * in. It takes exactly the ticket's ref, under git's own object checks, and
- * only history on the attempt's base, and moves no ref of the repository at
- * `repo`. Returns the snapshot commit it took, whose first parent is the
- * attempt's last commit (see {@link restoreSnapshot}).
+ * only history on the attempt's base, nothing where git looks for this
+ * repository's hooks, and moves no ref of the repository at `repo`. Returns the
+ * snapshot commit it took, whose first parent is the attempt's last commit (see
+ * {@link restoreSnapshot}).
  */
 export async function takeThroughGate(invoker: GitInvoker, repo: string, bundle: string, { ref, base }: GateTicket): Promise<string> {
   const listed = await tryGit(invoker, repo, ['bundle', 'list-heads', bundle]);
@@ -51,9 +49,40 @@ export async function takeThroughGate(invoker: GitInvoker, repo: string, bundle:
     const snapshot = (await git(invoker, repo, ['rev-parse', '--verify', `${quarantine}^{commit}`])).trim();
     if (await isAncestor(invoker, repo, base, `${snapshot}^1`) !== 'yes') throw new PushRefused(`its history does not stand on ${base}`);
     await checkObjects(invoker, repo, snapshot, base);
+    const hooks = await hooksWritten(invoker, repo, base, snapshot);
+    if (hooks.length > 0) throw new PushRefused(`it writes ${hooks.join(', ')}, where git looks for this repository's hooks`);
     return snapshot;
   } finally {
     await tryGit(invoker, repo, [...NO_HOOKS, 'update-ref', '-d', quarantine]);
+  }
+}
+
+/**
+ * What a snapshot changes in a hooks folder the repository tracks, as husky's is.
+ * Hooks are off on the way to a landing, but one that landed would be armed in
+ * the user's checkout, for their next commit. By the whole folder, since a hook
+ * sources what sits beside it, folded, as a Mac's disk folds a name, and by both
+ * the name git was given and where that leads, as a tracked link may stand in it.
+ * A path above it counts too: a file or a link in its place is the folder replaced.
+ */
+async function hooksWritten(invoker: GitInvoker, repo: string, base: string, snapshot: string): Promise<string[]> {
+  const top = (await git(invoker, repo, ['rev-parse', '--show-toplevel'])).trim();
+  const path = (await git(invoker, repo, ['rev-parse', '--git-path', 'hooks'])).trim();
+  const given = resolve(top, path);
+  const folders = [...new Set([given, realOf(given)])].map((dir) => relative(top, dir).split(sep).join('/').toLowerCase()).filter((dir) => dir !== '..' && !dir.startsWith('../') && !isAbsolute(dir));
+  if (folders.length === 0) return [];
+  const changed = (await git(invoker, repo, ['diff-tree', '-r', '-z', '--name-only', '--no-renames', base, snapshot])).split('\0').filter(Boolean);
+  return changed.filter((file) => {
+    const named = file.toLowerCase();
+    return folders.some((folder) => folder === '' || named === folder || named.startsWith(`${folder}/`) || folder.startsWith(`${named}/`));
+  });
+}
+
+function realOf(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
   }
 }
 
@@ -94,11 +123,11 @@ export async function restoreSnapshot(invoker: GitInvoker, worktree: string, sna
 }
 
 /**
- * The hooks a landing would run on this host, over what a container wrote. A
- * hook that tests or lints runs that code, and one in a tracked folder is itself
- * the container's to change, so none of this can come through a gate. Landing
- * with hooks off would silently drop a check the user set up, so a lease refuses
- * instead (ADR-0059 L6).
+ * The hooks a landing would have run. A session that runs tasks in containers
+ * lands with every hook off, since a hook that tests or lints runs what a
+ * container wrote: that is the boundary, and no name here is part of it. This is
+ * what it would silently stop checking, so a lease says so and refuses instead
+ * (ADR-0059 L6).
  */
 export async function hooksLandingWouldRun(invoker: GitInvoker, worktree: string): Promise<string[]> {
   const dir = resolve(worktree, (await git(invoker, worktree, ['rev-parse', '--git-path', 'hooks'])).trim());

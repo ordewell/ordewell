@@ -110,10 +110,11 @@ export function sessionsRoute(pool: OrchestratorPool) {
     } satisfies OkResponse);
   });
 
-  // Stops the orchestrator (killing every runner it spawned) and drops the
-  // in-memory planner conversation. No-op if already closed/unregistered.
-  router.post('/:id/close', (c) => {
-    pool.destroy(c.req.param('id'), { notifyClients: true });
+  // Stops the orchestrator (killing every runner it spawned, and every container
+  // with what serves it) and drops the in-memory planner conversation, answering
+  // once they have gone. No-op if already closed/unregistered.
+  router.post('/:id/close', async (c) => {
+    await pool.close(c.req.param('id'));
     return c.json({ ok: true } satisfies OkResponse);
   });
 

@@ -44,7 +44,7 @@ import { TaskControlError } from './TaskControlError';
 import { TaskWebReader } from './taskWebReads';
 import type { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { OrchestratorObserver, StartAdmission } from './TaskOrchestrator';
-import type { ExecutionBackend, OpenLease, ReservedLease } from './executionLease';
+import { KeptWorkError, type ExecutionBackend, type OpenLease, type ReservedLease } from './executionLease';
 import type { BudgetHold, NodeBudget } from './TreeLedger';
 
 class TaskStartConfigError extends Error {
@@ -891,6 +891,10 @@ export class Attempts {
     if (err instanceof TaskStartConfigError) {
       return failed({ leaves: 'held', hold: err.message, preserveWorktree: true, settles: false, notice: { level: 'warn', text: `Task "${task.title}" is on hold: ${err.message}` } });
     }
+    // Failed, not held: a Retry is what gives that work up, and a failed task's dependents wait with it (ADR-0059 L2).
+    if (err instanceof KeptWorkError && attempt.kind.kind !== 'repair') {
+      return failed({ leaves: 'failed', summary: summarizeOutput(message, ''), keepWorktree: true, notice: { level: 'error', text: message } });
+    }
     if (attempt.kind.kind === 'continuation' && !attachTimeout) {
       // A runner that exits while starting on a saved session has refused it.
       const refused = err instanceof RunnerStartupExit;
@@ -1411,6 +1415,10 @@ export class Attempts {
   /** A runner let go for this task has not gone yet: what a delegated task's row shows as stopping (ADR-0055 D16). */
   windingDown(taskId: string): boolean {
     return this.windDowns.has(taskId);
+  }
+
+  get anyWindingDown(): boolean {
+    return this.windDowns.size > 0;
   }
 
   /** Every runner let go has gone: what a subtree's stop waits on (ADR-0055 D16). */

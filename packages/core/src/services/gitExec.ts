@@ -60,6 +60,12 @@ export function execFileWithTimeout(timeoutMs: number): GitExecFn {
 
 export const defaultExecFile: GitExecFn = execFileWithTimeout(GIT_TIMEOUT_MS);
 
+/** What keeps a repository's hooks from running: no name of one can be missed, and git hands it to every git it runs. */
+export const NO_HOOKS = ['-c', 'core.hooksPath=/dev/null'];
+
+/** `exec` for work a repository's hooks must not run over, whichever hook git would fire and however it gets there. */
+export const withoutHooks = (exec: GitExecFn): GitExecFn => (file, args, opts) => exec(file, [...NO_HOOKS, ...args], opts);
+
 function describeDuration(ms: number): string {
   return ms >= 60_000 ? `${ms / 60_000} minutes` : `${ms / 1000} seconds`;
 }

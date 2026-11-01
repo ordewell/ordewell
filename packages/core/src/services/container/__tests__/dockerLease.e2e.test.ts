@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { execFile, execFileSync, spawnSync, type ChildProcess } from 'child_process';
-import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { createServer as createHttpServer, type IncomingHttpHeaders } from 'http';
@@ -119,7 +119,7 @@ function session(root: string, tasks: Task[], settings = settingsOf(), { egress,
   const parent = makeSession({
     runner: new StructuredRunner(),
     taskOutput,
-    isolation: createWorktreeIsolation({ resolvePath: async () => process.env.PATH ?? '', config: fakeConfig({ worktreeIsolation: true }) }),
+    isolation: createWorktreeIsolation({ resolvePath: async () => process.env.PATH ?? '', config: fakeConfig({ worktreeIsolation: true }), noHooks: true }),
     workspaceRoot: () => root, saveSession, openTaskLog, leaseHost: new LeaseHost(), sessionId: `docker-e2e-${process.pid}-${tasks[0].id}`,
     config: fakeConfig({ maxParallelSessions: 2, aiProvider: 'claude-code', conflictRepairAttempts: repairs }),
     notifications,
@@ -279,6 +279,79 @@ describe.skipIf(skip)('a task in a real container', () => {
     env.parent.destroy();
   }, 120_000);
 
+  describe('a hook written into a folder the repository tracks (ADR-0059 L2, L6)', () => {
+    const planted = (root: string, id: string, report: Record<string, unknown>) => {
+      mkdirSync(join(root, '.husky'));
+      writeFileSync(join(root, '.husky', 'README.md'), 'the project keeps its hooks here\n');
+      git(root, 'add', '-A');
+      git(root, 'commit', '-q', '-m', 'a folder for hooks');
+      git(root, 'config', 'core.hooksPath', '.husky');
+      const canary = join(tempDir(), 'hook-ran');
+      const hook = `#!/bin/sh\ntouch "${canary}"\n`;
+      return { canary, tasks: [createTask({ id, order: 1, title: 'Plant a hook', prompt: cue({ write: { '.husky/pre-commit': hook, '.husky/post-index-change': hook }, ...report }), assignedRunner: 'claude-code' })] };
+    };
+    it('runs nothing and lands nothing, and the landing waits on the user', async () => {
+      const root = repo();
+      const { canary, tasks } = planted(root, 'h1', { summary: 'Planted.' });
+      const env = session(root, tasks);
+      const volumes = ours('volume');
+      const held = () => ours('volume').filter((name) => !volumes.includes(name) && name.startsWith('ordewell-held-'));
+
+      await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+      await vi.waitFor(() => expect(env.parent.planTasks[0].status).toBe('awaiting_user'), { timeout: 60_000, interval: 100 });
+
+      await vi.waitFor(() => expect(vi.mocked(env.notifications.error).mock.calls.join()).toContain('where git looks for this repository\'s hooks'));
+      expect(held()).toHaveLength(1);
+      expect(git(root, 'ls-tree', '-r', '--name-only', env.integration())).not.toContain('pre-commit');
+      expect(existsSync(canary)).toBe(false);
+      env.parent.destroy();
+      await env.parent.gone;
+    }, 120_000);
+
+    it('refuses a Continue rather than seeding over it, until a Retry gives it up', async () => {
+      const root = repo();
+      const { canary, tasks } = planted(root, 'h2', { status: 'blocked', reason: 'stuck' });
+      const env = session(root, tasks);
+      const volumes = ours('volume');
+      const added = (prefix: string) => ours('volume').filter((name) => !volumes.includes(name) && name.startsWith(prefix));
+
+      await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+      await settled(env.parent);
+      const toldOf = () => env.told.filter((line) => line.includes('stays in its container\'s volume')).length;
+      await vi.waitFor(() => expect(toldOf()).toBe(1), { timeout: 30_000 });
+
+      await env.parent.execute({ command: 'retry_task', task: 'h2', from: 'session', message: cue({ write: { 'k.txt': 'x\n' }, summary: 'Went on.' }) }, { kind: 'user' });
+      await vi.waitFor(() => expect(vi.mocked(env.notifications.error).mock.calls.join()).toContain('until you retry the task'), { timeout: 30_000, interval: 100 });
+      expect(env.parent.planTasks[0].status).toBe('failed');
+      expect(added('ordewell-held-')).toHaveLength(1);
+      expect(added('ordewell-task-')).toHaveLength(1);
+
+      await env.parent.execute({ command: 'retry_task', task: 'h2', from: 'fresh' }, { kind: 'user' });
+      await vi.waitFor(() => expect(toldOf()).toBe(2), { timeout: 60_000, interval: 100 });
+      expect(existsSync(canary)).toBe(false);
+      env.parent.destroy();
+      await env.parent.gone;
+    }, 120_000);
+  });
+
+  it('takes its container, relay and way out with it as a Session closes, and keeps the volume (ADR-0059 L5)', async () => {
+    const root = repo();
+    const tasks = [createTask({ id: 'closes', order: 1, title: 'Run on', prompt: cue({ delayMs: 60_000 }), assignedRunner: 'claude-code' })];
+    const env = session(root, tasks);
+    const was = { container: ours('container'), volume: ours('volume'), network: ours('network') };
+    const added = (kind: keyof typeof was) => ours(kind).filter((name) => !was[kind].includes(name));
+
+    await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(env.parent.isExecuting && added('container').length > 0).toBe(true), { timeout: 60_000, interval: 100 });
+
+    env.parent.destroy();
+    await env.parent.gone;
+
+    expect(added('container')).toEqual([]);
+    expect(added('network')).toEqual([]);
+    expect(added('volume').filter((name) => name.startsWith('ordewell-task-'))).toHaveLength(1);
+  }, 120_000);
+
   it('refuses the lease, and starts no runner, on a network the probe finds open', async () => {
     const root = repo();
     const tasks = [createTask({ id: 'e', order: 1, title: 'Needs an allowlist', prompt: cue({ write: { 'e.txt': 'x' } }), assignedRunner: 'claude-code' })];
@@ -298,9 +371,10 @@ describe.skipIf(skip)('a task in a real container', () => {
 
     const report = await backend.probe();
 
-    for (const guarantee of ['fs.hostHidden', 'fs.writeScope', 'limits.memory', 'cred.unreadable', 'net.allowlist', 'net.noMetadata'] as const) {
+    for (const guarantee of ['fs.hostHidden', 'fs.writeScope', 'limits.memory', 'net.allowlist', 'net.noMetadata'] as const) {
       expect(report[guarantee], `${guarantee}: ${report[guarantee].by}`).toMatchObject({ proven: true });
     }
+    expect(report['cred.unreadable'], 'a probe holds no login').toMatchObject({ proven: false });
     expect(Object.keys(report).sort()).toEqual([...GUARANTEES].sort());
     await vi.waitFor(() => expect(ours('network').filter((n) => !before.network.includes(n))).toEqual([]), { timeout: 30_000 });
   }, 60_000);

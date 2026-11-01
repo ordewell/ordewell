@@ -4,7 +4,7 @@ import { createServer, type AddressInfo } from 'net';
 import { release, tmpdir, type as osType } from 'os';
 import { basename, join, posix, relative, sep } from 'path';
 import { augmentedPath } from '../../utils/shellPath';
-import { CHECKOUT_BRANCH, refuseUnproven, type ExecutionBackend, type GuaranteeReport, type LeaseExit, type LeaseRecord, type LeaseRepo, type LeaseRequest, type LeaseSpec, type OpenLease, type PlacedLaunch, type ReservedLease, type RunnerLaunch } from '../executionLease';
+import { CHECKOUT_BRANCH, KeptWorkError, refuseUnproven, type ExecutionBackend, type GuaranteeReport, type LeaseExit, type LeaseRecord, type LeaseRepo, type LeaseRequest, type LeaseSpec, type OpenLease, type PlacedLaunch, type ReservedLease, type RunnerLaunch } from '../executionLease';
 import { defaultExecFile, git, tryGit, type GitInvoker } from '../gitExec';
 import { SELF_REPO } from '../isolationRecord';
 import { settleWithin } from '../harness/settleWithin';
@@ -150,6 +150,7 @@ export class DockerExecutionBackend implements ExecutionBackend {
   private readonly boxes = new Map<string, Box>();
   private toldOfNetwork = false;
   private toldOfCopy = false;
+  private readonly lettingGo = new Set<Promise<void>>();
 
   constructor(private readonly local: ExecutionBackend, private readonly options: DockerBackendOptions) {
     this.cli = options.cli ?? new SpawnedDockerCli();
@@ -163,13 +164,14 @@ export class DockerExecutionBackend implements ExecutionBackend {
     const settings = await this.preflight();
     const canary = this.plantCanary();
     const loopback = await loopbackCanary();
-    const route = await this.egress.open({ name: `ordewell-probe-${randomBytes(4).toString('hex')}`, labels: this.labels('probe'), limits: containerLimits(settings), image: settings.image, allow: settings.allow, gated: null });
+    const allow = [...settings.allow, ...(settings.login.kind === 'own-sign-in' ? SIGN_IN_HOSTS : [])];
+    const route = await this.egress.open({ name: `ordewell-probe-${randomBytes(4).toString('hex')}`, labels: this.labels('probe'), limits: containerLimits(settings), image: settings.image, allow, gated: null });
     try {
       const network = networkAsked(route, loopback.port);
       const flags = [...containerLimits(settings), ...route.runArgs, '--tmpfs', `${TASK_ROOT}:uid=1000,gid=1000`, ...envArgs(route.env)];
       const asked: ProbeAsked = { hostPaths: [canary.file], deniedWrites: ['/', '/usr', '/etc', MIRROR_ROOT], workspace: TASK_ROOT, credentials: [], network };
       const ran = await this.cli.call(['run', '--rm', ...flags, '-e', `ORDEWELL_PROBE=${JSON.stringify(asked)}`, settings.image, 'node', '-e', PROBE_SCRIPT]);
-      return judgeProbe(this.findings(ran.stdout, ran.stderr), { ...this.expected(settings, [TASK_ROOT, '/tmp']), network, loopbackHits: loopback.hits() }, new Date().toISOString());
+      return judgeProbe(this.findings(ran.stdout, ran.stderr), { ...this.expected(settings, [TASK_ROOT, '/tmp']), network, loopbackHits: loopback.hits(), loginUntried: true }, new Date().toISOString());
     } finally {
       await route.close();
       loopback.close();
@@ -206,9 +208,10 @@ export class DockerExecutionBackend implements ExecutionBackend {
     // A script has no runner to prove: its steps are the lease's own execs.
     const agent = request.role === 'task';
     if (agent && !CONTAINER_RUNNERS.has(request.runner ?? '')) throw new Error(`This session runs tasks in containers, and ${request.runner ?? 'this runner'} has not been proven in one: assign the task to ${[...CONTAINER_RUNNERS].join(', ')}.`);
+    // A Continue restores what the worktree holds, so one started at once must not get there first. Before all else: a start that fails
+    // below gives its workspace up, which held-back work must outlive.
+    if (spec.task) await this.collect(spec.task.id).catch((err: unknown) => { if (err instanceof KeptWorkError) throw err; });
     const settings = await this.preflight(agent);
-    // A Continue restores what the worktree holds, so one started at once must not get there first. A refusal was said as it was refused.
-    if (spec.task) await this.collect(spec.task.id).catch(() => undefined);
     const opened = await lease.open({ ...spec, required: [] }, signal);
     // Ended since its claim: the worktree is the attempt's to undo, as it undoes any it finds it no longer wants.
     if (signal.aborted) return opened;
@@ -279,7 +282,7 @@ export class DockerExecutionBackend implements ExecutionBackend {
     if (!landsNothing) await this.refuseHooks(repos);
     const login = agent && settings.login.kind === 'broker' ? this.broker.issue(settings.login.variables) : NO_LOGIN;
     const signedIn = agent && settings.login.kind === 'own-sign-in';
-    const key = digest(`${this.options.sessionId()}\0${taskId}`);
+    const key = this.taskKey(taskId);
     const nonce = randomBytes(4).toString('hex');
     // Nothing of a read-only attempt is kept, so a retry cannot be handed a volume its last attempt is still giving up.
     const volume = landsNothing ? `ordewell-task-${key}-${nonce}` : `ordewell-task-${key}`;
@@ -344,6 +347,20 @@ export class DockerExecutionBackend implements ExecutionBackend {
 
   private tree(): string {
     return (this.options.treeId ?? this.options.sessionId)();
+  }
+
+  private taskKey(taskId: string): string {
+    return digest(`${this.options.sessionId()}\0${taskId}`);
+  }
+
+  /**
+   * A volume whose being there says the task's work was not brought back: it
+   * holds nothing, no container mounts it, and it outlives this host as what it
+   * stands for does (L2). A task's clone is no place for this, since a container
+   * could then lift it.
+   */
+  private heldVolume(taskId: string): string {
+    return `ordewell-held-${this.taskKey(taskId)}`;
   }
 
   /** Whose a thing in the engine is, as a clean-up finds it: all a session delete has left to go on. */
@@ -552,14 +569,19 @@ export class DockerExecutionBackend implements ExecutionBackend {
    */
   async collect(taskId: string): Promise<void> {
     const box = this.boxes.get(taskId);
-    if (!box) return;
-    await this.close(box);
-    if (!box.landsNothing) await this.bringBack(box);
+    if (box) {
+      await this.close(box);
+      if (!box.landsNothing) return this.bringBack(box);
+    }
+    const held = await this.cli.call(['volume', 'ls', '-q', '--filter', `name=${this.heldVolume(taskId)}`]);
+    if (held.stdout.trim()) throw new KeptWorkError(heldBack(taskId, 'it was not brought back'));
   }
 
   /**
    * The attempt's work, every repo through the gate before any is touched, as a
-   * landing is the whole task or none of it. Once per attempt: a refusal stands.
+   * landing is the whole task or none of it. Once per attempt: a refusal stands,
+   * and what it refused waits on the user, as {@link heldVolume} says past this
+   * Session, for a Retry to give up (L2).
    */
   private bringBack(box: Box): Promise<void> {
     box.bringing ??= (async () => {
@@ -568,6 +590,9 @@ export class DockerExecutionBackend implements ExecutionBackend {
         const taken: { repo: LeaseRepo; snapshot: string }[] = [];
         for (const repo of box.repos) taken.push({ repo, snapshot: await this.take(box, repo, join(dir, `${taken.length}.bundle`)) });
         for (const { repo, snapshot } of taken) await restoreSnapshot(this.git, repo.worktree, snapshot, repo.linked);
+      } catch (err) {
+        await this.cli.call(['volume', 'create', ...this.labels(box.taskId), this.heldVolume(box.taskId)]);
+        throw new KeptWorkError(heldBack(box.taskId, errorText(err)));
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
@@ -589,21 +614,39 @@ export class DockerExecutionBackend implements ExecutionBackend {
     await this.cli.call(['volume', 'rm', '-f', volume]);
   }
 
-  async letGo(taskId: string, how: { keep: boolean; landing?: Promise<unknown> | null; reason: string }): Promise<void> {
+  letGo(taskId: string, how: { keep: boolean; landing?: Promise<unknown> | null; reason: string }): Promise<void> {
+    const going: Promise<void> = this.releaseTask(taskId, how).finally(() => this.lettingGo.delete(going));
+    this.lettingGo.add(going);
+    return going;
+  }
+
+  private async releaseTask(taskId: string, how: { keep: boolean; landing?: Promise<unknown> | null; reason: string }): Promise<void> {
     // What refused it has been said; it is why the work stays where it is, not a reason to keep the worktree.
     await how.landing?.then(() => undefined, () => undefined);
     const box = this.boxes.get(taskId);
     if (box) {
       await this.close(box);
-      if (how.keep && !box.landsNothing) await this.bringBack(box).catch((err: unknown) => this.options.tell('warn', `The work of task ${taskId} stays in its container's volume: ${errorText(err)}`));
+      if (how.keep && !box.landsNothing) await this.bringBack(box).catch((err: unknown) => this.options.tell('warn', errorText(err)));
       if (this.boxes.get(taskId) === box) this.boxes.delete(taskId);
     }
-    if (!how.keep) await this.dropVolume(`ordewell-task-${digest(`${this.options.sessionId()}\0${taskId}`)}`);
+    if (!how.keep) {
+      await this.dropVolume(`ordewell-task-${this.taskKey(taskId)}`);
+      await this.dropVolume(this.heldVolume(taskId));
+    }
     return this.local.letGo(taskId, { ...how, landing: null });
   }
 
   list(): Promise<readonly LeaseRecord[]> {
     return this.local.list();
+  }
+
+  /** The Session is closing: its containers go, with the relay and the way out each holds open, and a kept task's volume stays for a Continue. */
+  async settle(): Promise<void> {
+    for (const box of this.boxes.values()) {
+      await this.close(box).catch(() => undefined);
+      await box.bringing?.catch(() => undefined);
+    }
+    await Promise.allSettled(this.lettingGo);
   }
 
   /**
@@ -612,10 +655,7 @@ export class DockerExecutionBackend implements ExecutionBackend {
    * a helper started after a volume has gone makes it again, with no label.
    */
   async reclaim(): Promise<void> {
-    for (const box of this.boxes.values()) {
-      await this.close(box).catch(() => undefined);
-      await box.bringing?.catch(() => undefined);
-    }
+    await this.settle();
     this.boxes.clear();
     const { settings } = this.options;
     await reclaimTree(this.tree(), this.cli, 'refused' in settings ? null : settings, (text) => this.options.tell('warn', text));
@@ -624,6 +664,11 @@ export class DockerExecutionBackend implements ExecutionBackend {
 
 /** A person's own sign-in, for the one runner proven in a container. */
 const loginVolume = (): string => 'ordewell-login-claude-code';
+
+/** What a user finds on a task whose work did not come back: where it is, and the one act that gives it up. */
+function heldBack(taskId: string, why: string): string {
+  return `The work of task ${taskId} stays in its container's volume: ${why.replace(/\.$/, '')}. Nothing starts over it until you retry the task, which gives that work up.`;
+}
 
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
