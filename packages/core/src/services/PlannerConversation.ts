@@ -580,6 +580,7 @@ export class PlannerConversation {
   private readonly briefing: PlannerBriefing;
   private readonly blocks: PromptBlocks;
   private live: PlannerTurn | null = null;
+  private readonly idling: Array<() => void> = [];
   private openTurn: UserTurn | null = null;
   /** When the live context's newest turn opened; null with no live context. */
   private requestedAt: number | null = null;
@@ -630,6 +631,15 @@ export class PlannerConversation {
     return this.live !== null;
   }
 
+  /** Resolves once no turn holds the conversation: what a subtree's stop waits on (ADR-0055 D16). */
+  idle(): Promise<void> {
+    return this.live ? new Promise((resolve) => { this.idling.push(resolve); }) : Promise.resolve();
+  }
+
+  private settleIdle(): void {
+    for (const resolve of this.idling.splice(0)) resolve();
+  }
+
   /** Stop the planner turn in flight; it settles as stopped. False when none is. */
   stopTurn(by?: 'force_send'): boolean {
     if (!this.live) return false;
@@ -666,6 +676,7 @@ export class PlannerConversation {
     const turn = this.live;
     if (!turn) return;
     this.live = null;
+    this.settleIdle();
     turn.abandon();
     this.host.turnDropped?.();
     const open = this.openTurn;
@@ -714,6 +725,7 @@ export class PlannerConversation {
         // An abandoned turn gave the slot up already, maybe to its successor.
         if (this.live !== turn) return;
         this.live = null;
+        this.settleIdle();
         this.host.turnReleased?.();
       },
     };

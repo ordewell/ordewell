@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { ChildPlanRunner, type ChildHost, type ChildNode, type NodeState, type SubplannerLink } from '../ChildPlanRunner';
 import { createTask } from '../../models/Task';
 
-const IDLE_BUT_LIVE: NodeState = { unfinished: [], completed: 0, live: true, plannerBusy: false, wakeOwed: false, stoppedFor: null, plannerFailed: false, startRefused: null, tasks: [] };
+const IDLE_BUT_LIVE: NodeState = { unfinished: [], completed: 0, live: true, plannerBusy: false, wakeOwed: false, stoppedFor: null, withdrawn: null, startRefused: null, tasks: [] };
 
 /** A child whose state a test sets, behind the runner seam: what its clock does, with no Session under it. */
 function child(wallClockMs: number) {
@@ -14,14 +14,15 @@ function child(wallClockMs: number) {
     wallClockMs,
     startPlanning: () => Promise.resolve(),
     continueConversation: () => Promise.resolve(),
+    goOn: () => Promise.resolve(),
     state: () => state,
     halt: vi.fn(async () => { state.live = false; }),
-    close: vi.fn(),
+    close: vi.fn(async () => undefined),
     heldSince: () => held.ms,
     takeReport: (report) => ({ ok: true, handoff: report }),
   };
   const links: SubplannerLink[] = [];
-  const host: ChildHost = { openChild: async (_task, _cwd, link) => { links.push(link); return node; }, changedPaths: async () => [], closeNode: async () => undefined, passUp: () => undefined };
+  const host: ChildHost = { openChild: async (_task, _cwd, link) => { links.push(link); return node; }, changedPaths: async () => [], stopped: () => false, passUp: () => undefined };
   return { held, node, state, links, runner: new ChildPlanRunner(host) };
 }
 
@@ -38,15 +39,15 @@ describe('a child stopped from above or below (ADR-0056 M8)', () => {
   afterEach(() => { vi.useRealTimers(); });
 
   it.each([
-    ['a guard lowered it', false, 'blocked'],
-    ['its planner failed its restart', true, 'failed'],
-  ])('ends as what stopped it says: %s', async (_case, plannerFailed, status) => {
+    ['a guard lowered it', 'blocked'],
+    ['its planner failed its restart', 'failed'],
+  ] as const)('ends as what stopped it says: %s', async (why, ends) => {
     const { links, runner, state } = child(60_000);
     const { reports } = await started(runner);
-    Object.assign(state, { live: false, stoppedFor: 'it stopped', plannerFailed });
+    Object.assign(state, { live: false, stoppedFor: { why, ends } });
     links[0].changed();
     await vi.advanceTimersByTimeAsync(1);
-    expect(reports[0]).toMatchObject({ status });
+    expect(reports[0]).toMatchObject({ status: ends });
   });
 });
 

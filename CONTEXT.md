@@ -805,7 +805,9 @@ waits for input.
 **Continue** — a retry of a completed, failed or skipped structured task, or
 of one paused on a usage limit (see *Usage-limit resume*), that resumes its
 saved runner session (Claude's `--resume`, Codex's `thread/resume`) with
-the user's message as the next turn.
+the user's message as the next turn. A **Delegated task**'s reopens its **Child
+plan** instead, stopped or failed but not landed: that plan acts as Execute, and
+its **Subplanner** replays its Model context with the message (ADR-0055 D17).
 It is verified and landed like any attempt, is not offered on conflicts, and
 leaves dependents alone, as retry does. It starts once the runner of the
 attempt it continues has wound down (ADR-0018, L1), so a session never runs in
@@ -3090,7 +3092,8 @@ included: the input and output `UsageTotals` counts (`spentTokens`). A *carve* c
 a child's limit from its parent's *room*, which is `limit` less the other three, and
 what `narrow` is handed as the parent's tokens; a *raise* does the same for a child
 that has one, from a parent's answer; on close, what a child did not spend returns to
-its parent and no further. `reserve` is an allowance per live session and a
+its parent and no further, on every end but a crash, whose node closes at the next
+carve of its task. `reserve` is an allowance per live session and a
 subplanner's share for its next turn, which spends that first. A node's own spending
 past its room takes its children's. Only a child is charged: the root's tasks and
 planner are not, and a flat run has no ledger. Rebuilt from the **Event log** by the
@@ -3134,7 +3137,9 @@ gives, held to its protected paths (D14).
 worktree, its state under the root's (`ChildPlanSession` behind `ChildPlanRunner`, the
 runner seam, ADR-0055 D3). Its plan is approved as it lands, and it merges into the
 delegated task's branch by itself at its run's end, so only the root touches the
-user's branch. Nothing of it reaches a surface directly.
+user's branch. Nothing of it reaches a surface directly. A Stop reaches all of it,
+tombstone first, and resolves when it has gone (D16). A Continue reopens it and any
+fresh attempt discards its run, its state staying under the root (D15, D17).
 
 **Subplanner** — a **Child plan**'s planner: a harness planner on the runner its
 delegated task names, in that task's worktree, Act with autorun inside its

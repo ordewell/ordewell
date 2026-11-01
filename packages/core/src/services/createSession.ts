@@ -19,7 +19,7 @@ import { PlanTurns, type PlanTurnInput } from './PlanTurns';
 import { RunSupervision, runOrigin } from './RunSupervision';
 import { Planner } from './Planner';
 import { TaskControlError, TaskOrchestrator, type OrchestratorObserver, type RunOrigin, type TaskOrchestratorOptions } from './TaskOrchestrator';
-import { ChildPlanRunner, ownedRunner, type ChildHost, type ChildNode, type NodeState, type SubplannerLink, type TakenReport } from './ChildPlanRunner';
+import { ChildPlanRunner, ownedRunner, type ChildHost, type ChildNode, type NodeEnd, type NodeState, type SubplannerLink, type TakenReport } from './ChildPlanRunner';
 import { readTask, type TaskLogReader } from './readTask';
 import { Subtree, takeReport } from './Subtree';
 import { DELEGATION_OFFERED } from './runSettingsText';
@@ -33,7 +33,7 @@ import { effectRuleFor, parseEffectAllowlist, type EffectRules } from './effectA
 import { autonomousAt, delegatedRequest, heldMandate, mandateRefusalText, narrow, rootAuthority, withheldPlannerTools, type Mandate, type MandateRequest, type NodeAuthority, type RootSettings } from './Mandate';
 import { TreeLedger, type Carved, type NodeBudget } from './TreeLedger';
 import type { EventStore } from './eventStore';
-import { ROOT_NODE } from '../models/TreeEvent';
+import { ROOT_NODE, type NodePath } from '../models/TreeEvent';
 import { jsonlEventStore, treeEventLogFile } from '../utils/treeEventLog';
 import { ensureStateDirIgnored } from '../utils/fsHelpers';
 import { PendingApprovals, type PendingApproval } from './PendingApprovals';
@@ -455,7 +455,7 @@ export function createSession(deps: SessionDeps): Session {
   const childHost: ChildHost = {
     openChild: (...open) => session.openChild(...open),
     changedPaths: (taskId) => session.changedPaths(taskId),
-    closeNode: (sessionId) => session.closeNode(sessionId),
+    stopped: () => session.underStop,
     passUp: (record) => deps.subplanner?.usage(record),
   };
   const childPlans = new ChildPlanRunner(childHost);
@@ -522,6 +522,8 @@ export function createSession(deps: SessionDeps): Session {
     autonomous: () => autonomousAt(deps.child, deps.config.autonomousMode),
     ...(deps.subplanner ? { decided: () => deps.subplanner?.changed() } : {}),
     ...(deps.child ? { inheritedProtectedPaths: () => deps.child?.mandate('off').exclusions.protectedPaths ?? [] } : {}),
+    ...(deps.subplanner ? { nodeRefusal: () => session.nodeRefusal() } : {}),
+    discardChild: (task) => session.discardChild(task),
     subtree: () => session.subtree(),
     ...(deps.placement?.budget ? { planNode: () => deps.placement!.budget!.path } : {}),
     sessionId: () => session.sessionId,
@@ -677,6 +679,14 @@ export function createSession(deps: SessionDeps): Session {
   return session;
 }
 
+/** A subplanner a guard lowered or that failed its restart is Act again on a Continue, which is the plan above picking it up (ADR-0056 M8). */
+function pickedUp(plan: LegacyPlanState): LegacyPlanState {
+  if (!plan.runSettings) return plan;
+  const settings = { ...plan.runSettings, supervisorLevel: 'act' as const };
+  delete settings.unsupervised;
+  return { ...plan, runSettings: settings };
+}
+
 /** A child's saves, which go under its root by the id they are saved under. */
 function saveUnder({ rootSessionId }: ChildPlacement): SaveSession {
   return (plan, goal, baseDir, sessionId) => { saveChildSession(plan, goal, { baseDir, rootSessionId, sessionId }); };
@@ -738,7 +748,7 @@ export interface SessionParts {
   subplanner?: SubplannerLink;
   brief?: SubplannerBrief;
   delegationOffered: boolean;
-  childPlans: Pick<ChildPlanRunner, 'stopEvery'>;
+  childPlans: Pick<ChildPlanRunner, 'stopEvery' | 'activeCount'>;
   childSession: (spec: ChildSpec) => Session;
 }
 
@@ -856,6 +866,8 @@ export class Session {
   private closed = false;
   /** Destroyed and let go of its lease for good: whatever settles later neither saves nor holds the session. */
   private leaseReleased = false;
+  /** Settles once a destroyed Session's lease has gone. */
+  private departed: Promise<void> = Promise.resolve();
   /**
    * Turns PlanTurns does not open, waiting at the planner gate, each ended
    * with why it must not open: a Stop, a newer goal, or its plan scope ending.
@@ -937,7 +949,7 @@ export class Session {
     this.budget?.onStop((why) => {
       if (this.closed) return;
       this.notice('warn', why);
-      this.stopRun();
+      void this.stopSubtree();
     });
     this.budget?.onRaised(() => this.budgetRaised());
     this.settingsFn = parts.settings;
@@ -1611,12 +1623,17 @@ export class Session {
     return {
       sessionId,
       stateRoot: this.stateRoot,
-      rootSessionId: this.placement?.rootSessionId ?? this.currentSessionId,
+      rootSessionId: this.rootSessionId,
       held: () => this.heldElsewhere(),
       isolation: this.runs.childIsolation,
       pool: this.orchestrator.slotPool,
       ...(budget ? { budget } : {}),
     };
+  }
+
+  /** The root Session's id, under which a tree's state sits (ADR-0055 D11). */
+  private get rootSessionId(): string {
+    return this.placement?.rootSessionId ?? this.currentSessionId;
   }
 
   /**
@@ -1701,7 +1718,8 @@ export class Session {
     this.treeOpening = null;
     if (this.placement) return;
     this.tree = null;
-    if (opening) this.treeClosing = opening.ledger.then((tree) => tree.shutdown()).catch(() => undefined);
+    // What a child winding down still spends, and its close, are written first (ADR-0056 M5).
+    if (opening) this.treeClosing = Promise.all([opening.ledger, this.childPlans.stopEvery()]).then(([tree]) => tree.shutdown()).catch(() => undefined);
   }
 
   /**
@@ -1718,15 +1736,26 @@ export class Session {
    * A child's mandate and budget, carved from what this node has left
    * (ADR-0056 M4, M5). At the root, what can never pass is refused before a
    * log is opened: the first carve is what makes a run a tree. A child's limit
-   * is the ledger's, which a raise has moved past its saved mandate.
+   * is the ledger's, which a raise has moved past its saved mandate. The task's
+   * record names the child only once the carve took, so a refused one leaves
+   * no name of a child that never existed.
    */
-  async carveChild(taskId: string, request: Omit<MandateRequest, 'level'>): Promise<Carved> {
+  async carveChild(taskId: string, request: Omit<MandateRequest, 'level'>, reopening?: string): Promise<Carved> {
     const asked = { ...request, level: this.authority.depth };
     const never = this.placement ? null : narrow(this.mandate(), asked);
     if (never && !never.ok) return never;
-    const sessionId = this.runs.hostChild(taskId, mintSessionId);
+    this.runs.requireChildSeat(taskId);
     const tree = await this.currentTree();
-    return tree.carve(this.budget?.path ?? ROOT_NODE, this.mandate(), asked, { sessionId, taskId });
+    // Again in the step that carves: the worktree may have gone meanwhile, and a carve with nowhere to seat its child holds budget for nothing.
+    this.runs.requireChildSeat(taskId);
+    const carved = tree.carve(this.nodePath, this.mandate(), asked, { sessionId: this.runs.childSession(taskId) ?? reopening ?? mintSessionId(), taskId });
+    if (carved.ok) this.runs.hostChild(taskId, () => carved.budget.sessionId);
+    return carved;
+  }
+
+  /** This node's place in the tree's ledger. */
+  private get nodePath(): NodePath {
+    return this.budget?.path ?? ROOT_NODE;
   }
 
   /** A raise for the child in `taskId`, applied from what this node has left (M5). Null when it took; otherwise why not. */
@@ -1742,30 +1771,73 @@ export class Session {
 
   /**
    * A child plan's start (ADR-0055 D3): its mandate and budget carved from what
-   * this node has left, then a Session built in `cwd`, the delegated task's
-   * worktree, that holds both. Rejects with the level that refused.
+   * its delegated task has left, then a Session built in `cwd`, the task's
+   * worktree, that holds both. A Continue (D17) is the same carve for the child
+   * it names, whose plan loads: nothing of that child's file is read before
+   * this. Its node closed as it ended, or a crash left it open and this closes
+   * it: either way it stays charged what it spent, so no attempt mints budget
+   * (ADR-0056 M10). Rejects with the level that refused.
    */
-  async openChild(task: Task, cwd: string, link: SubplannerLink): Promise<ChildNode> {
+  async openChild(task: Task, cwd: string, link: SubplannerLink, reopening?: string): Promise<ChildNode> {
+    // Before the ledger: a tree closing waits for its children, and this one would wait for the ledger.
+    if (this.closed || link.stopped()) throw new Error(`Task "${task.title}" was stopped before its child opened.`);
     if (!this.delegationOffered) throw new Error(`Task "${task.title}" is a delegated task, and delegation is off here.`);
-    const carved = await this.carveChild(task.id, delegatedRequest(task, this.authority.depth));
+    const tree = await this.currentTree();
+    tree.closeChildren(this.nodePath, (taskId) => taskId === task.id || !taskId || !this.store.get(taskId));
+    const carved = await this.carveChild(task.id, { ...delegatedRequest(task, this.authority.depth), ...this.budgetLeft(task, tree) }, reopening);
     if (!carved.ok) throw new Error(mandateRefusalText(carved.refusal));
-    const { mandate } = carved;
+    const { mandate, budget } = carved;
     // A change at any level above reaches the subtree at its next check (ADR-0056 M1).
     const authority: NodeAuthority = { depth: this.authority.depth + 1, mandate: () => heldMandate(mandate, [this.mandate()]) };
     const brief: SubplannerBrief = { protectedPaths: mandate.exclusions.protectedPaths, readOnly: task.readOnly === true };
     const placement = this.hostChild(task.id);
+    // Saved as it is seated: what a crash from here on leaves to reopen it by, or discard it (D17).
+    this.store.setTaskRunnerSessionId(task.id, placement.sessionId, this.store.resolveTaskRunner(task));
+    this.tryPersist();
+    const saved = reopening ? loadChildSession({ baseDir: this.stateRoot, rootSessionId: this.rootSessionId, sessionId: reopening }) : null;
     try {
-      return this.childSession({ task, cwd, placement, authority, brief, link }).asNode(mandate);
+      // Its run is tied to this path: moved, it would mint a new one and leave what it had landed behind, with its tasks still reading as done.
+      if (saved?.plan.isolation && saved.plan.isolation.run.workspaceRoot !== cwd) throw new Error(`Task "${task.title}" cannot reopen its child: its worktree has moved. Retry it fresh, which starts a new child.`);
+      const child = this.childSession({ task, cwd, placement, authority, brief, link });
+      if (saved) child.loadPlan(pickedUp(saved.plan), saved.meta.goal, cwd, { sessionId: placement.sessionId });
+      return child.asNode(mandate);
     } catch (err) {
-      await this.closeNode(placement.sessionId);
+      budget.tree.close(budget.path);
       throw err;
     }
+  }
+
+  /** What is left of a delegated task's budget, across every child it has had (ADR-0055 D15, ADR-0056 M10). Throws once nothing is. */
+  private budgetLeft(task: Task, tree: TreeLedger): Pick<MandateRequest, 'tokens' | 'wallClockMs'> {
+    const tokens = (task.budget?.tokens ?? 0) - tree.spentOn(this.nodePath, task.id);
+    if (tokens <= 0) throw new Error(`Task "${task.title}" has spent its budget of ${task.budget?.tokens ?? 0} tokens, so no child can start on it.`);
+    const clock = task.budget?.wallClockMs;
+    if (clock === undefined) return { tokens };
+    const wallClockMs = clock - (task.attemptUsage ?? []).reduce((total, attempt) => total + attempt.wallTimeMs, 0);
+    if (wallClockMs <= 0) throw new Error(`Task "${task.title}" has spent its time of ${clock} ms, so no child can start on it.`);
+    return { tokens, wallClockMs };
   }
 
   /** The child `sessionId` is gone: what it did not spend comes back here (ADR-0056 M5). */
   async closeNode(sessionId: string): Promise<void> {
     const node = (await this.ledger()).nodeOf(sessionId);
     if (node) node.tree.close(node.path);
+  }
+
+  /** A delegated task's next attempt is fresh: the child its last one left goes, whatever became of it (ADR-0055 D15). Its state stays under the root; what git could not let go throws, naming it, and the task still names the child. */
+  async discardChild({ id, runnerSessionId }: Readonly<Task>): Promise<void> {
+    // As the plan holds it now; a task an edit took out is only what it was.
+    const sessionId = this.store.get(id)?.runnerSessionId ?? runnerSessionId;
+    if (!sessionId) return;
+    await this.closeNode(sessionId);
+    const { refused } = await this.runs.discardChild({ baseDir: this.stateRoot, rootSessionId: this.rootSessionId, sessionId });
+    if (refused.length > 0) throw new Error(`The child run of its last attempt could not be discarded: ${refused.map(({ worktree, reason }) => `${worktree} (${reason})`).join(', ')}`);
+    if (this.store.get(id)?.runnerSessionId === sessionId) this.store.setTaskRunnerSessionId(id, undefined);
+  }
+
+  /** The run's own discard reaches no child: each is named only by what this run forgets (ADR-0055 D11). */
+  private async discardChildren(): Promise<void> {
+    for (const task of this.store.allTasks) if (task.type === 'delegated') await this.discardChild(task);
   }
 
   /** This session as its parent's attempt drives it. */
@@ -1777,11 +1849,24 @@ export class Session {
       heldSince: (since) => this.placement?.pool.heldSince(since) ?? 0,
       startPlanning: (goal) => this.startPlanning(goal),
       continueConversation: (text) => this.continueConversation(text),
+      goOn: (text, goal) => this.goOn(text, goal),
       state: () => this.nodeState(),
       takeReport: (report) => this.takeReport(report),
-      halt: () => this.halt(),
-      close: () => this.destroy(),
+      halt: () => this.stopSubtree(),
+      close: async () => {
+        this.destroy();
+        await this.departed;
+        this.budget?.tree.close(this.budget.path);
+      },
     };
+  }
+
+  /** Reopened (ADR-0055 D17): as Execute, so what failed is retried, and then its subplanner goes on. One whose plan never reached the disk plans its goal. */
+  private async goOn(text: string, goal: string): Promise<unknown> {
+    if (this.store.planTasks.length === 0) return this.startPlanning(goal);
+    const run = await this.execute({ command: 'run_plan' }, this.turnActor());
+    if (!run.ok) throw new Error(run.message);
+    return this.continueConversation(text);
   }
 
   private get taskLogReader(): TaskLogReader {
@@ -1846,25 +1931,49 @@ export class Session {
       plannerBusy: this.isPlannerBusy || this.turns.turnRunning,
       wakeOwed: this.supervision.wakeOwed || this.plan?.plannerResend?.at !== undefined,
       stoppedFor: this.stoppedFor(),
-      plannerFailed: this.plan?.runSettings?.unsupervised !== undefined,
+      withdrawn: this.withdrawn(),
       startRefused: this.orchestrator.refusedStart,
       tasks: tasks.map((task) => ({ label: label(task), status: task.status })),
     };
   }
 
-  /** Why this node may do nothing more: a child has nobody else to wait for (ADR-0056 M5, M8, M10). */
-  private stoppedFor(): string | null {
-    if (this.outOfBudget) return this.outOfBudget;
-    if (!this.mandate().grants.has('control')) return 'what it may do was withdrawn above it';
-    if (this.plan?.runSettings && this.supervision.level !== 'act') return 'its loop guard stopped its subplanner';
+  /** Why this node stops now: a child has nobody else to wait for (ADR-0056 M5, M8). */
+  private stoppedFor(): NodeEnd | null {
+    if (this.outOfBudget) return { why: this.outOfBudget, ends: 'blocked' };
+    const settings = this.plan?.runSettings;
+    if (settings?.unsupervised !== undefined) return { why: `its subplanner could not restart: ${settings.unsupervised}`, ends: 'failed' };
+    if (settings && this.supervision.level !== 'act') return { why: 'its loop guard stopped its subplanner', ends: 'blocked' };
     return null;
   }
 
-  /** End this node's run and its planner turn, its children first, for a parent that waits on it. */
-  private async halt(): Promise<void> {
+  /** Why nothing may start here, what is in flight finishing first (ADR-0056 M10). */
+  private withdrawn(): string | null {
+    return this.mandate().grants.has('control') ? null : 'what it may do was withdrawn above it';
+  }
+
+  /** A Stop stands at this node or above it, or its budget has stopped it (ADR-0055 D16, ADR-0056 M5). */
+  get underStop(): boolean {
+    return this.subplanner?.stopped() === true || this.outOfBudget !== null;
+  }
+
+  /** Why no claim and no planner turn may start at this node, read at every start as its own Stop generation is (ADR-0055 D16). */
+  nodeRefusal(): string | null {
+    if (!this.subplanner) return null;
+    if (this.underStop) return this.outOfBudget ?? 'A Stop stands at or above this node, so nothing starts here.';
+    return this.withdrawn();
+  }
+
+  /**
+   * Everything under this node stops, leaves first, its planner turn and any
+   * turn waiting included, and this resolves once it has all gone: with no
+   * timeout of its own, since a runner's grace is the runner's (ADR-0055 D16).
+   */
+  async stopSubtree(): Promise<void> {
     this.abortPlannerTurn();
-    if (this.orchestrator.isRunning || this.orchestrator.movesUnasked) this.stopRun();
+    if (this.stopOwed || this.orchestrator.movesUnasked) this.stopRun();
     await this.childPlans.stopEvery();
+    await this.orchestrator.woundDown();
+    await this.conversation.idle();
   }
 
   /**
@@ -2290,6 +2399,8 @@ export class Session {
     const reason = plannerNotReadyFor(this.config, (runner) => recordedRunnerAuth(runner, this.workspace));
     if (reason) throw new PlannerNotReadyError(reason);
     // A node with no turn left cannot say so itself (ADR-0056 M5).
+    const stopped = this.nodeRefusal();
+    if (stopped) throw new Error(stopped);
     const refused = this.budget?.turnRefusal();
     if (refused) {
       this.budget?.stop(refused);
@@ -3184,7 +3295,10 @@ export class Session {
   /** Remove the run's worktrees and task branches; keep its integration branch to review or merge. */
   async cleanupRun(): Promise<void> {
     this.requireSettledRun();
-    await this.withSave(() => this.runs.cleanup());
+    await this.withSave(async () => {
+      await this.discardChildren();
+      await this.runs.cleanup();
+    });
   }
 
   /**
@@ -3194,7 +3308,10 @@ export class Session {
    */
   async discardRun(): Promise<void> {
     this.requireSettledRun();
-    await this.withSave(() => this.runs.discard());
+    await this.withSave(async () => {
+      await this.discardChildren();
+      await this.runs.discard();
+    });
     this.announceClosed();
   }
 
@@ -3495,8 +3612,21 @@ export class Session {
     this.events.closeStatus(this.plan);
     this.orchestrator.leaveTree();
     // Last: stopping the run above saves what it changed, which needs the lease.
+    // A child reads the lease through this Session (ADR-0055 D13), so with one
+    // still stopping it goes only once that child has: read as free, the tree
+    // could be taken from under what it still writes.
+    if (this.childPlans.activeCount === 0) this.letLeaseGo();
+    else this.departed = this.childPlans.stopEvery().catch(() => undefined).then(() => this.letLeaseGo());
+  }
+
+  private letLeaseGo(): void {
     this.lease.release();
     this.leaseReleased = true;
+  }
+
+  /** Destroyed, with everything under it gone and its lease let go. */
+  get gone(): Promise<void> {
+    return this.departed;
   }
 
   /**

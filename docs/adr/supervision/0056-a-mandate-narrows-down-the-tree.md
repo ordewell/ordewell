@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0001", "0008", "0022", "0029", "0030", "0035", "0036", "0037", "0053"]
-note: "Settles #23, #92 and #112 as far as subplanners need. Built: M1 to M10. Not built: D16's subtree stop, which a child's stop and a budget stop wait on. A flat run does not change."
+note: "Settles #23, #92 and #112 as far as subplanners need. Built: M1 to M10 in core. Not built: a surface's raise: the inbox's Approve takes one in core, and no surface sends it while ADR-0055 D21 holds delegation back. A flat run does not change."
 ---
 
 # 0056 — A mandate says what a node may do without a person, and what it can hand on only narrows down the tree
@@ -55,7 +55,9 @@ Judgment stays the planner's.
   }
   ```
 
-  A child's is saved with its plan, as it was given. The root's is derived on each
+  A child's is carved from its delegated task's request each time that child opens,
+  and held in memory: a reopened one is narrowed afresh, so it holds no more than its
+  parent can hand on now. The root's is derived on each
   read by `rootMandate` and never saved. It reads each value where it lives today: the
   supervisor's level from the plan's `runSettings`, the run's own copy
   ([ADR-0030](0030-global-run-settings.md)), where a guard or a failure lowers it and
@@ -183,7 +185,11 @@ Judgment stays the planner's.
   - When a child ends, on confirmed close, what it did not spend returns to its parent,
     and goes no further: a sibling gets it only by its parent's next carve. Its parent
     is charged what it spent, and what still arrives from a runner winding down goes to
-    the nearest node still open.
+    the nearest node still open. Every end closes it: its verdict, a Stop, a refused
+    open and its parent going. A crash cannot, so what a crash left open closes at the
+    next carve of its task, or of any task once its own has left the plan. A root's
+    ledger shuts only once its children have gone, so what they still spend, and their
+    close, reach the log.
   - A child that needs more asks with a checkpoint. A raise is `answer_checkpoint` with
     `raiseTokens`, or the same on the inbox's Approve, carved at the call from what the
     parent has left, and recorded as a budget event ([ADR-0058](0058-a-tree-holds-many-nodes-and-few-live-sessions.md) S3)
@@ -283,7 +289,8 @@ Judgment stays the planner's.
   - ADR-0029's "the run never depends on the supervisor" holds at the root, where a person
     remains. A child has nobody else. A loop guard that would lower a root to Watch ends a
     subplanner `blocked`, and one whose planner fails its restart ends the child `failed`,
-    its tasks stopped first. A Continue picks either up.
+    its tasks stopped first: the first says it may do nothing more, the second that
+    something broke. A Continue picks either up, Act again.
 - **Outward effects (M9).** No ops task runs below the root (ADR-0055 D2). A child's
   script task runs by this rule whether its plan holds it or `run_script` added it.
   Without the `effect` grant it runs sealed, as a sealed check does (ADR-0055 D8):
@@ -306,7 +313,10 @@ Judgment stays the planner's.
   levels is twenty-seven times the work. Budgets bound that, and each node keeps its own
   loop guards (ADR-0029), so a parent's retry of a delegated task, a Continue
   (ADR-0055 D17) or a fresh retry (D15), spends what is left, and no retry mints
-  budget. A provider's error is another thing, and only one layer retries it
+  budget: what every child of that task spent, closed ones included, comes off its
+  tokens, and the time its attempts took comes off its clock, which a crash's last
+  attempt did not record. One with nothing left is refused, `blocked`, naming what it
+  spent. A provider's error is another thing, and only one layer retries it
   ([ADR-0058](0058-a-tree-holds-many-nodes-and-few-live-sessions.md) S5). The user can
   narrow or revoke at the root, and that holds for the subtree at once, by M1: a start
   under a lost grant is refused at its next check, which for a child's attempt is
@@ -314,7 +324,8 @@ Judgment stays the planner's.
   delegation off empties the root's `grantable`, so a saved child loses its grants,
   the floor with them: the floor binds `narrow`, which writes a new child, and not
   M1's reading. Nothing in the subtree starts, no new turn included, its work in flight
-  finishes, and code then ends each child `blocked` with a derived report.
+  finishes, and code then ends each child `blocked` with a derived report. So a lost
+  `control` is no stop: nothing is cut short, as a Stop or a spent budget cuts it.
 
 ## Testing decisions
 
@@ -410,6 +421,7 @@ Judgment stays the planner's.
 - 2026-10-31 — implemented in part: `Mandate`, `rootMandate`, `narrow`, the seam, the paths around it and a child's tool list, on a faked child, and the delegation setting (ADR-0055 D21). Built closest to the text where it could not hold: an automatic merge and `{ kind: 'autorun' }` read their grants below the root only, since Off and Watch hold neither and a flat run does not change; `PlanChangeCheck` reads `research` too; a request names the level narrowing.
 - 2026-10-31 — a subplanner's starts take the supervisor's authority as its report turns do, so a run it opens carries on rather than starting supervision afresh from a user's settings.
 - 2026-10-31 — M5's ledger implemented in `TreeLedger`, rebuilt from the tree's log. Built closest to the text where it could not hold: spend is checked in `startRefusal`; a script holds nothing; an attempt's overrun takes its children's room, and a node stops at what that leaves of `limit`, not at `limit`, or its own work could spend what its children hold; ready work refused with nothing live stops the node too.
+- 2026-11-01 — M10 and M5's stop implemented: a lost `control` refuses at the claim and the turn gate and lets what is in flight finish, where it had stopped it; a budget stop reaches the subtree; a Continue and a fresh retry carve what the task has left, so no retry mints budget; a child's mandate is carved as it opens and not saved; a planner that fails its restart ends the child `failed`, as M8 says, where it had read `blocked`.
 - 2026-11-01 — a child runs under its mandate: `delegate` and D19's limits are held as a change is written, nobody below the root may allow a runner's request, a child's script runs sealed without `effect`, and a child that may do nothing more ends `blocked` with a derived report. Wall-clock time runs from the child's start: it does not stop yet for a usage limit.
 - 2026-11-01 — M8's questions, `raiseTokens` and a child's wake on a refused start implemented, what a refused start ends in rewritten from a stop to a wake, a wall clock that stops for a tree's usage limits, and a body `effect` does not cover runs sealed. A denied runner request rides along in the next run update.
 - 2026-11-01 — a subplanner's harness subagents are withheld without `research`, per runner, and its prompt names none; M7's paths reach its report; a subtree's task runners load `minimal` unless the settings file says otherwise.
