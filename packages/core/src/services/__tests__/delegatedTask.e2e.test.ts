@@ -12,6 +12,7 @@ import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import type { Session } from '../createSession';
 import type { IAiService } from '../AiService';
 import type { IFileSystem, OwnSealedRuns, TaskShell, ToolOutcome } from '../../interfaces/IFileSystem';
+import type { IApproval } from '../../interfaces/IApproval';
 import type { IRunner } from '../../interfaces/IRunner';
 import type { IWorktreeIsolation } from '../../interfaces/IWorktreeIsolation';
 import type { PlannerToolHandler } from '../mcp';
@@ -1308,6 +1309,19 @@ describe('what ends a child with nobody to ask (ADR-0056 M3, M8, M10)', () => {
     await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
     expect(asked.session?.answers[0]?.decision).toMatchObject({ decision: 'deny' });
     expect(planner.asked[1]).toContain('denied');
+    parent.destroy();
+  });
+
+  it('refuses what its shell would ask, so it runs sealed: nobody could answer, and the turn would wait out the clock', async () => {
+    const policies: IApproval[] = [];
+    const fsAdapter = { ...fakeFs(), setApproval: (policy: IApproval) => { policies.push(policy); } };
+    const { parent } = tree([SUBMIT([childTask('a', 1)]), DONE], { fsAdapter });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+
+    const subplanners = policies.at(-1)!;
+    const asked = subplanners.request({ kind: 'shell_command', subject: 'sleep 90', scope: 'sleep' });
+    expect(await Promise.race([asked, new Promise((resolve) => setTimeout(() => resolve('still waiting on a person'), 200))])).toBe(false);
     parent.destroy();
   });
 
