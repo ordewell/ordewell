@@ -55,12 +55,22 @@ function holdPlanInView(after: TuiState): TuiState {
 }
 
 export function reduce(state: TuiState, action: Action): Step {
-  const result = reduceAction(state, action);
+  const result = nextTip(state, reduceAction(state, action));
   // A notice normally sets `scroll` to 0, which `holdReadingPlace` leaves
   // alone; one that holds the reader's place grows the content below them
   // exactly as live output does.
   if (action.type !== 'sessionMessage' && action.type !== 'compacted' && action.type !== 'taskLog' && action.type !== 'notice') return result;
   return { ...result, state: holdPlanInView(holdReadingPlace(state, result.state)) };
+}
+
+/**
+ * An emptied editor brings the next composer tip (#137). Moving it on here,
+ * once per emptying, keeps a tip still while the user reads it and leaves
+ * `render` a function of state (ADR-0006).
+ */
+function nextTip(before: TuiState, result: Step): Step {
+  if (before.editor.text === '' || result.state.editor.text !== '') return result;
+  return { ...result, state: { ...result.state, composerTipSeq: result.state.composerTipSeq + 1 } };
 }
 
 function reduceAction(state: TuiState, action: Action): Step {

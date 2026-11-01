@@ -391,6 +391,8 @@ export interface ForcedPrompt {
 
 export interface TuiState {
   editor: EditorState;
+  /** How many times the editor has been emptied, which picks the empty planner composer's tip (#137). */
+  composerTipSeq: number;
   /**
    * The chat pane's content: core's display blocks (#51), fed every planner
    * `SessionMessage` and every line the TUI adds itself as a `LocalEntry`.
@@ -732,6 +734,7 @@ function seedRun(overrides: Partial<TuiState>): RunView {
 export function initialState(overrides: Partial<TuiState> = {}): TuiState {
   return {
     editor: emptyEditor(),
+    composerTipSeq: 0,
     conversation: EMPTY_CONVERSATION,
     accountLimits: [],
     servedModels: {},

@@ -282,3 +282,58 @@ describe('slash token highlight', () => {
   });
 });
 
+describe('the empty composer tip (#137)', () => {
+  const ALLOWLIST_TIP = 'Tip: Use /allowlist to limit which models the planner assigns per runner.';
+  const placeholder = () => (screen.getByRole('textbox') as HTMLTextAreaElement).placeholder;
+
+  it('shows the /allowlist tip in an empty composer that has no state of its own to say', () => {
+    renderInput();
+    expect(placeholder()).toBe(ALLOWLIST_TIP);
+  });
+
+  it('gives way to a placeholder that says what is happening, and to a disabled reason', () => {
+    const { unmount } = renderInput({ placeholder: 'Queue a message for when the planner is done...' });
+    expect(placeholder()).toBe('Queue a message for when the planner is done...');
+    unmount();
+    renderInput({ disabled: true, disabledReason: 'Sign the planner in first' });
+    expect(placeholder()).toBe('Sign the planner in first');
+  });
+
+  it('names the input for assistive technology without relying on the placeholder', () => {
+    renderInput();
+    expect(screen.getByRole('textbox', { name: 'Message the planner' })).toBeTruthy();
+  });
+
+  it('is never part of the text: typed or pasted text is exactly what is there, and an empty Enter sends nothing', () => {
+    const { onSend } = renderInput();
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+    expect(onSend).not.toHaveBeenCalled();
+    expect((type('add a login route') as HTMLTextAreaElement).value).toBe('add a login route');
+    // A paste reaches the textarea as one change carrying the pasted text.
+    expect((type('pasted\nfrom elsewhere') as HTMLTextAreaElement).value).toBe('pasted\nfrom elsewhere');
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+    expect(onSend).toHaveBeenCalledWith('pasted\nfrom elsewhere');
+  });
+
+  it('holds still while the composer stays empty, and moves on once the text has been cleared', () => {
+    const { rerender, onSend, onStop } = renderInput();
+    rerender(<ChatInput onSend={onSend} onStop={onStop} disabled={false} />);
+    expect(placeholder()).toBe(ALLOWLIST_TIP);
+    type('x');
+    type('');
+    expect(placeholder()).toBe("Tip: Use /planner to pick the planner's harness, model and effort.");
+  });
+
+  it('only names commands this chat answers: never /runners, over a whole cycle', () => {
+    renderInput();
+    const seen = new Set<string>([placeholder()]);
+    for (let i = 0; i < 6; i++) {
+      type('x');
+      type('');
+      seen.add(placeholder());
+    }
+    expect(seen.size).toBe(4);
+    expect([...seen].every((tip) => tip.startsWith('Tip: '))).toBe(true);
+    expect([...seen].some((tip) => tip.includes('/runners'))).toBe(false);
+  });
+});
