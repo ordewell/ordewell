@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
+import { Landing } from '../Landing';
 import { LeaseHost } from '../sessionLease';
 import { resolveDefaultMode } from '../ModeResolver';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
@@ -169,6 +170,9 @@ function heldChecks() {
 const DONE: Turn = async (tools) => {
   const reply = await tools.taskComplete!({ status: 'done', summary: 'Both files are written.', commit: { subject: 'Write a and b' } }, { signal: new AbortController().signal });
   if (reply.isError) throw new Error(reply.text);
+};
+const CALL_BLOCKED: Turn = async (tools) => {
+  await tools.taskComplete!({ status: 'blocked', summary: 'Not now.', reason: 'Nothing is ready.' }, { signal: new AbortController().signal });
 };
 
 interface Tree {
@@ -814,6 +818,33 @@ describe('the merge hold (ADR-0055 D9)', () => {
     parent.destroy();
   });
 
+  it('asks the user\'s own Merge all to confirm first, naming the check, and merges once told to', async () => {
+    const { root, parent } = tree([SUBMIT([childTask('a', 1)]), DONE], { runner: failingCheck(), tasks: [delegated(), readOnlyCheck()] });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('failed'), { timeout: 20_000 });
+
+    const asked = await parent.execute({ command: 'merge_all' }, { kind: 'user' });
+    expect(asked).toMatchObject({
+      ok: false, outcome: 'refused',
+      message: expect.stringContaining('This merges work no check has passed: #2 "Check the subtree" has not'),
+      payload: { kind: 'merge_hold', checks: ['#2 "Check the subtree"'] },
+    });
+    expect(changed(root)).not.toContain('a.txt');
+
+    expect(await parent.execute({ command: 'merge_all', pastChecks: true }, { kind: 'user' })).toMatchObject({ ok: true, payload: { kind: 'merge' } });
+    expect(changed(root)).toContain('a.txt');
+    parent.destroy();
+  });
+
+  it('never lets a supervisor or a planner past a check, whatever it carries', async () => {
+    const { root, parent } = tree([SUBMIT([childTask('a', 1)]), DONE], { runner: failingCheck(), tasks: [delegated(), readOnlyCheck()] });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('failed'), { timeout: 20_000 });
+    expect(await parent.execute({ command: 'merge_all', pastChecks: true }, { kind: 'supervisor', level: 'act' })).toMatchObject({ ok: false, message: expect.stringContaining('Check the subtree') });
+    expect(changed(root)).not.toContain('a.txt');
+    parent.destroy();
+  });
+
   it('is not held by a delegated task that has not landed: a sibling\'s work merges', async () => {
     const { root, parent } = tree([NOTHING_THEN_BLOCKED], {
       tasks: [delegated(), readOnlyCheck(), createTask({ id: 's', order: 3, title: 'Sibling', prompt: 'sibling' })],
@@ -838,6 +869,54 @@ describe('the merge hold (ADR-0055 D9)', () => {
   });
 });
 
+describe('a delegated task started alone (ADR-0055 D8, D9)', () => {
+  const readOnlyCheck = (over: Partial<Task> = {}) => check({ taskMode: 'plan', ...over });
+
+  it('starts its check by itself, and closes its run only after it', async () => {
+    const { parent } = tree([SUBMIT([childTask('a', 1)]), DONE], { tasks: [delegated(), readOnlyCheck()] });
+    expect(await parent.execute({ command: 'run_task', task: 'd' }, { kind: 'user' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('completed'), { timeout: 20_000 });
+    parent.destroy();
+  });
+
+  it('does the same after a fresh retry', async () => {
+    const { parent } = tree([SUBMIT([childTask('a', 1)]), CALL_BLOCKED, SUBMIT([childTask('a', 1)]), DONE], { tasks: [delegated(), readOnlyCheck()] });
+    await parent.execute({ command: 'run_task', task: 'd' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('failed'), { timeout: 20_000 });
+    expect(statusOf(parent, 'c')).toBe('pending');
+    expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'fresh' }, { kind: 'user' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('completed'), { timeout: 20_000 });
+    parent.destroy();
+  });
+
+  it('leaves a check that waits on more than its delegated task, and the run closes: nothing is moving towards it', async () => {
+    const sibling = createTask({ id: 's', order: 3, title: 'Sibling', prompt: 'sibling' });
+    const { parent } = tree([SUBMIT([childTask('a', 1)]), DONE], { tasks: [delegated(), readOnlyCheck({ dependencies: ['d', 's'] }), sibling] });
+    await parent.execute({ command: 'run_task', task: 'd' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    await vi.waitFor(() => expect(parent.isExecuting || parent.startsPending).toBe(false), { timeout: 20_000 });
+    expect(statusOf(parent, 'c')).toBe('pending');
+    parent.destroy();
+  });
+
+  it('starts nothing after a Stop that comes as its work lands', async () => {
+    const land = Landing.prototype.landPassed;
+    const landing = vi.spyOn(Landing.prototype, 'landPassed').mockImplementation(async function (this: Landing, ...args) {
+      const landed = await land.apply(this, args);
+      if (args[0].id === 'd') parent.stopExecution();
+      return landed;
+    });
+    const { parent } = tree([SUBMIT([childTask('a', 1)]), DONE], { tasks: [delegated(), readOnlyCheck()] });
+    await parent.execute({ command: 'run_task', task: 'd' }, { kind: 'user' });
+    await vi.waitFor(() => expect(landing.mock.calls.some(([task]) => task.id === 'd')).toBe(true), { timeout: 20_000 });
+    await vi.waitFor(() => expect(parent.isExecuting || parent.startsPending).toBe(false), { timeout: 20_000 });
+    expect(statusOf(parent, 'c')).toBe('pending');
+    landing.mockRestore();
+    parent.destroy();
+  });
+});
+
 describe('a new result is checked again (ADR-0055 D8)', () => {
   const readOnlyCheck = () => check({ taskMode: 'plan' });
   const task = (session: Session, id: string) => session.planTasks.find((t) => t.id === id);
@@ -852,8 +931,7 @@ describe('a new result is checked again (ADR-0055 D8)', () => {
     expect(task(parent, 'c')?.verdict).toBeUndefined();
     expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'fresh' }, { kind: 'user' })).toMatchObject({ ok: true });
     await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
-    // A retry outside a run starts only what it names, here as for any task: Execute runs what is left.
-    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    // Its check is the one thing a retry outside a run starts beside what it names.
     await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('completed'), { timeout: 20_000 });
     expect(task(parent, 'c')?.verdict?.decidedAt).not.toBe(first?.decidedAt);
     parent.destroy();

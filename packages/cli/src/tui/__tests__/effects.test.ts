@@ -2308,6 +2308,38 @@ describe('worktree isolation', () => {
     expect(messageOf(h.actions, 'notice')).toBeUndefined();
   });
 
+  describe('a Merge all past a check that has not passed (ADR-0055 D9)', () => {
+    const ASKED = 'This merges work no check has passed: #2 "Check the subtree" has not.';
+
+    it('turns the daemon\'s question into one for the user, not a failure', async () => {
+      const h = harness({ mergeRun: vi.fn().mockRejectedValue(new DaemonError(ASKED, 409, 'merge_past_check')) } as Partial<OrdewellApi>);
+
+      await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration' }, h.deps);
+
+      expect(h.actions.filter((a) => a.type === 'failed')).toEqual([]);
+      expect(h.actions).toContainEqual({ type: 'mergeHeld', message: ASKED, sessionId: 's1' });
+    });
+
+    it('sends the yes with the request once the user gave it', async () => {
+      const mergeRun = vi.fn().mockResolvedValue({ outcome: 'merged' });
+      const h = harness({ mergeRun } as Partial<OrdewellApi>);
+
+      await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration', pastChecks: true }, h.deps);
+
+      expect(mergeRun).toHaveBeenCalledWith('s1', { pastChecks: true });
+      expect(messageOf(h.actions, 'notice')).toMatch(/Merged ordewell\/r1\/integration/);
+    });
+
+    it('still reports any other refusal as a failure', async () => {
+      const h = harness({ mergeRun: vi.fn().mockRejectedValue(new DaemonError('The run is still running', 400, 'refused')) } as Partial<OrdewellApi>);
+
+      await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration' }, h.deps);
+
+      expect(messageOf(h.actions, 'failed')).toContain('The run is still running');
+      expect(h.actions.some((a) => a.type === 'mergeHeld')).toBe(false);
+    });
+  });
+
   it('says which repos a Merge all had landed when it stopped part-way', async () => {
     const h = harness({ mergeRun: vi.fn().mockResolvedValue({ outcome: 'conflict', repo: 'web', files: ['w.txt'], landed: ['api'] }) } as Partial<OrdewellApi>);
 

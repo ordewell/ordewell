@@ -14,6 +14,7 @@ function child(wallClockMs: number) {
     wallClockMs,
     startPlanning: () => Promise.resolve(),
     continueConversation: () => Promise.resolve(),
+    hear: () => undefined,
     goOn: () => Promise.resolve(),
     state: () => state,
     halt: vi.fn(async () => { state.live = false; }),
@@ -22,7 +23,7 @@ function child(wallClockMs: number) {
     takeReport: (report) => ({ ok: true, handoff: report }),
   };
   const links: SubplannerLink[] = [];
-  const host: ChildHost = { openChild: async (_task, _cwd, link) => { links.push(link); return node; }, changedPaths: async () => [], stopped: () => false, passUp: () => undefined };
+  const host: ChildHost = { openChild: async (_task, _cwd, link) => { links.push(link); return node; }, changedPaths: async () => [], stopped: () => false, passUp: () => undefined, moved: () => undefined };
   return { held, node, state, links, runner: new ChildPlanRunner(host) };
 }
 
@@ -33,6 +34,35 @@ async function started(runner: ChildPlanRunner) {
   await vi.advanceTimersByTimeAsync(1);
   return { reports };
 }
+
+describe('what reaches a subplanner in a run (ADR-0057 R6)', () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setImmediate', 'Date'] }); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  async function running() {
+    const built = child(60_000);
+    const hear = vi.fn();
+    const go = vi.fn(() => Promise.resolve());
+    Object.assign(built.node, { hear, continueConversation: go });
+    const session = await built.runner.spawn({ taskId: 'd', runner: 'claude-code', prompt: '', cwd: '/w', delegated: createTask({ id: 'd', order: 1, title: 'D', type: 'delegated', goal: 'g' }) } as never);
+    await vi.advanceTimersByTimeAsync(1);
+    return { session, hear, go };
+  }
+
+  it('holds Ordewell\'s own line for its next turn, and opens none', async () => {
+    const { session, hear, go } = await running();
+    session.sendMessage('moved', 'ordewell');
+    expect(hear).toHaveBeenCalledWith('moved');
+    expect(go).not.toHaveBeenCalled();
+  });
+
+  it('opens a turn on a message from the plan above', async () => {
+    const { session, hear, go } = await running();
+    session.sendMessage('go on');
+    expect(go).toHaveBeenCalledWith('go on');
+    expect(hear).not.toHaveBeenCalled();
+  });
+});
 
 describe('a child stopped from above or below (ADR-0056 M8)', () => {
   beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setImmediate', 'Date'] }); });

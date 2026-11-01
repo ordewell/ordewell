@@ -4,8 +4,6 @@ status: accepted
 
 # 0022 — The Ordewell MCP server: task and planner tools behind per-caller tokens
 
-*Pending:* [ADR-0057](../supervision/0057-information-moves-by-reference.md) — the task tools gain `post` with a board.
-
 ## Problem
 
 Task completion and checkpoints need signals bound to the current attempt,
@@ -29,11 +27,10 @@ text markers have no role.
 
 | token | bound to | tools |
 |---|---|---|
-| **Task token** | one session, one task, one attempt generation | `task_complete({status: 'done' \| 'blocked' \| 'failed', summary, findings?, artifacts?, report?, reason?})`, `checkpoint({question})`, `read({task, attempt?, include_report?})`, and for a change task `apply_patch({task, attempt?})`, which merges a saved patch into its worktree ([ADR-0050](../planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md)); a read-only task's also `run_command({command})`, its only shell ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)), `save_patch({})`, which keeps what that shell changed as a patch ([ADR-0050](../planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md)), and `fetch({url})` and `web_search({query})`, its only web reads, decided by the web-read policy without asking anyone ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md), [ADR-0027](../planner-envelope/0027-web-reads-in-the-planner-envelope.md)) |
+| **Task token** | one session, one task, one attempt generation | `task_complete({status: 'done' \| 'blocked' \| 'failed', summary, findings?, artifacts?, report?, reason?})`, `checkpoint({question})`, `read({task, attempt?, include_report?})`, and for a change task `apply_patch({task, attempt?})`, which merges a saved patch into its worktree ([ADR-0050](../planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md)); a read-only task's also `run_command({command})`, its only shell ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)), `save_patch({})`, which keeps what that shell changed as a patch ([ADR-0050](../planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md)), and `fetch({url})` and `web_search({query})`, its only web reads, decided by the web-read policy without asking anyone ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md), [ADR-0027](../planner-envelope/0027-web-reads-in-the-planner-envelope.md)); where its plan has a board, `post({type, title, key?, value?, detail?, files?})` too, and a flat task's list does not change ([ADR-0057](../supervision/0057-information-moves-by-reference.md) R8, R11) |
 | **Planner token** | one session's planner conversation | `list_runners()`, `list_models({runner})`, `submit_plan({tasks})`, `edit_plan({ops})`, `task_query({...})`, `task_output({task, attempt?, kinds?, ...})`, `task_diff({task, repo?, path?, ...})`, `load_skill({name})` (a model-invocable planner skill's instructions; [ADR-0024](../planner/0024-unified-skills.md)) |
 
-#37's runner-facing tools (`board_post`, `report`, …) join the task side later,
-on the same mechanism.
+A runner-facing tool joins the task side on the same mechanism.
 
 ## Key properties
 
@@ -358,4 +355,5 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-11-01 — a subplanner's token serves `task_complete` and `checkpoint` (ADR-0055 D5), and `submit_plan` takes a delegated task only where one may be written.
 - 2026-11-01 — V5: a subplanner's `checkpoint` answers at once and parks it, and `answer_checkpoint` takes `raiseTokens` on a delegating planner's list (ADR-0056 M5, M8). A child's tool list is filtered by grants and fixed at its start, as ADR-0056 M6 says.
 - 2026-11-01 — the task tools read with `read`, `read_task` an alias at the call, a planner that may delegate lists it too, a server tool may carry an alias no list names, and `task_complete` takes `promote` and `open` on a subplanner's token alone ([ADR-0057](../supervision/0057-information-moves-by-reference.md) R2, R11).
+- 2026-11-01 — a token whose plan has a board lists `post`, and a planner that may delegate or sits under a delegated task lists it with `read` ([ADR-0057](../supervision/0057-information-moves-by-reference.md) R8, R11).
 - 2026-11-01 — a runner in a container reaches this server through its lease's relay, on its own loopback at the same port, so T1 and T2 hold unchanged ([ADR-0059](../isolation/0059-an-execution-lease-reserves-in-the-claim-and-opens-after-it.md) L6).

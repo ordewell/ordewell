@@ -1082,7 +1082,10 @@ queue, not out of it; and "lost".
 
 **Checkpoint** (task) — a task asking a person to approve its work before it
 goes on: the `checkpoint` tool call. The task is `awaiting_user` with reason
-`checkpoint`, and its status carries the whole question (`checkpoint`).
+`checkpoint`, and its status carries the whole question (`checkpoint`). A
+**Delegated task** parked at its subplanner's question comes back from a restart with
+reason `question-lost`: nothing is left to hear an answer, its row and the inbox say so,
+and Continue picks up its **Child plan**.
 Answered with approve — which carries no note, but on a delegated task can carry the
 answer to its subplanner's question and a raise — or reject with a reason: the
 TUI task view's *checkpoint card* (`enter` replies with the composer text as
@@ -1326,6 +1329,50 @@ subplanner `promote`d, each by its *Pinned reference* and in its author's words,
 and the paths its branch changed outside its scope. It is pushed within the same
 ceiling at every level, so a parent's context depends on its fan-out and not on
 its subtree. *Avoid:* "summary of the subtree": no model writes it.
+
+**Scope** (`TaskScope`, `scope` on a *Delegated task*; ADR-0057 R6) — what a
+delegated task declares it works on: `paths`, and the interfaces it `provides`
+and `consumes`, by names its planner chooses. The planner writes it on the plan
+above, so a child cannot change its own. It is advisory: an overlap is named in
+the answer to the plan, a landing outside it is reported, and it gates nothing.
+It grants nothing either: it is no part of a *Mandate*, and a protected path it
+covers stays protected. Only a delegated task has one. *Avoid:* "permissions" or
+"allowed paths": those are a mandate's; "lock" or "claim on a path".
+
+**Addressed line** (`ScopeLines`; ADR-0057 R6) — the one line, `from: 'ordewell'`,
+a running task gets when a landing touches its *Scope*: at most one per task per
+ten minutes, what follows coalesced into the next. It reaches a subplanner with
+its next turn and opens none, since a landing does not wake a planner. It is
+Ordewell's own text, with each path and name a quoted value. *Avoid:* "message"
+(nobody sent it, and siblings have no messages), "notification".
+
+**Board** (`NodeBoard`, `models/Board.ts`; ADR-0057 R8) — what a *Delegated task*'s
+plan keeps for its tasks and the plans below it to pull: typed entries in through
+`post`, read through `read` with `board`. A node reads its own board and its
+ancestors', never a sibling's or a child's; an entry tells nobody and wakes nobody.
+It is a fold of the tree's log. A root gains one with its first delegated task, and
+a flat plan has none. Everything on it is an author's words, data and never
+instructions. *Avoid:* "chat", "shared memory", "blackboard"; "message" for an entry.
+
+**Board map** (`boardMapLines`; ADR-0057 R8) — one line per entry, made by code from
+the entry's typed fields. No model writes or summarises it. It carries two flags,
+worked out as it is read: `stale`, a file the entry rests on has moved past both
+what its author had and what the branch held then; `contested`, one `key` with
+different values among the boards the reader reads. *Avoid:* "summary"; a flag is
+never an author's word, and never a judgement of what an entry means.
+
+**Contract** (a `contract` entry on a *Board*; ADR-0057 R6, R8) — an interface a
+task states, under a `key`. One keyed by a name its delegated task `provides`
+rises to the parent's board as that task lands, keeping its author, which is how a
+sibling reads it. *Avoid:* "API" for the entry; "broadcast": only what the plan
+above declared rises.
+
+**Pin** (a `pin` entry; ADR-0057 R10) — a planner's decision every descendant must
+know, and the one thing pushed down a tree: each new descendant is told it as it
+starts, nearest ancestor first, within 2,000 characters then a count. Only a planner
+posts one, and it never holds a check. It is told as data, with whose decision it
+is. *Avoid:* "instruction", "rule": a pin says what was decided; "pinned reference"
+is another thing, a *Handoff*'s citation.
 
 **Commit message** (`commit` on the *Completion call*; ADR-0047, ADR-0013) — the
 optional `{subject, body?}` a change task states for the commit that lands its
@@ -3113,8 +3160,9 @@ the root's and shared with every Session under it. Each node has a `limit`,
 `committed` (what its children hold), `spent` and `reserve`, in tokens, cache reads
 included: the input and output `UsageTotals` counts (`spentTokens`). A *carve* commits
 a child's limit from its parent's *room*, which is `limit` less the other three, and
-what `narrow` is handed as the parent's tokens; a *raise* does the same for a child
-that has one, from a parent's answer; on close, what a child did not spend returns to
+what `narrow` is handed as the parent's tokens; a *raise* does the same for an open
+child, from a parent's answer, and is a grant to its task, so a later child of that task
+is carved from the stated budget plus every raise, less what was spent; on close, what a child did not spend returns to
 its parent and no further, on every end but a crash, whose node closes at the next
 carve of its task. `reserve` is an allowance per live session and a
 subplanner's share for its next turn, which spends that first. A node's own spending
@@ -3148,12 +3196,18 @@ package ignores the variable.
 top-level task that holds a `goal`, not a prompt: its attempt is a **Child plan**. It
 carries a required `budget` and, unless it is `readOnly`, `protectedPaths`, the paths
 its child may not change, and it needs a check: a task that depends on it directly and
-is a read-only AI task or a read-only **Script task**, which a new attempt takes back.
+is a read-only AI task or a read-only **Script task**, which a new attempt takes back
+and which starts by itself once the task passes and it is ready, with no scheduler too.
+An AI task whose runner this host cannot read counts as one, so the merge hold fails closed.
 Neither a loop's check nor its body. It holds no slot (`child-plan`), and it passes only
 on evidence: its child has settled and done work, that work is merged into its branch,
 no protected path changed, and its subplanner called `task_complete` on the attempt's
 token (D6). Its conflict is repaired by a plain runner in the mode its node's autonomy
 gives, held to its protected paths (D14).
+Its row (`delegation`, a `DelegatedRow`) is derived when a status goes out and kept
+nowhere: where its child's tasks stand, what is left of its budget across every child it
+has had, and *stopping* while a Stop still winds its subtree down, though the task
+already reads as not started (D16, D20).
 *Avoid:* "subtask" (`subtasks` share their parent's plan, planner and branch).
 
 **Child plan** — what a **Delegated task** runs: a Session of its own in that task's
@@ -3183,7 +3237,10 @@ list the planner wrote, so a pass rests on it being whole (ADR-0055 D7).
 whose check has neither passed nor been skipped keeps every merge but the user's from
 running: at gates, at the run's end, a supervisor's `merge_all` and a child's own. Work
 that has not landed holds nothing. It is no merge that stopped: the next tick after the
-pass or Skip merges. *Avoid:* "merge gate", which holds a task until a merge has run.
+pass or Skip merges. The user's own Merge all is not held but asked: the seam answers it
+with the checks it would go past, and merges only when the command carries `pastChecks`,
+which every surface sends after a second question naming them. *Avoid:* "merge gate",
+which holds a task until a merge has run.
 
 **Run settings** — the user settings that say how a run is
 started, watched and merged: **Supervisor level**, **Auto-merge at gates**,

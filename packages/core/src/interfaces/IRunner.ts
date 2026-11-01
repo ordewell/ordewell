@@ -1,5 +1,5 @@
 import type { AgentEvent, TaskRunnerConfig } from '../services/harness/AgentAdapter';
-import type { ApplyPatchArgs, CheckpointAnswer, McpToolReply, ReadTaskArgs, TaskCompleteArgs } from '../services/mcp/tools';
+import type { ApplyPatchArgs, CheckpointAnswer, McpToolReply, PostArgs, ReadTaskArgs, TaskCompleteArgs } from '../services/mcp/tools';
 import type { ApprovalDecision } from './IApproval';
 import type { Task, TaskSkillSnapshot, VerificationCheck } from '../models/Task';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
@@ -302,6 +302,8 @@ export interface IRunner {
      * and the session's task logs. Without one the call says it is not available.
      */
     readTask?: (args: ReadTaskArgs) => McpToolReply | Promise<McpToolReply>;
+    /** Answers the attempt's `post` calls (ADR-0057 R8). Given only where its plan has a board, which is what lists the tool. */
+    post?: (args: PostArgs) => McpToolReply | Promise<McpToolReply>;
     /**
      * Answers a read-only attempt's `save_patch` calls (ADR-0050): its shell
      * captures the worktree's changes and the attempt keeps them. Without one

@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0009", "0013", "0015", "0018", "0020", "0022", "0029", "0030", "0035", "0045", "0046", "0049", "0054"]
-note: "Settles #33. Built: D1 to D19 and D21, so a child plan runs end to end behind the build's switch, asks up a level, stops as a subtree and comes back on a Continue, its conflicts and merges with it. Not built: a subplanner's native resume, so a reopened one replays its Model context. D20's minimum is built: one row and its usage, a log of what its child's tasks become; a tree view, the row's live counts and D16's stopping row are later."
+note: "Settles #33. Built: D1 to D19 and D21, so a child plan runs end to end behind the build's switch, asks up a level, stops as a subtree and comes back on a Continue, its conflicts and merges with it. Not built: a subplanner's native resume, so a reopened one replays its Model context. D20 is built for the TUI and VS Code: a row with its goal, budget left and live counts, D16's stopping row, a log of what its child's tasks become, and a report's open and promoted findings; a tree view is later."
 ---
 
 # 0055 — A delegated task is a child plan behind the runner seam
@@ -62,7 +62,7 @@ the child cannot reach follows it in the parent's plan.**
   | `assignedRunner`, `assignedModel` | the subplanner's, resolved as any task's are ([ADR-0003](../routing/0003-per-runner-model-allowlist.md), [ADR-0041](../routing/0041-a-tasks-model-follows-the-runners-own-switch.md)) |
   | `budget` | required: tokens, and optionally wall-clock time (ADR-0056 M5) |
   | `protectedPaths` | required unless `readOnly`: paths the child may not change (D7) |
-  | `grants`, `scope` | optional: the grants it asks for past the floor (ADR-0056 M2, M4), a declared scope (ADR-0057 R6) |
+  | `grants`, `scope` | optional: the grants it asks for past the floor (ADR-0056 M2, M4), a declared scope, advisory and granting nothing (ADR-0057 R6) |
   | `readOnly` | optional: it answers a question and lands nothing ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)), so D6 asks for no change, D7 for no paths and D8 for a read-only AI task as its check |
 
   It has no subtasks and is never one: it is top-level, as a script task is, and
@@ -172,6 +172,17 @@ the child cannot reach follows it in the parent's plan.**
   marked `readOnly`. What follows from the existing rules:
   - The check runs once the delegated task has landed on the parent's integration
     branch, so a dependent sees its work. It cannot hold that landing back.
+  - **A check starts by itself.** When a delegated task passes and its check is ready,
+    the check starts, on every route that started the task: Execute, a `run_task`, a
+    retry or a Continue. A scheduler does this anyway. With none, the passing attempt
+    carries the check on, as a loop's rounds are carried on (ADR-0045 L5): the run
+    stays open for it alone, and closes when it ends, so nothing reads as finished
+    with the work unjudged. It is read off the plan as it stands, so a check behind a
+    failure, or behind a task nothing is running, is not carried and holds nothing open.
+    A Stop withdraws it, and a restart forgets it, since loading starts nothing (D17).
+    It takes the start rule whole. A check outside the user's approval record is not
+    started: a start consents to the task it names and a script's consent is to its body
+    (ADR-0035), so it waits in the inbox, and the run says so and stays open for the answer.
   - **A `readOnly` delegated task's check reads its handoff.** It never lands, and
     its worktree and branch go when it passes (ADR-0046), so the tip a dependent is
     cut from holds none of its work, and a script there would pass or fail on the
@@ -219,6 +230,14 @@ the child cannot reach follows it in the parent's plan.**
   - A failed check blocks its dependents and wakes the planner, as any failure
     does. A model is refused `skip_task` on it: that would let the work past its
     only check. The user's Skip stands.
+  - **A check this host cannot read is still a check.** What makes an AI task a check
+    is its mode, read from its runner's manifest. A runner switched off since, removed
+    or absent from this machine leaves that unreadable, so every AI task directly on the
+    delegated task and on such a runner counts as one: it holds the merge (D9), may not be
+    skipped by a model, is taken back and refuses a retry beside it. That fails closed, and
+    a change task on such a runner holds too, until the user skips it or merges. Only a
+    plan being written is held to the modes it can read: a task nothing can read is no
+    check to accept one on.
   - **Reach.** The child's tools read its own plan and its ancestors' boards, never
     the parent's plan, so nothing hands it the check, and its plan's prompts do
     not name one. That is scope, not a boundary: a runner in a write-capable mode
@@ -229,14 +248,19 @@ the child cannot reach follows it in the parent's plan.**
   the run's end, a supervisor's `merge_all` and a child's own merge are held while
   any delegated task of that plan has landed work not yet merged, read as ADR-0054
   reads both, and a check that has neither passed nor been skipped, which only the
-  user can do, and they say why. The user's Merge all is not held, and its
-  confirmation names the check. Without this a check that fails would stop nothing:
+  user can do, and they say why. The user's Merge all is not held, but it asks: the
+  seam answers it with the checks it would go past, named as the plan names them, and
+  merges only when the command carries `pastChecks`. Every surface asks that second
+  question and sends the yes; a supervisor or a planner is refused whatever it carries. Without this a check that fails would stop nothing:
   its work is already on the branch the merge reads. Work that has not landed holds
   nothing, so a check waiting on its delegated task, or blocked behind one that
   failed, stays out of every other task's merge, and a `readOnly` task, which never
   lands, holds nothing. A held merge is no merge that stopped: the hold ends with
   the check's pass or Skip, and the next tick merges, a run that closed with its
   merge held included, which owes that merge rather than handing it to the user.
+  A delegated task started alone leaves no such hold behind it unasked: its ready check
+  starts by itself (D8), so the run closes after the check and merges as its settings
+  say. The hold fails closed: a check whose runner cannot be read here holds as any does (D8).
 
 ### Isolation
 
@@ -373,7 +397,11 @@ the child cannot reach follows it in the parent's plan.**
   subplanner replays its Model context with the message: a planner's native session
   is held in memory and saved nowhere, so a new process has none to resume. A child
   whose plan never reached the disk plans its goal again, and one with nothing left to
-  run goes straight to that turn: it may owe only its report. Its node closed as it ended,
+  run goes straight to that turn: it may owe only its report. A delegated task parked
+  at its subplanner's question reloads waiting, with no answer left to wait for: what
+  would hear one is held in memory, so the question is lost. It says so, in its row
+  (`question-lost`) and in the inbox, which quotes the question, saved beside the wait for
+  this alone, and offers Continue, since its child and its work are still there. Its node closed as it ended,
   or a crash left it open, so a Continue carves again, under the same child, from
   what the task has left, after `Session.ledger()` has answered. The task's worktree
   is restored in place, on the same path, read-only or not, since a child's run is
@@ -435,16 +463,24 @@ the child cannot reach follows it in the parent's plan.**
 
   A root plan has no task limit, so a flat run does not change.
 - **Surfaces (D20).** The root shows a delegated task as one row, of `kind`
-  `delegated`, with derived counts in its report, and its log shows the child's
-  activity, one line each time a child task's status changes, projected into its task
-  log. A child's `broadcast` carries nothing to a surface: its planner messages, cards
+  `delegated`. Its status carries a `delegation` row, derived each time one goes out and
+  kept nowhere: where its child's tasks stand now, what is left of its budget across
+  every child the task has had (ADR-0056 M10), and, while a Stop is still winding its
+  subtree down, that it is stopping (D16), since by then the task already reads as not
+  started. A surface draws these beside the goal, and a finished child's counts come
+  from its report. Its log shows the child's activity, one line each time a child task's
+  status changes, projected into its task log, and its handoff draws what a report adds
+  to any task's: Ordewell's counts, what the plan above must decide (`open`), and what
+  its subplanner passed up (`promoted`), each by the reference that names it
+  (ADR-0057 R2). A surface draws none of it unless delegation is offered, and a webview,
+  which cannot read the checkout it was built from, is told by its host. A child's `broadcast` carries nothing to a surface: its planner messages, cards
   and status never reach the user directly. Usage rolls up: each record its planner or
   a task spends goes up as it arrives, a level at a time, onto the delegated task's
   attempt, so `planUsage` and the row add it as they add any task's. It was charged
   where it was spent (ADR-0056 M5), so an attempt of a delegated task charges nothing,
   and the row has no context meter: no one session's context is a subtree's. A child
-  session is never offered: `listSessions` does not see it (D11). A full tree view and
-  live counts on the row are later.
+  session is never offered: `listSessions` does not see it (D11). A full tree view is
+  later.
 - **Off unless turned on (D21).** Delegation is a run setting, off by default
   ([ADR-0030](0030-global-run-settings.md)), and turning it on sets the tree's token
   budget (ADR-0056 M5). While the rest of this ADR is unbuilt a build holds it back
@@ -575,6 +611,17 @@ the child cannot reach follows it in the parent's plan.**
   Rejected: a script or ops body acts on a checkout that does not hold the work it
   should fix, and merging it gives up D9. Refusing the plan leaves the fix to a
   worktree task, which is cut from the integration tip and passes no gate.
+- **A queued start for a delegated task's check.** Rejected: a queued start outlives what
+  it waits for, so it stayed pending behind a failed task and read as a run still
+  advancing. Carrying the check is read off the plan each time, so one that stops being
+  ready stops holding the run open.
+- **A check left for the next Execute.** Dropped: a delegated task started alone closed
+  its run with everything reading as finished, its check pending and its merge held.
+- **Starting a delegated task approves its check.** Rejected: ADR-0035's consent is to what
+  will run, and a start names one task.
+- **A check on a runner this host cannot read falling back to the literal `plan` mode.**
+  Rejected: a mode's id is the runner's own (ADR-0031), so it would still fail open on any
+  runner whose read-only mode has another name.
 - **Taking a check back in `PlanStore.retry` alone.** Dropped: Execute readies a failed
   task without it and a force start claims one as it stands, so a skipped check stayed
   skipped over the new result, and D9 released it. Adding each route was rejected for
@@ -655,3 +702,5 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-11-01 — a subplanner's question goes up, and D8's take-back, D9's merge hold, D14's repair and M9's rules for a child's scripts are implemented. A run that closed with its merge held owes it to the next tick, and a resolver of a delegated task's conflict takes the mode a repair does.
 - 2026-11-01 — D20's minimum: a delegated row, usage rolled up a level at a time and charged once, and the child's activity in its log. D1's `read` is the runner's tool (ADR-0057 R11).
 - 2026-11-01 — from a real run: a Continue with nothing left to run goes to its subplanner's turn, where it had failed on Execute's refusal; a report counts every opening of its task; a Stop says what a Continue keeps and Execute discards.
+- 2026-11-01 — D20 on the TUI and VS Code: a delegated row's `delegation` (child counts, budget left, stopping), a report's `open` and `promoted`, VS Code's raise and answer words, and a Merge all that asks before it goes past a check. A webview is told by its host that delegation is offered, which it could not read itself.
+- 2026-11-01 — from review and a real run: a ready check starts by itself once its delegated task passes, on every route (D8, D9); a check whose runner cannot be read holds as any does; a restart says a parked question is lost, and Continue picks the child up (D17).

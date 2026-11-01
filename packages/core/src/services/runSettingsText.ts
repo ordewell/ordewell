@@ -63,8 +63,8 @@ export const DELEGATION_OFFERED = delegationSwitchedOn(placeHere());
 
 export const ACT_RISK = 'Tasks it adds run too, ops tasks included, which can act on real systems unattended.';
 export const AUTORUN_RISK = 'Plans start without review, ops tasks included, which can act on real systems unattended. In Full nobody is asked at all: the planner may start anything, script tasks included, from a plan no person read.';
-/** What turning delegation on accepts below the root, as Act and autorun accept it at the root (ADR-0056 M9). */
-export const DELEGATION_RISK = 'A subplanner approves and runs its own plan, and no person reads it. Its change tasks keep the network they have in a flat run, so an instruction injected into something a subplanner read can become a plan nobody read, and run with that network.';
+/** What turning delegation on accepts below the root, as Act and autorun accept it at the root (ADR-0056 M9). A container is not named as a remedy: none is run for delegation (ADR-0059). */
+export const DELEGATION_RISK = 'A subplanner approves and runs its own plan, and no person reads it. Its change tasks keep the network they have in a flat run, so an instruction injected into something a subplanner read can become a plan nobody read, and run with that network. Delegation does not run them in a container: a container is opt-in, for a task on its own.';
 
 /** `on`/`off` as a switch's value; null for anything else. */
 export function parseSwitch(arg: string): boolean | null {

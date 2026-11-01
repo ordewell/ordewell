@@ -1,3 +1,5 @@
+import type { BoardEntry } from './Board';
+
 /**
  * A live session's allowance for what it has in flight (ADR-0056 M5), which is
  * one model call: a long context's prompt, its cache reads included, and a reply.
@@ -56,6 +58,8 @@ export type TreeFact = OfNode & (
   | { kind: 'reserve_kept'; tokens: number }
   /** The user set the root's limit, the tree's budget, to `limit`. */
   | { kind: 'limit_set'; limit: number }
+  /** An entry on `node`'s board, whole: a board is a fold of these (ADR-0057 R8). */
+  | { kind: 'board_posted'; entry: BoardEntry }
 );
 
 /** A fact as the log holds it: `seq` is its place in the tree's one order, from 1. */

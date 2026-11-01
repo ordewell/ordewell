@@ -1,7 +1,7 @@
 ---
 status: accepted
 implemented: partial
-note: "States the scale goal behind ADR-0055. Built: S4's admission, the pool at `reserve`, and S3's EventStore with its JSONL backend, holding node lifecycle and budget events (ADR-0056 M5). Reports and board entries join the log with ADR-0057; the AIMD window (S4) is later."
+note: "States the scale goal behind ADR-0055. Built: S4's admission, the pool at `reserve`, and S3's EventStore with its JSONL backend, holding node lifecycle, budget events (ADR-0056 M5) and board entries (ADR-0057 R8). A report's event is unbuilt: a report stays in its attempt's log and the plan; the AIMD window (S4) is later."
 ---
 
 # 0058 — A tree holds many nodes and few live sessions
@@ -72,9 +72,9 @@ This is a design target and no promise to a user, and nothing here is a performa
     says a line landed. A read drops a torn last line and changes nothing; the writer, which holds the root's
     session lease, cuts it off before its first append, or the next line would join it and be lost too. An
     unreadable line that is not the last is no crash, and a read refuses it: skipping it would lose spend.
-  - It holds node lifecycle, budget events, reports and board entries. A report's event carries its digest
-    and its reference; the whole handoff stays in the attempt's log
-    ([ADR-0047](0047-structured-task-handoffs.md)), which a reference reads.
+  - It holds node lifecycle, budget events, reports and board entries, each entry whole, since a board is
+    read from nothing else. A report's event carries its digest and its reference; the whole handoff stays in
+    the attempt's log ([ADR-0047](0047-structured-task-handoffs.md)), which a reference reads.
   - Deltas stay in the per-attempt logs, and most events are deltas. Session files stay as they are until a
     later migration.
   - Node ids are immutable, each a child's place among its parent's children, and the path, `root/3/2`, is derived
@@ -139,3 +139,4 @@ stays possible behind the port or the lease.
 - 2026-10-31 — S1 names the planner turns that may run past the Parallel limit.
 - 2026-10-31 — S4's admission implemented: the pool of ADR-0055 D18, at `reserve`.
 - 2026-10-31 — S3 implemented in `EventStore` and `jsonlEventStore`, opened by a tree's first carve: a batch is one line, the store numbers events, so `append` takes facts, and an event carries its node's path.
+- 2026-11-01 — board entries join the log (ADR-0057 R8), whole.

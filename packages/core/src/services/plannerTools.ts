@@ -11,7 +11,8 @@ import {
 import type { TaskOp } from './TaskOps';
 import type { CheckedChange, PlanChangeError } from './PlanChangeCheck';
 import type { PlanChange, ToolRead } from './PlannerConversation';
-import { commandReply, type McpToolReply, type PlannerToolHandler, type ReadTaskArgs } from './mcp/tools';
+import { commandReply, type McpToolReply, type PlannerToolHandler, type PostArgs, type ReadTaskArgs } from './mcp/tools';
+import { isBoardRef } from '../models/Board';
 import type { TaskLogEvent } from '../models/TaskLog';
 import { namedHandoff, parseFindingRef, parsePlanPath, resolveWrittenRef } from '../models/Handoff';
 import type { Subtree } from './Subtree';
@@ -52,6 +53,8 @@ export interface PlannerToolsHost {
   taskLog(taskId: string, attempt: number): TaskLogEvent[];
   /** A handoff by reference, its whole plan and what is below it (ADR-0057 R11). */
   readHandoff?(args: ReadTaskArgs): Promise<McpToolReply>;
+  /** An entry on this node's board (ADR-0057 R8). */
+  post?(args: PostArgs): Promise<McpToolReply>;
   /** The plans below this one; null with nothing delegated. */
   below?(): Promise<Subtree | null>;
   taskDiff(taskId: string, options: TaskDiffRead): Promise<TaskDiffResult>;
@@ -215,6 +218,10 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       });
     },
 
+    async post(args) {
+      return await host.post?.(args) ?? { text: 'This session has no board.', isError: true };
+    },
+
     async taskQuery({ tasks, fields, catalog }) {
       const query: TaskQuery = { tasks: (tasks ?? []).map(String), fields: fields ?? [...TASK_QUERY_TASK_FIELDS], catalog: catalog === true };
       return read(host, taskQuerySignature(query), async () => ({
@@ -231,6 +238,11 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
     },
 
     async taskOutput({ task: ref, lines, since, attempt: asked, kinds }) {
+      // An API planner has no `read`, so a board is read here (ADR-0057 R11).
+      if (isBoardRef(String(ref)) && host.readHandoff) {
+        const board = await host.readHandoff({ task: String(ref) });
+        if (!board.isError) return board;
+      }
       // A reference a run update shows, `#4@2/F3`, reads the attempt it names (ADR-0057 R1).
       const written = resolveWrittenRef(host.tasks(), String(ref));
       const maxLines = Math.min(lines ?? OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX);

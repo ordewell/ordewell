@@ -587,7 +587,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         sandbox: opts.flags.permissionMode,
         ...(approvalPolicy ? { approvalPolicy } : {}),
         ...(approvalsReviewer ? { approvalsReviewer } : {}),
-        ...(opts.mcp ? { developerInstructions: CODEX_ORDEWELL.taskInstructions({ readOnly: readOnlyTask(opts), ...(opts.commits ? { commits: true } : {}) }) } : {}),
+        ...(opts.mcp ? { developerInstructions: CODEX_ORDEWELL.taskInstructions({ readOnly: readOnlyTask(opts), ...(opts.commits ? { commits: true } : {}), ...(opts.mcp.extraTools ? { extra: opts.mcp.extraTools } : {}) }) } : {}),
         ...threadConfig,
         ...(readOnlyTask(opts) ? { config: { ...config, mcp_servers: { ...withheld(this.withheldServers), ...config.mcp_servers }, projects: untrustedProjects(opts.cwd), web_search: 'disabled' } } : {}),
       };

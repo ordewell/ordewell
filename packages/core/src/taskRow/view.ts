@@ -11,6 +11,8 @@ import { checkOf, loopRoundOf, type LoopSubject } from '../models/Loop';
 import { assignedRunnerOf, assignmentConsequence, assignmentIssue, assignmentIssueText, type AssignmentScope } from '../services/AssignmentScope';
 import { approvalLabel, attachingLabel, awaitingLabel, isTaskRunning, NOT_STARTED, receiptLabel, repairWaitLabel, resumeLabel, taskStatusKind, WAITS_FOR_APPROVAL_LABEL, type TaskStatusKind } from './status';
 import { markAction, opsEditable, taskRowActions, type TaskRowAction, type TaskRowPlacement } from './actions';
+import { delegatedRowView, type TaskRowDelegated } from './delegated';
+import type { DelegatedRow } from '../models/Delegation';
 import { loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, type LoopCheckFacts, type LoopCheckState } from './loop';
 
 /**
@@ -60,6 +62,9 @@ export interface TaskRowSubject {
   loopStranded?: boolean;
   /** The latest attempt's handoff as the plan keeps it (ADR-0047); a row shows it without opening the task. */
   handoff?: HandoffDigest;
+  /** A delegated task's goal, and its row's live facts (ADR-0055 D20). */
+  goal?: string;
+  delegation?: DelegatedRow;
 }
 
 export interface TaskRowIsolation {
@@ -162,6 +167,8 @@ export type TaskRowLoop =
   };
 
 export interface TaskRowView {
+  /** A delegated task's goal, budget left, child counts and Stop (ADR-0055 D20); null on any other task. */
+  delegated: TaskRowDelegated | null;
   usage: TaskRowUsage | null;
   /** "2", or "2.1" for a subtask. */
   orderLabel: string;
@@ -341,6 +348,7 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
   const blocked = blockedBy(task, reading);
   const loop = loopOf(task, reading);
   return {
+    delegated: delegatedRowView(task),
     usage: latestAttempt ? { totals: spend.totals, ...(spend.contextFill ? { contextFill: spend.contextFill } : {}), attempt: latestAttempt.attempt } : task.type === 'ai' && ['completed', 'failed', 'in_progress', 'awaiting_user'].includes(task.status) ? { totals: {}, attempt: 0 } : null,
     orderLabel: taskOrderLabel(task, parent),
     kind: task.type === 'user' ? 'user' : task.type === 'script' ? 'script' : task.type === 'delegated' ? 'delegated' : task.ops ? 'ops' : 'ai',

@@ -81,10 +81,10 @@ export type TaskMode = string;
  * usage limit. Saved, so no surface has to guess it from whether an attempt
  * is live.
  */
-export type AwaitingReason = 'input' | 'checkpoint' | 'conflict' | 'files-changed' | 'usage-limit';
+export type AwaitingReason = 'input' | 'checkpoint' | 'question-lost' | 'conflict' | 'files-changed' | 'usage-limit';
 
 export function isAwaitingReason(value: unknown): value is AwaitingReason {
-  return value === 'input' || value === 'checkpoint' || value === 'conflict' || value === 'files-changed' || value === 'usage-limit';
+  return value === 'input' || value === 'checkpoint' || value === 'question-lost' || value === 'conflict' || value === 'files-changed' || value === 'usage-limit';
 }
 
 export interface TaskModelAssignment {
@@ -132,10 +132,13 @@ export function migrateLoadedTasks(tasks: readonly Task[]): void {
  * Nothing is running when a plan comes off disk, so a task saved in progress
  * lost its attempt with the host that ran it. It is failed, in place, so the
  * inbox lists it and what depends on it waits (ADR-0053). Its attempts and
- * logs are left as they are.
+ * logs are left as they are. A delegated task parked at its subplanner's
+ * question is no failure: it says the question is lost, and its child waits
+ * to be continued (ADR-0055 D17).
  */
 export function failInterruptedTasks(tasks: readonly Task[], now: string): void {
   for (const task of flattenTasks(tasks)) {
+    if (task.type === 'delegated' && task.awaitingReason === 'checkpoint') task.awaitingReason = 'question-lost';
     if (task.status !== 'in_progress') continue;
     task.status = 'failed';
     task.verdict = interruptedVerdict(now);
@@ -292,6 +295,12 @@ export interface Task {
   runnerSessionOwner?: RunnerId;
   /** Set only while `status` is `awaiting_user`, and not always then — a pause saved by an older build has none. */
   awaitingReason?: AwaitingReason;
+  /**
+   * The question a delegated task's subplanner is parked on (ADR-0056 M8). The
+   * live one is held in memory by what answers it, so this copy is only what a
+   * restart can still say was lost (ADR-0055 D17). Goes with the wait.
+   */
+  parkedQuestion?: string;
   /**
    * How many waits have ended since its latest attempt started, or since the
    * task was written if none has: an attempt can wait many times, and this
@@ -759,6 +768,8 @@ export interface PendingPlanTurn {
    * the run. While the user has stopped all of them it opens no turn (ADR-0029).
    */
   tasks?: string[];
+  /** It goes with the next turn and opens none (ADR-0057 R6). */
+  rides?: true;
 }
 
 /**

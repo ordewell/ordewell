@@ -14,7 +14,7 @@ export interface CodexOrdewellBinding extends OrdewellToolBinding<CodexAsk> {
   /** The thread config's `mcp_servers`. */
   threadServers(mcp: McpClientConfig): Record<string, unknown>;
   /** What a task thread's instructions say about the tools, and how the task is to end. */
-  taskInstructions(task?: { readOnly?: boolean; commits?: true }): string;
+  taskInstructions(task?: { readOnly?: boolean; commits?: true; extra?: readonly string[] }): string;
   /** What a planner thread's instructions add about the tools (ADR-0026), and where its web reads go (ADR-0027). */
   plannerInstructions(nativeSearch: boolean, hidden?: readonly string[], ownShell?: boolean, extra?: readonly string[]): string;
   /** The planner thread's `web_search` mode. */
@@ -82,12 +82,12 @@ export const CODEX_ORDEWELL: CodexOrdewellBinding = {
    * "call the task_complete tool" a model never looks there, so the thread's
    * instructions say where to look.
    */
-  taskInstructions({ readOnly = false, commits }: { readOnly?: boolean; commits?: true } = {}) {
+  taskInstructions({ readOnly = false, commits, extra }: { readOnly?: boolean; commits?: true; extra?: readonly string[] } = {}) {
     const role = readOnly ? 'readOnlyTask' : 'task';
-    const tools = ordewellToolNames(role);
+    const tools = ordewellToolNames(role, [], extra);
     const discovery = [
       `This task has ${countOf(tools)} tools from the \`${ORDEWELL_MCP_SERVER_NAME}\` MCP server: ${quoted(tools)}.`,
-      `They are not in your tool list up front. Find them with the tool discovery you have (the \`exec\` tool's \`ALL_TOOLS\` list) and call them by their full names, ${quoted(this.toolNames(role))}.`,
+      `They are not in your tool list up front. Find them with the tool discovery you have (the \`exec\` tool's \`ALL_TOOLS\` list) and call them by their full names, ${quoted(this.toolNames(role, [], extra))}.`,
       `Look for them before you finish; the task is reported complete through \`${TASK_COMPLETE_TOOL}\`.`,
     ].join(' ');
     const readOnlyNote = ` You have no native shell: read files, search the repository and run tests with \`${this.toolName('run_command')}\`. It is your only shell (ADR-0046). Read web pages with \`${this.toolName('fetch')}\` and search with \`${this.toolName('web_search')}\`: your own web search is off on this task.`;

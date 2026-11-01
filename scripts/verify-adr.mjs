@@ -54,9 +54,9 @@ const fail = (where, message) => problems.push({ level: 'FAIL', where, message }
 const warn = (where, message) => problems.push({ level: strict ? 'FAIL' : 'warn', where, message });
 
 const git = (...a) => execFileSync('git', ['-C', root, ...a], { encoding: 'utf8', maxBuffer: 1 << 28 });
-// Untracked files count too, so the check works before `git add`.
-const files = git('ls-files', '-z', '--cached', '--others', '--exclude-standard')
-  .split('\0')
+// Untracked files count too, so the check works before `git add`. A conflicted
+// file is listed once per stage, and read once it would count as several ADRs.
+const files = [...new Set(git('ls-files', '-z', '--cached', '--others', '--exclude-standard').split('\0'))]
   .filter(Boolean)
   .filter((p) => fs.existsSync(path.join(root, p)));
 const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');

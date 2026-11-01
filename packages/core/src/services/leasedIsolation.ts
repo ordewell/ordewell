@@ -14,7 +14,7 @@ export function leasedIsolation(isolation: IWorktreeIsolation, held: () => Sessi
     const holder = held();
     return holder ? Promise.reject(new SessionHeldError(holder)) : change(...args);
   };
-  const { taskDiff } = isolation;
+  const { taskDiff, blobOn } = isolation;
   return {
     isActive: (root) => isolation.isActive(root),
     stash: guarded((root) => isolation.stash(root)),
@@ -31,6 +31,7 @@ export function leasedIsolation(isolation: IWorktreeIsolation, held: () => Sessi
     pruneOrphans: guarded((run) => isolation.pruneOrphans(run)),
     reviewDiff: (run) => isolation.reviewDiff(run),
     ...(taskDiff ? { taskDiff: (run, taskId, options) => taskDiff.call(isolation, run, taskId, options) } : {}),
+    ...(blobOn ? { blobOn: (root, branch, file) => blobOn.call(isolation, root, branch, file) } : {}),
     findInHead: (run) => isolation.findInHead(run),
     snapshotTree: (root, exclude) => isolation.snapshotTree(root, exclude),
     changedSince: (root, snapshot) => isolation.changedSince(root, snapshot),

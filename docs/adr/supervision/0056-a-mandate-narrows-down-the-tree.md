@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0001", "0008", "0022", "0029", "0030", "0035", "0036", "0037", "0053"]
-note: "Settles #23, #92 and #112 as far as subplanners need. Built: M1 to M10 in core. Not built: VS Code's raise: the daemon's route, the CLI and the TUI send one, the inbox's Approve takes one in core, and VS Code sends none while ADR-0055 D21 holds delegation back. A flat run does not change."
+note: "Settles #23, #92 and #112 as far as subplanners need. Built: M1 to M10 in core. Every surface sends a raise: the daemon's route, the CLI, the TUI, VS Code's checkpoint card and the inbox's Approve. A flat run does not change."
 ---
 
 # 0056 — A mandate says what a node may do without a person, and what it can hand on only narrows down the tree
@@ -191,11 +191,17 @@ Judgment stays the planner's.
     ledger shuts only once its children have gone, so what they still spend, and their
     close, reach the log.
   - A child that needs more asks with a checkpoint. A raise is `answer_checkpoint` with
-    `raiseTokens`, or the same on the inbox's Approve or a surface's, carved at the call
+    `raiseTokens`, or the same on the inbox's Approve or a surface's (the CLI's `--raise`, the TUI's typed number, VS Code's field), carved at the call
     from what the parent has left, and recorded as a budget event ([ADR-0058](0058-a-tree-holds-many-nodes-and-few-live-sessions.md) S3)
     and in the timeline. It goes only with an approval, and one the parent cannot pay
     for is refused and leaves the question waiting. It moves numbers, so the child's
     Session starts its run again as it hears of one.
+  - A raise is a grant to the task, not to one node. The tree keeps what it granted, in
+    the budget events its log already holds, and what a raise gave outlives the child it
+    went to, so the task's next child is carved from it too (M10). What a parent's turn
+    takes back of a child's room is that child's `limit` and no part of the grant. Only
+    an open child can be raised: a closed one has no Session to start again, so a parent
+    that wants a task to have more raises the child it next opens.
   - A subplanner's own turns come before what it carved. A node's room is `limit`
     less the other three. A carve or a raise takes only room, and a subplanner keeps
     one session's `reserve` for its next turn while it is parked ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D18), so a carve of
@@ -314,15 +320,17 @@ Judgment stays the planner's.
   Deep autonomy adds no capability today. It does remove a person from plan approval, so
   an instruction injected into something a subplanner read can become a plan nobody read
   and run with that network. ADR-0029 and ADR-0030 accept that risk at the root under
-  Act and autorun; turning delegation on accepts it below, and its confirmation says so.
+  Act and autorun; turning delegation on accepts it below, and its confirmation says so, and that a container is opt-in for a task on its own: delegation runs none.
 - **Retries and revocation (M10).** Retries multiply across levels: three at each of three
   levels is twenty-seven times the work. Budgets bound that, and each node keeps its own
   loop guards (ADR-0029), so a parent's retry of a delegated task, a Continue
   (ADR-0055 D17) or a fresh retry (D15), spends what is left, and no retry mints
-  budget: what every child of that task spent, closed ones included, comes off its
-  tokens, and the time its attempts took comes off its clock, which a crash's last
-  attempt did not record. One with nothing left is refused, `blocked`, naming what it
-  spent. A provider's error is another thing, and only one layer retries it
+  budget. It is carved from what the tree granted the task, its stated tokens and every
+  raise (M5), less what every child of that task spent, closed ones included. A raise was
+  paid from its parent's room and what it did not spend went back there, so re-carving
+  it takes that room again. The time its attempts took comes off its clock, which a
+  crash's last attempt did not record. One with nothing left is refused, `blocked`,
+  naming the budget the tree granted it. A provider's error is another thing, and only one layer retries it
   ([ADR-0058](0058-a-tree-holds-many-nodes-and-few-live-sessions.md) S5). The user can
   narrow or revoke at the root, and that holds for the subtree at once, by M1: a start
   under a lost grant is refused at its next check, which for a child's attempt is
@@ -385,6 +393,9 @@ Judgment stays the planner's.
   a claim in that turn could take it, and nothing would be left to keep as it parks.
 - **Excluding cache reads from spend.** Rejected: they are most of a long session's cost, and
   a budget that ignores them would let context grow unbounded.
+- **A raise that moves one node's limit alone.** Dropped: a Continue or a fresh retry
+  re-carved from the stated tokens, so a tree that granted a raise could refuse the
+  attempt that would spend it, naming a budget nobody had set.
 - **What a child leaves flows to its siblings.** Rejected: a return would wake them all, and
   replay would depend on the order children ended.
 - **`research` by default on a delegated task.** Dropped: a harness's subagents pass no
@@ -432,3 +443,5 @@ Judgment stays the planner's.
 - 2026-11-01 — M8's questions, `raiseTokens` and a child's wake on a refused start implemented, what a refused start ends in rewritten from a stop to a wake, a wall clock that stops for a tree's usage limits, and a body `effect` does not cover runs sealed. A denied runner request rides along in the next run update.
 - 2026-11-01 — a subplanner's harness subagents are withheld without `research`, per runner, and its prompt names none; M7's paths reach its report; a subtree's task runners load `minimal` unless the settings file says otherwise.
 - 2026-11-01 — from a real run: a claim leaves a whole share for its subplanner's next turn, an approval carries words to a child, a budget stop waits with a question, and the daemon's route, the CLI and the TUI send a raise.
+- 2026-11-01 — VS Code's checkpoint card sends a raise and an answer's words, and M9's confirmation says delegation runs nothing in a container.
+- 2026-11-01 — a raise is a grant to the task: M5 keeps it past its child, and M10 re-carves from the stated tokens plus every raise, less what was spent, its refusal naming that budget.

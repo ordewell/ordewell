@@ -100,7 +100,7 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
       await handleAddTask(msg.draft, deps);
       return;
     case 'answerCheckpoint':
-      await handleCheckpointAnswer(msg.taskId, msg.approved, msg.reason, deps);
+      await handleCheckpointAnswer(msg.taskId, msg.approved, msg.reason, deps, msg.raiseTokens);
       return;
     case 'answerEscalation':
       await handleEscalationAnswer(msg, deps);

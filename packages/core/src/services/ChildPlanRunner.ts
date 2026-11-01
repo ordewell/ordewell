@@ -1,9 +1,9 @@
 import { EventEmitter } from 'events';
-import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredEvent, StructuredTurnEnd } from '../interfaces/IRunner';
+import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredEvent, StructuredTurnEnd, TaskMessageFrom } from '../interfaces/IRunner';
 import type { RunnerCommand } from '../models/RunnerCommand';
 import type { Task, VerificationCheck } from '../models/Task';
 import { checkHandoff, type HandoffCheck, type SubtreeReport } from '../models/Handoff';
-import { underProtectedPath } from '../models/Delegation';
+import { countChildTasks, underProtectedPath, type ChildTaskCounts } from '../models/Delegation';
 import type { UsageRecord } from '../models/Usage';
 import { AbstractRunner, AbstractRunnerSession, type RunnerSpawnOptions } from './AbstractRunner';
 import type { CheckpointAnswer, McpToolReply, TaskCompleteArgs } from './mcp/tools';
@@ -52,6 +52,8 @@ export interface ChildNode {
   continueConversation(text: string): Promise<unknown>;
   /** Reopened (ADR-0055 D17): acts as Execute there, and its subplanner goes on with `text`; one that never wrote a plan plans `goal`. */
   goOn(text: string, goal: string): Promise<unknown>;
+  /** A line for the subplanner's next turn, which opens none (ADR-0057 R6): a landing is no reason to wake it. */
+  hear(line: string): void;
   state(): NodeState;
   /** A report held to its plan and subtree, its references pinned and what crosses a level read verbatim (ADR-0057 R1, R2). */
   takeReport(report: TaskCompleteArgs): HandoffCheck<TakenReport>;
@@ -87,6 +89,8 @@ export interface ChildHost {
   stopped(): boolean;
   /** Usage on its way up the tree, past this level's row. */
   passUp(record: UsageRecord): void;
+  /** A child's tasks moved, so the row of its delegated task is stale (ADR-0055 D20). */
+  moved(): void;
 }
 
 /** Once per attempt: a subplanner told this has no second turn to end without the call (ADR-0055 D6). */
@@ -160,6 +164,8 @@ export class ChildPlanSession extends AbstractRunnerSession {
   private graceTimer: ReturnType<typeof setTimeout> | undefined;
   private wallClock: ReturnType<typeof setTimeout> | undefined;
   private printed = new Map<string, string>();
+  /** Where the child's tasks stood when its row last heard of them. */
+  private counts: ChildTaskCounts | undefined;
   private stopping: Promise<void> | null = null;
   private markGone!: () => void;
   private readonly gone = new Promise<void>((resolve) => { this.markGone = resolve; });
@@ -295,6 +301,11 @@ export class ChildPlanSession extends AbstractRunnerSession {
 
   /** The child's activity, as this attempt's log shows it (ADR-0055 D20): what a task became, not what its runner said. */
   private say({ tasks }: NodeState): void {
+    const counts = countChildTasks(tasks.map(({ status }) => status));
+    if (JSON.stringify(counts) !== JSON.stringify(this.counts)) {
+      this.counts = counts;
+      this.setup.host.moved();
+    }
     for (const { label, status } of tasks) {
       if (this.printed.get(label) === status) continue;
       this.printed.set(label, status);
@@ -446,6 +457,11 @@ export class ChildPlanSession extends AbstractRunnerSession {
     void this.stop();
   }
 
+  /** Where its child's tasks stand, as last read; absent before the first read and once the child has gone. */
+  progress(): ChildTaskCounts | undefined {
+    return this.ended ? undefined : this.counts;
+  }
+
   getOutput(): string { return this.output; }
   /** Nothing reads a child's input but a message. */
   write(): void {}
@@ -454,9 +470,12 @@ export class ChildPlanSession extends AbstractRunnerSession {
   onTurnEnd(listener: (reason: StructuredTurnEnd) => void): void { this.turnEnds.push(listener); }
   onEvent(listener: (event: StructuredEvent) => void): void { this.events.on('event', listener); }
 
-  /** A parent's message goes to the subplanner's next turn (D3). */
-  sendMessage(text: string): string {
-    if (this.node && !this.ended) this.opened(this.node.continueConversation(text));
+  /** A parent's message opens the subplanner's next turn (D3); Ordewell's own line waits for one. */
+  sendMessage(text: string, from?: TaskMessageFrom): string {
+    if (this.node && !this.ended) {
+      if (from === 'ordewell') this.node.hear(text);
+      else this.opened(this.node.continueConversation(text));
+    }
     return `${this.id}-message`;
   }
 
@@ -493,6 +512,11 @@ export class ChildPlanRunner extends AbstractRunner<ChildPlanSession> {
   /** Every child's stop, for a node that waits on its subtree. */
   async stopEvery(): Promise<void> {
     await Promise.all([...this.sessions.values()].map((session) => session.stop()));
+  }
+
+  /** Where the tasks of the child `taskId` runs stand, or nothing with no child live. */
+  progressOf(taskId: string): ChildTaskCounts | undefined {
+    return [...this.sessions.values()].find((session) => session.taskId === taskId)?.progress();
   }
 
   async spawn(opts: RunnerSpawnOptions): Promise<IRunnerSession> {

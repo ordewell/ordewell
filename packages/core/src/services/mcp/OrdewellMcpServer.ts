@@ -4,7 +4,7 @@ import { Server as McpProtocolServer } from '@modelcontextprotocol/sdk/server/in
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, CancelledNotificationSchema, ErrorCode, ListToolsRequestSchema, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { extractPresentedToken } from '../../utils/daemonToken';
-import { PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, TASK_TOOLS, plannerToolSet, toolListing, type McpTool, type PlannerToolHandler, type TaskToolHandler } from './tools';
+import { PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, TASK_TOOLS, plannerToolSet, taskToolSet, toolListing, type McpTool, type PlannerToolHandler, type TaskToolHandler } from './tools';
 
 /**
  * The Ordewell MCP server (ADR-0022): one loopback listener per process,
@@ -37,6 +37,8 @@ export interface TaskTokenScope {
   attempt: number;
   /** A read-only task's attempt (ADR-0046): its token lists `run_command`, `fetch` and `web_search` too, and no other task's does. */
   readOnly?: boolean;
+  /** Its plan has a board (ADR-0057 R8): its token lists `post`, and a flat task's does not. */
+  board?: boolean;
 }
 
 export interface PlannerTokenScope {
@@ -59,7 +61,7 @@ export interface McpCredential {
   token: string;
   /** The planner tools the token hides ({@link PlannerTokenScope.hidden}), so the runner is told of and pre-allows only what it is served. */
   hidden?: readonly string[];
-  /** Tools it serves past a flat planner's, by their names on the server: a subplanner's (ADR-0055 D5), and `read` where it may delegate (ADR-0057 R11). */
+  /** Tools it serves past a flat role's, by their names on the server: a subplanner's (ADR-0055 D5), `read` where it may delegate, and `post` where it has a board (ADR-0057 R11). */
   extraTools?: readonly string[];
   /** The token serves a read-only task's tools ({@link TaskTokenScope.readOnly}), so the runner is told of and pre-allows `run_command`, `fetch` and `web_search`. */
   readOnly?: true;
@@ -131,7 +133,7 @@ export class OrdewellMcpServer {
 
   async issueTaskToken(scope: TaskTokenScope, handler: TaskToolHandler = {}): Promise<McpCredential> {
     const credential = await this.issue({ role: 'task', scope: { ...scope }, handler, revoked: new AbortController(), calls: new Map() });
-    return scope.readOnly ? { ...credential, readOnly: true } : credential;
+    return { ...credential, ...(scope.readOnly ? { readOnly: true } : {}), ...(scope.board ? { extraTools: ['post'] } : {}) };
   }
 
   async issuePlannerToken(scope: PlannerTokenScope, handler: PlannerToolHandler = {}): Promise<McpCredential> {
@@ -238,7 +240,7 @@ export class OrdewellMcpServer {
     // Stateless: a fresh server per request, built from the grant, so the tool
     // list and every call are fixed by the token on that very request.
     const mcp = new McpProtocolServer({ name: 'ordewell', version: '1' }, { capabilities: { tools: {} } });
-    if (grant.role === 'task') serveTools(mcp, grant.scope.readOnly ? READ_ONLY_TASK_TOOLS : TASK_TOOLS, taskInventory(grant.scope.readOnly), grant.handler, grant, this.heartbeatMs);
+    if (grant.role === 'task') serveTools(mcp, taskToolSet(grant.scope), taskInventory(grant.scope), grant.handler, grant, this.heartbeatMs);
     else {
       const tools = plannerToolSet(grant.scope);
       serveTools(mcp, tools.filter((tool) => !grant.scope.hidden?.includes(tool.name)), plannerInventory(grant.scope.hidden ?? [], tools), grant.handler, grant, this.heartbeatMs);
@@ -297,8 +299,8 @@ function unknownToolMessage(called: string, inventory: ToolInventory): string {
 }
 
 /** A task token's inventory: its own tools, and the planner tools it is refused. */
-function taskInventory(readOnly?: boolean): ToolInventory {
-  const served = (readOnly ? READ_ONLY_TASK_TOOLS : TASK_TOOLS).map((t) => t.name);
+function taskInventory(scope: Pick<TaskTokenScope, 'readOnly' | 'board'>): ToolInventory {
+  const served = taskToolSet(scope).map((t) => t.name);
   const candidates = [...PLANNER_TOOLS, ...TASK_TOOLS, ...READ_ONLY_TASK_TOOLS];
   const withheld = [...new Set(candidates.map((t) => t.name))].filter((name) => !served.includes(name));
   return { served, withheld: withheld.map((name) => ({ name, reason: READ_ONLY_TASK_TOOLS.some((t) => t.name === name) ? 'read-only tasks only' : TASK_TOOLS.some((t) => t.name === name) ? 'change tasks only' : 'planner tokens only' })) };

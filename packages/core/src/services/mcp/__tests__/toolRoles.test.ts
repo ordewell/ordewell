@@ -62,14 +62,14 @@ describe('a role\'s tool set (R11)', () => {
     expect(flat.extraTools).toBeUndefined();
     const client = await connect(delegating);
     expect(await names(client)).toContain('read');
-    expect(delegating.extraTools).toEqual(['read']);
+    expect(delegating.extraTools).toEqual(['read', 'post']);
     expect(await client.callTool({ name: 'read', arguments: { task: '3:#4/F1' } })).toMatchObject({ content: [{ text: 'a subtree\'s handoff' }] });
   });
 
   it('holds a subplanner\'s list in one order, its own tools last', async () => {
     const server = newServer();
     const listed = await names(await connect(await server.issuePlannerToken({ sessionId: 's', delegates: true, subplanner: true })));
-    expect(listed.slice(-3)).toEqual(['read', 'task_complete', 'checkpoint']);
+    expect(listed.slice(-4)).toEqual(['read', 'post', 'task_complete', 'checkpoint']);
   });
 });
 

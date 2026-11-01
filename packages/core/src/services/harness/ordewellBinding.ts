@@ -1,4 +1,4 @@
-import { ORDEWELL_MCP_SERVER_NAME, PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, TASK_TOOLS, type McpCredential } from '../mcp';
+import { ORDEWELL_MCP_SERVER_NAME, PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, TASK_TOOLS, taskToolSet, type McpCredential } from '../mcp';
 import type { PlannerStartOptions } from './AgentAdapter';
 import { settleWithin } from './settleWithin';
 
@@ -92,7 +92,7 @@ export function ordewellToolNames(role: OrdewellToolRole, hidden: readonly strin
 }
 
 /** Every tool the server serves, under any role, by its name on the server. */
-export const ORDEWELL_TOOL_NAMES: readonly string[] = [...new Set([...TASK_TOOLS, ...READ_ONLY_TASK_TOOLS, ...PLANNER_TOOLS].map((tool) => tool.name))];
+export const ORDEWELL_TOOL_NAMES: readonly string[] = [...new Set([...TASK_TOOLS, ...taskToolSet({ board: true }), ...READ_ONLY_TASK_TOOLS, ...PLANNER_TOOLS].map((tool) => tool.name))];
 
 /** The naming half of a binding for a runner that names a server's tool `<prefix><tool>`. */
 export function prefixedToolNames(prefix: string): Pick<OrdewellToolBinding, 'toolName' | 'toolNames'> & { isToolName(name: string): boolean } {

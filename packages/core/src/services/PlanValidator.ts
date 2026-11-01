@@ -1,6 +1,7 @@
 import { Task, RunnerId, flattenTasksWithParents } from '../models/Task';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, PLAN_ENVELOPE_KEY } from './JsonExtractor';
 import type { RunnerModeInfo } from './ModeResolver';
+import { scopeOverlaps } from '../models/Delegation';
 import { plannedTask, checkPlanInvariants, taskWhere, type IntakeCatalog, type PlanTaskError } from './PlannedTask';
 
 export function parsePlanJson(
@@ -108,6 +109,7 @@ export function validatePlanTasks(
       ? ['"taskMode" is not yours to set and was ignored: each task runs in its runner\'s mode for the user\'s autonomy level, or its read-only mode when you set "readOnly": true.']
       : []),
     ...ignored.filter((i) => i.field === 'readOnly').map((i) => `${i.message}: it was ignored.`),
+    ...scopeOverlaps(tasks),
   ];
   return warnings.length > 0 ? { ok: true, tasks, warnings } : { ok: true, tasks };
 }

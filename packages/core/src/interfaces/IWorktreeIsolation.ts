@@ -760,6 +760,15 @@ export interface IWorktreeIsolation {
   taskDiff?(run: IsolationRun, taskId: string, options: TaskDiffRead): Promise<TaskDiffResult>;
 
   /**
+   * The blob `file` holds on `branch`, relative to `root`, the workspace
+   * (ADR-0057 R9): null where it holds none, undefined where nothing can be read.
+   * Refs are shared across worktrees, so a child reads an ancestor's branch too.
+   * A branch gone with its merged run reads as what `root` has checked out, which
+   * is where it merged.
+   */
+  blobOn?(root: string, branch: string, file: string): Promise<string | null | undefined>;
+
+  /**
    * Read each landed task's mark again from git: on where the user's branch
    * contains its work in every repo it changed (`git merge-base --is-ancestor`),
    * off where it no longer does. Returns the ids whose mark changed. A review

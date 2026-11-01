@@ -1,8 +1,7 @@
 ---
 status: accepted
-implemented: partial
 amends: ["0012", "0013", "0022", "0029", "0047"]
-note: "Settles #34, and #36 and #38 as far as this goes. R1 to R5, R11 and R12 are built, a child's plan and `promote` and `open` with them, and R4's waking reads a child plan's end. R6 and R7 come next, and the board (R8 to R10) last: `post` comes with it."
+note: "Settles #34, and #36 and #38 as far as this goes. Built behind ADR-0055 D21's switch, so a flat run has no scope and no board. An API planner reads a board through `task_output` and has no `post` (R11)."
 ---
 
 # 0057 — Information moves by reference: reports stay one size at every level, and code decides when a planner wakes
@@ -36,7 +35,7 @@ what a flat plan gets away with:
 every level, and a subplanner promotes child findings by reference, for Ordewell to render
 verbatim. Everything that crosses a level is untrusted data with its provenance. Code
 decides when a planner wakes. Between siblings the medium is the plan and git: tasks declare
-scopes, and the affected task gets one addressed line. A board comes after those, and there
+scopes, the affected task gets one addressed line, and a board holds what is worth pulling. There
 is no sibling chat, lock tool, wait tool or broadcast.**
 
 ## Key properties
@@ -127,7 +126,8 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   each report a way into every node above it, and into each task that reads it, so a report
   never becomes a plan's text unless a planner writes it, and that planner is then answerable
   for it. A promoted finding is its author's and not the subplanner's, so it carries that author's
-  reference; a detail is indented under it and a run update's report under its line, so neither can
+  reference; a detail is indented under it, a run update's report under its line, and every line a
+  delegated task wrote of its report, its commit, summary, reason and tail included, so none can
   pass for a line of Ordewell's.
 
 ### Waking
@@ -178,21 +178,36 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 
 ### Between siblings
 
-- **Tasks declare a scope (R6).** `scope: { paths, provides, consumes }` is an optional task field,
-  written by the planner. Overlap is checked as the plan commits and answered in the tool's result,
-  and the planner orders the tasks or names an owner. Producers go first, which is an edge in the
-  plan and costs nothing new.
+- **Tasks declare a scope (R6).** `scope: { paths, provides, consumes }` is an optional field of a
+  delegated task, written by the planner on the plan the child cannot edit, and on no other kind of
+  task: a flat plan has none. Overlap is checked as the plan commits and answered in the tool's
+  result, for an edit what that edit brought: paths that can name one file, one name two tasks
+  provide, and a consumer nothing puts after its producer, between tasks no edge orders. The planner
+  orders the tasks or names an owner. Producers go first, which is an edge in the plan and costs
+  nothing new. A scope's items are one line each, since they reach a line Ordewell writes.
 
   When a landing touches a path or interface a running task declared, that task gets one addressed
-  line at a step boundary
-  ([ADR-0023](../runners/0023-messages-reach-a-running-task.md)), marked `from: 'ordewell'`, at most
-  one per task per ten minutes and coalesced past that. An index from path to task makes this cost
-  the tasks that overlap, not the plan.
+  line, marked `from: 'ordewell'`, at most one per task per ten minutes and coalesced past that. A
+  running task with a scope is a delegated task, so its step boundary
+  ([ADR-0023](../runners/0023-messages-reach-a-running-task.md)) is its subplanner's next turn: the
+  line waits for that turn and opens none, since a landing is not in R4's table. What the landing
+  changed comes from git, and not from what it declared, so a landing past its own scope still
+  reaches whoever declared those paths. Each path and interface is a quoted string on that one line,
+  as a sibling's branch chose them (R3). An index from path to task makes this cost the tasks that
+  overlap, not the plan.
 
-  **Scopes are advisory.** Worktrees already isolate writes, and a miss costs a merge conflict, which
-  has a repair ([ADR-0015](../isolation/0015-conflict-repair.md)). So scopes neither gate scheduling
-  nor refuse a change; [ADR-0013](../isolation/0013-worktree-isolation.md)'s "conflicts are handled,
-  not predicted" stands for what a planner did not declare.
+  As a delegated task lands, each `contract` on its board keyed by a name it `provides` rises to its
+  parent's board, keeping its author and read again against the branch it landed on. That is how a
+  sibling reads one: a node reads its ancestors' boards and never another's, so nothing posted reaches
+  sideways before its work has landed, and only what the plan above declared rises. It is a copy
+  of the entry at most once, and the entries of a fresh retry's old child stay behind with it.
+
+  **Scopes are advisory, and widen nothing.** Worktrees already isolate writes, and a miss costs a
+  merge conflict, which has a repair ([ADR-0015](../isolation/0015-conflict-repair.md)). So scopes
+  neither gate scheduling nor refuse a change; [ADR-0013](../isolation/0013-worktree-isolation.md)'s
+  "conflicts are handled, not predicted" stands for what a planner did not declare. A scope grants
+  nothing either: it is no part of a mandate ([ADR-0056](0056-a-mandate-narrows-down-the-tree.md)), a
+  protected path it covers stays protected, and a `scope_change` entry changes nothing but the board.
 - **No sibling chat, lock, wait or broadcast (R7).** Sibling messages (#38) stay out. They come back
   only if replays of real trees show both of these: conflicts or duplicated work between siblings
   that scope lines and the board do not lower; and, on the same goals, messages on costing fewer
@@ -200,32 +215,56 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 
 ### The board
 
-Added after R1 to R7, and only if those leave a need; replays of Ordewell's own runs decide.
-
 - **A board per delegated task (R8).** Typed entries go in through `post`, and are read by pull through
-  `read`. Entries are one-way: a `post` wakes nobody. Types: `finding`, `claim`, `attempt` (tried and
-  failed, so others skip it), `artifact`, `contract`, `assume`, `scope_change`, and for planners
-  `decision` and `pin`. A node reads its own board and its ancestors'. A map, one line per entry, is
-  kept by code from the entries' typed fields, not by a model. A root gains a board with its first
-  delegated task, which is where its pins live. A flat plan has none.
-- **Stale and contested are computed (R9).** `file` evidence gains an optional blob sha, compared with
-  the branch at read, so a claim on a changed file shows `stale`. Entries with one `key` and different
-  values show `contested`. Both are flags in the map, in code; a semantic contradiction needs a model,
-  so it is a review task's.
+  `read`. Entries are one-way: a `post` wakes nobody and tells nobody. Types: `finding`, `claim`,
+  `attempt` (tried and failed, so others skip it), `artifact`, `contract`, `assume`, `scope_change`,
+  and for planners `decision` and `pin`, which a runner's `post` does not take. A node reads its own
+  board and its ancestors', through `read` with `board` for the map and an entry's reference,
+  `board:root/1:E3`, for that entry: a word `read` takes only where there is a board, so a runner's
+  `read` does not change by a byte. A map, one line per entry, is kept by code from the entries'
+  typed fields, not by a model. A root gains a board with its first delegated task, which is where
+  its pins live. A flat plan has none, opens no log and has no tool for one.
+
+  A board is a fold of `board_posted` facts in the tree's log
+  ([ADR-0058](0058-a-tree-holds-many-nodes-and-few-live-sessions.md) S3), so a restart reads it back.
+  A Continue's new node keeps its child's one board, and a fresh retry, a new child, starts another.
+  A board stops at 200 entries and a map at 100, the rest counted: tuning values.
+
+  Every word on a board is its author's, untrusted data (R3). Whose it is comes from the token that
+  posted it, never from the entry. The map says so in one label, and each one-line field reaches a
+  reader as a quoted string on a line of Ordewell's, indented, so no entry can pass for a line of
+  Ordewell's or make a second line. A detail is indented under it, on every line break a reader honours.
+- **Stale and contested are computed (R9).** A board's `file` evidence holds blobs Ordewell reads as the
+  entry is posted, never an author's claim: `sha`, the file as its author had it, hashed with no git
+  since a read-only task's worktree may hold a planted repository
+  ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)),
+  and `tip`, what the plan's integration branch held then. At read the branch is compared with both, so
+  a claim shows `stale` once the branch holds neither: a file its author changed and has not landed
+  reads as it should, and so does one that landed as claimed. A branch merged and gone with its run
+  reads as what the workspace has checked out, which is where it merged. Entries with one `key` and
+  different values show `contested`, across the boards a reader reads. Both are flags in the map, in
+  code; a semantic contradiction needs a model, so it is a review task's.
 - **Pins (R10).** A planner's `pin` is a decision every descendant must know. It reaches each new
-  descendant at spawn, nearest ancestor first, within 2,000 characters in all, then a count. It is the
-  one push down a tree, and a check never goes in one.
+  descendant at spawn, a subplanner in its opening message and a task in its prompt, nearest ancestor
+  first, within 2,000 characters in all, whole items, then a count. It is the one push down a tree, and
+  it is data as the rest of a board is: it says what was decided, labelled with whose decision it is.
+  Each descendant is told once, at its start, so a pin reaches no one already running. A check never
+  goes in one: `post` refuses a pin that holds whole what this plan's checks read or run, which is the
+  part code can see, and the prompt teaches the rest.
 
 ### Tools
 
 - **A small, fixed set per role (R11).** A runner has `task_complete`, `checkpoint`, `read`, `post` and
-  `apply_patch`; a read-only task keeps ADR-0046's tools beside the first four. A task with no board has
+  `apply_patch`; a read-only task keeps ADR-0046's tools beside the first four, and `post` declares
+  itself read-only, since it writes nothing of the workspace. A task with no board has
   no `post`, so a flat run's tool list grows by nothing. `read` extends `read_task`, whose name stays an
   alias at the call and leaves the list. That rename is the one change to a flat list: a session resumed
   across the build that ships it misses its prompt cache once. A planner holding delegated tasks gains `read` and `post`.
   It holds them from the moment its mandate lets it write one, since a list that grew with its first
-  delegated task would break its cache. An API planner has no server list: `task_output` takes the same
-  references for it. A role is one list, whichever attempt asks. Each
+  delegated task would break its cache, and `post` before there is a board says so. A subplanner holds
+  them whether or not it may delegate, since it has a board from its first turn. An API planner has no
+  server list: `task_output` takes the same references for it, `board` among them, and it has no `post`,
+  so an API root pins nothing. A role is one list, whichever attempt asks. Each
   role's set is fixed at session start, in a stable order
   ([ADR-0056](0056-a-mandate-narrows-down-the-tree.md) M6), with a CI test on its serialised size.
   Turning delegation on reaches a planner at its next process.
@@ -245,6 +284,10 @@ Added after R1 to R7, and only if those leave a need; replays of Ordewell's own 
   by one that a role's list does not change across a session.
 - Scope overlap goes through `validatePlanTasks` and the tool's answer; the addressed line through
   `FakeRunnerSession`, with its rate limit on a fake clock.
+- A board is tested on a real ledger and log, for who reads what, the flags and what a reader is told.
+  Two siblings coordinate on real git through a contract and a line, with a fake `claude` over the real
+  adapter and MCP server, so `post` and `read` are real tool calls. A flat run is asked for a board and
+  a tool and has neither, and the size test holds each new role's list.
 
 ## Out of scope
 
@@ -258,6 +301,15 @@ Added after R1 to R7, and only if those leave a need; replays of Ordewell's own 
   made to a real provider: #34's token task should log cached tokens per wake.
 
 ## Considered options
+
+- **Reading a sibling's board.** Rejected: a contract is what a consumer wants, and reaching across would break
+  R1's "down and never up or across". It rises to the parent's board at its landing instead, which R8's
+  reach already covers, and a child that failed leaves nothing there.
+- **Letting a child post to its parent's board.** Rejected: that is a broadcast to every sibling, with nothing
+  to bound what it holds. A rise is typed, keyed by what the plan above declared, and comes with a landing.
+- **A line that wakes the subplanner.** Rejected: R4 keeps waking in one table, and a landing that moves a
+  sibling's interface does not need a model now. It would buy a turn over the whole context per landing.
+- **An author's own blob sha.** Rejected: R9's flags are computed, and a sha a model sends is a claim.
 
 - **A model summarising each level.** Rejected. In three open-source deep-research systems, 84.7% of
   AI-Q's final-report errors arose at the orchestrator, while agents summarising a single document were
@@ -303,6 +355,10 @@ Added after R1 to R7, and only if those leave a need; replays of Ordewell's own 
   If replays show planners pulling most references, the push is too small.
 - The completion call gains two fields, and evidence a pinned attempt.
 - A scope a planner gets wrong warns about nothing. That is the cost of its being advisory.
+- A line waits for a turn, so a subplanner parked on a long task hears it when that task ends or something
+  else wakes it. A consumer that cannot go on without an interface needs an edge, not a line.
+- A file a clean filter rewrites hashes as it stands, so it can read `stale` once landed: a false flag, and
+  never a refusal.
 
 ## History
 
@@ -314,3 +370,5 @@ Added after R1 to R7, and only if those leave a need; replays of Ordewell's own 
 - 2026-10-31 — a removed task's pinned attempt reads from its log, within the readable set by citation; a turn's cap keeps the newest update and names what it leaves out; a digest cuts a title, not what happened.
 - 2026-10-31 — a removed task's attempt can be cited as it can be read, and a saved reference with no attempt reads the latest; a digest line leads with what happened and a task name is short enough to leave it, so a turn's cap keeps it.
 - 2026-11-01 — R1 across plans, R2, R3's checks at every level, R11 and R12 implemented, in `Subtree.ts`, `models/Handoff.ts` and `mcp/tools.ts`: a path is a node's in the tree's log, a report reads what it names once, a child plan's end is a `task_report`, and `read` is listed where a planner may delegate. Built closest to the text where it could not hold: `promote` and `open` are written as text, `open` may name a subplanner's own finding, and a runner's reason says whose words it is. `post` waits for the board.
+- 2026-11-01 — R3 holds for a delegated task's commit, summary, reason, report and output tail: every line is indented in every reading, so none can pass for a line of Ordewell's.
+- 2026-11-01 — R6 to R10 implemented, in `models/Board.ts`, `Board.ts`, `ScopeLines.ts` and `TreeLedger`, behind ADR-0055 D21's switch: a scope stays on a delegated task, its line waits for a subplanner's next turn, a `contract` rises to the parent's board as its task lands, `read` takes `board` so a runner's `read` does not move, `file` evidence holds a branch's blob beside its author's, and a pin goes in a subplanner's opening and a task's prompt.

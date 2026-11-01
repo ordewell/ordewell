@@ -61,6 +61,13 @@ describe('the delegation setting (ADR-0055 D21)', () => {
     expect(DELEGATION_RISK).toMatch(/keep the network they have in a flat run/);
     expect(DELEGATION_RISK).toMatch(/instruction injected/);
   });
+
+  it('does not let a container stand in for a boundary: delegation runs nothing in one, and one is opt-in', () => {
+    // A container is a separate, opt-in choice per task (ADR-0059): the warning may not read as if it held a subplanner's tasks.
+    expect(DELEGATION_RISK).toMatch(/does not run them in a container/);
+    expect(DELEGATION_RISK).toMatch(/opt-in/);
+    expect(DELEGATION_RISK).not.toMatch(/sandbox|isolated|contained|protected by/i);
+  });
 });
 
 describe('the root\'s mandate reads it where it lives (ADR-0030, ADR-0056 M1)', () => {

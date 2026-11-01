@@ -1,3 +1,4 @@
+import { mergePastChecksConfirmation } from './mergeWording';
 import { createHash } from 'crypto';
 import { isRunnerApproval } from '../interfaces/IApproval';
 import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
@@ -133,7 +134,7 @@ export interface EscalationInput {
   holdReason: (taskId: string) => string | null | undefined;
   /** Something will run this check between rounds without being asked (ADR-0045 L5). */
   loopRunsOn: (taskId: string) => boolean;
-  /** A loop carried on with no scheduler starts this task, so the run is open for it alone (ADR-0045 L5). */
+  /** A loop or a delegated task's check carried on with no scheduler starts this task, so the run is open for it alone (ADR-0045 L5, ADR-0055 D8). */
   carried: (taskId: string) => boolean;
   run: EscalationRun;
 }
@@ -275,6 +276,8 @@ function awaiting(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait
         options: [{ id: 'approve', label: 'Approve' }, { id: 'reject', label: 'Reject', note: 'optional' }, SKIP],
       };
     }
+    case 'question-lost':
+      return { kind: 'checkpoint', ...ended(row, `Its child plan asked a question, and Ordewell stopped before anyone answered it, so nothing is left to hear an answer${task.parkedQuestion ? `: "${task.parkedQuestion}"` : ''}. Continue it and its subplanner can ask again.`, input, rows) };
     case 'conflict': {
       const resolver = waitOf(input.waits.get(task.id) ?? [], 'resolver');
       if (resolver) return conflictWithResolver(row, resolver.resolver, input, rows);
@@ -336,7 +339,7 @@ function failed(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait |
 
 /** Merge all as the user is offered it: with what it would carry past its check named, when anything would (ADR-0055 D9). */
 function mergeOption({ run }: EscalationInput): EscalationOption {
-  return run.mergeHold.length === 0 ? MERGE_ALL : { ...MERGE_ALL, confirm: `This merges work no check has passed: ${run.mergeHold.join(', ')} has not.` };
+  return run.mergeHold.length === 0 ? MERGE_ALL : { ...MERGE_ALL, confirm: mergePastChecksConfirmation(run.mergeHold) };
 }
 
 /** A task not started that only a person can start, once a run is there for it to be late for. */
@@ -389,7 +392,8 @@ function unstarted(row: TaskWithParent, input: EscalationInput, rows: Rows): Wai
   }
   if (task.type === 'user') return waitOf(waits, 'by-hand') ? { kind: 'by-hand', reason: BY_HAND, options: completeOption(row, input.run) } : null;
   if (waitOf(waits, 'unapproved')) {
-    return { kind: 'unapproved', reason: input.waitsForApproval(task.id) ? 'Added since you approved the plan, so it waits for you to start it.' : 'Its loop is carried on, and waits for you to start it.', options: [{ id: 'run', label: 'Start' }] };
+    const afterDelegated = task.dependencies.some((id) => rows.get(id)?.task.type === 'delegated');
+    return { kind: 'unapproved', reason: input.waitsForApproval(task.id) ? 'Added since you approved the plan, so it waits for you to start it.' : afterDelegated ? 'Its delegated task has ended, and it waits for you to start it.' : 'Its loop is carried on, and waits for you to start it.', options: [{ id: 'run', label: 'Start' }] };
   }
   return null;
 }
@@ -494,7 +498,8 @@ export function escalationAct(escalation: Escalation, option: EscalationOptionId
     case 'force-start': return command({ command: 'force_start', task });
     case 'skip': return command({ command: 'skip_task', task, ...(said ? { reason: said } : {}) });
     case 'complete': return command({ command: 'mark_complete', task, confirmed: true });
-    case 'merge-all': return command({ command: 'merge_all' });
+    // The option carries its check's confirmation, so reaching here is the yes the seam asks for (ADR-0055 D9).
+    case 'merge-all': return command({ command: 'merge_all', pastChecks: true });
     case 'resolve-conflict': return { kind: 'resolve-conflict', task };
     case 'start-resolver': return command({ command: 'run_task', task: escalation.resolver ?? '' });
     case 'stash': return { kind: 'continue-run', how: 'stash' };
