@@ -33,7 +33,7 @@ export function hostBridge() {
   };
 }
 
-export const api = (globalThis as unknown as { __vscodeApi: { postMessage: import('vitest').Mock } }).__vscodeApi;
+export const api = (globalThis as unknown as { __vscodeApi: { postMessage: import('vitest').Mock; getState: import('vitest').Mock; setState: import('vitest').Mock } }).__vscodeApi;
 
 /** The top-level rows of the conversation, by the class that names their kind. */
 export function rowKinds(): string[] {

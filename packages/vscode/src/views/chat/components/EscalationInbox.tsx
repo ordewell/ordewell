@@ -1,11 +1,14 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import type { Escalation, EscalationOption } from '@ordewell/core';
-import type { EscalationAnswer, HostToWebview } from '../../../shared/protocol';
+import { taskLabel, type EscalationAnswers } from './escalationAnswers';
 
 interface EscalationInboxProps {
   escalations: readonly Escalation[];
-  /** Sends the answer to the host; its verdict comes back as an `escalationAnswered` message. */
-  onAnswer: (answer: EscalationAnswer) => void;
+  /** The answers in flight and the refusals: held above, so a refusal outlives its entry. */
+  answers: EscalationAnswers;
+  /** The list is open rather than its control alone. Held above, remembered across reloads. */
+  open: boolean;
+  onToggle: () => void;
   onOpenTask: (taskId: string) => void;
 }
 
@@ -15,69 +18,45 @@ interface Drafting {
   option: EscalationOption;
 }
 
-/** A refusal is kept apart from the list: a stale entry has left it by the time the host says so. */
-interface Refusal {
-  key: number;
-  title: string;
-  message: string;
-}
-
-const taskLabel = (e: Escalation): string => (e.task ? `${e.task.ref} ${e.task.title}` : 'This run');
-
 /**
- * What waits on the user (ADR-0053), drawn from the run view's list. Nothing is
- * kept here but the answer being written, the answers in flight and the
- * refusals: the list itself is the host's, replaced whole on every update, so
- * an entry leaves the moment its wait does.
+ * What waits on the user (ADR-0053): a small control at the right end of the
+ * usage line, and the list as a dropdown upward from it, over the conversation,
+ * so it takes no room from the composer. The list is closed with `hidden`, never
+ * unmounted, so an answer being written survives a collapse. Nothing is kept
+ * here but that answer: the list itself is the host's, replaced whole on every
+ * update, so an entry leaves the moment its wait does.
  */
-export default function EscalationInbox({ escalations, onAnswer, onOpenTask }: EscalationInboxProps) {
-  const [open, setOpen] = useState(true);
+export default function EscalationInbox({ escalations, answers, open, onToggle, onOpenTask }: EscalationInboxProps) {
   const [drafting, setDrafting] = useState<Drafting | null>(null);
   const [note, setNote] = useState('');
-  const [sending, setSending] = useState<ReadonlyMap<string, string>>(new Map());
-  const [refusals, setRefusals] = useState<Refusal[]>([]);
-  const requests = useRef(new Map<string, { escalation: Escalation; option: EscalationOption }>());
-  const nextRequest = useRef(0);
-  const nextRefusal = useRef(0);
+  const barRef = useRef<HTMLButtonElement>(null);
   const listId = useId();
-
-  useEffect(() => {
-    const onMessage = (event: MessageEvent<HostToWebview>) => {
-      const msg = event.data;
-      if (msg?.type !== 'escalationAnswered') return;
-      const request = requests.current.get(msg.requestId);
-      if (!request) return;
-      requests.current.delete(msg.requestId);
-      setSending((prev) => {
-        const next = new Map(prev);
-        next.delete(request.escalation.id);
-        return next;
-      });
-      if (msg.ok) return;
-      setRefusals((prev) => [...prev, {
-        key: nextRefusal.current++,
-        title: `${request.option.label}: ${taskLabel(request.escalation)}`,
-        message: msg.message,
-      }]);
-    };
-    window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
-  }, []);
+  const { sending, refusals } = answers;
 
   // A draft belongs to an escalation that may end under it: nothing is left to answer then.
   useEffect(() => {
     if (drafting && !escalations.some((e) => e.id === drafting.escalationId)) setDrafting(null);
   }, [escalations, drafting]);
 
+  // Esc closes an open question first (the form marks its own), then the list.
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      e.preventDefault();
+      onToggle();
+      barRef.current?.focus();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [open, onToggle]);
+
   if (escalations.length === 0 && refusals.length === 0) return null;
 
   const send = (escalation: Escalation, option: EscalationOption, text: string, confirmed: boolean) => {
-    const requestId = `${listId}-${nextRequest.current++}`;
-    requests.current.set(requestId, { escalation, option });
-    setSending((prev) => new Map(prev).set(escalation.id, option.label));
     setDrafting(null);
     setNote('');
-    onAnswer({ requestId, id: escalation.id, option: option.id, ...(text.trim() ? { note: text.trim() } : {}), ...(confirmed ? { confirmed: true } : {}) });
+    answers.answer(escalation, option, text, confirmed);
   };
 
   const choose = (escalation: Escalation, option: EscalationOption) => {
@@ -89,21 +68,26 @@ export default function EscalationInbox({ escalations, onAnswer, onOpenTask }: E
     send(escalation, option, '', false);
   };
 
+  const count = escalations.length > 0 ? `${escalations.length} waiting` : `${refusals.length} not done`;
+
   return (
     <section className="escalation-inbox" aria-label="Waiting on you">
       <button
+        ref={barRef}
         type="button"
         className="escalation-inbox-bar"
+        // The visible words lead the name, so a voice command for the label still finds it.
+        aria-label={escalations.length > 0 ? `${count} on you` : count}
         aria-expanded={open}
         aria-controls={listId}
-        onClick={() => setOpen((v) => !v)}
+        onClick={onToggle}
       >
-        <span className={`plan-dock-chevron${open ? '' : ' collapsed'}`} aria-hidden="true">
-          <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
+        <span className="escalation-inbox-count">{count}</span>
+        <span className={`escalation-inbox-chevron${open ? '' : ' collapsed'}`} aria-hidden="true">
+          <svg width="9" height="9" viewBox="0 0 11 11" fill="none">
             <path d="M2 4L5.5 7.5L9 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </span>
-        <span className="escalation-inbox-count">{escalations.length} waiting on you</span>
       </button>
       <div id={listId} className="escalation-inbox-body" hidden={!open}>
         {refusals.map((refusal) => (
@@ -113,7 +97,7 @@ export default function EscalationInbox({ escalations, onAnswer, onOpenTask }: E
               type="button"
               className="task-log-open-btn"
               aria-label={`Dismiss: ${refusal.title}`}
-              onClick={() => setRefusals((prev) => prev.filter((r) => r.key !== refusal.key))}
+              onClick={() => answers.dismiss(refusal.key)}
             >
               Dismiss
             </button>

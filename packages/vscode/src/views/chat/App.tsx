@@ -26,6 +26,8 @@ import { DelegationOfferedContext, useDelegationOffered } from './delegationOffe
 import { planSummaryLabel, nextDock } from './planDock';
 import { OpenPatchContext } from './openPatch';
 import { useFollowOutput } from './followOutput';
+import { INBOX_OFF_NOTE, useInboxPrefs } from './inboxView';
+import { useEscalationAnswers } from './components/escalationAnswers';
 import { isBuiltinSlashCommand, slashHelp } from '../../commands/slashCommands';
 import type { EscalationAnswer, HostToWebview, SettingsChange, WebviewToHost } from '../../shared/protocol';
 import { patchedBlocks } from '../../shared/conversationPatch';
@@ -242,6 +244,14 @@ export default function App() {
     vscode.postMessage({ type: 'newSession' });
   }, []);
 
+  const handleEscalationAnswer = useCallback((answer: EscalationAnswer) => {
+    vscode.postMessage({ type: 'answerEscalation', ...answer });
+  }, []);
+  const escalationAnswers = useEscalationAnswers(handleEscalationAnswer);
+  const inboxView = useInboxPrefs(vscode);
+  const { update: updateInboxView } = inboxView;
+  const handleToggleInbox = useCallback(() => updateInboxView({ open: !inboxView.open }), [inboxView.open, updateInboxView]);
+
   const handleSend = useCallback((text: string) => {
     if (text === '/new') {
       const hasContent = blocksRef.current.length > 0 || planRef.current !== null;
@@ -251,6 +261,11 @@ export default function App() {
       }
       setShowNewSessionConfirm(false);
       handleNewSession();
+      return;
+    }
+    if (/^\/inbox(\s|$)/i.test(text)) {
+      updateInboxView({ enabled: !inboxView.enabled });
+      if (inboxView.enabled) vscode.postMessage({ type: 'addNote', text: INBOX_OFF_NOTE });
       return;
     }
     if (text === '/help') {
@@ -278,7 +293,7 @@ export default function App() {
     // moment to start it, and a second send in between would race the first.
     dispatch({ type: 'turnRequested' });
     vscode.postMessage({ type: 'sendMessage', text, runners, typed: true });
-  }, [runners, handleNewSession, showNewSessionConfirm, plannerBusy]);
+  }, [runners, handleNewSession, showNewSessionConfirm, plannerBusy, inboxView.enabled, updateInboxView]);
 
   // The pills are the saved choice every surface and planner turn reads
   // (ADR-0043), so a click asks the host to save it. The request names the
@@ -432,10 +447,6 @@ export default function App() {
   // for it. Opening is idempotent host-side — an open tab is focused.
   const handleOpenTaskLog = useCallback((taskId: string) => {
     vscode.postMessage({ type: 'openTaskLog', taskId });
-  }, []);
-
-  const handleEscalationAnswer = useCallback((answer: EscalationAnswer) => {
-    vscode.postMessage({ type: 'answerEscalation', ...answer });
   }, []);
 
   // The card is where a task's evidence is, so opening the task is opening its
@@ -1146,9 +1157,13 @@ export default function App() {
 
       {renderPlanDock()}
 
-      <EscalationInbox escalations={run.escalations ?? []} onAnswer={handleEscalationAnswer} onOpenTask={handleOpenEscalatedTask} />
-
-      <UsageLine block={usageBlock} limits={accountLimitsOf(accountLimits, planner.runner, modelConfig?.orchestrator)} />
+      <UsageLine
+        block={usageBlock}
+        limits={accountLimitsOf(accountLimits, planner.runner, modelConfig?.orchestrator)}
+        inbox={inboxView.enabled && ((run.escalations ?? []).length > 0 || escalationAnswers.refusals.length > 0)
+          ? <EscalationInbox escalations={run.escalations ?? []} answers={escalationAnswers} open={inboxView.open} onToggle={handleToggleInbox} onOpenTask={handleOpenEscalatedTask} />
+          : undefined}
+      />
 
       {/* Pinned rather than the list's last row, and drawn for the whole turn:
           a turn can go minutes with nothing new to show, its thinking block

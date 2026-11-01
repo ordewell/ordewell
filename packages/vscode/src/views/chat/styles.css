@@ -981,9 +981,14 @@ body.vscode-high-contrast-light .disclosure:hover {
   border-bottom: 1px solid var(--border-muted);
   /* When the column is over-full (settings open, plan docked), the space comes
      from here — settings are the least urgent thing on screen, and the
-     alternative is the conversation or the input losing its room. */
-  flex-shrink: 1;
-  min-height: 0;
+     alternative is the conversation or the input losing its room. The factor
+     is large so the plan dock's, which must add up to more than one to take a
+     whole shortfall once this is at its floor, stays small beside it. */
+  flex-shrink: 100;
+  /* Its toggle row (8px padding either side of a 12px label) is the one thing
+     that never gives way: squeezed to nothing, the Run settings could not be
+     reached to be opened. */
+  min-height: 28px;
   display: flex;
   flex-direction: column;
   /* Only .setup-panel-body scrolls, so the Settings toggle stays reachable. */
@@ -3774,6 +3779,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 
 /* ---- Chat Input ---- */
 .chat-input {
+  flex-shrink: 0;
   border-top: 1px solid var(--border-muted);
   background: var(--bg-primary);
 }
@@ -5487,10 +5493,13 @@ body.vscode-high-contrast-light .task-card.expanded {
   display: flex;
   flex-direction: column;
   /* A dragged height is in px, so a panel resized smaller would otherwise push
-     the input off screen. The tiny weight keeps the settings panel the first
-     to give way: flex hands the overflow to the dock only once settings hit 0. */
-  flex-shrink: 0.01;
-  min-height: 0;
+     the input off screen. The settings panel's far larger factor makes it the
+     first to give way; once it is at its floor the dock takes the rest, and
+     only its body gives, so the bar stays. (A factor below one would take only
+     that fraction of the shortfall, which is how the composer was left over the
+     edge.) */
+  flex-shrink: 1;
+  min-height: 36px;
   border-top: 1px solid var(--border-muted);
   background: var(--bg-primary);
 }
@@ -6180,7 +6189,9 @@ body.vscode-high-contrast-light .pending-message {
   gap: 3px;
   flex-shrink: 0;
   min-width: 0;
-  overflow: hidden;
+  /* The inbox's list opens from here over the conversation, so the line cannot
+     clip it; every measure inside ellipsises on its own. */
+  position: relative;
   white-space: nowrap;
   padding: 3px 14px;
   font-size: 10px;
@@ -6924,33 +6935,36 @@ body.vscode-high-contrast-light .pending-message {
   border: 0;
 }
 
-/* The escalation inbox (ADR-0053) sits between the plan dock and the composer.
-   Its body is bounded and scrolls, so a long list never pushes the composer or
-   the queued-message stack off screen. */
+/* The escalation inbox (ADR-0053): a control pinned to the right end of the
+   usage line, and its list as a dropdown upward from there, over the
+   conversation. Nothing here takes height from the column, so the composer, the
+   usage line and the Settings bar stay in the panel whatever else is open. */
 .escalation-inbox {
+  margin-left: auto;
   flex-shrink: 0;
-  border-top: 1px solid var(--border-muted);
-  background: var(--bg-primary);
 }
 
+/* The measures give way before the control does; the colour (as the plan dock's
+   "awaiting approval") is what marks it out against the muted 10px text, and
+   holds its contrast in both themes. */
 .escalation-inbox-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 6px 10px;
+  gap: 5px;
+  padding: 1px 7px;
   border: none;
-  background: transparent;
-  color: var(--text-primary);
+  border-radius: var(--radius-full);
+  background: var(--orange-subtle);
+  color: var(--orange);
   font-family: inherit;
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 600;
+  line-height: 1.5;
   cursor: pointer;
-  text-align: left;
 }
 
 .escalation-inbox-bar:hover {
-  background: var(--bg-hover);
+  filter: brightness(1.15);
 }
 
 .escalation-inbox-bar:focus-visible,
@@ -6960,10 +6974,35 @@ body.vscode-high-contrast-light .pending-message {
   outline-offset: -1px;
 }
 
+.escalation-inbox-chevron {
+  display: flex;
+  transition: transform var(--transition-fast);
+}
+
+/* Closed it points up, where the list will open. */
+.escalation-inbox-chevron.collapsed {
+  transform: rotate(180deg);
+}
+
+/* Anchored to the usage line's top edge. Half the panel is the cap: the line sits
+   above the composer, so the list stays below the panel's top at any height the
+   composer leaves it, and a long list scrolls inside. */
 .escalation-inbox-body {
-  max-height: 30vh;
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 100%;
+  z-index: 5;
+  max-height: 50vh;
   overflow-y: auto;
-  padding: 0 10px 6px;
+  padding: 6px 8px;
+  white-space: normal;
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  box-shadow: 0 -4px 14px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+  color: var(--text-primary);
 }
 
 .escalation-inbox-body[hidden] {
