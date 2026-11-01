@@ -19,6 +19,8 @@
  *   summary     the summary handed to task_complete
  *   noComplete  end the turn without calling task_complete (reads as "waiting for input")
  *   crash       exit non-zero before completing
+ *   untilFile   a file to wait for before the work, for a task that must still run when something else ends
+ *   calls       tool calls made on the Ordewell server before the file writes, each `[tool, arguments]`
  *
  * A planner's first message may carry `turnsFrom` instead: a file holding one
  * list of tool calls per turn, each `[tool, arguments]`, made on the Ordewell
@@ -26,6 +28,9 @@
  * subplanner is parked between turns (ADR-0055 D18), so what is left of them is
  * kept beside the session, under FAKE_CLAUDE_STATE, for the `--resume` that
  * takes its next turn. A planner writes no file of the workspace.
+ *
+ * With FAKE_CLAUDE_LOG set, every prompt taken and every call's reply is
+ * appended to that file as a line of JSON, for a test to read what was said.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -151,26 +156,42 @@ function plannerTurn(cue) {
   return calls;
 }
 
-async function runPlannerTurn(calls) {
+function logged(entry) {
+  if (process.env.FAKE_CLAUDE_LOG) fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, `${JSON.stringify({ sessionId, ...entry })}\n`);
+}
+
+async function makeCalls(calls) {
   const server = mcpServer();
   for (const [name, args] of calls) {
     const id = `toolu_fake_${randomUUID()}`;
     assistant([{ type: 'tool_use', id, name: `mcp__ordewell__${name}`, input: args }]);
     const reply = await callTool(server, name, args);
+    logged({ tool: name, reply });
     toolResult(id, reply.text, reply.isError);
   }
+}
+
+async function runPlannerTurn(calls) {
+  await makeCalls(calls);
   assistant([{ type: 'text', text: 'This turn is done.' }]);
 }
 
+async function untilFile(file, signal) {
+  while (!fs.existsSync(file) && !signal.aborted) await sleep(25, signal);
+}
+
 async function runTurn(text, signal) {
+  logged({ prompt: text });
   const cue = readCue(text);
   const calls = plannerTurn(cue);
   if (calls) return runPlannerTurn(calls);
   assistant([{ type: 'text', text: 'Starting the task.' }]);
 
   if (cue.delayMs) await sleep(cue.delayMs, signal);
+  if (cue.untilFile) await untilFile(cue.untilFile, signal);
   if (signal.aborted) return;
   if (cue.crash) process.exit(1);
+  if (cue.calls) await makeCalls(cue.calls);
 
   const files = cue.write ?? { 'fake-claude-output.txt': `fake-claude output for ${sessionId}\n` };
   for (const [name, contents] of Object.entries(files)) {

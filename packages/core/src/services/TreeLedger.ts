@@ -296,13 +296,12 @@ export class TreeLedger {
    * new node for the same child and its one plan (ADR-0055 D17).
    */
   board(path: NodePath): readonly BoardEntry[] {
-    const { sessionId } = this.at(path);
-    return [...this.tree.values()].filter((node) => node.sessionId === sessionId).flatMap((node) => node.board ?? []);
+    return this.boardOf(this.at(path).sessionId);
   }
 
-  /** Every entry a task's children ever posted, for what its landing raises. */
-  boardsOf(parent: NodePath, taskId: string): readonly BoardEntry[] {
-    return [...this.tree.values()].filter((node) => node.taskId === taskId && parentPath(node.path) === parent).flatMap((node) => node.board ?? []);
+  /** One child's board, closed or not: a fresh retry is a new child with a board of its own (ADR-0055 D15). */
+  boardOf(sessionId: string): readonly BoardEntry[] {
+    return [...this.tree.values()].filter((node) => node.sessionId === sessionId).flatMap((node) => node.board ?? []);
   }
 
   /** Put an entry on `path`'s board, or null where that board is full. */

@@ -705,6 +705,17 @@ export class IsolationRunController {
     return read.text.split('\0').filter(Boolean);
   }
 
+  /** The branch this run's work lands on, which a board's files are compared with (ADR-0057 R9). */
+  get integrationBranch(): string | undefined {
+    const repos = this.run?.repos ?? [];
+    return (repos.find((repo) => repo.path === SELF_REPO) ?? repos[0])?.integrationBranch;
+  }
+
+  /** See {@link IWorktreeIsolation.blobOn}. */
+  async blobOn(branch: string, file: string): Promise<string | null | undefined> {
+    return this.isolation.blobOn?.(this.workspaceRoot(), branch, file).catch(() => undefined);
+  }
+
   async taskDiff(taskId: string, options: TaskDiffRead): Promise<TaskDiffResult> {
     if (!this.run || !this.run.tasks[taskId] || !this.isolation.taskDiff) {
       return { available: false, reason: TASK_DIFF_UNAVAILABLE };

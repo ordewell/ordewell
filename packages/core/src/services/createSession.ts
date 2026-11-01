@@ -12,7 +12,7 @@ import { ApprovalRecord } from './ApprovalRecord';
 import type { TaskQueryCatalog } from './TaskQuery';
 import { SessionCatalog } from './SessionCatalog';
 import { plannerToolHandler, runnersOf, PLANNER_TURN_ENDED, type PlanEditOutcome, type TaskHead } from './plannerTools';
-import { sharedMcpServer, type McpToolReply, type OrdewellMcpServer, type PlannerToolHandler, type ReadTaskArgs, type TaskCompleteArgs } from './mcp';
+import { sharedMcpServer, type McpToolReply, type OrdewellMcpServer, type PlannerToolHandler, type PostArgs, type ReadTaskArgs, type TaskCompleteArgs } from './mcp';
 import { ConversationEditError, PlannerContextPausedError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError, type ConversationCompaction, type ConversationOpening, type PlannerConversationHost, type RewindTarget, type WakeUpTurn } from './PlannerConversation';
 import { forkPlanState, type ForkedDialogue } from './conversationFork';
 import { PlanTurns, type PlanTurnInput } from './PlanTurns';
@@ -22,8 +22,11 @@ import { TaskControlError, TaskOrchestrator, type OrchestratorObserver, type Run
 import { ChildPlanRunner, ownedRunner, type ChildHost, type ChildNode, type NodeEnd, type NodeState, type SubplannerLink, type TakenReport } from './ChildPlanRunner';
 import { readTask, type TaskLogReader } from './readTask';
 import { Subtree, takeReport } from './Subtree';
+import { NodeBoard } from './Board';
+import { ScopeLines } from './ScopeLines';
+import { isBoardRef } from '../models/Board';
 import { DELEGATION_OFFERED } from './runSettingsText';
-import { checksDelegatedTask } from '../models/Delegation';
+import { checkWords, checksDelegatedTask } from '../models/Delegation';
 import type { SlotPool } from './SlotPool';
 import type { OpenLease, ReservedLease } from './executionLease';
 import { PlanStore } from './PlanStore';
@@ -526,6 +529,8 @@ export function createSession(deps: SessionDeps): Session {
     discardChild: (task) => session.discardChild(task),
     subtree: () => session.subtree(),
     ...(deps.placement?.budget ? { planNode: () => deps.placement!.budget!.path } : {}),
+    board: () => session.board(),
+    landed: (task) => session.taskLanded(task),
     sessionId: () => session.sessionId,
     openTurn: () => session.turnRoomFreed(),
     skillsAt: (roots) => (deps.skillsService ?? new SkillsService(roots)).forRoot(roots),
@@ -847,6 +852,12 @@ export class Session {
   private readonly budget: NodeBudget | undefined;
   /** The tree's ledger, once something asked: a flat run never does, so it has none and writes no log (ADR-0058 S3). */
   private tree: TreeLedger | null = null;
+  /** The lines this plan's landings owe its running tasks (ADR-0057 R6). */
+  private readonly scopeLines = new ScopeLines({
+    running: () => this.store.planTasks.filter((task) => task.type === 'delegated' && task.scope && (task.status === 'in_progress' || task.status === 'awaiting_user')),
+    changedPaths: (taskId) => this.changedPaths(taskId),
+    send: (taskId, line) => this.orchestrator.addressTask(taskId, line),
+  });
   /** The subplanner was told a start was refused; a raise makes it news again (ADR-0056 M5). */
   private toldStartRefused = false;
   /** The opening behind {@link tree}, and the session it opened for. */
@@ -905,6 +916,7 @@ export class Session {
     taskLog: (taskId, attempt) => this.taskLog(taskId, attempt),
     readHandoff: (args) => this.readBelow(args),
     below: () => this.subtree(),
+    post: (args) => this.postOnBoard(args),
     taskDiff: (taskId, options) => {
       // A read-only task lands nothing and its worktree is gone: the patch it saved is what it changed (ADR-0050).
       const patch = savedPatchOf(this.store.get(taskId)?.handoff);
@@ -1807,7 +1819,7 @@ export class Session {
       if (saved?.plan.isolation && saved.plan.isolation.run.workspaceRoot !== cwd) throw new Error(`Task "${task.title}" cannot reopen its child: its worktree has moved. Retry it fresh, which starts a new child.`);
       const child = this.childSession({ task, cwd, placement, authority, brief, link });
       if (saved) child.loadPlan(pickedUp(saved.plan), saved.meta.goal, cwd, { sessionId: placement.sessionId });
-      return child.asNode(mandate);
+      return child.asNode(mandate, (await this.board())?.pins() ?? []);
     } catch (err) {
       budget.tree.close(budget.path);
       throw err;
@@ -1847,16 +1859,18 @@ export class Session {
     for (const task of this.store.allTasks) if (task.type === 'delegated') await this.discardChild(task);
   }
 
-  /** This session as its parent's attempt drives it. */
-  private asNode(mandate: Mandate): ChildNode {
+  /** This session as its parent's attempt drives it, `pins` what it is told as it starts (ADR-0057 R10). */
+  private asNode(mandate: Mandate, pins: readonly string[]): ChildNode {
+    const told = (goal: string) => (pins.length > 0 ? `${goal}\n\n${pins.join('\n')}` : goal);
     return {
       sessionId: this.sessionId,
       protectedPaths: mandate.exclusions.protectedPaths,
       wallClockMs: mandate.limits.wallClockMs,
       heldSince: (since) => this.placement?.pool.heldSince(since) ?? 0,
-      startPlanning: (goal) => this.startPlanning(goal),
+      startPlanning: (goal) => this.startPlanning(told(goal)),
       continueConversation: (text) => this.continueConversation(text),
-      goOn: (text, goal) => this.goOn(text, goal),
+      goOn: (text, goal) => this.goOn(text, told(goal)),
+      hear: (line) => { void this.turns.enqueue({ source: 'supervisor', text: line, rides: true }).catch(() => undefined); },
       state: () => this.nodeState(),
       takeReport: (report) => this.takeReport(report),
       halt: () => this.stopSubtree(),
@@ -1903,6 +1917,49 @@ export class Session {
     });
   }
 
+  /** Whether this node has a board (ADR-0057 R8): a child always, and a root from its first delegated task. A flat plan never does, and never opens a ledger for one. */
+  private get holdsBoard(): boolean {
+    if (!this.delegationOffered) return false;
+    return this.budget !== undefined || this.tree !== null || flattenTasks(this.store.planTasks).some((task) => task.type === 'delegated');
+  }
+
+  /** This node's board, read through what its tree's log holds; null where it has none. */
+  async board(): Promise<NodeBoard | null> {
+    if (!this.holdsBoard) return null;
+    const log = this.budget?.tree ?? await this.ledger().catch(() => null);
+    return log && new NodeBoard({
+      log,
+      node: this.nodePath,
+      git: { branch: () => this.runs.integrationBranch, blob: (branch, file) => this.runs.blobOn(branch, file) },
+      checks: () => checkWords(this.store.planTasks),
+    });
+  }
+
+  /** A planner's `post`, in its own workspace. */
+  async postOnBoard(args: PostArgs): Promise<McpToolReply> {
+    const board = await this.board();
+    if (!board) return { text: 'This plan has no board: it gains one with its first delegated task. Nothing was posted.', isError: true };
+    return board.post(args, {}, this.workspaceRoot);
+  }
+
+  /**
+   * What a landing owes the plan it landed in (ADR-0057 R6): a delegated task's
+   * contracts rise to this board, then each running task that declared what it
+   * touched gets its line. Undefined with no board, so a flat landing waits on
+   * nothing. A failure here costs a line, and never the landing.
+   */
+  taskLanded(task: Readonly<Task>): Promise<void> | undefined {
+    if (!this.holdsBoard) return undefined;
+    return this.raiseAndAddress(task).catch((err: unknown) => console.warn(`[scope] Task "${task.title}" landed, and what it owed the tasks beside it failed: ${err instanceof Error ? err.message : String(err)}`));
+  }
+
+  private async raiseAndAddress(task: Readonly<Task>): Promise<void> {
+    const provides = task.scope?.provides ?? [];
+    const child = this.runs.childSession(task.id) ?? task.runnerSessionId;
+    if (provides.length > 0 && child) await (await this.board())?.raise((await this.ledger()).boardOf(child), provides);
+    await this.scopeLines.landed(task);
+  }
+
   /** What is below this plan; null with nothing delegated, so a flat run opens no ledger. */
   async subtree(): Promise<Subtree | null> {
     if (!this.tree && !flattenTasks(this.store.planTasks).some((task) => task.type === 'delegated')) return null;
@@ -1923,6 +1980,8 @@ export class Session {
 
   /** A planner's `read`: its whole plan, and what is below it (ADR-0057 R11). */
   async readBelow(args: ReadTaskArgs): Promise<McpToolReply> {
+    const board = isBoardRef(String(args.task)) ? await this.board() : null;
+    if (board) return board.read(String(args.task));
     return readTask(args, undefined, this.store.planTasks, this.taskLogReader, await this.subtree());
   }
 
@@ -3633,6 +3692,7 @@ export class Session {
   }
 
   destroy(): void {
+    this.scopeLines.dispose();
     // Planning research runs on a separate conduit from task execution — a
     // live spawn_research_agent/bash tool call would otherwise keep running
     // server-side after the client has already moved on to a new session.

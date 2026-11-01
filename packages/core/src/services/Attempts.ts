@@ -35,9 +35,11 @@ import { checkHandoff, readableTaskIds, withPatch, type HandoffPatch, type Store
 import { applySavedPatch, capturePatch, patchArtifact, patchReply } from './PatchCapture';
 import { handoffLogs, readTask, type TaskLogReader } from './readTask';
 import type { Subtree } from './Subtree';
+import type { NodeBoard } from './Board';
+import { isBoardRef } from '../models/Board';
 import { defaultExecFile, type GitInvoker } from './gitExec';
 import { augmentedPath } from '../utils/shellPath';
-import type { ApplyPatchArgs, McpToolReply } from './mcp/tools';
+import type { ApplyPatchArgs, McpToolReply, PostArgs } from './mcp/tools';
 import { TaskControlError } from './TaskControlError';
 import { TaskWebReader } from './taskWebReads';
 import type { IWebFetcher } from '../interfaces/IWebFetcher';
@@ -323,6 +325,8 @@ export interface AttemptsDeps {
   subtree?: () => Promise<Subtree | null>;
   /** This plan's node in its tree, what a reference is pinned under. Absent, the root's. */
   planNode?: () => string;
+  /** This plan's board; null for a flat plan, which has none (ADR-0057 R8). */
+  board?: () => Promise<NodeBoard | null>;
   /** What starting a research task owes the planner (ADR-0037 R3). */
   research?: Pick<ResearchTasks, 'started'>;
   /** This node's autonomy, as its mandate reads it (ADR-0056 M6). */
@@ -927,7 +931,8 @@ export class Attempts {
     if (takesSkills(kind) && task.skills?.length) {
       attempt.skills = resolveTaskSkills(task, this.deps.skillsAt(this.skillRoots(cwd)), worktree ? (name) => this.uncommittedSkillFolder(name) : undefined);
     }
-    const finalPrompt = attemptPrompt(kind, {
+    const board = await this.deps.board?.() ?? null;
+    const prompt = attemptPrompt(kind, {
       task,
       plan: store.planTasks,
       planMapEnabled: this.deps.config.planMapEnabled,
@@ -938,6 +943,9 @@ export class Attempts {
       previousHandoff: this.deps.previousHandoffFromLog,
       previousRound: this.host.previousRound(task.id),
     });
+    // The one push down a tree, and only to an attempt its plan's prompt starts: a continuing one was told at its start (ADR-0057 R10).
+    const pins = board && takesSkills(kind) ? board.pins() : [];
+    const finalPrompt = pins.length > 0 ? `${prompt}\n\n${pins.join('\n')}` : prompt;
     const env = await this.envForTask(cwd);
     if (landsNothing(kind)) {
       // Each repo worktree's `.git` must stay the repository's, so a sealed run
@@ -972,7 +980,8 @@ export class Attempts {
         const below = await this.reachOf(task.id);
         return checkHandoff(completion, task.id, store.planTasks, { attempt: attempt.attempt, logs: handoffLogs(this.deps.taskLog), ...(this.deps.planNode ? { node: this.deps.planNode() } : {}), ...(below ? { below: below.below } : {}) });
       },
-      readTask: async (args) => readTask(args, task.id, store.planTasks, this.deps.taskLog, await this.reachOf(task.id)),
+      readTask: async (args) => (board && isBoardRef(String(args.task)) ? board.read(String(args.task)) : readTask(args, task.id, store.planTasks, this.deps.taskLog, await this.reachOf(task.id))),
+      ...(board ? { post: (args: PostArgs) => board.post(args, { task: taskRefOf(store.planTasks, task.id) ?? task.id, attempt: attempt.attempt }, cwd) } : {}),
       ...(shell ? { savePatch: (signal: AbortSignal) => this.savePatch(task, attempt, signal) } : {}),
       ...(web ? { webReads: web } : {}),
       applyPatch: (args) => this.applyPatch(task, attempt, args),
@@ -985,6 +994,18 @@ export class Attempts {
         this.host.emit('onTaskChanged');
       },
     });
+  }
+
+  /**
+   * A line from Ordewell to a running attempt (ADR-0057 R6), at its next step
+   * boundary. No person sent it, so a task at a checkpoint takes it too and
+   * nothing about the task changes. False where nothing is running.
+   */
+  address(taskId: string, line: string): boolean {
+    const live = this.live.get(taskId)?.session;
+    if (!live) return false;
+    live.sendMessage(line, 'ordewell');
+    return true;
   }
 
   /** What a task may read below its plan: the subtree of each delegated task its readable set holds (ADR-0057 R1). */

@@ -166,6 +166,16 @@ export function checksHoldingMerge(tasks: readonly Task[], awaitsMerge: (taskId:
     .filter((check) => check.status !== 'completed' && check.status !== 'skipped');
 }
 
+/**
+ * What this plan's checks are made of (ADR-0057 R10): the words of whatever
+ * depends directly on a delegated task, which is all a pure reader of the plan
+ * can tell a check by. A pin may hold none of them whole.
+ */
+export function checkWords(tasks: readonly Task[]): string[] {
+  const delegated = new Set(tasks.filter((t) => t.type === 'delegated').map((t) => t.id));
+  return tasks.filter((t) => t.dependencies.some((id) => delegated.has(id))).flatMap((t) => [t.title, t.prompt ?? '', t.script ?? '', ...(t.commands ?? []).map((argv) => argv.join(' '))]);
+}
+
 /** Whether `task` is the check of a delegated task of `tasks`: what a model may not skip past, since that lets the work past its only check (D8). */
 export function checksDelegatedTask(tasks: readonly Task[], task: Task, rules: Pick<DelegationRules, 'runnerModes'> = {}): boolean {
   if (!readsOnly(task, rules.runnerModes) && !(task.type === 'script' && task.readOnly)) return false;

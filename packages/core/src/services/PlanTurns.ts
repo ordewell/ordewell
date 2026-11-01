@@ -21,6 +21,8 @@ export interface PlanTurnInput {
   tasks?: readonly string[];
   /** A wake-up of what a load gave back: nothing new happened, so while the session stays as loaded it waits with the saved inputs (ADR-0029). */
   idle?: true;
+  /** Goes with the next turn and opens none: a line Ordewell owes, which is no reason to wake a model (ADR-0057 R6). */
+  rides?: true;
   /** Stops the turn that takes this input. Not saved: a replayed input has no caller left to stop it. */
   signal?: AbortSignal;
 }
@@ -319,7 +321,7 @@ export class PlanTurns {
     // that arrives during a turn, and is delivered when it frees.
     if (input.source === 'user' && this.host.plan() && !this.running && this.host.conversationBusy()) return Promise.reject(new ConversationBusyError('send a message'));
     const plan = this.host.plan();
-    if (input.idle && this.restored && plan) {
+    if (((input.idle && this.restored) || input.rides) && plan) {
       plan.pendingTurns = [...(plan.pendingTurns ?? []), this.pending(input, false)];
       this.host.persist();
       return Promise.resolve(plan);
@@ -387,6 +389,7 @@ export class PlanTurns {
       ...(forced ? { forced: true } : {}),
       ...(input.report ? { report: input.report } : {}),
       ...(input.tasks?.length ? { tasks: [...input.tasks] } : {}),
+      ...(input.rides ? { rides: true } : {}),
     };
   }
 
@@ -552,7 +555,7 @@ export class PlanTurns {
    * the user stopped and nothing else opens one at all (ADR-0029).
    */
   private mayOpen(wakeUps: readonly PendingPlanTurn[]): boolean {
-    const opening = wakeUps.filter((t) => !this.host.stoppedByUser(t.tasks));
+    const opening = wakeUps.filter((t) => !t.rides && !this.host.stoppedByUser(t.tasks));
     if (opening.length === 0) return false;
     return opening.some((t) => t.report !== undefined) ? this.host.mayReport() : this.host.mayWake();
   }

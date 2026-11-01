@@ -14,6 +14,7 @@ function child(wallClockMs: number) {
     wallClockMs,
     startPlanning: () => Promise.resolve(),
     continueConversation: () => Promise.resolve(),
+    hear: () => undefined,
     goOn: () => Promise.resolve(),
     state: () => state,
     halt: vi.fn(async () => { state.live = false; }),

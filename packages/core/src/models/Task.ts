@@ -759,6 +759,8 @@ export interface PendingPlanTurn {
    * the run. While the user has stopped all of them it opens no turn (ADR-0029).
    */
   tasks?: string[];
+  /** It goes with the next turn and opens none (ADR-0057 R6). */
+  rides?: true;
 }
 
 /**
