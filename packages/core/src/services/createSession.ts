@@ -1814,10 +1814,11 @@ export class Session {
     }
   }
 
-  /** What is left of a delegated task's budget, across every child it has had (ADR-0055 D15, ADR-0056 M10). Throws once nothing is. */
+  /** What is left of what the tree granted a delegated task, its budget and every raise, across every child it has had (ADR-0055 D15, ADR-0056 M5, M10). Throws once nothing is. */
   private budgetLeft(task: Task, tree: TreeLedger): Pick<MandateRequest, 'tokens' | 'wallClockMs'> {
-    const tokens = (task.budget?.tokens ?? 0) - tree.spentOn(this.nodePath, task.id);
-    if (tokens <= 0) throw new Error(`Task "${task.title}" has spent its budget of ${task.budget?.tokens ?? 0} tokens, so no child can start on it.`);
+    const granted = (task.budget?.tokens ?? 0) + tree.raisedOn(this.nodePath, task.id);
+    const tokens = granted - tree.spentOn(this.nodePath, task.id);
+    if (tokens <= 0) throw new Error(`Task "${task.title}" has spent its budget of ${granted} tokens, so no child can start on it.`);
     const clock = task.budget?.wallClockMs;
     if (clock === undefined) return { tokens };
     const wallClockMs = clock - (task.attemptUsage ?? []).reduce((total, attempt) => total + attempt.wallTimeMs, 0);

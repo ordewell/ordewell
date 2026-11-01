@@ -61,6 +61,11 @@ function readsOnly(task: Task, runnerModes: DelegationRules['runnerModes']): boo
   return mode !== undefined && task.taskMode === mode;
 }
 
+/** Whether nothing here can say what mode `task` runs in: its runner was switched off since, removed, or belongs to another machine. */
+function runnerUnread(task: Task, runnerModes: DelegationRules['runnerModes']): boolean {
+  return task.type === 'ai' && runnerModes !== undefined && runnerModes[task.assignedRunner] === undefined;
+}
+
 /** Whether a task runs at the workspace root behind a merge gate, so it cannot be cut from the integration tip. */
 function atAGate(task: Task): boolean {
   return (task.type === 'script' && !task.readOnly) || task.ops === true;
@@ -137,9 +142,14 @@ function judges(task: Task, delegated: Task, runnerModes: DelegationRules['runne
   return readsOnly(task, runnerModes) || (!delegated.readOnly && task.type === 'script' && task.readOnly === true);
 }
 
-/** The checks of a delegated task: what depends on it directly and can judge it (D8). */
+/**
+ * The checks of a delegated task: what depends on it directly and can judge it
+ * (D8). One whose runner cannot be read may be its only check, so it counts,
+ * and the hold fails closed (D9). Only a plan being written is held to
+ * `judges` alone: a task nothing can read is no check to accept one on.
+ */
 export function checksOf(tasks: readonly Task[], delegated: Task, rules: Pick<DelegationRules, 'runnerModes'> = {}): Task[] {
-  return tasks.filter((t) => t.dependencies.includes(delegated.id) && judges(t, delegated, rules.runnerModes));
+  return tasks.filter((t) => t.dependencies.includes(delegated.id) && (judges(t, delegated, rules.runnerModes) || runnerUnread(t, rules.runnerModes)));
 }
 
 /**
@@ -157,7 +167,7 @@ export function checksHoldingMerge(tasks: readonly Task[], awaitsMerge: (taskId:
 
 /** Whether `task` is the check of a delegated task of `tasks`: what a model may not skip past, since that lets the work past its only check (D8). */
 export function checksDelegatedTask(tasks: readonly Task[], task: Task, rules: Pick<DelegationRules, 'runnerModes'> = {}): boolean {
-  if (!readsOnly(task, rules.runnerModes) && !(task.type === 'script' && task.readOnly)) return false;
+  if (!readsOnly(task, rules.runnerModes) && !runnerUnread(task, rules.runnerModes) && !(task.type === 'script' && task.readOnly)) return false;
   return tasks.some((t) => t.type === 'delegated' && task.dependencies.includes(t.id));
 }
 
