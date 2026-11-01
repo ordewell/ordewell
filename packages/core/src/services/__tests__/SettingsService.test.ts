@@ -265,6 +265,12 @@ describe('SettingsService', () => {
     expect(sessionRuntimeSettings(service.getAll()).plannerAutoCompaction).toBeUndefined();
   });
 
+  it('keeps the containers setting as written, whatever it holds: one it cannot use must reach what refuses it', () => {
+    fs.writeFileSync(tempFile, JSON.stringify({ containers: 'docker' }));
+    expect(service.getAll().containers).toBe('docker');
+    expect(sessionRuntimeSettings(service.getAll()).containers).toBe('docker');
+  });
+
   it('reads taskRunnerConfig from the file, keeps it through other writes, and drops a value that is not one of the two', () => {
     fs.writeFileSync(tempFile, JSON.stringify({ taskRunnerConfig: 'minimal' }));
     expect(service.getAll().taskRunnerConfig).toBe('minimal');

@@ -8,6 +8,16 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **A task can run in a container.** With the `containers` setting, a change task
+  runs in a Docker container you build the image for, with your files out of its
+  reach and its work coming back through one checked route before it lands. Any
+  engine the `docker` command talks to will do, and nothing changes unless you set
+  it: local worktrees stay the default. Claude Code is the runner proven there so
+  far. A container does not limit the network yet. See
+  [Running tasks in containers](docs/containers.md).
+
 ### Changed
 
 - **Tasks read each other's handoffs with `read`.** The tool was `read_task`, and

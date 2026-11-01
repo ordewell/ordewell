@@ -110,6 +110,13 @@ export interface UserSettings {
    * no surface offers it.
    */
   taskRunnerConfig?: TaskRunnerConfig;
+  /**
+   * Run tasks in containers (ADR-0059 L5), as `containerSettings` reads it:
+   * absent means local worktrees. Kept as written, since one it cannot use must
+   * refuse a task, not fall back to the host. Set in the file only: no surface
+   * offers it.
+   */
+  containers?: unknown;
 }
 
 /**
@@ -464,6 +471,7 @@ export class SettingsService {
     if (raw.taskRunnerConfig === 'user' || raw.taskRunnerConfig === 'minimal') {
       settings.taskRunnerConfig = raw.taskRunnerConfig;
     }
+    if (raw.containers !== undefined) settings.containers = raw.containers;
     // A value it cannot use is left out, so its default stands.
     for (const key of RUN_SETTING_KEYS) {
       if (RUN_SETTING_CHECKS[key].valid(raw[key])) (settings as Record<keyof GlobalRunSettings, unknown>)[key] = raw[key];

@@ -135,6 +135,8 @@ the runners each get their models and credentials, see
 [planners and runners](docs/planners-and-runners.md). To write your own
 planner or task skills, see the [skills guide](docs/skills.md). If Codex's
 sandbox cannot start on your machine, see [troubleshooting](docs/troubleshooting.md).
+To keep a task's runner away from your files, see
+[running tasks in containers](docs/containers.md).
 
 ## Where it's going
 

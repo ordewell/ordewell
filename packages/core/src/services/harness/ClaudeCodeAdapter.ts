@@ -588,6 +588,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   private mainModel: string | undefined;
   /** What the plan should say the task runs: its spawn's model, then each switch followed. */
   private followedModel: string | undefined;
+  /** The MCP configuration this process reads, on this host. */
+  private configFile: string | null = null;
   /**
    * Model commands sent through the chat whose switch has not been seen yet,
    * oldest first, each with the turns still to end before its own has. Several
@@ -712,7 +714,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       this.pendingResume = opts.resumeSessionId;
     }
     if (opts.mcp) args.push('--append-system-prompt', taskCompletionContract(opts), ...this.ordewellServerArgs(opts.mcp, readOnly ? 'readOnlyTask' : 'task'));
-    return { command: 'claude', args, env: minimal ? MINIMAL_TASK_ENV : TASK_ENV };
+    return { command: 'claude', args, env: minimal ? MINIMAL_TASK_ENV : TASK_ENV, files: this.configFile ? [this.configFile] : [] };
   }
 
   /**
@@ -732,6 +734,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   private ordewellServerArgs(mcp: McpClientConfig, role: OrdewellToolRole, servers?: Record<string, unknown>): string[] {
     const { args, config } = CLAUDE_ORDEWELL.launch(mcp, role, servers);
     this.own('mcp-config', () => config.remove());
+    this.configFile = config.path;
     this.givenOrdewell = true;
     return args;
   }

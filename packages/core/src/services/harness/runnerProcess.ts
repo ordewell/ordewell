@@ -8,6 +8,7 @@ import { killTree, spawnInOwnGroup } from '../../utils/processTree';
 import { workspaceEnvOf } from '../workspaceEnv';
 import { runnerEnv } from './runnerEnv';
 import type { AgentProcessDeps } from './AgentAdapter';
+import type { PlacedLaunch } from '../executionLease';
 
 /** Stderr kept for the failure message; a dying CLI's last words are the only useful diagnostic. */
 const STDERR_TAIL_CHARS = 4000;
@@ -45,6 +46,8 @@ export interface RunnerCommand {
    * workspace's, for a runner whose value merges into one of them.
    */
   env?: (workspace: Record<string, string>) => Record<string, string>;
+  /** Paths on this host, named in `args`, that the process reads, for a placement to bring along (ADR-0059 L5). */
+  files?: readonly string[];
   /**
    * Names this launch must not inherit from the host or the workspace — the
    * credentials a native-shell planner keeps out of its process (ADR-0036 N2.2).
@@ -78,6 +81,8 @@ export class RunnerProcess {
   private exitReported = false;
   private stderrTail = '';
   private spawnEnv: NodeJS.ProcessEnv = {};
+  /** What a lease launched in this process's place, where one did (ADR-0059 L5). */
+  private placed: PlacedLaunch | null = null;
   /** Stdout readers' end-of-stream flushes, for an end the pipe itself never reports. */
   private readonly stdoutEnds = new Set<() => void>();
 
@@ -110,7 +115,11 @@ export class RunnerProcess {
     // reads as a missing runner binary rather than a missing directory.
     assertWorkspaceExists(cwd, { isDirectory: this.deps.isDirectory });
     const workspace = await (this.deps.workspaceEnv ?? workspaceEnvOf)(cwd);
-    const command = describe(workspace);
+    const asked = describe(workspace);
+    const { placement } = this.deps;
+    if (placement) this.placed = await placement.place({ command: asked.command, args: asked.args, env: asked.env?.(workspace) ?? {}, files: asked.files ?? [] });
+    const placed = this.placed;
+    const command: RunnerCommand = placed ? { command: placed.command, args: placed.args, env: () => placed.env } : asked;
     const resolvePath = this.deps.resolvePath ?? augmentedPath;
     // Same PATH treatment as model discovery: the
     // binary must resolve wherever the user installed it, even under the
@@ -129,7 +138,8 @@ export class RunnerProcess {
     // The awaits above leave room for a dispose: a Stop takes the adapter back
     // while its start runs on, and a dispose finds no child to kill yet.
     if (this.disposed) throw new Error('The runner was stopped before it launched.');
-    this.spawnEnv = runnerEnv(PATH, workspace, command.env?.(workspace), command.envDrop);
+    // Placed, the workspace's variables stay here: they are this host's, and a lease says what crosses (ADR-0059 L5).
+    this.spawnEnv = runnerEnv(PATH, placed ? {} : workspace, command.env?.(workspace), command.envDrop);
 
     const child = spawnInOwnGroup((detached) => this.deps.spawn(launch.file, launch.args, {
       env: this.spawnEnv,
@@ -249,11 +259,19 @@ export class RunnerProcess {
     const child = this.child;
     this.child = null;
     killTree(child, { platform: this.deps.platform });
+    if (child) this.placed?.stop();
+    else this.placedEnded();
   }
 
   private end(exit: RunnerExit): void {
+    this.placedEnded();
     this.exitStatus = exit;
     this.markEnded();
+  }
+
+  private placedEnded(): void {
+    this.placed?.ended();
+    this.placed = null;
   }
 
   private appendStderr(text: string): void {

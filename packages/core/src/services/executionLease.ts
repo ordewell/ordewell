@@ -3,9 +3,9 @@ import type { RunnerId, Task } from '../models/Task';
 import type { AttemptIntent } from './IsolationRunController';
 
 /*
- * The execution lease (ADR-0059): where a session runs, behind one seam. This
- * is the interface as far as `LocalWorktreeLease` needs it; what only a
- * container needs comes with the first backend that does (ADR-0059 L5).
+ * The execution lease (ADR-0059): where a session runs, behind one seam, as
+ * `LocalWorktreeLease` and the Docker backend need it. What only the egress
+ * sidecar and the model gateway need comes with them (ADR-0059 L7).
  */
 
 /** What a backend can be asked to prove (ADR-0059 L3). */
@@ -75,6 +75,54 @@ export interface LeaseResult {
   sessionState: LeaseSessionState;
 }
 
+/** How a lease's session ended where the host could not watch it (L3); `expired` comes with the first backend that has a time limit. */
+export type LeaseExit = 'oom' | 'killed';
+
+/** A runner's launch, as its adapter wrote it for this host. */
+export interface RunnerLaunch {
+  command: string;
+  args: readonly string[];
+  env: Readonly<Record<string, string>>;
+  /** Paths on this host, named in `args`, that the process reads, the one holding its token among them. */
+  files: readonly string[];
+}
+
+/** What this host launches instead. */
+export interface PlacedLaunch {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  /** End the process where it runs: killing what this host launched does not reach it. */
+  stop(): void;
+  /** The process has ended. */
+  ended(): void;
+}
+
+/**
+ * Where a lease that does not run its session on this host puts its runner. A
+ * runner is still handed a cwd and nothing more (ADR-0013): only {@link RunnerProcess}
+ * reads this, and an adapter writes the launch it always wrote.
+ */
+export interface RunnerPlacement {
+  place(launch: RunnerLaunch): Promise<PlacedLaunch>;
+  /** Make a listener on this host's loopback reachable from there, and answer the URL to reach it by (`endpoints.mcp`). */
+  reach(url: string): Promise<string>;
+}
+
+/** One repository of an attempt's worktree, for a backend that keeps a copy of it elsewhere. */
+export interface LeaseRepo {
+  /** Relative to the workspace; `.` for a lone repository. */
+  path: string;
+  /** The repository on this host. */
+  root: string;
+  /** Its worktree for this task. */
+  worktree: string;
+  branch: string;
+  integrationBranch: string;
+  /** What Ordewell linked into the worktree, which is no attempt's work. */
+  linked: readonly string[];
+}
+
 export interface OpenLease {
   workspace: {
     cwd: string;
@@ -84,9 +132,15 @@ export interface OpenLease {
     worktree: boolean;
     /** What became of the previous attempt's work, where a restore was asked for. */
     previousWork?: PreviousWork;
+    /** Each repository of its worktree, plural as a repo group's are (ADR-0014). */
+    repos?: readonly LeaseRepo[];
   };
   guarantees: GuaranteeReport;
   exportResult(session: LeaseSessionState): LeaseResult;
+  /** Set where the runner does not run on this host. */
+  placement?: RunnerPlacement;
+  /** How its session ended, once it has, where the backend can tell (L3). */
+  ended?(): Promise<LeaseExit | null>;
 }
 
 /**
@@ -123,4 +177,11 @@ export interface ExecutionBackend {
   letGo(taskId: string, how: { keep: boolean; landing?: Promise<unknown> | null; reason: string }): Promise<void>;
   /** What a restart finds. Starts nothing (ADR-0044). */
   list(): Promise<readonly LeaseRecord[]>;
+  /**
+   * Bring a task's work to its worktree, for a backend that keeps it elsewhere:
+   * the half of a result that takes time and can be refused (L2). By task, since
+   * a landing can come after its attempt, as a Mark complete does. Absent, the
+   * work is there already. Rejects with why it must not land.
+   */
+  collect?(taskId: string): Promise<void>;
 }
