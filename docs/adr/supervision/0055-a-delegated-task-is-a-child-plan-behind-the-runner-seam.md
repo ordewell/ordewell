@@ -62,7 +62,7 @@ the child cannot reach follows it in the parent's plan.**
   | `assignedRunner`, `assignedModel` | the subplanner's, resolved as any task's are ([ADR-0003](../routing/0003-per-runner-model-allowlist.md), [ADR-0041](../routing/0041-a-tasks-model-follows-the-runners-own-switch.md)) |
   | `budget` | required: tokens, and optionally wall-clock time (ADR-0056 M5) |
   | `protectedPaths` | required unless `readOnly`: paths the child may not change (D7) |
-  | `grants`, `scope` | optional: the grants it asks for past the floor (ADR-0056 M2, M4), a declared scope (ADR-0057 R6) |
+  | `grants`, `scope` | optional: the grants it asks for past the floor (ADR-0056 M2, M4), a declared scope, advisory and granting nothing (ADR-0057 R6) |
   | `readOnly` | optional: it answers a question and lands nothing ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)), so D6 asks for no change, D7 for no paths and D8 for a read-only AI task as its check |
 
   It has no subtasks and is never one: it is top-level, as a script task is, and

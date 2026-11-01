@@ -7,7 +7,6 @@ note: "Settles #120 for flat plans; the hierarchy half stays with #34."
 
 # 0047 — Every task ends with a handoff: a short summary, atomic findings and a way to pull the rest
 
-*Pending:* [ADR-0057](0057-information-moves-by-reference.md) — a subplanner's handoff promotes by reference, and `read` extends `read`.
 
 ## Problem
 
@@ -232,8 +231,8 @@ the plan and the rest through the same task log read as everything else.
 
 ## Out of scope
 
-Hierarchy (reports across levels, event-log references, a board's scoped
-sharing: #34 beside #32, #33 and #36); cohorts (#38); raw transcripts as a
+Hierarchy: reports across levels, references across plans and a board's sharing
+are [ADR-0057](0057-information-moves-by-reference.md)'s. Cohorts (#38); raw transcripts as a
 handoff or as readable through `read`; a model that rewrites, scores or
 merges findings; and any new setting.
 
@@ -305,3 +304,4 @@ merges findings; and any new setting.
 - 2026-10-26 — task handoffs appear in expanded task details and task logs, not collapsed plan cards or rows.
 - 2026-10-31 — a `task` reference is pinned to its attempt, and renders as `#12@2/F3` ([ADR-0057](0057-information-moves-by-reference.md) R1).
 - 2026-11-01 — the tool is `read`, `read_task` an alias at the call; a runner's stated failure reason says whose words it is; a handoff across levels is ADR-0057's ([ADR-0057](0057-information-moves-by-reference.md) R2, R3, R11).
+- 2026-11-01 — a board's sharing is ADR-0057's, as a handoff across levels is.
