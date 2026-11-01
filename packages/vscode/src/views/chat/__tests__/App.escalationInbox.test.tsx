@@ -8,7 +8,7 @@ import { api, post } from './hostBridge';
 /**
  * The escalation inbox (ADR-0053): what waits on a person, drawn from the run
  * view's list and answered through the host's `answerEscalation`. It is shown
- * only while something waits, and sits beside the composer without moving it.
+ * only while something waits, as a control on the usage line that opens upward.
  */
 
 const failed: Escalation = {
@@ -32,7 +32,12 @@ const gate: Escalation = {
 };
 
 const runView = (escalations?: Escalation[]): RunView => ({ tasks: [], runMerge: null, handoff: null, mergeResult: null, ...(escalations ? { escalations } : {}) });
-const show = (...escalations: Escalation[]) => post({ type: 'runView', view: runView(escalations) });
+// The list starts closed behind its control; these tests read and answer it, so `show` opens it.
+const show = (...escalations: Escalation[]) => {
+  post({ type: 'runView', view: runView(escalations) });
+  const bar = document.querySelector<HTMLButtonElement>('.escalation-inbox-bar');
+  if (bar?.getAttribute('aria-expanded') === 'false') fireEvent.click(bar);
+};
 const inbox = () => screen.queryByRole('region', { name: /waiting on you/i });
 
 describe('the escalation inbox', () => {
@@ -45,7 +50,7 @@ describe('the escalation inbox', () => {
     show(failed, gate);
 
     const region = inbox()!;
-    expect(within(region).getByText('2 waiting on you')).toBeTruthy();
+    expect(within(region).getByText('2 waiting')).toBeTruthy();
     const entries = within(region).getAllByRole('listitem');
     expect(entries).toHaveLength(2);
     expect(within(entries[0]).getByText('#1 Add rate limiting')).toBeTruthy();

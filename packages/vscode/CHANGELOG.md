@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`/inbox` turns the waiting-on-you list off and on.** It is on by default and
+  remembered across reloads. Off, the list is not drawn at all; tasks, approval
+  cards and notifications are unchanged, and the chat says once how to turn it
+  back on (#30).
+
+### Changed
+
+- **The inbox is a control on the usage line, not a block above the composer.**
+  It reads `N waiting`, starts closed and opens its list upward over the
+  conversation with its own scroll. The composer, the usage line and the
+  Settings bar no longer leave the panel when three or more items wait, even in a
+  500px panel with the plan dock open. On a narrow panel it takes about 75px from
+  the usage text, which ellipsises first (#30).
+
 ## [0.12.0] - 2026-10-31
 
 ### Added

@@ -21,9 +21,19 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   will do, and nothing changes unless you set it: local worktrees stay the default.
   Claude Code is the runner proven there so far. See
   [Running tasks in containers](docs/containers.md).
+- **`/inbox` in the VS Code chat turns the waiting-on-you list off and on.** It
+  is on by default and remembered across reloads. Off, the list is not drawn at
+  all; the tasks, approval cards, notifications and the terminal's `/inbox` are
+  unchanged, and the chat says once how to turn it back on.
 
 ### Changed
 
+- **The VS Code inbox no longer pushes the composer out of the panel.** It is a
+  small `N waiting` control at the right end of the usage line, closed until you
+  open it, and its list opens upward over the conversation with its own scroll.
+  The composer, the usage line and the Settings bar stay in view at any panel
+  height, with the plan dock open and a long list waiting. On a narrow panel the
+  control takes about 75px from the usage text, which ellipsises first.
 - **Tasks read each other's handoffs with `read`.** The tool was `read_task`, and
   that name still works when a runner calls it. A failed task's reason now says it
   is that task's own words wherever a report opens with it.
