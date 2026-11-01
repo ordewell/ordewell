@@ -3111,10 +3111,12 @@ package ignores the variable.
 top-level task that holds a `goal`, not a prompt: its attempt is a **Child plan**. It
 carries a required `budget` and, unless it is `readOnly`, `protectedPaths`, the paths
 its child may not change, and it needs a check: a task that depends on it directly and
-is a read-only AI task or a read-only **Script task**. Neither a loop's check nor its
-body. It holds no slot (`child-plan`), and it passes only on evidence: its child has
-settled and done work, that work is merged into its branch, no protected path changed,
-and its subplanner called `task_complete` on the attempt's token (D6).
+is a read-only AI task or a read-only **Script task**, which a new attempt takes back.
+Neither a loop's check nor its body. It holds no slot (`child-plan`), and it passes only
+on evidence: its child has settled and done work, that work is merged into its branch,
+no protected path changed, and its subplanner called `task_complete` on the attempt's
+token (D6). Its conflict is repaired by a plain runner in the mode its node's autonomy
+gives, held to its protected paths (D14).
 *Avoid:* "subtask" (`subtasks` share their parent's plan, planner and branch).
 
 **Child plan** — what a **Delegated task** runs: a Session of its own in that task's
@@ -3126,14 +3128,22 @@ user's branch. Nothing of it reaches a surface directly.
 **Subplanner** — a **Child plan**'s planner: a harness planner on the runner its
 delegated task names, in that task's worktree, Act with autorun inside its
 **Mandate**. It writes no repository file. It has a planner's tools, `task_complete`
-and `checkpoint`, on a token bound to the attempt, and it is parked between turns. A
-turn that ends with nothing running and no call gets one reminder, and a second fails
-the attempt with a derived report. *Avoid:* "worker", "child agent" (a task's runner is
-neither planner nor node); a subplanner never implements.
+and `checkpoint`, on a token bound to the attempt, and it is parked between turns. Its
+`checkpoint` answers at once and goes up one level as its delegated task's checkpoint,
+where a person sees it only at the root, and the answer opens its next turn (ADR-0056
+M8). A turn that ends with nothing running and no call gets one reminder, and a second
+fails the attempt with a derived report. *Avoid:* "worker", "child agent" (a task's
+runner is neither planner nor node); a subplanner never implements.
 
 **Protected paths** — what a **Delegated task** names its child may not change,
 accumulating down the tree: a change to one fails the verdict, and nothing lands. A
 list the planner wrote, so a pass rests on it being whole (ADR-0055 D7).
+
+**Merge hold** (`checksHoldingMerge`, ADR-0055 D9) — landed work of a **Delegated task**
+whose check has neither passed nor been skipped keeps every merge but the user's from
+running: at gates, at the run's end, a supervisor's `merge_all` and a child's own. Work
+that has not landed holds nothing. It is no merge that stopped: the next tick after the
+pass or Skip merges. *Avoid:* "merge gate", which holds a task until a merge has run.
 
 **Run settings** — the user settings that say how a run is
 started, watched and merged: **Supervisor level**, **Auto-merge at gates**,

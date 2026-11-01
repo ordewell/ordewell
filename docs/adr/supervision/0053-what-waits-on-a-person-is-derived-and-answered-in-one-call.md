@@ -4,8 +4,6 @@ status: accepted
 
 # 0053 — What waits on a person is derived, listed once and answered in one call
 
-*Pending:* [ADR-0056](0056-a-mandate-narrows-down-the-tree.md) — a subplanner's question reaches this list as its delegated task's checkpoint, naming the path; a child's own waits never do.
-
 ## Problem
 
 A run that needs a person says so in many separate places: a runner approval
@@ -65,7 +63,7 @@ it on, since the seam refuses it otherwise
 | Kind | What it reads | Options | Dispatches to |
 |---|---|---|---|
 | `approval` | A pending runner approval of a task in the plan | Allow, Allow for this task where the runner proposed it, Deny | `answer_approval` |
-| `checkpoint` | `awaiting_user`, `checkpoint`, runner there | Approve, Reject, Skip | `answer_checkpoint`, `skip_task` |
+| `checkpoint` | `awaiting_user`, `checkpoint`, runner there; a delegated task's is its subplanner's question, its reason naming the child that asks (ADR-0056 M8), and a child's own waits are never listed | Approve, Reject, Skip; Approve may carry a raise (ADR-0056 M5) | `answer_checkpoint`, `skip_task` |
 | `checkpoint` | The same, no runner left to hear it | Retry, Skip, Mark complete | `retry_task`, `skip_task`, `mark_complete` |
 | `input` | `awaiting_user`, `input` or no saved reason, runner there | Reply, Skip, Mark complete | `message_task`, `skip_task`, `mark_complete` |
 | `input` | The same, no runner left to read a reply | Retry, Skip, Mark complete | as above |
@@ -468,3 +466,4 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
 - 2026-10-31 — a task an edit made manual is released as a direct edit lands too; a scheduled or held run keeps its failures and pauses through Execute with nothing live; a conflict, changed files and a pause with no session offer no Retry the seam would refuse, and a seam Continue is refused behind a loop's undecided check.
 - 2026-10-31 — Execute on a scheduled run a dirty checkout parked replays its start instead of beginning a new run, and a planner's `run_plan` joins a run that ended on a failure and leaves what failed in a run it begins.
 - 2026-10-31 — the list does not read a planner turn's start hold, which no status update marks, so a client's list stays what a fresh read says.
+- 2026-11-01 — a subplanner's question reaches the list as its delegated task's checkpoint, naming the child, and Approve may carry a raise (ADR-0056 M5, M8). Merge all names a check that has not passed in its confirmation (ADR-0055 D9).

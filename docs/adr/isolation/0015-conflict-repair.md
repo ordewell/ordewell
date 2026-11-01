@@ -5,8 +5,6 @@ amends: ["0013"]
 
 # 0015 — Conflict repair: the task repairs its own conflict, bounded and evidenced
 
-*Pending:* [ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — a delegated task's repair runs a plain runner on its assigned runner and model, since a subplanner writes no files, in the runner's mode for its mandate's `autonomy`, read by `ModeResolver` and set on the repair attempt for that one use, since a delegated task has no `taskMode` on the plan, and `verifyRepair` reads conflict markers on every run in a repo with no `repairBase` too, on `taskTip..branch`.
-
 **Amends:** ADR-0013 (worktree isolation), which surfaces every merge conflict
 for a human and rejected letting a model resolve one.
 
@@ -122,9 +120,14 @@ it or removing it is the way on.
   it records each changed repo's integration tip as `repairBase`, counts the
   repair in `repairs`, adds the conflict's files to `repairedFiles`, and moves
   the record to a new status, `repairing`. `verifyRepair` commits the
-  repair's work and checks (2) and (3) above per repo of `repairBase`. The
-  landing (4) is the unchanged `integrate`, so `land()` still makes one
-  `--no-ff` merge per changed repo, all or nothing.
+  repair's work and checks (2) and (3) above per repo of `repairBase`, and (3)
+  on `taskTip..branch` in a repo with none, since a repair can edit a repo the
+  landing did not change. The landing (4) is the unchanged `integrate`, so
+  `land()` still makes one `--no-ff` merge per changed repo, all or nothing.
+- **A delegated task's repair is a plain runner's.** A subplanner writes no
+  files, so the repair runs on the task's assigned runner and model, in the
+  runner's mode for its node's `autonomy`, set on the repair attempt for that one
+  use: a delegated task has no `taskMode` on the plan (ADR-0055 D14).
 - **A repair is spent when it starts.** `reopen` counts it before the runner
   is spawned, so a crash can never hand an attempt back. Anything that ends a
   repair without landing it — a failed verdict, a stop, a spawn that fails,
@@ -219,3 +222,4 @@ it or removing it is the way on.
 - 2026-10-09 — aligned with [ADR-0025](../runners/0025-structured-only-runners.md).
 - 2026-10-14 — a failed task blocks only its dependents instead of halting the run ([ADR-0034](../supervision/0034-a-failed-task-blocks-only-its-dependents.md)).
 - 2026-10-31 — one worker per conflict; a repair that waits says so, and a Stop or a load leaves its conflict waiting on the user; a resolver left behind is skipped, and one added outside a run is started.
+- 2026-11-01 — a delegated task's repair is a plain runner in the mode its autonomy resolves to, and `verifyRepair` reads conflict markers in a repo with no `repairBase` too, on every run (ADR-0055 D14).

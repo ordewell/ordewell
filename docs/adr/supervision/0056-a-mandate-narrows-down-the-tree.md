@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0001", "0008", "0022", "0029", "0030", "0035", "0036", "0037", "0053"]
-note: "Settles #23, #92 and #112 as far as subplanners need. Built: M1 to M4, M6's seam, its paths and `delegate`, M5's ledger in `TreeLedger`, a child's derived report on stopping, M7's autonomy, M9, and what M3, M8 and M10 end a child for: its clock, a guard, a lost grant. Not built: `raiseTokens`, a child's wake on a refused start, D16's subtree stop, questions going up in M8, the paths M7 derives past `scope`, and a subplanner's harness subagents in M6, which still run without `research`. A flat run does not change."
+note: "Settles #23, #92 and #112 as far as subplanners need. Built: M1 to M5, M6's seam, its paths and `delegate`, M7's autonomy, M8, M9 and M10. Not built: D16's subtree stop, the paths M7 derives past `scope`, which wait on ADR-0057's reports, and a subplanner's harness subagents in M6, which still run without `research`. A flat run does not change."
 ---
 
 # 0056 — A mandate says what a node may do without a person, and what it can hand on only narrows down the tree
@@ -122,10 +122,11 @@ Judgment stays the planner's.
   | depth, delegated tasks per plan, tasks per plan | ADR-0055 D19 | the same or lower |
   | allowed runners and models | what `SessionCatalog` allows | a subset |
 
-  Wall-clock time stops while the tree is held on a usage limit, up to that limit's
-  reset: a resume waiting on a slot past it (ADR-0055 D18) is on the clock. When it
-  runs out the node stops as a Stop does and ends `blocked`, so nothing waits for ever
-  (M8).
+  Wall-clock time stops while the tree is held on a usage limit, a task's or a
+  subplanner's own, up to that limit's reset: a resume waiting on a slot past it
+  (ADR-0055 D18) is on the clock. The reset is what ends the hold, so a limit that
+  lifts early gives a child that much more. When it runs out the node stops as a Stop
+  does and ends `blocked`, so nothing waits for ever (M8).
 - **Narrowing is one pure function (M4).** `narrow(parent, request)` returns a mandate
   or a refusal naming the level that refused, the field, what was asked and what is
   there. A mandate does not say where in the tree it stands, so the request names the
@@ -173,10 +174,12 @@ Judgment stays the planner's.
     after a restart, so a rebuilt `reserve` is that share alone. An attempt's spending
     past the node's room takes its children's room as a turn's does, so a node's own
     work cannot spend what they hold. When `spent` reaches what that leaves of `limit`
-    the node stops (ADR-0055 D16) and ends `blocked`, as it does when ready work is
-    refused with nothing live to free room, since no event would tick it again. A
-    runner's own subagents add requests nobody sees until their usage arrives, so the
-    reserve is an estimate and not a guarantee.
+    the node stops (ADR-0055 D16) and ends `blocked`. Ready work refused with nothing
+    live to free room is another thing, since no event would tick it again: its
+    subplanner is woken once, so it can ask, and the node ends `blocked` with a derived
+    report once a turn ends with no question waiting and still no room. One with no
+    subplanner stops. A runner's own subagents add requests nobody sees until their
+    usage arrives, so the reserve is an estimate and not a guarantee.
   - When a child ends, on confirmed close, what it did not spend returns to its parent,
     and goes no further: a sibling gets it only by its parent's next carve. Its parent
     is charged what it spent, and what still arrives from a runner winding down goes to
@@ -184,7 +187,9 @@ Judgment stays the planner's.
   - A child that needs more asks with a checkpoint. A raise is `answer_checkpoint` with
     `raiseTokens`, or the same on the inbox's Approve, carved at the call from what the
     parent has left, and recorded as a budget event ([ADR-0058](0058-a-tree-holds-many-nodes-and-few-live-sessions.md) S3)
-    and in the timeline.
+    and in the timeline. It goes only with an approval, and one the parent cannot pay
+    for is refused and leaves the question waiting. It moves numbers, so the child's
+    Session starts its run again as it hears of one.
   - A subplanner's own turns come before what it carved. A node's room is `limit`
     less the other three. A carve or a raise takes only room, and a subplanner keeps
     one session's `reserve` for its next turn while it is parked ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D18), so a carve of
@@ -282,9 +287,10 @@ Judgment stays the planner's.
   capability is held at the boundary, so a script can test and cannot reach out, and
   where nothing can seal it is refused as a script check is (ADR-0055 D8). With it
   they run in the child's checkout, a worktree, and only a body covered at every level
-  of `effectRules`; a script body is covered by nothing (ADR-0035). So an effect in a
-  child is a list of commands the user wrote rules for, and anything else goes up, where
-  the root runs it as a script task under ADR-0035.
+  of `effectRules`; a script body is covered by nothing (ADR-0035), and any other body
+  runs sealed as it lands, or is refused if an edit moves it past the rules. So an effect
+  in a child is a list of commands the user wrote rules for, and anything else goes up,
+  where the root runs it as a script task under ADR-0035.
 
   The known limit, plainly: a change-task runner in a child keeps the network it has in
   a flat run until the container backend exists
@@ -371,6 +377,12 @@ Judgment stays the planner's.
 - **A list that changes as a grant changes.** Rejected: it rebuilds the prompt cache to say what
   the seam says.
 - **A deadline or a default answer to a child's question.** Rejected: ADR-0053's reason.
+- **Stopping a node as soon as its budget refuses a start.** Dropped: a node that still
+  has a turn could ask for what it needs, and it would have ended `blocked` before it
+  could.
+- **A wall clock paused and resumed by events.** Dropped: the holds are the tree's and
+  overlap, and a child that was not told of one would run out. A deadline read again as
+  it runs out needs only when each hold began and when it resets.
 
 ## Consequences
 
@@ -396,3 +408,4 @@ Judgment stays the planner's.
 - 2026-10-31 — a subplanner's starts take the supervisor's authority as its report turns do, so a run it opens carries on rather than starting supervision afresh from a user's settings.
 - 2026-10-31 — M5's ledger implemented in `TreeLedger`, rebuilt from the tree's log. Built closest to the text where it could not hold: spend is checked in `startRefusal`; a script holds nothing; an attempt's overrun takes its children's room, and a node stops at what that leaves of `limit`, not at `limit`, or its own work could spend what its children hold; ready work refused with nothing live stops the node too.
 - 2026-11-01 — a child runs under its mandate: `delegate` and D19's limits are held as a change is written, nobody below the root may allow a runner's request, a child's script runs sealed without `effect`, and a child that may do nothing more ends `blocked` with a derived report. Wall-clock time runs from the child's start: it does not stop yet for a usage limit.
+- 2026-11-01 — M8's questions, `raiseTokens` and a child's wake on a refused start implemented, what a refused start ends in rewritten from a stop to a wake, a wall clock that stops for a tree's usage limits, and a body `effect` does not cover runs sealed. A denied runner request rides along in the next run update.

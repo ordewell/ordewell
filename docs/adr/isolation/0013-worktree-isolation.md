@@ -4,7 +4,6 @@ status: accepted
 
 # 0013 — Worktree isolation: one checkout per task, one branch per run
 
-*Pending:* [ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — a failed check holds automatic merges.
 *Pending:* [ADR-0057](../supervision/0057-information-moves-by-reference.md) — tasks may declare an advisory scope, overlap is answered at plan time, and a landing that touches one sends one line.
 
 ## Problem
@@ -128,7 +127,9 @@ everything below applies per repo of the group.
   task.** A conflicting merge is aborted with the worktree and both refs kept; it
   first gets a bounded, evidenced conflict repair on the task's own attempt
   (ADR-0015), and only a conflict repair does not clear is left `awaiting_user`,
-  dependents waiting. A landing git refuses (a hook, for instance) leaves the task
+  dependents waiting. A delegated task's check runs after its landing and cannot
+  hold it back, so what it holds is every merge but the user's (ADR-0055 D9). A
+  landing git refuses (a hook, for instance) leaves the task
   `awaiting_user` with its verdict `pass`, its worktree and branch kept (the
   record is `failed`, which surfaces show as `kept`) and the error naming what
   git stopped on; Mark complete lands it once the cause is fixed. Other ready
@@ -557,3 +558,4 @@ literal git command lines or private fields.
 - 2026-10-31 — a run may nest in a delegated task's worktree, with its worktrees under the root's state directory, and a child refuses the user's checkout (ADR-0055).
 - 2026-10-31 — `prepare` and the runner's cwd sit behind an execution lease, local by default (ADR-0059).
 - 2026-11-01 — a subplanner starts in its delegated task's worktree (ADR-0055 D5).
+- 2026-11-01 — landed work whose check has not passed holds the automatic merges (ADR-0055 D9).
