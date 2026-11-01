@@ -1454,7 +1454,8 @@ methods are mandatory, with no optional capability or transport discriminator.
 **Task runner config** (`taskRunnerConfig`, `TaskRunnerConfig`) — what a task
 runner loads of the user's own setup: `user`, the default, is everything the
 runner would load for them, and below the root `minimal` is unless the settings
-file names one; `minimal` is what a task needs, Ordewell's server
+file names one, for a **Subplanner**'s own process too, which then holds Ordewell's
+server and the native tools a planner reads with; `minimal` is what a task needs, Ordewell's server
 and what the repository ships or keeps for itself (its instructions, settings,
 MCP servers, skills and commands, and the user's local scope for it), and leaves
 out the user's own connectors, servers, skills, commands, settings and

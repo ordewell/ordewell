@@ -304,6 +304,8 @@ export interface PlannerConversationHost {
   goal(): string;
   aiService(): IAiService;
   onProgress(progress: ResearchProgress): void;
+  /** The planner is a subplanner: its prompt told it the catalog, and a plan that has settled leaves it only its report (ADR-0057 R11). */
+  subplanner?(): boolean;
   /** Fresh discovery, allowlist-filtered the way the system prompt shows it. */
   opening(runners: RunnerId[]): Promise<ConversationOpening>;
   /** What the per-turn catalog block and every read draw from, as of now. */
@@ -1797,6 +1799,7 @@ export class PlannerConversation {
    */
   private catalogBlock(): string | null {
     if (!this.host.plan()) return null;
+    if (this.host.subplanner?.()) return null;
     if (this.host.aiService().plannerToolsAttached?.()) return PLANNER_TOOLS_REMINDER;
     const { runners, models, modes } = this.host.catalog();
 
@@ -1833,6 +1836,8 @@ export class PlannerConversation {
     // Gated on live runners, not on an armed scheduler: a paused-but-armed run
     // has nothing running to lock, and takes a whole plan as well as an edit.
     const locked = flattenTasksWithParents(this.host.tasks()).filter(({ task }) => task.status === 'in_progress');
+    // How to edit a plan would ride in its context for nothing.
+    const settled = this.host.subplanner?.() === true && flattenTasksWithParents(this.host.tasks()).every(({ task }) => task.status === 'completed' || task.status === 'skipped');
     const running = this.host.isExecuting()
       ? `Execution is RUNNING${locked.length ? ` — these tasks are locked: ${namedRefs(locked.map(({ ref }) => ref))}` : ''}. No new task starts until your reply ends; ${tools ? 'each edit_plan call applies as it answers' : 'your task edits apply as it ends'}, to tasks that have not started. An edit aimed at a running task is refused — the user can stop it first, or you can change it after it finishes. Do not submit a whole new plan while tasks run.`
       : '';
@@ -1841,10 +1846,12 @@ export class PlannerConversation {
       ...rows.map(({ line }) => line),
       '</current_plan>',
       overflow,
-      'The block above is the CURRENT task plan — short fields only. Choose how to respond:',
-      '- To answer a question or discuss, reply in plain prose (no JSON).',
-      tools ? TASK_READ_TOOLS_REMINDER : TASK_QUERY_REMINDER,
-      ...taskOpsProtocol(running && `\n${running}`, tools),
+      ...(settled ? [] : [
+        'The block above is the CURRENT task plan — short fields only. Choose how to respond:',
+        '- To answer a question or discuss, reply in plain prose (no JSON).',
+        tools ? TASK_READ_TOOLS_REMINDER : TASK_QUERY_REMINDER,
+        ...taskOpsProtocol(running && `\n${running}`, tools),
+      ]),
     ].filter(Boolean).join('\n');
     return { rows, unlisted, overflow, full, running, tools };
   }

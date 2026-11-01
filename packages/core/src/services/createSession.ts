@@ -335,9 +335,10 @@ function subplannerConfig(config: IConfig, task: Task): IConfig {
 
 /**
  * A subplanner is Act with autorun, inside its mandate (ADR-0056 M7), and it
- * merges its own subtree (ADR-0055 D10). Its runners load what a task needs
- * unless the settings file says otherwise: a subtree multiplies what each
- * attempt's context carries (ADR-0057 R2).
+ * merges its own subtree (ADR-0055 D10). Its runners and its own process load
+ * what they need unless the settings file says otherwise: a subtree multiplies
+ * what each attempt's context carries, and each of a subplanner's calls is
+ * charged all of it (ADR-0057 R2, R11).
  */
 function subplannerSettings(settings: SessionRuntimeSettings): SessionRuntimeSettings {
   return { ...settings, taskRunnerConfig: settings.taskRunnerConfig ?? 'minimal', run: { ...RUN_SETTINGS_DEFAULTS, ...settings.run, supervisorLevel: 'act', autorun: true, mergeAtGatesAutomatically: true } };
@@ -686,6 +687,7 @@ export function createSession(deps: SessionDeps): Session {
     }),
     subplanner: deps.subplanner,
     brief: deps.brief,
+    runnerConfig: () => deps.settings().taskRunnerConfig,
     delegationOffered: deps.delegationOffered ?? DELEGATION_OFFERED,
     childPlans,
     childSession: (spec) => createSession(childSessionDeps(deps, spec)),
@@ -761,6 +763,7 @@ export interface SessionParts {
   eventLog: (rootSessionId: string, stateRoot: string) => EventStore;
   subplanner?: SubplannerLink;
   brief?: SubplannerBrief;
+  runnerConfig: () => TaskRunnerConfig | undefined;
   delegationOffered: boolean;
   childPlans: Pick<ChildPlanRunner, 'stopEvery' | 'activeCount' | 'progressOf'>;
   childSession: (spec: ChildSpec) => Session;
@@ -854,6 +857,7 @@ export class Session {
   /** How this session answers to its parent's attempt; undefined at the root (ADR-0055 D5). */
   private readonly subplanner: SubplannerLink | undefined;
   private readonly brief: SubplannerBrief | undefined;
+  private readonly runnerConfig: () => TaskRunnerConfig | undefined;
   private readonly delegationOffered: boolean;
   private readonly childPlans: SessionParts['childPlans'];
   private readonly childSession: SessionParts['childSession'];
@@ -916,6 +920,7 @@ export class Session {
       return this.planChanges.check({ kind: 'plan', tasks }, 'submit');
     },
     submitPlan: (tasks, turn) => this.submitPlanFromTool(tasks, turn),
+    unread: () => this.subplanner !== undefined,
     editPlan: (ops, turn) => this.editPlanFromTool(ops, turn),
     tasks: () => this.store.planTasks,
     read: (signature, answer) => this.conversation.read(signature, answer),
@@ -960,6 +965,7 @@ export class Session {
     this.authority = parts.child ?? rootAuthority(() => this.rootSettings());
     this.eventLog = parts.eventLog;
     this.subplanner = parts.subplanner;
+    this.runnerConfig = parts.runnerConfig;
     this.brief = parts.brief;
     this.delegationOffered = parts.delegationOffered;
     this.childPlans = parts.childPlans;
@@ -1012,6 +1018,7 @@ export class Session {
       onProgress: (p) => this.events.progress(p),
       opening: (runners) => this.conversationOpening(runners),
       catalog: () => this.catalog.current(),
+      subplanner: () => this.subplanner !== undefined,
       assignmentScope: () => this.catalog.scope(),
       autorun: () => this.userRunSettings().autorun,
       tasks: () => this.store.planTasks,
@@ -1102,6 +1109,7 @@ export class Session {
 
     this.supervision = new RunSupervision({
       plan: () => this.plan,
+      subplanner: () => this.subplanner !== undefined,
       userSettings: () => this.userRunSettings(),
       tasks: () => this.store.planTasks,
       startWaits: () => this.orchestrator.planStartWaits(),
@@ -1834,7 +1842,7 @@ export class Session {
     const { mandate, budget } = carved;
     // A change at any level above reaches the subtree at its next check (ADR-0056 M1).
     const authority: NodeAuthority = { depth: this.authority.depth + 1, mandate: () => heldMandate(mandate, [this.mandate()]) };
-    const brief: SubplannerBrief = { protectedPaths: mandate.exclusions.protectedPaths, readOnly: task.readOnly === true };
+    const brief: SubplannerBrief = { protectedPaths: mandate.exclusions.protectedPaths, readOnly: task.readOnly === true, runner: task.assignedRunner };
     const placement = this.hostChild(task.id);
     // Saved as it is seated: what a crash from here on leaves to reopen it by, or discard it (D17).
     this.store.setTaskRunnerSessionId(task.id, placement.sessionId, this.store.resolveTaskRunner(task));
@@ -3009,6 +3017,7 @@ export class Session {
         ...(this.delegates ? { delegates: true } : {}),
         ...(this.subplanner ? { subplanner: true } : {}),
         ...(this.child && !this.child.mandate('off').grants.has('research') ? { noSubagents: true } : {}),
+        ...(this.subplanner ? { runnerConfig: this.runnerConfig() ?? 'minimal' } : {}),
       },
       ...(this.delegates ? { delegation: this.delegationBrief() } : {}),
       ...(this.brief ? { subplanner: this.brief } : {}),

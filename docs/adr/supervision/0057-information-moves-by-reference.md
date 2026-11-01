@@ -176,6 +176,15 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   block is bounded too: past its cap it shows live and waiting tasks, a count of the rest and a
   `task_query` pointer. The 24,000 is a tuning value.
 
+  A subplanner is told less again. Its prompt names its own runner and that runner's models, so a
+  plan takes no call to read them and no wake reminds it to ([ADR-0022](../runners/0022-ordewell-mcp-server.md)
+  L3): `submit_plan` refuses what has gone stale, and `list_runners` and `list_models` stay for another
+  runner. Its prompt has no outline, which nobody reads, and no section on ops tasks, which do not exist below the
+  root. `submit_plan`'s answer asks it for one line, and for none would open the nudge an empty reply is owed. Its plan block,
+  once every task has passed or been skipped, is the task rows alone: what is left is its report.
+  Its wake brief is its own, which asks for that report first and names no user
+  ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D4).
+
 ### Between siblings
 
 - **Tasks declare a scope (R6).** `scope: { paths, provides, consumes }` is an optional field of a
@@ -270,6 +279,16 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   role's set is fixed at session start, in a stable order
   ([ADR-0056](0056-a-mandate-narrows-down-the-tree.md) M6), with a CI test on its serialised size.
   Turning delegation on reaches a planner at its next process.
+
+  A subplanner's process holds that list and little else of its harness, since each of its calls is
+  charged all of it, and nobody is there for the rest. Where its tasks' `taskRunnerConfig` is `minimal`,
+  as it is below the root unless the settings file names one, Claude Code starts with the native tools a
+  planner reads with (`--tools`: `Read`, `Grep`, `Glob`, `WebFetch`, `WebSearch`, `ToolSearch`, with `Agent`
+  under `research` and the shell tools under ADR-0036's opt-in), no setting source, `--strict-mcp-config`, connectors
+  off, and Ordewell's server alone. These go together and never apart: with a connector left on, its tools come along.
+  `ToolSearch` stays though it finds little here: without it a model reopened on a Continue read Ordewell's tools as
+  missing and ended saying it had no `task_complete`. `user` leaves the spawn as a planner's. Ordewell's own list for the role is not cut: it is what the role does. Codex and OpenCode
+  are started as they were.
 - **Plain `tools/call` (R12).** No MCP Tasks, subscriptions, sampling or internal A2A. MCP 2026-07-28 is
   stateless, and references passed as arguments fit it. Delivery goes over each runner's own message path
   (ADR-0023).
@@ -313,6 +332,26 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   sibling's interface does not need a model now. It would buy a turn over the whole context per landing.
 - **An author's own blob sha.** Rejected: R9's flags are computed, and a sha a model sends is a claim.
 
+- **Narrowing a subplanner's native tools alone.** Rejected, by a real run of the flags: with connectors left on
+  and `ToolSearch` gone, every connector's tools were sent whole, far past what the list saved.
+- **Leaving `ToolSearch` out of that list.** Dropped after real runs and a replay of the failing call: the tool list
+  was the one thing whose return stopped reopened children saying they had no `task_complete`. A list that named every
+  tool it held was not enough for the model to believe it.
+- **A pass with no subplanner turn, for a run that ended clean, or a report filed with the plan.** Rejected: a wake
+  costs one call now, and `task_complete` is the only way to a pass
+  ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D6). A report written before the work can
+  say nothing of it.
+- **Fewer of Ordewell's tools for a subplanner.** Not done: they are the largest part left of its context, but each
+  is one the role can need, and a list that grew when a run failed would break the prompt cache.
+- **Ending a subplanner's turn before its last reply.** Tried, at an accepted `submit_plan` and an accepted
+  `task_complete`, and dropped after real runs: each such reply is a call over the whole context, nearly all of it
+  cache reads. A process killed there takes its reported money with it, since Claude Code reports cost in the `result`
+  that ends a turn, and an interrupt instead leaves an empty reply, whose nudge is the call saved. Stopped at a plan, the
+  call stays in a history a wake resumes in its harness's words, the user refused this, stop and wait: one subplanner in
+  fourteen took that as an order and reported blocked with its work passed and merged, naming a user who was never there.
+  Stopped at a report, the turn lands nothing, and that closing line is how a Continue's replay knows it reported: reopened
+  children said they had no `task_complete`, and failed. A hook that ends a turn after a clean tool result might do this
+  without a stop, and would mean a hook in a planner's envelope (ADR-0028).
 - **A model summarising each level.** Rejected. In three open-source deep-research systems, 84.7% of
   AI-Q's final-report errors arose at the orchestrator, while agents summarising a single document were
   nearly clean ([arXiv 2608.24306](https://arxiv.org/abs/2608.24306), EMNLP 2026). That measures AI-Q and
@@ -376,3 +415,4 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - 2026-11-01 — R6 to R10 implemented, in `models/Board.ts`, `Board.ts`, `ScopeLines.ts` and `TreeLedger`, behind ADR-0055 D21's switch: a scope stays on a delegated task, its line waits for a subplanner's next turn, a `contract` rises to the parent's board as its task lands, `read` takes `board` so a runner's `read` does not move, `file` evidence holds a branch's blob beside its author's, and a pin goes in a subplanner's opening and a task's prompt.
 - 2026-11-01 — a pin reads its author's file through the lease where one runs the author elsewhere (R9).
 - 2026-11-01 — R11: an API planner holds `post` where a harness planner does, as the last entry of its list, so an API root can pin.
+- 2026-11-01 — from real runs of where a subplanner's tokens go: R5 tells it less and R11 narrows its process, in `ClaudeCodeAdapter`, `PlanPrompts`, `PlannerConversation` and `Supervisor`.

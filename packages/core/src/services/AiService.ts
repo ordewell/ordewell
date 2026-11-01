@@ -14,7 +14,7 @@ import { CliAgentAiService, type CliAgentAiServiceDeps } from './harness/CliAgen
 import type { IsolatedExecution, PlannerModes } from './plannerModes';
 import type { PlannerToolHandler } from './mcp';
 import type { SkillInfo } from './SkillsService';
-import type { UsageLimitSignal } from './harness/AgentAdapter';
+import type { TaskRunnerConfig, UsageLimitSignal } from './harness/AgentAdapter';
 import type { PlannerContextDeps } from './plannerContextBudget';
 import type { ConversationCompactionHost } from './budgetedChat';
 
@@ -34,6 +34,8 @@ export interface PlannerToolsOffer {
   subplanner?: boolean;
   /** Its harness's own subagents are withheld: nothing refuses what they spend, so a subplanner has them only with `research` (ADR-0056 M6). */
   noSubagents?: true;
+  /** What a subplanner's process loads of the user's setup: its tasks' setting holds for it too (ADR-0057 R11). */
+  runnerConfig?: TaskRunnerConfig;
 }
 
 /**

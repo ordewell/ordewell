@@ -18,6 +18,7 @@ function harness(user: Partial<GlobalRunSettings> = {}, options: SupervisorOptio
   const settings: GlobalRunSettings = { ...RUN_SETTINGS_DEFAULTS, ...user };
   const transcript: { text: string; voice: 'system' | 'supervisor' }[] = [];
   const host = {
+    subplanner: () => false,
     plan: () => plan,
     userSettings: () => ({ ...settings }),
     tasks: () => tasks,
