@@ -324,9 +324,14 @@ function subplannerConfig(config: IConfig, task: Task): IConfig {
   }) as IConfig;
 }
 
-/** A subplanner is Act with autorun, inside its mandate (ADR-0056 M7), and it merges its own subtree (ADR-0055 D10). */
+/**
+ * A subplanner is Act with autorun, inside its mandate (ADR-0056 M7), and it
+ * merges its own subtree (ADR-0055 D10). Its runners load what a task needs
+ * unless the settings file says otherwise: a subtree multiplies what each
+ * attempt's context carries (ADR-0057 R2).
+ */
 function subplannerSettings(settings: SessionRuntimeSettings): SessionRuntimeSettings {
-  return { ...settings, run: { ...RUN_SETTINGS_DEFAULTS, ...settings.run, supervisorLevel: 'act', autorun: true, mergeAtGatesAutomatically: true } };
+  return { ...settings, taskRunnerConfig: settings.taskRunnerConfig ?? 'minimal', run: { ...RUN_SETTINGS_DEFAULTS, ...settings.run, supervisorLevel: 'act', autorun: true, mergeAtGatesAutomatically: true } };
 }
 
 /**
