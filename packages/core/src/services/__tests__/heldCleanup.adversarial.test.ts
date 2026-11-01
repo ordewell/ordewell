@@ -7,6 +7,7 @@ import type { LegacyPlanState } from '../../models/Task';
 import type { TreeFact } from '../../models/TreeEvent';
 import { rootAuthority } from '../Mandate';
 import { LEASE_STALE_MS, LeaseHost, SessionHeldError } from '../sessionLease';
+import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import { fakeConfig, makeSession } from './sessionTestKit';
 import { heldPlanner, settled } from './supervisorTestKit';
 import { saveSession } from '../../utils/sessionStore';
@@ -38,7 +39,7 @@ describe('a held session\'s cleanup', () => {
       leaseHost: host,
       saveSession,
       workspaceRoot: () => workspace,
-      settings: () => ({ run: { supervisorLevel: 'off' as const, delegationTokens: 100_000 } }),
+      settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' as const, delegationTokens: 100_000 } }),
       eventLog: () => store,
     });
     try {

@@ -34,6 +34,7 @@ export const STALLED_LABEL = 'Stalled';
 const AWAITING_LABELS: Record<AwaitingReason, string> = {
   input: 'Waiting for your input',
   checkpoint: 'Checkpoint',
+  'question-lost': 'Question lost in a restart',
   conflict: 'Merge conflict',
   'files-changed': 'Changed tracked files',
   'usage-limit': 'Paused on a usage limit',
