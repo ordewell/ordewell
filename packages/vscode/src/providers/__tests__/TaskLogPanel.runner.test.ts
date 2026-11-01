@@ -44,6 +44,14 @@ describe('the task log tab tells the webview what its activity line needs', () =
   });
 });
 
+describe('a task log tab on a delegated task a Stop left with its child', () => {
+  it('continues it from the composer, which is the one start that keeps the child (ADR-0055 D17)', () => {
+    const stopped = task({ type: 'delegated', status: 'pending', assignedRunner: 'claude-code', runnerSessionId: 'session-child' });
+
+    expect(openedStatus(stopped).header.continuable).toBe(true);
+  });
+});
+
 describe('a task log tab on a conflict repair waiting to start', () => {
   it('says what it waits for, not that it is to do or in conflict', () => {
     const isolation: TaskIsolation = { state: 'conflict', branch: 'b', worktree: 'w', repos: [], repairWaits: 'slot' };

@@ -279,6 +279,7 @@ export class TaskLogPanel {
       script: task?.type === 'script',
       header: taskLogHeaderView({
         status: task?.status ?? '',
+        ...(task ? { type: task.type } : {}),
         ...(task?.awaitingReason ? { awaitingReason: task.awaitingReason } : {}),
         ...(task?.skipReason !== undefined ? { skipReason: task.skipReason } : {}),
         resumeAt: task?.resumeAt ?? null,

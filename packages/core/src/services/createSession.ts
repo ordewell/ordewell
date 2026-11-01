@@ -1808,13 +1808,16 @@ export class Session {
     const task = this.store.get(taskId);
     if (task?.type !== 'delegated') return undefined;
     const tasks = this.childPlans.progressOf(taskId);
-    const budget = task.budget?.tokens;
     const tree = this.tree;
+    const stated = task.budget?.tokens;
+    const budget = stated === undefined ? undefined : stated + (tree?.raisedOn(this.nodePath, taskId) ?? 0);
     const open = tree?.nodeOf(this.runs.childSession(taskId) ?? '');
     const spent = tree ? open ? tree.taskSpent(open.path) : tree.spentOn(this.nodePath, taskId) : 0;
+    // Spending is the log's, read when something first asks: before that a task that ran would read as untouched.
+    const known = budget !== undefined && (tree !== null || !task.attempted);
     const row: DelegatedRow = {
       ...(tasks ? { tasks } : {}),
-      ...(budget !== undefined ? { tokens: { budget, left: Math.max(0, budget - spent) } } : {}),
+      ...(known ? { tokens: { budget, left: Math.max(0, budget - spent) } } : {}),
       ...(this.orchestrator.windingDown(taskId) ? { stopping: true as const } : {}),
     };
     return Object.keys(row).length > 0 ? row : undefined;
