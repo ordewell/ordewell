@@ -448,7 +448,7 @@ export function applyTaskOps(
     return { ids, bad };
   };
 
-  const intake: IntakeCatalog = { runners, runnerModes: catalog?.runnerModes, autonomousDefault: catalog?.autonomousDefault, models: catalog, ...(catalog?.delegationRefusal !== undefined ? { delegationRefusal: catalog.delegationRefusal } : {}), ...(catalog?.sealsScripts ? { sealsScripts: true } : {}) };
+  const intake: IntakeCatalog = { runners, runnerModes: catalog?.runnerModes, autonomousDefault: catalog?.autonomousDefault, models: catalog, ...(catalog?.delegationRefusal !== undefined ? { delegationRefusal: catalog.delegationRefusal } : {}), ...(catalog?.sealsScripts ? { sealsScripts: catalog.sealsScripts } : {}) };
 
   /**
    * A planned task's dependency refs, at every depth, as ids: a subtask may

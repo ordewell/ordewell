@@ -263,6 +263,8 @@ export interface TaskOrchestratorDeps {
   startRefused: (why: string) => void;
   /** This node's autonomy, as its mandate reads it (ADR-0056 M6). */
   autonomous: () => boolean;
+  /** Nothing is deciding where the run goes any more; see {@link TaskOrchestrator.movesUnasked}. */
+  decided?: () => void;
 }
 
 /**
@@ -321,6 +323,8 @@ export interface TaskOrchestratorOptions {
   startRefused?: (why: string) => void;
   /** This node's autonomy, as its mandate reads it (ADR-0056 M6); the config's, at a root. */
   autonomous?: () => boolean;
+  /** Nothing is deciding where the run goes any more. */
+  decided?: () => void;
   /** What this node's ancestors protect (ADR-0056 M4). */
   inheritedProtectedPaths?: () => readonly string[];
 }
@@ -357,6 +361,8 @@ export class TaskOrchestrator {
   private admissions = 0;
   private reviewApproved = false;
   private autoMergeBlocked = false;
+  /** Ticks and attempt ends under way; see {@link deciding}. */
+  private decisions = 0;
   /** The run closed with its merge held, which it would otherwise have made itself. */
   private mergeOwedAtClose = false;
   private mergesInFlight = 0;
@@ -482,7 +488,7 @@ export class TaskOrchestrator {
       ...(deps.research ? { research: deps.research } : {}),
       autonomous: deps.autonomous,
       host: {
-        settle: (ended) => this.settle(ended),
+        settle: (ended) => this.deciding(() => this.settle(ended)),
         completing: (taskId) => this.completing.has(taskId),
         retried: (taskId) => (this.retryCounts.get(taskId) ?? 0) > 0,
         previousRound: (taskId) => this.previousRounds.get(taskId),
@@ -588,6 +594,7 @@ export class TaskOrchestrator {
       leaveTree: pool.join(node),
       ...(options.budget ? { budget: options.budget } : {}),
       startRefused: options.startRefused ?? ((why) => options.budget?.stop(why)),
+      ...(options.decided ? { decided: options.decided } : {}),
     });
     return orchestrator;
   }
@@ -2619,6 +2626,25 @@ export class TaskOrchestrator {
   }
 
   async tick(): Promise<void> {
+    await this.deciding(() => this.ticked());
+  }
+
+  /**
+   * A tick or an attempt's end is under way, so the run may yet go on or end,
+   * and tell its supervisor which. A child read in that gap has neither, and
+   * would be taken for one that sits on nothing (ADR-0056 M8).
+   */
+  private async deciding(work: () => Promise<void>): Promise<void> {
+    this.decisions += 1;
+    try {
+      await work();
+    } finally {
+      this.decisions -= 1;
+      if (this.decisions === 0) this.deps.decided?.();
+    }
+  }
+
+  private async ticked(): Promise<void> {
     // What this tick starts was admitted as it began: a Stop during one of its awaits withdraws it.
     const admission = this.admittedNow();
     this.recoverOrphans();
@@ -2682,7 +2708,7 @@ export class TaskOrchestrator {
    * tells a child that sits on nothing from one that waits (ADR-0056 M8).
    */
   get movesUnasked(): boolean {
-    if (this.attempts.size > 0 || this.runHeld || this.keptResumes.size > 0 || this.owedRepairs.size > 0 || this.store.allTasks.some(waitsForReset)) return true;
+    if (this.decisions > 0 || this.attempts.size > 0 || this.runHeld || this.keptResumes.size > 0 || this.owedRepairs.size > 0 || this.store.allTasks.some(waitsForReset)) return true;
     return this.isScheduling && (this.waitsOnTree() || (this.refusedStart === null && this.readiness().ready.length > 0));
   }
 

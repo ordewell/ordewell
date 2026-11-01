@@ -552,18 +552,18 @@ describe('a raise (ADR-0056 M5)', () => {
   });
 });
 
-describe('a question two levels down (ADR-0056 M8)', () => {
+describe('two levels down (ADR-0056 M8, ADR-0055 D9, D14)', () => {
   const quiet = () => ({ signal: new AbortController().signal });
   const nestedChild = { id: 'e', order: 1, title: 'Deeper subtree', description: 'deeper', type: 'delegated', goal: 'Write a', budget: { tokens: 800_000 }, protectedPaths: ['tests/'], sliceType: 'AFK', dependencies: [] };
   const nestedCheck = { id: 'f', order: 2, title: 'Check the deeper subtree', description: 'check', type: 'ai', prompt: 'read it', readOnly: true, sliceType: 'AFK', autonomy: 'AFK', dependencies: ['e'] };
 
   /** A root whose subplanner and sub-subplanner each read their own turns. */
-  function nested(outer: Turn[], inner: Turn[]) {
+  function nested(outer: Turn[], inner: Turn[], { runner = writingRunner({ a: ['a.txt'] }), config = {} }: { runner?: IRunner; config?: Parameters<typeof fakeConfig>[0] } = {}) {
     const root = repo();
     const planners = { d: scriptedPlanner(outer), e: scriptedPlanner(inner) };
     const parent = makeSession({
-      runner: writingRunner({ a: ['a.txt'] }), isolation: isolation(), workspaceRoot: () => root, saveSession, openTaskLog, leaseHost: new LeaseHost(), sessionId: 'session-root',
-      config: fakeConfig({ maxParallelSessions: 3 }),
+      runner, isolation: isolation(), workspaceRoot: () => root, saveSession, openTaskLog, leaseHost: new LeaseHost(), sessionId: 'session-root',
+      config: fakeConfig({ maxParallelSessions: 3, ...config }),
       settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: 5_000_000 } }),
       delegationOffered: true,
       childDeps: (task) => ({ aiService: { reset: vi.fn(), ...planners[task.id as 'd' | 'e'].service } as unknown as IAiService, fsAdapter: { ...fakeFs(), getWorkspaceRoot: () => root } }),
@@ -571,6 +571,54 @@ describe('a question two levels down (ADR-0056 M8)', () => {
     parent.loadPlan({ ...planOf([delegated({ grants: ['delegate'] }), check()]), runners: ['claude-code'] }, 'the root goal', root, { sessionId: 'session-root' });
     return { root, parent, planners };
   }
+
+  it('holds a child\'s own merge while its check has not passed, so its subplanner cannot say done', async () => {
+    const replies: string[] = [];
+    const inner = writingRunner({ a: ['a.txt'] });
+    const runner: IRunner = {
+      ...inner,
+      spawn: vi.fn(async (opts) => {
+        if (opts.taskId !== 'f') return inner.spawn(opts);
+        const session = new FakeRunnerSession(`s-${opts.taskId}`, opts.taskId);
+        setTimeout(() => session.reportComplete({ status: 'failed', summary: 'It does not hold.', reason: 'It does not hold.' }), 5);
+        return session;
+      }),
+    };
+    const { parent } = nested([
+      SUBMIT([nestedChild, nestedCheck]),
+      async (tools) => {
+        const said = await tools.taskComplete!({ status: 'done', summary: 'Done.', commit: { subject: 'Write a' } }, quiet());
+        replies.push(said.text);
+        await tools.taskComplete!({ status: 'blocked', summary: 'Its check failed.', reason: 'Its check failed.' }, quiet());
+      },
+    ], [SUBMIT([childTask('a', 1)]), DONE], { runner });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('failed'), { timeout: 40_000 });
+    expect(replies[0]).toContain('Not done yet');
+    expect(parent.planTasks.find((t) => t.id === 'd')?.verdict?.reported).toBe('blocked');
+    parent.destroy();
+  }, 60_000);
+
+  it('wakes the subplanner on a conflict with no repair left: nobody below the root waits on a person', async () => {
+    const held = heldTasks({ a: ['x.txt'], s: ['x.txt'] }, ['a', 's']);
+    const heard: string[] = [];
+    const { parent } = nested([
+      SUBMIT([nestedChild, nestedCheck, { ...childTask('s', 3) }]),
+      async (tools, text) => {
+        heard.push(text);
+        await tools.taskComplete!({ status: 'blocked', summary: 'It conflicts.', reason: 'It conflicts.' }, quiet());
+      },
+    ], [SUBMIT([childTask('a', 1)]), DONE], { runner: held.runner, config: { conflictRepairAttempts: 0 } });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(held.runner.spawned).toEqual(expect.arrayContaining(['a', 's'])), { timeout: 30_000 });
+    held.release('s');
+    await new Promise((resolve) => { setTimeout(resolve, 500); });
+    held.release('a');
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('failed'), { timeout: 40_000 });
+    expect(heard[0]).toContain('conflicts');
+    expect(parent.escalations().map((e) => e.kind)).not.toContain('checkpoint');
+    parent.destroy();
+  }, 60_000);
 
   it('wakes its parent subplanner, which answers it, and nothing of it reaches the user', async () => {
     let asked: string[] = [];
@@ -648,7 +696,9 @@ describe('the merge hold (ADR-0055 D9)', () => {
     const refused = await parent.execute({ command: 'merge_all' }, { kind: 'supervisor', level: 'act' });
     expect(refused).toMatchObject({ ok: false, message: expect.stringContaining('Check the subtree') });
 
-    const offered = parent.escalations().flatMap((e) => e.options.filter((o) => o.id === 'merge-all').map((o) => ({ id: e.id, confirm: o.confirm })))[0];
+    const mergeOffered = () => parent.escalations().flatMap((e) => e.options.filter((o) => o.id === 'merge-all').map((o) => ({ id: e.id, confirm: o.confirm })))[0];
+    await vi.waitFor(() => expect(mergeOffered()).toBeDefined(), { timeout: 20_000 });
+    const offered = mergeOffered();
     expect(offered.confirm).toContain('Check the subtree');
     expect(await parent.answerEscalation(offered.id, 'merge-all')).toMatchObject({ ok: false, message: expect.stringContaining('explicit yes') });
     expect(changed(root)).not.toContain('a.txt');
@@ -949,6 +999,87 @@ describe('a sealed script (ADR-0055 D8, ADR-0056 M9)', () => {
   });
 });
 
+describe('outward effects (ADR-0056 M9)', () => {
+  function sealedFs() {
+    const ran: { script: string; cwd: string }[] = [];
+    const run = async (script: string, cwd: string): Promise<ToolOutcome> => {
+      ran.push({ script, cwd });
+      const result = spawnSync('sh', ['-c', script], { cwd, encoding: 'utf8' });
+      return { success: result.status === 0, output: `${result.stdout}${result.stderr}`, truncated: false };
+    };
+    const fsAdapter: IFileSystem = {
+      ...fakeFs(),
+      canSeal: async () => true,
+      taskShell: ({ cwd, writable, worktrees }) => ({
+        run: () => Promise.reject(new Error('a script runs through hold')),
+        hold: <T>(work: (runs: OwnSealedRuns) => Promise<T>) => work({ worktrees: worktrees?.length ? worktrees : [writable ?? cwd], touched: false, scratch: '', run }),
+        end: () => undefined,
+      }),
+    };
+    return { fsAdapter, ran };
+  }
+  const script = (commands: string[][]) => ({ id: 't', order: 2, title: 'Test it', description: 'test', type: 'script', sliceType: 'AFK', commands, dependencies: ['a'] });
+  const effectGranted = () => [delegated({ grants: ['effect'] }), check()];
+
+  it('runs a body the rules cover at every level in the child\'s checkout, with `effect`', async () => {
+    const { fsAdapter, ran } = sealedFs();
+    const { parent } = tree([SUBMIT([childTask('a', 1), script([['cat', 'a.txt']])]), DONE], { fsAdapter, tasks: effectGranted(), config: { effectAllowlist: ['cat a.txt'] } });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    expect(ran).toHaveLength(0);
+    parent.destroy();
+  });
+
+  it('seals a body the rules do not cover, `effect` or no', async () => {
+    const { fsAdapter, ran } = sealedFs();
+    const { parent } = tree([SUBMIT([childTask('a', 1), script([['ls']])]), DONE], { fsAdapter, tasks: effectGranted(), config: { effectAllowlist: ['cat a.txt'] } });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    expect(ran).toHaveLength(1);
+    parent.destroy();
+  });
+
+  it('refuses an edit that moves a covered body past the rules', async () => {
+    const { fsAdapter } = sealedFs();
+    const replies: { text: string; isError?: boolean }[] = [];
+    const quiet = { signal: new AbortController().signal };
+    const SUBMIT_THEN_EDIT: Turn = async (tools, text) => {
+      await SUBMIT([childTask('a', 1), script([['cat', 'a.txt']])])(tools, text);
+      replies.push(await tools.editPlan!({ ops: [{ op: 'update', taskId: 't', changes: { commands: [['ls']] } }] } as never, quiet));
+      await tools.taskComplete!({ status: 'blocked', summary: 'Stopping here.', reason: 'Stopping here.' }, quiet);
+    };
+    const { parent } = tree([SUBMIT_THEN_EDIT], { fsAdapter, tasks: effectGranted(), config: { effectAllowlist: ['cat a.txt'] } });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(replies).toHaveLength(1), { timeout: 20_000 });
+    expect(replies[0]).toMatchObject({ isError: true, text: expect.stringContaining('effect rules') });
+    parent.destroy();
+  });
+
+  it('seals a script a subplanner adds with run_script, with no `effect`', async () => {
+    const { fsAdapter, ran } = sealedFs();
+    const RUN: Turn = async (tools) => {
+      await tools.runScript!({ title: 'Look', commands: [['ls']] } as never, { signal: new AbortController().signal });
+    };
+    const { parent } = tree([RUN, NOTHING_THEN_BLOCKED], { fsAdapter });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(ran).toHaveLength(1), { timeout: 20_000 });
+    parent.destroy();
+  });
+
+  it('refuses a child\'s script where nothing can seal it', async () => {
+    const refused: string[] = [];
+    const TRY: Turn = async (tools) => {
+      const reply = await tools.submitPlan!({ tasks: [childTask('a', 1), script([['ls']])] as never }, { signal: new AbortController().signal });
+      refused.push(reply.text);
+    };
+    const { parent } = tree([TRY, NOTHING_THEN_BLOCKED]);
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(refused).toHaveLength(1), { timeout: 20_000 });
+    expect(refused[0]).toContain('no sandbox to seal');
+    parent.destroy();
+  });
+});
+
 describe('what a model may not do to a check (ADR-0055 D8)', () => {
   it('refuses a supervisor\'s skip of a failed check, and leaves the user\'s', async () => {
     const { parent } = tree([SUBMIT([childTask('a', 1)]), DONE], { runner: failingCheck(), tasks: [delegated(), check({ taskMode: 'plan' })] });
@@ -962,13 +1093,14 @@ describe('what a model may not do to a check (ADR-0055 D8)', () => {
 });
 
 describe('what ends a child with nobody to ask (ADR-0056 M3, M8, M10)', () => {
-  it('denies a runner\'s approval at once: nobody below the root may allow it', async () => {
+  it('denies a runner\'s approval at once, and tells the next run update: nobody below the root may allow it', async () => {
     const asked = { session: null as FakeRunnerSession | null };
     const runner = writingRunner({ a: ['a.txt'] }, { asks: (session) => { asked.session = session; } });
-    const { parent } = tree([SUBMIT([childTask('a', 1)]), DONE], { runner });
+    const { parent, planner } = tree([SUBMIT([childTask('a', 1)]), DONE], { runner });
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
     expect(asked.session?.answers[0]?.decision).toMatchObject({ decision: 'deny' });
+    expect(planner.asked[1]).toContain('denied');
     parent.destroy();
   });
 

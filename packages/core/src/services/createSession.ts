@@ -494,6 +494,7 @@ export function createSession(deps: SessionDeps): Session {
     ...(deps.execution ? { execution: deps.execution } : {}),
     startRefused: (why) => session.startRefused(why),
     autonomous: () => autonomousAt(deps.child, deps.config.autonomousMode),
+    ...(deps.subplanner ? { decided: () => deps.subplanner?.changed() } : {}),
     ...(deps.child ? { inheritedProtectedPaths: () => deps.child?.mandate('off').exclusions.protectedPaths ?? [] } : {}),
     sessionId: () => session.sessionId,
     openTurn: () => session.turnRoomFreed(),
