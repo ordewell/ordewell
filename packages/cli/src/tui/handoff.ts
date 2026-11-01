@@ -147,8 +147,28 @@ export function runHandoffAction(state: TuiState, id: HandoffActionId): Step {
   }
 }
 
+/**
+ * The question a Merge all raises when the daemon holds it for a check that has
+ * not passed (ADR-0055 D9): the checks as it named them, and a yes that sends
+ * `pastChecks` with the merge. Asked after the generic confirmation, which
+ * knows nothing of the checks.
+ */
+export function askMergePastChecks(state: TuiState, named: string): TuiState {
+  const handoff = currentHandoff(state);
+  if (!handoff) return say(state, 'system', named);
+  return {
+    ...state,
+    overlay: {
+      kind: 'confirm',
+      title: 'Merge past a check that has not passed?',
+      message: `${named} Merge ${handoffBranchName(handoff)} into ${mergeTarget(handoff)} anyway?`,
+      action: { kind: 'merge-run', pastChecks: true },
+    },
+  };
+}
+
 /** Answers `merge-run` / `discard-run` confirmations. */
-export function confirmedHandoff(state: TuiState, kind: 'merge-run' | 'discard-run'): Step {
+export function confirmedHandoff(state: TuiState, kind: 'merge-run' | 'discard-run', pastChecks = false): Step {
   const closed: TuiState = { ...state, overlay: null };
   const handoff = currentHandoff(state);
   if (!state.sessionId || !handoff) return { state: closed, effects: [] };
@@ -159,6 +179,7 @@ export function confirmedHandoff(state: TuiState, kind: 'merge-run' | 'discard-r
       type: 'isolationMerge', sessionId, branch: handoffBranchName(handoff),
       ...(isRepoGroup(handoff) ? { group: true } : {}),
       ...(repaired.length > 0 ? { repaired } : {}),
+      ...(pastChecks ? { pastChecks: true as const } : {}),
     }
     : { type: 'isolationDiscard', sessionId, branch: handoffBranchName(handoff) };
   return { state: closed, effects: [effect] };

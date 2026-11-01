@@ -150,6 +150,34 @@ describe('POST /:sessionId/isolation/merge', () => {
   });
 });
 
+describe('POST /:sessionId/isolation/merge past a check that has not passed (ADR-0055 D9)', () => {
+  const ASKED = 'This merges work no check has passed: #2 "Check the subtree" has not.';
+  const asked = { ok: false, outcome: 'refused', message: ASKED, payload: { kind: 'merge_hold', checks: ['#2 "Check the subtree"'] } };
+
+  it('is a 409 naming the checks, so a surface asks first', async () => {
+    const execute = vi.fn().mockResolvedValue(asked);
+    const res = await post(appFor({ execute }), 'isolation/merge');
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: ASKED, code: 'merge_past_check' });
+    expect(execute).toHaveBeenCalledWith({ command: 'merge_all' }, { kind: 'user' });
+  });
+
+  it('carries the yes to the seam when the body says it', async () => {
+    const execute = vi.fn().mockResolvedValue(merged({ outcome: 'merged' }));
+    const res = await appFor({ execute }).request('/api/plans/s1/isolation/merge', { method: 'POST', body: JSON.stringify({ pastChecks: true }), headers: { 'content-type': 'application/json' } });
+
+    expect(res.status).toBe(200);
+    expect(execute).toHaveBeenCalledWith({ command: 'merge_all', pastChecks: true }, { kind: 'user' });
+  });
+
+  it('reads anything but true as no', async () => {
+    const execute = vi.fn().mockResolvedValue(asked);
+    await appFor({ execute }).request('/api/plans/s1/isolation/merge', { method: 'POST', body: JSON.stringify({ pastChecks: 'yes' }), headers: { 'content-type': 'application/json' } });
+    expect(execute).toHaveBeenCalledWith({ command: 'merge_all' }, { kind: 'user' });
+  });
+});
+
 describe.each([
   ['isolation/discard', 'discardRun'],
   ['isolation/cleanup', 'cleanupRun'],

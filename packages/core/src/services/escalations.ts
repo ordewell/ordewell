@@ -1,3 +1,4 @@
+import { mergePastChecksConfirmation } from './mergeWording';
 import { createHash } from 'crypto';
 import { isRunnerApproval } from '../interfaces/IApproval';
 import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
@@ -336,7 +337,7 @@ function failed(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait |
 
 /** Merge all as the user is offered it: with what it would carry past its check named, when anything would (ADR-0055 D9). */
 function mergeOption({ run }: EscalationInput): EscalationOption {
-  return run.mergeHold.length === 0 ? MERGE_ALL : { ...MERGE_ALL, confirm: `This merges work no check has passed: ${run.mergeHold.join(', ')} has not.` };
+  return run.mergeHold.length === 0 ? MERGE_ALL : { ...MERGE_ALL, confirm: mergePastChecksConfirmation(run.mergeHold) };
 }
 
 /** A task not started that only a person can start, once a run is there for it to be late for. */
@@ -494,7 +495,8 @@ export function escalationAct(escalation: Escalation, option: EscalationOptionId
     case 'force-start': return command({ command: 'force_start', task });
     case 'skip': return command({ command: 'skip_task', task, ...(said ? { reason: said } : {}) });
     case 'complete': return command({ command: 'mark_complete', task, confirmed: true });
-    case 'merge-all': return command({ command: 'merge_all' });
+    // The option carries its check's confirmation, so reaching here is the yes the seam asks for (ADR-0055 D9).
+    case 'merge-all': return command({ command: 'merge_all', pastChecks: true });
     case 'resolve-conflict': return { kind: 'resolve-conflict', task };
     case 'start-resolver': return command({ command: 'run_task', task: escalation.resolver ?? '' });
     case 'stash': return { kind: 'continue-run', how: 'stash' };

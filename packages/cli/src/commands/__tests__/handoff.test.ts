@@ -7,17 +7,21 @@ vi.mock('../../utils', async (importOriginal) => ({
   readLastSession: () => ({ sessionId: 'session-1', goal: 'g', runners: ['claude-code'], workspace: '/tmp/ws' }),
 }));
 
-interface Hit { method: string; url: string }
+interface Hit { method: string; url: string; body: string }
 
 function daemon(respond: (hit: Hit) => { status?: number; body: unknown }): Promise<{ port: number; hits: Hit[]; close: () => void }> {
   const hits: Hit[] = [];
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
-      const hit = { method: req.method ?? '', url: req.url ?? '' };
-      hits.push(hit);
-      const answer = respond(hit);
-      res.writeHead(answer.status ?? 200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(answer.body));
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        const hit = { method: req.method ?? '', url: req.url ?? '', body: Buffer.concat(chunks).toString('utf8') };
+        hits.push(hit);
+        const answer = respond(hit);
+        res.writeHead(answer.status ?? 200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(answer.body));
+      });
     });
     server.listen(0, '127.0.0.1', () => {
       resolve({ port: (server.address() as { port: number }).port, hits, close: () => server.close() });
@@ -78,14 +82,17 @@ const groupPlan = {
  * Like the real one, only adoption answers with the saved plan itself; reading a
  * session answers the phase-shaped view, which carries no run record.
  */
-function isolatedDaemon(over: Record<string, { status?: number; body: unknown }> = {}, savedPlan: unknown = isolatedPlan) {
-  return daemon(({ method, url }) => {
+type Answer = { status?: number; body: unknown };
+function isolatedDaemon(over: Record<string, Answer | ((hit: Hit) => Answer)> = {}, savedPlan: unknown = isolatedPlan) {
+  return daemon((hit) => {
+    const { method, url } = hit;
     if (url.includes('/load')) return { body: { plan: savedPlan, goal: 'g' } };
     if (method === 'GET' && url.startsWith('/api/sessions/session-1')) {
       return { body: { meta: { id: 'session-1' }, plan: { phase: 'executing', history: [], message: '', executionLog: [], pendingTasks: [] } } };
     }
     const route = Object.keys(over).find((key) => url.endsWith(key));
-    return route ? over[route] : { body: { ok: true } };
+    const answer = route ? over[route] : undefined;
+    return typeof answer === 'function' ? answer(hit) : answer ?? { body: { ok: true } };
   });
 }
 
@@ -136,6 +143,58 @@ describe('ordewell handoff', () => {
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Merge ordewell/r1/integration into main?'));
     expect(srv.hits.some((h) => h.url.endsWith('/isolation/merge'))).toBe(true);
     expect(stdout).toMatch(/Merged ordewell\/r1\/integration/);
+  });
+
+  describe('past a check that has not passed (ADR-0055 D9)', () => {
+    const ASKED = 'This merges work no check has passed: #2 "Check the subtree" has not.';
+    /** The daemon refuses a Merge all that does not carry the yes, naming the check. */
+    const holding = () => isolatedDaemon({
+      '/isolation/merge': (hit) => (JSON.parse(hit.body || '{}').pastChecks === true
+        ? { body: { outcome: 'merged' } }
+        : { status: 409, body: { error: ASKED, code: 'merge_past_check' } }),
+    });
+    const merges = (srv: { hits: Hit[] }) => srv.hits.filter((h) => h.url.endsWith('/isolation/merge'));
+
+    it('asks again, naming the check, and merges when told to', async () => {
+      const srv = await holding();
+      const { stdout, confirm } = await run(['merge'], srv);
+      srv.close();
+
+      expect(confirm).toHaveBeenCalledTimes(2);
+      expect(confirm).toHaveBeenLastCalledWith(`${ASKED} Merge anyway?`);
+      expect(merges(srv).map((h) => JSON.parse(h.body || '{}'))).toEqual([{}, { pastChecks: true }]);
+      expect(stdout).toMatch(/Merged ordewell\/r1\/integration/);
+    });
+
+    it('merges nothing when the second answer is no', async () => {
+      const srv = await holding();
+      const { stderr, exitCode } = await run(['merge'], srv, vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false));
+      srv.close();
+
+      expect(exitCode).toBe(1);
+      expect(stderr).toMatch(/Not confirmed/);
+      expect(merges(srv)).toHaveLength(1);
+    });
+
+    it('is not covered by --yes alone, which stands in for the first question only', async () => {
+      const srv = await holding();
+      const { stderr, exitCode, confirm } = await run(['merge', '--yes'], srv, vi.fn().mockResolvedValue(false));
+      srv.close();
+
+      expect(exitCode).toBe(1);
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(stderr).toMatch(/Not confirmed/);
+    });
+
+    it('is told by --past-checks, which sends the yes with the first request', async () => {
+      const srv = await holding();
+      const { stdout, confirm } = await run(['merge', '--yes', '--past-checks'], srv);
+      srv.close();
+
+      expect(confirm).not.toHaveBeenCalled();
+      expect(merges(srv).map((h) => JSON.parse(h.body || '{}'))).toEqual([{ pastChecks: true }]);
+      expect(stdout).toMatch(/Merged/);
+    });
   });
 
   it('merge does nothing when the answer is no', async () => {

@@ -748,7 +748,18 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
     // cleared the run up and says so on the stream (`run_closed`); one
     // mid-run leaves the run going (ADR-0020).
     case 'isolationMerge': {
-      const { ok, message } = mergeOutcome(await api.mergeRun(effect.sessionId), effect.branch, effect.group === true, effect.repaired ?? []);
+      let merged: Awaited<ReturnType<typeof api.mergeRun>>;
+      try {
+        merged = await api.mergeRun(effect.sessionId, effect.pastChecks ? { pastChecks: true } : {});
+      } catch (err) {
+        // A question for the user, with the checks named: not a failure (ADR-0055 D9).
+        if (err instanceof DaemonError && err.code === 'merge_past_check') {
+          dispatch({ type: 'mergeHeld', message: err.message, sessionId: effect.sessionId });
+          return;
+        }
+        throw err;
+      }
+      const { ok, message } = mergeOutcome(merged, effect.branch, effect.group === true, effect.repaired ?? []);
       dispatch({ type: ok ? 'notice' : 'failed', message });
       return;
     }

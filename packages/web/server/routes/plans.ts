@@ -240,8 +240,12 @@ export function plansRoute(pool: OrchestratorPool) {
   router.post('/:sessionId/isolation/merge', async (c) => {
     try {
       // A merge git stopped is still an outcome the Merge all card shows: the seam refuses it, with the result.
-      const outcome = await pool.session(c.req.param('sessionId')).execute({ command: 'merge_all' }, { kind: 'user' });
+      const body: unknown = await c.req.json().catch(() => ({}));
+      const pastChecks = typeof body === 'object' && body !== null && 'pastChecks' in body && body.pastChecks === true;
+      const outcome = await pool.session(c.req.param('sessionId')).execute(pastChecks ? { command: 'merge_all', pastChecks: true } : { command: 'merge_all' }, { kind: 'user' });
       if (outcome.payload?.kind === 'merge') return c.json(outcome.payload.result satisfies IsolationMergeResponse);
+      // Not a refusal of the request: the user is asked, the checks named, and the yes comes in the body.
+      if (outcome.payload?.kind === 'merge_hold') return refuse(c, 409, outcome.message, 'merge_past_check');
       if (!outcome.ok) throw new TaskControlError(outcome.message);
       throw new Error('Merge all answered without its result.');
     } catch (err) {

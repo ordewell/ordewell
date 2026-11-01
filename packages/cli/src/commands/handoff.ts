@@ -1,11 +1,11 @@
 import { hasFlag, positionals } from '../utils';
-import type { ApiClient } from '../apiClient';
+import { DaemonError, type ApiClient } from '../apiClient';
 import { checkoutRule, handoffBaseLine, handoffBranchName, isRepoGroup, isolationViewOfPlan, mergeOutcome, mergeTarget, repairedLanded, repairedNotice, repoResultLines } from '@ordewell/core';
 import { HANDOFF_ACTIONS } from '../tui/handoff';
 import { adopted } from './conversation';
 import { askYesNo, fail } from './shared';
 
-const USAGE = 'Usage: ordewell handoff [review|merge|discard|cleanup] [--session-id <id>] [--workspace /path] [--yes]';
+const USAGE = 'Usage: ordewell handoff [review|merge|discard|cleanup] [--session-id <id>] [--workspace /path] [--yes] [--past-checks]';
 
 /**
  * Land an isolated run's branch (ADR-0013) — the terminal counterpart of the
@@ -60,7 +60,21 @@ export async function handleHandoff(
       await confirmed((group
         ? `Merge ${branch} into ${mergeTarget(handoff)}? Nothing is merged unless every repository can take it${checkoutRule(handoff) ? ' and is on that branch' : ''}; once a finished run has merged everything, its worktrees and branches are removed.`
         : `Merge ${branch} into ${mergeTarget(handoff)}?${checkoutRule(handoff)} Once a finished run has merged everything, its worktrees and branches are removed.`) + repairedNotice(handoff));
-      const { ok, message } = mergeOutcome(await attempt(() => api.mergeRun(sessionId)), branch, group, repairedLanded(handoff));
+      // Work whose check has not passed is the daemon's to name: it refuses, and the yes comes in a second request (ADR-0055 D9).
+      // --yes covers the first question only; this one is answered by --past-checks or by a person.
+      let pastChecks = hasFlag(subArgs, '--past-checks');
+      const merged = await attempt(async () => {
+        try {
+          return await api.mergeRun(sessionId, pastChecks ? { pastChecks: true } : {});
+        } catch (err) {
+          if (!(err instanceof DaemonError) || err.code !== 'merge_past_check') throw err;
+          if (!(await confirm(`${err.message} Merge anyway?`))) return null;
+          pastChecks = true;
+          return api.mergeRun(sessionId, { pastChecks: true });
+        }
+      });
+      if (merged === null) fail('Not confirmed: nothing was changed. Pass --past-checks to merge past a check that has not passed.');
+      const { ok, message } = mergeOutcome(merged, branch, group, repairedLanded(handoff));
       if (ok) console.log(message);
       else fail(message);
       return;
