@@ -511,6 +511,8 @@ describe('what ends a child with nobody to ask (ADR-0056 M3, M8, M10)', () => {
       tasks: [delegated({ budget: { tokens: 2_000_000, wallClockMs: 200 } }), check(), createTask({ id: 's', order: 3, title: 'Sibling', prompt: 'sibling' })],
     });
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    // A run's own start clears what is live, with nothing to stop yet.
+    vi.mocked(held.runner.stopAll).mockClear();
     await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('failed'), { timeout: 20_000 });
     expect([...new Set(held.stopped)]).toEqual(['a']);
     expect(held.runner.stopAll).not.toHaveBeenCalled();
