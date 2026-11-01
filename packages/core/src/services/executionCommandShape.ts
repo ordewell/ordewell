@@ -42,7 +42,7 @@ const SHAPES: Record<ExecutionCommandName, Record<string, Field>> = {
   force_send_queued: { task, id },
   remove_queued: { task, id },
   cancel_resume: { task },
-  answer_checkpoint: { task, answer: { kind: 'oneOf', values: ['approve', 'reject'], required: true }, reason: { kind: 'string' } },
+  answer_checkpoint: { task, answer: { kind: 'oneOf', values: ['approve', 'reject'], required: true }, reason: { kind: 'string' }, raiseTokens: { kind: 'number' } },
   approve_review: {},
   run_script: {
     title: { kind: 'string', required: true },

@@ -5,8 +5,6 @@ amends: ["0029", "0034"]
 
 # 0045 — A check repeats with its fix until it passes
 
-*Pending:* [ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — a retry or fresh attempt of a delegated task retries its check, which L7 reads as any retry: its rounds start over.
-
 ## Problem
 
 "Until it passes" is a common shape of work: an adversarial review and a fix,
@@ -162,7 +160,9 @@ round *r* and round *r* + 1 the body runs once.
   unless a Stop or a reload came first. A retry of the check — the user's, a
   `rearm`, a force start after a failure, the fresh chance Execute gives —
   starts a new set of rounds: `loopRound` goes, and the body waits for the
-  check again. The loop's own run of the check is no retry: the retry limit
+  check again. So does a new attempt of the delegated task it checks, which
+  takes the check back whatever its status (ADR-0055 D8). The loop's own run of
+  the check is no retry: the retry limit
   and the identical-retry guard (ADR-0029) count none of its rounds. A resume
   after a usage limit goes on in the round it was in.
   A start of a check between rounds depends on whether anything will run it
@@ -310,4 +310,5 @@ as check or body; a user editing a loop's `loop` field by hand from a surface.
 - 2026-10-31 — L4: a continue of a failed body task waits on its undecided check as a retry does.
 - 2026-10-31 — what ends a run ends the loop it carried, as a Stop does: a discard, a clean-up, a Merge all that clears the run up, the lease lost (L5).
 - 2026-11-01 — a script check marked `readOnly` runs in a worktree of its own, so L9 does not hold it at a gate (ADR-0055 D8).
+- 2026-11-01 — a new attempt of a delegated task takes its check back, and its rounds start over (L7; ADR-0055 D8).
 - 2026-11-01 — the task tool is `read` ([ADR-0057](0057-information-moves-by-reference.md) R11).

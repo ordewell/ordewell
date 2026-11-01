@@ -649,10 +649,12 @@ const OVERFLOW_WORDS: Record<RunEventKind, string> = {
   task_failed: 'failed',
   waiting_input: 'waiting for input',
   waiting_approval: 'waiting for approval',
+  approval_denied: 'denied a request',
   task_idle: 'gone quiet',
   landing_conflict: 'in conflict',
   usage_limit: 'at a usage limit',
   auto_merge_stopped: 'with a merge stopped',
+  start_refused: 'refused a start',
   run_finished: 'ended',
   task_report: 'reported',
 };
@@ -671,9 +673,10 @@ export function wakeUpDigest(batch: WakeBatch, describe: (taskId: string) => str
     const whole = describe(taskId);
     return whole.length > TASK_NAME_CHARS ? `${whole.slice(0, TASK_NAME_CHARS - 2)}…"` : whole;
   };
-  const passed = [...new Set(batch.sinceLast.flatMap((e) => e.taskId ?? []))];
+  const passed = [...new Set(batch.sinceLast.filter((e) => e.kind === 'task_passed').flatMap((e) => e.taskId ?? []))];
   const items: DigestItem[] = [
     ...batch.attention.map((e) => attentionItem(e, name, blockedBy)),
+    ...batch.sinceLast.filter((e) => e.kind === 'approval_denied').map((e): DigestItem => ({ kind: e.kind, rank: 1, line: `- ${cut(attentionLine(e, name, []), RIDE_ALONG_CHARS - 2)}` })),
     ...passed.map((taskId): DigestItem => ({ kind: 'task_passed', rank: 2, line: `- ${cut(`task ${name(taskId)} passed`, RIDE_ALONG_CHARS - 2)}` })),
   ];
   const shown = new Set<DigestItem>();
@@ -721,11 +724,13 @@ function attentionLine(event: RunEvent, describe: (taskId: string) => string, bl
     }
     case 'waiting_input': return `${task} is waiting for input${colon}`;
     case 'waiting_approval': return `${task} is waiting for approval${colon}`;
+    case 'approval_denied': return `${task}'s runner asked for something nobody here may allow, and was denied${colon}`;
     case 'task_idle': return `${task} has gone quiet${detail ? ` (${detail})` : ''}`;
     case 'landing_conflict': return `${task} finished, but its work conflicts and could not land${colon}`;
     case 'auto_merge_stopped': return event.taskId === undefined
       ? `automatic Merge all at the end of the run stopped${colon}; the run is handed over to the user to merge`
       : `automatic Merge all at the merge gate of ${task} stopped${colon}; the gate waits for the user`;
+    case 'start_refused': return `work could not start${colon}. Ask the plan above for more with checkpoint, or end this with task_complete`;
     case 'run_finished': return `the run finished${colon}`;
     // Its result whole, not a digest line: the planner asked for it, and reads it here (ADR-0037, R2).
     case 'task_report': return `${task}${REPORT_LEAD} ${(event.report?.text ?? '').split('\n').join('\n  ')}`;

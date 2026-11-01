@@ -110,8 +110,7 @@ export function delegationErrors(tasks: readonly Task[], rules: DelegationRules 
         fail(script, 'dependencies', `Task "${script.title}" depends on "${task.title}", which is a read-only delegated task, which lands nothing, so a script has nothing to run on: make the check a read-only AI task, which reads its handoff`);
       }
     }
-    const isCheck = (t: Task) => readsOnly(t, rules.runnerModes) || (!task.readOnly && t.type === 'script' && t.readOnly === true);
-    if (!dependents.some(isCheck)) {
+    if (!dependents.some((t) => judges(t, task, rules.runnerModes))) {
       fail(task, 'dependencies', `${where} is a delegated task with no check: add a read-only AI task${task.readOnly ? ', which reads its handoff,' : ', or a script task marked "readOnly",'} that depends on it directly`);
     }
   }
@@ -131,6 +130,29 @@ export function delegationErrors(tasks: readonly Task[], rules: DelegationRules 
     }
   }
   return errors;
+}
+
+/** Whether `task` can judge `delegated`: a read-only AI task, or a read-only script of one that lands (D8). */
+function judges(task: Task, delegated: Task, runnerModes: DelegationRules['runnerModes']): boolean {
+  return readsOnly(task, runnerModes) || (!delegated.readOnly && task.type === 'script' && task.readOnly === true);
+}
+
+/** The checks of a delegated task: what depends on it directly and can judge it (D8). */
+export function checksOf(tasks: readonly Task[], delegated: Task, rules: Pick<DelegationRules, 'runnerModes'> = {}): Task[] {
+  return tasks.filter((t) => t.dependencies.includes(delegated.id) && judges(t, delegated, rules.runnerModes));
+}
+
+/**
+ * The checks that hold every merge but the user's (ADR-0055 D9): each of a
+ * delegated task with landed work not yet merged that has neither passed nor
+ * been skipped. Work that has not landed holds nothing, and a read-only task
+ * never lands.
+ */
+export function checksHoldingMerge(tasks: readonly Task[], awaitsMerge: (taskId: string) => boolean, rules: Pick<DelegationRules, 'runnerModes'> = {}): Task[] {
+  return tasks
+    .filter((t) => t.type === 'delegated' && awaitsMerge(t.id))
+    .flatMap((t) => checksOf(tasks, t, rules))
+    .filter((check) => check.status !== 'completed' && check.status !== 'skipped');
 }
 
 /** Whether `task` is the check of a delegated task of `tasks`: what a model may not skip past, since that lets the work past its only check (D8). */

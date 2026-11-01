@@ -5,8 +5,6 @@ amends: ["0013"]
 
 # 0054 — A landed task reverts on the integration branch, before Merge all
 
-*Pending:* [ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — a delegated task's check, which lands nothing, does not keep its result: a revert of that task retries it, as any re-run does.
-
 ## Problem
 
 A task finished and landed, and its work turns out to be wrong. The user could
@@ -212,7 +210,9 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
 ## Out of scope
 
 - A dependent that landed nothing keeps its result, though it may have been
-  built on the work; what follows it waits only for what it depends on.
+  built on the work; what follows it waits only for what it depends on. A
+  delegated task's check is the one exception: it judged what the revert takes
+  back, so it is taken back with it, as any re-run does (ADR-0055 D8).
 - Work a conflict resolver brought in has no merge of its own: reverting it, or
   the resolver that carried it, is refused rather than leaving a record that
   says landed over work that is gone. `IsolationRun.carried` keeps it from the
@@ -358,3 +358,4 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
 - 2026-10-31 — a revert is plumbing, off the worktree, so the tracked-changes refusal and the clearing of a stopped revert go, and each commit is saved before the branch moves; the reflog speaks before the base name; a failed git query refuses.
 - 2026-10-31 — every ancestor read goes through one yes, no or unknown helper; a warning beside a ref list is no answer; a landing keeps a tip it cannot read as carried, and stops when it cannot say what a task brings.
 - 2026-10-31 — a run with no `carried` record refuses every revert and offers none; every run holds the record from its start, and a landing never adds it to a run without one.
+- 2026-11-01 — a revert of a delegated task takes its check back (ADR-0055 D8).

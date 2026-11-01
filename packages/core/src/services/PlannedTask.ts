@@ -33,8 +33,8 @@ export interface IntakeCatalog {
    * a one-shot planner, or a route that holds no mandate.
    */
   delegationRefusal?: string | null;
-  /** A child's script tasks run sealed unless it holds `effect` (ADR-0056 M9), so each lands read-only, on every route. */
-  sealsScripts?: boolean;
+  /** Which of a child's script tasks run sealed (ADR-0056 M9): each such lands read-only, on every route. */
+  sealsScripts?: (task: Pick<Task, 'commands' | 'script' | 'timeoutMs'>) => boolean;
 }
 
 /** Where a planned task lands, which decides what it inherits. */
@@ -250,7 +250,7 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
   const script = type === 'script';
   const delegated = type === 'delegated';
   // A read-only script exists for a delegated task's check (ADR-0055 D8), so where nothing can delegate it reads as it always did.
-  const sealedScript = script && (catalog.sealsScripts === true || (delegating && raw.readOnly === true));
+  const sealedScript = script && (catalog.sealsScripts?.({ ...(Array.isArray(raw.commands) ? { commands: raw.commands as string[][] } : {}), ...(typeof raw.script === 'string' ? { script: raw.script } : {}), ...(typeof raw.timeoutMs === 'number' ? { timeoutMs: raw.timeoutMs } : {}) }) === true || (delegating && raw.readOnly === true));
   const assignedRunner = text(raw.assignedRunner) ?? base.assignedRunner ?? catalog.runners[0] ?? DEFAULT_RUNNERS[0];
   const description = text(raw.description) ?? base.description ?? title;
 

@@ -128,9 +128,10 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       ...(approval !== undefined ? { approval } : {}),
       ...(note !== undefined ? { note } : {}),
     }),
-    answerCheckpoint: ({ task, answer: reply, reason }) => execute({
+    answerCheckpoint: ({ task, answer: reply, reason, raiseTokens }) => execute({
       command: 'answer_checkpoint', task: String(task), answer: reply,
       ...(reason !== undefined ? { reason } : {}),
+      ...(raiseTokens !== undefined ? { raiseTokens } : {}),
     }),
     mergeAll: () => execute({ command: 'merge_all' }),
     runScript: ({ title, commands, script, timeoutMs, dependencies }, { signal }) => execute({

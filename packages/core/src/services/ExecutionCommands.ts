@@ -66,7 +66,7 @@ export type ExecutionCommand =
    * to act on, which anyone but the user must give. The user's, or the
    * supervisor's at Act (ADR-0029).
    */
-  | { command: 'answer_checkpoint'; task: string; answer: 'approve' | 'reject'; reason?: string }
+  | { command: 'answer_checkpoint'; task: string; answer: 'approve' | 'reject'; reason?: string; raiseTokens?: number }
   /** The user signs off the plan's review: every task in it is approved, as executing it approves them, and it runs. */
   | { command: 'approve_review' }
   /**
@@ -257,7 +257,11 @@ export interface ExecutionHost {
   cancelResume(taskId: string): Promise<boolean>;
   /** The task waits at a checkpoint, and a runner is left to hear the answer. */
   awaitsCheckpoint(taskId: string): boolean;
-  answerCheckpoint(taskId: string, approve: boolean, reason?: string): void;
+  answerCheckpoint(taskId: string, approve: boolean, reason?: string, note?: string): void;
+  /** The checks that hold every merge but the user's (ADR-0055 D9), each as its row names it. */
+  mergeHold(): readonly string[];
+  /** A raise for a delegated task's child, from what this node has left (ADR-0056 M5). Null when it took; otherwise why not. */
+  raiseChild(taskId: string, tokens: number): Promise<string | null>;
   /** Sign off the review: the plan is the user's, and runs. */
   approveReview(): Promise<void>;
   /** Answer a runner's request, as its card does; false once it was answered or withdrawn. */
@@ -491,7 +495,7 @@ export class ExecutionCommands {
    * it, and the supervisor keeps its own tools. `confirmed` is the user's yes to
    * an option's `confirm`, which a choice cannot imply.
    */
-  async answerEscalation(id: string, option: string, note?: string, confirmed = false): Promise<CommandOutcome> {
+  async answerEscalation(id: string, option: string, note?: string, confirmed = false, raiseTokens?: number): Promise<CommandOutcome> {
     const refused = (message: string): CommandOutcome => ({ ok: false, outcome: 'refused', message });
     const escalation = this.host.escalations().find((e) => e.id === id);
     if (!escalation) return refused(ESCALATION_GONE);
@@ -501,7 +505,7 @@ export class ExecutionCommands {
       return refused(`"${option}" is not an answer to this: use ${offered.length < 2 ? offered.join('') : `${offered.slice(0, -1).join(', ')} or ${offered[offered.length - 1]}`}. Nothing was changed.`);
     }
     if (chosen.confirm && !confirmed) return refused(`${chosen.confirm} Nothing was changed: it needs your explicit yes.`);
-    const act = escalationAct(escalation, chosen.id, note);
+    const act = escalationAct(escalation, chosen.id, note, raiseTokens);
     if (act.kind === 'command') return this.run(act.command, { kind: 'user' });
     try {
       if (act.kind === 'continue-run') {
@@ -1258,11 +1262,17 @@ export class ExecutionCommands {
     const approve = command.answer === 'approve';
     const reason = command.reason?.trim() || undefined;
     if (!approve && !reason && actor.kind !== 'user') return { refusal: 'A rejection needs a reason: the runner is told it, and acts on it. Say what it should do instead.' };
+    const raise = command.raiseTokens;
+    if (raise !== undefined && located.task.type !== 'delegated') return { refusal: `${capitalize(label)} holds no budget: only a delegated task's child can be raised.` };
+    if (raise !== undefined && !approve) return { refusal: 'A raise goes with an approval: a child refused goes on with what it has.' };
     return {
       act: async () => {
-        this.host.answerCheckpoint(located.task.id, approve, reason);
+        // Carved at the call: one the parent cannot pay for leaves the question waiting, and says so.
+        const refused = raise === undefined ? null : await this.host.raiseChild(located.task.id, raise);
+        if (refused) throw new Error(refused);
+        this.host.answerCheckpoint(located.task.id, approve, reason, raise === undefined ? undefined : `Your budget was raised by ${raise} tokens.`);
         const told = actor.kind === 'user' ? 'your reason' : 'the reason';
-        return { message: approve ? `Approved the checkpoint of ${label}: it goes on.` : `Rejected the checkpoint of ${label}: the runner is told${reason ? ` ${told}` : ''}.` };
+        return { message: approve ? `Approved the checkpoint of ${label}: it goes on${raise === undefined ? '' : `, with ${raise} more tokens`}.` : `Rejected the checkpoint of ${label}: the runner is told${reason ? ` ${told}` : ''}.` };
       },
     };
   }
@@ -1464,6 +1474,8 @@ export class ExecutionCommands {
     if (this.host.runMerged()) {
       return { nothing: `Nothing to merge: everything the run landed is in ${users ? 'your' : 'the user\'s'} branch already, and the run is closed.` };
     }
+    const held = this.host.mergeHold();
+    if (held.length > 0 && !users) return { refusal: `Merge all waits on ${held.join(', ')}: work a delegated task landed merges once its check has passed, or the user has skipped it.` };
     return {
       act: async () => {
         const result = await this.host.mergeAll();
@@ -1913,7 +1925,7 @@ function doneWords(record: ExecutionRecord, command: ExecutionCommand, label: st
     case 'remove_queued': return { action: `took back a queued message to ${label}`, tail: '.' };
     case 'cancel_resume': return { action: `cancelled the scheduled resume of ${label}`, tail: '.' };
     case 'approve_review': return { action: 'approved the plan, which starts it', tail: '.' };
-    case 'answer_checkpoint': return command.answer === 'reject' ? { action: `rejected the checkpoint of ${label}`, tail: quoted } : { action: `approved the checkpoint of ${label}`, tail: '.' };
+    case 'answer_checkpoint': return command.answer === 'reject' ? { action: `rejected the checkpoint of ${label}`, tail: quoted } : { action: `approved the checkpoint of ${label}${command.raiseTokens === undefined ? '' : `, raising its budget by ${command.raiseTokens} tokens`}`, tail: '.' };
     case 'run_script': return record.result === 'gated'
       ? { action: `added script ${label}, to run once its merge gate opens`, tail: `${consentWords(record.consent)}.` }
       : { action: `ran script ${label}`, tail: `${consentWords(record.consent)}${SCRIPT_RESULT[record.result ?? 'running']}` };

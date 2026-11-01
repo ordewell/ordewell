@@ -4,7 +4,6 @@ status: accepted
 
 # 0022 — The Ordewell MCP server: task and planner tools behind per-caller tokens
 
-*Pending:* [ADR-0056](../supervision/0056-a-mandate-narrows-down-the-tree.md) — below the root the tool list is filtered by grants and fixed at session start; a subplanner's `checkpoint` parks instead of waiting (V5).
 *Pending:* [ADR-0057](../supervision/0057-information-moves-by-reference.md) — the task tools gain `post` with a board.
 *Pending:* [ADR-0059](../isolation/0059-an-execution-lease-reserves-in-the-claim-and-opens-after-it.md) — a container reaches this server through the lease's endpoint, not loopback (T1, T2).
 
@@ -160,7 +159,10 @@ on the same mechanism.
   waiting call sends MCP progress notifications, so a runner that aborts a
   silent call (Claude Code, 300s by default) does not end a checkpoint that
   waits for a person; no runner setting is raised. Cancel, stop and retry end
-  the call with a refusal, as they deny a pending runner approval.
+  the call with a refusal, as they deny a pending runner approval. A
+  subplanner's call is the one that does not wait: it answers at once that the
+  question is asked, and the subplanner parks, since a call held open would hold
+  a process and a slot for as long as a person takes (ADR-0056 M8).
 
 ### Planner: the envelope's security boundary holds
 
@@ -355,4 +357,5 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-26 — P2: an edit's scope is the enabled runners alone, not the plan's own as well (ADR-0003, V1).
 - 2026-10-26 — P2: a successful `submit_plan` or `edit_plan` commits, saves and broadcasts before it answers, each `edit_plan` call a batch of its own; the turn's held edit, its preview and the starts deferred behind it are gone.
 - 2026-11-01 — a subplanner's token serves `task_complete` and `checkpoint` (ADR-0055 D5), and `submit_plan` takes a delegated task only where one may be written.
+- 2026-11-01 — V5: a subplanner's `checkpoint` answers at once and parks it, and `answer_checkpoint` takes `raiseTokens` on a delegating planner's list (ADR-0056 M5, M8). A child's tool list is filtered by grants and fixed at its start, as ADR-0056 M6 says.
 - 2026-11-01 — the task tools read with `read`, `read_task` an alias at the call, a planner that may delegate lists it too, a server tool may carry an alias no list names, and `task_complete` takes `promote` and `open` on a subplanner's token alone ([ADR-0057](../supervision/0057-information-moves-by-reference.md) R2, R11).

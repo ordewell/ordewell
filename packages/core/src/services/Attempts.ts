@@ -1,5 +1,5 @@
 import * as path from 'path';
-import { taggedReadOnlyMode, unavailableTaskModeMessage } from './ModeResolver';
+import { resolveDefaultMode, taggedReadOnlyMode, unavailableTaskModeMessage } from './ModeResolver';
 import { McpAttachError, McpAttachTimeout, RunnerStartupExit } from './harness/ordewellBinding';
 import type { RunnerId, Task, TaskOutputSummary, TaskSkillSnapshot, Verdict } from '../models/Task';
 import type { IConfig } from '../interfaces/IConfig';
@@ -325,6 +325,8 @@ export interface AttemptsDeps {
   planNode?: () => string;
   /** What starting a research task owes the planner (ADR-0037 R3). */
   research?: Pick<ResearchTasks, 'started'>;
+  /** This node's autonomy, as its mandate reads it (ADR-0056 M6). */
+  autonomous: () => boolean;
   host: AttemptsHost;
 }
 
@@ -465,7 +467,9 @@ export class Attempts {
     const { store } = this.deps;
     const continuation = claim.continuation ?? null;
     const script = task.type === 'script';
-    const delegated = task.type === 'delegated';
+    const kind = classifyAttempt(this.workOf(task), { repair: this.deps.landing.nextRepair(task.id), continuation, carriedFrom: task.carriedFrom });
+    // A repair edits files, which a subplanner never does: it is a plain runner's (ADR-0055 D14).
+    const delegated = task.type === 'delegated' && kind.kind !== 'repair';
     const attempt: TaskAttempt = {
       taskId: task.id,
       attempt: Math.max(this.spawnCounts.get(task.id) ?? 0, this.deps.lastLoggedAttempt(task.id), ...task.attemptUsage?.map((u) => u.attempt) ?? []) + 1,
@@ -475,7 +479,7 @@ export class Attempts {
       cwd: null,
       worktree: false,
       integration: null,
-      kind: classifyAttempt(this.workOf(task), { repair: this.deps.landing.nextRepair(task.id), continuation, carriedFrom: task.carriedFrom }),
+      kind,
       snapshot: null,
       startedAt: new Date().toISOString(),
       decided: false,
@@ -629,9 +633,9 @@ export class Attempts {
     return this.deps.store.get(taskId)?.awaitingReason === 'checkpoint' && this.live.has(taskId);
   }
 
-  approveCheckpoint(taskId: string): void {
+  approveCheckpoint(taskId: string, note?: string): void {
     if (!this.awaitsCheckpoint(taskId)) return;
-    this.verifier.approveCheckpoint(taskId);
+    this.verifier.approveCheckpoint(taskId, note);
     this.deps.store.markInProgress(taskId);
     this.host.emit('onTaskChanged');
   }
@@ -749,7 +753,7 @@ export class Attempts {
         // swapping it here, so a host that cannot run it ends the attempt
         // before a worktree is made for it.
         const manifest = this.deps.registry?.get(attempt.runner)?.manifest;
-        const unavailable = manifest && unavailableTaskModeMessage(manifest, task.taskMode);
+        const unavailable = manifest && unavailableTaskModeMessage(manifest, this.modeOf(task, attempt));
         if (unavailable) throw new Error(unavailable);
       }
       // Resumed beside a runner still winding it down, a session would run in
@@ -951,7 +955,7 @@ export class Attempts {
       modelId: task.assignedModel?.modelId,
       thinkingEffort: task.assignedModel?.thinkingEffort,
       modelVariants: task.assignedModel?.availableVariants,
-      mode: task.taskMode ?? 'build',
+      mode: this.modeOf(task, attempt) ?? 'build',
       cwd,
       registry: this.deps.registry ?? undefined,
       order: task.order,
@@ -1097,6 +1101,18 @@ export class Attempts {
       delegated: task,
       ...(attempt.kind.kind === 'continuation' ? { resumeSessionId: attempt.kind.resumeSessionId } : {}),
     });
+  }
+
+  /**
+   * The mode a runner of `task` runs in. A delegated task has none on the plan,
+   * so its repair, the one runner it ever has, takes the mode its node's
+   * autonomy resolves to, for that one use: a child's mandate holds its
+   * parent's, and the spawn's `build` is wider than a Guarded run's mode on one
+   * runner and no mode at all on another (ADR-0055 D14).
+   */
+  private modeOf(task: Task, attempt: TaskAttempt): string | undefined {
+    if (task.type !== 'delegated') return task.taskMode;
+    return resolveDefaultMode(this.deps.registry?.get(attempt.runner)?.manifest.modes, this.deps.autonomous());
   }
 
   /**

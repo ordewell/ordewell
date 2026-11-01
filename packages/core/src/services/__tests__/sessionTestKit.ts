@@ -114,6 +114,9 @@ export function saves(session: Session): Mock<SaveSession> {
 export type PlannerTurn = (tools: PlannerToolHandler, text: string) => Promise<unknown>;
 
 /** A planner with no process: each of its turns calls the tools a harness planner would, in order. */
+/** A scripted turn may answer as a turn does: a failure a planner reports, say. */
+const isTurn = (said: unknown): said is ConversationTurn => typeof said === 'object' && said !== null && 'kind' in said;
+
 export function scriptedPlanner(turns: PlannerTurn[]): { service: Partial<IAiService>; requests: ConversationRequest[]; asked: string[] } {
   const requests: ConversationRequest[] = [];
   const asked: string[] = [];
@@ -121,8 +124,8 @@ export function scriptedPlanner(turns: PlannerTurn[]): { service: Partial<IAiSer
   const next = async (text: string): Promise<ConversationTurn> => {
     asked.push(text);
     const turn = turns.shift();
-    if (turn && handler) await turn(handler, text);
-    return { kind: 'message', text: 'Done with this turn.', researchLog: [] };
+    const said = turn && handler ? await turn(handler, text) : undefined;
+    return isTurn(said) ? said : { kind: 'message', text: 'Done with this turn.', researchLog: [] };
   };
   return {
     requests,

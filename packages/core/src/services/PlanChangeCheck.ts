@@ -1,12 +1,14 @@
 import { flattenTasks, type RunnerId, type Task } from '../models/Task';
 import type { RunnerModeInfo } from './ModeResolver';
 import { validatePlanTasks, type PlanTasksResult } from './PlanValidator';
-import { checkPlanInvariants } from './PlannedTask';
+import { checkPlanInvariants, type IntakeCatalog } from './PlannedTask';
 import { applyTaskOps, opRefusalText, type OpRef, type TaskOp } from './TaskOps';
 import { resolveAssignments, type AssignmentAdjustment, type AssignmentCatalog } from './TaskAssignment';
 import { checkOpSkills, checkPlanSkills, type SkillCheck, type SkillLookup } from './taskSkills';
 import { delegatedRequest, mandateRefusalText, missingGrant, narrow, type Grant, type Mandate, type NodeAuthority } from './Mandate';
 import { planSize } from '../models/Delegation';
+import { scriptBodyOf } from '../models/ScriptTask';
+import { effectRuleFor } from './effectAllowlist';
 
 /**
  * When a planner's change is checked: as the planner submits it, where a
@@ -152,12 +154,12 @@ export class PlanChangeCheck {
   }
 
   /** Whether this node may write a delegated task: read on every route, since a parse that took one anyway would only be refused later (ADR-0055 D21). */
-  private delegation(): { delegationRefusal?: string | null; sealsScripts?: boolean } {
+  private delegation(): { delegationRefusal?: string | null; sealsScripts?: IntakeCatalog['sealsScripts'] } {
     const node = this.scope.node?.();
     if (!node) return {};
     return {
       delegationRefusal: node.mandate.grants.has('delegate') ? null : missingGrant(node.level, node.mandate, 'delegate'),
-      ...(node.level > 0 && !node.mandate.grants.has('effect') ? { sealsScripts: true } : {}),
+      ...(node.level > 0 ? { sealsScripts: (task) => runsSealed(node.mandate, task) } : {}),
     };
   }
 
@@ -247,7 +249,10 @@ export class PlanChangeCheck {
     const size = planSize(after);
     if (written.length > 0 && size > mandate.limits.tasksPerPlan) past('limits.tasksPerPlan', size, mandate.limits.tasksPerPlan);
     for (const task of written) {
-      const refused = task.ops ? 'an ops task acts on the user\'s systems from their checkout, so none runs below the root' : task.type === 'user' ? 'a manual task waits on a person, and none is below the root' : null;
+      const refused = task.ops ? 'an ops task acts on the user\'s systems from their checkout, so none runs below the root'
+        : task.type === 'user' ? 'a manual task waits on a person, and none is below the root'
+          // An add lands sealed; an edit that moves a body past the rules keeps what it was.
+          : task.type === 'script' && !task.readOnly && runsSealed(mandate, task) ? 'its body is not covered at every level of the effect rules, and it would run unsealed' : null;
       if (refused) errors.push({ taskId: task.id, field: 'type', message: `Level ${level} refused Task "${task.title}": ${refused}.` });
     }
     return errors;
@@ -256,6 +261,16 @@ export class PlanChangeCheck {
   private refused(change: PlannerChange, errors: PlanChangeError[]): CheckedChange {
     return { ok: false, errors, runners: this.scope.runners(change.kind) };
   }
+}
+
+/**
+ * Whether a child's script runs sealed (ADR-0056 M9): capability is held at the
+ * boundary, so all of them do but a body the rules of every level cover, in a
+ * child that holds `effect`. A script body is covered by nothing (ADR-0035).
+ */
+function runsSealed({ grants, effectRules }: Mandate, task: Pick<Task, 'commands' | 'script' | 'timeoutMs'>): boolean {
+  const body = scriptBodyOf({ ...task, type: 'script' });
+  return !grants.has('effect') || !body || effectRules.length === 0 || !effectRules.every((rules) => effectRuleFor(rules, body));
 }
 
 /** A landing plan's tasks: its phase's type says they are tasks, not JSON. */

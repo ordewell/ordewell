@@ -5,8 +5,6 @@ amends: ["0009", "0013", "0020", "0022"]
 
 # 0029 — The supervisor: levels, live planner turns, execution tools and auto-merge
 
-*Pending:* [ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — landed work whose check has not passed holds `merge_all` and the automatic merges.
-*Pending:* [ADR-0056](0056-a-mandate-narrows-down-the-tree.md) — a child's questions go to its parent, and a loop guard ends a subplanner where it would lower a root.
 
 **Amends:** ADR-0009 and ADR-0022 — the planner gains execution tools, a further
 explicit exception to harness planners being read-only; ADR-0013 — "never
@@ -206,7 +204,7 @@ the same seam through its own tool definitions.
 | `message_task` | send a task message (ADR-0023) |
 | `answer_approval` | deny a runner approval with a note, or escalate it to the user — never allow |
 | `answer_checkpoint` | approve the checkpoint a task waits at, or reject it with a required reason the runner acts on. In Act wake-up turns only |
-| `merge_all` | Merge all, in Act wake-up turns only |
+| `merge_all` | Merge all, in Act wake-up turns only, and not while landed work of a delegated task waits on its check (ADR-0055 D9) |
 | `skip_task` | end a task that failed, is blocked or is waiting for input as *skipped*, with a required reason; nothing of it lands, and its dependents go ahead, told the reason. In Act wake-up turns only |
 | `run_script` | add a script task ([ADR-0035](0035-effects-are-consented-and-recorded.md)) and start it in one step; answers with its verdict and the tail of its output, or "still running" after a minute |
 
@@ -491,7 +489,9 @@ accepted. Each tripped guard also posts a supervisor message to the user.
 - **Then the run goes unsupervised**: it carries on as Off, with a visible
   notice. Wake-ups not delivered are persisted and handed over whole at the
   next successful turn or user message, so nothing that happened is lost to
-  the conversation.
+  the conversation. A child has nobody else, so there it ends `failed`, its tasks
+  stopped first, and a guard that would lower a root ends it `blocked`
+  (ADR-0056 M8). A child's questions go to its parent, not to a person.
 - **A planner usage limit waits for its reset** as a runner's does (#84): the
   turn's wake-ups wait with its other inputs and go again in the planner's
   resend ([ADR-0044](../planner/0044-the-planners-usage-limit-waits-and-resends.md)); one
@@ -744,4 +744,5 @@ until #30 exists.
 - 2026-10-31 — `WakePolicy` holds a failure and a task gone idle, a run update has a size cap, and the level's rules go whole once a context ([ADR-0057](0057-information-moves-by-reference.md) R4, R5).
 - 2026-10-31 — what the wake policy saved goes out once due after a load and joins the saved inputs, opening no turn, instead of waiting in the policy for a run event that a quiet or finished run never sends.
 - 2026-10-31 — the user's Stop stands the supervisor down until they start work again, at every level and through a reload, and what was held waits on the plan; their stop of one task holds back only what is about it, and a loop guard refuses the supervisor's start of it. Seen in review: a held failure opened a turn on a stopped run, which at Act could start it again.
+- 2026-11-01 — landed work whose check has not passed holds the supervisor's `merge_all` and the automatic merges (ADR-0055 D9); a child's questions go to its parent, and what lowers a root ends a child (ADR-0056 M8).
 - 2026-11-01 — a Stop reaches a subtree, tombstone first, and a child's claim reads its ancestors' ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D16).

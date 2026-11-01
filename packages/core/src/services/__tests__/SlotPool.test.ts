@@ -314,7 +314,39 @@ describe('one pool across a tree (ADR-0055 D18)', () => {
     });
   });
 
-  describe('a usage limit found by one node', () => {
+  describe('the time a tree is held (ADR-0056 M3)', () => {
+  it('counts a limit from when it was found up to its reset, and only once where limits overlap', () => {
+    vi.useFakeTimers({ now: 1_000_000 });
+    const pool = new SlotPool(() => 3);
+    const root = node();
+    const child = node();
+    pool.join(root);
+    pool.join(child);
+    expect(pool.heldSince(1_000_000)).toBe(0);
+
+    pool.limitFound(child, 'codex', new Date(1_060_000));
+    expect(pool.heldSince(1_000_000)).toBe(60_000);
+    vi.setSystemTime(1_030_000);
+    pool.limitFound(root, 'claude-code', new Date(1_090_000));
+    expect(pool.heldSince(1_000_000)).toBe(90_000);
+
+    vi.setSystemTime(2_000_000);
+    pool.limitFound(child, 'codex', new Date(2_010_000));
+    expect(pool.heldSince(1_000_000)).toBe(100_000);
+    expect(pool.heldSince(2_005_000)).toBe(5_000);
+    vi.useRealTimers();
+  });
+
+  it('holds nothing while no child shares the pool: a flat run has no clock', () => {
+    const pool = new SlotPool(() => 3);
+    const root = node();
+    pool.join(root);
+    pool.limitFound(root, 'codex', new Date(Date.now() + 60_000));
+    expect(pool.heldSince(0)).toBe(0);
+  });
+});
+
+describe('a usage limit found by one node', () => {
     afterEach(() => { vi.useRealTimers(); });
 
     it('holds for the whole tree until it resets, then ticks every node', async () => {

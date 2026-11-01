@@ -6,6 +6,7 @@ import type { IRunner, QueuedTaskMessage } from '../interfaces/IRunner';
 import type { TaskShell, TaskShellSite } from '../interfaces/IFileSystem';
 import type { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { RunnerModelRef } from '../models/RunnerCommand';
+import { checksHoldingMerge, checksOf, type DelegationRules } from '../models/Delegation';
 import { summarizeOutput } from './promptAugment';
 import { BufferedTaskOutputSource } from './BufferedTaskOutputSource';
 import type { LiveTail, LiveTailOptions, TaskOutputSource } from '../interfaces/TaskOutputSource';
@@ -178,7 +179,7 @@ interface QueuedStart {
 export const STARTS_AT_ONCE = 8;
 
 /** What keeps a queued force start waiting, with nothing to say: it starts once these clear. */
-const QUEUED_WAITS: ReadonlySet<StartWaitKind> = new Set<StartWaitKind>(['queued', 'completing', 'merging', 'start-hold', 'unapproved']);
+const QUEUED_WAITS: ReadonlySet<StartWaitKind> = new Set<StartWaitKind>(['queued', 'completing', 'merging', 'start-hold', 'unapproved', 'check-running']);
 
 /** A force start the user made now: their own act, past the whole merge gate they confirmed. */
 const FORCED_NOW: ForcedStart = { queued: false };
@@ -263,6 +264,12 @@ export interface TaskOrchestratorDeps {
   leaveTree: () => void;
   /** This node's side of the tree's ledger; absent at the root, which is charged nothing, and on a flat run, which has no ledger (ADR-0056 M5). */
   budget?: NodeBudget;
+  /** What is ready cannot start, and nothing live will free room for it, so nothing ticks this again. */
+  startRefused: (why: string) => void;
+  /** This node's autonomy, as its mandate reads it (ADR-0056 M6). */
+  autonomous: () => boolean;
+  /** Nothing is deciding where the run goes any more; see {@link TaskOrchestrator.movesUnasked}. */
+  decided?: () => void;
   /** Why nothing may start at this node (ADR-0055 D16, ADR-0056 M10); absent at the root, whose own Stop is its generation. */
   nodeRefusal?: () => string | null;
   /** The child `task` holds goes (ADR-0055 D15). Absent where no Session hosts one. */
@@ -325,6 +332,14 @@ export interface TaskOrchestratorOptions {
   openTurn?: () => void;
   /** A child's side of the tree's ledger (ADR-0056 M5). */
   budget?: NodeBudget;
+  /** What follows a start its budget refuses with nothing live; the node stops, unless a subplanner can ask. */
+  startRefused?: (why: string) => void;
+  /** This node's autonomy, as its mandate reads it (ADR-0056 M6); the config's, at a root. */
+  autonomous?: () => boolean;
+  /** Nothing is deciding where the run goes any more. */
+  decided?: () => void;
+  /** What this node's ancestors protect (ADR-0056 M4). */
+  inheritedProtectedPaths?: () => readonly string[];
   /** See {@link TaskOrchestratorDeps.nodeRefusal}. */
   nodeRefusal?: () => string | null;
   /** See {@link TaskOrchestratorDeps.discardChild}. */
@@ -363,6 +378,10 @@ export class TaskOrchestrator {
   private admissions = 0;
   private reviewApproved = false;
   private autoMergeBlocked = false;
+  /** Ticks and attempt ends under way; see {@link deciding}. */
+  private decisions = 0;
+  /** The run closed with its merge held, which it would otherwise have made itself. */
+  private mergeOwedAtClose = false;
   private mergesInFlight = 0;
   /*
    * Retry counts and holds describe a task across attempts, so they
@@ -458,6 +477,7 @@ export class TaskOrchestrator {
     this.runSettings = deps.runSettings;
     this.isApproved = deps.isApproved;
     this.mayMergeUnasked = deps.mayMergeUnasked;
+    this.store.checksOf = (task) => checksOf(this.store.allTasks, task, this.checkRules);
     this.attempts = new Attempts({
       config: deps.config,
       notifications: deps.notifications,
@@ -486,8 +506,9 @@ export class TaskOrchestrator {
       ...(deps.subtree ? { subtree: deps.subtree } : {}),
       ...(deps.planNode ? { planNode: deps.planNode } : {}),
       ...(deps.research ? { research: deps.research } : {}),
+      autonomous: deps.autonomous,
       host: {
-        settle: (ended) => this.settle(ended),
+        settle: (ended) => this.deciding(() => this.settle(ended)),
         completing: (taskId) => this.completing.has(taskId),
         retried: (taskId) => (this.retryCounts.get(taskId) ?? 0) > 0,
         previousRound: (taskId) => this.previousRounds.get(taskId),
@@ -551,7 +572,7 @@ export class TaskOrchestrator {
       liveTasks: (): ReadonlySet<string> => orchestrator.liveTaskIds(),
       landedOn: (taskId) => landedOnOf(taskId, store.allTasks),
     });
-    const landing = new Landing({ runs, config: options.config, tasks: store, ...(options.plannedWith ? { plannedWith: options.plannedWith } : {}) });
+    const landing = new Landing({ runs, config: options.config, tasks: store, ...(options.plannedWith ? { plannedWith: options.plannedWith } : {}), ...(options.inheritedProtectedPaths ? { inheritedProtectedPaths: options.inheritedProtectedPaths } : {}) });
     const pool = options.pool ?? new SlotPool(() => options.config.maxParallelSessions);
     const node: PoolNode = {
       tick: () => orchestrator.offered(),
@@ -580,6 +601,7 @@ export class TaskOrchestrator {
       isApproved: options.isApproved ?? (() => true),
       mayMergeUnasked: options.mayMergeUnasked ?? (() => true),
       research: options.research,
+      autonomous: options.autonomous ?? (() => options.config.autonomousMode),
       ...(options.taskShell ? { taskShell: options.taskShell } : {}),
       ...(options.taskWebFetcher ? { taskWebFetcher: options.taskWebFetcher } : {}),
       ...(options.keepPatch ? { keepPatch: options.keepPatch } : {}),
@@ -593,6 +615,8 @@ export class TaskOrchestrator {
       limitFound: (runner, at) => pool.limitFound(node, runner, at),
       leaveTree: pool.join(node),
       ...(options.budget ? { budget: options.budget } : {}),
+      startRefused: options.startRefused ?? ((why) => options.budget?.stop(why)),
+      ...(options.decided ? { decided: options.decided } : {}),
       ...(options.nodeRefusal ? { nodeRefusal: options.nodeRefusal } : {}),
       ...(options.discardChild ? { discardChild: options.discardChild } : {}),
     });
@@ -621,8 +645,8 @@ export class TaskOrchestrator {
 
   get storeInstance(): PlanStore { return this.store; }
 
-  approveCheckpoint(taskId: string): void {
-    this.attempts.approveCheckpoint(taskId);
+  approveCheckpoint(taskId: string, note?: string): void {
+    this.attempts.approveCheckpoint(taskId, note);
   }
 
   rejectCheckpoint(taskId: string, reason?: string): void {
@@ -926,8 +950,17 @@ export class TaskOrchestrator {
    * over as before.
    */
   private async closeRun(): Promise<void> {
+    this.mergeOwedAtClose = false;
     if (this.mergesAtClose) await this.mergeLanded({ kind: 'run_end' });
+    else this.mergeOwedAtClose = this.mergesAutomatically() && !this.autoMergeBlocked && this.mergeHold.length > 0;
     await this.runs.close();
+  }
+
+  /** A hold is no merge that stopped (ADR-0055 D9): the tick after its check's pass or Skip merges, the run closed or not. */
+  private async mergeOwedAfterHold(): Promise<void> {
+    if (!this.mergesAtGates || this.merging || !this.settled || this.runMergeView() === null) return;
+    this.mergeOwedAtClose = false;
+    await this.mergeLanded({ kind: 'run_end' });
   }
 
   /**
@@ -937,7 +970,7 @@ export class TaskOrchestrator {
    * out of isolating and a merge that stopped blocks this, so neither wait is hidden.
    */
   get mergesAtClose(): boolean {
-    return this.mergesAutomatically() && !this.autoMergeBlocked && !this.merging && this.settled && this.runs.isolating
+    return this.mergesAtGates && !this.merging && this.settled && this.runs.isolating
       && this.runMergeView() !== null && this.attempts.excludingMerge() === undefined;
   }
 
@@ -1014,7 +1047,32 @@ export class TaskOrchestrator {
       queued: this.queuedStarts,
       conflictResolver: (taskId) => this.landing.liveResolvers(taskId)[0]?.id,
       ...(this.pool.shared ? { treeLimited: this.pool.limited() } : {}),
+      liveCheck: (task) => this.liveCheck(task)?.id,
     };
+  }
+
+  /** What tells a check, which reads the runners' modes as an attempt's kind does (ADR-0031). */
+  private get checkRules(): Pick<DelegationRules, 'runnerModes'> {
+    const { registry } = this.deps;
+    if (!registry) return {};
+    return { runnerModes: Object.fromEntries(this.store.allTasks.map((t) => [t.assignedRunner, registry.get(t.assignedRunner)?.manifest.modes])) };
+  }
+
+  private liveCheck(task: Readonly<Task>): Readonly<Task> | undefined {
+    return task.type === 'delegated' ? this.store.checksOf(task).find((check) => this.attempts.has(check.id)) : undefined;
+  }
+
+  /** A retry takes the task's checks back, and a live one cannot be (ADR-0055 D8). */
+  private refuseBesideLiveCheck(taskId: string): void {
+    const task = this.store.get(taskId);
+    const check = task && this.liveCheck(task);
+    if (check) throw new TaskControlError(`Task "${check.title}" is checking the work of task "${task.title}", and a new attempt takes that back: stop it first, or let it finish.`);
+  }
+
+  /** What holds every merge but the user's (ADR-0055 D9), named as a refusal names it. */
+  get mergeHold(): readonly Task[] {
+    if (!this.store.allTasks.some((t) => t.type === 'delegated')) return [];
+    return checksHoldingMerge(this.store.allTasks, (id) => this.runs.awaitsMerge(id), this.checkRules);
   }
 
   /**
@@ -1722,7 +1780,7 @@ export class TaskOrchestrator {
   get isMerging(): boolean { return this.merging; }
 
   /** A gate reached now is merged with nobody asked: the setting is on, and no merge has stopped it. */
-  get mergesAtGates(): boolean { return this.mergesAutomatically() && !this.autoMergeBlocked; }
+  get mergesAtGates(): boolean { return this.mergesAutomatically() && !this.autoMergeBlocked && this.mergeHold.length === 0; }
 
   /**
    * The user changed the run settings under an open run (ADR-0030). The
@@ -2077,6 +2135,7 @@ export class TaskOrchestrator {
     if (!task) return;
     this.refuseWhileCompleting(taskId);
     this.refuseBesideResolver(taskId);
+    this.refuseBesideLiveCheck(taskId);
     await this.whileAdmitted(async (admission) => {
       // A retried task's own pause ends with it; that may release a held run,
       // which the tick below then schedules (ADR-0018, U1).
@@ -2122,6 +2181,7 @@ export class TaskOrchestrator {
     const eligible = continuability(task);
     if (!eligible.ok) throw new TaskControlError(eligible.reason);
     if (pausedOnLimit(task)) return this.resumeNow(taskId, origin, text);
+    this.refuseBesideLiveCheck(taskId);
     await this.whileAdmitted(async (admission) => {
       if (!(await this.openForAdmitted(taskId, origin, () => this.continueTask(taskId, message, origin, revives), admission))) return;
       // The run may have started it while opening, or the task changed: the
@@ -2388,7 +2448,8 @@ export class TaskOrchestrator {
    */
   private queueBehindDependencies(task: Readonly<Task>): string | null {
     const waits = this.startWaits(task, FORCED_NOW);
-    const waiting = (waitOf(waits, 'dependencies') ?? waitOf(waits, 'queued'))?.waiting ?? [];
+    const check = waitOf(waits, 'check-running')?.check;
+    const waiting = [...(waitOf(waits, 'dependencies') ?? waitOf(waits, 'queued'))?.waiting ?? [], ...(check ? [check] : [])];
     if (waiting.length === 0) return null;
     this.onHold.delete(task.id);
     if (!this.leftToScheduler(task)) this.queuedStarts.set(task.id, { pastGate: this.getMergeGate(task.id) });
@@ -2503,6 +2564,11 @@ export class TaskOrchestrator {
     return !!task && waitsMidAttempt(task) && this.attempts.has(taskId);
   }
 
+  /** A subplanner's turn found its runner's limit, the account's and so the tree's (ADR-0055 D18). */
+  plannerLimited(runner: string, at: Date): void {
+    this.deps.limitFound(runner, at);
+  }
+
   limitFoundElsewhere(runner: string, at: Date): void {
     this.limitPauses.foundElsewhere(runner, at);
     this.emit('onTaskChanged');
@@ -2533,8 +2599,13 @@ export class TaskOrchestrator {
   }
 
   /** What a start of `task` reserves: a delegated task takes a node and no slot, or a parent at its limit deadlocks on the children that need them (ADR-0055 D18). */
+  /** Whether a start of `task` is its child plan's: a delegated task's repair is a plain runner's, which holds a slot and spends tokens (ADR-0055 D14). */
+  private startsChildPlan(task: Readonly<Task>): boolean {
+    return task.type === 'delegated' && this.landing.nextRepair(task.id) === null;
+  }
+
   private attemptRequest(task: Readonly<Task>): LeaseRequest {
-    const role = task.type === 'script' ? 'script' : task.type === 'delegated' ? 'child-plan' : 'task';
+    const role = task.type === 'script' ? 'script' : this.startsChildPlan(task) ? 'child-plan' : 'task';
     return { ...this.leaseRequest(role, task.id), runner: this.store.resolveTaskRunner(task) };
   }
 
@@ -2595,7 +2666,26 @@ export class TaskOrchestrator {
     await this.start(origin);
   }
 
-  async tick(): Promise<void> {
+  tick(): Promise<void> {
+    return this.deciding(() => this.ticked());
+  }
+
+  /**
+   * A tick or an attempt's end is under way, so the run may yet go on or end,
+   * and tell its supervisor which. A child read in that gap has neither, and
+   * would be taken for one that sits on nothing (ADR-0056 M8). Only a child is
+   * read that way, so a flat run's ticks take the turns they always took.
+   */
+  private deciding(work: () => Promise<void>): Promise<void> {
+    if (!this.deps.decided) return work();
+    this.decisions += 1;
+    return work().finally(() => {
+      this.decisions -= 1;
+      if (this.decisions === 0) this.deps.decided?.();
+    });
+  }
+
+  private async ticked(): Promise<void> {
     // What this tick starts was admitted as it began: a Stop during one of its awaits withdraws it.
     const admission = this.admittedNow();
     this.recoverOrphans();
@@ -2606,6 +2696,7 @@ export class TaskOrchestrator {
     await this.startQueued();
     this.startOwedRepairs(admission);
     this.offerKeptResumes();
+    if (this.mergeOwedAtClose) await this.mergeOwedAfterHold();
     if (!this.startsOnTick) return this.settleRun('tick');
 
     // Ahead of the run-complete check too: the turn may add work to a run
@@ -2621,8 +2712,7 @@ export class TaskOrchestrator {
       readiness = this.readiness();
     }
     if (!this.startsOnTick) return;
-    if (this.mergesAutomatically() && !this.autoMergeBlocked && !this.merging
-      && this.attempts.excludingMerge() === undefined) {
+    if (this.mergesAtGates && !this.merging && this.attempts.excludingMerge() === undefined) {
       // Only for a task the merge lets start, or lets the user do: nothing else holds it back.
       const gate = readiness.gated[0];
       if (gate) {
@@ -2641,14 +2731,33 @@ export class TaskOrchestrator {
 
     const waiting = ready.map(({ id }) => id);
     await Promise.all(Array.from({ length: Math.min(STARTS_AT_ONCE, waiting.length) }, () => this.startReady(waiting, admission)));
-    this.stopIfOutOfBudget(ready);
+    const refused = this.refusedStart;
+    if (refused) this.deps.startRefused(refused);
     this.emit('onTick');
   }
 
-  /** Work is ready and nothing live can free room for it, so no event will tick this again (ADR-0056 M5). */
-  private stopIfOutOfBudget(ready: readonly Task[]): void {
-    const refused = this.deps.budget?.refusal();
-    if (refused && this.attempts.size === 0 && ready.some((task) => task.type !== 'script' && task.type !== 'delegated' && this.stillReady(task.id))) this.deps.budget?.stop(refused);
+  /** Why what is ready cannot start, with nothing live to free room for it: no event will tick this again (ADR-0056 M5). Null otherwise. */
+  get refusedStart(): string | null {
+    const refused = this.deps.budget?.refusal() ?? null;
+    if (!refused || this.attempts.size > 0) return null;
+    return this.readyNow().some((task) => task.type !== 'script' && task.type !== 'delegated' && this.stillReady(task.id)) ? refused : null;
+  }
+
+  /**
+   * The run moves with nobody asked: something is at work, a reset resumes it,
+   * or a slot elsewhere in the tree starts what is ready (ADR-0055 D18). What
+   * tells a child that sits on nothing from one that waits (ADR-0056 M8).
+   */
+  get movesUnasked(): boolean {
+    if (this.decisions > 0 || this.attempts.size > 0 || this.runHeld || this.keptResumes.size > 0 || this.owedRepairs.size > 0 || this.store.allTasks.some(waitsForReset)) return true;
+    if (!this.isScheduling) return false;
+    return this.waitsOnTree() || (this.refusedStart === null && !this.deps.nodeRefusal?.() && this.readyNow().length > 0);
+  }
+
+  /** What is ready now, for a reader that asks far more often than a tick does, so it logs nothing. */
+  private readyNow(): readonly Task[] {
+    if (!this.startsOnTick) return [];
+    return selectReadyTasks({ ...this.startRule(), active: this.attempts.slotsHeld, maxParallel: this.config.maxParallelSessions, ...(this.isScheduling ? {} : { within: this.carriedTasks() }) }).ready;
   }
 
   /** One of a tick's starters: takes the next of `waiting` as each start it made has attached. */
@@ -2979,7 +3088,7 @@ export class TaskOrchestrator {
     if (!this.isApproved(taskId)) return `Task "${task.title}" waits for the user's approval: they approve it by starting it, or by executing the plan.`;
     // A script spends no tokens (ADR-0035), so a node out of them can still run its checks.
     // Nor does a delegated task's own attempt: what it spends is carved, and its carve answers for it.
-    return task.type === 'script' || task.type === 'delegated' ? null : this.deps.budget?.refusal() ?? null;
+    return task.type === 'script' || this.startsChildPlan(task) ? null : this.deps.budget?.refusal() ?? null;
   }
 
   /** An explicit start's refusal, before it changes anything: its caller's answer, as a {@link TaskControlError}. */
@@ -3013,6 +3122,8 @@ export class TaskOrchestrator {
     const task = this.store.get(taskId)!;
     const reserved = this.leases.reserve(this.attemptRequest(task));
     if ('refused' in reserved) return { refused: reserved.refused };
+    // The one point every start passes: Execute's fresh chance and a force start never call `retry` (ADR-0055 D8).
+    if (continuation === null && !opts.autoResumed && !this.landing.nextRepair(taskId)) this.store.takeBackChecks(taskId);
     return { spawned: this.attempts.start(task, { admission, continuation, autoResumed: opts.autoResumed === true, lease: reserved.lease }) };
   }
 

@@ -17,7 +17,7 @@ import { createTask, opsFlag, skillNames, updateTaskInPlan, type DiscoveredModel
 import type { RunnerModelRef } from '../models/RunnerCommand';
 import { clearedBodyFields } from '../models/ScriptTask';
 import { loopRemovalRefusal, loopSpec } from '../models/Loop';
-import { taggedReadOnlyMode } from './ModeResolver';
+import { resolveDefaultMode, taggedReadOnlyMode } from './ModeResolver';
 
 /** The fields that decide what a task runs on: an edit that touches none of them leaves the assignment as it stands. */
 const ASSIGNMENT_FIELDS = ['assignedRunner', 'assignedModel', 'taskMode', 'type'] as const satisfies readonly (keyof Task)[];
@@ -409,6 +409,12 @@ export class PlanEditor {
     const task = this.store.get(taskId);
     const draft = task ? conflictResolverTask(task, this.runs.current, this.store.planTasks, this.plannedWith()) : null;
     if (!draft) throw new PlanEditError('Only a task whose merge conflicted can be resolved as a task');
+    // A delegated task has no mode to hand on, and with none a runner gets the spawn's `build` (ADR-0055 D14).
+    if (task?.type === 'delegated') {
+      const { runnerModes, autonomousDefault } = this.catalog.edit();
+      const mode = resolveDefaultMode(runnerModes?.[task.assignedRunner], autonomousDefault ?? false);
+      if (mode !== undefined) draft.taskMode = mode;
+    }
     return this.commit(() => {
       const resolver = this.store.add(draft);
       this.approve([resolver.id]);

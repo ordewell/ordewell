@@ -104,6 +104,8 @@ export interface EscalationRun {
   mergesAtClose: boolean;
   /** What Merge all would merge now. */
   merge: RunMergeView | null;
+  /** The checks that have not passed work Merge all would merge (ADR-0055 D9): the user's is not held, and its confirmation names them. */
+  mergeHold: readonly string[];
   /** The isolated run's id. */
   id: string | null;
   /** Which of the session's starts a dirty checkout turned away, when one waits on it; null when none does. */
@@ -156,6 +158,7 @@ const ONLY_A_PERSON: Record<Exclude<StartWaitKind, 'start-hold'>, boolean> = {
   queued: false,
   merging: false,
   'usage-limit': false,
+  'check-running': false,
   'no-prompt': true,
   unapproved: true,
   'on-hold': true,
@@ -267,7 +270,8 @@ function awaiting(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait
       const question = input.checkpoint(task.id);
       return {
         kind: 'checkpoint',
-        reason: question ? `Checkpoint: ${question}` : 'Waiting at a checkpoint.',
+        // A subplanner's question reads as what it is: the ref says which child asks (ADR-0056 M8).
+        reason: question ? `${task.type === 'delegated' ? `The child plan of ${row.ref} asks` : 'Checkpoint'}: ${question}` : 'Waiting at a checkpoint.',
         options: [{ id: 'approve', label: 'Approve' }, { id: 'reject', label: 'Reject', note: 'optional' }, SKIP],
       };
     }
@@ -330,6 +334,11 @@ function failed(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait |
   return { kind: 'failed', ...ended(row, `Its loop stopped: ${body.map((r) => r.ref).join(', ')} did not run.`, input, rows) };
 }
 
+/** Merge all as the user is offered it: with what it would carry past its check named, when anything would (ADR-0055 D9). */
+function mergeOption({ run }: EscalationInput): EscalationOption {
+  return run.mergeHold.length === 0 ? MERGE_ALL : { ...MERGE_ALL, confirm: `This merges work no check has passed: ${run.mergeHold.join(', ')} has not.` };
+}
+
 /** A task not started that only a person can start, once a run is there for it to be late for. */
 function unstarted(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait | null {
   const { task } = row;
@@ -373,7 +382,7 @@ function unstarted(row: TaskWithParent, input: EscalationInput, rows: Rows): Wai
       on: attemptsDigest(gate.unmerged, input, rows),
       reason: `Waits for Merge all: the work of ${refs.join(', ')} is not merged into your branch yet.`,
       options: [
-        MERGE_ALL,
+        mergeOption(input),
         ...(task.type === 'user' ? completeOption(row, input.run) : [{ id: 'force-start' as const, label: 'Force start', confirm: pastGateConfirmation(refs, 'It') }]),
       ],
     };
@@ -450,7 +459,7 @@ export function escalations(input: EscalationInput): Escalation[] {
     id: `merge-all:${run.id ?? ''}:${attemptsDigest(run.merge?.landed.map((t) => t.taskId) ?? [], input, rows)}`,
     kind: 'merge-all',
     reason: `The run's landed work waits for Merge all: ${run.merge?.landed.map((t) => rows.get(t.taskId)?.ref ?? t.taskId).join(', ')}.`,
-    options: [MERGE_ALL],
+    options: [mergeOption(input)],
   }];
   return [...blocked, ...tasks, ...merge];
 }
@@ -466,7 +475,7 @@ export type EscalationAct =
  * A surface offering Mark complete asked first, and the seam only hears of it
  * with the user's yes: `answerEscalation` holds back an option that needs one.
  */
-export function escalationAct(escalation: Escalation, option: EscalationOptionId, note?: string): EscalationAct {
+export function escalationAct(escalation: Escalation, option: EscalationOptionId, note?: string, raiseTokens?: number): EscalationAct {
   const task = escalation.task?.id ?? '';
   const command = (issued: ExecutionCommand): EscalationAct => ({ kind: 'command', command: issued });
   const request = { command: 'answer_approval', task, ...(escalation.approval ? { approval: escalation.approval } : {}) } as const;
@@ -475,7 +484,7 @@ export function escalationAct(escalation: Escalation, option: EscalationOptionId
     case 'allow': return command({ ...request, answer: 'allow' });
     case 'allow-for-task': return command({ ...request, answer: 'allowForTask' });
     case 'deny': return command({ ...request, answer: 'deny', ...(said ? { note: said } : {}) });
-    case 'approve': return command({ command: 'answer_checkpoint', task, answer: 'approve' });
+    case 'approve': return command({ command: 'answer_checkpoint', task, answer: 'approve', ...(raiseTokens !== undefined ? { raiseTokens } : {}) });
     case 'reject': return command({ command: 'answer_checkpoint', task, answer: 'reject', ...(said ? { reason: said } : {}) });
     case 'reply': return command({ command: 'message_task', task, text: note ?? '' });
     case 'resume':

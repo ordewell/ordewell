@@ -124,10 +124,10 @@ export class VerdictEngine {
     return this.checkpointQuestions.get(taskId);
   }
 
-  approveCheckpoint(taskId: string): void {
+  approveCheckpoint(taskId: string, note?: string): void {
     this.checkpointQuestions.delete(taskId);
     this.resumeIdle(taskId);
-    this.toolCheckpoints.get(taskId)?.({ kind: 'continue' });
+    this.toolCheckpoints.get(taskId)?.({ kind: 'continue', ...(note ? { note } : {}) });
   }
 
   rejectCheckpoint(taskId: string, reason: string): void {

@@ -22,7 +22,7 @@ function endedText(task: Reported): string {
     case 'passed': return 'It passed.';
     case 'failed': return `It failed${reasonLabel(task)}: ${reason || 'no reason was given.'}`;
     case 'changed-files': return task.awaitingReason === 'conflict'
-      ? 'It passed, but its work conflicts and could not land: it waits for the user.'
+      ? `It passed, but its work conflicts and could not land${task.type === 'delegated' ? '.' : ': it waits for the user.'}`
       : 'It passed, but changed tracked files in the user\'s checkout: nothing was committed, and it waits for the user to look at the changes, then mark it complete or retry it.';
     default: return 'It was stopped before it ended, so it has no verdict.';
   }
@@ -39,9 +39,11 @@ function handoffWakeText(handoff: HandoffDigest, taskName: HandoffTaskName | und
 }
 
 /** Research's result is its handoff, never the report (ADR-0037 R1, R2; ADR-0047). */
-export function researchReport(task: Omit<Reported, 'awaitingReason'> & Pick<Task, 'outputSummary' | 'handoff'>, tail: string | undefined, taskName?: HandoffTaskName, whose = 'the task'): string {
+export function researchReport(task: Reported & Pick<Task, 'outputSummary' | 'handoff'>, tail: string | undefined, taskName?: HandoffTaskName, whose = 'the task'): string {
+  // A delegated task reports as research does, and its conflict is a pass that did not land, not a failure.
   const verdict = task.status === 'completed' ? 'It passed.'
-    : `${task.verdict?.reported === 'blocked' ? 'It was blocked' : 'It failed'}${reasonLabel(task)}: ${task.verdict?.reason ?? 'no reason was given'}`;
+    : task.status === 'awaiting_user' ? endedText(task)
+      : `${task.verdict?.reported === 'blocked' ? 'It was blocked' : 'It failed'}${reasonLabel(task)}: ${task.verdict?.reason ?? 'no reason was given'}`;
   if (task.handoff) return `${verdict}\n${handoffWakeText(task.handoff, taskName, whose)}`;
   const report = task.outputSummary?.report ?? task.outputSummary?.logTail ?? tail;
   return `${verdict}\n${report ? `${wordsFrom('Report', whose)}\n${report}` : 'It supplied no report.'}`;

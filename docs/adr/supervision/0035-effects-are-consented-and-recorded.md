@@ -6,8 +6,6 @@ note: "Settles #95. The mandate (#23) takes over the consent table and the effec
 
 # 0035 — Every effect is consented to and recorded, whoever performs it
 
-*Pending:* [ADR-0056](0056-a-mandate-narrows-down-the-tree.md) — below the root a mandate replaces the consent table, and the effect allowlist becomes one list per level.
-
 ## Problem
 
 ADR-0008 kept the planner from acting on its own account. Mutation belonged to
@@ -161,6 +159,10 @@ writes repository files.**
   mandate (#23).
 
 ### The effect allowlist
+
+Below the root a mandate takes over: a subplanner's consent is its grants, and a
+script runs unsealed only with `effect` and a body covered at every level's rules
+(ADR-0056 M6, M9).
 
 The user's standing approval for named effects, beside the planner allowlist
 (ADR-0026), which names reads.
@@ -408,3 +410,4 @@ minute is recorded beside its start.
 - 2026-10-31 — in Full with autorun nobody is asked on a first plan either, and a start there makes the plan approved; an approved plan is no longer a condition of the consent table's autorun row.
 - 2026-10-31 — under Guarded autorun's start of a submitted plan leaves a script task the commit left unapproved; before, that start approved it and ran it.
 - 2026-11-01 — a script task marked `readOnly` runs sealed in a throwaway worktree, past no gate (ADR-0055 D8).
+- 2026-11-01 — below the root a mandate takes over the consent table and the allowlist, one list per level (ADR-0056 M6, M9).

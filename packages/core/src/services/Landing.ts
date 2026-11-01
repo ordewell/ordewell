@@ -10,6 +10,7 @@ import { buildConflictRepairPrompt, buildConflictResolutionPrompt } from './Plan
 import { landsNothing, type AttemptKind } from './attemptKind';
 import type { HandoffCommit } from '../models/Handoff';
 import { landingMessage } from './landingMessage';
+import { underProtectedPath } from '../models/Delegation';
 
 /** Which repair of a task an attempt is, of the most `conflictRepairAttempts` allows. */
 export interface RepairAttempt {
@@ -61,6 +62,8 @@ export interface LandingDeps {
   tasks: Pick<PlanStore, 'get' | 'planTasks'>;
   /** Whether a repair merge's message ends with the Planned-with trailer; read as the prompt is built. */
   plannedWith?: () => boolean;
+  /** What this node's ancestors protect, which accumulates down a tree (ADR-0056 M4). */
+  inheritedProtectedPaths?: () => readonly string[];
 }
 
 const NOTHING_TO_LAND: LandingOutcome = { kind: 'nothing-to-land', messages: [] };
@@ -80,9 +83,11 @@ export class Landing {
   private readonly config: Pick<IConfig, 'conflictRepairAttempts'>;
   private readonly tasks: Pick<PlanStore, 'get' | 'planTasks'>;
   private readonly plannedWith: () => boolean;
+  private readonly inheritedProtectedPaths: () => readonly string[];
 
   constructor(deps: LandingDeps) {
     this.plannedWith = deps.plannedWith ?? (() => false);
+    this.inheritedProtectedPaths = deps.inheritedProtectedPaths ?? (() => []);
     this.runs = deps.runs;
     this.config = deps.config;
     this.tasks = deps.tasks;
@@ -126,6 +131,9 @@ export class Landing {
     // Whatever ended the attempt has already kept its worktree and said so.
     if (!current()) return { kind: 'awaiting_user', reason: 'repair-failed', messages: [] };
     if (!evidence.ok) return this.unrepaired(task, this.describeEvidence(evidence));
+    const touched = await this.protectedPathsTouched(task);
+    if (!current()) return { kind: 'awaiting_user', reason: 'repair-failed', messages: [] };
+    if (touched.length > 0) return this.unrepaired(task, `changed protected paths (${capConflictFiles(touched)})`);
     const landing = await this.runs.integrate(task);
     if (landing !== 'merged') return this.unmerged(task, landing);
     const files = this.runs.current?.tasks[task.id]?.repairedFiles ?? [];
@@ -133,6 +141,17 @@ export class Landing {
       kind: 'landed',
       messages: [{ level: 'info', text: `Task "${task.title}" landed after repairing a conflict${files.length > 0 ? ` in ${capConflictFiles(files)}` : ''}.`, repairLog: true }],
     };
+  }
+
+  /** A repair lands after the verdict that held the work to its protected paths, so it is held to them here (ADR-0055 D7, D14). */
+  private async protectedPathsTouched(task: Task): Promise<string[]> {
+    const paths = this.protectedPaths(task);
+    if (paths.length === 0) return [];
+    return (await this.runs.repairPaths(task)).filter((file) => paths.some((rule) => underProtectedPath(file, rule)));
+  }
+
+  private protectedPaths(task: Readonly<Task>): readonly string[] {
+    return task.type === 'delegated' ? [...task.protectedPaths ?? [], ...this.inheritedProtectedPaths()] : [];
   }
 
   /** A repair that ended without landing leaves the task as its conflict did: waiting on the user, worktree and refs kept. */
@@ -177,12 +196,9 @@ export class Landing {
   /**
    * The repair a conflicted task is owed next; null when repair is off, used
    * up, or there is no isolated run to repair it in. A resolver takes the
-   * conflict instead: a conflict has one worker (ADR-0015). A delegated task's
-   * repair is a plain runner's and not built yet (ADR-0055 D14), and a new child
-   * would redo the work, so it waits on the user as a spent repair does.
+   * conflict instead: a conflict has one worker (ADR-0015).
    */
   nextRepair(taskId: string): RepairAttempt | null {
-    if (this.tasks.get(taskId)?.type === 'delegated') return null;
     const record = this.runs.openRecord(taskId);
     const limit = this.config.conflictRepairAttempts;
     const spent = record?.repairs ?? 0;
@@ -212,7 +228,9 @@ export class Landing {
       ...(record?.conflictRepo ? { conflictRepo: record.conflictRepo } : {}),
       ...(record?.conflictFiles ? { conflictFiles: record.conflictFiles } : {}),
     };
-    return buildConflictRepairPrompt(task, conflict, handoffBranchName(run), this.tasks.planTasks);
+    const prompt = buildConflictRepairPrompt(task, conflict, handoffBranchName(run), this.tasks.planTasks);
+    const paths = this.protectedPaths(task);
+    return paths.length > 0 ? `${prompt}\n\nThese paths may not change: ${paths.join(', ')}. A repair that changes one does not land.` : prompt;
   }
 
   private hasUnlandedWork(taskId: string): boolean {

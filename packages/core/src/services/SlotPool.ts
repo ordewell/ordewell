@@ -60,6 +60,8 @@ export class SlotPool {
   private offering = false;
   /** Wakes the offer in flight once a slot goes: a tick's own spawn can take far longer than its claim. */
   private taken: (() => void) | null = null;
+  /** When the tree was held on a usage limit, oldest first and never overlapping. */
+  private readonly holds: { from: number; to: number }[] = [];
   private readonly limits = new ResetWaits(() => {
     for (const node of this.nodes) void node.tick();
   });
@@ -143,8 +145,26 @@ export class SlotPool {
   limitFound(node: PoolNode, runner: string, at: Date): Date {
     if (!this.shared) return at;
     const resets = this.limits.arm(runner, at);
+    this.held(resets.getTime());
     for (const other of this.nodes) if (other !== node) other.limitFound(runner, resets);
     return resets;
+  }
+
+  /**
+   * How long the tree has been held on a usage limit since `since`, up to each
+   * limit's reset: what a child's wall clock does not count (ADR-0056 M3). It
+   * ends at the reset whatever happens first, so what waits on a slot past it
+   * is on the clock, and limits that overlap count once.
+   */
+  heldSince(since: number): number {
+    return this.holds.reduce((total, { from, to }) => total + Math.max(0, to - Math.max(from, since)), 0);
+  }
+
+  private held(to: number): void {
+    const from = Date.now();
+    const last = this.holds.at(-1);
+    if (last && last.to >= from) last.to = Math.max(last.to, to);
+    else this.holds.push({ from, to });
   }
 
   /** The runners a usage limit holds across the tree. */

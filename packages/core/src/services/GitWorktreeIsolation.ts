@@ -826,16 +826,33 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     }
     for (const repo of run.repos) {
       const base = record.repairBase[repo.path];
-      if (base === undefined) continue;
-      const contains = await this.isAncestor(repo.root, base, record.branch);
-      if (contains !== 'yes') return { ok: false, reason: contains === 'no' ? 'not-merged' : 'failed', repo: repo.path };
-      const check = await this.tryGit(repo.root, ['-c', 'core.quotePath=false', 'diff', '--check', base, record.branch]);
+      if (base !== undefined) {
+        const contains = await this.isAncestor(repo.root, base, record.branch);
+        if (contains !== 'yes') return { ok: false, reason: contains === 'no' ? 'not-merged' : 'failed', repo: repo.path };
+      }
+      // A repo the landing did not change has no `repairBase`, and a repair can still edit it (ADR-0055 D14).
+      const from = base ?? record.repos[repo.path]?.taskTip;
+      if (from === undefined) continue;
+      const check = await this.tryGit(repo.root, ['-c', 'core.quotePath=false', 'diff', '--check', from, record.branch]);
       // Exit 2 is "found something", which is whitespace just as often; anything else is git failing.
       if (!check.ok && check.code !== 2) return { ok: false, reason: 'failed', repo: repo.path };
       const files = leftoverMarkerFiles(check.stdout);
       if (files.length > 0) return { ok: false, reason: 'conflict-markers', repo: repo.path, files };
     }
     return { ok: true };
+  }
+
+  async repairPaths(task: Task, run: IsolationRun): Promise<string[]> {
+    const record = run.tasks[task.id];
+    const paths: string[] = [];
+    for (const repo of run.repos) {
+      const from = record?.repairBase?.[repo.path] ?? record?.repos[repo.path]?.taskTip;
+      if (from === undefined) continue;
+      const prefix = await this.prefixOf(repo);
+      const listed = await this.git(repo.root, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', `--relative=${prefix}`, '--name-only', '-z', from, record.branch]);
+      paths.push(...listed.split('\0').filter(Boolean).map((file) => (repo.path === SELF_REPO ? file : `${repo.path}/${file}`)));
+    }
+    return paths;
   }
 
   /**

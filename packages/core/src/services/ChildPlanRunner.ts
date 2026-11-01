@@ -30,6 +30,8 @@ export interface NodeState {
   stoppedFor: NodeEnd | null;
   /** Why nothing may start here though what is in flight may finish, or null (ADR-0056 M10). */
   withdrawn: string | null;
+  /** Why what is ready cannot start, with nothing live to free room: its subplanner is told first, and it ends `blocked` if nothing comes of that (ADR-0056 M5). */
+  startRefused: string | null;
   /** One line per task, as a derived report lists them. */
   tasks: readonly { label: string; status: Task['status'] }[];
 }
@@ -44,6 +46,8 @@ export interface ChildNode {
   readonly protectedPaths: readonly string[];
   /** The time it has to run in (ADR-0056 M3). */
   readonly wallClockMs: number | null;
+  /** How much of the time since `since` its tree is held on a usage limit, which is not on its clock (M3). */
+  heldSince(since: number): number;
   startPlanning(goal: string): Promise<unknown>;
   continueConversation(text: string): Promise<unknown>;
   /** Reopened (ADR-0055 D17): acts as Execute there, and its subplanner goes on with `text`; one that never wrote a plan plans `goal`. */
@@ -60,7 +64,7 @@ export interface ChildNode {
 /** What a subplanner's token calls and what its Session tells of itself, bound to one attempt (ADR-0055 D5). */
 export interface SubplannerLink {
   taskComplete(report: TaskCompleteArgs): Promise<McpToolReply>;
-  checkpoint(): Promise<McpToolReply>;
+  checkpoint(question: string): McpToolReply;
   /** Something changed that a verdict or the completion reminder may read. */
   changed(): void;
   /** A Stop stands over this node, its own or an ancestor's (ADR-0055 D16). */
@@ -88,8 +92,17 @@ export interface ChildHost {
 /** Once per attempt: a subplanner told this has no second turn to end without the call (ADR-0055 D6). */
 const COMPLETION_REMINDER = 'Your turn ended with nothing running and no `task_complete` call. If your child plan reached the goal, call `task_complete` with status `done`; if it cannot, call it with status `blocked` or `failed` and the reason. If work is left, start it now. A second turn that ends like this fails the delegated task.';
 
-/** Questions going up a level are ADR-0056 M8's, and not built yet: a blocking call would hold a slot, so this refuses and says how to go on. */
-const NO_QUESTIONS_YET = 'A question cannot reach the plan above yet. Decide it yourself if your goal lets you; otherwise call task_complete with status "blocked" and say exactly what you need.';
+/** A subplanner parks on its question: a call that blocked would hold a process and a slot for as long as a person takes (ADR-0056 M8). */
+const QUESTION_ASKED = 'Asked. End your turn now: the answer opens your next turn. A question nobody answers ends with your time limit.';
+
+/** One at a time, as a runner's are (ADR-0022 V5). */
+const QUESTION_WAITS = 'Your last question has no answer yet: end your turn, and its answer opens your next one.';
+
+/** What opens the subplanner's next turn. */
+function answerText(answer: Exclude<CheckpointAnswer, { kind: 'withdrawn' }>): string {
+  if (answer.kind === 'rejected') return `The plan above answered your question: rejected. ${answer.reason}`;
+  return `The plan above answered your question: approved, so go on.${answer.note ? ` ${answer.note}` : ''}`;
+}
 
 /** How many paths a report names of what its branch changed outside its scope. */
 const OUTSIDE_SCOPE_PATHS = 20;
@@ -132,6 +145,10 @@ export class ChildPlanSession extends AbstractRunnerSession {
   private reminded = false;
   /** The accepted call, until it is published. */
   private accepted: { report: TaskCompleteArgs; refuted?: VerificationCheck } | null = null;
+  /** How the attempt raises a question: as a runner's `checkpoint` does, so the parent's task waits as any task at one. */
+  private ask: ((question: string, signal: AbortSignal) => Promise<CheckpointAnswer>) | null = null;
+  /** A question went up and has no answer: nothing is stuck, and only the wall clock ends the wait (ADR-0056 M8). */
+  private asking = false;
   /** The attempt has its end: nothing after it counts. */
   private ended = false;
   private halting: NodeEnd | null = null;
@@ -162,7 +179,7 @@ export class ChildPlanSession extends AbstractRunnerSession {
     try {
       this.node = await host.openChild(task, cwd, {
         taskComplete: (report) => this.taskComplete(report),
-        checkpoint: () => Promise.resolve({ text: NO_QUESTIONS_YET, isError: true }),
+        checkpoint: (question) => this.checkpoint(question),
         changed: () => this.queueCheck(),
         stopped: () => this.tombstone || this.halting !== null || host.stopped(),
         usage: (record) => {
@@ -176,11 +193,20 @@ export class ChildPlanSession extends AbstractRunnerSession {
       return;
     }
     if (this.tombstone) return;
-    if (this.node.wallClockMs !== null) {
-      this.wallClock = setTimeout(() => this.haltFor(`its time of ${this.node?.wallClockMs} ms ran out`), this.node.wallClockMs);
-      this.wallClock.unref?.();
-    }
+    this.watchClock(this.node, Date.now());
     this.opened(resume ? this.node.goOn(resume.message, task.goal ?? '') : this.node.startPlanning(task.goal ?? ''));
+  }
+
+  /** Read again as it runs out, so a hold found meanwhile moves it on (ADR-0056 M3). */
+  private watchClock(node: ChildNode, started: number): void {
+    if (node.wallClockMs === null) return;
+    const left = started + node.wallClockMs + node.heldSince(started) - Date.now();
+    if (left <= 0) {
+      this.haltFor(`its time of ${node.wallClockMs} ms ran out`);
+      return;
+    }
+    this.wallClock = setTimeout(() => this.watchClock(node, started), left);
+    this.wallClock.unref?.();
   }
 
   /** A turn this opened: its end is one a check reads, and a failure in it ends the attempt, since no person reads it (ADR-0056 M8). */
@@ -190,10 +216,10 @@ export class ChildPlanSession extends AbstractRunnerSession {
       () => this.turnSettled(),
       (err: unknown) => {
         this.turnSettled();
-        // A turn this ended itself is no failure of its planner, and nor is one refused at the gate: the check owes that end.
+        // A turn this ended itself is no failure of its planner, nor is one refused at the gate, whose end the check owes, and a limit's resend opens the next.
         if (this.tombstone || this.halting) return;
         const state = this.node?.state();
-        if (state?.stoppedFor || state?.withdrawn) return;
+        if (state?.stoppedFor || state?.withdrawn || state?.wakeOwed) return;
         this.end('failed', `Its planner could not go on: ${err instanceof Error ? err.message : String(err)}`);
       },
     );
@@ -237,7 +263,11 @@ export class ChildPlanSession extends AbstractRunnerSession {
       if (!state.live && !state.plannerBusy) this.end('blocked', this.derived(state.withdrawn, state));
       return;
     }
-    if (state.live || state.plannerBusy || state.wakeOwed || this.opening > 0) return;
+    if (state.live || state.plannerBusy || state.wakeOwed || this.opening > 0 || this.asking) return;
+    if (state.startRefused) {
+      this.haltFor(state.startRefused);
+      return;
+    }
     if (!this.reminded) {
       this.reminded = true;
       this.opened(node.continueConversation(COMPLETION_REMINDER));
@@ -302,6 +332,23 @@ export class ChildPlanSession extends AbstractRunnerSession {
     this.graceTimer = setTimeout(() => this.publish(), COMPLETION_GRACE_MS);
     this.graceTimer.unref?.();
     return { text: 'Recorded. End your turn now.' };
+  }
+
+  /**
+   * The subplanner's question: it goes up as a checkpoint of this attempt, and
+   * the call answers at once. Its answer opens the next turn, and a question
+   * withdrawn with the attempt opens none.
+   */
+  private checkpoint(question: string): McpToolReply {
+    if (this.ended || this.accepted || this.tombstone || !this.ask) return { text: 'This attempt has ended: nobody will answer.', isError: true };
+    if (this.asking) return { text: QUESTION_WAITS, isError: true };
+    this.asking = true;
+    void this.ask(question, new AbortController().signal).then((answer) => {
+      this.asking = false;
+      if (answer.kind === 'withdrawn' || !this.node || this.ended || this.tombstone) this.queueCheck();
+      else this.opened(this.node.continueConversation(answerText(answer)));
+    });
+    return { text: QUESTION_ASKED };
   }
 
   /** Why a `done` cannot be taken now, naming what is unfinished (D6: 1, 2). */
@@ -421,8 +468,8 @@ export class ChildPlanSession extends AbstractRunnerSession {
   invokeCommand(): string { throw new Error('A delegated task takes no runner commands.'); }
   answerPermission(): boolean { return false; }
   onTaskComplete(listener: (report: TaskCompleteArgs, refuted?: VerificationCheck) => void): void { this.completes.push(listener); }
-  /** A subplanner's question goes by its own token, not its attempt's: see {@link NO_QUESTIONS_YET}. */
-  onToolCheckpoint(_handler: (question: string, signal: AbortSignal) => Promise<CheckpointAnswer>): void {}
+  /** A subplanner asks by its own token, not its attempt's, and this is how that question reaches the attempt. */
+  onToolCheckpoint(handler: (question: string, signal: AbortSignal) => Promise<CheckpointAnswer>): void { this.ask = handler; }
   onScriptExit(): void {}
 }
 

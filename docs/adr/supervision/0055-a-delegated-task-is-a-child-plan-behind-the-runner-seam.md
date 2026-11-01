@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0009", "0013", "0015", "0018", "0020", "0022", "0029", "0030", "0035", "0045", "0046", "0049", "0054"]
-note: "Settles #33. Built: D1 to D8's plan rules and verdict, D10 to D13, D15, D16, D17, D18's pool and D21, so a child plan runs end to end behind the build's switch, stops as a subtree and comes back on a Continue. Not built: D8's taking a check back with a new result, D9's merge hold, D14's repair, a subplanner's native resume, so a reopened one replays its Model context, and a subplanner's question, which is refused so its turn goes on. D20's minimum is built: one row and its usage, a log of what its child's tasks become; a tree view, the row's live counts and D16's stopping row are later."
+note: "Settles #33. Built: D1 to D19 and D21, so a child plan runs end to end behind the build's switch, asks up a level, stops as a subtree and comes back on a Continue, its conflicts and merges with it. Not built: a subplanner's native resume, so a reopened one replays its Model context. D20's minimum is built: one row and its usage, a log of what its child's tasks become; a tree view, the row's live counts and D16's stopping row are later."
 ---
 
 # 0055 — A delegated task is a child plan behind the runner seam
@@ -235,7 +235,8 @@ the child cannot reach follows it in the parent's plan.**
   nothing, so a check waiting on its delegated task, or blocked behind one that
   failed, stays out of every other task's merge, and a `readOnly` task, which never
   lands, holds nothing. A held merge is no merge that stopped: the hold ends with
-  the check's pass or Skip, and the next tick merges.
+  the check's pass or Skip, and the next tick merges, a run that closed with its
+  merge held included, which owes that merge rather than handing it to the user.
 
 ### Isolation
 
@@ -324,6 +325,10 @@ the child cannot reach follows it in the parent's plan.**
   `verifyRepair` reads markers in that repo on every run, a flat group's included,
   since ADR-0015's guarantee has the same gap there; only its containment check needs
   a `repairBase`. A repair that fails either does not land, and its worktree is kept.
+  With no repair left the conflict waits as any does: on the user at the root, and on
+  its subplanner, which is woken for it, below (ADR-0056 M8). A resolver the user adds
+  takes that mode on the plan, for the same reason, and is theirs: it is held to no
+  protected path, as nothing they do by hand is.
 - **A fresh attempt starts a child over (D15).** When a delegated task's next
   attempt is fresh by any route, Execute, a force start, a retry, or Mark not done
   then a start, its child run is discarded as `discardRun` does, grandchildren first,
@@ -486,10 +491,10 @@ the child cannot reach follows it in the parent's plan.**
   These run real Sessions side by side in `treeSlots.test.ts`, and the pool's own
   rules are tested alone in `SlotPool.test.ts`. Flat runs keep their suites unchanged,
   and `executionLease.flatRun.test.ts` holds them with a table over Parallel limits.
-- D14's rule is tested with a repair that edits a protected path, in a repo the
-  landing changed and in one it did not, and with one that leaves a conflict marker
-  in a repo the landing did not change: none lands. A repair spawns in the mode its
-  mandate's `autonomy` resolves to, at both levels, and the plan gains no `taskMode`.
+- D14's rule is tested with a repair that edits a protected path, its own and an
+  ancestor's, with what it brings to a repo the landing did not change, and with a
+  conflict marker there: none lands. A repair spawns in the mode its mandate's
+  `autonomy` resolves to, at both levels, and the plan gains no `taskMode`.
 - A delegated task runs end to end on real repositories in `delegatedTask.e2e.test.ts`,
   a scripted planner calling the tools a harness planner would, and in
   `delegatedTask.harness.e2e.test.ts` with only the binary faked: the real adapter, the
@@ -646,4 +651,5 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-10-31 — D18 implemented in `SlotPool`, behind the lease (ADR-0059 L1): the root's pool reaches a child through `ChildPlacement`, and the subplanner's opening waits for a slot.
 - 2026-11-01 — D15, D16 and D17 implemented: a tombstone first, on the attempt, read at every claim and turn below it; `ChildNode.close` returns a child's budget on every end; a fresh attempt discards as it opens, not at the claim, and a stopped task may be continued. A subplanner replays on a reopen, since no planner saves a native session. A delete stops its tree first, and a root's `destroy` keeps the lease until its children have gone.
 - 2026-11-01 — one child plan end to end: D1, D2, D3 to D7, D8's plan rules and read-only script, and D19, in `ChildPlanRunner`, `models/Delegation.ts` and `PlanChangeCheck`. D21 gains the build's switch, and a protected path is one more check of the verdict.
+- 2026-11-01 — a subplanner's question goes up, and D8's take-back, D9's merge hold, D14's repair and M9's rules for a child's scripts are implemented. A run that closed with its merge held owes it to the next tick, and a resolver of a delegated task's conflict takes the mode a repair does.
 - 2026-11-01 — D20's minimum: a delegated row, usage rolled up a level at a time and charged once, and the child's activity in its log. D1's `read` is the runner's tool (ADR-0057 R11).

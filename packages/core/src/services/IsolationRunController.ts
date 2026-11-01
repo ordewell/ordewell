@@ -548,6 +548,11 @@ export class IsolationRunController {
     return this.isolation.verifyRepair(task, run).catch(unverified);
   }
 
+  /** What a repair brings onto the tip it was repaired against (ADR-0055 D14); throws where git cannot say, so nothing lands on a guess. */
+  repairPaths(task: Task): Promise<string[]> {
+    return this.isolation.repairPaths?.(task, this.requireRun()) ?? Promise.resolve([]);
+  }
+
   /**
    * Let go of a task's worktree. `keep` leaves it and its branch for
    * inspection; otherwise both go. A landing still in flight settles first, so

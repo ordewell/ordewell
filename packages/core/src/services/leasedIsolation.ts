@@ -22,6 +22,7 @@ export function leasedIsolation(isolation: IWorktreeIsolation, held: () => Sessi
     prepare: guarded((task, run, intent, opts) => isolation.prepare(task, run, intent, opts)),
     reopen: guarded((task, run) => isolation.reopen(task, run)),
     verifyRepair: (task, run) => isolation.verifyRepair(task, run),
+    repairPaths: (task, run) => isolation.repairPaths?.(task, run) ?? Promise.resolve([]),
     integrate: guarded((task, run, persist, commit) => isolation.integrate(task, run, persist, commit)),
     readLanded: (run, taskIds) => isolation.readLanded(run, taskIds),
     revert: guarded((run, taskIds, watch) => isolation.revert(run, taskIds, watch)),
