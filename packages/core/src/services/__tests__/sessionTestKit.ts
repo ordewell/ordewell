@@ -40,6 +40,14 @@ export function fakeFs(): IFileSystem {
   };
 }
 
+/** What lets a node's script run sealed, for a test that only watches what it was handed. */
+export function sealingFs(): Pick<IFileSystem, 'canSeal' | 'taskShell'> {
+  return {
+    canSeal: async () => true,
+    taskShell: () => ({ run: () => Promise.reject(new Error('a script runs through hold')), hold: () => Promise.reject(new Error('this test runs no script')), end: () => undefined }),
+  };
+}
+
 export interface SessionOverrides {
   broadcast?: SessionDeps['broadcast'];
   onNotice?: SessionDeps['onNotice'];

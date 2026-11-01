@@ -13,7 +13,7 @@ import { escalationAct, type Escalation } from './escalations';
 import { mergePastChecksConfirmation } from './mergeWording';
 import { revertStopped, type RevertScope } from './taskRevert';
 import { manualOverrideConfirmation, manualOverrideStopFirst, type OverrideDirection } from '../taskRow/texts';
-import { COMMAND_GRANTS, allowsCommand, missingGrant, rootAuthority, type Grant, type Mandate, type NodeAuthority } from './Mandate';
+import { COMMAND_GRANTS, SCRIPT_PAST_THE_RULES, allowsCommand, missingGrant, rootAuthority, type Grant, type Mandate, type NodeAuthority } from './Mandate';
 
 /** One call at the command seam, as every route words it (ADR-0029). Task references are resolved here. */
 export type ExecutionCommand =
@@ -585,6 +585,10 @@ export class ExecutionCommands {
     if (consent.kind === 'refuse') return this.refuse(command, actor, undefined, consent.reason);
     const draft = this.host.draftScript(command, actor);
     if (!draft.ok) return this.refuse(command, actor, undefined, `The script task was not added: ${draft.errors.join('; ')}`);
+    // A mandate answers for a sealed run alone: anything else needs a rule that covers it (ADR-0056 M9).
+    if (actor.kind === 'subplanner' && consent.kind === 'allow' && consent.how.by === 'mandate' && !draft.task.readOnly) {
+      return this.refuse(command, actor, undefined, `Level ${actor.depth} refused Task "${command.title}": ${SCRIPT_PAST_THE_RULES}.`);
+    }
     const unready = this.scriptUnready(draft.task);
     if (unready) return this.refuse(command, actor, undefined, unready);
     if (this.overriding.size > 0) return this.refuse(command, actor, undefined, OVERRIDE_LANDING);

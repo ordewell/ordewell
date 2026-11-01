@@ -112,6 +112,10 @@ export interface Options {
   child?: SessionDeps['child'];
   /** Where its sessions run (ADR-0059); the local worktrees unless set. */
   execution?: SessionDeps['execution'];
+  /** Whether a planner may delegate here (ADR-0055 D21); the build's own unless set. */
+  delegationOffered?: boolean;
+  /** Its file system, where a test needs more of one than a fake. */
+  fsAdapter?: SessionDeps['fsAdapter'];
 }
 
 /** A session running `tasks` under the user's supervisor level, Watch unless the options say otherwise. */
@@ -131,6 +135,8 @@ export async function supervised(tasks: Task[] = [task('t1', 1), task('t2', 2)],
     leaseHost: options.leaseHost,
     child: options.child,
     execution: options.execution,
+    delegationOffered: options.delegationOffered,
+    fsAdapter: options.fsAdapter,
     broadcast: (m) => messages.push(m),
     onNotice: (n) => notices.push(n),
     config: fakeConfig(options.config),

@@ -6,7 +6,7 @@ import { createAiService, type IAiService } from './AiService';
 import type { PlannerContextDeps } from './plannerContextBudget';
 import { PlannerBackend } from './PlannerBackend';
 import type { TaskOp } from './TaskOps';
-import { PlanChangeCheck, type PlanChangeScope } from './PlanChangeCheck';
+import { PlanChangeCheck, runsSealed, type PlanChangeScope } from './PlanChangeCheck';
 import { carryPlannedModes } from './ModeResolver';
 import { ApprovalRecord } from './ApprovalRecord';
 import type { TaskQueryCatalog } from './TaskQuery';
@@ -33,7 +33,7 @@ import { PlanStore } from './PlanStore';
 import { ApprovalPolicy, effectiveApprovalMode, type ApprovalModeSetting } from './ApprovalPolicy';
 import { DEFAULT_PLANNER_ALLOWLIST } from './plannerAllowlist';
 import { effectRuleFor, parseEffectAllowlist, type EffectRules } from './effectAllowlist';
-import { autonomousAt, delegatedRequest, heldMandate, mandateRefusalText, narrow, rootAuthority, withheldPlannerTools, type Mandate, type MandateRequest, type NodeAuthority, type RootSettings } from './Mandate';
+import { SCRIPT_PAST_THE_RULES, autonomousAt, delegatedRequest, heldMandate, mandateRefusalText, narrow, rootAuthority, withheldPlannerTools, type Mandate, type MandateRequest, type NodeAuthority, type RootSettings } from './Mandate';
 import { TreeLedger, type Carved, type NodeBudget } from './TreeLedger';
 import type { EventStore } from './eventStore';
 import { ROOT_NODE, type NodePath } from '../models/TreeEvent';
@@ -535,7 +535,7 @@ export function createSession(deps: SessionDeps): Session {
     startRefused: (why) => session.startRefused(why),
     autonomous: () => autonomousAt(deps.child, deps.config.autonomousMode),
     ...(deps.subplanner ? { decided: () => deps.subplanner?.changed() } : {}),
-    ...(deps.child ? { inheritedProtectedPaths: () => deps.child?.mandate('off').exclusions.protectedPaths ?? [] } : {}),
+    ...(deps.child ? { inheritedProtectedPaths: () => deps.child?.mandate('off').exclusions.protectedPaths ?? [], unsealedRefusal: (task: Readonly<Task>) => session.unsealedRefusal(task) } : {}),
     ...(deps.subplanner ? { nodeRefusal: () => session.nodeRefusal() } : {}),
     discardChild: (task) => session.discardChild(task),
     subtree: () => session.subtree(),
@@ -1541,6 +1541,11 @@ export class Session {
   /** What this node may do without a person, as it stands now (ADR-0056 M1): derived at the root, and never saved. */
   mandate(): Mandate {
     return this.authority.mandate(this.supervision.level);
+  }
+
+  /** Why this child's script may not land what it does unsealed, as the rules stand now: an effect withdrawn since it landed goes with them (ADR-0056 M9). */
+  unsealedRefusal(task: Readonly<Task>): string | null {
+    return runsSealed(this.mandate(), task) ? `Level ${this.authority.depth} refused Task "${task.title}": ${SCRIPT_PAST_THE_RULES}.` : null;
   }
 
   /** Each value where it lives today; the level is the caller's to name (ADR-0056 M1). */
@@ -3757,7 +3762,8 @@ export class Session {
     // A child reads the lease through this Session (ADR-0055 D13), so with one
     // still stopping it goes only once that child has: read as free, the tree
     // could be taken from under what it still writes. So with what this run
-    // started: a runner winding down, or a container and all it holds open.
+    // started: a runner winding down, a container and all it holds open, or a
+    // release or a merge still changing git.
     if (this.childPlans.activeCount === 0 && this.orchestrator.leftNothing) this.letLeaseGo();
     else this.departed = this.childPlans.stopEvery().then(() => this.orchestrator.allGone()).catch(() => undefined).then(() => this.letLeaseGo());
   }

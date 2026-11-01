@@ -58,6 +58,8 @@ export interface Mandate {
   exclusions: MandateExclusions;
   /** One per level, each with its own `!` rules: a command must match at every level (M4). */
   effectRules: readonly EffectRules[];
+  /** The level of `effectRules` this node's own request added: all of it a node keeps, the levels above being read as they stand (M1). */
+  ownEffectRules: readonly EffectRules[];
 }
 
 /** What the root's mandate is read from, each where it lives today (M1). */
@@ -123,6 +125,7 @@ const DELEGATED_GRANTS: readonly Grant[] = [...FLOOR_GRANTS, 'research', 'delega
 export function rootMandate(settings: RootSettings): Mandate {
   const effect = (settings.effects?.rules.length ?? 0) > 0;
   const delegation = settings.delegationTokens > 0;
+  const effectRules = settings.effects ? [settings.effects] : [];
   return {
     grants: new Set<Grant>([
       ...LEVEL_GRANTS[settings.level],
@@ -142,19 +145,22 @@ export function rootMandate(settings: RootSettings): Mandate {
       models: settings.models,
     },
     exclusions: { protectedPaths: [] },
-    effectRules: settings.effects ? [settings.effects] : [],
+    effectRules,
+    ownEffectRules: effectRules,
   };
 }
 
 /**
  * What holds at a node now (M1): its saved mandate within every ancestor's
- * `grantable` as it stands, so a change at the root reaches the subtree at the
- * next check. This reading intersects and refuses nothing: the floor binds
- * {@link narrow}, which writes a new child, not this.
+ * `grantable` as it stands, under every ancestor's effect rules as they stand,
+ * so a change at the root reaches the subtree at the next check. This reading
+ * intersects and refuses nothing: the floor binds {@link narrow}, which writes
+ * a new child, not this.
  */
 export function heldMandate(saved: Mandate, ancestors: readonly Mandate[]): Mandate {
   const within = (grants: ReadonlySet<Grant>) => new Set([...grants].filter((grant) => ancestors.every((ancestor) => ancestor.grantable.has(grant))));
-  return { ...saved, grants: within(saved.grants), grantable: within(saved.grantable) };
+  const effectRules = [...ancestors.flatMap((ancestor) => ancestor.effectRules), ...saved.ownEffectRules];
+  return { ...saved, grants: within(saved.grants), grantable: within(saved.grantable), effectRules };
 }
 
 type Ruled<T> = { value: T } | { refused: Omit<MandateRefusal, 'level'> };
@@ -216,6 +222,7 @@ const MANDATE_RULES: Rules<Mandate, Mandate> = {
   limits: ({ limits }, request) => applyRules<MandateLimits, MandateLimits>(LIMIT_RULES, limits, request),
   exclusions: ({ exclusions }, { protectedPaths }) => ({ value: { protectedPaths: [...new Set([...exclusions.protectedPaths, ...(protectedPaths ?? [])])] } }),
   effectRules: ({ effectRules }, { effectRules: asked }) => ({ value: asked ? [...effectRules, asked] : effectRules }),
+  ownEffectRules: (_parent, { effectRules: asked }) => ({ value: asked ? [asked] : [] }),
 };
 
 function applyRules<Of extends object, From>(rules: Rules<Of, From>, parent: From, request: MandateRequest): Ruled<Of> {
@@ -286,6 +293,9 @@ export function allowsCommand(mandate: Mandate, command: ExecutionCommandName): 
 export function missingGrant(depth: number, mandate: Mandate, needed: string): string {
   return `Level ${depth} refused this: it needs the ${needed} grant, and this node holds ${listed(mandate.grants)}.`;
 }
+
+/** Why a child's script may not run as it stands (M9). */
+export const SCRIPT_PAST_THE_RULES = 'its body is not covered at every level of the effect rules, and it would run unsealed';
 
 /** A planner tool no grant reaches is a read, offered to every node. */
 const TOOL_GRANTS: readonly (readonly [string, Grant])[] = [

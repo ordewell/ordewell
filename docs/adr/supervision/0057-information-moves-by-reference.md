@@ -426,3 +426,4 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - 2026-11-01 — R11: an API planner holds `post` where a harness planner does, as the last entry of its list, so an API root can pin.
 - 2026-11-01 — from real runs of where a subplanner's tokens go: R5 tells it less and R11 narrows its process, in `ClaudeCodeAdapter`, `PlanPrompts`, `PlannerConversation` and `Supervisor`.
 - 2026-11-01 — from review: a report outlasts a repair (R2), a line break is one set everywhere and no path or title can make one (R3), and a check's command counts in a pin at any length (R10).
+- 2026-11-01 — from review: VS Code's handoff panel holds what an author wrote, every line indented on the one set of breaks, as the TUI does for every handoff (R3).
