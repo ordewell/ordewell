@@ -267,7 +267,8 @@ function awaiting(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait
       const question = input.checkpoint(task.id);
       return {
         kind: 'checkpoint',
-        reason: question ? `Checkpoint: ${question}` : 'Waiting at a checkpoint.',
+        // A subplanner's question reads as what it is: the ref says which child asks (ADR-0056 M8).
+        reason: question ? `${task.type === 'delegated' ? `The child plan of ${row.ref} asks` : 'Checkpoint'}: ${question}` : 'Waiting at a checkpoint.',
         options: [{ id: 'approve', label: 'Approve' }, { id: 'reject', label: 'Reject', note: 'optional' }, SKIP],
       };
     }
@@ -466,7 +467,7 @@ export type EscalationAct =
  * A surface offering Mark complete asked first, and the seam only hears of it
  * with the user's yes: `answerEscalation` holds back an option that needs one.
  */
-export function escalationAct(escalation: Escalation, option: EscalationOptionId, note?: string): EscalationAct {
+export function escalationAct(escalation: Escalation, option: EscalationOptionId, note?: string, raiseTokens?: number): EscalationAct {
   const task = escalation.task?.id ?? '';
   const command = (issued: ExecutionCommand): EscalationAct => ({ kind: 'command', command: issued });
   const request = { command: 'answer_approval', task, ...(escalation.approval ? { approval: escalation.approval } : {}) } as const;
@@ -475,7 +476,7 @@ export function escalationAct(escalation: Escalation, option: EscalationOptionId
     case 'allow': return command({ ...request, answer: 'allow' });
     case 'allow-for-task': return command({ ...request, answer: 'allowForTask' });
     case 'deny': return command({ ...request, answer: 'deny', ...(said ? { note: said } : {}) });
-    case 'approve': return command({ command: 'answer_checkpoint', task, answer: 'approve' });
+    case 'approve': return command({ command: 'answer_checkpoint', task, answer: 'approve', ...(raiseTokens !== undefined ? { raiseTokens } : {}) });
     case 'reject': return command({ command: 'answer_checkpoint', task, answer: 'reject', ...(said ? { reason: said } : {}) });
     case 'reply': return command({ command: 'message_task', task, text: note ?? '' });
     case 'resume':

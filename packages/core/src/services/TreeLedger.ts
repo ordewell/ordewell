@@ -122,6 +122,8 @@ export interface NodeBudget {
   stoppedFor(): string | null;
   /** Tell `listener` why, each time this node stops. Returns how to stop being told. */
   onStop(listener: (why: string) => void): () => void;
+  /** Tell `listener` each time a raise takes: it only moves numbers, so what the node's Session starts again is its own. */
+  onRaised(listener: () => void): void;
 }
 
 export interface TreeLedgerOptions {
@@ -150,6 +152,7 @@ export class TreeLedger {
   /** Who pays first for the turn under way, by node. */
   private readonly wakers = new Map<NodePath, NodePath>();
   private readonly listeners = new Map<NodePath, Set<(why: string) => void>>();
+  private readonly raiseListeners = new Map<NodePath, () => void>();
   /** Why each stopped node did, which a raise clears (M5). */
   private readonly stopped = new Map<NodePath, string>();
   private pending: TreeFact[] = [];
@@ -268,6 +271,7 @@ export class TreeLedger {
         listeners.add(listener);
         return () => { listeners.delete(listener); };
       },
+      onRaised: (listener) => { this.raiseListeners.set(path, listener); },
     };
   }
 
@@ -332,6 +336,7 @@ export class TreeLedger {
     if (tokens > left) return `Level ${levelOf(parent)} refused this raise: it asks ${tokens} tokens, and ${left} are left.`;
     this.write({ kind: 'budget_raised', node: path, tokens });
     this.stopped.delete(path);
+    this.raiseListeners.get(path)?.();
     return null;
   }
 
@@ -358,6 +363,7 @@ export class TreeLedger {
     this.live.delete(path);
     this.wakers.delete(path);
     this.listeners.delete(path);
+    this.raiseListeners.delete(path);
   }
 
   private nearestOpen(path: NodePath): NodePath {

@@ -76,6 +76,10 @@ const checkpointInput = z.object({
   question: z.string().min(1).describe('The question for the user. The call returns their answer.'),
 });
 
+const subplannerCheckpointInput = z.object({
+  question: z.string().min(1).describe('The question for the plan above. The call returns at once: its answer opens your next turn.'),
+});
+
 const listRunnersInput = z.object({});
 
 const listModelsInput = z.object({
@@ -279,7 +283,7 @@ export type RetryTaskArgs = z.infer<typeof retryTaskInput>;
 export type MessageTaskArgs = z.infer<typeof messageTaskInput>;
 export type SkipTaskArgs = z.infer<typeof skipTaskInput>;
 export type AnswerApprovalArgs = z.infer<typeof answerApprovalInput>;
-export type AnswerCheckpointArgs = z.infer<typeof answerCheckpointInput>;
+export type AnswerCheckpointArgs = z.infer<typeof delegatingAnswerCheckpointInput>;
 export type RunScriptArgs = z.infer<typeof runScriptInput>;
 
 /** What a handler answers with. `isError` marks a refusal the caller should act on. */
@@ -294,7 +298,7 @@ export interface McpToolReply {
  * the question.
  */
 export type CheckpointAnswer =
-  | { kind: 'continue' }
+  | { kind: 'continue'; note?: string }
   | { kind: 'rejected'; reason: string }
   | { kind: 'withdrawn'; why: string };
 
@@ -725,6 +729,10 @@ const delegatingSubmitPlanInput = z.object({
   tasks: z.array(delegatingPlanTask).min(1).describe('The whole plan, in order.'),
 });
 
+const delegatingAnswerCheckpointInput = answerCheckpointInput.extend({
+  raiseTokens: z.number().int().positive().optional().describe('With "approve", on a delegated task\'s question: raise its budget by this many tokens, from what this plan has left. A raise this plan cannot pay for is refused, and the question still waits.'),
+});
+
 /**
  * What a planner's token serves (ADR-0056 M6): the list as a flat planner has
  * it unless delegation reaches it, so a flat session's tools do not change by
@@ -733,9 +741,11 @@ const delegatingSubmitPlanInput = z.object({
  */
 export function plannerToolSet({ delegates, subplanner }: { delegates?: boolean; subplanner?: boolean } = {}): readonly McpTool<PlannerToolHandler>[] {
   if (!delegates && !subplanner) return PLANNER_TOOLS;
-  const tools = delegates ? PLANNER_TOOLS.map((one) => (one.name === 'submit_plan'
-    ? tool<PlannerToolHandler, typeof delegatingSubmitPlanInput>('submit_plan', one.description, delegatingSubmitPlanInput, (h) => h.submitPlan?.bind(h) as Run<z.infer<typeof delegatingSubmitPlanInput>> | undefined, PLANNER_READ_ONLY)
-    : one)) : PLANNER_TOOLS;
+  const tools = delegates ? PLANNER_TOOLS.map((one) => {
+    if (one.name === 'submit_plan') return tool<PlannerToolHandler, typeof delegatingSubmitPlanInput>('submit_plan', one.description, delegatingSubmitPlanInput, (h) => h.submitPlan?.bind(h) as Run<z.infer<typeof delegatingSubmitPlanInput>> | undefined, PLANNER_READ_ONLY);
+    if (one.name === 'answer_checkpoint') return tool<PlannerToolHandler, typeof delegatingAnswerCheckpointInput>('answer_checkpoint', one.description, delegatingAnswerCheckpointInput, (h) => h.answerCheckpoint?.bind(h), PLANNER_EXECUTES);
+    return one;
+  }) : PLANNER_TOOLS;
   return subplanner ? [...tools, ...SUBPLANNER_TOOLS] : tools;
 }
 
@@ -743,8 +753,8 @@ export function plannerToolSet({ delegates, subplanner }: { delegates?: boolean;
 export const SUBPLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
   tool(TASK_COMPLETE_TOOL, `Report that the delegated task has ended, and how, with its handoff for the plan above. Status 'done' is refused until your child plan has settled, done work and merged it; 'blocked' and 'failed' are taken at any time. A call over a limit (the summary is at most ${HANDOFF_LIMITS.summary} characters) is refused whole. Call it once, as your last action.`,
     taskCompleteInput, (h) => h.taskComplete?.bind(h), PLANNER_READ_ONLY),
-  tool('checkpoint', 'Ask the plan above a question.',
-    checkpointInput, (h) => h.checkpoint?.bind(h), PLANNER_READ_ONLY),
+  tool('checkpoint', 'Ask the plan above a question, and end your turn. It answers at once that the question is asked, and the answer opens your next turn; a parent never answers in this call. One at a time. Use it for what your goal does not decide, and for more budget: say how many tokens you need.',
+    subplannerCheckpointInput, (h) => h.checkpoint?.bind(h), PLANNER_READ_ONLY),
 ];
 
 export const PLANNER_TASK_READ_TOOLS = PLANNER_TOOLS.filter((t) => ['task_query', 'task_output', 'task_diff'].includes(t.name));

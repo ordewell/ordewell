@@ -492,6 +492,7 @@ export function createSession(deps: SessionDeps): Session {
     ...(deps.placement ? { stateRoot: deps.placement.stateRoot, pool: deps.placement.pool } : {}),
     ...(deps.placement?.budget ? { budget: deps.placement.budget } : {}),
     ...(deps.execution ? { execution: deps.execution } : {}),
+    startRefused: (why) => session.startRefused(why),
     sessionId: () => session.sessionId,
     openTurn: () => session.turnRoomFreed(),
     skillsAt: (roots) => (deps.skillsService ?? new SkillsService(roots)).forRoot(roots),
@@ -805,6 +806,8 @@ export class Session {
   private readonly budget: NodeBudget | undefined;
   /** The tree's ledger, once something asked: a flat run never does, so it has none and writes no log (ADR-0058 S3). */
   private tree: TreeLedger | null = null;
+  /** The subplanner was told a start was refused; a raise makes it news again (ADR-0056 M5). */
+  private toldStartRefused = false;
   /** The opening behind {@link tree}, and the session it opened for. */
   private treeOpening: { sessionId: string; ledger: Promise<TreeLedger> } | null = null;
   /** The ledger let go, which the next opening reads after. */
@@ -903,6 +906,7 @@ export class Session {
       this.notice('warn', why);
       this.stopRun();
     });
+    this.budget?.onRaised(() => this.budgetRaised());
     this.settingsFn = parts.settings;
     this.runSettingsValue = { ...RUN_SETTINGS_DEFAULTS, ...(parts.settings().run ?? {}) };
     this.hostSessionId = parts.hostSessionId;
@@ -1054,7 +1058,8 @@ export class Session {
     });
     this.unlistenApprovals = this.approvals.listen(({ request }) => {
       if (isRunnerApproval(request) && request.taskId) {
-        this.supervision.observe({ kind: 'waiting_approval', taskId: request.taskId, detail: request.subject });
+        // Denied by the time this hears of it, below the root (ADR-0056 M8).
+        this.supervision.observe({ kind: this.child ? 'approval_denied' : 'waiting_approval', taskId: request.taskId, detail: request.subject });
       }
     });
 
@@ -1136,9 +1141,9 @@ export class Session {
     });
   }
 
-  /** The user's answer to an escalation; see {@link ExecutionCommands.answerEscalation}. */
-  async answerEscalation(id: string, option: string, note?: string, confirmed?: boolean): Promise<CommandOutcome> {
-    return this.commands.answerEscalation(id, option, note, confirmed);
+  /** The user's answer to an escalation; see {@link ExecutionCommands.answerEscalation}. `raiseTokens` goes with an Approve of a delegated task (ADR-0056 M5). */
+  async answerEscalation(id: string, option: string, note?: string, confirmed?: boolean, raiseTokens?: number): Promise<CommandOutcome> {
+    return this.commands.answerEscalation(id, option, note, confirmed, raiseTokens);
   }
 
   /** Run one planner turn with its own {@link TurnEffects}, which only a turn that lands hands back. */
@@ -1275,7 +1280,8 @@ export class Session {
         this.record.approvePlan();
         await this.withSave(() => this.orchestrator.approveReview('user'));
       },
-      answerCheckpoint: (taskId, approve, reason) => (approve ? this.approveCheckpoint(taskId) : this.rejectCheckpoint(taskId, reason)),
+      answerCheckpoint: (taskId, approve, reason, note) => (approve ? this.approveCheckpoint(taskId, note) : this.rejectCheckpoint(taskId, reason)),
+      raiseChild: (taskId, tokens) => this.raiseChild(taskId, tokens),
       answerRequest: (requestId, decision) => this.resolveApproval(requestId, decision),
       mergeAll: () => this.mergeAll(),
       runMerged: () => this.runs.mergedRun !== null,
@@ -1726,7 +1732,7 @@ export class Session {
     const planTasks = this.store.planTasks;
     const tasks = flattenTasks(planTasks);
     const label = (task: Task) => `${taskRefOf(planTasks, task.id) ?? `#${task.order}`} "${task.title}"`;
-    const live = this.runOpening !== null || this.orchestrator.hasLiveWork || this.orchestrator.isMerging;
+    const live = this.runOpening !== null || this.orchestrator.movesUnasked || this.orchestrator.isMerging;
     const open = tasks.filter((task) => task.status !== 'completed' && task.status !== 'skipped');
     return {
       unfinished: [
@@ -1740,6 +1746,7 @@ export class Session {
       plannerBusy: this.isPlannerBusy || this.turns.turnRunning,
       wakeOwed: this.supervision.wakeOwed,
       stoppedFor: this.stoppedFor(),
+      startRefused: this.orchestrator.refusedStart,
       tasks: tasks.map((task) => ({ label: label(task), status: task.status })),
     };
   }
@@ -1755,8 +1762,30 @@ export class Session {
   /** End this node's run and its planner turn, its children first, for a parent that waits on it. */
   private async halt(): Promise<void> {
     this.abortPlannerTurn();
-    if (this.orchestrator.hasLiveWork) this.stopRun();
+    if (this.orchestrator.isRunning || this.orchestrator.movesUnasked) this.stopRun();
     await this.childPlans.stopEvery();
+  }
+
+  /**
+   * What is ready cannot start and nothing live will free room for it, so
+   * nothing ticks this again (ADR-0056 M5). A subplanner is woken, once, so it
+   * can ask; {@link ChildPlanSession} ends it if nothing comes of that. A node
+   * with no planner to wake stops.
+   */
+  startRefused(why: string): void {
+    if (!this.subplanner) {
+      this.budget?.stop(why);
+      return;
+    }
+    if (this.toldStartRefused) return;
+    this.toldStartRefused = true;
+    this.supervision.observe({ kind: 'start_refused', detail: why });
+  }
+
+  /** A raise only moves numbers: what its room lets start is this run's to start (ADR-0056 M5). */
+  private budgetRaised(): void {
+    this.toldStartRefused = false;
+    if (this.orchestrator.isScheduling) void this.withSave(() => this.orchestrator.tick()).catch((err: unknown) => this.notice('error', `The raise could not start work: ${err instanceof Error ? err.message : String(err)}`));
   }
 
   /** What a delegated task's branch changed since its base. */
@@ -1826,6 +1855,12 @@ export class Session {
         this.broadcast({ type: 'isolation_merge', result, trigger });
         this.announceClosed();
         if (result.outcome !== 'merged') this.supervision.observe({ kind: 'auto_merge_stopped', ...(taskId === undefined ? {} : { taskId }), detail: mergeStopped(result) });
+      },
+      onCheckpoint: (data) => {
+        // A child that asks pays first for the answer (ADR-0056 M5).
+        const asking = this.tree?.nodeOf(this.runs.childSession(data.taskId) ?? '');
+        if (asking) this.budget?.woken(asking.path);
+        relay.onCheckpoint(data);
       },
       onTaskChanged: () => {
         this.saveChange();
@@ -2620,7 +2655,7 @@ export class Session {
   private offeredTools(): PlannerToolHandler {
     const { subplanner } = this;
     if (!subplanner) return this.plannerTools;
-    return { ...this.plannerTools, taskComplete: (report) => subplanner.taskComplete(report), checkpoint: () => subplanner.checkpoint() };
+    return { ...this.plannerTools, taskComplete: (report) => subplanner.taskComplete(report), checkpoint: ({ question }) => Promise.resolve(subplanner.checkpoint(question)) };
   }
 
   /** What the prompt says of this node's limits, as it stands when the planner starts (ADR-0055 D19). */
@@ -2880,8 +2915,8 @@ export class Session {
     this.onNotice?.({ type: 'notice', level, message });
   }
 
-  private approveCheckpoint(taskId: string): void {
-    this.saved(() => this.orchestrator.approveCheckpoint(taskId));
+  private approveCheckpoint(taskId: string, note?: string): void {
+    this.saved(() => this.orchestrator.approveCheckpoint(taskId, note));
   }
 
   private rejectCheckpoint(taskId: string, reason?: string): void {

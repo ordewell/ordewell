@@ -622,9 +622,9 @@ export class Attempts {
     return this.deps.store.get(taskId)?.awaitingReason === 'checkpoint' && this.live.has(taskId);
   }
 
-  approveCheckpoint(taskId: string): void {
+  approveCheckpoint(taskId: string, note?: string): void {
     if (!this.awaitsCheckpoint(taskId)) return;
-    this.verifier.approveCheckpoint(taskId);
+    this.verifier.approveCheckpoint(taskId, note);
     this.deps.store.markInProgress(taskId);
     this.host.emit('onTaskChanged');
   }

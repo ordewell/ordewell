@@ -258,6 +258,8 @@ export interface TaskOrchestratorDeps {
   leaveTree: () => void;
   /** This node's side of the tree's ledger; absent at the root, which is charged nothing, and on a flat run, which has no ledger (ADR-0056 M5). */
   budget?: NodeBudget;
+  /** What is ready cannot start, and nothing live will free room for it, so nothing ticks this again. */
+  startRefused: (why: string) => void;
 }
 
 /**
@@ -312,6 +314,8 @@ export interface TaskOrchestratorOptions {
   openTurn?: () => void;
   /** A child's side of the tree's ledger (ADR-0056 M5). */
   budget?: NodeBudget;
+  /** What follows a start its budget refuses with nothing live; the node stops, unless a subplanner can ask. */
+  startRefused?: (why: string) => void;
 }
 
 /**
@@ -571,6 +575,7 @@ export class TaskOrchestrator {
       limitFound: (runner, at) => pool.limitFound(node, runner, at),
       leaveTree: pool.join(node),
       ...(options.budget ? { budget: options.budget } : {}),
+      startRefused: options.startRefused ?? ((why) => options.budget?.stop(why)),
     });
     return orchestrator;
   }
@@ -597,8 +602,8 @@ export class TaskOrchestrator {
 
   get storeInstance(): PlanStore { return this.store; }
 
-  approveCheckpoint(taskId: string): void {
-    this.attempts.approveCheckpoint(taskId);
+  approveCheckpoint(taskId: string, note?: string): void {
+    this.attempts.approveCheckpoint(taskId, note);
   }
 
   rejectCheckpoint(taskId: string, reason?: string): void {
@@ -2602,14 +2607,26 @@ export class TaskOrchestrator {
 
     const waiting = ready.map(({ id }) => id);
     await Promise.all(Array.from({ length: Math.min(STARTS_AT_ONCE, waiting.length) }, () => this.startReady(waiting, admission)));
-    this.stopIfOutOfBudget(ready);
+    const refused = this.refusedStart;
+    if (refused) this.deps.startRefused(refused);
     this.emit('onTick');
   }
 
-  /** Work is ready and nothing live can free room for it, so no event will tick this again (ADR-0056 M5). */
-  private stopIfOutOfBudget(ready: readonly Task[]): void {
-    const refused = this.deps.budget?.refusal();
-    if (refused && this.attempts.size === 0 && ready.some((task) => task.type !== 'script' && task.type !== 'delegated' && this.stillReady(task.id))) this.deps.budget?.stop(refused);
+  /** Why what is ready cannot start, with nothing live to free room for it: no event will tick this again (ADR-0056 M5). Null otherwise. */
+  get refusedStart(): string | null {
+    const refused = this.deps.budget?.refusal() ?? null;
+    if (!refused || this.attempts.size > 0) return null;
+    return this.readiness().ready.some((task) => task.type !== 'script' && task.type !== 'delegated' && this.stillReady(task.id)) ? refused : null;
+  }
+
+  /**
+   * The run moves with nobody asked: something is at work, a reset resumes it,
+   * or a slot elsewhere in the tree starts what is ready (ADR-0055 D18). What
+   * tells a child that sits on nothing from one that waits (ADR-0056 M8).
+   */
+  get movesUnasked(): boolean {
+    if (this.attempts.size > 0 || this.runHeld || this.keptResumes.size > 0 || this.owedRepairs.size > 0 || this.store.allTasks.some(waitsForReset)) return true;
+    return this.isScheduling && (this.waitsOnTree() || (this.refusedStart === null && this.readiness().ready.length > 0));
   }
 
   /** One of a tick's starters: takes the next of `waiting` as each start it made has attached. */

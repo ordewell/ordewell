@@ -21,10 +21,12 @@ export type RunEventKind =
   | 'task_failed'
   | 'waiting_input'
   | 'waiting_approval'
+  | 'approval_denied'
   | 'task_idle'
   | 'landing_conflict'
   | 'usage_limit'
   | 'auto_merge_stopped'
+  | 'start_refused'
   | 'run_finished'
   | 'task_report';
 
@@ -260,7 +262,8 @@ export function createWakePolicy(options: WakePolicyOptions): WakePolicy {
 
   return {
     push(event) {
-      if (event.kind === 'task_passed') {
+      // A denial below the root settled itself: nobody waits on it, so it rides along (ADR-0056 M8).
+      if (event.kind === 'task_passed' || event.kind === 'approval_denied') {
         sinceLast.push(event);
         return;
       }
