@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0001", "0008", "0022", "0029", "0030", "0035", "0036", "0037", "0053"]
-note: "Settles #23, #92 and #112 as far as subplanners need. Built: M1 to M10 in core. Not built: VS Code's raise: the daemon's route, the CLI and the TUI send one, the inbox's Approve takes one in core, and VS Code sends none while ADR-0055 D21 holds delegation back. A flat run does not change."
+note: "Settles #23, #92 and #112 as far as subplanners need. Built: M1 to M10 in core. Every surface sends a raise: the daemon's route, the CLI, the TUI, VS Code's checkpoint card and the inbox's Approve. A flat run does not change."
 ---
 
 # 0056 — A mandate says what a node may do without a person, and what it can hand on only narrows down the tree
@@ -191,7 +191,7 @@ Judgment stays the planner's.
     ledger shuts only once its children have gone, so what they still spend, and their
     close, reach the log.
   - A child that needs more asks with a checkpoint. A raise is `answer_checkpoint` with
-    `raiseTokens`, or the same on the inbox's Approve or a surface's, carved at the call
+    `raiseTokens`, or the same on the inbox's Approve or a surface's (the CLI's `--raise`, the TUI's typed number, VS Code's field), carved at the call
     from what the parent has left, and recorded as a budget event ([ADR-0058](0058-a-tree-holds-many-nodes-and-few-live-sessions.md) S3)
     and in the timeline. It goes only with an approval, and one the parent cannot pay
     for is refused and leaves the question waiting. It moves numbers, so the child's
@@ -314,7 +314,7 @@ Judgment stays the planner's.
   Deep autonomy adds no capability today. It does remove a person from plan approval, so
   an instruction injected into something a subplanner read can become a plan nobody read
   and run with that network. ADR-0029 and ADR-0030 accept that risk at the root under
-  Act and autorun; turning delegation on accepts it below, and its confirmation says so.
+  Act and autorun; turning delegation on accepts it below, and its confirmation says so, and that a container is opt-in for a task on its own: delegation runs none.
 - **Retries and revocation (M10).** Retries multiply across levels: three at each of three
   levels is twenty-seven times the work. Budgets bound that, and each node keeps its own
   loop guards (ADR-0029), so a parent's retry of a delegated task, a Continue
@@ -432,3 +432,4 @@ Judgment stays the planner's.
 - 2026-11-01 — M8's questions, `raiseTokens` and a child's wake on a refused start implemented, what a refused start ends in rewritten from a stop to a wake, a wall clock that stops for a tree's usage limits, and a body `effect` does not cover runs sealed. A denied runner request rides along in the next run update.
 - 2026-11-01 — a subplanner's harness subagents are withheld without `research`, per runner, and its prompt names none; M7's paths reach its report; a subtree's task runners load `minimal` unless the settings file says otherwise.
 - 2026-11-01 — from a real run: a claim leaves a whole share for its subplanner's next turn, an approval carries words to a child, a budget stop waits with a question, and the daemon's route, the CLI and the TUI send a raise.
+- 2026-11-01 — VS Code's checkpoint card sends a raise and an answer's words, and M9's confirmation says delegation runs nothing in a container.
