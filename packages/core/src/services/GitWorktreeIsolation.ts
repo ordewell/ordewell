@@ -46,7 +46,7 @@ import { ensureStateDirIgnored, STATE_DIR } from '../utils/fsHelpers';
 import { sanitizeSlug } from '../utils/prdStore';
 import { absorbRemoval, handoffOf, integrationBranchFor, landedInRepo, noRemoval, PrepareFailedError, repoRootOf, SELF_REPO } from './isolationRecord';
 import { isTaskWorkspaceOf, refuseUsersCheckout, stateRootOf, worktreesDirOf } from './stateRoot';
-import { defaultExecFile, git, isAncestor, tryGit, type Ancestry, type GitExecFn, type GitInvoker, type GitResult } from './gitExec';
+import { defaultExecFile, git, isAncestor, tryGit, withoutHooks, type Ancestry, type GitExecFn, type GitInvoker, type GitResult } from './gitExec';
 import { IsolationLocks } from './isolationLocks';
 import { bootstrap, installDirs, isEnvFile, lexists, LINKED_ARTIFACTS, listDir, SetupCommandError } from './worktreeBootstrap';
 import { linkPath } from './worktreeLink';
@@ -60,6 +60,8 @@ export interface WorktreeIsolationDeps {
   config: Pick<IConfig, 'worktreeIsolation' | 'worktreeSetupCommand' | 'workspaceRepos' | 'worktreeLinks'>;
   /** Test seam: every git invocation goes through this. */
   execFileImpl?: GitExecFn;
+  /** Every git call of this isolation runs with hooks off: what it lands came from a container (ADR-0059 L6). */
+  noHooks?: boolean;
   resolvePath?: () => Promise<string>;
   platform?: NodeJS.Platform;
   mintRunId?: () => string;
@@ -348,7 +350,8 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
 
   constructor(private readonly deps: WorktreeIsolationDeps) {
     this.resolvePath = deps.resolvePath ?? (() => augmentedPath());
-    this.gitInvoker = { exec: deps.execFileImpl ?? defaultExecFile, resolvePath: this.resolvePath };
+    const exec = deps.execFileImpl ?? defaultExecFile;
+    this.gitInvoker = { exec: deps.noHooks ? withoutHooks(exec) : exec, resolvePath: this.resolvePath };
     this.platform = deps.platform ?? process.platform;
     this.mintRunId = deps.mintRunId ?? (() => randomBytes(4).toString('hex'));
   }

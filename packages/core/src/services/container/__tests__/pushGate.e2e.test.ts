@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { createWorktreeIsolation } from '../../GitWorktreeIsolation';
 import { defaultExecFile, type GitInvoker } from '../../gitExec';
 import { hooksLandingWouldRun, PushRefused, restoreSnapshot, takeThroughGate } from '../pushGate';
+import { createTask, type Task } from '../../../models/Task';
+import { fakeConfig } from '../../../testing';
 
 /*
  * The gate is what a hostile container meets, so it is driven with real git and
@@ -235,5 +238,149 @@ describe('the hooks a landing would run on this host', () => {
     executable(join(host, '.git', 'hooks', 'pre-push'));
 
     await expect(hooksLandingWouldRun(GIT, host)).resolves.toEqual([]);
+  });
+});
+
+/*
+ * The hook check runs before an attempt starts, so it can only see what the
+ * repository held then. A repository whose `core.hooksPath` is a tracked folder
+ * (husky, or any project that keeps its hooks beside its work) is one a task can
+ * write to, so the gate takes nothing there: a hook that landed would be armed in
+ * the user's checkout.
+ */
+describe('a hook a container writes into a tracked hooks folder (ADR-0059 L6)', () => {
+  /** A repository that keeps its hooks at `folder`, with none in it yet, as a lease's check finds it. */
+  function husky(folder = '.husky') {
+    const made = setup();
+    mkdirSync(join(made.host, folder), { recursive: true });
+    writeFileSync(join(made.host, folder, 'README.md'), 'the project keeps its hooks here\n');
+    git(made.host, 'add', '-A');
+    git(made.host, 'commit', '-q', '-m', 'a folder for hooks');
+    git(made.host, 'config', 'core.hooksPath', folder);
+    const base = git(made.host, 'rev-parse', 'HEAD');
+    git(made.box, 'fetch', '-q', made.host, base);
+    git(made.box, 'reset', '-q', '--hard', base);
+    return { ...made, base };
+  }
+
+  it('is refused at the gate, which the check at the lease could not see', async () => {
+    const { host, box, base, out } = husky();
+    const canary = join(out, 'hook-ran');
+    writeFileSync(join(box, '.husky', 'pre-commit'), `#!/bin/sh\ntouch "${canary}"\n`, { mode: 0o755 });
+
+    await expect(hooksLandingWouldRun(GIT, host)).resolves.toEqual([]);
+    await expect(takeThroughGate(GIT, host, bundle(box, out, base), ticket(base))).rejects.toThrow(/\.husky\/pre-commit, where git looks/);
+  });
+
+  it('is refused under a name only a folding disk takes for the folder', async () => {
+    const { host, box, base, out } = husky();
+    git(box, 'config', 'core.ignorecase', 'false');
+    mkdirSync(join(box, '.HUSKY'), { recursive: true });
+    writeFileSync(join(box, '.HUSKY', 'pre-commit'), '#!/bin/sh\n', { mode: 0o755 });
+
+    await expect(takeThroughGate(GIT, host, bundle(box, out, base), ticket(base))).rejects.toThrow(PushRefused);
+  });
+
+  it('is refused when the folder itself is replaced by a link', async () => {
+    const { host, box, base, out } = husky('tools/hooks');
+    rmSync(join(box, 'tools'), { recursive: true });
+    mkdirSync(join(box, 'elsewhere'));
+    writeFileSync(join(box, 'elsewhere', 'pre-commit'), '#!/bin/sh\n', { mode: 0o755 });
+    symlinkSync('elsewhere', join(box, 'tools'));
+
+    await expect(takeThroughGate(GIT, host, bundle(box, out, base), ticket(base))).rejects.toThrow(PushRefused);
+  });
+
+  it('is refused where `core.hooksPath` names that folder by an absolute path', async () => {
+    const { host, box, base, out } = husky();
+    git(host, 'config', 'core.hooksPath', join(host, '.husky'));
+    writeFileSync(join(box, '.husky', 'post-merge'), '#!/bin/sh\n', { mode: 0o755 });
+
+    await expect(takeThroughGate(GIT, host, bundle(box, out, base), ticket(base))).rejects.toThrow(PushRefused);
+  });
+
+  it('is refused where `core.hooksPath` reaches that folder through a tracked link, and when that link is turned', async () => {
+    const { host, box, out } = husky('tools/hooks');
+    symlinkSync('tools', join(host, 'link'));
+    git(host, 'add', '-A');
+    git(host, 'commit', '-q', '-m', 'a link to the tools');
+    git(host, 'config', 'core.hooksPath', 'link/hooks');
+    const linked = git(host, 'rev-parse', 'HEAD');
+    git(box, 'fetch', '-q', host, linked);
+    git(box, 'reset', '-q', '--hard', linked);
+    writeFileSync(join(box, 'tools', 'hooks', 'pre-commit'), '#!/bin/sh\n', { mode: 0o755 });
+    await expect(takeThroughGate(GIT, host, bundle(box, out, linked), ticket(linked))).rejects.toThrow(/tools\/hooks\/pre-commit/);
+
+    git(box, 'checkout', '-q', '--', '.');
+    rmSync(join(box, 'tools', 'hooks', 'pre-commit'));
+    mkdirSync(join(box, 'other'));
+    writeFileSync(join(box, 'other', 'pre-commit'), '#!/bin/sh\n', { mode: 0o755 });
+    rmSync(join(box, 'link'));
+    symlinkSync('other', join(box, 'link'));
+    await expect(takeThroughGate(GIT, host, bundle(box, out, linked), ticket(linked))).rejects.toThrow(/link/);
+  });
+
+  it('takes the same file outside that folder, and any file where the hooks are not in the tree', async () => {
+    const { host, box, base, out } = husky();
+    writeFileSync(join(box, 'pre-commit'), 'ordinary work\n');
+    await expect(takeThroughGate(GIT, host, bundle(box, out, base), ticket(base))).resolves.toMatch(/^[0-9a-f]{40}/);
+
+    const plain = setup();
+    mkdirSync(join(plain.box, '.husky'));
+    writeFileSync(join(plain.box, '.husky', 'pre-commit'), '#!/bin/sh\n', { mode: 0o755 });
+    await expect(takeThroughGate(GIT, plain.host, bundle(plain.box, plain.out, plain.base), ticket(plain.base))).resolves.toMatch(/^[0-9a-f]{40}/);
+  });
+});
+
+/*
+ * What a landing runs is closed as a kind: no name of a hook decides it, so one
+ * the list forgot, as `post-index-change` was, or one git adds later, is covered.
+ * The list says only what a lease must refuse, or a check would silently stop.
+ */
+describe('a session on a container backend, and the hooks of its repository (ADR-0059 L6)', () => {
+  const HOOKS = ['pre-commit', 'prepare-commit-msg', 'commit-msg', 'post-commit', 'pre-merge-commit', 'post-merge', 'post-checkout', 'post-rewrite', 'reference-transaction', 'post-index-change', 'a-hook-git-adds-later'];
+  const task = (order: number): Task => createTask({ id: `task-${order}`, order, title: `Task ${order}`, prompt: 'work', status: 'in_progress' });
+
+  /** Landing, a Continue's preserve and merge, and Merge all, over a repository with every hook armed. Returns those that ran. */
+  async function landedWith(noHooks: boolean): Promise<string[]> {
+    const { host } = setup();
+    const hooks = tempDir();
+    const ran = tempDir();
+    for (const hook of HOOKS) writeFileSync(join(hooks, hook), `#!/bin/sh\ntouch "${join(ran, hook)}"\n`, { mode: 0o755 });
+    git(host, 'config', 'core.hooksPath', hooks);
+    const iso = createWorktreeIsolation({ config: fakeConfig({ worktreeIsolation: true }), resolvePath: GIT.resolvePath, ...(noHooks ? { noHooks } : {}) });
+    const run = await iso.startRun(host);
+
+    const landed = task(1);
+    writeFileSync(join((await iso.prepare(landed, run)).cwd, 'b.txt'), 'the container wrote this\n');
+    expect(await iso.integrate(landed, run)).toBe('merged');
+
+    const continued = task(2);
+    writeFileSync(join((await iso.prepare(continued, run)).cwd, 'c.txt'), 'and this\n');
+    await iso.release(run, continued.id, { keep: true });
+    const { cwd, restoration } = await iso.prepare(continued, run, 'restore');
+    expect(restoration).toBe('restored');
+    writeFileSync(join(cwd, 'd.txt'), 'and this\n');
+    expect(await iso.integrate(continued, run)).toBe('merged');
+
+    expect(await iso.mergeIntoCheckedOut(run)).toEqual({ outcome: 'merged' });
+    expect(existsSync(join(host, 'd.txt'))).toBe(true);
+    return readdirSync(ran).sort();
+  }
+
+  it('runs none of them, whatever their name, at any step of a landing', async () => {
+    await expect(landedWith(true)).resolves.toEqual([]);
+  });
+
+  it('is what holds them back: the same steps run them without it', async () => {
+    await expect(landedWith(false)).resolves.toEqual(expect.arrayContaining(['pre-commit', 'post-commit', 'post-checkout', 'post-index-change']));
+  });
+
+  it('refuses a `post-index-change` hook at the lease: with hooks off, it would be a check silently gone', async () => {
+    const { host } = setup();
+    mkdirSync(join(host, '.git', 'hooks'), { recursive: true });
+    writeFileSync(join(host, '.git', 'hooks', 'post-index-change'), '#!/bin/sh\n', { mode: 0o755 });
+
+    await expect(hooksLandingWouldRun(GIT, host)).resolves.toEqual(['post-index-change']);
   });
 });

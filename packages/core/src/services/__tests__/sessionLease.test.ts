@@ -316,6 +316,7 @@ describe('the session lease (ADR-0049)', () => {
     logged.mockRestore();
     await vi.waitFor(() => expect(first.activity.running).toBe(false));
     expect(runner.stopAll).toHaveBeenCalled();
+    await first.gone;
     expect(fs.existsSync(path.join(sessionStore.sessionDataDir(SESSION, workspace), 'lease.json'))).toBe(false);
     fs.rmdirSync(file);
     sessionStore.saveSession(savedPlan(), GOAL, workspace, SESSION);

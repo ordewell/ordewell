@@ -575,7 +575,7 @@ export class TaskOrchestrator {
   static compose(options: TaskOrchestratorOptions): TaskOrchestrator {
     const store = options.store ?? new PlanStore();
     const output = options.output ?? new BufferedTaskOutputSource();
-    const git = options.isolation ?? createWorktreeIsolation({ config: options.config, ...(options.plannedWith ? { plannedWith: options.plannedWith } : {}) });
+    const git = options.isolation ?? createWorktreeIsolation({ config: options.config, ...(options.plannedWith ? { plannedWith: options.plannedWith } : {}), ...(options.execution ? { noHooks: true } : {}) });
     const isolation = options.sessionHeld ? leasedIsolation(git, options.sessionHeld) : git;
     const workspaceRoot = options.workspaceRoot ?? (() => process.cwd());
     // The listener callbacks fire only after construction, so the reference
@@ -2643,6 +2643,17 @@ export class TaskOrchestrator {
   /** Every runner this Session let go has gone. */
   woundDown(): Promise<void> {
     return this.attempts.allWoundDown();
+  }
+
+  /** Nothing the run started is still going, so a close has nothing to wait for. */
+  get leftNothing(): boolean {
+    return !this.attempts.anyWindingDown && !this.leases.settle;
+  }
+
+  /** Every runner let go has gone, and whatever a backend had running past one. What a next attempt comes back to stays. */
+  async allGone(): Promise<void> {
+    await this.attempts.allWoundDown();
+    await this.leases.settle?.();
   }
 
   /** The Session is closing: the tree stops counting on it. */
