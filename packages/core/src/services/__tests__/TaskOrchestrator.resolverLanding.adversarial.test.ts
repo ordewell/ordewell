@@ -29,6 +29,7 @@ function setup(config: Parameters<typeof fakeConfig>[0] = {}) {
     config: fakeConfig(config),
     notifications: fakeNotification(),
     runner,
+    childPlanRunner: runner,
     output: new BufferedTaskOutputSource(),
     isolation,
     workspaceRoot: () => '/repo',
@@ -237,5 +238,49 @@ describe('execution audit: no landing of a task begins while it is being release
 
     expect(env.isolation.taskIdsFor('integrate').filter((id) => id === 't1')).toHaveLength(1);
     expect(env.orchestrator.storeInstance.get('t1')!.status).not.toBe('completed');
+  });
+});
+
+describe('a Stop while a resolver lands a delegated task (ADR-0055 D8, D9)', () => {
+  /**
+   * The one landing that outlives a Stop: the resolver's attempt has ended and
+   * the delegated task waits on the user, so the Stop puts neither back to
+   * pending, and the landing goes on under the resolver's admission.
+   */
+  async function stoppedMidLanding(over: { stop: boolean }) {
+    const env = setup({ conflictRepairAttempts: 0 });
+    env.isolation.outcomes.set('d', 'conflict');
+    env.orchestrator.loadPlan([
+      change('d', 1, { type: 'delegated', goal: 'do d', budget: { tokens: 1_000 }, protectedPaths: ['tests/'] }),
+      change('c', 2, { dependencies: ['d'], taskMode: 'plan' }),
+      change('r', 3),
+    ]);
+    await env.orchestrator.forceStartTask('d');
+    env.latest('d').reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(env.orchestrator.storeInstance.get('d')!.status).toBe('awaiting_user'));
+    await env.orchestrator.forceStartTask('r');
+    env.orchestrator.runs.linkResolver('r', 'd');
+    env.isolation.outcomes.set('d', 'merged');
+
+    const openMerge = env.isolation.holdIntegration('d');
+    env.latest('r').reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(env.isolation.taskIdsFor('integrate').filter((id) => id === 'd')).toHaveLength(2));
+    if (over.stop) env.orchestrator.stop();
+    openMerge();
+    await vi.waitFor(() => expect(env.orchestrator.storeInstance.get('d')!.status).toBe('completed'));
+    await vi.waitFor(() => expect(env.orchestrator.storeInstance.get('r')!.status).toBe('completed'));
+    await flushMicrotasks();
+    return env;
+  }
+
+  it('starts its check when nothing stopped the run', async () => {
+    const env = await stoppedMidLanding({ stop: false });
+    await vi.waitFor(() => expect(env.latest('c')).toBeDefined());
+  });
+
+  it('lands it and leaves its check where it is', async () => {
+    const env = await stoppedMidLanding({ stop: true });
+    expect(env.latest('c')).toBeUndefined();
+    expect(env.orchestrator.storeInstance.get('c')!.status).toBe('pending');
   });
 });

@@ -51,6 +51,32 @@ describe('researchTools', () => {
     expect(names(toGeminiToolDeclarations(true, false))).not.toContain(SPAWN_RESEARCH_AGENT);
     expect(names(toGeminiToolDeclarations(true, false))).toEqual(expect.arrayContaining(['read_file', 'task_query', 'run_plan']));
   });
+
+  it('adds `post` after a planner\'s flat list and moves nothing in it, so a flat conversation sends the same bytes (ADR-0057 R11)', () => {
+    const flatOpenAi = JSON.stringify(toOpenAiTools(true));
+    const flatGemini = JSON.stringify(toGeminiToolDeclarations(true, false));
+    const openAi = toOpenAiTools(true, true);
+    const gemini = toGeminiToolDeclarations(true, false, true);
+
+    expect(openAi.at(-1)?.function.name).toBe('post');
+    expect(gemini.at(-1)?.name).toBe('post');
+    expect(JSON.stringify(openAi.slice(0, -1))).toBe(flatOpenAi);
+    expect(JSON.stringify(gemini.slice(0, -1))).toBe(flatGemini);
+    expect(toOpenAiTools().map((t) => t.function.name)).not.toContain('post');
+  });
+
+  it('declares `post`\'s entry types and required fields to each provider', () => {
+    const types = ['finding', 'claim', 'attempt', 'artifact', 'contract', 'assume', 'scope_change', 'decision', 'pin'];
+    const openAi = toOpenAiTools(true, true).at(-1)!.function.parameters as { properties: { type: { enum: string[] }; files: { items: unknown } }; required: string[] };
+    const gemini = toGeminiToolDeclarations(true, false, true).at(-1)!.parameters as unknown as { properties: { type: { enum: string[] }; files: { items: unknown } }; required: string[] };
+
+    expect([...openAi.properties.type.enum].sort()).toEqual([...types].sort());
+    expect([...gemini.properties.type.enum].sort()).toEqual([...types].sort());
+    expect(openAi.required).toEqual(['type', 'title']);
+    expect(gemini.required).toEqual(['type', 'title']);
+    expect(openAi.properties.files.items).toMatchObject({ type: 'string' });
+    expect(gemini.properties.files.items).toBeDefined();
+  });
 });
 
 describe('planner task read tool projections', () => {

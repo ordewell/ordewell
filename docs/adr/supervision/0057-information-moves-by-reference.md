@@ -1,7 +1,7 @@
 ---
 status: accepted
 amends: ["0012", "0013", "0022", "0029", "0047"]
-note: "Settles #34, and #36 and #38 as far as this goes. Built behind ADR-0055 D21's switch, so a flat run has no scope and no board. An API planner reads a board through `task_output` and has no `post` (R11)."
+note: "Settles #34, and #36 and #38 as far as this goes. Built behind ADR-0055 D21's switch, so a flat run has no scope and no board. An API planner reads a board through `task_output` and leaves entries with `post` (R11)."
 ---
 
 # 0057 — Information moves by reference: reports stay one size at every level, and code decides when a planner wakes
@@ -263,8 +263,8 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   It holds them from the moment its mandate lets it write one, since a list that grew with its first
   delegated task would break its cache, and `post` before there is a board says so. A subplanner holds
   them whether or not it may delegate, since it has a board from its first turn. An API planner has no
-  server list: `task_output` takes the same references for it, `board` among them, and it has no `post`,
-  so an API root pins nothing. A role is one list, whichever attempt asks. Each
+  server list: `task_output` takes the same references for it, `board` among them, and `post` comes last
+  in its list where delegation reaches it, so a flat API list does not move by a byte. A role is one list, whichever attempt asks. Each
   role's set is fixed at session start, in a stable order
   ([ADR-0056](0056-a-mandate-narrows-down-the-tree.md) M6), with a CI test on its serialised size.
   Turning delegation on reaches a planner at its next process.
@@ -372,3 +372,4 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - 2026-11-01 — R1 across plans, R2, R3's checks at every level, R11 and R12 implemented, in `Subtree.ts`, `models/Handoff.ts` and `mcp/tools.ts`: a path is a node's in the tree's log, a report reads what it names once, a child plan's end is a `task_report`, and `read` is listed where a planner may delegate. Built closest to the text where it could not hold: `promote` and `open` are written as text, `open` may name a subplanner's own finding, and a runner's reason says whose words it is. `post` waits for the board.
 - 2026-11-01 — R3 holds for a delegated task's commit, summary, reason, report and output tail: every line is indented in every reading, so none can pass for a line of Ordewell's.
 - 2026-11-01 — R6 to R10 implemented, in `models/Board.ts`, `Board.ts`, `ScopeLines.ts` and `TreeLedger`, behind ADR-0055 D21's switch: a scope stays on a delegated task, its line waits for a subplanner's next turn, a `contract` rises to the parent's board as its task lands, `read` takes `board` so a runner's `read` does not move, `file` evidence holds a branch's blob beside its author's, and a pin goes in a subplanner's opening and a task's prompt.
+- 2026-11-01 — R11: an API planner holds `post` where a harness planner does, as the last entry of its list, so an API root can pin.

@@ -265,6 +265,17 @@ describe('API planner task reads', () => {
     expect(chat.toolResultsSent[0].map((r) => r.output)).toEqual(['saved log', 'file patch', 'task body', expect.stringContaining("Invocation error: task_output rejected the call")]);
   });
 
+  it('holds `post` to the schema MCP holds it to, so a title of two lines is refused at the call', async () => {
+    const post = vi.fn(async () => ({ text: 'Posted.' }));
+    const chat = new ScriptedChat([
+      toolTurn([{ name: 'post', args: { type: 'pin', title: 'one\ntwo' }, id: '1' }]),
+      proseTurn('Refused.'),
+    ]);
+    await new TestService(fakeConfig()).runTurn({ ...ctxFor(chat, fakeFileSystem()), plannerTools: { post } });
+    expect(post).not.toHaveBeenCalled();
+    expect(chat.toolResultsSent[0][0].output).toContain('Invocation error: post rejected the call');
+  });
+
   it('does not execute task reads after the turn is stopped', async () => {
     const controller = new AbortController();
     const taskOutput = vi.fn(async () => { controller.abort(); return { text: 'first' }; });

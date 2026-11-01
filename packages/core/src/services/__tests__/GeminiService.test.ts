@@ -352,6 +352,21 @@ describe('Gemini planner exploration', () => {
     expect(system).not.toContain('spawn_research_agent');
     expect(tools.flatMap((t) => t.functionDeclarations.map((d) => d.name))).not.toContain('spawn_research_agent');
   });
+
+  it('declares `post` where delegation reaches the planner, and to no flat planner (ADR-0057 R11)', async () => {
+    const named = async (delegates: boolean) => {
+      generateContentStream.mockReset();
+      scriptStreams([streamResult([{ candidates: [{ content: { parts: [{ text: 'Hello.' }] }, finishReason: 'STOP' }] }])]);
+      await new GeminiService(geminiConfig()).startConversation({
+        goal: 'pin it', runners: ['claude-code'], modelsByRunner: {}, fs: fakeFileSystem() as IFileSystem, onProgress: () => {},
+        plannerTools: { sessionId: 's1', handler: {}, ...(delegates ? { delegates } : {}) },
+      });
+      return (generateContentStream.mock.calls[0] as [StreamRequest])[0].tools.flatMap((t) => t.functionDeclarations.map((d) => d.name));
+    };
+
+    expect(await named(true)).toContain('post');
+    expect(await named(false)).not.toContain('post');
+  });
 });
 
 describe('Gemini turn budgets', () => {
