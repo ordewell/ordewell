@@ -1,9 +1,9 @@
 import {
-  accountLimitsText, contextMeterText, type AccountLimitSnapshot, approvalKindText, approvalStatusText, compactionText, diffRows, diffSummary, handoffFindingsText, handoffReferenceText, loadedSkillTokens, outputPreview, planMarkerParts, savedPatchViews, severityLabel, usageText, wakeUpItems, worstSeverity, REPORT_PREVIEW_LINES,
+  DELEGATION_OFFERED, subtreeView, accountLimitsText, contextMeterText, type AccountLimitSnapshot, approvalKindText, approvalStatusText, compactionText, diffRows, diffSummary, handoffFindingsText, handoffReferenceText, loadedSkillTokens, outputPreview, planMarkerParts, savedPatchViews, severityLabel, usageText, wakeUpItems, worstSeverity, REPORT_PREVIEW_LINES,
   type DiffRow, type DiffStat,
   type ApprovalBlock, type DisplayBlock, type MessageBlock, type MessageRole, type PlanBlock,
   type CommandBlock, type CommandStatus, type CompactionBlock, type RunnerLoadedBlock,
-  type FindingSeverity, type HandoffBlock, type HandoffFinding,
+  type FindingSeverity, type HandoffBlock, type HandoffFinding, type SubtreeItemView, type SubtreeReport,
   type SkillLoadBlock, type SubagentBlock, type SubagentStatus, type ThinkingDisplayBlock, type ToolBlock,
 } from '@ordewell/core';
 import { graphemes, pad, sanitize, style, truncate, width, wrap, wrapLines } from './ansi';
@@ -708,6 +708,27 @@ function handoffReportLines(report: string, cols: number, detailAll: boolean): s
   return rows;
 }
 
+/**
+ * A delegated task's report past any task's (ADR-0057 R2): Ordewell's counts of
+ * what its subtree did, then each finding it left open for the plan above, and
+ * each its subplanner passed up, by the reference that names it.
+ */
+function subtreeLines(subtree: SubtreeReport, cols: number): string[] {
+  const view = subtreeView(subtree);
+  const room = Math.max(1, cols - HANDOFF_INDENT.length);
+  const itemLines = (items: SubtreeItemView[]): string[] => items.flatMap((item) => [
+    ...wrap(`${sanitize(item.heading)}`, Math.max(1, cols - FINDING_INDENT.length)).map((line) => `${HANDOFF_INDENT}${line}`),
+    ...(item.detail ? sanitize(item.detail).replace(/\n+$/, '').split('\n').flatMap((line) => wrap(line, Math.max(1, cols - FINDING_INDENT.length))).map((line) => `${FINDING_INDENT}${line}`) : []),
+    ...(item.reference ? wrap(sanitize(item.reference), Math.max(1, cols - FINDING_INDENT.length)).map((line) => `${FINDING_INDENT}${style.grey(line)}`) : []),
+  ]);
+  return [
+    ...wrap(`Subtree: ${view.summary}`, room).map((line) => `${HANDOFF_INDENT}${line}`),
+    ...(view.outsideScope ? wrap(view.outsideScope, room).map((line) => `${HANDOFF_INDENT}${style.yellow(line)}`) : []),
+    ...(view.open.length > 0 ? [`${HANDOFF_INDENT}${style.grey('Open, for you to decide:')}`, ...itemLines(view.open)] : []),
+    ...(view.promoted.length > 0 ? [`${HANDOFF_INDENT}${style.grey('Passed up by its subplanner:')}`, ...itemLines(view.promoted)] : []),
+  ];
+}
+
 function handoffLines(block: HandoffBlock, cols: number, detailAll: boolean): string[] {
   const { handoff } = block;
   const severity = worstSeverity(handoff.findings);
@@ -728,6 +749,8 @@ function handoffLines(block: HandoffBlock, cols: number, detailAll: boolean): st
   }
   const more = handoff.findingCount - handoff.findings.length;
   if (more > 0) rows.push(style.grey(`${HANDOFF_INDENT}+${more} more finding${more === 1 ? '' : 's'}, in the attempt's log`));
+  // Only a delegated task leaves one, and none is offered everywhere (ADR-0055 D21).
+  if (handoff.subtree && DELEGATION_OFFERED) rows.push(...subtreeLines(handoff.subtree, cols));
   rows.push(...handoffArtifactLines(block, cols));
   rows.push(...handoffPatchLines(block, cols));
   if (handoff.report) rows.push(...handoffReportLines(handoff.report, cols, detailAll));

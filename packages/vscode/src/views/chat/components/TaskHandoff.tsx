@@ -1,8 +1,25 @@
 import React from 'react';
 import type { HandoffDigest, StoredHandoff } from '@ordewell/core';
-import { handoffFindingsText, handoffReferenceText, savedPatchViews, severityLabel, worstSeverity } from '@ordewell/core/plan-utils';
+import { DELEGATION_OFFERED, handoffFindingsText, handoffReferenceText, savedPatchViews, severityLabel, subtreeView, worstSeverity } from '@ordewell/core/plan-utils';
+import type { SubtreeItemView } from '@ordewell/core/plan-utils';
 import { useOpenPatch } from '../openPatch';
 import ReportBody from './ReportBody';
+
+function SubtreeItems({ title, items }: { title: string; items: SubtreeItemView[] }) {
+  if (items.length === 0) return null;
+  return (
+    <div className="task-handoff-subtree-items">
+      <div className="task-handoff-heading">{title}</div>
+      {items.map((item, i) => (
+        <div key={i} className="task-handoff-finding">
+          <div className="task-handoff-finding-heading">{item.heading}</div>
+          {item.detail && <div className="task-handoff-detail">{item.detail}</div>}
+          {item.reference && <div className="task-handoff-evidence">{item.reference}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 /** The same handoff in expanded task details and an attempt log (ADR-0047); only the log carries the report. */
 export default function TaskHandoff({ handoff, taskName, onReadFull }: {
@@ -37,6 +54,18 @@ export default function TaskHandoff({ handoff, taskName, onReadFull }: {
           ) : null}
         </div>
       ))}
+      {handoff.subtree && DELEGATION_OFFERED && (() => {
+        const view = subtreeView(handoff.subtree);
+        return (
+          <div className="task-handoff-subtree">
+            <div className="task-handoff-heading">Subtree</div>
+            <div className="task-handoff-summary">{view.summary}</div>
+            {view.outsideScope && <div className="task-handoff-patch-flag">{view.outsideScope}</div>}
+            <SubtreeItems title="Open, for you to decide" items={view.open} />
+            <SubtreeItems title="Passed up by its subplanner" items={view.promoted} />
+          </div>
+        );
+      })()}
       {more > 0 && <div className="task-handoff-more">+{more} more finding{more === 1 ? '' : 's'}, in the attempt's log</div>}
       {artifacts.length ? (
         <div className="task-handoff-artifacts">
