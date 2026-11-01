@@ -11,9 +11,9 @@ export async function handleAddTask(subArgs: string[], injectedApi?: ApiClient):
     process.exit(1);
   }
 
+  const workspace = flag(subArgs, '--workspace') || process.cwd();
   let sessionId = flag(subArgs, '--session-id');
   if (!sessionId) {
-    const workspace = flag(subArgs, '--workspace') || process.cwd();
     const last = readLastSession(workspace);
     if (!last) {
       console.error(`No session specified. Use --session-id <id> or run \`ordewell plan\` in ${workspace} first.`);
@@ -36,7 +36,7 @@ export async function handleAddTask(subArgs: string[], injectedApi?: ApiClient):
   if (dependencyRefs.length > 0) {
     let tasks;
     try {
-      tasks = taskViews((await api.getSession(sessionId)).plan);
+      tasks = taskViews((await api.getSession(sessionId, workspace)).plan);
     } catch (err) {
       console.error(`Failed to read the plan: ${(err as Error).message}`);
       process.exit(1);
@@ -61,7 +61,6 @@ export async function handleAddTask(subArgs: string[], injectedApi?: ApiClient):
       description,
       type,
       prompt: type === 'ai' ? (flag(subArgs, '--prompt') || description) : undefined,
-      taskMode: 'build',
       dependencies: dependencies && dependencies.length ? dependencies : undefined,
       userSteps: type === 'user' ? [{ order: 1, instruction: description, completed: false }] : undefined,
     });

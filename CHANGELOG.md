@@ -43,6 +43,9 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   used to leave a task's runner working on, editing and committing in its worktree
   until its turn ended. It now stops within seconds. On Windows nothing has changed:
   such a runner still has to be stopped by hand.
+- **`ordewell add-task` works on a Claude Code plan.** It sent a task mode only some
+  runners have, so Claude Code refused every task it added, and `--depends-on`
+  could not find a session outside the daemon's own directory.
 
 ## [0.12.0] - 2026-10-31
 
