@@ -5,7 +5,7 @@ status: accepted
 # 0022 — The Ordewell MCP server: task and planner tools behind per-caller tokens
 
 *Pending:* [ADR-0056](../supervision/0056-a-mandate-narrows-down-the-tree.md) — below the root the tool list is filtered by grants and fixed at session start; a subplanner's `checkpoint` parks instead of waiting (V5).
-*Pending:* [ADR-0057](../supervision/0057-information-moves-by-reference.md) — the task tools gain `read` and `post`, `task_complete` gains `promote` and `open`, and references pin an attempt.
+*Pending:* [ADR-0057](../supervision/0057-information-moves-by-reference.md) — the task tools gain `post` with a board.
 *Pending:* [ADR-0059](../isolation/0059-an-execution-lease-reserves-in-the-claim-and-opens-after-it.md) — a container reaches this server through the lease's endpoint, not loopback (T1, T2).
 
 ## Problem
@@ -31,7 +31,7 @@ text markers have no role.
 
 | token | bound to | tools |
 |---|---|---|
-| **Task token** | one session, one task, one attempt generation | `task_complete({status: 'done' \| 'blocked' \| 'failed', summary, findings?, artifacts?, report?, reason?})`, `checkpoint({question})`, `read_task({task, attempt?, include_report?})`, and for a change task `apply_patch({task, attempt?})`, which merges a saved patch into its worktree ([ADR-0050](../planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md)); a read-only task's also `run_command({command})`, its only shell ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)), `save_patch({})`, which keeps what that shell changed as a patch ([ADR-0050](../planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md)), and `fetch({url})` and `web_search({query})`, its only web reads, decided by the web-read policy without asking anyone ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md), [ADR-0027](../planner-envelope/0027-web-reads-in-the-planner-envelope.md)) |
+| **Task token** | one session, one task, one attempt generation | `task_complete({status: 'done' \| 'blocked' \| 'failed', summary, findings?, artifacts?, report?, reason?})`, `checkpoint({question})`, `read({task, attempt?, include_report?})`, and for a change task `apply_patch({task, attempt?})`, which merges a saved patch into its worktree ([ADR-0050](../planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md)); a read-only task's also `run_command({command})`, its only shell ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)), `save_patch({})`, which keeps what that shell changed as a patch ([ADR-0050](../planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md)), and `fetch({url})` and `web_search({query})`, its only web reads, decided by the web-read policy without asking anyone ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md), [ADR-0027](../planner-envelope/0027-web-reads-in-the-planner-envelope.md)) |
 | **Planner token** | one session's planner conversation | `list_runners()`, `list_models({runner})`, `submit_plan({tasks})`, `edit_plan({ops})`, `task_query({...})`, `task_output({task, attempt?, kinds?, ...})`, `task_diff({task, repo?, path?, ...})`, `load_skill({name})` (a model-invocable planner skill's instructions; [ADR-0024](../planner/0024-unified-skills.md)) |
 
 #37's runner-facing tools (`board_post`, `report`, …) join the task side later,
@@ -149,7 +149,7 @@ on the same mechanism.
   report of at most 20,000 ([ADR-0047](../supervision/0047-structured-task-handoffs.md)).
   The plan keeps a bounded digest; the attempt log keeps the full handoff.
   Dependents get the summary and whole findings within 4,000 characters per
-  dependency. `read_task` pulls the rest for the task itself, its transitive
+  dependency. `read` pulls the rest for the task itself, its transitive
   dependencies and its loop's other end; it exposes no transcript or diff.
   The planner reads the digest with `task_query` and the full handoff with
   `task_output`, under its existing read budget.
@@ -344,8 +344,8 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-21 — `run_script` joins the execution tools, and a script task's exit status is its completion evidence, handed to `VerdictEngine` ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)).
 - 2026-10-21 — S2: a task runner the server never reaches while its process runs is held with a reason instead of failing and blocking its dependents; a `failed` report still fails it, and a planner turn still fails either way.
 - 2026-10-21 — a read-only task's token serves `run_command`, and says so in the runner's configuration (ADR-0046).
-- 2026-10-22 — decided, not built: `task_complete` carries a handoff and the task token gains `read_task` ([ADR-0047](../supervision/0047-structured-task-handoffs.md), #120).
-- 2026-10-22 — implemented the handoff envelope and task-scoped `read_task` (V4; ADR-0047, #120).
+- 2026-10-22 — decided, not built: `task_complete` carries a handoff and the task token gains `read` ([ADR-0047](../supervision/0047-structured-task-handoffs.md), #120).
+- 2026-10-22 — implemented the handoff envelope and task-scoped `read` (V4; ADR-0047, #120).
 - 2026-10-24 — P2: one check (`PlanChangeCheck`) for every planner change, at submit and at landing, with structured refusals; a whole plan is re-held to the plan's rules as it lands.
 - 2026-10-24 — `answer_checkpoint` joins the execution tools, for the supervisor at Act ([ADR-0029](../supervision/0029-the-supervisor.md)).
 - 2026-10-24 — S4 holds for the runner's whole life: OpenCode 2.1.4 evicted an idle planner's services after an hour and rebuilt them with Ordewell's tools inside code mode, out of the planner's reach.
@@ -355,3 +355,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-10-26 — P2: an edit's scope is the enabled runners alone, not the plan's own as well (ADR-0003, V1).
 - 2026-10-26 — P2: a successful `submit_plan` or `edit_plan` commits, saves and broadcasts before it answers, each `edit_plan` call a batch of its own; the turn's held edit, its preview and the starts deferred behind it are gone.
 - 2026-11-01 — a subplanner's token serves `task_complete` and `checkpoint` (ADR-0055 D5), and `submit_plan` takes a delegated task only where one may be written.
+- 2026-11-01 — the task tools read with `read`, `read_task` an alias at the call, a planner that may delegate lists it too, a server tool may carry an alias no list names, and `task_complete` takes `promote` and `open` on a subplanner's token alone ([ADR-0057](../supervision/0057-information-moves-by-reference.md) R2, R11).
