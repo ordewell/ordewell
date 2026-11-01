@@ -1343,7 +1343,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
 
   it('is a runner whose structured tasks are taught the tools', () => {
     const instructions = CODEX_ORDEWELL.taskInstructions();
-    for (const tool of ['task_complete', 'checkpoint', 'read_task']) expect(instructions).toContain(`\`mcp__ordewell__${tool}\``);
+    for (const tool of ['task_complete', 'checkpoint', 'read']) expect(instructions).toContain(`\`mcp__ordewell__${tool}\``);
     expect(instructions).toContain('ALL_TOOLS');
     expect(instructions.endsWith(TASK_COMPLETION_CONTRACT)).toBe(true);
 

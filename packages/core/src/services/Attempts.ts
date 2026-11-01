@@ -314,7 +314,7 @@ export interface AttemptsDeps {
    * ran (ADR-0047). A task that ran no session, a user task, gets a log of its own.
    */
   recordHandoff: (sessionId: string | undefined, taskId: string, handoff: StoredHandoff) => void;
-  /** The session's saved task logs, which a task's `read_task` reads handoffs from (ADR-0047). */
+  /** The session's saved task logs, which a task's `read` reads handoffs from (ADR-0047). */
   taskLog: TaskLogReader;
   /** What starting a research task owes the planner (ADR-0037 R3). */
   research?: Pick<ResearchTasks, 'started'>;

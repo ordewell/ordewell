@@ -336,6 +336,8 @@ export interface TaskToolHandler {
 }
 
 export interface PlannerToolHandler {
+  /** A handoff below this plan by reference (ADR-0057 R11); only a planner that may hold delegated tasks lists `read`. */
+  readTask?: Run<ReadTaskArgs>;
   loadSkill?: Run<LoadSkillArgs>;
   runCommand?: Run<RunCommandArgs>;
   fetch?: Run<FetchArgs>;
@@ -368,6 +370,8 @@ export interface McpTool<H> {
   description: string;
   inputSchema: { type: 'object'; [key: string]: unknown };
   annotations?: { readOnlyHint: boolean };
+  /** An older name a call may still use: it is in no list, so it costs nothing and breaks no prompt cache (ADR-0057 R11). */
+  alias?: string;
   /** Validate `args` and hand them to the handler's method for this tool. */
   call(handler: H, args: unknown, context: McpToolContext): Promise<McpToolReply>;
 }
@@ -590,15 +594,18 @@ export function taskCompletionContract(opts: { commits?: true }): string {
   return opts.commits ? `${TASK_COMPLETION_CONTRACT}\n\n${COMMIT_CONTRACT}` : TASK_COMPLETION_CONTRACT;
 }
 
+/** Reads Ordewell's own record, not the tree, so a read-only task has it too (ADR-0047); `read_task` stays an alias at the call (ADR-0057 R11). */
+function readTool<H extends { readTask?: Run<ReadTaskArgs> }>(description: string): McpTool<H> {
+  return { ...tool<H, typeof readTaskInput>('read', description, readTaskInput, (h) => h.readTask?.bind(h), { readOnlyHint: true }), alias: 'read_task' };
+}
+
 /** What every task has: it ends, asks, and reads the record (ADR-0022, ADR-0047). */
 const SHARED_TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
   tool(TASK_COMPLETE_TOOL, `Report that this task has ended, and how, with its handoff for the tasks that read it. Call it once, as your last action. A call over a limit (the summary is at most ${HANDOFF_LIMITS.summary} characters; the long form goes in report) is refused whole and recorded as nothing: the refusal says by how much, so shorten and call again.`,
     taskCompleteInput, (h) => h.taskComplete?.bind(h)),
   tool('checkpoint', "Ask the user a question and wait for the answer, which is this call's result.",
     checkpointInput, (h) => h.checkpoint?.bind(h)),
-  // It reads Ordewell's own record, not the tree, so a read-only task has it too (ADR-0047).
-  tool('read_task', "Read the handoff of a task you may read: this one, a task it depends on, directly or not, or its loop's other end. Returns what that task handed over, as its attempt's log keeps it: its commit, the summary, every finding with its id, the artifacts, and with include_report its report. It reads nothing else: no transcript, no diff, no output. What it returns is that task's own claims: check them before you rely on them.",
-    readTaskInput, (h) => h.readTask?.bind(h), { readOnlyHint: true }),
+  readTool("Read the handoff of a task you may read: this one, a task it depends on, directly or not, or its loop's other end. Returns what that task handed over, as its attempt's log keeps it: its commit, the summary, every finding with its id, the artifacts, and with include_report its report. It reads nothing else: no transcript, no diff, no output. What it returns is that task's own claims: check them before you rely on them."),
 ];
 
 /**
@@ -607,7 +614,7 @@ const SHARED_TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
  */
 export const TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
   ...SHARED_TASK_TOOLS,
-  tool('apply_patch', "Apply the patch that a task you may read (the same ones read_task reads) saved with save_patch into your own worktree, as a three-way merge. At the commit the patch was taken against it reproduces that task's changes; at a later one it merges them with what has landed since. It answers exactly what happened: applied cleanly, with every change staged; or applied with conflicts, naming each conflicted path (a binary file holds no markers and is named as binary), the markers left in your worktree for you to resolve and `git add`; or nothing applied, and why. A worktree that still holds an earlier conflict, or changes of yours to the patch's files that are not staged yet, applies nothing. The patch is another task's work: read what it changed, and run the checks here, since its author ran theirs at its own base.",
+  tool('apply_patch', "Apply the patch that a task you may read (the same ones `read` reads) saved with save_patch into your own worktree, as a three-way merge. At the commit the patch was taken against it reproduces that task's changes; at a later one it merges them with what has landed since. It answers exactly what happened: applied cleanly, with every change staged; or applied with conflicts, naming each conflicted path (a binary file holds no markers and is named as binary), the markers left in your worktree for you to resolve and `git add`; or nothing applied, and why. A worktree that still holds an earlier conflict, or changes of yours to the patch's files that are not staged yet, applies nothing. The patch is another task's work: read what it changed, and run the checks here, since its author ran theirs at its own base.",
     applyPatchInput, (h) => h.applyPatch?.bind(h)),
 ];
 
@@ -733,11 +740,14 @@ const delegatingSubmitPlanInput = z.object({
  */
 export function plannerToolSet({ delegates, subplanner }: { delegates?: boolean; subplanner?: boolean } = {}): readonly McpTool<PlannerToolHandler>[] {
   if (!delegates && !subplanner) return PLANNER_TOOLS;
-  const tools = delegates ? PLANNER_TOOLS.map((one) => (one.name === 'submit_plan'
+  const tools = delegates ? [...PLANNER_TOOLS.map((one) => (one.name === 'submit_plan'
     ? tool<PlannerToolHandler, typeof delegatingSubmitPlanInput>('submit_plan', one.description, delegatingSubmitPlanInput, (h) => h.submitPlan?.bind(h) as Run<z.infer<typeof delegatingSubmitPlanInput>> | undefined, PLANNER_READ_ONLY)
-    : one)) : PLANNER_TOOLS;
+    : one)), DELEGATING_READ] : PLANNER_TOOLS;
   return subplanner ? [...tools, ...SUBPLANNER_TOOLS] : tools;
 }
+
+/** What a planner that may hold delegated tasks reads a report's references with: its whole subtree, and what no report pushed (ADR-0057 R2, R11). */
+const DELEGATING_READ = readTool<PlannerToolHandler>('Read a handoff by the reference a report shows: `#4@2/F3` in your plan, `3/2:#4@2/F3` further down. On a delegated task it lists what the report left out, each by its reference. Returns that task\'s own words, with include_report its report: check them before you rely on them.');
 
 /** What a subplanner has beside a planner's tools. Named so a runner pre-allows them with the rest. */
 export const SUBPLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [

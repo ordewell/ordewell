@@ -295,7 +295,7 @@ export interface IRunner {
      */
     checkHandoff?: (completion: TaskCompleteArgs) => HandoffCheck<TaskCompleteArgs>;
     /**
-     * Answers the attempt's `read_task` calls (ADR-0047), against the plan
+     * Answers the attempt's `read` calls (ADR-0047), against the plan
      * and the session's task logs. Without one the call says it is not available.
      */
     readTask?: (args: ReadTaskArgs) => McpToolReply;

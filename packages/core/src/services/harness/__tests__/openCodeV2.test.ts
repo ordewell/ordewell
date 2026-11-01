@@ -295,7 +295,7 @@ const ordewellAllow = [
   'list_runners', 'list_models', 'submit_plan', 'edit_plan', 'task_query', 'task_output', 'task_diff', 'run_command', 'fetch', 'web_search', 'load_skill',
   'run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'skip_task', 'message_task', 'answer_approval', 'answer_checkpoint', 'merge_all', 'run_script',
 ].map((tool) => ({ action: `ordewell_${tool}`, resource: '*', effect: 'allow' }));
-const taskAllow = ['task_complete', 'checkpoint', 'read_task', 'apply_patch'].map((tool) => ({ action: `ordewell_${tool}`, resource: '*', effect: 'allow' }));
+const taskAllow = ['task_complete', 'checkpoint', 'read', 'apply_patch'].map((tool) => ({ action: `ordewell_${tool}`, resource: '*', effect: 'allow' }));
 const document = (info: Record<string, unknown>) => ({ type: 'document', path: '/home/u/.config/opencode/opencode.jsonc', info });
 
 // 2.0.26's `websearch` with no provider chosen asks the user to pick one through `question`, which a planner is denied.

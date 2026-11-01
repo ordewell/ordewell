@@ -5,7 +5,7 @@ import type { McpToolReply, ReadTaskArgs } from './mcp/tools';
 import { listed } from './harness/ordewellBinding';
 import { taskRefOf, titledTaskRefOf } from './TaskRefs';
 
-/** The session's saved task logs, as `read_task` reads them (ADR-0018, P1). */
+/** The session's saved task logs, as `read` reads them (ADR-0018, P1). */
 export interface TaskLogReader {
   /** The attempts of a task that have a saved log, oldest first. */
   attempts(taskId: string): number[];
@@ -23,7 +23,7 @@ export function handoffLogs(log: Pick<TaskLogReader, 'attempts' | 'events'>): Ha
 }
 
 /**
- * A task's `read_task` call (ADR-0047): the whole handoff of one attempt of a
+ * A task's `read` call (ADR-0047): the whole handoff of one attempt of a
  * task in `plan`, from that attempt's log, with its report only when asked.
  * Only a task in the reader's readable set is read, so the plan's own graph
  * scopes what one task learns of another's work. It reads a handoff and
@@ -83,7 +83,7 @@ function storedLines(handoff: StoredHandoff, includeReport: boolean, taskName: H
   const { report, ...rest } = handoff;
   const lines = handoffLines(includeReport ? handoff : rest, taskName);
   if (!report || includeReport) return lines;
-  return [...lines, '', `It also wrote a report of ${report.length} characters, left out here: call read_task again with include_report: true to read it.`];
+  return [...lines, '', `It also wrote a report of ${report.length} characters, left out here: call read again with include_report: true to read it.`];
 }
 
 /** The plan's digest, saying what it does not hold rather than pointing at a log there is not. */

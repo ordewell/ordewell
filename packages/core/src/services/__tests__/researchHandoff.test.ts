@@ -30,7 +30,7 @@ describe('a task that depends on a research task (ADR-0037, ADR-0047)', () => {
     if (added.ok) expect(added.tasks.find((t) => t.title === fix.title)?.dependencies).toEqual(['r']);
   });
 
-  it('gets the research handoff in its prompt, and reads the report through read_task, as does a task further down', async () => {
+  it('gets the research handoff in its prompt, and reads the report through read, as does a task further down', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-research-handoff-'));
     const agents: FakeRunnerSession[] = [];
     const spawn = vi.fn(async (opts: Parameters<IRunner['spawn']>[0]) => {
