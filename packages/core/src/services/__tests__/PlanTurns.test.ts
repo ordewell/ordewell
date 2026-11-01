@@ -575,6 +575,33 @@ describe('the planner gate', () => {
   });
 });
 
+describe('a line Ordewell owes (ADR-0057 R6)', () => {
+  it('opens no turn, and goes with the next one, whatever brings it', async () => {
+    const { host, turns, current } = fakeHost();
+    const runner = new PlanTurns(host);
+
+    await runner.enqueue({ source: 'supervisor', text: 'a line', rides: true });
+    await flushMicrotasks();
+    runner.pump();
+    expect(turns).toHaveLength(0);
+    expect(current.plan!.pendingTurns!.map((t) => t.text)).toEqual(['a line']);
+
+    void runner.enqueue({ source: 'supervisor', text: 'a run update' }).catch(() => {});
+    await flushMicrotasks();
+    expect(turns.map((t) => t.prompt.wakeUps)).toEqual([['a line', 'a run update']]);
+  });
+
+  it('keeps a loaded session quiet, as it found it', async () => {
+    const { host, turns, current } = fakeHost();
+    const runner = new PlanTurns(host);
+    runner.restoreResend();
+    await runner.enqueue({ source: 'supervisor', text: 'a line', rides: true });
+    runner.pump();
+    expect(turns).toHaveLength(0);
+    expect(current.plan!.pendingTurns).toHaveLength(1);
+  });
+});
+
 describe('an input about tasks the user stopped (ADR-0029)', () => {
   it('opens no turn, and rides with the next one', async () => {
     const { host, turns, current } = fakeHost();

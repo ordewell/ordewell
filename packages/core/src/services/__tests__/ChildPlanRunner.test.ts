@@ -35,6 +35,35 @@ async function started(runner: ChildPlanRunner) {
   return { reports };
 }
 
+describe('what reaches a subplanner in a run (ADR-0057 R6)', () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setImmediate', 'Date'] }); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  async function running() {
+    const built = child(60_000);
+    const hear = vi.fn();
+    const go = vi.fn(() => Promise.resolve());
+    Object.assign(built.node, { hear, continueConversation: go });
+    const session = await built.runner.spawn({ taskId: 'd', runner: 'claude-code', prompt: '', cwd: '/w', delegated: createTask({ id: 'd', order: 1, title: 'D', type: 'delegated', goal: 'g' }) } as never);
+    await vi.advanceTimersByTimeAsync(1);
+    return { session, hear, go };
+  }
+
+  it('holds Ordewell\'s own line for its next turn, and opens none', async () => {
+    const { session, hear, go } = await running();
+    session.sendMessage('moved', 'ordewell');
+    expect(hear).toHaveBeenCalledWith('moved');
+    expect(go).not.toHaveBeenCalled();
+  });
+
+  it('opens a turn on a message from the plan above', async () => {
+    const { session, hear, go } = await running();
+    session.sendMessage('go on');
+    expect(go).toHaveBeenCalledWith('go on');
+    expect(hear).not.toHaveBeenCalled();
+  });
+});
+
 describe('a child stopped from above or below (ADR-0056 M8)', () => {
   beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setImmediate', 'Date'] }); });
   afterEach(() => { vi.useRealTimers(); });

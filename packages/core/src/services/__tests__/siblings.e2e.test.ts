@@ -101,7 +101,7 @@ describe('two siblings and a provided interface', () => {
   it('opens no turn for a line, and tells a sibling that declared nothing it touched nothing', async () => {
     const built = tree([], {
       slots: 5,
-      runner: gatedRunner({ pa: ['api/users.ts'], oa: ['other.ts'], ca: ['web/client.ts'] }, { oa: () => lined, ca: () => lined }),
+      runner: gatedRunner({ pa: ['api/users.ts'], oa: ['other.ts'], ca: ['web/client.ts'] }, { oa: () => lined, ca: () => lined }, { pa: async (opts) => { await opts.post!({ type: 'finding', title: 'Nobody hears this' }); } }),
       tasks: [sibling('p', 1, { provides: ['users-api'] }), guard('pc', 2, 'p'), sibling('c', 3, { consumes: ['users-api'] }), guard('cc', 4, 'c'), sibling('o', 5, { paths: ['docs/'] }), guard('oc', 6, 'o')],
       below: {
         p: [SUBMIT([childTask('pa', 1)]), REPORT('Serve it')],
@@ -116,6 +116,8 @@ describe('two siblings and a provided interface', () => {
     expect(lower.c.asked).toHaveLength(1);
     await allDone(parent);
     expect(lower.c.asked).toHaveLength(2);
+    expect(lower.c.asked.join('\n')).not.toContain('Nobody hears this');
+    expect(lower.p.asked.join('\n')).not.toContain('Nobody hears this');
     expect(lower.o.asked.join('\n')).not.toContain('what you declared moved');
     parent.destroy();
   });

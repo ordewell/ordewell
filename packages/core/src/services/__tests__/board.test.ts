@@ -85,6 +85,17 @@ describe('a board (ADR-0057 R8)', () => {
     expect(map).toContain('"after"');
   });
 
+  it('is its own for a fresh retry, a new child that starts with an empty board', async () => {
+    const ledger = await open();
+    const old = child(ledger, ROOT_NODE, 'first-child');
+    await boardOf(ledger, old).post(entry({ type: 'contract', title: 'From the attempt that failed', key: 'api', value: 'v1' }), task);
+    ledger.close(old);
+    const fresh = child(ledger, ROOT_NODE, 'second-child');
+    expect(ledger.board(fresh)).toEqual([]);
+    expect(ledger.boardOf('first-child')).toHaveLength(1);
+    expect(ledger.boardOf('second-child')).toEqual([]);
+  });
+
   it('stops a post past its limit, and a map says what it left out', async () => {
     const ledger = await open();
     const board = boardOf(ledger, child(ledger, ROOT_NODE));
