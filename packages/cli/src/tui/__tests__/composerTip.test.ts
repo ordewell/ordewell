@@ -6,7 +6,7 @@ import { render, selectedText } from '../render';
 import { initialState, type TaskLogState, type TaskView, type TuiState } from '../state';
 
 const ALLOWLIST_TIP = 'Tip: Use /allowlist to limit which models the planner assigns per runner.';
-const PLANNER_TIP = "Tip: Use /planner to pick the planner's harness, model and effort.";
+const RUNNERS_TIP = 'Tip: Use /runners to turn runners on or off.';
 
 let wasEnabled: boolean;
 beforeEach(() => { wasEnabled = style.enabled; style.enabled = true; });
@@ -73,6 +73,11 @@ describe('the empty planner composer shows a command tip (#137)', () => {
     expect(selectedText(select(typed('add a login route')))).toContain('add a login route');
     expect(selectedText(select(at(80)))).not.toContain('Tip');
   });
+
+  it('is not painted while mouse capture is off, where a terminal selection would copy it', () => {
+    expect(composerText(at(80))).toContain(ALLOWLIST_TIP);
+    expect(composerText(at(80, { mouseCapture: false }))).not.toContain('Tip:');
+  });
 });
 
 describe('which tip shows (#137)', () => {
@@ -82,7 +87,7 @@ describe('which tip shows (#137)', () => {
     expect(typedOne.composerTipSeq).toBe(0);
     const emptied = key(typedOne, 'backspace');
     expect(emptied.composerTipSeq).toBe(1);
-    expect(composerText(emptied)).toContain(PLANNER_TIP);
+    expect(composerText(emptied)).toContain(RUNNERS_TIP);
     // A key that leaves the empty composer empty picks no new tip.
     expect(key(emptied, 'left').composerTipSeq).toBe(1);
   });
