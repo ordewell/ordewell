@@ -114,7 +114,7 @@ export interface TaskRowContext {
  * or a script task (ADR-0035): an ops task by nature, drawn with its body and
  * with no prompt, runner or model to edit.
  */
-export type TaskRowKind = 'ai' | 'user' | 'ops' | 'script';
+export type TaskRowKind = 'ai' | 'user' | 'ops' | 'script' | 'delegated';
 
 /** The task's whole spend (see `taskUsageSummary`); `attempt` is the latest one, 0 before any reported. */
 export interface TaskRowUsage extends Pick<TaskUsageSummary, 'totals' | 'contextFill'> {
@@ -343,7 +343,7 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
   return {
     usage: latestAttempt ? { totals: spend.totals, ...(spend.contextFill ? { contextFill: spend.contextFill } : {}), attempt: latestAttempt.attempt } : task.type === 'ai' && ['completed', 'failed', 'in_progress', 'awaiting_user'].includes(task.status) ? { totals: {}, attempt: 0 } : null,
     orderLabel: taskOrderLabel(task, parent),
-    kind: task.type === 'user' ? 'user' : task.type === 'script' ? 'script' : task.ops ? 'ops' : 'ai',
+    kind: task.type === 'user' ? 'user' : task.type === 'script' ? 'script' : task.type === 'delegated' ? 'delegated' : task.ops ? 'ops' : 'ai',
     // Between rounds a check waits for its fix as a task waits for its dependencies, and is no failure (ADR-0045 L3).
     status: blocked.length > 0 ? 'blocked' : loop?.role === 'check' && loop.state === 'repeating' ? 'todo' : taskStatusKind(task),
     running: isTaskRunning(task),

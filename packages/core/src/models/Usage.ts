@@ -359,7 +359,7 @@ export function addUsageTotals(totals: UsageTotals, addition: UsageTotals): Usag
   return next;
 }
 
-interface UsageTask { attemptUsage?: readonly AttemptUsage[]; subtasks?: readonly UsageTask[] }
+interface UsageTask { type?: string; attemptUsage?: readonly AttemptUsage[]; subtasks?: readonly UsageTask[] }
 
 export function planUsage(tasks: readonly UsageTask[]): PlanUsage {
   const result: PlanUsage = { totals: {}, byModel: [], wallTimeMs: 0, attempts: 0 };
@@ -396,10 +396,11 @@ export interface TaskUsageSummary {
   contextFill?: ContextFill;
 }
 
-export function taskUsageSummary(task: Pick<UsageTask, 'attemptUsage'>): TaskUsageSummary {
+export function taskUsageSummary(task: Pick<UsageTask, 'attemptUsage' | 'type'>): TaskUsageSummary {
   const attempts = task.attemptUsage ?? [];
   const latest = attempts.at(-1);
-  const contextFill = latest ? plannerContextFill(latest) : undefined;
+  // A delegated task's usage is its whole subtree's (ADR-0055 D20): no one session's context, so it has no meter.
+  const contextFill = latest && task.type !== 'delegated' ? plannerContextFill(latest) : undefined;
   return {
     totals: attempts.reduce((sum, attempt) => addUsageTotals(sum, attempt.totals), {} as UsageTotals),
     attempts: attempts.length,

@@ -73,7 +73,7 @@ describe('applySavedPatch refuses', () => {
     expect(await refusal({ task: '#1' }, { worktrees: ['/work/a', '/work/b'] })).toContain('several repositories');
   });
 
-  it('a patch from a task outside the set read_task reads, naming that set', async () => {
+  it('a patch from a task outside the set read reads, naming that set', async () => {
     const text = await refusal({ task: '#3' });
 
     expect(text).toContain('#3 Task aside is not a task this one may read');

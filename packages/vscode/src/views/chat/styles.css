@@ -6563,6 +6563,7 @@ body.vscode-high-contrast-light .pending-message {
 }
 
 /* A script task (ADR-0035): an ops task by nature, drawn with its body */
+.task-type-badge.delegated,
 .task-type-badge.script {
   background: var(--purple-subtle);
   color: var(--purple);

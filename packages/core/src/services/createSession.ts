@@ -1,7 +1,7 @@
 import * as path from 'path';
 import { resolveHandoffReferences } from './handoffReferences';
 import { readSavedPatch } from './taskDiffRead';
-import { savedPatchOf } from '../models/Handoff';
+import { savedPatchOf, type HandoffCheck } from '../models/Handoff';
 import { createAiService, type IAiService } from './AiService';
 import type { PlannerContextDeps } from './plannerContextBudget';
 import { PlannerBackend } from './PlannerBackend';
@@ -12,14 +12,16 @@ import { ApprovalRecord } from './ApprovalRecord';
 import type { TaskQueryCatalog } from './TaskQuery';
 import { SessionCatalog } from './SessionCatalog';
 import { plannerToolHandler, runnersOf, PLANNER_TURN_ENDED, type PlanEditOutcome, type TaskHead } from './plannerTools';
-import { sharedMcpServer, type OrdewellMcpServer, type PlannerToolHandler } from './mcp';
+import { sharedMcpServer, type McpToolReply, type OrdewellMcpServer, type PlannerToolHandler, type ReadTaskArgs, type TaskCompleteArgs } from './mcp';
 import { ConversationEditError, PlannerContextPausedError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError, type ConversationCompaction, type ConversationOpening, type PlannerConversationHost, type RewindTarget, type WakeUpTurn } from './PlannerConversation';
 import { forkPlanState, type ForkedDialogue } from './conversationFork';
 import { PlanTurns, type PlanTurnInput } from './PlanTurns';
 import { RunSupervision, runOrigin } from './RunSupervision';
 import { Planner } from './Planner';
 import { TaskControlError, TaskOrchestrator, type OrchestratorObserver, type RunOrigin, type TaskOrchestratorOptions } from './TaskOrchestrator';
-import { ChildPlanRunner, ownedRunner, type ChildHost, type ChildNode, type NodeState, type SubplannerLink } from './ChildPlanRunner';
+import { ChildPlanRunner, ownedRunner, type ChildHost, type ChildNode, type NodeState, type SubplannerLink, type TakenReport } from './ChildPlanRunner';
+import { readTask, type TaskLogReader } from './readTask';
+import { Subtree, takeReport } from './Subtree';
 import { DELEGATION_OFFERED } from './runSettingsText';
 import { checksDelegatedTask } from '../models/Delegation';
 import type { SlotPool } from './SlotPool';
@@ -54,7 +56,7 @@ import { surfacePlan, type RunActivity, type RunMergeView, type RunView, type Se
 import { EMPTY_RUN, reduceRun } from './runView';
 import { SessionEventRelay } from './SessionEventRelay';
 import { SubagentRuns } from './SubagentRuns';
-import { saveChildSession, saveSession } from '../utils/sessionStore';
+import { loadChildSession, saveChildSession, saveSession } from '../utils/sessionStore';
 import { listTaskLogAttempts, prepareTaskOutputFile, readTaskLog, readTaskPatch, saveTaskPatch, type TaskLogFile, type TaskLogLocation } from '../utils/taskLogStore';
 import { digestTaskLog, type TaskLogEvent } from '../models/TaskLog';
 import { TaskLogRecorder } from './TaskLogRecorder';
@@ -324,9 +326,30 @@ function subplannerConfig(config: IConfig, task: Task): IConfig {
   }) as IConfig;
 }
 
-/** A subplanner is Act with autorun, inside its mandate (ADR-0056 M7), and it merges its own subtree (ADR-0055 D10). */
+/**
+ * A subplanner is Act with autorun, inside its mandate (ADR-0056 M7), and it
+ * merges its own subtree (ADR-0055 D10). Its runners load what a task needs
+ * unless the settings file says otherwise: a subtree multiplies what each
+ * attempt's context carries (ADR-0057 R2).
+ */
 function subplannerSettings(settings: SessionRuntimeSettings): SessionRuntimeSettings {
-  return { ...settings, run: { ...RUN_SETTINGS_DEFAULTS, ...settings.run, supervisorLevel: 'act', autorun: true, mergeAtGatesAutomatically: true } };
+  return { ...settings, taskRunnerConfig: settings.taskRunnerConfig ?? 'minimal', run: { ...RUN_SETTINGS_DEFAULTS, ...settings.run, supervisorLevel: 'act', autorun: true, mergeAtGatesAutomatically: true } };
+}
+
+/** A node's budget that tells its parent's attempt of each record it is charged. */
+function reportingUp(budget: NodeBudget, link: SubplannerLink | undefined): NodeBudget {
+  if (!link) return budget;
+  return {
+    ...budget,
+    spent: (record, on) => {
+      budget.spent(record, on);
+      link.usage(record);
+    },
+    turnSpent: (record) => {
+      budget.turnSpent(record);
+      link.usage(record);
+    },
+  };
 }
 
 /**
@@ -433,6 +456,7 @@ export function createSession(deps: SessionDeps): Session {
     openChild: (...open) => session.openChild(...open),
     changedPaths: (taskId) => session.changedPaths(taskId),
     closeNode: (sessionId) => session.closeNode(sessionId),
+    passUp: (record) => deps.subplanner?.usage(record),
   };
   const childPlans = new ChildPlanRunner(childHost);
   const taskLogs: TaskLogRecorder = new TaskLogRecorder({
@@ -478,6 +502,8 @@ export function createSession(deps: SessionDeps): Session {
     },
   });
   const runnerApprovals = new RunnerApprovals(approvals);
+  // What is charged here goes on up, for a row at each level to show (ADR-0055 D20).
+  const nodeBudget = deps.placement?.budget && reportingUp(deps.placement.budget, deps.subplanner);
   const orchestrator = TaskOrchestrator.compose({
     config: deps.config,
     notifications: deps.notifications,
@@ -490,12 +516,14 @@ export function createSession(deps: SessionDeps): Session {
     registry: deps.registry,
     workspaceRoot: deps.workspaceRoot,
     ...(deps.placement ? { stateRoot: deps.placement.stateRoot, pool: deps.placement.pool } : {}),
-    ...(deps.placement?.budget ? { budget: deps.placement.budget } : {}),
+    ...(nodeBudget ? { budget: nodeBudget } : {}),
     ...(deps.execution ? { execution: deps.execution } : {}),
     startRefused: (why) => session.startRefused(why),
     autonomous: () => autonomousAt(deps.child, deps.config.autonomousMode),
     ...(deps.subplanner ? { decided: () => deps.subplanner?.changed() } : {}),
     ...(deps.child ? { inheritedProtectedPaths: () => deps.child?.mandate('off').exclusions.protectedPaths ?? [] } : {}),
+    subtree: () => session.subtree(),
+    ...(deps.placement?.budget ? { planNode: () => deps.placement!.budget!.path } : {}),
     sessionId: () => session.sessionId,
     openTurn: () => session.turnRoomFreed(),
     skillsAt: (roots) => (deps.skillsService ?? new SkillsService(roots)).forRoot(roots),
@@ -537,7 +565,7 @@ export function createSession(deps: SessionDeps): Session {
   });
   const events = new SessionEventRelay({
     broadcast: deps.broadcast, onNotice: deps.onNotice, store, orchestrator, usage,
-    ...(deps.placement?.budget ? { spent: deps.placement.budget.turnSpent } : {}),
+    ...(nodeBudget ? { spent: nodeBudget.turnSpent } : {}),
     awaitingApproval: (taskId) => runnerApprovals.waiting(taskId),
     checkpointQuestion: (taskId) => orchestrator.getCheckpointQuestion(taskId),
     waitsForApproval: (taskId): boolean => session.waitsForApproval(taskId),
@@ -863,6 +891,8 @@ export class Session {
     lastAttempt: (taskId) => lastAttemptDigest(this.taskLogLocation, taskId),
     taskLogAttempts: (taskId) => this.taskLogAttempts(taskId),
     taskLog: (taskId, attempt) => this.taskLog(taskId, attempt),
+    readHandoff: (args) => this.readBelow(args),
+    below: () => this.subtree(),
     taskDiff: (taskId, options) => {
       // A read-only task lands nothing and its worktree is gone: the patch it saved is what it changed (ADR-0050).
       const patch = savedPatchOf(this.store.get(taskId)?.handoff);
@@ -1748,9 +1778,53 @@ export class Session {
       startPlanning: (goal) => this.startPlanning(goal),
       continueConversation: (text) => this.continueConversation(text),
       state: () => this.nodeState(),
+      takeReport: (report) => this.takeReport(report),
       halt: () => this.halt(),
       close: () => this.destroy(),
     };
+  }
+
+  private get taskLogReader(): TaskLogReader {
+    return { attempts: (taskId) => this.taskLogAttempts(taskId), events: (taskId, attempt) => this.taskLog(taskId, attempt) };
+  }
+
+  /** The plans below this one on `tree`, each read when asked for (ADR-0055 D17, ADR-0057 R1). */
+  private subtreeOn(tree: TreeLedger): Subtree {
+    const baseDir = this.stateRoot;
+    const rootSessionId = this.placement?.rootSessionId ?? this.currentSessionId;
+    const here = this.budget?.path ?? ROOT_NODE;
+    return new Subtree({
+      here,
+      nodes: () => tree.below(here),
+      plan: ({ sessionId }) => loadChildSession({ baseDir, rootSessionId, sessionId })?.plan.tasks,
+      logs: ({ sessionId }) => {
+        const location: TaskLogLocation = { baseDir, sessionId, rootSessionId };
+        return { attempts: (taskId) => listTaskLogAttempts(location, taskId), events: (taskId, attempt) => readTaskLog(location, taskId, attempt) };
+      },
+    });
+  }
+
+  /** What is below this plan; null with nothing delegated, so a flat run opens no ledger. */
+  async subtree(): Promise<Subtree | null> {
+    if (!this.tree && !flattenTasks(this.store.planTasks).some((task) => task.type === 'delegated')) return null;
+    const tree = await this.ledger().catch(() => null);
+    return tree && this.subtreeOn(tree);
+  }
+
+  /** A subplanner's report, read against its own plan and what is below it; a child's ledger is its root's, so nothing here waits. */
+  private takeReport(report: TaskCompleteArgs): HandoffCheck<TakenReport> {
+    const tree = this.budget?.tree ?? null;
+    const node = this.budget?.path ?? ROOT_NODE;
+    return takeReport(report, {
+      plan: { node, tasks: this.store.planTasks, logs: this.taskLogReader },
+      subtree: tree && this.subtreeOn(tree),
+      tokens: tree?.subtreeSpent(node) ?? 0,
+    });
+  }
+
+  /** A planner's `read`: its whole plan, and what is below it (ADR-0057 R11). */
+  async readBelow(args: ReadTaskArgs): Promise<McpToolReply> {
+    return readTask(args, undefined, this.store.planTasks, this.taskLogReader, await this.subtree());
   }
 
   /** What its parent reads of it, afresh (ADR-0055 D6). */
@@ -2703,6 +2777,7 @@ export class Session {
         ...(this.child ? { withheld: withheldPlannerTools(this.child.mandate('off')) } : {}),
         ...(this.delegates ? { delegates: true } : {}),
         ...(this.subplanner ? { subplanner: true } : {}),
+        ...(this.child && !this.child.mandate('off').grants.has('research') ? { noSubagents: true } : {}),
       },
       ...(this.delegates ? { delegation: this.delegationBrief() } : {}),
       ...(this.brief ? { subplanner: this.brief } : {}),

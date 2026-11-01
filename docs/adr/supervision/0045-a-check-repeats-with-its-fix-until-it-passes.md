@@ -71,7 +71,7 @@ round *r* and round *r* + 1 the body runs once.
   and otherwise only on what the check depends on or on other tasks of its
   body; no task outside the loop depends on a body task, and the check never
   waits for its own body. A check and its body may read each other's handoffs
-  with `read_task` without adding dependency edges (ADR-0047). No task in a
+  with `read` without adding dependency edges (ADR-0047). No task in a
   loop has subtasks, since a round runs each again whole. Every route holds a loop to this: `submit_plan`,
   `edit_plan` (whose body references resolve like dependencies), the user's
   direct edits and a hand-added task. A loop written as `null` is dropped.
@@ -311,3 +311,4 @@ as check or body; a user editing a loop's `loop` field by hand from a surface.
 - 2026-10-31 — what ends a run ends the loop it carried, as a Stop does: a discard, a clean-up, a Merge all that clears the run up, the lease lost (L5).
 - 2026-11-01 — a script check marked `readOnly` runs in a worktree of its own, so L9 does not hold it at a gate (ADR-0055 D8).
 - 2026-11-01 — a new attempt of a delegated task takes its check back, and its rounds start over (L7; ADR-0055 D8).
+- 2026-11-01 — the task tool is `read` ([ADR-0057](0057-information-moves-by-reference.md) R11).

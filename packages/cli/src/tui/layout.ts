@@ -1208,9 +1208,11 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
         ? style.cyan('SCR')
         : row.kind === 'ops'
           ? style.magenta('OPS')
-          : row.research
-            ? style.cyan('RES')
-            : style.grey(' AI');
+          : row.kind === 'delegated'
+            ? style.cyan('SUB')
+            : row.research
+              ? style.cyan('RES')
+              : style.grey(' AI');
   const caret = selected ? style.brand('❯') : ' ';
 
   // A subtask row names itself by its dotted order ("2.1") and steps in under
@@ -1336,6 +1338,10 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
     }
     if (row.research) {
       lines.push(...taskText('Research', 'Read-only: it lands nothing. Its report wakes the planner when it ends.', cols, bodyPad));
+    }
+    if (row.kind === 'delegated') {
+      lines.push(...taskText('Delegated', 'Runs as a child plan of its own, in one worktree. Its log shows what its tasks do, and its report what they found.', cols, bodyPad));
+      if (task.goal) lines.push(...taskText('Goal', task.goal, cols, bodyPad));
     }
     if (row.kind === 'ops') {
       lines.push(...taskText('Ops', 'Runs in your checkout, not a worktree, once the work it depends on is merged. O makes it a change task.', cols, bodyPad));

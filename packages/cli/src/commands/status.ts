@@ -126,7 +126,7 @@ function printOneSession(
     const shortId = (t.id ?? '').slice(-8);
     const row = taskRowView({ ...t, dependencies: t.dependencies ?? [], waitsForApproval: waitsForApproval(t, record), holdReason: holds.get(t.id), loopStranded: stranded.has(t.id) }, { tasks: allTasks, runnerScope });
     const icon = iconFor(blocked.has(t.id) ? 'blocked' : goesOn(t.id) ? 'pending' : t.status);
-    console.log(`  ${taskOrderLabel(t).padStart(2)}. ${icon} [${shortId}]${row.kind === 'script' ? ' [SCR]' : row.research ? ' [RES]' : ''} ${t.title}${model}`);
+    console.log(`  ${taskOrderLabel(t).padStart(2)}. ${icon} [${shortId}]${row.kind === 'script' ? ' [SCR]' : row.kind === 'delegated' ? ' [SUB]' : row.research ? ' [RES]' : ''} ${t.title}${model}`);
     // What the user approves and what runs: the body as the plan holds it, not a summary (ADR-0035).
     if (t.type === 'script') {
       for (const line of scriptTaskText(t).split('\n')) console.log(line ? `      ${line.replace(/\t/g, '    ')}` : '');

@@ -2,8 +2,9 @@ import { EventEmitter } from 'events';
 import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredEvent, StructuredTurnEnd } from '../interfaces/IRunner';
 import type { RunnerCommand } from '../models/RunnerCommand';
 import type { Task, VerificationCheck } from '../models/Task';
-import { checkHandoff } from '../models/Handoff';
+import { checkHandoff, type HandoffCheck, type SubtreeReport } from '../models/Handoff';
 import { underProtectedPath } from '../models/Delegation';
+import type { UsageRecord } from '../models/Usage';
 import { AbstractRunner, AbstractRunnerSession, type RunnerSpawnOptions } from './AbstractRunner';
 import type { CheckpointAnswer, McpToolReply, TaskCompleteArgs } from './mcp/tools';
 
@@ -29,6 +30,9 @@ export interface NodeState {
   tasks: readonly { label: string; status: Task['status'] }[];
 }
 
+/** A subplanner's report once Ordewell has read what it names (ADR-0057 R2). */
+export type TakenReport = TaskCompleteArgs & { subtree?: SubtreeReport };
+
 /** The child, as its attempt drives it: nothing of the Session it is, or of a surface. */
 export interface ChildNode {
   readonly sessionId: string;
@@ -41,6 +45,8 @@ export interface ChildNode {
   startPlanning(goal: string): Promise<unknown>;
   continueConversation(text: string): Promise<unknown>;
   state(): NodeState;
+  /** A report held to its plan and subtree, its references pinned and what crosses a level read verbatim (ADR-0057 R1, R2). */
+  takeReport(report: TaskCompleteArgs): HandoffCheck<TakenReport>;
   /** End its run and its planner turn. Resolves once nothing of either is left. */
   halt(): Promise<void>;
   /** Let its Session go. */
@@ -53,6 +59,8 @@ export interface SubplannerLink {
   checkpoint(question: string): McpToolReply;
   /** Something changed that a verdict or the completion reminder may read. */
   changed(): void;
+  /** What its planner or a task spent, as it arrives: charged where it was spent, and rolled up to each level for its row (ADR-0055 D20). */
+  usage(record: UsageRecord): void;
 }
 
 /** The parent, as a child's attempt needs it. */
@@ -63,6 +71,8 @@ export interface ChildHost {
   changedPaths(taskId: string): Promise<string[]>;
   /** The child is gone: what it did not spend comes back (ADR-0056 M5). By its id, since its task's record may have gone with a landing. */
   closeNode(sessionId: string): Promise<void>;
+  /** Usage on its way up the tree, past this level's row. */
+  passUp(record: UsageRecord): void;
 }
 
 /** Once per attempt: a subplanner told this has no second turn to end without the call (ADR-0055 D6). */
@@ -78,6 +88,14 @@ const QUESTION_WAITS = 'Your last question has no answer yet: end your turn, and
 function answerText(answer: Exclude<CheckpointAnswer, { kind: 'withdrawn' }>): string {
   if (answer.kind === 'rejected') return `The plan above answered your question: rejected. ${answer.reason}`;
   return `The plan above answered your question: approved, so go on.${answer.note ? ` ${answer.note}` : ''}`;
+}
+
+/** How many paths a report names of what its branch changed outside its scope. */
+const OUTSIDE_SCOPE_PATHS = 20;
+
+/** A child's usage as its delegated task's row reads it: spend, with no context meter, which is one session's and says nothing of a subtree. */
+function rolledUp({ contextWindow: _window, contextTokens: _tokens, ...spend }: UsageRecord): UsageRecord {
+  return spend;
 }
 
 /** How long a `task_complete` waits for the turn that made it to close before it is published anyway. */
@@ -142,6 +160,10 @@ export class ChildPlanSession extends AbstractRunnerSession {
         taskComplete: (report) => this.taskComplete(report),
         checkpoint: (question) => this.checkpoint(question),
         changed: () => this.queueCheck(),
+        usage: (record) => {
+          this.emitEvent({ type: 'usage', record: rolledUp(record) });
+          host.passUp(record);
+        },
       });
     } catch (err) {
       // Refused, not failed: nothing ran, and what can be changed is the plan above (ADR-0056 M4).
@@ -248,9 +270,11 @@ export class ChildPlanSession extends AbstractRunnerSession {
     }
   }
 
+  /** In its output and its log alike: what a person opens the task to read is this. */
   private print(text: string): void {
     this.output += text;
     this.outputEmitter.emit('output', text);
+    this.emitEvent({ type: 'assistant_text', runId: this.id, text });
   }
 
   /**
@@ -261,8 +285,8 @@ export class ChildPlanSession extends AbstractRunnerSession {
    */
   private async taskComplete(report: TaskCompleteArgs): Promise<McpToolReply> {
     if (this.ended || this.accepted || this.stopping) return { text: 'This attempt has ended: nothing was recorded.', isError: true };
-    // Its references resolve in its own plan (ADR-0057 R1), which comes with reports by reference: until then it may cite none.
-    const checked = checkHandoff(report, this.taskId, []);
+    // Its references resolve in its own plan and what is below it, never the parent's (ADR-0057 R1).
+    const checked: HandoffCheck<TakenReport> = this.node?.takeReport(report) ?? checkHandoff(report, this.taskId, []);
     if (!checked.ok) return { text: checked.refusal, isError: true };
     let refuted: VerificationCheck | undefined;
     if (checked.handoff.status === 'done') {
@@ -270,8 +294,11 @@ export class ChildPlanSession extends AbstractRunnerSession {
       if (refusal) return { text: refusal, isError: true };
       refuted = await this.protectedPathsTouched();
     }
+    const outsideScope = await this.outsideScope();
     if (this.ended || this.accepted || this.stopping) return { text: 'This attempt has ended: nothing was recorded.', isError: true };
-    this.accepted = { report: checked.handoff, ...(refuted ? { refuted } : {}) };
+    const { subtree } = checked.handoff;
+    const taken = subtree && outsideScope ? { ...checked.handoff, subtree: { ...subtree, outsideScope } } : checked.handoff;
+    this.accepted = { report: taken, ...(refuted ? { refuted } : {}) };
     this.emitEvent({ type: 'completion_received', status: checked.handoff.status });
     // The runner ends its turn on this reply; one that keeps it open is published at this grace.
     this.graceTimer = setTimeout(() => this.publish(), COMPLETION_GRACE_MS);
@@ -318,6 +345,20 @@ export class ChildPlanSession extends AbstractRunnerSession {
     return { name: 'protected_paths', passed: false, skipped: false, detail: `The child plan changed protected paths, so its work does not land: ${touched.join(', ')}.` };
   }
 
+  /**
+   * What its branch changed past the scope its parent declared (ADR-0056 M7),
+   * for the parent to decide: scopes are advisory, so this goes in the report
+   * and refuses nothing. A read-only task lands nothing to say this of.
+   */
+  private async outsideScope(): Promise<SubtreeReport['outsideScope']> {
+    const { task, host } = this.setup;
+    const scope = task.scope?.paths;
+    if (!scope?.length || task.readOnly) return undefined;
+    const changed = await host.changedPaths(this.taskId).catch(() => []);
+    const outside = changed.filter((file) => !scope.some((rule) => underProtectedPath(file, rule)));
+    return outside.length > 0 ? { paths: outside.slice(0, OUTSIDE_SCOPE_PATHS), count: outside.length } : undefined;
+  }
+
   private publish(): void {
     const accepted = this.accepted;
     if (!accepted || this.ended) return;
@@ -331,7 +372,9 @@ export class ChildPlanSession extends AbstractRunnerSession {
   /** An end no subplanner reported: its handoff is what the plan and run show, and the verdict comes from there. */
   private end(status: 'blocked' | 'failed', why: string): void {
     if (this.ended || this.accepted) return;
-    this.accepted = { report: { status, summary: why.slice(0, 1500), reason: why } };
+    const report: TaskCompleteArgs = { status, summary: why.slice(0, 1500), reason: why };
+    const taken = this.node?.takeReport(report);
+    this.accepted = { report: taken?.ok ? taken.handoff : report };
     this.publish();
   }
 

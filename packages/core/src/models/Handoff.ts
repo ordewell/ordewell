@@ -36,7 +36,7 @@ export function worstSeverity(findings: readonly Pick<HandoffFinding, 'severity'
   return worst;
 }
 
-/** The plan a pinned reference is under while every plan is the root's (ADR-0057 R1). */
+/** The root's plan: the node a pinned reference is under until a plan below names its own (ADR-0057 R1). */
 export const ROOT_NODE = 'root';
 
 /**
@@ -51,8 +51,22 @@ export const ROOT_NODE = 'root';
 export type HandoffEvidence =
   | { kind: 'file'; path: string; line?: number; resolved?: boolean }
   | { kind: 'commit'; sha: string; repo?: string; resolved?: boolean }
-  | { kind: 'task'; node?: string; task: string; attempt?: number; finding?: string }
+  | TaskEvidence
   | { kind: 'url'; url: string };
+
+/**
+ * `label` is how the task's own plan names it, kept once a reference has
+ * crossed a level: a reader in another plan has no plan to name it from, and a
+ * task id can repeat between plans, so no plan names one that has it.
+ */
+export interface TaskEvidence {
+  kind: 'task';
+  node?: string;
+  task: string;
+  attempt?: number;
+  finding?: string;
+  label?: string;
+}
 
 /**
  * What a saved patch does not carry as the task's worktree held it
@@ -115,6 +129,33 @@ export interface HandoffCommit {
   body?: string;
 }
 
+/** A finding as it crossed a level (ADR-0057 R2): its author's words, by the reference that names it. A subplanner's own has none. */
+export interface ReportItem {
+  ref?: TaskEvidence;
+  finding: HandoffFinding;
+}
+
+/**
+ * What a delegated task's report carries past any task's (ADR-0057 R2). All of
+ * it comes from Ordewell, the findings by reference, so what a subplanner left
+ * out shows and it cannot have reworded what it passes on. It is read once, as
+ * the report is taken, so the renderer stays a pure function of the digest:
+ * references are pinned, so the words cannot have moved.
+ */
+export interface SubtreeReport {
+  /** The child plan's node: what a read of this report's subtree starts from. */
+  node: string;
+  counts: { done: number; failed: number; blocked: number; skipped: number; commits: number; tokens: number };
+  /** Every finding below, by severity, read from the latest attempt of each task. */
+  findings: Record<FindingSeverity, number>;
+  /** What the parent must decide. */
+  open: ReportItem[];
+  /** What the subplanner passed up. */
+  promoted: ReportItem[];
+  /** What its branch changed outside its declared scope, first paths and how many (ADR-0056 M7). */
+  outsideScope?: { paths: string[]; count: number };
+}
+
 /** What the plan keeps on a task: enough for a surface or a dependent's prompt without reading a log. */
 export interface HandoffDigest {
   commit?: HandoffCommit;
@@ -125,6 +166,8 @@ export interface HandoffDigest {
   artifacts?: HandoffArtifact[];
   /** The attempt it is from, which a reference to it is pinned to (ADR-0057 R1); absent on a plan saved before it was kept. */
   attempt?: number;
+  /** A delegated task's: what Ordewell derived of its subtree. */
+  subtree?: SubtreeReport;
 }
 
 /** The whole handoff, as the attempt's log keeps it. */
@@ -141,6 +184,7 @@ export interface Handoff {
   findings?: Omit<HandoffFinding, 'id'>[];
   artifacts?: HandoffArtifact[];
   report?: string;
+  subtree?: SubtreeReport;
 }
 
 /** The most a report keeps: whole findings fit, and a runaway one does not bloat the files that hold it. */
@@ -155,6 +199,7 @@ export const HANDOFF_LIMITS = {
   commitSubject: 100,
   commitBody: 500,
   findings: 50,
+  promoted: 8,
   title: 200,
   detail: 2_000,
   reference: 2_000,
@@ -182,6 +227,7 @@ export function storedHandoff(handoff: Handoff): StoredHandoff | undefined {
     findingCount: findings.length,
     ...(artifacts.length > 0 ? { artifacts } : {}),
     ...(report ? { report } : {}),
+    ...(handoff.subtree ? { subtree: handoff.subtree } : {}),
   };
 }
 
@@ -231,6 +277,7 @@ export function handoffDigest(handoff: StoredHandoff): HandoffDigest {
     findingCount: handoff.findingCount,
     ...(handoff.artifacts ? { artifacts: handoff.artifacts } : {}),
     ...(handoff.attempt !== undefined ? { attempt: handoff.attempt } : {}),
+    ...(handoff.subtree ? { subtree: handoff.subtree } : {}),
   };
 }
 
@@ -239,7 +286,7 @@ export type HandoffTaskName = (taskId: string) => string | undefined;
 
 /** A handoff with the tasks it cites named by their references in `plan`, as a reader names them. */
 export function namedHandoff<H extends HandoffDigest>(plan: readonly Task[], handoff: H): H {
-  const named = <R extends HandoffArtifact>(refs: readonly R[]) => refs.map((r) => (r.kind === 'task' ? { ...r, task: taskRefOf(plan, r.task) ?? r.task } : r));
+  const named = <R extends HandoffArtifact>(refs: readonly R[]) => refs.map((r) => (r.kind === 'task' && r.label === undefined ? { ...r, task: taskRefOf(plan, r.task) ?? r.task } : r));
   return {
     ...handoff,
     findings: handoff.findings.map((f) => (f.evidence ? { ...f, evidence: named(f.evidence) } : f)),
@@ -255,6 +302,19 @@ export interface WrittenTaskRef {
 }
 
 const WRITTEN_REF = /^(.+?)(?:@([1-9][0-9]*))?(?:\/(F[1-9][0-9]*))?$/s;
+
+const PLAN_PATH = /^([1-9][0-9]*(?:\/[1-9][0-9]*)*):(.+)$/s;
+
+/** The plan a written reference names below this one, `3/2:#4@2/F3`, and the rest as a plan reads it (ADR-0057 R1). */
+export function parsePlanPath(written: string): { path: string; rest: string } | undefined {
+  const [, path, rest] = PLAN_PATH.exec(written) ?? [];
+  return path === undefined ? undefined : { path, rest };
+}
+
+/** A node's path as a reader writes it: `root/3/2` is `3/2`. */
+export function nodeText(node: string): string {
+  return node.startsWith(`${ROOT_NODE}/`) ? node.slice(ROOT_NODE.length + 1) : node;
+}
 
 /**
  * The parts of a written reference, its task as written. What this cuts off
@@ -289,12 +349,11 @@ export function resolveWrittenRef(plan: readonly Task[], written: string): (Omit
  * reference naming no attempt takes the newest one cited. `asked` is an attempt
  * given apart from the text. Undefined when nothing it may read cites one.
  */
-export function removedAttempt(plan: readonly Task[], readerId: string, logs: HandoffLogs, written: string, asked?: number): { taskId: string; attempt: number; finding?: string } | undefined {
+export function removedAttempt(plan: readonly Task[], readable: ReadonlySet<string>, logs: HandoffLogs, written: string, asked?: number): { taskId: string; attempt: number; finding?: string } | undefined {
   const { task: taskId, attempt, finding } = parseFindingRef(written);
   const saved = logs.attempts(taskId);
   const latest = saved.at(-1);
   if (latest === undefined) return undefined;
-  const readable = readableTaskIds(plan, readerId);
   const cited = flattenTasks(plan).filter((t) => readable.has(t.id)).flatMap((t) => citedAttempts(t, taskId, latest, logs));
   const reached = asked ?? attempt ?? Math.max(...cited);
   if (!cited.includes(reached) || !saved.includes(reached)) return undefined;
@@ -318,7 +377,7 @@ export function handoffReferenceText(ref: HandoffArtifact, taskName: HandoffTask
   switch (ref.kind) {
     case 'file': return `${ref.line !== undefined ? `${ref.path}:${ref.line}` : ref.path}${ref.resolved === true ? '' : ' (unresolved)'}`;
     case 'commit': return `commit ${ref.sha}${ref.repo ? ` in ${ref.repo}` : ''}${ref.resolved === true ? '' : ' (unresolved)'}`;
-    case 'task': return findingRefText(taskName(ref.task) ?? ref.task, ref);
+    case 'task': return findingRefText(ref.label !== undefined ? `${nodeText(ref.node ?? ROOT_NODE)}:${ref.label}` : taskName(ref.task) ?? ref.task, ref);
     case 'url': return ref.url;
     case 'patch': return patchText(ref);
   }
@@ -456,8 +515,74 @@ export function wordsFrom(what: string, whose: string): string {
 /** Each pushed handoff's text ceiling, excluding artifacts (ADR-0047). */
 export const HANDOFF_PUSH_CHARS = 4_000;
 
+const SEVERITIES: readonly FindingSeverity[] = ['blocker', 'major', 'minor', 'info'];
+
+/** What Ordewell derived of a subtree, as one line. */
+function subtreeCountLine({ counts: { done, failed, blocked, skipped, commits, tokens } }: SubtreeReport): string {
+  return `Subtree: ${done} done, ${failed} failed, ${blocked} blocked, ${skipped} skipped; ${counted(commits, 'commit')}; ${tokens} tokens.`;
+}
+
+/** The subtree's findings by severity, and how many of each show below: what a subplanner left out shows without a pull. */
+function subtreeFindingLine(subtree: SubtreeReport, shown: readonly ReportItem[]): string {
+  const parts = SEVERITIES.filter((severity) => subtree.findings[severity] > 0)
+    .map((severity) => `${subtree.findings[severity]} ${severity} (${shown.filter((item) => item.ref && item.finding.severity === severity).length} shown)`);
+  return `Findings below: ${parts.length > 0 ? parts.join(', ') : 'none'}.`;
+}
+
+/** Its author's reference over its words: never reworded, and answerable to that author and not to whoever passed it on (ADR-0057 R3). */
+function reportItemLines({ ref, finding }: ReportItem, taskName: HandoffTaskName): string[] {
+  return findingLines({ ...finding, id: ref ? handoffReferenceText(ref) : finding.id }, taskName);
+}
+
+const OPEN_HEADING = 'Open, for you to decide (each in its author\'s words):';
+const PROMOTED_HEADING = 'Promoted (each in its author\'s words):';
+
+function outsideScopeLine({ paths, count }: NonNullable<SubtreeReport['outsideScope']>): string {
+  return `- Changed outside its scope (from Ordewell): ${paths.join(', ')}${count > paths.length ? `, +${count - paths.length} more` : ''}.`;
+}
+
+/** Each section of what a report names, whole items of it in order: what is open comes first, since a cut leaves what matters least out. */
+function reportSections(handoff: HandoffDigest, subtree: SubtreeReport): { heading: string; items: ReportItem[] }[] {
+  const opened = new Set(subtree.open.flatMap((item) => (item.ref ? [] : [item.finding.id])));
+  return [
+    { heading: OPEN_HEADING, items: subtree.open },
+    { heading: PROMOTED_HEADING, items: subtree.promoted },
+    { heading: 'Findings:', items: handoff.findings.filter((f) => !opened.has(f.id)).map((finding) => ({ finding })) },
+  ];
+}
+
+/** A delegated task's report within the same ceiling as any handoff (ADR-0057 R2), so a parent's context depends on its fan-out and not on its subtree. */
+function boundedReportLines(handoff: HandoffDigest, subtree: SubtreeReport, omission: (more: number) => string, taskName: HandoffTaskName, footer: string): string[] {
+  const sections = reportSections(handoff, subtree);
+  const scope = subtree.outsideScope ? [outsideScopeLine(subtree.outsideScope)] : [];
+  const heads = (shown: readonly ReportItem[]) => [subtreeCountLine(subtree), subtreeFindingLine(subtree, shown)];
+  // Every item shown is the widest this line can be, so what fits here still fits with the counts it ends on.
+  const widest = heads(sections.flatMap((section) => section.items));
+  const items = sections.reduce((sum, { items: listed }) => sum + listed.length, 0) + handoff.findingCount - sections[2].items.length - subtree.open.filter((item) => !item.ref).length;
+  const body = [...openingLines(handoff), ...(scope.length > 0 ? ['', OPEN_HEADING, ...scope] : [])];
+  const shown: ReportItem[] = [];
+  const closing = (count: number) => [...(items > count ? [omission(items - count)] : []), ...(footer ? ['', footer] : [])];
+  let full = false;
+  for (const { heading, items: listed } of sections) {
+    let opened = heading === OPEN_HEADING && scope.length > 0;
+    for (const item of listed) {
+      const next = [...(opened ? [] : ['', heading]), ...reportItemLines(item, taskName)];
+      if (full || [...widest, ...body, ...next, ...closing(shown.length + 1)].join('\n').length > HANDOFF_PUSH_CHARS) {
+        full = true;
+        break;
+      }
+      body.push(...next);
+      shown.push(item);
+      opened = true;
+    }
+  }
+  const artifacts = artifactLines(handoff, taskName);
+  return [...heads(shown), ...body, ...closing(shown.length), ...(artifacts.length ? ['', ...artifacts] : [])];
+}
+
 /** Shared push rendering: reserve the closing pointer before accepting each whole finding. */
 export function boundedHandoffLines(handoff: HandoffDigest, omission: (more: number) => string, taskName: HandoffTaskName = () => undefined, footer = ''): string[] {
+  if (handoff.subtree) return boundedReportLines(handoff, handoff.subtree, omission, taskName, footer);
   const lines = openingLines(handoff);
   let shown = 0;
   const closing = (count: number) => [
@@ -500,6 +625,7 @@ export function handoffPreviewLines(handoff: HandoffDigest, options: HandoffPrev
   const others = (handoff.artifacts ?? []).filter((a) => a.kind !== 'patch');
   const artifacts = others.length ? artifactLines({ ...handoff, artifacts: others }, options.taskName) : [];
   return [
+    ...(handoff.subtree ? [subtreeCountLine(handoff.subtree)] : []),
     ...(commit ? [`Commit: ${commit.subject}`, ...(commit.body ? commit.body.split('\n') : [])] : []),
     ...(summary ? summary.split('\n') : []),
     ...shown.map((f) => `${f.id} [${f.severity}] ${f.title}`),
@@ -527,8 +653,15 @@ export function handoffWakeLines(handoff: HandoffDigest, taskName: HandoffTaskNa
  * when it has one.
  */
 export function handoffLines(handoff: HandoffDigest | StoredHandoff, taskName: HandoffTaskName = () => undefined): string[] {
-  const lines = openingLines(handoff);
-  if (handoff.findings.length > 0) lines.push('', 'Findings:', ...handoff.findings.flatMap((f) => findingLines(f, taskName)));
+  const { subtree } = handoff;
+  const lines = [...(subtree ? [subtreeCountLine(subtree), subtreeFindingLine(subtree, [...subtree.open, ...subtree.promoted])] : []), ...openingLines(handoff)];
+  if (subtree) {
+    const scope = subtree.outsideScope ? [outsideScopeLine(subtree.outsideScope)] : [];
+    for (const { heading, items } of reportSections(handoff, subtree)) {
+      const listed = [...(heading === OPEN_HEADING ? scope : []), ...items.flatMap((item) => reportItemLines(item, taskName))];
+      if (listed.length > 0) lines.push('', heading, ...listed);
+    }
+  } else if (handoff.findings.length > 0) lines.push('', 'Findings:', ...handoff.findings.flatMap((f) => findingLines(f, taskName)));
   const more = handoff.findingCount - handoff.findings.length;
   if (more > 0) lines.push(`+${more} more finding${more === 1 ? '' : 's'}, in the attempt's log`);
   const artifacts = artifactLines(handoff, taskName);
@@ -575,6 +708,110 @@ export interface HandoffPins {
   logs?: HandoffLogs;
   /** The attempt making the call: what a task naming itself is pinned to. */
   attempt?: number;
+  /** The plan these references are pinned under. Absent, the root's. */
+  node?: string;
+  /** What the producer may cite in `plan`, for one the plan's graph cannot give it: a subplanner, the plan below its own delegated task, is in none of its tasks' graphs. */
+  readable?: ReadonlySet<string>;
+  /** The plan at a path below this one that the producer may read; undefined for one it may not, or that is not there. */
+  below?: (path: string) => BelowPlan | undefined;
+  /** The handoff goes up a level, so what it cites keeps the name its plan gives it. */
+  crossing?: true;
+}
+
+/** A plan of the subtree, as a reference reads it. */
+export interface BelowPlan {
+  node: string;
+  tasks: readonly Task[];
+  logs: HandoffLogs;
+}
+
+/** Where a reference is read: a plan, and what the producer may read of it. */
+interface ReferenceScope {
+  plan: readonly Task[];
+  readable: ReadonlySet<string>;
+  logs?: HandoffLogs;
+  node: string;
+  /** Keep the task's own name: what names it here is no name where it is read. */
+  crossing: boolean;
+}
+
+/** A reference pinned, or nothing where the refusal said why. */
+function pinIn(scope: ReferenceScope, producer: { id: string; attempt?: number; findings: number }, ref: TaskEvidence, written: string, field: string, refuse: (why: string) => void): TaskEvidence | undefined {
+  const { plan, readable, logs, node, crossing } = scope;
+  const kept = (taskId: string) => (crossing ? taskRefOf(plan, taskId) ?? taskId : undefined);
+  const labelled = (taskId: string) => {
+    const label = kept(taskId);
+    return label === undefined ? {} : { label };
+  };
+  /** Whichever the text and the field name, or a refusal when they name two. */
+  const oneFinding = (inText: string | undefined): { finding: string | undefined } | null => {
+    if (inText && ref.finding && inText !== ref.finding) {
+      refuse(`${field}.finding: ${JSON.stringify(written)} and ${JSON.stringify(ref.finding)} name ${inText} and ${ref.finding}: give one finding.`);
+      return null;
+    }
+    return { finding: inText ?? ref.finding };
+  };
+  const resolved = resolveWrittenRef(plan, written);
+  if (!resolved) {
+    const removed = logs && removedAttempt(plan, readable, logs, written);
+    if (!removed) {
+      refuse(`${field}.task: ${JSON.stringify(written)} names no task in the plan: give its "#order", its id or its title.`);
+      return undefined;
+    }
+    const given = oneFinding(removed.finding);
+    if (!given) return undefined;
+    const count = logs?.handoff(removed.taskId, removed.attempt)?.findingCount ?? 0;
+    if (given.finding !== undefined && Number(given.finding.slice(1)) > count) {
+      refuse(`${field}.finding: ${JSON.stringify(given.finding)} is not a finding of removed task ${removed.taskId}: its attempt ${removed.attempt} has ${count > 0 ? `F1 to F${count}` : 'none'}.`);
+    }
+    return { kind: 'task', node, task: removed.taskId, attempt: removed.attempt, ...(given.finding !== undefined ? { finding: given.finding } : {}), ...labelled(removed.taskId) };
+  }
+  const target = resolved.task;
+  const named = titledTaskRefOf(plan, target.id) ?? target.id;
+  if (!readable.has(target.id)) {
+    refuse(`${field}.task: ${JSON.stringify(written)} is ${named}, which this task may not read: only itself, a task it depends on, or its loop's other end.`);
+    return undefined;
+  }
+  const given = oneFinding(resolved.finding);
+  if (!given) return undefined;
+  const { finding } = given;
+  const latest = target.handoff?.attempt ?? (target.handoff ? logs?.attempts(target.id).at(-1) : undefined);
+  // A task naming itself means the attempt making the call and the handoff it is writing, whatever an earlier one left on the plan.
+  const own = target.id === producer.id && producer.attempt !== undefined && (resolved.attempt ?? producer.attempt) === producer.attempt;
+  const attempt = own ? producer.attempt : resolved.attempt ?? latest;
+  const held = resolved.attempt === undefined || resolved.attempt === latest ? target.handoff : logs?.handoff(target.id, resolved.attempt);
+  if (!own && resolved.attempt !== undefined && resolved.attempt !== latest && !logs?.attempts(target.id).includes(resolved.attempt)) {
+    refuse(`${field}.task: ${named} has no saved attempt ${resolved.attempt}.`);
+    return undefined;
+  }
+  if (finding !== undefined) {
+    const count = own ? producer.findings : held?.findingCount ?? 0;
+    const whose = own ? 'this handoff' : resolved.attempt === undefined ? 'its latest handoff' : `its attempt ${resolved.attempt}`;
+    if (Number(finding.slice(1)) > count) {
+      refuse(`${field}.finding: ${JSON.stringify(finding)} is not a finding of ${named}: ${count > 0 ? `${whose} has F1 to F${count}` : `${whose} has none`}.`);
+    }
+  }
+  return { kind: 'task', node, task: target.id, ...(attempt !== undefined ? { attempt } : {}), ...(finding !== undefined ? { finding } : {}), ...labelled(target.id) };
+}
+
+/**
+ * One written reference pinned, in the producer's plan or a plan below it:
+ * the text is tried whole first, since a title may read like a path.
+ */
+export function pinReference(plan: readonly Task[], producerId: string, pins: HandoffPins, ref: TaskEvidence, field: string, findings: number, refuse: (why: string) => void): TaskEvidence | undefined {
+  const producer = { id: producerId, ...(pins.attempt !== undefined ? { attempt: pins.attempt } : {}), findings };
+  const across = pins.below && !resolveWrittenRef(plan, ref.task) ? parsePlanPath(ref.task) : undefined;
+  if (across) {
+    const lower = pins.below?.(across.path);
+    if (!lower) {
+      refuse(`${field}.task: ${JSON.stringify(ref.task)} names no plan below this one: give the path a report shows, as "2:#4/F3".`);
+      return undefined;
+    }
+    const tasks = flattenTasks(lower.tasks).map((t) => t.id);
+    return pinIn({ plan: lower.tasks, readable: new Set(tasks), logs: lower.logs, node: lower.node, crossing: true }, producer, ref, across.rest, field, refuse);
+  }
+  const scope: ReferenceScope = { plan, readable: pins.readable ?? readableTaskIds(plan, producerId), node: pins.node ?? ROOT_NODE, crossing: pins.crossing === true, ...(pins.logs ? { logs: pins.logs } : {}) };
+  return pinIn(scope, producer, ref, ref.task, field, refuse);
 }
 
 /**
@@ -591,63 +828,15 @@ export interface HandoffPins {
  * what it read can be passed on ({@link removedAttempt}).
  */
 export function checkHandoff<H extends Handoff>(handoff: H, producerId: string, plan: readonly Task[], pins: HandoffPins = {}): HandoffCheck<H> {
-  const readable = readableTaskIds(plan, producerId);
   const refusals: string[] = [];
+  const refuse = (why: string) => { refusals.push(why); };
   const check = (ref: HandoffEvidence, field: string): HandoffEvidence => {
     if (ref.kind === 'url') {
       if (!isWebUrl(ref.url)) refusals.push(`${field}.url: ${JSON.stringify(ref.url)} is refused: only an http or https URL is accepted.`);
       return ref;
     }
     if (ref.kind !== 'task') return ref;
-    /** Whichever the text and the field name, or a refusal when they name two. */
-    const oneFinding = (inText: string | undefined): { finding: string | undefined } | null => {
-      if (inText && ref.finding && inText !== ref.finding) {
-        refusals.push(`${field}.finding: ${JSON.stringify(ref.task)} and ${JSON.stringify(ref.finding)} name ${inText} and ${ref.finding}: give one finding.`);
-        return null;
-      }
-      return { finding: inText ?? ref.finding };
-    };
-    const written = resolveWrittenRef(plan, ref.task);
-    if (!written) {
-      const removed = pins.logs && removedAttempt(plan, producerId, pins.logs, ref.task);
-      if (!removed) {
-        refusals.push(`${field}.task: ${JSON.stringify(ref.task)} names no task in the plan: give its "#order", its id or its title.`);
-        return ref;
-      }
-      const given = oneFinding(removed.finding);
-      if (!given) return ref;
-      const count = pins.logs?.handoff(removed.taskId, removed.attempt)?.findingCount ?? 0;
-      if (given.finding !== undefined && Number(given.finding.slice(1)) > count) {
-        refusals.push(`${field}.finding: ${JSON.stringify(given.finding)} is not a finding of removed task ${removed.taskId}: its attempt ${removed.attempt} has ${count > 0 ? `F1 to F${count}` : 'none'}.`);
-      }
-      return { kind: 'task', node: ROOT_NODE, task: removed.taskId, attempt: removed.attempt, ...(given.finding !== undefined ? { finding: given.finding } : {}) };
-    }
-    const target = written.task;
-    const named = titledTaskRefOf(plan, target.id) ?? target.id;
-    if (!readable.has(target.id)) {
-      refusals.push(`${field}.task: ${JSON.stringify(ref.task)} is ${named}, which this task may not read: only itself, a task it depends on, or its loop's other end.`);
-      return ref;
-    }
-    const given = oneFinding(written.finding);
-    if (!given) return ref;
-    const { finding } = given;
-    const latest = target.handoff?.attempt ?? (target.handoff ? pins.logs?.attempts(target.id).at(-1) : undefined);
-    // A task naming itself means the attempt making the call and the handoff it is writing, whatever an earlier one left on the plan.
-    const own = target.id === producerId && pins.attempt !== undefined && (written.attempt ?? pins.attempt) === pins.attempt;
-    const attempt = own ? pins.attempt : written.attempt ?? latest;
-    const held = written.attempt === undefined || written.attempt === latest ? target.handoff : pins.logs?.handoff(target.id, written.attempt);
-    if (!own && written.attempt !== undefined && written.attempt !== latest && !pins.logs?.attempts(target.id).includes(written.attempt)) {
-      refusals.push(`${field}.task: ${named} has no saved attempt ${written.attempt}.`);
-      return ref;
-    }
-    if (finding !== undefined) {
-      const count = own ? handoff.findings?.length ?? 0 : held?.findingCount ?? 0;
-      const whose = own ? 'this handoff' : written.attempt === undefined ? 'its latest handoff' : `its attempt ${written.attempt}`;
-      if (Number(finding.slice(1)) > count) {
-        refusals.push(`${field}.finding: ${JSON.stringify(finding)} is not a finding of ${named}: ${count > 0 ? `${whose} has F1 to F${count}` : `${whose} has none`}.`);
-      }
-    }
-    return { kind: 'task', node: ROOT_NODE, task: target.id, ...(attempt !== undefined ? { attempt } : {}), ...(finding !== undefined ? { finding } : {}) };
+    return pinReference(plan, producerId, pins, ref, field, handoff.findings?.length ?? 0, refuse) ?? ref;
   };
   const findings = handoff.findings?.map((f, i) => (f.evidence ? { ...f, evidence: f.evidence.map((e, j) => check(e, `findings[${i}].evidence[${j}]`)) } : f));
   const artifacts = handoff.artifacts?.map((a, i) => (a.kind === 'patch' ? a : check(a, `artifacts[${i}]`)));

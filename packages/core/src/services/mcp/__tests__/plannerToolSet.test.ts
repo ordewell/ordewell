@@ -19,12 +19,12 @@ describe('the planner tool set', () => {
     expect(submitType(toolListing(PLANNER_TOOLS))).toEqual(['ai', 'user', 'script']);
   });
 
-  it('takes a delegated task in submit_plan and a raise in answer_checkpoint only where one may be written, and changes no other tool', () => {
+  it('takes a delegated task in submit_plan and a raise in answer_checkpoint only where one may be written, adds `read`, and changes no other tool', () => {
     const on = listOf(true, false);
     expect(submitType(on)).toEqual(['ai', 'user', 'script', 'delegated']);
     const flat = toolListing(PLANNER_TOOLS);
-    expect(on.map((t) => t.name)).toEqual(flat.map((t) => t.name));
-    const others = (tools: typeof flat) => tools.filter((t) => t.name !== 'submit_plan' && t.name !== 'answer_checkpoint');
+    expect(on.map((t) => t.name)).toEqual([...flat.map((t) => t.name), 'read']);
+    const others = (tools: typeof flat) => tools.filter((t) => t.name !== 'submit_plan' && t.name !== 'answer_checkpoint' && t.name !== 'read');
     expect(others(on)).toEqual(others(flat));
     const raise = (tools: typeof flat) => JSON.stringify(tools.find((t) => t.name === 'answer_checkpoint')).includes('raiseTokens');
     expect([raise(on), raise(flat)]).toEqual([true, false]);

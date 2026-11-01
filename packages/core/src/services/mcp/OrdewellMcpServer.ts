@@ -4,7 +4,7 @@ import { Server as McpProtocolServer } from '@modelcontextprotocol/sdk/server/in
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, CancelledNotificationSchema, ErrorCode, ListToolsRequestSchema, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { extractPresentedToken } from '../../utils/daemonToken';
-import { PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, SUBPLANNER_TOOLS, TASK_TOOLS, plannerToolSet, toolListing, type McpTool, type PlannerToolHandler, type TaskToolHandler } from './tools';
+import { PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, TASK_TOOLS, plannerToolSet, toolListing, type McpTool, type PlannerToolHandler, type TaskToolHandler } from './tools';
 
 /**
  * The Ordewell MCP server (ADR-0022): one loopback listener per process,
@@ -59,7 +59,7 @@ export interface McpCredential {
   token: string;
   /** The planner tools the token hides ({@link PlannerTokenScope.hidden}), so the runner is told of and pre-allows only what it is served. */
   hidden?: readonly string[];
-  /** Tools it serves past a planner's, by their names on the server: a subplanner's (ADR-0055 D5). */
+  /** Tools it serves past a flat planner's, by their names on the server: a subplanner's (ADR-0055 D5), and `read` where it may delegate (ADR-0057 R11). */
   extraTools?: readonly string[];
   /** The token serves a read-only task's tools ({@link TaskTokenScope.readOnly}), so the runner is told of and pre-allows `run_command`, `fetch` and `web_search`. */
   readOnly?: true;
@@ -137,10 +137,11 @@ export class OrdewellMcpServer {
   async issuePlannerToken(scope: PlannerTokenScope, handler: PlannerToolHandler = {}): Promise<McpCredential> {
     const hidden = [...(scope.hidden ?? [])];
     const credential = await this.issue({ role: 'planner', scope: { ...scope, hidden }, handler, revoked: new AbortController(), calls: new Map() });
+    const extraTools = plannerToolSet(scope).map((tool) => tool.name).filter((name) => !PLANNER_TOOLS.some((tool) => tool.name === name));
     return {
       ...credential,
       ...(hidden.length > 0 ? { hidden } : {}),
-      ...(scope.subplanner ? { extraTools: SUBPLANNER_TOOLS.map((tool) => tool.name) } : {}),
+      ...(extraTools.length > 0 ? { extraTools } : {}),
     };
   }
 
@@ -323,7 +324,7 @@ function serveTools<H>(mcp: McpProtocolServer, tools: readonly McpTool<H>[], inv
 
   mcp.setRequestHandler(ListToolsRequestSchema, () => ({ tools: toolListing(tools) }));
   mcp.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
-    const tool = tools.find((t) => t.name === request.params.name);
+    const tool = tools.find((t) => t.name === request.params.name || t.alias === request.params.name);
     if (!tool) throw new McpError(ErrorCode.InvalidParams, unknownToolMessage(request.params.name, inventory));
     const progressToken = request.params._meta?.progressToken;
     const id = String(extra.requestId);

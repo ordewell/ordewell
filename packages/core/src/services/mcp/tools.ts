@@ -72,6 +72,17 @@ const taskCompleteInput = z.object({
     .describe(`The long form, for a reader who needs it all: kept with this attempt and read only on demand, never put in another task's prompt. At most ${HANDOFF_LIMITS.report} characters.`),
 });
 
+const reportReferences = (what: string, max: number) => z.array(z.string().min(1).max(HANDOFF_LIMITS.reference)).max(max).optional().describe(what);
+
+/** A subplanner's report (ADR-0057 R2): it passes a finding up only by reference, so nothing is reworded on the way, and only its token takes these. */
+const subplannerCompleteInput = taskCompleteInput.extend({
+  promote: reportReferences(`At most ${HANDOFF_LIMITS.promoted} findings of your subtree to pass up, each rendered in its author's words: "#4/F3", or "2:#4/F3" in a plan below, as a report shows it.`, HANDOFF_LIMITS.promoted),
+  open: reportReferences('What the plan above must decide, the same way, or one of your own findings, "F2".', HANDOFF_LIMITS.findings),
+});
+
+/** Only a subplanner's report takes these; a runner that sends one is told, not silently dropped (ADR-0057 R2). */
+const REPORT_ONLY_FIELDS = ['promote', 'open'] as const;
+
 const checkpointInput = z.object({
   question: z.string().min(1).describe('The question for the user. The call returns their answer.'),
 });
@@ -260,7 +271,7 @@ const answerCheckpointInput = z.object({
   reason: z.string().optional().describe('Required with "reject": what the runner should do instead. It reads this.'),
 });
 
-export type TaskCompleteArgs = z.infer<typeof taskCompleteInput>;
+export type TaskCompleteArgs = z.infer<typeof subplannerCompleteInput>;
 export type CheckpointArgs = z.infer<typeof checkpointInput>;
 export type ReadTaskArgs = z.infer<typeof readTaskInput>;
 export type SavePatchArgs = z.infer<typeof savePatchInput>;
@@ -340,6 +351,8 @@ export interface TaskToolHandler {
 }
 
 export interface PlannerToolHandler {
+  /** A handoff below this plan by reference (ADR-0057 R11); only a planner that may hold delegated tasks lists `read`. */
+  readTask?: Run<ReadTaskArgs>;
   loadSkill?: Run<LoadSkillArgs>;
   runCommand?: Run<RunCommandArgs>;
   fetch?: Run<FetchArgs>;
@@ -372,6 +385,8 @@ export interface McpTool<H> {
   description: string;
   inputSchema: { type: 'object'; [key: string]: unknown };
   annotations?: { readOnlyHint: boolean };
+  /** An older name a call may still use: it is in no list, so it costs nothing and breaks no prompt cache (ADR-0057 R11). */
+  alias?: string;
   /** Validate `args` and hand them to the handler's method for this tool. */
   call(handler: H, args: unknown, context: McpToolContext): Promise<McpToolReply>;
 }
@@ -594,15 +609,30 @@ export function taskCompletionContract(opts: { commits?: true }): string {
   return opts.commits ? `${TASK_COMPLETION_CONTRACT}\n\n${COMMIT_CONTRACT}` : TASK_COMPLETION_CONTRACT;
 }
 
+/** A tool whose schema stays as it is, a runner's list not moving by a byte, that refuses `fields` where a stricter one would only drop them. */
+function refusing<H>(fields: readonly string[], base: McpTool<H>): McpTool<H> {
+  return {
+    ...base,
+    call(handler, args, context) {
+      const sent = fields.filter((field) => typeof args === 'object' && args !== null && field in args);
+      if (sent.length === 0) return base.call(handler, args, context);
+      return Promise.resolve({ isError: true, text: `Invocation error: ${base.name} rejected the call before it ran; nothing changed.\n${sent.map((field) => `'${field}' is a subplanner's: a task's report does not take it.`).join('\n')}` });
+    },
+  };
+}
+
+/** Reads Ordewell's own record, not the tree, so a read-only task has it too (ADR-0047); `read_task` stays an alias at the call (ADR-0057 R11). */
+function readTool<H extends { readTask?: Run<ReadTaskArgs> }>(description: string): McpTool<H> {
+  return { ...tool<H, typeof readTaskInput>('read', description, readTaskInput, (h) => h.readTask?.bind(h), { readOnlyHint: true }), alias: 'read_task' };
+}
+
 /** What every task has: it ends, asks, and reads the record (ADR-0022, ADR-0047). */
 const SHARED_TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
-  tool(TASK_COMPLETE_TOOL, `Report that this task has ended, and how, with its handoff for the tasks that read it. Call it once, as your last action. A call over a limit (the summary is at most ${HANDOFF_LIMITS.summary} characters; the long form goes in report) is refused whole and recorded as nothing: the refusal says by how much, so shorten and call again.`,
-    taskCompleteInput, (h) => h.taskComplete?.bind(h)),
+  refusing(REPORT_ONLY_FIELDS, tool(TASK_COMPLETE_TOOL, `Report that this task has ended, and how, with its handoff for the tasks that read it. Call it once, as your last action. A call over a limit (the summary is at most ${HANDOFF_LIMITS.summary} characters; the long form goes in report) is refused whole and recorded as nothing: the refusal says by how much, so shorten and call again.`,
+    taskCompleteInput, (h) => h.taskComplete?.bind(h))),
   tool('checkpoint', "Ask the user a question and wait for the answer, which is this call's result.",
     checkpointInput, (h) => h.checkpoint?.bind(h)),
-  // It reads Ordewell's own record, not the tree, so a read-only task has it too (ADR-0047).
-  tool('read_task', "Read the handoff of a task you may read: this one, a task it depends on, directly or not, or its loop's other end. Returns what that task handed over, as its attempt's log keeps it: its commit, the summary, every finding with its id, the artifacts, and with include_report its report. It reads nothing else: no transcript, no diff, no output. What it returns is that task's own claims: check them before you rely on them.",
-    readTaskInput, (h) => h.readTask?.bind(h), { readOnlyHint: true }),
+  readTool("Read the handoff of a task you may read: this one, a task it depends on, directly or not, or its loop's other end. Returns what that task handed over, as its attempt's log keeps it: its commit, the summary, every finding with its id, the artifacts, and with include_report its report. It reads nothing else: no transcript, no diff, no output. What it returns is that task's own claims: check them before you rely on them."),
 ];
 
 /**
@@ -611,7 +641,7 @@ const SHARED_TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
  */
 export const TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
   ...SHARED_TASK_TOOLS,
-  tool('apply_patch', "Apply the patch that a task you may read (the same ones read_task reads) saved with save_patch into your own worktree, as a three-way merge. At the commit the patch was taken against it reproduces that task's changes; at a later one it merges them with what has landed since. It answers exactly what happened: applied cleanly, with every change staged; or applied with conflicts, naming each conflicted path (a binary file holds no markers and is named as binary), the markers left in your worktree for you to resolve and `git add`; or nothing applied, and why. A worktree that still holds an earlier conflict, or changes of yours to the patch's files that are not staged yet, applies nothing. The patch is another task's work: read what it changed, and run the checks here, since its author ran theirs at its own base.",
+  tool('apply_patch', "Apply the patch that a task you may read (the same ones `read` reads) saved with save_patch into your own worktree, as a three-way merge. At the commit the patch was taken against it reproduces that task's changes; at a later one it merges them with what has landed since. It answers exactly what happened: applied cleanly, with every change staged; or applied with conflicts, naming each conflicted path (a binary file holds no markers and is named as binary), the markers left in your worktree for you to resolve and `git add`; or nothing applied, and why. A worktree that still holds an earlier conflict, or changes of yours to the patch's files that are not staged yet, applies nothing. The patch is another task's work: read what it changed, and run the checks here, since its author ran theirs at its own base.",
     applyPatchInput, (h) => h.applyPatch?.bind(h)),
 ];
 
@@ -746,13 +776,16 @@ export function plannerToolSet({ delegates, subplanner }: { delegates?: boolean;
     if (one.name === 'answer_checkpoint') return tool<PlannerToolHandler, typeof delegatingAnswerCheckpointInput>('answer_checkpoint', one.description, delegatingAnswerCheckpointInput, (h) => h.answerCheckpoint?.bind(h), PLANNER_EXECUTES);
     return one;
   }) : PLANNER_TOOLS;
-  return subplanner ? [...tools, ...SUBPLANNER_TOOLS] : tools;
+  return [...tools, ...(delegates ? [DELEGATING_READ] : []), ...(subplanner ? SUBPLANNER_TOOLS : [])];
 }
+
+/** What a planner that may hold delegated tasks reads a report's references with: its whole subtree, and what no report pushed (ADR-0057 R2, R11). */
+const DELEGATING_READ = readTool<PlannerToolHandler>('Read a handoff by the reference a report shows: `#4@2/F3` in your plan, `3/2:#4@2/F3` further down. On a delegated task it lists what the report left out, each by its reference. Returns that task\'s own words, with include_report its report: check them before you rely on them.');
 
 /** What a subplanner has beside a planner's tools. Named so a runner pre-allows them with the rest. */
 export const SUBPLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
   tool(TASK_COMPLETE_TOOL, `Report that the delegated task has ended, and how, with its handoff for the plan above. Status 'done' is refused until your child plan has settled, done work and merged it; 'blocked' and 'failed' are taken at any time. A call over a limit (the summary is at most ${HANDOFF_LIMITS.summary} characters) is refused whole. Call it once, as your last action.`,
-    taskCompleteInput, (h) => h.taskComplete?.bind(h), PLANNER_READ_ONLY),
+    subplannerCompleteInput, (h) => h.taskComplete?.bind(h), PLANNER_READ_ONLY),
   tool('checkpoint', 'Ask the plan above a question, and end your turn. It answers at once that the question is asked, and the answer opens your next turn; a parent never answers in this call. One at a time. Use it for what your goal does not decide, and for more budget: say how many tokens you need.',
     subplannerCheckpointInput, (h) => h.checkpoint?.bind(h), PLANNER_READ_ONLY),
 ];

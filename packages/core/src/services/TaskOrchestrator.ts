@@ -48,6 +48,7 @@ import { ScriptRunner } from './ScriptRunner';
 import type { StoredHandoff } from '../models/Handoff';
 import { userTaskHandoff } from '../models/DerivedHandoff';
 import type { TaskLogReader } from './readTask';
+import type { Subtree } from './Subtree';
 import { leasedIsolation } from './leasedIsolation';
 import { LocalWorktreeLease } from './LocalWorktreeLease';
 import { SlotPool, type PoolNode } from './SlotPool';
@@ -245,8 +246,12 @@ export interface TaskOrchestratorDeps {
    * ran (ADR-0047). A task that ran no session, a user task, gets a log of its own.
    */
   recordHandoff: (sessionId: string | undefined, taskId: string, handoff: StoredHandoff) => void;
-  /** The session's saved task logs, which a task's `read_task` reads handoffs from (ADR-0047). */
+  /** The session's saved task logs, which a task's `read` reads handoffs from (ADR-0047). */
   taskLog: TaskLogReader;
+  /** The plans below this one (ADR-0057 R1); absent or null with nothing delegated. */
+  subtree?: () => Promise<Subtree | null>;
+  /** This plan's node in its tree, what a reference is pinned under. Absent, the root's. */
+  planNode?: () => string;
   /** Where sessions run (ADR-0059). */
   leases: ExecutionBackend;
   /** The tree's slots and usage limits (ADR-0055 D18), which the backend reserves from. */
@@ -273,6 +278,10 @@ export interface TaskOrchestratorDeps {
  * resolved wiring the orchestrator itself runs on.
  */
 export interface TaskOrchestratorOptions {
+  /** The plans below this one (ADR-0057 R1); absent or null with nothing delegated. */
+  subtree?: () => Promise<Subtree | null>;
+  /** This plan's node in its tree, what a reference is pinned under. Absent, the root's. */
+  planNode?: () => string;
   /** What starting a research task owes the planner (ADR-0037 R3). */
   research?: Pick<ResearchTasks, 'started'>;
   config: IConfig;
@@ -485,6 +494,8 @@ export class TaskOrchestrator {
       ...(deps.keepPatch ? { keepPatch: deps.keepPatch } : {}),
       recordHandoff: deps.recordHandoff,
       taskLog: deps.taskLog,
+      ...(deps.subtree ? { subtree: deps.subtree } : {}),
+      ...(deps.planNode ? { planNode: deps.planNode } : {}),
       ...(deps.research ? { research: deps.research } : {}),
       autonomous: deps.autonomous,
       host: {
@@ -587,6 +598,8 @@ export class TaskOrchestrator {
       ...(options.keepPatch ? { keepPatch: options.keepPatch } : {}),
       recordHandoff: options.recordHandoff ?? (() => undefined),
       taskLog: options.taskLog ?? { attempts: () => [], events: () => [] },
+      ...(options.subtree ? { subtree: options.subtree } : {}),
+      ...(options.planNode ? { planNode: options.planNode } : {}),
       leases: (options.execution ?? ((local) => local))(new LocalWorktreeLease({ pool, node, runs, workspaceRoot })),
       pool,
       sessionId: options.sessionId ?? (() => ''),

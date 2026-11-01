@@ -216,6 +216,23 @@ describe('CliAgentAiService — Claude Code', () => {
     expect(disallowed.split(',')).toEqual(expect.arrayContaining(['Bash', 'PowerShell', 'EnterPlanMode', 'ExitPlanMode']));
   });
 
+  it.each([
+    ['a planner', undefined, false],
+    ['a subplanner without research', true, true],
+  ] as const)('leaves Claude Code\'s subagents to %s as its mandate says (ADR-0056 M6)', async (_who, noSubagents, withheld) => {
+    const { svc, spawned } = service('claude-code', [fixture('claude-code', 'prose')]);
+    const offered = request();
+    await svc.startConversation({ ...offered, plannerTools: { ...offered.plannerTools!, ...(noSubagents ? { noSubagents } : {}) } });
+
+    const args = spawned.lastArgs();
+    const disallowed = args[args.indexOf('--disallowedTools') + 1].split(',');
+    expect(disallowed.includes('Agent')).toBe(withheld);
+    expect(disallowed.includes('Task')).toBe(withheld);
+    const prompt = args[args.indexOf('--append-system-prompt') + 1];
+    expect(prompt.includes('your Agent tool')).toBe(!withheld);
+    if (withheld) expect(prompt).toContain('you have no agents of your own here');
+  });
+
   it('passes the planner model and effort from config', async () => {
     const { svc, spawned } = service('claude-code', [fixture('claude-code', 'prose')], {
       orchestratorModel: 'haiku',
@@ -1293,6 +1310,21 @@ describe('CliAgentAiService — Codex', () => {
     expect(thinking).toContain('apparmor_restrict_unprivileged_userns=0');
   });
 
+  it('turns Codex\'s subagents off for a subplanner without research, and leaves a planner\'s config alone (ADR-0056 M6)', async () => {
+    const start = async (noSubagents: boolean) => {
+      const { svc, spawned } = service('codex', [fixture('codex', 'handshake-warning'), fixture('codex', 'new-conversation'), fixture('codex', 'tools')]);
+      const offered = request({ runners: ['codex'] });
+      await svc.startConversation({ ...offered, plannerTools: { ...offered.plannerTools!, ...(noSubagents ? { noSubagents } : {}) } });
+      return JSON.parse(spawned.processes[0].written[1]).params;
+    };
+    const withheld = await start(true);
+    expect(withheld.config.features).toEqual({ multi_agent: false, multi_agent_v2: false });
+    expect(withheld.developerInstructions).not.toContain('your own subagents');
+    const planner = await start(false);
+    expect(planner.config.features).toBeUndefined();
+    expect(planner.developerInstructions).toContain('your own subagents');
+  });
+
   it('plans with Codex\'s own shell off when no sandbox backend works', async () => {
     const { svc, spawned } = service(
       'codex',
@@ -1538,6 +1570,17 @@ describe('CliAgentAiService — OpenCode', () => {
     );
     return { svc, spawned };
   }
+
+  it('has no OpenCode subagents for any planner to withhold (ADR-0056 M6)', async () => {
+    const sent: Record<string, unknown>[] = [];
+    const { svc } = openCodeService((url, init) => {
+      if (url.endsWith('/session')) return { id: 'ses_withheld' };
+      if (init?.body) sent.push(JSON.parse(String(init.body)));
+      return { info: { id: 'msg_a' }, parts: [{ id: 'prt_1', messageID: 'msg_a', type: 'text', text: 'Ready.' }] };
+    });
+    await svc.startConversation(request({ runners: ['opencode'] }));
+    expect(sent.at(-1)?.tools).toMatchObject({ task: false });
+  });
 
   // One OpenCode message can carry text on both sides of a tool call. Run
   // together they read as one broken sentence ("…let me check.The factory is…"),

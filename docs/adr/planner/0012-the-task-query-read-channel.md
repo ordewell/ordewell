@@ -244,7 +244,7 @@ ADR-0008's exploration envelope is unchanged.
 
 ## Considered options
 
-- **A separate API-only `read_task` tool (M1).** Rejected: a backend-specific
+- **A separate API-only `read` tool (M1).** Rejected: a backend-specific
   read contract would split what each planner can inspect. Both transports now
   use `task_query`, `task_output` and `task_diff` with shared handlers and
   validation; the API text envelope remains on the same budget.
@@ -310,3 +310,4 @@ ADR-0008's exploration envelope is unchanged.
 - 2026-10-23 — T10: the plan and catalog blocks go whole once per live context, then as what changed (M7).
 - 2026-10-25 — T10: a vendor planner condensing its context in the middle of a turn ([ADR-0002](0002-planner-as-conversation-loop.md)) counts as a compaction, so the next turn is sent the whole plan.
 - 2026-10-31 — T10: the plan block has a size cap, past which it lists live and waiting tasks, a count of the rest and a pointer (ADR-0057 R5).
+- 2026-11-01 — the runner's tool is `read`, with `read_task` an alias at the call ([ADR-0057](../supervision/0057-information-moves-by-reference.md) R11).

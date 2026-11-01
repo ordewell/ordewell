@@ -318,7 +318,7 @@ export class CliAgentAiService implements IAiService {
       req.modelsByRunner,
       req.runners,
       req.runnerModes,
-      { harness: true, runner: this.runner, isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined, autorun: req.autorun, delegation: req.delegation, subplanner: req.subplanner },
+      { harness: true, runner: this.runner, isolatedExecution: req.isolatedExecution, skills: req.skills, execution: req.plannerTools !== undefined, autorun: req.autorun, delegation: req.delegation, subplanner: req.subplanner, ...(req.plannerTools.noSubagents ? { subagents: false } : {}) },
     );
 
     const fetcher = req.fetcher;
@@ -329,6 +329,7 @@ export class CliAgentAiService implements IAiService {
       ...await this.repoConfig(systemPrompt, cwd, req.approval),
       model: this.plannerModel(),
       effort: this.config.plannerThinkingEffort,
+      ...(req.plannerTools.noSubagents ? { noSubagents: true } : {}),
     };
     // Without an approval channel there is no gate, so nothing would decide a search.
     if (req.approval && fetcher?.searchesUnasked) session.searchesUnasked = (provider) => fetcher.searchesUnasked?.(provider) ?? false;
