@@ -140,7 +140,10 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
   It proves what it can, which is little: its report is that a local runner reaches what the user reaches.
 - **The first container backend (L5).** The Docker API through the docker CLI, so one code path serves any engine
   that speaks it, in `DockerExecutionBackend`, around the local backend, which keeps the slots and the worktrees. It is
-  opt-in, by the `containers` setting, in the file only; one it cannot use refuses every container, where the rest of that
+  opt-in, by the `containers` setting, in the file only, and held out of a published build as delegation is
+  (ADR-0055 D21): the setting is read only with `ORDEWELL_CONTAINERS=1` in a build run from a git checkout
+  (`containersOffered`), and elsewhere it is ignored with one warning that the build offers no containers, since the
+  review's findings are not all closed and nobody may believe they are isolated when they are not; one it cannot use refuses every container, where the rest of that
   file falls back to a default, since a typing mistake must not mean the host. The host's worktree stays where a task's
   result lives, so Landing, a repair and a Continue are what they were. A runner is launched by exec into one container
   per attempt, non-root, capabilities dropped, a read-only root filesystem, `--init --pids-limit 8192 --memory <limit>`
@@ -355,3 +358,4 @@ for model traffic first. The interface is kept free of anything that blocks thes
 - 2026-11-01 — L7 implemented: the egress sidecar and the model gateway behind `EgressPath`, and `net.allowlist` proven by probe and required by default. `setNetwork` dropped. Scripts run in containers, a child's tasks and repairs are proven there, a pin reads through the lease, and `reclaim` clears what a tree leaves. The terms check before a subscription path ships dropped: which login someone uses is up to them.
 - 2026-11-01 — A container session's git runs with hooks off and the gate takes nothing in a tracked hooks folder; work not brought back stops a next attempt; a close waits on `settle`; a child takes its root's backend; a probe reports `cred.unreadable` unproven. Refusing hooks alone dropped.
 - 2026-11-01 — the gate runs git's object checks itself, since a fetch from a bundle does not on an older git.
+- 2026-11-01 — containers are experimental and off in published builds: `containersOffered` reads the `containers` setting only with `ORDEWELL_CONTAINERS=1` from a git checkout, as delegation is held.

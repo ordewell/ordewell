@@ -48,18 +48,32 @@ export function delegationSwitchedOn({ env, moduleDir, exists }: DelegationPlace
 }
 
 /** This module's directory, by the build's own means; `fs` comes from the process so a webview, which bundles this file, imports none. */
-function placeHere(): DelegationPlace {
+function placeHere(variable: string): DelegationPlace {
   const fs = typeof process === 'undefined' ? undefined : process.getBuiltinModule?.('fs');
   if (!fs) return { env: undefined, moduleDir: null, exists: () => false };
   const file = typeof __filename !== 'undefined' ? __filename : new URL(
     // @ts-expect-error - import.meta is only valid under an ESM module setting; see builtinSkills.ts
     (import.meta as { url: string }).url,
   ).pathname;
-  return { env: process.env[DELEGATION_ENV], moduleDir: file.replace(/[\\/][^\\/]*$/, ''), exists: (path) => fs.existsSync(path) };
+  return { env: process.env[variable], moduleDir: file.replace(/[\\/][^\\/]*$/, ''), exists: (path) => fs.existsSync(path) };
 }
 
 /** Whether any surface offers the delegation setting, and whether a planner may write a delegated task. */
-export const DELEGATION_OFFERED = delegationSwitchedOn(placeHere());
+export const DELEGATION_OFFERED = delegationSwitchedOn(placeHere(DELEGATION_ENV));
+
+/** What turns containers on where they may be turned on at all (ADR-0059 L5). */
+export const CONTAINERS_ENV = 'ORDEWELL_CONTAINERS';
+
+/**
+ * Whether the `containers` setting is read at all. Containers are held out of
+ * a published build like delegation (ADR-0055 D21), by the same test of a git
+ * checkout and its own variable: the container review's findings are not all
+ * closed, and a setting a user can type must not promise an isolation this
+ * build does not yet prove. Read at call time, so a test can set the variable.
+ */
+export function containersOffered(place: DelegationPlace = placeHere(CONTAINERS_ENV)): boolean {
+  return delegationSwitchedOn(place);
+}
 
 export const ACT_RISK = 'Tasks it adds run too, ops tasks included, which can act on real systems unattended.';
 export const AUTORUN_RISK = 'Plans start without review, ops tasks included, which can act on real systems unattended. In Full nobody is asked at all: the planner may start anything, script tasks included, from a plan no person read.';

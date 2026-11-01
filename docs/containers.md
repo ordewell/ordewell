@@ -1,5 +1,10 @@
 # Running tasks in containers
 
+> **Experimental, and off in published versions.** Containers are not ready: a
+> published Ordewell ignores the `containers` setting below and says so once, and
+> your tasks run in local worktrees as ever. The setting is read only in a build run
+> from a git checkout of this repository, with `ORDEWELL_CONTAINERS=1` set.
+
 A task's runner can do whatever you can do on your machine. A container takes that
 away: a change task runs in a Docker container, on a copy of its worktree, with your
 files out of its reach, a short list of hosts as its only way out, and your API key
