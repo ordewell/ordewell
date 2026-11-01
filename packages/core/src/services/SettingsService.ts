@@ -6,6 +6,7 @@ import type { SupervisorLevel } from '../models/Execution';
 import { DEFAULT_SUPERVISOR_RETRY_LIMIT } from './LoopGuards';
 import { DEFAULT_WAKE_UP_READ_BUDGET } from './Supervisor';
 import { parseAutonomyFlag } from './ModeResolver';
+import { containersOffered } from './runSettingsText';
 import type { TaskRunnerConfig } from './harness/AgentAdapter';
 
 /** How a run is started, watched and merged: the user's, not a plan's (ADR-0030). */
@@ -471,7 +472,11 @@ export class SettingsService {
     if (raw.taskRunnerConfig === 'user' || raw.taskRunnerConfig === 'minimal') {
       settings.taskRunnerConfig = raw.taskRunnerConfig;
     }
-    if (raw.containers !== undefined) settings.containers = raw.containers;
+    if (raw.containers !== undefined) {
+      // Ignored, not refused, in a published build (ADR-0059 L5): the user hears it once, so nobody thinks tasks are isolated when they run on the host.
+      if (containersOffered()) settings.containers = raw.containers;
+      else this.warnProblem('has a containers setting, and this build does not offer containers: tasks run in local worktrees on this machine, not in containers');
+    }
     // A value it cannot use is left out, so its default stands.
     for (const key of RUN_SETTING_KEYS) {
       if (RUN_SETTING_CHECKS[key].valid(raw[key])) (settings as Record<keyof GlobalRunSettings, unknown>)[key] = raw[key];
