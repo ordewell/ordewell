@@ -55,7 +55,7 @@ export interface HostState {
   runnerNotice: { line: string; docs: string } | null;
   modelConfig: { orchestrator: string; orchestratorProvider?: string } | null;
   /** The user's autonomy level, run settings (ADR-0030) and parallel limit; null until the host sends them. */
-  runSettings: { autonomous: boolean; run: GlobalRunSettings; maxParallel: number } | null;
+  runSettings: { autonomous: boolean; run: GlobalRunSettings; maxParallel: number; delegationOffered?: boolean } | null;
   /** Bumped by each `/settings`: App opens the Settings panel at its Run block. */
   settingsRequest: number;
   modelOptions: ModelOption[];
@@ -503,7 +503,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
       return { ...state, isolationPreview: action.preview };
 
     case 'setRunSettings':
-      return { ...state, runSettings: { autonomous: action.autonomous, run: action.run, maxParallel: action.maxParallel } };
+      return { ...state, runSettings: { autonomous: action.autonomous, run: action.run, maxParallel: action.maxParallel, delegationOffered: action.delegationOffered === true } };
 
     case 'openSettings':
       return { ...state, settingsRequest: state.settingsRequest + 1 };

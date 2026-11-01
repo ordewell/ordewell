@@ -1,12 +1,15 @@
 import React, { forwardRef, useEffect, useId, useState } from 'react';
 import type { GlobalRunSettings, SupervisorLevel } from '@ordewell/core';
-import { DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL, parseCount } from '@ordewell/core/plan-utils';
+import { SUPERVISOR_LEVEL_LABEL, parseCount } from '@ordewell/core/plan-utils';
+import { useDelegationOffered } from '../delegationOffered';
 import type { SettingsChange } from '../../../shared/protocol';
 
 export interface RunSettingsValue {
   autonomous: boolean;
   run: GlobalRunSettings;
   maxParallel: number;
+  /** Whether the host offers delegation (ADR-0055 D21); a webview cannot read it itself. */
+  delegationOffered?: boolean;
 }
 
 interface PillOption<T> {
@@ -101,6 +104,7 @@ const AUTORUN: PillOption<boolean>[] = [
 /** The Settings panel's Run block (ADR-0030): every run setting one click away, each saved by the host as it changes. */
 const RunSettingsBlock = forwardRef<HTMLElement, { value: RunSettingsValue; expanded: boolean; onToggle(): void; onChange(change: SettingsChange): void }>(function RunSettingsBlock({ value, expanded, onToggle, onChange }, ref) {
   const { run } = value;
+  const DELEGATION_OFFERED = useDelegationOffered();
   const summary = [
     value.autonomous ? 'Full' : 'Guarded',
     `Supervisor: ${SUPERVISOR_LEVEL_LABEL[run.supervisorLevel]}`,
@@ -129,6 +133,7 @@ const RunSettingsBlock = forwardRef<HTMLElement, { value: RunSettingsValue; expa
 });
 
 function RunSettingsRows({ value, onChange }: { value: RunSettingsValue; onChange(change: SettingsChange): void }) {
+  const DELEGATION_OFFERED = useDelegationOffered();
   const { run } = value;
   return (
     <>

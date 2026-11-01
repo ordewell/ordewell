@@ -268,7 +268,8 @@ export type HostToWebview =
   /** The remembered plan dock height in px; absent until the user first drags it. */
   | { type: 'planDockHeight'; height?: number }
   /** The user's autonomy level, run settings (ADR-0030) and parallel limit, sent on ready and after each change. */
-  | { type: 'setRunSettings'; autonomous: boolean; run: GlobalRunSettings; maxParallel: number }
+  /** `delegationOffered`: whether this build offers delegation, which only the host can read (ADR-0055 D21). */
+  | { type: 'setRunSettings'; autonomous: boolean; run: GlobalRunSettings; maxParallel: number; delegationOffered?: boolean }
   /** `/settings`: open the Settings panel at its Run block. */
   | { type: 'openSettings' }
   /** Discovered skills (global ~/.ordewell/skills/ + workspace .ordewell/skills/, global wins over workspace) for the /skill-name suggestion dropdown. */

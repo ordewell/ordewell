@@ -1,8 +1,9 @@
 import React from 'react';
 import type { HandoffDigest, StoredHandoff } from '@ordewell/core';
-import { DELEGATION_OFFERED, handoffFindingsText, handoffReferenceText, savedPatchViews, severityLabel, subtreeView, worstSeverity } from '@ordewell/core/plan-utils';
+import { handoffFindingsText, handoffReferenceText, savedPatchViews, severityLabel, subtreeView, worstSeverity } from '@ordewell/core/plan-utils';
 import type { SubtreeItemView } from '@ordewell/core/plan-utils';
 import { useOpenPatch } from '../openPatch';
+import { useDelegationOffered } from '../delegationOffered';
 import ReportBody from './ReportBody';
 
 function SubtreeItems({ title, items }: { title: string; items: SubtreeItemView[] }) {
@@ -35,6 +36,7 @@ export default function TaskHandoff({ handoff, taskName, onReadFull }: {
   const artifacts = handoff.artifacts?.filter((a) => a.kind !== 'patch') ?? [];
   const patches = savedPatchViews(handoff);
   const openPatch = useOpenPatch();
+  const delegationOffered = useDelegationOffered();
   return (
     <section className="task-handoff" aria-label="Handoff">
       <div className="task-handoff-heading">Handoff · {handoffFindingsText(handoff.findingCount)}{severity ? ` · ${severityLabel(severity)}` : ''}</div>
@@ -54,7 +56,7 @@ export default function TaskHandoff({ handoff, taskName, onReadFull }: {
           ) : null}
         </div>
       ))}
-      {handoff.subtree && DELEGATION_OFFERED && (() => {
+      {handoff.subtree && delegationOffered && (() => {
         const view = subtreeView(handoff.subtree);
         return (
           <div className="task-handoff-subtree">

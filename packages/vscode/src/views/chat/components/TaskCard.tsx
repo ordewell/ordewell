@@ -8,9 +8,10 @@ import SkillChips from './SkillChips';
 import TaskHandoff from './TaskHandoff';
 import { QUEUE_TITLE, SendKeyHint, isSendNowKey } from './PendingMessages';
 import { lastLine } from '../taskOutput';
+import { useDelegationOffered } from '../delegationOffered';
 import { checkLabel } from '../checkLabel';
 import { useFollowOutput } from '../followOutput';
-import { DELEGATION_OFFERED, blockedByLabel, dependencyCandidates, capConflictFiles, cardEditable, holdLabel, loopRowParts, pausedOnLimit, scriptTaskText, skippedLabel, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
+import { blockedByLabel, dependencyCandidates, capConflictFiles, cardEditable, holdLabel, loopRowParts, pausedOnLimit, scriptTaskText, skippedLabel, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, RunTask, TaskRowAction, TaskRowView, TaskStatusKind, AssignmentScope } from '@ordewell/core';
 
 export interface RunnerMode {
@@ -502,7 +503,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
     ...(run ? { verdict: run.verdict ?? task.verdict, loopRound: run.loopRound } : {}),
   }, { tasks: siblings, modes: activeModes, runnerScope });
   // Nothing of a delegated task's child shows where delegation is not offered (ADR-0055 D21).
-  const delegated = DELEGATION_OFFERED ? row.delegated : null;
+  const delegated = useDelegationOffered() ? row.delegated : null;
   // Its chat exists only once an attempt has started; status alone never says so.
   const chatAvailable = row.chatAvailable;
   const conflictFiles = isolatedWork?.conflictFiles ?? [];
