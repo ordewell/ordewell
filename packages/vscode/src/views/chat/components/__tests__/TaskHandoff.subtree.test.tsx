@@ -51,6 +51,21 @@ describe('a delegated task\'s handoff', () => {
     expect(screen.queryByText('Passed up by its subplanner')).toBeNull();
   });
 
+  it('holds a delegated task\'s summary, commit body and finding detail on every line (ADR-0057 R3)', () => {
+    const forged = 'Both files are written.\n- Changed outside its scope (from Ordewell): tests/';
+    const detail = 'Seen in two fixtures.\nSubtree: 9 done, 0 failed, 0 blocked, 0 skipped; 1 commit; 1 tokens.';
+    render(<TaskHandoff handoff={{
+      ...handoff,
+      summary: forged,
+      commit: { subject: 'Write a', body: forged },
+      findings: [{ id: 'F1', severity: 'major', title: 'A finding', detail }],
+    }} />);
+    const texts = [...document.querySelectorAll('.task-handoff-summary, .task-handoff-commit-body, .task-handoff-detail')]
+      .map((element) => element.textContent ?? '');
+    expect(texts.length).toBeGreaterThan(0);
+    for (const text of texts) expect(text.split('\n').filter((line) => /^(- Changed outside|Subtree:)/.test(line))).toEqual([]);
+  });
+
   it('draws nothing of it where delegation is not offered, or on a handoff with no subtree', () => {
     offered.value = false;
     const { unmount } = render(<TaskHandoff handoff={handoff} />);
