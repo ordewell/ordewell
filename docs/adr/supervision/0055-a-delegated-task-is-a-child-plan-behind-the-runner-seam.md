@@ -370,7 +370,10 @@ the child cannot reach follows it in the parent's plan.**
   whose plan never reached the disk plans its goal again. Its node closed as it ended,
   or a crash left it open, so a Continue carves again, under the same child, from
   what the task has left, after `Session.ledger()` has answered. The task's worktree
-  is restored in place, on the same path, read-only or not. A stopped delegated task
+  is restored in place, on the same path, read-only or not, since a child's run is
+  tied to that path: a record that names a child keeps its parent's run continuing,
+  whether or not a Stop has yet taken it off `active`, and a child whose path moved
+  anyway is refused, `blocked`, rather than mint a run and leave what it landed behind. A stopped delegated task
   reads as not started and may be continued, since its child is still there; one
   that landed may not, since its child has gone with the work. A subplanner a guard
   lowered, or that failed its restart, is Act again (ADR-0056 M8). A parent's adoption does not prune a task that names a child:

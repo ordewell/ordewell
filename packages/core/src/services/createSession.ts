@@ -1745,6 +1745,8 @@ export class Session {
     this.tryPersist();
     const saved = reopening ? loadChildSession({ baseDir: this.stateRoot, rootSessionId: this.rootSessionId, sessionId: reopening }) : null;
     try {
+      // Its run is tied to this path: moved, it would mint a new one and leave what it had landed behind, with its tasks still reading as done.
+      if (saved?.plan.isolation && saved.plan.isolation.run.workspaceRoot !== cwd) throw new Error(`Task "${task.title}" cannot reopen its child: its worktree has moved. Retry it fresh, which starts a new child.`);
       const child = this.childSession({ task, cwd, placement, authority, brief, link });
       if (saved) child.loadPlan(pickedUp(saved.plan), saved.meta.goal, cwd, { sessionId: placement.sessionId });
       return child.asNode(mandate);

@@ -937,11 +937,13 @@ export class IsolationRunController {
    * predecessors' work, and anything held — a kept attempt, a conflict, a
    * repair — is work the user may still want, which a fresh run's mint would
    * delete. Only a run with no records at all is superseded, and not one that
-   * reverted the tasks it had: a retry starts from its tip (ADR-0054).
+   * reverted the tasks it had: a retry starts from its tip (ADR-0054). A record
+   * that names a child holds a code root, on a path that child's own run is tied
+   * to, whether or not a Stop has yet taken it off `active` (ADR-0055 D17).
    */
   private continuableRun(root: string): IsolationRun | null {
     const run = this.run;
-    return run && run.workspaceRoot === root && (run.reverted || Object.values(run.tasks).some((r) => r.status !== 'active')) ? run : null;
+    return run && run.workspaceRoot === root && (run.reverted || Object.values(run.tasks).some((r) => r.status !== 'active' || r.childSession)) ? run : null;
   }
 
   /**

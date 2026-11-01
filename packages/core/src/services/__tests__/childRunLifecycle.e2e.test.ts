@@ -13,7 +13,7 @@ import type { IRunner } from '../../interfaces/IRunner';
 import type { IWorktreeIsolation } from '../../interfaces/IWorktreeIsolation';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import { fakeConfig, FakeRunnerSession } from '../../testing';
-import { loadChildSession, loadSession, saveSession } from '../../utils/sessionStore';
+import { loadChildSession, loadSession, saveChildSession, saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
 import { fakeFs, makeSession, type PlannerTurn as Turn } from './sessionTestKit';
 
@@ -480,6 +480,48 @@ describe('a Continue (ADR-0055 D17)', () => {
     expect(planner.asked.join('\n')).toContain('go on');
     const integration = parent.planState?.isolation?.run.repos[0].integrationBranch ?? '';
     expect(git(root, 'ls-tree', '-r', '--name-only', integration).split('\n')).toEqual(expect.arrayContaining(['a.txt', 'b.txt']));
+    parent.destroy();
+  });
+
+  it('reopens in the same run while a Stop has yet to take the record off active, or the child\'s landed work is left behind', async () => {
+    const runner = fakeRunner({ a: ['a.txt'], b: ['b.txt'] }, { held: ['b'] });
+    const { root, parent } = tree([SUBMIT([childTask('a', 1), childTask('b', 2, ['a'])]), NOTHING, DONE], { runner });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(runner.spawned).toContain('b'), { timeout: 20_000 });
+    const before = parent.planState?.isolation?.run.id;
+    parent.stopExecution();
+    await parent.stopSubtree();
+    // As a Continue finds it when the Stop's keep has not run yet.
+    const record = parent.planState?.isolation?.run.tasks.d;
+    await vi.waitFor(() => expect(record?.status).toBe('kept'));
+    record!.status = 'active';
+
+    expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'session', message: 'go on' }, { kind: 'user' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(runner.spawned.filter((id) => id === 'b')).toHaveLength(2), { timeout: 20_000 });
+    expect(parent.planState?.isolation?.run.id).toBe(before);
+    runner.release('b');
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    const integration = parent.planState?.isolation?.run.repos[0].integrationBranch ?? '';
+    expect(git(root, 'ls-tree', '-r', '--name-only', integration).split('\n')).toEqual(expect.arrayContaining(['a.txt', 'b.txt']));
+    parent.destroy();
+  });
+
+  it('refuses a child whose worktree has moved, rather than lose what it landed', async () => {
+    const runner = fakeRunner({ a: ['a.txt'] }, { held: ['a'] });
+    const { root, parent, planner } = tree([SUBMIT([childTask('a', 1)])], { runner });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(runner.spawned).toContain('a'), { timeout: 20_000 });
+    parent.stopExecution();
+    await parent.stopSubtree();
+    const place = { baseDir: root, rootSessionId: 'session-root', sessionId: childIdOf(parent, 'd')! };
+    const saved = loadChildSession(place)!;
+    saved.plan.isolation!.run.workspaceRoot = join(root, 'somewhere-else');
+    saveChildSession(saved.plan, saved.meta.goal, place);
+    const asked = planner.asked.length;
+
+    expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'session', message: 'go on' }, { kind: 'user' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(taskOf(parent, 'd').verdict).toMatchObject({ reported: 'blocked', reason: expect.stringContaining('has moved') }), { timeout: 20_000 });
+    expect(planner.asked).toHaveLength(asked);
     parent.destroy();
   });
 
