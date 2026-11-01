@@ -275,6 +275,8 @@ export interface AttemptsDeps {
   leases: Pick<ExecutionBackend, 'letGo'>;
   /** This node's side of the tree's ledger; absent at the root, and on a flat run, which has none (ADR-0056 M5). */
   budget?: Pick<NodeBudget, 'hold' | 'spent'>;
+  /** The child a delegated task's last attempt left goes, as its next attempt starts afresh (ADR-0055 D15). */
+  discardChild?: (task: Readonly<Task>) => Promise<void>;
   /** A passed attempt's work, or a repair's, onto the integration branch, while the attempt stays live. */
   landing: Pick<Landing, 'landPassed' | 'settleRepair' | 'nextRepair' | 'repairPrompt'>;
   registry: RunnerRegistry | null;
@@ -747,7 +749,10 @@ export class Attempts {
       }
       // Resumed beside a runner still winding it down, a session would run in
       // two processes, and count from before what the first one still reports.
-      if (kind.kind === 'continuation') await this.windDowns.get(task.id);
+      // A child still stopping is one neither a Continue nor a discard can reach.
+      if (kind.kind === 'continuation' || attempt.delegated) await this.windDowns.get(task.id);
+      // A fresh attempt by any route starts its child over; a Continue, which is another kind, reopens it.
+      if (kind.kind === 'delegated') await this.deps.discardChild?.(task);
       if (!attempt.script && kind.kind === 'repair') {
         const paths = await this.startConfig.check(runs.current, task.id, { epoch: runs.epoch, root: this.deps.workspaceRoot(), cwd: null, worktree: true });
         if (paths.length) throw new TaskStartConfigError(paths);
@@ -789,7 +794,8 @@ export class Attempts {
       attempt.phase = 'running';
       attempt.attaching = null;
       attempt.session = session;
-      store.setTaskRunnerSessionId(task.id, undefined);
+      // A child's id is written as it is seated, and is what a crash leaves to reopen or discard it by (ADR-0055 D17).
+      if (!attempt.delegated) store.setTaskRunnerSessionId(task.id, undefined);
       store.clearCarriedFrom(task.id);
       if (kind.kind === 'carryOver' && previousWork?.outcome === 'fallback') {
         this.host.tell('warn', `Task "${task.title}" starts fresh on ${attempt.runner}: the work its paused attempt on ${kind.from} left conflicts with the integration tip, so it was not carried over. It is kept on branch ${quotedList([...new Set(previousWork.preserved.map((kept) => kept.branch))])}.`);
@@ -1063,12 +1069,12 @@ export class Attempts {
     return shell;
   }
 
-  /** A delegated task's start (ADR-0055 D3): its child plan, in the worktree this attempt opened. No prompt: a subplanner reads its goal. */
+  /** A delegated task's start (ADR-0055 D3): its child plan, in the worktree this attempt opened. A subplanner reads its goal, or a Continue's message. */
   private spawnChildPlan(task: Task, attempt: TaskAttempt, cwd: string): Promise<IRunnerSession> {
     return this.deps.childPlanRunner.spawn({
       taskId: task.id,
       runner: attempt.runner,
-      prompt: task.goal ?? '',
+      prompt: attempt.kind.kind === 'continuation' ? attempt.kind.message : task.goal ?? '',
       cwd,
       order: task.order,
       title: task.title,
@@ -1315,6 +1321,11 @@ export class Attempts {
   private unresumed(attempt: TaskAttempt): boolean {
     const session = attempt.session;
     return attempt.kind.kind === 'continuation' && session !== null && !session.nativeSessionId();
+  }
+
+  /** Every runner let go has gone: what a subtree's stop waits on (ADR-0055 D16). */
+  async allWoundDown(): Promise<void> {
+    await Promise.all(this.windDowns.values());
   }
 
   /**

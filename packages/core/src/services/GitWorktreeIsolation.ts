@@ -618,7 +618,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
 
       const record: IsolationTaskRecord = {
         taskId: task.id, order: task.order, title: task.title, branch, workspace: dir, status: 'active', repos: {},
-        ...(opts.readOnly ? { readOnly: true } : {}),
+        ...(opts.readOnly || (intent === 'restore' && previous?.readOnly) ? { readOnly: true } : {}),
         // A restore continues the same work, so its merges keep the subject its landing stated; a fresh attempt states its own.
         ...(intent === 'restore' && previous?.commit ? { commit: previous.commit } : {}),
         // And the same child, which Continue reopens (ADR-0055 D17); a fresh attempt starts one over (D15).
@@ -877,7 +877,8 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       const record = run.tasks[taskId];
       if (!record) return noRemoval();
       // A read-only task's worktree is never kept for inspection: nothing in it is work (ADR-0046).
-      const removal = opts.keep && !record.readOnly ? noRemoval() : await this.removeTask(run, record, { dropRecord: true });
+      // A read-only task's worktree goes whatever it holds, unless it is a child's code root, which a Continue reopens (ADR-0055 D17).
+      const removal = opts.keep && (!record.readOnly || record.childSession) ? noRemoval() : await this.removeTask(run, record, { dropRecord: true });
       if (opts.keep || removal.refused.length > 0) {
         // Off `active` so a crash-recovery prune does not mistake a kept attempt for an orphan.
         if (record.status === 'active') record.status = 'kept';

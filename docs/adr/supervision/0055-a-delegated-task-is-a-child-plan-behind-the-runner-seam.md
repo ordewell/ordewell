@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0009", "0013", "0015", "0018", "0020", "0022", "0029", "0030", "0035", "0045", "0046", "0049", "0054"]
-note: "Settles #33. Built: D1 to D8's plan rules and verdict, D10 to D13, D17's prune, D18's pool and D21, so one child plan runs end to end behind the build's switch. Not built: D8's taking a check back with a new result, D9's merge hold, D14's repair, D15's discards, D16's subtree stop, D17's Continue, which is refused, and a subplanner's question, which is refused so its turn goes on. D20's roll-up and a surface's row wait on ADR-0057's reports."
+note: "Settles #33. Built: D1 to D8's plan rules and verdict, D10 to D13, D15, D16, D17, D18's pool and D21, so a child plan runs end to end behind the build's switch, stops as a subtree and comes back on a Continue. Not built: D8's taking a check back with a new result, D9's merge hold, D14's repair, a subplanner's native resume, so a reopened one replays its Model context, and a subplanner's question, which is refused so its turn goes on. D20's roll-up and a surface's row, and with it D16's stopping row, wait on ADR-0057's reports."
 ---
 
 # 0055 — A delegated task is a child plan behind the runner seam
@@ -276,9 +276,11 @@ the child cannot reach follows it in the parent's plan.**
     `listSessions` reads `sessions/*.json`, so a child session is never in the list
     and never offered: it is deleted with its root and adopted only through it.
     `deleteSession` removes files and no worktree, so a host deleting a root first
-    calls `discardChildRuns`, which discards each child's run as `discardRun` does, or
-    its worktrees and branches would outlive the only record that names them. What
-    git could not let go stops the delete.
+    stops its tree and calls `discardChildRuns`, which discards each child's run as
+    `discardRun` does, or its worktrees and branches would outlive the only record
+    that names them. A child at work cannot have them taken from under it, so the
+    stop comes first, and the delete waits for it (D16). What git could not let go
+    stops the delete, the Session left open and stopped.
   - `Session.hostChild` seats a child: it mints the child's id, names it on the
     delegated task's run record (`childSession`), and hands back what `createSession`
     builds the child from. Asked again it finds the same child, so a reopen does too.
@@ -296,7 +298,11 @@ the child cannot reach follows it in the parent's plan.**
   which covers the tree, its runner groups included, and `leasedIsolation` asks it.
   Only a root is adopted, so no second host can reach a child, and a tree does not
   multiply the heartbeat. A run a held lease refuses stays unopened: it does not fall
-  back to running without worktrees, as a refusal from git does.
+  back to running without worktrees, as a refusal from git does. A child reads the
+  lease through its parent, so a parent's `destroy`, which hosts do not wait on,
+  stops its subtree at once and lets the lease go only once that subtree has gone:
+  read as free before then, the tree could be taken from under what still writes.
+  `Session.gone` settles when it has. The tree's ledger waits for the same (ADR-0056 M5).
 - **A conflict is repaired by a runner (D14).** A delegated task's landing can
   conflict. Its repair ([ADR-0015](../isolation/0015-conflict-repair.md)) needs a
   session that edits files, which a subplanner never is, so a delegated task's
@@ -320,14 +326,20 @@ the child cannot reach follows it in the parent's plan.**
   a `repairBase`. A repair that fails either does not land, and its worktree is kept.
 - **A fresh attempt starts a child over (D15).** When a delegated task's next
   attempt is fresh by any route, Execute, a force start, a retry, or Mark not done
-  then a start, its child run is discarded as `discardRun` does and a new child
-  starts on what is left of its budget. A Continue never discards it: D17 reopens
-  that child. A delegated task removed, merged or split out of the plan has its
-  child run discarded too, or its worktrees and branches would outlive the only
-  record that names them (D11). The Session or `PlanEditor` path that applies the
-  change does this, never `PlanStore`, which reaches no run: for a fresh attempt at
-  the claim, where D8 takes its checks back, and for an edit as it is applied. The
-  old child's state stays on disk under the root. Revert
+  then a start, its child run is discarded as `discardRun` does, grandchildren first,
+  and a new child starts on what is left of its budget (ADR-0056 M10). A Continue
+  never discards it: D17 reopens that child. A delegated task removed from the plan,
+  by a person or a planner's edit, has its child run discarded too, or its worktrees
+  and branches would outlive the only record that names them (D11), and a run's own
+  Clean up and Discard take its children's with them. Merge and split refuse a
+  delegated task, so neither reaches one. The Session does this, through the orchestrator
+  and never `PlanStore`, which reaches no run: for a fresh attempt as it opens, the
+  first step past the claim, since a claim is synchronous and git is not, and that
+  attempt's kind says it is fresh on every route; for an edit as it lands. The task's
+  `runnerSessionId` names the child, set as it is seated and cleared only by the
+  discard, so a retry that dropped the task's record and a crash both leave the name.
+  What git could not let go stops the start, with the name kept. The old child's
+  state stays on disk under the root. Revert
   ([ADR-0054](../isolation/0054-a-landed-task-reverts-on-the-integration-branch-before-merge-all.md))
   takes the one landing whole: it is the user's, and it never reaches inside a
   child.
@@ -339,17 +351,29 @@ the child cannot reach follows it in the parent's plan.**
   ancestors' Stop as it reads its own Stop generation
   ([ADR-0029](0029-the-supervisor.md)) and is refused. Then the subtree stops,
   leaves first, and `ChildPlanSession.stop()` resolves when the subtree is gone,
-  with no timeout of its own at an interior node. A surface shows the node as
-  stopping until it does. A runner's own grace stays ADR-0018's.
+  with no timeout of its own at an interior node: its runners, its live planner turn
+  and any turn at a gate included. A surface shows the node as stopping until it
+  does. A runner's own grace stays ADR-0018's. The tombstone is the attempt's own, so
+  a later attempt starts clear of it, and a child reads it through its
+  `SubplannerLink`, which reads on up. A node its budget or its clock stopped reads
+  the same way (ADR-0056 M3, M5).
 - **Restart (D17).** Loading starts nothing
   ([ADR-0044](../planner/0044-the-planners-usage-limit-waits-and-resends.md),
   [ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
   The child's file is not read until asked for. A delegated task that was live
   reloads failed, as interrupted, with `runnerSessionId` naming its child session,
-  and is listed. Continue reopens the child and acts as Execute there: its plan
-  loads, in-progress tasks fail, and `PlanStore.resetForRun` readies what failed, so
-  they are retried. Its subplanner resumes from its native session, or replays its
-  Model context. A parent's adoption does not prune a task that names a child:
+  which is written as the child is seated, and is listed. Continue reopens the child
+  and acts as Execute there: its plan loads, in-progress tasks fail, and
+  `PlanStore.resetForRun` readies what failed, so they are retried, and its
+  subplanner replays its Model context with the message: a planner's native session
+  is held in memory and saved nowhere, so a new process has none to resume. A child
+  whose plan never reached the disk plans its goal again. Its node closed as it ended,
+  or a crash left it open, so a Continue carves again, under the same child, from
+  what the task has left, after `Session.ledger()` has answered. The task's worktree
+  is restored in place, on the same path, read-only or not. A stopped delegated task
+  reads as not started and may be continued, since its child is still there; one
+  that landed may not, since its child has gone with the work. A subplanner a guard
+  lowered, or that failed its restart, is Act again (ADR-0056 M8). A parent's adoption does not prune a task that names a child:
   `pruneOrphans` keeps a record with a `childSession` as it keeps kept work, a
   read-only one too, and a restore carries the name. A child's worktrees are out of
   its reach by D11. Continue never crosses runners, as ever.
@@ -463,9 +487,14 @@ the child cannot reach follows it in the parent's plan.**
   real server and a token bound to the attempt. The parent's deadlock is held there
   with real Sessions. `delegation.validation.test.ts` holds the plan rules on both
   routes, and `delegation.session.test.ts` who may write one.
-- D15 is tested with each route to a fresh attempt, a removal, a merge and a split:
-  the old child's worktrees and branches go and its state stays. A Continue, a repair
-  and a resume leave them.
+- D15 is tested in `childRunLifecycle.e2e.test.ts` on real repositories, with each
+  route to a fresh attempt, a removal and a run's own discard: the old child's
+  worktrees and branches go and its state stays. A Continue leaves them. D16 and D17
+  are tested there too: a Stop that resolves only once a held runner and a live turn
+  have gone, a start refused under it, a grandchild, a child opening as it comes, and a
+  crash in the middle of a child run, taken from the files a process left, followed by
+  a load that starts nothing, a Continue and a fresh retry. The harness test does a
+  Stop and a Continue with only the binary faked.
 
 ## Out of scope
 
@@ -604,4 +633,5 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-10-31 — D21's run setting implemented, off by default; nothing can delegate yet, so the planner is not taught it, and it moves only the root's mandate ([ADR-0030](0030-global-run-settings.md)).
 - 2026-10-31 — D10 to D13 and D17's prune implemented, reached by `Session.hostChild`: `createSession` is where a child is refused the user's checkout until `ChildPlanRunner` exists, a child takes its parent's isolation and never sweeps, a delete stops on what git could not let go, and a run a held lease refuses does not fall back to the checkout.
 - 2026-10-31 — D18 implemented in `SlotPool`, behind the lease (ADR-0059 L1): the root's pool reaches a child through `ChildPlacement`, and the subplanner's opening waits for a slot.
+- 2026-11-01 — D15, D16 and D17 implemented: a tombstone first, on the attempt, read at every claim and turn below it; `ChildNode.close` returns a child's budget on every end; a fresh attempt discards as it opens, not at the claim, and a stopped task may be continued. A subplanner replays on a reopen, since no planner saves a native session. A delete stops its tree first, and a root's `destroy` keeps the lease until its children have gone.
 - 2026-11-01 — one child plan end to end: D1, D2, D3 to D7, D8's plan rules and read-only script, and D19, in `ChildPlanRunner`, `models/Delegation.ts` and `PlanChangeCheck`. D21 gains the build's switch, and a protected path is one more check of the verdict.

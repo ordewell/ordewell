@@ -1054,6 +1054,11 @@ export class OrchestratorPool {
     this.clients.delete(sessionId);
   }
 
+  /** Stop a session's whole tree, and wait until it has gone; the session stays open (ADR-0055 D16). */
+  async stopTree(sessionId: string): Promise<void> {
+    await this.sessions.get(sessionId)?.stopSubtree();
+  }
+
   destroyAll(): void { for (const id of this.sessions.keys()) this.destroy(id); }
 }
 
@@ -1063,12 +1068,15 @@ export function getSessionList(workspace: string) { return listSessions(workspac
 export function getSession(sessionId: string, workspace: string) { return loadSession(sessionId, workspace); }
 
 /**
- * A session and the children saved under it. Their runs go first, since the
- * files that go next are the only record that names their worktrees and
- * branches (ADR-0055 D11). What git could not let go stops the delete, with the
- * records still in place and `close` not called, and is named in the error.
+ * A session and the children saved under it. Its tree stops first, since a
+ * child at work cannot have its worktrees taken from under it (ADR-0055 D16).
+ * Their runs go next: the files that follow are the only record that names
+ * their worktrees and branches (D11). What git could not let go stops the
+ * delete, with the records still in place and `close` not called, and is named
+ * in the error.
  */
-export async function removeSession(sessionId: string, workspace: string, close: () => void): Promise<boolean> {
+export async function removeSession(sessionId: string, workspace: string, stop: () => Promise<void>, close: () => void): Promise<boolean> {
+  await stop();
   const { refused } = await discardChildRuns(sessionId, workspace, createWorktreeIsolation({ config: new WebConfig() }));
   if (refused.length > 0) throw new Error(`The session was kept: ${refused.map(({ worktree, reason }) => `${worktree} (${reason})`).join(', ')}`);
   close();

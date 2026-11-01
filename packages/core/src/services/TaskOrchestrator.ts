@@ -258,6 +258,10 @@ export interface TaskOrchestratorDeps {
   leaveTree: () => void;
   /** This node's side of the tree's ledger; absent at the root, which is charged nothing, and on a flat run, which has no ledger (ADR-0056 M5). */
   budget?: NodeBudget;
+  /** Why nothing may start at this node (ADR-0055 D16, ADR-0056 M10); absent at the root, whose own Stop is its generation. */
+  nodeRefusal?: () => string | null;
+  /** The child `task` holds goes (ADR-0055 D15). Absent where no Session hosts one. */
+  discardChild?: (task: Readonly<Task>) => Promise<void>;
 }
 
 /**
@@ -312,6 +316,10 @@ export interface TaskOrchestratorOptions {
   openTurn?: () => void;
   /** A child's side of the tree's ledger (ADR-0056 M5). */
   budget?: NodeBudget;
+  /** See {@link TaskOrchestratorDeps.nodeRefusal}. */
+  nodeRefusal?: () => string | null;
+  /** See {@link TaskOrchestratorDeps.discardChild}. */
+  discardChild?: (task: Readonly<Task>) => Promise<void>;
 }
 
 /**
@@ -452,6 +460,7 @@ export class TaskOrchestrator {
       runs: deps.runs,
       leases: deps.leases,
       ...(deps.budget ? { budget: deps.budget } : {}),
+      ...(deps.discardChild ? { discardChild: deps.discardChild } : {}),
       landing: deps.landing,
       registry: deps.registry,
       workspaceRoot: deps.workspaceRoot,
@@ -571,6 +580,8 @@ export class TaskOrchestrator {
       limitFound: (runner, at) => pool.limitFound(node, runner, at),
       leaveTree: pool.join(node),
       ...(options.budget ? { budget: options.budget } : {}),
+      ...(options.nodeRefusal ? { nodeRefusal: options.nodeRefusal } : {}),
+      ...(options.discardChild ? { discardChild: options.discardChild } : {}),
     });
     return orchestrator;
   }
@@ -1122,6 +1133,7 @@ export class TaskOrchestrator {
     this.loadPlan(tasks, planRunners, true);
     this.store.resetForRun({ edited: true });
     this.retireResolversLeft(before);
+    this.retireChildrenLeft(before);
   }
 
   /**
@@ -1180,6 +1192,7 @@ export class TaskOrchestrator {
   planEdited(before: readonly Task[]): void {
     this.store.releaseMadeManual((id) => this.attempts.has(id));
     this.retireResolversLeft(before);
+    this.retireChildrenLeft(before);
     const was = new Map(before.map((task) => [task.id, task]));
     for (const check of this.store.allTasks) {
       if (!outOfRounds(check)) continue;
@@ -1619,6 +1632,14 @@ export class TaskOrchestrator {
   /** A planner's remove reaches no {@link releaseTask}: what it took out of the plan since `before` ends its conflicts here. */
   private retireResolversLeft(before: readonly Task[]): void {
     for (const { id } of flattenTasks(before)) if (!this.store.get(id)) this.retireResolvers(id);
+  }
+
+  /** A delegated task the edit took out leaves nothing naming its child's run, so that goes with it, once a child still stopping has (ADR-0055 D15). */
+  private retireChildrenLeft(before: readonly Task[]): void {
+    for (const task of flattenTasks(before)) {
+      if (task.type !== 'delegated' || !task.runnerSessionId || this.store.get(task.id)) continue;
+      this.unawaited(this.attempts.allWoundDown().then(() => this.deps.discardChild?.(task)), `Could not discard the child of task "${task.title}"`);
+    }
   }
 
   /** A control that would end a conflict waits for the resolver at work on it: a conflict has one worker (ADR-0015). */
@@ -2484,6 +2505,11 @@ export class TaskOrchestrator {
     return this.pool;
   }
 
+  /** Every runner this Session let go has gone. */
+  woundDown(): Promise<void> {
+    return this.attempts.allWoundDown();
+  }
+
   /** The Session is closing: the tree stops counting on it. */
   leaveTree(): void {
     this.deps.leaveTree();
@@ -2907,7 +2933,7 @@ export class TaskOrchestrator {
   /**
    * Why a start may not take its claim now, or null when it may: a Stop came
    * since it was admitted (ADR-0029), the task left the plan or is being
-   * marked complete, a resolver has its conflict, so a start of it would be a
+   * marked complete, this node may start nothing (ADR-0055 D16, ADR-0056 M10), a resolver has its conflict, so a start of it would be a
    * second worker on it (ADR-0015), a revert is taking back work it depends on
    * or skipped it since (ADR-0054), it
    * is outside the user's approval record (ADR-0035), its node's budget has no
@@ -2928,6 +2954,8 @@ export class TaskOrchestrator {
    */
   private startRefusal(taskId: string, admission: Admitted, { revives = false }: { revives?: boolean } = {}): string | null {
     if (!admission.current()) return STOPPED_BEFORE_START;
+    const refused = this.deps.nodeRefusal?.();
+    if (refused) return refused;
     const task = this.store.get(taskId);
     if (!task) return `There is no task "${taskId}" in this plan any more.`;
     if (task.status === 'skipped' && !revives) return `Task "${task.title}" was skipped after this start was asked for${task.skipReason ? `: ${task.skipReason}` : ''}. Start it again to run it.`;

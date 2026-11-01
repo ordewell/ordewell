@@ -277,6 +277,16 @@ export class TreeLedger {
     return found && this.node(found.path);
   }
 
+  /** What every child `parent` opened for `taskId` has spent, closed ones included: a retry's budget is what they left (ADR-0056 M10). */
+  spentOn(parent: NodePath, taskId: string): number {
+    return [...this.tree.values()].filter((node) => node.taskId === taskId && parentPath(node.path) === parent).reduce((total, node) => total + node.spent, 0);
+  }
+
+  /** Close the children of `parent` that `gone` picks by their task: no session is live in them, so what they hold would stay committed for good. */
+  closeChildren(parent: NodePath, gone: (taskId: string | undefined) => boolean): void {
+    for (const child of this.openChildren(parent)) if (gone(child.taskId)) this.close(child.path);
+  }
+
   private hold(path: NodePath): BudgetHold {
     this.live.set(path, (this.live.get(path) ?? 0) + 1);
     let released = false;

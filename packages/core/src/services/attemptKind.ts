@@ -143,6 +143,8 @@ export function checksTree(kind: AttemptKind): boolean {
 export function attemptWorkspace(kind: AttemptKind): LeaseWorkspace {
   if (inCheckout(kind)) return { kind: 'checkout' };
   if (kind.kind === 'repair') return { kind: 'worktree', intent: 'repair' };
+  // A child's code root, which a Continue reopens whether or not it lands (ADR-0055 D17).
+  if (kind.kind === 'continuation' && kind.work === 'delegatedReadOnly') return { kind: 'worktree', intent: 'restore' };
   if (landsNothing(kind)) return { kind: 'worktree', intent: 'readOnly' };
   return { kind: 'worktree', intent: kind.kind === 'continuation' || kind.kind === 'carryOver' ? 'restore' : 'fresh' };
 }

@@ -5,7 +5,7 @@ amends: ["0009", "0013", "0020", "0022"]
 
 # 0029 — The supervisor: levels, live planner turns, execution tools and auto-merge
 
-*Pending:* [ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — Stop reaches a subtree, tombstone first; landed work whose check has not passed holds `merge_all` and the automatic merges, and a model may not skip that check.
+*Pending:* [ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — landed work whose check has not passed holds `merge_all` and the automatic merges.
 *Pending:* [ADR-0056](0056-a-mandate-narrows-down-the-tree.md) — a child's questions go to its parent, and a loop guard ends a subplanner where it would lower a root.
 
 **Amends:** ADR-0009 and ADR-0022 — the planner gains execution tools, a further
@@ -257,7 +257,9 @@ by id with the admission the start was asked under, and reads the task as it
 stands then: a start that awaited first — its run opening, the user's answer —
 runs what the plan holds, an edit made meanwhile included. Each attempt keeps
 the admission it was claimed under, and the repair its conflict is owed claims
-under that one, so a Stop since withdraws the repair as it did the attempt.
+under that one, so a Stop since withdraws the repair as it did the attempt. Below
+the root a claim reads its ancestors' Stop too, so a Stop reaches a whole subtree,
+tombstone first ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D16).
 Whether the task may start at all is the one start rule
 ([ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)), read before the
 claim.
@@ -742,3 +744,4 @@ until #30 exists.
 - 2026-10-31 — `WakePolicy` holds a failure and a task gone idle, a run update has a size cap, and the level's rules go whole once a context ([ADR-0057](0057-information-moves-by-reference.md) R4, R5).
 - 2026-10-31 — what the wake policy saved goes out once due after a load and joins the saved inputs, opening no turn, instead of waiting in the policy for a run event that a quiet or finished run never sends.
 - 2026-10-31 — the user's Stop stands the supervisor down until they start work again, at every level and through a reload, and what was held waits on the plan; their stop of one task holds back only what is about it, and a loop guard refuses the supervisor's start of it. Seen in review: a held failure opened a turn on a stopped run, which at Act could start it again.
+- 2026-11-01 — a Stop reaches a subtree, tombstone first, and a child's claim reads its ancestors' ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D16).
