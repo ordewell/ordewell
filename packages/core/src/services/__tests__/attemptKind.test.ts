@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   attemptPrompt, attemptWorkspace, checksTree, classifyAttempt, decidesIsolation, landsNothing, mergeExcludes, takesSkills, writesCommit,
-  type AttemptKind, type AttemptPromptSources,
+  type AttemptKind, type AttemptPromptSources, type TaskWork,
 } from '../attemptKind';
-import { createTask, opsFlag, inheritedOps } from '../../models/Task';
+import { createTask, opsFlag, inheritedOps, type Task } from '../../models/Task';
 
 const repair = { n: 1, limit: 2 };
 const resume = { message: 'one more thing', resumeSessionId: 'sess-1' };
@@ -216,5 +216,42 @@ describe('the ops flag', () => {
     ['a choice of ops over changes', [{}, {}], true, true],
   ])('inherits with %s', (_label, from, chosen, expected) => {
     expect(inheritedOps(from, chosen)).toBe(expected);
+  });
+});
+
+describe('a delegated task\'s attempt (ADR-0055 D3)', () => {
+  const continued = (work: TaskWork): AttemptKind => classifyAttempt(work, { continuation: { message: 'go on', resumeSessionId: 'child-1' } });
+  const sources = (task: Partial<Task>) => ({ task: task as Task, plan: [], skills: [], repairPrompt: () => '', previousAttempt: () => undefined, previousHandoff: () => undefined });
+
+  it('is its own kind, read-only or not, and a repair outranks either', () => {
+    expect(classifyAttempt('delegated')).toEqual({ kind: 'delegated', readOnly: false });
+    expect(classifyAttempt('delegatedReadOnly')).toEqual({ kind: 'delegated', readOnly: true });
+    expect(classifyAttempt('delegated', { repair: { n: 1, limit: 2 } }).kind).toBe('repair');
+  });
+
+  it('lands unless it is read-only, and names the commit its landing is written from', () => {
+    expect(landsNothing(classifyAttempt('delegated'))).toBe(false);
+    expect(landsNothing(classifyAttempt('delegatedReadOnly'))).toBe(true);
+    expect(landsNothing(continued('delegatedReadOnly'))).toBe(true);
+    expect(writesCommit(classifyAttempt('delegated'))).toBe(true);
+    expect(writesCommit(classifyAttempt('delegatedReadOnly'))).toBe(false);
+    expect(writesCommit(continued('delegated'))).toBe(true);
+  });
+
+  it('runs in a worktree of its own: a read-only one in a throwaway, a continued one in what it left', () => {
+    expect(attemptWorkspace(classifyAttempt('delegated'))).toEqual({ kind: 'worktree', intent: 'fresh' });
+    expect(attemptWorkspace(classifyAttempt('delegatedReadOnly'))).toEqual({ kind: 'worktree', intent: 'readOnly' });
+    expect(attemptWorkspace(continued('delegated'))).toEqual({ kind: 'worktree', intent: 'restore' });
+  });
+
+  it('takes no skills and never excludes a merge', () => {
+    const kind = classifyAttempt('delegated');
+    expect(takesSkills(kind)).toBe(false);
+    expect(mergeExcludes(kind)).toBe(false);
+  });
+
+  it('is told its goal, not a runner\'s brief', () => {
+    expect(attemptPrompt(classifyAttempt('delegated'), sources({ goal: 'Reach it', type: 'delegated' }))).toBe('Reach it');
+    expect(attemptPrompt(classifyAttempt('delegated'), sources({ type: 'delegated' }))).toBe('');
   });
 });
