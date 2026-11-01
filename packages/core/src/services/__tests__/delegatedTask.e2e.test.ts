@@ -508,7 +508,7 @@ describe('what ends a child with nobody to ask (ADR-0056 M3, M8, M10)', () => {
     const held = heldTasks({ a: ['a.txt'], s: ['s.txt'] }, ['a', 's']);
     const { parent } = tree([SUBMIT([childTask('a', 1)])], {
       runner: held.runner,
-      tasks: [delegated({ budget: { tokens: 2_000_000, wallClockMs: 200 } }), check(), createTask({ id: 's', order: 3, title: 'Sibling', prompt: 'sibling' })],
+      tasks: [delegated({ budget: { tokens: 2_000_000, wallClockMs: 2500 } }), check(), createTask({ id: 's', order: 3, title: 'Sibling', prompt: 'sibling' })],
     });
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
     // A run's own start clears what is live, with nothing to stop yet.
@@ -524,8 +524,9 @@ describe('what ends a child with nobody to ask (ADR-0056 M3, M8, M10)', () => {
 
   it('ends blocked when its time runs out, its run stopped first', async () => {
     const held = heldTasks({ a: ['a.txt'] }, ['a']);
-    const { parent } = tree([SUBMIT([childTask('a', 1)])], { runner: held.runner, tasks: [delegated({ budget: { tokens: 2_000_000, wallClockMs: 150 } }), check()] });
+    const { parent } = tree([SUBMIT([childTask('a', 1)])], { runner: held.runner, tasks: [delegated({ budget: { tokens: 2_000_000, wallClockMs: 2500 } }), check()] });
     await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(held.runner.spawned).toContain('a'));
     await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('failed'), { timeout: 20_000 });
     expect(parent.planTasks.find((t) => t.id === 'd')?.verdict).toMatchObject({ reported: 'blocked', reason: expect.stringContaining('ran out') });
     expect(held.stopped).toContain('a');

@@ -83,6 +83,9 @@ still runs a single goal the old way.
   text marker. A task steers it with a cue in its prompt:
   `<fake-claude>{"delayMs":400,"write":{"A.txt":"hi"},"status":"blocked","reason":"why"}</fake-claude>`
   (all fields optional; see the header of `fake-claude.mjs` for the full list).
+  A planner is driven the same way, from a file of tool calls per turn
+  (`{"turnsFrom":"<path>"}`), which is how `delegatedTask.harness.e2e.test.ts`
+  runs a subplanner.
   `claude` is the POSIX shim and `claude.cmd` the Windows one.
 - `drive-pipeline.mjs` — drives a plan end to end through the fake `claude`
   (`--runner fake`, the default) so auto-advance, parallel task scheduling and

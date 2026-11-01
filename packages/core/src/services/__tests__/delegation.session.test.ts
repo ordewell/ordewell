@@ -91,7 +91,7 @@ describe('submit_plan and edit_plan', () => {
     replies.length = 0;
     const { session } = sessionWith([SUBMIT], { tokens: 5_000_000, offered: false });
     await session.startPlanning('A goal');
-    expect(replies[0]).toMatchObject({ isError: true, text: expect.stringContaining('it needs the delegate grant') });
+    expect(replies[0]).toMatchObject({ isError: true, text: expect.stringContaining('delegation is not available in this session') });
     session.destroy();
   });
 

@@ -75,10 +75,11 @@ export interface PlanChangeScope {
   catalog(runners: RunnerId[]): AssignmentCatalog & { runnerModes?: Record<RunnerId, RunnerModeInfo[]> };
   /**
    * The node a change is made on, with what it holds now and how far below the
-   * root it stands, read as each check runs (ADR-0056 M4). Absent, nothing may
-   * delegate: a one-shot planner has no node.
+   * root it stands, read as each check runs (ADR-0056 M4). Absent or undefined,
+   * nothing may delegate: a one-shot planner has no node, and a build that does
+   * not offer delegation reads no mandate for it.
    */
-  node?(): { mandate: Mandate; level: number };
+  node?(): { mandate: Mandate; level: number } | undefined;
   /** Whether a script can run sealed here (ADR-0036 S6): a change that brings a read-only one waits on this, as an attached skill waits on its lookup. */
   canSeal?(): Promise<boolean>;
   /** Where attached skill names are looked up; absent, none are. */

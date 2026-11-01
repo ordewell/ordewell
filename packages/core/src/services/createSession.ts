@@ -1383,19 +1383,14 @@ export class Session {
       skills: () => this.workspaceSkills(),
       handles: () => this.conversation.turnHandles(),
       guard: (before, after) => (guarded() ? this.supervision.checkEdit(before, after)?.refusal : undefined),
-      node: () => ({ mandate: this.offeredMandate(), level: this.authority.depth }),
+      // Read only where the build offers delegation, so a flat session's change meets what it always met (ADR-0055 D21).
+      node: () => (this.delegationOffered ? { mandate: this.mandate(), level: this.authority.depth } : undefined),
       canSeal: async () => (await this.fsAdapter.canSeal?.()) ?? false,
     };
   }
 
-  /** What this node holds, less `delegate` where the build does not offer it, whatever a stored setting says (ADR-0055 D21). */
-  private offeredMandate(): Mandate {
-    const mandate = this.mandate();
-    return this.delegationOffered ? mandate : { ...mandate, grants: new Set([...mandate.grants].filter((grant) => grant !== 'delegate')) };
-  }
-
   private get delegates(): boolean {
-    return this.offeredMandate().grants.has('delegate');
+    return this.delegationOffered && this.mandate().grants.has('delegate');
   }
 
   /** A line from Ordewell itself, kept in the transcript where it happened. */
@@ -2630,7 +2625,7 @@ export class Session {
 
   /** What the prompt says of this node's limits, as it stands when the planner starts (ADR-0055 D19). */
   private delegationBrief(): PlannerDelegation {
-    const { limits, grants } = this.offeredMandate();
+    const { limits, grants } = this.mandate();
     return { tokens: limits.tokens, delegatedTasks: limits.delegatedTasks, grantable: [...grants].filter((grant) => grant === 'research' || grant === 'delegate' || grant === 'effect') };
   }
 
