@@ -1,6 +1,6 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { aheadOfDraft } from '@ordewell/core/plan-utils';
-import { ALL_SLASH_COMMANDS, isBuiltinSlashCommand } from '../../../commands/slashCommands';
+import React, { useState, useRef, useEffect, useId, useMemo } from 'react';
+import { aheadOfDraft, composerTip } from '@ordewell/core/plan-utils';
+import { ALL_SLASH_COMMANDS, SLASH_COMMAND_NAMES, isBuiltinSlashCommand } from '../../../commands/slashCommands';
 import { QUEUE_TITLE, SendKeyHint, isSendNowKey } from './PendingMessages';
 
 interface SlashSuggestion {
@@ -29,6 +29,8 @@ interface ChatInputProps {
   onEscape?: () => boolean;
   disabledReason?: string;
   prefill?: string;
+  /** A state cue of the host's, drawn under the composer while it is empty (#137). */
+  hint?: string;
   /** Queued text taken back from the host; it lands above the current draft. */
   unsent?: { text: string; seq: number } | null;
   /** Discovered skills (global ~/.ordewell/skills/ + workspace .ordewell/skills/) merged into the / suggestion dropdown. */
@@ -180,6 +182,7 @@ export default function ChatInput({
   prefill,
   unsent,
   skills = [],
+  hint,
 }: ChatInputProps) {
   const [text, setText] = useState('');
   // The caret offset into `text` — tracked separately from `text` itself since
@@ -200,6 +203,28 @@ export default function ChatInput({
   // highlighted row into view for arrow-key navigation but NOT on mouse hover
   // (hovering a row that's already under the cursor must never move the list).
   const scrollOnSelectRef = useRef(false);
+  // Which command tip the empty composer shows (#137). It moves on only when the
+  // text is emptied, so a tip stays put while the user reads it.
+  const [tipSeq, setTipSeq] = useState(0);
+  const hadTextRef = useRef(false);
+  const descriptionId = useId();
+
+  // What the empty composer says: a live status or disabled reason when there
+  // is one, the command tip otherwise (#137). The placeholder draws it, and a
+  // visually hidden description exposes the same words to assistive technology.
+  const placeholderText = disabled && disabledReason
+    ? disabledReason
+    : placeholder || composerTip(tipSeq, SLASH_COMMAND_NAMES) || 'Type / for commands or describe what you want to build...';
+  // A hint belongs where the tip does: an empty composer. Typing is its own
+  // answer, and the cue would only compete with the draft.
+  const shownHint = text === '' ? hint : undefined;
+  // Only the reason outlives a draft: the tip describes an empty composer, and
+  // with text in it that description would be about something not shown.
+  const descriptionText = disabled && disabledReason
+    ? disabledReason
+    : text !== ''
+      ? ''
+      : shownHint ? `${placeholderText} ${shownHint}` : placeholderText;
 
   // The `/word` the caret is actively composing when it is *not* at the very
   // start of the message — e.g. "explain this bug /gri" with the caret right
@@ -272,8 +297,32 @@ export default function ChatInput({
     }
   };
 
+  // A new tip, status or disabled reason is a new placeholder, which can need
+  // a different height.
   useEffect(() => {
     autoResize();
+  }, [text, placeholderText]);
+
+  // The panel can narrow without React re-rendering, wrapping the same
+  // placeholder onto more rows. Width is not state, so observe the field's box;
+  // a height change here re-fires with the same width and is ignored.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    let width: number | null = null;
+    const observer = new ResizeObserver((entries) => {
+      const next = entries[0]?.contentRect.width;
+      if (next === undefined || next === width) return;
+      width = next;
+      autoResize();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (hadTextRef.current && text === '') setTipSeq((seq) => seq + 1);
+    hadTextRef.current = text !== '';
   }, [text]);
 
   // Applies a caret position queued by a mid-prompt splice, once React has
@@ -414,11 +463,6 @@ export default function ChatInput({
     }
   };
 
-  const getPlaceholderText = () => {
-    if (disabled && disabledReason) return disabledReason;
-    return placeholder || 'Type / for commands or describe what you want to build...';
-  };
-
   const renderedSuggestions = () => suggestions.map((s, i) => (
     <div
       key={s.label}
@@ -464,7 +508,9 @@ export default function ChatInput({
                 onKeyUp={(e) => setCursor(e.currentTarget.selectionStart ?? 0)}
                 onKeyDown={handleKeyDown}
                 onScroll={syncBackdropScroll}
-                placeholder={getPlaceholderText()}
+                placeholder={placeholderText}
+                aria-label="Message the planner"
+                aria-describedby={descriptionText ? descriptionId : undefined}
                 disabled={disabled}
                 rows={1}
               />
@@ -488,7 +534,10 @@ export default function ChatInput({
             </button>
           </div>
           {queues && <SendKeyHint />}
+          {shownHint && <div className="chat-input-hint">{shownHint}</div>}
         </div>
+        {/* Once aria-label names the field, its placeholder is drawn only; this keeps what it says in the accessible description (#137). */}
+        <span id={descriptionId} className="visually-hidden">{descriptionText}</span>
       </div>
     </div>
   );

@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- **The empty chat composer shows a command tip.** With nothing typed it
+  suggests one planner chat command, weighted toward `/allowlist`; typing hides
+  it and clearing the input shows the next. A "Reply to the planner" cue sits
+  under it once the planner has just spoken. The tip is part of the composer's
+  accessible description, and the box grows to fit it when the panel narrows
+  (#137).
+
 ## [0.12.1] - 2026-11-01
 
 ### Added

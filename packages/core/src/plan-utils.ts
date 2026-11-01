@@ -21,6 +21,8 @@ export { blockingFailures, repeatingChecks, planBlocks, type BlockingSubject, ty
 // What a loop's rows say (ADR-0045) is read the way the scheduler reads it.
 export { betweenRounds, outOfRounds, loopRoundOf, checkOf, loopRemovalRefusal, type TaskLoop } from './models/Loop';
 export { DELEGATION_OFFERED, PLANNED_WITH_LABEL, SUPERVISOR_LEVEL_LABEL, parseCount } from './services/runSettingsText';
+// The empty planner composer's tips (#137), one table for both planner chats.
+export { COMPOSER_TIPS, composerTip, type ComposerTip } from './services/composerTips';
 // The shared conversation view (#51) is pure too, so every surface — a webview
 // included — draws from the same reducer.
 export * from './conversation';
