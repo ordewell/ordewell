@@ -1011,10 +1011,12 @@ export class Session {
       turnAborted: () => this.approvals.clear(isPlannerApproval),
       // A planner switch or settings change made while no turn ran is made
       // before the next one takes the backend, and one made during a turn as
-      // soon as it is over.
+      // soon as it is over. A Retry compaction alone arrives here with no
+      // slot: run past the refusal, it would be one more than the tree's limit.
       turnClaiming: () => {
         this.backend.settle();
-        this.turnRoom();
+        const refused = this.turnRefusal();
+        if (refused) throw new Error(refused);
       },
       // After the turn has announced its end, so the next one never starts
       // ahead of it on a surface.
@@ -1643,11 +1645,15 @@ export class Session {
    * {@link turnRoomFreed}.
    */
   private turnRoom(): boolean {
-    if (this.turnLease) return true;
+    return this.turnRefusal() === null;
+  }
+
+  private turnRefusal(): string | null {
+    if (this.turnLease) return null;
     const reserved = this.orchestrator.reserveTurn();
-    if ('refused' in reserved) return false;
+    if ('refused' in reserved) return reserved.refused;
     this.turnLease = reserved.lease;
-    return true;
+    return null;
   }
 
   /** The pool has a slot for the turn it refused: the opening waiting for one, or else the next of the queue. */
@@ -2249,12 +2255,16 @@ export class Session {
   /**
    * Another host took the session over, judging this one gone (ADR-0049). Its
    * runners must not work on beside that host's, in the worktrees that host
-   * now prepares, so the run here stops.
+   * now prepares, so the run here stops. The planner turn is abandoned, not
+   * only stopped: a backend can still answer past a stop, and that reply would
+   * write a PRD into the checkout that host now holds. What waits behind it
+   * stays, for the gate to refuse with the hold's own reason (L5).
    */
   private leaseLost(held: SessionHeld): void {
     this.saveRefusedFor = held.holder.hostId;
     this.notice('error', describeLost(held));
     if (this.stopOwed) this.stopRun();
+    this.conversation.abandonTurn();
   }
 
   /** Something of the run would go on if left: work, a resume, a start on its way, or a loop a retry would carry on (ADR-0045 L5). */
@@ -2316,6 +2326,22 @@ export class Session {
     this.orchestrator.loadPlan([]);
     void this.runs.adopt(null);
     this.escalationNotifier.baseline([]);
+  }
+
+  /**
+   * The fresh plan of a goal its gate let in. The slot that gate took stays
+   * through the old scope's end: given back, the pool offers it on at once, and
+   * a sibling's kept turn leaves this one none (ADR-0055 D18). That end takes
+   * the process of any turn this one replaces, as {@link endTurnLease} would.
+   */
+  private beginFreshPlanForTurn(): void {
+    const slot = this.turnLease;
+    this.turnLease = null;
+    try {
+      this.beginFreshPlan({ keepGrants: true });
+    } finally {
+      this.turnLease = slot;
+    }
   }
 
   /**
@@ -2574,7 +2600,7 @@ export class Session {
     this.plan = null;
     this.goal = goal;
     this.remintSessionId();
-    this.beginFreshPlan({ keepGrants: true });
+    this.beginFreshPlanForTurn();
 
     const generated = await this.conversation.hold(options?.signal, async (turn) => {
       const { modelsByRunner, runnerModes } = await this.catalog.planning(chosenRunners);
@@ -2636,7 +2662,7 @@ export class Session {
       this.plan = null;
       this.goal = goal;
       this.remintSessionId();
-      this.beginFreshPlan({ keepGrants: true });
+      this.beginFreshPlanForTurn();
 
       const now = new Date().toISOString();
       this.plan = { tasks: [], generatedAt: now, status: 'draft', runners: chosenRunners, lastUpdated: now };
@@ -3294,6 +3320,8 @@ export class Session {
 
   /** Remove the run's worktrees and task branches; keep its integration branch to review or merge. */
   async cleanupRun(): Promise<void> {
+    // Before its children: closing a child's node writes to the holder's tree log, ahead of the isolation's own refusal.
+    this.refuseHeld();
     this.requireSettledRun();
     await this.withSave(async () => {
       await this.discardChildren();
@@ -3307,6 +3335,8 @@ export class Session {
    * otherwise (Mark not done), because only they know whether they kept the work.
    */
   async discardRun(): Promise<void> {
+    // As in cleanupRun.
+    this.refuseHeld();
     this.requireSettledRun();
     await this.withSave(async () => {
       await this.discardChildren();
