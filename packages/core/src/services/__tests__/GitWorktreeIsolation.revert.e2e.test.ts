@@ -1245,3 +1245,77 @@ describe('a checkout that holds the work with no merge of it', () => {
     expect(await iso.readLanded(run, [landed.id])).toMatchObject({ ok: true, inBranch: [{ repo: '.' }] });
   });
 });
+
+describe('reverting on an older git', () => {
+  /** Real git that says it is `version`, and turns `merge-tree --merge-base` down as a git before 2.40 does. */
+  const gitOf = (version: string): GitExecFn => (file, args, opts) => {
+    if (args[0] === '--version') return Promise.resolve({ stdout: `git version ${version}\n`, stderr: '' });
+    if (args.some((arg) => arg.startsWith('--merge-base'))) {
+      return Promise.reject(Object.assign(new Error('unknown option'), { stdout: '', stderr: "error: unknown option `merge-base=...'", code: 129 }));
+    }
+    return defaultExecFile(file, args, opts);
+  };
+
+  it('takes one landing back on git 2.39, keeping what landed beside it', async () => {
+    const root = initRepo(tempDir(), { 'shared.txt': 'one\ntwo\nthree\n' });
+    const iso = isolation({ execFileImpl: gitOf('2.39.5') });
+    const run = await iso.startRun(root);
+    const integration = run.repos[0].integrationBranch;
+    const first = task(1, 'Change the top');
+    const second = task(2, 'Change the bottom');
+    await land(iso, run, first, { 'shared.txt': 'ONE\ntwo\nthree\n' });
+    await land(iso, run, second, { 'shared.txt': 'ONE\ntwo\nTHREE\n' });
+
+    expect(await iso.revert(run, [first.id], nothingInTheWay)).toMatchObject({ outcome: 'reverted', tasks: [{ taskId: first.id }] });
+
+    expect(git(root, 'show', `${integration}:shared.txt`)).toBe('one\ntwo\nTHREE');
+    // What stood in for the merge's sides stays out of the branch's history.
+    expect(git(root, 'rev-list', '--count', `${integration}~1..${integration}`)).toBe('1');
+    expect(git(root, 'log', '-1', '--format=%s', integration)).toBe('Revert: Change the top');
+  });
+
+  it('stops on a conflict on git 2.39 and says which files', async () => {
+    const root = initRepo(tempDir(), { 'shared.txt': 'one\n' });
+    const iso = isolation({ execFileImpl: gitOf('2.39.5') });
+    const run = await iso.startRun(root);
+    const integration = run.repos[0].integrationBranch;
+    const first = task(1, 'Change it');
+    const second = task(2, 'Change it again');
+    await land(iso, run, first, { 'shared.txt': 'two\n' });
+    await land(iso, run, second, { 'shared.txt': 'three\n' });
+    const tip = git(root, 'rev-parse', integration);
+
+    expect(await iso.revert(run, [first.id], nothingInTheWay)).toMatchObject({ outcome: 'conflict', files: ['shared.txt'] });
+    expect(git(root, 'rev-parse', integration)).toBe(tip);
+  });
+
+  it('tells a run on git 2.37 what that costs, in the version it found', async () => {
+    const note = await isolation({ execFileImpl: gitOf('2.37.7') }).gitShortfall();
+
+    expect(note).toContain('git 2.38 or newer');
+    expect(note).toContain('2.37.7');
+    expect(note).not.toContain('patch');
+  });
+
+  it('adds what goes wrong with a patch on git 2.32', async () => {
+    expect(await isolation({ execFileImpl: gitOf('2.32.7') }).gitShortfall()).toContain("another task's patch");
+  });
+
+  it('has nothing to say on git 2.38, on an Apple build, or with no git at all', async () => {
+    expect(await isolation({ execFileImpl: gitOf('2.38.0') }).gitShortfall()).toBeNull();
+    expect(await isolation({ execFileImpl: gitOf('2.39.5 (Apple Git-154)') }).gitShortfall()).toBeNull();
+    const missing: GitExecFn = () => Promise.reject(Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' }));
+    expect(await isolation({ execFileImpl: missing }).gitShortfall()).toBeNull();
+  });
+
+  it('refuses on git 2.37, naming the version it needs', async () => {
+    const root = initRepo(tempDir());
+    const iso = isolation({ execFileImpl: gitOf('2.37.7') });
+    const run = await iso.startRun(root);
+    const landed = task(1, 'Add greeting');
+    await land(iso, run, landed, { 'greeting.txt': 'hi\n' });
+
+    expect(await iso.readLanded(run, [landed.id])).toMatchObject({ ok: false, reason: 'git', error: expect.stringContaining('git 2.38 or newer') });
+    expect(await iso.revert(run, [landed.id], nothingInTheWay)).toMatchObject({ outcome: 'failed', error: expect.stringContaining('git 2.38 or newer') });
+  });
+});

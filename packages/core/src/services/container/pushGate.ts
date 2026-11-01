@@ -1,5 +1,6 @@
-import { accessSync, constants } from 'fs';
-import { resolve } from 'path';
+import { accessSync, constants, mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join, resolve } from 'path';
 import { git, isAncestor, tryGit, type GitInvoker } from '../gitExec';
 
 /** Nothing a repository's hooks do belongs in this path: what is taken here came from a container. */
@@ -49,9 +50,30 @@ export async function takeThroughGate(invoker: GitInvoker, repo: string, bundle:
   try {
     const snapshot = (await git(invoker, repo, ['rev-parse', '--verify', `${quarantine}^{commit}`])).trim();
     if (await isAncestor(invoker, repo, base, `${snapshot}^1`) !== 'yes') throw new PushRefused(`its history does not stand on ${base}`);
+    await checkObjects(invoker, repo, snapshot, base);
     return snapshot;
   } finally {
     await tryGit(invoker, repo, [...NO_HOOKS, 'update-ref', '-d', quarantine]);
+  }
+}
+
+/**
+ * Hold what the snapshot brings to git's object checks. `FSCK` cannot be relied
+ * on for this: a fetch from a bundle reads it from some git on (2.47 does, 2.40
+ * does not) and an older one takes a tree that writes into `.git` without a word.
+ * Packing the snapshot's own objects and indexing them strictly checks the same
+ * things on every git, and only what could land.
+ */
+async function checkObjects(invoker: GitInvoker, repo: string, snapshot: string, base: string): Promise<void> {
+  const scratch = mkdtempSync(join(tmpdir(), 'ordewell-gate-'));
+  try {
+    const prefix = join(scratch, 'taken');
+    const packed = await tryGit(invoker, repo, ['pack-objects', '--revs', '-q', prefix], `${snapshot}\n^${base}\n`);
+    if (!packed.ok) throw new PushRefused(`git could not read what it holds (${packed.stderr.trim()})`);
+    const checked = await tryGit(invoker, repo, ['index-pack', '--strict', '-o', join(scratch, 'checked.idx'), `${prefix}-${packed.stdout.trim()}.pack`]);
+    if (!checked.ok) throw new PushRefused(`git would not take it (${checked.stderr.trim()})`);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
   }
 }
 

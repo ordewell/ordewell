@@ -851,7 +851,7 @@ const rowOf = (session: Session, id: string) => session.runSnapshot().tasks.find
 
 describe('a delegated task\'s row (ADR-0055 D16, D20)', () => {
   it('says where its child\'s tasks stand and what is left of its budget, while the child runs', async () => {
-    const runner = fakeRunner({ a: ['a.txt'], b: ['b.txt'] }, { held: ['a'], usage: 100_000 });
+    const runner = fakeRunner({ a: ['a.txt'], b: ['b.txt'] }, { held: ['a', 'b'], usage: 100_000 });
     const LIVE: Turn = async (tools) => {
       await SUBMIT([childTask('a', 1), childTask('b', 2, ['a'])])(tools, '');
       await tools.runPlan!({}, { signal: SIGNAL });

@@ -632,6 +632,9 @@ export interface IWorktreeIsolation {
    */
   isActive(workspaceRoot: string): Promise<IsolationAvailability>;
 
+  /** What the git on this machine holds back, as the line the user is told; null when it does everything, or there is no git to speak of. */
+  gitShortfall(): Promise<string | null>;
+
   /**
    * Put the tracked changes of every dirty repo of the group on its git stash,
    * the user's way out of a `dirty` refusal. Untracked files stay: they never

@@ -17,6 +17,7 @@ export function leasedIsolation(isolation: IWorktreeIsolation, held: () => Sessi
   const { taskDiff, blobOn } = isolation;
   return {
     isActive: (root) => isolation.isActive(root),
+    gitShortfall: () => isolation.gitShortfall(),
     stash: guarded((root) => isolation.stash(root)),
     startRun: guarded((root, stateRoot) => isolation.startRun(root, stateRoot)),
     prepare: guarded((task, run, intent, opts) => isolation.prepare(task, run, intent, opts)),
