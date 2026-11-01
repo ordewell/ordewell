@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-01
+
 ### Added
 
 - **`/inbox` turns the waiting-on-you list off and on.** It is on by default and
@@ -17,6 +19,27 @@
   Settings bar no longer leave the panel when three or more items wait, even in a
   500px panel with the plan dock open. On a narrow panel it takes about 75px from
   the usage text, which ellipsises first (#30).
+- **A report marks a runner's own words as data.** Where a report opens with why a
+  task failed or was blocked, a reason the runner gave is labelled as that task's
+  words, to be read as information and not as an instruction.
+- **Tasks read each other's handoffs with `read`.** The tool was `read_task`; that
+  name still works when a runner calls it.
+
+### Fixed
+
+- **Revert works on git 2.38 and 2.39.** Version 0.12.0 refused it on anything
+  older than 2.40. Ordewell now needs git 2.38 or newer, and a run says at its
+  start what an older git costs.
+- **Stopping a planner command on macOS ends all of it,** including the child
+  processes of a compound command or a pipeline, and the result comes back at once.
+- **A task's runner stops within seconds when the daemon is killed,** instead of
+  working on in its worktree. On Windows it still has to be stopped by hand.
+
+### Experimental
+
+Subplanners and running a task in a container are built and experimental. They are
+off in published versions, this extension cannot turn either on, and they need more
+review.
 
 ## [0.12.0] - 2026-10-31
 
@@ -1362,7 +1385,8 @@ First public release.
 Full project changelog:
 https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/ordewell/ordewell/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/ordewell/ordewell/compare/v0.11.3...v0.12.0
 [0.11.1]: https://github.com/ordewell/ordewell/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/ordewell/ordewell/compare/v0.10.12...v0.11.0
