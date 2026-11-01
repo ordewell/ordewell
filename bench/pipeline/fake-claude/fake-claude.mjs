@@ -19,8 +19,16 @@
  *   summary     the summary handed to task_complete
  *   noComplete  end the turn without calling task_complete (reads as "waiting for input")
  *   crash       exit non-zero before completing
+ *
+ * A planner's first message may carry `turnsFrom` instead: a file holding one
+ * list of tool calls per turn, each `[tool, arguments]`, made on the Ordewell
+ * server in order. A file, since a plan's prompts hold cues of their own. A
+ * subplanner is parked between turns (ADR-0055 D18), so what is left of them is
+ * kept beside the session, under FAKE_CLAUDE_STATE, for the `--resume` that
+ * takes its next turn. A planner writes no file of the workspace.
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import readline from 'node:readline';
@@ -129,8 +137,35 @@ async function callTool(server, name, args) {
   return { text, isError: result.isError === true };
 }
 
+function stateFile() {
+  return path.join(process.env.FAKE_CLAUDE_STATE ?? os.tmpdir(), `${sessionId}.json`);
+}
+
+/** This turn's calls: from a first message's cue, or what a turn before it left. Null when this is no scripted planner. */
+function plannerTurn(cue) {
+  const from = cue.turnsFrom ?? (flag('--resume') !== undefined && fs.existsSync(stateFile()) ? stateFile() : null);
+  const left = from ? JSON.parse(fs.readFileSync(from, 'utf8')) : null;
+  if (!left) return null;
+  const [calls = [], ...rest] = left;
+  fs.writeFileSync(stateFile(), JSON.stringify(rest));
+  return calls;
+}
+
+async function runPlannerTurn(calls) {
+  const server = mcpServer();
+  for (const [name, args] of calls) {
+    const id = `toolu_fake_${randomUUID()}`;
+    assistant([{ type: 'tool_use', id, name: `mcp__ordewell__${name}`, input: args }]);
+    const reply = await callTool(server, name, args);
+    toolResult(id, reply.text, reply.isError);
+  }
+  assistant([{ type: 'text', text: 'This turn is done.' }]);
+}
+
 async function runTurn(text, signal) {
   const cue = readCue(text);
+  const calls = plannerTurn(cue);
+  if (calls) return runPlannerTurn(calls);
   assistant([{ type: 'text', text: 'Starting the task.' }]);
 
   if (cue.delayMs) await sleep(cue.delayMs, signal);

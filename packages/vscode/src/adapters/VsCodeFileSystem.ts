@@ -90,9 +90,13 @@ function run(
  * `BaseFileSystem`; the adapter never re-derives containment.
  */
 export class VsCodeFileSystem extends BaseFileSystem {
+  constructor(private readonly fixedRoot?: string) { super(); }
+
   getWorkspaceRoot(): string {
-    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+    return this.fixedRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
   }
+
+  rootedAt(workspace: string): VsCodeFileSystem { return new VsCodeFileSystem(workspace); }
 
   /**
    * PATH for the search subprocesses. `execFile` starts them with no shell, so

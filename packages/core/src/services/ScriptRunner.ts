@@ -10,6 +10,7 @@ import { planDirectLaunch, type LaunchDeps } from '../utils/launch';
 import { killTree, spawnInOwnGroup } from '../utils/processTree';
 import { augmentedPath } from '../utils/shellPath';
 import { assertWorkspaceExists } from '../utils/workspace';
+import type { TaskShell, ToolOutcome } from '../interfaces/IFileSystem';
 import { AbstractRunner, AbstractRunnerSession, type RunnerSpawnOptions } from './AbstractRunner';
 import { runnerEnv } from './harness/runnerEnv';
 import { resolveResearchShell, type ResearchShell } from './researchShell';
@@ -49,6 +50,9 @@ const FULL_OUTPUT_MAX_CHARS = 64 * 1024 * 1024;
 const CLOSE_GRACE_MS = 2000;
 
 const NO_MODEL = 'A script task runs no model, so it takes no messages or commands.';
+
+/** How the sealed shell says it ran nothing (`OwnSealedRuns.run`). */
+const SEALED_REFUSAL = 'Not run: ';
 
 export type ScriptSpawnFn = (
   file: string,
@@ -103,6 +107,8 @@ interface ScriptSessionSetup {
   launch: LaunchDeps;
   shell: () => ResearchShell;
   fullOutput?: { file: string; maxChars: number };
+  /** A read-only script runs here, or not at all (ADR-0055 D8). */
+  sealed?: TaskShell;
 }
 
 /**
@@ -119,6 +125,10 @@ interface ScriptSessionSetup {
  * the group (`setsid`, `setpgrp`) is out of reach of a group signal, and once
  * its parent exits nothing ties it to the step: holding it is the work of a
  * boundary around the task, a container or a lease (#97, #99), not of a signal.
+ *
+ * A read-only script's steps run sealed instead (ADR-0055 D8), in the shell a
+ * read-only task's commands use and in its throwaway worktree: Stop and the time
+ * limit reach them through its signal, and what they print comes as each ends.
  */
 export class ScriptSession extends AbstractRunnerSession {
   private readonly events = new EventEmitter();
@@ -135,6 +145,8 @@ export class ScriptSession extends AbstractRunnerSession {
   private logTail = '';
   private omitted = 0;
   private full: { file: string; stream: fs.WriteStream; written: number; dropped: number; failed: boolean } | null = null;
+  /** Aborted to end a sealed step, which has no process of its own here to signal. */
+  private readonly sealedEnd = new AbortController();
   private markGone!: () => void;
   private readonly gone = new Promise<void>((resolve) => { this.markGone = resolve; });
 
@@ -186,16 +198,37 @@ export class ScriptSession extends AbstractRunnerSession {
     this.errorTail = '';
     let status: ScriptStatus;
     try {
-      const launch = await this.launchOf(step);
-      status = this.stopped || this.timedOut
-        ? { code: null, signal: null, error: 'it was ended before it started' }
-        : await this.spawnStep(launch);
+      if (this.setup.sealed) status = await this.sealedStep(step, this.setup.sealed);
+      else {
+        const launch = await this.launchOf(step);
+        status = this.stopped || this.timedOut
+          ? { code: null, signal: null, error: 'it was ended before it started' }
+          : await this.spawnStep(launch);
+      }
     } catch (err) {
       status = { code: null, signal: null, error: err instanceof Error ? err.message : String(err) };
     }
     this.flushLogTail();
     this.emit({ type: 'script_exit', durationMs: Date.now() - started, ...(this.timedOut ? { timedOut: true } : {}), ...status });
     return status;
+  }
+
+  /**
+   * A step through the sealed shell: from the worktree root it was cut at, the
+   * only place a sealed run may start, and on into the task's folder. A refusal
+   * ran nothing, so it says it could not start rather than that it failed.
+   */
+  private sealedStep(step: ScriptRun, shell: TaskShell): Promise<ScriptStatus> {
+    if (!shell.hold) return Promise.resolve({ code: null, signal: null, error: 'this host cannot run it sealed' });
+    return shell.hold(async (runs) => {
+      const root = runs.worktrees.find((tree) => this.setup.cwd === tree || this.setup.cwd.startsWith(`${tree}${path.sep}`));
+      if (root === undefined) return { code: null, signal: null, error: `${this.setup.cwd} is no worktree of this task` };
+      const inside = path.relative(root, this.setup.cwd);
+      const line = 'argv' in step ? step.argv.map(shellQuoted).join(' ') : step.script;
+      const outcome = await runs.run(inside ? `cd ${shellQuoted(inside)} && ${line}` : line, root);
+      if (outcome.output) this.printError(outcome.output.endsWith('\n') ? outcome.output : `${outcome.output}\n`);
+      return sealedStatus(outcome);
+    }, this.sealedEnd.signal);
   }
 
   /**
@@ -261,6 +294,7 @@ export class ScriptSession extends AbstractRunnerSession {
   private expire(): void {
     if (!this.running) return;
     this.timedOut = true;
+    this.sealedEnd.abort();
     if (this.child) killTree(this.child, { platform: this.setup.platform });
   }
 
@@ -348,6 +382,7 @@ export class ScriptSession extends AbstractRunnerSession {
   stop(): Promise<void> {
     if (this.running && !this.stopped) {
       this.stopped = true;
+      this.sealedEnd.abort();
       if (this.child) killTree(this.child, { platform: this.setup.platform });
     }
     return this.gone;
@@ -413,6 +448,7 @@ export class ScriptRunner extends AbstractRunner<ScriptSession> {
       platform,
       launch: { ...this.deps.launch, platform, resolvePath },
       shell: this.deps.shell ?? (() => resolveResearchShell()),
+      ...(opts.sealed ? { sealed: opts.sealed } : {}),
       ...(fullOutput ? { fullOutput: { file: fullOutput, maxChars: this.deps.fullOutputMaxChars ?? FULL_OUTPUT_MAX_CHARS } } : {}),
     });
     this.registerSession(session.id, session);
@@ -430,6 +466,18 @@ export class ScriptRunner extends AbstractRunner<ScriptSession> {
       return undefined;
     }
   }
+}
+
+/** A word as a POSIX shell reads it back: a sealed run takes one line, and an argument vector stays what it was. */
+function shellQuoted(word: string): string {
+  return `'${word.replace(/'/g, `'\\''`)}'`;
+}
+
+/** A sealed run has a shell's outcome, not a process's, and one the shell turned down ran nothing. */
+function sealedStatus(outcome: ToolOutcome): ScriptStatus {
+  if (outcome.success) return { code: 0, signal: null };
+  if (outcome.output.startsWith(SEALED_REFUSAL)) return { code: null, signal: null, error: outcome.output };
+  return { code: 1, signal: outcome.signal ?? null };
 }
 
 function passed(status: ScriptStatus): boolean {

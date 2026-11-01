@@ -39,6 +39,7 @@ const BASH_TIMEOUT_MS = 120_000;
 export class PoolFileSystem extends BaseFileSystem {
   constructor(private workspaceRoot: string) { super(); }
   getWorkspaceRoot(): string { return this.workspaceRoot; }
+  rootedAt(workspace: string): PoolFileSystem { return new PoolFileSystem(workspace); }
 
   /**
    * PATH for the search subprocesses. `execFile` starts them with no shell, so

@@ -861,3 +861,58 @@ describe('the edit protocol explains loop and research (ADR-0045, ADR-0037)', ()
     expect(protocol).toMatch(/"research": true on a read-only top-level AI task makes it a research task, whose task_complete report wakes you/);
   });
 });
+
+describe('delegation in the planner prompt (ADR-0055 D4, D21)', () => {
+  const modes = { 'claude-code': [{ id: 'plan', label: 'Plan', description: '', readOnly: true }, { id: 'build', label: 'Build', description: '' }] };
+  const base = { harness: true, runner: 'claude-code', execution: true, autorun: true, isolatedExecution: { repos: ['.'], shared: [] } };
+  const prompt = (variant: Parameters<typeof buildConversationSystemPrompt>[5] = {}) => buildConversationSystemPrompt('The goal', 'context', {}, ['claude-code'], modes, { ...base, ...variant });
+  const delegation = { tokens: 3_000_000, delegatedTasks: 8, grantable: ['research', 'delegate'] };
+  const brief = { protectedPaths: ['tests/', 'package.json'], readOnly: false };
+
+  it('says nothing of delegation when it is off, and adds one section when it is on: nothing else moves', () => {
+    const off = prompt();
+    const on = prompt({ delegation });
+    expect(off).not.toMatch(/"delegated"|DELEGATED TASKS/);
+    const section = on.slice(on.indexOf('DELEGATED TASKS:'), on.indexOf('RULES:'));
+    expect(section).toContain('"type": "delegated"');
+    expect(section).toContain('3000000 tokens');
+    expect(on.replace(section, '')).toBe(off);
+  });
+
+  it('teaches a flat plan as the default, a separable subdomain, a budget, the paths and a check', () => {
+    const on = prompt({ delegation });
+    expect(on).toMatch(/flat plan stays the default: delegate only a separable subdomain/);
+    expect(on).toMatch(/One coherent feature, or a change with cross-cutting invariants, stays flat/);
+    expect(on).toMatch(/"protectedPaths" is required unless "readOnly"/);
+    expect(on).toMatch(/Every delegated task needs a check/);
+  });
+
+  it('names no user to a subplanner, who has none, save the words of a plan\'s fields', () => {
+    const lines = prompt({ subplanner: brief }).split('\n');
+    const naming = lines.filter((line) => /\buser\b/i.test(line.replace(/"type": "ai\|user\|script"|"userSteps"|userSteps|"userStoriesCovered"|user stories|user story|"user"|users and sessions|user steps/g, '')));
+    expect(naming).toEqual([]);
+  });
+
+  it('tells a subplanner how it ends, what it may not change, and that nobody answers it', () => {
+    const text = prompt({ subplanner: brief });
+    expect(text.startsWith('You are a subplanner')).toBe(true);
+    expect(text).toMatch(/You end this one way: call task_complete/);
+    expect(text).toContain('These paths may not change: tests/, package.json.');
+    expect(text).toMatch(/nobody answers a question/);
+    expect(text).toMatch(/Ops tasks and manual tasks do not exist here/);
+    expect(text).toMatch(/YOUR GOAL: The goal/);
+    expect(text).not.toMatch(/plan_complete|ask_parent/);
+  });
+
+  it('asks a read-only subplanner for no change and names no paths', () => {
+    const text = prompt({ subplanner: { protectedPaths: [], readOnly: true } });
+    expect(text).toMatch(/This task lands nothing/);
+    expect(text).not.toMatch(/These paths may not change/);
+  });
+
+  it('teaches a subplanner that holds `delegate` too', () => {
+    const text = prompt({ subplanner: brief, delegation });
+    expect(text).toContain('DELEGATED TASKS:');
+    expect(text.startsWith('You are a subplanner')).toBe(true);
+  });
+});
