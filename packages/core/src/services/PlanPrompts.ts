@@ -159,7 +159,8 @@ function researchPhaseBlock(harnessMode: boolean, agents: InTurnAgents): string 
 export type InTurnAgents = string | null;
 
 export function inTurnAgents(harness: boolean, runner?: RunnerId, subagents = true): InTurnAgents {
-  if (!harness) return subagents ? 'spawn_research_agent' : null;
+  if (!subagents) return null;
+  if (!harness) return 'spawn_research_agent';
   switch (runner) {
     case 'claude-code': return 'your Agent tool';
     case 'codex': return 'your own subagents, if this session has them';
@@ -235,7 +236,7 @@ export interface ConversationVariant {
   runner?: RunnerId;
   /** The skill catalog: task skills it can attach on every path, planner skills it can load only with tools. */
   skills?: readonly SkillInfo[];
-  /** Whether an API planner's service can run Ordewell's research subagents; Gemini cannot (it has no `createSubagentChat`). */
+  /** Whether an API planner's service can run Ordewell's research subagents, which Gemini's cannot (it has no `createSubagentChat`), and a subplanner without `research` its harness's (ADR-0056 M6). */
   subagents?: boolean;
   /** Every AI task gets its own worktree (ADR-0013), so file overlap no longer forces an order; of every repo of a group (ADR-0014). */
   isolatedExecution?: IsolatedExecution;

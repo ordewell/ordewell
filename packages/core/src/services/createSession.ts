@@ -2614,6 +2614,7 @@ export class Session {
         ...(this.child ? { withheld: withheldPlannerTools(this.child.mandate('off')) } : {}),
         ...(this.delegates ? { delegates: true } : {}),
         ...(this.subplanner ? { subplanner: true } : {}),
+        ...(this.child && !this.child.mandate('off').grants.has('research') ? { noSubagents: true } : {}),
       },
       ...(this.delegates ? { delegation: this.delegationBrief() } : {}),
       ...(this.brief ? { subplanner: this.brief } : {}),
