@@ -26,7 +26,7 @@ import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
 import { IAiService, ConversationRequest, ConversationTurn, type ContextCondenseRequest } from './AiService';
 import type { TurnBudgets } from './PlannerBudgets';
 import { BaseAiService, ResearchChat, ResearchTurn, ToolResult, ConversationTurnContext } from './BaseAiService';
-import { toGeminiToolDeclarations } from './researchTools';
+import { listsPost, toGeminiToolDeclarations } from './researchTools';
 import { messageChars, type CompactableMessage } from './contextCompaction';
 import { BudgetedChat, condenseConversation, type CallInput, type ChatCompaction, type ContextSummarizer } from './budgetedChat';
 import type { SummaryCall } from './contextSummary';
@@ -36,6 +36,7 @@ import { TokenGauge, callBudget, replyTokens, type ChatBudget, type ModelLimits,
 const TOOL_DEFINITIONS = toGeminiToolDeclarations(false, false);
 /** With the task reads and execution tools a session offers its conversation (ADR-0029). */
 const CONVERSATION_TOOL_DEFINITIONS = toGeminiToolDeclarations(true, false);
+const BOARD_TOOL_DEFINITIONS = toGeminiToolDeclarations(true, false, true);
 
 interface GeminiPart {
   text?: string;
@@ -525,7 +526,7 @@ export class GeminiService extends BaseAiService implements IAiService {
 
     let currentProgress = req.onProgress;
     const host = req.compaction;
-    const researchChat = this.chat(seed, [{ functionDeclarations: req.plannerTools ? CONVERSATION_TOOL_DEFINITIONS : TOOL_DEFINITIONS }], {
+    const researchChat = this.chat(seed, [{ functionDeclarations: listsPost(req.plannerTools) ? BOARD_TOOL_DEFINITIONS : req.plannerTools ? CONVERSATION_TOOL_DEFINITIONS : TOOL_DEFINITIONS }], {
       onReasoning: (text, segmentId) => currentProgress({ type: 'thinking', text, segmentId }),
       onContent: (text, segmentId) => currentProgress({ type: 'text_delta', text, segmentId }),
       onUsage: (record) => currentProgress({ type: 'usage', record }),

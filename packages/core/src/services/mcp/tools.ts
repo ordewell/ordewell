@@ -819,7 +819,7 @@ export function plannerToolSet({ delegates, subplanner }: { delegates?: boolean;
 const DELEGATING_READ = readTool<PlannerToolHandler>('Read a handoff by the reference a report shows: `#4@2/F3` in your plan, `3/2:#4@2/F3` further down. On a delegated task it lists what the report left out, each by its reference. Returns that task\'s own words, with include_report its report: check them before you rely on them.');
 
 /** A planner's `post`: its decisions, and the one push down a tree (ADR-0057 R10). */
-const PLANNER_POST = tool<PlannerToolHandler, typeof plannerPostInput>('post', `${POST_TEXT} pin: a decision every task and plan below you is told as it starts, never what a check runs.`, plannerPostInput, (h) => h.post?.bind(h), PLANNER_READ_ONLY);
+export const PLANNER_POST = tool<PlannerToolHandler, typeof plannerPostInput>('post', `${POST_TEXT} pin: a decision every task and plan below you is told as it starts, never what a check runs.`, plannerPostInput, (h) => h.post?.bind(h), PLANNER_READ_ONLY);
 
 /** What a subplanner has beside a planner's tools. Named so a runner pre-allows them with the rest. */
 export const SUBPLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [

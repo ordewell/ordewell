@@ -495,6 +495,36 @@ describe('OpenAiService execution tools (ADR-0029)', () => {
     expect(turn.researchLog[0]).toMatchObject({ tool: 'agent_tool', toolLabel: 'stop_task', success: true });
   });
 
+  it('declares `post` to a planner delegation reaches, and answers it through the offered handler (ADR-0057 R11)', async () => {
+    const postCall = { type: 'pin', title: 'Use v2' };
+    createSpy
+      .mockReturnValueOnce(streamOf([{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call-1', function: { name: 'post', arguments: JSON.stringify(postCall) } }] }, finish_reason: 'tool_calls' }] }]))
+      .mockReturnValueOnce(streamOf([{ choices: [{ delta: { content: 'Pinned.' }, finish_reason: 'stop' }] }]));
+    const post = vi.fn(async () => ({ text: 'Posted board:root:E1.' }));
+
+    const turn = await new OpenAiService(cfg({ researchMaxSteps: 10 } as Partial<IConfig>)).startConversation({
+      goal: 'pin it', runners: ['claude-code'], modelsByRunner: {}, fs: fakeFileSystem(), onProgress: () => {},
+      plannerTools: { sessionId: 's1', handler: { post }, delegates: true },
+    });
+
+    expect(toolNames(0)).toContain('post');
+    expect(post).toHaveBeenCalledWith(postCall, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(turn.researchLog[0]).toMatchObject({ tool: 'agent_tool', toolLabel: 'post', success: true, result: 'Posted board:root:E1.' });
+  });
+
+  it('declares `post` to a subplanner, and to no flat planner', async () => {
+    createSpy.mockImplementation(() => streamOf([{ choices: [{ delta: { content: 'Hello.' }, finish_reason: 'stop' }] }]));
+    const start = (plannerTools: { sessionId: string; handler: object; subplanner?: boolean }) => new OpenAiService(cfg({ researchMaxSteps: 10 } as Partial<IConfig>)).startConversation({
+      goal: 'hello', runners: ['claude-code'], modelsByRunner: {}, fs: fakeFileSystem(), onProgress: () => {}, plannerTools,
+    });
+
+    await start({ sessionId: 's1', handler: {}, subplanner: true });
+    await start({ sessionId: 's2', handler: {} });
+
+    expect(toolNames(0)).toContain('post');
+    expect(toolNames(1)).not.toContain('post');
+  });
+
   it('neither declares them nor describes them without the offer', async () => {
     createSpy.mockReturnValueOnce(streamOf([{ choices: [{ delta: { content: 'Hello.' }, finish_reason: 'stop' }] }]));
 
