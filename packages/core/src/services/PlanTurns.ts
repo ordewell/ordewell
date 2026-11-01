@@ -91,7 +91,7 @@ export interface PlanTurnsHost {
    * installed-planner probe may replace.
    */
   plannerDetecting(): Promise<void> | null;
-  /** Throws {@link PlannerNotReadyError} when the planner in use now cannot plan. */
+  /** Throws why no turn may open now: {@link PlannerNotReadyError} when the planner in use cannot plan, or the refusal of a session another host holds (ADR-0049 L5). */
   assertPlannerReady(): void;
   /** The runner the planner runs as now, whose account a usage limit belongs to; null when it is not a coding agent. */
   plannerRunner(): RunnerId | null;
