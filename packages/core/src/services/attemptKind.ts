@@ -71,6 +71,20 @@ export function classifyAttempt(
   return owed.carriedFrom ? { kind: 'carryOver', from: owed.carriedFrom } : { kind: 'change' };
 }
 
+/**
+ * Whether this is the repair of a delegated task (ADR-0055 D14): a plain
+ * runner, on a task whose saved session is its child's and whose handoff is its
+ * subplanner's report, neither of which that runner's attempt replaces.
+ */
+export function repairsChild(task: Pick<Task, 'type'> | undefined, kind: AttemptKind): boolean {
+  return kind.kind === 'repair' && task?.type === 'delegated';
+}
+
+/** What an attempt leaves of the task's last handoff as it writes its own outcome: nothing, unless it {@link repairsChild}. */
+export function handoffKept(task: Pick<Task, 'type' | 'handoff'> | undefined, kind: AttemptKind): Task['handoff'] {
+  return repairsChild(task, kind) ? task?.handoff : undefined;
+}
+
 /** An ops task's attempt, fresh or continued, acts from the user's checkout (ADR-0020). */
 function inCheckout(kind: AttemptKind): boolean {
   return kind.kind === 'ops' || (kind.kind === 'continuation' && kind.work === 'ops');

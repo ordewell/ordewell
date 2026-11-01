@@ -1,4 +1,5 @@
 import { pausedOnLimit, waitsForReset, type Task } from '../models/Task';
+import { handoffKept, type AttemptKind } from './attemptKind';
 import type { PlanStore } from './PlanStore';
 import { summarizeOutput } from './promptAugment';
 import { readUsageLimitReset, type TurnFailure } from './runnerExit';
@@ -38,6 +39,7 @@ export interface ResumeNow {
 /** The attempt the limit stopped, as far as its pause reads it. */
 export interface LimitedAttempt {
   readonly runner: string;
+  readonly kind: AttemptKind;
   /** Whether it ran in a worktree of its own, which the pause keeps for the resume. */
   readonly worktree: boolean;
   /** Resumed after an earlier pause rather than started; see {@link RELAPSE_MS}. */
@@ -108,7 +110,7 @@ export class LimitPauses {
     else this.waitForReset(task, attempt, said);
     // Words are the turn's whole output, too long to stand as the reason.
     const reason = typeof said === 'string' ? `${attempt.runner} hit its usage limit` : said.message;
-    store.setTaskOutputSummary(taskId, summarizeOutput(reason, output));
+    store.setTaskOutputSummary(taskId, summarizeOutput(reason, output), handoffKept(task, attempt.kind));
     if (attempt.worktree) await this.host.keepWorktree(taskId);
     await this.host.settled(taskId);
   }

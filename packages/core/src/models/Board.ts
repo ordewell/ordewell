@@ -1,4 +1,5 @@
 import { HANDOFF_LIMITS, wordsFrom } from './Handoff';
+import { quotedLine, splitLines } from './lineBreaks';
 import type { NodePath } from './TreeEvent';
 
 /**
@@ -112,11 +113,11 @@ export function contestedKeys(entries: readonly BoardEntry[]): Set<string> {
 }
 
 /** An author's one-line field: quoted, so it stays one line and reads as a value. */
-const quoted = (text: string): string => JSON.stringify(text);
+const quoted = quotedLine;
 
-/** An author's detail, under a line of Ordewell's: every line break git or a terminal would honour, not only `\n`. */
+/** An author's detail, under a line of Ordewell's. */
 function indented(detail: string, by: string): string[] {
-  return detail.split(/\r\n|[\n\v\f\r\u0085\u2028\u2029]/).map((line) => `${by}${line}`);
+  return splitLines(detail).map((line) => `${by}${line}`);
 }
 
 function byText({ node, task }: BoardAuthor): string {

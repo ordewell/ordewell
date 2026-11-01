@@ -1031,7 +1031,7 @@ describe('a landing that conflicts (ADR-0055 D14)', () => {
       spawn: vi.fn(async (opts) => {
         if (opts.taskId !== 'd') return held.runner.spawn(opts);
         repairs.push({ mode: opts.mode, cwd: opts.cwd, prompt: opts.prompt });
-        const repair = new FakeRunnerSession(`repair-${repairs.length}`, 'd');
+        const repair = new FakeRunnerSession(`repair-${repairs.length}`, 'd', 'native-repair');
         const finish = () => {
           if (waitsFor && !waitsFor()) {
             setTimeout(finish, 5);
@@ -1074,6 +1074,12 @@ describe('a landing that conflicts (ADR-0055 D14)', () => {
     expect(task(made.parent, 'd')?.taskMode).toBeUndefined();
     expect(made.planner.requests).toHaveLength(1);
     expect(git(made.root, 'show', `${integrationOf(made.parent)}:x.txt`)).toBe('both');
+    // Its child's two names and its report outlast the repair, a plain runner with a session of its own.
+    const child = made.parent.planState?.isolation?.run.tasks.d.childSession;
+    expect(child).toBeDefined();
+    expect(task(made.parent, 'd')?.runnerSessionId).toBe(child);
+    expect(task(made.parent, 'd')?.handoff?.subtree?.counts.done).toBe(1);
+    expect(task(made.parent, 'd')?.handoff?.summary).not.toBe('Repaired.');
     made.parent.destroy();
   });
 
@@ -1086,6 +1092,8 @@ describe('a landing that conflicts (ADR-0055 D14)', () => {
     await vi.waitFor(() => expect(task(made.parent, 'd')).toMatchObject({ status: 'awaiting_user', awaitingReason: 'conflict' }), { timeout: 20_000 });
     expect(repairs).toHaveLength(1);
     expect(git(made.root, 'show', `${integrationOf(made.parent)}:tests/guard.txt`)).toBe('the check reads this');
+    expect(task(made.parent, 'd')?.runnerSessionId).toBe(made.parent.planState?.isolation?.run.tasks.d.childSession);
+    expect(task(made.parent, 'd')?.handoff?.subtree).toBeDefined();
     made.parent.destroy();
   });
 

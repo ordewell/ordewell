@@ -4,6 +4,7 @@ import type { RunnerCommand } from '../models/RunnerCommand';
 import type { Task, VerificationCheck } from '../models/Task';
 import { checkHandoff, type HandoffCheck, type SubtreeReport } from '../models/Handoff';
 import { countChildTasks, underProtectedPath, type ChildTaskCounts } from '../models/Delegation';
+import { onOneLine } from '../models/lineBreaks';
 import type { UsageRecord } from '../models/Usage';
 import { AbstractRunner, AbstractRunnerSession, type RunnerSpawnOptions } from './AbstractRunner';
 import type { CheckpointAnswer, McpToolReply, TaskCompleteArgs } from './mcp/tools';
@@ -385,7 +386,7 @@ export class ChildPlanSession extends AbstractRunnerSession {
     const changed = await this.setup.host.changedPaths(this.taskId);
     const touched = changed.filter((file) => paths.some((rule) => underProtectedPath(file, rule)));
     if (touched.length === 0) return undefined;
-    return { name: 'protected_paths', passed: false, skipped: false, detail: `The child plan changed protected paths, so its work does not land: ${touched.join(', ')}.` };
+    return { name: 'protected_paths', passed: false, skipped: false, detail: `The child plan changed protected paths, so its work does not land: ${touched.map(onOneLine).join(', ')}.` };
   }
 
   /**

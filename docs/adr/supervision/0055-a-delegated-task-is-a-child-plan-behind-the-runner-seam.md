@@ -337,7 +337,12 @@ the child cannot reach follows it in the parent's plan.**
   tasks, and set on the repair attempt for that one use. A delegated task has no
   `taskMode` on the plan, so a repair never falls to the spawn's `build`, which is
   wider than a Guarded run's mode on one runner and no mode at all on another.
-  `classifyAttempt` already ranks a repair first. A repair lands after the verdict, so
+  `classifyAttempt` already ranks a repair first. A repair is that plain runner to the
+  ledger too: what it spends is charged as a runner's is, where a child's rolled up
+  from its node. It runs on a task whose saved session is the child's and whose
+  handoff is its subplanner's report, so it replaces neither: D15 and D17 still find
+  the child, and its own handoff goes to its attempt's log, where a read of that
+  attempt finds it, its words held as ADR-0057 R3 says. A repair lands after the verdict, so
   `Landing.settleRepair` holds it to D7: one whose `repairBase..branch` diff, what the
   branch brings onto the tip it was repaired against, touches a protected path goes
   `unrepaired`, as one that leaves conflict markers does. A repo the landing did not
@@ -704,3 +709,4 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-11-01 — from a real run: a Continue with nothing left to run goes to its subplanner's turn, where it had failed on Execute's refusal; a report counts every opening of its task; a Stop says what a Continue keeps and Execute discards.
 - 2026-11-01 — D20 on the TUI and VS Code: a delegated row's `delegation` (child counts, budget left, stopping), a report's `open` and `promoted`, VS Code's raise and answer words, and a Merge all that asks before it goes past a check. A webview is told by its host that delegation is offered, which it could not read itself.
 - 2026-11-01 — from review and a real run: a ready check starts by itself once its delegated task passes, on every route (D8, D9); a check whose runner cannot be read holds as any does; a restart says a parked question is lost, and Continue picks the child up (D17).
+- 2026-11-01 — from review: a repair is charged to the ledger and leaves the child's names and the report as they stood (D14).

@@ -35,7 +35,7 @@ import { landed, planStartWaits, selectReadyTasks, startWaits, waitOf, type Forc
 import type { ResearchTasks } from './ResearchTasks';
 import { blockingFailures, planBlocks, repeatingChecks } from './blocking';
 import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
-import { decidesIsolation, type Continuation } from './attemptKind';
+import { decidesIsolation, handoffKept, type Continuation } from './attemptKind';
 import type { SkillLookup } from './taskSkills';
 import { SkillsService } from './SkillsService';
 import { capConflictFiles } from './conflictFiles';
@@ -1618,7 +1618,7 @@ export class TaskOrchestrator {
     if (attempt) {
       if (attempt.kind.kind === 'repair') this.store.markAwaitingUser(taskId, 'conflict');
       else this.store.markFailed(taskId);
-      this.store.setTaskOutputSummary(taskId, summarizeOutput(reason, ''));
+      this.store.setTaskOutputSummary(taskId, summarizeOutput(reason, ''), handoffKept(this.store.get(taskId), attempt.kind));
       // Its landing may be what threw, so the release does not wait on it.
       if (attempt.worktree) this.unawaited(this.leases.letGo(taskId, { keep: true, reason: 'unsettled' }), `Could not keep the worktree of task "${title}"`);
     }

@@ -1,6 +1,7 @@
 import type { Task } from './Task';
 import { GRANTS, type Grant } from '../services/Mandate';
 import { flattenTasks } from './Task';
+import { ONE_LINE, splitLines } from './lineBreaks';
 import { taggedReadOnlyMode, type RunnerModeInfo } from '../services/ModeResolver';
 
 /** A delegated task's budget: tokens, and optionally wall-clock time (ADR-0056 M5). */
@@ -182,7 +183,7 @@ export function delegationErrors(tasks: readonly Task[], rules: DelegationRules 
 function scopeOk(scope: unknown): boolean {
   if (typeof scope !== 'object' || scope === null) return false;
   const { paths, provides, consumes } = scope as Record<string, unknown>;
-  const itemOk = (item: unknown) => typeof item === 'string' && item.trim().length > 0 && item.length <= SCOPE_LIMITS.item && !/[\r\n]/.test(item);
+  const itemOk = (item: unknown) => typeof item === 'string' && item.trim().length > 0 && item.length <= SCOPE_LIMITS.item && ONE_LINE.test(item);
   return [paths, provides, consumes].every((list) => list === undefined || (Array.isArray(list) && list.length <= SCOPE_LIMITS.items && list.every(itemOk)));
 }
 
@@ -214,14 +215,29 @@ export function checksHoldingMerge(tasks: readonly Task[], awaitsMerge: (taskId:
     .filter((check) => check.status !== 'completed' && check.status !== 'skipped');
 }
 
+/** Something a check is made of. A `command` is the check itself at any length, where prose says little until it has some. */
+export interface CheckWord {
+  text: string;
+  command: boolean;
+}
+
+/** The commands a check runs, a script's one by one: holding any of them is holding the check. */
+function commandsOf({ script, commands }: Task): string[] {
+  const written = splitLines(script ?? '').flatMap((line) => line.split(/[;|&]+/)).map((command) => command.trim()).filter((command) => !command.startsWith('#'));
+  return [...written, ...(commands ?? []).map((argv) => argv.join(' '))].filter(Boolean);
+}
+
 /**
  * What this plan's checks are made of (ADR-0057 R10): the words of whatever
  * depends directly on a delegated task, which is all a pure reader of the plan
  * can tell a check by. A pin may hold none of them whole.
  */
-export function checkWords(tasks: readonly Task[]): string[] {
+export function checkWords(tasks: readonly Task[]): CheckWord[] {
   const delegated = new Set(tasks.filter((t) => t.type === 'delegated').map((t) => t.id));
-  return tasks.filter((t) => t.dependencies.some((id) => delegated.has(id))).flatMap((t) => [t.title, t.prompt ?? '', t.script ?? '', ...(t.commands ?? []).map((argv) => argv.join(' '))]);
+  return tasks.filter((t) => t.dependencies.some((id) => delegated.has(id))).flatMap((t) => [
+    ...[t.title, t.prompt ?? ''].map((text) => ({ text, command: false })),
+    ...commandsOf(t).map((text) => ({ text, command: true })),
+  ]);
 }
 
 /** Whether `task` is the check of a delegated task of `tasks`: what a model may not skip past, since that lets the work past its only check (D8). */

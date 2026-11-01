@@ -1,7 +1,8 @@
 import { flattenTasks, type Task } from '../models/Task';
 import { checkHandoff, handoffReferenceText, pinReference, type BelowPlan, type FindingSeverity, type Handoff, type HandoffCheck, type HandoffDigest, type HandoffEvidence, type HandoffFinding, type HandoffPins, type ReportItem, type SubtreeReport, type TaskEvidence } from '../models/Handoff';
+import { onOneLine } from '../models/lineBreaks';
 import { isWithin, ROOT_NODE, type NodePath } from '../models/TreeEvent';
-import { handoffLogs, loggedHandoff, type TaskLogReader } from './readTask';
+import { handoffAttempt, handoffLogs, loggedHandoff, type TaskLogReader } from './readTask';
 import { taskRefOf } from './TaskRefs';
 
 /** One node as a tree's log names it (ADR-0058 S3). */
@@ -101,7 +102,7 @@ export class Subtree {
 /** The handoff `attempt` of a task ended with: its log's, or the plan's digest for the attempt that digest is from. */
 function handoffOf(plan: NodePlan, taskId: string, attempt: number | undefined): HandoffDigest | undefined {
   const task = flattenTasks(plan.tasks).find((t) => t.id === taskId);
-  const reached = attempt ?? plan.logs.attempts(taskId).at(-1);
+  const reached = attempt ?? handoffAttempt(task, plan.logs.attempts(taskId));
   const logged = reached === undefined ? undefined : loggedHandoff(plan.logs.events(taskId, reached));
   return logged ?? (task?.handoff && (attempt === undefined || task.handoff.attempt === attempt) ? task.handoff : undefined);
 }
@@ -197,7 +198,7 @@ export function subtreeListing(subtree: SubtreeReport, plans: readonly NodePlan[
       const label = taskRefOf(plan.tasks, task.id) ?? task.id;
       for (const finding of handoff?.findings ?? []) {
         const ref = handoffReferenceText({ kind: 'task', node: plan.node, task: task.id, label, ...(handoff?.attempt !== undefined ? { attempt: handoff.attempt } : {}), finding: finding.id });
-        if (!shown.has(ref)) listed.push(`- ${ref} [${finding.severity}] ${finding.title}`);
+        if (!shown.has(ref)) listed.push(`- ${ref} [${finding.severity}] ${onOneLine(finding.title)}`);
       }
     }
   }
