@@ -39,6 +39,22 @@ describe('a subtree\'s task runners', () => {
   });
 });
 
+describe('a subplanner\'s own process (ADR-0057 R11)', () => {
+  it('loads as little as its tasks do unless the settings file says otherwise', async () => {
+    const { parent, planner } = tree([SUBMIT([childTask('a', 1)]), DONE]);
+    await endsDone(parent);
+    expect(planner.requests[0].plannerTools?.runnerConfig).toBe('minimal');
+    parent.destroy();
+  });
+
+  it('keeps the user\'s setup where the settings file asks for it', async () => {
+    const { parent, planner } = tree([SUBMIT([childTask('a', 1)]), DONE], { settings: { taskRunnerConfig: 'user' } });
+    await endsDone(parent);
+    expect(planner.requests[0].plannerTools?.runnerConfig).toBe('user');
+    parent.destroy();
+  });
+});
+
 describe('a subplanner\'s own subagents (ADR-0056 M6)', () => {
   it('are withheld without `research`', async () => {
     const { parent, planner } = tree([SUBMIT([childTask('a', 1)]), DONE]);

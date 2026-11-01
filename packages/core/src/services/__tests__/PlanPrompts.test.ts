@@ -867,7 +867,7 @@ describe('delegation in the planner prompt (ADR-0055 D4, D21)', () => {
   const base = { harness: true, runner: 'claude-code', execution: true, autorun: true, isolatedExecution: { repos: ['.'], shared: [] } };
   const prompt = (variant: Parameters<typeof buildConversationSystemPrompt>[5] = {}) => buildConversationSystemPrompt('The goal', 'context', {}, ['claude-code'], modes, { ...base, ...variant });
   const delegation = { tokens: 3_000_000, delegatedTasks: 8, grantable: ['research', 'delegate'] };
-  const brief = { protectedPaths: ['tests/', 'package.json'], readOnly: false };
+  const brief = { protectedPaths: ['tests/', 'package.json'], readOnly: false, runner: 'claude-code' as const };
 
   it('says nothing of delegation when it is off, and adds one section when it is on: nothing else moves', () => {
     const off = prompt();
@@ -905,9 +905,40 @@ describe('delegation in the planner prompt (ADR-0055 D4, D21)', () => {
   });
 
   it('asks a read-only subplanner for no change and names no paths', () => {
-    const text = prompt({ subplanner: { protectedPaths: [], readOnly: true } });
+    const text = prompt({ subplanner: { protectedPaths: [], readOnly: true, runner: 'claude-code' } });
     expect(text).toMatch(/This task lands nothing/);
     expect(text).not.toMatch(/These paths may not change/);
+  });
+
+  it('tells a subplanner its own runner and models, so a plan takes no call to read them', () => {
+    const models = { 'claude-code': [{ modelId: 'haiku', modelLabel: 'Haiku', variants: [{ id: 'low', label: 'Low' }, { id: 'high', label: 'High' }] }, { modelId: 'sonnet', modelLabel: 'Sonnet', variants: [] }] };
+    const text = buildConversationSystemPrompt('The goal', 'context', models, ['claude-code'], modes, { ...base, subplanner: brief });
+    expect(text).toContain('You plan on "claude-code". Its models: haiku (low, high), sonnet.');
+    expect(text).toMatch(/Call list_runners and list_models only to assign another runner/);
+    expect(text).not.toMatch(/Call list_runners: the enabled runners|Read them just before you submit|then call list_runners and list_models/);
+  });
+
+  it('sends a subplanner to list_models when it has no list to be told', () => {
+    expect(prompt({ subplanner: brief })).toContain('You plan on "claude-code". Call list_models before you assign a model.');
+  });
+
+  it('asks a subplanner for no outline: nobody reads one', () => {
+    const text = prompt({ subplanner: brief });
+    expect(text).not.toMatch(/prose outline|the outline in your reply/);
+    expect(text).toMatch(/end your reply with one line/);
+  });
+
+  it('leaves out what does not exist below the root', () => {
+    const text = prompt({ subplanner: brief });
+    expect(text).not.toContain('CHANGE AND OPS TASKS:');
+    expect(text).toContain('BUILD PLANS:');
+    expect(prompt()).toContain('CHANGE AND OPS TASKS:');
+  });
+
+  it('teaches a planner the catalog and the outline as before', () => {
+    const text = prompt();
+    expect(text).toContain('1. Call list_runners: the enabled runners');
+    expect(text).toMatch(/outline/);
   });
 
   it('teaches a subplanner that holds `delegate` too', () => {

@@ -115,15 +115,17 @@ function settingSources(readOnly: boolean, minimal: boolean): string[] {
 const TASK_COMPACT_WINDOW_TOKENS = 150_000;
 const TASK_ENV = { ...NO_AUTO_MEMORY, CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(TASK_COMPACT_WINDOW_TOKENS) };
 
+/** Connectors come from the account and no setting source governs them, hence the variable; a CLI that ignores it costs tokens and breaks nothing. */
+const NO_CONNECTORS = { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' };
+
 /**
  * A `minimal` task runner's context (`taskRunnerConfig`). Its setting sources
  * ({@link settingSources}) leave out the user's servers, skills, commands,
  * settings and instructions and keep the repository's, which is the toolchain
  * a task was started to use (ADR-0028), so a task must not lose them to save
- * tokens. Connectors come from the account and no source governs them, hence
- * the variable; a CLI that ignores it costs tokens and breaks nothing.
+ * tokens.
  */
-const MINIMAL_TASK_ENV = { ...TASK_ENV, ENABLE_CLAUDEAI_MCP_SERVERS: 'false' };
+const MINIMAL_TASK_ENV = { ...TASK_ENV, ...NO_CONNECTORS };
 
 /**
  * A read-only task loads nothing of the repository's in any case (ADR-0046),
@@ -132,6 +134,17 @@ const MINIMAL_TASK_ENV = { ...TASK_ENV, ENABLE_CLAUDEAI_MCP_SERVERS: 'false' };
  * prompt, not loaded from here.
  */
 const MINIMAL_READ_ONLY_ARGS = ['--strict-mcp-config', '--disable-slash-commands'];
+
+/**
+ * What a subplanner reads and looks up with (ADR-0057 R11): every other native
+ * tool, the skills they list and the connectors would ride in each of its
+ * calls, and nobody is there for them. `ToolSearch` stays, for all it finds: a
+ * model handed a list without it was found to read Ordewell's tools as missing,
+ * and end a Continue saying it had no `task_complete`. The strict flag and
+ * {@link NO_CONNECTORS} go with this list and never apart from it: a connector's
+ * tools cost more than it saves.
+ */
+const SUBPLANNER_NATIVE_TOOLS = ['Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch', 'ToolSearch'];
 
 /**
  * Whether `abs` is in the folder Claude Code saves this session's long tool
@@ -615,6 +628,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     const allowedShell = nativeShell ? DISALLOWED_TOOLS.filter((tool) => !NATIVE_SHELL_TOOLS.has(tool)) : DISALLOWED_TOOLS;
     // Both names: 2.1.314 lists `Task`, and the flag takes it out of the session's tools (ADR-0056 M6).
     const disallowed = opts.noSubagents ? [...allowedShell, ...SUBAGENT_TOOLS] : allowedShell;
+    const minimal = opts.runnerConfig === 'minimal';
+    const nativeTools = [...SUBPLANNER_NATIVE_TOOLS, ...(nativeShell ? NATIVE_SHELL_TOOLS : []), ...(opts.noSubagents ? [] : ['Agent'])];
     const args = [
       ...PROTOCOL_ARGS,
       // The read-only guarantee, enforced at spawn rather than by prompt.
@@ -623,11 +638,11 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       '--disallowedTools', disallowed.join(','),
       // In `-p` a repository's settings apply trusted or not: their hooks,
       // `env` and helper commands run before the first turn (ADR-0028).
-      '--setting-sources', 'user',
+      ...(minimal ? ['--setting-sources=', '--strict-mcp-config', '--tools', nativeTools.join(',')] : ['--setting-sources', 'user']),
       '--settings', nativeShell ? nativeShellSettings(nativeShell) : PLANNER_SETTINGS,
       '--append-system-prompt', opts.systemPrompt,
     ];
-    if (opts.mcp) args.push(...this.ordewellServerArgs(opts.mcp, 'planner', this.plannerServers(opts, { ...process.env, ...workspace })));
+    if (opts.mcp) args.push(...this.ordewellServerArgs(opts.mcp, 'planner', minimal ? undefined : this.plannerServers(opts, { ...process.env, ...workspace })));
     if (opts.model) args.push('--model', opts.model);
     // `adaptive` is a thinking *type*, not an effort rung: `--effort adaptive`
     // is warned about and ignored, and adaptive is the default for every model
@@ -646,10 +661,11 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     // login stays (N3). The launcher's two variables are here as well as in
     // `--settings` env: the settings block is the one that wins, and this
     // covers whatever reads them before settings are parsed.
+    const memoryOff = minimal ? { ...NO_AUTO_MEMORY, ...NO_CONNECTORS } : NO_AUTO_MEMORY;
     return {
       command: 'claude',
       args,
-      env: nativeShell ? { ...NO_AUTO_MEMORY, ...nativeShell.env } : NO_AUTO_MEMORY,
+      env: nativeShell ? { ...memoryOff, ...nativeShell.env } : memoryOff,
       ...(nativeShell ? { envDrop: isCredentialVariable } : {}),
     };
   }
