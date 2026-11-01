@@ -184,7 +184,7 @@ export function wakeDue(held: readonly RunEvent[], facts: () => WakeFacts, debou
 }
 
 /** What moves on its own: nothing about these waits needs a decision. */
-const PASSING_WAITS: ReadonlySet<StartWaitKind> = new Set<StartWaitKind>(['completing', 'queued', 'merging', 'usage-limit', 'start-hold']);
+const PASSING_WAITS: ReadonlySet<StartWaitKind> = new Set<StartWaitKind>(['completing', 'queued', 'merging', 'usage-limit', 'start-hold', 'check-running']);
 
 /**
  * What the plan says for {@link wakeDue}. A cohort is the tasks with the same

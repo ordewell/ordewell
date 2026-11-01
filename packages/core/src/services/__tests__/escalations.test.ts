@@ -9,7 +9,7 @@ import type { RunMergeView } from '../SessionMessage';
 const task = (id: string, order: number, over: Partial<Task> = {}): Task =>
   ({ ...createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, status: 'approved', ...over }), ...over });
 
-const OPEN: EscalationRun = { open: true, advancing: false, merging: false, autoMerges: false, mergesAtClose: false, merge: null, id: null, blocked: null };
+const OPEN: EscalationRun = { open: true, advancing: false, merging: false, autoMerges: false, mergesAtClose: false, merge: null, mergeHold: [], id: null, blocked: null };
 
 const failedVerdict = (reported: 'failed' | 'blocked'): Task['verdict'] => ({ outcome: 'fail', reason: 'it did not hold', checks: [], decidedAt: '2026-10-30T00:00:00Z', reported });
 

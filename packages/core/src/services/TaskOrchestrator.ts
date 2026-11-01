@@ -6,6 +6,7 @@ import type { IRunner, QueuedTaskMessage } from '../interfaces/IRunner';
 import type { TaskShell, TaskShellSite } from '../interfaces/IFileSystem';
 import type { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { RunnerModelRef } from '../models/RunnerCommand';
+import { checksHoldingMerge, checksOf, type DelegationRules } from '../models/Delegation';
 import { summarizeOutput } from './promptAugment';
 import { BufferedTaskOutputSource } from './BufferedTaskOutputSource';
 import type { LiveTail, LiveTailOptions, TaskOutputSource } from '../interfaces/TaskOutputSource';
@@ -177,7 +178,7 @@ interface QueuedStart {
 export const STARTS_AT_ONCE = 8;
 
 /** What keeps a queued force start waiting, with nothing to say: it starts once these clear. */
-const QUEUED_WAITS: ReadonlySet<StartWaitKind> = new Set<StartWaitKind>(['queued', 'completing', 'merging', 'start-hold', 'unapproved']);
+const QUEUED_WAITS: ReadonlySet<StartWaitKind> = new Set<StartWaitKind>(['queued', 'completing', 'merging', 'start-hold', 'unapproved', 'check-running']);
 
 /** A force start the user made now: their own act, past the whole merge gate they confirmed. */
 const FORCED_NOW: ForcedStart = { queued: false };
@@ -350,6 +351,8 @@ export class TaskOrchestrator {
   private admissions = 0;
   private reviewApproved = false;
   private autoMergeBlocked = false;
+  /** The run closed with its merge held, which it would otherwise have made itself. */
+  private mergeOwedAtClose = false;
   private mergesInFlight = 0;
   /*
    * Retry counts and holds describe a task across attempts, so they
@@ -445,6 +448,7 @@ export class TaskOrchestrator {
     this.runSettings = deps.runSettings;
     this.isApproved = deps.isApproved;
     this.mayMergeUnasked = deps.mayMergeUnasked;
+    this.store.checksOf = (task) => checksOf(this.store.allTasks, task, this.checkRules);
     this.attempts = new Attempts({
       config: deps.config,
       notifications: deps.notifications,
@@ -907,8 +911,17 @@ export class TaskOrchestrator {
    * over as before.
    */
   private async closeRun(): Promise<void> {
+    this.mergeOwedAtClose = false;
     if (this.mergesAtClose) await this.mergeLanded({ kind: 'run_end' });
+    else this.mergeOwedAtClose = this.mergesAutomatically() && !this.autoMergeBlocked && this.mergeHold.length > 0;
     await this.runs.close();
+  }
+
+  /** A hold is no merge that stopped (ADR-0055 D9): the tick after its check's pass or Skip merges, the run closed or not. */
+  private async mergeOwedAfterHold(): Promise<void> {
+    if (!this.mergeOwedAtClose || !this.mergesAtGates || this.merging || !this.settled || this.runMergeView() === null) return;
+    this.mergeOwedAtClose = false;
+    await this.mergeLanded({ kind: 'run_end' });
   }
 
   /**
@@ -918,7 +931,7 @@ export class TaskOrchestrator {
    * out of isolating and a merge that stopped blocks this, so neither wait is hidden.
    */
   get mergesAtClose(): boolean {
-    return this.mergesAutomatically() && !this.autoMergeBlocked && !this.merging && this.settled && this.runs.isolating
+    return this.mergesAtGates && !this.merging && this.settled && this.runs.isolating
       && this.runMergeView() !== null && this.attempts.excludingMerge() === undefined;
   }
 
@@ -995,7 +1008,31 @@ export class TaskOrchestrator {
       queued: this.queuedStarts,
       conflictResolver: (taskId) => this.landing.liveResolvers(taskId)[0]?.id,
       ...(this.pool.shared ? { treeLimited: this.pool.limited() } : {}),
+      liveCheck: (task) => this.liveCheck(task)?.id,
     };
+  }
+
+  /** What tells a check, which reads the runners' modes as an attempt's kind does (ADR-0031). */
+  private get checkRules(): Pick<DelegationRules, 'runnerModes'> {
+    const { registry } = this.deps;
+    if (!registry) return {};
+    return { runnerModes: Object.fromEntries(this.store.allTasks.map((t) => [t.assignedRunner, registry.get(t.assignedRunner)?.manifest.modes])) };
+  }
+
+  private liveCheck(task: Readonly<Task>): Readonly<Task> | undefined {
+    return task.type === 'delegated' ? this.store.checksOf(task).find((check) => this.attempts.has(check.id)) : undefined;
+  }
+
+  /** A retry takes the task's checks back, and a live one cannot be (ADR-0055 D8). */
+  private refuseBesideLiveCheck(taskId: string): void {
+    const task = this.store.get(taskId);
+    const check = task && this.liveCheck(task);
+    if (check) throw new TaskControlError(`Task "${check.title}" is checking the work of task "${task.title}", and a new attempt takes that back: stop it first, or let it finish.`);
+  }
+
+  /** What holds every merge but the user's (ADR-0055 D9), named as a refusal names it. */
+  get mergeHold(): readonly Task[] {
+    return checksHoldingMerge(this.store.allTasks, (id) => this.runs.awaitsMerge(id), this.checkRules);
   }
 
   /**
@@ -1693,7 +1730,7 @@ export class TaskOrchestrator {
   get isMerging(): boolean { return this.merging; }
 
   /** A gate reached now is merged with nobody asked: the setting is on, and no merge has stopped it. */
-  get mergesAtGates(): boolean { return this.mergesAutomatically() && !this.autoMergeBlocked; }
+  get mergesAtGates(): boolean { return this.mergesAutomatically() && !this.autoMergeBlocked && this.mergeHold.length === 0; }
 
   /**
    * The user changed the run settings under an open run (ADR-0030). The
@@ -2048,6 +2085,7 @@ export class TaskOrchestrator {
     if (!task) return;
     this.refuseWhileCompleting(taskId);
     this.refuseBesideResolver(taskId);
+    this.refuseBesideLiveCheck(taskId);
     await this.whileAdmitted(async (admission) => {
       // A retried task's own pause ends with it; that may release a held run,
       // which the tick below then schedules (ADR-0018, U1).
@@ -2359,7 +2397,8 @@ export class TaskOrchestrator {
    */
   private queueBehindDependencies(task: Readonly<Task>): string | null {
     const waits = this.startWaits(task, FORCED_NOW);
-    const waiting = (waitOf(waits, 'dependencies') ?? waitOf(waits, 'queued'))?.waiting ?? [];
+    const check = waitOf(waits, 'check-running')?.check;
+    const waiting = [...(waitOf(waits, 'dependencies') ?? waitOf(waits, 'queued'))?.waiting ?? [], ...(check ? [check] : [])];
     if (waiting.length === 0) return null;
     this.onHold.delete(task.id);
     if (!this.leftToScheduler(task)) this.queuedStarts.set(task.id, { pastGate: this.getMergeGate(task.id) });
@@ -2572,6 +2611,7 @@ export class TaskOrchestrator {
     await this.startQueued();
     this.startOwedRepairs(admission);
     this.offerKeptResumes();
+    await this.mergeOwedAfterHold();
     if (!this.startsOnTick) return this.settleRun('tick');
 
     // Ahead of the run-complete check too: the turn may add work to a run
@@ -2587,8 +2627,7 @@ export class TaskOrchestrator {
       readiness = this.readiness();
     }
     if (!this.startsOnTick) return;
-    if (this.mergesAutomatically() && !this.autoMergeBlocked && !this.merging
-      && this.attempts.excludingMerge() === undefined) {
+    if (this.mergesAtGates && !this.merging && this.attempts.excludingMerge() === undefined) {
       // Only for a task the merge lets start, or lets the user do: nothing else holds it back.
       const gate = readiness.gated[0];
       if (gate) {
@@ -2989,6 +3028,8 @@ export class TaskOrchestrator {
     const task = this.store.get(taskId)!;
     const reserved = this.leases.reserve(this.attemptRequest(task));
     if ('refused' in reserved) return { refused: reserved.refused };
+    // The one point every start passes: Execute's fresh chance and a force start never call `retry` (ADR-0055 D8).
+    if (continuation === null && !opts.autoResumed && !this.landing.nextRepair(taskId)) this.store.takeBackChecks(taskId);
     return { spawned: this.attempts.start(task, { admission, continuation, autoResumed: opts.autoResumed === true, lease: reserved.lease }) };
   }
 

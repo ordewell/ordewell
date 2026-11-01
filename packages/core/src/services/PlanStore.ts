@@ -228,6 +228,9 @@ export class PlanStore {
     delete t.skipReason;
   }
 
+  /** A delegated task's checks; its scheduler, which knows what makes a task read-only, says which those are. */
+  checksOf: (task: Readonly<Task>) => readonly Task[] = () => [];
+
   markCompleted(id: string): void {
     this.setStatus(id, 'completed');
   }
@@ -296,7 +299,24 @@ export class PlanStore {
       delete task.handoff;
       delete task.forcedPastGate;
       delete task.carriedFrom;
-      if (!opts.sameRound) delete task.loopRound;
+      if (!opts.sameRound) {
+        delete task.loopRound;
+        this.takeBackChecks(id);
+      }
+    }
+  }
+
+  /**
+   * A pass judged one result, and a new attempt of a delegated task makes
+   * another (ADR-0055 D8): its checks run again, whatever their status, their
+   * rounds starting over. A check not started yet has nothing to take back. The
+   * retries of every kind pass here; the claim asks for the starts that do not.
+   */
+  takeBackChecks(id: string): void {
+    const task = this._taskMap.get(id);
+    if (task?.type !== 'delegated') return;
+    for (const check of this.checksOf(task)) {
+      if (check.status !== 'pending' && check.status !== 'approved') this.retry(check.id);
     }
   }
 

@@ -147,6 +147,23 @@ function failingCheck(): IRunner {
   };
 }
 
+/** Writes `a.txt`, and the check `c` waits for {@link release} each time it runs. */
+function heldChecks() {
+  const inner = writingRunner({ a: ['a.txt'] });
+  const ends: Array<() => void> = [];
+  const runner: IRunner = {
+    ...inner,
+    spawn: vi.fn(async (opts) => {
+      if (opts.taskId !== 'c') return inner.spawn(opts);
+      const session = new FakeRunnerSession(`s-c-${ends.length}`, opts.taskId);
+      ends.push(() => session.reportComplete({ status: 'done', summary: 'It holds.' }));
+      return session;
+    }),
+  };
+  // In progress comes before its session: a release waits for the one it ends.
+  return { runner, release: () => vi.waitFor(() => { expect(ends.length).toBeGreaterThan(0); ends.shift()?.(); }, { timeout: 20_000 }) };
+}
+
 const DONE: Turn = async (tools) => {
   const reply = await tools.taskComplete!({ status: 'done', summary: 'Both files are written.', commit: { subject: 'Write a and b' } }, { signal: new AbortController().signal });
   if (reply.isError) throw new Error(reply.text);
@@ -158,16 +175,16 @@ interface Tree {
   planner: ReturnType<typeof scriptedPlanner>;
 }
 
-interface TreeOptions { runner?: IRunner; tasks?: Task[]; tokens?: () => number; parallel?: number; offered?: boolean; runners?: string[]; fsAdapter?: IFileSystem }
+interface TreeOptions { runner?: IRunner; tasks?: Task[]; tokens?: () => number; parallel?: number; offered?: boolean; runners?: string[]; fsAdapter?: IFileSystem; merges?: boolean }
 
-function tree(turns: Turn[], { runner = writingRunner({ a: ['a.txt'], b: ['b.txt'] }), tasks = [delegated(), check()], tokens = () => 5_000_000, parallel = 3, offered = true, runners = ['claude-code'], fsAdapter }: TreeOptions = {}): Tree {
+function tree(turns: Turn[], { runner = writingRunner({ a: ['a.txt'], b: ['b.txt'] }), tasks = [delegated(), check()], tokens = () => 5_000_000, parallel = 3, offered = true, runners = ['claude-code'], fsAdapter, merges = false }: TreeOptions = {}): Tree {
   const root = repo();
   const planner = scriptedPlanner(turns);
   const parent = makeSession({
     runner, isolation: isolation(), workspaceRoot: () => root, saveSession, openTaskLog, leaseHost: new LeaseHost(), sessionId: 'session-root',
     config: fakeConfig({ maxParallelSessions: parallel }),
     ...(fsAdapter ? { fsAdapter } : {}),
-    settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: tokens() } }),
+    settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: tokens(), mergeAtGatesAutomatically: merges } }),
     delegationOffered: offered,
     childDeps: () => ({ aiService: { reset: vi.fn(), ...planner.service } as unknown as IAiService, fsAdapter: fsAdapter ?? { ...fakeFs(), getWorkspaceRoot: () => root } }),
   });
@@ -530,6 +547,233 @@ describe('a raise (ADR-0056 M5)', () => {
       expect(parent.planTasks.find((t) => t.id === 'd')?.verdict?.reported).toBe('blocked');
       parent.destroy();
     });
+  });
+});
+
+describe('a question two levels down (ADR-0056 M8)', () => {
+  const quiet = () => ({ signal: new AbortController().signal });
+  const nestedChild = { id: 'e', order: 1, title: 'Deeper subtree', description: 'deeper', type: 'delegated', goal: 'Write a', budget: { tokens: 800_000 }, protectedPaths: ['tests/'], sliceType: 'AFK', dependencies: [] };
+  const nestedCheck = { id: 'f', order: 2, title: 'Check the deeper subtree', description: 'check', type: 'ai', prompt: 'read it', readOnly: true, sliceType: 'AFK', autonomy: 'AFK', dependencies: ['e'] };
+
+  /** A root whose subplanner and sub-subplanner each read their own turns. */
+  function nested(outer: Turn[], inner: Turn[]) {
+    const root = repo();
+    const planners = { d: scriptedPlanner(outer), e: scriptedPlanner(inner) };
+    const parent = makeSession({
+      runner: writingRunner({ a: ['a.txt'] }), isolation: isolation(), workspaceRoot: () => root, saveSession, openTaskLog, leaseHost: new LeaseHost(), sessionId: 'session-root',
+      config: fakeConfig({ maxParallelSessions: 3 }),
+      settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: 5_000_000 } }),
+      delegationOffered: true,
+      childDeps: (task) => ({ aiService: { reset: vi.fn(), ...planners[task.id as 'd' | 'e'].service } as unknown as IAiService, fsAdapter: { ...fakeFs(), getWorkspaceRoot: () => root } }),
+    });
+    parent.loadPlan({ ...planOf([delegated({ grants: ['delegate'] }), check()]), runners: ['claude-code'] }, 'the root goal', root, { sessionId: 'session-root' });
+    return { root, parent, planners };
+  }
+
+  it('wakes its parent subplanner, which answers it, and nothing of it reaches the user', async () => {
+    let asked: string[] = [];
+    let seen: string[] = [];
+    const { parent, planners } = nested([
+      SUBMIT([nestedChild, nestedCheck]),
+      async (tools, text) => {
+        seen = parent.escalations().map((e) => e.reason);
+        expect(text).toContain('Which file?');
+        const reply = await tools.answerCheckpoint!({ task: 'e', answer: 'reject', reason: 'a.txt', raiseTokens: undefined }, quiet());
+        if (reply.isError) throw new Error(reply.text);
+      },
+      DONE,
+    ], [
+      async (tools) => { await tools.checkpoint!({ question: 'Which file?' }, quiet()); },
+      async (tools, text) => { asked = [text]; await SUBMIT([childTask('a', 1)])(tools, text); },
+      DONE,
+    ]);
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 40_000 });
+    expect(asked[0]).toContain('a.txt');
+    expect(seen.join()).not.toContain('Which file?');
+    expect(planners.d.asked.join()).toContain('Which file?');
+    parent.destroy();
+  }, 60_000);
+});
+
+describe('the merge hold (ADR-0055 D9)', () => {
+  const readOnlyCheck = () => check({ taskMode: 'plan' });
+  const changed = (root: string) => git(root, 'ls-tree', '-r', '--name-only', 'main').split('\n');
+
+  /** A runner whose check waits until told how it ends. */
+  function verdictOnCall() {
+    const inner = writingRunner({ a: ['a.txt'], s: ['s.txt'] });
+    const ends: Array<(pass: boolean) => void> = [];
+    const runner: IRunner = {
+      ...inner,
+      spawn: vi.fn(async (opts) => {
+        if (opts.taskId !== 'c') return inner.spawn(opts);
+        const session = new FakeRunnerSession(`s-c-${ends.length}`, opts.taskId);
+        ends.push((pass) => session.reportComplete(pass ? { status: 'done', summary: 'It holds.' } : { status: 'failed', summary: 'It does not.', reason: 'It does not.' }));
+        return session;
+      }),
+    };
+    return { runner, ends };
+  }
+
+  it('merges at the run\'s end once its check has passed, and not before', async () => {
+    const { runner, ends } = verdictOnCall();
+    const { root, parent } = tree([SUBMIT([childTask('a', 1)]), DONE], { runner, tasks: [delegated(), readOnlyCheck()], merges: true });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(ends).toHaveLength(1), { timeout: 20_000 });
+    expect(changed(root)).not.toContain('a.txt');
+    ends[0](true);
+    await vi.waitFor(() => expect(changed(root)).toContain('a.txt'), { timeout: 20_000 });
+    parent.destroy();
+  });
+
+  it('holds past a failed check, and the user\'s Skip lets the next tick merge', async () => {
+    const { root, parent } = tree([SUBMIT([childTask('a', 1)]), DONE], { runner: failingCheck(), tasks: [delegated(), readOnlyCheck()], merges: true });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('failed'), { timeout: 20_000 });
+    // By now the run has closed with its merge held: the Skip finds no run to end.
+    await new Promise((resolve) => { setTimeout(resolve, 500); });
+    expect(changed(root)).not.toContain('a.txt');
+    expect(await parent.execute({ command: 'skip_task', task: 'c' }, { kind: 'user' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(changed(root)).toContain('a.txt'), { timeout: 20_000 });
+    parent.destroy();
+  });
+
+  it('refuses a supervisor\'s Merge all naming the check, and leaves the user\'s, whose confirmation names it', async () => {
+    const { root, parent } = tree([SUBMIT([childTask('a', 1)]), DONE], { runner: failingCheck(), tasks: [delegated(), readOnlyCheck()] });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('failed'), { timeout: 20_000 });
+    const refused = await parent.execute({ command: 'merge_all' }, { kind: 'supervisor', level: 'act' });
+    expect(refused).toMatchObject({ ok: false, message: expect.stringContaining('Check the subtree') });
+
+    const offered = parent.escalations().flatMap((e) => e.options.filter((o) => o.id === 'merge-all').map((o) => ({ id: e.id, confirm: o.confirm })))[0];
+    expect(offered.confirm).toContain('Check the subtree');
+    expect(await parent.answerEscalation(offered.id, 'merge-all')).toMatchObject({ ok: false, message: expect.stringContaining('explicit yes') });
+    expect(changed(root)).not.toContain('a.txt');
+    expect(await parent.answerEscalation(offered.id, 'merge-all', undefined, true)).toMatchObject({ ok: true });
+    expect(changed(root)).toContain('a.txt');
+    parent.destroy();
+  });
+
+  it('is not held by a delegated task that has not landed: a sibling\'s work merges', async () => {
+    const { root, parent } = tree([NOTHING_THEN_BLOCKED], {
+      tasks: [delegated(), readOnlyCheck(), createTask({ id: 's', order: 3, title: 'Sibling', prompt: 'sibling' })],
+      runner: writingRunner({ s: ['s.txt'] }),
+      merges: true,
+    });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(changed(root)).toContain('s.txt'), { timeout: 20_000 });
+    expect(statusOf(parent, 'd')).toBe('failed');
+    parent.destroy();
+  });
+
+  it('is not held by a read-only delegated task, which lands nothing', async () => {
+    const { root, parent } = tree([SUBMIT([childTask('a', 1)]), DONE], {
+      tasks: [delegated({ readOnly: true, protectedPaths: undefined }), check({ taskMode: 'plan', dependencies: ['d'] }), createTask({ id: 's', order: 3, title: 'Sibling', prompt: 'sibling' })],
+      runner: writingRunner({ s: ['s.txt'], c: [] }),
+      merges: true,
+    });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(changed(root)).toContain('s.txt'), { timeout: 20_000 });
+    parent.destroy();
+  });
+});
+
+describe('a new result is checked again (ADR-0055 D8)', () => {
+  const readOnlyCheck = () => check({ taskMode: 'plan' });
+  const task = (session: Session, id: string) => session.planTasks.find((t) => t.id === id);
+
+  it('takes a passed check back with Mark not done, and its next run reads the new result', async () => {
+    const { parent } = tree([SUBMIT([childTask('a', 1)]), DONE, SUBMIT([childTask('b', 1)]), DONE], { tasks: [delegated(), readOnlyCheck()] });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('completed'), { timeout: 20_000 });
+    const first = task(parent, 'c')?.verdict;
+    expect(await parent.execute({ command: 'mark_not_done', task: 'd', confirmed: true }, { kind: 'user' })).toMatchObject({ ok: true });
+    expect(statusOf(parent, 'c')).toBe('pending');
+    expect(task(parent, 'c')?.verdict).toBeUndefined();
+    expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'fresh' }, { kind: 'user' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    // A retry outside a run starts only what it names, here as for any task: Execute runs what is left.
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('completed'), { timeout: 20_000 });
+    expect(task(parent, 'c')?.verdict?.decidedAt).not.toBe(first?.decidedAt);
+    parent.destroy();
+  });
+
+  it('takes a check the user skipped back too: a Skip let one result past, not the next', async () => {
+    const { parent } = tree([SUBMIT([childTask('a', 1)]), DONE], { runner: failingCheck(), tasks: [delegated(), readOnlyCheck()] });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('failed'), { timeout: 20_000 });
+    await parent.execute({ command: 'skip_task', task: 'c' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('skipped'));
+    expect(await parent.execute({ command: 'mark_not_done', task: 'd', confirmed: true }, { kind: 'user' })).toMatchObject({ ok: true });
+    expect(statusOf(parent, 'c')).toBe('pending');
+    expect(task(parent, 'c')?.skipReason).toBeUndefined();
+    parent.destroy();
+  });
+
+  it('takes a failed check back with a revert, and refuses a revert under a live one', async () => {
+    const { parent } = tree([SUBMIT([childTask('a', 1)]), DONE], { runner: failingCheck(), tasks: [delegated(), readOnlyCheck()] });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('failed'), { timeout: 20_000 });
+    expect(await parent.execute({ command: 'revert_task', task: 'd', confirmed: true }, { kind: 'user' })).toMatchObject({ ok: true });
+    expect(statusOf(parent, 'd')).toBe('pending');
+    expect(statusOf(parent, 'c')).toBe('pending');
+    parent.destroy();
+  });
+
+  it('refuses to take a live check back, naming it', async () => {
+    const { runner, release } = heldChecks();
+    const { parent } = tree([SUBMIT([childTask('a', 1)]), DONE], { runner, tasks: [delegated(), readOnlyCheck()] });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('in_progress'), { timeout: 20_000 });
+    expect(await parent.execute({ command: 'mark_not_done', task: 'd', confirmed: true }, { kind: 'user' })).toMatchObject({ ok: false });
+    expect(statusOf(parent, 'c')).toBe('in_progress');
+    await release();
+    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('completed'), { timeout: 20_000 });
+    parent.destroy();
+  });
+
+  /** The user forced the check past its failed task: a start of that task now is the one that can meet a live check. */
+  async function failedWithItsCheckLive(turns: Turn[]) {
+    const { runner, release } = heldChecks();
+    const made = tree(turns, { runner, tasks: [delegated(), readOnlyCheck()] });
+    await made.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(made.parent, 'd')).toBe('failed'), { timeout: 20_000 });
+    await made.parent.execute({ command: 'force_start', task: 'c' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(made.parent, 'c')).toBe('in_progress'), { timeout: 20_000 });
+    return { ...made, release };
+  }
+
+  it('refuses a retry under a live check, naming it', async () => {
+    const { parent, release } = await failedWithItsCheckLive([NOTHING_THEN_BLOCKED]);
+    expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'fresh' }, { kind: 'user' })).toMatchObject({ ok: false, message: expect.stringContaining('Check the subtree') });
+    await release();
+    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('completed'), { timeout: 20_000 });
+    parent.destroy();
+  });
+
+  it('takes a check back at a force start\'s claim, which waits for a live one to end', async () => {
+    const { parent, planner, release } = await failedWithItsCheckLive([NOTHING_THEN_BLOCKED, SUBMIT([childTask('a', 1)]), DONE]);
+    await parent.execute({ command: 'force_start', task: 'd' }, { kind: 'user' });
+    await new Promise((resolve) => { setTimeout(resolve, 200); });
+    expect(planner.requests).toHaveLength(1);
+    await release();
+    await vi.waitFor(() => expect(planner.requests).toHaveLength(2), { timeout: 20_000 });
+    expect(statusOf(parent, 'c')).not.toBe('completed');
+    parent.destroy();
+  });
+
+  it('takes a check back at Execute\'s fresh chance, which never calls retry', async () => {
+    const { parent, planner } = tree([NOTHING_THEN_BLOCKED, SUBMIT([childTask('a', 1)]), DONE], { tasks: [delegated(), readOnlyCheck()] });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('failed'), { timeout: 20_000 });
+    await parent.execute({ command: 'skip_task', task: 'c' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('skipped'));
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(statusOf(parent, 'c')).toBe('completed'), { timeout: 20_000 });
+    expect(planner.requests).toHaveLength(2);
+    parent.destroy();
   });
 });
 

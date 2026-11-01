@@ -1135,10 +1135,16 @@ export class Session {
         autoMerges: this.orchestrator.mergesAtGates,
         mergesAtClose: this.orchestrator.mergesAtClose,
         merge: this.runMergeView(),
+        mergeHold: this.mergeHold(),
         id: this.runs.planIsolation?.run.id ?? null,
         blocked: this.runs.blocked ? this.runs.blockedStarts : null,
       },
     });
+  }
+
+  /** What holds a merge nobody asked for here, as a list or a refusal names it (ADR-0055 D9). */
+  private mergeHold(): string[] {
+    return this.orchestrator.mergeHold.map((check) => `${taskRefOf(this.store.planTasks, check.id) ?? `#${check.order}`} "${check.title}"`);
   }
 
   /** The user's answer to an escalation; see {@link ExecutionCommands.answerEscalation}. `raiseTokens` goes with an Approve of a delegated task (ADR-0056 M5). */
@@ -1282,6 +1288,7 @@ export class Session {
       },
       answerCheckpoint: (taskId, approve, reason, note) => (approve ? this.approveCheckpoint(taskId, note) : this.rejectCheckpoint(taskId, reason)),
       raiseChild: (taskId, tokens) => this.raiseChild(taskId, tokens),
+      mergeHold: () => this.mergeHold(),
       answerRequest: (requestId, decision) => this.resolveApproval(requestId, decision),
       mergeAll: () => this.mergeAll(),
       runMerged: () => this.runs.mergedRun !== null,

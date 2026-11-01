@@ -46,6 +46,8 @@ export type StartWait =
   | { kind: 'usage-limit'; runner: string }
   /** A planner turn holds new starts until its reply ends (ADR-0029). */
   | { kind: 'start-hold' }
+  /** A delegated task's check is running: its fresh attempt takes that check back, so it waits for it to end (ADR-0055 D8). */
+  | { kind: 'check-running'; check: string }
   /** Its merge gate (ADR-0020): the ancestors whose landed work is not in the user's branch yet. */
   | { kind: 'merge-gate'; unmerged: string[] }
   /** A user task: the user does it by hand, and nothing starts it. */
@@ -90,6 +92,8 @@ export interface StartRuleInput {
   conflictResolver?: (taskId: string) => string | undefined;
   /** The runners whose usage limit another Session of the tree found (ADR-0055 D18). */
   treeLimited?: ReadonlySet<string>;
+  /** A delegated task's check that is running now, if any (ADR-0055 D8). */
+  liveCheck?: (task: Readonly<Task>) => string | undefined;
 }
 
 /** What the scheduler picks from: the start rule's input, and the slots. */
@@ -230,6 +234,8 @@ function waitsOf(task: Readonly<Task>, input: StartRuleInput, forced: ForcedStar
     const runner = store.resolveTaskRunner(task);
     if (plan.limited().has(runner) || input.treeLimited?.has(runner)) waits.push({ kind: 'usage-limit', runner });
   }
+  const liveCheck = input.liveCheck?.(task);
+  if (liveCheck) waits.push({ kind: 'check-running', check: liveCheck });
   if (input.startsHeld && !byHand && forced?.queued !== false) waits.push({ kind: 'start-hold' });
   // A start forced now passes the whole gate, which the user confirmed; a queued one only what they confirmed then.
   const confirmed = forced?.queued ? forced.pastGate : [];

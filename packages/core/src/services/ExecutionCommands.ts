@@ -258,6 +258,8 @@ export interface ExecutionHost {
   /** The task waits at a checkpoint, and a runner is left to hear the answer. */
   awaitsCheckpoint(taskId: string): boolean;
   answerCheckpoint(taskId: string, approve: boolean, reason?: string, note?: string): void;
+  /** The checks that hold every merge but the user's (ADR-0055 D9), each as its row names it. */
+  mergeHold(): readonly string[];
   /** A raise for a delegated task's child, from what this node has left (ADR-0056 M5). Null when it took; otherwise why not. */
   raiseChild(taskId: string, tokens: number): Promise<string | null>;
   /** Sign off the review: the plan is the user's, and runs. */
@@ -1472,6 +1474,8 @@ export class ExecutionCommands {
     if (this.host.runMerged()) {
       return { nothing: `Nothing to merge: everything the run landed is in ${users ? 'your' : 'the user\'s'} branch already, and the run is closed.` };
     }
+    const held = this.host.mergeHold();
+    if (held.length > 0 && !users) return { refusal: `Merge all waits on ${held.join(', ')}: work a delegated task landed merges once its check has passed, or the user has skipped it.` };
     return {
       act: async () => {
         const result = await this.host.mergeAll();

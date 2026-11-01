@@ -104,6 +104,8 @@ export interface EscalationRun {
   mergesAtClose: boolean;
   /** What Merge all would merge now. */
   merge: RunMergeView | null;
+  /** The checks that have not passed work Merge all would merge (ADR-0055 D9): the user's is not held, and its confirmation names them. */
+  mergeHold: readonly string[];
   /** The isolated run's id. */
   id: string | null;
   /** Which of the session's starts a dirty checkout turned away, when one waits on it; null when none does. */
@@ -156,6 +158,7 @@ const ONLY_A_PERSON: Record<Exclude<StartWaitKind, 'start-hold'>, boolean> = {
   queued: false,
   merging: false,
   'usage-limit': false,
+  'check-running': false,
   'no-prompt': true,
   unapproved: true,
   'on-hold': true,
@@ -331,6 +334,11 @@ function failed(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait |
   return { kind: 'failed', ...ended(row, `Its loop stopped: ${body.map((r) => r.ref).join(', ')} did not run.`, input, rows) };
 }
 
+/** Merge all as the user is offered it: with what it would carry past its check named, when anything would (ADR-0055 D9). */
+function mergeOption({ run }: EscalationInput): EscalationOption {
+  return run.mergeHold.length === 0 ? MERGE_ALL : { ...MERGE_ALL, confirm: `This merges work no check has passed: ${run.mergeHold.join(', ')} has not.` };
+}
+
 /** A task not started that only a person can start, once a run is there for it to be late for. */
 function unstarted(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait | null {
   const { task } = row;
@@ -374,7 +382,7 @@ function unstarted(row: TaskWithParent, input: EscalationInput, rows: Rows): Wai
       on: attemptsDigest(gate.unmerged, input, rows),
       reason: `Waits for Merge all: the work of ${refs.join(', ')} is not merged into your branch yet.`,
       options: [
-        MERGE_ALL,
+        mergeOption(input),
         ...(task.type === 'user' ? completeOption(row, input.run) : [{ id: 'force-start' as const, label: 'Force start', confirm: pastGateConfirmation(refs, 'It') }]),
       ],
     };
@@ -451,7 +459,7 @@ export function escalations(input: EscalationInput): Escalation[] {
     id: `merge-all:${run.id ?? ''}:${attemptsDigest(run.merge?.landed.map((t) => t.taskId) ?? [], input, rows)}`,
     kind: 'merge-all',
     reason: `The run's landed work waits for Merge all: ${run.merge?.landed.map((t) => rows.get(t.taskId)?.ref ?? t.taskId).join(', ')}.`,
-    options: [MERGE_ALL],
+    options: [mergeOption(input)],
   }];
   return [...blocked, ...tasks, ...merge];
 }
