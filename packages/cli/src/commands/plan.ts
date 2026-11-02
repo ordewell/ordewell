@@ -295,8 +295,8 @@ export async function handlePlan(
 
   const stream = api.streamPlanning(sessionId, (event) => {
     renderStep(event);
-    // A run snapshot is not a planner message; this stream ignores it.
-    if (event.type !== 'run_snapshot' && event.type !== 'account_limits') void handleApproval(event);
+    // A run snapshot or a child list is not a planner message; this stream ignores them.
+    if (event.type !== 'run_snapshot' && event.type !== 'account_limits' && event.type !== 'child_tree') void handleApproval(event);
   });
 
   try {

@@ -537,13 +537,22 @@ function approvalKeysLine(block: ApprovalBlock, cols: number): string {
  * after it, and say so when a tool request has to be answered first.
  */
 export function checkpointCardLines(order: number, question: string, cols: number, approvalFirst: boolean, delegated = false): string[] {
+  return questionCardLines(`Task ${order} asks`, question, cols, approvalFirst, delegated ? DELEGATED_CHOICES : CHECKPOINT_CHOICES);
+}
+
+/** The same card on a subplanner's own screen, where its task is the plan above's. A raise goes only where the root answers it. */
+export function subplannerCardLines(question: string, cols: number, raises: boolean): string[] {
+  return questionCardLines('Subplanner asks', question, cols, false, raises ? DELEGATED_CHOICES : CHECKPOINT_CHOICES);
+}
+
+function questionCardLines(title: string, question: string, cols: number, approvalFirst: boolean, choices: ReadonlyArray<readonly [string, string]>): string[] {
   const room = Math.max(1, cols - 2);
   const first = approvalFirst ? wrap('answer the tool request above first (ctrl-y / ctrl-g), then:', room) : [];
   return [
-    truncate(`${style.accent('◆')} ${style.bold(`Task ${order} asks`)}`, cols),
+    truncate(`${style.accent('◆')} ${style.bold(title)}`, cols),
     ...wrap(sanitize(question).trim(), room).map((line) => `  ${line}`),
     ...first.map((line) => style.grey(`  ${line}`)),
-    ...(delegated ? DELEGATED_CHOICES : CHECKPOINT_CHOICES).flatMap(([key, text]) => choiceLines(key, text, room)),
+    ...choices.flatMap(([key, text]) => choiceLines(key, text, room)),
   ];
 }
 

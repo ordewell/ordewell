@@ -8,6 +8,11 @@ import type {
   ApproveReviewResponse,
   CancelPlanningResponse,
   CancelResumeResponse,
+  ChildListResponse,
+  ChildMessageResponse,
+  ChildPlanResponse,
+  ChildTaskControlResponse,
+  ChildTreeFrame,
   ContainerChange,
   ContainerChangeResponse,
   ContainerStatus,
@@ -180,7 +185,7 @@ export type { SessionMeta };
  * broadcast carries its place in the session's stream, for a client holding
  * several sockets to tell one broadcast's copies from two broadcasts.
  */
-export type WsEvent = SessionFrame | RunSnapshotFrame | AccountLimitsFrame;
+export type WsEvent = SessionFrame | RunSnapshotFrame | AccountLimitsFrame | ChildTreeFrame;
 
 /** A held subscription to a session (`followSession`). `ended` is `'lost'` unless `close` ended it. */
 export interface SessionFollow {
@@ -188,6 +193,21 @@ export interface SessionFollow {
   ready: Promise<boolean>;
   ended: Promise<'lost' | void>;
   close(): void;
+}
+
+/** A held subscription to a child plan (`followChild`). `ended` is the close code, null when `close` ended it. */
+export interface ChildFollow {
+  /** True when the socket opened; false when it could not — resolved either way, never rejected. */
+  ready: Promise<boolean>;
+  ended: Promise<number | null>;
+  close(): void;
+}
+
+/** A checkpoint in a child plan, by the words it waits on: a raise or a force is the plan above's to give. */
+export interface ChildCheckpointAnswer {
+  answer: 'approve' | 'reject';
+  question: string;
+  reason?: string;
 }
 
 /** `/api/plans/<id>/…` and `/api/sessions/<id>/…`: the session a request is about. */
@@ -618,9 +638,13 @@ export class ApiClient {
    * it never reaches an access log.
    */
   private openSessionSocket(sessionId: string): WebSocket {
+    return this.openSocket(`/ws/session/${sessionId}`);
+  }
+
+  private openSocket(socketPath: string): WebSocket {
     const token = this.token();
     const socket = new WebSocket(
-      `ws://127.0.0.1:${this.port}/ws/session/${sessionId}`,
+      `ws://127.0.0.1:${this.port}${socketPath}`,
       token ? tokenSubprotocols(token) : undefined,
     );
 
@@ -645,6 +669,72 @@ export class ApiClient {
     });
 
     return socket;
+  }
+
+  listChildren(rootId: string): Promise<ChildListResponse> {
+    return this.call('GET', `/api/sessions/${rootId}/children`, 'Could not list the child plans');
+  }
+
+  getChild(rootId: string, childId: string): Promise<ChildPlanResponse> {
+    return this.call('GET', `/api/sessions/${rootId}/children/${childId}`, 'Could not read the child plan');
+  }
+
+  getChildTaskLogAttempts(rootId: string, childId: string, taskId: string): Promise<TaskLogAttemptsResponse> {
+    return this.call('GET', `/api/sessions/${rootId}/children/${childId}/tasks/${encodeURIComponent(taskId)}/log`, 'Could not read the task log');
+  }
+
+  getChildTaskLog(rootId: string, childId: string, taskId: string, attempt: number): Promise<TaskLogResponse> {
+    return this.call('GET', `/api/sessions/${rootId}/children/${childId}/tasks/${encodeURIComponent(taskId)}/log/${attempt}`, 'Could not read the task log');
+  }
+
+  /** To the child's subplanner, as a turn of its conversation (ADR-0055 D20). */
+  messageChild(rootId: string, childId: string, message: string): Promise<ChildMessageResponse> {
+    return this.call('POST', `/api/sessions/${rootId}/children/${childId}/message`, 'Could not message the child plan', { message });
+  }
+
+  messageChildTask(rootId: string, childId: string, taskId: string, message: string): Promise<ChildTaskControlResponse> {
+    return this.call('POST', `/api/sessions/${rootId}/children/${childId}/tasks/${encodeURIComponent(taskId)}/message`, 'Could not message the task', { message });
+  }
+
+  answerChildCheckpoint(rootId: string, childId: string, taskId: string, { answer, question, reason }: ChildCheckpointAnswer): Promise<ChildTaskControlResponse> {
+    return this.call('POST', `/api/sessions/${rootId}/children/${childId}/tasks/${encodeURIComponent(taskId)}/checkpoint/${answer}`, 'Could not answer the checkpoint', { question, ...(reason ? { reason } : {}) });
+  }
+
+  /**
+   * One child plan's own stream, through the root that holds it. Its close code
+   * is what a surface acts on: the daemon closes 1012 for a replaced root, which
+   * a reconnect recovers, and 4404 for an unknown child, which it may not.
+   */
+  followChild(rootId: string, childId: string, onEvent: (event: WsEvent) => void): ChildFollow {
+    const socket = this.openSocket(`/ws/session/${rootId}/child/${childId}`);
+    let closing = false;
+    const ready = new Promise<boolean>((resolve) => {
+      socket.once('open', () => resolve(true));
+      socket.once('error', () => resolve(false));
+      socket.once('close', () => resolve(false));
+    });
+    const ended = new Promise<number | null>((resolve) => {
+      socket.once('close', (code: number) => resolve(closing ? null : code));
+    });
+    socket.on('message', (data: Buffer) => {
+      if (closing) return;
+      try {
+        onEvent(JSON.parse(data.toString()));
+      } catch {
+        // ignore malformed messages
+      }
+    });
+    socket.on('error', () => {
+      // Reported through `ended`, which the close that follows settles.
+    });
+    return {
+      ready,
+      ended,
+      close: () => {
+        closing = true;
+        socket.close();
+      },
+    };
   }
 
   /** Ends one stream `streamExecution` returned, leaving any newer stream the session has opened since alone. */
