@@ -103,6 +103,31 @@ describe('carving a child\'s budget (ADR-0056 M5)', () => {
   });
 });
 
+describe('what a task still asks of its parent (ADR-0056 M5, M10)', () => {
+  const carveFor = (ledger: TreeLedger, taskId: string, tokens: number): NodeBudget => {
+    const carved = ledger.carve(ROOT_NODE, delegating(1000), { level: 0, tokens }, { sessionId: `child-of-${taskId}`, taskId });
+    if (!carved.ok) throw new Error(JSON.stringify(carved.refusal));
+    return carved.budget;
+  };
+
+  it('is its stated budget until a child opens, and nothing while one holds it', async () => {
+    const ledger = await open(1000);
+    expect(ledger.stillAsks(ROOT_NODE, 't', 300)).toBe(300);
+    carveFor(ledger, 't', 300);
+    expect(ledger.stillAsks(ROOT_NODE, 't', 300)).toBe(0);
+  });
+
+  it('is what its closed children left, with every raise, and never less than nothing', async () => {
+    const ledger = await open(1000);
+    const first = carveFor(ledger, 't', 400);
+    ledger.raise(first.path, 50);
+    first.spent(used(100), { taskId: 'w', attempt: 1 });
+    ledger.close(first.path);
+    expect(ledger.stillAsks(ROOT_NODE, 't', 400)).toBe(350);
+    expect(ledger.stillAsks(ROOT_NODE, 't', 40)).toBe(0);
+  });
+});
+
 describe('a claim (ADR-0056 M5)', () => {
   it('holds one session\'s reserve while it runs, and frees it as it ends', async () => {
     const ledger = await open(100);

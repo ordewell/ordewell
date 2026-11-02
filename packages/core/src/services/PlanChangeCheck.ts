@@ -67,6 +67,15 @@ export type CheckedChange =
 
 export type PassedChange = Extract<CheckedChange, { ok: true }>;
 
+/** A node's budget as its ledger holds it (ADR-0056 M5): `limit` is where a raise, or a parent's turn taking room back, has moved it past the saved mandate. */
+export interface NodeFunds {
+  limit: number;
+  /** What a carve can take now. */
+  left: number;
+  /** What a delegated task can still draw on this node: an open child's limit is already spoken for in `left`. */
+  stillAsks(task: Pick<Task, 'id' | 'budget'>): number;
+}
+
 /** What a change is checked against, read as each check runs: a session's live state, or a one-shot planner's request. */
 export interface PlanChangeScope {
   /** The plan's tasks as they stand. */
@@ -79,9 +88,10 @@ export interface PlanChangeScope {
    * The node a change is made on, with what it holds now and how far below the
    * root it stands, read as each check runs (ADR-0056 M4). Absent or undefined,
    * nothing may delegate: a one-shot planner has no node, and a build that does
-   * not offer delegation reads no mandate for it.
+   * not offer delegation reads no mandate for it. `budget` is absent while no
+   * ledger is open: the mandate's limit is then all this node knows.
    */
-  node?(): { mandate: Mandate; level: number } | undefined;
+  node?(): { mandate: Mandate; level: number; budget?: NodeFunds } | undefined;
   /** Whether a script can run sealed here (ADR-0036 S6): a change that brings a read-only one waits on this, as an attached skill waits on its lookup. */
   canSeal?(): Promise<boolean>;
   /** Where attached skill names are looked up; absent, none are. */
@@ -223,16 +233,20 @@ export class PlanChangeCheck {
 
   /**
    * What a change leaves past this node's limits (ADR-0055 D2, D19): each
-   * delegated task it wrote narrowed as it is written (ADR-0056 M4), so a plan
-   * never holds what its carve would refuse, and a child held to what a child
-   * plan may be. Only what this change wrote: what stands in the plan is not
-   * this edit's to answer for. A root plan has no task limit, so a flat run
-   * does not change.
+   * delegated task it wrote narrowed as it is written (ADR-0056 M4), the plan's
+   * budgets together held to what a carve could give them (M5), and a child held
+   * to what a child plan may be. Only what this change wrote or made bigger: what
+   * stands in the plan is not this edit's to answer for, so a plan past its room
+   * can still come down. Whatever passes here, the carve is what decides: spending
+   * moves the room after a plan is accepted. A root plan has no task limit, so a
+   * flat run does not change.
    */
   private pastMandate(before: readonly Task[], after: readonly Task[]): PlanChangeError[] {
     const node = this.scope.node?.();
     if (!node) return [];
-    const { mandate, level } = node;
+    const { level } = node;
+    const funds = node.budget ?? { limit: node.mandate.limits.tokens, left: node.mandate.limits.tokens, stillAsks: statedBudget };
+    const mandate = { ...node.mandate, limits: { ...node.mandate.limits, tokens: funds.limit } };
     const said = ({ status: _status, ...task }: Task) => JSON.stringify(task);
     const was = new Map(flattenTasks(before).map((task) => [task.id, said(task)]));
     const written = flattenTasks(after).filter((task) => was.get(task.id) !== said(task));
@@ -243,6 +257,10 @@ export class PlanChangeCheck {
       const narrowed = narrow(mandate, delegatedRequest(task, level));
       if (!narrowed.ok) errors.push({ taskId: task.id, field: 'budget', message: mandateRefusalText(narrowed.refusal) });
     }
+    const finished = new Set(before.filter(({ status }) => status === 'completed' || status === 'skipped').map(({ id }) => id));
+    const stillAsked = (tasks: readonly Task[]) => tasks.reduce((sum, task) => sum + (task.type !== 'delegated' || finished.has(task.id) ? 0 : funds.stillAsks(task)), 0);
+    const asked = stillAsked(after);
+    if (errors.length === 0 && asked > funds.left && asked > stillAsked(before)) past('limits.tokens', asked, funds.left);
     const count = after.filter((task) => task.type === 'delegated').length;
     if (delegated.length > 0 && count > mandate.limits.delegatedTasks) past('limits.delegatedTasks', count, mandate.limits.delegatedTasks);
     if (level === 0) return errors;
@@ -261,6 +279,10 @@ export class PlanChangeCheck {
   private refused(change: PlannerChange, errors: PlanChangeError[]): CheckedChange {
     return { ok: false, errors, runners: this.scope.runners(change.kind) };
   }
+}
+
+function statedBudget({ budget }: Pick<Task, 'budget'>): number {
+  return budget?.tokens ?? 0;
 }
 
 /** The overlaps an edit brought (ADR-0057 R6): what stood before it was answered then. */

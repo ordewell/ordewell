@@ -347,6 +347,12 @@ export class TreeLedger {
     return this.childrenFor(parent, taskId).reduce((total, node) => total + node.raised, 0);
   }
 
+  /** What a task stating `stated` can still draw on `parent`: nothing while a child holds its limit in `committed`, else what the tree granted it less what it spent (ADR-0056 M5, M10). */
+  stillAsks(parent: NodePath, taskId: string, stated: number): number {
+    if (this.childrenFor(parent, taskId).some((child) => child.open)) return 0;
+    return Math.max(0, stated + this.raisedOn(parent, taskId) - this.spentOn(parent, taskId));
+  }
+
   private childrenFor(parent: NodePath, taskId: string): TreeNode[] {
     return [...this.tree.values()].filter((node) => node.taskId === taskId && parentPath(node.path) === parent);
   }

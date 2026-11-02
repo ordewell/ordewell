@@ -6,7 +6,7 @@ import { createAiService, type IAiService } from './AiService';
 import type { PlannerContextDeps } from './plannerContextBudget';
 import { PlannerBackend } from './PlannerBackend';
 import type { TaskOp } from './TaskOps';
-import { PlanChangeCheck, runsSealed, type PlanChangeScope } from './PlanChangeCheck';
+import { PlanChangeCheck, runsSealed, type NodeFunds, type PlanChangeScope } from './PlanChangeCheck';
 import { carryPlannedModes } from './ModeResolver';
 import { ApprovalRecord } from './ApprovalRecord';
 import type { TaskQueryCatalog } from './TaskQuery';
@@ -642,6 +642,7 @@ export function createSession(deps: SessionDeps): Session {
   const catalog = new SessionCatalog({
     config: deps.config,
     autonomous: () => autonomousAt(deps.child, deps.config.autonomousMode),
+    ...(deps.child ? { held: () => deps.child!.mandate('off').limits } : {}),
     registry: deps.registry,
     modelResolver: deps.modelResolver,
     settings: deps.settings,
@@ -1482,7 +1483,11 @@ export class Session {
       handles: () => this.conversation.turnHandles(),
       guard: (before, after) => (guarded() ? this.supervision.checkEdit(before, after)?.refusal : undefined),
       // Read only where the build offers delegation, so a flat session's change meets what it always met (ADR-0055 D21).
-      node: () => (this.delegationOffered ? { mandate: this.mandate(), level: this.authority.depth } : undefined),
+      node: () => {
+        if (!this.delegationOffered) return undefined;
+        const budget = this.heldFunds();
+        return { mandate: this.mandate(), level: this.authority.depth, ...(budget ? { budget } : {}) };
+      },
       canSeal: async () => (await this.fsAdapter.canSeal?.()) ?? false,
     };
   }
@@ -1774,6 +1779,23 @@ export class Session {
     const tree = await this.ledger();
     if (!this.placement) tree.setRootLimit(this.userRunSettings().delegationTokens);
     return tree;
+  }
+
+  /**
+   * What the ledger says of this node's budget, in the tick a check reads it: a
+   * check has no wait to open one with, and a root with no ledger open has
+   * carved nothing yet in this process.
+   */
+  private heldFunds(): NodeFunds | undefined {
+    const tree = this.budget?.tree ?? this.tree;
+    if (!tree) return undefined;
+    if (!this.placement) tree.setRootLimit(this.userRunSettings().delegationTokens);
+    const { nodePath } = this;
+    return {
+      limit: tree.numbers(nodePath).limit,
+      left: tree.left(nodePath),
+      stillAsks: (task) => tree.stillAsks(nodePath, task.id, task.budget?.tokens ?? 0),
+    };
   }
 
   /**
@@ -2717,7 +2739,6 @@ export class Session {
 
     const generated = await this.conversation.hold(options?.signal, async (turn) => {
       const { modelsByRunner, runnerModes } = await this.catalog.planning(chosenRunners);
-      const settings = this.settingsFn();
       const modes = { ...plannerModesFrom(this.autonomous()), isolatedExecution: await this.runs.plannerLayout(), taskSkills: this.workspaceSkills() };
       const subagents = new SubagentRuns();
 
@@ -2734,7 +2755,7 @@ export class Session {
           this.events.progress(p);
         },
         signal: turn.signal,
-        perRunnerAllowlist: settings.modelAllowlist,
+        perRunnerAllowlist: this.catalog.allowlist(),
         modes,
       });
       if (turn.abandoned) throw new PlannerTurnDiscardedError();
@@ -3043,10 +3064,10 @@ export class Session {
     return { ...this.plannerTools, taskComplete: (report) => subplanner.taskComplete(report), checkpoint: ({ question }) => Promise.resolve(subplanner.checkpoint(question)) };
   }
 
-  /** What the prompt says of this node's limits, as it stands when the planner starts (ADR-0055 D19). */
+  /** What the prompt says of this node's limits, as it stands when the planner starts (ADR-0055 D19): what a carve could take then, which a child's limit overstates by what it keeps for its own turns. */
   private delegationBrief(): PlannerDelegation {
     const { limits, grants } = this.mandate();
-    return { tokens: limits.tokens, delegatedTasks: limits.delegatedTasks, grantable: [...grants].filter((grant) => grant === 'research' || grant === 'delegate' || grant === 'effect') };
+    return { tokens: this.heldFunds()?.left ?? limits.tokens, delegatedTasks: limits.delegatedTasks, grantable: [...grants].filter((grant) => grant === 'research' || grant === 'delegate' || grant === 'effect') };
   }
 
   /**

@@ -166,6 +166,14 @@ the child cannot reach follows it in the parent's plan.**
   last step before one, on the same diff. A repair lands after that step, and is
   held to the same paths there (D14). Paths accumulate down the tree
   (ADR-0056 M4): a nested delegated task is held to its ancestors' too.
+  A rule is relative to the repository root and read whatever its case and however
+  its characters are composed, since a case-insensitive checkout writes one file under
+  either name: a name covers that path and what is under it, `*` crosses no `/` and
+  `**` does, and a pattern with no `/` matches a name at any depth. A rule outside the
+  repository, one with another wildcard, and one that covers the whole of it are
+  refused with the rest (`protectedPathFault`), since each would pass a diff it was
+  meant to stop or leave a child nothing to land. A saved plan's whole-repository rule
+  matches everything, so the matcher errs by refusing the work.
 - **A check is a task (D8).** `delegationErrors`, in `checkPlanInvariants`, refuses
   on every route a delegated task with no check directly depending on it, as
   `loopErrors` holds a loop. A check is a read-only AI task or a script task
@@ -713,3 +721,4 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-11-01 — from review and a real run: a ready check starts by itself once its delegated task passes, on every route (D8, D9); a check whose runner cannot be read holds as any does; a restart says a parked question is lost, and Continue picks the child up (D17).
 - 2026-11-01 — from review: a repair is charged to the ledger and leaves the child's names and the report as they stood (D14).
 - 2026-11-01 — from real runs: a surface's composer continues a stopped delegated task and one whose question was lost (D17), and its row counts raises and says no budget it has not read (D20).
+- 2026-11-02 — from an audit: D7 says what a protected path covers, one matcher reads it on every use, and a rule the matcher would not honour is refused as it is written.
