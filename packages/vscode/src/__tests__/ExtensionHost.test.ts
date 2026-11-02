@@ -389,7 +389,7 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
       h.chat.messages.fire({ type: 'openChild', childId: 'nested' });
       await vi.waitFor(() => expect(h.chat.provider.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'childView' })));
 
-      h.chat.messages.fire({ type: 'answerChildCheckpoint', childId: 'nested', taskId: 'runner', question: 'Which rounding?', answer: 'approve' });
+      h.chat.messages.fire({ type: 'answerChildCheckpoint', answerId: 'a1', childId: 'nested', taskId: 'runner', question: 'Which rounding?', answer: 'approve' });
 
       await vi.waitFor(() => expect(control).toHaveBeenCalledWith('runner', { kind: 'checkpoint', answer: 'approve', question: 'Which rounding?' }));
       expect(h.session.spies.execute).not.toHaveBeenCalled();

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { ChildPlanEntry, ChildPlanView } from '@ordewell/core';
 import App from '../App';
-import { api, post } from './hostBridge';
+import { api, lastAnswerId, post } from './hostBridge';
 
 const noRun = { tasks: [], runMerge: null, handoff: null, mergeResult: null };
 function entry(o: Partial<ChildPlanEntry> = {}): ChildPlanEntry {
@@ -18,7 +18,7 @@ function asking(question: string | null, child = entry()): ChildPlanView {
       : { id: 'n', title: 'Nested', status: 'awaiting_user', awaitingReason: 'checkpoint', checkpoint: question, subtasks: [] }] },
   } as unknown as ChildPlanView;
 }
-const refused = (error = 'The budget is spent.') => post({ type: 'childControlResult', childId: 'child', taskId: 'n', error });
+const refused = (error = 'The budget is spent.', answerId = lastAnswerId()) => post({ type: 'checkpointResult', answerId, error });
 const typeAnswer = (w: string) => fireEvent.change(screen.getByLabelText('Your answer'), { target: { value: w } });
 const approveWith = (w: string) => { typeAnswer(w); fireEvent.click(screen.getByRole('button', { name: /Approve/ })); };
 const region = () => screen.queryByRole('region', { name: 'Answers not delivered' });
@@ -208,7 +208,7 @@ describe('child answers that were refused or never sent', () => {
     refused();
     post({ type: 'childView', view: asking('Same?', entry({ sessionId: 'sibling', title: 'Sibling' })) });
     expect(screen.getByLabelText('Your answer')).toHaveValue('');
-    post({ type: 'childControlResult', childId: 'sibling', taskId: 'n', error: 'x' });
+    post({ type: 'checkpointResult', answerId: 'an answer of another page', error: 'x' });
     expect(region()).toBeNull();
   });
   it('a refused answer survives a root session switch and return', () => {
@@ -226,14 +226,14 @@ describe('child answers that were refused or never sent', () => {
     approveWith('Floor.');
     refused();
     approveWith('Ceiling.');
-    post({ type: 'childControlResult', childId: 'child', taskId: 'n' });
+    post({ type: 'checkpointResult', answerId: lastAnswerId() });
     post({ type: 'childView', view: asking('Q2?') });
     expect(region()).toBeNull();
     post({ type: 'childView', view: asking('Q1?') });
     expect(screen.getByLabelText('Your answer')).toHaveValue('');
   });
 
-  const landed = (taskId = 'n') => post({ type: 'childControlResult', childId: 'child', taskId });
+  const landed = (answerId = lastAnswerId()) => post({ type: 'checkpointResult', answerId });
   const back = () => fireEvent.click(screen.getByRole('button', { name: 'Back to parent' }));
   const reopen = (view: ChildPlanView) => {
     post({ type: 'children', rootId: 'root', children: [entry({ checkpoints: ['n'] })] });
@@ -354,12 +354,13 @@ describe('child answers that were refused or never sent', () => {
     refused();
     fireEvent.change(words('Nested'), { target: { value: 'Floor, edited.' } });
     typeAndGive('Other', 'Other words.');
+    const other = lastAnswerId();
     back();
-    post({ type: 'childControlResult', childId: 'child', taskId: 'm', error: 'Other refused.' });
+    refused('Other refused.', other);
     reopen(two('Q1?', 'QM?'));
     expect(words('Nested')).toHaveValue('Floor, edited.');
     expect(words('Other')).toHaveValue('Other words.');
-    landed('m');
+    landed('an answer no longer here');
     expect(words('Nested')).toHaveValue('Floor, edited.');
     post({ type: 'childView', view: two('Q2?', null) });
     expect(within(region()!).getByText('Floor.')).toBeTruthy();

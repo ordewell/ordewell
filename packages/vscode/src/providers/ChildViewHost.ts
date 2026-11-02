@@ -97,26 +97,34 @@ export class ChildViewHost {
 
   async message(id: string, text: string): Promise<void> {
     const report = (result: { status?: 'woken' | 'queued'; error?: string }) => this.post({ type: 'childMessageResult', childId: id, ...result });
+    let handle: ChildPlanHandle;
     try {
       if (!text.trim()) throw new Error(NOT_OPEN);
-      const handle = await this.reach(id);
+      handle = await this.reach(id);
       const outcome = handle.message(text);
       report(outcome.ok ? { status: outcome.status } : { error: refusalText(outcome) });
-      this.showView(id, handle);
-    } catch (error) { report({ error: errorText(error) }); }
+    } catch (error) {
+      report({ error: errorText(error) });
+      return;
+    }
+    this.showViewAfter(id, handle);
   }
 
   /** The person's answer on this child's own task (ADR-0055 D20), so a depth-2 question never reaches the root. */
   async answer(answer: ChildCheckpointAnswer): Promise<void> {
-    const { childId, taskId, question, answer: decision, reason } = answer;
-    const report = (error?: string) => this.post({ type: 'childControlResult', childId, taskId, ...(error ? { error } : {}) });
+    const { answerId, childId, taskId, question, answer: decision, reason } = answer;
+    const report = (error?: string) => this.post({ type: 'checkpointResult', answerId, ...(error !== undefined ? { error } : {}) });
+    let handle: ChildPlanHandle;
     try {
-      const handle = await this.reach(childId);
+      handle = await this.reach(childId);
       const outcome = await handle.control(taskId, { kind: 'checkpoint', answer: decision, question, ...(reason ? { reason } : {}) });
       report(outcome.ok ? undefined : refusalText(outcome));
-      // Not waiting any more: what is shown next is the question that is.
-      this.showView(childId, handle);
-    } catch (error) { report(errorText(error)); }
+    } catch (error) {
+      report(errorText(error));
+      return;
+    }
+    // Not waiting any more: what is shown next is the question that is.
+    this.showViewAfter(childId, handle);
   }
 
   /** A handle speaks for the tree it was found in, so every action finds it again. */
@@ -141,6 +149,12 @@ export class ChildViewHost {
 
   private showView(id: string, handle: ChildPlanHandle): void {
     if (this.selected?.id === id) this.post({ type: 'childView', view: handle.view() });
+  }
+
+  /** The result is told by now, and a view that cannot be read is no second word on it: a person told "refused" of what landed would send it again. */
+  private showViewAfter(id: string, handle: ChildPlanHandle): void {
+    try { this.showView(id, handle); }
+    catch (error) { this.post({ type: 'childNotice', childId: id, message: errorText(error) }); }
   }
 
   close(): void { ++this.generation; this.closeSelection(); }

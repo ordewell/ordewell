@@ -194,7 +194,7 @@ export default function App() {
       if (msg.type === 'childView') { if (!childLeft.current) setChildView(msg.view); return; }
       if (msg.type === 'childConversation') { setChildConversation((current) => applyConversationPatch(current, msg.message)); return; }
       if (msg.type === 'childNotice') { setChildNotice({ childId: msg.childId, message: msg.message }); return; }
-      if (msg.type === 'childMessageResult' || msg.type === 'childControlResult') return;
+      if (msg.type === 'childMessageResult') return;
       // The login is this surface's own state, not the session's: it ends here
       // rather than in the reducer that mirrors the host.
       if (msg.type === 'plannerLoginEnded') {
@@ -609,8 +609,7 @@ export default function App() {
 
   const handleApproveCheckpoint = (words?: string, raiseTokens?: number) => {
     if (!checkpoint) return;
-    rootAnswers.give(checkpoint.taskId, { question: checkpoint.summary, answer: 'approve', words, raiseTokens });
-    dispatch({ type: 'checkpointAnswered' });
+    dispatch({ type: 'checkpointAnswered', answerId: rootAnswers.give(checkpoint.taskId, { question: checkpoint.summary, answer: 'approve', words, raiseTokens }) });
   };
 
   const handleRejectCheckpoint = (reason: string) => {
@@ -618,8 +617,7 @@ export default function App() {
     // Reject resumes the paused agent with the reason (rather than cancelling
     // the task), and the panel is torn down immediately — leaving a decision
     // box on screen after the decision is made asks the user to answer twice.
-    rootAnswers.give(checkpoint.taskId, { question: checkpoint.summary, answer: 'reject', words: reason });
-    dispatch({ type: 'checkpointAnswered' });
+    dispatch({ type: 'checkpointAnswered', answerId: rootAnswers.give(checkpoint.taskId, { question: checkpoint.summary, answer: 'reject', words: reason }) });
   };
 
   // The host owns every isolation action: opening the diff, and the merge,

@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, fireEvent, screen } from '@testing-library/react';
 import App from '../App';
-import { post as send } from './hostBridge';
+import { lastAnswerId, post as send } from './hostBridge';
 
 vi.mock('@ordewell/core/plan-utils', async (importOriginal) => {
   const real = await importOriginal<typeof import('@ordewell/core/plan-utils')>();
@@ -18,7 +18,7 @@ function asked() {
   send(view as never);
 }
 const card = () => document.querySelector('.checkpoint-panel');
-const refusal = (over: Record<string, string> = {}) => ({ type: 'checkpointRefused', taskId: 'd1', question: task.checkpoint, error: 'The budget is spent.', ...over });
+const refusal = (answerId = lastAnswerId()) => ({ type: 'checkpointResult', answerId, error: 'The budget is spent.' });
 const approve = () => fireEvent.click(document.querySelector('.checkpoint-approve-btn')!);
 
 describe('a refused answer to the root checkpoint', () => {
@@ -56,10 +56,10 @@ describe('a refused answer to the root checkpoint', () => {
     expect(card()).toBeNull();
   });
 
-  it('does not bring back a question that has gone, or one that was not the refused task', () => {
+  it('does not bring back a question that has gone, or one whose answer was not refused', () => {
     asked();
     approve();
-    send(refusal({ taskId: 'another' }) as never);
+    send(refusal('an answer of another page') as never);
     expect(card()).toBeNull();
     send({ type: 'runView', view: { tasks: [], runMerge: null, handoff: null, mergeResult: null } } as never);
     send(refusal() as never);

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { ChildPlanEntry, ChildPlanView } from '@ordewell/core';
 import App from '../App';
-import { api, post } from './hostBridge';
+import { api, lastAnswerId, post } from './hostBridge';
 
 const noRun = { tasks: [], runMerge: null, handoff: null, mergeResult: null };
 
@@ -89,7 +89,7 @@ describe('subplanner navigation', () => {
       render(<App />);
       post({ type: 'childView', view: asking(entry()) });
       fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
-      expect(api.postMessage).toHaveBeenCalledWith({ type: 'answerChildCheckpoint', childId: 'child', taskId: 'n', question: 'Which rounding?', answer: 'approve' });
+      expect(api.postMessage).toHaveBeenCalledWith({ type: 'answerChildCheckpoint', answerId: expect.any(String), childId: 'child', taskId: 'n', question: 'Which rounding?', answer: 'approve' });
       expect(sent('checkpointApprove')).toEqual([]);
       expect(sent('checkpointReject')).toEqual([]);
     });
@@ -100,7 +100,7 @@ describe('subplanner navigation', () => {
       expect(screen.getByRole('button', { name: 'Send Rejection' })).toBeDisabled();
       fireEvent.change(screen.getByPlaceholderText(/Why are you rejecting/), { target: { value: 'Use floor.' } });
       fireEvent.click(screen.getByRole('button', { name: 'Send Rejection' }));
-      expect(api.postMessage).toHaveBeenCalledWith({ type: 'answerChildCheckpoint', childId: 'child', taskId: 'n', question: 'Which rounding?', answer: 'reject', reason: 'Use floor.' });
+      expect(api.postMessage).toHaveBeenCalledWith({ type: 'answerChildCheckpoint', answerId: expect.any(String), childId: 'child', taskId: 'n', question: 'Which rounding?', answer: 'reject', reason: 'Use floor.' });
     });
     it('carries the words of an answer to a nested subplanner, and offers no raise', () => {
       render(<App />);
@@ -108,7 +108,7 @@ describe('subplanner navigation', () => {
       expect(screen.queryByLabelText(/Raise its budget/)).toBeNull();
       fireEvent.change(screen.getByLabelText('Your answer'), { target: { value: 'Floor.' } });
       fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
-      expect(api.postMessage).toHaveBeenCalledWith({ type: 'answerChildCheckpoint', childId: 'child', taskId: 'n', question: 'Which rounding?', answer: 'approve', reason: 'Floor.' });
+      expect(api.postMessage).toHaveBeenCalledWith({ type: 'answerChildCheckpoint', answerId: expect.any(String), childId: 'child', taskId: 'n', question: 'Which rounding?', answer: 'approve', reason: 'Floor.' });
     });
     it('holds a second answer until the first comes back, and keeps the words through a refusal', () => {
       render(<App />);
@@ -116,7 +116,7 @@ describe('subplanner navigation', () => {
       fireEvent.change(screen.getByLabelText('Your answer'), { target: { value: 'Floor.' } });
       fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
       expect(screen.getByRole('button', { name: /Approve/ })).toBeDisabled();
-      post({ type: 'childControlResult', childId: 'child', taskId: 'n', error: 'The budget is spent.' });
+      post({ type: 'checkpointResult', answerId: lastAnswerId(), error: 'The budget is spent.' });
       expect(screen.getByRole('button', { name: /Approve/ })).toBeEnabled();
       expect(screen.getByLabelText('Your answer')).toHaveValue('Floor.');
       expect(screen.getByRole('status')).toHaveTextContent('The budget is spent.');
@@ -130,7 +130,7 @@ describe('subplanner navigation', () => {
         fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
         post({ type: 'childView', view: { ...asking(nested), plan: null, run: noRun } as ChildPlanView });
       };
-      const refused = (error = 'The child plan is no longer open.') => post({ type: 'childControlResult', childId: 'child', taskId: 'n', error });
+      const refused = (error = 'The child plan is no longer open.') => post({ type: 'checkpointResult', answerId: lastAnswerId(), error });
 
       it('tells of a refusal by name, and hands back the words on return', () => {
         answerThenLeave();
@@ -170,7 +170,7 @@ describe('subplanner navigation', () => {
       });
       it('keeps nothing of an answer that landed', () => {
         answerThenLeave();
-        post({ type: 'childControlResult', childId: 'child', taskId: 'n' });
+        post({ type: 'checkpointResult', answerId: lastAnswerId() });
         expect(screen.queryByRole('status')).toBeNull();
         post({ type: 'childView', view: asking(entry(), 'Which rounding?', 'delegated') });
         expect(screen.getByLabelText('Your answer')).toHaveValue('');
@@ -206,7 +206,7 @@ describe('subplanner navigation', () => {
       expect(screen.getByText('The budget is spent.')).toBeTruthy();
       expect(screen.queryByLabelText('Message subplanner')).toBeNull();
       fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
-      expect(api.postMessage).toHaveBeenCalledWith({ type: 'answerChildCheckpoint', childId: 'child', taskId: 'n', question: 'Which rounding?', answer: 'approve' });
+      expect(api.postMessage).toHaveBeenCalledWith({ type: 'answerChildCheckpoint', answerId: expect.any(String), childId: 'child', taskId: 'n', question: 'Which rounding?', answer: 'approve' });
     });
     it('is found from the root, wherever in the tree it sits', () => {
       render(<App />);

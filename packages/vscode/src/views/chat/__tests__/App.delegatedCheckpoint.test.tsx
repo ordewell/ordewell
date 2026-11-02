@@ -38,7 +38,7 @@ describe('the checkpoint card of a delegated task', () => {
     fireEvent.change(screen.getByLabelText('Raise its budget by (tokens)'), { target: { value: '700000' } });
     fireEvent.click(document.querySelector('.checkpoint-approve-btn')!);
 
-    expect(api.postMessage).toHaveBeenCalledWith({ type: 'answerCheckpoint', taskId: 'd1', question: 'Round half up or to even?', approved: true, reason: 'Half up.', raiseTokens: 700_000 });
+    expect(api.postMessage).toHaveBeenCalledWith({ type: 'answerCheckpoint', answerId: expect.any(String), taskId: 'd1', approved: true, reason: 'Half up.', raiseTokens: 700_000 });
     expect(document.querySelector('.checkpoint-panel')).toBeNull();
   });
 
@@ -46,7 +46,7 @@ describe('the checkpoint card of a delegated task', () => {
     send(view(task()) as never);
     api.postMessage.mockClear();
     fireEvent.click(document.querySelector('.checkpoint-approve-btn')!);
-    expect(api.postMessage).toHaveBeenCalledWith({ type: 'answerCheckpoint', taskId: 'd1', question: 'Round half up or to even?', approved: true });
+    expect(api.postMessage).toHaveBeenCalledWith({ type: 'answerCheckpoint', answerId: expect.any(String), taskId: 'd1', approved: true });
   });
 
   it('is the plain card for a task that is not delegated', () => {

@@ -43,8 +43,8 @@ export function ChildQuestions({ tree, current, onOpen }: { tree: readonly Child
 }
 
 const LABELS: Record<UndeliveredPart, Record<UndeliveredWords['field'], string>> = {
-  refused: { words: 'Your answer:', reason: 'Your rejection reason:' },
-  unsent: { words: 'Your answer, not sent:', reason: 'Your rejection reason, not sent:' },
+  refused: { words: 'Your answer:', reason: 'Your rejection reason:', raise: 'Your raise (tokens):' },
+  unsent: { words: 'Your answer, not sent:', reason: 'Your rejection reason, not sent:', raise: 'Your raise (tokens), not sent:' },
 };
 
 /**
@@ -142,7 +142,7 @@ export default function ChildPlanPanel({ view, tree, conversation, notice, compo
     return <div className="child-task" key={task.id}>
       <span>{task.title} · {live?.status ?? task.status}</span>
       {question && (answerable
-        ? <AnswerableQuestion key={question} title={task.title} question={question} delegated={task.type === 'delegated'} answering={answers.out(task.id)} draft={answers.draft(task.id, question)} onDraft={(draft) => answers.edit(task.id, question, draft)} onAnswer={(answer, words) => answers.give(task.id, { question, answer, words })} />
+        ? <AnswerableQuestion key={question} title={task.title} question={question} delegated={task.type === 'delegated'} answering={answers.out(task.id)} draft={answers.draft(task.id, question)} onDraft={(draft) => answers.edit(task.id, question, draft)} onAnswer={(answer, words) => { answers.give(task.id, { question, answer, words }); }} />
         : <p>{question}</p>)}
       {(task.attempted || live?.attempted) && <button type="button" onClick={() => post({ type: 'openChildTaskLog', childId, taskId: task.id })}>Open chat</button>}
       {task.type === 'delegated' && descendants.map((entry) =>
