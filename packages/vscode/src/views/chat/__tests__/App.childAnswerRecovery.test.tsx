@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { ChildPlanEntry, ChildPlanView } from '@ordewell/core';
 import App from '../App';
-import { api, post } from './hostBridge';
+import { api, lastAnswerId, post } from './hostBridge';
 
 const noRun = { tasks: [], runMerge: null, handoff: null, mergeResult: null };
 
@@ -23,7 +23,7 @@ function asking(question: string | null, child = entry()): ChildPlanView {
 }
 
 const elsewhere = () => post({ type: 'childView', view: { ...asking('Other?', entry({ sessionId: 'other', parent: 'child', title: 'Other plan', depth: 2 })), plan: null, run: noRun } as ChildPlanView });
-const refused = (error = 'The budget is spent.') => post({ type: 'childControlResult', childId: 'child', taskId: 'n', error });
+const refused = (error = 'The budget is spent.') => post({ type: 'checkpointResult', answerId: lastAnswerId(), error });
 const approveWith = (words: string) => {
   fireEvent.change(screen.getByLabelText('Your answer'), { target: { value: words } });
   fireEvent.click(screen.getByRole('button', { name: /Approve/ }));
@@ -83,7 +83,7 @@ describe('a refused answer in a child plan', () => {
     post({ type: 'childView', view: asking('Which currency?') });
     approveWith('Euro.');
     expect(within(notDelivered()).getByText('Floor.')).toBeTruthy();
-    post({ type: 'childControlResult', childId: 'child', taskId: 'n' });
+    post({ type: 'checkpointResult', answerId: lastAnswerId() });
     expect(within(notDelivered()).getByText('Floor.')).toBeTruthy();
   });
 
@@ -153,7 +153,7 @@ describe('a refused answer in a child plan', () => {
     elsewhere();
     post({ type: 'childView', view: asking('Which rounding?') });
     approveWith('Floor, again.');
-    expect(api.postMessage).toHaveBeenLastCalledWith({ type: 'answerChildCheckpoint', childId: 'child', taskId: 'n', question: 'Which rounding?', answer: 'approve', reason: 'Floor, again.' });
+    expect(api.postMessage).toHaveBeenLastCalledWith({ type: 'answerChildCheckpoint', answerId: expect.any(String), childId: 'child', taskId: 'n', question: 'Which rounding?', answer: 'approve', reason: 'Floor, again.' });
   });
 
   it('is let go on request, and shows nothing once it landed', () => {
@@ -166,7 +166,7 @@ describe('a refused answer in a child plan', () => {
     expect(screen.queryByRole('region', { name: 'Answers not delivered' })).toBeNull();
     post({ type: 'childView', view: asking('Which currency?') });
     approveWith('Euro.');
-    post({ type: 'childControlResult', childId: 'child', taskId: 'n' });
+    post({ type: 'checkpointResult', answerId: lastAnswerId() });
     post({ type: 'childView', view: asking(null) });
     expect(screen.queryByRole('region', { name: 'Answers not delivered' })).toBeNull();
   });

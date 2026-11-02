@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ChildPlanEntry } from '@ordewell/core';
 import type { HostToWebview, WebviewToHost } from '../../shared/protocol';
 import type { ChildNotice } from './components/ChildPlanPanel';
@@ -84,8 +84,8 @@ export interface AnswerDraft {
 
 export const EMPTY_ANSWER_DRAFT: AnswerDraft = { words: '', reason: '', rejecting: false };
 
-/** The two texts a form holds: an approval's words and a rejection's reason. */
-type Field = 'words' | 'reason';
+/** The texts a form holds: an approval's words, a rejection's reason, and a raise. */
+type Field = 'words' | 'reason' | 'raise';
 
 /** One question's words as the list shows them. */
 export interface UndeliveredWords {
@@ -121,7 +121,8 @@ export interface ChildAnswers {
   /** What is typed to this very question, however many times the panel has come and gone. */
   draft: (taskId: string, question: string) => AnswerDraft;
   edit: (taskId: string, question: string, draft: AnswerDraft) => void;
-  give: (taskId: string, given: { question: string; answer: 'approve' | 'reject'; words?: string; raiseTokens?: number }) => void;
+  /** Sends the answer, and returns the identity the host's result will name. */
+  give: (taskId: string, given: { question: string; answer: 'approve' | 'reject'; words?: string; raiseTokens?: number }) => string;
   /** What is left of the questions the panel does not still offer a form for. */
   undelivered: (offered: (taskId: string, question: string) => boolean) => Undelivered[];
   dismiss: (taskId: string, question: string, part: UndeliveredPart) => void;
@@ -150,6 +151,25 @@ export interface KeptAnswers {
 }
 
 /**
+ * One answer given. It has an identity of its own because a question can be
+ * asked again word for word while this answer is out: only the id says which
+ * answer the host's result speaks for. An answer that lands leaves the list, so
+ * nothing here was ever delivered.
+ */
+interface Delivery {
+  id: string;
+  /**
+   * The words that went to the host, as sent: the form may have been edited
+   * since, and the list must say what the host refused, not what was typed after.
+   */
+  sent: Readonly<Partial<Record<Field, string>>>;
+  /** The form as it stood when the answer went, which a refusal brings back to the root's card, closed on answering. */
+  given: AnswerDraft;
+  /** The host's refusal; none while the answer is out. */
+  error?: string;
+}
+
+/**
  * Keyed by the question as well as the task: an answer belongs to the question
  * it was given to, so a later question cannot overwrite or inherit it.
  */
@@ -161,58 +181,81 @@ interface KeptAnswer {
   title: string;
   /** What the form holds now. */
   draft: AnswerDraft;
-  /**
-   * The words that went to the host, as sent: the form may have been edited
-   * since, and the list must say what the host refused, not what was typed after.
-   */
-  sent: Readonly<Partial<Record<Field, string>>>;
-  /**
-   * The form as it stood when the answer went, for the root card, which closes
-   * on answering: a refusal brings it back to this, unless the question was
-   * asked again and typed into meanwhile.
-   */
-  given?: AnswerDraft;
-  /** Typed only; out with the host until its result; or refused by it. */
-  state: 'draft' | 'out' | 'refused';
-  error?: string;
+  /** The answers to this question the host has not taken, oldest first. */
+  deliveries: readonly Delivery[];
 }
 
+type Answers = Readonly<Record<string, KeptAnswer>>;
+
 const answerKey = (childId: string, taskId: string, question: string): string => JSON.stringify([childId, taskId, question]);
-const FIELDS: readonly Field[] = ['words', 'reason'];
+const FIELDS: readonly Field[] = ['words', 'reason', 'raise'];
 
-const blank = (draft: AnswerDraft): boolean => draft.words.trim() === '' && draft.reason.trim() === '' && !draft.rejecting && !(draft.raise ?? '').trim();
+const typed = (draft: AnswerDraft, field: Field): string => (draft[field] ?? '').trim();
 
-/** The words a form holds that were not what went to the host. */
+const blank = (draft: AnswerDraft): boolean => !draft.rejecting && FIELDS.every((field) => typed(draft, field) === '');
+
+const isOut = (delivery: Delivery): boolean => delivery.error === undefined;
+
+/** The refusals that stand: one a later answer may yet replace is not the person's to act on until that answer is settled. */
+function refusals({ deliveries }: KeptAnswer): readonly Delivery[] {
+  let from = deliveries.length;
+  while (from > 0 && !isOut(deliveries[from - 1])) from--;
+  return deliveries.slice(from);
+}
+
+/** What the standing refusals sent, field by field: a later answer's words replace an earlier's. */
+const refusedWords = (kept: KeptAnswer): Delivery['sent'] => Object.assign({}, ...refusals(kept).map((delivery) => delivery.sent));
+
+/** The words a form holds that are not what went to the host. */
 const typedAfter = (kept: KeptAnswer, field: Field): boolean => {
-  const text = kept.draft[field].trim();
-  return text !== '' && text !== kept.sent[field];
+  const text = typed(kept.draft, field);
+  return text !== '' && !kept.deliveries.some((delivery) => delivery.sent[field] === text);
 };
 
 function listed(kept: KeptAnswer): Undelivered | undefined {
   const { childId, title, taskId, question } = kept;
-  const refused = kept.state === 'refused'
-    ? FIELDS.flatMap((field) => { const text = kept.sent[field]; return text ? [{ field, text }] : []; })
-    : [];
-  const unsent = FIELDS.filter((field) => typedAfter(kept, field)).map((field) => ({ field, text: kept.draft[field] }));
+  const sent = refusedWords(kept);
+  const refused = FIELDS.flatMap((field) => { const text = sent[field]; return text ? [{ field, text }] : []; });
+  const unsent = FIELDS.filter((field) => typedAfter(kept, field)).map((field) => ({ field, text: kept.draft[field] ?? '' }));
   if (refused.length === 0 && unsent.length === 0) return undefined;
-  return { childId, title, taskId, question, ...(refused.length > 0 ? { refused: { words: refused, error: kept.error ?? '' } } : {}), ...(unsent.length > 0 ? { unsent } : {}) };
+  return { childId, title, taskId, question, ...(refused.length > 0 ? { refused: { words: refused, error: refusals(kept).at(-1)?.error ?? '' } } : {}), ...(unsent.length > 0 ? { unsent } : {}) };
 }
 
 /** What stays of a kept answer when a person lets go of one of its two lists, if anything does. */
 function letGo(kept: KeptAnswer, part: UndeliveredPart): KeptAnswer | undefined {
+  const sent = refusedWords(kept);
+  const shown = refusals(kept);
   // The form still holding what was refused goes with it; words typed after it are the other list's.
   const goes = (field: Field) => part === 'refused'
-    ? kept.sent[field] !== undefined && !typedAfter(kept, field)
+    ? sent[field] !== undefined && !typedAfter(kept, field)
     : typedAfter(kept, field);
   const draft = { ...kept.draft, ...Object.fromEntries(FIELDS.filter(goes).map((field) => [field, ''])) };
-  const sent = part === 'refused' ? {} : kept.sent;
-  if (Object.keys(sent).length === 0 && draft.words.trim() === '' && draft.reason.trim() === '') return undefined;
-  return { ...kept, draft, sent, state: part === 'refused' ? 'draft' : kept.state, error: part === 'refused' ? undefined : kept.error };
+  const deliveries = part === 'refused' ? kept.deliveries.filter((delivery) => !shown.includes(delivery)) : kept.deliveries;
+  if (deliveries.length === 0 && FIELDS.every((field) => typed(draft, field) === '')) return undefined;
+  return { ...kept, draft, deliveries };
 }
 
-/** The host refused: the card or form comes back to the words it was answered with. */
-function refuse(kept: KeptAnswer, error: string): KeptAnswer {
-  return { ...kept, state: 'refused', error, draft: kept.given && blank(kept.draft) ? kept.given : kept.draft, given: undefined };
+/** The host refused: the card or form comes back to the newest answer's words, and an older one's are not put over them. */
+function refuse(kept: KeptAnswer, id: string, error: string): KeptAnswer {
+  const newest = kept.deliveries.at(-1);
+  return {
+    ...kept,
+    deliveries: kept.deliveries.map((delivery) => (delivery.id === id ? { ...delivery, error } : delivery)),
+    draft: newest?.id === id && blank(kept.draft) ? newest.given : kept.draft,
+  };
+}
+
+/**
+ * The host took the answer, which settles every older one to this question,
+ * whatever the host said or has yet to say of it: results can come in any order
+ * and must leave the same list. A newer answer has its own result to come.
+ */
+function land(kept: KeptAnswer, id: string): KeptAnswer | undefined {
+  const index = kept.deliveries.findIndex((delivery) => delivery.id === id);
+  const deliveries = kept.deliveries.slice(index + 1);
+  // The same object: the form is as this answer took it. Equal words in another are retyped, and new.
+  const draft = kept.draft === kept.deliveries[index].given ? EMPTY_ANSWER_DRAFT : kept.draft;
+  return deliveries.length === 0 && blank(draft) ? undefined : { ...kept, draft, deliveries };
 }
 
 /**
@@ -223,37 +266,37 @@ function refuse(kept: KeptAnswer, error: string): KeptAnswer {
  * and told apart from what was sent.
  */
 export function useChildAnswers(post: (message: WebviewToHost) => void, notify: (notice: ChildNotice) => void): KeptAnswers {
-  const [answers, setAnswers] = useState<Readonly<Record<string, KeptAnswer>>>({});
+  const [answers, setAnswers] = useState<Answers>({});
+  // Written at once, not on render: a result can come before the render of the answer it names, and another result right after it.
   const latest = useRef(answers);
-  latest.current = answers;
+  const change = useCallback((next: (current: Answers) => Answers) => {
+    latest.current = next(latest.current);
+    setAnswers(latest.current);
+  }, []);
+  // Prefixed per page, as an escalation's request is: a result on its way to the old page must not match a new count.
+  const page = useRef(Math.random().toString(36).slice(2));
+  const nextAnswer = useRef(0);
 
   useEffect(() => {
     const handler = (event: MessageEvent<HostToWebview>) => {
       const msg = event.data;
-      if (msg.type === 'checkpointRefused') {
-        // The root's host names the question, so a late refusal cannot land on a newer one.
-        const key = answerKey(ROOT_ANSWERS, msg.taskId, msg.question);
-        if (latest.current[key]?.state !== 'out') return;
-        setAnswers((current) => (current[key]?.state === 'out' ? { ...current, [key]: refuse(current[key], msg.error) } : current));
-        return;
-      }
-      if (msg.type !== 'childControlResult') return;
-      // A result names no question, but a task has one answer out at a time.
-      const key = Object.keys(latest.current).find((k) => {
-        const kept = latest.current[k];
-        return kept.state === 'out' && kept.childId === msg.childId && kept.taskId === msg.taskId;
-      });
+      if (msg.type !== 'checkpointResult') return;
+      const { answerId, error } = msg;
+      // An answer a later one has settled is gone, and so is the last word on it.
+      const key = Object.keys(latest.current).find((k) => latest.current[k].deliveries.some((delivery) => delivery.id === answerId));
       if (!key) return;
       const kept = latest.current[key];
-      setAnswers(({ [key]: _settled, ...others }) => (msg.error ? { ...others, [key]: refuse(kept, msg.error) } : others));
-      // As for a message: the view of wherever the person went may still be on its way.
-      if (msg.error) notify({ childId: '', message: `Not answered in ${kept.title}: ${msg.error}` });
+      const left = error === undefined ? land(kept, answerId) : refuse(kept, answerId, error);
+      change(({ [key]: _settled, ...others }) => (left ? { ...others, [key]: left } : others));
+      // As for a message: the view of wherever the person went may still be on
+      // its way. The root's refusal has its card to come back to.
+      if (error !== undefined && kept.childId !== ROOT_ANSWERS) notify({ childId: '', message: `Not answered in ${kept.title}: ${error}` });
     };
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
-  }, [notify]);
+  }, [change, notify]);
 
-  const discard = (childId: string, taskId: string, question: string, part: UndeliveredPart) => setAnswers((current) => {
+  const discard = (childId: string, taskId: string, question: string, part: UndeliveredPart) => change((current) => {
     const key = answerKey(childId, taskId, question);
     const { [key]: kept, ...others } = current;
     const left = kept && letGo(kept, part);
@@ -273,31 +316,40 @@ export function useChildAnswers(post: (message: WebviewToHost) => void, notify: 
     }),
     dismiss: (item, part) => discard(item.childId, item.taskId, item.question, part),
     of: ({ sessionId: childId, title }) => ({
-      out: (taskId) => Object.values(answers).some((kept) => kept.state === 'out' && kept.childId === childId && kept.taskId === taskId),
+      out: (taskId) => Object.values(answers).some((kept) => kept.childId === childId && kept.taskId === taskId && kept.deliveries.some(isOut)),
       draft: (taskId, question) => answers[answerKey(childId, taskId, question)]?.draft ?? EMPTY_ANSWER_DRAFT,
-      edit: (taskId, question, draft) => setAnswers((current) => {
+      edit: (taskId, question, draft) => change((current) => {
         const key = answerKey(childId, taskId, question);
-        const kept = current[key] ?? { childId, taskId, question, sent: {}, state: 'draft' as const };
+        const kept = current[key] ?? { childId, taskId, question, title, draft: EMPTY_ANSWER_DRAFT, deliveries: [] };
         // Clearing a refused field is letting it go; any other edit leaves what was sent as it was.
-        const cleared = (field: Field) => kept.state === 'refused' && kept.draft[field].trim() !== '' && draft[field].trim() === '';
-        const sent = Object.fromEntries(Object.entries(kept.sent).filter(([field]) => !cleared(field as Field)));
-        return { ...current, [key]: { ...kept, title, draft, sent } };
+        const cleared = (field: Field) => typed(kept.draft, field) !== '' && typed(draft, field) === '';
+        const deliveries = kept.deliveries.map((delivery) => (isOut(delivery)
+          ? delivery
+          : { ...delivery, sent: Object.fromEntries(Object.entries(delivery.sent).filter(([field]) => !cleared(field as Field))) }));
+        return { ...current, [key]: { ...kept, title, draft, deliveries } };
       }),
       give: (taskId, { question, answer, words, raiseTokens }) => {
         const key = answerKey(childId, taskId, question);
         const root = childId === ROOT_ANSWERS;
-        setAnswers((current) => {
+        const answerId = `${page.current}-${nextAnswer.current++}`;
+        change((current) => {
           const kept = current[key];
-          const field: Field = answer === 'approve' ? 'words' : 'reason';
-          // A wordless approval sent no words, so none are its to show.
-          const sent = words?.trim() ? { ...kept?.sent, [field]: words.trim() } : (kept?.sent ?? {});
           const form = kept?.draft ?? EMPTY_ANSWER_DRAFT;
+          const field: Field = answer === 'approve' ? 'words' : 'reason';
+          const sent = {
+            // A wordless approval sent no words, so none are its to show.
+            ...(words?.trim() ? { [field]: words.trim() } : {}),
+            // As typed, so the form is not taken for something else: "7e5" is a raise too.
+            ...(raiseTokens !== undefined ? { raise: typed(form, 'raise') || String(raiseTokens) } : {}),
+          };
+          const delivery: Delivery = { id: answerId, sent, given: form };
           // The root's card closes, so a question asked again finds its form blank.
-          return { ...current, [key]: { childId, taskId, question, ...kept, title, draft: root ? EMPTY_ANSWER_DRAFT : form, given: root ? form : undefined, sent, state: 'out' as const, error: undefined } };
+          return { ...current, [key]: { childId, taskId, question, title, draft: root ? EMPTY_ANSWER_DRAFT : form, deliveries: [...(kept?.deliveries ?? []), delivery] } };
         });
         post(root
-          ? { type: 'answerCheckpoint', taskId, question, approved: answer === 'approve', ...(words ? { reason: words } : {}), ...(raiseTokens !== undefined ? { raiseTokens } : {}) }
-          : { type: 'answerChildCheckpoint', childId, taskId, question, answer, ...(words ? { reason: words } : {}) });
+          ? { type: 'answerCheckpoint', answerId, taskId, approved: answer === 'approve', ...(words ? { reason: words } : {}), ...(raiseTokens !== undefined ? { raiseTokens } : {}) }
+          : { type: 'answerChildCheckpoint', answerId, childId, taskId, question, answer, ...(words ? { reason: words } : {}) });
+        return answerId;
       },
       undelivered: (offered) => Object.values(answers)
         .filter((kept) => kept.childId === childId && !offered(kept.taskId, kept.question))

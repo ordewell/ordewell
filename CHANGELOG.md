@@ -10,6 +10,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **A checkpoint answer in VS Code is told by its own result.** An answer that was
+  delivered is no longer called refused when the same question comes back, words
+  retyped to match it stay readable when the question goes, and a refused or
+  unsent budget raise is listed with the answer and the refusal.
 - **A message to a child plan is no longer lost in silence.** A message held for a
   usage limit or a pause says so on that child's stream when a Stop ends the child
   before its subplanner read it.

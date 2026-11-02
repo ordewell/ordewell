@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { ChildPlanEntry, ChildPlanView } from '@ordewell/core';
 import App from '../App';
-import { api, post } from './hostBridge';
+import { api, lastAnswerId, post } from './hostBridge';
 
 vi.mock('@ordewell/core/plan-utils', async (importOriginal) => {
   const real = await importOriginal<typeof import('@ordewell/core/plan-utils')>();
@@ -23,7 +23,7 @@ function asking(question: string | null, child = entry()): ChildPlanView {
       : { id: 'n', title: 'Nested', status: 'awaiting_user', awaitingReason: 'checkpoint', checkpoint: question, subtasks: [] }] },
   } as unknown as ChildPlanView;
 }
-const refused = (error = 'The budget is spent.') => post({ type: 'childControlResult', childId: 'child', taskId: 'n', error });
+const refused = (error = 'The budget is spent.', answerId = lastAnswerId()) => post({ type: 'checkpointResult', answerId, error });
 const type = (w: string) => fireEvent.change(screen.getByLabelText('Your answer'), { target: { value: w } });
 const approveBtn = () => screen.getByRole('button', { name: /Approve/ });
 const notDelivered = () => screen.queryByRole('region', { name: 'Answers not delivered' });
@@ -34,7 +34,7 @@ const rootView = (q: string | null) => ({ type: 'runView' as const, view: { task
 const plan = { tasks: [{ id: 'd1', order: 1, title: 'Import ledger', description: '', type: 'ai', status: 'pending', dependencies: [], subtasks: [], assignedRunner: 'claude-code', taskMode: 'build' }], generatedAt: new Date().toISOString(), status: 'draft' as const, runners: ['claude-code'], lastUpdated: new Date().toISOString() };
 const card = () => document.querySelector('.checkpoint-panel');
 const rootAsked = (q = 'Round half up?') => { render(<App />); post({ type: 'planUpdated', plan } as never); post(rootView(q) as never); };
-const rootRefused = (question = 'Round half up?') => ({ type: 'checkpointRefused', taskId: 'd1', question, error: 'The budget is spent.' });
+const rootRefused = (answerId = lastAnswerId()) => ({ type: 'checkpointResult', answerId, error: 'The budget is spent.' });
 const rootApprove = () => fireEvent.click(document.querySelector('.checkpoint-approve-btn')!);
 
 describe('answers whose question has moved on or been edited', () => {
@@ -97,11 +97,12 @@ describe('answers whose question has moved on or been edited', () => {
   it('a late refusal of the old question leaves a newer answer on the same task shut', () => {
     rootAsked();
     rootApprove();
+    const old = lastAnswerId();
     post(rootView('A new question?') as never);
     fireEvent.change(screen.getByLabelText('Your answer'), { target: { value: 'New words.' } });
     rootApprove();
     expect(card()).toBeNull();
-    post(rootRefused() as never);
+    post(rootRefused(old) as never);
     expect(card()).toBeNull();
   });
 

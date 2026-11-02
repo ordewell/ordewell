@@ -110,10 +110,10 @@ describe('child view host', () => {
     const control = vi.fn(async () => ({ ok: true as const, message: 'Rejected.' }));
     const { host, post, directory } = selected({ control });
     await host.open('child');
-    await host.answer({ childId: 'child', taskId: 'nested', question: 'Which rounding?', answer: 'reject', reason: 'Use floor.' });
+    await host.answer({ answerId: 'a1', childId: 'child', taskId: 'nested', question: 'Which rounding?', answer: 'reject', reason: 'Use floor.' });
     expect(directory.find).toHaveBeenCalledTimes(2);
     expect(control).toHaveBeenCalledWith('nested', { kind: 'checkpoint', answer: 'reject', question: 'Which rounding?', reason: 'Use floor.' });
-    expect(post).toHaveBeenCalledWith({ type: 'childControlResult', childId: 'child', taskId: 'nested' });
+    expect(post).toHaveBeenCalledWith({ type: 'checkpointResult', answerId: 'a1' });
     host.dispose();
   });
   it('shows the question now waiting when the one answered has moved on', async () => {
@@ -121,9 +121,29 @@ describe('child view host', () => {
     const { host, post } = selected({ control });
     await host.open('child');
     post.mockClear();
-    await host.answer({ childId: 'child', taskId: 'nested', question: 'Old question', answer: 'approve' });
-    expect(post).toHaveBeenCalledWith({ type: 'childControlResult', childId: 'child', taskId: 'nested', error: 'That checkpoint is not waiting any more.' });
+    await host.answer({ answerId: 'a1', childId: 'child', taskId: 'nested', question: 'Old question', answer: 'approve' });
+    expect(post).toHaveBeenCalledWith({ type: 'checkpointResult', answerId: 'a1', error: 'That checkpoint is not waiting any more.' });
     expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: 'childView' }));
+    host.dispose();
+  });
+  it('has one word on an answer or a message that landed, when the view after it cannot be read', async () => {
+    const control = vi.fn(async () => ({ ok: true as const, message: 'Approved.' }));
+    const entry = { sessionId: 'child', parent: 'root', node: '0/1', taskId: 'd', title: 'Delegate', depth: 1, state: 'parked' as const };
+    const readable = { child: entry, plan: null, run: { tasks: [], runMerge: null, handoff: null, mergeResult: null } };
+    const view = vi.fn(() => readable);
+    const message = vi.fn(() => ({ ok: true as const, status: 'queued' as const }));
+    const { host, post } = selected({ control, view, message } as never);
+    await host.open('child');
+    view.mockImplementation(() => { throw new Error('The plan cannot be read.'); });
+    post.mockClear();
+    await host.answer({ answerId: 'a1', childId: 'child', taskId: 'nested', question: 'Which?', answer: 'approve' });
+    await host.message('child', 'Hello');
+    expect(post.mock.calls.map(([sent]) => sent)).toEqual([
+      { type: 'checkpointResult', answerId: 'a1' },
+      { type: 'childNotice', childId: 'child', message: 'The plan cannot be read.' },
+      { type: 'childMessageResult', childId: 'child', status: 'queued' },
+      { type: 'childNotice', childId: 'child', message: 'The plan cannot be read.' },
+    ]);
     host.dispose();
   });
   it('never offers a Continue that a fresh retry may have taken away', async () => {
@@ -131,20 +151,20 @@ describe('child view host', () => {
     const { host, post } = selected({ message: () => ended, control: async () => ended });
     await host.open('child');
     await host.message('child', 'Hello');
-    await host.answer({ childId: 'child', taskId: 'nested', question: 'Which?', answer: 'approve' });
+    await host.answer({ answerId: 'a1', childId: 'child', taskId: 'nested', question: 'Which?', answer: 'approve' });
     expect(post).toHaveBeenCalledWith({ type: 'childMessageResult', childId: 'child', error: 'This child plan has ended, so it only reads.' });
-    expect(post).toHaveBeenCalledWith({ type: 'childControlResult', childId: 'child', taskId: 'nested', error: 'This child plan has ended, so it only reads.' });
+    expect(post).toHaveBeenCalledWith({ type: 'checkpointResult', answerId: 'a1', error: 'This child plan has ended, so it only reads.' });
     host.dispose();
   });
   it('refuses an answer to a child that left the tree or is not the one on screen', async () => {
     const control = vi.fn(async () => ({ ok: true as const, message: 'Approved.' }));
     const { host, post, directory } = selected({ control });
-    await host.answer({ childId: 'child', taskId: 'nested', question: 'Which?', answer: 'approve' });
+    await host.answer({ answerId: 'a1', childId: 'child', taskId: 'nested', question: 'Which?', answer: 'approve' });
     await host.open('child');
     directory.find.mockResolvedValueOnce(null);
-    await host.answer({ childId: 'child', taskId: 'nested', question: 'Which?', answer: 'approve' });
+    await host.answer({ answerId: 'a1', childId: 'child', taskId: 'nested', question: 'Which?', answer: 'approve' });
     expect(control).not.toHaveBeenCalled();
-    expect(post.mock.calls.filter(([message]) => message.type === 'childControlResult' && message.error === 'The child plan is no longer open.')).toHaveLength(2);
+    expect(post.mock.calls.filter(([message]) => message.type === 'checkpointResult' && message.error === 'The child plan is no longer open.')).toHaveLength(2);
     host.dispose();
   });
 });
