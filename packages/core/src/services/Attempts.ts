@@ -525,6 +525,7 @@ export class Attempts {
     if (!script) store.startAttemptUsage(task.id, attempt.attempt, attempt.runner, attempt.startedAt);
     store.setTaskOutputSummary(task.id, undefined, handoffKept(task, kind));
     store.markAttemptStarted(task.id);
+    if (script) this.host.emit('onScriptClaimed');
     this.host.emit('onTaskChanged');
     return this.run(task, attempt, continuation);
   }

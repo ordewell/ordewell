@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { ApiClient } from '../../apiClient';
 import { handleRun } from '../run';
+import { EMPTY_RUN, type RunView } from '@ordewell/core';
 
 type Event = Parameters<Parameters<ApiClient['streamExecution']>[1]>[0];
 
@@ -37,6 +38,21 @@ async function run(script: Event[]): Promise<string> {
   }
   return written.join('');
 }
+
+describe('ordewell run joining a run', () => {
+  it('keeps every task on its lines, though an update carries only the task that moved', async () => {
+    const task = (id: string, status: 'completed' | 'pending') => ({ id, order: 1, title: id, description: '', prompt: '', type: 'task' as const, status, verdict: null, subtasks: [] });
+    const view = { ...EMPTY_RUN, tasks: [task('task-0001', 'completed'), task('task-0002', 'pending')] } as unknown as RunView;
+
+    const out = await run([
+      { type: 'run_snapshot', sessionId: 's1', view },
+      { type: 'status_update', tasks: [{ id: 'task-0002', status: 'completed', verdict: null }] },
+    ]);
+
+    expect(out).toContain('#0001 completed');
+    expect(out).toContain('#0002 completed');
+  });
+});
 
 describe('ordewell run prints a task\'s handoff when it ends (ADR-0047)', () => {
   it('puts the summary, finding titles and artifacts under the task, before the next task\'s line', async () => {

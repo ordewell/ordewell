@@ -184,6 +184,8 @@ export interface ConversationRewind extends ConversationFork {
  * plan's size multiplies.
  */
 const SAVE_INTERVAL_MS = 5000;
+/** The closest two saves of a changed status come, as a burst of starts would otherwise write the plan once each. */
+const STATUS_SAVE_INTERVAL_MS = 1000;
 
 /** Writes one plan to the saved-session store: {@link saveSession}'s shape, injected so tests never touch disk. `workspace` is the state root. */
 export type SaveSession = (plan: LegacyPlanState, goal: string, workspace: string, sessionId: string) => void;
@@ -846,6 +848,10 @@ export class Session {
   private saveTimer: ReturnType<typeof setTimeout> | undefined;
   /** The store's status mark as last saved, or as loaded. */
   private savedStatuses: string | undefined;
+  private savedRevision: number | undefined;
+  private savedAt = 0;
+  private saveDue = 0;
+  private savesHeld = false;
   /** The user was told the disk is refusing this session's saves, and none has landed since. */
   private saveFailureSaid = false;
   /** A whole-plan start opening; a second Execute joins it rather than resetting the run under it. */
@@ -2156,8 +2162,9 @@ export class Session {
 
   /**
    * The relay announces every orchestrator event; this adds the saves some of
-   * them owe, each made before the announcement so no surface sees state the
-   * disk lacks.
+   * them owe, each made before the announcement so no surface sees a decision
+   * the disk lacks. A status that decides nothing may lead the disk by up to
+   * {@link STATUS_SAVE_INTERVAL_MS}.
    */
   private observer(): OrchestratorObserver {
     const relay = this.events.observer(() => this.plan);
@@ -2195,6 +2202,9 @@ export class Session {
         this.saveChange();
         relay.onTaskChanged();
       },
+      // A script's effects do not wait for a save, and a reload that finds it
+      // unstarted would offer to run them again as if they never ran (ADR-0035).
+      onScriptClaimed: () => this.persist(),
       onTick: () => {
         this.saveChange();
         relay.onTick();
@@ -2204,8 +2214,7 @@ export class Session {
       // last Session operation.
       onTaskSettled: ({ taskId }) => {
         const task = this.store.get(taskId);
-        if (task) this.supervision.taskSettled(task);
-        this.persist();
+        this.savingOnce(() => { if (task) this.supervision.taskSettled(task); });
       },
       onUsageLimitWait: ({ taskId, runner, resumeAt, cancelled }) => {
         if (!cancelled) this.supervision.observe({ kind: 'usage_limit', taskId, runner, resumeAt });
@@ -2253,6 +2262,7 @@ export class Session {
    * write: a turn holds what it writes until the mutation that lands it.
    */
   private persist(): void {
+    if (this.savesHeld) return;
     // A save that settles after destroy would claim the lease again, and hold
     // the session from every other host until this process exits (ADR-0049 L7).
     if (!this.plan || this.leaseReleased) return;
@@ -2275,31 +2285,55 @@ export class Session {
     this.plan.supervision = this.supervision.snapshot();
     this.plan.lastUpdated = new Date().toISOString();
     this.save(this.plan, this.goal, this.stateRoot, this.currentSessionId);
+    this.savedAt = Date.now();
+    this.savedRevision = this.store.revision;
     this.savedStatuses = this.store.statusMark();
     this.saveFailureSaid = false;
   }
 
+  /** One save for all `act` asks of it, made as it ends, however it ends: the plan is written whole, so each save is what a plan's size multiplies. */
+  private savingOnce(act: () => void): void {
+    this.savesHeld = true;
+    try {
+      act();
+    } finally {
+      this.savesHeld = false;
+      this.persist();
+    }
+  }
+
   /**
    * What a change to the plan owes the disk. A task's status is what a
-   * decision and a reload read, so a changed one is saved at once, and what
-   * changed beside it goes with it; anything else can wait for the timer.
+   * decision and a reload read, so a changed one is saved within the second,
+   * and at once if no save came in the one before: a save writes the whole
+   * plan, and a wide run starts tasks far faster than that is worth. A
+   * settled task and a user's control are not paced, and neither is a script,
+   * saved as it starts (see {@link observer}). What changed beside a status
+   * goes with it; anything else can wait for the timer.
    */
   private saveChange(): void {
     if (this.controlsInFlight > 0) return this.persist();
     // Saved as it ends, or not at all if it aborts.
     if (this.events.holdingStatus) return;
-    if (this.store.statusMark() !== this.savedStatuses) this.persist();
-    else this.saveSoon();
+    if (this.store.revision === this.savedRevision) return;
+    if (this.store.statusMark() === this.savedStatuses) return this.saveSoon();
+    const sinceSaved = Date.now() - this.savedAt;
+    if (sinceSaved >= STATUS_SAVE_INTERVAL_MS) this.persist();
+    else this.saveSoon(STATUS_SAVE_INTERVAL_MS - sinceSaved);
   }
 
-  /** Owe a save, made once however often this is called before it comes. */
-  private saveSoon(): void {
-    if (this.saveTimer || !this.plan) return;
+  /** Owe a save, made once, by the soonest it was asked for, however often this is called before it comes. */
+  private saveSoon(within = SAVE_INTERVAL_MS): void {
+    if (!this.plan) return;
+    const due = Date.now() + within;
+    if (this.saveTimer && this.saveDue <= due) return;
+    clearTimeout(this.saveTimer);
+    this.saveDue = due;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = undefined;
       // Outside any observer, whose throw the orchestrator would catch.
       this.tryPersist();
-    }, SAVE_INTERVAL_MS);
+    }, within);
     // A process with nothing else to do does not wait for this: settling and destroy save.
     this.saveTimer.unref?.();
   }
@@ -3686,6 +3720,7 @@ export class Session {
     if (adopting) this.creditLoggedAttempts(plan.tasks);
     // Held, so a task the load puts back is not saved here: whether a load saves is the caller's to say.
     this.events.holdStatus(() => this.orchestrator.loadPlan(plan.tasks, plan.runners));
+    this.savedRevision = this.store.revision;
     this.savedStatuses = this.store.statusMark();
     // Loading normalizes statuses (a stored `blocked` goes) on the store's
     // copy; the adopted plan shows that result, not the caller's input.

@@ -730,3 +730,42 @@ describe('a delegated task\'s row (ADR-0055 D16, D20)', () => {
     expect(taskRowView(subject({ delegation: { stopping: true } })).delegated).toBeNull();
   });
 });
+
+describe('the rows of one plan', () => {
+  const countingPlan = (size: number) => {
+    let reads = 0;
+    const plan = Array.from({ length: size }, (_, i) => new Proxy({ id: `t${i}`, order: i + 1, title: `T${i}`, status: 'pending', dependencies: i > 0 ? [`t${i - 1}`] : [] }, {
+      get(task, key, receiver) {
+        reads += 1;
+        return Reflect.get(task, key, receiver);
+      },
+    }));
+    return { plan, reads: () => reads };
+  };
+
+  it('read the plan once between them, however many rows there are', () => {
+    const { plan, reads } = countingPlan(300);
+    plan.forEach((_, i) => taskRowView(subject({ id: `t${i}`, order: i + 1, dependencies: i > 0 ? [`t${i - 1}`] : [] }), { tasks: plan }));
+    expect(reads()).toBeLessThan(300 * 30);
+  });
+
+  it('name each dependency by the plan they read', () => {
+    const { plan } = countingPlan(3);
+    expect(taskRowView(subject({ id: 't2', order: 3, dependencies: ['t1', 'gone'] }), { tasks: plan }).dependencies).toEqual(['#2', 'gone']);
+  });
+
+  it('read a changed plan afresh', () => {
+    const plan = [{ id: 'a', order: 1, title: 'A', status: 'pending', dependencies: [] }, { id: 'b', order: 2, title: 'B', status: 'pending', dependencies: ['a'] }];
+    const b = subject({ id: 'b', dependencies: ['a'] });
+    expect(taskRowView(b, { tasks: plan }).blockedBy).toBeNull();
+    expect(taskRowView(b, { tasks: plan.map((t) => (t.id === 'a' ? { ...t, status: 'failed' } : t)) }).blockedBy).toEqual(['#1']);
+  });
+
+  it('let a check\'s own row stand over the older word the plan holds on it', () => {
+    const plan = [{ id: 'c', order: 1, title: 'Review', status: 'pending', dependencies: [], loop: { body: ['f'], maxRounds: 3 } }, { id: 'f', order: 2, title: 'Fix', status: 'pending', dependencies: ['c'] }];
+    const failed = { status: 'failed', verdict: { outcome: 'fail', reported: 'failed' } } as const;
+    const found = taskRowView(subject({ id: 'c', order: 1, loop: { body: ['f'], maxRounds: 3 }, ...failed }), { tasks: plan });
+    expect(found.loop).toMatchObject({ state: 'repeating' });
+    expect(found.status).toBe('todo');
+  });
+});

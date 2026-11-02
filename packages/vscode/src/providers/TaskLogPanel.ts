@@ -110,7 +110,11 @@ export class TaskLogPanel {
       else this.push();
       return;
     }
-    if (msg.type === 'status_update') this.idleSince = msg.tasks.find((t) => t.id === this.taskId)?.idleSince ?? null;
+    if (msg.type === 'status_update') {
+      // An update leaves out a task that has not moved.
+      const task = msg.tasks.find((t) => t.id === this.taskId);
+      if (task) this.idleSince = task.idleSince ?? null;
+    }
     if (TASK_STATE_EVENTS.has(msg.type)) {
       this.pushStatus();
       // A reassigned task draws its new runner's account.

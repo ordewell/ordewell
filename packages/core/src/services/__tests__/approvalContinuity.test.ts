@@ -195,8 +195,8 @@ describe('a session saved by an older version', () => {
 
 describe('a withdrawal reaches the surfaces', () => {
   const lastStatus = (env: Env, id: string) => {
-    const status = env.messages.filter((m): m is Extract<typeof m, { type: 'status_update' }> => m.type === 'status_update').at(-1);
-    return status?.tasks.find((t) => t.id === id);
+    const statuses = env.messages.filter((m): m is Extract<typeof m, { type: 'status_update' }> => m.type === 'status_update');
+    return statuses.flatMap((m) => m.tasks).reverse().find((t) => t.id === id);
   };
 
   it('as a plan update and a status that shows the task waiting, when an edit lifts research', async () => {

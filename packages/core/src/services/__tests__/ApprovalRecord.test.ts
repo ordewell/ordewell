@@ -26,7 +26,66 @@ function setup(tasks: Task[], fields: ApprovalFields = { approved: true }, modes
   return { record, store, plan, withdrawn };
 }
 
+/** `ids` as a list that counts how many entries were read out of it. */
+function countingList(ids: string[]): { list: string[]; reads: () => number } {
+  let reads = 0;
+  const list = new Proxy(ids, {
+    get(target, key, receiver) {
+      if (typeof key === 'string' && /^\d+$/.test(key)) reads += 1;
+      return Reflect.get(target, key, receiver);
+    },
+  });
+  return { list, reads: () => reads };
+}
+
 describe('ApprovalRecord', () => {
+  describe('reading the record across a plan', () => {
+    const SIZE = 200;
+    const ids = Array.from({ length: SIZE }, (_, i) => `t${i}`);
+
+    it('walks the list once however many tasks ask', () => {
+      const { list, reads } = countingList([...ids]);
+      const { record } = setup(ids.map((id) => task(id)), { approved: true, approvedTasks: list });
+      const loaded = reads();
+      for (const id of ids) {
+        expect(record.isApproved(id)).toBe(true);
+        expect(record.waitsForApproval(id)).toBe(false);
+      }
+      expect(reads() - loaded).toBeLessThanOrEqual(SIZE);
+    });
+
+    it('walks it once for tasks outside it too', () => {
+      const { list, reads } = countingList(ids.slice(0, 1));
+      const { record } = setup(ids.map((id) => task(id)), { approved: true, approvedTasks: list });
+      const loaded = reads();
+      for (const id of ids.slice(1)) expect(record.waitsForApproval(id)).toBe(true);
+      expect(reads() - loaded).toBeLessThanOrEqual(1);
+    });
+
+    it('answers from the record as it stands after each change', () => {
+      const { record, plan, store } = setup([task('a'), task('b')], { approved: true, approvedTasks: ['a'] });
+      expect(record.waitsForApproval('b')).toBe(true);
+      record.approve(['b']);
+      expect(record.isApproved('b')).toBe(true);
+      expect(record.waitsForApproval('b')).toBe(false);
+      record.withdraw(['a']);
+      expect(record.isApproved('a')).toBe(false);
+      store.remove('b');
+      expect(plan.approvedTasks).toEqual([]);
+      expect(record.isApproved('b')).toBe(false);
+    });
+
+    it('reads the plan the session holds now, not the one it read last', () => {
+      const plans: ApprovalFields[] = [{ approved: true, approvedTasks: ['a'] }, { approved: true, approvedTasks: [] }];
+      const store = new PlanStore();
+      store.load([task('a')], ['claude-code']);
+      const record = new ApprovalRecord({ plan: () => plans[0], store, runnerModes: () => MODES });
+      expect(record.isApproved('a')).toBe(true);
+      plans.shift();
+      expect(record.isApproved('a')).toBe(false);
+    });
+  });
+
   describe('approve and isApproved', () => {
     it('approves tasks the plan holds, once each', () => {
       const { record, plan } = setup([task('a'), task('b')]);

@@ -66,6 +66,19 @@ describe('a task log tab opened on a runner that is already quiet', () => {
     const status = openedStatus(task({ status: 'in_progress' }), [], (id) => (id === 't1' ? quiet : null));
     expect(status.idleSince).toBe(quiet);
   });
+
+  it('stays quiet across a status update that leaves the task out, as one that has not moved', () => {
+    const quiet = '2026-10-30T10:05:00.000Z';
+    const panel = createFakeWebviewPanel('ordewell.taskLog', 'Task log');
+    const session = { taskLogAttempts: () => [], taskLog: () => [], outstandingApprovals: () => [], isolationView: () => null } as unknown as TaskLogSession;
+    const t = task({ status: 'in_progress' });
+    const log = new TaskLogPanel(panel as unknown as vscode.WebviewPanel, t.id, { session, getTask: () => t, openFile: () => undefined, idleSince: () => quiet, log: () => undefined }, { toString: () => 'file:///ext' } as unknown as vscode.Uri, () => undefined);
+    panel.__receive({ type: 'ready' });
+
+    log.receive({ type: 'status_update', tasks: [{ id: 'another', status: 'in_progress', verdict: null }] });
+
+    expect(panel.webview.postMessage.mock.calls.map(([m]) => m as HostToTaskLog).filter((m) => m.type === 'status')).toEqual([]);
+  });
 });
 
 describe('the task log tab tells the webview when the open turn began (#81)', () => {
