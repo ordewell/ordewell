@@ -27,7 +27,7 @@ export const BOARD_LIMITS = {
   files: 10,
   /** A board is read whole, so a loop that posts is stopped before it costs every reader. */
   entries: 200,
-  /** A map stops here and counts the rest. */
+  /** A map stops here, counts the rest and says where it goes on. */
   mapped: 100,
   /** What a new descendant is told of the pins above it, in all (R10). */
   pinChars: 2_000,
@@ -78,7 +78,7 @@ export interface BoardEntry extends Omit<BoardPost, 'files'> {
 /** An entry as the log is told of it: the ledger numbers it and the clock stamps it. */
 export type BoardDraft = Omit<BoardEntry, 'node' | 'id' | 'at'>;
 
-/** What a reader writes to read the map, and what starts the reference to one entry. */
+/** What a reader writes to read the map, and what starts the references to a later page of it and to one entry. */
 export const BOARD_REF = 'board';
 
 /** `board:root/1:E3`: what the map shows and `read` takes back. */
@@ -94,6 +94,13 @@ export function isBoardRef(written: string): boolean {
 export function parseBoardRef(written: string): { node: NodePath; id: number } | null {
   const match = /^board:(root(?:\/[0-9]+)*):E([1-9][0-9]*)$/.exec(written);
   return match ? { node: match[1], id: Number(match[2]) } : null;
+}
+
+/** The entry a page of the map starts at, 1 for the first, or null for what is not a page. `board:101` reads on from a map that stopped at 100, so paging changes no tool's arguments (R8). */
+export function parseBoardPage(written: string): number | null {
+  if (written === BOARD_REF) return 1;
+  const match = /^board:([1-9][0-9]*)$/.exec(written);
+  return match ? Number(match[1]) : null;
 }
 
 /** What code found of an entry (R9): flags in the map, never an author's word. */
@@ -137,12 +144,14 @@ function mapLine(entry: BoardEntry, marks: BoardMarks): string {
   return `  - ${boardRef(entry)} [${entry.type}${flagText(marks)}] by ${byText(entry.by)}${keyText(entry)}: ${quoted(entry.title)}`;
 }
 
-/** The map of what a node reads, with its provenance: `nodes` nearest first, `more` what it leaves out. */
-export function boardMapLines(nodes: readonly NodePath[], shown: readonly { entry: BoardEntry; marks: BoardMarks }[], more: number): string[] {
+/** One page of the map of what a node reads, with its provenance: `nodes` nearest first, `shown` the `total` entries from entry `from`. */
+export function boardMapLines(nodes: readonly NodePath[], shown: readonly { entry: BoardEntry; marks: BoardMarks }[], from: number, total: number): string[] {
+  const next = from + shown.length;
+  const more = total - next + 1;
   return [
     wordsFrom('Board', nodes.join(', ')),
-    ...(shown.length > 0 ? shown.map(({ entry, marks }) => mapLine(entry, marks)) : ['  (nothing on it yet)']),
-    ...(more > 0 ? [`  +${more} more`] : []),
+    ...(shown.length > 0 ? shown.map(({ entry, marks }) => mapLine(entry, marks)) : [total > 0 ? `  (nothing past entry ${total})` : '  (nothing on it yet)']),
+    ...(shown.length > 0 && more > 0 ? [`  +${more} more: read "${BOARD_REF}:${next}".`] : []),
   ];
 }
 

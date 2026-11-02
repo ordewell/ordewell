@@ -46,7 +46,8 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   of immutable ids, pinned by Ordewell as the call is accepted: an author writes `#4/F3` and
   `checkHandoff` stores the attempt that finding belongs to, as it does for the `{ task, finding }`
   an author may also send, and `#4@1/F3` names an attempt outright. It renders as `#4@2/F3`, and
-  that text is what `read` and `task_output` take back. Across plans it carries the derived
+  that text is what `read` and `task_output` take back. A reference with no attempt reads the
+  latest, from the logs where a retry has cleared the task's digest. Across plans it carries the derived
   path, `3/2:#4@2/F3`: `TaskRefs`' grammar is not overloaded, and the separator is one a task label
   cannot hold. The path is the node's in the tree's log
   ([ADR-0058](0058-a-tree-holds-many-nodes-and-few-live-sessions.md) S3), each id a child's place
@@ -104,9 +105,11 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   +N more; read #4
   ```
 
-  The finding counts read the latest attempt of each task in the subtree, and `+N more`
+  The finding counts read the latest attempt of each task in the subtree as it stands: a child a
+  fresh retry or a removal discarded no longer counts, and a Continue's two nodes count once. `+N more`
   counts what the ceiling cut, promoted items included. So what a subplanner leaves out
-  shows without a pull, and `read` on the delegated task lists it, each by its reference.
+  shows without a pull, and `read` on the delegated task lists it, each by its reference. The list
+  reads what stood on that report, a discarded child's too, so a reference to it means what it meant.
   A child's finding moves up only by reference. A subplanner adds its judgement as a finding of
   its own; it cannot edit a child's, and no model summarises one. `open` may also name one of its
   own findings, `F2`, which moves there. Paths its branch changed
@@ -116,8 +119,10 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   Each item is read once, as the report is taken, and kept in the handoff: its reference is pinned,
   so its words cannot have moved, and the renderer stays a pure function of the digest. A child that
   ends with no call gets the same counts in a derived report. `blocked` counts every task that did
-  not end, `commits` the tasks that passed with a commit message. A listing `read` gives stops at 100
-  findings and counts the rest. The fields are written as text, `"#4/F3"`, since a reference is
+  not end, `commits` the tasks that passed with a commit message. A listing `read` gives holds 100
+  findings a page, counts the rest, and names the next page, `#4@2/from:101`, which is no citation: a
+  page is read and passed on by the findings it lists. An API planner reads one through `task_output`,
+  which says where the list starts. The fields are written as text, `"#4/F3"`, since a reference is
   what a report shows, and `open` has the limit `findings` has.
 - **What crosses a level is untrusted (R3).** Reports, boards and handoffs are data, shown with
   their provenance and never as instructions: the block says whose words they are, by path, in one
@@ -244,7 +249,9 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   A board is a fold of `board_posted` facts in the tree's log
   ([ADR-0058](0058-a-tree-holds-many-nodes-and-few-live-sessions.md) S3), so a restart reads it back.
   A Continue's new node keeps its child's one board, and a fresh retry, a new child, starts another.
-  A board stops at 200 entries and a map at 100, the rest counted: tuning values.
+  A board stops at 200 entries and a map at 100 a page, the rest counted with the page that holds
+  them, `board:101`: tuning values. Entries are only added, so a page that moves repeats one and loses
+  none.
 
   Every word on a board is its author's, untrusted data (R3). Whose it is comes from the token that
   posted it, never from the entry. The map says so in one label, and each one-line field reaches a
@@ -283,7 +290,8 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   It holds them from the moment its mandate lets it write one, since a list that grew with its first
   delegated task would break its cache, and `post` before there is a board says so. A subplanner holds
   them whether or not it may delegate, since it has a board from its first turn. An API planner has no
-  server list: `task_output` takes the same references for it, `board` among them, and `post` comes last
+  server list: `task_output` takes the same references for it, `board` and a listing's pages among them, on the
+  read budget of any read, and `post` comes last
   in its list where delegation reaches it, so a flat API list does not move by a byte. A role is one list, whichever attempt asks. Each
   role's set is fixed at session start, in a stable order
   ([ADR-0056](0056-a-mandate-narrows-down-the-tree.md) M6), with a CI test on its serialised size.
@@ -427,3 +435,4 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - 2026-11-01 — from real runs of where a subplanner's tokens go: R5 tells it less and R11 narrows its process, in `ClaudeCodeAdapter`, `PlanPrompts`, `PlannerConversation` and `Supervisor`.
 - 2026-11-01 — from review: a report outlasts a repair (R2), a line break is one set everywhere and no path or title can make one (R3), and a check's command counts in a pin at any length (R10).
 - 2026-11-01 — from review: VS Code's handoff panel holds what an author wrote, every line indented on the one set of breaks, as the TUI does for every handoff (R3).
+- 2026-11-02 — from an audit of the flow: R2's counts read the tree as it stands while a report's list reads what stood on it, a listing and a board's map page on rather than stop, a board and a page spend a read through `task_output`, and a reference with no attempt reads the logs where a retry cleared the digest.

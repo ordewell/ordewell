@@ -1,7 +1,7 @@
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { BOARD_LIMITS, BOARD_REF, boardEntryLines, boardMapLines, boardRef, contestedKeys, parseBoardRef, pinLines, type BoardAuthor, type BoardDraft, type BoardEntry, type BoardFile, type BoardMarks, type BoardPost } from '../models/Board';
+import { BOARD_LIMITS, BOARD_REF, boardEntryLines, boardMapLines, boardRef, contestedKeys, parseBoardPage, parseBoardRef, pinLines, type BoardAuthor, type BoardDraft, type BoardEntry, type BoardFile, type BoardMarks, type BoardPost } from '../models/Board';
 import type { CheckWord } from '../models/Delegation';
 import { parentPath, type NodePath } from '../models/TreeEvent';
 import type { McpToolReply } from './mcp/tools';
@@ -159,11 +159,12 @@ export class NodeBoard {
     })));
   }
 
-  /** `read` of `board`, or of one entry by its reference. */
+  /** `read` of `board`, of a later page of its map, or of one entry by its reference. Entries are only ever added, so a page that moves repeats one and loses none. */
   async read(written: string): Promise<McpToolReply> {
-    if (written === BOARD_REF) {
+    const from = parseBoardPage(written);
+    if (from !== null) {
       const all = this.readable();
-      return { text: boardMapLines(this.chain(), await this.marked(all.slice(0, BOARD_LIMITS.mapped)), all.length - BOARD_LIMITS.mapped).join('\n') };
+      return { text: boardMapLines(this.chain(), await this.marked(all.slice(from - 1, from - 1 + BOARD_LIMITS.mapped)), from, all.length).join('\n') };
     }
     const ref = parseBoardRef(written);
     const entry = ref && this.readable().find((one) => one.node === ref.node && one.id === ref.id);

@@ -8,6 +8,23 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A subplanner's report counts the tree as it stands.** A child a fresh retry
+  or a removal discarded no longer adds to the counts and findings of a report,
+  and what hung from it goes with it. A read of the old child's own report still
+  lists what stood on it.
+- **A reference to a finding survives a retry.** With a task's digest cleared,
+  `#4/F1` pins against the attempts its log holds rather than being refused.
+- **Long reads go on rather than stop.** A report's listing and a board's map
+  hold one page and say how to read the next, `#4@2/from:101` and `board:101`.
+  A `task_query` answer stops at a task and names the tasks it did not read, and
+  a task named twice is read once. A removed task's report lists what it left
+  out as a standing task's does.
+- **A planner with no `read` spends its read budget on a board.** A board read
+  through `task_output` counts as a read, as a report's later pages do, and an
+  ended report says where its listing is.
+
 ## [0.12.2] - 2026-11-01
 
 ### Added

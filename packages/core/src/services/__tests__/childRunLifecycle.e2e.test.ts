@@ -642,6 +642,7 @@ describe('a Continue (ADR-0055 D17)', () => {
 describe('a reopened child, read from above (ADR-0057 R1)', () => {
   const reopened = new Subtree({
     here: 'root',
+    tasks: () => [{ ...delegated(), runnerSessionId: 'child' }],
     nodes: () => [{ path: 'root/1', sessionId: 'child', taskId: 'd' }, { path: 'root/2', sessionId: 'child', taskId: 'd' }],
     plan: () => [delegated()],
     logs: () => ({ attempts: () => [], events: () => [] }),

@@ -1,6 +1,6 @@
 import { flattenTasks, type Task } from '../models/Task';
 import type { TaskLogEvent } from '../models/TaskLog';
-import { handoffLines, nodeText, parsePlanPath, readableTaskIds, removedAttempt, resolveWrittenRef, wordsFrom, type HandoffDigest, type HandoffLogs, type HandoffTaskName, type StoredHandoff } from '../models/Handoff';
+import { handoffLines, nodeText, parseListingPage, parsePlanPath, readableTaskIds, removedAttempt, resolveWrittenRef, wordsFrom, type HandoffDigest, type HandoffLogs, type HandoffTaskName, type StoredHandoff } from '../models/Handoff';
 import type { McpToolReply, ReadTaskArgs } from './mcp/tools';
 import { listed } from './harness/ordewellBinding';
 import { subtreeListing, type NodePlan, type Subtree } from './Subtree';
@@ -69,8 +69,10 @@ function belowScope({ node, tasks, logs }: NodePlan, subtree: Subtree | null): R
 
 function readIn(args: ReadTaskArgs, scope: ReadScope): McpToolReply {
   const { plan, log, readable, path } = scope;
-  const written = resolveWrittenRef(plan, String(args.task));
-  if (!written) return readRemoved(args, scope) ?? { isError: true, text: `${JSON.stringify(String(args.task))} names no task in the plan: give its "#order", its id or its title.` };
+  const page = resolveWrittenRef(plan, String(args.task)) ? undefined : parseListingPage(String(args.task));
+  const task = page?.rest ?? String(args.task);
+  const written = resolveWrittenRef(plan, task);
+  if (!written) return readRemoved({ ...args, task }, scope, page?.from) ?? { isError: true, text: `${JSON.stringify(String(args.task))} names no task in the plan: give its "#order", its id or its title.` };
   const target = written.task;
   const named = (id: string) => { const name = titledTaskRefOf(plan, id) ?? id; return `${path}${name}`; };
   const name = named(target.id);
@@ -88,9 +90,11 @@ function readIn(args: ReadTaskArgs, scope: ReadScope): McpToolReply {
   }
   const attempt = asked ?? handoffAttempt(target, attempts);
   const of = `attempt ${attempt} of ${attempts.length}`;
-  const taskName: HandoffTaskName = (id) => { const ref = taskRefOf(plan, id); return ref && `${path}${ref}`; };
+  const taskName = namesIn(scope);
   const logged = attempt === undefined ? undefined : loggedHandoff(log.events(target.id, attempt));
-  if (logged) return { text: [wordsFrom('Handoff', `${name}, ${of}`), '', ...storedLines(logged, args.include_report === true, taskName), ...(logged.subtree ? subtreeListing(logged.subtree, scope.subtree?.plans() ?? []) : [])].join('\n') };
+  const at = `${taskName(target.id)}@${attempt}`;
+  if (page) return listingPage(logged, `${name}, ${of}`, at, page.from, scope);
+  if (logged) return wholeHandoff(logged, `${name}, ${of}`, at, args, scope);
   // What the plan keeps is one attempt's, so it stands in for no other.
   if (attempt !== latest && !digested) return { text: `${name} has no handoff from ${of}: it ended without a task_complete call, or ran before handoffs.` };
   if (target.handoff && (asked === undefined || digested)) return { text: [`${name}: no saved log of this session holds its handoff, so this is what the plan keeps of it.`, '', wordsFrom('Handoff', name), ...digestLines(target.handoff, taskName)].join('\n') };
@@ -98,14 +102,34 @@ function readIn(args: ReadTaskArgs, scope: ReadScope): McpToolReply {
 }
 
 /** A read of a removed task, reached by citation ({@link removedAttempt}); a reader with none is told what any unknown reference is told. */
-function readRemoved(args: ReadTaskArgs, { plan, log, readable, path }: ReadScope): McpToolReply | undefined {
+function readRemoved(args: ReadTaskArgs, scope: ReadScope, from?: number): McpToolReply | undefined {
+  const { plan, log, readable, path } = scope;
   const pin = removedAttempt(plan, readable, handoffLogs(log), String(args.task), args.attempt);
   if (!pin) return undefined;
   const handoff = loggedHandoff(log.events(pin.taskId, pin.attempt));
   const name = `${path}${pin.taskId}, removed from the plan`;
   const of = `attempt ${pin.attempt} of ${log.attempts(pin.taskId).length}`;
+  const at = `${path}${pin.taskId}@${pin.attempt}`;
+  if (from !== undefined) return listingPage(handoff, `${name}, ${of}`, at, from, scope);
   if (!handoff) return { text: `${name}, has no handoff from ${of}: it ended without a task_complete call, or ran before handoffs.` };
-  return { text: [wordsFrom('Handoff', `${name}, ${of}`), '', ...storedLines(handoff, args.include_report === true, (id) => { const ref = taskRefOf(plan, id); return ref && `${path}${ref}`; })].join('\n') };
+  return wholeHandoff(handoff, `${name}, ${of}`, at, args, scope);
+}
+
+/** How a plan's tasks are named to its reader. */
+function namesIn({ plan, path }: ReadScope): HandoffTaskName {
+  return (id) => { const ref = taskRefOf(plan, id); return ref && `${path}${ref}`; };
+}
+
+/** A logged handoff as a read gives it, what a report left out after it. `at` is the attempt as this reader names it, which is how it asks for more. */
+function wholeHandoff(handoff: StoredHandoff, of: string, at: string, args: ReadTaskArgs, scope: ReadScope): McpToolReply {
+  const lines = storedLines(handoff, args.include_report === true, namesIn(scope));
+  return { text: [wordsFrom('Handoff', of), '', ...lines, ...(handoff.subtree ? subtreeListing(handoff.subtree, scope.subtree, at, 1) : [])].join('\n') };
+}
+
+/** A page of what a report left out, and no more: the handoff has been read already (ADR-0057 R2). */
+function listingPage(handoff: StoredHandoff | undefined, of: string, at: string, from: number, { subtree }: ReadScope): McpToolReply {
+  if (!handoff?.subtree) return { isError: true, text: `${of}: no report of a subtree here to list.` };
+  return { text: [wordsFrom('Handoff', of), ...subtreeListing(handoff.subtree, subtree, at, from)].join('\n') };
 }
 
 /** The handoff an attempt ended with: the last one its log holds. */
