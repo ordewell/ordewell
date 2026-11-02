@@ -547,6 +547,7 @@ describe('SettingsService', () => {
         supervisorRetryLimit: 2,
         wakeUpReadBudget: 12,
         delegationTokens: 0,
+        delegationBudget: 0,
       });
     });
 
@@ -561,6 +562,7 @@ describe('SettingsService', () => {
         supervisorRetryLimit: 2,
         wakeUpReadBudget: 12,
         delegationTokens: 0,
+        delegationBudget: 0,
       });
     });
 

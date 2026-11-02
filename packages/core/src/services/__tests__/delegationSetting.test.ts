@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DELEGATION_RISK, delegationSummary, parseDelegation } from '../runSettingsText';
+import { DELEGATION_RISK, SUBPLANNER_ACCOUNTING, SUBPLANNER_CHILD, SUBPLANNER_SCOPE, delegationSummary, keptDelegationBudget, parseDelegation } from '../runSettingsText';
 import { RUN_SETTINGS_DEFAULTS, RunSettingsError, SettingsService, runSettingsOf } from '../SettingsService';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -43,6 +43,49 @@ describe('the delegation setting (ADR-0055 D21)', () => {
     expect(new SettingsService(file).getRunSettings().delegationTokens).toBe(0);
   });
 
+  describe('the kept budget', () => {
+    const fresh = (): string => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-delegation-')), 'settings.json');
+
+    it('has none until the user enters one', () => {
+      expect(RUN_SETTINGS_DEFAULTS.delegationBudget).toBe(0);
+      expect(new SettingsService(fresh()).getRunSettings().delegationBudget).toBe(0);
+    });
+
+    it('survives off, on and a restart, and is never replaced by a default', () => {
+      const file = fresh();
+      const service = new SettingsService(file);
+
+      expect(service.updateRunSettings({ delegationTokens: 750_000 })).toMatchObject({ delegationTokens: 750_000, delegationBudget: 750_000 });
+      expect(service.updateRunSettings({ delegationTokens: 0 })).toMatchObject({ delegationTokens: 0, delegationBudget: 750_000 });
+      expect(new SettingsService(file).getRunSettings()).toMatchObject({ delegationTokens: 0, delegationBudget: 750_000 });
+      expect(new SettingsService(file).updateRunSettings({ delegationTokens: 750_000 })).toMatchObject({ delegationTokens: 750_000 });
+    });
+
+    it('follows a new budget typed while on, and reads a file written before it existed as the budget in force', () => {
+      const file = fresh();
+      fs.writeFileSync(file, JSON.stringify({ delegationTokens: 400 }));
+      const service = new SettingsService(file);
+      expect(service.getRunSettings()).toMatchObject({ delegationTokens: 400, delegationBudget: 400 });
+
+      expect(service.updateRunSettings({ delegationTokens: 900 }).delegationBudget).toBe(900);
+      service.updateRunSettings({ delegationTokens: 0 });
+      expect(new SettingsService(file).getRunSettings().delegationBudget).toBe(900);
+    });
+
+    it('is not a way to turn delegation on', () => {
+      const service = new SettingsService(fresh());
+      expect(service.updateRunSettings({ delegationBudget: 5000 })).toMatchObject({ delegationTokens: 0, delegationBudget: 5000 });
+      expect(() => service.updateRunSettings({ delegationBudget: -1 })).toThrow(RunSettingsError);
+    });
+
+    it('is kept in a session\'s copy too, so the Run block shows the same budget as the file', () => {
+      const session = makeSession({});
+      session.applyRunSettings({ delegationTokens: 1000 });
+      session.applyRunSettings({ delegationTokens: 0 });
+      expect(session.runSettings()).toMatchObject({ delegationTokens: 0, delegationBudget: 1000 });
+    });
+  });
+
   it('is read as typed: `off`, or a positive whole number', () => {
     expect(parseDelegation('off')).toBe(0);
     expect(parseDelegation('5000000')).toBe(5_000_000);
@@ -54,6 +97,22 @@ describe('the delegation setting (ADR-0055 D21)', () => {
   it('is summarised on or off', () => {
     expect(delegationSummary({ ...RUN_SETTINGS_DEFAULTS })).toBe('Delegation: off');
     expect(delegationSummary({ ...RUN_SETTINGS_DEFAULTS, delegationTokens: 1000 })).toBe('Delegation: on, 1000 tokens for a tree');
+  });
+
+  it('names the budget it keeps while off, and turns on at it only when there is one', () => {
+    expect(delegationSummary({ ...RUN_SETTINGS_DEFAULTS, delegationBudget: 2000 })).toBe('Delegation: off, 2000 tokens kept for a tree');
+    expect(keptDelegationBudget({ ...RUN_SETTINGS_DEFAULTS, delegationBudget: 2000 })).toBe(2000);
+    expect(keptDelegationBudget({ ...RUN_SETTINGS_DEFAULTS })).toBeNull();
+  });
+
+  it('words the scope, the approximate accounting and the child\'s Act and autorun for every surface', () => {
+    expect(SUBPLANNER_SCOPE).toMatch(/separable part/);
+    expect(SUBPLANNER_SCOPE).toMatch(/mandate/);
+    expect(SUBPLANNER_ACCOUNTING).toMatch(/whole tree/);
+    expect(SUBPLANNER_ACCOUNTING).toMatch(/approximate/);
+    expect(SUBPLANNER_CHILD).toMatch(/Act/);
+    expect(SUBPLANNER_CHILD).toMatch(/autorun/);
+    expect(`${SUBPLANNER_SCOPE}${SUBPLANNER_ACCOUNTING}${SUBPLANNER_CHILD}`).not.toMatch(/\d+\s?%|\bsaves?\b|\bfaster\b/i);
   });
 
   it('says what M9 says its confirmation must: no person reads the plan, and it runs with the network', () => {

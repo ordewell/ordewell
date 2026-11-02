@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { RUN_SETTINGS_DEFAULTS } from '@ordewell/core';
+import { RUN_SETTINGS_DEFAULTS, SUBPLANNER_ACCOUNTING, SUBPLANNER_CHILD, SUBPLANNER_SCOPE } from '@ordewell/core';
 import { initialState, reduce, type Step } from '../reducer';
 import type { StepperState } from '../reducers/stepper';
 import type { TuiState } from '../state';
@@ -138,11 +138,11 @@ describe('/settings', () => {
   it('has no Supervisor reads step, at Watch, Off or Act, including after switching level with the panel open', () => {
     const labels = (state: TuiState): string[] => stepper(state).trail.map((t) => t.label);
     const watch = typed(base(), '/settings').state;
-    expect(labels(watch)).toEqual(['Autonomy', 'Supervisor', 'Supervisor retries', 'Automerge', 'Autorun', 'Parallel', 'Delegation']);
+    expect(labels(watch)).toEqual(['Autonomy', 'Supervisor', 'Supervisor retries', 'Automerge', 'Autorun', 'Parallel', 'Subplanners']);
     expect(labels(watch)).not.toContain('Supervisor reads');
 
     const off = press(walk(watch, 'tab', 'up'), 'enter').state;
-    expect(labels(off)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Autorun', 'Parallel', 'Delegation']);
+    expect(labels(off)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Autorun', 'Parallel', 'Subplanners']);
     expect(labels(off)).not.toContain('Supervisor reads');
 
     const asked = press(walk(watch, 'tab', 'down'), 'enter');
@@ -223,11 +223,11 @@ describe('/settings', () => {
 
   it('hides the supervisor retries step as soon as the supervisor is saved Off', () => {
     const atOff = typed(base({ runSettings: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' } }), '/settings').state;
-    expect(stepper(atOff).trail.map((t) => t.label)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Autorun', 'Parallel', 'Delegation']);
+    expect(stepper(atOff).trail.map((t) => t.label)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Autorun', 'Parallel', 'Subplanners']);
 
     const { state, effects } = press(walk(typed(base(), '/settings').state, 'tab', 'up'), 'enter');
     expect(effects).toEqual([save({ supervisorLevel: 'off' }, 'Settings: Supervisor Off')]);
-    expect(stepper(state).trail.map((t) => t.label)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Autorun', 'Parallel', 'Delegation']);
+    expect(stepper(state).trail.map((t) => t.label)).toEqual(['Autonomy', 'Supervisor', 'Automerge', 'Autorun', 'Parallel', 'Subplanners']);
     expect(onScreen(state).step).toBe('Supervisor');
     expect(onScreen(walk(state, 'right')).step).toBe('Automerge');
   });
@@ -267,35 +267,87 @@ describe('/settings', () => {
     expect(onScreen(declined.state).step).toBe('Autorun');
   });
 
-  describe('Delegation', () => {
-    const atDelegation = () => walk(typed(base(), '/settings').state, ...Array<string>(6).fill('tab'));
+  describe('Subplanners', () => {
+    const atSubplanners = (state: TuiState = base()) => walk(typed(state, '/settings').state, ...Array<string>(6).fill('tab'));
+    const withBudget = (over: Partial<typeof RUN_SETTINGS_DEFAULTS>) => base({ runSettings: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'watch', ...over } });
+    const note = (state: TuiState): string => (state.overlay?.kind === 'confirm' ? state.overlay.note ?? '' : '');
 
-    it('is off by default, and a number sets the tree\'s budget', () => {
-      expect(onScreen(atDelegation())).toEqual({ step: 'Delegation', highlighted: '0' });
+    it('is Off by default, with no budget step to show', () => {
+      expect(onScreen(atSubplanners())).toEqual({ step: 'Subplanners', highlighted: 'Off' });
+      expect(stepper(atSubplanners()).trail.map((t) => t.label)).not.toContain('Tree budget');
+      expect(walk(atSubplanners(), 'right')).toSatisfy((s: TuiState) => onScreen(s).step === 'Subplanners');
     });
 
-    it('asks before turning it on, saying what it accepts, and returns to the step either way', () => {
-      const asked = press(type(atDelegation(), '5000000'), 'enter');
-      expect(asked.state.overlay).toMatchObject({ kind: 'confirm', message: 'Settings: Delegation on, 5000000 tokens' });
-      const note = asked.state.overlay?.kind === 'confirm' ? asked.state.overlay.note : '';
-      expect(note).toContain('a plan nobody read');
+    it('says where delegated work stops, how it is counted and what runs unread', () => {
+      const hint = (state: TuiState): string => stepper(state).definition.steps[stepper(state).current].hint ?? '';
+      expect(hint(atSubplanners())).toContain(SUBPLANNER_SCOPE);
+      expect(hint(atSubplanners())).toContain(SUBPLANNER_CHILD);
+      const budget = walk(atSubplanners(withBudget({ delegationTokens: 100, delegationBudget: 100 })), 'right');
+      expect(hint(budget)).toContain(SUBPLANNER_ACCOUNTING);
+    });
+
+    it('asks for the budget the first time, with nothing filled in, and saves nothing until it is typed', () => {
+      const asked = press(walk(atSubplanners(), 'up'), 'enter');
       expect(asked.effects).toEqual([]);
+      expect(asked.state.overlay).toMatchObject({ kind: 'stepper' });
+      expect(onScreen(asked.state)).toEqual({ step: 'Tree budget', highlighted: '' });
+
+      // Neither Enter, nor the arrows, nor a non-number invents a budget.
+      const idle = walk(asked.state, 'enter', 'up', 'down');
+      expect(onScreen(idle)).toEqual({ step: 'Tree budget', highlighted: '' });
+      expect(onScreen(walk(type(asked.state, 'x'), 'enter')).highlighted).toBe('');
+      expect(onScreen(walk(type(asked.state, '0'), 'enter')).highlighted).toBe('0');
+    });
+
+    it('turns on at the typed budget after a confirmation that says what it accepts, and keeps that budget', () => {
+      const budget = press(walk(atSubplanners(), 'up'), 'enter').state;
+      const asked = press(type(budget, '5000000'), 'enter');
+      expect(asked.effects).toEqual([]);
+      expect(asked.state.overlay).toMatchObject({ kind: 'confirm', message: 'Settings: Subplanners on, 5000000 tokens' });
+      expect(note(asked.state)).toContain('a plan nobody read');
 
       const confirmed = press(asked.state, 'enter');
-      expect(confirmed.effects).toEqual([save({ delegationTokens: 5000000 }, 'Settings: Delegation on, 5000000 tokens')]);
-      expect(onScreen(confirmed.state).step).toBe('Delegation');
-
-      const declined = press(asked.state, 'escape');
-      expect(declined.effects).toEqual([]);
-      expect(declined.state.runSettings.delegationTokens).toBe(0);
+      expect(confirmed.effects).toEqual([save({ delegationTokens: 5000000 }, 'Settings: Subplanners on, 5000000 tokens')]);
+      expect(confirmed.state.runSettings).toMatchObject({ delegationTokens: 5000000, delegationBudget: 5000000 });
+      expect(onScreen(confirmed.state)).toEqual({ step: 'Tree budget', highlighted: '5000000' });
     });
 
-    it('changes the budget of a tree already on, and turns it off, without asking', () => {
-      const on = base({ runSettings: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'watch', delegationTokens: 100 } });
-      const open = walk(typed(on, '/settings').state, ...Array<string>(6).fill('tab'));
+    it('saves nothing when the first enable is cancelled, at the budget step or at the confirmation', () => {
+      const budget = press(walk(atSubplanners(), 'up'), 'enter').state;
+      const closed = press(type(budget, '5000000'), 'escape');
+      expect(closed.effects).toEqual([]);
+      expect(closed.state.overlay).toBeNull();
+      expect(closed.state.runSettings.delegationTokens).toBe(0);
 
-      expect(press(type(open, '200'), 'enter').effects).toEqual([save({ delegationTokens: 200 }, 'Settings: Delegation on, 200 tokens')]);
-      expect(press(type(open, '0'), 'enter').effects).toEqual([save({ delegationTokens: 0 }, 'Settings: Delegation off')]);
+      const declined = press(press(type(budget, '5000000'), 'enter').state, 'escape');
+      expect(declined.effects).toEqual([]);
+      expect(declined.state.runSettings).toMatchObject({ delegationTokens: 0, delegationBudget: 0 });
+      expect(onScreen(declined.state)).toEqual({ step: 'Subplanners', highlighted: 'Off' });
+    });
+
+    it('turns back on at the kept budget, asking only for the confirmation', () => {
+      const kept = withBudget({ delegationTokens: 0, delegationBudget: 750000 });
+      const asked = press(walk(atSubplanners(kept), 'up'), 'enter');
+      expect(asked.state.overlay).toMatchObject({ kind: 'confirm', message: 'Settings: Subplanners on, 750000 tokens' });
+      expect(press(asked.state, 'enter').effects).toEqual([save({ delegationTokens: 750000 }, 'Settings: Subplanners on, 750000 tokens')]);
+    });
+
+    it('turns off without asking, hides the budget step and keeps the budget', () => {
+      const on = withBudget({ delegationTokens: 100, delegationBudget: 100 });
+      expect(stepper(atSubplanners(on)).trail.map((t) => t.label)).toContain('Tree budget');
+
+      const off = press(walk(atSubplanners(on), 'down'), 'enter');
+      expect(off.effects).toEqual([save({ delegationTokens: 0 }, 'Settings: Subplanners off')]);
+      expect(off.state.runSettings).toMatchObject({ delegationTokens: 0, delegationBudget: 100 });
+      expect(stepper(off.state).trail.map((t) => t.label)).not.toContain('Tree budget');
+    });
+
+    it('changes the budget of a tree already on without asking, and takes only a positive number', () => {
+      const on = withBudget({ delegationTokens: 100, delegationBudget: 100 });
+      const open = walk(atSubplanners(on), 'right');
+      expect(onScreen(open)).toEqual({ step: 'Tree budget', highlighted: '100' });
+      expect(press(type(open, '200'), 'enter').effects).toEqual([save({ delegationTokens: 200 }, 'Settings: Tree budget 200 tokens')]);
+      expect(press(type(open, '0'), 'enter').effects).toEqual([]);
     });
   });
 

@@ -26,7 +26,7 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   { label: '/compact', detail: 'Condense this conversation into a summary; the last two exchanges and all tasks are kept', insertText: '/compact' },
   { label: '/allowlist', detail: 'Restrict which models the planner may auto-assign per runner', insertText: '/allowlist' },
   { label: '/refresh', detail: 'Re-discover runner models (e.g. after enabling an opencode backend)', insertText: '/refresh' },
-  { label: '/settings', detail: `Open the run settings: autonomy, supervisor, merging, autorun, parallel tasks${DELEGATION_OFFERED ? ', delegation' : ''}`, insertText: '/settings' },
+  { label: '/settings', detail: `Open the run settings: autonomy, supervisor, merging, autorun, parallel tasks${DELEGATION_OFFERED ? ', subplanners' : ''}`, insertText: '/settings' },
   { label: '/inbox', detail: 'Turn the waiting-on-you list on or off in this chat (task rows, approval cards and notifications stay)', insertText: '/inbox' },
   { label: '/help', detail: 'Show all available commands', insertText: '/help' },
 ];
