@@ -5,14 +5,14 @@
 # Ordewell publishes no image holding Claude Code: Anthropic's terms say
 # preinstalling or running it in a product or service needs its Commercial
 # Terms and an unmodified binary (ADR-0059 L5). Add your project's toolchain
-# below, and rebuild when you want a newer Claude Code.
+# below, leave out a runner you do not use, and rebuild when you want a newer one.
 FROM node:22-slim
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @anthropic-ai/claude-code
+RUN npm install -g @anthropic-ai/claude-code @openai/codex
 
 # For OpenCode tasks, add its MIT-licensed package as well:
 # RUN npm install -g @opencode/cli

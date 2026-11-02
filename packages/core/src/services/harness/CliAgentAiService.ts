@@ -9,6 +9,7 @@ import {
   type ResearchStep,
   type RunnerId,
   DEFAULT_RUNNERS,
+  type PlannerNativeSession,
 } from '../../models/Task';
 import { addUsage, type RunnerSessionCost, type UsageTotals } from '../../models/Usage';
 import type { IConfig } from '../../interfaces/IConfig';
@@ -131,6 +132,11 @@ interface PlannerSessionStart {
   gate?: PlannerPermissionGate;
 }
 
+/** Whether a saved session is this planner's to take up: a session opened otherwise would plan under a model or folder the settings have since left. */
+function opensUnder(saved: PlannerNativeSession, runner: string, { cwd, model, effort }: PlannerStartOptions): boolean {
+  return saved.runner === runner && saved.cwd === cwd && saved.model === model && saved.effort === effort;
+}
+
 /**
  * One planner session — a conversation or a one-shot: its process, the token
  * that process was spawned with, and what a respawn needs. The service drops
@@ -162,6 +168,12 @@ class PlannerSession {
   nativeSessionId: string | null = null;
   /** What was counted of that session's running cost, so a resume counts on from it rather than dropping its first turn. */
   sessionCost: RunnerSessionCost | null = null;
+  /**
+   * A saved session asked for, until the runner names one: a refusal here
+   * falls back to replaying the transcript within the same call rather than
+   * failing a conversation nobody is sat in (ADR-0055 D17).
+   */
+  takingUp = false;
   /** Set once the first spawn attached. */
   start: PlannerSessionStart | null = null;
   /**
@@ -277,6 +289,15 @@ export class CliAgentAiService implements IAiService {
   /** The agent's own session id, a resumption hint only — Ordewell's transcript is authoritative (T4). */
   nativeSessionId(): string | null { return this.session?.adapter?.nativeSessionId() ?? null; }
 
+  /** What a later process needs to take this conversation's session up again, or null while it has none (ADR-0055 D17). */
+  nativeSession(): PlannerNativeSession | null {
+    const session = this.session;
+    const sessionId = session?.adapter?.nativeSessionId() ?? session?.nativeSessionId;
+    if (!session?.start || !sessionId) return null;
+    const { cwd, model, effort } = session.start.startOptions;
+    return { runner: this.runner, sessionId, cwd, ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(session.sessionCost ? { cost: session.sessionCost } : {}) };
+  }
+
   /** The compactions the agents reported of their own context, never a subagent's or another thread's: their adapters drop those (ADR-0012 T10). */
   compactions(): number { return this.compacted; }
 
@@ -335,6 +356,12 @@ export class CliAgentAiService implements IAiService {
     // Without an approval channel there is no gate, so nothing would decide a search.
     if (req.approval && fetcher?.searchesUnasked) session.searchesUnasked = (provider) => fetcher.searchesUnasked?.(provider) ?? false;
     const tools = req.plannerTools;
+    const gate = req.approval ? { approval: req.approval, fetcher: req.fetcher, workspaceRoot: startOptions.cwd } : undefined;
+    const start = { startOptions, tools, gate };
+    if (req.resume && opensUnder(req.resume.session, this.runner, startOptions)) {
+      const turn = await this.takeUp(session, start, req.resume, req);
+      if (turn) return turn;
+    }
     try {
       const adapter = await this.startAdapter(startOptions, tools, session);
       recordUnusable(adapter.unusableProjectServers?.() ?? [], req.approval);
@@ -344,14 +371,50 @@ export class CliAgentAiService implements IAiService {
       throw err;
     }
 
-    const gate = req.approval ? { approval: req.approval, fetcher: req.fetcher, workspaceRoot: startOptions.cwd } : undefined;
-    session.start = { startOptions, tools, gate };
+    session.start = start;
 
     // A reloaded session replays its transcript instead of re-running the
     // research the agent already paid for. The agent gets it as context, not
     // as turns: the reply we act on is the one the user's new message opens.
     const opening = this.openingMessage(req);
     return this.runConversation(session, opening, req.onProgress, req.signal);
+  }
+
+  /**
+   * Open a conversation in the session a process before this one left, and say
+   * only what that session has not heard. Null when the runner would not take
+   * it up, with `session` left to start afresh and replay the transcript: the
+   * saved session is a hint, and Ordewell's transcript loses nothing (T4).
+   */
+  private async takeUp(session: PlannerSession, start: PlannerSessionStart, resume: NonNullable<ConversationRequest['resume']>, req: ConversationRequest): Promise<ConversationTurn | null> {
+    const { sessionId, cost } = resume.session;
+    session.start = start;
+    session.nativeSessionId = sessionId;
+    session.sessionCost = cost ?? null;
+    session.takingUp = true;
+    try {
+      const adapter = await this.startAdapter({ ...start.startOptions, resumeSessionId: sessionId, resumeCost: cost }, start.tools, session);
+      recordUnusable(adapter.unusableProjectServers?.() ?? [], req.approval);
+      const named = adapter.nativeSessionId();
+      // Codex and OpenCode may answer a missing session with a new one, which heard none of what `since` leaves out.
+      if (!named || named === sessionId) {
+        const turn = await this.runConversation(session, this.openingMessage({ ...req, priorHistory: resume.since }), req.onProgress, req.signal);
+        // A turn failed in the session names it; one that named none never reached it.
+        if (turn.kind !== 'message' || !turn.failed || turn.aborted || !session.takingUp) return turn;
+      }
+    } catch (err) {
+      if (!session.takingUp || session.discarded.aborted || req.signal?.aborted) {
+        if (this.session === session) this.session = null;
+        session.discard();
+        throw err;
+      }
+    }
+    session.stop();
+    session.takingUp = false;
+    session.nativeSessionId = null;
+    session.sessionCost = null;
+    session.start = null;
+    return null;
   }
 
   async continueConversation(
@@ -664,6 +727,8 @@ export class CliAgentAiService implements IAiService {
     } catch (err) {
       session.stop();
       throw err;
+    } finally {
+      if (adapter.nativeSessionId()) session.takingUp = false;
     }
     // A failed or stopped turn may have ended before the harness named its
     // version; the next one can still say why the setting is not offered.
@@ -889,7 +954,7 @@ export class CliAgentAiService implements IAiService {
       // conversation stays, so the next message tries a fresh process rather
       // than replaying the whole transcript over a server that may be back.
       if (err instanceof McpAttachError || err instanceof McpAttachTimeout) throw err;
-      if (!resumeSessionId || session.discarded.aborted) throw err;
+      if (!resumeSessionId || session.discarded.aborted || session.takingUp) throw err;
       // Kept, the conversation would ask for the same refused session on
       // every message. Dropped, the next one replays the transcript into a
       // fresh context (T4), as after a reload.

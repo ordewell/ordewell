@@ -386,10 +386,10 @@ function noop(): void {}
  * are the runner's own: Allow, Allow for this task when the runner offered a
  * grant for it, and Deny with an optional note the agent reads.
  */
-function RunnerApprovalCard({ block, onAnswer }: { block: ApprovalBlock; onAnswer: (id: string, decision: ApprovalDecision) => void }) {
+function RunnerApprovalCard({ block, onAnswer }: { block: ApprovalBlock; onAnswer: ((id: string, decision: ApprovalDecision) => void) | undefined }) {
   const [note, setNote] = useState('');
-  const pending = block.status === 'pending' && block.approvalId !== undefined;
-  const answer = (decision: ApprovalDecision) => { if (block.approvalId) onAnswer(block.approvalId, decision); };
+  const pending = block.status === 'pending' && block.approvalId !== undefined && onAnswer !== undefined;
+  const answer = (decision: ApprovalDecision) => { if (block.approvalId) onAnswer?.(block.approvalId, decision); };
   return (
     <div className={`approval-card ${block.status}`} data-status={block.status}>
       <div className="approval-card-head">
@@ -499,7 +499,7 @@ const MemoCommandRow = React.memo(CommandRow);
 interface Handlers {
   onShowPlan: () => void;
   onResolveApproval: (id: string, granted: boolean) => void;
-  onAnswerApproval: (id: string, decision: ApprovalDecision) => void;
+  onAnswerApproval?: (id: string, decision: ApprovalDecision) => void;
 }
 
 const groupKey = (block: DisplayBlock) => `activity:${block.id}`;
@@ -536,7 +536,7 @@ function ActivityGroup({ blocks, open, onToggleGroup, onToggleRow, handlers }: {
 }
 
 export function ConversationBlocks({
-  blocks, asRun = false, onShowPlan, onResolveApproval = noop, onAnswerApproval = noop,
+  blocks, asRun = false, onShowPlan, onResolveApproval = noop, onAnswerApproval,
 }: {
   blocks: readonly DisplayBlock[];
   /**
@@ -547,7 +547,7 @@ export function ConversationBlocks({
   asRun?: boolean;
   onShowPlan: () => void;
   onResolveApproval?: (id: string, granted: boolean) => void;
-  /** A task runner's request, answered in its task log (ADR-0018, A1). */
+  /** A task runner's request, answered in its task log (ADR-0018, A1). Absent, it only reads: a button that answers nothing misleads. */
   onAnswerApproval?: (id: string, decision: ApprovalDecision) => void;
 }) {
   const items = useMemo(() => conversationItems(blocks), [blocks]);

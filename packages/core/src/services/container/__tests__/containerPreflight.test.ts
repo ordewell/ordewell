@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { describeProblems, inspectEngine, inspectReadiness, LOGIN_VOLUME } from '../containerPreflight';
+import { CODEX_LOGIN_VOLUME, containerRunner } from '../containerRunners';
 import { CredentialBroker } from '../credentialBroker';
 import type { DockerCall, DockerCli, DockerResult } from '../dockerCli';
 
@@ -213,6 +214,35 @@ describe('inspectReadiness', () => {
     expect(cli.calls.some((line) => line.startsWith('pull') || line.startsWith('image pull'))).toBe(false);
   });
 
+  it('asks after the sign-in of the runner a task is on, and not another\'s', async () => {
+    const cli = new FakeDocker({ ['run --rm']: OK(''), [`${SIGN_IN} ${LOGIN_VOLUME}`]: OK('[]\n'), [`${SIGN_IN} ${CODEX_LOGIN_VOLUME}`]: SAID('no such volume'), ...READY });
+
+    const checked = await inspectReadiness(OWN, { cli, platform: 'darwin', broker: noBroker, runner: containerRunner('codex')! });
+
+    expect(codes(checked)).toEqual(['sign-in-missing']);
+    expect(checked.problems[0].message).toContain('for codex');
+    expect(checked.problems[0].remedy).toContain(CODEX_LOGIN_VOLUME);
+  });
+
+  it('with no task to ask for, takes either runner\'s sign-in as one made', async () => {
+    const cli = new FakeDocker({ [`${SIGN_IN} ${LOGIN_VOLUME}`]: SAID('no such volume'), [`${SIGN_IN} ${CODEX_LOGIN_VOLUME}`]: OK('[]\n'), ...READY });
+
+    const checked = await inspectReadiness(OWN, { cli, platform: 'darwin', broker: noBroker });
+
+    expect(codes(checked)).toEqual([]);
+  });
+
+  it('refuses a broker login that holds nothing for the runner, naming the variable', async () => {
+    const broker = new CredentialBroker({ ANTHROPIC_API_KEY: 'sk-ant-api03-a-key' });
+    const cli = new FakeDocker({ ['run --rm']: OK(''), ...READY });
+    const login = { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } };
+
+    const checked = await inspectReadiness(login, { cli, platform: 'darwin', broker, runner: containerRunner('codex')! });
+
+    expect(codes(checked)).toEqual(['login-unavailable']);
+    expect(checked.problems[0].message).toContain('OPENAI_API_KEY');
+  });
+
   it('checks that a sign-in was made, by the volume that keeps it and never by reading it', async () => {
     const cli = new FakeDocker({ ...READY, [SIGN_IN]: SAID(`no such volume: ${LOGIN_VOLUME}`) });
 
@@ -227,7 +257,7 @@ describe('inspectReadiness', () => {
   it("asks for a task's own runner's sign-in, not another's", async () => {
     const cli = new FakeDocker({ ...READY, 'run --rm': OK(''), [SIGN_IN]: SAID('no such volume') });
 
-    const opencode = await inspectReadiness(OWN, { cli, platform: 'linux', broker: noBroker, runner: 'opencode' });
+    const opencode = await inspectReadiness(OWN, { cli, platform: 'linux', broker: noBroker, runner: containerRunner('opencode')! });
 
     expect(codes(opencode)).toEqual(['sign-in-missing']);
     expect(opencode.problems[0].remedy).toContain('ordewell-login-opencode');
@@ -238,7 +268,7 @@ describe('inspectReadiness', () => {
   it('reports an image that cannot start the task\'s runner, before a worktree is made', async () => {
     const cli = new FakeDocker({ ...READY, 'run --rm': SAID('exec: "opencode": executable file not found', 127) });
 
-    const checked = await inspectReadiness(KEY, { cli, platform: 'linux', broker: keyBroker, runner: 'opencode' });
+    const checked = await inspectReadiness(KEY, { cli, platform: 'linux', broker: keyBroker, runner: containerRunner('opencode')! });
 
     expect(codes(checked)).toEqual(['runner-missing']);
     expect(checked.problems[0].message).toContain('opencode');

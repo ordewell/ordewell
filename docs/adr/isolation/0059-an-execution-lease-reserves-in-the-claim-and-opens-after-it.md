@@ -153,7 +153,8 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
     killed `docker exec` leaves its process running, so a runner is stopped by its pid inside. A Session that closes
     stops its run, and is `gone` once its runners have and `settle` has taken its containers, relays and gateways: what a
     close waits on, so a session adopted next finds nothing of it at work. A task's volume stays for a Continue.
-  - A change task of a runner proven in a container runs there: Claude Code and OpenCode, today. So does every script, whatever its
+  - A change task of a runner proven in a container runs there: Claude Code, Codex at Full access, and OpenCode, which
+    `containerRunners.ts` lists with what a lease needs of each. So does every script, whatever its
     runner: a body is a person's or a planner's, but what it runs over is what containers wrote, so `npm test` on the host
     would run that code outside the boundary. Read-only tasks and planners stay out, under their envelope and their seal,
     as does a subplanner ([ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md)). A
@@ -191,6 +192,16 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
   preinstalling or running Claude Code in a product or service needs its Commercial Terms and an unmodified binary
   ([legal and compliance](https://code.claude.com/docs/en/legal-and-compliance), read 2026-10-31). A user's own build
   is their own install: that is a reading, and needs counsel before it is relied on.
+
+  Codex's Guarded mode does not run in a container, and a task at it is refused, not moved. `codex sandbox` was run in
+  this lease's container on codex 0.166.0: bubblewrap fails, `use_legacy_landlock` panics with `filesystem-restricted
+  execution requires bubblewrap`, and with seccomp and AppArmor off bubblewrap still fails at `Failed RTM_NEWADDR`. So
+  what it lacks is past those two profiles, in what this hardening withholds, and the adapter's probe, put to the
+  container's own binary, is what refuses, at the handshake and before a model turn. The task is held with the reason, nothing lands,
+  and its mode stays as planned
+  ([ADR-0001](../routing/0001-autonomous-mode-resolution.md)). At Full access the container is what holds the runner,
+  which is the point of a lease: Codex's sandbox is off, and the guarantees here are not. A level left at Guarded, the
+  default, plans such tasks, and each waits for a person to change it.
 - **Workspace, mirror and caches (L6).** Inside a Mac they live in the VM, in named volumes: a host path, a host socket
   and an APFS clone do not cross it, so no mount reaches this host. A repository's mirror is seeded by git over a helper
   with no network, so only what it lacks crosses. It pins each task's refs for as long as that task's clone leans on it,
@@ -237,18 +248,23 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
     does, and listens on the lease's network alone: the bridge joins after it has. It opens a CONNECT to port 443 of a host on the lease's list and nothing else, and reads none of what
     passes. A name is resolved there and its answer checked and dialed as it stands, so one that answers with a private
     address is turned down however it is listed: this sidecar's other network reaches the engine's host. The list is
-    `containers.allow`, or the registries of the caches named, and an `own-sign-in` lease adds where it talks to Anthropic.
-    A broker's lease lists no model host: under a key of its own, the model API would be a way out. Any host on a list is a
+    `containers.allow`, or the registries of the caches named, and an `own-sign-in` lease adds where its runner talks to
+    its service. A broker's lease lists no model host: under a key of its own, the model API would be a way out. Any host on a list is a
     way out for what can use it, and a client can name a listed host and be served another by a shared CDN: a list says
     where a connection goes, and no more.
   - The gateway (`modelGateway.ts`) runs on this host and is reached through the relay, with no network. An API key
     stays here, and the runner holds a token that means nothing past that listener, so `cred.unreadable` is provable for a
-    broker's lease. It carries model traffic alone, to the one upstream, under the real key whatever a client sent: a
+    broker's lease. A lease has a token of its own, so concurrent tasks on one key hold nothing in common. It carries model
+    traffic alone, to the one upstream, under the real key whatever a client sent: a
     process in the container can spend the key and cannot read it, send it elsewhere or use the API under its own. TLS
-    ends there, for that one host, which is the only interception a lease does. Claude Code reads the address from its
-    environment; OpenCode is given a provider block in its own configuration, pointing `anthropic` at the gateway with the
-    stand-in, since it does not read `ANTHROPIC_BASE_URL` for a provider's base. A model of another provider, or a person's
-    own sign-in, is handed its key or its login and reaches its provider's hosts through the sidecar instead.
+    ends there, for that one host, which is the only interception a lease does. Each runner names its `ModelApi`: Codex's
+    is the Responses API, under a bearer key. Claude Code reads the address from its environment; OpenCode is given a
+    provider block in its own configuration, pointing `anthropic` at the gateway with the stand-in, since it does not read
+    `ANTHROPIC_BASE_URL` for a provider's base. `app-server` reads neither `OPENAI_API_KEY` nor `OPENAI_BASE_URL`, so it is
+    pointed at the gateway by a provider of its own in `-c`, over HTTP alone, which the gateway carries. A task's key is
+    its own runner's, and a login's other keys stay here, so a two-key login does not hand one over in the clear. A model
+    of another provider, or a person's own sign-in, is handed its key or its login and reaches its provider's hosts
+    through the sidecar instead.
   - A person chooses the login, and it has no default: `broker`, API keys or cloud credentials from this host's
     environment, or `own-sign-in`, made inside a container and kept in a volume no task mounts. Each runner has its own
     sign-in volume and its own place the runner reads it from: Claude Code's config directory, OpenCode's data directory.
@@ -265,7 +281,14 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
     unread, and that lease reports `cred.unreadable` as not proven.
   - One Codex `auth.json` never serves concurrent attempts. OpenAI: "Do not share the same file across concurrent jobs
     or multiple machines", and not on public or open-source repositories
-    ([CI/CD auth](https://developers.openai.com/codex/auth/ci-cd-auth)). A copy per container is that shape.
+    ([CI/CD auth](https://learn.chatgpt.com/docs/auth/ci-cd-auth)). A plain copy per task is not that shape, since
+    refresh tokens rotate and each copy would spend the same one. So a task's copy (`COPY_CODEX_SIGN_IN`) holds the access
+    token and the account, with no refresh token and a fresh `last_refresh`, and a helper refuses a kept file that is an
+    API key, has expired, or holds no tokens. `auth.openai.com` stays off the list: nothing in a task can refresh, so the
+    kept sign-in is not spent, and it lasts as long as its access token. A person signs in again when it ends. With a
+    refresh token empty and `exp` valid, codex 0.166.0 starts and calls with the access token, and past `exp` it fails
+    cleanly, by fake tokens over HTTP. A turn on a ChatGPT account is not measured: its backend takes HTTPS alone, and no
+    account is spent here. OpenAI's guide does not describe this copy, and which login someone uses stays up to them.
   - Passing a user's own OAuth token through Ordewell, into a lease or a gateway, is treated as not allowed until
     Anthropic says otherwise. A runner on the local backend inherits the user's own environment as it does today (L4):
     Ordewell carries nothing there.
@@ -286,7 +309,9 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
   repair included. `ORDEWELL_E2E_HARNESS_IMAGE` adds the real binary, from an image built as `docker/task.Dockerfile` says,
   through a turn of a scripted model behind the gateway. `ORDEWELL_E2E_OPENCODE_IMAGE` does the same for OpenCode: the
   real `opencode serve` in a container, its own server reached through the relay, and a controlled Anthropic model on this
-  host behind the lease gateway that writes a file and calls `task_complete`.
+  host behind the lease gateway that writes a file and calls `task_complete`. `codexContainer.e2e.test.ts` does the same for
+  Codex under `ORDEWELL_E2E_CODEX_IMAGE`: two tasks at once through the gateway, the relay's MCP and the gate, and the real
+  sandbox refusing Guarded.
 - A guarantee's probe is tested by a backend built to fail it: an open that requires it refuses, and the engine's default
   network is what `net.allowlist` must catch. The relay, the sidecar and the gate need no engine: the relay and the sidecar
   run as themselves on this host's node, a preload standing in for the world's DNS and sockets, and the gate takes real
@@ -356,6 +381,15 @@ for model traffic first. The interface is kept free of anything that blocks thes
   it missed `post-index-change`. Hooks off closes it as a kind, and the refusal stays so that no check goes silently.
 - **Hooks off with no refusal.** Rejected: it would silently drop a check the user set up, such as a secret scan.
 - **Falling back to the host when a container cannot start.** Rejected: that is running weaker with nobody told.
+- **Codex's Guarded mode in a container, by loosening it.** Rejected: its sandbox fails with seccomp and AppArmor off as
+  well, which leaves the hardening L3 proves, given up for a boundary inside one that already holds.
+- **A Guarded Codex task moved to Full access at spawn.** Rejected: modes are never silently rewritten (ADR-0001).
+- **A plain copy of Codex's `auth.json` per task, or refreshing it for them.** Rejected: rotation makes every copy but one
+  stale, and refreshing would put a person's tokens through this host, which never reads them.
+- **`chatgptAuthTokens`, or a gateway for a ChatGPT token.** Rejected: Ordewell would hold and pass a person's sign-in,
+  which L7 keeps it from for a subscription, and such a gateway would stand in front of a private backend.
+- **Codex access tokens now.** Not built: they are for ChatGPT Enterprise workspaces and nothing here can prove one. It
+  would reach the runner by name, as a cloud credential does, with `chatgpt.com` on the list.
 - **One container per attempt as the unit at scale.** Rejected: a container per attempt pays setup every time. It is
   right for one laptop, where the unit and the trust domain coincide.
 - **A published image.** Rejected: see L5.
@@ -379,6 +413,10 @@ for model traffic first. The interface is kept free of anything that blocks thes
 - A sealed command over what landed still runs on this host, inside its seal.
 - A check held out of a child's reach (ADR-0055 D8) becomes a boundary only on a backend that proves `fs.hostHidden`.
 - A subscription user in a container has a weaker guarantee, and is told so.
+- A Codex change task runs in a container at Full access alone. Under the default Guarded level a planned Codex task
+  waits at its start until a person changes it. The runner catalog still offers Guarded, since its marks are host-wide
+  and a lease is a session's.
+- A ChatGPT sign-in for Codex ends with its access token, and a person renews it by hand.
 
 ## History
 
@@ -392,4 +430,5 @@ for model traffic first. The interface is kept free of anything that blocks thes
 - 2026-11-01 — the gate runs git's object checks itself, since a fetch from a bundle does not on an older git.
 - 2026-11-01 — containers are experimental and off in published builds: `containersOffered` reads the `containers` setting only with `ORDEWELL_CONTAINERS=1` from a git checkout, as delegation is held.
 - 2026-11-02 — `changeContainers`, `inspectEngine` and `inspectReadiness`: on asks for a local Docker alone, and a task's start rechecks the raw setting. A task works from its own copy of a sign-in, and keeps its caches in its own volume. Shared caches and a sign-in volume mounted into tasks dropped.
+- 2026-11-02 — Codex change tasks run in containers at Full access: `containerRunners.ts`, a gateway per model API, a task's sign-in copy without a refresh token, and Guarded refused at start by the sandbox probe in the container.
 - 2026-11-02 — OpenCode runs a change task in a container: a per-runner sign-in volume and copy, the relay's reverse direction for its own server, and its Anthropic provider pointed at the lease gateway. A runner's binary is asked of the image before a worktree is made, and a model's provider hosts are opened where nothing gates its traffic.

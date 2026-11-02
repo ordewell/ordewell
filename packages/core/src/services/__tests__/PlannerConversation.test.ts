@@ -293,6 +293,69 @@ describe('PlannerConversation rewind targets', () => {
   });
 });
 
+describe('a subplanner\'s native session (ADR-0055 D17, ADR-0009 T4)', () => {
+  const session = { runner: 'claude-code', sessionId: 'sess-saved', cwd: '/repo' };
+  const lastRequest = (ai: IAiService): ConversationRequest => vi.mocked(ai.startConversation).mock.lastCall![0];
+  /** A new process: no live context, and whatever the last one saved. */
+  const reopened = (plannerSession: LegacyPlanState['plannerSession'], ai = fakeAi({ hasActiveConversation: () => false })) => {
+    const fixture = fakeHost(ai, { ...dialoguePlan(), plannerSession });
+    fixture.host.subplanner = () => true;
+    return { ...fixture, ai };
+  };
+
+  it('is written as a turn ends, with how much of the transcript it has heard', async () => {
+    const ai = fakeAi({ nativeSession: () => session });
+    const { conversation, host, state } = fakeHost(ai);
+    host.subplanner = () => true;
+
+    await conversation.reply('Carry on');
+
+    expect(state.plan?.plannerSession).toEqual({ ...session, heard: 4 });
+  });
+
+  it('is written by no root planner, whose next process replays', async () => {
+    const { conversation, state } = fakeHost(fakeAi({ nativeSession: () => session }));
+
+    await conversation.reply('Carry on');
+
+    expect(state.plan).not.toHaveProperty('plannerSession');
+  });
+
+  it('is offered with what the transcript has moved on by since', async () => {
+    const { conversation, ai } = reopened({ ...session, heard: 1 });
+
+    await conversation.reply('Carry on');
+
+    expect(lastRequest(ai).resume).toEqual({ session: { ...session, heard: 1 }, since: [expect.objectContaining({ role: 'assistant', content: 'Which file formats?' })] });
+    expect(lastRequest(ai).priorHistory).toHaveLength(2);
+  });
+
+  it('is not offered once the transcript has moved behind what it holds', async () => {
+    const { conversation, ai } = reopened({ ...session, heard: 3 });
+
+    await conversation.reply('Carry on');
+
+    expect(lastRequest(ai).resume).toBeUndefined();
+  });
+
+  it('is not offered to a turn retried from a pause: the session is what filled up', async () => {
+    const { conversation, ai } = reopened({ ...session, heard: 2 });
+
+    await conversation.reply('Carry on', { recovery: { model: 'm', at: '2026-01-01T00:00:00Z', reason: 'full', inputs: [] } });
+
+    expect(lastRequest(ai).resume).toBeUndefined();
+  });
+
+  it('goes with a compaction, whose summary it holds none of', async () => {
+    const ai = fakeAi({ continueConversation: vi.fn().mockResolvedValue(summaryTurn('s')) });
+    const { conversation, state } = fakeHost(ai, { ...threeTurnPlan(), plannerSession: { ...session, heard: 6 } });
+
+    await conversation.compact();
+
+    expect(state.plan).not.toHaveProperty('plannerSession');
+  });
+});
+
 describe('PlannerConversation turns', () => {
   it('rolls back the user message and its research entry when the transport rejects', async () => {
     const ai = fakeAi({ continueConversation: vi.fn().mockRejectedValue(new Error('transport down')) });

@@ -111,10 +111,13 @@ export interface PlacedLaunch {
 
 /**
  * Where a lease that does not run its session on this host puts its runner. A
- * runner is still handed a cwd and nothing more (ADR-0013): only {@link RunnerProcess}
- * reads this, and an adapter writes the launch it always wrote.
+ * runner is still handed a cwd and nothing more (ADR-0013): {@link RunnerProcess}
+ * reads this, and an adapter writes the launch it always wrote. One whose
+ * protocol names a path takes it from {@link cwd}.
  */
 export interface RunnerPlacement {
+  /** The session's working directory as the runner sees it there. */
+  cwd: string;
   place(launch: RunnerLaunch): Promise<PlacedLaunch>;
   /** Make a listener on this host's loopback reachable from there, and answer the URL to reach it by (`endpoints.mcp`). */
   reach(url: string): Promise<string>;

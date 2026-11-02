@@ -100,6 +100,7 @@ interface TaskCardProps {
   onSendMessageNow?: (taskId: string, text: string) => void;
   /** Open (or focus) this task's log tab (ADR-0018, V1). */
   onOpenLog?: (taskId: string) => void;
+  onOpenChild?: (taskId: string) => void;
   /** Controlled expansion. When both are supplied the parent owns which card is
    *  open (an accordion); omitted, the card keeps its own state. */
   expanded?: boolean;
@@ -459,7 +460,7 @@ export function runnerOptionsFor(runners: RunnerOption[] | undefined, assignedRu
   return [...runners, { id: assignedRunner, displayName: assignedRunner }];
 }
 
-export default function TaskCard({ task, run, runsByTask, models, modes, modelsByRunner, modesByRunner, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, runActive, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRevert, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
+export default function TaskCard({ task, run, runsByTask, models, modes, modelsByRunner, modesByRunner, runners, runnerScope, configuredProviders, modelApiMapping, isExecuting, runActive, output, onResolveConflict, dependentCount, siblings, onDependenciesChange, onRunnerChange, onModelChange, onModelsRefreshNeeded, onModeChange, onOpsChange, taskSkills, onSkillsChange, onRemoveTask, onPromptChange, onRetry, onSkip, onCancel, onCancelResume, onResumeNow, onForceStart, onMarkComplete, onMarkIncomplete, onRevert, onRunTask, onSendMessage, onSendMessageNow, onOpenLog, onOpenChild, expanded: expandedProp, onExpandedChange }: TaskCardProps) {
   const [internalExpanded, setInternalExpanded] = useState(false);
   const isControlled = expandedProp !== undefined;
   const expanded = isControlled ? expandedProp : internalExpanded;
@@ -594,6 +595,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
             </button>
             {/* Outside the heading button, so Open chat can share its line without nesting a button in a button. */}
             <TaskAssignment task={task} />
+            {delegated && onOpenChild && <button type="button" onClick={(e) => { e.stopPropagation(); onOpenChild(task.id); }}>Open subplanner</button>}
             {delegated && (delegated.counts || delegated.tokens || delegated.stopping) && (
               <span className="task-delegated-meta">
                 {(delegated.counts || delegated.tokens) && <span className="task-delegated-line">{[delegated.counts, delegated.tokens].filter(Boolean).join(' · ')}</span>}

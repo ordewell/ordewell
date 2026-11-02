@@ -31,6 +31,10 @@
  *
  * With FAKE_CLAUDE_LOG set, every prompt taken and every call's reply is
  * appended to that file as a line of JSON, for a test to read what was said.
+ *
+ * A `--resume` of the session named by FAKE_CLAUDE_REFUSE_RESUME is answered as
+ * the real CLI answers one it cannot find: an error result, no `init`, and a wait
+ * on stdin.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -245,19 +249,28 @@ function control(msg) {
   emit({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id, response } });
 }
 
-emit({ type: 'system', subtype: 'init', cwd, model: MODEL, permissionMode });
+if (flag('--resume') !== undefined && flag('--resume') === process.env.FAKE_CLAUDE_REFUSE_RESUME) {
+  emit({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: [`No conversation found with session ID: ${sessionId}`], total_cost_usd: 0 });
+  process.stdin.resume();
+  process.stdin.on('end', () => process.exit(1));
+} else {
+  emit({ type: 'system', subtype: 'init', cwd, model: MODEL, permissionMode });
+  acceptInput();
+}
 
 // Turns run one at a time, but control requests (an interrupt, an attach
 // check) are answered while one is in flight.
-let turns = Promise.resolve();
-const input = readline.createInterface({ input: process.stdin });
-input.on('line', (line) => {
-  let msg;
-  try { msg = JSON.parse(line); } catch { return; }
-  if (msg.type === 'control_request') control(msg);
-  else if (msg.type === 'user') {
-    if (msg.uuid) emit({ type: 'user', isReplay: true, uuid: msg.uuid, message: msg.message });
-    turns = turns.then(() => handleUser(msg));
-  }
-});
-input.on('close', () => { turns.then(() => process.exit(0)); });
+function acceptInput() {
+  let turns = Promise.resolve();
+  const input = readline.createInterface({ input: process.stdin });
+  input.on('line', (line) => {
+    let msg;
+    try { msg = JSON.parse(line); } catch { return; }
+    if (msg.type === 'control_request') control(msg);
+    else if (msg.type === 'user') {
+      if (msg.uuid) emit({ type: 'user', isReplay: true, uuid: msg.uuid, message: msg.message });
+      turns = turns.then(() => handleUser(msg));
+    }
+  });
+  input.on('close', () => { turns.then(() => process.exit(0)); });
+}

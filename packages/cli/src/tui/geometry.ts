@@ -138,7 +138,8 @@ export function chatEditorRoom(cols: number, active: boolean): number {
 export function chatPromptLabel(state: TuiState): string {
   if (!state.taskView) return '❯';
   const task = findTask(state.tasks, state.taskView.taskId);
-  const verb = !continuesTask(task) ? 'Task' : resumesTask(task) ? 'Resume task' : 'Continue task';
+  // A Continue is given from the root: below it, a task takes messages or nothing.
+  const verb = state.child || !continuesTask(task) ? 'Task' : resumesTask(task) ? 'Resume task' : 'Continue task';
   return `→ ${verb} ${task?.order ?? '?'}`;
 }
 

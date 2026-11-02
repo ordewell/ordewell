@@ -127,6 +127,15 @@ Judgment stays the planner's.
   | depth, delegated tasks per plan, tasks per plan | ADR-0055 D19 | the same or lower |
   | allowed runners and models | what `SessionCatalog` allows | a subset |
 
+  A child's `SessionCatalog` assigns inside the runners and models its mandate holds
+  (`withinLimits`), so it can write no task its parent could not. The lists are what
+  the parent held at the carve, and the user's settings can take a runner or a model
+  from a running child and never hand one back; one set back to the empty list that
+  allows any stays the list the child was carved with. A delegated task's fields ask
+  for grants, tokens, wall-clock time and protected paths and nothing else, so a child
+  holds these limits at its parent's values until a field asks for fewer, and depth
+  and the two task limits bind at ADR-0055 D19's numbers.
+
   Wall-clock time stops while the tree is held on a usage limit, a task's or a
   subplanner's own, up to that limit's reset: a resume waiting on a slot past it
   (ADR-0055 D18) is on the clock. The reset is what ends the hold, so a limit that
@@ -146,7 +155,7 @@ Judgment stays the planner's.
   | tokens, wall-clock time | carved from what the parent has left |
   | depth | the parent's less one, refused at 0 |
   | delegated tasks, tasks per plan | the lesser |
-  | runners, models | intersect |
+  | runners, models | intersect, refused where nothing is kept: a model list left empty allows any, so an empty result would be the widest answer |
   | exclusions | accumulate |
   | `effectRules` | append: a command must match at every level, so no rule is widened by a wildcard, a `!` rule holds below its level, and no rules are intersected as text |
   | `ownEffectRules` | the level the request adds, if any |
@@ -166,6 +175,17 @@ Judgment stays the planner's.
     children hold), `spent` and `reserve`, with `spent + committed + reserve ≤ limit`.
     A node's `spent` is its own and what its closed children spent, so an open child's
     spending shows at its parent as what it holds.
+  - A plan is held to what its node has left together, not task by task. A change that
+    takes what its delegated tasks still ask past `limit` less the other three is
+    refused, naming the room it found. `TreeLedger.stillAsks` counts
+    a task its open child already holds as nothing, and a raise and what was spent as M10
+    does. One that lowers what they ask passes, so a plan the room fell under can come
+    down. That is the worst case: a child's unspent budget returns as it ends, so a run
+    of tasks in sequence can be refused what it could in fact have carved. The carve
+    stays what decides, since spending moves the room after a plan is accepted. With no
+    ledger open yet the check reads the mandate's limit. It binds a planner's changes: a
+    user's direct edit is the user's, and meets the carve. A planner's brief reads the
+    same number, as it starts.
   - Spend is checked in `startRefusal`, which `claim` and `claimRefusal` both read, the
     one point every attempt passes: `tick`, `startRound`, `resumeTask` and
     `startOwedRepairs` never reach the command seam. It is the last check before the
@@ -466,4 +486,5 @@ Judgment stays the planner's.
 - 2026-11-01 — under the `containers` setting a child's change tasks, repairs and scripts take the container path, a sealed script with no network, and the confirmation says delegation starts no container of its own (M9).
 - 2026-11-01 — from a real run: a node stops short of its limit, while what it can reach still pays for the calls on their way, where it stopped at the limit and passed it (M5).
 - 2026-11-01 — from review: a child reads the effect rules above it as they stand, with `ownEffectRules` kept; a mandate's consent covers a sealed run alone; and a script past the rules fails at its start (M1, M9).
+- 2026-11-02 — from an audit: `narrow` refuses a runner or model set that keeps nothing, a child's `SessionCatalog` assigns within its limits, and which of those limits a delegated task can ask for is said; a plan's budgets are held to its node's room together, not one by one, and its brief says that room.
 - 2026-11-02 — a person with a child plan open may answer what that plan holds, under its subplanner's `steer`; the list stays the root's (M8, ADR-0055 D20).

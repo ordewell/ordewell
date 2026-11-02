@@ -1,7 +1,9 @@
-import { parseContainerSettings, type ContainerSettings } from './containerSettings';
-import { CONTAINER_RUNNERS, containerRunner, CONTAINER_RUNNER_IDS, type ContainerRunner } from './containerRunners';
+import { containerLimits, parseContainerSettings, type ContainerSettings } from './containerSettings';
+import { CONTAINER_RUNNERS, signInRemedy, type ContainerRunner } from './containerRunners';
 import type { CredentialBroker } from './credentialBroker';
 import type { DockerCli, DockerResult } from './dockerCli';
+
+export { LOGIN_VOLUME } from './containerRunners';
 
 /** Why a container cannot be had yet, and what a person does about it. */
 export interface ContainerProblem {
@@ -34,8 +36,8 @@ export interface ReadinessDeps extends PreflightDeps {
   broker: CredentialBroker;
   /** False for a script, whose container holds no login at all. */
   agent?: boolean;
-  /** Whose task this is for, when the caller knows: its sign-in and its binary are asked of that runner alone. */
-  runner?: string;
+  /** Whose login is asked for. Absent, a surface's question, with no task in mind: a sign-in of any runner's, and every variable there. */
+  runner?: ContainerRunner;
   setupCommand?: string;
 }
 
@@ -43,9 +45,6 @@ export interface Readiness extends EngineCheck {
   /** Absent for a setting that cannot be used as it stands. */
   settings?: ContainerSettings;
 }
-
-/** Where a person's own sign-in is kept: theirs, made in a container, and never read here (ADR-0059 L7). */
-export const LOGIN_VOLUME = CONTAINER_RUNNERS.get('claude-code')!.signIn.volume;
 
 /** A surface waits on this, and an engine that hangs is one to report, not to wait for. */
 const ASK_MS = 15_000;
@@ -122,15 +121,10 @@ export const CONTAINER_ASSUMPTIONS: readonly string[] = [
   'The engine behind a unix:// socket is on this machine: a socket forwarded from elsewhere looks the same.',
   'Containers on an engine share one kernel, this host\'s on Linux and the VM\'s on a Mac. kernel.separate means separate from this host, never from another task: a kernel flaw reaches every task on the engine.',
   'A task has limits on memory and processes, and none on CPU or disk.',
-  `Only ${CONTAINER_RUNNER_IDS.join(' and ')} have been proven as runners in a container: another runner's task refuses at start.`,
+  'Only Claude Code, Codex and OpenCode have been proven as runners in a container: another runner\'s task refuses at start.',
+  'Codex runs in a container at Full access alone: its sandbox cannot start under this hardening, so a task at Codex\'s Guarded mode refuses at start.',
 ];
 
-/** Where a runner's sign-in is kept, as the one thing to do about it. */
-export function signInRemedy(runner: ContainerRunner): string {
-  return `Sign in as docs/containers.md shows, so ${runner.id}'s is kept in the ${runner.signIn.volume} volume.`;
-}
-
-export const SIGN_IN_REMEDY = signInRemedy(CONTAINER_RUNNERS.get('claude-code')!);
 
 const MEMORY_REMEDY: Partial<Record<NodeJS.Platform, string>> = {
   darwin: 'Give the engine more with `colima stop && colima start --memory 8`, or Docker Desktop\'s Settings > Resources, or lower containers.memory.',
@@ -149,22 +143,19 @@ function readSetting(raw: unknown): { problems: ContainerProblem[]; settings?: C
   return { problems: [], settings };
 }
 
-async function loginProblems(settings: ContainerSettings, cli: DockerCli, broker: CredentialBroker, runner: string | undefined): Promise<ContainerProblem[]> {
+async function loginProblems(settings: ContainerSettings, cli: DockerCli, broker: CredentialBroker, runner?: ContainerRunner): Promise<ContainerProblem[]> {
   if (settings.login.kind === 'own-sign-in') {
-    // A surface knows no task's runner, so it is satisfied by any runner's sign-in; a lease knows its own and asks only for that.
-    const wanted = runner === undefined ? [...CONTAINER_RUNNERS.values()] : [containerRunner(runner)].filter((entry): entry is ContainerRunner => entry !== null);
-    if (wanted.length === 0) return [problem('runner-unknown', `${runner} has not been proven in a container.`, `Assign the task to ${CONTAINER_RUNNER_IDS.join(' or ')}.`)];
-    const made: ContainerRunner[] = [];
-    for (const entry of wanted) {
-      const kept = await cli.call(['volume', 'inspect', entry.signIn.volume], { timeoutMs: ASK_MS });
-      if (kept.code === 0) made.push(entry);
+    // A surface knows no task's runner, so any runner's kept sign-in satisfies it; a lease knows its own and asks only for that.
+    const asked = runner ? [runner] : CONTAINER_RUNNERS;
+    for (const { signIn } of asked) {
+      const kept = await cli.call(['volume', 'inspect', signIn.volume], { timeoutMs: ASK_MS });
+      if (kept.code === 0) return [];
     }
-    if (made.length > 0) return [];
-    const remedy = wanted.map(signInRemedy).join(' ');
-    return [problem('sign-in-missing', `The containers setting names your own sign-in, and none has been made for ${wanted.map((entry) => entry.id).join(' or ')}.`, remedy)];
+    return [problem('sign-in-missing', `The containers setting names your own sign-in, and none has been made${runner ? ` for ${runner.id}` : ''}.`, signInRemedy(asked[0].signIn))];
   }
   try {
-    broker.issue(settings.login.variables);
+    if (runner) broker.issue(settings.login.variables, runner.api);
+    else broker.check(settings.login.variables);
     return [];
   } catch (err) {
     return [problem('login-unavailable', err instanceof Error ? err.message : String(err), 'Set it in the environment Ordewell starts from, or use the "own-sign-in" login.')];
@@ -177,7 +168,7 @@ async function loginProblems(settings: ContainerSettings, cli: DockerCli, broker
  * is a server that never comes up after an attempt has been spent on it.
  */
 async function runnerInImage(settings: ContainerSettings, cli: DockerCli, runner: ContainerRunner): Promise<ContainerProblem[]> {
-  const asked = await cli.call(['run', '--rm', '--network', 'none', '--user', '1000:1000', '--entrypoint', 'sh', settings.image, '-c', `command -v ${runner.binary}`], { timeoutMs: ASK_MS });
+  const asked = await cli.call(['run', '--rm', '--entrypoint', 'sh', ...containerLimits(settings), '--network', 'none', settings.image, '-c', `command -v ${runner.binary}`], { timeoutMs: ASK_MS });
   if (asked.code === 0) return [];
   return [problem('runner-missing', `The image ${settings.image} has no ${runner.binary} on its PATH, so a ${runner.id} task cannot start in it.`, `Add ${runner.binary} to the image, as docs/containers.md shows, and build it again.`)];
 }
@@ -204,8 +195,7 @@ export async function inspectReadiness(raw: unknown, { cli, platform, broker, ag
   if (image.code !== 0) problems.push(problem('image-missing', `The image ${settings.image} is not there.`, 'Ordewell publishes no image: build it as docs/containers.md shows.'));
   if (agent) {
     problems.push(...await loginProblems(settings, cli, broker, runner));
-    const chosen = containerRunner(runner);
-    if (image.code === 0 && chosen) problems.push(...await runnerInImage(settings, cli, chosen));
+    if (image.code === 0 && runner) problems.push(...await runnerInImage(settings, cli, runner));
   }
   return { problems, engine, ...(problems.length === 0 ? { settings } : {}) };
 }

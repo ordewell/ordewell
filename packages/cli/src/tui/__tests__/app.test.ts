@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { replayTaskLog } from '@ordewell/core';
+import { createTask, replayTaskLog, serializePlan } from '@ordewell/core';
 import { stripAnsi } from '../ansi';
 import { createApp } from '../app';
 import { style } from '../ansi';
@@ -57,6 +57,21 @@ describe('createApp', () => {
     app.dispatch({ type: 'sessionStarted', sessionId: 's2', goal: 'Add reverse' });
 
     expect(onSessionChange.mock.calls.map(([id, state]) => [id, state.goal])).toEqual([['s1', 'Add multiply'], ['s2', 'Add reverse']]);
+  });
+
+  it('keeps the CLI\'s default on the root while a child plan is on screen', () => {
+    const onSessionChange = vi.fn();
+    const app = createApp({ initial: { rows: 24, cols: 80, focus: 'plan' }, draw: () => {}, perform: async () => {}, onExit: () => {}, onSessionChange });
+    const delegated = createTask({ id: 'd', order: 1, title: 'Delegated', type: 'delegated', goal: 'Do it', budget: { tokens: 1000 } } as Parameters<typeof createTask>[0]);
+    const plan = serializePlan({ tasks: [delegated], generatedAt: '', status: 'approved', runners: ['claude-code'], lastUpdated: '' } as Parameters<typeof serializePlan>[0]);
+
+    app.dispatch({ type: 'sessionStarted', sessionId: 'root', goal: 'The root goal' });
+    app.dispatch({ type: 'planUpdated', sessionId: 'root', plan });
+    app.dispatch({ type: 'childTree', sessionId: 'root', children: [{ sessionId: 'child', node: 'root/1', parent: 'root', taskId: 'd', title: 'Delegated', depth: 1, state: 'parked' }] });
+    app.dispatch({ type: 'key', key: { name: 'enter' } });
+
+    expect(app.getState().sessionId).toBe('child');
+    expect(onSessionChange.mock.calls.map(([id]) => id)).toEqual(['root']);
   });
 
   it('startup refresh posts no notice', async () => {

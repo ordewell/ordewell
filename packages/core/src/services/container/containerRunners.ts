@@ -1,45 +1,63 @@
 import { posix } from 'path';
-import { TASK_ROOT } from './taskWorkspace';
+import type { RunnerLaunch } from '../executionLease';
+import { SIGN_IN_HOSTS } from './credentialBroker';
+import { ANTHROPIC_API, OPENAI_API, type ModelApi } from './modelGateway';
+import { COPY_CODEX_SIGN_IN, COPY_OPENCODE_SIGN_IN, COPY_SIGN_IN, CODEX_SIGN_IN_FILE, OPENCODE_SIGN_IN_COPY, SIGN_IN_COPY, TASK_ROOT } from './taskWorkspace';
 
-/*
- * Which runners have been proven in a container, and what each needs there
- * (ADR-0059 L5, L7). The lease reads this, never a name it recognises on its
- * own: a runner missing here refuses at start rather than running with a login
- * or a home it was not given.
- */
+/** Where a person's own sign-in to a runner is kept: theirs, made in a container, and never read here (ADR-0059 L7). */
+export const LOGIN_VOLUME = 'ordewell-login-claude-code';
+export const CODEX_LOGIN_VOLUME = 'ordewell-login-codex';
+export const OPENCODE_LOGIN_VOLUME = 'ordewell-login-opencode';
 
-/** Where a person's own sign-in for one runner is kept, and what a task does with it. */
-export interface RunnerSignIn {
-  /** The volume a person signs in to, made inside a container and never read on this host. */
-  volume: string;
-  /** Where a helper mounts that volume, read-only, to copy from. */
-  mounted: string;
-  /** The task's own copy, the only one its runner ever sees. */
-  copy: string;
-  /** What tells the runner to read its copy, set over anything the workspace has. */
-  env: Readonly<Record<string, string>>;
-  /** Where the runner's own sign-in talks, and refreshes it: opened for an own-sign-in lease. */
-  hosts: readonly string[];
+/** What a task's container holds for its runner to find. */
+export interface PlacedRunner {
+  /** The gateway's port on the container's loopback, under a key the gateway holds. */
+  gatewayPort: number | null;
+  signedIn: boolean;
 }
 
+/** A person's own sign-in for one runner, and how a task gets its copy of it: a runner never sees the volume (ADR-0059 L7). */
+export interface ContainerSignIn {
+  /** The kept volume, which a helper mounts read-only at `/login`. */
+  volume: string;
+  /** Where the runner talks to its service once it holds that sign-in. */
+  hosts: readonly string[];
+  /** The helper's command, which leaves the task's copy in its volume and exits 3 for a sign-in that is no use. */
+  copy: readonly string[];
+  /** The copy, which the runner can read: a probe's proof that `cred.unreadable` does not hold. */
+  path: string;
+  env: Readonly<Record<string, string>>;
+}
+
+/** One runner a container has been proven with: all a lease knows of it. A protocol that needs this host's loopback or its own sandbox has not. */
 export interface ContainerRunner {
   id: string;
-  /** What the image must have on its PATH, which readiness asks for before a worktree is made. */
+  /** What the image has to hold. */
   binary: string;
-  signIn: RunnerSignIn;
+  /** The model API its login is for: a key for any other stays on this host. */
+  api: ModelApi;
+  signIn: ContainerSignIn;
+  /** Its launch's arguments, for what it cannot be told by a variable. */
+  args(launch: RunnerLaunch, placed: PlacedRunner): readonly string[];
 }
 
-const claudeCode: ContainerRunner = {
-  id: 'claude-code',
-  binary: 'claude',
-  signIn: {
-    volume: 'ordewell-login-claude-code',
-    mounted: '/login/claude',
-    copy: posix.join(TASK_ROOT, 'login', 'claude'),
-    env: { CLAUDE_CONFIG_DIR: posix.join(TASK_ROOT, 'login', 'claude') },
-    hosts: ['api.anthropic.com', 'claude.ai', 'platform.claude.com'],
-  },
-};
+/*
+ * `app-server` reads neither OPENAI_API_KEY nor OPENAI_BASE_URL: only a provider
+ * of its own in `-c` reaches a base URL with a key, and it names the variable
+ * that holds the key, which is the gateway's token here. Not over WebSockets,
+ * which the gateway does not carry.
+ */
+function codexArgs(launch: RunnerLaunch, { gatewayPort, signedIn }: PlacedRunner): readonly string[] {
+  if (launch.args[0] !== 'app-server') return launch.args;
+  const { keyVariable, basePath } = OPENAI_API;
+  const gateway = gatewayPort === null ? [] : [
+    '-c', `model_providers.gateway={name="gateway",base_url="http://127.0.0.1:${gatewayPort}${basePath}",env_key="${keyVariable}",wire_api="responses",supports_websockets=false}`,
+    '-c', 'model_provider="gateway"',
+  ];
+  // No keyring in a container, and a task's copy is the file a helper wrote.
+  const store = signedIn ? ['-c', 'cli_auth_credentials_store="file"'] : [];
+  return [...launch.args, ...gateway, ...store];
+}
 
 /**
  * OpenCode keeps every provider's login in its data directory, so the copy is
@@ -48,34 +66,50 @@ const claudeCode: ContainerRunner = {
  * login flow offers and the API each one calls; another provider needs its
  * hosts in `containers.allow` (docs/containers.md).
  */
-const openCode: ContainerRunner = {
-  id: 'opencode',
-  binary: 'opencode',
-  signIn: {
-    volume: 'ordewell-login-opencode',
-    mounted: '/login/opencode',
-    copy: posix.join(TASK_ROOT, 'login', 'opencode'),
-    env: { XDG_DATA_HOME: posix.join(TASK_ROOT, 'login') },
-    hosts: [
-      'opencode.ai',
-      'api.anthropic.com', 'claude.ai', 'platform.claude.com',
-      'api.openai.com', 'auth.openai.com', 'chatgpt.com',
-      'api.individual.githubcopilot.com', 'api.githubcopilot.com',
-      'generativelanguage.googleapis.com', 'cloudcode-pa.googleapis.com',
-      'openrouter.ai',
-    ],
+const OPENCODE_HOSTS: readonly string[] = [
+  'opencode.ai',
+  'api.anthropic.com', 'claude.ai', 'platform.claude.com',
+  'api.openai.com', 'auth.openai.com', 'chatgpt.com',
+  'api.individual.githubcopilot.com', 'api.githubcopilot.com',
+  'generativelanguage.googleapis.com', 'cloudcode-pa.googleapis.com',
+  'openrouter.ai',
+];
+
+export const CONTAINER_RUNNERS: readonly ContainerRunner[] = [
+  {
+    id: 'claude-code',
+    binary: 'claude',
+    api: ANTHROPIC_API,
+    signIn: { volume: LOGIN_VOLUME, hosts: SIGN_IN_HOSTS, copy: ['sh', '-c', COPY_SIGN_IN], path: SIGN_IN_COPY, env: { CLAUDE_CONFIG_DIR: SIGN_IN_COPY } },
+    args: (launch) => launch.args,
   },
-};
+  {
+    id: 'codex',
+    binary: 'codex',
+    api: OPENAI_API,
+    // Without auth.openai.com: no task's copy holds a refresh token to spend there (ADR-0059 L7).
+    signIn: { volume: CODEX_LOGIN_VOLUME, hosts: ['chatgpt.com'], copy: ['node', '-e', COPY_CODEX_SIGN_IN], path: CODEX_SIGN_IN_FILE, env: {} },
+    args: codexArgs,
+  },
+  {
+    id: 'opencode',
+    binary: 'opencode',
+    // Its own login is for whichever provider a person chose; an Anthropic key stops at the lease's gateway, and any other is handed over (ADR-0059 L7).
+    api: ANTHROPIC_API,
+    // The copy is the runner's data directory, which `XDG_DATA_HOME` names the parent of.
+    signIn: { volume: OPENCODE_LOGIN_VOLUME, hosts: OPENCODE_HOSTS, copy: ['sh', '-c', COPY_OPENCODE_SIGN_IN], path: OPENCODE_SIGN_IN_COPY, env: { XDG_DATA_HOME: posix.join(TASK_ROOT, 'login') } },
+    args: (launch) => launch.args,
+  },
+];
 
-export const CONTAINER_RUNNERS: ReadonlyMap<string, ContainerRunner> = new Map([claudeCode, openCode].map((runner) => [runner.id, runner]));
+export const containerRunner = (id: string | undefined): ContainerRunner | undefined => CONTAINER_RUNNERS.find((runner) => runner.id === id);
 
-/** A runner proven in a container, or null: a name nothing here has proven runs nowhere. */
-export const containerRunner = (id: string | undefined): ContainerRunner | null => (id === undefined ? null : CONTAINER_RUNNERS.get(id) ?? null);
-
-export const CONTAINER_RUNNER_IDS: readonly string[] = [...CONTAINER_RUNNERS.keys()];
+export const CONTAINER_RUNNER_IDS: readonly string[] = CONTAINER_RUNNERS.map(({ id }) => id);
 
 /** Every runner's sign-in hosts, for a surface's check, which knows no task's runner. */
-export const ALL_SIGN_IN_HOSTS: readonly string[] = [...new Set(CONTAINER_RUNNER_IDS.flatMap((id) => CONTAINER_RUNNERS.get(id)!.signIn.hosts))];
+export const ALL_SIGN_IN_HOSTS: readonly string[] = [...new Set(CONTAINER_RUNNERS.flatMap(({ signIn }) => signIn.hosts))];
+
+export const signInRemedy = ({ volume }: ContainerSignIn): string => `Sign in as docs/containers.md shows, so it is kept in the ${volume} volume.`;
 
 /**
  * Where a model's own API is, by the provider id of the task's assigned model.

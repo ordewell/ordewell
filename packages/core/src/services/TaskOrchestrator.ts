@@ -40,7 +40,7 @@ import type { SkillLookup } from './taskSkills';
 import { SkillsService } from './SkillsService';
 import { capConflictFiles } from './conflictFiles';
 import { resolveWorkspaceEnv, type WorkspaceEnv } from './workspaceEnv';
-import { continuability, sessionOwner } from './continuation';
+import { continuability, reopenMessage, sessionOwner } from './continuation';
 import { quotedList } from '../utils/quotedList';
 import { inBranchRefusal, landedOnOf, revertReach, revertScope, type RevertScope, type TaskRevertPreview } from './taskRevert';
 import type { RunMergeView, RunActivity } from './SessionMessage';
@@ -448,6 +448,14 @@ export class TaskOrchestrator {
   private queuedStarts = new Map<string, QueuedStart>();
   /** Conflict repairs owed with every slot taken and no scheduler to claim them: a freed slot starts them. */
   private owedRepairs = new Set<string>();
+  /**
+   * The delegated tasks a Continue from above owes their child (ADR-0055 D17):
+   * Execute's fresh chance would discard each at its claim. Past a plan load,
+   * which the run those claims belong to begins with; a Stop ends that run.
+   */
+  private owedReopens = new Map<string, Continuation>();
+  /** The children a reopened run may not reach: each stays as it stands until someone decides (ADR-0055 D17). */
+  private keptChildren = new Set<string>();
   /**
    * The checks whose loop goes on with no scheduler: each failed a round in a
    * run the scheduler was not driving, so nothing else would start what it
@@ -1347,11 +1355,34 @@ export class TaskOrchestrator {
   async beginRun(origin: RunOrigin, keepFailed?: ReadonlySet<string>): Promise<void> {
     this.stop('restart');
     this.store.clearLog();
-    this.store.resetForRun({ keepFailed });
+    this.store.resetForRun({ keepFailed: new Set([...(keepFailed ?? []), ...this.keptChildren]) });
     const chosen = this.chosenHoldsNow();
     this.loadPlan(this.store.planTasks, [...this.store.planRunners]);
     this.restoreHolds(chosen);
     await this.approveReview(origin);
+  }
+
+  /**
+   * A Continue from above reached this node (ADR-0055 D17): the run about to
+   * begin is Execute's, but a Continue never discards a child, at any depth. So
+   * each delegated task with a child to reopen is claimed as a continue when
+   * the scheduler reaches it, its dependencies and approval as for any task,
+   * and one whose child cannot be reopened is held rather than started fresh.
+   * Answers what was held and why, for its subplanner to decide.
+   */
+  owesChildren(message: string): string[] {
+    const held: string[] = [];
+    for (const task of this.store.allTasks) {
+      if (task.type !== 'delegated' || task.status === 'completed' || task.status === 'skipped' || this.attempts.has(task.id)) continue;
+      const reopens = continuability(task);
+      if (reopens.ok) this.owedReopens.set(task.id, { message: reopenMessage(task, message), resumeSessionId: reopens.sessionId });
+      else if (task.runnerSessionId) {
+        this.keptChildren.add(task.id);
+        this.hold(task.id, reopens.reason, true);
+        held.push(reopens.reason);
+      }
+    }
+    return held;
   }
 
   /**
@@ -1436,7 +1467,11 @@ export class TaskOrchestrator {
     this.releaseUnchosenHolds();
     this.withdrawRepairs();
     this.endCarriedLoops();
-    if (reason === 'user') this.withdrawQueuedStarts();
+    if (reason === 'user') {
+      this.withdrawQueuedStarts();
+      this.owedReopens.clear();
+      this.keptChildren.clear();
+    }
     this.limitPauses.cancelAll();
     this.keptResumes.clear();
     this.sayStopped(stopped);
@@ -2213,6 +2248,8 @@ export class TaskOrchestrator {
       const movedFrom = this.movedFrom(task);
       this.store.retry(taskId);
       this.owedRepairs.delete(taskId);
+      this.owedReopens.delete(taskId);
+      this.keptChildren.delete(taskId);
       // Now, not once the worktree has gone: a tick in between would start it.
       this.retireResolvers(taskId);
       if (movedFrom) this.store.setCarriedFrom(taskId, movedFrom);
@@ -3250,10 +3287,12 @@ export class TaskOrchestrator {
     const task = this.store.get(taskId)!;
     const reserved = this.leases.reserve(this.attemptRequest(task));
     if ('refused' in reserved) return { refused: reserved.refused };
+    const continuing = continuation ?? this.owedReopens.get(taskId) ?? null;
+    this.owedReopens.delete(taskId);
     // The one point every start passes: Execute's fresh chance and a force start never call `retry` (ADR-0055 D8).
-    if (continuation === null && !opts.autoResumed && !this.landing.nextRepair(taskId)) this.store.takeBackChecks(taskId);
+    if (continuing === null && !opts.autoResumed && !this.landing.nextRepair(taskId)) this.store.takeBackChecks(taskId);
     this.carriedChecks.delete(taskId);
-    return { spawned: this.attempts.start(task, { admission, continuation, autoResumed: opts.autoResumed === true, lease: reserved.lease }) };
+    return { spawned: this.attempts.start(task, { admission, continuation: continuing, autoResumed: opts.autoResumed === true, lease: reserved.lease }) };
   }
 
   private tell(level: 'info' | 'warn' | 'error', message: string): void {

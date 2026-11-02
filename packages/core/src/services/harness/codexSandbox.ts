@@ -54,7 +54,8 @@ export async function probeCodexSandbox(
   env: NodeJS.ProcessEnv,
 ): Promise<CodexSandboxDecision> {
   // Bubblewrap is the Linux backend only, so there is nothing here to probe
-  // elsewhere: macOS uses Seatbelt, which cannot fail this way.
+  // elsewhere: macOS uses Seatbelt, which cannot fail this way. A placed Codex
+  // runs on another machine, whichever this one is, and that one is asked.
   //
   // Windows is a weaker statement and deliberately not dressed up as a stronger
   // one. Codex's own sandboxing there is not the OS-enforced equivalent of
@@ -68,7 +69,7 @@ export async function probeCodexSandbox(
   // construction" (ADR-0009) is a Linux/macOS guarantee, not yet a verified
   // Windows one. Returning 'default' declines to invent a workaround for a
   // failure mode nobody has observed; it does not claim the guarantee is proven.
-  if ((deps.platform ?? process.platform) !== 'linux') return 'default';
+  if (!deps.placement && (deps.platform ?? process.platform) !== 'linux') return 'default';
 
   const bubblewrap = await runProbe(deps, cwd, env, []);
   if (bubblewrap.code === 0) return 'default';
@@ -83,7 +84,15 @@ const NAMESPACE_CAUSE = "Its Linux sandbox needs unprivileged user namespaces, w
 const SYSCTL_FIX = '  sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0';
 
 /** The message shown when Codex has no working sandbox and cannot do without one, naming both documented fixes. */
-export function codexSandboxUnavailableMessage(role: 'planner' | 'task' = 'planner'): string {
+export function codexSandboxUnavailableMessage(role: 'planner' | 'task' | 'container' = 'planner'): string {
+  // No sysctl here: what refuses the namespaces is the container's hardening, which no host setting changes and Ordewell does not loosen for a runner.
+  if (role === 'container') {
+    return [
+      "Codex cannot start its sandbox in this task's container, so it can run no command in this task's mode.",
+      '',
+      'Its sandbox needs namespaces of its own, which a hardened container does not give. There the container is what holds the runner, so give the task Full access or another runner, then run the task again.',
+    ].join('\n');
+  }
   if (role === 'task') {
     return [
       "Codex cannot start a sandbox on this machine, so it can run no command in this task's mode.",
@@ -206,12 +215,14 @@ export class CodexSandboxAvailability {
   }
 }
 
-function runProbe(
+async function runProbe(
   deps: AgentProcessDeps,
   cwd: string,
   env: NodeJS.ProcessEnv,
   flags: string[],
 ): Promise<{ code: number | null; output: string }> {
+  const args = ['sandbox', ...flags, '--', '/bin/true'];
+  const placed = await deps.placement?.place({ command: 'codex', args, env: {}, files: [] });
   return new Promise((resolve) => {
     let output = '';
     let settled = false;
@@ -220,10 +231,12 @@ function runProbe(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      placed?.ended();
       resolve({ code, output });
     };
 
     const timer = setTimeout(() => {
+      placed?.stop();
       finish(null);
       // The answer is refused, so the probe has no owner left; nothing knows
       // its pid, and leaving it running would hold the workspace for the
@@ -233,8 +246,8 @@ function runProbe(
     timer.unref?.();
 
     try {
-      proc = spawnInOwnGroup((detached) => deps.spawn('codex', ['sandbox', ...flags, '--', '/bin/true'], {
-        env, stdio: ['pipe', 'pipe', 'pipe'], cwd, detached,
+      proc = spawnInOwnGroup((detached) => deps.spawn(placed?.command ?? 'codex', placed?.args ?? args, {
+        env: { ...env, ...placed?.env }, stdio: ['pipe', 'pipe', 'pipe'], cwd, detached,
       }), deps.platform);
     } catch {
       finish(null);

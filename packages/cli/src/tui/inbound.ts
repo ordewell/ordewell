@@ -104,7 +104,7 @@ function replyKey(content: string, timestamp?: string): string {
 }
 
 /** A broadcast this client may have had more than once. */
-type Broadcast = Exclude<WsEvent, RunSnapshotFrame | { type: 'account_limits' }>;
+type Broadcast = Exclude<WsEvent, RunSnapshotFrame | { type: 'account_limits' } | { type: 'child_tree' }>;
 
 function stampOf(frame: Partial<StreamStamp>): StreamStamp | null {
   return frame.stream !== undefined && frame.seq !== undefined ? { stream: frame.stream, seq: frame.seq } : null;
@@ -414,6 +414,11 @@ function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
       heldAfter.push(() => receive(kind, id, event));
       return;
     }
+    // Whole each time and unstamped: the latest one is all of it, copies included.
+    if (event.type === 'child_tree') {
+      if (event.sessionId === sessionId) dispatch({ type: 'childTree', sessionId, children: event.children });
+      return;
+    }
     if (event.type === 'account_limits') {
       if (event.sessionId !== sessionId) return;
       if (limitsPosition?.stream === event.stream && event.revision <= limitsPosition.revision) return;
@@ -505,11 +510,11 @@ function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionI
       return;
 
     case 'review_needed':
-      dispatch({ type: 'notice', message: 'Plan needs your sign-off: /approve to continue.' });
+      dispatch({ type: 'notice', message: 'Plan needs your sign-off: /approve to continue.', sessionId });
       return;
 
     case 'review_approved':
-      dispatch({ type: 'notice', message: 'Plan approved.' });
+      dispatch({ type: 'notice', message: 'Plan approved.', sessionId });
       return;
 
     case 'execution_complete':
@@ -528,7 +533,7 @@ function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionI
 
     // How the run isolates. The daemon has no toast channel, so this is the only place the user hears it.
     case 'notice':
-      dispatch({ type: 'notice', message: event.message, level: event.level });
+      dispatch({ type: 'notice', message: event.message, level: event.level, sessionId });
       return;
 
     case 'isolation_handoff':

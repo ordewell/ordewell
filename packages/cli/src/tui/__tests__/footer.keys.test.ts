@@ -25,7 +25,7 @@ describe('plan footer — the keys that fit the selected task', () => {
     ['a blocked task', { status: 'blocked' }, {}, ['f start', 's skip', 'E run plan']],
     ['a manual task', { type: 'user' }, {}, ['m done', 'E run plan']],
     ['a cancelled task back to pending', { attempted: true }, {}, ['enter chat', 'f start', 'E run plan', 'o model', 'e effort']],
-    ['a delegated task a Stop left with its child', { type: 'delegated', continuable: true, attempted: true }, {}, ['enter continue', 'f start', 'E run plan', 'o model', 'e effort']],
+    ['a delegated task a Stop left with its child', { type: 'delegated', continuable: true, attempted: true }, {}, ['enter subplanner', 'l continue', 'f start', 'E run plan', 'o model', 'e effort']],
     ['a running task', { status: 'in_progress', attempted: true }, {}, ['enter chat', 'c cancel']],
     ['a running task during a run', { status: 'in_progress', attempted: true }, { status: 'executing' }, ['enter chat', 'c cancel', 'S stop']],
     ['a task waiting on an approval', { status: 'in_progress', awaitingApproval: 1, attempted: true }, {}, ['enter chat', 'c cancel']],

@@ -208,6 +208,7 @@ describe('OpenCodeAdapter task mode — start', () => {
   it("points OpenCode's Anthropic provider at the lease's gateway, so a broker key never reaches the model API", async () => {
     const server = fakeServer();
     const placement: RunnerPlacement = {
+      cwd: '/task/work',
       place: async (launch) => ({ command: 'docker', args: ['exec', 'box', launch.command, ...launch.args], env: { ...launch.env }, stop: () => undefined, ended: () => undefined }),
       reach: async (url) => url,
       reachIn: async (url) => url,
@@ -227,6 +228,7 @@ describe('OpenCodeAdapter task mode — start', () => {
   it("does not carry this host's inline config into a container", async () => {
     const server = fakeServer();
     const placement: RunnerPlacement = {
+      cwd: '/task/work',
       place: async (launch) => ({ command: 'docker', args: ['exec', 'box', launch.command, ...launch.args], env: { ...launch.env }, stop: () => undefined, ended: () => undefined }),
       reach: async (url) => url,
       reachIn: async (url) => url,
@@ -253,6 +255,7 @@ describe('OpenCodeAdapter task mode — start', () => {
       return server.fetch(url.replace('http://127.0.0.1:5555', BASE), init);
     };
     const placement: RunnerPlacement = {
+      cwd: '/task/work',
       place: async (launch) => ({ command: 'docker', args: ['exec', 'box', launch.command, ...launch.args], env: { ...launch.env }, stop: () => undefined, ended: () => undefined }),
       reach: async (url) => url,
       reachIn: async (url) => { asked.push(`reachIn ${url}`); return 'http://127.0.0.1:5555'; },

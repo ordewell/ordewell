@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { validatePlanTasks } from '../PlanValidator';
 import { applyTaskOps, type TaskOp } from '../TaskOps';
 import { checkPlanInvariants } from '../PlannedTask';
-import { PlanChangeCheck, type PlanChangeScope } from '../PlanChangeCheck';
+import { PlanChangeCheck, type NodeFunds, type PlanChangeScope } from '../PlanChangeCheck';
 import { rootMandate, type Mandate } from '../Mandate';
 import { createTask, keepExecutionState, type Task } from '../../models/Task';
 
@@ -171,11 +171,11 @@ describe('an edit', () => {
 describe('who may write one (ADR-0056 M2, M4, ADR-0055 D2, D19)', () => {
   const root = (over: Partial<Parameters<typeof rootMandate>[0]> = {}) => rootMandate({ level: 'watch', autorun: false, autonomous: true, delegationTokens: 1_000_000, runners, models: {}, ...over });
 
-  const scopeOf = (mandate: Mandate | undefined, level = 0, before: Task[] = [], asChild = false): PlanChangeScope => ({
+  const scopeOf = (mandate: Mandate | undefined, level = 0, before: Task[] = [], asChild = false, budget?: NodeFunds): PlanChangeScope => ({
     tasks: () => before,
     runners: () => runners,
     catalog: () => ({ modelsByRunner: {}, runnerModes: modes }),
-    ...(mandate ? { node: () => ({ mandate, level }) } : {}),
+    ...(mandate ? { node: () => ({ mandate, level, ...(budget ? { budget } : {}) }) } : {}),
     ...(asChild && mandate ? { child: () => ({ depth: level, mandate: () => mandate }) } : {}),
   });
 
@@ -196,6 +196,65 @@ describe('who may write one (ADR-0056 M2, M4, ADR-0055 D2, D19)', () => {
   it('is narrowed as it is written: a budget past what is there is refused, naming the level', () => {
     const big = [delegated('d', { budget: { tokens: 2_000_000 } }), readOnlyCheck('c', ['d'])];
     expect(messages(submitted(scopeOf(root()), big))[0]).toBe('Level 0 refused limits.tokens: asked 2000000, and there is 1000000.');
+  });
+
+  describe('the budgets of a plan together (ADR-0056 M5)', () => {
+    const asking = (...tokens: number[]) => tokens.flatMap((each, i) => [delegated(`d${i}`, { budget: { tokens: each } }), readOnlyCheck(`c${i}`, [`d${i}`])]);
+    const standing = (...tokens: number[]) => {
+      const planned = checked(asking(...tokens));
+      if (!planned.ok) throw new Error('expected a plan');
+      return planned.tasks;
+    };
+
+    it('refuses budgets each of which passes alone and that together pass what is there, once', () => {
+      expect(messages(submitted(scopeOf(root()), asking(600_000, 600_000)))).toEqual(['Level 0 refused limits.tokens: asked 1200000, and there is 1000000.']);
+    });
+
+    it('takes budgets that come to exactly what is there', () => {
+      expect(submitted(scopeOf(root()), asking(600_000, 400_000)).ok).toBe(true);
+    });
+
+    const edited = (scope: PlanChangeScope, ...ops: unknown[]) => new PlanChangeCheck(scope).checkNow({ kind: 'ops', ops: ops as TaskOp[] }, 'land');
+    const added = (id: string, tokens: number) => [
+      { op: 'add', task: delegated(id, { order: undefined, budget: { tokens } }), handle: id },
+      { op: 'add', task: spec(`check-${id}`, { readOnly: true, order: undefined, dependencies: [id] }) },
+    ];
+
+    it('holds an edit to what the plan\'s other tasks still ask', () => {
+      const scope = scopeOf(root(), 0, standing(700_000));
+      expect(messages(edited(scope, ...added('more', 400_000)))).toEqual(['Level 0 refused limits.tokens: asked 1100000, and there is 1000000.']);
+      expect(edited(scope, ...added('more', 300_000)).ok).toBe(true);
+    });
+
+    it('leaves a plan already past what is there free to come down, and to change what asks no more', () => {
+      const scope = scopeOf(root(), 0, standing(600_000, 600_000));
+      expect(edited(scope, { op: 'update', taskId: 'd1', changes: { budget: { tokens: 500_000 } } }).ok).toBe(true);
+      expect(edited(scope, { op: 'update', taskId: 'd1', changes: { goal: 'another' } }).ok).toBe(true);
+      expect(messages(edited(scope, { op: 'update', taskId: 'd1', changes: { budget: { tokens: 700_000 } } }))).toEqual(['Level 0 refused limits.tokens: asked 1300000, and there is 1000000.']);
+    });
+
+    it('counts nothing for a task that has finished, whatever a whole plan\'s JSON says of it', () => {
+      const done = standing(600_000, 300_000).map((task) => (task.id === 'd0' ? { ...task, status: 'completed' as const } : task));
+      const scope = scopeOf(root(), 0, done);
+      expect(edited(scope, ...added('more', 600_000)).ok).toBe(true);
+      expect(submitted(scope, [...asking(600_000, 300_000), ...added('more', 600_000).map((op) => ({ ...op.task, order: 9 }))]).ok).toBe(true);
+    });
+
+    it('reads what a ledger says is left over the mandate\'s limit, and a task\'s own ask from it', () => {
+      const budget = { limit: 1_000_000, left: 500_000, stillAsks: (task: Pick<Task, 'id'>) => (task.id === 'd0' ? 100_000 : 400_000) };
+      const held = (tasks: Task[]) => scopeOf(root(), 0, tasks, false, budget);
+      expect(submitted(held([]), asking(900_000, 900_000)).ok).toBe(true);
+      const three = { ...budget, stillAsks: () => 300_000 };
+      expect(messages(submitted(scopeOf(root(), 0, [], false, three), asking(10, 10)))).toEqual(['Level 0 refused limits.tokens: asked 600000, and there is 500000.']);
+    });
+
+    it('holds one task to a raised limit, which its saved mandate does not know of, and to a lowered one', () => {
+      const raised = { limit: 1_500_000, left: 1_500_000, stillAsks: (task: Pick<Task, 'budget'>) => task.budget?.tokens ?? 0 };
+      const child = root({ level: 'act' });
+      expect(submitted(scopeOf(child, 1, [], true, raised), asking(1_200_000)).ok).toBe(true);
+      const lowered = { limit: 400_000, left: 900_000, stillAsks: () => 0 };
+      expect(messages(submitted(scopeOf(child, 1, [], true, lowered), asking(500_000)))).toEqual(['Level 1 refused limits.tokens: asked 500000, and there is 400000.']);
+    });
   });
 
   it('holds a plan to the delegated tasks its mandate allows', () => {

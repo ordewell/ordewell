@@ -4,6 +4,7 @@ import { taskEditorRoom } from '../geometry';
 import { findTask, planRows, refFor, selectedPlanRow, titledRefFor, type TaskView, type TuiState } from '../state';
 import type { Key } from '../keys';
 import { scrollDelta, scrollPlan, settlePlan } from './pointer';
+import { openDelegated } from './children';
 import { openTaskView } from './taskView';
 import {
   addTask, confirmForceStartPastGate, confirmRemoveTask, openTaskDepsPicker, openTaskEffortPicker, openTaskModePicker, openTaskModelPicker,
@@ -122,7 +123,12 @@ export function handlePlanKey(state: TuiState, key: Key): Step {
   const row = selectedPlanRow(state);
   if (!row) return step(state);
   const task = row.task;
-  if (key.name === 'enter' && state.sessionId) return openTaskView(state, state.sessionId, task.id);
+  if (key.name === 'enter' && state.sessionId) {
+    return task.type === 'delegated' ? openDelegated(state, state.sessionId, task.id) : openTaskView(state, state.sessionId, task.id);
+  }
+  // Enter goes down into a delegated task's plan, so the task's own log, where
+  // it is continued or its budget raised, needs a key of its own.
+  if (key.name === 'char' && key.char === 'l' && state.sessionId && task.type === 'delegated') return openTaskView(state, state.sessionId, task.id);
   if (key.name === 'right') {
     // A parent's first right arrow only reveals its subtask rows — jumping straight
     // to the editor would trap the cursor before it ever reaches them. Right
@@ -133,7 +139,7 @@ export function handlePlanKey(state: TuiState, key: Key): Step {
       return step(settlePlan({ ...state, expandedTaskId: task.id, taskEditor: null }));
     }
     // A script's body is the planner's to write: the row opens to show it, and nothing in it edits.
-    if (task.type === 'script') return step(settlePlan({ ...state, expandedTaskId: task.id, taskEditor: null }));
+    if (task.type === 'script' || state.child) return step(settlePlan({ ...state, expandedTaskId: task.id, taskEditor: null }));
     const text = task.prompt ?? task.description ?? task.title;
     return step(settlePlan({
       ...state,

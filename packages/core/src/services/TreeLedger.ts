@@ -138,7 +138,7 @@ export interface TreeLedgerOptions {
   failed?: (err: unknown) => void;
 }
 
-const taskKey = (parent: NodePath, taskId: string): string => `${parent}\n${taskId}`;
+const taskKey = (parentSession: string, taskId: string): string => `${parentSession}\n${taskId}`;
 
 function append<K, V>(index: Map<K, V[]>, key: K, value: V): void {
   const held = index.get(key);
@@ -172,7 +172,7 @@ export class TreeLedger {
   private readonly openUnder = new Map<NodePath, Map<NodePath, TreeNode>>();
   /** Every opening of a session, oldest first: a Continue opens a new node for the same child (ADR-0055 D17). */
   private readonly openings = new Map<string, TreeNode[]>();
-  /** Every child a parent opened for a task, oldest first, by {@link taskKey}. */
+  /** Every child a parent's session opened for a task, in any of its openings, oldest first, by {@link taskKey}. */
   private readonly forTask = new Map<string, TreeNode[]>();
   private pending: TreeFact[] = [];
   private writing: Promise<void> | null = null;
@@ -202,7 +202,8 @@ export class TreeLedger {
     const node = this.at(fact.node);
     append(this.openings, node.sessionId, node);
     if (parent === null) return;
-    if (node.taskId !== undefined) append(this.forTask, taskKey(parent, node.taskId), node);
+    const above = this.tree.get(parent);
+    if (above && node.taskId !== undefined) append(this.forTask, taskKey(above.sessionId, node.taskId), node);
     const open = this.openUnder.get(parent) ?? new Map<NodePath, TreeNode>();
     this.openUnder.set(parent, open);
     open.set(fact.node, node);
@@ -377,8 +378,15 @@ export class TreeLedger {
     return this.childrenFor(parent, taskId).reduce((total, node) => total + node.raised, 0);
   }
 
+  /** What a task stating `stated` can still draw on `parent`: nothing while a child holds its limit in `committed`, else what the tree granted it less what it spent (ADR-0056 M5, M10). */
+  stillAsks(parent: NodePath, taskId: string, stated: number): number {
+    if (this.childrenFor(parent, taskId).some((child) => child.open)) return 0;
+    return Math.max(0, stated + this.raisedOn(parent, taskId) - this.spentOn(parent, taskId));
+  }
+
+  /** Under every opening of `parent`'s session: a Continue opens a new node for the same child, and what its tasks spent before stays spent (ADR-0055 D17, ADR-0056 M10). */
   private childrenFor(parent: NodePath, taskId: string): TreeNode[] {
-    return this.forTask.get(taskKey(parent, taskId)) ?? [];
+    return this.forTask.get(taskKey(this.at(parent).sessionId, taskId)) ?? [];
   }
 
   /** Close the children of `parent` that `gone` picks by their task: no session is live in them, so what they hold would stay committed for good. */
