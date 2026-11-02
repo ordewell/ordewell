@@ -56,7 +56,12 @@ so no surface is told or has to act.
 The Session adds to the relay's observer only the saves some events owe, each
 made before the event is announced: a task that settles on its own
 (`onTaskSettled` — completed, failed or awaiting the user) is saved as it
-settles, so a shared run does not wait for its end to record a verdict.
+settles, in one save with what supervision took from it, so a shared run does
+not wait for its end to record a verdict. Any other changed status is saved
+within a second, and at once when no save came in the second before: a save
+writes the whole plan, so a burst of starts shares one. A crash inside that
+second loads such a start as not yet started, which is why a script's start,
+whose effects do not wait, is saved before the script runs.
 Any save may land in the middle of a planner turn, and none settles it: the
 turn holds what it writes until the mutation that lands it (see
 *PlannerConversation*), so there is nothing of it for another save to write.
@@ -172,11 +177,11 @@ script of the workspace root runs on a copy of what that root has committed, and
 nothing of it comes back. What a lease cannot be it refuses: nothing runs on the host
 in a container's place. Its parts: a **mirror**, one bare repository per repo in a
 volume of the engine, read-only to an attempt; a **task volume**, which keeps the
-task's clone and the runner's home across attempts; a **relay**, the container's idle
-entry, which carries connections to this host over its stdio and ends the container
-when its host goes; an **egress sidecar**, a lease's one way out; a **model gateway**,
-which holds its API key; and a **push gate**, the only way work comes back, which
-takes one ref of one attempt as a bundle.
+task's clone, its package caches and the runner's home across attempts; a **relay**,
+the container's idle entry, which carries connections to this host over its stdio and
+ends the container when its host goes; an **egress sidecar**, a lease's one way out; a
+**model gateway**, which holds its API key; and a **push gate**, the only way work comes
+back, which takes one ref of one attempt as a bundle.
 *Avoid:* "sandbox" (a *Sealed run*'s word: that holds a read-only process on this
 host, and this moves a writing one off it), "push" for anything but the gate.
 
@@ -197,8 +202,9 @@ is where a key goes instead of the runner.
 what hands a *Container lease* API keys and cloud-provider credentials, from this
 host's environment: an API key to its *Model gateway*, and what a cloud provider signs
 with to the runner by name. It never holds a Claude subscription's token. A person
-chooses a lease's login, `broker` or `own-sign-in`, the person's own sign-in inside a
-container in a volume Ordewell never reads, and it has no default.
+chooses a lease's login, `broker` or `own-sign-in`, the person's own sign-in made inside
+a container, in a volume no task mounts and this host never reads, of which each task
+gets its own copy, and it has no default.
 *Avoid:* "login" for an API key held here, except as the setting names it.
 
 **Slot pool** (`services/SlotPool.ts`, ADR-0055 D18) — the Parallel limit across a
@@ -219,7 +225,9 @@ models discovery found for them, and the allowlist narrowing those. Built in
 planner's per-turn block (`queryCatalog`), its tools (`live`), a user's direct
 edit (`edit`, `runner`) and planning (`planning`) all read the same state —
 settings are read live at each call, never captured, so a runner enabled or an
-allowlist edited mid-session counts (#69). The per-runner discovered models are
+allowlist edited mid-session counts (#69). A child's reads the runners and models
+of its **Mandate** too, so settings can narrow what it assigns and never widen it
+(ADR-0056 M3). The per-runner discovered models are
 **merged into, never replaced**: discovering one runner must not forget
 another's, because coercion clamps thinking efforts against whatever was last
 found. `admit(runner, models)` is how an admitted runner keeps its models there
@@ -2792,7 +2800,8 @@ bounded buffer fed by the session and answers `finalText` (the completion
 call's summary, falling back to clean plain output for the current turn) and
 `liveTail` (a bounded diagnostic window with an absolute `nextOffset`). A new
 turn or a message read mid-turn clears the earlier summary and advances the
-output boundary. It does not discover transcripts or render a runner's PTY.
+output boundary. Once an attempt ends it keeps the attempt's completion and the
+end of its output. It does not discover transcripts or render a runner's PTY.
 *Avoid:* "the output buffer", "transcript capture" as the owner — a transcript
 is a separate artifact, not completion evidence.
 
@@ -2907,10 +2916,13 @@ that decides what a plan refresh keeps: plan fields (title, dependencies,
 fields (verdict, `idleSince`, isolation, checkpoint, queued messages,
 `continuable`, `awaitingApproval`, merge gate, `forcedPastGate`) stay as the
 last status update said, the checkpoint question only while the task still
-waits at it. A status update replaces every status field it covers. The daemon
-sends `Session.runSnapshot()` as a `run_snapshot` frame right after
-`connected`, so a client that joins mid-run has the run before the next update;
-the session routes' load and read answers carry it too. Whether the run is
+waits at it. A status update replaces every status field of each task it
+carries, and carries only the tasks that moved, with every task again every
+half minute so that a surface a change missed comes right; what it says of the
+run is whole each time. The daemon sends `Session.runSnapshot()`, always whole,
+as a `run_snapshot` frame right after `connected`, so a client that joins
+mid-run has the run before the next update; the session routes' load and read
+answers carry it too. Whether the run is
 closed is the Session's word, `run_closed` (a Merge all that left nothing to
 hand over, or a discard), which `reduceRun` folds into dropping the marks,
 the handoff and the merge view; a merge that leaves the run going keeps them.
@@ -3221,7 +3233,7 @@ package ignores the variable.
 **Delegated task** (`type: 'delegated'`, `models/Delegation.ts`, ADR-0055) — a
 top-level task that holds a `goal`, not a prompt: its attempt is a **Child plan**. It
 carries a required `budget` and, unless it is `readOnly`, `protectedPaths`, the paths
-its child may not change, and it needs a check: a task that depends on it directly and
+its child may not change, relative to the repository and in any case (D7), and it needs a check: a task that depends on it directly and
 is a read-only AI task or a read-only **Script task**, which a new attempt takes back
 and which starts by itself once the task passes and it is ready, with no scheduler too.
 An AI task whose runner this host cannot read counts as one, so the merge hold fails closed.

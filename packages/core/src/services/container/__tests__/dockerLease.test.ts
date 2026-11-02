@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { spawn, type ChildProcess } from 'child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
+import { release, tmpdir, type as osType } from 'os';
 import { join } from 'path';
 import { CredentialBroker } from '../credentialBroker';
 import { DockerExecutionBackend, whereItRuns } from '../dockerLease';
+import { LOGIN_VOLUME } from '../containerPreflight';
 import { parseContainerSettings } from '../containerSettings';
-import { EGRESS_ENTRY } from '../egressSidecar';
+import { EGRESS_ENTRY, type EgressRoute } from '../egressSidecar';
 import { RELAY_ENTRY } from '../leaseRelay';
 import type { DockerCall, DockerCli, DockerResult } from '../dockerCli';
 import type { ProbeAsked, ProbeFindings } from '../guaranteeProbe';
@@ -68,6 +69,8 @@ class RecordingCli implements DockerCli {
     this.heard(line);
     const set = this.answers.find(({ match }) => match.test(line));
     if (set) return { ...OK, ...set.result };
+    if (line.startsWith('context inspect')) return { ...OK, stdout: 'unix:///var/run/docker.sock\n' };
+    if (line.startsWith('info')) return { ...OK, stdout: `linux|2|${16 * 1024 ** 3}\n` };
     if (args.includes('rm') && args[0] === 'rm') for (const entry of this.entries) entry.process.kill('SIGKILL');
     const told = args.find((arg) => arg.startsWith('ORDEWELL_PROBE='));
     if (told) {
@@ -109,9 +112,8 @@ function backendWith(over: { settings?: unknown; cli?: RecordingCli; env?: Recor
   local.repos = [repo];
   const cli = over.cli ?? new RecordingCli();
   const told: { level: string; text: string }[] = [];
-  const settings = parseContainerSettings(over.settings ?? { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } });
   const backend = new DockerExecutionBackend(local, {
-    settings,
+    settings: over.settings ?? { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } },
     cli,
     git: over.git ?? git(over.hooks),
     ...(over.setupCommand ? { setupCommand: () => over.setupCommand } : {}),
@@ -175,7 +177,7 @@ describe('a lease that cannot be what was asked refuses, and runs nothing weaker
   it('refuses when no login was chosen: a person chooses it', async () => {
     const { backend, local } = backendWith({ settings: { image: 'ordewell-task' } });
 
-    await expect(opened(backend)).rejects.toThrow(/choose/);
+    await expect(opened(backend)).rejects.toThrow(/No login has been chosen/);
     expect(local.opened).toEqual([]);
   });
 
@@ -674,7 +676,7 @@ describe('a script in a container', () => {
       const { backend, local, cli } = backendWith();
       local.repos = [];
       const refusing: GitInvoker = { exec: async () => { throw Object.assign(new Error('not a git repository'), { stderr: 'fatal: not a git repository' }); }, resolvePath: async () => '/usr/bin' };
-      const lone = new DockerExecutionBackend(local, { settings: parseContainerSettings({ image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } }), cli, git: refusing, broker: new CredentialBroker({ ANTHROPIC_API_KEY: 'k' }), sessionId: () => 'session-1', tell: () => undefined });
+      const lone = new DockerExecutionBackend(local, { settings: { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } }, cli, git: refusing, broker: new CredentialBroker({ ANTHROPIC_API_KEY: 'k' }), sessionId: () => 'session-1', tell: () => undefined });
 
       await expect(opened(lone, scriptRequest, checkoutSpec)).rejects.toThrow(/git repository/);
       expect(cli.entries).toEqual([]);
@@ -1017,7 +1019,7 @@ describe('work that did not come back (L2)', () => {
   it('holds past this Session: what says so is in the engine, where no container reaches it', async () => {
     const { cli, local } = await refused();
     const later = new DockerExecutionBackend(local, {
-      settings: parseContainerSettings({ image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } }),
+      settings: { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } },
       cli, git: git(), broker: new CredentialBroker({ ANTHROPIC_API_KEY: 'sk-ant-api03-test' }), sessionId: () => 'session-1', tell: () => undefined,
     });
 
@@ -1093,5 +1095,161 @@ describe('a Session closing (ADR-0059 L5)', () => {
 
     bring();
     await vi.waitFor(() => expect(settled).toBe(true));
+  });
+});
+
+/** What a person fixed or broke between two starts counts, and a check that passed once proves nothing of the next start. */
+describe('the check at every task start', () => {
+  it('refuses a start after the engine moved off this machine, though an earlier one passed', async () => {
+    const { backend, cli } = backendWith();
+    const first = await opened(backend);
+    first.lease.release('done');
+    cli.answers.push({ match: /^context inspect/, result: { stdout: 'tcp://build-box.example:2376\n' } });
+
+    await expect(opened(backend, { ...taskRequest, node: { sessionId: 'session-1', taskId: 'b' } }, { ...changeSpec, task: { ...changeSpec.task!, id: 'b' } })).rejects.toThrow(/not on this machine/);
+    expect(cli.entries).toHaveLength(1);
+  });
+
+  it('tells a person the remedy, not only the fault', async () => {
+    const cli = new RecordingCli();
+    cli.answers.push({ match: /^version/, result: { code: 1, stderr: 'Cannot connect to the Docker daemon' } });
+    const { backend } = backendWith({ cli });
+
+    await expect(opened(backend)).rejects.toThrow(/does not answer: Cannot connect to the Docker daemon\. .*(colima start|systemctl start docker)/);
+  });
+
+  it('turns a task down on a setting that is on and not yet configured, and never the host in its place', async () => {
+    const { backend, cli, local } = backendWith({ settings: {} });
+
+    await expect(opened(backend)).rejects.toThrow(/No image has been chosen.*No login has been chosen/);
+    expect(local.opened).toEqual([]);
+    expect(cli.entries).toEqual([]);
+  });
+});
+
+/** A sign-in one task could write is a sign-in the next one loads: one task's code would run in the next (ADR-0059 L7). */
+describe('a person\'s own sign-in in a task', () => {
+  const OWN = { settings: { image: 'ordewell-task', login: { kind: 'own-sign-in' } } };
+
+  it('never mounts the kept sign-in where a runner runs, and hands it a copy of its own', async () => {
+    const { backend, cli } = backendWith(OWN);
+    const lease = await opened(backend);
+
+    const entry = cli.entries[0].args.join(' ');
+    expect(entry).not.toContain(LOGIN_VOLUME);
+    expect(entry).not.toContain('/login:');
+    expect(entry).toContain('CLAUDE_CONFIG_DIR=/task/login/claude');
+    lease.lease.release('done');
+  });
+
+  it('copies it read-only, with no network, and before the runner has a container', async () => {
+    const { backend, cli } = backendWith(OWN);
+    const order: string[] = [];
+    cli.heard = (line) => { if (line.includes(LOGIN_VOLUME) && line.startsWith('run')) order.push(`copy, entries ${cli.entries.length}`); };
+    const lease = await opened(backend);
+
+    const copy = cli.lines().find((line) => line.includes(LOGIN_VOLUME) && line.startsWith('run'));
+    expect(copy).toContain(`${LOGIN_VOLUME}:/login:ro`);
+    expect(copy).toContain('--network none');
+    expect(order).toEqual(['copy, entries 0']);
+    lease.lease.release('done');
+  });
+
+  it('refuses a task it could not give the sign-in to, naming how to make one', async () => {
+    const cli = new RecordingCli();
+    cli.answers.push({ match: new RegExp(`^run .*${LOGIN_VOLUME}`), result: { code: 3, stderr: 'no sign-in' } });
+    const { backend } = backendWith({ ...OWN, cli });
+
+    await expect(opened(backend)).rejects.toThrow(/sign in as docs\/containers\.md shows/i);
+    expect(cli.entries).toEqual([]);
+  });
+
+  it('copies nothing for a script, which holds no login', async () => {
+    const { backend, cli } = backendWith(OWN);
+    const lease = await opened(backend, scriptRequest);
+
+    expect(cli.lines().filter((line) => line.includes(LOGIN_VOLUME))).toEqual([]);
+    lease.lease.release('done');
+  });
+
+  it('tells the probe where the copy is, so what it reports is of that', async () => {
+    const { backend, cli, told } = backendWith(OWN);
+    cli.probe = { loginReadable: true };
+    const lease = await opened(backend);
+
+    expect(cli.asked[0].login).toBe('/task/login/claude');
+    expect(told.some(({ text }) => text.includes('cred.unreadable'))).toBe(true);
+    lease.lease.release('done');
+  });
+});
+
+/** A cache every task writes is a way for one task's code to run in the next. */
+describe('package caches', () => {
+  it('stay in the task\'s own volume, shared with no other task', async () => {
+    const { backend, cli } = backendWith();
+    const lease = await opened(backend);
+
+    const entry = cli.entries[0].args.join(' ');
+    expect(entry).not.toContain('ordewell-cache-');
+    expect(entry).toContain('npm_config_cache=/task/caches/npm');
+    lease.lease.release('done');
+  });
+
+  it('are no mounts the probe would call strange', async () => {
+    const { backend } = backendWith({ settings: { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] }, caches: ['npm', 'pip'] } });
+
+    const lease = await opened(backend);
+
+    expect(lease.guarantees['fs.hostHidden'].proven).toBe(true);
+    lease.lease.release('done');
+  });
+});
+
+describe('what a person is told of a lease\'s guarantees', () => {
+  it('names what was not proven, once for a session', async () => {
+    const { backend, cli, told } = backendWith();
+    cli.probe = { kernel: `${osType()} ${release()}` };
+    const first = await opened(backend);
+    first.lease.release('done');
+    const second = await opened(backend, { ...taskRequest, node: { sessionId: 'session-1', taskId: 'b' } }, { ...changeSpec, task: { ...changeSpec.task!, id: 'b' } });
+    second.lease.release('done');
+
+    const about = told.filter(({ text }) => text.includes('kernel.separate'));
+    expect(about).toHaveLength(1);
+    expect(about[0].text).not.toContain('fs.hostHidden');
+  });
+});
+
+describe('a probe that fails', () => {
+  it('leaves no container behind when its CLI gives up on it', async () => {
+    const { backend, cli } = backendWith();
+    cli.answers.push({ match: /ORDEWELL_PROBE=/, result: { code: 137, stdout: '', stderr: '' } });
+
+    await expect(backend.probe()).rejects.toThrow(/probe/);
+
+    const run = cli.calls.find(({ args }) => args.some((arg) => arg.startsWith('ORDEWELL_PROBE=')))!.args;
+    const name = run[run.indexOf('--name') + 1];
+    expect(run.join(' ')).toContain('ordewell.tree=');
+    const lines = cli.lines();
+    expect(lines.indexOf(`rm -f ${name}`)).toBeGreaterThan(-1);
+    expect(lines.indexOf(`rm -f ${name}`)).toBeLessThan(lines.findIndex((line) => line.startsWith('network rm')));
+  });
+
+  it('gives its way out back whatever the probe threw', async () => {
+    const closed = vi.fn(async () => undefined);
+    const route: EgressRoute = { runArgs: [], env: {}, proxied: true, gateway: null, close: closed };
+    const cli = new RecordingCli();
+    cli.call = async function call(args, opts) {
+      if (args.some((arg) => arg.startsWith('ORDEWELL_PROBE='))) throw new Error('the CLI fell over');
+      return RecordingCli.prototype.call.call(this, args, opts);
+    };
+    const backend = new DockerExecutionBackend(new FakeExecutionBackend(), {
+      settings: { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } }, cli, git: git(), egress: { open: async () => route },
+      broker: new CredentialBroker({ ANTHROPIC_API_KEY: 'k' }), sessionId: () => 'session-1', tell: () => undefined,
+    });
+
+    await expect(backend.probe()).rejects.toThrow(/fell over/);
+
+    expect(closed).toHaveBeenCalledOnce();
   });
 });

@@ -19,9 +19,10 @@ import { createTask, type LegacyPlanState, type Task } from '../../../models/Tas
 import { fakeConfig, FakeExecutionBackend } from '../../../testing';
 import { saveSession } from '../../../utils/sessionStore';
 import { openTaskLog } from '../../../utils/taskLogStore';
+import { LOGIN_VOLUME } from '../containerPreflight';
+import { containerStatus, describeContainers } from '../containerSetup';
 import { CredentialBroker } from '../credentialBroker';
 import { DockerExecutionBackend } from '../dockerLease';
-import { parseContainerSettings } from '../containerSettings';
 import { SpawnedDockerCli } from '../dockerCli';
 import type { EgressPath } from '../egressSidecar';
 import { LeaseRelay, RELAY_ENTRY } from '../leaseRelay';
@@ -44,7 +45,7 @@ const IMAGE = `ordewell-e2e-fake:${process.pid}`;
 const FAKE_CLAUDE = resolve(__dirname, '../../../../../../bench/pipeline/fake-claude/fake-claude.mjs');
 const DOCKERFILE = `FROM node:22-slim
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends git >/dev/null
-RUN mkdir -p /task /mirror /login /caches/npm && chown -R node:node /task /mirror /login /caches
+RUN mkdir -p /task /mirror /login && chown -R node:node /task /mirror /login
 COPY fake-claude.mjs /opt/fake-claude.mjs
 COPY claude /usr/local/bin/claude
 USER node
@@ -101,7 +102,7 @@ function repo(): string {
 }
 
 const cue = (spec: unknown) => `<fake-claude>${JSON.stringify(spec)}</fake-claude>`;
-const settingsOf = (over: Record<string, unknown> = {}) => parseContainerSettings({ image: IMAGE, memory: '512m', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] }, ...over });
+const settingsOf = (over: Record<string, unknown> = {}) => ({ image: IMAGE, memory: '512m', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] }, ...over });
 
 interface SessionOptions {
   egress?: EgressPath;
@@ -378,6 +379,70 @@ describe.skipIf(skip)('a task in a real container', () => {
     expect(Object.keys(report).sort()).toEqual([...GUARANTEES].sort());
     await vi.waitFor(() => expect(ours('network').filter((n) => !before.network.includes(n))).toEqual([]), { timeout: 30_000 });
   }, 60_000);
+
+  it('reports on a real engine what a check proved apart from what it assumes, and leaves nothing', async () => {
+    const status = await containerStatus(settingsOf(), { prove: true, broker: new CredentialBroker({ ANTHROPIC_API_KEY: 'sk-ant-api03-x' }) });
+
+    expect(status, JSON.stringify(status.problems)).toMatchObject({ on: true, ready: true, problems: [] });
+    expect(Object.fromEntries(status.guarantees!.filter(({ required }) => required).map(({ guarantee, proven }) => [guarantee, proven]))).toEqual({ 'fs.hostHidden': true, 'fs.writeScope': true, 'limits.memory': true, 'net.allowlist': true, 'net.noMetadata': true });
+    expect(status.guarantees!.find(({ guarantee }) => guarantee === 'cred.unreadable')).toMatchObject({ proven: false });
+    expect(describeContainers(status).join('\n')).toContain('Assumed or left uncovered, and never proven:');
+    await vi.waitFor(() => {
+      expect(ours('container').filter((n) => !before.container.includes(n))).toEqual([]);
+      expect(ours('network').filter((n) => !before.network.includes(n))).toEqual([]);
+    }, { timeout: 30_000 });
+  }, 60_000);
+
+  it('names an image that was never built, on a real engine, and starts nothing to find out', async () => {
+    const status = await containerStatus(settingsOf({ image: `ordewell-never-built:${process.pid}` }), { prove: true, broker: new CredentialBroker({ ANTHROPIC_API_KEY: 'sk-ant-api03-x' }) });
+
+    expect(status.ready).toBe(false);
+    expect(status.problems.map(({ code }) => code)).toEqual(['image-missing']);
+    expect(status.guarantees).toBeUndefined();
+  }, 30_000);
+
+  it('hands a task a copy of the sign-in: what it forges stops there, for the original and the next task', async (test) => {
+    const hadLogin = spawnSync('docker', ['volume', 'inspect', LOGIN_VOLUME]).status === 0;
+    if (hadLogin) test.skip();
+    docker('volume', 'create', LOGIN_VOLUME);
+    try {
+      docker('run', '--rm', '--network', 'none', '-v', `${LOGIN_VOLUME}:/login`, IMAGE, 'sh', '-c', 'mkdir -p /login/claude && echo original > /login/claude/.credentials.json');
+      const first = leaseWith('forger', [worktreeOf(repo(), 'ordewell/forger')], settingsOf({ login: { kind: 'own-sign-in' } }));
+      const second = leaseWith('heir', [worktreeOf(repo(), 'ordewell/heir')], settingsOf({ login: { kind: 'own-sign-in' } }));
+
+      const forger = await first.open();
+      const forged = await forger.run('echo forged > "$CLAUDE_CONFIG_DIR/.credentials.json"; cat "$CLAUDE_CONFIG_DIR/.credentials.json"; cat /login/claude/.credentials.json; echo "original $?"');
+      const heir = await second.open();
+      const inherited = await heir.run('cat "$CLAUDE_CONFIG_DIR/.credentials.json"');
+
+      expect(forged.stdout.trim().split('\n')).toEqual(['forged', 'original 1']);
+      expect(inherited.stdout.trim()).toBe('original');
+      expect(docker('run', '--rm', '--network', 'none', '-v', `${LOGIN_VOLUME}:/login:ro`, IMAGE, 'cat', '/login/claude/.credentials.json')).toBe('original');
+      forger.lease.release('done');
+      heir.lease.release('done');
+      await first.backend.letGo('forger', { keep: false, reason: 'done' });
+      await second.backend.letGo('heir', { keep: false, reason: 'done' });
+    } finally {
+      docker('volume', 'rm', '-f', LOGIN_VOLUME);
+    }
+  }, 120_000);
+
+  it('keeps what one task leaves in its package cache from the next task on the same project', async () => {
+    const root = repo();
+    const first = leaseOver('poisoner', [worktreeOf(root, 'ordewell/poisoner')]);
+    const second = leaseOver('reader', [worktreeOf(root, 'ordewell/reader')]);
+
+    const poisoner = await first.open();
+    await poisoner.run('mkdir -p "$npm_config_cache" && echo poison > "$npm_config_cache/_cacache"');
+    const reader = await second.open();
+    const found = await reader.run('ls "$npm_config_cache/_cacache" 2>/dev/null; echo "cache $?"');
+
+    expect(found.stdout.trim()).toBe('cache 2');
+    poisoner.lease.release('done');
+    reader.lease.release('done');
+    await first.backend.letGo('poisoner', { keep: false, reason: 'done' });
+    await second.backend.letGo('reader', { keep: false, reason: 'done' });
+  }, 90_000);
 
   it('catches, by that probe, what the default network was measured to let through', async () => {
     const backend = new DockerExecutionBackend(new FakeExecutionBackend(), { settings: settingsOf(), egress: BRIDGE, sessionId: () => 'probe', tell: () => undefined });
@@ -678,7 +743,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     const pinsIn = (mirror: string) => docker('run', '--rm', '--init', '--pids-limit', '8192', '--memory', '256m', '--network', 'none', '-v', `${mirror}:/mirror:ro`, IMAGE, 'sh', '-c', 'for m in /mirror/*.git; do git -C "$m" for-each-ref refs/ordewell/pins; done').split('\n').filter(Boolean);
     const failing = (id: string) => [createTask({ id, order: 1, title: 'Leave work', prompt: cue({ write: { 'partial.txt': 'half done\n' }, status: 'blocked', reason: 'stuck' }), assignedRunner: 'claude-code' })];
 
-    it('goes with a Clean up: its volumes, and a mirror and caches nothing else leans on', async () => {
+    it('goes with a Clean up: its volumes, and a mirror nothing else leans on', async () => {
       const volumes = ours('volume');
       const root = repo();
       const env = session(root, failing('q'));
@@ -686,7 +751,6 @@ describe.skipIf(skip)('a task in a real container', () => {
       await settled(env.parent);
       await vi.waitFor(() => expect(leftBy(volumes).filter((name) => name.startsWith('ordewell-task-'))).toHaveLength(1), { timeout: 30_000 });
       expect(leftBy(volumes).some((name) => name.startsWith('ordewell-mirror-'))).toBe(true);
-      expect(leftBy(volumes).some((name) => name.startsWith('ordewell-cache-'))).toBe(true);
 
       await env.parent.execute({ command: 'stop_run' }, { kind: 'user' });
       await env.parent.cleanupRun();
@@ -834,7 +898,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     if (!hadLogin) docker('volume', 'create', login);
     const root = repo();
     const tasks = [createTask({ id: 'h', order: 1, title: 'Real harness', prompt: 'Say hello.', assignedRunner: 'claude-code' })];
-    const env = session(root, tasks, parseContainerSettings({ image: HARNESS_IMAGE, memory: '2g', login: { kind: 'own-sign-in' } }));
+    const env = session(root, tasks, settingsOf({ image: HARNESS_IMAGE, memory: '2g', login: { kind: 'own-sign-in' } }));
 
     await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(attempts()).toHaveLength(1), { timeout: 60_000, interval: 100 });
@@ -920,7 +984,7 @@ describe.skipIf(skip)('a task in a real container', () => {
     const key = 'sk-ant-api03-a-real-turn-through-the-gateway';
     const root = repo();
     const tasks = [createTask({ id: 'turn', order: 1, title: 'A real turn', prompt: 'Write the file.', assignedRunner: 'claude-code' })];
-    const env = session(root, tasks, parseContainerSettings({ image: HARNESS_IMAGE, memory: '2g', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL'] }, required: ['fs.hostHidden', 'fs.writeScope', 'limits.memory', 'net.allowlist', 'net.noMetadata', 'cred.unreadable'] }), { key: { ANTHROPIC_API_KEY: key, ANTHROPIC_BASE_URL: url } });
+    const env = session(root, tasks, settingsOf({ image: HARNESS_IMAGE, memory: '2g', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL'] }, required: ['fs.hostHidden', 'fs.writeScope', 'limits.memory', 'net.allowlist', 'net.noMetadata', 'cred.unreadable'] }), { key: { ANTHROPIC_API_KEY: key, ANTHROPIC_BASE_URL: url } });
 
     await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(attempts()).toHaveLength(1), { timeout: 60_000, interval: 100 });
@@ -948,10 +1012,10 @@ describe.skipIf(skip)('a task in a real container', () => {
     const lease = leaseOver('reach', [worktreeOf(root, 'ordewell/reach')]);
     const { run, lease: reserved } = await lease.open();
 
-    const tried = await run(`touch /mirror/self.git/hooks/post-receive; echo "mirror $?"; touch /usr/bin/x; echo "root $?"; ls ${root} 2>&1; echo "host $?"; ls /var/run/docker.sock 2>&1; echo "socket $?"; touch /caches/npm/x; echo "cache $?"; touch "$HOME/x"; echo "home $?"`);
+    const tried = await run(`touch /mirror/self.git/hooks/post-receive; echo "mirror $?"; touch /usr/bin/x; echo "root $?"; ls ${root} 2>&1; echo "host $?"; ls /var/run/docker.sock 2>&1; echo "socket $?"; mkdir -p "$npm_config_cache" && touch "$npm_config_cache/x"; echo "cache $?"; ls -d /caches /login 2>&1; echo "shared $?"; touch "$HOME/x"; echo "home $?"`);
 
     const lines = tried.stdout.trim().split('\n');
-    for (const [where, code] of [['mirror', '1'], ['root', '1'], ['host', '2'], ['socket', '2'], ['cache', '0'], ['home', '0']]) expect(lines).toContain(`${where} ${code}`);
+    for (const [where, code] of [['mirror', '1'], ['root', '1'], ['host', '2'], ['socket', '2'], ['cache', '0'], ['shared', '2'], ['home', '0']]) expect(lines).toContain(`${where} ${code}`);
     reserved.release('done');
     await lease.backend.letGo('reach', { keep: false, reason: 'done' });
   }, 60_000);

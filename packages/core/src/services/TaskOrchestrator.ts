@@ -105,6 +105,8 @@ type Claim = { spawned: Promise<void> } | { refused: string };
 export interface OrchestratorObserver {
   /** Any task-shaped state changed (store mutation, checkpoint, retry, …). */
   onTaskChanged?(): void;
+  /** A script attempt was claimed and its task is in progress, before anything of it has run (ADR-0035). */
+  onScriptClaimed?(): void;
   /**
    * A run reached an outcome that stands until the user acts — completed,
    * failed, or awaiting the user — on its own, not as the answer to a call.

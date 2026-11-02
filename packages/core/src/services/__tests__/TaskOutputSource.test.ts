@@ -147,6 +147,37 @@ describe('BufferedTaskOutputSource', () => {
       expect(source.liveTail('t2', { maxLines: 5 })?.running).toBe(false);
     });
 
+    it('keeps only the end of what an ended attempt printed, so a long plan does not keep every buffer', () => {
+      const source = new BufferedTaskOutputSource();
+      const session = new FakeRunnerSession('s1', 't1');
+      source.attach('t1', session);
+      const printed = Array.from({ length: 5000 }, (_, i) => `line-${i}\n`).join('');
+      session.emitOutput(printed);
+      expect(source.finalText('t1')).toContain('line-0\n');
+
+      source.detach('t1');
+
+      const tail = source.liveTail('t1', { maxLines: 100_000 });
+      expect(tail?.nextOffset).toBe(printed.length);
+      expect(tail?.running).toBe(false);
+      expect(tail?.text.length).toBeLessThanOrEqual(16 * 1024);
+      expect(tail?.text.startsWith('line-')).toBe(true);
+      expect(tail?.text.endsWith('line-4999')).toBe(true);
+    });
+
+    it('keeps the completion of an ended attempt whole, however long its output', () => {
+      const source = new BufferedTaskOutputSource({ maxBufferChars: 1024 * 1024 });
+      const session = new FakeRunnerSession('s1', 't1');
+      source.attach('t1', session);
+      session.emitOutput('x\n'.repeat(100_000));
+      session.reportComplete({ status: 'done', summary: 'Renamed the module.' });
+
+      source.detach('t1');
+
+      expect(source.finalText('t1')).toBe('Renamed the module.');
+      expect(source.handoff('t1')?.summary).toBe('Renamed the module.');
+    });
+
     it('reads a retried task from its new session only', () => {
       const source = new BufferedTaskOutputSource();
       const first = new FakeRunnerSession('s1', 't1');

@@ -138,6 +138,14 @@ export interface TreeLedgerOptions {
   failed?: (err: unknown) => void;
 }
 
+const taskKey = (parentSession: string, taskId: string): string => `${parentSession}\n${taskId}`;
+
+function append<K, V>(index: Map<K, V[]>, key: K, value: V): void {
+  const held = index.get(key);
+  if (held) held.push(value);
+  else index.set(key, [value]);
+}
+
 /** A node's level, as a refusal names it (ADR-0056 M4). */
 const levelOf = (node: NodePath): number => node.split('/').length - 1;
 
@@ -160,27 +168,50 @@ export class TreeLedger {
   private readonly raiseListeners = new Map<NodePath, () => void>();
   /** Why each stopped node did, which a raise clears (M5). */
   private readonly stopped = new Map<NodePath, string>();
+  /** Open children by parent, oldest first. The tree only grows, by thousands over a run's life, and a usage record asks this. */
+  private readonly openUnder = new Map<NodePath, Map<NodePath, TreeNode>>();
+  /** Every opening of a session, oldest first: a Continue opens a new node for the same child (ADR-0055 D17). */
+  private readonly openings = new Map<string, TreeNode[]>();
+  /** Every child a parent's session opened for a task, in any of its openings, oldest first, by {@link taskKey}. */
+  private readonly forTask = new Map<string, TreeNode[]>();
   private pending: TreeFact[] = [];
   private writing: Promise<void> | null = null;
   private failureSaid = false;
 
-  private constructor(private readonly store: EventStore, private readonly tree: TreeState, options: TreeLedgerOptions) {
+  private readonly tree: TreeState = new Map();
+
+  private constructor(private readonly store: EventStore, options: TreeLedgerOptions) {
     this.reserve = options.sessionReserve ?? SESSION_RESERVE_TOKENS;
     this.failed = options.failed ?? (() => undefined);
   }
 
   /** Rebuild from the log, and from nothing else (ADR-0058 S3). A log with no root gets one: this is the first carve of a tree. */
   static async open(store: EventStore, root: { sessionId: string; limit: number }, options: TreeLedgerOptions = {}): Promise<TreeLedger> {
-    const tree: TreeState = new Map();
-    for await (const event of store.read(0)) applyFact(tree, event);
-    const ledger = new TreeLedger(store, tree, options);
-    if (!tree.has(ROOT_NODE)) ledger.write({ kind: 'node_opened', node: ROOT_NODE, sessionId: root.sessionId, limit: root.limit, kept: 0 });
+    const ledger = new TreeLedger(store, options);
+    for await (const event of store.read(0)) ledger.apply(event);
+    if (!ledger.tree.has(ROOT_NODE)) ledger.write({ kind: 'node_opened', node: ROOT_NODE, sessionId: root.sessionId, limit: root.limit, kept: 0 });
     return ledger;
+  }
+
+  /** One fact on the tree and on what answers for walking it. */
+  private apply(fact: TreeFact): void {
+    applyFact(this.tree, fact);
+    const parent = parentPath(fact.node);
+    if (fact.kind === 'node_closed' && parent !== null) this.openUnder.get(parent)?.delete(fact.node);
+    if (fact.kind !== 'node_opened') return;
+    const node = this.at(fact.node);
+    append(this.openings, node.sessionId, node);
+    if (parent === null) return;
+    const above = this.tree.get(parent);
+    if (above && node.taskId !== undefined) append(this.forTask, taskKey(above.sessionId, node.taskId), node);
+    const open = this.openUnder.get(parent) ?? new Map<NodePath, TreeNode>();
+    this.openUnder.set(parent, open);
+    open.set(fact.node, node);
   }
 
   private write(fact: DistributiveOmit<TreeFact, 'at'>): void {
     const stamped = { ...fact, at: new Date().toISOString() } as TreeFact;
-    applyFact(this.tree, stamped);
+    this.apply(stamped);
     this.pending.push(stamped);
     this.flush();
   }
@@ -306,7 +337,7 @@ export class TreeLedger {
 
   /** One child's board, closed or not: a fresh retry is a new child with a board of its own (ADR-0055 D15). */
   boardOf(sessionId: string): readonly BoardEntry[] {
-    return [...this.tree.values()].filter((node) => node.sessionId === sessionId).flatMap((node) => node.board ?? []);
+    return (this.openings.get(sessionId) ?? []).flatMap((node) => node.board ?? []);
   }
 
   /** Put an entry on `path`'s board, or null where that board is full. */
@@ -333,7 +364,7 @@ export class TreeLedger {
 
   /** The open node `sessionId` is, if any: what a reopen finds. */
   nodeOf(sessionId: string): NodeBudget | undefined {
-    const found = [...this.tree.values()].find((node) => node.open && node.sessionId === sessionId);
+    const found = this.openings.get(sessionId)?.find((node) => node.open);
     return found && this.node(found.path);
   }
 
@@ -347,13 +378,15 @@ export class TreeLedger {
     return this.childrenFor(parent, taskId).reduce((total, node) => total + node.raised, 0);
   }
 
+  /** What a task stating `stated` can still draw on `parent`: nothing while a child holds its limit in `committed`, else what the tree granted it less what it spent (ADR-0056 M5, M10). */
+  stillAsks(parent: NodePath, taskId: string, stated: number): number {
+    if (this.childrenFor(parent, taskId).some((child) => child.open)) return 0;
+    return Math.max(0, stated + this.raisedOn(parent, taskId) - this.spentOn(parent, taskId));
+  }
+
   /** Under every opening of `parent`'s session: a Continue opens a new node for the same child, and what its tasks spent before stays spent (ADR-0055 D17, ADR-0056 M10). */
   private childrenFor(parent: NodePath, taskId: string): TreeNode[] {
-    const { sessionId } = this.at(parent);
-    return [...this.tree.values()].filter((node) => {
-      const above = parentPath(node.path);
-      return node.taskId === taskId && above !== null && this.at(above).sessionId === sessionId;
-    });
+    return this.forTask.get(taskKey(this.at(parent).sessionId, taskId)) ?? [];
   }
 
   /** Close the children of `parent` that `gone` picks by their task: no session is live in them, so what they hold would stay committed for good. */
@@ -375,7 +408,7 @@ export class TreeLedger {
   }
 
   private openChildren(path: NodePath): TreeNode[] {
-    return [...this.tree.values()].filter((node) => node.open && parentPath(node.path) === path);
+    return [...(this.openUnder.get(path)?.values() ?? [])];
   }
 
   /** What a turn can reach: what its node has beside its live sessions, and its children's room. */

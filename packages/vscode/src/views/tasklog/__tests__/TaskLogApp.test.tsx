@@ -93,6 +93,97 @@ function init(overrides: StatusOverrides = {}, blocks: DisplayBlock[] = [message
   send({ type: 'init', status: status(overrides), blocks });
 }
 
+describe('a child runner chat', () => {
+  const child = { id: 'nested' };
+
+  it('speaks to its runner, offering only what the child seam takes', () => {
+    const commands: RunnerCommand[] = [{ name: 'compact', description: 'Compact', kind: 'native', source: 'builtin' }];
+    render(<TaskLogApp />);
+    init({ child, working: true, commands, queued: [{ id: 'q', text: 'Waiting words', forced: false, handedOver: false }] });
+    expect(screen.queryByRole('button', { name: 'Interrupt' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Send now/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Remove/ })).toBeNull();
+    expect(screen.getByText('Waiting words')).toBeTruthy();
+
+    const box = screen.getByPlaceholderText(/Message the task/);
+    fireEvent.change(box, { target: { value: '/compact' } });
+    expect(screen.queryByRole('option')).toBeNull();
+    fireEvent.keyDown(box, { key: 'Enter', metaKey: true });
+    expect(api.postMessage).toHaveBeenCalledWith({ type: 'sendTaskMessage', text: '/compact' });
+    expect(api.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'sendTaskMessageNow' }));
+    expect(api.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'invokeTaskCommand' }));
+  });
+
+  it('never arms an interrupt from the keyboard', () => {
+    render(<TaskLogApp />);
+    init({ child, working: true });
+    const box = screen.getByPlaceholderText(/Message the task/);
+    fireEvent.keyDown(box, { key: 'Escape' });
+    fireEvent.keyDown(box, { key: 'Escape' });
+    expect(screen.queryByText('Press Esc again to stop')).toBeNull();
+    expect(api.postMessage).not.toHaveBeenCalledWith({ type: 'interruptTask' });
+  });
+
+  it('offers no Continue, Resume, or approval answer', () => {
+    const approval: DisplayBlock = { type: 'approval', id: 'a', approvalId: 'a', kind: 'runner_tool', subject: 'ls', scope: 'task', status: 'pending' };
+    render(<TaskLogApp />);
+    init({ child, planStatus: 'failed', continuable: true, resumeAt: new Date(Date.now() + 60_000).toISOString() }, [approval]);
+    expect(screen.queryByRole('button', { name: /Continue/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Resume/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: "Don't resume" })).toBeNull();
+    expect(screen.getByText('ls')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Allow' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Deny' })).toBeNull();
+  });
+
+  it('says why the runner takes no message, in place of the box', () => {
+    render(<TaskLogApp />);
+    init({ child: { id: 'nested', note: 'This child plan has ended, so it only reads.' }, working: true });
+    expect(screen.getByRole('note')).toHaveTextContent('This child plan has ended, so it only reads.');
+    expect(screen.queryByPlaceholderText(/Message the task/)).toBeNull();
+    expect(screen.getByText('hello from the agent')).toBeTruthy();
+  });
+
+  it('takes the box away the moment the tree stops the child, and gives it back', () => {
+    render(<TaskLogApp />);
+    init({ child });
+    send({ type: 'status', status: status({ child: { id: 'nested', note: 'Budget exhausted' } }) });
+    expect(screen.getByRole('note')).toHaveTextContent('Budget exhausted');
+    send({ type: 'status', status: status({ child }) });
+    expect(screen.queryByRole('note')).toBeNull();
+    expect(screen.getByPlaceholderText(/Message the task/)).toBeTruthy();
+  });
+
+  it('keeps refused words in the box, with the reason', () => {
+    render(<TaskLogApp />);
+    init({ child });
+    const box = screen.getByPlaceholderText(/Message the task/);
+    fireEvent.change(box, { target: { value: 'Keep these words' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(box).toHaveValue('');
+    send({ type: 'showError', error: 'This task is waiting at a checkpoint', draft: 'Keep these words' });
+    expect(box).toHaveValue('Keep these words');
+    expect(screen.getByRole('alert')).toHaveTextContent('This task is waiting at a checkpoint');
+  });
+
+  it('never lays refused words over what was typed since', () => {
+    render(<TaskLogApp />);
+    init({ child });
+    const box = screen.getByPlaceholderText(/Message the task/);
+    fireEvent.change(box, { target: { value: 'First' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    fireEvent.change(box, { target: { value: 'Second' } });
+    send({ type: 'showError', error: 'Refused', draft: 'First' });
+    expect(box).toHaveValue('Second');
+  });
+
+  it('saves which child the tab speaks to, so a reload can prove it against the tree', () => {
+    render(<TaskLogApp />);
+    init({ child });
+    expect(api.setState).toHaveBeenCalledWith({ taskId: 't1', childId: 'nested' });
+  });
+});
+
 /** Each footer row as a reader sees it: the limits' screen-reader description is in the DOM but never drawn. */
 function visibleFooter(): string[] {
   return [...document.querySelectorAll('.usage-line')].map((line) => {

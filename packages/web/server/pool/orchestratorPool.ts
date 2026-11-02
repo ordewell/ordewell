@@ -31,6 +31,12 @@ import {
   loadSession,
   deleteSession,
   reclaimContainers,
+  changeContainers,
+  containerStatus,
+  type ContainerChange,
+  type ContainerChangeResponse,
+  type ContainerStatus,
+  type DockerCli,
   SettingsService,
   sessionRuntimeSettings,
   type GlobalRunSettings,
@@ -110,6 +116,8 @@ export interface OrchestratorPoolDeps {
    * planner-switch catalog lookup can be seeded without spawning real CLIs.
    */
   modelResolver?: ModelResolver;
+  /** Overrides the docker CLI a containers status or change asks; tests inject one so no engine is needed. */
+  dockerCli?: DockerCli;
   /** Overrides the pool's Codex sandbox probe; tests inject one so no real `codex` is started. */
   codexSandbox?: Pick<CodexSandboxAvailability, 'ensure' | 'refresh'>;
   /** Overrides the pool's installation checks; tests inject one so no real agent binary is asked. */
@@ -178,10 +186,12 @@ export class OrchestratorPool {
   private codexSandbox: Pick<CodexSandboxAvailability, 'ensure' | 'refresh'>;
   private readonly leaseHost: LeaseHost | undefined;
   private readonly isolationPreview: IIsolationPreview;
+  private readonly suppliedDockerCli: DockerCli | undefined;
 
   constructor(deps: OrchestratorPoolDeps = {}) {
     const pluginNotice = removedPluginNotice();
     if (pluginNotice) console.warn(pluginNotice);
+    this.suppliedDockerCli = deps.dockerCli;
     this.runner = deps.runner ?? new StructuredRunner();
     // The login probe must ask the account the planner will use (ADR-0016).
     // This installation is the daemon's own cwd for detection; a runner list
@@ -527,6 +537,22 @@ export class OrchestratorPool {
     this.settingsService.updateRunSettings(changes);
     if (sessionId) this.sessions.get(sessionId)?.applyRunSettings(changes);
     return this.getSettings(sessionId, workspace);
+  }
+
+  /** The `containers` setting as a surface shows it: `prove` starts a throwaway container to measure (ADR-0059 L3). */
+  containerStatus(prove: boolean, workspace?: string): Promise<ContainerStatus> {
+    const { worktreeSetupCommand: setupCommand } = this.plannerConfig(undefined, workspace);
+    return containerStatus(this.settingsService.getAll().containers, { prove, ...this.docker(), ...(setupCommand ? { setupCommand } : {}) });
+  }
+
+  /** The way a surface changes that setting, and where it then stands; a running Session keeps what it opened with. */
+  async changeContainers(change: ContainerChange, workspace?: string): Promise<ContainerChangeResponse> {
+    const refused = await changeContainers(change, { settings: this.settingsService, ...this.docker() });
+    return { refused, status: await this.containerStatus(false, workspace) };
+  }
+
+  private docker(): { cli?: DockerCli } {
+    return this.suppliedDockerCli ? { cli: this.suppliedDockerCli } : {};
   }
 
   /**

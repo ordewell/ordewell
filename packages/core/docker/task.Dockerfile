@@ -16,7 +16,7 @@ RUN npm install -g @anthropic-ai/claude-code
 
 # A named volume takes its owner from the folder it mounts over, and a lease
 # runs as uid 1000, which is the `node` user here.
-RUN mkdir -p /task /mirror /login /caches/npm /caches/pip /caches/cargo /caches/go \
- && chown -R node:node /task /mirror /login /caches
+RUN mkdir -p /task /mirror /login \
+ && chown -R node:node /task /mirror /login
 
 USER node

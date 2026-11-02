@@ -176,12 +176,19 @@ const lesser = (limit: 'delegatedTasks' | 'tasksPerPlan') => (parent: MandateLim
   return { value: Math.min(parent[limit], asked ?? parent[limit]) };
 };
 
-function intersectModels(parent: MandateLimits['models'], asked: MandateLimits['models'] = {}): MandateLimits['models'] {
-  const models: Record<RunnerId, readonly string[]> = { ...asked, ...parent };
-  for (const runner of Object.keys(parent)) {
-    if (asked[runner]) models[runner] = parent[runner].filter((model) => asked[runner].includes(model));
+/**
+ * An empty list allows any model, as the user's allowlist reads, so a set that
+ * keeps nothing is refused here: written down, it would be the widest answer.
+ */
+function intersectModels(parent: MandateLimits['models'], asked: MandateLimits['models'] = {}): Ruled<MandateLimits['models']> {
+  const models: Record<RunnerId, readonly string[]> = { ...parent };
+  for (const [runner, wanted] of Object.entries(asked)) {
+    const held = parent[runner] ?? [];
+    const kept = held.length > 0 ? held.filter((model) => wanted.includes(model)) : wanted;
+    if (kept.length === 0) return { refused: { field: 'limits.models', asked: `${runner}: ${wanted.join(', ') || 'nothing'}`, there: `${runner}: ${held.join(', ') || 'any'}` } };
+    models[runner] = kept;
   }
-  return models;
+  return { value: models };
 }
 
 const LIMIT_RULES: Rules<MandateLimits, MandateLimits> = {
@@ -202,8 +209,12 @@ const LIMIT_RULES: Rules<MandateLimits, MandateLimits> = {
   },
   delegatedTasks: lesser('delegatedTasks'),
   tasksPerPlan: lesser('tasksPerPlan'),
-  runners: ({ runners }, { runners: asked }) => ({ value: asked ? runners.filter((runner) => asked.includes(runner)) : runners }),
-  models: ({ models }, { models: asked }) => ({ value: intersectModels(models, asked) }),
+  runners: ({ runners }, { runners: asked }) => {
+    if (!asked) return { value: runners };
+    const kept = runners.filter((runner) => asked.includes(runner));
+    return kept.length > 0 ? { value: kept } : { refused: { field: 'limits.runners', asked: asked.join(', ') || 'nothing', there: runners.join(', ') || 'nothing' } };
+  },
+  models: ({ models }, { models: asked }) => intersectModels(models, asked),
 };
 
 /** Both `grants` and `grantable`: a child hands on what it holds. `research`, `delegate` and `effect` come only by name (M2). */
@@ -257,6 +268,26 @@ export function delegatedRequest(task: Pick<Task, 'grants' | 'budget' | 'protect
     ...(task.budget?.wallClockMs !== undefined ? { wallClockMs: task.budget.wallClockMs } : {}),
     ...(task.protectedPaths ? { protectedPaths: task.protectedPaths } : {}),
   };
+}
+
+/**
+ * What live settings leave of what a child's limits hold (M3): the settings can
+ * take a runner or a model away from a running child and never hand one back,
+ * so limits carved with a list stay a list when the user clears theirs. A
+ * runner the two lists share no model on is taken away, for an empty list
+ * would allow it any.
+ */
+export function withinLimits(limits: Pick<MandateLimits, 'runners' | 'models'>, enabled: readonly RunnerId[], allowlist: Readonly<Record<string, string[]>>): { runners: RunnerId[]; allowlist: Record<string, string[]> } {
+  const models = { ...allowlist };
+  const noneLeft = new Set<RunnerId>();
+  for (const [runner, held] of Object.entries(limits.models)) {
+    if (held.length === 0) continue;
+    const live = allowlist[runner] ?? [];
+    const kept = live.length > 0 ? held.filter((model) => live.includes(model)) : [...held];
+    if (kept.length === 0) noneLeft.add(runner);
+    models[runner] = kept.length > 0 ? kept : [...held];
+  }
+  return { runners: enabled.filter((runner) => limits.runners.includes(runner) && !noneLeft.has(runner)), allowlist: models };
 }
 
 /** The grant each command needs (M2); null for the user's own controls, which no grant reaches. */

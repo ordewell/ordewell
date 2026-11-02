@@ -255,6 +255,8 @@ describe('a task running when the host died', () => {
     await vi.waitFor(() => expect(body.spawned()).toEqual(['check', 'fix']));
     await body.report('fix', 'done');
     await vi.waitFor(() => expect(body.spawned()).toEqual(['check', 'fix', 'check']));
+    // A start right after a settle reaches the disk within the second that follows it.
+    await vi.waitFor(() => expect(body.session.planState?.tasks[0].status).toBe('in_progress'));
 
     const env = reopened(body);
 

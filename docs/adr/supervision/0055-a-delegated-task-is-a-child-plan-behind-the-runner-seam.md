@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0009", "0013", "0015", "0018", "0020", "0022", "0029", "0030", "0035", "0045", "0046", "0049", "0054"]
-note: "Settles #33. Built: D1 to D19 and D21, so a child plan runs end to end behind the build's switch, asks up a level, stops as a subtree and comes back on a Continue, its conflicts and merges with it, a reopened subplanner taking its native session up where its harness keeps one. D20 is built for the TUI and VS Code: a row with its goal, budget left and live counts, D16's stopping row, a log of what its child's tasks become, and a report's open and promoted findings. The core and daemon let a surface list a tree, read and stream any child, message a live subplanner, message a child's runner and answer a checkpoint a child plan holds; the TUI and VS Code drawing that are later."
+note: "Settles #33. Built: D1 to D19 and D21, so a child plan runs end to end behind the build's switch, asks up a level, stops as a subtree and comes back on a Continue, its conflicts and merges with it, a reopened subplanner taking its native session up where its harness keeps one. D20 is built for the TUI and VS Code: a row with its goal, budget left and live counts, D16's stopping row, a log of what its child's tasks become, and a report's open and promoted findings. The core and daemon let a surface list a tree, read and stream any child, message a live subplanner, message a child's runner and answer a checkpoint a child plan holds, and VS Code draws all of that; the TUI's drawing it is later."
 ---
 
 # 0055 — A delegated task is a child plan behind the runner seam
@@ -166,6 +166,14 @@ the child cannot reach follows it in the parent's plan.**
   last step before one, on the same diff. A repair lands after that step, and is
   held to the same paths there (D14). Paths accumulate down the tree
   (ADR-0056 M4): a nested delegated task is held to its ancestors' too.
+  A rule is relative to the repository root and read whatever its case and however
+  its characters are composed, since a case-insensitive checkout writes one file under
+  either name: a name covers that path and what is under it, `*` crosses no `/` and
+  `**` does, and a pattern with no `/` matches a name at any depth. A rule outside the
+  repository, one with another wildcard, and one that covers the whole of it are
+  refused with the rest (`protectedPathFault`), since each would pass a diff it was
+  meant to stop or leave a child nothing to land. A saved plan's whole-repository rule
+  matches everything, so the matcher errs by refusing the work.
 - **A check is a task (D8).** `delegationErrors`, in `checkPlanInvariants`, refuses
   on every route a delegated task with no check directly depending on it, as
   `loopErrors` holds a loop. A check is a read-only AI task or a script task
@@ -521,7 +529,10 @@ the child cannot reach follows it in the parent's plan.**
   raise and no force, which are refused aloud. It names the plan's task by its exact id:
   nothing resolves a reference, and nothing falls through to the root. An answer carries
   the question the person read, so it never lands on a later one. The subplanner hears
-  of it on its next turn, which this does not open. An ended child is view-only
+  of it on its next turn, which this does not open. VS Code holds the Session itself, so
+  it asks `ChildDirectory` where the TUI asks the daemon, finding the child again for every
+  action, and a child runner's tab reopens after a reload only if the tree still holds
+  that child and its task. An ended child is view-only
   until its task is continued or retried. Usage rolls up: each record its planner or
   a task spends goes up as it arrives, a level at a time, onto the delegated task's
   attempt, so `planUsage` and the row add it as they add any task's. It was charged
@@ -753,5 +764,7 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-11-01 — from review: a repair is charged to the ledger and leaves the child's names and the report as they stood (D14).
 - 2026-11-01 — from real runs: a surface's composer continues a stopped delegated task and one whose question was lost (D17), and its row counts raises and says no budget it has not read (D20).
 - 2026-11-02 — D17: a Continue reaches every level with nothing below it discarded, and a reopened subplanner takes up its saved native session where its harness keeps one, replaying its Model context where not; a reopened child's budget counts every opening of its parent's session (ADR-0056 M10).
+- 2026-11-02 — from an audit: D7 says what a protected path covers, one matcher reads it on every use, and a rule the matcher would not honour is refused as it is written.
 - 2026-11-02 — D20 opens a child to a surface: `ChildDirectory` and the daemon's routes and stream read any plan in a tree, and a person may message a live subplanner within what it already holds.
 - 2026-11-02 — D20 lets a person message a child plan's runner and answer a checkpoint that plan holds, as its subplanner's commands, where a surface only watched.
+- 2026-11-02 — D20 on VS Code: nested child plans, their questions and runner tabs, each action found again through `ChildDirectory`.

@@ -40,7 +40,8 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onWebviewPanel:ordewellTaskLog"
+    "onWebviewPanel:ordewellTaskLog",
+    "onWebviewPanel:ordewellChildTaskLog"
   ],
   "main": "./dist/extension.js",
   "scripts": {
@@ -166,9 +167,19 @@
       {
         "command": "ordewell.configureModelAllowlist",
         "title": "Ordewell: Configure Model Allowlist"
+      },
+      {
+        "command": "ordewell.containers",
+        "title": "Ordewell: Containers (experimental)"
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "ordewell.containers",
+          "when": "ordewell.containersOffered"
+        }
+      ],
       "view/title": [
         {
           "command": "ordewell.loadSession",

@@ -123,15 +123,18 @@ export interface TreeOptions {
   scriptRunner?: IRunner;
   /** Whether a child can seal a script. */
   seals?: boolean;
+  /** Turns of the root's own planner, as a test talks to it with a child running. */
+  rootTurns?: Turn[];
 }
 
-export function tree(turns: Turn[], { runner = writingRunner({ a: ['a.txt'], b: ['b.txt'] }), tasks = [delegated(), check()], settings = {}, below = {}, parallel = 3, config, scriptRunner, seals = false }: TreeOptions = {}): Tree {
+export function tree(turns: Turn[], { runner = writingRunner({ a: ['a.txt'], b: ['b.txt'] }), tasks = [delegated(), check()], settings = {}, below = {}, parallel = 3, config, scriptRunner, seals = false, rootTurns }: TreeOptions = {}): Tree {
   const root = repo();
   const rootConfig = config ?? fakeConfig({ maxParallelSessions: parallel });
   const planner = scriptedPlanner(turns);
   const lower = Object.fromEntries(Object.entries(below).map(([id, script]) => [id, scriptedPlanner(script)]));
   const isolation = createWorktreeIsolation({ resolvePath: async () => process.env.PATH ?? '', config: fakeConfig({ worktreeIsolation: true }) });
   const parent = makeSession({
+    ...(rootTurns ? { aiService: { reset: vi.fn(), ...scriptedPlanner(rootTurns).service } as unknown as IAiService } : {}),
     runner, scriptRunner, isolation, workspaceRoot: () => root, saveSession, openTaskLog, leaseHost: new LeaseHost(), sessionId: 'session-root',
     config: rootConfig,
     settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: 5_000_000 }, ...settings }),

@@ -32,7 +32,16 @@ export interface ApprovalRecordDeps {
  * live on the plan (they are saved with it), so a save only writes them.
  */
 export class ApprovalRecord {
+  /** {@link approvedIds}' last reading. Every change here sets a new list, so a list unchanged is a set still good. */
+  private read: { list: readonly string[] | undefined; ids: ReadonlySet<string> } = { list: undefined, ids: new Set() };
+
   constructor(private readonly deps: ApprovalRecordDeps) {}
+
+  /** The plan's list as a set: a scheduler's pass and a status ask of every task, and the list is as long as the plan. */
+  private approvedIds(plan: ApprovalFields): ReadonlySet<string> {
+    if (plan.approvedTasks !== this.read.list) this.read = { list: plan.approvedTasks, ids: new Set(plan.approvedTasks) };
+    return this.read.ids;
+  }
 
   /**
    * Whether the user approved this task to run: it was in the plan they
@@ -41,7 +50,8 @@ export class ApprovalRecord {
    * the scheduler both ask it.
    */
   isApproved(taskId: string): boolean {
-    return !!this.deps.store.get(taskId) && (this.deps.plan()?.approvedTasks?.includes(taskId) ?? false);
+    const plan = this.deps.plan();
+    return !!plan && !!this.deps.store.get(taskId) && this.approvedIds(plan).has(taskId);
   }
 
   /** The user approved the plan to run (ADR-0029); kept apart from the plan's display status. */
@@ -58,7 +68,7 @@ export class ApprovalRecord {
   waitsForApproval(taskId: string): boolean {
     const plan = this.deps.plan();
     const task = this.deps.store.get(taskId);
-    return !!plan && !!task && waitsForApproval(task, plan);
+    return !!plan && !!task && !this.approvedIds(plan).has(taskId) && waitsForApproval(task, { approved: plan.approved });
   }
 
   /** What the user approved to run (ADR-0029): a start of their own approves the task and its subtasks. */

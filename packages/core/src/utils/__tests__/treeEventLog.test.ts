@@ -8,6 +8,11 @@ import type { TreeEvent, TreeFact } from '../../models/TreeEvent';
 import { FakeEventStore } from '../../testing';
 import { jsonlEventStore, treeEventLogFile } from '../treeEventLog';
 
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs')>();
+  return { ...actual, createReadStream: vi.fn(actual.createReadStream) };
+});
+
 const AT = '2026-10-31T10:00:00.000Z';
 const spent = (node: string, tokens: number): TreeFact => ({ kind: 'tokens_spent', at: AT, node, tokens });
 
@@ -196,5 +201,60 @@ describe('the JSONL backend across a crash', () => {
 describe('where a tree keeps its log', () => {
   it('is the root session\'s directory, so it goes with that session', () => {
     expect(treeEventLogFile('root-1', '/repo')).toBe(path.join('/repo', '.ordewell', 'sessions', 'root-1', 'tree-events.jsonl'));
+  });
+});
+
+describe('appending to a log just read', () => {
+  it('does not read the file again for where it ends', async () => {
+    const file = path.join(dir, 'tree.jsonl');
+    const first = jsonlEventStore(file);
+    await first.append([spent('root/1', 10), spent('root/1', 20)]);
+    await first.close();
+    const store = jsonlEventStore(file);
+    await all(store);
+    vi.mocked(fs.createReadStream).mockClear();
+    await store.append([spent('root/1', 30)]);
+    expect(fs.createReadStream).not.toHaveBeenCalled();
+    expect((await all(store)).map((e) => e.seq)).toEqual([1, 2, 3]);
+    await store.close();
+  });
+
+  it('reads it again when the file moved since', async () => {
+    const file = path.join(dir, 'tree.jsonl');
+    const reader = jsonlEventStore(file);
+    const writer = jsonlEventStore(file);
+    await writer.append([spent('root/1', 10)]);
+    await all(reader);
+    await writer.append([spent('root/1', 20)]);
+    await writer.close();
+    await reader.append([spent('root/1', 30)]);
+    expect((await all(reader)).map((e) => e.seq)).toEqual([1, 2, 3]);
+    await reader.close();
+  });
+
+  it('cuts a torn line the read left behind', async () => {
+    const file = path.join(dir, 'tree.jsonl');
+    const first = jsonlEventStore(file);
+    await first.append([spent('root/1', 10)]);
+    await first.close();
+    fs.appendFileSync(file, '[{"kind":"tokens');
+    const store = jsonlEventStore(file);
+    await all(store);
+    await store.append([spent('root/1', 20)]);
+    expect(tokensOf(await all(store))).toEqual([10, 20]);
+    await store.close();
+  });
+
+  it('leaves a read abandoned part way out of it', async () => {
+    const file = path.join(dir, 'tree.jsonl');
+    const first = jsonlEventStore(file);
+    await first.append([spent('root/1', 10)]);
+    await first.append([spent('root/1', 20)]);
+    await first.close();
+    const store = jsonlEventStore(file);
+    for await (const event of store.read(0)) { expect(event.seq).toBe(1); break; }
+    await store.append([spent('root/1', 30)]);
+    expect((await all(store)).map((e) => e.seq)).toEqual([1, 2, 3]);
+    await store.close();
   });
 });
