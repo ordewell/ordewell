@@ -308,7 +308,8 @@ Judgment stays the planner's.
     it does any checkpoint. At Watch the root's planner is woken and holds no `steer`,
     and at Off it is not woken, so the user answers. Deeper, a question is its parent
     subplanner's to handle, and is never a list item for the user unless that parent
-    asks it as its own.
+    asks it as its own. A person who opens that parent's plan may answer it there, under
+    that parent's own `steer`, as any checkpoint it holds (ADR-0055 D20).
   - Whether a question concerns an outward effect stays judgment: a question is free
     text, so ADR-0029's rule that one on an irreversible or outward effect goes to the
     user stays in the brief. What code holds is where an effect can run (M9).
@@ -486,3 +487,4 @@ Judgment stays the planner's.
 - 2026-11-01 — from a real run: a node stops short of its limit, while what it can reach still pays for the calls on their way, where it stopped at the limit and passed it (M5).
 - 2026-11-01 — from review: a child reads the effect rules above it as they stand, with `ownEffectRules` kept; a mandate's consent covers a sealed run alone; and a script past the rules fails at its start (M1, M9).
 - 2026-11-02 — from an audit: `narrow` refuses a runner or model set that keeps nothing, a child's `SessionCatalog` assigns within its limits, and which of those limits a delegated task can ask for is said; a plan's budgets are held to its node's room together, not one by one, and its brief says that room.
+- 2026-11-02 — a person with a child plan open may answer what that plan holds, under its subplanner's `steer`; the list stays the root's (M8, ADR-0055 D20).

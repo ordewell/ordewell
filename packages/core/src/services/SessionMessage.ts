@@ -314,7 +314,12 @@ export type SessionMessage =
    * `true` for the next to wait under.
    */
   | { type: 'planner_detection'; waiting: boolean }
-  /** `escalations`: what waits on a person now (ADR-0053), whole; absent from an older daemon. */
+  /**
+   * `tasks` holds the tasks that moved, each whole, and a task left out is as
+   * it was; `RunSnapshotFrame` gives a joining surface the rest. Now and then
+   * it holds every task again. The run-wide fields are whole on every update.
+   * `escalations`: what waits on a person now (ADR-0053); absent from an older daemon.
+   */
   | { type: 'status_update'; tasks: SerializedTaskStatus[]; runMerge?: RunMergeView; usage?: PlanUsage; activity?: RunActivity; escalations?: Escalation[] }
   | { type: 'review_needed'; tasks: SerializedTask[] }
   | { type: 'review_approved' }
@@ -603,6 +608,8 @@ export interface ChildPlanEntry {
   state: 'working' | 'parked' | 'ended';
   /** Why a message would be refused now, so a surface can say so before the person types one. */
   refused?: string;
+  /** Its tasks waiting at a checkpoint now, so a surface can tell without opening it. */
+  checkpoints?: string[];
 }
 
 /** A child plan as a surface opens it: a session's own load, as {@link ChildPlanEntry} places it. */
@@ -625,6 +632,25 @@ export interface ChildPlanView {
 export type ChildMessageOutcome =
   | { ok: true; status: 'woken' | 'queued' }
   | { ok: false; code: 'view_only' | 'refused'; message: string };
+
+/**
+ * What a person may ask of one task of a child plan (ADR-0055 D20). `question`
+ * is the one they read, so an answer cannot land on a later one. There is no
+ * raise and no force: those stay with the plan above and with the root's user.
+ */
+export type ChildTaskControl =
+  | { kind: 'message'; text: string }
+  | { kind: 'checkpoint'; answer: 'approve' | 'reject'; question: string; reason?: string };
+
+/**
+ * What became of a {@link ChildTaskControl}: `id` is the message's, when it
+ * reached a turn rather than resuming a paused task. A refusal adds to
+ * {@link ChildMessageOutcome}'s `no_task` for a task this plan does not hold,
+ * and `not_waiting` for a checkpoint that is not the one asked about.
+ */
+export type ChildControlOutcome =
+  | { ok: true; message: string; id?: string }
+  | { ok: false; code: 'view_only' | 'refused' | 'no_task' | 'not_waiting'; message: string };
 
 export function serializePlan(plan: LegacyPlanState): SerializedPlan {
   return {

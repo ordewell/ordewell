@@ -68,6 +68,73 @@ describe('SessionEventRelay', () => {
     expect(planReadsPerStatus(100)).toBe(planReadsPerStatus(10));
   });
 
+  describe('a status update as a change', () => {
+    const updates = (sent: SessionMessage[]) => sent.flatMap((m) => (m.type === 'status_update' ? [m] : []));
+    const ids = (update: { tasks: { id: string }[] }) => update.tasks.map((t) => t.id);
+
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('says every task first, then only the tasks that moved', () => {
+      const { relay, sent, store } = setup();
+      const p = plan();
+
+      relay.status(p);
+      store.markCompleted('t3');
+      relay.status(p);
+
+      expect(updates(sent).map(ids)).toEqual([['t1', 't2', 't3'], ['t3']]);
+    });
+
+    it('carries a task again for what only the run knows of it, its hold being no field of the plan', () => {
+      const holds = new Map<string, string>();
+      const { relay, sent } = setup(holds);
+      const p = plan();
+
+      relay.status(p);
+      holds.set('t1', 'merge-gate');
+      relay.status(p);
+
+      expect(updates(sent).map(ids)).toEqual([['t1', 't2', 't3'], ['t1']]);
+    });
+
+    it('carries no task when none moved, and still says what waits on a person whole', () => {
+      const wait: Escalation = { id: 'failed:t2:1', kind: 'failed', reason: 'it failed', options: [] };
+      const { relay, sent } = setup(new Map(), () => [wait]);
+      const p = plan();
+
+      relay.status(p);
+      relay.status(p);
+
+      expect(ids(updates(sent)[1])).toEqual([]);
+      expect(updates(sent)[1].escalations).toEqual([wait]);
+    });
+
+    it('leaves a joining surface the whole run', () => {
+      const { relay, store } = setup();
+      const p = plan();
+
+      relay.status(p);
+      store.markCompleted('t3');
+      relay.status(p);
+
+      expect(ids(relay.statusMessage())).toEqual(['t1', 't2', 't3']);
+    });
+
+    it('says every task again now and then, so a surface a change missed comes right', () => {
+      vi.useFakeTimers();
+      const { relay, sent } = setup();
+      const p = plan();
+
+      relay.status(p);
+      vi.advanceTimersByTime(29_000);
+      relay.status(p);
+      vi.advanceTimersByTime(1_000);
+      relay.status(p);
+
+      expect(updates(sent).map(ids)).toEqual([['t1', 't2', 't3'], [], ['t1', 't2', 't3']]);
+    });
+  });
+
   it('announces task status and brings the plan object up to date first', () => {
     const { relay, sent } = setup();
     const p = plan();

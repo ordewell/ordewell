@@ -56,7 +56,12 @@ so no surface is told or has to act.
 The Session adds to the relay's observer only the saves some events owe, each
 made before the event is announced: a task that settles on its own
 (`onTaskSettled` — completed, failed or awaiting the user) is saved as it
-settles, so a shared run does not wait for its end to record a verdict.
+settles, in one save with what supervision took from it, so a shared run does
+not wait for its end to record a verdict. Any other changed status is saved
+within a second, and at once when no save came in the second before: a save
+writes the whole plan, so a burst of starts shares one. A crash inside that
+second loads such a start as not yet started, which is why a script's start,
+whose effects do not wait, is saved before the script runs.
 Any save may land in the middle of a planner turn, and none settles it: the
 turn holds what it writes until the mutation that lands it (see
 *PlannerConversation*), so there is nothing of it for another save to write.
@@ -2792,7 +2797,8 @@ bounded buffer fed by the session and answers `finalText` (the completion
 call's summary, falling back to clean plain output for the current turn) and
 `liveTail` (a bounded diagnostic window with an absolute `nextOffset`). A new
 turn or a message read mid-turn clears the earlier summary and advances the
-output boundary. It does not discover transcripts or render a runner's PTY.
+output boundary. Once an attempt ends it keeps the attempt's completion and the
+end of its output. It does not discover transcripts or render a runner's PTY.
 *Avoid:* "the output buffer", "transcript capture" as the owner — a transcript
 is a separate artifact, not completion evidence.
 
@@ -2907,10 +2913,13 @@ that decides what a plan refresh keeps: plan fields (title, dependencies,
 fields (verdict, `idleSince`, isolation, checkpoint, queued messages,
 `continuable`, `awaitingApproval`, merge gate, `forcedPastGate`) stay as the
 last status update said, the checkpoint question only while the task still
-waits at it. A status update replaces every status field it covers. The daemon
-sends `Session.runSnapshot()` as a `run_snapshot` frame right after
-`connected`, so a client that joins mid-run has the run before the next update;
-the session routes' load and read answers carry it too. Whether the run is
+waits at it. A status update replaces every status field of each task it
+carries, and carries only the tasks that moved, with every task again every
+half minute so that a surface a change missed comes right; what it says of the
+run is whole each time. The daemon sends `Session.runSnapshot()`, always whole,
+as a `run_snapshot` frame right after `connected`, so a client that joins
+mid-run has the run before the next update; the session routes' load and read
+answers carry it too. Whether the run is
 closed is the Session's word, `run_closed` (a Merge all that left nothing to
 hand over, or a discard), which `reduceRun` folds into dropping the marks,
 the handoff and the merge view; a merge that leaves the run going keeps them.
@@ -3243,8 +3252,11 @@ delegated task's branch by itself at its run's end, so only the root touches the
 user's branch. A surface reaches it only through its root: `ChildDirectory` answers
 for every plan below one, by the stable session id the tree's ledger names, and an id
 it does not name is refused before anything is read (D20). A surface may read and
-stream any of them, and a person may message a live subplanner; one that has ended is
-view-only until its task is continued or retried. A Stop reaches all of it,
+stream any of them. A person may message a live subplanner, and may message a task's
+runner or answer a checkpoint the plan holds, by the task's exact id, as that plan's
+subplanner's own command: it can do nothing the subplanner could not, and nothing falls
+through to the root. One that has ended is view-only until its task is continued or
+retried. A Stop reaches all of it,
 tombstone first, and resolves when it has gone (D16). A Continue reopens it and any
 fresh attempt discards its run, its state staying under the root (D15, D17).
 
@@ -3254,8 +3266,8 @@ delegated task names, in that task's worktree, Act with autorun inside its
 and `checkpoint`, on a token bound to the attempt, and it is parked between turns. Its
 harness's own subagents are withheld unless its delegated task named `research`. Its
 `checkpoint` answers at once and goes up one level as its delegated task's checkpoint,
-where a person sees it only at the root, and the answer opens its next turn (ADR-0056
-M8). A person's message wakes it or queues behind its turn, under the shared slot
+which the root's inbox lists at depth one and a person may answer on the plan that holds
+it, and the answer opens its next turn (ADR-0056 M8). A person's message wakes it or queues behind its turn, under the shared slot
 limit, and carries nothing with it: it holds the actor and grants it had, and raises
 no budget and approves no effect. The message stays with it unless it passes what is
 relevant up itself (D20). A turn that ends with nothing running and no call gets one

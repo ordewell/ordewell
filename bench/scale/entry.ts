@@ -7,6 +7,7 @@ export * from '../../packages/core/src/index';
 export { fakeConfig, fakeFileSystem, FakeRunnerSession } from '../../packages/core/src/testing';
 export { selectReadyTasks } from '../../packages/core/src/services/readiness';
 export { checkOf } from '../../packages/core/src/models/Loop';
+export { taskRowView } from '../../packages/core/src/taskRow';
 export { wakeUpDigest } from '../../packages/core/src/services/Supervisor';
 export { RunSupervision } from '../../packages/core/src/services/RunSupervision';
 export { composeAugmentedPrompt, renderPlanMap } from '../../packages/core/src/services/promptAugment';
@@ -16,3 +17,7 @@ export { saveSession, loadSession } from '../../packages/core/src/utils/sessionS
 export { renderTaskLog } from '../../packages/core/src/services/taskLogRead';
 export { OrdewellMcpServer } from '../../packages/core/src/services/mcp/OrdewellMcpServer';
 export { RUN_SETTINGS_DEFAULTS } from '../../packages/core/src/services/SettingsService';
+export { TreeLedger } from '../../packages/core/src/services/TreeLedger';
+export { rootMandate } from '../../packages/core/src/services/Mandate';
+export { ROOT_NODE } from '../../packages/core/src/models/TreeEvent';
+export { jsonlEventStore } from '../../packages/core/src/utils/treeEventLog';

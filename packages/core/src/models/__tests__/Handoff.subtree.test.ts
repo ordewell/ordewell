@@ -166,3 +166,21 @@ describe('a report (R2)', () => {
     expect(handoffPreviewLines(digest(subtree))[0]).toBe('Subtree: 3 done, 1 failed, 0 blocked, 1 skipped; 2 commits; 1200 tokens.');
   });
 });
+
+describe('a handoff citing many tasks', () => {
+  it('walks the plan once to name them all', () => {
+    let reads = 0;
+    const plan = Array.from({ length: 200 }, (_, i) => new Proxy(task(`t${i}`, i + 1), {
+      get(target, key, receiver) {
+        reads += 1;
+        return Reflect.get(target, key, receiver);
+      },
+    }));
+    const cited = plan.map((_, i) => ({ kind: 'task' as const, task: `t${i}` }));
+
+    const named = namedHandoff(plan, held(1, { ...finding('F1', 'info', 'Cited'), evidence: cited }));
+
+    expect(named.findings[0].evidence?.at(-1)).toEqual({ kind: 'task', task: '#200' });
+    expect(reads).toBeLessThan(200 * 10);
+  });
+});

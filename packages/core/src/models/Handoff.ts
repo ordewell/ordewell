@@ -1,7 +1,7 @@
 import { flattenTasks, type Task } from './Task';
 import { checkOf } from './Loop';
 import { onOneLine, splitLines } from './lineBreaks';
-import { resolveTaskRef, taskRefOf, titledTaskRefOf } from '../services/TaskRefs';
+import { resolveTaskRef, taskRefOf, taskRefsOf, titledTaskRefOf } from '../services/TaskRefs';
 
 /*
  * A task's handoff (ADR-0047): what it tells the tasks that read it, as its
@@ -290,7 +290,8 @@ export type HandoffTaskName = (taskId: string) => string | undefined;
 
 /** A handoff with the tasks it cites named by their references in `plan`, as a reader names them. */
 export function namedHandoff<H extends HandoffDigest>(plan: readonly Task[], handoff: H): H {
-  const named = <R extends HandoffArtifact>(refs: readonly R[]) => refs.map((r) => (r.kind === 'task' && r.label === undefined ? { ...r, task: taskRefOf(plan, r.task) ?? r.task } : r));
+  let taskRefs: Map<string, string> | undefined;
+  const named = <R extends HandoffArtifact>(refs: readonly R[]) => refs.map((r) => (r.kind === 'task' && r.label === undefined ? { ...r, task: (taskRefs ??= taskRefsOf(plan)).get(r.task) ?? r.task } : r));
   return {
     ...handoff,
     findings: handoff.findings.map((f) => (f.evidence ? { ...f, evidence: named(f.evidence) } : f)),

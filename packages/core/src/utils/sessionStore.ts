@@ -108,7 +108,7 @@ function isSessionMeta(value: unknown): value is SessionMeta {
     && typeof meta.createdAt === 'string' && !Number.isNaN(Date.parse(meta.createdAt));
 }
 
-function hasScalarRunner(parsed: Record<string, unknown>): boolean {
+function hasScalarRunner(parsed: { meta?: unknown; plan?: unknown }): boolean {
   const meta = parsed.meta as Record<string, unknown> | undefined;
   const plan = parsed.plan as Record<string, unknown> | undefined;
   return (typeof meta?.runner === 'string') || (typeof plan?.runner === 'string');
@@ -274,15 +274,21 @@ function moveAside(sessionsDir: string, file: string, reason: string, logger: IL
   return null;
 }
 
-function findSessionFile(sessionsDir: string, sessionId: string, logger: ILogger): string | null {
+/** The endings {@link sessionFilename} and {@link legacySessionFilename} give a session's file. */
+const filenameEndings = (sessionId: string): string[] =>
+  [sessionId.replace(/^session-/, ''), sessionId].map((id) => `_${id.slice(0, 8)}.json`);
+
+/** A session is read from the file named for it when there is one; a renamed file is still found by what it holds. */
+function findSessionFile(sessionsDir: string, sessionId: string, logger: ILogger): { file: string; session: SessionData } | null {
   const files = fs.readdirSync(sessionsDir).filter((f) => f.endsWith('.json'));
-  for (const f of files) {
+  const endings = filenameEndings(sessionId);
+  const named = files.filter((f) => endings.some((ending) => f.endsWith(ending)));
+  for (const file of new Set([...named, ...files])) {
     try {
-      const raw = fs.readFileSync(path.join(sessionsDir, f), 'utf-8');
-      const session = JSON.parse(raw) as SessionData;
-      if (session.meta.id === sessionId) return f;
+      const session = JSON.parse(fs.readFileSync(path.join(sessionsDir, file), 'utf-8')) as SessionData;
+      if (session.meta.id === sessionId) return { file, session };
     } catch (err: unknown) {
-      logger.warn('sessionStore', `failed to read session file ${f}; skipping`, err);
+      logger.warn('sessionStore', `failed to read session file ${file}; skipping`, err);
     }
   }
   return null;
@@ -318,15 +324,13 @@ export function loadSession(sessionId: string, baseDir?: string, logger: ILogger
   const sessionsDir = getSessionsDir(baseDir);
   if (!fs.existsSync(sessionsDir)) return null;
   try {
-    const file = findSessionFile(sessionsDir, sessionId, logger);
-    if (file) {
-      const raw = fs.readFileSync(path.join(sessionsDir, file), 'utf-8');
-      const parsed = JSON.parse(raw);
-      if (hasScalarRunner(parsed)) {
-        logger.warn('sessionStore', `session file ${file}: ${REJECTION_MESSAGE}`);
+    const found = findSessionFile(sessionsDir, sessionId, logger);
+    if (found) {
+      if (hasScalarRunner(found.session)) {
+        logger.warn('sessionStore', `session file ${found.file}: ${REJECTION_MESSAGE}`);
         return null;
       }
-      return settledOnLoad(parsed as SessionData, researchLogPath(sessionId, baseDir), logger);
+      return settledOnLoad(found.session, researchLogPath(sessionId, baseDir), logger);
     }
   } catch (err: unknown) {
     logger.warn('sessionStore', `failed to list sessions directory while searching for ${sessionId}`, err);
@@ -355,8 +359,8 @@ export function deleteSession(sessionId: string, baseDir?: string, logger: ILogg
     logger.warn('sessionStore', `failed to remove the task logs of ${sessionId}`, err);
   }
   try {
-    const file = findSessionFile(sessionsDir, sessionId, logger);
-    if (file) { fs.unlinkSync(path.join(sessionsDir, file)); return true; }
+    const found = findSessionFile(sessionsDir, sessionId, logger);
+    if (found) { fs.unlinkSync(path.join(sessionsDir, found.file)); return true; }
   } catch (err: unknown) {
     logger.warn('sessionStore', `failed to list sessions directory for deletion of ${sessionId}`, err);
   }

@@ -1,12 +1,15 @@
 import { flag, hasFlag, readLastSession } from '../utils';
 import { iconFor } from '../utils/output';
 import type { ApiClient } from '../apiClient';
-import { handoffBranchName, holdLabel, isRepoGroup, loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, repairWaitLabel, repoResultLines, scriptTaskText, skippedLabel, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL, type SerializedTaskStatus } from '@ordewell/core';
+import { handoffBranchName, holdLabel, isRepoGroup, loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, repairWaitLabel, repoResultLines, scriptTaskText, skippedLabel, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL, walkPlan, type SerializedTaskStatus } from '@ordewell/core';
 import { allTasksOf } from '../utils/tasks';
 import { connect } from './shared';
 import { taskHandoffLines } from './taskHandoff';
 
 const inLine = (label: string): string => label.charAt(0).toLowerCase() + label.slice(1);
+
+/** A task's status; a run joined midway holds the plan's looser `type` and `research`. */
+type TaskLine = Omit<SerializedTaskStatus, 'type' | 'research'> & { type?: string; research?: boolean };
 
 /** A task as the line names it: the stream carries no order, so its id's tail. */
 const refOf = (id: string): string => `#${id.slice(-4)}`;
@@ -17,7 +20,7 @@ const refOf = (id: string): string => `#${id.slice(-4)}`;
  * `repeating` is whether a check between rounds goes on, which a body task
  * that failed or was skipped stops, and so does nothing being left to run it.
  */
-function loopNote(task: SerializedTaskStatus, all: readonly SerializedTaskStatus[]): { text: string; repeating: boolean } | null {
+function loopNote(task: TaskLine, all: readonly TaskLine[]): { text: string; repeating: boolean } | null {
   if (task.loop) {
     const check = { id: task.id, status: task.status, loop: task.loop, loopRound: task.loopRound, ...(task.verdict ? { verdict: task.verdict } : {}) };
     const halted = task.loop.body.some((id) => ['failed', 'skipped'].includes(all.find((t) => t.id === id)?.status ?? ''));
@@ -65,7 +68,7 @@ export async function followExecution(
 ): Promise<void> {
   let blocked: string | null = null;
   let dirtyRepos: string[] = [];
-  const taskStates = new Map<string, SerializedTaskStatus>();
+  const taskStates = new Map<string, TaskLine>();
   let lastPrinted = '';
 
   function printStatus(tasks: SerializedTaskStatus[]): void {
@@ -109,6 +112,10 @@ export async function followExecution(
     settleReady = (error) => (error ? reject(error) : resolve());
   });
   const stream = api.streamExecution(sessionId, (event) => {
+    // An update leaves out what has not moved, so joining a run starts from the whole of it.
+    if (event.type === 'run_snapshot') {
+      for (const { task } of walkPlan(event.view.tasks)) taskStates.set(task.id, { ...task, verdict: task.verdict ?? null });
+    }
     if (event.type === 'task_started') {
       process.stderr.write(`· ${taskStartedNotice(event.title, event.runner)}\n`);
     }

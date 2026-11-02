@@ -243,6 +243,12 @@ export interface WakePolicy {
   poll(now: number): WakeBatch | null;
   /** When `poll` next answers a batch, on the events' clock; null while nothing would wake the supervisor. */
   dueAt(): number | null;
+  /**
+   * When next to `poll`, reading the plan only once its answer can matter:
+   * nothing held alone is due inside the first event's window, so a wave of
+   * events in it costs one walk of the plan, at its end.
+   */
+  nextLookAt(now: number): number | null;
   /** What waits, so a daemon restart still delivers it. */
   snapshot(): WakePolicySnapshot;
   /** Put back a save's waiting events, replacing whatever this held. */
@@ -302,6 +308,11 @@ export function createWakePolicy(options: WakePolicyOptions): WakePolicy {
     },
 
     dueAt,
+
+    nextLookAt(now) {
+      const windowEnd = (attention[0]?.at ?? Number.NEGATIVE_INFINITY) + debounceMs;
+      return now < windowEnd && attention.every(isHeldEvent) ? windowEnd : dueAt();
+    },
 
     snapshot() {
       return { attention: [...attention], sinceLast: [...sinceLast] };

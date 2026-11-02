@@ -22,7 +22,7 @@ export interface LiveTail {
 export interface TaskOutputSource {
   /** Start capturing a session; replaces any earlier capture of the task. */
   attach(taskId: string, session: IRunnerSession): void;
-  /** Stop capturing the task's session; what was captured stays readable. */
+  /** Stop capturing the task's session; its answer and the end of its output stay readable. */
   detach(taskId: string): void;
   /** Drop every capture (a new plan reuses task ids). */
   reset(): void;

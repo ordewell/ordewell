@@ -9,7 +9,7 @@ import { Hono } from 'hono';
 import WebSocket from 'ws';
 import {
   createSession, createTask, createWorktreeIsolation, DAEMON_SUBPROTOCOL, LeaseHost, ModelResolver, openTaskLog, RUN_SETTINGS_DEFAULTS, RunnerRegistry, saveSession,
-  type ChildListResponse, type ChildMessageResponse, type ChildPlanResponse, type ChildTreeFrame, type ErrorBody, type IRunner, type LegacyPlanState, type RunSnapshotFrame, type Session, type SessionDeps, type SessionFrame, type Task, type TaskLogAttemptsResponse,
+  type ChildListResponse, type ChildMessageResponse, type ChildPlanResponse, type ChildTaskControlResponse, type ChildTreeFrame, type ErrorBody, type IRunner, type LegacyPlanState, type RunSnapshotFrame, type Session, type SessionDeps, type SessionFrame, type Task, type TaskLogAttemptsResponse,
 } from '@ordewell/core';
 import { fakeConfig, fakeFileSystem, FakeRunnerSession } from '@ordewell/core/testing';
 import { OrchestratorPool } from '../../pool/orchestratorPool';
@@ -29,6 +29,7 @@ const ROOT = 'session-root';
 type Tools = {
   submitPlan?(args: unknown, extra: { signal: AbortSignal }): Promise<{ isError?: boolean; text: string }>;
   taskComplete?(args: unknown, extra: { signal: AbortSignal }): Promise<{ isError?: boolean; text: string }>;
+  checkpoint?(args: unknown, extra: { signal: AbortSignal }): Promise<{ isError?: boolean; text: string }>;
 };
 type Turn = (tools: Tools) => Promise<void>;
 
@@ -99,11 +100,13 @@ function repo(): string {
 
 function heldTasks(held: string[]) {
   const spawned: string[] = [];
+  const sessions = new Map<string, FakeRunnerSession>();
   const waiting = new Map<string, () => void>();
   const runner: IRunner = {
     spawn: vi.fn(async (opts) => {
       spawned.push(opts.taskId);
       const session = new FakeRunnerSession(`s-${opts.taskId}-${spawned.length}`, opts.taskId);
+      sessions.set(opts.taskId, session);
       const finish = () => {
         writeFileSync(join(opts.cwd, `${opts.taskId}.txt`), `written by ${opts.taskId}\n`);
         session.reportComplete({ status: 'done', summary: 'Done.' });
@@ -116,7 +119,7 @@ function heldTasks(held: string[]) {
     stopAll: vi.fn(),
     activeCount: 0,
   };
-  return { runner, spawned, release: (taskId: string) => waiting.get(taskId)?.() };
+  return { runner, spawned, sessions, release: (taskId: string) => waiting.get(taskId)?.() };
 }
 
 interface Socket {
@@ -149,7 +152,7 @@ interface DaemonOptions { held?: string[]; parallel?: number; tasks?: Task[] }
 async function daemon(turns: Record<string, Turn[]>, { held = ['a'], parallel = 3, tasks = [delegated()] }: DaemonOptions = {}) {
   const workspace = repo();
   const planners = Object.fromEntries(Object.entries(turns).map(([id, script]) => [id, planner(script)]));
-  const { runner, spawned, release } = heldTasks(held);
+  const { runner, spawned, sessions, release } = heldTasks(held);
   const pool = new OrchestratorPool({ accountLimitCollectors: () => [] });
   const internals = pool as unknown as {
     broadcast(id: string, message: unknown): void;
@@ -207,10 +210,11 @@ async function daemon(turns: Record<string, Turn[]>, { held = ['a'], parallel = 
   const parked = (childId: string) => vi.waitFor(async () => {
     expect((await list()).children.find((child) => child.sessionId === childId)?.state).toBe('parked');
   }, WAIT);
-  const message = (childId: string, body: unknown) => app.request(`/api/sessions/${ROOT}/children/${childId}/message`, {
+  const post = (path: string, body: unknown) => app.request(`/api/sessions/${ROOT}/children/${path}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
-  return { app, pool, session, planners, spawned, release, connect, list, running, parked, message, workspace };
+  const message = (childId: string, body: unknown) => post(`${childId}/message`, body);
+  return { app, pool, session, planners, spawned, sessions, release, connect, list, running, parked, post, message, workspace };
 }
 
 describe('navigating a tree over the daemon', () => {
@@ -453,6 +457,271 @@ describe('a person\'s message over the daemon', () => {
   });
 });
 
+describe('a person\'s task controls over the daemon', () => {
+  const QUESTION = 'May I drop the table?';
+
+  const started = async (turns: Record<string, Turn[]>, options?: DaemonOptions) => {
+    const made = await daemon(turns, options);
+    await made.session.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(made.spawned).toContain((options?.held ?? ['a'])[0]), WAIT);
+    return made;
+  };
+  type Made = Awaited<ReturnType<typeof started>>;
+  const childAt = async ({ running }: Made, depth: number, count = depth) => (await running(count)).find((child) => child.depth === depth)!;
+  const view = async ({ app }: Made, childId: string) => await (await app.request(`/api/sessions/${ROOT}/children/${childId}`)).json() as ChildPlanResponse;
+  /** The way a surface comes to answer: the list says who waits, the child's view says what it asked. */
+  const waiting = async (made: Made, childId: string, taskId = 'a') => {
+    await vi.waitFor(async () => expect((await made.list()).children.find((child) => child.sessionId === childId)?.checkpoints).toEqual([taskId]), WAIT);
+    return (await view(made, childId)).run.tasks.find((task) => task.id === taskId)!.checkpoint!;
+  };
+  const refused = async (answer: Response, status: number, code: ErrorBody['code']) => {
+    expect(answer.status).toBe(status);
+    expect(await answer.json()).toMatchObject({ code, error: expect.any(String) });
+  };
+
+  it('answers a child runner\'s checkpoint by the words a person read, and the runner goes on', async () => {
+    const made = await started({ d: [SUBMIT([aiTask('a', 1)]), REPLY, DONE] });
+    const child = await childAt(made, 1);
+    await made.parked(child.sessionId);
+    const rootSocket = made.connect(`/ws/session/${ROOT}`);
+    await rootSocket.saw('run_snapshot');
+    const childSocket = made.connect(`/ws/session/${ROOT}/child/${child.sessionId}`);
+    await childSocket.saw('run_snapshot');
+    const answer = made.sessions.get('a')!.callCheckpoint(QUESTION);
+
+    const question = await waiting(made, child.sessionId);
+    const told = () => ofType<ChildTreeFrame>(rootSocket.frames, 'child_tree').at(-1)?.children[0].checkpoints;
+    await vi.waitFor(() => expect(told()).toEqual(['a']), WAIT);
+    const done = await made.post(`${child.sessionId}/tasks/a/checkpoint/approve`, { question });
+
+    expect(question).toBe(QUESTION);
+    expect(done.status).toBe(200);
+    expect(await done.json() as ChildTaskControlResponse).toEqual({ message: expect.any(String) });
+    await expect(answer).resolves.toMatchObject({ kind: 'continue' });
+    expect((await view(made, child.sessionId)).run.tasks[0].status).toBe('in_progress');
+    await vi.waitFor(() => expect(told()).toBeUndefined(), WAIT);
+
+    await childSocket.saw('execution_action');
+    const answered = (socket: Socket) => ofType<{ record: { command: string; actor: string; person?: true } }>(socket.frames, 'execution_action').map((frame) => frame.record).filter((record) => record.command === 'answer_checkpoint');
+    expect(answered(childSocket)).toEqual([expect.objectContaining({ actor: 'subplanner', person: true })]);
+    expect(answered(rootSocket)).toEqual([]);
+    made.release('a');
+    await vi.waitFor(() => expect(made.session.planTasks[0].status).toBe('completed'), WAIT);
+  });
+
+  it('reads a long question whole, so what a person read is what it answers', async () => {
+    const made = await started({ d: [SUBMIT([aiTask('a', 1)]), REPLY, DONE] });
+    const child = await childAt(made, 1);
+    await made.parked(child.sessionId);
+    const long = `First line, ${'with more to weigh '.repeat(20)}\nand a second line.`;
+    const answer = made.sessions.get('a')!.callCheckpoint(long);
+
+    const question = await waiting(made, child.sessionId);
+    expect(question).toBe(long);
+    expect((await made.post(`${child.sessionId}/tasks/a/checkpoint/approve`, { question })).status).toBe(200);
+    await expect(answer).resolves.toMatchObject({ kind: 'continue' });
+    made.release('a');
+  });
+
+  it('tells a runner why, and asks a rejection for its reason, leaving it waiting', async () => {
+    const made = await started({ d: [SUBMIT([aiTask('a', 1)]), REPLY, DONE] });
+    const child = await childAt(made, 1);
+    await made.parked(child.sessionId);
+    const answer = made.sessions.get('a')!.callCheckpoint(QUESTION);
+    const question = await waiting(made, child.sessionId);
+
+    await refused(await made.post(`${child.sessionId}/tasks/a/checkpoint/reject`, { question }), 400, 'refused');
+    await refused(await made.post(`${child.sessionId}/tasks/a/checkpoint/reject`, { question, reason: '   ' }), 400, 'refused');
+    expect(await waiting(made, child.sessionId)).toBe(QUESTION);
+
+    const done = await made.post(`${child.sessionId}/tasks/a/checkpoint/reject`, { question, reason: 'Keep the table.' });
+
+    expect(done.status).toBe(200);
+    await expect(answer).resolves.toEqual({ kind: 'rejected', reason: 'Keep the table.' });
+    made.release('a');
+  });
+
+  it('refuses an answer to a question that is no longer the one waiting', async () => {
+    const made = await started({ d: [SUBMIT([aiTask('a', 1)]), REPLY, DONE] });
+    const child = await childAt(made, 1);
+    await made.parked(child.sessionId);
+
+    await refused(await made.post(`${child.sessionId}/tasks/a/checkpoint/approve`, { question: 'Anything?' }), 409, 'checkpoint_not_waiting');
+
+    const first = made.sessions.get('a')!.callCheckpoint('First?');
+    await waiting(made, child.sessionId);
+    expect((await made.post(`${child.sessionId}/tasks/a/checkpoint/approve`, { question: 'First?' })).status).toBe(200);
+    await first;
+    await refused(await made.post(`${child.sessionId}/tasks/a/checkpoint/approve`, { question: 'First?' }), 409, 'checkpoint_not_waiting');
+
+    const second = made.sessions.get('a')!.callCheckpoint('Second?');
+    await waiting(made, child.sessionId);
+    await refused(await made.post(`${child.sessionId}/tasks/a/checkpoint/approve`, { question: 'First?' }), 409, 'checkpoint_not_waiting');
+    expect(await waiting(made, child.sessionId)).toBe('Second?');
+    expect((await made.post(`${child.sessionId}/tasks/a/checkpoint/approve`, { question: 'Second?' })).status).toBe(200);
+    await second;
+    made.release('a');
+  });
+
+  it('messages the runner named, which a message at a checkpoint may not stand in for', async () => {
+    const made = await started({ d: [SUBMIT([aiTask('a', 1), aiTask('b', 2)]), REPLY, DONE] }, { held: ['a', 'b'] });
+    const child = await childAt(made, 1);
+    await made.parked(child.sessionId);
+    await vi.waitFor(() => expect(made.spawned).toContain('b'), WAIT);
+
+    const sent = await made.post(`${child.sessionId}/tasks/b/message`, { message: 'Mind the migrations.' });
+
+    expect(sent.status).toBe(200);
+    expect(await sent.json() as ChildTaskControlResponse).toEqual({ message: expect.any(String), id: expect.any(String) });
+    const reached = (taskId: string) => {
+      const session = made.sessions.get(taskId)!;
+      return [...session.delivered, ...session.messages.map((message) => message.text)];
+    };
+    expect(reached('b').join()).toContain('Mind the migrations.');
+    expect(reached('a')).toEqual([]);
+
+    const answer = made.sessions.get('a')!.callCheckpoint(QUESTION);
+    const question = await waiting(made, child.sessionId);
+    await refused(await made.post(`${child.sessionId}/tasks/a/message`, { message: 'yes' }), 409, 'child_refused');
+    expect(reached('a')).toEqual([]);
+
+    await made.post(`${child.sessionId}/tasks/a/checkpoint/approve`, { question });
+    await answer;
+    made.release('a');
+    made.release('b');
+  });
+
+  it('refuses aloud what only the plan above can give, and a body that says nothing', async () => {
+    const made = await started({ d: [SUBMIT([aiTask('a', 1)]), REPLY, DONE] });
+    const child = await childAt(made, 1);
+    await made.parked(child.sessionId);
+    const limit = made.session.planTasks[0].budget?.tokens;
+    const answer = made.sessions.get('a')!.callCheckpoint(QUESTION);
+    const question = await waiting(made, child.sessionId);
+
+    for (const body of [{ question, raiseTokens: 9_000_000 }, { question, force: true }, {}, { question: 7 }, { question: '  ' }]) {
+      await refused(await made.post(`${child.sessionId}/tasks/a/checkpoint/approve`, body), 400, 'refused');
+    }
+    for (const body of [{ message: 'go', force: true }, { message: 'go', raiseTokens: 1 }, {}, { message: '   ' }, { message: 7 }]) {
+      await refused(await made.post(`${child.sessionId}/tasks/a/message`, body), 400, 'refused');
+    }
+    await refused(await made.app.request(`/api/sessions/${ROOT}/children/${child.sessionId}/tasks/a/message`, { method: 'POST', body: 'not json' }), 400, 'refused');
+
+    expect(made.session.planTasks[0].budget?.tokens).toBe(limit);
+    expect(await waiting(made, child.sessionId)).toBe(QUESTION);
+    expect((await made.post(`${child.sessionId}/tasks/a/checkpoint/approve`, { question })).status).toBe(200);
+    await answer;
+    made.release('a');
+  });
+
+  it('reaches a task at depth two through the plan that holds it, and no other', async () => {
+    const made = await started({
+      d: [SUBMIT([nested('n', 1), { ...aiTask('c', 2, ['n']), title: 'Check n', readOnly: true }]), DONE],
+      n: [SUBMIT([aiTask('a', 1)]), REPLY, DONE],
+    });
+    const above = await childAt(made, 1, 2);
+    const deep = await childAt(made, 2);
+    await made.parked(deep.sessionId);
+    const answer = made.sessions.get('a')!.callCheckpoint('Deep?');
+    const question = await waiting(made, deep.sessionId);
+
+    await refused(await made.post(`${above.sessionId}/tasks/a/checkpoint/approve`, { question }), 404, 'child_task_not_found');
+    await refused(await made.post(`${above.sessionId}/tasks/a/message`, { message: 'hello' }), 404, 'child_task_not_found');
+
+    expect((await made.post(`${deep.sessionId}/tasks/a/checkpoint/approve`, { question })).status).toBe(200);
+    await expect(answer).resolves.toMatchObject({ kind: 'continue' });
+    made.release('a');
+  });
+
+  it('answers a depth-two subplanner\'s question on the delegated task waiting for it in its parent', async () => {
+    const asks: Turn = async (tools) => { await tools.checkpoint!({ question: 'Which file?' }, signal()); };
+    const made = await started({
+      d: [SUBMIT([nested('n', 1), { ...aiTask('c', 2, ['n']), title: 'Check n', readOnly: true }]), REPLY, DONE],
+      n: [SUBMIT([aiTask('a', 1)]), asks, REPLY, DONE],
+    });
+    const above = await childAt(made, 1, 2);
+    const deep = await childAt(made, 2);
+    await made.parked(deep.sessionId);
+    expect((await made.message(deep.sessionId, { message: 'ask above' })).status).toBe(200);
+    const question = await waiting(made, above.sessionId, 'n');
+
+    await refused(await made.post(`${deep.sessionId}/tasks/n/checkpoint/approve`, { question }), 404, 'child_task_not_found');
+    expect((await made.post(`${above.sessionId}/tasks/n/checkpoint/reject`, { question, reason: 'Use a.txt.' })).status).toBe(200);
+
+    await vi.waitFor(() => expect(made.planners.n.asked.join('\n')).toContain('Use a.txt.'), WAIT);
+    made.release('a');
+  });
+
+  it('leaves a depth-one subplanner\'s question with the root, never answering it from the child', async () => {
+    const asks: Turn = async (tools) => { await tools.checkpoint!({ question: 'Which way?' }, signal()); };
+    const made = await started({ d: [SUBMIT([aiTask('a', 1)]), asks, REPLY, DONE] });
+    const child = await childAt(made, 1);
+    await made.parked(child.sessionId);
+    await made.message(child.sessionId, { message: 'ask above' });
+    await vi.waitFor(() => expect(made.session.escalations().find((e) => e.kind === 'checkpoint')).toBeDefined(), WAIT);
+
+    await refused(await made.post(`${child.sessionId}/tasks/d/checkpoint/approve`, { question: 'Which way?' }), 404, 'child_task_not_found');
+    await refused(await made.post(`${child.sessionId}/tasks/d/message`, { message: 'left' }), 404, 'child_task_not_found');
+
+    expect(made.session.escalations().find((e) => e.kind === 'checkpoint')).toBeDefined();
+    expect((await made.list()).children[0].checkpoints).toBeUndefined();
+    await made.session.execute({ command: 'answer_checkpoint', task: 'd', answer: 'approve', reason: 'left' }, { kind: 'user' });
+    await vi.waitFor(() => expect(made.planners.d.asked.join('\n')).toContain('The plan above answered your question: approved'), WAIT);
+    made.release('a');
+  });
+
+  it('names nothing outside the tree or the plan: a stranger\'s id, the root\'s, a reference that only the root resolves', async () => {
+    const made = await started({ d: [SUBMIT([aiTask('a', 1)]), REPLY, DONE] });
+    const child = await childAt(made, 1);
+    await made.parked(child.sessionId);
+    const answer = made.sessions.get('a')!.callCheckpoint(QUESTION);
+    const question = await waiting(made, child.sessionId);
+
+    for (const id of ['session-other', ROOT, '..%2Fsession-other']) {
+      await refused(await made.post(`${id}/tasks/a/message`, { message: 'hi' }), 404, 'child_not_found');
+      await refused(await made.post(`${id}/tasks/a/checkpoint/approve`, { question }), 404, 'child_not_found');
+    }
+    for (const task of ['missing', '%231', 'Write%20a', '..%2Fa']) {
+      await refused(await made.post(`${child.sessionId}/tasks/${task}/checkpoint/approve`, { question }), 404, 'child_task_not_found');
+    }
+
+    expect(await waiting(made, child.sessionId)).toBe(QUESTION);
+    expect((await made.post(`${child.sessionId}/tasks/a/checkpoint/approve`, { question })).status).toBe(200);
+    await answer;
+    made.release('a');
+  });
+
+  it('refuses a task with no runner left, and leaves a finished plan to read', async () => {
+    const made = await started({ d: [SUBMIT([aiTask('a', 1), aiTask('b', 2, ['a'])]), REPLY, DONE] }, { held: ['b'] });
+    const child = await childAt(made, 1);
+    await vi.waitFor(async () => expect((await view(made, child.sessionId)).run.tasks.find((task) => task.id === 'a')?.status).toBe('completed'), WAIT);
+
+    await refused(await made.post(`${child.sessionId}/tasks/a/message`, { message: 'one more thing' }), 409, 'child_refused');
+    await refused(await made.post(`${child.sessionId}/tasks/a/checkpoint/approve`, { question: 'Any?' }), 409, 'checkpoint_not_waiting');
+
+    made.release('b');
+    await vi.waitFor(async () => expect((await made.list()).children[0].state).toBe('ended'), WAIT);
+    await refused(await made.post(`${child.sessionId}/tasks/b/message`, { message: 'too late' }), 409, 'child_view_only');
+    await refused(await made.post(`${child.sessionId}/tasks/b/checkpoint/approve`, { question: 'Any?' }), 409, 'child_view_only');
+    expect((await view(made, child.sessionId)).child.state).toBe('ended');
+  });
+
+  it('refuses once Stop halts the tree, and the runner hears its question withdrawn', async () => {
+    const made = await started({ d: [SUBMIT([aiTask('a', 1)]), REPLY, DONE] });
+    const child = await childAt(made, 1);
+    await made.parked(child.sessionId);
+    const answer = made.sessions.get('a')!.callCheckpoint(QUESTION);
+    const question = await waiting(made, child.sessionId);
+
+    await made.session.execute({ command: 'stop_run' }, { kind: 'user' });
+
+    const late = await made.post(`${child.sessionId}/tasks/a/checkpoint/approve`, { question });
+    expect(late.status).toBe(409);
+    expect(['child_refused', 'child_view_only']).toContain((await late.json() as ErrorBody).code);
+    await expect(answer).resolves.toMatchObject({ kind: 'withdrawn' });
+  });
+});
+
 describe('the boundary of a tree', () => {
   it('names nothing outside it, by request or by socket, and reads nothing for it', async () => {
     const { app, session, spawned, connect, running, message, release } = await daemon({ d: [SUBMIT([aiTask('a', 1)]), DONE] });
@@ -486,6 +755,10 @@ describe('the boundary of a tree', () => {
     expect(await (await app.request(`/api/sessions/${flat.id}/children`)).json()).toEqual({ children: [] });
     expect((await app.request(`/api/sessions/${flat.id}/children/${child.sessionId}`)).status).toBe(404);
     expect(await (await app.request('/api/sessions/session-unloaded/children')).json()).toMatchObject({ code: 'session_not_found' });
+    const control = (path: string, body: unknown) => app.request(path, { method: 'POST', body: JSON.stringify(body) });
+    expect(await (await control(`/api/sessions/session-unloaded/children/${child.sessionId}/tasks/a/message`, { message: 'Hi.' })).json()).toMatchObject({ code: 'session_not_found' });
+    expect(await (await control(`/api/sessions/session-unloaded/children/${child.sessionId}/tasks/a/checkpoint/approve`, { question: 'Why?' })).json()).toMatchObject({ code: 'session_not_found' });
+    expect(await (await control(`/api/sessions/${flat.id}/children/${child.sessionId}/tasks/a/message`, { message: 'Hi.' })).json()).toMatchObject({ code: 'child_not_found' });
     const stray = connect(`/ws/session/${flat.id}/child/${child.sessionId}`);
     expect(await stray.closed).toBe(4404);
     release('a');

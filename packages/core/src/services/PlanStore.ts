@@ -8,12 +8,15 @@ import { sessionOwner } from './continuation';
 import { betweenRounds, loopRoundOf } from '../models/Loop';
 import { handoffDigest, type StoredHandoff } from '../models/Handoff';
 
-/** Deep copy of a task tree, down to the arrays the store rewrites. */
+/**
+ * Deep copy of a task tree, down to the arrays the store rewrites. A task's
+ * usage is shared: the store replaces it and never writes into it, and it was
+ * what a snapshot spent most of its time copying.
+ */
 function cloneTasks(tasks: ReadonlyArray<Readonly<Task>>): Task[] {
   return tasks.map((t) => ({
     ...t,
     dependencies: [...t.dependencies],
-    ...(t.attemptUsage ? { attemptUsage: structuredClone(t.attemptUsage) } : {}),
     ...(t.loop ? { loop: { ...t.loop, body: [...t.loop.body] } } : {}),
     subtasks: cloneTasks(t.subtasks ?? []),
   }));
@@ -47,6 +50,8 @@ export class PlanStore {
   private _onMutate: (() => void) | null = null;
   private _onTree: ((ids: ReadonlySet<string>) => void) | null = null;
   private _executionLog: TaskSnapshot[] = [];
+  private _revision = 0;
+  private _statusMark: { revision: number; mark: string } | null = null;
 
   /** Hook called after every structural mutation (add/remove/update/resetForRun). */
   set onMutate(cb: (() => void) | null) { this._onMutate = cb; }
@@ -75,6 +80,18 @@ export class PlanStore {
   get(taskId: string): Readonly<Task> | undefined { return this._taskMap.get(taskId); }
 
   /**
+   * Moves with every write to the plan, so a reader that walks it can tell
+   * whether its last walk still stands. Writers reach a task through
+   * {@link edit}, so a write cannot leave this behind.
+   */
+  get revision(): number { return this._revision; }
+
+  private edit(id: string): Task | undefined {
+    this._revision++;
+    return this._taskMap.get(id);
+  }
+
+  /**
    * Whether a task runs as an ops task (ADR-0020): a top-level AI task marked
    * so, or a script task, which is one by nature (ADR-0035). A subtask runs
    * with the top-level task it hangs under.
@@ -86,7 +103,10 @@ export class PlanStore {
 
   /** Every task's status and what it waits for, to tell cheaply whether one has changed since this was read. */
   statusMark(): string {
-    return this._allTasks.map((t) => `${t.status}:${t.awaitingReason ?? ''}:${t.resumeAt ?? ''}`).join();
+    if (this._statusMark?.revision !== this._revision) {
+      this._statusMark = { revision: this._revision, mark: this._allTasks.map((t) => `${t.status}:${t.awaitingReason ?? ''}:${t.resumeAt ?? ''}`).join() };
+    }
+    return this._statusMark.mark;
   }
 
   /** A copy of the task tree, detached from the store: later status changes do not reach it. */
@@ -216,10 +236,12 @@ export class PlanStore {
 
   /** See {@link releaseMadeManual}; `live` names what a runner still holds. */
   releaseMadeManual(live?: (taskId: string) => boolean): void {
+    this._revision++;
     releaseMadeManual(this._planTasks, live);
   }
 
   private ready(t: Task): void {
+    this._revision++;
     delete t.handoff;
     delete t.outputSummary;
     t.status = 'approved';
@@ -241,7 +263,7 @@ export class PlanStore {
 
   markSkipped(id: string, reason?: string): void {
     this.setStatus(id, 'skipped');
-    const task = this._taskMap.get(id);
+    const task = this.edit(id);
     if (task && reason) task.skipReason = reason;
   }
 
@@ -251,25 +273,25 @@ export class PlanStore {
 
   /** Its first attempt is starting: from now on its chat exists, whatever becomes of the attempt. */
   markAttempted(id: string): void {
-    const task = this._taskMap.get(id);
+    const task = this.edit(id);
     if (task) task.attempted = true;
   }
 
   /** Its attempt starts: the number now tells its waits from the last attempt's, so they count from nothing (ADR-0053). */
   markAttemptStarted(id: string): void {
     this.setStatus(id, 'in_progress');
-    const task = this._taskMap.get(id);
+    const task = this.edit(id);
     if (task) delete task.waitsEnded;
   }
 
   /** Saved beside the wait it explains: see {@link Task.parkedQuestion}. */
   parkQuestion(id: string, question: string): void {
-    const task = this._taskMap.get(id);
+    const task = this.edit(id);
     if (task) task.parkedQuestion = question;
   }
 
   markAwaitingUser(id: string, reason?: AwaitingReason): void {
-    const task = this._taskMap.get(id);
+    const task = this.edit(id);
     if (!task) return;
     this.leaveStatus(task, 'awaiting_user');
     task.status = 'awaiting_user';
@@ -281,7 +303,7 @@ export class PlanStore {
 
   /** When a task paused on a usage limit resumes on its own; undefined leaves it to a manual retry. */
   setTaskResumeAt(id: string, resumeAt: string | undefined): void {
-    const task = this._taskMap.get(id);
+    const task = this.edit(id);
     if (!task || task.awaitingReason !== 'usage-limit') return;
     if (resumeAt) task.resumeAt = resumeAt;
     else delete task.resumeAt;
@@ -297,7 +319,7 @@ export class PlanStore {
    * limit goes on with the attempt the limit cut short.
    */
   retry(id: string, opts: { sameRound?: boolean } = {}): void {
-    const task = this._taskMap.get(id);
+    const task = this.edit(id);
     if (task) {
       this.setStatus(id, 'pending');
       task.verdict = undefined;
@@ -319,7 +341,7 @@ export class PlanStore {
    * retries of every kind pass here; the claim asks for the starts that do not.
    */
   takeBackChecks(id: string): void {
-    const task = this._taskMap.get(id);
+    const task = this.edit(id);
     if (task?.type !== 'delegated') return;
     for (const check of this.checksOf(task)) {
       if (check.status !== 'pending' && check.status !== 'approved') this.retry(check.id);
@@ -329,13 +351,13 @@ export class PlanStore {
   /** Its landed work was reverted (ADR-0054): as a retry leaves it, marked so until it starts. */
   markReverted(id: string): void {
     this.retry(id);
-    const task = this._taskMap.get(id);
+    const task = this.edit(id);
     if (task) task.reverted = true;
   }
 
   /** A loop's check counts its rounds afresh from its next run (ADR-0045 L7). */
   startRoundsOver(id: string): void {
-    const task = this._taskMap.get(id);
+    const task = this.edit(id);
     if (task) delete task.loopRound;
   }
 
@@ -345,7 +367,7 @@ export class PlanStore {
    * the task — its report went to the body, and stays in its attempt's log.
    */
   repeat(id: string): void {
-    const task = this._taskMap.get(id);
+    const task = this.edit(id);
     if (!task) return;
     const round = loopRoundOf(task) + 1;
     this.retry(id);
@@ -354,13 +376,13 @@ export class PlanStore {
 
   /** Kept on the task: it was force-started past its merge gate, before these ancestors' work was merged (ADR-0020). */
   setForcedPastGate(id: string, dependencies: string[]): void {
-    const task = this._taskMap.get(id);
+    const task = this.edit(id);
     if (task) task.forcedPastGate = dependencies;
   }
 
   /** One of the task's waits is over, so what it waits on next is another (ADR-0053). */
   endWait(id: string): void {
-    const task = this._taskMap.get(id);
+    const task = this.edit(id);
     if (task) task.waitsEnded = (task.waitsEnded ?? 0) + 1;
   }
 
@@ -371,7 +393,7 @@ export class PlanStore {
 
   /** A reason outlives nothing: any status but `awaiting_user` drops it, and the resume time with it; any status drops a skip's reason. */
   private setStatus(id: string, status: Exclude<TaskStatus, 'awaiting_user'>): void {
-    const task = this._taskMap.get(id);
+    const task = this.edit(id);
     if (!task) return;
     this.leaveStatus(task, status);
     task.status = status;
@@ -383,7 +405,7 @@ export class PlanStore {
   }
 
   setTaskVerdict(id: string, verdict: Task['verdict']): void {
-    const task = this._taskMap.get(id);
+    const task = this.edit(id);
     if (task) task.verdict = verdict;
   }
 
@@ -393,7 +415,7 @@ export class PlanStore {
    * it: the plan holds the latest attempt's, as it does the summary.
    */
   setTaskOutputSummary(id: string, summary: Task['outputSummary'], handoff?: StoredHandoff): void {
-    const task = this._taskMap.get(id);
+    const task = this.edit(id);
     if (!task) return;
     task.outputSummary = summary;
     if (handoff) task.handoff = handoffDigest(handoff);
@@ -402,7 +424,7 @@ export class PlanStore {
 
   /** The owner is saved with the session it belongs to, and dropped with it. */
   setTaskRunnerSessionId(id: string, runnerSessionId: string | undefined, owner?: RunnerId): void {
-    const task = this._taskMap.get(id);
+    const task = this.edit(id);
     if (!task) return;
     task.runnerSessionId = runnerSessionId;
     if (runnerSessionId && owner) task.runnerSessionOwner = owner;
@@ -410,32 +432,32 @@ export class PlanStore {
   }
 
   setCarriedFrom(id: string, runner: RunnerId): void {
-    const task = this._taskMap.get(id);
+    const task = this.edit(id);
     if (task) task.carriedFrom = runner;
   }
 
   clearCarriedFrom(id: string): void {
-    const task = this._taskMap.get(id);
+    const task = this.edit(id);
     if (task) delete task.carriedFrom;
   }
 
   startAttemptUsage(id: string, attempt: number, runner: string, startedAt: string): void {
-    const task = this._taskMap.get(id);
+    const task = this.edit(id);
     if (task) task.attemptUsage = [...task.attemptUsage ?? [], startAttemptUsage(attempt, runner, startedAt)];
   }
 
   recordAttemptUsage(id: string, attempt: number, record: UsageRecord, now: string): void {
-    const task = this._taskMap.get(id);
+    const task = this.edit(id);
     if (task?.attemptUsage) task.attemptUsage = task.attemptUsage.map((usage) => usage.attempt === attempt ? addAttemptUsage(usage, record, now) : usage);
   }
 
   endAttemptUsage(id: string, attempt: number, now: string, runnerSessionCost?: RunnerSessionCost, sessionId?: string): void {
-    const task = this._taskMap.get(id);
+    const task = this.edit(id);
     if (task?.attemptUsage) task.attemptUsage = task.attemptUsage.map((usage) => usage.attempt === attempt ? endAttemptUsage(usage, now, runnerSessionCost, sessionId) : usage);
   }
 
   setTaskAttemptSkills(id: string, skills: Task['attemptSkills']): void {
-    const task = this._taskMap.get(id);
+    const task = this.edit(id);
     if (task) task.attemptSkills = skills && skills.length > 0 ? skills : undefined;
   }
 
@@ -462,6 +484,7 @@ export class PlanStore {
   }
 
   private rebuild(): void {
+    this._revision++;
     // Frozen because the getters return these arrays as they are; a caller
     // that casts the readonly type away still cannot reshape the plan.
     Object.freeze(this._planTasks);
