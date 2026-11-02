@@ -47,6 +47,16 @@ describe('a subplanner at the seam (ADR-0056 M6)', () => {
     expect(held.kind).toBe(grant === null ? 'refuse' : 'allow');
   });
 
+  it('gives a person acting through it no more than the subplanner holds', () => {
+    const person = { ...SUBPLANNER, person: true } as const;
+    for (const command of COMMANDS) {
+      expect(seamAt(child(['observe'])).consent(person, command)).toEqual(seamAt(child(['observe'])).consent(SUBPLANNER, command));
+      expect(seamAt(child([...GRANTS])).consent(person, command)).toEqual(seamAt(child([...GRANTS])).consent(SUBPLANNER, command));
+    }
+    expect(seamAt(child(['observe'])).consent(person, 'answer_checkpoint').kind).toBe('refuse');
+    expect(seamAt(child([...GRANTS])).consent(person, 'mark_complete').kind).toBe('refuse');
+  });
+
   it('asks nobody even in Guarded, where a planner turn is asked', () => {
     expect(seamAt(child(['control'], { autonomy: 'guarded' })).consent(SUBPLANNER, 'run_task')).toEqual({ kind: 'allow' });
   });

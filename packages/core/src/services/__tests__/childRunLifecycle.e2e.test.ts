@@ -653,6 +653,7 @@ describe('a Continue (ADR-0055 D17)', () => {
 describe('a reopened child, read from above (ADR-0057 R1)', () => {
   const reopened = new Subtree({
     here: 'root',
+    tasks: () => [{ ...delegated(), runnerSessionId: 'child' }],
     nodes: () => [{ path: 'root/1', sessionId: 'child', taskId: 'd' }, { path: 'root/2', sessionId: 'child', taskId: 'd' }],
     plan: () => [delegated()],
     logs: () => ({ attempts: () => [], events: () => [] }),
@@ -732,7 +733,7 @@ describe('a crash in the middle of a child run (ADR-0055 D17)', () => {
     expect(taskOf(parent, 'd')).toMatchObject({ status: 'failed', runnerSessionId: child });
     expect(parent.escalations().map((e) => e.task?.id)).toContain('d');
     // Its worktree is the child's code root, so the adoption's prune left it.
-    expect(parent.planState?.isolation?.run.tasks.d.status).toBe('kept');
+    await vi.waitFor(() => expect(parent.planState?.isolation?.run.tasks.d.status).toBe('kept'));
     parent.destroy();
   });
 

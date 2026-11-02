@@ -3240,7 +3240,14 @@ already reads as not started (D16, D20).
 worktree, its state under the root's (`ChildPlanSession` behind `ChildPlanRunner`, the
 runner seam, ADR-0055 D3). Its plan is approved as it lands, and it merges into the
 delegated task's branch by itself at its run's end, so only the root touches the
-user's branch. Nothing of it reaches a surface directly. A Stop reaches all of it,
+user's branch. A surface reaches it only through its root: `ChildDirectory` answers
+for every plan below one, by the stable session id the tree's ledger names, and an id
+it does not name is refused before anything is read (D20). A surface may read and
+stream any of them. A person may message a live subplanner, and may message a task's
+runner or answer a checkpoint the plan holds, by the task's exact id, as that plan's
+subplanner's own command: it can do nothing the subplanner could not, and nothing falls
+through to the root. One that has ended is view-only until its task is continued or
+retried. A Stop reaches all of it,
 tombstone first, and resolves when it has gone (D16). A Continue reopens it and any
 fresh attempt discards its run, its state staying under the root (D15, D17).
 
@@ -3250,9 +3257,12 @@ delegated task names, in that task's worktree, Act with autorun inside its
 and `checkpoint`, on a token bound to the attempt, and it is parked between turns. Its
 harness's own subagents are withheld unless its delegated task named `research`. Its
 `checkpoint` answers at once and goes up one level as its delegated task's checkpoint,
-where a person sees it only at the root, and the answer opens its next turn (ADR-0056
-M8). A turn that ends with nothing running and no call gets one reminder, and a second
-fails the attempt with a derived report. *Avoid:* "worker", "child agent" (a task's
+which the root's inbox lists at depth one and a person may answer on the plan that holds
+it, and the answer opens its next turn (ADR-0056 M8). A person's message wakes it or queues behind its turn, under the shared slot
+limit, and carries nothing with it: it holds the actor and grants it had, and raises
+no budget and approves no effect. The message stays with it unless it passes what is
+relevant up itself (D20). A turn that ends with nothing running and no call gets one
+reminder, and a second fails the attempt with a derived report. *Avoid:* "worker", "child agent" (a task's
 runner is neither planner nor node); a subplanner never implements.
 
 **Protected paths** — what a **Delegated task** names its child may not change,

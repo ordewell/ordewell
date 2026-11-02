@@ -4,6 +4,17 @@ import type { Duplex } from 'stream';
 import { DAEMON_SUBPROTOCOL, type RunSnapshotFrame, type SessionFrame } from '@ordewell/core';
 import { OrchestratorPool } from '../pool/orchestratorPool';
 
+const CHILD_PATH = /^\/ws\/session\/([^/]+)\/child\/([^/]+)$/;
+
+/** Nothing is sent before the tree has named the child, so a stray id learns only that it was refused. */
+function joinChild(pool: OrchestratorPool, ws: WebSocket, rootId: string, childId: string): void {
+  const leave = () => pool.unwatchChild(rootId, childId, ws);
+  ws.on('close', leave);
+  ws.on('error', leave);
+  const refuse = () => ws.close(4404, 'No such child plan in this tree');
+  void pool.watchChild(rootId, childId, ws).then((watching) => { if (!watching) refuse(); }, refuse);
+}
+
 export function createWsHandler(pool: OrchestratorPool) {
   const wss = new WebSocketServer({
     noServer: true,
@@ -15,6 +26,11 @@ export function createWsHandler(pool: OrchestratorPool) {
 
   wss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
     const url = new URL(request.url ?? '', `http://${request.headers.host}`);
+    const child = CHILD_PATH.exec(url.pathname);
+    if (child) {
+      joinChild(pool, ws, child[1], child[2]);
+      return;
+    }
     const sessionId = url.pathname.split('/').pop() || '';
 
     ws.on('close', () => {

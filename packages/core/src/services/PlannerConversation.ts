@@ -396,9 +396,13 @@ export class ConversationBusyError extends ConversationEditError {
  * transcript.
  */
 export class PlannerTurnDiscardedError extends Error {
-  constructor(options?: ErrorOptions) {
+  /** No turn had taken the input this answers, so the planner never read it. */
+  readonly unread: boolean;
+
+  constructor({ unread = false, ...options }: ErrorOptions & { unread?: boolean } = {}) {
     super('The planner turn was discarded: the plan it was answering is no longer the current one.', options);
     this.name = 'PlannerTurnDiscardedError';
+    this.unread = unread;
   }
 }
 

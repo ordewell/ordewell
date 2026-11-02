@@ -31,6 +31,14 @@ export class InvalidBodyError extends Error {
   }
 }
 
+/** An id the tree does not hold, whatever else it might name. */
+export class ChildNotFoundError extends Error {
+  constructor() {
+    super('This tree has no such child plan.');
+    this.name = 'ChildNotFoundError';
+  }
+}
+
 /**
  * The body of a route that needs one object. Every route that read
  * `c.req.json()` directly turned a client's typo into a 500 with the parser's
@@ -61,6 +69,7 @@ export async function jsonObject<T extends object = Record<string, unknown>>(c: 
 function classify(err: unknown): Classified | undefined {
   if (err instanceof InvalidBodyError) return { status: 400, code: 'refused' };
   if (err instanceof SessionNotFoundError) return { status: 404, code: 'session_not_found' };
+  if (err instanceof ChildNotFoundError) return { status: 404, code: 'child_not_found' };
   // 409: the session exists; another host has it open right now (ADR-0049).
   if (err instanceof SessionHeldError) return { status: 409, code: 'session_held' };
   if (err instanceof NoPlanError) return { status: 400, code: 'no_plan' };

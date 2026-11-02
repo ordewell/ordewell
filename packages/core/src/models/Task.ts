@@ -770,6 +770,8 @@ export interface PendingPlanTurn {
   tasks?: string[];
   /** It goes with the next turn and opens none (ADR-0057 R6). */
   rides?: true;
+  /** Who a message comes from where the conversation cannot tell (ADR-0055 D20): it stands or falls with its message, and a turn says it once. */
+  aside?: string;
 }
 
 /**

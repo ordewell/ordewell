@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0009", "0013", "0015", "0018", "0020", "0022", "0029", "0030", "0035", "0045", "0046", "0049", "0054"]
-note: "Settles #33. Built: D1 to D19 and D21, so a child plan runs end to end behind the build's switch, asks up a level, stops as a subtree and comes back on a Continue, its conflicts and merges with it, a reopened subplanner taking its native session up where its harness keeps one. D20 is built for the TUI and VS Code: a row with its goal, budget left and live counts, D16's stopping row, a log of what its child's tasks become, and a report's open and promoted findings; a tree view is later."
+note: "Settles #33. Built: D1 to D19 and D21, so a child plan runs end to end behind the build's switch, asks up a level, stops as a subtree and comes back on a Continue, its conflicts and merges with it, a reopened subplanner taking its native session up where its harness keeps one. D20 is built for the TUI and VS Code: a row with its goal, budget left and live counts, D16's stopping row, a log of what its child's tasks become, and a report's open and promoted findings. The core and daemon let a surface list a tree, read and stream any child, message a live subplanner, message a child's runner and answer a checkpoint a child plan holds; the TUI and VS Code drawing that are later."
 ---
 
 # 0055 — A delegated task is a child plan behind the runner seam
@@ -496,14 +496,38 @@ the child cannot reach follows it in the parent's plan.**
   to any task's: Ordewell's counts, what the plan above must decide (`open`), and what
   its subplanner passed up (`promoted`), each by the reference that names it
   (ADR-0057 R2). A surface draws none of it unless delegation is offered, and a webview,
-  which cannot read the checkout it was built from, is told by its host. A child's `broadcast` carries nothing to a surface: its planner messages, cards
-  and status never reach the user directly. Usage rolls up: each record its planner or
+  which cannot read the checkout it was built from, is told by its host. A child's `broadcast` goes to the root only as its row and its log,
+  and a surface reads a child by asking for it. `ChildDirectory`, on the root, answers for
+  every plan below it, at any depth: the ledger says which ids are in this tree, so an
+  id from elsewhere is refused before anything is read under it, and a child reads as
+  `working`, `parked` or `ended`, by the same session id across a Continue and with a
+  list that keeps a child a fresh attempt let go. Its conversation, tasks and runner
+  logs are the daemon's to serve (`/api/sessions/:id/children`, and
+  `/ws/session/:id/child/:childId`, a stream with its own sequence that a reconnect takes
+  a snapshot from). A surface never answers for a child as a whole: its approvals are
+  its allowlist's, a subplanner's own checkpoint goes up (ADR-0056 M8) and is answered on
+  the plan above, and a raise stays there too. A person may message a parked or working
+  subplanner: the message wakes it, or queues behind its turn, and holds a slot under
+  the same limit as any turn (D18). It is words only, under the actor and grants that
+  child already holds, so it raises no budget, widens no Mandate and approves no
+  effect, and the verdict's protected-path and merge checks ask what they always did. It
+  stays with the child: nothing tells the plan above unless the subplanner passes it up
+  itself. A failed turn is told only on that child's stream. A person may also act on a
+  task of an open child: message its runner, or answer the checkpoint it waits at, a
+  subplanner's question included where that plan's delegated task holds it. The
+  checkpoints waiting are listed with the child, so a surface need not open it to know.
+  Each is that plan's own command under its subplanner's actor and grants, kept on its
+  record as a person's, so it can do nothing the subplanner could not, and carries no
+  raise and no force, which are refused aloud. It names the plan's task by its exact id:
+  nothing resolves a reference, and nothing falls through to the root. An answer carries
+  the question the person read, so it never lands on a later one. The subplanner hears
+  of it on its next turn, which this does not open. An ended child is view-only
+  until its task is continued or retried. Usage rolls up: each record its planner or
   a task spends goes up as it arrives, a level at a time, onto the delegated task's
   attempt, so `planUsage` and the row add it as they add any task's. It was charged
   where it was spent (ADR-0056 M5), so an attempt of a delegated task charges nothing,
   and the row has no context meter: no one session's context is a subtree's. A child
-  session is never offered: `listSessions` does not see it (D11). A full tree view is
-  later.
+  session is never offered: `listSessions` does not see it (D11).
 - **Off unless turned on (D21).** Delegation is a run setting, off by default
   ([ADR-0030](0030-global-run-settings.md)), and turning it on sets the tree's token
   budget (ADR-0056 M5). While the rest of this ADR is unbuilt a build holds it back
@@ -729,3 +753,5 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-11-01 — from review: a repair is charged to the ledger and leaves the child's names and the report as they stood (D14).
 - 2026-11-01 — from real runs: a surface's composer continues a stopped delegated task and one whose question was lost (D17), and its row counts raises and says no budget it has not read (D20).
 - 2026-11-02 — D17: a Continue reaches every level with nothing below it discarded, and a reopened subplanner takes up its saved native session where its harness keeps one, replaying its Model context where not; a reopened child's budget counts every opening of its parent's session (ADR-0056 M10).
+- 2026-11-02 — D20 opens a child to a surface: `ChildDirectory` and the daemon's routes and stream read any plan in a tree, and a person may message a live subplanner within what it already holds.
+- 2026-11-02 — D20 lets a person message a child plan's runner and answer a checkpoint that plan holds, as its subplanner's commands, where a surface only watched.

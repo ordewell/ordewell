@@ -28,7 +28,7 @@ import { respondingSpawn, planJson, type FakeAgentProcess, type FakeSpawnResult 
 import { plannerToolHandler, PLANNER_TURN_ENDED, type PlannerToolsHost } from '../plannerTools';
 import { EMPTY_CONVERSATION, fromTranscript, reduceConversation, type ConversationView } from '../../conversation';
 import type { SubmitPlanArgs } from '../mcp/tools';
-import { TASK_READ_TOOLS_PROTOCOL } from '../TaskQuery';
+import { TASK_QUERY_ANSWER_MAX_CHARS, TASK_READ_TOOLS_PROTOCOL } from '../TaskQuery';
 
 /**
  * The Ordewell MCP server reaching the Claude Code planner (ADR-0022): the
@@ -1694,6 +1694,135 @@ describe('the read budget of a user message', () => {
 
     expect(messages).toHaveLength(1);
     expect(landed(planner).last).toBe(asText);
+  });
+});
+
+const handlerOver = (read: PlannerToolsHost['read'], tasks: Task[] = [], readHandoff: PlannerToolsHost['readHandoff'] = async () => ({ text: 'Board root:\n  - board:root:E1 [claim]' }), logs: Partial<Pick<PlannerToolsHost, 'taskLogAttempts' | 'taskLog'>> = {}) => plannerToolHandler({
+  skills: () => [],
+  turnId: () => 'turn-1',
+  recordSkillLoad: () => false,
+  liveCatalog: async () => ({ runners: ['claude-code'], models: {}, modes: {}, autonomousDefault: true }),
+  checkPlan: async () => { throw new Error('not used here'); },
+  submitPlan: async () => ({ ok: true as const, summary: [], tasks: [] }),
+  editPlan: async () => ({ ok: true as const, summary: [], tasks: [] }),
+  tasks: () => tasks,
+  read,
+  readHandoff,
+  liveOutput: () => null,
+  lastAttempt: () => null,
+  taskLogAttempts: () => [],
+  taskLog: () => [],
+  taskDiff: async () => ({ available: false, reason: 'not available' }),
+  runCommand: async () => ({ success: true, output: '', truncated: false }),
+  fetchUrl: async () => ({ success: true, output: '', truncated: false }),
+  webSearch: async () => undefined,
+  execute: async () => ({ ok: true, message: '' }),
+  editsRefused: () => undefined,
+  ...logs,
+});
+
+const answering: PlannerToolsHost['read'] = async (_signature, answer) => ({ status: 'answered', value: await answer(), landNow: false });
+
+describe('task_query on a long read', () => {
+  const context = { signal: new AbortController().signal };
+  const plan = (count: number) => Array.from({ length: count }, (_, i) => createTask({ id: `t${i + 1}`, order: i + 1, title: `Task ${i + 1}`, prompt: `${i + 1}:${'x'.repeat(6_000)}` }));
+
+  it('stops at the cap the text channel holds to, and names what is left', async () => {
+    const reply = await handlerOver(answering, plan(5)).taskQuery?.({ tasks: ['#1', '#2', '#3', '#4', '#5'], fields: ['prompt'] }, context);
+    const answer = JSON.parse(reply?.text ?? '') as { tasks: { ref: string }[]; unread: string };
+    expect((reply?.text ?? '').length).toBeLessThanOrEqual(TASK_QUERY_ANSWER_MAX_CHARS);
+    expect(answer.tasks.map((task) => task.ref)).toEqual(['#1', '#2']);
+    expect(answer.unread).toBe('Not read, to keep this answer bounded: #3, #4, #5. Ask for them in another query.');
+  });
+
+  it('reads each task once, and adds nothing to an answer that fits', async () => {
+    const reply = await handlerOver(answering, plan(2)).taskQuery?.({ tasks: ['#1', 't1', '#2'], fields: ['prompt'] }, context);
+    const answer = JSON.parse(reply?.text ?? '') as Record<string, unknown>;
+    expect(answer.tasks).toHaveLength(2);
+    expect(answer).not.toHaveProperty('unread');
+  });
+});
+
+describe('a board read through task_output, as a planner with no `read` makes it (ADR-0057 R11)', () => {
+  const context = { signal: new AbortController().signal };
+  it('spends a read of the turn, under a signature of its own', async () => {
+    const signatures: string[] = [];
+    const handler = handlerOver(async (signature, answerRead) => {
+      signatures.push(signature);
+      return { status: 'answered', value: await answerRead(), landNow: false };
+    });
+    expect(await handler.taskOutput?.({ task: 'board' }, context)).toEqual({ text: JSON.stringify({ board: 'Board root:\n  - board:root:E1 [claim]' }) });
+    await handler.taskOutput?.({ task: 'board:root:E1' }, context);
+    expect(signatures).toHaveLength(2);
+    expect(new Set(signatures).size).toBe(2);
+  });
+
+  it('reads nothing once the turn has no read left', async () => {
+    const readHandoff = vi.fn(async () => ({ text: 'never' }));
+    const reply = await handlerOver(async () => ({ status: 'refused' }), [], readHandoff).taskOutput?.({ task: 'board' }, context);
+    expect(reply).toEqual({ isError: true, text: expect.stringContaining('every read this message allows') });
+    expect(readHandoff).not.toHaveBeenCalled();
+  });
+
+  it('tells the planner to land with the answer, as any read past the soft limit does', async () => {
+    const reply = await handlerOver(async (_signature, answerRead) => ({ status: 'answered', value: await answerRead(), landNow: true })).taskOutput?.({ task: 'board' }, context);
+    expect(JSON.parse(reply?.text ?? '{}').note).toMatch(/Do not read again this turn/);
+  });
+
+  it('still reaches a task of that name where no board answers', async () => {
+    const handler = handlerOver(async (_signature, answerRead) => ({ status: 'answered', value: await answerRead(), landNow: false }), [createTask({ id: 'b', order: 1, title: 'board' })], async () => ({ text: 'No board here.', isError: true }));
+    const reply = await handler.taskOutput?.({ task: 'board' }, context);
+    expect(JSON.parse(reply?.text ?? '{}')).toMatchObject({ task: { id: 'b' } });
+  });
+});
+
+describe('a report\'s listing through task_output, as a planner with no `read` makes it (ADR-0057 R2, R11)', () => {
+  const context = { signal: new AbortController().signal };
+  const split = (title = 'Split') => createTask({ id: 'd', order: 1, title, type: 'delegated', status: 'completed', handoff: { summary: 'ended', attempt: 2, findings: [], findingCount: 0 } });
+  const page = 'Handoff from #1\n- 1/1:#1@1/F101 [major] F101 says so';
+
+  it('reads a later page on the turn\'s reads, each under a signature of its own', async () => {
+    const signatures: string[] = [];
+    const asked: unknown[] = [];
+    const handler = handlerOver(async (signature, answerRead) => {
+      signatures.push(signature);
+      return { status: 'answered', value: await answerRead(), landNow: false };
+    }, [split()], async ({ task }) => {
+      asked.push(task);
+      return { text: page };
+    });
+    expect(JSON.parse((await handler.taskOutput?.({ task: '#1@2/from:101' }, context))?.text ?? '{}')).toEqual({ handoff: page });
+    await handler.taskOutput?.({ task: '#1@2/from:201' }, context);
+    expect(asked).toEqual(['#1@2/from:101', '#1@2/from:201']);
+    expect(new Set(signatures).size).toBe(2);
+  });
+
+  it('keeps a title that looks like a page reading as that task', async () => {
+    const readHandoff = vi.fn(async () => ({ text: 'never' }));
+    const reply = await handlerOver(answering, [split('Split/from:101')], readHandoff).taskOutput?.({ task: 'Split/from:101' }, context);
+    expect(JSON.parse(reply?.text ?? '{}')).toMatchObject({ task: { id: 'd' } });
+    expect(readHandoff).not.toHaveBeenCalled();
+  });
+
+  it('says where an ended report\'s listing is, by the attempt it holds', async () => {
+    const report = {
+      ...storedHandoff({ summary: 'What the child plan did.' })!,
+      attempt: 2,
+      subtree: { node: 'root/1', counts: { done: 1, failed: 0, blocked: 0, skipped: 0, commits: 0, tokens: 0 }, findings: { blocker: 0, major: 0, minor: 0, info: 0 }, open: [], promoted: [] },
+    };
+    const reply = await handlerOver(answering, [split()], undefined, {
+      taskLogAttempts: () => [1, 2],
+      taskLog: (_id, attempt) => (attempt === 2 ? [{ type: 'handoff', handoff: report }] : []),
+    }).taskOutput?.({ task: '#1' }, context);
+    expect(JSON.parse(reply?.text ?? '{}').handoff.rest).toBe('Read what its report left out of its subtree with task_output: "#1@2/from:1".');
+  });
+
+  it('points nowhere for a handoff that is no report', async () => {
+    const reply = await handlerOver(answering, [split()], undefined, {
+      taskLogAttempts: () => [2],
+      taskLog: () => [{ type: 'handoff', handoff: storedHandoff({ summary: 'A plain handoff.' })! }],
+    }).taskOutput?.({ task: '#1' }, context);
+    expect(JSON.parse(reply?.text ?? '{}').handoff.rest).toBeUndefined();
   });
 });
 

@@ -96,6 +96,11 @@ than cached or replayed.
   whole (`wakeUpReadBudget`, a user setting, 12 by default,
   [ADR-0030](../supervision/0030-global-run-settings.md)), and only its last read
   is told to land.
+  One answer is bounded too: it stops at the task past `OUTPUT_TAIL_MAX_CHARS`
+  and names what it did not read, so a long read costs a second question and
+  loses nothing. The first task reads whole at any length, since a planner
+  rewrites what it reads. A task named twice is read once. Both channels share
+  this, in `readsInCap`.
 - **Refusing to answer was rejected as the backstop (T5).** Unlike a `bash`
   tool call (ADR-0008, T5: "absent is denial"), a read that stops being
   answered is not a safe default here — the planner has no other way to get
@@ -311,3 +316,4 @@ ADR-0008's exploration envelope is unchanged.
 - 2026-10-25 — T10: a vendor planner condensing its context in the middle of a turn ([ADR-0002](0002-planner-as-conversation-loop.md)) counts as a compaction, so the next turn is sent the whole plan.
 - 2026-10-31 — T10: the plan block has a size cap, past which it lists live and waiting tasks, a count of the rest and a pointer (ADR-0057 R5).
 - 2026-11-01 — the runner's tool is `read`, with `read_task` an alias at the call ([ADR-0057](../supervision/0057-information-moves-by-reference.md) R11).
+- 2026-11-02 — T4: one answer is bounded, stopping at a task and naming what it left unread, and a task named twice is read once.
