@@ -414,6 +414,26 @@ describe('ordewell supervisor, automerge, trailer and autorun (ADR-0030)', () =>
     d.close();
   });
 
+  it('turns delegation on at the kept budget with `on`, and asks for a number when none was ever entered', async () => {
+    const kept = await fakeDaemon({ settings: { run: { ...RUN, delegationTokens: 0, delegationBudget: 750000 } } });
+    const { handleDelegation } = await import('../runSettings');
+
+    const shown = await capture(() => handleDelegation([], new ApiClient(kept.port)));
+    expect(shown.stdout).toContain('Delegation: off, 750000 tokens kept for a tree');
+
+    const on = await capture(() => handleDelegation(['on'], new ApiClient(kept.port)));
+    expect(kept.sent.at(-1)?.body).toMatchObject({ run: { delegationTokens: 750000 } });
+    expect(on.stdout).toMatch(/a plan nobody read/);
+    kept.close();
+
+    const none = await fakeDaemon({ settings: { run: { ...RUN, delegationTokens: 0, delegationBudget: 0 } } });
+    const refused = await capture(() => handleDelegation(['on'], new ApiClient(none.port)));
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stderr).toContain('ordewell delegation <tokens>');
+    expect(none.sent).toEqual([]);
+    none.close();
+  });
+
   it('says what Act and autorun allow when it turns them on', async () => {
     const d = await fakeDaemon({ settings: { run: RUN } });
     const { handleSupervisor, handleAutorun } = await import('../runSettings');
@@ -425,7 +445,7 @@ describe('ordewell supervisor, automerge, trailer and autorun (ADR-0030)', () =>
   it.each([
     ['handleSupervisor', ['boss']], ['handleSupervisor', ['reads', '0']], ['handleSupervisor', ['retries', 'many']],
     ['handleAutomerge', ['maybe']], ['handleAutorun', ['yes']], ['handleTrailer', ['sometimes']],
-    ['handleDelegation', ['on']], ['handleDelegation', ['0']], ['handleDelegation', ['1.5']],
+    ['handleDelegation', ['0']], ['handleDelegation', ['1.5']],
   ] as const)('%s refuses %j, sending nothing', async (handler, args) => {
     const d = await fakeDaemon({ settings: { run: RUN } });
     const commands = await import('../runSettings');

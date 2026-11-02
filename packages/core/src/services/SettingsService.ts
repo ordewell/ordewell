@@ -6,7 +6,7 @@ import type { SupervisorLevel } from '../models/Execution';
 import { DEFAULT_SUPERVISOR_RETRY_LIMIT } from './LoopGuards';
 import { DEFAULT_WAKE_UP_READ_BUDGET } from './Supervisor';
 import { parseAutonomyFlag } from './ModeResolver';
-import { containersOffered } from './runSettingsText';
+import { containersOffered, rememberDelegationBudget } from './runSettingsText';
 import type { TaskRunnerConfig } from './harness/AgentAdapter';
 
 /** How a run is started, watched and merged: the user's, not a plan's (ADR-0030). */
@@ -26,6 +26,12 @@ export interface GlobalRunSettings {
    * delegation off. One value, so delegation is never on with no budget.
    */
   delegationTokens: number;
+  /**
+   * The last budget the user entered, kept while delegation is off so turning
+   * it on again asks for nothing. 0 is none yet: the first enable takes a
+   * number from the user, never a default. It never turns delegation on.
+   */
+  delegationBudget: number;
 }
 
 export const RUN_SETTINGS_DEFAULTS: Readonly<GlobalRunSettings> = {
@@ -36,6 +42,7 @@ export const RUN_SETTINGS_DEFAULTS: Readonly<GlobalRunSettings> = {
   supervisorRetryLimit: DEFAULT_SUPERVISOR_RETRY_LIMIT,
   wakeUpReadBudget: DEFAULT_WAKE_UP_READ_BUDGET,
   delegationTokens: 0,
+  delegationBudget: 0,
 };
 
 export class RunSettingsError extends Error {
@@ -77,6 +84,10 @@ const RUN_SETTING_CHECKS: { [K in keyof GlobalRunSettings]: { valid: (v: unknown
     valid: (v): v is number => Number.isSafeInteger(v) && (v as number) >= 0,
     refusal: 'The delegation budget must be a whole number of tokens; 0 turns delegation off.',
   },
+  delegationBudget: {
+    valid: (v): v is number => Number.isSafeInteger(v) && (v as number) >= 0,
+    refusal: 'The kept delegation budget must be a whole number of tokens.',
+  },
 };
 
 const RUN_SETTING_KEYS = Object.keys(RUN_SETTING_CHECKS) as (keyof GlobalRunSettings)[];
@@ -99,6 +110,7 @@ export interface UserSettings {
   supervisorRetryLimit?: number;
   wakeUpReadBudget?: number;
   delegationTokens?: number;
+  delegationBudget?: number;
   /**
    * Whether an API planner prunes its own context ahead of a call that would
    * pass 90% of its model's window. Absent means on. Set in the file only:
@@ -178,6 +190,8 @@ export function runSettingsOf(settings: UserSettings): GlobalRunSettings {
   for (const key of RUN_SETTING_KEYS) {
     if (settings[key] !== undefined) (out as Record<keyof GlobalRunSettings, unknown>)[key] = settings[key];
   }
+  // A file from before the budget was kept holds the one in force.
+  if (out.delegationBudget === 0) out.delegationBudget = out.delegationTokens;
   return out;
 }
 
@@ -402,7 +416,8 @@ export class SettingsService {
   }
 
   /** Checks every value before writing any, so a refused change saves nothing. */
-  updateRunSettings(changes: Partial<GlobalRunSettings>): GlobalRunSettings {
+  updateRunSettings(given: Partial<GlobalRunSettings>): GlobalRunSettings {
+    const changes = rememberDelegationBudget(given);
     for (const key of RUN_SETTING_KEYS) {
       if (changes[key] !== undefined && !RUN_SETTING_CHECKS[key].valid(changes[key])) {
         throw new RunSettingsError(RUN_SETTING_CHECKS[key].refusal);

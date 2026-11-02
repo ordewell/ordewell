@@ -25,7 +25,7 @@ import { Subtree, takeReport } from './Subtree';
 import { blobsIn, NodeBoard } from './Board';
 import { ScopeLines } from './ScopeLines';
 import { isBoardRef } from '../models/Board';
-import { DELEGATION_OFFERED } from './runSettingsText';
+import { DELEGATION_OFFERED, rememberDelegationBudget } from './runSettingsText';
 import { checkWords, checksDelegatedTask, type DelegatedRow } from '../models/Delegation';
 import type { SlotPool } from './SlotPool';
 import type { OpenLease, ReservedLease } from './executionLease';
@@ -3129,7 +3129,8 @@ export class Session {
   }
 
   /** Merge the run settings this session owns, ignoring a field it does not know from a client's body. */
-  private mergeRunSettings(changes: Partial<GlobalRunSettings>): void {
+  private mergeRunSettings(given: Partial<GlobalRunSettings>): void {
+    const changes = rememberDelegationBudget(given);
     const next: GlobalRunSettings = { ...this.runSettingsValue };
     for (const key of Object.keys(next) as (keyof GlobalRunSettings)[]) {
       const value = (changes as Partial<Record<keyof GlobalRunSettings, unknown>>)[key];

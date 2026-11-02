@@ -14,6 +14,12 @@ interface StepBase {
   hint?: string;
   /** Whether the step applies, given the steps before it; a skipped step is neither asked nor shown. */
   skip?(state: TuiState, choices: StepChoices): boolean;
+  /**
+   * Whether confirming this step moves on to the next applicable step even in
+   * a `'stay'` stepper — for an answer that only opens the question after it,
+   * which the save hook has nothing to save for yet.
+   */
+  onward?(state: TuiState, choices: StepChoices): boolean;
 }
 
 export interface ListStep extends StepBase {
@@ -28,7 +34,8 @@ export interface ListStep extends StepBase {
 export interface NumberStep extends StepBase {
   number: {
     min: number;
-    current(state: TuiState, choices: StepChoices): number;
+    /** The value to pre-fill; null leaves the box empty, for a setting whose number only the user can say. */
+    current(state: TuiState, choices: StepChoices): number | null;
   };
 }
 
@@ -139,6 +146,8 @@ export function handleStepperKey(state: TuiState, stepper: StepperState, key: Ke
     const shown = entry ?? { text: choices[def.id], pristine: true };
     if (key.name === 'enter') return typed === null ? reopen(stepper) : choose(state, stepper, String(typed));
     if (key.name === 'up' || key.name === 'down') {
+      // An empty box has no number to step from: the arrows never choose one for the user.
+      if (!/^\d+$/.test(shown.text) && !/^\d+$/.test(choices[def.id])) return reopen(stepper);
       const from = /^\d+$/.test(shown.text) ? Number(shown.text) : Number(choices[def.id]);
       const to = Math.max(min, from + (key.name === 'up' ? 1 : -1));
       return reopen({ ...stepper, entry: { text: String(to), pristine: true } });
@@ -178,10 +187,11 @@ type AfterChoice = { flow: 'advance' | 'stay'; step: number } | { flow: 'close' 
  * a sentinel index. `'advance'` walks to the next applicable step and closes
  * once none is left; `'stay'` shows the same step again with the choice
  * marked — and closes when the save made that very step stop applying, for
- * then there is nothing left to show.
+ * then there is nothing left to show. A step whose answer is `onward` advances
+ * even in a `'stay'` stepper.
  */
-function afterChoice(definition: StepperDefinition, lists: readonly (PickerItem[] | null)[], current: number): AfterChoice {
-  if (definition.afterSave === 'stay') {
+function afterChoice(definition: StepperDefinition, lists: readonly (PickerItem[] | null)[], current: number, onward: boolean): AfterChoice {
+  if (definition.afterSave === 'stay' && !onward) {
     return lists[current] === null ? { flow: 'close' } : { flow: 'stay', step: current };
   }
   const next = lists.findIndex((list, i) => i > current && list !== null);
@@ -204,7 +214,8 @@ function choose(state: TuiState, stepper: StepperState, value: string): Step {
 
   // Rebuilt from the saved state, so an earlier choice that changed which steps apply shows at once.
   const { lists } = settle(saved.state, definition, choices);
-  const after = afterChoice(definition, lists, current);
+  const onward = definition.steps[current].onward?.(saved.state, choices) ?? false;
+  const after = afterChoice(definition, lists, current, onward && lists.some((list, i) => i > current && list !== null));
   if (after.flow === 'close') return { ...saved, state: { ...saved.state, overlay: null } };
   return { ...saved, state: { ...saved.state, overlay: { kind: 'stepper', stepper: show(saved.state, definition, choices, after.step) } } };
 }
@@ -217,7 +228,8 @@ function choose(state: TuiState, stepper: StepperState, value: string): Step {
 export function reopenStepper(state: TuiState, stepper: StepperState): TuiState {
   const { definition, current } = stepper;
   const { lists } = settle(state, definition, {});
-  const at = lists[current] !== null ? current : lists.findIndex((list) => list !== null);
+  // A step the answer made inapplicable falls back to the one before it, which asked the question.
+  const at = lists[current] !== null ? current : lastIndexBefore(lists, current) !== -1 ? lastIndexBefore(lists, current) : lists.findIndex((list) => list !== null);
   if (at === -1) return { ...state, overlay: null };
   return { ...state, overlay: { kind: 'stepper', stepper: show(state, definition, {}, at) } };
 }
@@ -239,7 +251,7 @@ function settle(
   const lists = definition.steps.map((def) => {
     if (def.skip?.(state, { ...choices })) return null;
     if (def.number) {
-      choices[def.id] = String(parseCount(wanted[def.id], def.number.min) ?? def.number.current(state, { ...choices }));
+      choices[def.id] = String(parseCount(wanted[def.id], def.number.min) ?? def.number.current(state, { ...choices }) ?? '');
       return [];
     }
     const items = def.items(state, { ...choices });

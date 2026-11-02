@@ -1,12 +1,15 @@
 import type { GlobalRunSettings, SupervisorLevel } from '@ordewell/core';
-import { ACT_RISK, AUTORUN_RISK, DELEGATION_OFFERED, DELEGATION_RISK, SUPERVISOR_LEVEL_LABEL, autonomyLevelLabel, codexSandboxNotice } from '@ordewell/core';
+import {
+  ACT_RISK, AUTORUN_RISK, DELEGATION_OFFERED, DELEGATION_RISK, SUBPLANNER_ACCOUNTING, SUBPLANNER_CHILD, SUBPLANNER_SCOPE, SUPERVISOR_LEVEL_LABEL,
+  autonomyLevelLabel, codexSandboxNotice, keptDelegationBudget, parseCount, rememberDelegationBudget,
+} from '@ordewell/core';
 import type { ConfirmAction, PickerItem, TuiState } from '../state';
 import { openStepper, reopenStepper, type StepChoices, type StepperDefinition } from './stepper';
 import { step, type Effect, type Step } from './shared';
 
 /**
  * `/settings`: autonomy, supervisor, merging, autorun, parallel tasks and
- * delegation in one stepped panel. Each enter saves its step, and only if it changed, through the
+ * subplanners in one stepped panel. Each enter saves its step, and only if it changed, through the
  * same paths the headless commands save them.
  */
 
@@ -33,7 +36,7 @@ const supervisorOff = (_state: TuiState, choices: StepChoices): boolean => choic
 export const SETTINGS: StepperDefinition = {
   title: 'Settings',
   afterSave: 'stay',
-  hint: `${DELEGATION_OFFERED ? 'Supervisor, automerge, autorun and delegation' : 'Supervisor, automerge and autorun'} apply to this session; your last change is the default for new ones. Autonomy and Parallel tasks apply to every session.`,
+  hint: `${DELEGATION_OFFERED ? 'Supervisor, automerge, autorun and subplanners' : 'Supervisor, automerge and autorun'} apply to this session; your last change is the default for new ones. Autonomy and Parallel tasks apply to every session.`,
   steps: [
     {
       id: 'autonomy',
@@ -86,13 +89,30 @@ export const SETTINGS: StepperDefinition = {
       hint: 'How many AI tasks run at once, a live run included',
       number: { min: 1, current: (state) => state.maxParallel },
     },
-    // Not offered until a delegated task exists (ADR-0055 D21).
-    ...(DELEGATION_OFFERED ? [{
-      id: 'delegation',
-      label: 'Delegation',
-      hint: 'The token budget of a tree of plans; 0 keeps delegation off',
-      number: { min: 0, current: (state: TuiState) => state.runSettings.delegationTokens },
-    }] : []),
+    // Not offered until a delegated task exists (ADR-0055 D21). The budget is a
+    // step of its own, shown only while Subplanners is on, so Off leaves a
+    // single row; its box starts empty until the user has entered one, and
+    // turning on without one asks for it first (ADR-0056 M5).
+    ...(DELEGATION_OFFERED ? [
+      {
+        id: 'subplanners',
+        label: 'Subplanners',
+        hint: `${SUBPLANNER_SCOPE} ${SUBPLANNER_CHILD} Turning it on asks you to confirm.`,
+        items: (state: TuiState) => switchItems(
+          state.runSettings.delegationTokens > 0,
+          'A plan may hand a separable part of its goal to a subplanner',
+          'Plans stay flat; the tree budget is kept for next time',
+        ),
+        onward: (state: TuiState, choices: StepChoices) => choices.subplanners === 'on' && state.runSettings.delegationTokens === 0,
+      },
+      {
+        id: 'budget',
+        label: 'Tree budget',
+        hint: `Tokens for the whole tree, as a whole number. ${SUBPLANNER_ACCOUNTING}`,
+        skip: (_state: TuiState, choices: StepChoices) => choices.subplanners !== 'on',
+        number: { min: 1, current: (state: TuiState) => (state.runSettings.delegationTokens > 0 ? state.runSettings.delegationTokens : keptDelegationBudget(state.runSettings)) },
+      },
+    ] : []),
   ],
   save: saveChoices,
 };
@@ -135,10 +155,14 @@ function saveChoices(state: TuiState, choices: StepChoices): Step {
     changed.push(`Parallel ${parallel}`);
   }
   // A step that is not offered has no choice, which leaves its setting as it is.
-  const delegationTokens = Number(choices.delegation);
-  if (choices.delegation !== undefined && delegationTokens !== state.runSettings.delegationTokens) {
-    run.delegationTokens = delegationTokens;
-    changed.push(delegationTokens > 0 ? `Delegation on, ${delegationTokens} tokens` : 'Delegation off');
+  if (choices.subplanners !== undefined) {
+    // Turning on takes the budget on screen; without a whole number there is nothing to turn on at.
+    const tokens = choices.subplanners === 'on' ? parseCount(choices.budget, 1) : 0;
+    if (tokens !== null && tokens !== state.runSettings.delegationTokens) {
+      run.delegationTokens = tokens;
+      const wasOn = state.runSettings.delegationTokens > 0;
+      changed.push(tokens === 0 ? 'Subplanners off' : wasOn ? `Tree budget ${tokens} tokens` : `Subplanners on, ${tokens} tokens`);
+    }
   }
 
   if (changed.length === 0) return step(state);
@@ -179,6 +203,6 @@ export function saveSettings(state: TuiState, effect: SaveSettingsEffect): Step 
     ...state,
     ...(effect.autonomous !== undefined ? { autonomous: effect.autonomous } : {}),
     ...(effect.maxParallel !== undefined ? { maxParallel: effect.maxParallel } : {}),
-    runSettings: { ...state.runSettings, ...effect.run },
+    runSettings: { ...state.runSettings, ...rememberDelegationBudget(effect.run) },
   }, [effect]);
 }

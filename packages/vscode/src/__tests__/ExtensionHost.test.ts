@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { RUN_SETTINGS_DEFAULTS,
+import { RUN_SETTINGS_DEFAULTS, SUBPLANNER_ACCOUNTING, SUBPLANNER_CHILD,
   createTask, defaultEnabledRunners, saveState, RunnerRegistry, recordedInstalledPlanner, resetInstalledPlanner,
   type AiProvider, type DiscoveredModel, type GlobalRunSettings, type IRunner, type LegacyPlanState, type PlannerUsability,
   type ModelResolver, type PlannerModelMemory, type RunnerInstallation,
@@ -801,6 +801,29 @@ describe("the Settings panel's Run block", () => {
     warning.mockReset().mockImplementation(async (...args: unknown[]) => args.at(-1));
     h.chat.messages.fire({ type: 'changeSettings', change: { run } });
     await vi.waitFor(() => expect(h.settings.updateRunSettings).toHaveBeenCalledWith(run));
+  });
+
+  it('words the confirmation as Subplanners: the budget, the approximate count, and what runs unread', async () => {
+    delegation.offered = true;
+    warning.mockResolvedValue(undefined);
+    h.chat.messages.fire({ type: 'changeSettings', change: { run: { delegationTokens: 5000000 } } });
+
+    await vi.waitFor(() => expect(warning).toHaveBeenCalled());
+    const [title, options, confirm] = warning.mock.calls[0] as [string, { detail: string }, string];
+    expect(title).toBe('Turn Subplanners on?');
+    expect(confirm).toBe('Turn Subplanners on');
+    expect(options.detail).toContain('5000000 tokens');
+    expect(options.detail).toContain(SUBPLANNER_ACCOUNTING);
+    expect(options.detail).toContain(SUBPLANNER_CHILD);
+    expect(h.settings.updateRunSettings).not.toHaveBeenCalled();
+  });
+
+  it('keeps the budget the panel cannot set: a kept budget is never a change of its own', async () => {
+    delegation.offered = true;
+    warning.mockImplementation(async (...args: unknown[]) => args.at(-1));
+    h.chat.messages.fire({ type: 'changeSettings', change: { run: { delegationTokens: 5000000, delegationBudget: 1, supervisorLevel: 'off' } } });
+
+    await vi.waitFor(() => expect(h.settings.updateRunSettings).toHaveBeenCalledWith({ delegationTokens: 5000000, supervisorLevel: 'off' }));
   });
 
   it('does not accept a delegation budget while delegation is not offered, and saves the rest of the change', async () => {

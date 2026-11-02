@@ -3205,7 +3205,14 @@ plan rewrites no history.
 **Delegation** — the **Run setting** that lets a plan hand a separable part of
 its goal to a child plan (ADR-0055 D21): `delegationTokens`, a tree's token budget,
 0 being off. Off by default, and read from the session's copy at each check, so a
-run keeps no copy of it. A build offers it only with `ORDEWELL_DELEGATION=1` when it
+run keeps no copy of it. Surfaces call the control **Subplanners**: an on/off
+switch with the budget as a row only while it is on. `delegationBudget` is the budget
+the user last entered, kept while off and across restarts; it turns nothing on, and
+the mandate reads `delegationTokens` only. The first time there is no kept budget, so
+turning on asks the user to enter one; it is never defaulted, and cancelling saves
+nothing. Turning on always asks for a confirmation that says a subplanner plans in Act
+with autorun and no person reads its plan, and that the budget is counted
+approximately. A build offers it only with `ORDEWELL_DELEGATION=1` when it
 runs from a git checkout of this repository (`DELEGATION_OFFERED`), so a published
 package ignores the variable.
 

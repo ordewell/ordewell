@@ -369,15 +369,17 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
 
   /**
    * A click in the Settings panel's Run block. Pushed back whatever happens, so
-   * a declined Act, autorun or delegation, or a refused number, shows its old
+   * a declined Act, autorun or Subplanners, or a refused number, shows its old
    * value again.
    */
   async function changeSettings(change: SettingsChange): Promise<void> {
     if (change.autonomous !== undefined) saveAutonomy(change.autonomous);
     // The panel shows no delegation row until it is offered (ADR-0055 D21), so
-    // a change that carries one did not come from it.
+    // a change that carries one did not come from it. It never sets the kept
+    // budget either: that follows the budget it turns Subplanners on at.
     const run = change.run && { ...change.run };
     if (run && !DELEGATION_OFFERED) delete run.delegationTokens;
+    if (run) delete run.delegationBudget;
     if (run && await confirmRisks(run, shownRunSettings().delegationTokens)) changeRunSettings(run);
     const limit = change.maxParallel === undefined ? null : parseMaxParallel(change.maxParallel);
     if (limit !== null) await services.config.update('maxParallelSessions', limit);

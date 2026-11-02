@@ -14,7 +14,11 @@ export const automergeSummary = (run: GlobalRunSettings): string => `Merge autom
 export const PLANNED_WITH_LABEL = 'Planned-with line in commits Ordewell writes';
 export const trailerSummary = (run: GlobalRunSettings): string => `${PLANNED_WITH_LABEL}: ${onOff(run.plannedWithTrailer)}`;
 export const autorunSummary = (run: GlobalRunSettings): string => `Autorun: ${onOff(run.autorun)}`;
-export const delegationSummary = (run: GlobalRunSettings): string => `Delegation: ${run.delegationTokens > 0 ? `on, ${run.delegationTokens} tokens for a tree` : 'off'}`;
+export const delegationSummary = (run: GlobalRunSettings): string =>
+  `Delegation: ${run.delegationTokens > 0 ? `on, ${run.delegationTokens} tokens for a tree` : run.delegationBudget > 0 ? `off, ${run.delegationBudget} tokens kept for a tree` : 'off'}`;
+
+/** The budget turning delegation on again takes, or null where the user has entered none and must. */
+export const keptDelegationBudget = (run: GlobalRunSettings): number | null => (run.delegationBudget > 0 ? run.delegationBudget : null);
 
 /** What turns delegation on where it may be turned on at all (ADR-0055 D21). */
 export const DELEGATION_ENV = 'ORDEWELL_DELEGATION';
@@ -79,6 +83,22 @@ export const ACT_RISK = 'Tasks it adds run too, ops tasks included, which can ac
 export const AUTORUN_RISK = 'Plans start without review, ops tasks included, which can act on real systems unattended. In Full nobody is asked at all: the planner may start anything, script tasks included, from a plan no person read.';
 /** What turning delegation on accepts below the root, as Act and autorun accept it at the root (ADR-0056 M9). A container is not named as a remedy: only its own setting runs one, a child's tasks included (ADR-0059). */
 export const DELEGATION_RISK = 'A subplanner approves and runs its own plan, and no person reads it. Its change tasks keep the network they have in a flat run, so an instruction injected into something a subplanner read can become a plan nobody read, and run with that network. Delegation starts no container of its own: containers are opt-in, and only that setting runs a child\'s tasks in one.';
+
+/**
+ * `changes` with the budget it turns delegation on at also kept as the user's
+ * (see `GlobalRunSettings.delegationBudget`). Off keeps what was kept, and a
+ * budget named in `changes` is never overridden. Every writer of a run
+ * setting — the file, a session's copy — goes through this one rule.
+ */
+export function rememberDelegationBudget<T extends Partial<GlobalRunSettings>>(changes: T): T {
+  if (changes.delegationBudget !== undefined || !((changes.delegationTokens ?? 0) > 0)) return changes;
+  return { ...changes, delegationBudget: changes.delegationTokens };
+}
+
+/** What the Subplanners setting tells a user on every surface (ADR-0055, ADR-0056): where delegated work stops, how it is counted, and what runs unread. */
+export const SUBPLANNER_SCOPE = 'Lets a plan hand a separable part of its goal to a subplanner working on its own branch. A subplanner stays inside the mandate it is given and cannot widen it; this setting grants nothing else.';
+export const SUBPLANNER_ACCOUNTING = 'The budget is one allowance of tokens for the whole tree, counted approximately from what runners report: usage arrives after a call, so a tree can pass it a little.';
+export const SUBPLANNER_CHILD = 'A subplanner plans in Act with autorun: it approves and runs its own plan, and no person reads it. You confirm once, when you turn Subplanners on.';
 
 /** `on`/`off` as a switch's value; null for anything else. */
 export function parseSwitch(arg: string): boolean | null {
