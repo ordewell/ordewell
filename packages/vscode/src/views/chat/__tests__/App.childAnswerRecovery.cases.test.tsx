@@ -155,12 +155,20 @@ describe('child answers that were refused or never sent', () => {
     fireEvent.click(list.getByRole('button', { name: 'Dismiss' }));
     expect(region()).toBeNull();
   });
-  it('the root does not list words that were only typed', () => {
+  it('the root does not list words typed to a child that is still in the tree', () => {
     render(<App />);
+    post({ type: 'children', rootId: 'root', children: [entry()] });
     post({ type: 'childView', view: asking('Which rounding?') });
     typeAnswer('Typed, unsent.');
     post({ type: 'childClosed' });
     expect(body()).not.toContain('Typed, unsent.');
+  });
+  it('the root lists words typed to a child that has left the tree', () => {
+    render(<App />);
+    post({ type: 'childView', view: asking('Which rounding?') });
+    typeAnswer('Typed, unsent.');
+    post({ type: 'childClosed' });
+    expect(within(unsent()!).getByText('Typed, unsent.')).toBeTruthy();
   });
 
   it('an ended child lists what was refused to it', () => {
@@ -354,8 +362,9 @@ describe('child answers that were refused or never sent', () => {
     landed('m');
     expect(words('Nested')).toHaveValue('Floor, edited.');
     post({ type: 'childView', view: two('Q2?', null) });
-    expect(within(region()!).getByText('Floor, edited.')).toBeTruthy();
+    expect(within(region()!).getByText('Floor.')).toBeTruthy();
     expect(within(region()!).getByText('Other words.')).toBeTruthy();
+    expect(within(unsent()!).getByText('Floor, edited.')).toBeTruthy();
   });
   it('an edit that empties a recovered answer stays empty, and brings nothing back', () => {
     render(<App />);
@@ -376,7 +385,8 @@ describe('child answers that were refused or never sent', () => {
     refused();
     typeAnswer('Floor, edited.');
     post({ type: 'childView', view: asking('Q2?') });
-    expect(within(region()!).getByText('Floor, edited.')).toBeTruthy();
+    expect(within(region()!).getByText('Floor.')).toBeTruthy();
+    expect(within(unsent()!).getByText('Floor, edited.')).toBeTruthy();
     post({ type: 'childView', view: asking('Q1?') });
     expect(words()).toHaveValue('Floor, edited.');
     expect(region()).toBeNull();

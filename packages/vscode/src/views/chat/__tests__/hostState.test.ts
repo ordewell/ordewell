@@ -191,7 +191,7 @@ describe('reduceHost runView', () => {
     it('gives an answered question back as it was asked, and lets a run view carry it again', () => {
       const before = asked();
       const answered = reduceHost(before, { type: 'checkpointAnswered' });
-      const refused = reduceHost(answered, msg({ type: 'checkpointRefused', taskId: checkpointTask.id }));
+      const refused = reduceHost(answered, msg({ type: 'checkpointRefused', taskId: checkpointTask.id, question: checkpointTask.checkpoint, error: 'Refused.' }));
       expect(refused.checkpoint).toEqual(before.checkpoint);
       expect(refused.answeredCheckpoint).toBeNull();
       expect(reduceHost(refused, msg({ type: 'runView', view: runWith([checkpointTask]) })).checkpoint?.pausedAt).toBe(before.checkpoint?.pausedAt);
@@ -199,13 +199,18 @@ describe('reduceHost runView', () => {
 
     it('changes nothing for a task whose answer was not the one given', () => {
       const answered = reduceHost(asked(), { type: 'checkpointAnswered' });
-      expect(reduceHost(answered, msg({ type: 'checkpointRefused', taskId: 'other' }))).toBe(answered);
+      expect(reduceHost(answered, msg({ type: 'checkpointRefused', taskId: 'other', question: checkpointTask.checkpoint, error: 'Refused.' }))).toBe(answered);
+    });
+
+    it('changes nothing for another question on the same task, which a late refusal is not about', () => {
+      const answered = reduceHost(asked(), { type: 'checkpointAnswered' });
+      expect(reduceHost(answered, msg({ type: 'checkpointRefused', taskId: checkpointTask.id, question: 'an earlier question', error: 'Refused.' }))).toBe(answered);
     });
 
     it('changes nothing once the run has dropped the question', () => {
       const answered = reduceHost(asked(), { type: 'checkpointAnswered' });
       const gone = reduceHost(answered, msg({ type: 'runView', view: EMPTY_RUN }));
-      expect(reduceHost(gone, msg({ type: 'checkpointRefused', taskId: checkpointTask.id }))).toBe(gone);
+      expect(reduceHost(gone, msg({ type: 'checkpointRefused', taskId: checkpointTask.id, question: checkpointTask.checkpoint, error: 'Refused.' }))).toBe(gone);
     });
   });
 });

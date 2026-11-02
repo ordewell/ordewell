@@ -424,7 +424,7 @@ function showRefusal(err: unknown): void {
  * the task. A delegated task's approval carries words and a raise of its budget
  * too (ADR-0056 M5, M8); the seam refuses them for any other task.
  */
-export async function handleCheckpointAnswer(taskId: string, approved: boolean, reason: string | undefined, deps: Pick<PlanManagerDeps, 'session' | 'chatProvider'>, raiseTokens?: number): Promise<void> {
+export async function handleCheckpointAnswer(taskId: string, question: string, approved: boolean, reason: string | undefined, deps: Pick<PlanManagerDeps, 'session' | 'chatProvider'>, raiseTokens?: number): Promise<void> {
   try {
     await executeUserCommand(deps.session, approved
       ? { command: 'answer_checkpoint', task: taskId, answer: 'approve', ...(reason ? { reason } : {}), ...(raiseTokens !== undefined ? { raiseTokens } : {}) }
@@ -432,7 +432,7 @@ export async function handleCheckpointAnswer(taskId: string, approved: boolean, 
   } catch (err) {
     showRefusal(err);
     // The card closed when the answer was given; a refused one leaves the question waiting.
-    deps.chatProvider.postMessage({ type: 'checkpointRefused', taskId });
+    deps.chatProvider.postMessage({ type: 'checkpointRefused', taskId, question, error: err instanceof Error ? err.message : String(err) });
   }
 }
 

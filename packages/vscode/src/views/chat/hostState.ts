@@ -325,9 +325,10 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
       };
 
     // The seam refused the answer, so the question still waits: it is the
-    // person's again, as it was asked.
+    // person's again, as it was asked. A refusal of an older question on the
+    // same task is not this one's.
     case 'checkpointRefused':
-      if (state.answeredCheckpoint?.taskId !== action.taskId) return state;
+      if (state.answeredCheckpoint?.taskId !== action.taskId || state.answeredCheckpoint.summary !== action.question) return state;
       return { ...state, checkpoint: state.answeredCheckpoint, answeredCheckpoint: null };
 
     case 'patchDockHeight':
