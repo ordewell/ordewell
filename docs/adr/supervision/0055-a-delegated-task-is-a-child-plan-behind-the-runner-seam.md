@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0009", "0013", "0015", "0018", "0020", "0022", "0029", "0030", "0035", "0045", "0046", "0049", "0054"]
-note: "Settles #33. Built: D1 to D19 and D21, so a child plan runs end to end behind the build's switch, asks up a level, stops as a subtree and comes back on a Continue, its conflicts and merges with it. Not built: a subplanner's native resume, so a reopened one replays its Model context. D20 is built for the TUI and VS Code: a row with its goal, budget left and live counts, D16's stopping row, a log of what its child's tasks become, and a report's open and promoted findings. The core and daemon let a surface list a tree, read and stream any child, message a live subplanner, message a child's runner and answer a checkpoint a child plan holds; the TUI and VS Code drawing that are later."
+note: "Settles #33. Built: D1 to D19 and D21, so a child plan runs end to end behind the build's switch, asks up a level, stops as a subtree and comes back on a Continue, its conflicts and merges with it. Not built: a subplanner's native resume, so a reopened one replays its Model context. D20 is built for the TUI and VS Code: a row with its goal, budget left and live counts, D16's stopping row, a log of what its child's tasks become, and a report's open and promoted findings. The core and daemon let a surface list a tree, read and stream any child, message a live subplanner, message a child's runner and answer a checkpoint a child plan holds; the TUI walks a tree with them, a plan at a time; VS Code's drawing is later."
 ---
 
 # 0055 — A delegated task is a child plan behind the runner seam
@@ -507,7 +507,14 @@ the child cannot reach follows it in the parent's plan.**
   nothing resolves a reference, and nothing falls through to the root. An answer carries
   the question the person read, so it never lands on a later one. The subplanner hears
   of it on its next turn, which this does not open. An ended child is view-only
-  until its task is continued or retried. Usage rolls up: each record its planner or
+  until its task is continued or retried. The TUI walks a tree a plan at a time: Enter
+  on a delegated task opens its subplanner beside its tasks, Esc goes back to the plan
+  above, and the plans above stay held and current, each on its own socket, so Esc is
+  never a reload. Its root's run keeps its keys: an overlay the root raises shows over a
+  child and answers on the root, and a Stop reaches the whole run from any depth. A
+  child's branch comes in through its task, so nothing below the root offers a merge.
+  The subplanner's own question shows on its conversation and is answered from there, on
+  the route of the plan that holds it, and only a root's carries a raise. Usage rolls up: each record its planner or
   a task spends goes up as it arrives, a level at a time, onto the delegated task's
   attempt, so `planUsage` and the row add it as they add any task's. It was charged
   where it was spent (ADR-0056 M5), so an attempt of a delegated task charges nothing,
@@ -739,3 +746,4 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-11-01 — from real runs: a surface's composer continues a stopped delegated task and one whose question was lost (D17), and its row counts raises and says no budget it has not read (D20).
 - 2026-11-02 — D20 opens a child to a surface: `ChildDirectory` and the daemon's routes and stream read any plan in a tree, and a person may message a live subplanner within what it already holds.
 - 2026-11-02 — D20 lets a person message a child plan's runner and answer a checkpoint that plan holds, as its subplanner's commands, where a surface only watched.
+- 2026-11-02 — D20's TUI walks a tree: Enter and Esc move a plan at a time, a child stays followed on its own socket, and the root's run keeps its keys and overlays from any depth.

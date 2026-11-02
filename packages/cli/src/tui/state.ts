@@ -1,5 +1,5 @@
 import { taskPlacement } from '@ordewell/core/plan-utils';
-import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, logContinues, logResumes, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type AccountLimitSnapshot, type GlobalRunSettings, type OverrideDirection, type TaskStatus, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ConversationView, type HandoffDigest, type IsolationHandoff, type IsolationLandedTask, type IsolationPreview, type PromptHold, type RunTask, type RunView, type SupervisorLevel, type TaskIsolation, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
+import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, logContinues, logResumes, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type AccountLimitSnapshot, type GlobalRunSettings, type OverrideDirection, type TaskStatus, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ChildPlanEntry, type ConversationView, type HandoffDigest, type IsolationHandoff, type IsolationLandedTask, type IsolationPreview, type PromptHold, type RunTask, type RunView, type SupervisorLevel, type TaskIsolation, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
 import type { RunnersResponse } from '../apiClient';
 import type { SaveSettingsEffect } from './reducers/settings';
@@ -389,8 +389,27 @@ export interface ForcedPrompt {
   queueIndex?: number;
 }
 
+/**
+ * The plan below a root that is on screen (ADR-0055 D20). `TuiState` always
+ * holds the plan being viewed, so the panes and keys read it as they read a
+ * root; this says it is a child, and keeps the plan it was opened from whole,
+ * still following, for Esc to land back on.
+ */
+export interface ChildFrame {
+  entry: ChildPlanEntry;
+  parent: TuiState;
+  /** Until the first read of the child lands, there is nothing to show of it yet. */
+  reading: boolean;
+  /** Its socket is down and the effects side is bringing it back; what is on screen may be behind. */
+  lost: boolean;
+}
+
 export interface TuiState {
   editor: EditorState;
+  /** Set while a plan below the root is on screen. */
+  child: ChildFrame | null;
+  /** Every plan below the root, as the root's socket last sent it. `child` holds a copy of the row in view. */
+  childTree: ChildPlanEntry[];
   /** How many times the editor has been emptied, which picks the empty planner composer's tip (#137). */
   composerTipSeq: number;
   /**
@@ -694,6 +713,34 @@ export function scriptTaskView(state: TuiState): boolean {
   return state.taskView ? findTask(state.tasks, state.taskView.taskId)?.type === 'script' : false;
 }
 
+/** The root's frame, whichever plan is viewed: a run and its stream are the root's. */
+export function rootFrame(state: TuiState): TuiState {
+  let frame = state;
+  while (frame.child) frame = frame.child.parent;
+  return frame;
+}
+
+/** A plan that has ended is read, not spoken to: only a Continue or a Retry from above brings it back. */
+export const viewOnly = (state: TuiState): boolean => state.child?.entry.state === 'ended';
+
+/**
+ * What the plan above waits on from this plan's subplanner. A retried-away
+ * child shares its task with the live one, and must not offer its question.
+ */
+export function questionAbove(state: TuiState): { task: TaskView; question: string } | null {
+  const frame = state.child;
+  if (!frame?.entry.taskId || frame.entry.state === 'ended') return null;
+  const task = findTask(frame.parent.tasks, frame.entry.taskId);
+  const question = waitingCheckpoint(task);
+  return task && question ? { task, question } : null;
+}
+
+/** The plans below `taskId` of `plan` that wait at a checkpoint, however deep: the root's inbox does not hold them. */
+export function checkpointsBelow(tree: readonly ChildPlanEntry[], plan: string, taskId: string): number {
+  const of = (child: ChildPlanEntry): number => (child.checkpoints?.length ?? 0) + tree.filter((next) => next.parent === child.sessionId).reduce((sum, next) => sum + of(next), 0);
+  return tree.filter((child) => child.parent === plan && child.taskId === taskId).reduce((sum, child) => sum + of(child), 0);
+}
+
 /**
  * The reference the plan renders for a task: "#2", or the dotted "#2.1" for a
  * subtask. Looked up against the tree, so a subtask is not named by the order
@@ -734,6 +781,8 @@ function seedRun(overrides: Partial<TuiState>): RunView {
 export function initialState(overrides: Partial<TuiState> = {}): TuiState {
   return {
     editor: emptyEditor(),
+    child: null,
+    childTree: [],
     composerTipSeq: 0,
     conversation: EMPTY_CONVERSATION,
     accountLimits: [],

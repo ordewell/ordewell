@@ -3245,7 +3245,8 @@ stream any of them. A person may message a live subplanner, and may message a ta
 runner or answer a checkpoint the plan holds, by the task's exact id, as that plan's
 subplanner's own command: it can do nothing the subplanner could not, and nothing falls
 through to the root. One that has ended is view-only until its task is continued or
-retried. A Stop reaches all of it,
+retried. The TUI opens one with `enter` on its delegated task and `esc` goes back up a
+level. A Stop reaches all of it,
 tombstone first, and resolves when it has gone (D16). A Continue reopens it and any
 fresh attempt discards its run, its state staying under the root (D15, D17).
 
