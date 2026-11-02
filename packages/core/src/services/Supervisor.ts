@@ -470,7 +470,7 @@ export class Supervisor {
 
   /** Deliver what is gathered once due. */
   private arm(): void {
-    const due = this.policy.dueAt();
+    const due = this.policy.nextLookAt(this.now());
     if (due === null) return;
     this.disarm();
     this.tick = setTimeout(() => {

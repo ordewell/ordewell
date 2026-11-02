@@ -168,6 +168,18 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
     login, and the workspace's variables stay here. So a script that needs this host's credentials fails, saying why, and
     uncommitted changes do not reach it; the user is told once. A read-only script runs likewise on its throwaway worktree
     with no network at all, which is what ADR-0056 M9's seal holds a child's script to, and needs no sandbox on this host.
+  - Turning containers on asks one thing, a Docker this product can use (`inspectEngine`): a local engine, by a `unix://`
+    endpoint from `docker context inspect`, that answers, runs Linux containers on cgroup v2, on a Linux or Mac host. An
+    engine elsewhere is refused and never warned of, since this host's paths and loopback, which the proofs try, are not
+    its own. The image and login can follow: `{}` is on, and refuses every task, never the host (`changeContainers`, the
+    one way a surface changes the setting). `inspectReadiness` is what a surface and a lease both ask, so what one reports
+    the other refuses, and a lease asks it again from the raw setting at each start, as a Docker that stopped or a
+    sign-in that went is only found there. A surface's check (`containerStatus`, `proveEngine`) proves what a throwaway
+    container can, and holds no login, so it never answers for `cred.unreadable`, and a lease proves its own in any case.
+    What was measured and what is taken on trust are shown apart (`CONTAINER_ASSUMPTIONS`): a forwarded socket looks like a
+    local one, `kernel.separate` means separate from this host and never from another task, as one engine has one kernel
+    (one VM, on a Mac), and a task has no limit on CPU or disk. A `containers.memory` above what the engine has is refused,
+    as Docker accepts it and it limits nothing. Rootless Docker is not refused: the proofs decide.
   - Measured on Colima with Docker 29.5, 2026-11-01: a container's start, `docker run` to its entry ready, took 179 to 224
     ms over eleven; a lease's whole open, with mirror, seed and probe, 303 to 909 ms over thirty, by how busy the machine
     was, and 441 to 489 ms over ten once it opened a sidecar. Claude Code 2.1.316 at rest, attached to its tools and past a
@@ -185,7 +197,8 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
   with `gc.pruneExpire=never` and `gc.auto=0`, and never prunes under one: on git 2.56 a pruned mirror broke a `--shared`
   clone with `bad object HEAD` (measured 2026-10-31). Its pins sit under their tree's name. An attempt only ever mounts it read-only: a writable bare repository
   lets an agent plant hooks and config that later run on the host. Its volume holds the task's clone, put back on what the
-  host holds at each attempt, and the runner's home.
+  host holds at each attempt, the runner's home, and its package caches: a cache tasks share lets one task's code run in
+  the next, so a task's stay its own, and a retry keeps them.
   - Work leaves through a ref-scoped gate on the host (`pushGate.ts`), with the attempt's container already gone, so no
     process of it can change what is read. A helper bundles a snapshot of the workspace on one ref. The gate takes that
     ref alone, named for the attempt, under git's object checks, which it runs itself over a pack of what the ref brings,
@@ -204,8 +217,9 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
   - What a tree leaves in the engine goes with it (`reclaim.ts`), by the label every container, network and task volume
     carries, since a session delete has no Session left to ask: `ExecutionBackend.reclaim` for a Clean up and a Discard,
     `reclaimContainers` for a delete. Every mirror is read, since a landed task's pin outlives its volume. One it took the
-    last pin from goes whole with its project's caches, the one time nothing leans on either; one it held none in is
-    another project's, and stays. A person's sign-in volume is theirs. Without the setting, Docker is not asked.
+    last pin from goes whole, with any cache volume an earlier build left for its project, the one time nothing leans on
+    either; one it held none in is another project's, and stays. A person's sign-in volume is theirs. Without the setting,
+    Docker is not asked.
   - A pin on the board (ADR-0057 R9) reads its file through the lease, since until `collect` the worktree here holds what
     the attempt was seeded with.
   - The Ordewell MCP server is reached with no network at all: the relay listens on the same port of the container's own
@@ -231,8 +245,10 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
     process in the container can spend the key and cannot read it, send it elsewhere or use the API under its own. TLS
     ends there, for that one host, which is the only interception a lease does.
   - A person chooses the login, and it has no default: `broker`, API keys or cloud credentials from this host's
-    environment, or `own-sign-in`, made inside a container and kept in a volume Ordewell mounts and never reads. Which
-    login someone uses is up to them, API usage or their own subscription, and so are its terms: the maintainer decided so
+    environment, or `own-sign-in`, made inside a container and kept in a volume no task mounts. A helper in the engine,
+    with that volume read-only, copies it into the task's own volume as the task starts, so nothing a task writes reaches
+    the original or another task, and this host never reads it. That stops writing and nothing else: the runner can read
+    its copy, and a token it refreshes stays there. Which login someone uses is up to them, API usage or their own subscription, and so are its terms: the maintainer decided so
     on 2026-11-01. Ordewell's part is what it holds, which is below.
   - A broker holds API keys and cloud-provider credentials only (`CredentialBroker`). It never holds Claude subscription
     tokens, and refuses one under any name it can recognise. What a cloud provider's client signs with has to reach it, so
@@ -296,6 +312,13 @@ for model traffic first. The interface is kept free of anything that blocks thes
   for what the relay reaches with no network at all.
 - **`--network none` and the proxy on this host, through the relay.** Rejected: the probe's proof would be simpler, but a
   bug in the proxy would then reach this host's loopback, where a sidecar's worst reach is the engine's.
+- **One writable sign-in volume mounted into every task.** Dropped: a task could rewrite what the next task signs in
+  with, and concurrent tasks would share one refreshing credentials file.
+- **A package cache every task of a project shares.** Dropped: it is a way for one task's code to run in the next.
+  Keeping the speed would take a cache no task can write, which nothing fills yet.
+- **Refusing containers until the image and login are set.** Rejected: an image is built after a person learns their
+  Docker works, and being on with nothing chosen refuses every task.
+- **Warning of a remote engine and going on.** Rejected: a probe on another machine proves nothing of this one.
 - **`api.anthropic.com` on a broker lease's list.** Rejected: a process in the container could then send anything there
   under a key of its own. It stays on an `own-sign-in` list, which cannot avoid it, and that lease proves less.
 - **An empty list unless `allow` names hosts.** Rejected: naming a cache says a task installs from there, and nothing
@@ -339,8 +362,9 @@ for model traffic first. The interface is kept free of anything that blocks thes
 - `Attempts` and `CliAgentAiService` open a lease where they make a workspace and start an adapter.
 - A task's reach can be stated, and only a proven entry relaxes anything. On the local backend that is nothing.
 - A repository with git hooks, a worktree setup command, and a runner's ops task do not run under containers yet, and each
-  says so. A project's dependencies are the runner's to install, in a volume cache, since a host's setup does not reach a
-  container, and a script's to install too, since it has a task volume of its own.
+  says so. A project's dependencies are the runner's to install, in its task volume's cache, since a host's setup does not
+  reach a container, and a script's to install too, since it has a task volume of its own. Each task downloads them
+  for itself.
 - A script that needs this host's credentials or writes to the checkout does not do so under containers: a `git push` fails,
   and a script's writes stay in its container. The setting is session-wide, so such a step runs in a session without it.
 - A lease takes a network of the engine, whose address pools are finite, and one a dead host left stays until a clean-up.
@@ -359,3 +383,4 @@ for model traffic first. The interface is kept free of anything that blocks thes
 - 2026-11-01 — A container session's git runs with hooks off and the gate takes nothing in a tracked hooks folder; work not brought back stops a next attempt; a close waits on `settle`; a child takes its root's backend; a probe reports `cred.unreadable` unproven. Refusing hooks alone dropped.
 - 2026-11-01 — the gate runs git's object checks itself, since a fetch from a bundle does not on an older git.
 - 2026-11-01 — containers are experimental and off in published builds: `containersOffered` reads the `containers` setting only with `ORDEWELL_CONTAINERS=1` from a git checkout, as delegation is held.
+- 2026-11-02 — `changeContainers`, `inspectEngine` and `inspectReadiness`: on asks for a local Docker alone, and a task's start rechecks the raw setting. A task works from its own copy of a sign-in, and keeps its caches in its own volume. Shared caches and a sign-in volume mounted into tasks dropped.

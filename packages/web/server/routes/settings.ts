@@ -1,10 +1,48 @@
 import { Hono } from 'hono';
-import { RunSettingsError, installedPlannerDetected, type GlobalRunSettings, type SettingsResponse, type SettingsUpdateResponse } from '@ordewell/core';
+import { RunSettingsError, containersOffered, installedPlannerDetected, type ContainerChange, type ContainerChangeResponse, type ContainerStatus, type GlobalRunSettings, type SettingsResponse, type SettingsUpdateResponse } from '@ordewell/core';
 import type { OrchestratorPool } from '../pool/orchestratorPool';
 import { failure, jsonObject, refuse } from './errors';
 
+/** One change, so a surface cannot half-apply two; `changeContainers` judges what it holds. */
+function containerChange(body: Record<string, unknown>): ContainerChange | null {
+  const change = Object.fromEntries(Object.entries(body).filter(([key]) => key !== 'workspace'));
+  if (Object.keys(change).length !== 1) return null;
+  if (typeof change.on === 'boolean') return { on: change.on };
+  if (typeof change.image === 'string') return { image: change.image };
+  return 'login' in change ? { login: change.login } : null;
+}
+
 export function settingsRoute(pool: OrchestratorPool) {
   const router = new Hono();
+
+  // Not there at all in a build that does not offer containers (ADR-0059 L5):
+  // the same answer as any other route it does not have.
+  router.use('/containers', async (c, next) => {
+    if (!containersOffered()) return refuse(c, 404, 'This build does not offer containers');
+    return next();
+  });
+
+  router.get('/containers', async (c) => {
+    try {
+      const status: ContainerStatus = await pool.containerStatus(c.req.query('prove') === '1', c.req.query('workspace') || undefined);
+      return c.json(status);
+    } catch (err) {
+      return failure(c, err, 'containers status');
+    }
+  });
+
+  router.patch('/containers', async (c) => {
+    try {
+      const body = await jsonObject(c);
+      const change = containerChange(body);
+      if (!change) return refuse(c, 400, 'One of on, image or login is required');
+      const { workspace } = body;
+      const result: ContainerChangeResponse = await pool.changeContainers(change, typeof workspace === 'string' ? workspace || undefined : undefined);
+      return c.json(result);
+    } catch (err) {
+      return failure(c, err, 'containers change', { fallback: 400 });
+    }
+  });
 
   // Both wait for the startup probe (ADR-0009): the TUI reads the planner from
   // here the moment it opens, and a /planner switch is judged against the

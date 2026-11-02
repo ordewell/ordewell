@@ -6,7 +6,7 @@ import { createAiService, type IAiService } from './AiService';
 import type { PlannerContextDeps } from './plannerContextBudget';
 import { PlannerBackend } from './PlannerBackend';
 import type { TaskOp } from './TaskOps';
-import { PlanChangeCheck, runsSealed, type PlanChangeScope } from './PlanChangeCheck';
+import { PlanChangeCheck, runsSealed, type NodeFunds, type PlanChangeScope } from './PlanChangeCheck';
 import { carryPlannedModes } from './ModeResolver';
 import { ApprovalRecord } from './ApprovalRecord';
 import type { TaskQueryCatalog } from './TaskQuery';
@@ -185,6 +185,8 @@ export interface ConversationRewind extends ConversationFork {
  * plan's size multiplies.
  */
 const SAVE_INTERVAL_MS = 5000;
+/** The closest two saves of a changed status come, as a burst of starts would otherwise write the plan once each. */
+const STATUS_SAVE_INTERVAL_MS = 1000;
 
 /** Writes one plan to the saved-session store: {@link saveSession}'s shape, injected so tests never touch disk. `workspace` is the state root. */
 export type SaveSession = (plan: LegacyPlanState, goal: string, workspace: string, sessionId: string) => void;
@@ -661,6 +663,7 @@ export function createSession(deps: SessionDeps): Session {
   const catalog = new SessionCatalog({
     config: deps.config,
     autonomous: () => autonomousAt(deps.child, deps.config.autonomousMode),
+    ...(deps.child ? { held: () => deps.child!.mandate('off').limits } : {}),
     registry: deps.registry,
     modelResolver: deps.modelResolver,
     settings: deps.settings,
@@ -865,6 +868,10 @@ export class Session {
   private saveTimer: ReturnType<typeof setTimeout> | undefined;
   /** The store's status mark as last saved, or as loaded. */
   private savedStatuses: string | undefined;
+  private savedRevision: number | undefined;
+  private savedAt = 0;
+  private saveDue = 0;
+  private savesHeld = false;
   /** The user was told the disk is refusing this session's saves, and none has landed since. */
   private saveFailureSaid = false;
   /** A whole-plan start opening; a second Execute joins it rather than resetting the run under it. */
@@ -1502,7 +1509,11 @@ export class Session {
       handles: () => this.conversation.turnHandles(),
       guard: (before, after) => (guarded() ? this.supervision.checkEdit(before, after)?.refusal : undefined),
       // Read only where the build offers delegation, so a flat session's change meets what it always met (ADR-0055 D21).
-      node: () => (this.delegationOffered ? { mandate: this.mandate(), level: this.authority.depth } : undefined),
+      node: () => {
+        if (!this.delegationOffered) return undefined;
+        const budget = this.heldFunds();
+        return { mandate: this.mandate(), level: this.authority.depth, ...(budget ? { budget } : {}) };
+      },
       canSeal: async () => (await this.fsAdapter.canSeal?.()) ?? false,
     };
   }
@@ -1812,6 +1823,23 @@ export class Session {
   }
 
   /**
+   * What the ledger says of this node's budget, in the tick a check reads it: a
+   * check has no wait to open one with, and a root with no ledger open has
+   * carved nothing yet in this process.
+   */
+  private heldFunds(): NodeFunds | undefined {
+    const tree = this.budget?.tree ?? this.tree;
+    if (!tree) return undefined;
+    if (!this.placement) tree.setRootLimit(this.userRunSettings().delegationTokens);
+    const { nodePath } = this;
+    return {
+      limit: tree.numbers(nodePath).limit,
+      left: tree.left(nodePath),
+      stillAsks: (task) => tree.stillAsks(nodePath, task.id, task.budget?.tokens ?? 0),
+    };
+  }
+
+  /**
    * A child's mandate and budget, carved from what this node has left
    * (ADR-0056 M4, M5). At the root, what can never pass is refused before a
    * log is opened: the first carve is what makes a run a tree. A child's limit
@@ -1961,7 +1989,7 @@ export class Session {
       heldSince: (since) => this.placement?.pool.heldSince(since) ?? 0,
       startPlanning: (goal) => this.startPlanning(told(goal)),
       continueConversation: (text) => this.continueConversation(text),
-      goOn: (text, goal) => this.goOn(text, told(goal)),
+      goOn: (text, goal) => this.goOn(text, goal, told),
       hear: (line) => { void this.turns.enqueue({ source: 'supervisor', text: line, rides: true }).catch(() => undefined); },
       state: () => this.nodeState(),
       takeReport: (report) => this.takeReport(report),
@@ -2048,18 +2076,21 @@ export class Session {
   }
 
   /**
-   * Reopened (ADR-0055 D17): as Execute, so what failed is retried, and then its
-   * subplanner goes on. One whose plan never reached the disk plans its goal, and
-   * one with nothing left to run goes straight to its turn: it may owe only its report.
+   * Reopened (ADR-0055 D17): as Execute, so what failed is retried, but for its
+   * own children, which go on under this same Continue, and then its subplanner
+   * goes on. One whose plan never reached the disk plans its goal, and one with
+   * nothing left to run goes straight to its turn: it may owe only its report.
+   * `told` adds the pins of now, posted since it opened or not (ADR-0057 R10);
+   * its children hear the message without them, and add their own.
    */
-  private async goOn(text: string, goal: string): Promise<unknown> {
-    if (this.store.planTasks.length === 0) return this.startPlanning(goal);
+  private async goOn(text: string, goal: string, told: (said: string) => string): Promise<unknown> {
+    if (this.store.planTasks.length === 0) return this.startPlanning(told(goal));
     const left = flattenTasks(this.store.planTasks).some((task) => task.type !== 'user' && task.status !== 'completed' && task.status !== 'skipped');
-    if (left) {
-      const run = await this.execute({ command: 'run_plan' }, this.turnActor());
-      if (!run.ok) throw new Error(run.message);
-    }
-    return this.continueConversation(text);
+    if (!left) return this.continueConversation(told(text));
+    const held = this.orchestrator.owesChildren(text);
+    const run = await this.execute({ command: 'run_plan' }, this.turnActor());
+    if (!run.ok) throw new Error(run.message);
+    return this.continueConversation(told([text, ...held].join('\n\n')));
   }
 
   private get taskLogReader(): TaskLogReader {
@@ -2276,8 +2307,9 @@ export class Session {
 
   /**
    * The relay announces every orchestrator event; this adds the saves some of
-   * them owe, each made before the announcement so no surface sees state the
-   * disk lacks.
+   * them owe, each made before the announcement so no surface sees a decision
+   * the disk lacks. A status that decides nothing may lead the disk by up to
+   * {@link STATUS_SAVE_INTERVAL_MS}.
    */
   private observer(): OrchestratorObserver {
     const relay = this.events.observer(() => this.plan);
@@ -2315,6 +2347,9 @@ export class Session {
         this.saveChange();
         relay.onTaskChanged();
       },
+      // A script's effects do not wait for a save, and a reload that finds it
+      // unstarted would offer to run them again as if they never ran (ADR-0035).
+      onScriptClaimed: () => this.persist(),
       onTick: () => {
         this.saveChange();
         relay.onTick();
@@ -2324,8 +2359,7 @@ export class Session {
       // last Session operation.
       onTaskSettled: ({ taskId }) => {
         const task = this.store.get(taskId);
-        if (task) this.supervision.taskSettled(task);
-        this.persist();
+        this.savingOnce(() => { if (task) this.supervision.taskSettled(task); });
       },
       onUsageLimitWait: ({ taskId, runner, resumeAt, cancelled }) => {
         if (!cancelled) this.supervision.observe({ kind: 'usage_limit', taskId, runner, resumeAt });
@@ -2373,6 +2407,7 @@ export class Session {
    * write: a turn holds what it writes until the mutation that lands it.
    */
   private persist(): void {
+    if (this.savesHeld) return;
     // A save that settles after destroy would claim the lease again, and hold
     // the session from every other host until this process exits (ADR-0049 L7).
     if (!this.plan || this.leaseReleased) return;
@@ -2395,31 +2430,55 @@ export class Session {
     this.plan.supervision = this.supervision.snapshot();
     this.plan.lastUpdated = new Date().toISOString();
     this.save(this.plan, this.goal, this.stateRoot, this.currentSessionId);
+    this.savedAt = Date.now();
+    this.savedRevision = this.store.revision;
     this.savedStatuses = this.store.statusMark();
     this.saveFailureSaid = false;
   }
 
+  /** One save for all `act` asks of it, made as it ends, however it ends: the plan is written whole, so each save is what a plan's size multiplies. */
+  private savingOnce(act: () => void): void {
+    this.savesHeld = true;
+    try {
+      act();
+    } finally {
+      this.savesHeld = false;
+      this.persist();
+    }
+  }
+
   /**
    * What a change to the plan owes the disk. A task's status is what a
-   * decision and a reload read, so a changed one is saved at once, and what
-   * changed beside it goes with it; anything else can wait for the timer.
+   * decision and a reload read, so a changed one is saved within the second,
+   * and at once if no save came in the one before: a save writes the whole
+   * plan, and a wide run starts tasks far faster than that is worth. A
+   * settled task and a user's control are not paced, and neither is a script,
+   * saved as it starts (see {@link observer}). What changed beside a status
+   * goes with it; anything else can wait for the timer.
    */
   private saveChange(): void {
     if (this.controlsInFlight > 0) return this.persist();
     // Saved as it ends, or not at all if it aborts.
     if (this.events.holdingStatus) return;
-    if (this.store.statusMark() !== this.savedStatuses) this.persist();
-    else this.saveSoon();
+    if (this.store.revision === this.savedRevision) return;
+    if (this.store.statusMark() === this.savedStatuses) return this.saveSoon();
+    const sinceSaved = Date.now() - this.savedAt;
+    if (sinceSaved >= STATUS_SAVE_INTERVAL_MS) this.persist();
+    else this.saveSoon(STATUS_SAVE_INTERVAL_MS - sinceSaved);
   }
 
-  /** Owe a save, made once however often this is called before it comes. */
-  private saveSoon(): void {
-    if (this.saveTimer || !this.plan) return;
+  /** Owe a save, made once, by the soonest it was asked for, however often this is called before it comes. */
+  private saveSoon(within = SAVE_INTERVAL_MS): void {
+    if (!this.plan) return;
+    const due = Date.now() + within;
+    if (this.saveTimer && this.saveDue <= due) return;
+    clearTimeout(this.saveTimer);
+    this.saveDue = due;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = undefined;
       // Outside any observer, whose throw the orchestrator would catch.
       this.tryPersist();
-    }, SAVE_INTERVAL_MS);
+    }, within);
     // A process with nothing else to do does not wait for this: settling and destroy save.
     this.saveTimer.unref?.();
   }
@@ -2837,7 +2896,6 @@ export class Session {
 
     const generated = await this.conversation.hold(options?.signal, async (turn) => {
       const { modelsByRunner, runnerModes } = await this.catalog.planning(chosenRunners);
-      const settings = this.settingsFn();
       const modes = { ...plannerModesFrom(this.autonomous()), isolatedExecution: await this.runs.plannerLayout(), taskSkills: this.workspaceSkills() };
       const subagents = new SubagentRuns();
 
@@ -2854,7 +2912,7 @@ export class Session {
           this.events.progress(p);
         },
         signal: turn.signal,
-        perRunnerAllowlist: settings.modelAllowlist,
+        perRunnerAllowlist: this.catalog.allowlist(),
         modes,
       });
       if (turn.abandoned) throw new PlannerTurnDiscardedError();
@@ -3163,10 +3221,10 @@ export class Session {
     return { ...this.plannerTools, taskComplete: (report) => subplanner.taskComplete(report), checkpoint: ({ question }) => Promise.resolve(subplanner.checkpoint(question)) };
   }
 
-  /** What the prompt says of this node's limits, as it stands when the planner starts (ADR-0055 D19). */
+  /** What the prompt says of this node's limits, as it stands when the planner starts (ADR-0055 D19): what a carve could take then, which a child's limit overstates by what it keeps for its own turns. */
   private delegationBrief(): PlannerDelegation {
     const { limits, grants } = this.mandate();
-    return { tokens: limits.tokens, delegatedTasks: limits.delegatedTasks, grantable: [...grants].filter((grant) => grant === 'research' || grant === 'delegate' || grant === 'effect') };
+    return { tokens: this.heldFunds()?.left ?? limits.tokens, delegatedTasks: limits.delegatedTasks, grantable: [...grants].filter((grant) => grant === 'research' || grant === 'delegate' || grant === 'effect') };
   }
 
   /**
@@ -3806,6 +3864,7 @@ export class Session {
     if (adopting) this.creditLoggedAttempts(plan.tasks);
     // Held, so a task the load puts back is not saved here: whether a load saves is the caller's to say.
     this.events.holdStatus(() => this.orchestrator.loadPlan(plan.tasks, plan.runners));
+    this.savedRevision = this.store.revision;
     this.savedStatuses = this.store.statusMark();
     // Loading normalizes statuses (a stored `blocked` goes) on the store's
     // copy; the adopted plan shows that result, not the caller's input.

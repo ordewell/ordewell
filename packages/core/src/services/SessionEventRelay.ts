@@ -21,9 +21,17 @@ type PlannerCompactionMessage = Extract<SessionMessage, { type: 'planner_compact
 
 /** The least time between status updates that nothing a person decides on asked for. */
 const STATUS_INTERVAL_MS = 1000;
+/**
+ * How often a status update says every task again. A surface holds what the
+ * stream told it, and a snapshot read over HTTP can land on top of a newer
+ * update, so what a change alone would leave wrong for good comes right here.
+ */
+const WHOLE_STATUS_INTERVAL_MS = 30_000;
 
 const waitIds = (list: readonly Escalation[]): string => list.map((e) => e.id).join();
 const landedIds = (view: RunMergeView | null | undefined): string => view?.landed.map((t) => t.taskId).join() ?? '';
+
+type StatusUpdate = Extract<SessionMessage, { type: 'status_update' }>;
 
 export interface SessionEventRelayDeps {
   broadcast: SessionBroadcaster;
@@ -59,7 +67,7 @@ export interface SessionEventRelayDeps {
  * and remembered for a surface joining late, so Session announces it too. A
  * model switch is a plan edit, which Session's editor announces as one.
  */
-export type RelayObserver = Required<Omit<OrchestratorObserver, 'onTaskSettled' | 'onRunStarted' | 'onAutoMerge' | 'onUsageLimitWait' | 'onModelSwitched' | 'onTaskIdle' | 'onIsolationHandoff' | 'onRunClosed'>>;
+export type RelayObserver = Required<Omit<OrchestratorObserver, 'onTaskSettled' | 'onRunStarted' | 'onAutoMerge' | 'onUsageLimitWait' | 'onModelSwitched' | 'onTaskIdle' | 'onIsolationHandoff' | 'onRunClosed' | 'onScriptClaimed'>>;
 
 /**
  * Turns orchestrator and planner events into {@link SessionMessage}
@@ -98,6 +106,9 @@ export class SessionEventRelay {
   private landedSent = false;
   /** The run as {@link statusChanged} last read it. */
   private lastMoved: string | undefined;
+  /** Each task's status as the last status update left surfaces holding it, so one carries only what moved. */
+  private sentTasks = new Map<string, string>();
+  private wholeStatusAt: number | undefined;
   private livePlan: () => LegacyPlanState | null = () => null;
   /** The planner's requests announced and not yet settled, as they were announced: a surface joining now is owed them. */
   private readonly announced = new Map<string, Extract<SessionMessage, { type: 'approval_request' }>>();
@@ -159,7 +170,7 @@ export class SessionEventRelay {
     this.statusCanWait(plan);
   }
 
-  /** Send every task's status now, whatever was sent a moment ago: for what a surface must not wait for. */
+  /** Send what moved now, however little was sent a moment ago: for what a surface must not wait for. */
   status(plan: LegacyPlanState | null): void {
     if (!plan) return;
     this.statusOwed = this.statusHeld;
@@ -176,8 +187,23 @@ export class SessionEventRelay {
     if (landed !== this.sentLanded) this.landedSent = true;
     this.sentLanded = landed;
     this.openStatusWindow();
-    this.broadcast(message);
+    this.broadcast(this.changesIn(message));
     this.escalationsSent(message.escalations ?? []);
+  }
+
+  /** `message` with only the tasks that moved: serialized, since most of what moves in a status is no field of the store. */
+  private changesIn(message: StatusUpdate): StatusUpdate {
+    const now = Date.now();
+    const whole = this.wholeStatusAt === undefined || now - this.wholeStatusAt >= WHOLE_STATUS_INTERVAL_MS;
+    if (whole) this.wholeStatusAt = now;
+    const sent = new Map<string, string>();
+    const tasks = message.tasks.filter((task) => {
+      const serialized = JSON.stringify(task);
+      sent.set(task.id, serialized);
+      return whole || this.sentTasks.get(task.id) !== serialized;
+    });
+    this.sentTasks = sent;
+    return { ...message, tasks };
   }
 
   /**
@@ -226,10 +252,10 @@ export class SessionEventRelay {
 
   /**
    * The first change to what waits on a person goes out at once, and the rest
-   * wait for the second to end: every update carries every wait, so a hundred
-   * tasks failing together must not each send the plan with all those before
-   * them. The notifier reads the list as it goes out, so it is told of them
-   * then, each once.
+   * wait for the second to end: every update carries every wait and is judged
+   * over the whole plan, so a hundred tasks failing together must not each cost
+   * that with all those before them. The notifier reads the list as it goes
+   * out, so it is told of them then, each once.
    */
   private waitsMayHaveChanged(plan: LegacyPlanState | null): void {
     if (!plan || !this.statusWindow || this.statusHeld || this.waitsSent || waitIds(this.escalations()) === this.sentWaits) this.statusCanWait(plan);
@@ -238,9 +264,9 @@ export class SessionEventRelay {
 
   /**
    * A task in a worktree reports its landing twice and its release once, and
-   * every update carries every task, so a wide run must not send the plan per
-   * report. What a person acts on still goes first: new work to merge, like a
-   * new wait, goes at once, and the rest waits for the second to end.
+   * every update is judged over the whole plan, so a wide run must not pay that
+   * per report. What a person acts on still goes first: new work to merge, like
+   * a new wait, goes at once, and the rest waits for the second to end.
    */
   private isolationChanged(plan: LegacyPlanState | null): void {
     if (!plan || !this.statusWindow || this.statusHeld || this.landedSent || landedIds(this.orchestrator.runMergeView()) === this.sentLanded) this.waitsMayHaveChanged(plan);
@@ -259,12 +285,12 @@ export class SessionEventRelay {
     this.statusWindow.unref?.();
   }
 
-  /** Every task's status as it stands, in the message a status update carries. */
-  statusMessage(): Extract<SessionMessage, { type: 'status_update' }> {
+  /** Every task's status as it stands: what a joining surface starts from. */
+  statusMessage(): StatusUpdate {
     return this.orchestrator.judgingOnce(() => this.judgedStatus());
   }
 
-  private judgedStatus(): Extract<SessionMessage, { type: 'status_update' }> {
+  private judgedStatus(): StatusUpdate {
     const runMerge = this.orchestrator.runMergeView();
     return {
       type: 'status_update',

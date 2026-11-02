@@ -19,7 +19,8 @@ import { handlePlanner, handlePlannerEffort } from './planner';
 import { handleModel } from './model';
 import { handleParallel } from './parallel';
 import { handleAutomerge, handleAutorun, handleDelegation, handleSupervisor, handleTrailer } from './runSettings';
-import { DELEGATION_OFFERED } from '@ordewell/core';
+import { DELEGATION_OFFERED, containersOffered } from '@ordewell/core';
+import { handleContainers } from './containers';
 import { handleKey } from './key';
 import { handleAuto, handleRefresh, handleRunners } from './runners';
 import { handleApprove } from './approve';
@@ -62,6 +63,8 @@ export const COMMANDS: Record<string, (args: string[]) => Promise<void> | void> 
   autorun: handleAutorun,
   // Not offered until a delegated task exists (ADR-0055 D21).
   ...(DELEGATION_OFFERED ? { delegation: handleDelegation } : {}),
+  // Only a checkout that asks for them gets them (ADR-0059 L5).
+  ...(containersOffered() ? { containers: handleContainers } : {}),
   refresh: handleRefresh,
   setup: handleSetup,
   skills: handleSkills,

@@ -164,7 +164,7 @@ export type SurfaceTask<T extends Task = Task> = Omit<T, 'attemptSkills' | 'subt
 };
 
 /** A plan as the daemon and the VS Code webview are sent it: the session's own state, minus every skill body. */
-export type SurfacePlan = Omit<LegacyPlanState, 'tasks' | 'conversationHistory' | 'pendingTurns' | 'queuedMessages'> & {
+export type SurfacePlan = Omit<LegacyPlanState, 'tasks' | 'conversationHistory' | 'pendingTurns' | 'queuedMessages' | 'plannerSession'> & {
   tasks: SurfaceTask[];
   conversationHistory?: SerializedConversationMessage[];
   pendingTurns?: SerializedPendingTurn[];
@@ -314,7 +314,12 @@ export type SessionMessage =
    * `true` for the next to wait under.
    */
   | { type: 'planner_detection'; waiting: boolean }
-  /** `escalations`: what waits on a person now (ADR-0053), whole; absent from an older daemon. */
+  /**
+   * `tasks` holds the tasks that moved, each whole, and a task left out is as
+   * it was; `RunSnapshotFrame` gives a joining surface the rest. Now and then
+   * it holds every task again. The run-wide fields are whole on every update.
+   * `escalations`: what waits on a person now (ADR-0053); absent from an older daemon.
+   */
   | { type: 'status_update'; tasks: SerializedTaskStatus[]; runMerge?: RunMergeView; usage?: PlanUsage; activity?: RunActivity; escalations?: Escalation[] }
   | { type: 'review_needed'; tasks: SerializedTask[] }
   | { type: 'review_approved' }
@@ -569,7 +574,7 @@ export function surfaceTask<T extends Task>({ attemptSkills, subtasks, runnerSes
 }
 
 /** The one place a plan's skill bodies come off before it leaves the session: every wire path that carries plan state goes through here. */
-export function surfacePlan({ queuedMessages: _carriedOverAtLoad, ...plan }: LegacyPlanState): SurfacePlan {
+export function surfacePlan({ queuedMessages: _carriedOverAtLoad, plannerSession: _hint, ...plan }: LegacyPlanState): SurfacePlan {
   return {
     ...plan,
     tasks: plan.tasks.map(surfaceTask),

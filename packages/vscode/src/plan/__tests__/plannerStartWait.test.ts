@@ -100,7 +100,7 @@ describe('a first goal waiting for the installed-agent probe', () => {
       sendRunSettings,
       log: () => {},
       extension: {
-        ready: vi.fn(),
+        ready: vi.fn(), refreshChildren: vi.fn(async () => {}), openChild: vi.fn(async () => {}), closeChild: vi.fn(), messageChild: vi.fn(async () => {}), answerChildCheckpoint: vi.fn(async () => {}), openChildTaskLog: vi.fn(async () => {}),
         refreshModels: vi.fn(),
         runSlashCommand: vi.fn(async () => {}),
         setPlanner: vi.fn(async () => {}),

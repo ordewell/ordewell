@@ -509,8 +509,8 @@ export class ChildPlanSession extends AbstractRunnerSession {
   queued(): QueuedTaskMessage[] { return []; }
   /** A child has no one turn to interrupt: Stop ends it. */
   async interrupt(): Promise<void> {}
-  /** What a restart names (D3): the child session, not a runner's. */
-  nativeSessionId(): string | null { return this.node?.sessionId ?? null; }
+  /** What a restart names (D3): the child session, not a runner's. One refused reopening still names it: none would read as a runner that lost its session, over the real reason. */
+  nativeSessionId(): string | null { return this.node?.sessionId ?? this.setup.resume?.sessionId ?? null; }
   commands(): RunnerCommand[] { return []; }
   invokeCommand(): string { throw new Error('A delegated task takes no runner commands.'); }
   answerPermission(): boolean { return false; }

@@ -13,6 +13,9 @@ import type {
   ChildPlanResponse,
   ChildTaskControlResponse,
   ChildTreeFrame,
+  ContainerChange,
+  ContainerChangeResponse,
+  ContainerStatus,
   ConversationCompactResponse,
   ConversationForkResponse,
   ConversationRewindResponse,
@@ -906,6 +909,15 @@ export class ApiClient {
   /** Save run settings (ADR-0030); with `sessionId`, that session's run takes them at once. */
   updateRunSettings(changes: Partial<GlobalRunSettings>, sessionId?: string): Promise<SettingsResponse> {
     return this.call('PATCH', '/api/settings', 'Change run settings failed', { run: changes, ...(sessionId ? { sessionId } : {}), workspace: this.workspace });
+  }
+
+  /** Where the `containers` setting stands; `prove` has the daemon start a throwaway container to measure. */
+  getContainers(prove = false): Promise<ContainerStatus> {
+    return this.call('GET', `/api/settings/containers?${prove ? 'prove=1&' : ''}workspace=${encodeURIComponent(this.workspace)}`, 'Failed to read containers');
+  }
+
+  changeContainers(change: ContainerChange): Promise<ContainerChangeResponse> {
+    return this.call('PATCH', '/api/settings/containers', 'Failed to change containers', { ...change, workspace: this.workspace });
   }
 
   updateSettings(changes: Record<string, unknown>): Promise<SettingsUpdateResponse> {

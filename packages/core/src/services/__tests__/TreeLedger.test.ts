@@ -103,6 +103,62 @@ describe('carving a child\'s budget (ADR-0056 M5)', () => {
   });
 });
 
+describe('what a task still asks of its parent (ADR-0056 M5, M10)', () => {
+  const carveFor = (ledger: TreeLedger, taskId: string, tokens: number): NodeBudget => {
+    const carved = ledger.carve(ROOT_NODE, delegating(1000), { level: 0, tokens }, { sessionId: `child-of-${taskId}`, taskId });
+    if (!carved.ok) throw new Error(JSON.stringify(carved.refusal));
+    return carved.budget;
+  };
+
+  it('is its stated budget until a child opens, and nothing while one holds it', async () => {
+    const ledger = await open(1000);
+    expect(ledger.stillAsks(ROOT_NODE, 't', 300)).toBe(300);
+    carveFor(ledger, 't', 300);
+    expect(ledger.stillAsks(ROOT_NODE, 't', 300)).toBe(0);
+  });
+
+  it('is what its closed children left, with every raise, and never less than nothing', async () => {
+    const ledger = await open(1000);
+    const first = carveFor(ledger, 't', 400);
+    ledger.raise(first.path, 50);
+    first.spent(used(100), { taskId: 'w', attempt: 1 });
+    ledger.close(first.path);
+    expect(ledger.stillAsks(ROOT_NODE, 't', 400)).toBe(350);
+    expect(ledger.stillAsks(ROOT_NODE, 't', 40)).toBe(0);
+  });
+
+  it('reads every opening of the parent, whose Continue is a new node for the same session, and reads it again from the log (ADR-0055 D17)', async () => {
+    const store = new FakeEventStore();
+    const ledger = await open(1000, store);
+    const carve = (on: TreeLedger, parent: NodePath, level: number, tokens: number, sessionId: string, taskId: string): NodeBudget => {
+      const carved = on.carve(parent, delegating(1000), { level, tokens }, { sessionId, taskId });
+      if (!carved.ok) throw new Error(JSON.stringify(carved.refusal));
+      return carved.budget;
+    };
+    const first = carve(ledger, ROOT_NODE, 0, 800, 'subplanner', 'sub');
+    const below = carve(ledger, first.path, 1, 400, 'grandchild', 't');
+    below.spent(used(100), { taskId: 'w', attempt: 1 });
+    ledger.raise(below.path, 50);
+    ledger.close(first.path);
+
+    const second = carve(ledger, ROOT_NODE, 0, 700, 'subplanner', 'sub');
+    expect(second.path).not.toBe(first.path);
+    expect(ledger.spentOn(second.path, 't')).toBe(100);
+    expect(ledger.raisedOn(second.path, 't')).toBe(50);
+    expect(ledger.stillAsks(second.path, 't', 400)).toBe(350);
+
+    const held = carve(ledger, second.path, 1, 350, 'grandchild-again', 't');
+    expect(ledger.stillAsks(second.path, 't', 400)).toBe(0);
+    held.spent(used(30), { taskId: 'w', attempt: 2 });
+    ledger.close(held.path);
+
+    await ledger.flushed();
+    const reopened = await open(1000, store);
+    expect(reopened.spentOn(second.path, 't')).toBe(130);
+    expect(reopened.stillAsks(second.path, 't', 400)).toBe(320);
+  });
+});
+
 describe('a claim (ADR-0056 M5)', () => {
   it('holds one session\'s reserve while it runs, and frees it as it ends', async () => {
     const ledger = await open(100);
@@ -765,7 +821,12 @@ describe('down a tree, over generated histories', () => {
       takes += store.events.filter((e) => e.kind === 'budget_taken').length;
       // The live numbers are the log's, whatever came.
       const replayed = await open(0, store);
-      for (const node of foldTree(store.events).keys()) expect(replayed.numbers(node), `seed ${seed}`).toEqual(ledger.numbers(node));
+      const tree = foldTree(store.events);
+      for (const [node, state] of tree) {
+        expect(replayed.numbers(node), `seed ${seed}`).toEqual(ledger.numbers(node));
+        expect(ledger.nodeOf(state.sessionId)?.path, `seed ${seed}`).toBe(state.open ? node : undefined);
+        expect(replayed.nodeOf(state.sessionId)?.path, `seed ${seed}`).toBe(state.open ? node : undefined);
+      }
     }
     // A property nothing reached proves nothing.
     expect(carves).toBeGreaterThan(500);
@@ -809,5 +870,69 @@ describe('down a tree, over generated histories', () => {
       expect(spent, `seed ${seed}`).toBeLessThanOrEqual(limit);
     }
     expect(refusals).toBeGreaterThan(100);
+  });
+});
+
+/** How often `act` walked a map of at least `size` entries: a whole tree, in the tests below. */
+function walksOf(size: number, act: () => void): number {
+  const walks = vi.spyOn(Map.prototype, 'values');
+  try {
+    act();
+    return walks.mock.contexts.filter((map) => (map as Map<unknown, unknown>).size >= size).length;
+  } finally {
+    walks.mockRestore();
+  }
+}
+
+describe('a tree that has opened far more children than are open (ADR-0058 S3)', () => {
+  const OVER_ITS_LIFE = 50;
+
+  async function longRunning() {
+    const store = new FakeEventStore();
+    const ledger = await open(100_000, store);
+    for (let i = 0; i < OVER_ITS_LIFE; i++) ledger.close(child(ledger, ROOT_NODE, 20).path);
+    return { ledger, store };
+  }
+
+  it('pays a usage record without walking every child it ever opened', async () => {
+    const { ledger } = await longRunning();
+    const busy = child(ledger, ROOT_NODE, 100);
+    busy.hold();
+    expect(walksOf(OVER_ITS_LIFE, () => busy.spent(used(1), { taskId: 't', attempt: 1 }))).toBe(0);
+    expect(ledger.numbers(busy.path).spent).toBe(1);
+  });
+
+  it('finds a session, a task and a board without walking them either', async () => {
+    const { ledger } = await longRunning();
+    const budget = child(ledger, ROOT_NODE, 100);
+    const taskId = `task-${opened}`;
+    const walks = walksOf(OVER_ITS_LIFE, () => {
+      expect(ledger.nodeOf(budget.sessionId)?.path).toBe(budget.path);
+      expect(ledger.spentOn(ROOT_NODE, taskId)).toBe(0);
+      expect(ledger.board(budget.path)).toEqual([]);
+    });
+    expect(walks).toBe(0);
+  });
+
+  it('carves and closes a child without walking them', async () => {
+    const { ledger } = await longRunning();
+    const walks = walksOf(OVER_ITS_LIFE, () => ledger.close(child(ledger, ROOT_NODE, 20).path));
+    expect(walks).toBe(0);
+  });
+
+  it('answers the same after a restart, from the log alone', async () => {
+    const { ledger, store } = await longRunning();
+    const held = child(ledger, ROOT_NODE, 100);
+    const below = child(ledger, held.path, 50);
+    below.spent(used(3), { taskId: 't', attempt: 1 });
+    ledger.close(child(ledger, ROOT_NODE, 20).path);
+    await ledger.flushed();
+    const reopened = await open(100_000, store);
+    expect(reopened.subtreeSpent(held.path)).toBe(3);
+    expect(reopened.nodeOf(below.sessionId)?.path).toBe(below.path);
+    expect(reopened.numbers(ROOT_NODE)).toEqual(ledger.numbers(ROOT_NODE));
+    reopened.close(held.path);
+    expect(reopened.nodeOf(below.sessionId)).toBeUndefined();
+    expect(reopened.numbers(ROOT_NODE).spent).toBe(3);
   });
 });

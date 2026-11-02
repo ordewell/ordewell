@@ -167,6 +167,74 @@ describe('Supervisor', () => {
     vi.useRealTimers();
   });
 
+  describe('reading the plan for a wave of held events (ADR-0058)', () => {
+    it('reads it once for a window, however many failures land in it, and still wakes at the window', async () => {
+      vi.useFakeTimers();
+      const h = host({ level: 'act' });
+      const wakeFacts = vi.fn(h.wakeFacts);
+      const supervisor = new Supervisor({ ...h, wakeFacts }, { debounceMs: 10 });
+
+      for (let i = 1; i <= 100; i++) supervisor.observe({ kind: 'task_failed', taskId: `t${i}`, detail: 'broke' });
+      await vi.advanceTimersByTimeAsync(9);
+      expect(h.deliver).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(h.deliver).toHaveBeenCalledTimes(1);
+      expect(wakeFacts).toHaveBeenCalledTimes(1);
+      vi.useRealTimers();
+    });
+
+    it('holds past the window what the plan does not call for, and wakes when it is due', async () => {
+      vi.useFakeTimers();
+      const h = host({ level: 'act' });
+      const wakeFacts = () => ({ nothingCanStart: false, cohortDone: new Set<string>(), blocksWork: new Set<string>(), ttlMs: 1000, requestAt: null });
+      const supervisor = new Supervisor({ ...h, wakeFacts }, { debounceMs: 10 });
+
+      supervisor.observe({ kind: 'task_failed', taskId: 't1', detail: 'broke' });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(h.deliver).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(h.deliver).toHaveBeenCalledTimes(1);
+      vi.useRealTimers();
+    });
+
+    it('wakes at once past the window when an event makes the held ones due', async () => {
+      vi.useFakeTimers();
+      const h = host({ level: 'act' });
+      const cohortDone = new Set<string>();
+      const wakeFacts = () => ({ nothingCanStart: false, cohortDone, blocksWork: new Set<string>(), ttlMs: 1_000_000, requestAt: null });
+      const supervisor = new Supervisor({ ...h, wakeFacts }, { debounceMs: 10 });
+
+      supervisor.observe({ kind: 'task_failed', taskId: 't1', detail: 'broke' });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(h.deliver).not.toHaveBeenCalled();
+
+      cohortDone.add('t1');
+      supervisor.observe({ kind: 'task_passed', taskId: 't2' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(h.deliver).toHaveBeenCalledTimes(1);
+      vi.useRealTimers();
+    });
+
+    it('does not put off what is due at once to the plan\'s read', async () => {
+      vi.useFakeTimers();
+      const h = host({ level: 'act' });
+      const wakeFacts = vi.fn(h.wakeFacts);
+      const supervisor = new Supervisor({ ...h, wakeFacts }, { debounceMs: 10 });
+
+      supervisor.observe({ kind: 'task_failed', taskId: 't1', detail: 'broke' });
+      await vi.advanceTimersByTimeAsync(5);
+      supervisor.observe({ kind: 'waiting_input', taskId: 't2', detail: 'Which database?' });
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(h.deliver).toHaveBeenCalledTimes(1);
+      expect(wakeFacts).not.toHaveBeenCalled();
+      vi.useRealTimers();
+    });
+  });
+
   describe('a report the planner asked for (ADR-0037)', () => {
     const report = (authority: 'user' | 'supervisor', taskId = 't1'): RunEventInput => ({ kind: 'task_report', taskId, report: { authority, text: 'It passed.\nIt printed nothing.', passed: true } });
 

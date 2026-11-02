@@ -405,6 +405,16 @@ describe('sessionStore', () => {
       expect(loadSession(meta.id, tmpDir)!.plan).toEqual(plan);
     });
 
+    it('goes to the file named for the session without opening the others', () => {
+      const { id } = saveSession(createEmptyPlan(), 'Goal', tmpDir);
+      fs.writeFileSync(path.join(tmpDir, '.ordewell', 'sessions', '0-sorts-first.json'), '{ not json');
+      const { logger, warns } = fakeLogger();
+
+      expect(loadSession(id, tmpDir, logger)?.meta.id).toBe(id);
+
+      expect(warns).toEqual([]);
+    });
+
     it('keeps subagent entries and planner usage across a save and a load', () => {
       const plan = {
         ...createEmptyPlan(),

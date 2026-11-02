@@ -148,8 +148,9 @@ describe('a status update', () => {
       await until(() => env.messages.some((m) => m.type === 'execution_complete'));
 
       expect(statuses(env.messages).length).toBeLessThan(6);
+      const shown = new Map(statuses(env.messages).flatMap((m) => (m.type === 'status_update' ? m.tasks : [])).map((t) => [t.id, t.status]));
+      expect([...shown.values()]).toEqual(wide(20).map(() => 'completed'));
       const last = statuses(env.messages).at(-1);
-      expect(last?.type === 'status_update' && last.tasks.map((t) => t.status)).toEqual(wide(20).map(() => 'completed'));
       expect(last?.type === 'status_update' && last.runMerge?.landed).toHaveLength(20);
     });
 
@@ -187,6 +188,12 @@ describe('a status update', () => {
 
 describe('saving', () => {
   const statusesSaved = (env: Env) => saves(env.session).mock.calls.map(([saved]) => saved.tasks.map((t) => t.status));
+  /** Each save as it was written: every save hands over the one plan object, which a later save rewrites. */
+  function writes(env: Env): string[][] {
+    const written: string[][] = [];
+    saves(env.session).mockImplementation((saved) => { written.push(saved.tasks.map((t) => t.status)); });
+    return written;
+  }
 
   async function running() {
     const env = await supervised([task('t1', 1), task('t2', 2)], { config: { maxParallelSessions: 2 } });
@@ -219,13 +226,73 @@ describe('saving', () => {
     expect(statusesSaved(env).at(-1)).toEqual(['in_progress', 'awaiting_user']);
   });
 
-  it('saves a start at once', async () => {
-    const env = await supervised([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]);
+  it('saves a start beside a settle within a second, however many there are', async () => {
+    const chain = task('t3', 3, { dependencies: ['t1'] });
+    const env = await supervised([task('t1', 1), task('t2', 2, { dependencies: ['t1'] }), chain], { config: { maxParallelSessions: 3 } });
     await until(() => env.run.spawnedIds().length === 1);
-    env.run.of('t1').reportComplete({ status: 'done', summary: 'ok' });
-    await until(() => env.run.spawnedIds().length === 2);
+    await vi.advanceTimersByTimeAsync(2000);
+    const written = writes(env);
 
-    expect(statusesSaved(env).at(-1)).toEqual(['completed', 'in_progress']);
+    env.run.of('t1').reportComplete({ status: 'done', summary: 'ok' });
+    await until(() => env.run.spawnedIds().length === 3);
+
+    expect(written).toEqual([['completed', 'approved', 'approved']]);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(written.slice(1)).toEqual([['completed', 'in_progress', 'in_progress']]);
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(written).toHaveLength(2);
+  });
+
+  it('saves every settle at once, however close together', async () => {
+    const env = await running();
+    const written = writes(env);
+
+    env.run.of('t1').reportComplete({ status: 'done', summary: 'ok' });
+    await settled();
+    env.run.of('t2').reportComplete({ status: 'done', summary: 'ok' });
+    await settled();
+
+    expect(written.slice(0, 2)).toEqual([['completed', 'in_progress'], ['completed', 'completed']]);
+  });
+
+  it('saves a script start before the script runs, a second after a save or not', async () => {
+    const env = await supervised([task('t1', 1), task('s', 2, { type: 'script', script: 'deploy', dependencies: ['t1'] })]);
+    await until(() => env.run.spawnedIds().length === 1);
+    let savedAsItRan: string[] | undefined;
+    env.scripts.runner.spawn.mockImplementationOnce(async () => {
+      savedAsItRan = statusesSaved(env).at(-1);
+      throw new Error('stop here');
+    });
+
+    env.run.of('t1').reportComplete({ status: 'done', summary: 'ok' });
+    await until(() => savedAsItRan !== undefined);
+
+    expect(savedAsItRan).toEqual(['completed', 'in_progress']);
+  });
+
+  it('writes a settled task once, verdict and supervision together, and owes nothing after', async () => {
+    const env = await running();
+
+    env.run.of('t1').reportComplete({ status: 'blocked', summary: 'stuck', reason: 'no way through' });
+    await settled();
+
+    expect(saves(env.session)).toHaveBeenCalledTimes(1);
+    const [saved] = saves(env.session).mock.calls[0];
+    expect(saved.tasks[0].status).toBe('failed');
+    expect(saved.supervision?.wake?.policy.attention.map((e) => e.kind)).toEqual(['task_failed']);
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(saves(env.session)).toHaveBeenCalledTimes(1);
+  });
+
+  it('a tick with nothing changed owes no save', async () => {
+    const env = await running();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(saves(env.session)).not.toHaveBeenCalled();
   });
 
   it('a crash between timer saves loses usage, and no decision', async () => {

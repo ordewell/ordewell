@@ -17,6 +17,8 @@ import type { CommandPayload } from './services/ExecutionCommands';
 import type { RunnerAuth } from './services/runnerAuth';
 import type { Escalation } from './services/escalations';
 import type { TaskRevertPreview } from './services/taskRevert';
+import type { ContainerStatus } from './services/container/containerSetup';
+import type { ContainerProblem } from './services/container/containerPreflight';
 
 /**
  * The daemon contract: every HTTP body the local daemon sends, in one place.
@@ -346,6 +348,12 @@ export interface SettingsResponse {
    * asked about, else the file's values, each at its default until set.
    */
   run: GlobalRunSettings;
+}
+
+/** What `PATCH /api/settings/containers` answers: why the change was refused, if it was, and where the setting stands. */
+export interface ContainerChangeResponse {
+  refused: ContainerProblem[];
+  status: ContainerStatus;
 }
 
 /** What `PATCH /api/settings` answers: the settings as they now stand, plus what the write itself decided. */

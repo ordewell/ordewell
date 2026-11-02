@@ -329,6 +329,22 @@ describe('PlanStore owns its tasks', () => {
     snap[0].status = 'failed';
     expect(store.get('a')!.status).toBe('completed');
   });
+
+  it('keeps in a snapshot the usage it was taken with, sharing it rather than copying it', () => {
+    const store = new PlanStore();
+    const usage = { attempt: 1, runner: 'claude-code', startedAt: '2026-01-01T00:00:00.000Z', wallTimeMs: 0, totals: { inputTokens: 5 }, byModel: [] };
+    store.load([createTask({ id: 'a', title: 'A', attemptUsage: [usage] })], ['claude-code']);
+    const snap = store.snapshot();
+    expect(store.snapshot()[0].attemptUsage).toBe(snap[0].attemptUsage);
+
+    store.recordAttemptUsage('a', 1, { source: 'test', model: 'm', inputTokens: 7 }, '2026-01-01T00:00:01.000Z');
+    store.startAttemptUsage('a', 2, 'claude-code', '2026-01-01T00:00:02.000Z');
+    store.endAttemptUsage('a', 1, '2026-01-01T00:00:03.000Z');
+
+    expect(snap[0].attemptUsage).toEqual([usage]);
+    expect(store.get('a')!.attemptUsage).toHaveLength(2);
+    expect(store.get('a')!.attemptUsage![0].totals.inputTokens).toBe(12);
+  });
 });
 
 describe('PlanStore.load of a plan with a task on a runner outside its set', () => {
@@ -389,5 +405,85 @@ describe('PlanStore counts the waits a task has ended (ADR-0053)', () => {
     store.markAttemptStarted('t');
     expect(store.get('t')).toMatchObject({ status: 'in_progress' });
     expect(store.get('t')?.waitsEnded).toBeUndefined();
+  });
+});
+
+describe('PlanStore.revision', () => {
+  const record = { inputTokens: 1 } as unknown as Parameters<PlanStore['recordAttemptUsage']>[2];
+
+  function loaded() {
+    const store = new PlanStore();
+    store.load([
+      createTask({ id: 'a', title: 'A', status: 'awaiting_user', awaitingReason: 'usage-limit', attemptUsage: [{ attempt: 1, runner: 'claude-code', startedAt: 'then', wallTimeMs: 0, totals: {}, byModel: [] }] }),
+      createTask({ id: 'b', title: 'B' }),
+    ], ['claude-code']);
+    return store;
+  }
+
+  // Each write a save or a status has to hear of: one left off this list, and off the counter, is a change the disk never gets.
+  const writes: Array<[string, (store: PlanStore) => void]> = [
+    ['add', (s) => s.add({ title: 'C' })],
+    ['remove', (s) => s.remove('b')],
+    ['update', (s) => s.update('b', { title: 'B2' })],
+    ['resetForRun', (s) => s.resetForRun()],
+    ['readyFailed', (s) => { s.markFailed('b'); const after = s.revision; s.readyFailed(() => false); expect(s.revision).toBeGreaterThan(after); }],
+    ['releaseMadeManual', (s) => s.releaseMadeManual()],
+    ['markCompleted', (s) => s.markCompleted('b')],
+    ['markFailed', (s) => s.markFailed('b')],
+    ['markSkipped', (s) => s.markSkipped('b', 'no')],
+    ['markInProgress', (s) => s.markInProgress('b')],
+    ['markAttempted', (s) => s.markAttempted('b')],
+    ['markAttemptStarted', (s) => s.markAttemptStarted('b')],
+    ['parkQuestion', (s) => s.parkQuestion('b', 'why?')],
+    ['markAwaitingUser', (s) => s.markAwaitingUser('b', 'usage-limit')],
+    ['setTaskResumeAt', (s) => s.setTaskResumeAt('a', 'later')],
+    ['markPending', (s) => s.markPending('a')],
+    ['retry', (s) => s.retry('a')],
+    ['markReverted', (s) => s.markReverted('a')],
+    ['startRoundsOver', (s) => s.startRoundsOver('a')],
+    ['repeat', (s) => s.repeat('a')],
+    ['setForcedPastGate', (s) => s.setForcedPastGate('a', ['b'])],
+    ['endWait', (s) => s.endWait('a')],
+    ['setTaskVerdict', (s) => s.setTaskVerdict('a', { outcome: 'pass' } as Task['verdict'])],
+    ['setTaskOutputSummary', (s) => s.setTaskOutputSummary('a', undefined)],
+    ['setTaskRunnerSessionId', (s) => s.setTaskRunnerSessionId('a', 'native', 'claude-code')],
+    ['setCarriedFrom', (s) => s.setCarriedFrom('a', 'codex')],
+    ['clearCarriedFrom', (s) => s.clearCarriedFrom('a')],
+    ['startAttemptUsage', (s) => s.startAttemptUsage('b', 1, 'claude-code', 'now')],
+    ['recordAttemptUsage', (s) => s.recordAttemptUsage('a', 1, record, 'now')],
+    ['endAttemptUsage', (s) => s.endAttemptUsage('a', 1, 'now')],
+    ['setTaskAttemptSkills', (s) => s.setTaskAttemptSkills('a', [])],
+    ['load', (s) => s.load([createTask({ id: 'z', title: 'Z' })], ['claude-code'])],
+  ];
+
+  it.each(writes)('moves on %s', (_name, write) => {
+    const store = loaded();
+    const before = store.revision;
+
+    write(store);
+
+    expect(store.revision).toBeGreaterThan(before);
+  });
+
+  it('stays put for what only reads', () => {
+    const store = loaded();
+    const before = store.revision;
+
+    store.snapshot();
+    store.statusMark();
+    store.get('a');
+    store.isOps('a');
+    store.isFinished();
+
+    expect(store.revision).toBe(before);
+  });
+
+  it('reads a new status mark after a write, and the same one with none', () => {
+    const store = loaded();
+    const mark = store.statusMark();
+
+    expect(store.statusMark()).toBe(mark);
+    store.markCompleted('b');
+    expect(store.statusMark()).not.toBe(mark);
   });
 });
