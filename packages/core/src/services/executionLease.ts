@@ -121,8 +121,21 @@ export interface RunnerPlacement {
   place(launch: RunnerLaunch): Promise<PlacedLaunch>;
   /** Make a listener on this host's loopback reachable from there, and answer the URL to reach it by (`endpoints.mcp`). */
   reach(url: string): Promise<string>;
+  /**
+   * Make a listener inside reachable from here, and answer the URL to reach it
+   * by: a runner whose own server the host must speak to, as OpenCode's is.
+   * Absent where only this host's listeners are ever reached from there.
+   */
+  reachIn?(url: string): Promise<string>;
   /** The blob a file holds there, as git would name it, read where the attempt's work is; undefined for what cannot be read. */
   blob(file: string): Promise<string | undefined>;
+  /**
+   * What the lease holds for the runner in place of a key it may not read
+   * (ADR-0059 L7), by the name the runner knows it by: a stand-in token, the
+   * address it is spent at, and what was handed over. Read before a runner
+   * starts, for a runner that must write one into its own configuration.
+   */
+  env?: Readonly<Record<string, string>>;
 }
 
 /** What a copy of a checkout is on where a backend keeps it: no ref of the user's is at stake, and it stands on HEAD as it is. */

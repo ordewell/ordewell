@@ -1,5 +1,5 @@
+import { containerLimits, helperArgs, parseContainerSettings, type ContainerSettings } from './containerSettings';
 import { CONTAINER_RUNNERS, signInRemedy, type ContainerRunner } from './containerRunners';
-import { helperArgs, parseContainerSettings, type ContainerSettings } from './containerSettings';
 import type { CredentialBroker } from './credentialBroker';
 import type { DockerCli, DockerResult } from './dockerCli';
 
@@ -121,9 +121,10 @@ export const CONTAINER_ASSUMPTIONS: readonly string[] = [
   'The engine behind a unix:// socket is on this machine: a socket forwarded from elsewhere looks the same.',
   'Containers on an engine share one kernel, this host\'s on Linux and the VM\'s on a Mac. kernel.separate means separate from this host, never from another task: a kernel flaw reaches every task on the engine.',
   'A task has limits on memory and processes, and none on CPU or disk.',
-  'Only Claude Code and Codex have been proven as runners in a container: another runner\'s task refuses at start.',
+  'Only Claude Code, Codex and OpenCode have been proven as runners in a container: another runner\'s task refuses at start.',
   'Codex runs in a container at Full access alone: its sandbox cannot start under this hardening, so a task at Codex\'s Guarded mode refuses at start.',
 ];
+
 
 const MEMORY_REMEDY: Partial<Record<NodeJS.Platform, string>> = {
   darwin: 'Give the engine more with `colima stop && colima start --memory 8`, or Docker Desktop\'s Settings > Resources, or lower containers.memory.',
@@ -184,13 +185,25 @@ async function loginProblems(settings: ContainerSettings, cli: DockerCli, broker
 }
 
 /**
+ * Whether the image has the runner on it. A lease asks this before it makes a
+ * worktree: an image built for one runner starts no other, and the alternative
+ * is a server that never comes up after an attempt has been spent on it.
+ */
+async function runnerInImage(settings: ContainerSettings, cli: DockerCli, runner: ContainerRunner): Promise<ContainerProblem[]> {
+  const asked = await cli.call(['run', '--rm', '--entrypoint', 'sh', ...containerLimits(settings), '--network', 'none', settings.image, '-c', `command -v ${runner.binary}`], { timeoutMs: ASK_MS });
+  if (asked.code === 0) return [];
+  return [problem('runner-missing', `The image ${settings.image} has no ${runner.binary} on its PATH, so a ${runner.id} task cannot start in it.`, `Add ${runner.binary} to the image, as docs/containers.md shows, and build it again.`)];
+}
+
+/**
  * Whether a task could start now: the engine, and all a person chose on it. What
  * only a start can know stays with the lease: its repositories' hooks, its
  * runner, and the guarantees a container proves (ADR-0059 L3). A surface and a
  * lease both ask this, so what one reports is what the other refuses. A script
  * is asked nothing of the login it never gets. Nothing here reads a sign-in: the
  * harness says whether it holds one, in a helper (`ASK_SIGN_IN`). Nothing here
- * pulls either: an image is what a person built.
+ * pulls either: an image is what a person built. A lease that names its runner
+ * starts the image once, with no network, to ask whether the runner is on it.
  */
 export async function inspectReadiness(raw: unknown, { cli, platform, broker, agent = true, runner, setupCommand }: ReadinessDeps): Promise<Readiness> {
   const { problems: engineProblems, engine } = await inspectEngine({ cli, ...(platform ? { platform } : {}) });
@@ -203,7 +216,10 @@ export async function inspectReadiness(raw: unknown, { cli, platform, broker, ag
   }
   const image = await cli.call(['image', 'inspect', '--format', '{{.Id}}', settings.image], { timeoutMs: ASK_MS });
   if (image.code !== 0) problems.push(problem('image-missing', `The image ${settings.image} is not there.`, 'Ordewell publishes no image: build it as docs/containers.md shows.'));
-  if (agent) problems.push(...await loginProblems(settings, cli, broker, image.code === 0, runner));
+  if (agent) {
+    problems.push(...await loginProblems(settings, cli, broker, image.code === 0, runner));
+    if (image.code === 0 && runner) problems.push(...await runnerInImage(settings, cli, runner));
+  }
   return { problems, engine, ...(problems.length === 0 ? { settings } : {}) };
 }
 

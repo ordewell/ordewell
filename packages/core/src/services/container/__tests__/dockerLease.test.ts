@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { spawn, type ChildProcess } from 'child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { type AddressInfo } from 'net';
+import { createServer as createHttpServer } from 'http';
 import { release, tmpdir, type as osType } from 'os';
 import { join } from 'path';
 import { CredentialBroker } from '../credentialBroker';
@@ -139,6 +141,81 @@ async function opened(backend: DockerExecutionBackend, request = taskRequest, sp
 }
 
 describe('what runs in a container (ADR-0059 L5)', () => {
+  it('refuses a runner no container has been proven with, naming the ones that have', async () => {
+    const { backend, cli } = backendWith();
+
+    await expect(opened(backend, { ...taskRequest, runner: 'gemini' })).rejects.toThrow(/gemini has not been proven in one.*claude-code, codex, opencode/);
+    expect(cli.entries).toEqual([]);
+  });
+
+  it('runs an OpenCode change task there', async () => {
+    const { backend, cli } = backendWith();
+
+    const lease = await opened(backend, { ...taskRequest, runner: 'opencode' });
+
+    expect(cli.entries).toHaveLength(1);
+    expect(lease.placement).toBeDefined();
+    lease.lease.release('done');
+  });
+
+  it('gives an OpenCode own sign-in its own copy, and points the runner at it', async () => {
+    const { backend, cli } = backendWith({ settings: { image: 'ordewell-task', login: { kind: 'own-sign-in' } } });
+
+    const lease = await opened(backend, { ...taskRequest, runner: 'opencode' });
+
+    const copy = cli.lines().find((line) => line.includes('ordewell-login-opencode') && line.startsWith('run'));
+    expect(copy).toContain('ordewell-login-opencode:/login:ro');
+    expect(copy).toContain('/task/login/opencode');
+    expect(cli.entries[0].args.join(' ')).toContain('XDG_DATA_HOME=/task/login');
+    expect(cli.entries[0].args.join(' ')).not.toContain('CLAUDE_CONFIG_DIR');
+    lease.lease.release('done');
+  });
+
+  it("opens an OpenCode sign-in's providers and the model's own API, which nothing gates", async () => {
+    const { backend, cli } = backendWith({ settings: { image: 'ordewell-task', login: { kind: 'own-sign-in' }, allow: [] } });
+    const spec = { ...changeSpec, task: createTask({ id: 'a', order: 1, title: 'A', prompt: 'do a', assignedModel: { modelId: 'opencode/claude-sonnet-4', modelLabel: 'claude-sonnet-4', availableVariants: [] } }) };
+
+    const lease = await opened(backend, { ...taskRequest, runner: 'opencode' }, spec);
+
+    const egress = cli.sidecars[0].args.find((arg) => arg.startsWith('ORDEWELL_EGRESS='))!;
+    const allow = JSON.parse(egress.slice('ORDEWELL_EGRESS='.length)).allow as string[];
+    expect(allow).toEqual(expect.arrayContaining(['api.anthropic.com', 'opencode.ai']));
+    lease.lease.release('done');
+  });
+
+  it("opens a handed key's provider hosts, and no model host behind the gateway", async () => {
+    const handed = backendWith({ settings: { image: 'ordewell-task', login: { kind: 'broker', variables: ['OPENROUTER_API_KEY'] }, allow: [] }, env: { OPENROUTER_API_KEY: 'sk-or-test' } });
+    const gated = backendWith({ settings: { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] }, allow: [] } });
+    const model = (id: string) => ({ ...changeSpec, task: createTask({ id: 'a', order: 1, title: 'A', prompt: 'do a', assignedModel: { modelId: id, modelLabel: id.split('/').at(-1)!, availableVariants: [] } }) });
+
+    const open = await opened(handed.backend, { ...taskRequest, runner: 'opencode' }, model('openrouter/anthropic/claude-sonnet-4'));
+    const closed = await opened(gated.backend, { ...taskRequest, runner: 'opencode' }, model('anthropic/claude-sonnet-4'));
+    const allowOf = (cli: RecordingCli) => JSON.parse(cli.sidecars[0].args.find((arg) => arg.startsWith('ORDEWELL_EGRESS='))!.slice('ORDEWELL_EGRESS='.length)).allow as string[];
+
+    expect(allowOf(handed.cli)).toContain('openrouter.ai');
+    expect(allowOf(gated.cli)).not.toContain('api.anthropic.com');
+    open.lease.release('done');
+    closed.lease.release('done');
+  });
+
+  it("reaches a server the runner starts inside, over the relay, and nowhere else", async () => {
+    const { backend, cli } = backendWith();
+    const lease = await opened(backend, { ...taskRequest, runner: 'opencode' });
+    const inside = createHttpServer((req, res) => res.end(`inside ${req.url}`));
+    await new Promise<void>((done) => inside.listen(0, '127.0.0.1', done));
+    const insidePort = (inside.address() as AddressInfo).port;
+
+    const reached = await lease.placement!.reachIn!(`http://127.0.0.1:${insidePort}`);
+    const reply = await (await fetch(`${reached}/api/info`)).text();
+
+    expect(reached).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(reached).not.toContain(String(insidePort));
+    expect(reply).toBe('inside /api/info');
+    inside.close();
+    lease.lease.release('done');
+    expect(cli.entries).toHaveLength(1);
+  });
+
   it('runs a change task there', () => {
     expect(whereItRuns(taskRequest, changeSpec)).toBe('container');
   });
@@ -333,7 +410,7 @@ describe('every container', () => {
     await opened(backend);
     await backend.collect('a').catch(() => undefined);
 
-    const helper = cli.calls.find(({ args }) => args[0] === 'run' && args.join(' ').includes('--network none'));
+    const helper = cli.calls.find(({ args }) => args[0] === 'run' && args.join(' ').includes('--network none') && args.includes('--pids-limit'));
     expect(helper?.args.join(' ')).toContain('--pids-limit 8192');
     expect(helper?.args).toContain('--init');
     expect(helper?.args.join(' ')).toContain('--memory 4g');

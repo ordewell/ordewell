@@ -46,12 +46,15 @@ const skip = (!engineAnswers || process.env.CI !== undefined) && !REQUIRE_DOCKER
 
 const IMAGE = `ordewell-e2e-fake:${process.pid}`;
 const FAKE_CLAUDE = resolve(__dirname, '../../../../../../bench/pipeline/fake-claude/fake-claude.mjs');
+const FAKE_OPENCODE = resolve(__dirname, '../../../../../../bench/pipeline/fake-opencode/fake-opencode.mjs');
 const FAKE_PROVIDER = resolve(__dirname, '../../../../../../bench/pipeline/fake-provider/fake-provider.mjs');
 const DOCKERFILE = `FROM node:22-slim
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends git >/dev/null
 RUN mkdir -p /task /mirror /login && chown -R node:node /task /mirror /login
 COPY fake-claude.mjs /opt/fake-claude.mjs
+COPY fake-opencode.mjs /opt/fake-opencode.mjs
 COPY claude /usr/local/bin/claude
+COPY opencode /usr/local/bin/opencode
 USER node
 `;
 /**
@@ -69,6 +72,12 @@ for branch in $(git for-each-ref --format='%(refname:short)' refs/heads/); do
   git merge -q -X ours --no-edit "$branch" >/dev/null 2>&1 || true
 done
 exec node /opt/fake-claude.mjs "$@"
+`;
+
+/** The OpenCode stand-in says where it ran the same way, then serves. */
+const FAKE_OPENCODE_LAUNCHER = `#!/bin/sh
+echo "$(uname -s) $(id -u) $HOME" > where-i-ran.txt
+exec node /opt/fake-opencode.mjs "$@"
 `;
 
 /** The engine's default network, which limits nothing: what a guarantee was measured to have to stop. */
@@ -125,6 +134,7 @@ function repo(): string {
 }
 
 const cue = (spec: unknown) => `<fake-claude>${JSON.stringify(spec)}</fake-claude>`;
+const openCue = (spec: unknown) => `<fake-opencode>${JSON.stringify(spec)}</fake-opencode>`;
 const settingsOf = (over: Record<string, unknown> = {}) => ({ image: IMAGE, memory: '512m', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] }, ...over });
 
 interface SessionOptions {
@@ -133,9 +143,11 @@ interface SessionOptions {
   /** Turns of a delegated task's subplanner, which runs on this host in any case. */
   subplanner?: PlannerTurn[];
   repairs?: number;
+  /** The runners the plan is for: an OpenCode task needs it named. */
+  runners?: string[];
 }
 
-function session(root: string, tasks: Task[], settings = settingsOf(), { egress, key, subplanner, repairs = 0 }: SessionOptions = {}) {
+function session(root: string, tasks: Task[], settings = settingsOf(), { egress, key, subplanner, repairs = 0, runners = ['claude-code'] }: SessionOptions = {}) {
   const told: string[] = [];
   const planner = subplanner && scriptedPlanner(subplanner);
   const notifications = fakeNotification();
@@ -159,11 +171,63 @@ function session(root: string, tasks: Task[], settings = settingsOf(), { egress,
       tell: (level, text) => { told.push(`${level}: ${text}`); context.tell(level, text); },
     }),
   });
-  parent.loadPlan({ tasks, runners: ['claude-code'], status: 'approved', generatedAt: '2026-11-01T10:00:00.000Z' } as unknown as LegacyPlanState, 'the goal', root, { sessionId: `docker-e2e-${process.pid}-${tasks[0].id}` });
+  parent.loadPlan({ tasks, runners, status: 'approved', generatedAt: '2026-11-01T10:00:00.000Z' } as unknown as LegacyPlanState, 'the goal', root, { sessionId: `docker-e2e-${process.pid}-${tasks[0].id}` });
   return { parent, told, notifications, taskOutput, integration: () => parent.planState?.isolation?.run.repos[0].integrationBranch ?? '' };
 }
 
 const settled = (s: ReturnType<typeof session>['parent'], index = 0) => vi.waitFor(() => expect(s.planTasks[index].status).not.toMatch(/approved|pending|in_progress/), { timeout: 60_000, interval: 100 });
+
+/**
+ * A controlled Anthropic model: no network, no key, and a scripted turn. It
+ * writes one file, asks Ordewell's own `task_complete` through the relayed MCP
+ * server, then ends. That is the whole of what a containerised OpenCode task
+ * does with a model, without a provider or a bill.
+ */
+function controlledModel() {
+  const asked: string[] = [];
+  let writes = 0;
+  const sse = (res: import('http').ServerResponse, blocks: readonly Record<string, unknown>[]) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    const event = (payload: unknown) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    event({ type: 'message_start', message: { id: `msg_${asked.length}`, type: 'message', role: 'assistant', model: 'controlled', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 } } });
+    blocks.forEach((block, index) => {
+      if (block.type === 'text') {
+        event({ type: 'content_block_start', index, content_block: { type: 'text', text: '' } });
+        event({ type: 'content_block_delta', index, delta: { type: 'text_delta', text: block.text } });
+      } else {
+        event({ type: 'content_block_start', index, content_block: { type: 'tool_use', id: `toolu_${asked.length}_${index}`, name: block.name, input: {} } });
+        event({ type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: JSON.stringify(block.input) } });
+      }
+      event({ type: 'content_block_stop', index });
+    });
+    event({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 5 } });
+    event({ type: 'message_stop' });
+    res.end();
+  };
+  const server = createHttpServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', () => {
+      const parsed = (() => { try { return JSON.parse(body) as { system?: unknown; messages?: { content?: unknown }[] }; } catch { return {}; } })();
+      const system = JSON.stringify(parsed.system ?? '');
+      const last = parsed.messages?.at(-1)?.content;
+      const text = Array.isArray(last)
+        ? last.map((block: { type?: string; text?: string; content?: unknown }) => (block.type === 'text' ? block.text ?? '' : block.type === 'tool_result' ? JSON.stringify(block.content) : '')).join(' ')
+        : String(last ?? '');
+      asked.push(text.slice(0, 120));
+      // A title is asked for before the turn, with a prompt of its own.
+      if (system.includes('name conversations')) return sse(res, [{ type: 'text', text: 'A containerised task' }]);
+      if (text.includes('Recorded')) return sse(res, [{ type: 'text', text: 'Done.' }]);
+      if (text.includes('Wrote file') || text.includes('Created file')) {
+        return sse(res, [{ type: 'tool_use', name: 'ordewell_task_complete', input: { status: 'done', summary: 'The controlled model wrote it.' } }]);
+      }
+      // A schema change in a later OpenCode would make the same call fail forever; one retry, then the turn ends without a completion.
+      if (writes++ > 0) return sse(res, [{ type: 'text', text: 'The write tool was refused.' }]);
+      return sse(res, [{ type: 'tool_use', name: 'write', input: { path: 'provider.txt', content: 'from the controlled model\n' } }]);
+    });
+  });
+  return { server, asked };
+}
 
 describe.skipIf(skip)('a task in a real container', () => {
   const before: Record<'container' | 'volume' | 'network', string[]> = { container: [], volume: [], network: [] };
@@ -175,8 +239,11 @@ describe.skipIf(skip)('a task in a real container', () => {
     const context = tempDir('ordewell-image-');
     writeFileSync(join(context, 'Dockerfile'), DOCKERFILE);
     copyFileSync(FAKE_CLAUDE, join(context, 'fake-claude.mjs'));
+    copyFileSync(FAKE_OPENCODE, join(context, 'fake-opencode.mjs'));
     writeFileSync(join(context, 'claude'), FAKE_LAUNCHER);
     chmodSync(join(context, 'claude'), 0o755);
+    writeFileSync(join(context, 'opencode'), FAKE_OPENCODE_LAUNCHER);
+    chmodSync(join(context, 'opencode'), 0o755);
     docker('build', '-q', '-t', IMAGE, context);
   }, 180_000);
 
@@ -212,6 +279,95 @@ describe.skipIf(skip)('a task in a real container', () => {
     expect(await env.parent.execute({ command: 'merge_all' }, { kind: 'user' })).toMatchObject({ ok: true });
     expect(readFileSync(join(root, 'a.txt'), 'utf8')).toBe('written in the container\n');
     env.parent.destroy();
+  }, 120_000);
+
+  it('runs an OpenCode change task in the container, and lands its work', async () => {
+    const root = repo();
+    const tasks = [createTask({ id: 'o', order: 1, title: 'OpenCode o', prompt: openCue({ write: { 'o.txt': 'written by opencode\n' }, summary: 'Wrote o.' }), assignedRunner: 'opencode' })];
+    const env = session(root, tasks, settingsOf(), { runners: ['claude-code', 'opencode'] });
+
+    await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await settled(env.parent);
+
+    expect(env.parent.planTasks[0]).toMatchObject({ status: 'completed', verdict: { outcome: 'pass', reported: 'done' } });
+    const integration = env.integration();
+    expect(git(root, 'show', `${integration}:o.txt`)).toBe('written by opencode');
+    expect(git(root, 'show', `${integration}:where-i-ran.txt`)).toBe('Linux 1000 /task/home');
+    await vi.waitFor(() => expect(ours('container').filter((n) => !before.container.includes(n))).toEqual([]), { timeout: 30_000 });
+    env.parent.destroy();
+  }, 120_000);
+
+  it.skipIf(!process.env.ORDEWELL_E2E_OPENCODE_IMAGE)('runs a real OpenCode task in a container against a controlled model, through the lease gateway', async () => {
+    // Build an image with `npm install -g @opencode/cli` and `git`, as `docker/task.Dockerfile` shows, and name it in ORDEWELL_E2E_OPENCODE_IMAGE.
+    const model = controlledModel();
+    await new Promise<void>((done) => model.server.listen(0, '127.0.0.1', done));
+    const modelPort = (model.server.address() as AddressInfo).port;
+    try {
+      const root = repo();
+      const tasks = [createTask({
+        id: 'r', order: 1, title: 'Real OpenCode', prompt: 'Write provider.txt and complete the task.', assignedRunner: 'opencode',
+        assignedModel: { modelId: 'anthropic/claude-sonnet-5', modelLabel: 'claude-sonnet-5', availableVariants: [] },
+      })];
+      const env = session(root, tasks, settingsOf({
+        image: process.env.ORDEWELL_E2E_OPENCODE_IMAGE, memory: '2g',
+        login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL'] },
+        required: ['fs.hostHidden', 'fs.writeScope', 'limits.memory', 'net.allowlist', 'net.noMetadata', 'cred.unreadable'],
+      }), { runners: ['claude-code', 'opencode'], key: { ANTHROPIC_API_KEY: 'sk-ant-api03-not-a-real-key', ANTHROPIC_BASE_URL: `http://127.0.0.1:${modelPort}` } });
+
+      await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+      await settled(env.parent);
+
+      expect(env.parent.planTasks[0]).toMatchObject({ status: 'completed', verdict: { outcome: 'pass', reported: 'done' } });
+      expect(git(root, 'show', `${env.integration()}:provider.txt`)).toBe('from the controlled model');
+      // The real binary reached Ordewell's server through the relay, and the model's traffic reached this host's gateway.
+      expect(model.asked.some((line) => line.includes('Recorded'))).toBe(true);
+      env.parent.destroy();
+    } finally {
+      model.server.close();
+    }
+  }, 180_000);
+
+  it('a Continue resumes an OpenCode session in the home its volume kept (ADR-0059 L2)', async () => {
+    const root = repo();
+    const tasks = [createTask({ id: 'c', order: 1, title: 'Continue c', prompt: openCue({ write: { 'partial.txt': 'half done\n' }, status: 'blocked', reason: 'stuck' }), assignedRunner: 'opencode' })];
+    const env = session(root, tasks, settingsOf(), { runners: ['claude-code', 'opencode'] });
+
+    await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await settled(env.parent);
+    expect(env.parent.planTasks[0].status).toBe('failed');
+    const resumed = env.parent.planTasks[0].runnerSessionId;
+    expect(resumed).toMatch(/^ses_/);
+
+    const continued = await env.parent.execute({ command: 'retry_task', task: 'c', from: 'session', message: openCue({ write: { 'c.txt': 'continued\n' }, summary: 'Went on.' }) }, { kind: 'user' });
+    expect(continued).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(env.parent.planTasks[0].status).toBe('completed'), { timeout: 60_000, interval: 100 });
+
+    const integration = env.integration();
+    expect(git(root, 'show', `${integration}:c.txt`)).toBe('continued');
+    expect(git(root, 'show', `${integration}:partial.txt`)).toBe('half done');
+    expect(env.parent.planTasks[0].attemptUsage?.map((usage) => usage.sessionId)).toEqual([resumed, resumed]);
+    env.parent.destroy();
+  }, 120_000);
+
+  it("gives an OpenCode task its own copy of a person's sign-in, which reaches neither the original nor the next task", async () => {
+    const hadLogin = spawnSync('docker', ['volume', 'inspect', 'ordewell-login-opencode']).status === 0;
+    docker('volume', 'create', 'ordewell-login-opencode');
+    docker('run', '--rm', '--network', 'none', '-v', 'ordewell-login-opencode:/login', IMAGE, 'sh', '-c', 'mkdir -p /login/opencode && echo original > /login/opencode/auth.json');
+    try {
+      const root = repo();
+      const tasks = [createTask({ id: 'p', order: 1, title: 'Sign-in p', prompt: openCue({ readSignIn: true, forgeSignIn: true, write: { 'p.txt': 'read it\n' }, summary: 'Read the sign-in.' }), assignedRunner: 'opencode' })];
+      const env = session(root, tasks, settingsOf({ login: { kind: 'own-sign-in' } }), { runners: ['claude-code', 'opencode'] });
+
+      await env.parent.execute({ command: 'run_plan' }, { kind: 'user' });
+      await settled(env.parent);
+
+      expect(env.parent.planTasks[0].status).toBe('completed');
+      expect(git(root, 'show', `${env.integration()}:sign-in-read.txt`)).toBe('original');
+      expect(docker('run', '--rm', '--network', 'none', '-v', 'ordewell-login-opencode:/login:ro', IMAGE, 'cat', '/login/opencode/auth.json')).toBe('original');
+      env.parent.destroy();
+    } finally {
+      if (!hadLogin) docker('volume', 'rm', '-f', 'ordewell-login-opencode');
+    }
   }, 120_000);
 
   it("keeps a failed attempt's work in its worktree, as a local attempt's stays", async () => {

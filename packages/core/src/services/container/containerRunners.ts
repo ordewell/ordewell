@@ -1,11 +1,13 @@
+import { posix } from 'path';
 import type { RunnerLaunch } from '../executionLease';
 import { SIGN_IN_HOSTS } from './credentialBroker';
 import { ANTHROPIC_API, OPENAI_API, type ModelApi } from './modelGateway';
-import { ASK_SIGN_IN, COPY_CODEX_SIGN_IN, COPY_SIGN_IN, CODEX_SIGN_IN_FILE, SIGN_IN_COPY } from './taskWorkspace';
+import { ASK_SIGN_IN, COPY_CODEX_SIGN_IN, COPY_OPENCODE_SIGN_IN, COPY_SIGN_IN, CODEX_SIGN_IN_FILE, OPENCODE_SIGN_IN_COPY, SIGN_IN_COPY, TASK_ROOT } from './taskWorkspace';
 
-/** Where a person's own sign-in to Claude Code is kept: theirs, made in a container, and never read here (ADR-0059 L7). */
+/** Where a person's own sign-in to a runner is kept: theirs, made in a container, and never read here (ADR-0059 L7). */
 export const LOGIN_VOLUME = 'ordewell-login-claude-code';
 export const CODEX_LOGIN_VOLUME = 'ordewell-login-codex';
+export const OPENCODE_LOGIN_VOLUME = 'ordewell-login-opencode';
 
 /** What a task's container holds for its runner to find. */
 export interface PlacedRunner {
@@ -59,6 +61,22 @@ function codexArgs(launch: RunnerLaunch, { gatewayPort, signedIn }: PlacedRunner
   return [...launch.args, ...gateway, ...store];
 }
 
+/**
+ * OpenCode keeps every provider's login in its data directory, so the copy is
+ * the directory itself and `XDG_DATA_HOME` names its parent. It signs in to
+ * whichever provider a person chose, so the list covers the providers its own
+ * login flow offers and the API each one calls; another provider needs its
+ * hosts in `containers.allow` (docs/containers.md).
+ */
+const OPENCODE_HOSTS: readonly string[] = [
+  'opencode.ai',
+  'api.anthropic.com', 'claude.ai', 'platform.claude.com',
+  'api.openai.com', 'auth.openai.com', 'chatgpt.com',
+  'api.individual.githubcopilot.com', 'api.githubcopilot.com',
+  'generativelanguage.googleapis.com', 'cloudcode-pa.googleapis.com',
+  'openrouter.ai',
+];
+
 export const CONTAINER_RUNNERS: readonly ContainerRunner[] = [
   {
     id: 'claude-code',
@@ -75,8 +93,56 @@ export const CONTAINER_RUNNERS: readonly ContainerRunner[] = [
     signIn: { volume: CODEX_LOGIN_VOLUME, hosts: ['chatgpt.com'], copy: ['node', '-e', COPY_CODEX_SIGN_IN], path: CODEX_SIGN_IN_FILE, env: {} },
     args: codexArgs,
   },
+  {
+    id: 'opencode',
+    binary: 'opencode',
+    // Its own login is for whichever provider a person chose; an Anthropic key stops at the lease's gateway, and any other is handed over (ADR-0059 L7).
+    api: ANTHROPIC_API,
+    // The copy is the runner's data directory, which `XDG_DATA_HOME` names the parent of.
+    signIn: { volume: OPENCODE_LOGIN_VOLUME, hosts: OPENCODE_HOSTS, copy: ['sh', '-c', COPY_OPENCODE_SIGN_IN], path: OPENCODE_SIGN_IN_COPY, env: { XDG_DATA_HOME: posix.join(TASK_ROOT, 'login') } },
+    args: (launch) => launch.args,
+  },
 ];
 
 export const containerRunner = (id: string | undefined): ContainerRunner | undefined => CONTAINER_RUNNERS.find((runner) => runner.id === id);
 
+export const CONTAINER_RUNNER_IDS: readonly string[] = CONTAINER_RUNNERS.map(({ id }) => id);
+
+/** Every runner's sign-in hosts, for a surface's check, which knows no task's runner. */
+export const ALL_SIGN_IN_HOSTS: readonly string[] = [...new Set(CONTAINER_RUNNERS.flatMap(({ signIn }) => signIn.hosts))];
+
 export const signInRemedy = ({ volume }: ContainerSignIn): string => `Sign in as docs/containers.md shows, so it is kept in the ${volume} volume.`;
+
+/**
+ * Where a model's own API is, by the provider id of the task's assigned model.
+ * A broker's key that stops at this host's gateway reaches no host; one handed
+ * over, and a person's own sign-in, reaches its provider. An unknown provider
+ * adds nothing: `containers.allow` is where a person names it.
+ */
+const MODEL_HOSTS: Readonly<Record<string, readonly string[]>> = {
+  anthropic: ['api.anthropic.com'],
+  openai: ['api.openai.com'],
+  opencode: ['opencode.ai'],
+  'opencode-go': ['opencode.ai'],
+  openrouter: ['openrouter.ai'],
+  google: ['generativelanguage.googleapis.com'],
+  'google-vertex': ['aiplatform.googleapis.com'],
+  'github-copilot': ['api.individual.githubcopilot.com'],
+  groq: ['api.groq.com'],
+  mistral: ['api.mistral.ai'],
+  deepseek: ['api.deepseek.com'],
+  xai: ['api.x.ai'],
+};
+
+/** The provider id of a flat `provider/model` id, or null for one with no slash. */
+const providerOf = (model: string): string | null => {
+  const slash = model.indexOf('/');
+  return slash > 0 && slash < model.length - 1 ? model.slice(0, slash) : null;
+};
+
+/** What a model's traffic reaches directly, which a gateway or an allowlist may make unnecessary. */
+export function modelHosts(model: string | undefined): readonly string[] {
+  if (!model) return [];
+  const provider = providerOf(model);
+  return provider ? MODEL_HOSTS[provider] ?? [] : [];
+}

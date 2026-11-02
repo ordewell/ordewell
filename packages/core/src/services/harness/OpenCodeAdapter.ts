@@ -5,7 +5,7 @@ import { isCredentialVariable } from './credentialEnv';
 import type { NativeShellLauncher } from '../sandbox/nativeShellLauncher';
 import { ProcessLifecycle } from './ProcessLifecycle';
 import { OpenCodeV2 } from './OpenCodeV2';
-import { OPENCODE_CONFIG_VARIABLE, OPENCODE_ORDEWELL, OPENCODE_PLANNER_ENV, OPENCODE_READ_ONLY_PERMISSION } from './openCodeOrdewell';
+import { OPENCODE_CONFIG_VARIABLE, OPENCODE_ORDEWELL, OPENCODE_PLANNER_ENV, OPENCODE_READ_ONLY_PERMISSION, leaseGateway } from './openCodeOrdewell';
 import { awaitAttach, MCP_ATTACH_TIMEOUT_MS, type AttachState } from './ordewellBinding';
 import { taskCompletionContract, type McpClientConfig } from '../mcp';
 import type { ProjectMcpServer } from './repoConfig';
@@ -330,6 +330,8 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
     // server with no password cannot be spoken to at all.
     const password = randomBytes(24).toString('base64url');
     const nativeShell = this.nativeShell?.prefix;
+    // What a lease holds in place of an Anthropic key (ADR-0059 L7), read before the server starts: a task's model traffic must go to its gateway, not to Anthropic with a token that means nothing there.
+    const gateway = leaseGateway(this.deps.placement?.env);
     const command = () => ({
       command: 'opencode',
       args: ['serve', '--hostname', '127.0.0.1', '--port', '0'],
@@ -337,14 +339,15 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
         // The token rides in the server's environment, not its argv (ADR-0022, A5).
         // A planner always gets its permission policy (ADR-0026), with the server or without it, and
         // over content that cannot be merged too: a planner without its policy may not start.
-        const existing = workspaceEnv[OPENCODE_CONFIG_VARIABLE] ?? process.env[OPENCODE_CONFIG_VARIABLE];
+        // A container gets Ordewell's own configuration, never this host's: an inline config here may name host paths, providers or a key, and none of it crosses (ADR-0059 L5).
+        const existing = this.deps.placement ? undefined : workspaceEnv[OPENCODE_CONFIG_VARIABLE] ?? process.env[OPENCODE_CONFIG_VARIABLE];
         const projectServers = opts.kind === 'planner' ? Object.fromEntries((opts.projectServers ?? []).map((server) => [server.name, server.definition])) : {};
         const readOnly = opts.kind === 'task' && readOnlyTask(opts);
         const role = readOnly ? 'readOnlyTask' : opts.kind;
         const ordewellConfig = opts.kind === 'planner' || readOnly
-          ? OPENCODE_ORDEWELL.configContent(existing, opts.mcp ?? null, role, projectServers, opts.kind === 'task' ? opts : undefined, nativeShell) ?? OPENCODE_ORDEWELL.configContent(undefined, opts.mcp ?? null, role, projectServers, opts.kind === 'task' ? opts : undefined, nativeShell)
-          : opts.mcp ? OPENCODE_ORDEWELL.configContent(existing, opts.mcp, 'task') : null;
-        if (opts.mcp && ordewellConfig === null) {
+          ? OPENCODE_ORDEWELL.configContent(existing, opts.mcp ?? null, role, projectServers, opts.kind === 'task' ? opts : undefined, nativeShell, gateway ?? undefined) ?? OPENCODE_ORDEWELL.configContent(undefined, opts.mcp ?? null, role, projectServers, opts.kind === 'task' ? opts : undefined, nativeShell, gateway ?? undefined)
+          : opts.mcp || gateway ? OPENCODE_ORDEWELL.configContent(existing, opts.mcp ?? null, 'task', undefined, undefined, undefined, gateway ?? undefined) : null;
+        if ((opts.mcp || gateway) && ordewellConfig === null) {
           console.error('[opencode] OPENCODE_CONFIG_CONTENT is not a JSON object, so the Ordewell tools were not injected.');
         }
         this.ordewell = ordewellConfig === null ? null : opts.mcp ?? null;
@@ -404,6 +407,8 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
     if (!this.baseUrl) {
       throw new Error(this.runner.withStderrTail(`The OpenCode ${this.role} server did not start.`));
     }
+    // In a container the server listens on its own loopback, which this host cannot reach: the lease's relay carries this host's port to it (ADR-0059 L6).
+    if (this.deps.placement?.reachIn) this.baseUrl = await this.deps.placement.reachIn(this.baseUrl);
 
     const version = await this.v2Version();
     this.serverVersion = version;

@@ -9,8 +9,8 @@ import { SELF_REPO } from '../isolationRecord';
 import { settleWithin } from '../harness/settleWithin';
 import { CredentialBroker, type IssuedLogin } from './credentialBroker';
 import { describeProblems, inspectReadiness } from './containerPreflight';
+import { CONTAINER_RUNNER_IDS, containerRunner, modelHosts, signInRemedy, type ContainerRunner, type ContainerSignIn } from './containerRunners';
 import { networkAsked, probeExpected, probeFindings, proveEngine, withCanaries } from './containerProof';
-import { CONTAINER_RUNNERS, containerRunner, signInRemedy, type ContainerRunner, type ContainerSignIn } from './containerRunners';
 import { CACHE_VARIABLES, containerLimits, envArgs, helperArgs, parseContainerSettings, type ContainerSettings } from './containerSettings';
 import { SpawnedDockerCli, type DockerCli } from './dockerCli';
 import { NO_WAY_OUT, SidecarEgress, type EgressPath, type EgressRoute } from './egressSidecar';
@@ -27,8 +27,8 @@ const EXPORT_TIMEOUT_MS = 600_000;
 /** Past any repository's worth of one attempt: what comes back is written to this host's disk. */
 const MAX_BUNDLE_BYTES = 8 * 1024 ** 3;
 
-/** A launch variable that names this host's own: the container has its own of each, and the docker CLI reads these. */
-const STAYS_HERE = /^(HOME|PATH|DOCKER_.*)$/;
+/** A launch variable that names this host's own: the container has its own of each, and the docker CLI reads these. PWD is the container's, which `docker exec -w` sets. */
+const STAYS_HERE = /^(HOME|PATH|PWD|DOCKER_.*)$/;
 
 /** A regular file within the size a board reads: a pipe there would never end the read. By `./`, since a path may start with a dash and `find` has no `--`. */
 const BLOB_SCRIPT = `file="./$0"; [ -n "$(find -P "$file" -maxdepth 0 -type f -size -16385k 2>/dev/null)" ] && exec git hash-object --no-filters -- "$file"`;
@@ -171,7 +171,7 @@ export class DockerExecutionBackend implements ExecutionBackend {
     // A script has no runner to prove: its steps are the lease's own execs.
     const agent = request.role === 'task';
     const runner = (agent && containerRunner(request.runner)) || null;
-    if (agent && !runner) throw new Error(`This session runs tasks in containers, and ${request.runner ?? 'this runner'} has not been proven in one: assign the task to ${CONTAINER_RUNNERS.map(({ id }) => id).join(', ')}.`);
+    if (agent && !runner) throw new Error(`This session runs tasks in containers, and ${request.runner ?? 'this runner'} has not been proven in one: assign the task to ${CONTAINER_RUNNER_IDS.join(', ')}.`);
     // A Continue restores what the worktree holds, so one started at once must not get there first. Before all else: a start that fails
     // below gives its workspace up, which held-back work must outlive.
     if (spec.task) await this.collect(spec.task.id).catch((err: unknown) => { if (err instanceof KeptWorkError) throw err; });
@@ -189,7 +189,9 @@ export class DockerExecutionBackend implements ExecutionBackend {
         cwd: box.cwd,
         place: (launch) => this.place(box, launch),
         reach: (url) => this.reach(box, url),
+        reachIn: (url) => this.reachIn(box, url),
         blob: (file) => this.blob(box, file),
+        env: box.route.gateway?.env ?? {},
       },
       ended: async () => {
         await this.close(box);
@@ -262,7 +264,7 @@ export class DockerExecutionBackend implements ExecutionBackend {
 
     const name = `ordewell-${key}-${nonce}`;
     // A read-only script runs as a sealed one does, which reaches nothing (ADR-0056 M9).
-    const route = sealed ? NO_WAY_OUT : await this.egress.open({ name, labels, limits: containerLimits(settings), image: settings.image, allow: [...settings.allow, ...signIn?.hosts ?? []], gated: login.gated });
+    const route = sealed ? NO_WAY_OUT : await this.egress.open({ name, labels, limits: containerLimits(settings), image: settings.image, allow: this.allowOf(settings, runner !== null, login, signIn, spec.task?.assignedModel?.modelId), gated: login.gated });
     const giveUp = async () => {
       await this.cli.call(['rm', '-f', name]);
       await route.close();
@@ -390,6 +392,20 @@ export class DockerExecutionBackend implements ExecutionBackend {
     };
   }
 
+  /**
+   * What a lease's container may reach: what the person listed, where a person's
+   * own sign-in talks and refreshes, and a model's own API where nothing gates it
+   * (a handed key, or that sign-in). A broker's key that stops at the gateway
+   * reaches no host at all.
+   */
+  private allowOf(settings: ContainerSettings, agent: boolean, login: IssuedLogin, signIn: ContainerSignIn | null, model: string | undefined): readonly string[] {
+    const hosts = [...settings.allow];
+    if (signIn) hosts.push(...signIn.hosts);
+    // A script holds no login and calls no model: what it reaches is the person's list alone.
+    if (agent && !login.gated) hosts.push(...modelHosts(model));
+    return [...new Set(hosts)];
+  }
+
   /** One volume for a repo group, by where git keeps the first repository: worktrees of it and later sessions share it. */
   private async mirrorVolume(repos: readonly LeaseRepo[]): Promise<string> {
     const commonDir = (await git(this.git, repos[0].root, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();
@@ -470,6 +486,23 @@ export class DockerExecutionBackend implements ExecutionBackend {
     const port = Number(new URL(url).port);
     await box.relay.forward(port, port);
     return url;
+  }
+
+  /**
+   * A server the runner started inside, as the host reaches it (L6): the relay
+   * carries this host's loopback into the container, so a server bound to the
+   * container's own `127.0.0.1` is reached with no network and under any
+   * egress. The URL keeps its path and protocol and takes the port the relay
+   * took here, which is never the container's.
+   */
+  private async reachIn(box: Box, url: string): Promise<string> {
+    const target = new URL(url);
+    const port = Number(target.port);
+    if (!Number.isInteger(port) || port <= 0) throw new Error(`A listener inside the container was named without a port: ${url}`);
+    const hostPort = await box.relay.expose(port);
+    // The address a server prints is its origin; a path it names is kept, but a bare root is not a second slash in every URL built on it.
+    const path = target.pathname === '/' ? '' : target.pathname;
+    return `${target.protocol}//${target.hostname}:${hostPort}${path}${target.search}`;
   }
 
   /**

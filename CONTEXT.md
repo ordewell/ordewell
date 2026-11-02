@@ -171,19 +171,29 @@ which host holds a session, and this one where a session runs.
 
 **Container lease** (`services/container/`, ADR-0059 L5 to L7) — an *Execution lease*
 from `DockerExecutionBackend`, opt-in by the `containers` setting, for a change task
-of a runner proven there, Claude Code or Codex at Full access, and for every script task. The host's worktree stays where
+of a runner proven there, Claude Code, Codex at Full access or OpenCode, and for every script task. The host's worktree stays where
 a task's result lives; a copy runs in one container per attempt, reached by exec. A
 script of the workspace root runs on a copy of what that root has committed, and
 nothing of it comes back. What a lease cannot be it refuses: nothing runs on the host
 in a container's place. Its parts: a **mirror**, one bare repository per repo in a
 volume of the engine, read-only to an attempt; a **task volume**, which keeps the
 task's clone, its package caches and the runner's home across attempts; a **relay**,
-the container's idle entry, which carries connections to this host over its stdio and
-ends the container when its host goes; an **egress sidecar**, a lease's one way out; a
-**model gateway**, which holds its API key; and a **push gate**, the only way work comes
-back, which takes one ref of one attempt as a bundle.
+the container's idle entry, which carries connections over its stdio both ways — this
+host's listeners reached from the container, and a server the runner starts there
+reached from here — and ends the container when its host goes; an **egress sidecar**,
+a lease's one way out; a **model gateway**, which holds its API key; and a **push
+gate**, the only way work comes back, which takes one ref of one attempt as a bundle.
 *Avoid:* "sandbox" (a *Sealed run*'s word: that holds a read-only process on this
 host, and this moves a writing one off it), "push" for anything but the gate.
+
+**Container runner** (`services/container/containerRunners.ts`, ADR-0059 L5, L7) — a
+runner whose change tasks have been proven in a container: its id, the binary its
+image must carry, and its **sign-in**: the volume a person signs in to, where a helper
+mounts it, the copy a task gets, what tells the runner to read that copy, and the
+hosts its own login talks to. Claude Code, Codex and OpenCode are the three; a task on
+another runner refuses rather than running with a login or a home it was not given.
+*Avoid:* "supported runner" (every runner is supported; this is the narrower fact that
+it has been proven in a container).
 
 **Egress sidecar** (`services/container/egressSidecar.ts`, ADR-0059 L7) — the one
 container of a lease on both its internal network and the bridge: a proxy that opens
@@ -194,7 +204,9 @@ that ignores it reaches nothing, which the probe proves as `net.allowlist`.
 **Model gateway** (`services/container/modelGateway.ts`, ADR-0059 L7) — the listener
 on this host, reached through the relay, that carries a broker lease's model traffic
 under the real key. The runner holds a token that means nothing past it, so an API
-key never enters the engine. A subscription's token never reaches it.
+key never enters the engine. Claude Code reads its address from `ANTHROPIC_BASE_URL`;
+OpenCode is given a provider block in its own configuration, since it does not read
+that variable for a provider's base. A subscription's token never reaches it.
 *Avoid:* "broker" for it: the *Credential broker* decides what a lease gets, and this
 is where a key goes instead of the runner.
 

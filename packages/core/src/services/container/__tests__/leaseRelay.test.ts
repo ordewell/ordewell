@@ -78,6 +78,27 @@ describe('the lease relay', () => {
     expect([slow, quick]).toEqual(['/slow', '/quick']);
   });
 
+  it("carries this host's request to a listener in the container, and its reply back", async () => {
+    const containerPort = await server((req, res) => res.end(`inside ${req.url}`));
+    const relay = new LeaseRelay(entry());
+    await relay.ready;
+
+    const hostPort = await relay.expose(containerPort);
+
+    expect(await (await fetch(`http://127.0.0.1:${hostPort}/api/info`)).text()).toBe('inside /api/info');
+  });
+
+  it('carries two connections into the container at once without crossing them', async () => {
+    const containerPort = await server((req, res) => { setTimeout(() => res.end(req.url), req.url === '/slow' ? 40 : 0); });
+    const relay = new LeaseRelay(entry());
+    await relay.ready;
+    const hostPort = await relay.expose(containerPort);
+
+    const [slow, quick] = await Promise.all(['/slow', '/quick'].map(async (path) => (await fetch(`http://127.0.0.1:${hostPort}${path}`)).text()));
+
+    expect([slow, quick]).toEqual(['/slow', '/quick']);
+  });
+
   it('forwards each port once, however often it is asked', async () => {
     const hostPort = await server((_req, res) => res.end('ok'));
     const relay = new LeaseRelay(entry());

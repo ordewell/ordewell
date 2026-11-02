@@ -5,7 +5,7 @@ import { release, tmpdir, type as osType } from 'os';
 import { join } from 'path';
 import type { GuaranteeReport } from '../executionLease';
 import { containerLimits, envArgs, PIDS_LIMIT, type ContainerSettings } from './containerSettings';
-import { CONTAINER_RUNNERS } from './containerRunners';
+import { ALL_SIGN_IN_HOSTS } from './containerRunners';
 import type { DockerCli } from './dockerCli';
 import type { EgressPath, EgressRoute } from './egressSidecar';
 import { judgeProbe, METADATA, PROBE_SCRIPT, type ProbeAsked, type ProbeExpected, type ProbeFindings, type ProbeNetwork } from './guaranteeProbe';
@@ -95,7 +95,7 @@ export interface ProofDeps {
 export async function proveEngine(settings: ContainerSettings, { cli, egress, labels }: ProofDeps): Promise<GuaranteeReport> {
   return withCanaries(async ({ file, port, loopbackHits }) => {
     const name = `ordewell-probe-${randomBytes(4).toString('hex')}`;
-    const allow = [...settings.allow, ...(settings.login.kind === 'own-sign-in' ? CONTAINER_RUNNERS.flatMap(({ signIn }) => signIn.hosts) : [])];
+    const allow = [...settings.allow, ...(settings.login.kind === 'own-sign-in' ? ALL_SIGN_IN_HOSTS : [])];
     const route = await egress.open({ name, labels: [...labels], limits: containerLimits(settings), image: settings.image, allow, gated: null });
     const box = `${name}-check`;
     try {

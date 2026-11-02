@@ -3,7 +3,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { CODEX_SIGN_IN_FILE, COPY_CODEX_SIGN_IN, COPY_SIGN_IN, HOME_DIR, mirrorDir, repoDir } from '../taskWorkspace';
+import { CODEX_SIGN_IN_FILE, COPY_CODEX_SIGN_IN, COPY_OPENCODE_SIGN_IN, COPY_SIGN_IN, HOME_DIR, mirrorDir, repoDir } from '../taskWorkspace';
 
 describe('where a repository is in a container', () => {
   it('keeps a lone repository at the workspace', () => {
@@ -217,5 +217,54 @@ describe('a task\'s copy of a person\'s Codex sign-in', () => {
 
     expect(code).toBe(0);
     expect(statSync(file).isFile()).toBe(true);
+  });
+});
+
+describe('a task\'s copy of a person\'s OpenCode sign-in', () => {
+  let root: string;
+  let kept: string;
+  let copy: string;
+
+  const handOff = () => spawnSync('sh', ['-c', COPY_OPENCODE_SIGN_IN.replace(/(?<![\w/])\/(login|task)\//g, `${root}/$1/`)], { encoding: 'utf8', timeout: 5000 });
+  const signIn = (provider: string) => writeFileSync(join(kept, 'auth.json'), JSON.stringify({ [provider]: { access: provider } }));
+  const held = () => JSON.parse(readFileSync(join(copy, 'auth.json'), 'utf8')) as Record<string, unknown>;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'ordewell-opencode-sign-in-'));
+    kept = join(root, 'login', 'opencode');
+    copy = join(root, 'task', 'login', 'opencode');
+    mkdirSync(kept, { recursive: true });
+  });
+
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it('leaves a login the task refreshed to its next attempt, until the kept one changes', () => {
+    signIn('anthropic');
+    expect(handOff().status).toBe(0);
+    writeFileSync(join(copy, 'auth.json'), JSON.stringify({ anthropic: { access: 'refreshed by the task' } }));
+
+    expect(handOff().status).toBe(0);
+    expect(held()).toEqual({ anthropic: { access: 'refreshed by the task' } });
+
+    signIn('openai');
+    expect(handOff().status).toBe(0);
+    expect(held()).toEqual({ openai: { access: 'openai' } });
+  });
+
+  it('refuses an empty volume, and writes nothing', () => {
+    const refused = handOff();
+
+    expect(refused.status).toBe(3);
+    expect(refused.stderr).toContain('no sign-in');
+    expect(existsSync(join(copy, 'auth.json'))).toBe(false);
+  });
+
+  it('keeps the copy from everyone but its owner', () => {
+    signIn('anthropic');
+    chmodSync(join(kept, 'auth.json'), 0o644);
+
+    expect(handOff().status).toBe(0);
+
+    expect(statSync(join(copy, 'auth.json')).mode & 0o077).toBe(0);
   });
 });

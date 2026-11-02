@@ -15,7 +15,25 @@ export const MIRROR_ROOT = '/mirror';
 export const TASK_ROOT = '/task';
 export const WORK_ROOT = `${TASK_ROOT}/work`;
 export const HOME_DIR = `${TASK_ROOT}/home`;
-/** A task's own copy of a person's sign-in, the only one a runner ever sees. */
+/**
+ * A task's own copy of a person's sign-in, the only one a runner ever sees. A
+ * copy is replaced only when the kept sign-in changed: a runner's refresh writes
+ * the copy alone, and a Continue that copied again would hand back a token that
+ * no longer works (ADR-0059 L7). The mark is the task's to write, so only a plain
+ * file is read: a pipe there would hold the helper, and the attempt's start with it.
+ */
+export const signInCopy = (mounted: string, copy: string, mark: string): string => String.raw`set -eu
+[ -n "$(ls -A ${mounted} 2>/dev/null)" ] || { echo 'the sign-in volume holds no sign-in' >&2; exit 3; }
+kept=$(cd ${mounted} && find . -type f -exec cksum {} + 2>/dev/null | sort | cksum)
+[ ! -f ${mark} ] || [ -L ${mark} ] || [ "$(cat ${mark})" != "$kept" ] || exit 0
+mkdir -p ${copy}
+cp -a ${mounted}/. ${copy}/
+chmod -R go-rwx ${copy}
+rm -rf ${mark}
+printf %s "$kept" > ${mark}
+`;
+
+/** Claude Code's copy, as code before every runner had one names it. New code asks its runner (ADR-0059 L7). */
 export const SIGN_IN_COPY = `${TASK_ROOT}/login/claude`;
 /** Which sign-in that copy came from, as a checksum. The task can write it, and only for itself: it holds the copy. */
 const SIGN_IN_MARK = `${TASK_ROOT}/login/handed`;
@@ -125,6 +143,15 @@ writeFileSync(file, JSON.stringify({
   last_refresh: new Date().toISOString(),
 }), { mode: 0o600, flag: 'wx' });
 `;
+
+/** Where OpenCode keeps its providers' logins under the task's home, its own copy of what a person signed in to. */
+export const OPENCODE_SIGN_IN_COPY = `${TASK_ROOT}/login/opencode`;
+
+/** Which sign-in that copy came from, as a checksum: OpenCode's own, beside Claude Code's. */
+const OPENCODE_SIGN_IN_MARK = `${TASK_ROOT}/login/handed-opencode`;
+
+/** OpenCode's copy: the sign-in volume's data directory, read-only to the helper and writable only in the task's own volume. */
+export const COPY_OPENCODE_SIGN_IN = signInCopy('/login/opencode', OPENCODE_SIGN_IN_COPY, OPENCODE_SIGN_IN_MARK);
 
 /**
  * Run in the attempt's container, before its runner. The clone shares the
