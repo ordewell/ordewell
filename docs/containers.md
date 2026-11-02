@@ -59,14 +59,21 @@ asked again each time a task starts.
 Ordewell publishes no image: Anthropic's terms say preinstalling or running Claude
 Code in a product or service needs its Commercial Terms. You build your own from
 [`task.Dockerfile`](../packages/core/docker/task.Dockerfile), and add your project's
-toolchain to it:
+toolchain to it. It installs Claude Code; for OpenCode, which is MIT-licensed, add its
+package too:
+
+```dockerfile
+RUN npm install -g @opencode/cli
+```
 
 ```bash
 docker build -t ordewell-task - < packages/core/docker/task.Dockerfile
 ```
 
-An image of your own needs `git`, `node`, a user with uid 1000, and the folders
-`/task`, `/mirror` and `/login` owned by that user.
+An image of your own needs `git`, `node`, a user with uid 1000, the folders
+`/task`, `/mirror` and `/login` owned by that user, and the binary of every runner you
+assign tasks to: `claude` or `opencode`. A task whose runner is not on the image's PATH
+is refused as it starts, before its worktree is made.
 
 ## Choose a login
 
@@ -91,27 +98,60 @@ nothing anywhere else. To send that traffic somewhere other than Anthropic's API
 its client, so a runner can read them, and `cred.unreadable` is reported unproven. Put
 that provider's hosts in `allow`.
 
+Only an Anthropic key takes the gateway. An OpenCode task on another provider — an
+OpenRouter key, say — has that key handed to the runner, so it can read it, and its
+provider's hosts are opened for it. A model id whose provider Ordewell does not know
+needs its hosts in `allow`.
+
 Ordewell never carries a Claude subscription's token, and refuses one that reaches it
-as a variable. To use your subscription, sign in yourself, inside a container:
+as a variable. To use your subscription, sign in yourself, inside a container, for the
+runner you will assign:
 
 ```bash
+# Claude Code
 docker run --rm -it --init --pids-limit 8192 --memory 2g \
   -v ordewell-login-claude-code:/login \
   -e CLAUDE_CONFIG_DIR=/login/claude ordewell-task claude
+
+# OpenCode: its data directory holds every provider's login
+docker run --rm -it --init --pids-limit 8192 --memory 2g \
+  -v ordewell-login-opencode:/login \
+  -e HOME=/login -e XDG_DATA_HOME=/login ordewell-task opencode auth login
 ```
 
-Then set `"login": { "kind": "own-sign-in" }`. The sign-in stays in that volume, which
-no task mounts and Ordewell never reads on your machine. A task gets a copy of its own,
-made in the engine as it starts, so what it writes there reaches neither the sign-in you
-made nor another task. That covers writing, and no more:
+Then set `"login": { "kind": "own-sign-in" }`. The sign-in stays in that runner's
+volume, which no task mounts and Ordewell never reads on your machine. A task gets a
+copy of its own, made in the engine as it starts, so what it writes there reaches
+neither the sign-in you made nor another task. That covers writing, and no more:
 
 - **A runner can read its copy**, and send it to any host a task can reach. Its traffic
-  goes straight to Anthropic, so `api.anthropic.com`, `claude.ai` and
-  `platform.claude.com` are opened for it, and `cred.unreadable` is reported unproven.
+  goes straight to the provider, so the hosts its login and its model need are opened
+  for it — Anthropic's for Claude Code; OpenCode's own and the providers its login flow
+  offers — and `cred.unreadable` is reported unproven. A provider outside that list
+  needs its hosts in `allow`.
 - **A copy stays in the task's volume** until its session is cleaned up, and signing out
   of the original does not reach it.
 - **A token a task refreshes stays in that copy.** If refreshing replaces the token, the
   one you made can go stale, and you sign in again. This has not been measured.
+
+A surface's check is satisfied when any runner's sign-in volume is there; a task asks
+for its own runner's at start, and refuses naming the one it needs.
+
+## OpenCode
+
+OpenCode's server is driven the same way as on your machine, but the host reaches it
+through the lease's relay: it listens on the container's own loopback and no port is
+published. Three things differ from Claude Code:
+
+- **Only an Anthropic key is gated.** A broker login with `ANTHROPIC_API_KEY` points
+  OpenCode's `anthropic` provider at the lease gateway. Any other provider's key is
+  handed to the runner, and that provider's hosts are opened; a provider Ordewell does
+  not know needs them in `allow`.
+- **Its own sign-in is its whole data directory**, copied to the task's volume. Every
+  provider login it holds travels with it, and the hosts its login flow offers are
+  opened. A provider outside that list needs its hosts in `allow`.
+- **The model id is the plan's**, passed through unchanged; a model OpenCode's catalog
+  does not list is refused by OpenCode at its first call, not by Ordewell.
 
 ## The other settings
 
@@ -171,8 +211,8 @@ first container proved:
 
 ## What runs where
 
-- **In a container:** change tasks on Claude Code, script tasks, and in a delegated
-  task, the tasks of its child plan and the repair of its conflicts.
+- **In a container:** change tasks on Claude Code and OpenCode, script tasks, and in a
+  delegated task, the tasks of its child plan and the repair of its conflicts.
 - **On your machine, as ever:** planners, subplanners and read-only AI tasks. Their
   commands run sealed. A sealed command can run what a container wrote, inside that seal.
 - **Refused, with the reason:** a task on another runner, an ops task on a runner, which

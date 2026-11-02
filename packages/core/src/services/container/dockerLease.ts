@@ -7,8 +7,9 @@ import { CHECKOUT_BRANCH, KeptWorkError, refuseUnproven, type ExecutionBackend, 
 import { defaultExecFile, git, tryGit, type GitInvoker } from '../gitExec';
 import { SELF_REPO } from '../isolationRecord';
 import { settleWithin } from '../harness/settleWithin';
-import { CredentialBroker, SIGN_IN_HOSTS, type IssuedLogin } from './credentialBroker';
-import { describeProblems, inspectReadiness, LOGIN_VOLUME, SIGN_IN_REMEDY } from './containerPreflight';
+import { CredentialBroker, type IssuedLogin } from './credentialBroker';
+import { describeProblems, inspectReadiness, signInRemedy } from './containerPreflight';
+import { CONTAINER_RUNNER_IDS, containerRunner, modelHosts, type ContainerRunner, type RunnerSignIn } from './containerRunners';
 import { networkAsked, probeExpected, probeFindings, proveEngine, withCanaries } from './containerProof';
 import { CACHE_VARIABLES, containerLimits, envArgs, helperArgs, parseContainerSettings, type ContainerSettings } from './containerSettings';
 import { SpawnedDockerCli, type DockerCli } from './dockerCli';
@@ -17,10 +18,7 @@ import { judgeProbe, PROBE_SCRIPT, type ProbeAsked } from './guaranteeProbe';
 import { LeaseRelay, RELAY_ENTRY } from './leaseRelay';
 import { reclaimTree, TREE_LABEL, treePins } from './reclaim';
 import { hooksLandingWouldRun, PushRefused, restoreSnapshot, takeThroughGate } from './pushGate';
-import { COPY_SIGN_IN, EXPORT_SCRIPT, exportRef, HOME_DIR, MIRROR_ROOT, mirrorDir, pinRefs, pushToMirror, repoDir, SEED_SCRIPT, SIGN_IN_COPY, TASK_ROOT, WORK_ROOT } from './taskWorkspace';
-
-/** Each runner a container has been proven with. A protocol that needs this host's loopback or its own sandbox has not. */
-const CONTAINER_RUNNERS: ReadonlySet<string> = new Set(['claude-code']);
+import { EXPORT_SCRIPT, exportRef, HOME_DIR, MIRROR_ROOT, mirrorDir, pinRefs, pushToMirror, repoDir, SEED_SCRIPT, signInCopy, TASK_ROOT, WORK_ROOT } from './taskWorkspace';
 
 /** A runner told to stop is bounded by its own interrupt grace; this bounds one that never said it ended. */
 const RUNNER_GRACE_MS = 30_000;
@@ -29,8 +27,8 @@ const EXPORT_TIMEOUT_MS = 600_000;
 /** Past any repository's worth of one attempt: what comes back is written to this host's disk. */
 const MAX_BUNDLE_BYTES = 8 * 1024 ** 3;
 
-/** A launch variable that names this host's own: the container has its own of each, and the docker CLI reads these. */
-const STAYS_HERE = /^(HOME|PATH|DOCKER_.*)$/;
+/** A launch variable that names this host's own: the container has its own of each, and the docker CLI reads these. PWD is the container's, which `docker exec -w` sets. */
+const STAYS_HERE = /^(HOME|PATH|PWD|DOCKER_.*)$/;
 
 /** A regular file within the size a board reads: a pipe there would never end the read. By `./`, since a path may start with a dash and `find` has no `--`. */
 const BLOB_SCRIPT = `file="./$0"; [ -n "$(find -P "$file" -maxdepth 0 -type f -size -16385k 2>/dev/null)" ] && exec git hash-object --no-filters -- "$file"`;
@@ -54,6 +52,8 @@ export interface DockerBackendOptions {
 interface Starting {
   /** A runner's, with a login; a script's is not. */
   agent: boolean;
+  /** The runner this attempt is for, when it is one a container has been proven with. */
+  runner: ContainerRunner | null;
   settings: ContainerSettings;
   spec: LeaseSpec;
   opened: OpenLease;
@@ -170,15 +170,16 @@ export class DockerExecutionBackend implements ExecutionBackend {
     if (place !== 'container') throw new Error(`This session runs tasks in containers, but ${place.refused}.`);
     // A script has no runner to prove: its steps are the lease's own execs.
     const agent = request.role === 'task';
-    if (agent && !CONTAINER_RUNNERS.has(request.runner ?? '')) throw new Error(`This session runs tasks in containers, and ${request.runner ?? 'this runner'} has not been proven in one: assign the task to ${[...CONTAINER_RUNNERS].join(', ')}.`);
+    const runner = agent ? containerRunner(request.runner) : null;
+    if (agent && !runner) throw new Error(`This session runs tasks in containers, and ${request.runner ?? 'this runner'} has not been proven in one: assign the task to ${CONTAINER_RUNNER_IDS.join(', ')}.`);
     // A Continue restores what the worktree holds, so one started at once must not get there first. Before all else: a start that fails
     // below gives its workspace up, which held-back work must outlive.
     if (spec.task) await this.collect(spec.task.id).catch((err: unknown) => { if (err instanceof KeptWorkError) throw err; });
-    const settings = await this.preflight(agent);
+    const settings = await this.preflight(agent, runner?.id);
     const opened = await lease.open({ ...spec, required: [] }, signal);
     // Ended since its claim: the worktree is the attempt's to undo, as it undoes any it finds it no longer wants.
     if (signal.aborted) return opened;
-    const box = await this.start({ agent, settings, spec, opened, repos: await this.reposOf(agent, opened) }, signal);
+    const box = await this.start({ agent, runner, settings, spec, opened, repos: await this.reposOf(agent, opened) }, signal);
     if (!box) return opened;
     mine.box = box;
     return {
@@ -187,7 +188,9 @@ export class DockerExecutionBackend implements ExecutionBackend {
       placement: {
         place: (launch) => this.place(box, launch),
         reach: (url) => this.reach(box, url),
+        reachIn: (url) => this.reachIn(box, url),
         blob: (file) => this.blob(box, file),
+        env: box.route.gateway?.env ?? {},
       },
       ended: async () => {
         await this.close(box);
@@ -201,9 +204,9 @@ export class DockerExecutionBackend implements ExecutionBackend {
    * cannot go on. It runs at each start, and the claim stays synchronous without
    * it: an engine that answered an hour ago proves nothing of this one.
    */
-  private async preflight(agent = true): Promise<ContainerSettings> {
+  private async preflight(agent = true, runner?: string): Promise<ContainerSettings> {
     const setupCommand = this.options.setupCommand?.();
-    const { problems, settings } = await inspectReadiness(this.options.settings, { cli: this.cli, broker: this.broker, agent, ...(setupCommand ? { setupCommand } : {}) });
+    const { problems, settings } = await inspectReadiness(this.options.settings, { cli: this.cli, broker: this.broker, agent, ...(runner ? { runner } : {}), ...(setupCommand ? { setupCommand } : {}) });
     if (!settings) throw new Error(`This session runs tasks in containers, and this task cannot start in one. ${describeProblems(problems)}`);
     return settings;
   }
@@ -234,13 +237,13 @@ export class DockerExecutionBackend implements ExecutionBackend {
     return posix.join(WORK_ROOT, worktree ? relative(writable ?? cwd, cwd).split(sep).join('/') : await this.checkoutFolder(cwd));
   }
 
-  private async start({ agent, settings, spec, opened, repos }: Starting, signal: AbortSignal): Promise<(Box & { report: GuaranteeReport }) | null> {
+  private async start({ agent, runner, settings, spec, opened, repos }: Starting, signal: AbortSignal): Promise<(Box & { report: GuaranteeReport }) | null> {
     const taskId = spec.task!.id;
     const sealed = spec.workspace.kind === 'worktree' && spec.workspace.intent === 'readOnly';
     const landsNothing = sealed || !opened.workspace.worktree;
     if (!landsNothing) await this.refuseHooks(repos);
     const login = agent && settings.login.kind === 'broker' ? this.broker.issue(settings.login.variables) : NO_LOGIN;
-    const signedIn = agent && settings.login.kind === 'own-sign-in';
+    const signIn = agent && settings.login.kind === 'own-sign-in' ? runner!.signIn : null;
     const key = this.taskKey(taskId);
     const nonce = randomBytes(4).toString('hex');
     // Nothing of a read-only attempt is kept, so a retry cannot be handed a volume its last attempt is still giving up.
@@ -256,11 +259,11 @@ export class DockerExecutionBackend implements ExecutionBackend {
       await dropThrowaway();
       return null;
     }
-    if (signedIn) await this.handSignIn(settings, volume, labels).catch(async (err: unknown) => { await dropThrowaway(); throw err; });
+    if (signIn) await this.handSignIn(settings, volume, labels, runner!).catch(async (err: unknown) => { await dropThrowaway(); throw err; });
 
     const name = `ordewell-${key}-${nonce}`;
     // A read-only script runs as a sealed one does, which reaches nothing (ADR-0056 M9).
-    const route = sealed ? NO_WAY_OUT : await this.egress.open({ name, labels, limits: containerLimits(settings), image: settings.image, allow: [...settings.allow, ...(signedIn ? SIGN_IN_HOSTS : [])], gated: login.gated });
+    const route = sealed ? NO_WAY_OUT : await this.egress.open({ name, labels, limits: containerLimits(settings), image: settings.image, allow: this.allowOf(settings, agent, login, signIn, spec.task?.assignedModel?.modelId), gated: login.gated });
     const giveUp = async () => {
       await this.cli.call(['rm', '-f', name]);
       await route.close();
@@ -272,7 +275,7 @@ export class DockerExecutionBackend implements ExecutionBackend {
         'run', '-i', '--rm', '--name', name, ...labels,
         ...containerLimits(settings), ...route.runArgs,
         '-v', `${volume}:${TASK_ROOT}`, '-v', `${mirror}:${MIRROR_ROOT}:ro`,
-        ...envArgs(this.containerEnv(settings, route, signedIn)),
+        ...envArgs(this.containerEnv(settings, route, signIn)),
         settings.image, 'node', '-e', RELAY_ENTRY,
       ]);
       const relay = new LeaseRelay(entry);
@@ -288,7 +291,7 @@ export class DockerExecutionBackend implements ExecutionBackend {
       console.error(`[container] ${name} up in ${Date.now() - startedAt}ms`);
       if (route.gateway) await relay.forward(route.gateway.port, route.gateway.port);
       for (const repo of repos) await this.seed(box, repo, tips.get(repo.path)!);
-      box.report = await this.prove(box, settings, opened.workspace.cwd, login, signedIn);
+      box.report = await this.prove(box, settings, opened.workspace.cwd, login, signIn);
       refuseUnproven([...spec.required, ...settings.required], box.report);
       if (signal.aborted) {
         await giveUp();
@@ -363,21 +366,36 @@ export class DockerExecutionBackend implements ExecutionBackend {
    * link an earlier attempt planted leads nowhere the helper may write but this
    * same volume.
    */
-  private async handSignIn(settings: ContainerSettings, volume: string, labels: readonly string[]): Promise<void> {
-    const copied = await this.cli.call([...helperArgs(settings, [`${volume}:${TASK_ROOT}`, `${LOGIN_VOLUME}:/login:ro`], {}, labels), 'sh', '-c', COPY_SIGN_IN]);
-    if (copied.code !== 0) throw new Error(`Your own sign-in could not be handed to this task: ${copied.stderr.trim() || 'it could not be copied'}. ${SIGN_IN_REMEDY}`);
+  private async handSignIn(settings: ContainerSettings, volume: string, labels: readonly string[], runner: ContainerRunner): Promise<void> {
+    const { signIn } = runner;
+    const copied = await this.cli.call([...helperArgs(settings, [`${volume}:${TASK_ROOT}`, `${signIn.volume}:/login:ro`], {}, labels), 'sh', '-c', signInCopy(signIn.mounted, signIn.copy)]);
+    if (copied.code !== 0) throw new Error(`Your own sign-in could not be handed to this task: ${copied.stderr.trim() || 'it could not be copied'}. ${signInRemedy(runner)}`);
   }
 
-  private containerEnv(settings: ContainerSettings, route: EgressRoute, signedIn: boolean): Record<string, string> {
+  private containerEnv(settings: ContainerSettings, route: EgressRoute, signIn: RunnerSignIn | null): Record<string, string> {
     return {
       HOME: HOME_DIR,
       // Behind a proxy Claude Code's memory grew until killed in user reports (ADR-0059 L7), and a task needs none of this traffic.
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       // In the task's own volume: a cache every task writes is one task's code running in the next. A retry keeps its own.
       ...Object.fromEntries(settings.caches.map((cache) => [CACHE_VARIABLES[cache], `${TASK_ROOT}/caches/${cache}`])),
-      ...(signedIn ? { CLAUDE_CONFIG_DIR: SIGN_IN_COPY } : {}),
+      ...(signIn?.env ?? {}),
       ...route.env,
     };
+  }
+
+  /**
+   * What a lease's container may reach: what the person listed, where a person's
+   * own sign-in talks and refreshes, and a model's own API where nothing gates it
+   * (a handed key, or that sign-in). A broker's key that stops at the gateway
+   * reaches no host at all.
+   */
+  private allowOf(settings: ContainerSettings, agent: boolean, login: IssuedLogin, signIn: RunnerSignIn | null, model: string | undefined): readonly string[] {
+    const hosts = [...settings.allow];
+    if (signIn) hosts.push(...signIn.hosts);
+    // A script holds no login and calls no model: what it reaches is the person's list alone.
+    if (agent && !login.gated) hosts.push(...modelHosts(model));
+    return [...new Set(hosts)];
   }
 
   /** One volume for a repo group, by where git keeps the first repository: worktrees of it and later sessions share it. */
@@ -414,12 +432,12 @@ export class DockerExecutionBackend implements ExecutionBackend {
   }
 
   /** L3: the proof is a run in the container, as its runner will run, with what its runner will hold. */
-  private prove(box: Box, settings: ContainerSettings, hostCwd: string, { gated, handed }: IssuedLogin, signedIn: boolean): Promise<GuaranteeReport> {
+  private prove(box: Box, settings: ContainerSettings, hostCwd: string, { gated, handed }: IssuedLogin, signIn: RunnerSignIn | null): Promise<GuaranteeReport> {
     return withCanaries(async ({ file, port, loopbackHits }) => {
       const network = networkAsked(box.route, port);
       const salt = randomBytes(16).toString('hex');
       const secrets = gated ? { secrets: { salt, digests: [createHash('sha256').update(salt + gated.key).digest('hex')] } } : {};
-      const asked: ProbeAsked = { hostPaths: [file, hostCwd], deniedWrites: ['/', '/usr', '/etc', MIRROR_ROOT], workspace: WORK_ROOT, credentials: Object.keys(handed), ...(signedIn ? { login: SIGN_IN_COPY } : {}), network, ...secrets };
+      const asked: ProbeAsked = { hostPaths: [file, hostCwd], deniedWrites: ['/', '/usr', '/etc', MIRROR_ROOT], workspace: WORK_ROOT, credentials: Object.keys(handed), ...(signIn ? { login: signIn.copy } : {}), network, ...secrets };
       const names = Object.keys(box.credentials).flatMap((variable) => ['-e', variable]);
       const ran = await this.cli.call(['exec', '-e', `ORDEWELL_PROBE=${JSON.stringify(asked)}`, ...names, box.name, 'node', '-e', PROBE_SCRIPT], { env: box.credentials });
       return judgeProbe(probeFindings(ran.stdout, ran.stderr), { ...probeExpected(settings, [TASK_ROOT, MIRROR_ROOT, '/tmp']), network, loopbackHits: loopbackHits(), gated: gated !== null }, new Date().toISOString());
@@ -460,6 +478,23 @@ export class DockerExecutionBackend implements ExecutionBackend {
     const port = Number(new URL(url).port);
     await box.relay.forward(port, port);
     return url;
+  }
+
+  /**
+   * A server the runner started inside, as the host reaches it (L6): the relay
+   * carries this host's loopback into the container, so a server bound to the
+   * container's own `127.0.0.1` is reached with no network and under any
+   * egress. The URL keeps its path and protocol and takes the port the relay
+   * took here, which is never the container's.
+   */
+  private async reachIn(box: Box, url: string): Promise<string> {
+    const target = new URL(url);
+    const port = Number(target.port);
+    if (!Number.isInteger(port) || port <= 0) throw new Error(`A listener inside the container was named without a port: ${url}`);
+    const hostPort = await box.relay.expose(port);
+    // The address a server prints is its origin; a path it names is kept, but a bare root is not a second slash in every URL built on it.
+    const path = target.pathname === '/' ? '' : target.pathname;
+    return `${target.protocol}//${target.hostname}:${hostPort}${path}${target.search}`;
   }
 
   /**

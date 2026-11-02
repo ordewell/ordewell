@@ -11,8 +11,11 @@ export const GATED_KEY = 'ANTHROPIC_API_KEY';
 export const BASE_URL = 'ANTHROPIC_BASE_URL';
 const MODEL_API = 'https://api.anthropic.com';
 
-/** Where a person's own sign-in talks to Anthropic, and which a broker's lease never needs: its model traffic takes the gateway. */
-export const SIGN_IN_HOSTS: readonly string[] = ['api.anthropic.com', 'claude.ai', 'platform.claude.com'];
+/**
+ * Every container runner's own sign-in hosts. Kept here as earlier code names
+ * it; a lease opens its own runner's (`containerRunners.ts`).
+ */
+export { ALL_SIGN_IN_HOSTS as SIGN_IN_HOSTS } from './containerRunners';
 
 /**
  * Which login a container runs under, which a person chooses and nothing here

@@ -153,7 +153,7 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
     killed `docker exec` leaves its process running, so a runner is stopped by its pid inside. A Session that closes
     stops its run, and is `gone` once its runners have and `settle` has taken its containers, relays and gateways: what a
     close waits on, so a session adopted next finds nothing of it at work. A task's volume stays for a Continue.
-  - A change task of a runner proven in a container runs there: Claude Code, today. So does every script, whatever its
+  - A change task of a runner proven in a container runs there: Claude Code and OpenCode, today. So does every script, whatever its
     runner: a body is a person's or a planner's, but what it runs over is what containers wrote, so `npm test` on the host
     would run that code outside the boundary. Read-only tasks and planners stay out, under their envelope and their seal,
     as does a subplanner ([ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md)). A
@@ -226,7 +226,9 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
     loopback and carries each connection over its stdio, so the URL is unchanged and
     [ADR-0022](../runners/0022-ordewell-mcp-server.md) T2's Host check still holds, on any engine and under any egress. It
     connects only to what was forwarded, whatever a frame says, since a process in the container can write the relay's
-    stdout. `apply_patch` is refused in a container: it merges into a worktree the runner does not work in.
+    stdout. The same pipe carries the other way for a runner whose own server the host must speak to, as OpenCode's is: the
+    host listens on its own loopback and the relay dials the container's, so no port is published and no network is used.
+    `apply_patch` is refused in a container: it merges into a worktree the runner does not work in.
 - **Credentials and egress (L7).** An egress sidecar per lease, and a base-URL gateway for model traffic, behind
   `EgressPath`. A bridge container was measured to reach 1.1.1.1:443 and this host's loopback through
   `host.docker.internal`; on an `--internal` network neither answers, no name outside resolves, and there is no route.
@@ -243,12 +245,16 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
     stays here, and the runner holds a token that means nothing past that listener, so `cred.unreadable` is provable for a
     broker's lease. It carries model traffic alone, to the one upstream, under the real key whatever a client sent: a
     process in the container can spend the key and cannot read it, send it elsewhere or use the API under its own. TLS
-    ends there, for that one host, which is the only interception a lease does.
+    ends there, for that one host, which is the only interception a lease does. Claude Code reads the address from its
+    environment; OpenCode is given a provider block in its own configuration, pointing `anthropic` at the gateway with the
+    stand-in, since it does not read `ANTHROPIC_BASE_URL` for a provider's base. A model of another provider, or a person's
+    own sign-in, is handed its key or its login and reaches its provider's hosts through the sidecar instead.
   - A person chooses the login, and it has no default: `broker`, API keys or cloud credentials from this host's
-    environment, or `own-sign-in`, made inside a container and kept in a volume no task mounts. A helper in the engine,
-    with that volume read-only, copies it into the task's own volume as the task starts, so nothing a task writes reaches
-    the original or another task, and this host never reads it. That stops writing and nothing else: the runner can read
-    its copy, and a token it refreshes stays there. Which login someone uses is up to them, API usage or their own subscription, and so are its terms: the maintainer decided so
+    environment, or `own-sign-in`, made inside a container and kept in a volume no task mounts. Each runner has its own
+    sign-in volume and its own place the runner reads it from: Claude Code's config directory, OpenCode's data directory.
+    A helper in the engine, with that volume read-only, copies it into the task's own volume as the task starts, so
+    nothing a task writes reaches the original or another task, and this host never reads it. That stops writing and
+    nothing else: the runner can read its copy, and a token it refreshes stays there. Which login someone uses is up to them, API usage or their own subscription, and so are its terms: the maintainer decided so
     on 2026-11-01. Ordewell's part is what it holds, which is below.
   - A broker holds API keys and cloud-provider credentials only (`CredentialBroker`). It never holds Claude subscription
     tokens, and refuses one under any name it can recognise. What a cloud provider's client signs with has to reach it, so
@@ -278,7 +284,9 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
   skips where no engine answers and on CI unless `ORDEWELL_REQUIRE_DOCKER=1`, and is one suite, so one at a time. A fake
   harness runs in a real container through the real adapter, MCP server and Landing, a delegated child plan and its
   repair included. `ORDEWELL_E2E_HARNESS_IMAGE` adds the real binary, from an image built as `docker/task.Dockerfile` says,
-  through a turn of a scripted model behind the gateway.
+  through a turn of a scripted model behind the gateway. `ORDEWELL_E2E_OPENCODE_IMAGE` does the same for OpenCode: the
+  real `opencode serve` in a container, its own server reached through the relay, and a controlled Anthropic model on this
+  host behind the lease gateway that writes a file and calls `task_complete`.
 - A guarantee's probe is tested by a backend built to fail it: an open that requires it refuses, and the engine's default
   network is what `net.allowlist` must catch. The relay, the sidecar and the gate need no engine: the relay and the sidecar
   run as themselves on this host's node, a preload standing in for the world's DNS and sockets, and the gate takes real
@@ -384,3 +392,4 @@ for model traffic first. The interface is kept free of anything that blocks thes
 - 2026-11-01 — the gate runs git's object checks itself, since a fetch from a bundle does not on an older git.
 - 2026-11-01 — containers are experimental and off in published builds: `containersOffered` reads the `containers` setting only with `ORDEWELL_CONTAINERS=1` from a git checkout, as delegation is held.
 - 2026-11-02 — `changeContainers`, `inspectEngine` and `inspectReadiness`: on asks for a local Docker alone, and a task's start rechecks the raw setting. A task works from its own copy of a sign-in, and keeps its caches in its own volume. Shared caches and a sign-in volume mounted into tasks dropped.
+- 2026-11-02 — OpenCode runs a change task in a container: a per-runner sign-in volume and copy, the relay's reverse direction for its own server, and its Anthropic provider pointed at the lease gateway. A runner's binary is asked of the image before a worktree is made, and a model's provider hosts are opened where nothing gates its traffic.

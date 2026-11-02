@@ -169,6 +169,7 @@ describe('inspectReadiness', () => {
   const OWN = { image: 'ordewell-task', login: { kind: 'own-sign-in' } };
   const KEY = { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } };
   const noBroker = new CredentialBroker({});
+  const keyBroker = new CredentialBroker({ ANTHROPIC_API_KEY: 'sk-ant-api03-test' });
   const codes = (checked: { problems: { code: string }[] }) => checked.problems.map((problem) => problem.code);
 
   it('passes a setting whose image and login are there, and hands back what it read', async () => {
@@ -220,6 +221,36 @@ describe('inspectReadiness', () => {
     expect(codes(checked)).toEqual(['sign-in-missing']);
     expect(checked.problems[0].remedy).toContain(LOGIN_VOLUME);
     expect(cli.calls).toContain(`volume inspect ${LOGIN_VOLUME}`);
+    expect(cli.calls.filter((line) => line.startsWith('run'))).toEqual([]);
+  });
+
+  it("asks for a task's own runner's sign-in, not another's", async () => {
+    const cli = new FakeDocker({ ...READY, 'run --rm': OK(''), [SIGN_IN]: SAID('no such volume') });
+
+    const opencode = await inspectReadiness(OWN, { cli, platform: 'linux', broker: noBroker, runner: 'opencode' });
+
+    expect(codes(opencode)).toEqual(['sign-in-missing']);
+    expect(opencode.problems[0].remedy).toContain('ordewell-login-opencode');
+    expect(cli.calls).toContain('volume inspect ordewell-login-opencode');
+    expect(cli.calls).not.toContain(`volume inspect ${LOGIN_VOLUME}`);
+  });
+
+  it('reports an image that cannot start the task\'s runner, before a worktree is made', async () => {
+    const cli = new FakeDocker({ ...READY, 'run --rm': SAID('exec: "opencode": executable file not found', 127) });
+
+    const checked = await inspectReadiness(KEY, { cli, platform: 'linux', broker: keyBroker, runner: 'opencode' });
+
+    expect(codes(checked)).toEqual(['runner-missing']);
+    expect(checked.problems[0].message).toContain('opencode');
+    expect(checked.problems[0].remedy).toMatch(/docs\/containers\.md/);
+  });
+
+  it('asks no runner of an image when it knows none, and starts no container', async () => {
+    const cli = new FakeDocker(READY);
+
+    const checked = await inspectReadiness(KEY, { cli, platform: 'linux', broker: keyBroker });
+
+    expect(codes(checked)).toEqual([]);
     expect(cli.calls.filter((line) => line.startsWith('run'))).toEqual([]);
   });
 

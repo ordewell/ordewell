@@ -3,6 +3,7 @@ import { OpenCodeAdapter } from '../OpenCodeAdapter';
 import { REQUEST_TIMEOUT_MS } from '../openCodeTransport';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, SpawnFn, TaskStartOptions, TaskModeAgentAdapter } from '../AgentAdapter';
 import { mcpClientConfig, TASK_COMPLETION_CONTRACT, taskCompletionContract } from '../../mcp';
+import type { RunnerPlacement } from '../../executionLease';
 import { OPENCODE_PLANNER_PERMISSION } from '../openCodeOrdewell';
 import { OPENCODE_MANIFEST } from '../../../plugins/builtin/opencode.manifest';
 import { modeIds, fakeSpawn, sseResponse, type FakeEventStream } from '../../__tests__/harnessTestKit';
@@ -108,7 +109,7 @@ function taskStart(overrides: Partial<TaskStartOptions> = {}): TaskStartOptions 
 }
 
 /** The adapter's start, announced up and not yet awaited — for a test that holds the start itself. */
-async function beginTask(server: ReturnType<typeof fakeServer>, opts: AgentStartOptions = taskStart(), workspaceEnv: Record<string, string> = {}) {
+async function beginTask(server: ReturnType<typeof fakeServer>, opts: AgentStartOptions = taskStart(), workspaceEnv: Record<string, string> = {}, overrides: Partial<AgentProcessDeps> = {}) {
   const spawned = fakeSpawn([]);
   const envs: NodeJS.ProcessEnv[] = [];
   const spawn: SpawnFn = (cmd, argv, options) => {
@@ -123,6 +124,7 @@ async function beginTask(server: ReturnType<typeof fakeServer>, opts: AgentStart
     isDirectory: () => true,
     exists: () => true,
     workspaceEnv: async () => workspaceEnv,
+    ...overrides,
   };
   const adapter = new OpenCodeAdapter(deps);
   const started = adapter.start(opts);
@@ -131,8 +133,8 @@ async function beginTask(server: ReturnType<typeof fakeServer>, opts: AgentStart
   return { adapter, spawned, env: envs[0], started };
 }
 
-async function startTask(server: ReturnType<typeof fakeServer>, opts: AgentStartOptions = taskStart(), workspaceEnv: Record<string, string> = {}) {
-  const { started, ...running } = await beginTask(server, opts, workspaceEnv);
+async function startTask(server: ReturnType<typeof fakeServer>, opts: AgentStartOptions = taskStart(), workspaceEnv: Record<string, string> = {}, overrides: Partial<AgentProcessDeps> = {}) {
+  const { started, ...running } = await beginTask(server, opts, workspaceEnv, overrides);
   await started;
   return running;
 }
@@ -200,6 +202,67 @@ describe('OpenCodeAdapter task mode — start', () => {
       'POST /session', 'GET /event', 'POST /session/ses_task/prompt_async', 'GET /session/status',
     ]));
     for (const request of server.requests) expect(request.authorization).toBe(basic(password!));
+    adapter.dispose();
+  });
+
+  it("points OpenCode's Anthropic provider at the lease's gateway, so a broker key never reaches the model API", async () => {
+    const server = fakeServer();
+    const placement: RunnerPlacement = {
+      place: async (launch) => ({ command: 'docker', args: ['exec', 'box', launch.command, ...launch.args], env: { ...launch.env }, stop: () => undefined, ended: () => undefined }),
+      reach: async (url) => url,
+      reachIn: async (url) => url,
+      blob: async () => undefined,
+      env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:7777', ANTHROPIC_API_KEY: 'ordewell-lease-token' },
+    };
+    const mcp = mcpClientConfig({ token: 'gateway-test', url: 'http://127.0.0.1:4555/mcp' });
+
+    const { adapter, env } = await startTask(server, taskStart({ mcp }), {}, { placement });
+
+    const config = JSON.parse(env.OPENCODE_CONFIG_CONTENT!) as { provider?: { anthropic?: { options?: Record<string, unknown> } }; mcp?: Record<string, unknown> };
+    expect(config.provider?.anthropic?.options).toEqual({ baseURL: 'http://127.0.0.1:7777/v1', apiKey: 'ordewell-lease-token' });
+    expect(config.mcp?.ordewell).toBeDefined();
+    adapter.dispose();
+  });
+
+  it("does not carry this host's inline config into a container", async () => {
+    const server = fakeServer();
+    const placement: RunnerPlacement = {
+      place: async (launch) => ({ command: 'docker', args: ['exec', 'box', launch.command, ...launch.args], env: { ...launch.env }, stop: () => undefined, ended: () => undefined }),
+      reach: async (url) => url,
+      reachIn: async (url) => url,
+      blob: async () => undefined,
+      env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:7777', ANTHROPIC_API_KEY: 'ordewell-lease-token' },
+    };
+    const mcp = mcpClientConfig({ token: 'isolation-test', url: 'http://127.0.0.1:4555/mcp' });
+
+    const { adapter, env } = await startTask(server, taskStart({ mcp }), { OPENCODE_CONFIG_CONTENT: JSON.stringify({ hostOnly: true, provider: { anthropic: { options: { apiKey: 'host-secret' } } } }) }, { placement });
+
+    const config = JSON.parse(env.OPENCODE_CONFIG_CONTENT!) as Record<string, unknown> & { provider?: { anthropic?: { options?: Record<string, unknown> } } };
+    expect(config.hostOnly).toBeUndefined();
+    expect(config.provider?.anthropic?.options).toEqual({ baseURL: 'http://127.0.0.1:7777/v1', apiKey: 'ordewell-lease-token' });
+    expect(config.mcp).toBeDefined();
+    adapter.dispose();
+  });
+
+  it("reaches a server in the container through the lease's relay, not its own loopback address", async () => {
+    const server = fakeServer();
+    const asked: string[] = [];
+    const fetchImpl = (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      asked.push(url);
+      return server.fetch(url.replace('http://127.0.0.1:5555', BASE), init);
+    };
+    const placement: RunnerPlacement = {
+      place: async (launch) => ({ command: 'docker', args: ['exec', 'box', launch.command, ...launch.args], env: { ...launch.env }, stop: () => undefined, ended: () => undefined }),
+      reach: async (url) => url,
+      reachIn: async (url) => { asked.push(`reachIn ${url}`); return 'http://127.0.0.1:5555'; },
+      blob: async () => undefined,
+    };
+
+    const { adapter } = await startTask(server, taskStart(), {}, { placement, fetch: fetchImpl as unknown as typeof fetch });
+
+    expect(asked).toContain(`reachIn ${BASE}`);
+    expect(server.requests.map((r) => `${r.method} ${r.path}`)).toContain('GET /api/info');
     adapter.dispose();
   });
 });

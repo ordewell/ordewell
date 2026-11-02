@@ -124,9 +124,12 @@ export interface OpenCodeOrdewellBinding extends OrdewellToolBinding<string> {
   /**
    * The 1.x server's `OPENCODE_CONFIG_CONTENT` with the server added — see
    * {@link mergeOrdewellConfig}. `nativeShell`, when given, is the launcher
-   * every command must run in (ADR-0036 N2).
+   * every command must run in (ADR-0036 N2). `gateway`, when given, is what a
+   * lease holds in place of an Anthropic key (ADR-0059 L7): the provider points
+   * at the lease's own address with the stand-in, so OpenCode's model traffic
+   * never needs the key or the network.
    */
-  configContent(existing: string | undefined, mcp: McpClientConfig | null, role: OrdewellToolRole, projectServers?: Record<string, unknown>, site?: Pick<TaskStartOptions, 'cwd' | 'workspaceRoot'>, nativeShell?: string): string | null;
+  configContent(existing: string | undefined, mcp: McpClientConfig | null, role: OrdewellToolRole, projectServers?: Record<string, unknown>, site?: Pick<TaskStartOptions, 'cwd' | 'workspaceRoot'>, nativeShell?: string, gateway?: LeaseGateway): string | null;
   /** The rules a 2.x session is created with so the server's tools never wait on a person (ADR-0022, S3). */
   sessionRules(mcp: McpClientConfig, role: OrdewellToolRole): OpenCodeSessionRule[];
   /**
@@ -138,6 +141,35 @@ export interface OpenCodeOrdewellBinding extends OrdewellToolBinding<string> {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * What a container lease holds for a runner in place of an Anthropic key
+ * (ADR-0059 L7): the address its gateway answers on from inside the container,
+ * and the stand-in token that is all the runner ever reads.
+ */
+export interface LeaseGateway {
+  baseURL: string;
+  apiKey: string;
+}
+
+/** The lease's gateway, from what its placement hands a runner: absent outside a container, or with no key gated. */
+export function leaseGateway(env: Readonly<Record<string, string>> | undefined): LeaseGateway | null {
+  const baseURL = env?.ANTHROPIC_BASE_URL;
+  const apiKey = env?.ANTHROPIC_API_KEY;
+  return baseURL && apiKey ? { baseURL, apiKey } : null;
+}
+
+/**
+ * Where OpenCode's Anthropic provider sends its model calls. Both its 1.x and
+ * 2.x providers append `/messages` to this, as the AI SDK's Anthropic provider
+ * does to its own `https://api.anthropic.com/v1` default (checked against
+ * 2.2.5 on 2026-11-02), so a lease's gateway is named with the `/v1` it does
+ * not itself carry.
+ */
+function versioned(baseURL: string): string {
+  const trimmed = baseURL.replace(/\/+$/, '');
+  return trimmed.endsWith('/v1') ? trimmed : `${trimmed}/v1`;
 }
 
 function deepMerge(base: Record<string, unknown>, over: Record<string, unknown>): Record<string, unknown> {
@@ -202,7 +234,7 @@ export function withoutParentOrdewell(content: string): string {
  * layer that also decides the policy, so a user's own config cannot choose a
  * different shell for the planner.
  */
-function mergeOrdewellConfig(existing: string | undefined, mcp: McpClientConfig | null, role: OrdewellToolRole, projectServers: Record<string, unknown> = {}, site?: Pick<TaskStartOptions, 'cwd' | 'workspaceRoot'>, nativeShell?: string): string | null {
+function mergeOrdewellConfig(existing: string | undefined, mcp: McpClientConfig | null, role: OrdewellToolRole, projectServers: Record<string, unknown> = {}, site?: Pick<TaskStartOptions, 'cwd' | 'workspaceRoot'>, nativeShell?: string, gateway?: LeaseGateway): string | null {
   let base: Record<string, unknown> = {};
   if (existing?.trim()) {
     let parsed: unknown;
@@ -234,6 +266,10 @@ function mergeOrdewellConfig(existing: string | undefined, mcp: McpClientConfig 
     // for good (ADR-0022 S4; checked against 2.1.4). 1.x has no such
     // eviction, and ignores the key (checked against 1.18.35's config parser).
     ...(mcp ? { experimental: { location_idle_timeout: false } } : {}),
+    // L7: a lease's key stops at its gateway, and OpenCode is pointed there with
+    // the stand-in. Its own provider block would otherwise send the token to
+    // Anthropic, where it means nothing, and the task's model call would fail.
+    ...(gateway ? { provider: { anthropic: { options: { baseURL: versioned(gateway.baseURL), apiKey: gateway.apiKey } } } } : {}),
     permission: {
       ...(role === 'planner' ? plannerPermission(nativeShell !== undefined) : role === 'readOnlyTask' ? OPENCODE_READ_ONLY_PERMISSION : {}),
       ...(role === 'readOnlyTask' && site ? { external_directory: Object.fromEntries(readOnlySessionRules(site).filter((r) => r.action === 'external_directory').map((r) => [r.resource, r.effect])) } : {}),

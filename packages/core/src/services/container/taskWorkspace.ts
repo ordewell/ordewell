@@ -16,7 +16,17 @@ export const TASK_ROOT = '/task';
 export const WORK_ROOT = `${TASK_ROOT}/work`;
 export const HOME_DIR = `${TASK_ROOT}/home`;
 /** A task's own copy of a person's sign-in, the only one a runner ever sees. */
+export const signInCopy = (mounted: string, copy: string): string => String.raw`set -eu
+[ -n "$(ls -A ${mounted} 2>/dev/null)" ] || { echo 'the sign-in volume holds no sign-in' >&2; exit 3; }
+mkdir -p ${copy}
+cp -a ${mounted}/. ${copy}/
+chmod -R go-rwx ${copy}
+`;
+
+/** Claude Code's copy, as code before every runner had one names it. New code asks its runner (ADR-0059 L7). */
 export const SIGN_IN_COPY = `${TASK_ROOT}/login/claude`;
+/** The copy script for {@link SIGN_IN_COPY}. */
+export const COPY_SIGN_IN = signInCopy('/login/claude', SIGN_IN_COPY);
 
 /** Where a repo of the workspace is, in a container. */
 export const repoDir = (repo: Pick<LeaseRepo, 'path'>): string => (repo.path === SELF_REPO ? WORK_ROOT : posix.join(WORK_ROOT, repo.path));
@@ -62,14 +72,6 @@ export async function pushToMirror(invoker: GitInvoker, repo: LeaseRepo, helper:
  * host holds: the host is what a Continue or a repair restored. Ignored files
  * stay, so what an earlier attempt installed is still there.
  */
-/** Run with the kept sign-in read-only at `/login`. A sign-in that is not there yet is a refusal here, not an empty login later. */
-export const COPY_SIGN_IN = String.raw`set -eu
-[ -n "$(ls -A /login/claude 2>/dev/null)" ] || { echo 'the sign-in volume holds no sign-in' >&2; exit 3; }
-mkdir -p ${SIGN_IN_COPY}
-cp -a /login/claude/. ${SIGN_IN_COPY}/
-chmod -R go-rwx ${SIGN_IN_COPY}
-`;
-
 export const SEED_SCRIPT = String.raw`set -eu
 mkdir -p "$ORDEWELL_REPO_DIR" "$HOME"
 cd "$ORDEWELL_REPO_DIR"

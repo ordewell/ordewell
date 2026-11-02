@@ -1,4 +1,5 @@
 import { parseContainerSettings, type ContainerSettings } from './containerSettings';
+import { CONTAINER_RUNNERS, containerRunner, CONTAINER_RUNNER_IDS, type ContainerRunner } from './containerRunners';
 import type { CredentialBroker } from './credentialBroker';
 import type { DockerCli, DockerResult } from './dockerCli';
 
@@ -33,6 +34,8 @@ export interface ReadinessDeps extends PreflightDeps {
   broker: CredentialBroker;
   /** False for a script, whose container holds no login at all. */
   agent?: boolean;
+  /** Whose task this is for, when the caller knows: its sign-in and its binary are asked of that runner alone. */
+  runner?: string;
   setupCommand?: string;
 }
 
@@ -42,7 +45,7 @@ export interface Readiness extends EngineCheck {
 }
 
 /** Where a person's own sign-in is kept: theirs, made in a container, and never read here (ADR-0059 L7). */
-export const LOGIN_VOLUME = 'ordewell-login-claude-code';
+export const LOGIN_VOLUME = CONTAINER_RUNNERS.get('claude-code')!.signIn.volume;
 
 /** A surface waits on this, and an engine that hangs is one to report, not to wait for. */
 const ASK_MS = 15_000;
@@ -119,10 +122,15 @@ export const CONTAINER_ASSUMPTIONS: readonly string[] = [
   'The engine behind a unix:// socket is on this machine: a socket forwarded from elsewhere looks the same.',
   'Containers on an engine share one kernel, this host\'s on Linux and the VM\'s on a Mac. kernel.separate means separate from this host, never from another task: a kernel flaw reaches every task on the engine.',
   'A task has limits on memory and processes, and none on CPU or disk.',
-  'Only Claude Code has been proven as a runner in a container: another runner\'s task refuses at start.',
+  `Only ${CONTAINER_RUNNER_IDS.join(' and ')} have been proven as runners in a container: another runner's task refuses at start.`,
 ];
 
-export const SIGN_IN_REMEDY = `Sign in as docs/containers.md shows, so it is kept in the ${LOGIN_VOLUME} volume.`;
+/** Where a runner's sign-in is kept, as the one thing to do about it. */
+export function signInRemedy(runner: ContainerRunner): string {
+  return `Sign in as docs/containers.md shows, so ${runner.id}'s is kept in the ${runner.signIn.volume} volume.`;
+}
+
+export const SIGN_IN_REMEDY = signInRemedy(CONTAINER_RUNNERS.get('claude-code')!);
 
 const MEMORY_REMEDY: Partial<Record<NodeJS.Platform, string>> = {
   darwin: 'Give the engine more with `colima stop && colima start --memory 8`, or Docker Desktop\'s Settings > Resources, or lower containers.memory.',
@@ -141,10 +149,19 @@ function readSetting(raw: unknown): { problems: ContainerProblem[]; settings?: C
   return { problems: [], settings };
 }
 
-async function loginProblems(settings: ContainerSettings, cli: DockerCli, broker: CredentialBroker): Promise<ContainerProblem[]> {
+async function loginProblems(settings: ContainerSettings, cli: DockerCli, broker: CredentialBroker, runner: string | undefined): Promise<ContainerProblem[]> {
   if (settings.login.kind === 'own-sign-in') {
-    const kept = await cli.call(['volume', 'inspect', LOGIN_VOLUME], { timeoutMs: ASK_MS });
-    return kept.code === 0 ? [] : [problem('sign-in-missing', 'The containers setting names your own sign-in, and none has been made.', SIGN_IN_REMEDY)];
+    // A surface knows no task's runner, so it is satisfied by any runner's sign-in; a lease knows its own and asks only for that.
+    const wanted = runner === undefined ? [...CONTAINER_RUNNERS.values()] : [containerRunner(runner)].filter((entry): entry is ContainerRunner => entry !== null);
+    if (wanted.length === 0) return [problem('runner-unknown', `${runner} has not been proven in a container.`, `Assign the task to ${CONTAINER_RUNNER_IDS.join(' or ')}.`)];
+    const made: ContainerRunner[] = [];
+    for (const entry of wanted) {
+      const kept = await cli.call(['volume', 'inspect', entry.signIn.volume], { timeoutMs: ASK_MS });
+      if (kept.code === 0) made.push(entry);
+    }
+    if (made.length > 0) return [];
+    const remedy = wanted.map(signInRemedy).join(' ');
+    return [problem('sign-in-missing', `The containers setting names your own sign-in, and none has been made for ${wanted.map((entry) => entry.id).join(' or ')}.`, remedy)];
   }
   try {
     broker.issue(settings.login.variables);
@@ -155,14 +172,26 @@ async function loginProblems(settings: ContainerSettings, cli: DockerCli, broker
 }
 
 /**
+ * Whether the image has the runner on it. A lease asks this before it makes a
+ * worktree: an image built for one runner starts no other, and the alternative
+ * is a server that never comes up after an attempt has been spent on it.
+ */
+async function runnerInImage(settings: ContainerSettings, cli: DockerCli, runner: ContainerRunner): Promise<ContainerProblem[]> {
+  const asked = await cli.call(['run', '--rm', '--network', 'none', '--user', '1000:1000', '--entrypoint', 'sh', settings.image, '-c', `command -v ${runner.binary}`], { timeoutMs: ASK_MS });
+  if (asked.code === 0) return [];
+  return [problem('runner-missing', `The image ${settings.image} has no ${runner.binary} on its PATH, so a ${runner.id} task cannot start in it.`, `Add ${runner.binary} to the image, as docs/containers.md shows, and build it again.`)];
+}
+
+/**
  * Whether a task could start now: the engine, and all a person chose on it. What
  * only a start can know stays with the lease: its repositories' hooks, its
  * runner, and the guarantees a container proves (ADR-0059 L3). A surface and a
  * lease both ask this, so what one reports is what the other refuses. A script
  * is asked nothing of the login it never gets. Nothing here reads a sign-in, or
- * pulls: an image is what a person built.
+ * pulls: an image is what a person built. A lease that names its runner starts
+ * the image once, with no network, to ask whether the runner is on it.
  */
-export async function inspectReadiness(raw: unknown, { cli, platform, broker, agent = true, setupCommand }: ReadinessDeps): Promise<Readiness> {
+export async function inspectReadiness(raw: unknown, { cli, platform, broker, agent = true, runner, setupCommand }: ReadinessDeps): Promise<Readiness> {
   const { problems: engineProblems, engine } = await inspectEngine({ cli, ...(platform ? { platform } : {}) });
   const { problems: settingProblems, settings } = readSetting(raw);
   const setup = setupCommand ? [problem('setup-command', 'A worktree setup command is set: it would run on this host, in what a container wrote.', 'Unset worktreeSetupCommand and ORDEWELL_WORKTREE_SETUP for this session.')] : [];
@@ -173,7 +202,11 @@ export async function inspectReadiness(raw: unknown, { cli, platform, broker, ag
   }
   const image = await cli.call(['image', 'inspect', '--format', '{{.Id}}', settings.image], { timeoutMs: ASK_MS });
   if (image.code !== 0) problems.push(problem('image-missing', `The image ${settings.image} is not there.`, 'Ordewell publishes no image: build it as docs/containers.md shows.'));
-  if (agent) problems.push(...await loginProblems(settings, cli, broker));
+  if (agent) {
+    problems.push(...await loginProblems(settings, cli, broker, runner));
+    const chosen = containerRunner(runner);
+    if (image.code === 0 && chosen) problems.push(...await runnerInImage(settings, cli, chosen));
+  }
   return { problems, engine, ...(problems.length === 0 ? { settings } : {}) };
 }
 

@@ -14,6 +14,9 @@ RUN apt-get update \
 
 RUN npm install -g @anthropic-ai/claude-code
 
+# For OpenCode tasks, add its MIT-licensed package as well:
+# RUN npm install -g @opencode/cli
+
 # A named volume takes its owner from the folder it mounts over, and a lease
 # runs as uid 1000, which is the `node` user here.
 RUN mkdir -p /task /mirror /login \
