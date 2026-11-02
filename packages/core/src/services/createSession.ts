@@ -56,7 +56,7 @@ import { RUN_SETTINGS_DEFAULTS, runSettingsOf, type GlobalRunSettings, type User
 import { SkillsService } from './SkillsService';
 import { resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
 import { plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
-import { surfacePlan, type ChildMessageOutcome, type ChildPlanView, type RunActivity, type RunMergeView, type RunView, type SessionBroadcaster, type SessionMessage, type SessionNotice } from './SessionMessage';
+import { surfacePlan, type ChildControlOutcome, type ChildMessageOutcome, type ChildPlanView, type ChildTaskControl, type RunActivity, type RunMergeView, type RunView, type SessionBroadcaster, type SessionMessage, type SessionNotice } from './SessionMessage';
 import { EMPTY_RUN, reduceRun } from './runView';
 import { SessionEventRelay } from './SessionEventRelay';
 import { SubagentRuns } from './SubagentRuns';
@@ -1951,6 +1951,8 @@ export class Session {
       refusal: () => this.personRefused(),
       view: () => this.seenFromAbove(),
       hear: (text) => this.hearPerson(text),
+      checkpoints: () => flattenTasks(this.store.planTasks).filter((held) => this.awaitsCheckpoint(held.id)).map((held) => held.id),
+      control: (taskId, control) => this.controlledByPerson(taskId, control),
     });
     return {
       sessionId: this.sessionId,
@@ -2014,6 +2016,35 @@ export class Session {
       }
     });
     return { ok: true, status: !taken && this.turns.turnRunning ? 'woken' : 'queued' };
+  }
+
+  /**
+   * A person's control on this plan's own task (ADR-0055 D20): the command its
+   * subplanner could call, as its subplanner, so its held mandate decides and
+   * no budget, grant or effect moves here. An id this plan does not hold is
+   * refused rather than resolved, and the question is compared in the same
+   * tick the seam checks and answers it, so no answer lands on a later one.
+   * The subplanner hears of it on its next turn, and none is opened to tell it.
+   */
+  private async controlledByPerson(taskId: string, control: ChildTaskControl): Promise<ChildControlOutcome> {
+    const refused = this.personRefused();
+    if (refused || !this.child) return refused ?? CHILD_ENDED;
+    if (!flattenTasks(this.store.planTasks).some((task) => task.id === taskId)) {
+      return { ok: false, code: 'no_task', message: `This child plan has no task "${taskId}".` };
+    }
+    if (control.kind === 'checkpoint' && !(this.awaitsCheckpoint(taskId) && this.orchestrator.getCheckpointQuestion(taskId) === control.question)) {
+      return { ok: false, code: 'not_waiting', message: 'That checkpoint is not waiting any more: it was answered, withdrawn or replaced by another question.' };
+    }
+    const outcome = await this.execute(
+      control.kind === 'message'
+        ? { command: 'message_task', task: taskId, text: control.text }
+        : { command: 'answer_checkpoint', task: taskId, answer: control.answer, ...(control.reason ? { reason: control.reason } : {}) },
+      { kind: 'subplanner', depth: this.child.depth, person: true },
+    );
+    if (!outcome.ok) return { ok: false, code: 'refused', message: outcome.message };
+    const said = control.kind === 'message' ? control.text : control.reason;
+    void this.turns.enqueue({ source: 'supervisor', text: `A person acted on your plan: ${outcome.message}${said ? ` They said: ${said}` : ''}`, rides: true }).catch(() => undefined);
+    return { ok: true, message: outcome.message, ...(outcome.payload?.kind === 'message' ? { id: outcome.payload.id } : {}) };
   }
 
   /**

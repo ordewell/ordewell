@@ -2,7 +2,7 @@ import { ROOT_NODE, parentPath, type NodePath } from '../models/TreeEvent';
 import { flattenTasks, type LegacyPlanState, type Task } from '../models/Task';
 import type { TaskLogLocation } from '../utils/taskLogStore';
 import type { TreeLedger, TreeNode } from './TreeLedger';
-import { surfacePlan, type ChildMessageOutcome, type ChildPlanEntry, type ChildPlanView, type SessionMessage, type SessionNotice } from './SessionMessage';
+import { surfacePlan, type ChildControlOutcome, type ChildMessageOutcome, type ChildPlanEntry, type ChildPlanView, type ChildTaskControl, type SessionMessage, type SessionNotice } from './SessionMessage';
 import { EMPTY_RUN, reduceRun } from './runView';
 
 export const CHILD_ENDED = { ok: false, code: 'view_only', message: 'This child plan has ended, so it only reads. Continue its task to speak to it.' } as const;
@@ -21,6 +21,9 @@ export interface SeatedChild {
   refusal(): Extract<ChildMessageOutcome, { ok: false }> | null;
   view(): Omit<ChildPlanView, 'child'>;
   hear(text: string): ChildMessageOutcome;
+  /** Its tasks waiting at a checkpoint now, each one {@link ChildPlanHandle.control} can answer. */
+  checkpoints(): string[];
+  control(taskId: string, control: ChildTaskControl): Promise<ChildControlOutcome>;
 }
 
 /** The root, as the directory reads it. */
@@ -41,6 +44,8 @@ export interface ChildPlanHandle {
   /** Every frame of its stream from now on, across a Continue that reseats the same id. */
   watch(listener: ChildListener): () => void;
   message(text: string): ChildMessageOutcome;
+  /** On this plan's own task, as its subplanner: never its parent's, whatever the id names there. */
+  control(taskId: string, control: ChildTaskControl): Promise<ChildControlOutcome>;
   logLocation(): TaskLogLocation;
 }
 
@@ -88,7 +93,7 @@ export class ChildDirectory {
     this.telling = true;
     setImmediate(() => {
       this.telling = false;
-      const now = JSON.stringify([...this.seats.values()].map((child) => [child.sessionId, child.working(), child.refusal()]));
+      const now = JSON.stringify([...this.seats.values()].map((child) => [child.sessionId, child.working(), child.refusal(), child.checkpoints()]));
       if (now === this.told) return;
       this.told = now;
       for (const listener of [...this.listeners]) listener();
@@ -116,6 +121,7 @@ export class ChildDirectory {
       view: () => this.view(sessionId, entry()),
       watch: (listener) => this.watch(sessionId, listener),
       message: (text) => this.seats.get(sessionId)?.hear(text) ?? CHILD_ENDED,
+      control: async (taskId, control) => (await this.seats.get(sessionId)?.control(taskId, control)) ?? CHILD_ENDED,
       logLocation: () => this.host.logLocation(sessionId),
     };
   }
@@ -155,6 +161,7 @@ export class ChildDirectory {
       // Its Session lets go a moment after its attempt ends, and nothing it says then counts.
       const over = refusal?.code === 'view_only';
       const refused = refusal && !over ? refusal.message : undefined;
+      const checkpoints = over ? [] : seat?.checkpoints() ?? [];
       return {
         sessionId: node.sessionId,
         node: node.path,
@@ -164,6 +171,7 @@ export class ChildDirectory {
         depth: node.path.split('/').length - 1,
         state: !seat || over ? 'ended' : seat.working() ? 'working' : 'parked',
         ...(refused ? { refused } : {}),
+        ...(checkpoints.length > 0 ? { checkpoints } : {}),
       };
     });
   }

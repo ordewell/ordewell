@@ -230,6 +230,8 @@ export type {
   ChildPlanEntry,
   ChildPlanView,
   ChildMessageOutcome,
+  ChildTaskControl,
+  ChildControlOutcome,
 } from './services/SessionMessage';
 export { EMPTY_RUN, reduceRun } from './services/runView';
 export { ChildDirectory, type ChildFrame, type ChildPlanHandle } from './services/ChildDirectory';

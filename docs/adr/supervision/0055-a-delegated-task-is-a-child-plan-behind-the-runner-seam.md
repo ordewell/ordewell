@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0009", "0013", "0015", "0018", "0020", "0022", "0029", "0030", "0035", "0045", "0046", "0049", "0054"]
-note: "Settles #33. Built: D1 to D19 and D21, so a child plan runs end to end behind the build's switch, asks up a level, stops as a subtree and comes back on a Continue, its conflicts and merges with it. Not built: a subplanner's native resume, so a reopened one replays its Model context. D20 is built for the TUI and VS Code: a row with its goal, budget left and live counts, D16's stopping row, a log of what its child's tasks become, and a report's open and promoted findings. The core and daemon let a surface list a tree, read and stream any child and message a live subplanner; the TUI and VS Code drawing that are later."
+note: "Settles #33. Built: D1 to D19 and D21, so a child plan runs end to end behind the build's switch, asks up a level, stops as a subtree and comes back on a Continue, its conflicts and merges with it. Not built: a subplanner's native resume, so a reopened one replays its Model context. D20 is built for the TUI and VS Code: a row with its goal, budget left and live counts, D16's stopping row, a log of what its child's tasks become, and a report's open and promoted findings. The core and daemon let a surface list a tree, read and stream any child, message a live subplanner, message a child's runner and answer a checkpoint a child plan holds; the TUI and VS Code drawing that are later."
 ---
 
 # 0055 — A delegated task is a child plan behind the runner seam
@@ -489,15 +489,24 @@ the child cannot reach follows it in the parent's plan.**
   list that keeps a child a fresh attempt let go. Its conversation, tasks and runner
   logs are the daemon's to serve (`/api/sessions/:id/children`, and
   `/ws/session/:id/child/:childId`, a stream with its own sequence that a reconnect takes
-  a snapshot from). A surface may watch it but never answers for it: its approvals are
-  its allowlist's, its checkpoint goes up (ADR-0056 M8) and is answered at the root, and
-  a raise stays with the plan above. A person may message a parked or working
+  a snapshot from). A surface never answers for a child as a whole: its approvals are
+  its allowlist's, a subplanner's own checkpoint goes up (ADR-0056 M8) and is answered on
+  the plan above, and a raise stays there too. A person may message a parked or working
   subplanner: the message wakes it, or queues behind its turn, and holds a slot under
   the same limit as any turn (D18). It is words only, under the actor and grants that
   child already holds, so it raises no budget, widens no Mandate and approves no
   effect, and the verdict's protected-path and merge checks ask what they always did. It
   stays with the child: nothing tells the plan above unless the subplanner passes it up
-  itself. A failed turn is told only on that child's stream. An ended child is view-only
+  itself. A failed turn is told only on that child's stream. A person may also act on a
+  task of an open child: message its runner, or answer the checkpoint it waits at, a
+  subplanner's question included where that plan's delegated task holds it. The
+  checkpoints waiting are listed with the child, so a surface need not open it to know.
+  Each is that plan's own command under its subplanner's actor and grants, kept on its
+  record as a person's, so it can do nothing the subplanner could not, and carries no
+  raise and no force, which are refused aloud. It names the plan's task by its exact id:
+  nothing resolves a reference, and nothing falls through to the root. An answer carries
+  the question the person read, so it never lands on a later one. The subplanner hears
+  of it on its next turn, which this does not open. An ended child is view-only
   until its task is continued or retried. Usage rolls up: each record its planner or
   a task spends goes up as it arrives, a level at a time, onto the delegated task's
   attempt, so `planUsage` and the row add it as they add any task's. It was charged
@@ -729,3 +738,4 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-11-01 — from review: a repair is charged to the ledger and leaves the child's names and the report as they stood (D14).
 - 2026-11-01 — from real runs: a surface's composer continues a stopped delegated task and one whose question was lost (D17), and its row counts raises and says no budget it has not read (D20).
 - 2026-11-02 — D20 opens a child to a surface: `ChildDirectory` and the daemon's routes and stream read any plan in a tree, and a person may message a live subplanner within what it already holds.
+- 2026-11-02 — D20 lets a person message a child plan's runner and answer a checkpoint that plan holds, as its subplanner's commands, where a surface only watched.
