@@ -14,7 +14,7 @@ const LOCAL_ENGINE = {
 };
 const NO_DOCKER = { 'context inspect': SAID('spawn docker ENOENT', -1) };
 const ENGINE_DOWN = { ...LOCAL_ENGINE, version: SAID('failed to connect to the docker API at unix:///var/run/docker.sock') };
-const ALL_THERE = { ...LOCAL_ENGINE, 'image inspect': OK('sha256:1\n'), 'volume inspect': OK('[]\n') };
+const ALL_THERE = { ...LOCAL_ENGINE, 'image inspect': OK('sha256:1\n'), 'volume inspect': OK('[]\n'), 'run ': OK('') };
 
 function docker(answers: Record<string, DockerResult>): DockerCli & { calls: string[] } {
   const calls: string[] = [];
@@ -247,6 +247,13 @@ describe('containerStatus', () => {
     expect(status.assumptions.join(' ')).toMatch(/share one kernel/);
     expect(status.assumptions.join(' ')).toMatch(/can read your sign-in/);
     expect(status.assumptions.join(' ')).toMatch(/Codex.*no refresh token.*sign in again/);
+  });
+
+  it('owns up to what it cannot see of a sign-in: that it still works, and that every copy is one login', async () => {
+    const status = await containerStatus(CHOSEN, { cli: docker(ALL_THERE), broker, platform: 'linux' });
+
+    expect(status.assumptions.join(' ')).toMatch(/held, not that it still works/);
+    expect(status.assumptions.join(' ')).toMatch(/every copy of a Claude Code sign-in is one login/i);
   });
 
   it('owns up to a key handed over by name, which a runner can read, only under a broker login', async () => {

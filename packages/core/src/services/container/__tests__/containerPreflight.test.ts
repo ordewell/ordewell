@@ -166,7 +166,8 @@ describe('inspectEngine', () => {
 describe('inspectReadiness', () => {
   const IMAGE = 'image inspect';
   const SIGN_IN = 'volume inspect';
-  const READY = { ...HEALTHY, [IMAGE]: OK('sha256:abc\n'), [SIGN_IN]: OK('[]\n') };
+  const ASKED = 'run ';
+  const READY = { ...HEALTHY, [IMAGE]: OK('sha256:abc\n'), [SIGN_IN]: OK('[]\n'), [ASKED]: OK('') };
   const OWN = { image: 'ordewell-task', login: { kind: 'own-sign-in' } };
   const KEY = { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY'] } };
   const noBroker = new CredentialBroker({});
@@ -213,6 +214,44 @@ describe('inspectReadiness', () => {
     expect(cli.calls.some((line) => line.startsWith('pull') || line.startsWith('image pull'))).toBe(false);
   });
 
+  it('takes the harness\'s word on what an abandoned sign-in left: files there, and no login', async () => {
+    const cli = new FakeDocker({ ...READY, [ASKED]: SAID('') });
+
+    const checked = await inspectReadiness(OWN, { cli, platform: 'linux', broker: noBroker, runner: containerRunner('claude-code')! });
+
+    expect(codes(checked)).toEqual(['sign-in-missing']);
+    expect(checked.problems[0].remedy).toContain(LOGIN_VOLUME);
+  });
+
+  it('asks in a container with no network and the sign-in read-only, and keeps its answer, which can name the account, in there', async () => {
+    const cli = new FakeDocker(READY);
+
+    await inspectReadiness(OWN, { cli, platform: 'linux', broker: noBroker });
+
+    const asked = cli.calls.find((line) => line.startsWith(ASKED));
+    expect(asked).toContain('--network none');
+    expect(asked).toContain(`-v ${LOGIN_VOLUME}:/login:ro`);
+    expect(asked).toMatch(/claude auth status >\/dev\/null 2>&1/);
+  });
+
+  it('does not call an image with no `claude` a missing sign-in: signing in again would change nothing', async () => {
+    const cli = new FakeDocker({ ...READY, [ASKED]: SAID('', 127) });
+
+    const checked = await inspectReadiness(OWN, { cli, platform: 'linux', broker: noBroker, runner: containerRunner('claude-code')! });
+
+    expect(codes(checked)).toEqual(['sign-in-unasked']);
+    expect(checked.problems[0].message).toContain('ordewell-task');
+  });
+
+  it('asks nothing of an image that is not there, which has its own problem', async () => {
+    const cli = new FakeDocker({ ...READY, [IMAGE]: SAID('no such image') });
+
+    const checked = await inspectReadiness(OWN, { cli, platform: 'linux', broker: noBroker });
+
+    expect(codes(checked)).toEqual(['image-missing']);
+    expect(cli.calls.filter((line) => line.startsWith(ASKED))).toEqual([]);
+  });
+
   it('asks after the sign-in of the runner a task is on, and not another\'s', async () => {
     const cli = new FakeDocker({ [`${SIGN_IN} ${LOGIN_VOLUME}`]: OK('[]\n'), [`${SIGN_IN} ${CODEX_LOGIN_VOLUME}`]: SAID('no such volume'), ...READY });
 
@@ -242,6 +281,32 @@ describe('inspectReadiness', () => {
     expect(checked.problems[0].message).toContain('OPENAI_API_KEY');
   });
 
+  it('with no task to ask for, still takes the harness\'s word on the one sign-in there is', async () => {
+    const onlyClaude = { [`${SIGN_IN} ${CODEX_LOGIN_VOLUME}`]: SAID('no such volume'), ...READY };
+
+    const abandoned = await inspectReadiness(OWN, { cli: new FakeDocker({ ...onlyClaude, [ASKED]: SAID('') }), platform: 'linux', broker: noBroker });
+    const unanswered = await inspectReadiness(OWN, { cli: new FakeDocker({ ...onlyClaude, [ASKED]: SAID('', 127) }), platform: 'linux', broker: noBroker });
+
+    expect(codes(abandoned)).toEqual(['sign-in-missing']);
+    expect(codes(unanswered)).toEqual(['sign-in-unasked']);
+  });
+
+  it('with no task to ask for, lets a Codex sign-in stand for an abandoned Claude Code one', async () => {
+    const checked = await inspectReadiness(OWN, { cli: new FakeDocker({ ...READY, [ASKED]: SAID('') }), platform: 'linux', broker: noBroker });
+
+    expect(codes(checked)).toEqual([]);
+  });
+
+  it('reports a login a runner would refuse before a task does, with no task to ask for', async () => {
+    const broker = new CredentialBroker({ ANTHROPIC_API_KEY: 'sk-ant-api03-a-key', ANTHROPIC_AUTH_TOKEN: 'a-gateway-of-their-own' });
+    const login = { image: 'ordewell-task', login: { kind: 'broker', variables: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'] } };
+
+    const checked = await inspectReadiness(login, { cli: new FakeDocker(READY), platform: 'linux', broker });
+
+    expect(codes(checked)).toEqual(['login-unavailable']);
+    expect(checked.problems[0].message).toContain('outranks ANTHROPIC_API_KEY');
+  });
+
   it('checks that a sign-in was made, by the volume that keeps it and never by reading it', async () => {
     const cli = new FakeDocker({ ...READY, [SIGN_IN]: SAID(`no such volume: ${LOGIN_VOLUME}`) });
 
@@ -250,7 +315,8 @@ describe('inspectReadiness', () => {
     expect(codes(checked)).toEqual(['sign-in-missing']);
     expect(checked.problems[0].remedy).toContain(LOGIN_VOLUME);
     expect(cli.calls).toContain(`volume inspect ${LOGIN_VOLUME}`);
-    expect(cli.calls.filter((line) => line.startsWith('run'))).toEqual([]);
+    // `docker run -v name:…` would make the volume it was asked about.
+    expect(cli.calls.filter((line) => line.startsWith(ASKED))).toEqual([]);
   });
 
   it('holds a script to no login: its container has none, so a missing one cannot stop it', async () => {

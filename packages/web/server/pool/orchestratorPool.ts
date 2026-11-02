@@ -1145,13 +1145,16 @@ export function getSession(sessionId: string, workspace: string) { return loadSe
  * their worktrees and branches (D11). What git could not let go stops the
  * delete, with the records still in place and `close` not called, and is named
  * in the error. What the tree left in an engine goes last: its volumes are
- * nothing a person could go back to once its records have gone.
+ * nothing a person could go back to once its records have gone. That waits for
+ * the session to have gone, not only stopped: a closing attempt still brings its
+ * work back, and a helper that names a volume already taken makes it again, with
+ * no label for anything to find it by.
  */
-export async function removeSession(sessionId: string, workspace: string, stop: () => Promise<void>, close: () => void, reclaim: () => Promise<void>): Promise<boolean> {
+export async function removeSession(sessionId: string, workspace: string, stop: () => Promise<void>, close: () => Promise<void>, reclaim: () => Promise<void>): Promise<boolean> {
   await stop();
   const { refused } = await discardChildRuns(sessionId, workspace, createWorktreeIsolation({ config: new WebConfig() }));
   if (refused.length > 0) throw new Error(`The session was kept: ${refused.map(({ worktree, reason }) => `${worktree} (${reason})`).join(', ')}`);
-  close();
+  await close();
   await reclaim();
   return deleteSession(sessionId, workspace);
 }

@@ -1,7 +1,7 @@
 import type { RunnerLaunch } from '../executionLease';
 import { SIGN_IN_HOSTS } from './credentialBroker';
 import { ANTHROPIC_API, OPENAI_API, type ModelApi } from './modelGateway';
-import { COPY_CODEX_SIGN_IN, COPY_SIGN_IN, CODEX_SIGN_IN_FILE, SIGN_IN_COPY } from './taskWorkspace';
+import { ASK_SIGN_IN, COPY_CODEX_SIGN_IN, COPY_SIGN_IN, CODEX_SIGN_IN_FILE, SIGN_IN_COPY } from './taskWorkspace';
 
 /** Where a person's own sign-in to Claude Code is kept: theirs, made in a container, and never read here (ADR-0059 L7). */
 export const LOGIN_VOLUME = 'ordewell-login-claude-code';
@@ -22,6 +22,8 @@ export interface ContainerSignIn {
   hosts: readonly string[];
   /** The helper's command, which leaves the task's copy in its volume and exits 3 for a sign-in that is no use. */
   copy: readonly string[];
+  /** A helper's command that says, with no network, whether the volume holds a sign-in: exit 0 for one, 1 for none. Absent, only {@link copy} says. */
+  ask?: readonly string[];
   /** The copy, which the runner can read: a probe's proof that `cred.unreadable` does not hold. */
   path: string;
   env: Readonly<Record<string, string>>;
@@ -62,7 +64,7 @@ export const CONTAINER_RUNNERS: readonly ContainerRunner[] = [
     id: 'claude-code',
     binary: 'claude',
     api: ANTHROPIC_API,
-    signIn: { volume: LOGIN_VOLUME, hosts: SIGN_IN_HOSTS, copy: ['sh', '-c', COPY_SIGN_IN], path: SIGN_IN_COPY, env: { CLAUDE_CONFIG_DIR: SIGN_IN_COPY } },
+    signIn: { volume: LOGIN_VOLUME, hosts: SIGN_IN_HOSTS, copy: ['sh', '-c', COPY_SIGN_IN], ask: ['sh', '-c', ASK_SIGN_IN], path: SIGN_IN_COPY, env: { CLAUDE_CONFIG_DIR: SIGN_IN_COPY } },
     args: (launch) => launch.args,
   },
   {

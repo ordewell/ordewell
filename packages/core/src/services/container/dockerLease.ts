@@ -363,9 +363,9 @@ export class DockerExecutionBackend implements ExecutionBackend {
    * A task's own copy of a person's sign-in, in its own volume. The kept one is
    * never where a runner runs: one task could write it, and every later task of
    * every session loads what it wrote. A helper with no network and no agent reads
-   * it, read-only. Over what the volume holds, so a Continue keeps its sessions; a
-   * link an earlier attempt planted leads nowhere the helper may write but this
-   * same volume.
+   * it, read-only. A Continue keeps the copy it has, refreshed token and sessions
+   * alike, until a new sign-in comes over it; a link an earlier attempt planted leads
+   * nowhere the helper may write but this same volume.
    */
   /** Asked before anything is copied in: launched, a missing binary reads in the task's log as a runner that died. */
   private async refuseAbsentRunner(name: string, settings: ContainerSettings, { binary }: ContainerRunner): Promise<void> {
