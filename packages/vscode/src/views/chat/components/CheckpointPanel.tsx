@@ -19,11 +19,13 @@ interface CheckpointPanelProps {
   onReject: (reason: string) => void;
 }
 
-/** What a person has typed into the form: an approval's words, a rejection's reason, and which of the two is open. */
+/** What a person has typed into the form: an approval's words, a rejection's reason, which of the two is open, and a raise. */
 export interface CheckpointDraft {
   words: string;
   reason: string;
   rejecting: boolean;
+  /** As typed; a panel that offers no raise has none. */
+  raise?: string;
 }
 
 const NOT_A_RAISE = 'A raise is a whole number of tokens, 1 or more.';
@@ -40,15 +42,14 @@ const TIMEOUT_MINUTES = 3;
 
 export default function CheckpointPanel({ taskTitle, summary, pausedAt, delegated = false, raisable = true, draft, onDraft, onApprove, onReject }: CheckpointPanelProps) {
   const [own, setOwn] = useState<CheckpointDraft>({ words: '', reason: '', rejecting: false });
-  const { words, reason, rejecting: showRejectInput } = draft ?? own;
+  const { words, reason, rejecting: showRejectInput, raise = '' } = draft ?? own;
   const write = (patch: Partial<CheckpointDraft>) => {
-    const next = { words, reason, rejecting: showRejectInput, ...patch };
+    const next = { words, reason, rejecting: showRejectInput, raise, ...patch };
     setOwn(next);
     onDraft?.(next);
   };
   const [elapsed, setElapsed] = useState(0);
   const [showFull, setShowFull] = useState(false);
-  const [raise, setRaise] = useState('');
   const raiseTokens = raiseOf(raise);
 
   useEffect(() => {
@@ -99,7 +100,7 @@ export default function CheckpointPanel({ taskTitle, summary, pausedAt, delegate
           {raisable && (
             <label>
               Raise its budget by (tokens)
-              <input type="text" inputMode="numeric" value={raise} onChange={(e) => setRaise(e.target.value)} placeholder="none" />
+              <input type="text" inputMode="numeric" value={raise} onChange={(e) => write({ raise: e.target.value })} placeholder="none" />
             </label>
           )}
           {raiseTokens === null && <div className="checkpoint-delegated-error" role="alert">{NOT_A_RAISE}</div>}

@@ -11,14 +11,14 @@ import PlannerPauseBar from './components/PlannerPauseBar';
 import EscalationInbox from './components/EscalationInbox';
 import DockResizeHandle from './components/DockResizeHandle';
 import { ConversationBlocks } from './components/ChatMessage';
-import ChildPlanPanel, { ChildQuestions, NO_CHILD_NOTICE, type ChildNotice } from './components/ChildPlanPanel';
+import ChildPlanPanel, { ChildQuestions, NO_CHILD_NOTICE, UndeliveredAnswers, type ChildNotice } from './components/ChildPlanPanel';
 import { reduceHost, runnersOn, INITIAL_HOST_STATE, type HostState } from './hostState';
 import ModelSelector, { API_PROVIDER_LABELS } from './components/ModelSelector';
 import PlanCardGroup from './components/PlanCardGroup';
 import UsageLine from './components/UsageLine';
 import PendingMessages, { type PendingMessage } from './components/PendingMessages';
 import HandoffCard from './components/HandoffCard';
-import CheckpointPanel from './components/CheckpointPanel';
+import CheckpointPanel, { type CheckpointDraft } from './components/CheckpointPanel';
 import RunSettingsBlock from './components/RunSettingsBlock';
 import type { TaskDraft } from './components/NewTaskCard';
 import type { ChildPlanEntry, ChildPlanView, CompactionBlock, GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId, RunnerAuth } from '@ordewell/core';
@@ -44,6 +44,7 @@ const vscode = acquireVsCodeApi();
 const postTaskCommand = (message: WebviewToHost): void => vscode.postMessage(message);
 
 const STOP_ARM_MS = 2_000;
+const EMPTY_ROOT_DRAFT: CheckpointDraft = { words: '', reason: '', rejecting: false, raise: '' };
 
 type Updatable<T> = T | ((prev: T) => T);
 
@@ -101,7 +102,7 @@ export default function App() {
     conversation, plan, isExecuting, isResearchActive, error, models, modelsByRunner,
     runnerList, enabledRunnerIds, pendingRunners, modelAllowlist, held, unsent, modesByRunner, runnerNotice, modelConfig,
     modelOptions, configuredProviders, planner, plannerKnown, plannerDetecting, runnersKnown, isReady, modelDiscoveryErrors,
-    skills, taskSkills, checkpoint, taskOutput, run, activity, starting, dockExpanded, dockHeight, settingsRequest, accountLimits, plannerTurnStartedAt,
+    skills, taskSkills, checkpoint, answeredCheckpoint, taskOutput, run, activity, starting, dockExpanded, dockHeight, settingsRequest, accountLimits, plannerTurnStartedAt,
   } = host;
   const setPlan = useCallback((v: Updatable<HostState['plan']>) => dispatch({ type: 'patchPlan', plan: v }), []);
   const setError = useCallback((v: string) => dispatch({ type: 'patchError', error: v }), []);
@@ -603,6 +604,13 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [stopArmed, plannerBusy]);
 
+  // Kept here, not in the card: the card closes when an answer is given, and
+  // a refused one brings the question back to the words that were typed.
+  const [rootDraft, setRootDraft] = useState<{ taskId: string; summary: string; draft: CheckpointDraft } | null>(null);
+  useEffect(() => {
+    if (!checkpoint && !answeredCheckpoint) setRootDraft(null);
+  }, [checkpoint, answeredCheckpoint]);
+
   const handleApproveCheckpoint = useCallback((words?: string, raiseTokens?: number) => {
     if (!checkpoint) return;
     vscode.postMessage({ type: 'answerCheckpoint', taskId: checkpoint.taskId, approved: true, ...(words ? { reason: words } : {}), ...(raiseTokens !== undefined ? { raiseTokens } : {}) });
@@ -849,6 +857,8 @@ export default function App() {
               summary={checkpoint.summary}
               pausedAt={checkpoint.pausedAt}
               delegated={delegationOffered && checkpoint.delegated}
+              draft={rootDraft?.taskId === checkpoint.taskId && rootDraft.summary === checkpoint.summary ? rootDraft.draft : EMPTY_ROOT_DRAFT}
+              onDraft={(draft) => setRootDraft({ taskId: checkpoint.taskId, summary: checkpoint.summary, draft })}
               onApprove={handleApproveCheckpoint}
               onReject={handleRejectCheckpoint}
             />
@@ -981,7 +991,7 @@ export default function App() {
       conversation={childConversation}
       notice={childNotice}
       composer={childComposer(childView.child)}
-      answers={childAnswers(childView.child)}
+      answers={childAnswers.of(childView.child)}
       rootQuestion={checkpoint?.taskTitle}
       post={(message) => vscode.postMessage(message)}
       onOpen={openChild}
@@ -993,6 +1003,8 @@ export default function App() {
     <div className="chat-container" tabIndex={-1} hidden={inChild}>
       {!inChild && childNotice.message && <p role="status">{childNotice.message}</p>}
       <ChildQuestions tree={childTree.children} onOpen={openChild} />
+      {/* A refusal can come after the child plan has closed, with no panel left to read the words in. */}
+      {!inChild && <UndeliveredAnswers items={childAnswers.refused()} named onDismiss={childAnswers.dismiss} />}
       {childChoice && <div role="region" aria-label="Subplanner sessions">
         <button type="button" onClick={() => setChildChoice(null)}>Close</button>
         {childTree.children.filter((entry) => entry.parent === childTree.rootId && entry.taskId === childChoice).map((entry) =>
