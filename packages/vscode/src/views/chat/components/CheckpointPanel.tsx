@@ -9,10 +9,21 @@ interface CheckpointPanelProps {
   delegated?: boolean;
   /** Off for a person answering inside a child plan: no raise reaches a child's control (ADR-0055 D20). */
   raisable?: boolean;
-  /** An answer that did not land, read back into its form when the form comes back. */
-  given?: { answer: 'approve' | 'reject'; words?: string };
+  /**
+   * What the form holds, when the caller keeps it: a form that comes back finds
+   * its words, whatever unmounted it. Without one the form keeps its own.
+   */
+  draft?: CheckpointDraft;
+  onDraft?: (draft: CheckpointDraft) => void;
   onApprove: (words?: string, raiseTokens?: number) => void;
   onReject: (reason: string) => void;
+}
+
+/** What a person has typed into the form: an approval's words, a rejection's reason, and which of the two is open. */
+export interface CheckpointDraft {
+  words: string;
+  reason: string;
+  rejecting: boolean;
 }
 
 const NOT_A_RAISE = 'A raise is a whole number of tokens, 1 or more.';
@@ -27,13 +38,16 @@ function raiseOf(text: string): number | undefined | null {
 
 const TIMEOUT_MINUTES = 3;
 
-export default function CheckpointPanel({ taskTitle, summary, pausedAt, delegated = false, raisable = true, given, onApprove, onReject }: CheckpointPanelProps) {
-  const rejected = given?.answer === 'reject';
-  const [reason, setReason] = useState(rejected ? given.words ?? '' : '');
-  const [showRejectInput, setShowRejectInput] = useState(rejected);
+export default function CheckpointPanel({ taskTitle, summary, pausedAt, delegated = false, raisable = true, draft, onDraft, onApprove, onReject }: CheckpointPanelProps) {
+  const [own, setOwn] = useState<CheckpointDraft>({ words: '', reason: '', rejecting: false });
+  const { words, reason, rejecting: showRejectInput } = draft ?? own;
+  const write = (patch: Partial<CheckpointDraft>) => {
+    const next = { words, reason, rejecting: showRejectInput, ...patch };
+    setOwn(next);
+    onDraft?.(next);
+  };
   const [elapsed, setElapsed] = useState(0);
   const [showFull, setShowFull] = useState(false);
-  const [words, setWords] = useState(given?.answer === 'approve' ? given.words ?? '' : '');
   const [raise, setRaise] = useState('');
   const raiseTokens = raiseOf(raise);
 
@@ -80,7 +94,7 @@ export default function CheckpointPanel({ taskTitle, summary, pausedAt, delegate
         <div className="checkpoint-delegated">
           <label>
             Your answer
-            <textarea value={words} onChange={(e) => setWords(e.target.value)} placeholder="What it asked, answered (optional)" rows={2} />
+            <textarea value={words} onChange={(e) => write({ words: e.target.value })} placeholder="What it asked, answered (optional)" rows={2} />
           </label>
           {raisable && (
             <label>
@@ -97,7 +111,7 @@ export default function CheckpointPanel({ taskTitle, summary, pausedAt, delegate
           <button className="checkpoint-approve-btn" disabled={raiseTokens === null} onClick={() => (delegated ? onApprove(words.trim() || undefined, raiseTokens ?? undefined) : onApprove())}>
             Approve &amp; Continue
           </button>
-          <button className="checkpoint-reject-btn" onClick={() => setShowRejectInput(true)}>
+          <button className="checkpoint-reject-btn" onClick={() => write({ rejecting: true })}>
             Reject
           </button>
         </div>
@@ -105,7 +119,7 @@ export default function CheckpointPanel({ taskTitle, summary, pausedAt, delegate
         <div className="checkpoint-reject-form">
           <textarea
             value={reason}
-            onChange={(e) => setReason(e.target.value)}
+            onChange={(e) => write({ reason: e.target.value })}
             placeholder="Why are you rejecting this checkpoint?"
             rows={2}
             autoFocus
@@ -114,7 +128,7 @@ export default function CheckpointPanel({ taskTitle, summary, pausedAt, delegate
             <button onClick={() => onReject(reason)} disabled={!reason.trim()}>
               Send Rejection
             </button>
-            <button className="cancel-btn" onClick={() => setShowRejectInput(false)}>
+            <button className="cancel-btn" onClick={() => write({ rejecting: false })}>
               Cancel
             </button>
           </div>
