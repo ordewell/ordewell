@@ -9,7 +9,7 @@ import { DaemonError, RequestTimeoutError, UnreadableResponseError, WorkspaceIni
 import { normalizeCatalog } from '../catalog';
 import { plannerSwitchRecall, uninstalledPlannerRefusal } from '../plannerModelSwitch';
 import type { Action, Effect } from './reducer';
-import type { ChatRestored } from './reducers/shared';
+import { answerWords, type ChatRestored } from './reducers/shared';
 import type { SessionView } from './state';
 import { inboundFor, forgetInbound } from './inbound';
 
@@ -387,10 +387,13 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
     // The card goes when the daemon's next status says the task left the
     // checkpoint; a refusal (settled elsewhere, withdrawn) surfaces as the
     // failure the daemon words.
-    case 'answerTaskCheckpoint':
-      if (effect.answer === 'approve') await api.approveTaskCheckpoint(effect.sessionId, effect.taskId, { ...(effect.reason ? { reason: effect.reason } : {}), ...(effect.raiseTokens !== undefined ? { raiseTokens: effect.raiseTokens } : {}) });
-      else await api.rejectTaskCheckpoint(effect.sessionId, effect.taskId, effect.reason);
+    case 'answerTaskCheckpoint': {
+      const answering = () => (effect.answer === 'approve'
+        ? api.approveTaskCheckpoint(effect.sessionId, effect.taskId, { ...(effect.reason ? { reason: effect.reason } : {}), ...(effect.raiseTokens !== undefined ? { raiseTokens: effect.raiseTokens } : {}) })
+        : api.rejectTaskCheckpoint(effect.sessionId, effect.taskId, effect.reason));
+      await (effect.below ? refusable(deps, effect.sessionId, answering, answerWords(effect)) : answering());
       return;
+    }
 
     // The saved log is read off disk (ADR-0018, P1) so the view opens with the
     // task's history; the live `task_log` stream then catches it up in place.

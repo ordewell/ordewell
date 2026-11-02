@@ -9,7 +9,7 @@ import { SELF_REPO } from '../isolationRecord';
 import { settleWithin } from '../harness/settleWithin';
 import { CredentialBroker, type IssuedLogin } from './credentialBroker';
 import { describeProblems, inspectReadiness } from './containerPreflight';
-import { CONTAINER_RUNNER_IDS, containerRunner, modelHosts, signInRemedy, type ContainerRunner, type ContainerSignIn } from './containerRunners';
+import { CONTAINER_RUNNER_IDS, brokerRefusal, containerRunner, modelHosts, signInRemedy, type ContainerRunner, type ContainerSignIn } from './containerRunners';
 import { networkAsked, probeExpected, probeFindings, proveEngine, withCanaries } from './containerProof';
 import { CACHE_VARIABLES, containerLimits, envArgs, helperArgs, parseContainerSettings, type ContainerSettings } from './containerSettings';
 import { SpawnedDockerCli, type DockerCli } from './dockerCli';
@@ -179,7 +179,7 @@ export class DockerExecutionBackend implements ExecutionBackend {
     // A Continue restores what the worktree holds, so one started at once must not get there first. Before all else: a start that fails
     // below gives its workspace up, which held-back work must outlive.
     if (spec.task) await this.collect(spec.task.id).catch((err: unknown) => { if (err instanceof KeptWorkError) throw err; });
-    const settings = await this.preflight(runner);
+    const settings = await this.preflight(runner, spec.task?.assignedModel?.modelId);
     const opened = await lease.open({ ...spec, required: [] }, signal);
     // Ended since its claim: the worktree is the attempt's to undo, as it undoes any it finds it no longer wants.
     if (signal.aborted) return opened;
@@ -209,10 +209,13 @@ export class DockerExecutionBackend implements ExecutionBackend {
    * cannot go on. It runs at each start, and the claim stays synchronous without
    * it: an engine that answered an hour ago proves nothing of this one.
    */
-  private async preflight(runner: ContainerRunner | null): Promise<ContainerSettings> {
+  private async preflight(runner: ContainerRunner | null, model?: string): Promise<ContainerSettings> {
     const setupCommand = this.options.setupCommand?.();
     const { problems, settings } = await inspectReadiness(this.options.settings, { cli: this.cli, broker: this.broker, agent: runner !== null, ...(runner ? { runner } : {}), ...(setupCommand ? { setupCommand } : {}) });
     if (!settings) throw new Error(`This session runs tasks in containers, and this task cannot start in one. ${describeProblems(problems)}`);
+    // A task's model is the one thing here no surface could have asked about.
+    const refusal = runner && settings.login.kind === 'broker' ? brokerRefusal(runner, model) : null;
+    if (refusal) throw new Error(`This session runs tasks in containers, and this task cannot start in one. ${refusal}`);
     return settings;
   }
 

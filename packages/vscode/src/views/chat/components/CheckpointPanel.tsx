@@ -9,6 +9,8 @@ interface CheckpointPanelProps {
   delegated?: boolean;
   /** Off for a person answering inside a child plan: no raise reaches a child's control (ADR-0055 D20). */
   raisable?: boolean;
+  /** An answer that did not land, read back into its form when the form comes back. */
+  given?: { answer: 'approve' | 'reject'; words?: string };
   onApprove: (words?: string, raiseTokens?: number) => void;
   onReject: (reason: string) => void;
 }
@@ -25,12 +27,13 @@ function raiseOf(text: string): number | undefined | null {
 
 const TIMEOUT_MINUTES = 3;
 
-export default function CheckpointPanel({ taskTitle, summary, pausedAt, delegated = false, raisable = true, onApprove, onReject }: CheckpointPanelProps) {
-  const [reason, setReason] = useState('');
-  const [showRejectInput, setShowRejectInput] = useState(false);
+export default function CheckpointPanel({ taskTitle, summary, pausedAt, delegated = false, raisable = true, given, onApprove, onReject }: CheckpointPanelProps) {
+  const rejected = given?.answer === 'reject';
+  const [reason, setReason] = useState(rejected ? given.words ?? '' : '');
+  const [showRejectInput, setShowRejectInput] = useState(rejected);
   const [elapsed, setElapsed] = useState(0);
   const [showFull, setShowFull] = useState(false);
-  const [words, setWords] = useState('');
+  const [words, setWords] = useState(given?.answer === 'approve' ? given.words ?? '' : '');
   const [raise, setRaise] = useState('');
   const raiseTokens = raiseOf(raise);
 

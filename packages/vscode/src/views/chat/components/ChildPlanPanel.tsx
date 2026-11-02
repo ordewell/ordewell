@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { ChildPlanEntry, ChildPlanView, RunTask, SurfaceTask } from '@ordewell/core';
 import { patchedBlocks, type PatchedView } from '../../../shared/conversationPatch';
-import type { HostToWebview, WebviewToHost } from '../../../shared/protocol';
-import type { ChildComposer } from '../childDrafts';
+import type { WebviewToHost } from '../../../shared/protocol';
+import type { ChildAnswers, ChildComposer, GivenAnswer } from '../childDrafts';
 import { ConversationBlocks } from './ChatMessage';
 import CheckpointPanel from './CheckpointPanel';
 
@@ -38,6 +38,7 @@ interface AnswerableProps {
   question: string;
   delegated: boolean;
   answering: boolean;
+  given?: GivenAnswer;
   onAnswer: (answer: 'approve' | 'reject', words?: string) => void;
 }
 
@@ -46,10 +47,10 @@ interface AnswerableProps {
  * the person's words where they left them. A raise is the parent's to give
  * (ADR-0056 M8), so the panel offers none here.
  */
-function AnswerableQuestion({ title, question, delegated, answering, onAnswer }: AnswerableProps) {
+function AnswerableQuestion({ title, question, delegated, answering, given, onAnswer }: AnswerableProps) {
   const [pausedAt] = useState(() => Date.now());
   return <fieldset className="child-question" disabled={answering} aria-label={`Question on ${title}`}>
-    <CheckpointPanel taskTitle={title} summary={question} pausedAt={pausedAt} delegated={delegated} raisable={false}
+    <CheckpointPanel taskTitle={title} summary={question} pausedAt={pausedAt} delegated={delegated} raisable={false} given={given}
       onApprove={(words) => onAnswer('approve', words)} onReject={(reason) => onAnswer('reject', reason)} />
   </fieldset>;
 }
@@ -60,20 +61,19 @@ interface ChildPlanPanelProps {
   conversation: PatchedView;
   notice: ChildNotice;
   composer: ChildComposer;
+  answers: ChildAnswers;
   /** The root plan's own waiting question, kept in reach while a child is read. */
   rootQuestion?: string;
   post: (message: WebviewToHost) => void;
   onOpen: (childId: string) => void;
   onBack: () => void;
   onRootQuestion: () => void;
-  onNotice: (notice: ChildNotice) => void;
 }
 
-/** One child plan. App keys it by session, so another child starts clean, and holds what is written to it. */
-export default function ChildPlanPanel({ view, tree, conversation, notice, composer, rootQuestion, post, onOpen, onBack, onRootQuestion, onNotice }: ChildPlanPanelProps) {
+/** One child plan. App keys it by session, so another child starts clean, and holds what is written or answered to it. */
+export default function ChildPlanPanel({ view, tree, conversation, notice, composer, answers, rootQuestion, post, onOpen, onBack, onRootQuestion }: ChildPlanPanelProps) {
   const { child } = view;
   const childId = child.sessionId;
-  const [answering, setAnswering] = useState<readonly string[]>([]);
   const [unstarted, setUnstarted] = useState<string | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const tasks = useRef<HTMLHeadingElement>(null);
@@ -81,23 +81,6 @@ export default function ChildPlanPanel({ view, tree, conversation, notice, compo
   const answerable = child.state !== 'ended';
 
   useEffect(() => { heading.current?.focus(); }, []);
-
-  useEffect(() => {
-    const handler = (event: MessageEvent<HostToWebview>) => {
-      const msg = event.data;
-      if (msg.type === 'childControlResult' && msg.childId === childId) {
-        setAnswering((current) => current.filter((taskId) => taskId !== msg.taskId));
-        if (msg.error) onNotice({ childId, message: msg.error });
-      }
-    };
-    window.addEventListener('message', handler);
-    return () => window.removeEventListener('message', handler);
-  }, [childId, onNotice]);
-
-  const answer = (task: SurfaceTask, question: string, decision: 'approve' | 'reject', words?: string) => {
-    setAnswering((current) => [...current, task.id]);
-    post({ type: 'answerChildCheckpoint', childId, taskId: task.id, question, answer: decision, ...(words ? { reason: words } : {}) });
-  };
 
   const drawTask = (task: SurfaceTask): React.ReactNode => {
     const live = findRun(view.run.tasks, task.id);
@@ -107,7 +90,7 @@ export default function ChildPlanPanel({ view, tree, conversation, notice, compo
     return <div className="child-task" key={task.id}>
       <span>{task.title} · {live?.status ?? task.status}</span>
       {question && (answerable
-        ? <AnswerableQuestion key={question} title={task.title} question={question} delegated={task.type === 'delegated'} answering={answering.includes(task.id)} onAnswer={(decision, words) => answer(task, question, decision, words)} />
+        ? <AnswerableQuestion key={question} title={task.title} question={question} delegated={task.type === 'delegated'} answering={answers.out(task.id)} given={answers.given(task.id, question)} onAnswer={(answer, words) => answers.give(task.id, { question, answer, words })} />
         : <p>{question}</p>)}
       {(task.attempted || live?.attempted) && <button type="button" onClick={() => post({ type: 'openChildTaskLog', childId, taskId: task.id })}>Open chat</button>}
       {task.type === 'delegated' && descendants.map((entry) =>

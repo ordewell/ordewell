@@ -275,7 +275,8 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
     `ANTHROPIC_BASE_URL` for a provider's base. `app-server` reads neither `OPENAI_API_KEY` nor `OPENAI_BASE_URL`, so it is
     pointed at the gateway by a provider of its own in `-c`, over HTTP alone, which the gateway carries. A task's key is
     its own runner's, and a login's other keys stay here, so a two-key login does not hand one over in the clear: that
-    is `OPENAI_API_KEY` under OpenCode, whose `openai/*` models take its own sign-in. A model of any other provider, or a
+    is `OPENAI_API_KEY` under OpenCode, whose `openai/*` models take its own sign-in: a broker login refuses such a task
+    before a worktree is made, since the model is known only to a start, and it would have no way to its model. A model of any other provider, or a
     person's own sign-in, is handed its key or its login and reaches its provider's hosts through the sidecar instead.
   - A person chooses the login, and it has no default: `broker`, API keys or cloud credentials from this host's
     environment, or `own-sign-in`, made inside a container and kept in a volume no task mounts. Each runner keeps its own
@@ -483,3 +484,4 @@ for model traffic first. The interface is kept free of anything that blocks thes
 - 2026-11-02 — OpenCode runs a change task in a container: a per-runner sign-in volume and copy, the relay's reverse direction for its own server, and its Anthropic provider pointed at the lease gateway. A runner's binary is asked of the image before a worktree is made, and a model's provider hosts are opened where nothing gates its traffic.
 - 2026-11-02 — The real-engine suites run in CI as the `real-engine` job and by hand as `npm run test:containers`, where a skip fails the run rather than passing it.
 - 2026-11-02 — Review fixes: the gateway carries exact routes, batches and stored responses out; a login with a gated key opens a handed key's provider; a check says not ready when a required guarantee no lease could prove; an export stops an attempt's hooks and fsmonitor, a filter still runs; a clean-up takes what a dead host's check left.
+- 2026-11-02 — L7: a broker login refuses an OpenCode task on an `openai/*` model before a worktree is made, where it had started with no way to its model.

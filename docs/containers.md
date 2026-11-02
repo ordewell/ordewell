@@ -119,11 +119,12 @@ The gateway carries a turn and a read of the model list, and nothing else a key 
 do: no Message Batches, which serve a whole workspace, no stored responses, no files.
 
 For OpenCode, only an Anthropic key takes the gateway. `OPENAI_API_KEY` is Codex's: it
-stays on your machine, so an OpenCode task on an `openai/*` model does not get it, and
-needs OpenCode's own sign-in instead. Any other provider's key — an OpenRouter key,
-say — is handed to the runner, so it can read it, and its provider's hosts are opened
-for it, beside an Anthropic key too. A model id whose provider Ordewell does not know
-needs its hosts in `allow`.
+stays on your machine, so under a broker login an OpenCode task on an `openai/*` model
+is refused before it starts, whatever else the login names. Give that task another
+model or runner, or use OpenCode's own sign-in. Any other provider's key — an
+OpenRouter key, say — is handed to the runner, so it can read it, and its provider's
+hosts are opened for it, beside an Anthropic key too. A model id whose provider
+Ordewell does not know needs its hosts in `allow`.
 
 Ordewell never carries a Claude subscription's token, and refuses one that reaches it
 as a variable. To use your subscription, sign in yourself, inside a container, for the
@@ -192,7 +193,8 @@ published. Three things differ from Claude Code:
 
 - **Only an Anthropic key is gated.** A broker login with `ANTHROPIC_API_KEY` points
   OpenCode's `anthropic` provider at the lease gateway. `OPENAI_API_KEY` is not handed
-  to OpenCode, whose `openai/*` models need its own sign-in. Any other provider's key
+  to OpenCode, so a task on an `openai/*` model is refused under a broker login and
+  needs its own sign-in. Any other provider's key
   is handed to the runner, and that provider's hosts are opened; a provider Ordewell
   does not know needs them in `allow`.
 - **Its own sign-in is its whole data directory**, copied to the task's volume as it

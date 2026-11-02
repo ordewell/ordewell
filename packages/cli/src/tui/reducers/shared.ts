@@ -93,8 +93,12 @@ export type Effect =
   | { type: 'respondApproval'; sessionId: string; approvalId: string; granted: boolean }
   /** A task runner's tool request, answered from its task view (ADR-0018, A1). */
   | { type: 'answerTaskApproval'; sessionId: string; approvalId: string; answer: ApprovalDecision }
-  /** The checkpoint a task waits at, answered; only a rejection carries a reason. */
-  | { type: 'answerTaskCheckpoint'; sessionId: string; taskId: string; answer: 'approve' | 'reject'; reason?: string; raiseTokens?: number }
+  /**
+   * The checkpoint a task waits at, answered; only a rejection carries a reason.
+   * `below`: given from a plan below the one that holds the task, so a refusal
+   * has to find that person, and their words, rather than the plan it was sent to.
+   */
+  | { type: 'answerTaskCheckpoint'; sessionId: string; taskId: string; answer: 'approve' | 'reject'; reason?: string; raiseTokens?: number; below?: true }
   /** Startup refreshes silently; only a typed `/refresh` sets `announce`. */
   | { type: 'refresh'; announce?: boolean; sessionId?: string }
   /** The runners alone, as the daemon has them saved. */
@@ -291,6 +295,10 @@ export function clearNotice(state: TuiState): TuiState {
  */
 export const stale = (state: TuiState, sessionId: string | undefined): boolean =>
   sessionId !== undefined && sessionId !== state.sessionId;
+
+/** What a person typed for an answer, which is theirs again if it is refused: a raise is typed as its number. */
+export const answerWords = ({ reason, raiseTokens }: { reason?: string; raiseTokens?: number }): string | undefined =>
+  reason ?? (raiseTokens === undefined ? undefined : String(raiseTokens));
 
 /** Keeps a value inside `0..max`, where every offset this package clamps shares its zero. */
 export function clamp(value: number, max: number): number {

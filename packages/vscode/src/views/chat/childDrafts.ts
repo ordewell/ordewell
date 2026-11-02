@@ -69,3 +69,63 @@ export function useChildDrafts(post: (message: WebviewToHost) => void, notify: (
     };
   };
 }
+
+/** A person's answer to one question, as its form takes it back. */
+export interface GivenAnswer {
+  question: string;
+  answer: 'approve' | 'reject';
+  words?: string;
+}
+
+/** One child's checkpoints, as its panel draws and drives them. */
+export interface ChildAnswers {
+  /** Whether an answer on this task is out with the host. */
+  out: (taskId: string) => boolean;
+  /** What this very question was last answered with, until that lands. */
+  given: (taskId: string, question: string) => GivenAnswer | undefined;
+  give: (taskId: string, given: GivenAnswer) => void;
+}
+
+/** Out with the host until its result, with the title a failure will name. */
+type KeptAnswer = GivenAnswer & { title: string; out: boolean };
+
+const answerKey = (childId: string, taskId: string): string => JSON.stringify([childId, taskId]);
+
+/**
+ * A person's answers, kept above the panels for the reason their messages are:
+ * a refusal can come back to a panel that has gone. An answer leaves only when
+ * it lands, so the form that comes back finds its words.
+ */
+export function useChildAnswers(post: (message: WebviewToHost) => void, notify: (notice: ChildNotice) => void): (child: ChildPlanEntry) => ChildAnswers {
+  const [answers, setAnswers] = useState<Readonly<Record<string, KeptAnswer>>>({});
+  const latest = useRef(answers);
+  latest.current = answers;
+
+  useEffect(() => {
+    const handler = (event: MessageEvent<HostToWebview>) => {
+      const msg = event.data;
+      if (msg.type !== 'childControlResult') return;
+      const key = answerKey(msg.childId, msg.taskId);
+      const kept = latest.current[key];
+      if (!kept) return;
+      setAnswers(({ [key]: _settled, ...others }) => (msg.error ? { ...others, [key]: { ...kept, out: false } } : others));
+      // As for a message: the view of wherever the person went may still be on its way.
+      if (msg.error) notify({ childId: '', message: `Not answered in ${kept.title}: ${msg.error}` });
+    };
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, [notify]);
+
+  return ({ sessionId: childId, title }) => ({
+    out: (taskId) => answers[answerKey(childId, taskId)]?.out === true,
+    given: (taskId, question) => {
+      const kept = answers[answerKey(childId, taskId)];
+      return kept?.question === question ? kept : undefined;
+    },
+    give: (taskId, given) => {
+      setAnswers((current) => ({ ...current, [answerKey(childId, taskId)]: { ...given, title, out: true } }));
+      const { question, answer, words } = given;
+      post({ type: 'answerChildCheckpoint', childId, taskId, question, answer, ...(words ? { reason: words } : {}) });
+    },
+  });
+}
