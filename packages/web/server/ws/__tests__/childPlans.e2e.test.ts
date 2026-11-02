@@ -377,7 +377,14 @@ describe('a person\'s message over the daemon', () => {
     await parked(child.sessionId);
     const limit = session.planTasks[0].budget?.tokens;
 
-    const answer = await message(child.sessionId, { message: 'use the blue one', raiseTokens: 9_000_000, grants: ['effect'], approve: true });
+    for (const asks of [{ raiseTokens: 9_000_000 }, { force: true }]) {
+      const answer = await message(child.sessionId, { message: 'use the blue one', ...asks });
+      expect(answer.status).toBe(400);
+      expect(await answer.json()).toMatchObject({ code: 'refused' });
+    }
+    expect(planners.d.asked.join('\n')).not.toContain('use the blue one');
+
+    const answer = await message(child.sessionId, { message: 'use the blue one', grants: ['effect'], approve: true });
 
     expect(answer.status).toBe(200);
     expect(await answer.json()).toEqual({ status: 'queued' });

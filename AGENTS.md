@@ -30,6 +30,7 @@ npm run test:coverage   # same tests, plus the per-file coverage floors CI enfor
 npm run ci              # every ci.yml step, in its order: run this before pushing
 npm run test:changed    # while iterating: only tests affected by uncommitted changes
 npm run test:quick      # every test except the real-git e2e files (*.e2e.test.ts, GitWorktreeIsolation)
+npm run test:containers # every harness's real binary in a real Docker engine; a skip is UNVERIFIED, not a pass
 ```
 
 `test:changed` is the inner loop. When `packages/core` changed it rebuilds

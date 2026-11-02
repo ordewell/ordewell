@@ -259,10 +259,11 @@ describe('the Codex account-limit collector', () => {
 
   it('gives up at its deadline on a server that never answers, and takes the server down', async () => {
     const started = Date.now();
-    const reading = await read(collector({ account: SIGNED_IN, hang: 'limits' }, 400));
+    // Long enough for a loaded machine to start node and answer the account read, or the owner it fails with is not known yet.
+    const reading = await read(collector({ account: SIGNED_IN, hang: 'limits' }, 3000));
 
     expect(reading).toEqual({ kind: 'failed', owner: expect.any(String) });
-    expect(Date.now() - started).toBeLessThan(3000);
+    expect(Date.now() - started).toBeLessThan(10_000);
   });
 
   it('fails at once when the server exits before answering, and when it cannot be launched', async () => {

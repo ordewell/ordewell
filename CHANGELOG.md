@@ -10,6 +10,16 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **A message to a child plan is no longer lost in silence.** A message held for a
+  usage limit or a pause says so on that child's stream when a Stop ends the child
+  before its subplanner read it.
+- **A message to a subplanner cannot carry a raise or a force.** The daemon refuses
+  one that asks for either, rather than ignoring the request and reading the words.
+- **A child plan's list survives a restart.** A child no task names any more, after
+  a fresh retry or a discard, is still listed from the tree's own log, and its
+  refusal no longer sends you to a Continue that would not reach it.
+- **A Continue reaches every level of a tree.** Nothing below it is discarded, and a
+  reopened subplanner takes up its saved session where its harness keeps one.
 - **A subplanner's report counts the tree as it stands.** A child a fresh retry
   or a removal discarded no longer adds to the counts and findings of a report,
   and what hung from it goes with it. A read of the old child's own report still

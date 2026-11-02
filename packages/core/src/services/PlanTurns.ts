@@ -307,6 +307,15 @@ export class PlanTurns {
     }, 0);
   }
 
+  /**
+   * What waits with nobody left to tell if it is lost: a usage limit or a
+   * context pause answered these senders at once (see {@link admit}), so no
+   * rejection reaches them, and a Stop or a discard would pass in silence.
+   */
+  heldWithoutCaller(): readonly PendingPlanTurn[] {
+    return (this.host.plan()?.pendingTurns ?? []).filter((t) => t.source === 'user' && !this.waiters.has(t.id) && !this.running?.ids.has(t.id));
+  }
+
   /** Whether a turn this module opened is in flight. */
   get busy(): boolean {
     return this.running !== null;

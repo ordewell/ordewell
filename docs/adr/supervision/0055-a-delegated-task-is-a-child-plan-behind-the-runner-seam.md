@@ -518,9 +518,12 @@ the child cannot reach follows it in the parent's plan.**
   subplanner: the message wakes it, or queues behind its turn, and holds a slot under
   the same limit as any turn (D18). It is words only, under the actor and grants that
   child already holds, so it raises no budget, widens no Mandate and approves no
-  effect, and the verdict's protected-path and merge checks ask what they always did. It
+  effect, and the verdict's protected-path and merge checks ask what they always did; a
+  message that asks for a raise or a force is refused aloud, never read as words. It
   stays with the child: nothing tells the plan above unless the subplanner passes it up
-  itself. A failed turn is told only on that child's stream. A person may also act on a
+  itself. A failed turn is told only on that child's stream, and so is a message held
+  for a usage limit or a pause that a Stop ends before its subplanner read it, since
+  nobody is left waiting on its answer. A person may also act on a
   task of an open child: message its runner, or answer the checkpoint it waits at, a
   subplanner's question included where that plan's delegated task holds it. The
   checkpoints waiting are listed with the child, so a surface need not open it to know.
@@ -532,8 +535,10 @@ the child cannot reach follows it in the parent's plan.**
   of it on its next turn, which this does not open. VS Code holds the Session itself, so
   it asks `ChildDirectory` where the TUI asks the daemon, finding the child again for every
   action, and a child runner's tab reopens after a reload only if the tree still holds
-  that child and its task. An ended child is view-only
-  until its task is continued or retried. The TUI walks a tree a plan at a time: Enter
+  that child and its task. An ended child is view-only until its task is continued, and
+  one a fresh retry let go stays so, its refusal saying that no Continue leads back to it.
+  The list reads the tree's own log, so a child no task names any more is still listed
+  after a restart, as it was before. The TUI walks a tree a plan at a time: Enter
   on a delegated task opens its subplanner beside its tasks, Esc goes back to the plan
   above, and the plans above stay held and current, each on its own socket, so Esc is
   never a reload. Its root's run keeps its keys: an overlay the root raises shows over a
@@ -776,3 +781,4 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-11-02 — D20 lets a person message a child plan's runner and answer a checkpoint that plan holds, as its subplanner's commands, where a surface only watched.
 - 2026-11-02 — D20 on VS Code: nested child plans, their questions and runner tabs, each action found again through `ChildDirectory`.
 - 2026-11-02 — D20's TUI walks a tree: Enter and Esc move a plan at a time, a child stays followed on its own socket, and the root's run keeps its keys and overlays from any depth.
+- 2026-11-02 — D20: the daemon's message route refuses a raise or a force aloud, a held message a Stop ends is told on its child's stream, a child a retry let go says no Continue reaches it, and the list reads the tree's log after a restart.

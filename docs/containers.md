@@ -5,6 +5,9 @@
 > your tasks run in local worktrees as ever. The setting is read only in a build run
 > from a git checkout of this repository, with `ORDEWELL_CONTAINERS=1` set, and the
 > daemon is a process of its own, so it needs that variable as well as your shell.
+> Delegation is held out the same way, by `ORDEWELL_DELEGATION=1`: a child plan's tasks
+> run in containers only where both are on. [Checking it yourself](#checking-it-yourself)
+> says what has been run so far, and what has not.
 
 A task's runner can do whatever you can do on your machine. A container takes that
 away: a change task runs in a Docker container, on a copy of its worktree, with your
@@ -79,7 +82,8 @@ Claude Code it also needs a `claude` that has `claude auth status`, which is how
 Ordewell asks whether a sign-in is held, and `sh`, `cat`, `cp` and `cksum`.
 
 An image keeps the runners it was built with, and Docker reuses that step of the
-build. For a newer one, add `--no-cache`. Codex 0.166.0 is the version proven here.
+build. For a newer one, add `--no-cache`. The versions last proven here are Claude Code
+2.1.316, Codex 0.166.0 and OpenCode 2.2.5.
 
 ## Choose a login
 
@@ -281,13 +285,128 @@ first container proved:
 
 - **Tasks share a kernel.** On Linux it is your machine's. On a Mac it is the VM's, one
   for every task, so `kernel.separate` means separate from your machine, never from
-  another task. A kernel flaw reaches every task on the engine.
+  another task. A kernel flaw reaches every task on the engine. Docker Desktop and
+  Colima both work this way, so a container here is not a boundary between tasks that
+  a VM for each task would be.
 - **A `unix://` socket is taken for an engine on this machine.** A socket forwarded from
   elsewhere looks the same.
 - **Memory and process counts are limited, CPU and disk are not.** A task can fill the
   engine's disk or take its CPU.
 - **`containers.memory` above what the engine has** starts and limits nothing, so it is
-  refused. On a Mac that is the VM's memory, not the Mac's.
+  refused. On a Mac that is the VM's memory, not the Mac's. Colima's VM starts smaller
+  than the default limit: give it more, or lower `memory`.
+- **The sidecar tries one address.** It connects to the first address a listed name
+  resolves to and no other, so a name whose first answer has no route from your engine
+  fails, even where a later answer would have worked.
+- **A relay killed for memory reads as killed.** A task whose relay ran out of memory
+  says it was killed, not why.
+
+## Checking it yourself
+
+These checks need this repository, since containers are held to a checkout. They are
+for someone changing this code, or deciding whether to trust it on their machine.
+
+### With a controlled model
+
+This runs the container suites against the engine your `docker` command talks to, with
+the real Claude Code, Codex and OpenCode in an image it builds, and a stand-in model on
+your machine in place of each provider. It needs no key and no account, and it builds
+a large image the first time:
+
+```bash
+npm ci
+npm run test:containers
+```
+
+It ends by saying one of three things, and exits non-zero on the last two:
+
+| Outcome | What it means |
+| --- | --- |
+| `VERIFIED` | Every test ran and passed, on this engine, and each harness's real binary was proven. |
+| `FAILED` | A test failed. |
+| `UNVERIFIED` | No engine answered, a test was skipped, or a real binary was not proven. A skipped test is never a pass, so nothing here reads as passing. |
+
+CI runs this on Linux, in the `real-engine` job. It does not run on a Mac there, so on
+a Mac it is yours to run. With Colima:
+
+```bash
+colima start --cpu 6 --memory 16     # what it was run at: Colima's default VM is smaller than a task's default limit
+docker context use colima
+npm run test:containers
+```
+
+With Docker Desktop, give it the same under *Settings → Resources*, then:
+
+```bash
+docker context use desktop-linux
+npm run test:containers
+```
+
+It says which engine it ran against, so keep that line with the result. `--image <tag>`
+(after `--`, through npm) uses an image you built, which must hold all three runners. A
+run that is interrupted can leave volumes and networks behind, as
+[Cleaning up](#cleaning-up) says.
+
+### What has been run
+
+Last run on 2026-11-02, with Claude Code 2.1.316, Codex 0.166.0 and OpenCode 2.2.5,
+against controlled models only:
+
+- **Colima on an Apple silicon Mac:** `VERIFIED`, nothing skipped.
+- **A Linux engine nested in that Colima VM**, arm64, as a non-root user with a fresh
+  install, the closest this could come to the CI job: `VERIFIED`, nothing skipped.
+
+Not run, so not known:
+
+- **The `real-engine` job on GitHub's runners**, which are amd64, until a push runs it.
+- **Docker Desktop**, on any machine, and an Intel Mac.
+- **A rootless engine**, and Podman.
+- **Any real provider account**, on any runner: see below.
+- **Windows** is refused, as above.
+
+### With your own login
+
+No automated check here holds a real account, so these are by hand. Each needs a
+provider's own terms read first, and spends that account's usage. Run them in a
+throwaway repository with one small change task, then read what each step says rather
+than assuming it:
+
+```bash
+export ORDEWELL_CONTAINERS=1
+ordewell containers on
+ordewell containers image ordewell-task
+```
+
+1. **Claude Code, API key.** `ordewell containers login broker ANTHROPIC_API_KEY`, then
+   `ordewell containers check`. Run the task. It should land, and `docker inspect` of
+   its container, while it runs, should show no `ANTHROPIC_API_KEY`.
+2. **Claude Code, your subscription.** Sign in as [Choose a login](#choose-a-login) says,
+   then `ordewell containers login own-sign-in`. `ordewell containers` should say a
+   sign-in is held. Run the task, and run a second one beside it: one failing with
+   `OAuth session expired` is the one-login limit above, so note how long that took.
+3. **Codex, API key.** `ordewell containers login broker OPENAI_API_KEY`. Give the task
+   Full access. Started at Guarded, it should wait and say why, having asked the model
+   nothing.
+4. **Codex, a ChatGPT sign-in.** Sign in as [Codex](#codex) says. A real turn here is the
+   thing not yet measured, so note whether it lands and when it stops working.
+5. **OpenCode, an Anthropic key**, then **its own sign-in**, as [OpenCode](#opencode)
+   says. A key should go through the gateway; a sign-in carries every provider it holds.
+
+With delegation as well, `ORDEWELL_DELEGATION=1` and `ordewell delegation on`, one
+delegated task should run its child plan's tasks in containers, and Stop and a Continue
+should reach them.
+
+### A child plan in a real VS Code window
+
+The automated tests drive VS Code's host and its webview apart, so the two together are
+by hand. In a checkout with `ORDEWELL_DELEGATION=1` set for the window, run a plan with
+a delegated task whose child plan delegates again, then:
+
+1. Open each child plan from its row, and read a task's log.
+2. Answer a question from depth two, and see it lands on that plan.
+3. Message a subplanner, and see the message stays with it.
+4. Reload the window with a child's tab open. The child reads as ended, which is by
+   design: a restart reopens nothing by reading it. Continue its task, and it comes back.
 
 ## What runs where
 

@@ -210,6 +210,10 @@ carefully, and keep all versions in lockstep.
   Neither replaces the full suite: make sure
   `npm run ci` passes before pushing. It runs every step of CI's workflow
   locally, the full suite with its per-file coverage floors included.
+- If you changed anything a container runs, `npm run test:containers` runs the real
+  harnesses in a real engine. It needs Docker and builds a large image, so `npm run ci`
+  leaves it out and CI's `real-engine` job runs it. A skipped test there is not a pass:
+  [docs/containers.md](docs/containers.md#checking-it-yourself) says what it reports.
 - Describe what you changed and why. If it changes behaviour a user can see, say
   what they'll notice.
 
