@@ -102,7 +102,7 @@ function loginOf(login: unknown): { login: LeaseLogin } | { refused: string } {
 
 function loginLimit(login: LeaseLogin): string {
   if (login.kind === 'own-sign-in') {
-    return 'The runner can read your sign-in: each task works from its own copy, which stops it writing to the one you made, not reading it or sending it to an allowed host. The copy stays in the task\'s volume until its session is cleaned up, and signing out of the original does not reach it.';
+    return 'The runner can read your sign-in: each task works from its own copy, which stops it writing to the one you made, not reading it or sending it to an allowed host. The copy stays in the task\'s volume until its session is cleaned up, and signing out of the original does not reach it. Codex\'s copy holds no refresh token, so nothing renews it: when the sign-in you made runs out, sign in again.';
   }
   return 'An API key stops at this host\'s gateway, and a task reaches it by a stand-in. Anything else handed over, a cloud provider\'s credentials above all, is in the container for the runner to read.';
 }

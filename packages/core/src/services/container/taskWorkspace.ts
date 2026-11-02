@@ -56,12 +56,6 @@ export async function pushToMirror(invoker: GitInvoker, repo: LeaseRepo, helper:
   if (!again.ok) throw new Error(`Could not update the repository's mirror: ${again.stderr.trim() || pushed.stderr.trim()}`);
 }
 
-/**
- * Run in the attempt's container, before its runner. The clone shares the
- * mirror's objects, and a clone a later attempt finds is put back on what the
- * host holds: the host is what a Continue or a repair restored. Ignored files
- * stay, so what an earlier attempt installed is still there.
- */
 /** Run with the kept sign-in read-only at `/login`. A sign-in that is not there yet is a refusal here, not an empty login later. */
 export const COPY_SIGN_IN = String.raw`set -eu
 [ -n "$(ls -A /login/claude 2>/dev/null)" ] || { echo 'the sign-in volume holds no sign-in' >&2; exit 3; }
@@ -70,6 +64,52 @@ cp -a /login/claude/. ${SIGN_IN_COPY}/
 chmod -R go-rwx ${SIGN_IN_COPY}
 `;
 
+/**
+ * Where Codex looks for a sign-in under the task's home, so its sessions stay
+ * there too, for a Continue. A task's copy, not the person's: see {@link COPY_CODEX_SIGN_IN}.
+ */
+export const CODEX_SIGN_IN_FILE = `${HOME_DIR}/.codex/auth.json`;
+
+/**
+ * Codex's refresh token rotates: two tasks spending one lose the sign-in, and
+ * OpenAI forbids sharing an auth.json between jobs. So a task's copy holds no
+ * refresh token: every task can use the kept access token at once, and none can
+ * spend what a person has to sign in again to replace. It is stamped as fresh, or
+ * Codex would try a refresh that cannot work while the token still can. An API
+ * key does not belong in this volume, and an access token past its time is a
+ * refusal here, not a task that fails on its first turn. Written anew with its
+ * name removed first, so whatever an earlier attempt left there is not followed.
+ */
+export const COPY_CODEX_SIGN_IN = String.raw`
+const { mkdirSync, readFileSync, rmSync, writeFileSync } = require('fs');
+const { dirname } = require('path');
+const refuse = (why) => { console.error(why); process.exit(3); };
+const decoded = (text) => JSON.parse(Buffer.from(text, 'base64url').toString());
+let kept;
+try { kept = JSON.parse(readFileSync('/login/codex/auth.json', 'utf8')); } catch { refuse('the sign-in volume holds no sign-in'); }
+if (kept.OPENAI_API_KEY) refuse('the sign-in volume holds an API key, which belongs in a broker login');
+const { id_token, access_token, account_id } = kept.tokens ?? {};
+if (typeof id_token !== 'string' || typeof access_token !== 'string') refuse('the sign-in volume holds no ChatGPT sign-in');
+let expires = 0;
+try { expires = decoded(access_token.split('.')[1]).exp * 1000; } catch { refuse('the kept sign-in cannot be read'); }
+if (!(expires > Date.now())) refuse('the kept sign-in has expired');
+const file = ${JSON.stringify(CODEX_SIGN_IN_FILE)};
+mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+rmSync(file, { force: true, recursive: true });
+writeFileSync(file, JSON.stringify({
+  auth_mode: 'chatgpt',
+  OPENAI_API_KEY: null,
+  tokens: { id_token, access_token, refresh_token: '', account_id },
+  last_refresh: new Date().toISOString(),
+}), { mode: 0o600, flag: 'wx' });
+`;
+
+/**
+ * Run in the attempt's container, before its runner. The clone shares the
+ * mirror's objects, and a clone a later attempt finds is put back on what the
+ * host holds: the host is what a Continue or a repair restored. Ignored files
+ * stay, so what an earlier attempt installed is still there.
+ */
 export const SEED_SCRIPT = String.raw`set -eu
 mkdir -p "$ORDEWELL_REPO_DIR" "$HOME"
 cd "$ORDEWELL_REPO_DIR"

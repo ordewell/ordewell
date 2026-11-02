@@ -1,3 +1,5 @@
+import { ANTHROPIC_API, MODEL_APIS, type ModelApi } from './modelGateway';
+
 /*
  * The name Claude Code reads a subscription's token from, and the shapes such a
  * token takes under any other name: an OAuth access or refresh token, or the
@@ -5,11 +7,6 @@
  */
 const SUBSCRIPTION_VARIABLE = 'CLAUDE_CODE_OAUTH_TOKEN';
 const SUBSCRIPTION_VALUE = /^sk-ant-o[ar]t|claudeAiOauth/;
-
-/** What the gateway holds in a runner's place, and where it sends model traffic unless the login names somewhere else. */
-export const GATED_KEY = 'ANTHROPIC_API_KEY';
-export const BASE_URL = 'ANTHROPIC_BASE_URL';
-const MODEL_API = 'https://api.anthropic.com';
 
 /** Where a person's own sign-in talks to Anthropic, and which a broker's lease never needs: its model traffic takes the gateway. */
 export const SIGN_IN_HOSTS: readonly string[] = ['api.anthropic.com', 'claude.ai', 'platform.claude.com'];
@@ -39,15 +36,15 @@ export function parseLogin(raw: unknown): LeaseLogin | { refused: string } {
 /** What a lease's login comes to. */
 export interface IssuedLogin {
   /** The API key and where it goes, held on this host by the lease's gateway. */
-  gated: { key: string; upstream: string } | null;
+  gated: { key: string; upstream: string; api: ModelApi } | null;
   /** What no gateway can carry, for the runner by name, which it can read. */
   handed: Record<string, string>;
 }
 
-function upstreamOf(url: string | undefined): string {
-  if (url === undefined) return MODEL_API;
+function upstreamOf(url: string | undefined, api: ModelApi): string {
+  if (url === undefined) return api.upstream;
   const protocol = URL.canParse(url) ? new URL(url).protocol : '';
-  if (protocol !== 'https:' && protocol !== 'http:') throw new Error(`${BASE_URL} must be an http or https address.`);
+  if (protocol !== 'https:' && protocol !== 'http:') throw new Error(`${api.baseUrlVariable} must be an http or https address.`);
   return url;
 }
 
@@ -56,17 +53,25 @@ function upstreamOf(url: string | undefined): string {
  * subscription's: Anthropic's terms forbid a product collecting, storing or
  * intermediating one (ADR-0059 L7). An API key stops at the gateway. What a cloud
  * provider's client signs with has to reach it, so a lease with one reports
- * `cred.unreadable` unproven.
+ * `cred.unreadable` unproven. A login is one for a session's every runner, so a
+ * key that serves another runner's API stays here: nothing gates it for this one,
+ * and handing it over by name would put it in the clear.
  */
 export class CredentialBroker {
   constructor(private readonly source: Record<string, string | undefined>) {}
 
-  issue(variables: readonly string[]): IssuedLogin {
-    const held = Object.fromEntries(variables.map((variable) => [variable, this.hold(variable)]));
-    const { [GATED_KEY]: key, ...rest } = held;
-    if (key === undefined) return { gated: null, handed: held };
-    const { [BASE_URL]: url, ...handed } = rest;
-    return { gated: { key, upstream: upstreamOf(url) }, handed };
+  issue(variables: readonly string[], api: ModelApi = ANTHROPIC_API): IssuedLogin {
+    const others = MODEL_APIS.filter((other) => other !== api).flatMap(({ keyVariable, baseUrlVariable }) => [keyVariable, baseUrlVariable]);
+    const held = Object.fromEntries(variables.filter((variable) => !others.includes(variable)).map((variable) => [variable, this.hold(variable)]));
+    const { [api.keyVariable]: key, [api.baseUrlVariable]: url, ...handed } = held;
+    if (key !== undefined) return { gated: { key, upstream: upstreamOf(url, api), api }, handed };
+    if (api.keyOnly || Object.keys(held).length === 0) throw new Error(`The container's login holds nothing for ${api.name}: name ${api.keyVariable} in it.`);
+    return { gated: null, handed: held };
+  }
+
+  /** That every variable is there, for a surface that asks with no runner in mind: which of them serves which runner waits for {@link issue}. */
+  check(variables: readonly string[]): void {
+    for (const variable of variables) this.hold(variable);
   }
 
   private hold(variable: string): string {

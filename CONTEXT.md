@@ -171,7 +171,7 @@ which host holds a session, and this one where a session runs.
 
 **Container lease** (`services/container/`, ADR-0059 L5 to L7) — an *Execution lease*
 from `DockerExecutionBackend`, opt-in by the `containers` setting, for a change task
-of a runner proven there and for every script task. The host's worktree stays where
+of a runner proven there, Claude Code or Codex at Full access, and for every script task. The host's worktree stays where
 a task's result lives; a copy runs in one container per attempt, reached by exec. A
 script of the workspace root runs on a copy of what that root has committed, and
 nothing of it comes back. What a lease cannot be it refuses: nothing runs on the host
@@ -201,10 +201,11 @@ is where a key goes instead of the runner.
 **Credential broker** (`services/container/credentialBroker.ts`, ADR-0059 L7) —
 what hands a *Container lease* API keys and cloud-provider credentials, from this
 host's environment: an API key to its *Model gateway*, and what a cloud provider signs
-with to the runner by name. It never holds a Claude subscription's token. A person
-chooses a lease's login, `broker` or `own-sign-in`, the person's own sign-in made inside
-a container, in a volume no task mounts and this host never reads, of which each task
-gets its own copy, and it has no default.
+with to the runner by name, and a runner the key for its own model API alone. It never
+holds a Claude subscription's token. A person chooses a lease's login, `broker` or
+`own-sign-in`, the person's own sign-in made inside a container, in a volume no task
+mounts and this host never reads, of which each task gets its own copy, and it has no
+default.
 *Avoid:* "login" for an API key held here, except as the setting names it.
 
 **Slot pool** (`services/SlotPool.ts`, ADR-0055 D18) — the Parallel limit across a

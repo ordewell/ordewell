@@ -227,7 +227,7 @@ describe('ScriptRunner: placed in a lease (ADR-0059 L5)', () => {
       const [command, ...args] = run(launch);
       return { command, args, env, stop, ended };
     });
-    return { asked, stop, ended, lease: { place, reach: async (url: string) => url, blob: async () => undefined } satisfies RunnerPlacement };
+    return { asked, stop, ended, lease: { cwd: '/task/work/repo', place, reach: async (url: string) => url, blob: async () => undefined } satisfies RunnerPlacement };
   }
 
   const says = js('process.stdout.write(process.argv.slice(1).join("|"))');
@@ -309,7 +309,7 @@ describe('ScriptRunner: placed in a lease (ADR-0059 L5)', () => {
   });
 
   it('says a step it could not place failed to start', async () => {
-    const lease: RunnerPlacement = { place: async () => { throw new Error('the container is gone'); }, reach: async (url) => url, blob: async () => undefined };
+    const lease: RunnerPlacement = { cwd: '/task/work/repo', place: async () => { throw new Error('the container is gone'); }, reach: async (url) => url, blob: async () => undefined };
 
     const run = await start({ commands: [['x']] }, { placement: lease });
 

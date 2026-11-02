@@ -12,6 +12,7 @@ import { mcpClientConfig, TASK_COMPLETION_CONTRACT, taskCompletionContract } fro
 import { CODEX_ORDEWELL } from '../harness/codexOrdewell';
 import { ApprovalPolicy, effectiveApprovalMode, type ApprovalModeSetting } from '../ApprovalPolicy';
 import { WebReadPolicy } from '../webReadPolicy';
+import type { PlacedLaunch, RunnerLaunch } from '../executionLease';
 import { codexAnswer, modeIds, fakeSpawn, fixture, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
 
 /**
@@ -1654,4 +1655,114 @@ it('waits for Codex native compaction to finish and reports manual and automatic
   ]);
   expect(sentNamed(proc.written, 'turn/start')).toHaveLength(1);
   adapter.dispose();
+});
+
+describe('CodexAdapter in a lease\'s container (ADR-0059 L7)', () => {
+  const BWRAP_FAILURE = 'bwrap: No permissions to create a new namespace, likely because the kernel does not allow non-privileged user namespaces.';
+  const noSandbox = { probe: () => ({ code: 1, output: BWRAP_FAILURE }) };
+
+  /** Docker on this host, whatever the runner asked for: a probe spawned as `codex` here would be asking the wrong machine. */
+  function placed() {
+    const launches: RunnerLaunch[] = [];
+    const ended = vi.fn();
+    const placement = {
+      cwd: '/task/work/repo',
+      place: async (launch: RunnerLaunch): Promise<PlacedLaunch> => {
+        launches.push(launch);
+        return { command: 'docker', args: [...launch.args], env: { OPENAI_API_KEY: 'ordewell-lease-token' }, stop: () => {}, ended };
+      },
+      reach: async (url: string) => url,
+      blob: async () => undefined,
+    };
+    return { placement, launches, ended };
+  }
+
+  function placedDeps(replies: ScriptedReply[], options: FakeSpawnOptions = {}) {
+    const { spawned, processDeps } = deps(replies, options);
+    const commands: Array<{ command: string; args: readonly string[]; env: NodeJS.ProcessEnv | undefined }> = [];
+    const { placement, launches, ended } = placed();
+    const spawn: AgentProcessDeps['spawn'] = (command, args, spawnOptions) => {
+      commands.push({ command, args, env: spawnOptions?.env });
+      return spawned.spawn(command, args, spawnOptions);
+    };
+    // A mac's Codex is no answer for the Linux one in the container.
+    return { spawned, commands, launches, ended, adapter: new CodexAdapter({ ...processDeps, spawn, platform: 'darwin', placement }) };
+  }
+
+  it('tells Codex where it runs: this host\'s path means nothing in there', async () => {
+    const { spawned, adapter } = placedDeps(handshake());
+    await adapter.start(taskStart('fullAccess', { cwd: '/Users/me/worktrees/task-4' }));
+
+    const proc = spawned.processes[0];
+    expect(sentNamed(proc.written, 'thread/start')[0].params?.cwd).toBe('/task/work/repo');
+    expect(sentNamed(proc.written, 'skills/list')[0].params).toEqual({ cwds: ['/task/work/repo'] });
+    expect(JSON.stringify(proc.written)).not.toContain('/Users/me');
+    adapter.dispose();
+  });
+
+  it('lists the skills Codex reports for the container\'s path', async () => {
+    const { processDeps } = deps(handshake(), {
+      codexDiscovery: (method) => method === 'skills/list' ? { data: [{ cwd: '/task/work/repo', skills: [{ name: 'lint', description: 'Lint it', path: '/task/work/repo/.agents/skills/lint/SKILL.md', enabled: true }] }] } : { data: [], nextCursor: null },
+    });
+    const adapter = new CodexAdapter({ ...processDeps, placement: placed().placement });
+    await adapter.start(taskStart('fullAccess', { cwd: '/Users/me/worktrees/task-4' }));
+
+    expect(adapter.commands?.().map(({ name }) => name)).toContain('lint');
+    adapter.dispose();
+  });
+
+  it('shows a changed file relative to the container\'s worktree', async () => {
+    const { spawned, adapter } = placedDeps(handshake());
+    await adapter.start(taskStart('fullAccess', { cwd: '/Users/me/worktrees/task-4' }));
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('go', (e) => events.push(e));
+    const proc = spawned.processes[0];
+    const change = [{ path: '/task/work/repo/src/sum.js', kind: { type: 'update' }, diff: '' }];
+    proc.emitStdout(turnStarted('turn-a') + fileChangeStarted('item-1', change) + fileChangeDone('item-1', 'completed', change) + turnCompleted('turn-a'));
+    await turn;
+
+    const call = events.find((e) => e.type === 'tool_call');
+    expect(call?.type === 'tool_call' && call.args).toEqual({ path: 'src/sum.js' });
+    adapter.dispose();
+  });
+
+  it('asks the container, not this host, whether a sandboxed task can run, and refuses in its own words', async () => {
+    const { spawned, commands, launches, ended, adapter } = placedDeps(handshake(), noSandbox);
+
+    const started = adapter.start(taskStart('agent', { cwd: '/Users/me/worktrees/task-4' }));
+    await expect(started).rejects.toThrow(/container/);
+    await expect(started).rejects.toThrow(/Full access or another runner/);
+    await expect(started).rejects.not.toThrow(/sysctl/);
+    expect(launches.filter(({ args }) => args[0] === 'sandbox').map(({ command, args }) => [command, ...args])).toEqual([
+      ['codex', 'sandbox', '--', '/bin/true'],
+      ['codex', 'sandbox', '--enable', 'use_legacy_landlock', '--', '/bin/true'],
+    ]);
+    const probes = commands.filter(({ args }) => args[0] === 'sandbox');
+    expect(probes.map(({ command }) => command)).toEqual(['docker', 'docker']);
+    // What a lease handed by name, the docker CLI must have to pass on.
+    expect(probes[0].env?.OPENAI_API_KEY).toBe('ordewell-lease-token');
+    expect(sentNamed(spawned.processes[0].written, 'thread/start')).toHaveLength(0);
+    // The two probes and the app-server: a lease waits for each to end before it closes.
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledTimes(3));
+  });
+
+  it('runs a sandboxed task when the sandbox does start in the container', async () => {
+    const { spawned, adapter } = placedDeps(handshake(), { probe: () => ({ code: 0 }) });
+    await adapter.start(taskStart('agent'));
+
+    expect(sentNamed(spawned.processes[0].written, 'thread/start')[0].params?.sandbox).toBe('workspace-write');
+    adapter.dispose();
+  });
+
+  it('asks nothing of a sandbox a full-access task does not use, whose absence is no fault in a container', async () => {
+    const { spawned, commands, adapter } = placedDeps([fixture('codex', 'handshake-warning'), fixture('codex', 'task-thread'), fixture('codex', 'task-turn')], noSandbox);
+    await adapter.start(taskStart('fullAccess'));
+    const events: AgentEvent[] = [];
+    await adapter.send('fix sum', (e) => e.type !== 'runner_loaded' && events.push(e));
+
+    expect(commands.filter(({ args }) => args[0] === 'sandbox')).toEqual([]);
+    expect(sentNamed(spawned.processes[0].written, 'thread/start')[0].params?.sandbox).toBe('danger-full-access');
+    expect(events.filter((e) => e.type === 'thinking' && /bubblewrap/i.test(e.text))).toEqual([]);
+    adapter.dispose();
+  });
 });

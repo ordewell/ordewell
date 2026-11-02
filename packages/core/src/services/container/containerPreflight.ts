@@ -1,6 +1,9 @@
+import { CONTAINER_RUNNERS, signInRemedy, type ContainerRunner } from './containerRunners';
 import { parseContainerSettings, type ContainerSettings } from './containerSettings';
 import type { CredentialBroker } from './credentialBroker';
 import type { DockerCli, DockerResult } from './dockerCli';
+
+export { LOGIN_VOLUME } from './containerRunners';
 
 /** Why a container cannot be had yet, and what a person does about it. */
 export interface ContainerProblem {
@@ -33,6 +36,8 @@ export interface ReadinessDeps extends PreflightDeps {
   broker: CredentialBroker;
   /** False for a script, whose container holds no login at all. */
   agent?: boolean;
+  /** Whose login is asked for. Absent, a surface's question, with no task in mind: a sign-in of any runner's, and every variable there. */
+  runner?: ContainerRunner;
   setupCommand?: string;
 }
 
@@ -40,9 +45,6 @@ export interface Readiness extends EngineCheck {
   /** Absent for a setting that cannot be used as it stands. */
   settings?: ContainerSettings;
 }
-
-/** Where a person's own sign-in is kept: theirs, made in a container, and never read here (ADR-0059 L7). */
-export const LOGIN_VOLUME = 'ordewell-login-claude-code';
 
 /** A surface waits on this, and an engine that hangs is one to report, not to wait for. */
 const ASK_MS = 15_000;
@@ -119,10 +121,9 @@ export const CONTAINER_ASSUMPTIONS: readonly string[] = [
   'The engine behind a unix:// socket is on this machine: a socket forwarded from elsewhere looks the same.',
   'Containers on an engine share one kernel, this host\'s on Linux and the VM\'s on a Mac. kernel.separate means separate from this host, never from another task: a kernel flaw reaches every task on the engine.',
   'A task has limits on memory and processes, and none on CPU or disk.',
-  'Only Claude Code has been proven as a runner in a container: another runner\'s task refuses at start.',
+  'Only Claude Code and Codex have been proven as runners in a container: another runner\'s task refuses at start.',
+  'Codex runs in a container at Full access alone: its sandbox cannot start under this hardening, so a task at Codex\'s Guarded mode refuses at start.',
 ];
-
-export const SIGN_IN_REMEDY = `Sign in as docs/containers.md shows, so it is kept in the ${LOGIN_VOLUME} volume.`;
 
 const MEMORY_REMEDY: Partial<Record<NodeJS.Platform, string>> = {
   darwin: 'Give the engine more with `colima stop && colima start --memory 8`, or Docker Desktop\'s Settings > Resources, or lower containers.memory.',
@@ -141,13 +142,18 @@ function readSetting(raw: unknown): { problems: ContainerProblem[]; settings?: C
   return { problems: [], settings };
 }
 
-async function loginProblems(settings: ContainerSettings, cli: DockerCli, broker: CredentialBroker): Promise<ContainerProblem[]> {
+async function loginProblems(settings: ContainerSettings, cli: DockerCli, broker: CredentialBroker, runner?: ContainerRunner): Promise<ContainerProblem[]> {
   if (settings.login.kind === 'own-sign-in') {
-    const kept = await cli.call(['volume', 'inspect', LOGIN_VOLUME], { timeoutMs: ASK_MS });
-    return kept.code === 0 ? [] : [problem('sign-in-missing', 'The containers setting names your own sign-in, and none has been made.', SIGN_IN_REMEDY)];
+    const asked = runner ? [runner] : CONTAINER_RUNNERS;
+    for (const { signIn } of asked) {
+      const kept = await cli.call(['volume', 'inspect', signIn.volume], { timeoutMs: ASK_MS });
+      if (kept.code === 0) return [];
+    }
+    return [problem('sign-in-missing', `The containers setting names your own sign-in, and none has been made${runner ? ` for ${runner.id}` : ''}.`, signInRemedy(asked[0].signIn))];
   }
   try {
-    broker.issue(settings.login.variables);
+    if (runner) broker.issue(settings.login.variables, runner.api);
+    else broker.check(settings.login.variables);
     return [];
   } catch (err) {
     return [problem('login-unavailable', err instanceof Error ? err.message : String(err), 'Set it in the environment Ordewell starts from, or use the "own-sign-in" login.')];
@@ -162,7 +168,7 @@ async function loginProblems(settings: ContainerSettings, cli: DockerCli, broker
  * is asked nothing of the login it never gets. Nothing here reads a sign-in, or
  * pulls: an image is what a person built.
  */
-export async function inspectReadiness(raw: unknown, { cli, platform, broker, agent = true, setupCommand }: ReadinessDeps): Promise<Readiness> {
+export async function inspectReadiness(raw: unknown, { cli, platform, broker, agent = true, runner, setupCommand }: ReadinessDeps): Promise<Readiness> {
   const { problems: engineProblems, engine } = await inspectEngine({ cli, ...(platform ? { platform } : {}) });
   const { problems: settingProblems, settings } = readSetting(raw);
   const setup = setupCommand ? [problem('setup-command', 'A worktree setup command is set: it would run on this host, in what a container wrote.', 'Unset worktreeSetupCommand and ORDEWELL_WORKTREE_SETUP for this session.')] : [];
@@ -173,7 +179,7 @@ export async function inspectReadiness(raw: unknown, { cli, platform, broker, ag
   }
   const image = await cli.call(['image', 'inspect', '--format', '{{.Id}}', settings.image], { timeoutMs: ASK_MS });
   if (image.code !== 0) problems.push(problem('image-missing', `The image ${settings.image} is not there.`, 'Ordewell publishes no image: build it as docs/containers.md shows.'));
-  if (agent) problems.push(...await loginProblems(settings, cli, broker));
+  if (agent) problems.push(...await loginProblems(settings, cli, broker, runner));
   return { problems, engine, ...(problems.length === 0 ? { settings } : {}) };
 }
 
