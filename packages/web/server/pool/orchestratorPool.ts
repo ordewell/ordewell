@@ -14,6 +14,7 @@ import {
   Session,
   createSession,
   type ConversationCompaction,
+  type ChildTreeFrame,
   type ConversationFork,
   type RunView,
   type SessionMessage,
@@ -74,6 +75,7 @@ import {
   type IIsolationPreview,
   type IsolationPreview,
 } from '@ordewell/core';
+import { ChildStreams } from './childStreams';
 import { WebConfig, type PlannerPick } from '../adapters/WebConfig';
 import { scanWorkspaces as scanWorkspacesImpl } from '../utils/workspaceScanner';
 import { PoolFileSystem } from '../adapters/PoolFileSystem';
@@ -141,6 +143,7 @@ export class OrchestratorPool {
    */
   private readonly stream = randomUUID();
   private sequence = new Map<string, number>();
+  private readonly childStreams = new ChildStreams(this.stream);
   private registry: CoreRunnerRegistry = new RunnerRegistry();
   private modelResolver: ModelResolver;
   /** A host that supplied its own resolver answers for every workspace, as a supplied probe does. */
@@ -265,6 +268,8 @@ export class OrchestratorPool {
     if (!this.clients.has(sessionId)) this.clients.set(sessionId, new Set());
     this.clients.get(sessionId)!.add(ws);
     this.connectAccountLimits(sessionId, ws);
+    const session = this.sessions.get(sessionId);
+    if (session) void this.tellTree(sessionId, session, [ws]);
   }
 
   unsubscribe(sessionId: string, ws: WebSocket): void {
@@ -312,7 +317,31 @@ export class OrchestratorPool {
     this.sessions.set(sessionId, session);
     this.sessionWorkspaces.set(sessionId, workspace);
     for (const ws of this.clients.get(sessionId) ?? []) this.connectAccountLimits(sessionId, ws);
+    session.children.onChange(() => void this.tellTree(sessionId, session));
   }
+
+  /** The tree as it stands. A failed read tells nothing: the list route is where a surface hears why. */
+  private async tellTree(sessionId: string, session: Session, sockets?: WebSocket[]): Promise<void> {
+    const children = await session.children.list().catch(() => []);
+    if (children.length === 0 || this.sessions.get(sessionId) !== session) return;
+    const payload = JSON.stringify({ type: 'child_tree', sessionId, children } satisfies ChildTreeFrame);
+    for (const ws of sockets ?? this.clients.get(sessionId) ?? []) {
+      if (ws.readyState === ws.OPEN) ws.send(payload);
+    }
+  }
+
+  /** False for a child this root does not hold, or a root no longer loaded (ADR-0055 D20). */
+  async watchChild(rootId: string, childId: string, ws: WebSocket): Promise<boolean> {
+    const session = this.sessions.get(rootId);
+    const child = await session?.children.find(childId);
+    if (!child || this.sessions.get(rootId) !== session) return false;
+    this.childStreams.join(rootId, childId, child, ws);
+    return true;
+  }
+
+  unwatchChild(rootId: string, childId: string, ws: WebSocket): void { this.childStreams.leave(rootId, childId, ws); }
+  /** What a read of the child taken now accounts for on its socket. */
+  childPosition(rootId: string, childId: string): StreamStamp { return this.childStreams.position(rootId, childId); }
 
   private broadcast(sessionId: string, msg: SessionMessage | SessionNotice): void {
     const workspace = this.sessionWorkspaces.get(sessionId);
@@ -1045,6 +1074,9 @@ export class OrchestratorPool {
     this.sessions.delete(sessionId);
     this.sessionWorkspaces.delete(sessionId);
     this.releaseUnusedAccountLimits();
+    // A root's socket outlives a replacement, its broadcasts arriving on it. A
+    // child's cannot: it reads a directory that went with the old Session.
+    this.childStreams.closeRoot(sessionId, options?.notifyClients ? 1001 : 1012);
     if (!options?.notifyClients) return;
     const clients = this.clients.get(sessionId);
     if (!clients) return;

@@ -23,6 +23,8 @@ export interface PlanTurnInput {
   idle?: true;
   /** Goes with the next turn and opens none: a line Ordewell owes, which is no reason to wake a model (ADR-0057 R6). */
   rides?: true;
+  /** Read with this input, never shown as its words; see {@link PendingPlanTurn.aside}. */
+  aside?: string;
   /** Stops the turn that takes this input. Not saved: a replayed input has no caller left to stop it. */
   signal?: AbortSignal;
 }
@@ -125,7 +127,7 @@ export function turnPrompt(batch: readonly PendingPlanTurn[]): TurnPrompt {
     source: fromUser.length > 0 ? 'user' : 'supervisor',
     text: fromUser.map((t) => t.text).join('\n\n'),
     skills: fromUser.flatMap((t) => t.skills ?? []),
-    wakeUps: batch.filter((t) => t.source === 'supervisor').map((t) => t.text),
+    wakeUps: [...new Set(fromUser.flatMap((t) => t.aside ?? [])), ...batch.filter((t) => t.source === 'supervisor').map((t) => t.text)],
     ...(fromUser.length === 0 ? { authority: authorityOf(batch[0]) } : {}),
     ...(batch.some((t) => t.forced) ? { forced: true } : {}),
   };
@@ -390,6 +392,7 @@ export class PlanTurns {
       ...(input.report ? { report: input.report } : {}),
       ...(input.tasks?.length ? { tasks: [...input.tasks] } : {}),
       ...(input.rides ? { rides: true } : {}),
+      ...(input.aside ? { aside: input.aside } : {}),
     };
   }
 
@@ -515,12 +518,13 @@ export class PlanTurns {
     this.resend.reset();
     if (this.reportWake) clearTimeout(this.reportWake);
     this.reportWake = null;
+    const read = this.running?.ids;
     this.running?.release();
     this.running = null;
     this.host.turnSettled?.();
     this.quiet = false;
     this.restored = false;
-    for (const waiter of this.waiters.values()) waiter.reject(new PlannerTurnDiscardedError());
+    for (const [id, waiter] of this.waiters) waiter.reject(new PlannerTurnDiscardedError({ unread: !read?.has(id) }));
     this.waiters.clear();
   }
 
