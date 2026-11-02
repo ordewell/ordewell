@@ -7,6 +7,7 @@ import { filterModelsForPrompt } from './ModelAllowlistResolver';
 import { runnerModesFrom, type RunnerModeInfo } from './ModeResolver';
 import type { AssignmentScope } from './AssignmentScope';
 import { runnerForProvider } from './ProviderRegistry';
+import { withinLimits, type MandateLimits } from './Mandate';
 import type { DiscoveredModel, RunnerId } from '../models/Task';
 
 type ModelsByRunner = Partial<Record<RunnerId, DiscoveredModel[]>>;
@@ -15,6 +16,8 @@ export interface SessionCatalogDeps {
   config: Pick<IConfig, 'enabledRunners' | 'autonomousMode' | 'aiProvider'>;
   /** Whether a task's mode defaults to its runner's autonomous one: a child's mandate says, the config's level unless set (ADR-0056 M6). */
   autonomous?: () => boolean;
+  /** The runners and models a child's mandate holds it to, which a live setting can only narrow (ADR-0056 M3). Unset at a root: the settings are what it holds. */
+  held?: () => Pick<MandateLimits, 'runners' | 'models'>;
   registry: Pick<RunnerRegistry, 'getManifest'>;
   modelResolver: Pick<ModelResolver, 'modelsForRunners' | 'getCachedRunnerModels'>;
   /** Read at each call: a toggle or allowlist edit made since the session was built counts (#69). */
@@ -44,10 +47,17 @@ export class SessionCatalog {
     return this.deps.autonomous?.() ?? this.deps.config.autonomousMode;
   }
 
+  /** The settings as they stand, within what this node's mandate holds. */
+  private assignable(): { runners: RunnerId[]; allowlist: Record<string, string[]> } {
+    const { enabledRunners, modelAllowlist = {} } = this.deps.settings();
+    const enabled = (enabledRunners ?? this.deps.config.enabledRunners).filter((runner) => this.deps.registry.getManifest(runner) !== undefined);
+    const held = this.deps.held?.();
+    return held ? withinLimits(held, enabled, modelAllowlist) : { runners: enabled, allowlist: modelAllowlist };
+  }
+
   /** The runners enabled right now. */
   enabledRunners(): RunnerId[] {
-    return (this.deps.settings().enabledRunners ?? this.deps.config.enabledRunners)
-      .filter((runner) => this.deps.registry.getManifest(runner) !== undefined);
+    return this.assignable().runners;
   }
 
   /** The runners `writer` may put a task on now ({@link assignableRunners}); undefined means any. */
@@ -61,7 +71,7 @@ export class SessionCatalog {
    * has since cleared.
    */
   allowlist(): Record<string, string[]> {
-    return this.deps.settings().modelAllowlist ?? {};
+    return this.assignable().allowlist;
   }
 
   /** The enabled runners and allowlist together, for whoever compares an assignment with them. */

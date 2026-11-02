@@ -225,7 +225,9 @@ models discovery found for them, and the allowlist narrowing those. Built in
 planner's per-turn block (`queryCatalog`), its tools (`live`), a user's direct
 edit (`edit`, `runner`) and planning (`planning`) all read the same state —
 settings are read live at each call, never captured, so a runner enabled or an
-allowlist edited mid-session counts (#69). The per-runner discovered models are
+allowlist edited mid-session counts (#69). A child's reads the runners and models
+of its **Mandate** too, so settings can narrow what it assigns and never widen it
+(ADR-0056 M3). The per-runner discovered models are
 **merged into, never replaced**: discovering one runner must not forget
 another's, because coercion clamps thinking efforts against whatever was last
 found. `admit(runner, models)` is how an admitted runner keeps its models there
@@ -3229,7 +3231,7 @@ package ignores the variable.
 **Delegated task** (`type: 'delegated'`, `models/Delegation.ts`, ADR-0055) — a
 top-level task that holds a `goal`, not a prompt: its attempt is a **Child plan**. It
 carries a required `budget` and, unless it is `readOnly`, `protectedPaths`, the paths
-its child may not change, and it needs a check: a task that depends on it directly and
+its child may not change, relative to the repository and in any case (D7), and it needs a check: a task that depends on it directly and
 is a read-only AI task or a read-only **Script task**, which a new attempt takes back
 and which starts by itself once the task passes and it is ready, with no scheduler too.
 An AI task whose runner this host cannot read counts as one, so the merge hold fails closed.
