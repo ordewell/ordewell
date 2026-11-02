@@ -5,7 +5,7 @@ import { activeToken, composerCompletions, findCommand, parseRunnerCommand, pars
 import { applyKey, commit } from './editor';
 import { endRunningCompactions, hear, say, wiped } from './transcript';
 import { askMergePastChecks, blockedPicker, handoffArrived, showDiff } from './handoff';
-import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, scriptTaskView, waitingApproval, waitingCheckpoint, type RunStatus, type TaskView, type TuiState } from './state';
+import { continuesTask, findTask, isTaskRunning, planPaneOpen, planRows, plannerInFlight, scriptTaskView, viewOnly, waitingApproval, waitingCheckpoint, type RunStatus, type TaskView, type TuiState } from './state';
 import type { Key } from './keys';
 import { handleOverlayKey } from './reducers/overlays';
 import { syncApprovals } from './reducers/approvals';
@@ -769,10 +769,13 @@ function runStatus(state: TuiState, tasks: TaskView[]): RunStatus {
   return 'idle';
 }
 
+/** What a key may clear. An ended plan draws no composer, so what it holds is not cleared unseen: leaving takes it up. */
+const draftOnScreen = (state: TuiState): boolean => !!state.editor.text && !viewOnly(state);
+
 /** Ctrl-C backs out one layer at a time; it only quits when there is nothing to back out of. */
 function interrupt(state: TuiState): Step {
   if (state.overlay) return step({ ...state, overlay: null });
-  if (state.editor.text) return step({ ...state, editor: { ...state.editor, text: '', cursor: 0 } });
+  if (draftOnScreen(state)) return step({ ...state, editor: { ...state.editor, text: '', cursor: 0 } });
   if (state.child) return leaveChild(state);
   return step({ ...state, exiting: true }, [{ type: 'exit' }]);
 }
@@ -806,7 +809,7 @@ function handleKey(state: TuiState, key: Key): Step {
   // closes the view onto the plan with the cursor on that task. An open overlay
   // still owns Esc ahead of both, so /help closes before either.
   if (key.name === 'escape' && state.taskView && !state.overlay && !planPaneOpen(state)) {
-    if (state.editor.text) return step({ ...state, editor: { ...state.editor, text: '', cursor: 0 } });
+    if (draftOnScreen(state)) return step({ ...state, editor: { ...state.editor, text: '', cursor: 0 } });
     return step(returnToPlan(state, state.taskView.taskId));
   }
 
@@ -820,7 +823,7 @@ function handleKey(state: TuiState, key: Key): Step {
   // Below the root, Esc is the way back up from either pane: a draft goes
   // first, as it does in a task view, and an open row stays the pane's own.
   if (key.name === 'escape' && state.child && !planPaneOpen(state)) {
-    return state.editor.text ? step({ ...state, editor: { ...state.editor, text: '', cursor: 0 } }) : leaveChild(state);
+    return draftOnScreen(state) ? step({ ...state, editor: { ...state.editor, text: '', cursor: 0 } }) : leaveChild(state);
   }
   // Above the focus split, because a wheel notch is aimed, not focused. A drag
   // is aimed too, and for the same reason it never reaches the line editor or
@@ -938,7 +941,7 @@ function submit(state: TuiState): Step {
   }
 
   const builtIn = builtInCommand(text);
-  if (builtIn) return commandInChild(state, builtIn.name) ?? runCommand(cleared, builtIn);
+  if (builtIn) return commandInChild(cleared, builtIn.name) ?? runCommand(cleared, builtIn);
   // No planner state here: the daemon holds what a busy subplanner has not read, and its stream shows the turn.
   if (state.child) return speakToChild(state, cleared, text);
 

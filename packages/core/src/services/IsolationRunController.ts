@@ -699,9 +699,9 @@ export class IsolationRunController {
     return Object.keys(this.resolvers).filter((id) => this.resolvers[id] === conflictedId);
   }
 
-  /** The paths a task's branch changed since its base, by their place in the workspace. Throws where they cannot be read: a verdict that rests on them fails closed (ADR-0055 D6). */
-  async changedPaths(taskId: string): Promise<string[]> {
-    const read = await this.taskDiff(taskId, { names: true });
+  /** The paths a task's branch changed since its base, as `changeNames` calls them, `both` asking for both names of each. Throws where they cannot be read: a verdict that rests on them fails closed (ADR-0055 D6). */
+  async changedPaths(taskId: string, names: 'both' | true = true): Promise<string[]> {
+    const read = await this.taskDiff(taskId, { names });
     if (!read.available) throw new Error(read.reason);
     return read.text.split('\0').filter(Boolean);
   }

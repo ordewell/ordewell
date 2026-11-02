@@ -151,6 +151,125 @@ describe('following a child plan', () => {
     expect(of(h.actions, 'followLost')).toHaveLength(2);
   });
 
+  describe('a read that fails on an open socket', () => {
+    const BUSY = new DaemonError('Busy.', 503);
+
+    it('reads again on a socket of its own after a reconnect, and says nothing more', async () => {
+      const h = harness();
+      await open(h.deps);
+      h.sockets[0].end(1006);
+      await vi.advanceTimersByTimeAsync(0);
+      h.api.getChild.mockRejectedValueOnce(BUSY);
+
+      await vi.advanceTimersByTimeAsync(600_000);
+
+      expect(h.sockets).toHaveLength(3);
+      expect(h.api.getChild).toHaveBeenCalledTimes(3);
+      expect(h.sockets[1].close).toHaveBeenCalled();
+      expect(h.sockets[2].close).not.toHaveBeenCalled();
+      expect(of(h.actions, 'childOpened')).toHaveLength(2);
+      expect(of(h.actions, 'failed')).toEqual([]);
+    });
+
+    it('waits longer each time, up to the most a lost socket waits', async () => {
+      const h = harness();
+      await open(h.deps);
+      h.api.getChild.mockRejectedValue(BUSY);
+      h.sockets[0].end(1006);
+
+      await vi.advanceTimersByTimeAsync(499);
+      expect(h.sockets).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.sockets).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(h.sockets).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.sockets).toHaveLength(3);
+
+      // 2s, 4s, then 8s for as long as the reads fail.
+      await vi.advanceTimersByTimeAsync(2_000 + 4_000 + 3 * 8_000);
+      expect(h.sockets).toHaveLength(8);
+      expect(h.sockets.slice(1, -1).every((s) => s.close.mock.calls.length > 0)).toBe(true);
+    });
+
+    it('recovers on the first open: the failure shows, the plan is told, and a later read lands', async () => {
+      const h = harness({ getChild: vi.fn().mockRejectedValueOnce(BUSY).mockResolvedValue(VIEW) });
+
+      await open(h.deps);
+
+      expect(of(h.actions, 'failed')).toEqual([expect.objectContaining({ type: 'failed', message: 'Busy.' })]);
+      expect(of(h.actions, 'followLost')).toEqual([{ type: 'followLost', sessionId: CHILD }]);
+      expect(h.sockets[0].close).toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(of(h.actions, 'childOpened')).toEqual([{ type: 'childOpened', sessionId: CHILD, view: VIEW }]);
+      expect(h.sockets).toHaveLength(2);
+    });
+
+    it('tells the plan even when the close that started it said nothing', async () => {
+      const h = harness();
+      await open(h.deps);
+      h.sockets[0].end(1012);
+      await vi.advanceTimersByTimeAsync(0);
+      h.api.getChild.mockRejectedValueOnce(BUSY);
+
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(of(h.actions, 'followLost')).toEqual([{ type: 'followLost', sessionId: CHILD }]);
+    });
+
+    it('asks once when the socket ends under the read', async () => {
+      let refuse: (err: unknown) => void = () => {};
+      const h = harness();
+      await open(h.deps);
+      h.api.getChild.mockImplementationOnce(() => new Promise((_, reject) => { refuse = reject; }));
+      h.sockets[0].end(1006);
+      await vi.advanceTimersByTimeAsync(500);
+
+      h.sockets[1].end(1006);
+      await vi.advanceTimersByTimeAsync(0);
+      refuse(BUSY);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(h.sockets).toHaveLength(3);
+    });
+
+    it('leaves a newer socket alone when an old read fails late', async () => {
+      let refuse: (err: unknown) => void = () => {};
+      const h = harness();
+      await open(h.deps);
+      h.api.getChild.mockImplementationOnce(() => new Promise((_, reject) => { refuse = reject; }));
+      h.sockets[0].end(1006);
+      await vi.advanceTimersByTimeAsync(500);
+      h.sockets[1].end(1006);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(h.sockets).toHaveLength(3);
+
+      refuse(BUSY);
+      await vi.advanceTimersByTimeAsync(600_000);
+
+      expect(h.sockets).toHaveLength(3);
+      expect(h.sockets[2].close).not.toHaveBeenCalled();
+    });
+
+    it('stops there when the person left while it was on its way', async () => {
+      let refuse: (err: unknown) => void = () => {};
+      const h = harness({ getChild: vi.fn(() => new Promise((_, reject) => { refuse = reject; })) });
+      const opening = open(h.deps);
+      await vi.advanceTimersByTimeAsync(0);
+
+      await runEffect({ type: 'closeChild', childId: CHILD }, h.deps);
+      refuse(BUSY);
+      await opening;
+      await vi.advanceTimersByTimeAsync(600_000);
+
+      expect(h.sockets).toHaveLength(1);
+      expect(of(h.actions, 'followLost')).toEqual([]);
+      expect(of(h.actions, 'failed')).toEqual([]);
+    });
+  });
+
   it('stops for good when the person leaves the plan, with a retry already waiting', async () => {
     const h = harness();
     await open(h.deps);
@@ -227,6 +346,14 @@ describe('asking the daemon on a child plan', () => {
 
     expect(h.deps.reviveDaemon).toHaveBeenCalled();
     expect(of(h.actions, 'childFailed')).toEqual([]);
+  });
+
+  it('hands back the words of a refused checkpoint answer, which the composer no longer holds', async () => {
+    const h = harness({ answerChildCheckpoint: vi.fn().mockRejectedValue(REFUSED) });
+
+    await runEffect({ type: 'answerChildCheckpoint', rootId: ROOT, childId: CHILD, taskId: 'a', answer: 'reject', question: 'Ship it?', reason: 'not yet' }, h.deps);
+
+    expect(of(h.actions, 'childFailed')).toEqual([{ type: 'childFailed', sessionId: CHILD, message: 'This plan has ended.', code: 'child_view_only', text: 'not yet' }]);
   });
 
   it('says what a message did to the plan', async () => {

@@ -172,17 +172,25 @@ git clean -fdq
 `;
 
 /**
- * Run in a helper once the attempt's container has gone, so nothing of the
- * attempt is alive to change what is read. The snapshot holds what the attempt
- * left uncommitted, on top of its last commit, and leaves its index alone.
+ * Run in a helper once the attempt's container has gone, so no process of the
+ * attempt is alive. The snapshot holds what the attempt left uncommitted, on top
+ * of its last commit, and leaves its index alone.
+ *
+ * The repository is the attempt's, `.git` included, so git here does what that
+ * says: the wrapper stops its hooks, an index write's and a ref update's among
+ * them, and its fsmonitor, but no flag reaches a filter, whose name it chose. So
+ * a clean filter it configured runs here, and could change what is read. It runs
+ * in a helper with no network and the mirror read-only, and what it leaves goes
+ * through the push gate like any other work (ADR-0059 L6).
  */
 export const EXPORT_SCRIPT = String.raw`set -eu
 cd "$ORDEWELL_REPO_DIR"
 export GIT_INDEX_FILE=/tmp/ordewell-export-index
+git() { command git -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"; }
 git read-tree HEAD
-git -c core.hooksPath=/dev/null add -A -- .
+git add -A -- .
 tree=$(git write-tree)
 snapshot=$(git -c user.name=ordewell -c user.email=ordewell@localhost commit-tree "$tree" -p HEAD -m "The attempt's work")
 git update-ref "$ORDEWELL_REF" "$snapshot"
-exec git bundle create -q - "$ORDEWELL_REF" "^$ORDEWELL_BASE"
+git bundle create -q - "$ORDEWELL_REF" "^$ORDEWELL_BASE"
 `;

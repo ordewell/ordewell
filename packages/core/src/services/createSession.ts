@@ -11,7 +11,7 @@ import { carryPlannedModes } from './ModeResolver';
 import { ApprovalRecord } from './ApprovalRecord';
 import type { TaskQueryCatalog } from './TaskQuery';
 import { SessionCatalog } from './SessionCatalog';
-import { plannerToolHandler, runnersOf, PLANNER_TURN_ENDED, type PlanEditOutcome, type TaskHead } from './plannerTools';
+import { plannerToolHandler, runnersOf, NODE_REPORTED, PLANNER_TURN_ENDED, type PlanEditOutcome, type TaskHead } from './plannerTools';
 import { sharedMcpServer, type McpToolReply, type OrdewellMcpServer, type PlannerToolHandler, type PostArgs, type ReadTaskArgs, type TaskCompleteArgs } from './mcp';
 import { ConversationEditError, PlannerContextPausedError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError, type ConversationCompaction, type ConversationOpening, type PlannerConversationHost, type RewindTarget, type WakeUpTurn } from './PlannerConversation';
 import { forkPlanState, type ForkedDialogue } from './conversationFork';
@@ -487,8 +487,8 @@ export function createSession(deps: SessionDeps): Session {
     : { fullOutputFile: (taskId, attempt) => prepareTaskOutputFile(session.taskLogLocation, taskId, attempt) };
   const childHost: ChildHost = {
     openChild: (...open) => session.openChild(...open),
-    changedPaths: (taskId) => session.changedPaths(taskId),
-    stopped: () => session.underStop,
+    changedPaths: (taskId, names) => session.changedPaths(taskId, names),
+    stopped: () => session.underStop || session.reported,
     passUp: (record) => deps.subplanner?.usage(record),
     moved: () => events.rowsMoved(session.planState),
   };
@@ -559,7 +559,7 @@ export function createSession(deps: SessionDeps): Session {
     autonomous: () => autonomousAt(deps.child, deps.config.autonomousMode),
     ...(deps.subplanner ? { decided: () => deps.subplanner?.changed() } : {}),
     ...(deps.child ? { inheritedProtectedPaths: () => deps.child?.mandate('off').exclusions.protectedPaths ?? [], unsealedRefusal: (task: Readonly<Task>) => session.unsealedRefusal(task) } : {}),
-    ...(deps.subplanner ? { nodeRefusal: () => session.nodeRefusal() } : {}),
+    ...(deps.subplanner ? { nodeRefusal: () => session.startRefusal() } : {}),
     discardChild: (task) => session.discardChild(task),
     subtree: () => session.subtree(),
     ...(deps.placement?.budget ? { planNode: () => deps.placement!.budget!.path } : {}),
@@ -1123,7 +1123,7 @@ export class Session {
       },
       run: async (prompt, { taken, signal }) => {
         const reply = (turnSignal: AbortSignal | undefined, wakeUp?: WakeUpTurn) => this.conversation.reply(prompt, {
-          signal: turnSignal, onCommit: taken, wakeUps: prompt.wakeUps, forced: prompt.forced, ...(wakeUp ? { wakeUp } : {}), ...(prompt.recovery ? { recovery: prompt.recovery } : {}),
+          signal: turnSignal, onCommit: taken, wakeUps: prompt.wakeUps, asides: prompt.asides, forced: prompt.forced, ...(wakeUp ? { wakeUp } : {}), ...(prompt.recovery ? { recovery: prompt.recovery } : {}),
         });
         // Wake-ups that ride with a user's message are context for the user's turn.
         const { landed, effects } = await this.openTurn(() => (prompt.source === 'supervisor'
@@ -2028,9 +2028,10 @@ export class Session {
     };
   }
 
-  private personRefused(): Extract<ChildMessageOutcome, { ok: false }> | null {
+  /** `opensTurn`: an answer does not, and a runner must not stay parked at its question for want of a turn nobody takes. */
+  private personRefused({ opensTurn = true }: { opensTurn?: boolean } = {}): Extract<ChildMessageOutcome, { ok: false }> | null {
     if (!this.subplanner?.listening()) return CHILD_ENDED;
-    const refused = this.nodeRefusal() ?? this.budget?.turnRefusal() ?? (this.plan || this.opening ? null : 'This child plan has not started its conversation yet.');
+    const refused = this.nodeRefusal() ?? (opensTurn ? this.budget?.turnRefusal() : null) ?? (this.plan || this.opening ? null : 'This child plan has not started its conversation yet.');
     return refused ? { ok: false, code: 'refused', message: refused } : null;
   }
 
@@ -2067,7 +2068,7 @@ export class Session {
    * The subplanner hears of it on its next turn, and none is opened to tell it.
    */
   private async controlledByPerson(taskId: string, control: ChildTaskControl): Promise<ChildControlOutcome> {
-    const refused = this.personRefused();
+    const refused = this.personRefused({ opensTurn: control.kind !== 'checkpoint' });
     if (refused || !this.child) return refused ?? CHILD_ENDED;
     if (!flattenTasks(this.store.planTasks).some((task) => task.id === taskId)) {
       return { ok: false, code: 'no_task', message: `This child plan has no task "${taskId}".` };
@@ -2245,6 +2246,16 @@ export class Session {
     return this.withdrawn();
   }
 
+  /** Its report is what its verdict and landing go by: work behind it would land past both (ADR-0055 D7). */
+  get reported(): boolean {
+    return this.subplanner?.reported() === true;
+  }
+
+  /** {@link nodeRefusal}, and a report: a turn can still read a person's message, but no task may start from it. */
+  startRefusal(): string | null {
+    return this.nodeRefusal() ?? (this.reported ? NODE_REPORTED : null);
+  }
+
   /**
    * Everything under this node stops, leaves first, its planner turn and any
    * turn waiting included, and this resolves once it has all gone: with no
@@ -2281,8 +2292,8 @@ export class Session {
   }
 
   /** What a delegated task's branch changed since its base. */
-  changedPaths(taskId: string): Promise<string[]> {
-    return this.runs.changedPaths(taskId);
+  changedPaths(taskId: string, names?: 'both'): Promise<string[]> {
+    return this.runs.changedPaths(taskId, names);
   }
 
   /** Why this node stopped for its budget, or null: a parent's reason for ending it `blocked`. */
@@ -3128,6 +3139,7 @@ export class Session {
    */
   private async submitPlanFromTool(tasks: Task[], turn: string | undefined): Promise<PlanEditOutcome> {
     if (!this.plan) return { ok: false, errors: [{ field: 'tasks', message: 'No planning turn is open to take the plan.' }] };
+    if (this.reported) return { ok: false, errors: [{ field: 'tasks', message: NODE_REPORTED }] };
     const committed = await this.conversation.commitFromTool({ kind: 'plan', tasks }, turn);
     if (!committed.ok) return committed;
     const { adjustments, warnings } = committed.passed;
@@ -3146,6 +3158,7 @@ export class Session {
     const refuse = (message: string): PlanEditOutcome => ({ ok: false, errors: [{ message }] });
     await this.liveCatalog();
     if (this.conversation.currentTurnId !== turn) return refuse(PLANNER_TURN_ENDED);
+    if (this.reported) return refuse(NODE_REPORTED);
     if (!this.plan || this.store.planTasks.length === 0) return refuse('There is no plan to edit yet: submit one with submit_plan.');
     const committed = await this.conversation.commitFromTool({ kind: 'task_ops', ops }, turn);
     if (!committed.ok) return committed;

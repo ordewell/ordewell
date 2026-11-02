@@ -16,6 +16,7 @@ import { SpawnedDockerCli, type DockerCli } from './dockerCli';
 import { NO_WAY_OUT, SidecarEgress, type EgressPath, type EgressRoute } from './egressSidecar';
 import { judgeProbe, PROBE_SCRIPT, type ProbeAsked } from './guaranteeProbe';
 import { LeaseRelay, RELAY_ENTRY } from './leaseRelay';
+import { MODEL_APIS } from './modelGateway';
 import { reclaimTree, TREE_LABEL, treePins } from './reclaim';
 import { hooksLandingWouldRun, PushRefused, restoreSnapshot, takeThroughGate } from './pushGate';
 import { EXPORT_SCRIPT, exportRef, HOME_DIR, MIRROR_ROOT, mirrorDir, pinRefs, pushToMirror, repoDir, SEED_SCRIPT, TASK_ROOT, WORK_ROOT } from './taskWorkspace';
@@ -109,6 +110,9 @@ const digest = (text: string): string => createHash('sha256').update(text).diges
 
 /** A script's container holds no login: a body the plan names has no use for a model's. */
 const NO_LOGIN: IssuedLogin = { gated: null, handed: {} };
+
+/** The APIs a broker keeps keys for: never handed over beside a gated key, so a task under one has no business reaching them. */
+const BROKERED_HOSTS: ReadonlySet<string> = new Set(MODEL_APIS.map(({ upstream }) => new URL(upstream).hostname));
 
 /**
  * The first container backend (ADR-0059 L5, L6): the Docker API through the
@@ -253,18 +257,22 @@ export class DockerExecutionBackend implements ExecutionBackend {
     const labels = this.labels(taskId);
     await this.cli.call(['volume', 'create', ...labels, volume]);
     const pin = `${treePins(this.tree())}/${key}`;
-    const tips = await this.syncMirror(settings, mirror, pin, repos);
     // What is left of an attempt that never was: a task's own volume stays for its next one.
     const dropThrowaway = () => (landsNothing ? this.dropVolume(volume) : Promise.resolve());
+    const dropAndThrow = async (err: unknown): Promise<never> => {
+      await dropThrowaway();
+      throw err;
+    };
+    const tips = await this.syncMirror(settings, mirror, pin, repos).catch(dropAndThrow);
     if (signal.aborted) {
       await dropThrowaway();
       return null;
     }
-    if (signIn) await this.handSignIn(settings, signIn, volume, labels).catch(async (err: unknown) => { await dropThrowaway(); throw err; });
+    if (signIn) await this.handSignIn(settings, signIn, volume, labels).catch(dropAndThrow);
 
     const name = `ordewell-${key}-${nonce}`;
     // A read-only script runs as a sealed one does, which reaches nothing (ADR-0056 M9).
-    const route = sealed ? NO_WAY_OUT : await this.egress.open({ name, labels, limits: containerLimits(settings), image: settings.image, allow: this.allowOf(settings, runner !== null, login, signIn, spec.task?.assignedModel?.modelId), gated: login.gated });
+    const route = sealed ? NO_WAY_OUT : await this.egress.open({ name, labels, limits: containerLimits(settings), image: settings.image, allow: this.allowOf(settings, runner !== null, login, signIn, spec.task?.assignedModel?.modelId), gated: login.gated }).catch(dropAndThrow);
     const giveUp = async () => {
       await this.cli.call(['rm', '-f', name]);
       await route.close();
@@ -394,15 +402,17 @@ export class DockerExecutionBackend implements ExecutionBackend {
 
   /**
    * What a lease's container may reach: what the person listed, where a person's
-   * own sign-in talks and refreshes, and a model's own API where nothing gates it
-   * (a handed key, or that sign-in). A broker's key that stops at the gateway
-   * reaches no host at all.
+   * own sign-in talks and refreshes, and a model's own API where a key was handed
+   * or that sign-in holds one. A broker's key that stops at the gateway reaches no
+   * host at all, and the other API a login keeps from this runner reaches none
+   * either, so beside a gated key only a handed one opens its provider.
    */
   private allowOf(settings: ContainerSettings, agent: boolean, login: IssuedLogin, signIn: ContainerSignIn | null, model: string | undefined): readonly string[] {
     const hosts = [...settings.allow];
     if (signIn) hosts.push(...signIn.hosts);
     // A script holds no login and calls no model: what it reaches is the person's list alone.
     if (agent && !login.gated) hosts.push(...modelHosts(model));
+    if (agent && login.gated && Object.keys(login.handed).length > 0) hosts.push(...modelHosts(model).filter((host) => !BROKERED_HOSTS.has(host)));
     return [...new Set(hosts)];
   }
 

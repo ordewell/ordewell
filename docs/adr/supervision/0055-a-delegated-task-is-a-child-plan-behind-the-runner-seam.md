@@ -163,10 +163,18 @@ the child cannot reach follows it in the parent's plan.**
   it is whole: a path it leaves out is the child's to change, and a pass rests on
   that list. A landing never fails a task
   ([ADR-0013](../isolation/0013-worktree-isolation.md)), so the check sits in the
-  last step before one, on the same diff. A repair lands after that step, and is
+  last step before one, on the same diff. `task_complete` is the attempt's end: no
+  task starts and no plan changes behind a report, though a turn still reads a
+  person's message, and the branch is read once more when the report is published,
+  anything still running wound down first. A branch that cannot be read does not
+  land. A repair lands after that step, and is
   held to the same paths there (D14). Paths accumulate down the tree
   (ADR-0056 M4): a nested delegated task is held to its ancestors' too.
-  A rule is relative to the repository root and read whatever its case and however
+  A rule is relative to the repository root, and in a workspace that is a folder of
+  its repository a planner, who reads the workspace, may name a change in that folder
+  by its place there too, so a change there is held under either name. A landing takes
+  the whole worktree, so a change beside that folder is read as well, from the root.
+  A rule is read whatever its case and however
   its characters are composed, since a case-insensitive checkout writes one file under
   either name: a name covers that path and what is under it, `*` crosses no `/` and
   `**` does, and a pattern with no `/` matches a name at any depth. A rule outside the
@@ -412,7 +420,9 @@ the child cannot reach follows it in the parent's plan.**
   as a Continue with the same message when its dependencies allow, so a Continue
   reaches every level with nothing below it discarded. One whose child cannot be
   reopened, its session on another runner say, is held with its child kept and its
-  subplanner told why, which decides as for any task of its plan. A subplanner saves
+  subplanner told why, which decides as for any task of its plan. A worktree that
+  cannot open leaves the child for the next Continue, and a restore that falls back
+  tells the subplanner so and where what the task left is kept. A subplanner saves
   its harness's native session on its plan at each turn's end, a hint
   ([ADR-0009](../planner/0009-coding-agents-as-planners.md) T4) with how much of the
   Model context it heard, and what the session's running cost had reached, so a new
@@ -782,3 +792,4 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-11-02 — D20 on VS Code: nested child plans, their questions and runner tabs, each action found again through `ChildDirectory`.
 - 2026-11-02 — D20's TUI walks a tree: Enter and Esc move a plan at a time, a child stays followed on its own socket, and the root's run keeps its keys and overlays from any depth.
 - 2026-11-02 — D20: the daemon's message route refuses a raise or a force aloud, a held message a Stop ends is told on its child's stream, a child a retry let go says no Continue reaches it, and the list reads the tree's log after a restart.
+- 2026-11-02 — from review: D7's list holds every path a branch changes, beside a folder workspace too, and nothing starts behind a report, whose branch is read again as it is published. D17: a Continue whose worktree cannot open keeps the child, and one whose restore falls back says so.

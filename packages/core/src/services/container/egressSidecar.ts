@@ -27,7 +27,7 @@ const six = new net.BlockList();
 const FOUR = [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 3]];
 for (const [address, prefix] of FOUR) four.addSubnet(address, prefix, 'ipv4');
 // All but global unicast, then its parts that hold an IPv4 address or none. A list of its own: one list reads an IPv4 address as mapped, inside ::/3.
-const SIX = [['::', 3], ['4000::', 2], ['8000::', 1], ['2001:db8::', 32], ['2002::', 16]];
+const SIX = [['::', 3], ['4000::', 2], ['8000::', 1], ['2001::', 32], ['2001:db8::', 32], ['2002::', 16]];
 for (const [address, prefix] of SIX) six.addSubnet(address, prefix, 'ipv6');
 const listed = (host) => allow.some((entry) => (entry.startsWith('*.') ? host.endsWith(entry.slice(1)) : host === entry));
 const isPrivate = ({ address, family }) => (family === 6 ? six.check(address, 'ipv6') : four.check(address, 'ipv4'));
@@ -57,7 +57,8 @@ function tunnel(client, host, early) {
 }
 function handle(client, head, early) {
   const [line] = head.toString('latin1').split('\r\n');
-  const asked = /^CONNECT ([^\s:]+):(\d+) HTTP\/1\.[01]$/.exec(line);
+  // A DNS name and nothing else: dns.lookup throws on a NUL, and here that would end the sidecar.
+  const asked = /^CONNECT ([\w.-]+):(\d+) HTTP\/1\.[01]$/.exec(line);
   if (!asked) return refuse(client, 'Only a CONNECT to a host on this task\'s list leaves here.');
   const host = asked[1].toLowerCase().replace(/\.$/, '');
   if (asked[2] !== '443' || !listed(host)) return refuse(client, asked[1] + ':' + asked[2] + ' is not on this task\'s list: add the host to containers.allow.');

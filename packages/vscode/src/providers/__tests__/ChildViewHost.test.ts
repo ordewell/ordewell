@@ -66,6 +66,17 @@ describe('child view host', () => {
     expect(message).toHaveBeenCalledTimes(1);
     host.dispose();
   });
+  it('tells the composer when the selection moved before a message reached its child', async () => {
+    const message = vi.fn();
+    const { host, post, directory } = selected({ message });
+    await host.open('child');
+    directory.find.mockImplementationOnce(async () => { host.close(); return null; });
+    await host.message('child', 'Carry on');
+    await host.message('child', 'Carry on');
+    expect(message).not.toHaveBeenCalled();
+    expect(post.mock.calls.filter(([sent]) => sent.type === 'childMessageResult' && sent.childId === 'child' && sent.error === 'The child plan is no longer open.')).toHaveLength(2);
+    host.dispose();
+  });
   it('closes a child that leaves the tree, rather than draw a plan nothing can reach', async () => {
     let changed = () => {};
     const { host, post, directory } = selected({});

@@ -29,6 +29,7 @@ const BELONGS_ABOVE = 'A subplanner owns its plan: tell it what to change, or ch
 const NO_ROUTE = 'That has no route to a plan below the root: go back with Esc and act from the plan above.';
 const RAISE_ABOVE = 'A raise is the plan above this one to give: answer without it here.';
 const QUESTION_MOVED = 'That question has moved on: reading the plan again.';
+const WORDS_KEPT = 'Your words are kept: Esc takes them to the composer of the plan above.';
 const STOPS_THE_RUN = 'Stopping the whole run: a plan below the root has no stop of its own. A message waiting on a pause goes with it.';
 const COMMANDS_HERE = new Set(['help', 'stop', 'quit']);
 
@@ -54,10 +55,15 @@ export function openDelegated(state: TuiState, sessionId: string, taskId: string
   return child ? openChild(state, child) : step(state, [{ type: 'listChildren', rootId: rootId(state), open: { parent: sessionId, taskId } }]);
 }
 
-/** Back to the plan this one was opened from, as it was left and as its socket has kept it since. */
+/**
+ * Back to the plan this one was opened from, as it was left and as its socket
+ * has kept it since. An ended plan draws no composer, so the words it holds go
+ * up with the person, to the first one that shows them.
+ */
 export function leaveChild(state: TuiState): Step {
   if (!state.child || !state.sessionId) return step(state);
-  return step(settlePanes({ ...state.child.parent, ...shared(state) }), [{ type: 'closeChild', childId: state.sessionId }]);
+  const above = { ...state.child.parent, ...shared(state) };
+  return step(settlePanes(viewOnly(state) ? givenBack(above, state.editor.text) : above), [{ type: 'closeChild', childId: state.sessionId }]);
 }
 
 /** Every frame's row comes from the same list; a child it leaves out keeps its row, since its socket says if it is gone. */
@@ -187,9 +193,11 @@ export function routeChild(before: TuiState, action: Action, result: Step): Step
  */
 function answerAbove(state: TuiState, answer: 'approve' | 'reject', reason: string, raiseTokens?: number): Step {
   const asked = questionAbove(state);
-  if (!asked) return step(state);
+  if (!state.child || !asked) return step(state);
+  const above = { ...state.child.parent, ...shared(state) };
   const asking: Action = { type: 'key', key: { name: 'enter' } };
-  return onParent(state, (parent) => routeChild(parent, asking, answerCheckpoint(parent, parent.sessionId ?? '', asked.task.id, answer, reason, raiseTokens)));
+  // Routed as the plan that holds the task, and a refusal said on the plan the person is reading.
+  return routeChild(above, asking, { ...answerCheckpoint(above, above.sessionId ?? '', asked.task.id, answer, reason, raiseTokens), state });
 }
 
 const emptied = (state: TuiState): TuiState => ({ ...state, editor: { ...state.editor, text: '', cursor: 0 } });
@@ -258,33 +266,39 @@ function givenBack(state: TuiState, text: string | undefined): TuiState {
   return { ...state, editor: { ...state.editor, text: draft, cursor: draft.length } };
 }
 
+/** A refusal, and the words it sends back. Where no composer shows them, the person is told where they are. */
+function refused(state: TuiState, message: string, text: string | undefined): TuiState {
+  return reportError(givenBack(state, text), text && viewOnly(state) ? `${message} ${WORDS_KEPT}` : message);
+}
+
 function endedRow(state: TuiState): TuiState {
   return state.child ? { ...state, child: { ...state.child, entry: { ...state.child.entry, state: 'ended' } } } : state;
 }
 
-/** Never `executionLost`'s advice: a child is not loaded, its socket is what comes back. */
+/** Never `executionLost`'s advice: a child is not loaded, its socket is what comes back. Any read under way went with it. */
 export function childLost(state: TuiState): TuiState {
   if (!state.child || state.child.lost) return state;
-  return say({ ...state, child: { ...state.child, lost: true } }, 'system', 'Lost the connection to this plan; reconnecting.');
+  return say({ ...state, child: { ...state.child, reading: false, lost: true } }, 'system', 'Lost the connection to this plan; reconnecting.');
 }
 
 /** Leaves a plan the daemon no longer serves, saying so on the plan it lands on. */
-export function childGone(state: TuiState, message: string): Step {
+export function childGone(state: TuiState, message: string, text?: string): Step {
   const left = leaveChild(state);
-  return { ...left, state: reportError(left.state, message) };
+  return { ...left, state: refused(left.state, message, text) };
 }
 
 /**
  * A child route's refusal. An answer on the plan above comes back here too,
- * with that plan's id, and is shown where it was given.
+ * with that plan's id, and is shown where it was given. The person's words
+ * land wherever the person is now, whatever became of the plan they were for.
  */
 export function childFailed(state: TuiState, action: { sessionId: string; message: string; code?: DaemonErrorCode; text?: string }): Step {
   const { sessionId, message, code, text } = action;
   if (stale(state, sessionId)) {
     const reread: Effect[] = code === 'checkpoint_not_waiting' && heldAbove(state, sessionId) ? [{ type: 'readChild', rootId: rootId(state), childId: sessionId }] : [];
-    return step(reportError(state, message), reread);
+    return step(refused(state, message, text), reread);
   }
-  if (code === 'child_not_found') return childGone(state, message);
-  if (code === 'checkpoint_not_waiting' && state.sessionId) return step(reportError(state, message), [{ type: 'readChild', rootId: rootId(state), childId: state.sessionId }]);
-  return step(reportError(givenBack(code === 'child_view_only' ? endedRow(state) : state, text), message));
+  if (code === 'child_not_found') return childGone(state, message, text);
+  if (code === 'checkpoint_not_waiting' && state.sessionId) return step(refused(state, message, text), [{ type: 'readChild', rootId: rootId(state), childId: state.sessionId }]);
+  return step(refused(code === 'child_view_only' ? endedRow(state) : state, message, text));
 }

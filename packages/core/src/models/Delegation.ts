@@ -358,5 +358,6 @@ const GLOB_STARS: Record<string, string> = { '*': '[^/]*', '**': '.*', '**/': '(
 
 function globRegExp(rule: string): RegExp {
   const pattern = rule.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*\*\/|\*\*|\*/g, (star) => GLOB_STARS[star]);
-  return new RegExp(`^${rule.includes('/') ? '' : '(?:.*/)?'}${pattern}(?:/.*)?$`);
+  // `s`: a line break is a legal character of a file name, and `.` must walk over it.
+  return new RegExp(`^${rule.includes('/') ? '' : '(?:.*/)?'}${pattern}(?:/.*)?$`, 's');
 }

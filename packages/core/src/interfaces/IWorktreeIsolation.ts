@@ -681,8 +681,9 @@ export interface IWorktreeIsolation {
   verifyRepair(task: Task, run: IsolationRun): Promise<RepairEvidence>;
 
   /**
-   * The paths a repair brings onto the integration tip, by their place in the
-   * workspace: `repairBase` to the branch where the landing changed a repo, and
+   * The paths a repair brings onto the integration tip, each under every name a
+   * protected path may give it (`changeNames`), since nothing else reads them:
+   * `repairBase` to the branch where the landing changed a repo, and
    * the task's tip to it where it did not, since a repair can still edit that
    * repo. Read after {@link verifyRepair} commits, before `integrate` moves the tip.
    */

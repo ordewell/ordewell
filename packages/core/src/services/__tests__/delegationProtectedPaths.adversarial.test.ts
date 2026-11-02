@@ -88,6 +88,17 @@ describe('what a protected path covers', () => {
     expect(underProtectedPath('tests\\a.ts', 'tests/')).toBe(true);
   });
 
+  // A line break is a legal character of a file name, and git prints it as any other.
+  it.each<[rule: string, file: string]>([
+    ['**/*.test.ts', 'src/x\ny/guard.test.ts'],
+    ['**/*.test.ts', 'src/x\u2028y/guard.test.ts'],
+    ['tests/**/*.ts', 'tests/x\ny/guard.ts'],
+    ['**/fixtures/**', 'src/a\rb/fixtures/c.json'],
+    ['*.test.ts', 'src\n/a.test.ts'],
+  ])('the pattern %j holds %j across a line terminator', (rule, file) => {
+    expect(underProtectedPath(file, rule)).toBe(true);
+  });
+
   it('fails closed on a saved rule for the whole repository, and a blank one protects nothing', () => {
     for (const rule of ['.', './', '**', '*', '**/*']) expect(underProtectedPath(NOT_A_TEST, rule)).toBe(true);
     expect(underProtectedPath(NOT_A_TEST, '   ')).toBe(false);

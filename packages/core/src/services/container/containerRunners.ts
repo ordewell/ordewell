@@ -96,7 +96,7 @@ export const CONTAINER_RUNNERS: readonly ContainerRunner[] = [
   {
     id: 'opencode',
     binary: 'opencode',
-    // Its own login is for whichever provider a person chose; an Anthropic key stops at the lease's gateway, and any other is handed over (ADR-0059 L7).
+    // Its own login is for whichever provider a person chose. An Anthropic key stops at the lease's gateway, an OpenAI key is Codex's and stays on this host, and any other is handed over (ADR-0059 L7).
     api: ANTHROPIC_API,
     // The copy is the runner's data directory, which `XDG_DATA_HOME` names the parent of.
     signIn: { volume: OPENCODE_LOGIN_VOLUME, hosts: OPENCODE_HOSTS, copy: ['sh', '-c', COPY_OPENCODE_SIGN_IN], path: OPENCODE_SIGN_IN_COPY, env: { XDG_DATA_HOME: posix.join(TASK_ROOT, 'login') } },

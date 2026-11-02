@@ -67,7 +67,7 @@ export function containerLimits(settings: ContainerSettings): string[] {
 /** Not secrets: what is goes by name, in the CLI's environment. */
 export const envArgs = (variables: Readonly<Record<string, string>>): string[] => Object.entries(variables).flatMap(([variable, value]) => ['-e', `${variable}=${value}`]);
 
-/** A throwaway container with no network and no agent ever in it, for what is done to a volume. */
+/** A throwaway container with no network and no runner in it, for what is done to a volume. Not free of an attempt's code: see `EXPORT_SCRIPT`. */
 export function helperArgs(settings: ContainerSettings, volumes: readonly string[], variables: Readonly<Record<string, string>> = {}, labels: readonly string[] = []): string[] {
   return ['run', '--rm', '-i', ...labels, ...containerLimits(settings), '--network', 'none', ...volumes.flatMap((volume) => ['-v', volume]), ...envArgs({ HOME: HOME_DIR, ...variables }), settings.image];
 }

@@ -8,6 +8,7 @@ import type { SkillInfo } from '../SkillsService';
 import type { TurnFailure } from '../runnerExit';
 import { fakePlanChanges, passed, refused } from './planChangesTestKit';
 import { PLAN_BLOCK_MAX_TASKS } from '../planWindow';
+import { turnPrompt } from '../PlanTurns';
 
 function dialoguePlan(): LegacyPlanState {
   return {
@@ -1899,6 +1900,22 @@ describe('the level brief, sent once to a context (ADR-0057 R5)', () => {
     expect(sent[0]).toContain('b'.repeat(14_000));
     expect(sent[0]).not.toContain('a'.repeat(14_000));
     expect(sent[0]).toContain('+1 earlier run update left out; task_query reads these tasks:\n- task #1 "Build" failed: boom');
+  });
+
+  it('sends a person\'s label whole, whatever the updates beside it overflow', async () => {
+    const { conversation, sent } = counted();
+    const label = 'A message in this turn comes from a person.';
+    const prompt = turnPrompt([
+      { id: '1', source: 'user', text: 'Look at this.', timestamp: 't', aside: label },
+      { id: '2', source: 'supervisor', text: `Run update:\n- task #1 "Build" failed: boom\n  ${'a'.repeat(14_000)}`, timestamp: 't' },
+      { id: '3', source: 'supervisor', text: 'b'.repeat(14_000), timestamp: 't' },
+    ]);
+
+    await conversation.reply(prompt, { wakeUps: prompt.wakeUps, asides: prompt.asides });
+
+    expect(sent[0]).toContain(label);
+    expect(sent[0]).toContain('+1 earlier run update left out');
+    expect(sent[0]).toContain('Look at this.');
   });
 
   it('counts the prompt cache from the turn that opened, and from nothing once its context is gone', async () => {

@@ -294,6 +294,17 @@ export function continuedWorkNote(work: PreviousWork | undefined): string {
 }
 
 /**
+ * What a Continue of a delegated task tells its subplanner of a restore that fell
+ * back. A message passes down the tree (ADR-0055 D17), so it names the task rather
+ * than saying "your": a grandchild's worktree did not move.
+ */
+export function delegatedWorkNote(title: string, work: PreviousWork | undefined): string | null {
+  if (work?.outcome !== 'fallback') return null;
+  return `What "${title}" left in its worktree conflicted with the integration tip, so that worktree starts at the integration tip. `
+    + keptWorkLines(work.preserved, 'that work');
+}
+
+/**
  * What a carry-over is told (ADR-0018, U1). A fresh session on another
  * runner finds files it did not write, and nothing of the reasoning behind
  * them, so it is told where they came from and not to trust them as done.

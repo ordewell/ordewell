@@ -94,6 +94,8 @@ export function jsonlEventStore(file: string): EventStore {
   let closed = false;
   /** Where the last whole read ended. A tree is folded from its log just before its first append. */
   let walked: LogEnd | null = null;
+  /** A line whose write reported a failure, and the number it would have started at: only the next read of the file says whether it landed. */
+  let doubted: { events: readonly TreeFact[]; next: number } | null = null;
 
   /** The file ready to take a line: its tail clean, and the next number known. */
   async function open(): Promise<NonNullable<typeof writer>> {
@@ -112,12 +114,17 @@ export function jsonlEventStore(file: string): EventStore {
   async function write(events: readonly TreeFact[]): Promise<void> {
     writer ??= await open();
     const { handle, next } = writer;
-    const numbered = logged(events, next);
+    // A failed write can land whole on a network drive, and what is offered again is then spend counted twice.
+    const owed = doubted && next > doubted.next ? events.filter((event) => !doubted?.events.includes(event)) : events;
+    doubted = null;
+    if (owed.length === 0) return;
+    const numbered = logged(owed, next);
     try {
       await handle.appendFile(`${JSON.stringify(numbered)}\n`);
       writer.next = next + numbered.length;
     } catch (err) {
       // Part of the line may be there: the next append cuts it off as it would a crash's.
+      doubted = { events: owed, next };
       writer = null;
       await handle.close().catch(() => undefined);
       throw err;

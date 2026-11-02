@@ -37,6 +37,8 @@ export interface PlanTurnInput {
 export interface TurnPrompt extends SkillInvocation {
   source: PlanTurnSource;
   wakeUps: string[];
+  /** Which of `wakeUps` are asides, not run updates: nothing may bound them away from the words they explain. */
+  asides?: string[];
   /**
    * A wake-up turn's: who it acts for (ADR-0037, R3) — the supervisor, or the
    * user's turn whose report it delivers. Absent on the user's own turn.
@@ -123,11 +125,13 @@ type Outcome = { ok: true; plan: LegacyPlanState } | { ok: false; err: unknown }
 /** One planner message for a batch: the inputs in the order they came, each with the skills it loaded. */
 export function turnPrompt(batch: readonly PendingPlanTurn[]): TurnPrompt {
   const fromUser = batch.filter((t) => t.source === 'user');
+  const asides = [...new Set(fromUser.flatMap((t) => t.aside ?? []))];
   return {
     source: fromUser.length > 0 ? 'user' : 'supervisor',
     text: fromUser.map((t) => t.text).join('\n\n'),
     skills: fromUser.flatMap((t) => t.skills ?? []),
-    wakeUps: [...new Set(fromUser.flatMap((t) => t.aside ?? [])), ...batch.filter((t) => t.source === 'supervisor').map((t) => t.text)],
+    wakeUps: [...asides, ...batch.filter((t) => t.source === 'supervisor').map((t) => t.text)],
+    ...(asides.length > 0 ? { asides } : {}),
     ...(fromUser.length === 0 ? { authority: authorityOf(batch[0]) } : {}),
     ...(batch.some((t) => t.forced) ? { forced: true } : {}),
   };

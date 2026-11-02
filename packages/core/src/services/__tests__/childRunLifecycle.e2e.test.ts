@@ -567,6 +567,64 @@ describe('a Continue (ADR-0055 D17)', () => {
     parent.destroy();
   });
 
+  it('keeps the child through a Continue whose worktree could not open, so the next one reopens it', async () => {
+    const runner = fakeRunner({ a: ['a.txt'], b: ['b.txt'] }, { held: ['b'] });
+    const { root, parent } = tree([SUBMIT([childTask('a', 1), childTask('b', 2, ['a'])]), NOTHING, DONE], { runner });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(runner.spawned).toContain('b'), { timeout: 20_000 });
+    const child = childIdOf(parent, 'd')!;
+    parent.stopExecution();
+    await parent.stopSubtree();
+    await vi.waitFor(() => expect(parent.planState?.isolation?.run.tasks.d.status).toBe('kept'));
+    // What a Continue opens on is gone for now, as a person's or a tool's branch surgery leaves it.
+    const integration = parent.planState?.isolation?.run.repos[0].integrationBranch ?? '';
+    git(root, 'branch', '-m', integration, 'parked');
+
+    expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'session', message: 'go on' }, { kind: 'user' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('failed'), { timeout: 20_000 });
+    expect(childIdOf(parent, 'd')).toBe(child);
+    git(root, 'branch', '-m', 'parked', integration);
+
+    expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'session', message: 'go on' }, { kind: 'user' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(runner.spawned.filter((id) => id === 'b')).toHaveLength(2), { timeout: 20_000 });
+    expect(runner.spawned.filter((id) => id === 'a')).toHaveLength(1);
+    expect(childIdOf(parent, 'd')).toBe(child);
+    runner.release('b');
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    expect(git(root, 'ls-tree', '-r', '--name-only', integration).split('\n')).toEqual(expect.arrayContaining(['a.txt', 'b.txt']));
+    parent.destroy();
+  });
+
+  it('tells the subplanner when what the task left could not be restored, and where it is kept', async () => {
+    const runner = fakeRunner({ a: ['a.txt'], b: ['b.txt'] }, { held: ['b'] });
+    const { root, parent, planner } = tree([SUBMIT([childTask('a', 1), childTask('b', 2, ['a'])]), NOTHING, DONE], { runner });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(runner.spawned).toContain('b'), { timeout: 20_000 });
+    parent.stopExecution();
+    await parent.stopSubtree();
+    await vi.waitFor(() => expect(parent.planState?.isolation?.run.tasks.d.status).toBe('kept'));
+    const record = parent.planState?.isolation?.run.tasks.d;
+    writeFileSync(join(Object.values(record!.repos)[0].worktree, 'shared.txt'), 'the task left this\n');
+    const integration = parent.planState?.isolation?.run.repos[0].integrationBranch ?? '';
+    const elsewhere = join(root, '..', `elsewhere-${Date.now()}`);
+    git(root, 'worktree', 'add', elsewhere, integration);
+    writeFileSync(join(elsewhere, 'shared.txt'), 'the tip has this\n');
+    git(elsewhere, 'add', '-A');
+    git(elsewhere, 'commit', '-m', 'moved');
+    git(root, 'worktree', 'remove', '--force', elsewhere);
+
+    expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'session', message: 'go on' }, { kind: 'user' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(runner.spawned.filter((id) => id === 'b')).toHaveLength(2), { timeout: 20_000 });
+    const told = planner.asked.at(-1);
+    expect(told).toContain('go on');
+    expect(told).toContain('conflicted with the integration tip');
+    const kept = /kept on branch `([^`]+)`/.exec(told ?? '')?.[1] ?? '';
+    expect(git(root, 'show', `${kept}:shared.txt`)).toBe('the task left this');
+    runner.release('b');
+    await vi.waitFor(() => expect(statusOf(parent, 'd')).toBe('completed'), { timeout: 20_000 });
+    parent.destroy();
+  });
+
   it('refuses a child whose worktree has moved, rather than lose what it landed', async () => {
     const runner = fakeRunner({ a: ['a.txt'] }, { held: ['a'] });
     const errors = vi.fn();

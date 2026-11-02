@@ -6,7 +6,7 @@ import type { NodePath, TreeEvent, TreeFact } from '../models/TreeEvent';
  * lease writes it (ADR-0055 D13).
  */
 export interface EventStore {
-  /** In order, each batch whole: after a crash a reader finds all of a batch or none of it. Numbers them. */
+  /** In order, each batch whole: after a crash a reader finds all of a batch or none of it. Numbers them. A rejected batch is offered again by the same event objects, which land once. */
   append(events: readonly TreeFact[]): Promise<void>;
   /** What came after the cursor, at `path` and below when one is named. */
   read(after: number, path?: NodePath): AsyncIterable<TreeEvent>;

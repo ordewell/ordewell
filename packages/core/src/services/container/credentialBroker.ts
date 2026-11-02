@@ -33,6 +33,13 @@ export function parseLogin(raw: unknown): LeaseLogin | { refused: string } {
   return { refused: 'containers.login must be {"kind":"broker","variables":[...]} or {"kind":"own-sign-in"}' };
 }
 
+/** Whether all of a login stops at a gateway, the only way a lease can prove `cred.unreadable`: a sign-in, and anything handed over, a runner can read. An address goes as far as the key beside it. */
+export function staysOnThisHost(login: LeaseLogin): boolean {
+  if (login.kind !== 'broker') return false;
+  const { variables } = login;
+  return variables.every((variable) => MODEL_APIS.some(({ keyVariable, baseUrlVariable }) => variable === keyVariable || variable === baseUrlVariable && variables.includes(keyVariable)));
+}
+
 /** What a lease's login comes to. */
 export interface IssuedLogin {
   /** The API key and where it goes, held on this host by the lease's gateway. */
@@ -51,6 +58,12 @@ function upstreamOf(url: string | undefined, api: ModelApi): string {
 function refuseOutranking(variables: readonly string[], { keyVariable, outranksKey }: ModelApi): void {
   const outranking = variables.includes(keyVariable) ? outranksKey.find((variable) => variables.includes(variable)) : undefined;
   if (outranking) throw new Error(`${outranking} outranks ${keyVariable} in the runner it serves, so the two do not make one login: name one or the other.`);
+}
+
+/** A refusal's word on a key a person did name: an OpenCode task on an OpenAI model would otherwise be told only to add a key of Anthropic's. */
+function keptBack(variables: readonly string[], api: ModelApi): string {
+  const kept = MODEL_APIS.filter((other) => other !== api && variables.includes(other.keyVariable)).map(({ keyVariable }) => keyVariable);
+  return kept.length === 0 ? '' : ` ${kept.join(' and ')} is not handed to this runner, since no gateway carries it here: a model of its provider needs the "own-sign-in" login.`;
 }
 
 /**
@@ -73,7 +86,7 @@ export class CredentialBroker {
       refuseOutranking(variables, api);
       return { gated: { key, upstream: upstreamOf(url, api), api }, handed };
     }
-    if (api.keyOnly || Object.keys(held).length === 0) throw new Error(`The container's login holds nothing for ${api.name}: name ${api.keyVariable} in it.`);
+    if (api.keyOnly || Object.keys(held).length === 0) throw new Error(`The container's login holds nothing for ${api.name}: name ${api.keyVariable} in it.${keptBack(variables, api)}`);
     return { gated: null, handed: held };
   }
 

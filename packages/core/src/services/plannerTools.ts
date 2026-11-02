@@ -83,6 +83,9 @@ export interface PlannerToolsHost {
  */
 export const PLANNER_TURN_ENDED = 'The planning turn this call was made in has ended, so nothing was changed.';
 
+/** Refused by a child whose report is taken: its plan and work stay as that report describes them (ADR-0055 D7). */
+export const NODE_REPORTED = 'This child plan has reported, so nothing starts here and its plan takes no more edits.';
+
 /** A task as a planner tool's answer names it, by the id and the reference a later call can read or start it by. */
 export interface TaskHead {
   id: string;

@@ -112,3 +112,105 @@ describe('a child\'s wall clock (ADR-0056 M3)', () => {
     expect(node.halt).toHaveBeenCalled();
   });
 });
+
+describe('the longest wall clock a timer cannot hold (ADR-0056 M3)', () => {
+  it('waits in one long timer rather than firing at once and spinning', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setImmediate', 'Date'] });
+    const armed = vi.spyOn(globalThis, 'setTimeout');
+    try {
+      const { node, runner } = child(3_000_000_000);
+      await started(runner);
+      expect(armed.mock.calls.map(([, ms]) => ms ?? 0).every((ms) => ms <= 2 ** 31 - 1)).toBe(true);
+      await vi.advanceTimersByTimeAsync(2 ** 31 - 1);
+      expect(node.halt).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(3_000_000_000 - (2 ** 31 - 1));
+      expect(node.halt).toHaveBeenCalled();
+    } finally {
+      armed.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('a question that cannot go up', () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setImmediate', 'Date'] }); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('leaves no question waiting, so the next one goes up and a quiet child still ends', async () => {
+    const { links, runner, state } = child(60_000);
+    const session = await runner.spawn({ taskId: 'd', runner: 'claude-code', prompt: '', cwd: '/w', delegated: createTask({ id: 'd', order: 1, title: 'D', type: 'delegated', goal: 'g' }) } as never);
+    const reports: unknown[] = [];
+    session.onTaskComplete?.((report) => reports.push(report));
+    const asked = vi.fn().mockRejectedValueOnce(new Error('the log would not take it')).mockReturnValue(new Promise(() => undefined));
+    session.onToolCheckpoint?.(asked);
+    await vi.advanceTimersByTimeAsync(1);
+
+    links[0].checkpoint('first?');
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect((links[0].checkpoint('second?') as { isError?: boolean }).isError).toBeUndefined();
+    expect(asked).toHaveBeenCalledTimes(2);
+    expect(reports).toEqual([]);
+    expect(state.live).toBe(true);
+  });
+});
+
+describe('the verdict a subplanner\'s report takes', () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setImmediate', 'Date'] }); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  /** A child done at its call, with `branch` the paths its branch shows at each read. */
+  async function reporting(branch: () => Promise<string[]>) {
+    const { node, links, state } = child(60_000);
+    Object.assign(node, { protectedPaths: ['tests/'] });
+    Object.assign(state, { live: false, completed: 1 });
+    const host: ChildHost = { openChild: async (_task, _cwd, link) => { links.push(link); return node; }, changedPaths: branch, stopped: () => false, passUp: () => undefined, moved: () => undefined };
+    const session = await new ChildPlanRunner(host).spawn({ taskId: 'd', runner: 'claude-code', prompt: '', cwd: '/w', delegated: createTask({ id: 'd', order: 1, title: 'D', type: 'delegated', goal: 'g' }) } as never);
+    const verdicts: unknown[] = [];
+    session.onTaskComplete?.((_report, refuted) => verdicts.push(refuted));
+    await vi.advanceTimersByTimeAsync(1);
+    const reply = await links[0].taskComplete({ status: 'done', summary: 'Done.' } as never);
+    return { node, state, verdicts, reply };
+  }
+
+  it('reads the branch again at publishing: what landed behind the call is judged too', async () => {
+    const reads = [['a.txt'], ['a.txt'], ['a.txt', 'tests/guard.txt']];
+    const { verdicts, reply } = await reporting(async () => reads.shift() ?? []);
+    expect(reply.isError).toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(verdicts).toEqual([expect.objectContaining({ name: 'protected_paths', passed: false, detail: expect.stringContaining('tests/guard.txt') })]);
+  });
+
+  it('refutes the work when that last read fails: an unread branch never lands', async () => {
+    let reads = 0;
+    const { verdicts } = await reporting(async () => {
+      reads += 1;
+      if (reads > 2) throw new Error('git went away');
+      return ['a.txt'];
+    });
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(verdicts).toEqual([expect.objectContaining({ name: 'protected_paths', passed: false, detail: expect.stringContaining('git went away') })]);
+  });
+
+  it('winds down what raced the call before that read, so nothing merges behind it', async () => {
+    let wound = false;
+    const { node, state, verdicts } = await reporting(async () => (wound ? ['a.txt', 'tests/guard.txt'] : ['a.txt']));
+    state.live = true;
+    vi.mocked(node.halt).mockImplementation(async () => { state.live = false; wound = true; });
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(node.halt).toHaveBeenCalled();
+    expect(verdicts).toEqual([expect.objectContaining({ name: 'protected_paths', detail: expect.stringContaining('tests/guard.txt') })]);
+  });
+
+  it('takes a clean branch at the last read', async () => {
+    const { verdicts } = await reporting(async () => ['a.txt']);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(verdicts).toEqual([undefined]);
+  });
+});

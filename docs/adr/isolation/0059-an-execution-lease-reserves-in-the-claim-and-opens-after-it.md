@@ -176,7 +176,8 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
     one way a surface changes the setting). `inspectReadiness` is what a surface and a lease both ask, so what one reports
     the other refuses, and a lease asks it again from the raw setting at each start, as a Docker that stopped or a
     sign-in that went is only found there. A surface's check (`containerStatus`, `proveEngine`) proves what a throwaway
-    container can, and holds no login, so it never answers for `cred.unreadable`, and a lease proves its own in any case.
+    container can, and holds no login, so it never proves `cred.unreadable`: a lease proves its own, and a check refuses
+    only a required one no lease could, under a login a runner can read.
     What was measured and what is taken on trust are shown apart (`CONTAINER_ASSUMPTIONS`): a forwarded socket looks like a
     local one, `kernel.separate` means separate from this host and never from another task, as one engine has one kernel
     (one VM, on a Mac), and a task has no limit on CPU or disk. A `containers.memory` above what the engine has is refused,
@@ -211,8 +212,10 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
   host holds at each attempt, the runner's home, and its package caches: a cache tasks share lets one task's code run in
   the next, so a task's stay its own, and a retry keeps them.
   - Work leaves through a ref-scoped gate on the host (`pushGate.ts`), with the attempt's container already gone, so no
-    process of it can change what is read. A helper bundles a snapshot of the workspace on one ref. The gate takes that
-    ref alone, named for the attempt, under git's object checks, which it runs itself over a pack of what the ref brings,
+    process of it is alive. A helper bundles a snapshot of the workspace on one ref. That helper's git reads a repository
+    the attempt wrote: it stops the attempt's hooks and fsmonitor, and no flag reaches a clean filter, whose name the
+    attempt chose, so one it configured runs there and can change what is read. It has no network and the mirror
+    read-only, so the gate is the boundary, not the helper. The gate takes that ref alone, named for the attempt, under git's object checks, which it runs itself over a pack of what the ref brings,
     since a fetch from a bundle skips them on an older git (2.40 skips them, 2.47 does not), only on the attempt's base, moving no ref of the
     repository, and never believes what the bundle says of itself. There is no listener: the bundle comes over the helper's
     stdout. The snapshot then goes into the host's worktree as a local attempt would have left it, its commits on the
@@ -228,7 +231,9 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
   - What a tree leaves in the engine goes with it (`reclaim.ts`), by the label every container, network and task volume
     carries, since a session delete has no Session left to ask: `ExecutionBackend.reclaim` for a Clean up and a Discard,
     `reclaimContainers` for a delete, once the session has gone: a helper of a closing attempt that names a volume already
-    taken makes it again, with no label. Every mirror is read, since a landed task's pin outlives its volume. One it took
+    taken makes it again, with no label. A surface's check names no tree, so its leftovers go by its own label, in the
+    same clean-up, by a prune: that takes only what is unused and an hour old, so a live check keeps its network. Every
+    mirror is read, since a landed task's pin outlives its volume. One it took
     the last pin from goes whole, with any cache volume an earlier build left for its project, the one time nothing leans
     on either. Every clean-up mounts every mirror, so one that overlaps holds it for a moment: the removal outlasts that,
     reading the pins again between rounds and giving up the moment one appears, since what held it may be a new session's
@@ -253,22 +258,25 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
     passes. A name is resolved there and its answer checked and dialed as it stands, so one that answers with a private
     address is turned down however it is listed: this sidecar's other network reaches the engine's host. The list is
     `containers.allow`, or the registries of the caches named, and an `own-sign-in` lease adds where its runner talks to
-    its service. A broker's lease lists no model host: under a key of its own, the model API would be a way out. Any host on a list is a
+    its service. A broker's lease lists no host of a model API whose key it keeps: under a key of its own, that API would be
+    a way out. It lists the provider of a model whose key it hands over, beside a gated key too. Any host on a list is a
     way out for what can use it, and a client can name a listed host and be served another by a shared CDN: a list says
     where a connection goes, and no more.
   - The gateway (`modelGateway.ts`) runs on this host and is reached through the relay, with no network. An API key
     stays here, and the runner holds a token that means nothing past that listener, so `cred.unreadable` is provable for a
     broker's lease. A lease has a token of its own, so concurrent tasks on one key hold nothing in common. It carries model
-    traffic alone, to the one upstream, under the real key whatever a client sent: a
-    process in the container can spend the key and cannot read it, send it elsewhere or use the API under its own. TLS
+    traffic alone, by exact method and path: a turn, Anthropic's `count_tokens`, which reads only what it is sent, and a
+    read of the model list. A route that reads what a key has done is refused whatever its method: Message Batches serve a
+    whole workspace, and Codex sends each turn whole and never reads a stored response (`codex-cli` 0.166.0, measured
+    2026-11-02). It goes to the one upstream, under the real key whatever a client sent: a process in the container can spend the key and cannot read it, send it elsewhere or use the API under its own. TLS
     ends there, for that one host, which is the only interception a lease does. Each runner names its `ModelApi`: Codex's
     is the Responses API, under a bearer key. Claude Code reads the address from its environment; OpenCode is given a
     provider block in its own configuration, pointing `anthropic` at the gateway with the stand-in, since it does not read
     `ANTHROPIC_BASE_URL` for a provider's base. `app-server` reads neither `OPENAI_API_KEY` nor `OPENAI_BASE_URL`, so it is
     pointed at the gateway by a provider of its own in `-c`, over HTTP alone, which the gateway carries. A task's key is
-    its own runner's, and a login's other keys stay here, so a two-key login does not hand one over in the clear. A model
-    of another provider, or a person's own sign-in, is handed its key or its login and reaches its provider's hosts
-    through the sidecar instead.
+    its own runner's, and a login's other keys stay here, so a two-key login does not hand one over in the clear: that
+    is `OPENAI_API_KEY` under OpenCode, whose `openai/*` models take its own sign-in. A model of any other provider, or a
+    person's own sign-in, is handed its key or its login and reaches its provider's hosts through the sidecar instead.
   - A person chooses the login, and it has no default: `broker`, API keys or cloud credentials from this host's
     environment, or `own-sign-in`, made inside a container and kept in a volume no task mounts. Each runner keeps its own
     sign-in volume and its own place the runner reads it from: Claude Code's config directory, OpenCode's data directory.
@@ -474,3 +482,4 @@ for model traffic first. The interface is kept free of anything that blocks thes
 - 2026-11-02 — L6: overlapping clean-ups no longer strand a mirror, and a session delete waits for the session to have gone before it clears the engine.
 - 2026-11-02 — OpenCode runs a change task in a container: a per-runner sign-in volume and copy, the relay's reverse direction for its own server, and its Anthropic provider pointed at the lease gateway. A runner's binary is asked of the image before a worktree is made, and a model's provider hosts are opened where nothing gates its traffic.
 - 2026-11-02 — The real-engine suites run in CI as the `real-engine` job and by hand as `npm run test:containers`, where a skip fails the run rather than passing it.
+- 2026-11-02 — Review fixes: the gateway carries exact routes, batches and stored responses out; a login with a gated key opens a handed key's provider; a check says not ready when a required guarantee no lease could prove; an export stops an attempt's hooks and fsmonitor, a filter still runs; a clean-up takes what a dead host's check left.

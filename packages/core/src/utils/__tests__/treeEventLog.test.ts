@@ -196,6 +196,29 @@ describe('the JSONL backend across a crash', () => {
     expect(events.map((e) => e.seq)).toEqual([1, 2, 3, 4]);
     expect(tokensOf(events)).toEqual([10, 20, 30, 50]);
   });
+
+  it('counts a line once when its write reported a failure and landed all the same, as its ledger offers it again', async () => {
+    await written();
+    const open = fs.promises.open;
+    vi.spyOn(fs.promises, 'open').mockImplementationOnce(async (...args: Parameters<typeof open>) => {
+      const handle = await open(...args);
+      handle.appendFile = async (line) => {
+        fs.appendFileSync(file(), String(line));
+        throw new Error('the share went away');
+      };
+      return handle;
+    });
+    const store = jsonlEventStore(file());
+    const lost = spent('root/1', 40);
+    await expect(store.append([lost])).rejects.toThrow('the share went away');
+
+    await store.append([lost, spent('root/1', 50)]);
+    await store.close();
+
+    const events = await all(jsonlEventStore(file()));
+    expect(events.map((e) => e.seq)).toEqual([1, 2, 3, 4, 5]);
+    expect(tokensOf(events)).toEqual([10, 20, 30, 40, 50]);
+  });
 });
 
 describe('where a tree keeps its log', () => {

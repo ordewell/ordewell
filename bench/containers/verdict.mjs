@@ -14,9 +14,10 @@ const VERIFIED_ON = {
  * vitest reports a skipped test as `skipped`, `pending`, `todo` or `disabled`
  * depending on how it was skipped, so a pass is the one status counted as one.
  * A file that failed to load holds no tests at all, and is a failure itself.
+ * `success` is vitest's own word, which also covers what fails no single test.
  */
 export function tally(report) {
-  const counts = { passed: [], failed: [], skipped: [] };
+  const counts = { passed: [], failed: [], skipped: [], success: report.success === true };
   for (const { name: path, status, message, assertionResults = [] } of report.testResults ?? []) {
     const file = path.split('/').pop();
     if (status === 'failed' && !assertionResults.some((test) => test.status === 'failed')) {
@@ -40,15 +41,23 @@ function harnessesProven(counts, proofs) {
   return harnesses;
 }
 
-export function verdict({ engine, counts, proofs, reason }) {
+/**
+ * `suites` are the test files this run was to hold, and one with no passed test
+ * did not run, so naming a suite here is what stops it going missing unseen. A
+ * clean end is asked of both vitest's report and its exit status, and only `0`
+ * reads as one: an unknown status is a run nobody saw finish.
+ */
+export function verdict({ engine, counts, proofs, suites, vitestStatus, reason }) {
   const harnesses = harnessesProven(counts, proofs);
   const unproven = Object.values(harnesses).includes('unverified');
   const failed = counts?.failed.length ?? 0;
   const skipped = counts?.skipped.length ?? 0;
-  const outcome = failed ? 'failed'
-    : !engine || !counts || !counts.passed.length || skipped || unproven ? 'unverified'
+  const missing = counts ? suites.filter((suite) => !counts.passed.some(({ file }) => file === suite)) : [];
+  const vitestFailed = counts !== null && (!counts.success || vitestStatus !== 0);
+  const outcome = failed || vitestFailed ? 'failed'
+    : !engine || !counts || !counts.passed.length || skipped || unproven || missing.length ? 'unverified'
       : 'verified';
-  return { outcome, exitCode: outcome === 'verified' ? 0 : 1, engine, counts, harnesses, reason };
+  return { outcome, exitCode: outcome === 'verified' ? 0 : 1, engine, counts, harnesses, missing, vitestFailed, vitestStatus, reason };
 }
 
 /** What a run on one engine says nothing about, stated on every run however it went. */
@@ -66,7 +75,7 @@ function notVerifiedHere(result) {
 }
 
 export function describeVerdict(result) {
-  const { engine, counts, harnesses, outcome, reason } = result;
+  const { engine, counts, harnesses, missing, vitestFailed, vitestStatus, outcome, reason } = result;
   const lines = [];
   lines.push(engine
     ? `Engine: ${VERIFIED_ON[engine.kind] ?? engine.kind} (context ${engine.context}, ${engine.os}, ${engine.arch}, kernel ${engine.kernel}, cgroup v${engine.cgroup}, server ${engine.server})`
@@ -76,6 +85,8 @@ export function describeVerdict(result) {
   for (const [harness, state] of Object.entries(harnesses)) lines.push(`  ${harness}: ${state === 'verified' ? 'real binary proven' : 'NOT PROVEN'}`);
   for (const { name } of counts?.failed ?? []) lines.push(`  failed: ${name}`);
   for (const { name } of counts?.skipped ?? []) lines.push(`  skipped, so not verified: ${name}`);
+  for (const suite of missing) lines.push(`  did not run, so not verified: ${suite}`);
+  if (vitestFailed) lines.push(`  failed: vitest ended with status ${vitestStatus}, and its report ${counts.success ? 'says it succeeded' : 'does not say it succeeded'}`);
   lines.push('Not verified by this run:');
   for (const line of notVerifiedHere(result)) lines.push(`  ${line}`);
   lines.push(`Outcome: ${outcome.toUpperCase()}`);
@@ -85,12 +96,14 @@ export function describeVerdict(result) {
 /**
  * Docker Desktop names itself as the system on both hosts, so it is asked first.
  * A VM this does not know stays `other`: calling it native Linux, or Colima, would
- * claim a run nobody made.
+ * claim a run nobody made. So does an engine this Linux host only talks to:
+ * `endpoint` is `docker context inspect`'s, and `unix://` is the same test of
+ * local that `inspectEngine` makes, with the same forwarded socket taken on trust.
  */
-export function classifyEngine({ context, name, operatingSystem, platform }) {
+export function classifyEngine({ context, name, operatingSystem, platform, endpoint }) {
   if (/docker desktop/i.test(operatingSystem ?? '')) return 'docker-desktop';
   if (/^colima/.test(context ?? '') || /^colima/.test(name ?? '')) return 'colima';
-  if (platform === 'linux') return 'native-linux';
+  if (platform === 'linux' && endpoint?.startsWith('unix://')) return 'native-linux';
   return 'other';
 }
 
