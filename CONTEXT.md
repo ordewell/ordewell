@@ -844,8 +844,10 @@ waits for input.
 of one paused on a usage limit (see *Usage-limit resume*), that resumes its
 saved runner session (Claude's `--resume`, Codex's `thread/resume`) with
 the user's message as the next turn. A **Delegated task**'s reopens its **Child
-plan** instead, stopped or failed but not landed: that plan acts as Execute, and
-its **Subplanner** replays its Model context with the message (ADR-0055 D17).
+plan** instead, stopped or failed but not landed: that plan acts as Execute, its
+own delegated tasks reopen the same way, and its **Subplanner** takes the message
+in its native session where its harness kept one, replaying its Model context
+where not (ADR-0055 D17).
 It is verified and landed like any attempt, is not offered on conflicts, and
 leaves dependents alone, as retry does. It starts once the runner of the
 attempt it continues has wound down (ADR-0018, L1), so a session never runs in

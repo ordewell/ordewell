@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0009", "0013", "0015", "0018", "0020", "0022", "0029", "0030", "0035", "0045", "0046", "0049", "0054"]
-note: "Settles #33. Built: D1 to D19 and D21, so a child plan runs end to end behind the build's switch, asks up a level, stops as a subtree and comes back on a Continue, its conflicts and merges with it. Not built: a subplanner's native resume, so a reopened one replays its Model context. D20 is built for the TUI and VS Code: a row with its goal, budget left and live counts, D16's stopping row, a log of what its child's tasks become, and a report's open and promoted findings; a tree view is later."
+note: "Settles #33. Built: D1 to D19 and D21, so a child plan runs end to end behind the build's switch, asks up a level, stops as a subtree and comes back on a Continue, its conflicts and merges with it, a reopened subplanner taking its native session up where its harness keeps one. D20 is built for the TUI and VS Code: a row with its goal, budget left and live counts, D16's stopping row, a log of what its child's tasks become, and a report's open and promoted findings; a tree view is later."
 ---
 
 # 0055 — A delegated task is a child plan behind the runner seam
@@ -362,7 +362,7 @@ the child cannot reach follows it in the parent's plan.**
   attempt is fresh by any route, Execute, a force start, a retry, or Mark not done
   then a start, its child run is discarded as `discardRun` does, grandchildren first,
   and a new child starts on what is left of its budget (ADR-0056 M10). A Continue
-  never discards it: D17 reopens that child. A delegated task removed from the plan,
+  never discards it, at any depth: D17 reopens that child. A delegated task removed from the plan,
   by a person or a planner's edit, has its child run discarded too, or its worktrees
   and branches would outlive the only record that names them (D11), and a run's own
   Clean up and Discard take its children's with them. Merge and split refuse a
@@ -399,9 +399,24 @@ the child cannot reach follows it in the parent's plan.**
   which is written as the child is seated, and is listed. Continue reopens the child
   and acts as Execute there: its plan loads, in-progress tasks fail, and
   `PlanStore.resetForRun` readies what failed, so they are retried, and its
-  subplanner replays its Model context with the message: a planner's native session
-  is held in memory and saved nowhere, so a new process has none to resume. A child
-  whose plan never reached the disk plans its goal again, and one with nothing left to
+  subplanner takes the message. A delegated task of that plan is no task Execute may
+  start over: `TaskOrchestrator.owesChildren` marks it, and the scheduler claims it
+  as a Continue with the same message when its dependencies allow, so a Continue
+  reaches every level with nothing below it discarded. One whose child cannot be
+  reopened, its session on another runner say, is held with its child kept and its
+  subplanner told why, which decides as for any task of its plan. A subplanner saves
+  its harness's native session on its plan at each turn's end, a hint
+  ([ADR-0009](../planner/0009-coding-agents-as-planners.md) T4) with how much of the
+  Model context it heard, and what the session's running cost had reached, so a new
+  process counts nothing twice (ADR-0056 M10). A reopened subplanner takes that session up, and
+  hears only what came since, under the runner, model, effort and folder it was opened
+  with, when nothing has moved behind it: a compaction drops the hint, and a recovery
+  turn never reads it. Where the harness has no session to give (a vendor API planner),
+  refuses this one, or names another, the same turn replays the Model context instead,
+  which with the plan block, the board and `read` is all a subplanner needs (ADR-0057),
+  so nothing is lost but warm context. A root planner saves no hint: a person's next
+  message replays, as ever. A
+  child whose plan never reached the disk plans its goal again, and one with nothing left to
   run goes straight to that turn: it may owe only its report. A delegated task parked
   at its subplanner's question reloads waiting, with no answer left to wait for: what
   would hear one is held in memory, so the question is lost. It says so, in its row
@@ -713,3 +728,4 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-11-01 — from review and a real run: a ready check starts by itself once its delegated task passes, on every route (D8, D9); a check whose runner cannot be read holds as any does; a restart says a parked question is lost, and Continue picks the child up (D17).
 - 2026-11-01 — from review: a repair is charged to the ledger and leaves the child's names and the report as they stood (D14).
 - 2026-11-01 — from real runs: a surface's composer continues a stopped delegated task and one whose question was lost (D17), and its row counts raises and says no budget it has not read (D20).
+- 2026-11-02 — D17: a Continue reaches every level with nothing below it discarded, and a reopened subplanner takes up its saved native session where its harness keeps one, replaying its Model context where not; a reopened child's budget counts every opening of its parent's session (ADR-0056 M10).

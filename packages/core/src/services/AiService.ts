@@ -1,4 +1,4 @@
-import { Task, ConversationMessage, DiscoveredModel, ReplyRun, ResearchLogEntry, ResearchProgress, RunnerId } from '../models/Task';
+import { Task, ConversationMessage, DiscoveredModel, PlannerNativeSession, ReplyRun, ResearchLogEntry, ResearchProgress, RunnerId } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
 import { IFileSystem } from '../interfaces/IFileSystem';
 import { IWebFetcher } from '../interfaces/IWebFetcher';
@@ -70,6 +70,12 @@ export interface ConversationRequest {
    * for them; the first call is the turn opened by `initialMessage`.
    */
   priorHistory?: ConversationMessage[];
+  /**
+   * A subplanner's saved native session, and what the transcript holds past it
+   * (ADR-0055 D17). A backend that takes it up sends `since` where it would
+   * replay `priorHistory`; any other, or one refused, replays `priorHistory`.
+   */
+  resume?: { session: PlannerNativeSession; since: ConversationMessage[] };
   /**
    * The user message that opens this turn. Defaults to `goal` — set it when
    * resuming so the system prompt keeps the original goal while the turn
@@ -182,6 +188,9 @@ export interface IAiService {
    * unconditionally instead.
    */
   hasActiveConversation(): boolean;
+
+  /** The native session of the latest conversation, its process gone or not; absent on a backend that has none (ADR-0055 D17). */
+  nativeSession?(): PlannerNativeSession | null;
 
   /**
    * Optional: end the planner's live process but keep its own session id, so

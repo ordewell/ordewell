@@ -347,8 +347,13 @@ export class TreeLedger {
     return this.childrenFor(parent, taskId).reduce((total, node) => total + node.raised, 0);
   }
 
+  /** Under every opening of `parent`'s session: a Continue opens a new node for the same child, and what its tasks spent before stays spent (ADR-0055 D17, ADR-0056 M10). */
   private childrenFor(parent: NodePath, taskId: string): TreeNode[] {
-    return [...this.tree.values()].filter((node) => node.taskId === taskId && parentPath(node.path) === parent);
+    const { sessionId } = this.at(parent);
+    return [...this.tree.values()].filter((node) => {
+      const above = parentPath(node.path);
+      return node.taskId === taskId && above !== null && this.at(above).sessionId === sessionId;
+    });
   }
 
   /** Close the children of `parent` that `gone` picks by their task: no session is live in them, so what they hold would stay committed for good. */

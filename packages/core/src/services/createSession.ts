@@ -1915,7 +1915,7 @@ export class Session {
       heldSince: (since) => this.placement?.pool.heldSince(since) ?? 0,
       startPlanning: (goal) => this.startPlanning(told(goal)),
       continueConversation: (text) => this.continueConversation(text),
-      goOn: (text, goal) => this.goOn(text, told(goal)),
+      goOn: (text, goal) => this.goOn(text, goal, told),
       hear: (line) => { void this.turns.enqueue({ source: 'supervisor', text: line, rides: true }).catch(() => undefined); },
       state: () => this.nodeState(),
       takeReport: (report) => this.takeReport(report),
@@ -1929,18 +1929,21 @@ export class Session {
   }
 
   /**
-   * Reopened (ADR-0055 D17): as Execute, so what failed is retried, and then its
-   * subplanner goes on. One whose plan never reached the disk plans its goal, and
-   * one with nothing left to run goes straight to its turn: it may owe only its report.
+   * Reopened (ADR-0055 D17): as Execute, so what failed is retried, but for its
+   * own children, which go on under this same Continue, and then its subplanner
+   * goes on. One whose plan never reached the disk plans its goal, and one with
+   * nothing left to run goes straight to its turn: it may owe only its report.
+   * `told` adds the pins of now, posted since it opened or not (ADR-0057 R10);
+   * its children hear the message without them, and add their own.
    */
-  private async goOn(text: string, goal: string): Promise<unknown> {
-    if (this.store.planTasks.length === 0) return this.startPlanning(goal);
+  private async goOn(text: string, goal: string, told: (said: string) => string): Promise<unknown> {
+    if (this.store.planTasks.length === 0) return this.startPlanning(told(goal));
     const left = flattenTasks(this.store.planTasks).some((task) => task.type !== 'user' && task.status !== 'completed' && task.status !== 'skipped');
-    if (left) {
-      const run = await this.execute({ command: 'run_plan' }, this.turnActor());
-      if (!run.ok) throw new Error(run.message);
-    }
-    return this.continueConversation(text);
+    if (!left) return this.continueConversation(told(text));
+    const held = this.orchestrator.owesChildren(text);
+    const run = await this.execute({ command: 'run_plan' }, this.turnActor());
+    if (!run.ok) throw new Error(run.message);
+    return this.continueConversation(told([text, ...held].join('\n\n')));
   }
 
   private get taskLogReader(): TaskLogReader {

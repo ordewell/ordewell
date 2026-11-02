@@ -969,6 +969,8 @@ export class PlannerConversation {
     const entry: ConversationMessage = { role: 'assistant', content, timestamp, kind: 'compaction', checkpoint: { id, keptFrom, trigger } };
     this.host.mutate(() => {
       this.appendEntries([entry]);
+      // What the native session holds is what this condensed away.
+      delete this.requirePlan().plannerSession;
       return true;
     }, () => this.host.broadcastPlan());
   }
@@ -1190,6 +1192,7 @@ export class PlannerConversation {
     // turn taken up again from the transcript starts on a replay, whatever
     // live context is left: its held input is not this turn's to send.
     const reopened = this.canContinueLive() && !userTurn.recovery ? null : await this.reopen(userTurn);
+    const native = userTurn.recovery ? undefined : this.requirePlan().plannerSession;
     userTurn.briefing = this.briefing.brief(userTurn.wakeUp?.brief);
     // The persisted transcript keeps the raw user message; the model gets the
     // catalog and the current plan (tasks, statuses, edit protocol — once
@@ -1200,7 +1203,7 @@ export class PlannerConversation {
     const said = fromUser ? plannerMessage(message.text, message.skills) : '';
     const outgoing = plannerInput([contextBlock, ...boundedWakeUps(wakeUps), userTurn.briefing.wakeBrief, said]);
     return reopened
-      ? this.resume(reopened, outgoing, priorHistory, signal, userTurn.stream.sink())
+      ? this.resume(reopened, outgoing, priorHistory, signal, userTurn.stream.sink(), native)
       : this.host.aiService().continueConversation(outgoing, userTurn.stream.sink(), signal);
   }
 
@@ -1383,6 +1386,7 @@ export class PlannerConversation {
       throw interrupted(planner, err);
     } finally {
       if (this.openTurn === turn) this.openTurn = null;
+      this.keepNativeSession(planner);
       // Released before the end is announced, so a surface that sends its
       // next message on hearing it is not refused by the turn it heard end.
       release();
@@ -1512,7 +1516,10 @@ export class PlannerConversation {
    * Reopen the model context from the transcript — because the in-memory one
    * is gone (session reload, extension restart), or because it is stale
    * against the planner config now in effect. No LLM call happens for the
-   * replayed turns; the first call is the one the user's message opens.
+   * replayed turns; the first call is the one the user's message opens. A
+   * subplanner's saved native session goes with it, for the backend to take up
+   * in place of the replay (ADR-0055 D17), unless the transcript has moved
+   * behind what it holds.
    */
   private resume(
     opening: ConversationOpening,
@@ -1520,6 +1527,7 @@ export class PlannerConversation {
     priorHistory: ConversationMessage[],
     signal: AbortSignal,
     onProgress: (progress: ResearchProgress) => void,
+    native?: NonNullable<LegacyPlanState['plannerSession']>,
   ): Promise<ConversationTurn> {
     const replayed = plannerTranscript(priorHistory);
     // The opening message as typed, unless a compaction has since condensed it
@@ -1533,9 +1541,25 @@ export class PlannerConversation {
       onProgress,
       signal,
       priorHistory: replayed,
+      ...(native && native.heard <= priorHistory.length ? { resume: { session: native, since: plannerTranscript(priorHistory.slice(native.heard)) } } : {}),
       initialMessage: message,
       compaction: this.compaction,
     });
+  }
+
+  /**
+   * The process goes with the attempt and its session id with the process, so
+   * what would take it up again is written as each turn ends, however it ended
+   * (ADR-0055 D17). A root planner writes none: a new process replays (T4).
+   */
+  private keepNativeSession(planner: PlannerTurn): void {
+    if (planner.abandoned || !this.host.subplanner?.()) return;
+    const native = this.host.aiService().nativeSession?.();
+    if (!native) return;
+    this.host.mutate(() => {
+      this.requirePlan().plannerSession = { ...native, heard: modelContext(this.transcript).length };
+      return true;
+    }, () => undefined);
   }
 
   /**

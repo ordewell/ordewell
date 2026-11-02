@@ -164,7 +164,7 @@ export type SurfaceTask<T extends Task = Task> = Omit<T, 'attemptSkills' | 'subt
 };
 
 /** A plan as the daemon and the VS Code webview are sent it: the session's own state, minus every skill body. */
-export type SurfacePlan = Omit<LegacyPlanState, 'tasks' | 'conversationHistory' | 'pendingTurns' | 'queuedMessages'> & {
+export type SurfacePlan = Omit<LegacyPlanState, 'tasks' | 'conversationHistory' | 'pendingTurns' | 'queuedMessages' | 'plannerSession'> & {
   tasks: SurfaceTask[];
   conversationHistory?: SerializedConversationMessage[];
   pendingTurns?: SerializedPendingTurn[];
@@ -569,7 +569,7 @@ export function surfaceTask<T extends Task>({ attemptSkills, subtasks, runnerSes
 }
 
 /** The one place a plan's skill bodies come off before it leaves the session: every wire path that carries plan state goes through here. */
-export function surfacePlan({ queuedMessages: _carriedOverAtLoad, ...plan }: LegacyPlanState): SurfacePlan {
+export function surfacePlan({ queuedMessages: _carriedOverAtLoad, plannerSession: _hint, ...plan }: LegacyPlanState): SurfacePlan {
   return {
     ...plan,
     tasks: plan.tasks.map(surfaceTask),
