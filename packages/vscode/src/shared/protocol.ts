@@ -1,6 +1,6 @@
 import type { AccountLimitSnapshot, GlobalRunSettings, IsolationPreview,
   AiProvider, RunnerAuth, RunnerCommand, DisplayBlock, DiscoveredModel, PromptHold, RunnerId, RunActivity, RunView, SurfacePlan,
-  TaskModelAssignment,
+  TaskModelAssignment, ChildPlanEntry, ChildPlanView,
 } from '@ordewell/core';
 
 /*
@@ -100,6 +100,15 @@ export interface ConversationPatch {
 }
 
 /** One answer to an escalation (ADR-0053); `requestId` is what the host's `escalationAnswered` replies to. */
+/** A person's answer to a question held by a task in a child plan: its text echoed as read, so a later one is not answered (ADR-0055 D20). */
+export interface ChildCheckpointAnswer {
+  childId: string;
+  taskId: string;
+  question: string;
+  answer: 'approve' | 'reject';
+  reason?: string;
+}
+
 export interface EscalationAnswer {
   requestId: string;
   id: string;
@@ -109,6 +118,12 @@ export interface EscalationAnswer {
 }
 
 export type WebviewToHost =
+  | { type: 'refreshChildren' }
+  | { type: 'openChild'; childId: string }
+  | { type: 'closeChild' }
+  | { type: 'messageChild'; childId: string; text: string }
+  | ({ type: 'answerChildCheckpoint' } & ChildCheckpointAnswer)
+  | { type: 'openChildTaskLog'; childId: string; taskId: string }
   | { type: 'getTaskCommands'; taskId: string }
   | { type: 'invokeTaskCommand'; taskId: string; name: string; args: string }
   /** Chat input: a message for the planner, or a slash command. */
@@ -208,6 +223,13 @@ export interface SettingsChange {
 }
 
 export type HostToWebview =
+  | { type: 'children'; children: ChildPlanEntry[]; rootId: string }
+  | { type: 'childView'; view: ChildPlanView }
+  | { type: 'childClosed' }
+  | { type: 'childConversation'; childId: string; message: ConversationPatch }
+  | { type: 'childMessageResult'; childId: string; status?: 'queued' | 'woken'; error?: string }
+  | { type: 'childControlResult'; childId: string; taskId: string; error?: string }
+  | { type: 'childNotice'; childId: string; message: string }
   | { type: 'taskCommands'; taskId: string; commands: readonly RunnerCommand[] }
   | { type: 'setState'; state: ChatState }
   | ConversationPatch

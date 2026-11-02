@@ -40,7 +40,8 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onWebviewPanel:ordewellTaskLog"
+    "onWebviewPanel:ordewellTaskLog",
+    "onWebviewPanel:ordewellChildTaskLog"
   ],
   "main": "./dist/extension.js",
   "scripts": {

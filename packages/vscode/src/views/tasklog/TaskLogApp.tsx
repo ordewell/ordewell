@@ -76,7 +76,9 @@ export default function TaskLogApp() {
   const header = status?.header;
   const shownLimits = limits.filter(hasAccountLimits);
   const state = header?.state;
-  const commands = header?.commands ?? [];
+  // A child takes a person's words and nothing else (ADR-0056 M8), so nothing here may read as a runner command.
+  const child = status?.child;
+  const commands = child ? [] : header?.commands ?? [];
   const completion = useRunnerCommands(text, setText, commands);
   const canSend = text.trim().length > 0;
 
@@ -86,8 +88,9 @@ export default function TaskLogApp() {
       switch (msg.type) {
         case 'init':
           // A reload restores this tab by task id, so the id has to outlive the
-          // webview's own memory.
-          vscode.setState({ taskId: msg.status.taskId });
+          // webview's own memory; a child's tab by the child's too, proved
+          // against the tree when it comes back.
+          vscode.setState({ taskId: msg.status.taskId, ...(msg.status.child ? { childId: msg.status.child.id } : {}) });
           setView(applyConversationPatch(EMPTY_PATCHED_VIEW, {
             type: 'conversationPatch',
             order: msg.blocks.map((b) => b.id),
@@ -111,6 +114,7 @@ export default function TaskLogApp() {
           break;
         case 'showError':
           setError(msg.error);
+          if (msg.draft) { const draft = msg.draft; setText((current) => current.trim() ? current : draft); }
           break;
       }
     };
@@ -121,8 +125,8 @@ export default function TaskLogApp() {
 
   // A finished task has no turn to message: its box continues it instead, and
   // one paused on a usage limit is resumed by it.
-  const continues = header?.continuable === true;
-  const resumes = header?.resumable === true;
+  const continues = !child && header?.continuable === true;
+  const resumes = !child && header?.resumable === true;
   // A script task runs no model (ADR-0035): its log is output only.
   const script = status?.script === true;
 
@@ -146,7 +150,7 @@ export default function TaskLogApp() {
 
   const working = header?.working === true && state?.kind !== 'done' && state?.kind !== 'failed';
   // Force send (ADR-0023, F1) needs a turn to interrupt; a finished task's box continues it instead.
-  const canSendNow = working && canSend && !continues && !(commands.length > 0 && text.trim().startsWith('/'));
+  const canSendNow = !child && working && canSend && !continues && !(commands.length > 0 && text.trim().startsWith('/'));
 
   const sendNow = (): void => {
     const value = text.trim();
@@ -159,9 +163,9 @@ export default function TaskLogApp() {
     key: m.id,
     text: m.text,
     state: m.forced ? 'sending' : m.handedOver ? 'waiting' : 'queued',
-    onSendNow: m.forced ? undefined : () => vscode.postMessage({ type: 'sendQueuedTaskMessageNow', id: m.id }),
-    onRemove: m.forced || m.handedOver ? undefined : () => vscode.postMessage({ type: 'removeQueuedTaskMessage', id: m.id }),
-  })), [status?.queued]);
+    onSendNow: m.forced || child ? undefined : () => vscode.postMessage({ type: 'sendQueuedTaskMessageNow', id: m.id }),
+    onRemove: m.forced || m.handedOver || child ? undefined : () => vscode.postMessage({ type: 'removeQueuedTaskMessage', id: m.id }),
+  })), [status?.queued, child]);
 
   // The pairing is what keeps a stray tap from interrupting a turn, so an arm
   // lapses on its own, and never outlives the turn it was aimed at.
@@ -177,7 +181,7 @@ export default function TaskLogApp() {
 
   const onComposerKeyDown = (e: React.KeyboardEvent): void => {
     if (e.nativeEvent.isComposing || completion.keyDown(e)) return;
-    if (e.key === 'Escape' && working) {
+    if (e.key === 'Escape' && working && !child) {
       e.preventDefault();
       if (stopArmed) {
         setStopArmed(false);
@@ -202,7 +206,7 @@ export default function TaskLogApp() {
 
   // One button, as in the planner's composer: Stop only while a turn is live
   // and nothing is typed, so typing a message always turns it back into Send.
-  const stops = !script && working && !canSend;
+  const stops = !script && !child && working && !canSend;
   const sendLabel = resumes ? 'Resume' : continues ? 'Continue' : 'Send';
 
   return (
@@ -220,7 +224,7 @@ export default function TaskLogApp() {
               Resume now
             </button>
           )}
-          {header?.resumes && (
+          {!child && header?.resumes && (
             <button type="button" className="task-log-detail" onClick={() => vscode.postMessage({ type: 'cancelResume' })}
               title="Keep it from resuming on its own: resume or retry it yourself once the limit resets">
               Don't resume
@@ -250,7 +254,7 @@ export default function TaskLogApp() {
         {blocks.length === 0
           ? <div className="task-log-empty">{working ? 'Working…' : 'No output yet.'}</div>
           : <ConversationBlocks blocks={blocks} asRun={script} onShowPlan={noop}
-              onAnswerApproval={(id, decision) => vscode.postMessage({ type: 'answerApproval', id, decision })} />}
+              onAnswerApproval={child ? undefined : (id, decision) => vscode.postMessage({ type: 'answerApproval', id, decision })} />}
       </div>
 
       {activity && (
@@ -271,7 +275,7 @@ export default function TaskLogApp() {
 
       {!script && <PendingMessages messages={pending} />}
 
-      {script ? (
+      {child?.note ? <div className="task-log-readonly" role="note">{child.note}</div> : script ? (
         <div className="task-log-readonly" role="note">
           This script task runs no model, so it takes no messages. Its output is above.
         </div>
