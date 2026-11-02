@@ -7,6 +7,8 @@ interface CheckpointPanelProps {
   pausedAt: number;
   /** A delegated task's question: its approval can carry the answer's words and a raise of its budget (ADR-0056 M5, M8). */
   delegated?: boolean;
+  /** Off for a person answering inside a child plan: no raise reaches a child's control (ADR-0055 D20). */
+  raisable?: boolean;
   onApprove: (words?: string, raiseTokens?: number) => void;
   onReject: (reason: string) => void;
 }
@@ -23,7 +25,7 @@ function raiseOf(text: string): number | undefined | null {
 
 const TIMEOUT_MINUTES = 3;
 
-export default function CheckpointPanel({ taskTitle, summary, pausedAt, delegated = false, onApprove, onReject }: CheckpointPanelProps) {
+export default function CheckpointPanel({ taskTitle, summary, pausedAt, delegated = false, raisable = true, onApprove, onReject }: CheckpointPanelProps) {
   const [reason, setReason] = useState('');
   const [showRejectInput, setShowRejectInput] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -77,10 +79,12 @@ export default function CheckpointPanel({ taskTitle, summary, pausedAt, delegate
             Your answer
             <textarea value={words} onChange={(e) => setWords(e.target.value)} placeholder="What it asked, answered (optional)" rows={2} />
           </label>
-          <label>
-            Raise its budget by (tokens)
-            <input type="text" inputMode="numeric" value={raise} onChange={(e) => setRaise(e.target.value)} placeholder="none" />
-          </label>
+          {raisable && (
+            <label>
+              Raise its budget by (tokens)
+              <input type="text" inputMode="numeric" value={raise} onChange={(e) => setRaise(e.target.value)} placeholder="none" />
+            </label>
+          )}
           {raiseTokens === null && <div className="checkpoint-delegated-error" role="alert">{NOT_A_RAISE}</div>}
         </div>
       )}

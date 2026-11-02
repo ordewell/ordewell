@@ -33,6 +33,8 @@ export interface TaskLogStatus {
   runner: string;
   /** A script task (ADR-0035) runs no model: its log is output only, with no composer or queue. */
   script?: boolean;
+  /** A child runner's tab: the child it speaks to, and why it takes no message now, if so. */
+  child?: { id: string; note?: string };
   /** The state, resume time, continuation, usage and runner commands, worded once in core (ADR-0018, V1). */
   header: TaskLogHeaderView;
   /** The plan task's status: the activity line shows only for a running task, whatever its log's turn says. */
@@ -65,7 +67,7 @@ export type HostToTaskLog =
    * the header.
    */
   | { type: 'accountLimits'; limits: readonly AccountLimitSnapshot[] }
-  | { type: 'showError'; error: string };
+  | { type: 'showError'; error: string; draft?: string };
 
 export type TaskLogToHost =
   | { type: 'ready' }

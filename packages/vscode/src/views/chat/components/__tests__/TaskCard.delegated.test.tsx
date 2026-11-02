@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import type { Task } from '@ordewell/core';
 
 /*
@@ -27,6 +27,12 @@ const delegation = { tasks: { completed: 2, running: 1, waiting: 0, pending: 1, 
 beforeEach(() => { offered.value = true; });
 
 describe('a delegated task\'s card', () => {
+  it('opens its child plan from the task row', () => {
+    const open = vi.fn();
+    render(<TaskCard task={task()} models={[]} onOpenChild={open} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open subplanner' }));
+    expect(open).toHaveBeenCalledWith('d');
+  });
   it('says where its child stands and what is left of its budget, on the collapsed card', () => {
     render(<TaskCard task={task()} models={[]} isExecuting run={{ delegation }} />);
     const line = document.querySelector('.task-delegated-line') as HTMLElement;
