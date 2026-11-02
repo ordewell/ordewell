@@ -74,6 +74,10 @@ export interface SubplannerLink {
   stopped(): boolean;
   /** What its planner or a task spent, as it arrives: charged where it was spent, and rolled up to each level for its row (ADR-0055 D20). */
   usage(record: UsageRecord): void;
+  /** The attempt is still open, so a person's message has a turn to reach (D20). */
+  listening(): boolean;
+  /** A turn a person's message opens: the attempt waits for it, and owes it nothing. */
+  spoken(turn: () => Promise<unknown>): void;
 }
 
 /** The parent, as a child's attempt needs it. */
@@ -147,6 +151,8 @@ export class ChildPlanSession extends AbstractRunnerSession {
   private output = '';
   /** Turns this opened and has not seen end: until they do, a quiet child is one still opening. */
   private opening = 0;
+  /** Turns a person's message opened and has not seen end. */
+  private heard = 0;
   private reminded = false;
   /** The accepted call, until it is published. */
   private accepted: { report: TaskCompleteArgs; refuted?: VerificationCheck } | null = null;
@@ -193,6 +199,8 @@ export class ChildPlanSession extends AbstractRunnerSession {
           this.emitEvent({ type: 'usage', record: rolledUp(record) });
           host.passUp(record);
         },
+        listening: () => !this.ended && !this.accepted && !this.tombstone && !this.halting,
+        spoken: (turn) => this.spoken(turn),
       }, resume?.sessionId);
     } catch (err) {
       // Refused, not failed: nothing ran, and what can be changed is the plan above (ADR-0056 M4).
@@ -237,6 +245,21 @@ export class ChildPlanSession extends AbstractRunnerSession {
     this.queueCheck();
   }
 
+  /**
+   * A person is not the plan above: however their turn ends, it costs this
+   * attempt nothing, so a reminder already spent is owed again and a turn that
+   * failed goes to the check, not to a verdict (ADR-0055 D20).
+   */
+  private spoken(turn: () => Promise<unknown>): void {
+    this.heard += 1;
+    const settled = () => {
+      this.heard -= 1;
+      this.reminded = false;
+      this.queueCheck();
+    };
+    turn().then(settled, settled);
+  }
+
   private queueCheck(): void {
     if (this.checkQueued) return;
     this.checkQueued = true;
@@ -271,7 +294,7 @@ export class ChildPlanSession extends AbstractRunnerSession {
       if (!state.live && !state.plannerBusy) this.end('blocked', this.derived(state.withdrawn, state));
       return;
     }
-    if (state.live || state.plannerBusy || state.wakeOwed || this.opening > 0 || this.asking) return;
+    if (state.live || state.plannerBusy || state.wakeOwed || this.opening > 0 || this.heard > 0 || this.asking) return;
     if (state.startRefused) {
       this.haltFor(state.startRefused);
       return;

@@ -4,7 +4,7 @@ import { modelInvocablePlannerSkills, snapshotSkill } from './skillInvocation';
 import { autonomyLevelLabel, readOnlyMode } from './ModeResolver';
 import type { AssignmentAdjustment } from './TaskAssignment';
 import {
-  fitTail, readTask, taskReadDetail, verdictRead, outputSummaryRead, taskQuerySignature,
+  fitTail, readsInCap, readTask, taskReadDetail, verdictRead, outputSummaryRead, taskQuerySignature,
   OUTPUT_LINES_DEFAULT, OUTPUT_LINES_MAX, OUTPUT_TAIL_MAX_CHARS, TASK_QUERY_TASK_FIELDS, TASK_READ_ANSWER_OR_EDIT,
   type LiveOutputLookup, type TaskQuery, type TaskQueryCatalog, type TaskQueryField,
 } from './TaskQuery';
@@ -14,7 +14,7 @@ import type { PlanChange, ToolRead } from './PlannerConversation';
 import { commandReply, type McpToolReply, type PlannerToolHandler, type PostArgs, type ReadTaskArgs } from './mcp/tools';
 import { isBoardRef } from '../models/Board';
 import type { TaskLogEvent } from '../models/TaskLog';
-import { namedHandoff, parseFindingRef, parsePlanPath, resolveWrittenRef } from '../models/Handoff';
+import { namedHandoff, parseFindingRef, parseListingPage, parsePlanPath, resolveWrittenRef } from '../models/Handoff';
 import type { Subtree } from './Subtree';
 import { renderTaskLog } from './taskLogRead';
 import { taskReadPage } from './taskReadPage';
@@ -228,10 +228,15 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
 
     async taskQuery({ tasks, fields, catalog }) {
       const query: TaskQuery = { tasks: (tasks ?? []).map(String), fields: fields ?? [...TASK_QUERY_TASK_FIELDS], catalog: catalog === true };
-      return read(host, taskQuerySignature(query), async () => ({
-        tasks: query.tasks.map((ref) => taskDetail(host.tasks(), ref, query.fields ?? [])),
-        ...(query.catalog ? { catalog: catalogDetail(await host.liveCatalog()) } : {}),
-      }));
+      return read(host, taskQuerySignature(query), async () => {
+        const plan = host.tasks();
+        const { reads, unread } = readsInCap(query.tasks, plan, (ref, task) => taskDetail(plan, ref, task, query.fields ?? []), (detail) => JSON.stringify(detail).length);
+        return {
+          tasks: reads,
+          ...(unread ? { unread } : {}),
+          ...(query.catalog ? { catalog: catalogDetail(await host.liveCatalog()) } : {}),
+        };
+      });
     },
 
     async readTask(args) {
@@ -242,10 +247,17 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
     },
 
     async taskOutput({ task: ref, lines, since, attempt: asked, kinds }) {
-      // An API planner has no `read`, so a board is read here (ADR-0057 R11).
-      if (isBoardRef(String(ref)) && host.readHandoff) {
-        const board = await host.readHandoff({ task: String(ref) });
-        if (!board.isError) return board;
+      // An API planner has no `read`, so a board and a report's later pages are read here (ADR-0057 R11), on the budget every other read spends.
+      const carried = isBoardRef(String(ref)) ? 'board' : !resolveWrittenRef(host.tasks(), String(ref)) && parseListingPage(String(ref)) ? 'handoff' : undefined;
+      if (carried && host.readHandoff) {
+        const { readHandoff } = host;
+        let missed = false;
+        const answer = await read(host, JSON.stringify([carried, String(ref)]), async () => {
+          const reply = await readHandoff.call(host, { task: String(ref) });
+          missed = reply.isError === true;
+          return { [carried]: reply.text };
+        });
+        if (!missed) return answer;
       }
       // A reference a run update shows, `#4@2/F3`, reads the attempt it names (ADR-0057 R1).
       const written = resolveWrittenRef(host.tasks(), String(ref));
@@ -361,13 +373,15 @@ async function read(host: PlannerToolsHost, signature: string, answerRead: () =>
   return { ...answer({ ...result.value, ...(result.landNow ? { note: TASK_READ_ANSWER_OR_EDIT } : {}) }), ...('ok' in result.value && result.value.ok === false ? { isError: true } : {}) };
 }
 
-/** A task's whole handoff from its latest attempt's log, findings and report, else the plan's digest. */
+/** A task's whole handoff from its latest attempt's log, findings and report, else the plan's digest. A report says where its listing is, which this does not hold (ADR-0057 R2). */
 function endedHandoffDetail(host: PlannerToolsHost, task: Task) {
   if (!task.handoff) return null;
+  const plan = host.tasks();
   const attempt = host.taskLogAttempts(task.id).at(-1);
   const events = attempt === undefined ? [] : host.taskLog(task.id, attempt);
   const logged = events.filter((e): e is Extract<TaskLogEvent, { type: 'handoff' }> => e.type === 'handoff').at(-1);
-  return namedHandoff(host.tasks(), logged?.handoff ?? task.handoff);
+  const handoff = namedHandoff(plan, logged?.handoff ?? task.handoff);
+  return logged?.handoff.subtree ? { ...handoff, rest: `Read what its report left out of its subtree with task_output: ${JSON.stringify(`${refOf(plan, task)}@${attempt}/from:1`)}.` } : handoff;
 }
 
 /** A subtask's order restarts under its parent, so a read names it by its dotted reference, never a bare order. */
@@ -380,8 +394,7 @@ function taskHead(plan: readonly Task[], task: Task) {
 }
 
 /** A task read as the tool answers it: the rules are {@link readTask}'s, so both channels state them once. */
-function taskDetail(plan: readonly Task[], ref: string, fields: readonly TaskQueryField[]) {
-  const task = resolveTaskRef(plan, ref);
+function taskDetail(plan: readonly Task[], ref: string, task: Task | undefined, fields: readonly TaskQueryField[]) {
   return task ? taskReadDetail(readTask(plan, task, fields)) : { ref, error: 'no task matches this reference in the current plan.' };
 }
 

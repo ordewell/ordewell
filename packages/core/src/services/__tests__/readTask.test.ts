@@ -66,6 +66,34 @@ describe('a reference across a retry (ADR-0057 R1)', () => {
     expect(readTask({ task: '#4/F1' }, 'fix', plan(2), log).text).toContain('attempt 2 of 2');
   });
 
+  describe('with the digest gone, as a retry leaves it', () => {
+    const cleared = (): Task[] => [{ ...plan(2)[0], handoff: undefined, status: 'pending' }, plan(2)[1]];
+
+    it('pins to the newest attempt that left a handoff', () => {
+      const cited = checkHandoff({ summary: 'Reads the last review.', artifacts: [{ kind: 'task', task: '#4/F1' }] }, 'fix', cleared(), { logs: handoffLogs(log) });
+      if (!cited.ok) throw new Error(cited.refusal);
+      expect(cited.handoff.artifacts).toEqual([expect.objectContaining({ task: 'review', attempt: 2, finding: 'F1' })]);
+    });
+
+    it('passes over an attempt still running, which has left none', () => {
+      const running = { attempts: (id: string) => (id === 'review' ? [1, 2, 3] : []), events: (id: string, attempt: number) => (attempt === 3 ? [] : log.events(id, attempt)) };
+      const cited = checkHandoff({ summary: 'Reads the last review.', artifacts: [{ kind: 'task', task: '#4/F1' }] }, 'fix', cleared(), { logs: handoffLogs(running) });
+      if (!cited.ok) throw new Error(cited.refusal);
+      expect(cited.handoff.artifacts).toEqual([expect.objectContaining({ attempt: 2 })]);
+    });
+
+    it('holds a finding to the handoff it pins to, which has only so many', () => {
+      const cited = checkHandoff({ summary: 'Reads the last review.', artifacts: [{ kind: 'task', task: '#4/F3' }] }, 'fix', cleared(), { logs: handoffLogs(log) });
+      expect(cited).toMatchObject({ ok: false, refusal: expect.stringContaining('its latest handoff has F1 to F1') });
+    });
+
+    it('stays unpinned for a task no attempt of which has handed anything over', () => {
+      const cited = checkHandoff({ summary: 'Points at it.', artifacts: [{ kind: 'task', task: '#5' }] }, 'third', [...plan(2), createTask({ id: 'third', order: 6, title: 'Third', dependencies: ['fix'] })], { logs: handoffLogs(log) });
+      if (!cited.ok) throw new Error(cited.refusal);
+      expect(cited.handoff.artifacts?.[0]).not.toHaveProperty('attempt');
+    });
+  });
+
   it('refuses an attempt the log does not hold, naming those it does', () => {
     const read = readTask({ task: '#4@7/F1' }, 'fix', plan(2), log);
     expect(read).toMatchObject({ isError: true, text: expect.stringContaining('no saved attempt 7') });

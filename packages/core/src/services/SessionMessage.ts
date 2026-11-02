@@ -585,6 +585,47 @@ export function surfacePlanState(state: PlanState): SurfacePlanState {
     : { ...state, pendingTasks: state.pendingTasks.map(surfaceTask), executionLog: state.executionLog.map(surfaceTask) };
 }
 
+/**
+ * A plan below the root as a surface selects it (ADR-0055 D20). `sessionId`
+ * holds still across a Continue, which opens a new `node` for the same child;
+ * a fresh Retry is a new child with a new id.
+ */
+export interface ChildPlanEntry {
+  sessionId: string;
+  /** Its latest opening in the tree. */
+  node: string;
+  /** The plan above it: the root's id at depth 1. */
+  parent: string;
+  taskId?: string;
+  title: string;
+  depth: number;
+  /** Its subplanner in a turn, parked between turns, or no longer there: an ended child only reads. */
+  state: 'working' | 'parked' | 'ended';
+  /** Why a message would be refused now, so a surface can say so before the person types one. */
+  refused?: string;
+}
+
+/** A child plan as a surface opens it: a session's own load, as {@link ChildPlanEntry} places it. */
+export interface ChildPlanView {
+  child: ChildPlanEntry;
+  goal?: string;
+  /** Null while nothing of it has been saved yet. */
+  plan: SurfacePlan | null;
+  run: RunView;
+  plannerTurnId?: string;
+  plannerCompaction?: Extract<SessionMessage, { type: 'planner_compaction' }>;
+}
+
+/**
+ * What became of a person's message to a subplanner: `woken` opened its turn
+ * at once, and `queued` holds it for the turn in flight or for a slot. A
+ * refusal is `view_only` once its attempt is over, or `refused` while what
+ * stands over it (a Stop, its budget, a withdrawn grant) lets nothing start.
+ */
+export type ChildMessageOutcome =
+  | { ok: true; status: 'woken' | 'queued' }
+  | { ok: false; code: 'view_only' | 'refused'; message: string };
+
 export function serializePlan(plan: LegacyPlanState): SerializedPlan {
   return {
     tasks: plan.tasks.map(serializeTask),

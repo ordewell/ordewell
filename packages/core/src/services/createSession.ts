@@ -19,6 +19,7 @@ import { PlanTurns, type PlanTurnInput } from './PlanTurns';
 import { RunSupervision, runOrigin } from './RunSupervision';
 import { Planner } from './Planner';
 import { TaskControlError, TaskOrchestrator, type OrchestratorObserver, type RunOrigin, type TaskOrchestratorOptions } from './TaskOrchestrator';
+import { CHILD_ENDED, ChildDirectory } from './ChildDirectory';
 import { ChildPlanRunner, ownedRunner, type ChildHost, type ChildNode, type NodeEnd, type NodeState, type SubplannerLink, type TakenReport } from './ChildPlanRunner';
 import { readTask, type TaskLogReader } from './readTask';
 import { Subtree, takeReport } from './Subtree';
@@ -55,7 +56,7 @@ import { RUN_SETTINGS_DEFAULTS, runSettingsOf, type GlobalRunSettings, type User
 import { SkillsService } from './SkillsService';
 import { resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
 import { plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
-import { surfacePlan, type RunActivity, type RunMergeView, type RunView, type SessionBroadcaster, type SessionMessage, type SessionNotice } from './SessionMessage';
+import { surfacePlan, type ChildMessageOutcome, type ChildPlanView, type RunActivity, type RunMergeView, type RunView, type SessionBroadcaster, type SessionMessage, type SessionNotice } from './SessionMessage';
 import { EMPTY_RUN, reduceRun } from './runView';
 import { SessionEventRelay } from './SessionEventRelay';
 import { SubagentRuns } from './SubagentRuns';
@@ -206,6 +207,8 @@ export interface ChildPlacement {
   isolation: IWorktreeIsolation;
   /** The root's, so the tree shares one Parallel limit (D18). */
   pool: SlotPool;
+  /** The root's, which a surface finds this child through (D20). */
+  directory: ChildDirectory;
   /** Its side of the tree's ledger, once a carve gave it one (ADR-0056 M5). */
   budget?: NodeBudget;
 }
@@ -362,11 +365,21 @@ function reportingUp(budget: NodeBudget, link: SubplannerLink | undefined): Node
   };
 }
 
+/** Who the message of a turn came from, since a subplanner otherwise reads every message as the plan above's. */
+const PERSON_SPOKE = 'A message in this turn comes from a person watching this child plan, not from the plan above. It stays here: nothing reaches the plan above unless you pass up what it needs in your own report or question.';
+
+/** What a person hears of a message nothing answered, nobody else holding the call. The child's report ending the turn that read it is no news. */
+function personUnanswered(err: unknown): string | null {
+  if (err instanceof PlannerTurnDiscardedError && !err.unread) return null;
+  if (err instanceof PlannerTurnDiscardedError || err instanceof PlannerTurnStoppedError) return 'This child plan stopped before its subplanner answered your message.';
+  return `Your message to this child plan went unanswered: ${err instanceof Error ? err.message : String(err)}`;
+}
+
 /**
  * What a child is built from: what its tree shares, and what is its own. It
  * takes its parent's isolation through its placement and never one of its own
- * (ADR-0055 D11), a broadcast that reaches no surface (D20), and a runner view
- * that stops only what it started.
+ * (ADR-0055 D11), a broadcast only a surface that selected it hears (D20), and
+ * a runner view that stops only what it started.
  */
 function childSessionDeps(deps: SessionDeps, { task, cwd, placement, authority, brief, link }: ChildSpec): SessionDeps {
   const given = deps.childDeps?.(task) ?? {};
@@ -383,8 +396,14 @@ function childSessionDeps(deps: SessionDeps, { task, cwd, placement, authority, 
     ...(deps.childDeps ? { childDeps: deps.childDeps } : {}),
     config: subplannerConfig(deps.config, task),
     notifications: SILENT,
-    broadcast: () => link.changed(),
-    onNotice: () => link.changed(),
+    broadcast: (message) => {
+      link.changed();
+      placement.directory.publish(placement.sessionId, message);
+    },
+    onNotice: (notice) => {
+      link.changed();
+      placement.directory.publish(placement.sessionId, notice);
+    },
     runner: ownedRunner(deps.runner),
     ...(deps.scriptRunner ? { scriptRunner: ownedRunner(deps.scriptRunner) } : {}),
     workspaceRoot: () => cwd,
@@ -869,6 +888,7 @@ export class Session {
   private readonly budget: NodeBudget | undefined;
   /** The tree's ledger, once something asked: a flat run never does, so it has none and writes no log (ADR-0058 S3). */
   private tree: TreeLedger | null = null;
+  private ownChildren: ChildDirectory | undefined;
   /** The lines this plan's landings owe its running tasks (ADR-0057 R6). */
   private readonly scopeLines = new ScopeLines({
     running: () => this.store.planTasks.filter((task) => task.type === 'delegated' && task.scope && (task.status === 'in_progress' || task.status === 'awaiting_user')),
@@ -1672,8 +1692,23 @@ export class Session {
       held: () => this.heldElsewhere(),
       isolation: this.runs.childIsolation,
       pool: this.orchestrator.slotPool,
+      directory: this.children,
       ...(budget ? { budget } : {}),
     };
+  }
+
+  /** The tree's plans as a surface reaches them, one directory at every depth (ADR-0055 D20). */
+  get children(): ChildDirectory {
+    if (this.placement) return this.placement.directory;
+    this.ownChildren ??= new ChildDirectory({
+      rootSessionId: () => this.rootSessionId,
+      // A read opens no tree of its own: that would fix the root's limit before its run does.
+      ledger: async () => (this.tree || flattenTasks(this.store.planTasks).some((task) => task.type === 'delegated' && task.runnerSessionId) ? this.ledger() : null),
+      rootTask: (taskId) => this.store.get(taskId),
+      saved: (sessionId) => loadChildSession({ baseDir: this.stateRoot, rootSessionId: this.rootSessionId, sessionId }),
+      logLocation: (sessionId) => ({ baseDir: this.stateRoot, sessionId, rootSessionId: this.rootSessionId }),
+    });
+    return this.ownChildren;
   }
 
   /** The root Session's id, under which a tree's state sits (ADR-0055 D11). */
@@ -1886,7 +1921,7 @@ export class Session {
       if (saved?.plan.isolation && saved.plan.isolation.run.workspaceRoot !== cwd) throw new Error(`Task "${task.title}" cannot reopen its child: its worktree has moved. Retry it fresh, which starts a new child.`);
       const child = this.childSession({ task, cwd, placement, authority, brief, link });
       if (saved) child.loadPlan(pickedUp(saved.plan), saved.meta.goal, cwd, { sessionId: placement.sessionId });
-      return child.asNode(mandate, (await this.board())?.pins() ?? []);
+      return child.asNode(task, mandate, (await this.board())?.pins() ?? []);
     } catch (err) {
       budget.tree.close(budget.path);
       throw err;
@@ -1928,8 +1963,17 @@ export class Session {
   }
 
   /** This session as its parent's attempt drives it, `pins` what it is told as it starts (ADR-0057 R10). */
-  private asNode(mandate: Mandate, pins: readonly string[]): ChildNode {
+  private asNode(task: Task, mandate: Mandate, pins: readonly string[]): ChildNode {
     const told = (goal: string) => (pins.length > 0 ? `${goal}\n\n${pins.join('\n')}` : goal);
+    const leave = this.placement?.directory.seat({
+      sessionId: this.sessionId,
+      taskId: task.id,
+      title: task.title,
+      working: () => this.isPlannerBusy || this.turns.turnRunning,
+      refusal: () => this.personRefused(),
+      view: () => this.seenFromAbove(),
+      hear: (text) => this.hearPerson(text),
+    });
     return {
       sessionId: this.sessionId,
       protectedPaths: mandate.exclusions.protectedPaths,
@@ -1945,9 +1989,53 @@ export class Session {
       close: async () => {
         this.destroy();
         await this.departed;
+        leave?.();
         this.budget?.tree.close(this.budget.path);
       },
     };
+  }
+
+  /** This child as a surface that selected it opens it, the same shape a joining client reads of any session. */
+  private seenFromAbove(): Omit<ChildPlanView, 'child'> {
+    const plannerTurnId = this.plannerTurnId;
+    const plannerCompaction = this.plannerCompaction();
+    return {
+      goal: this.goal,
+      plan: this.plan ? surfacePlan({ ...this.plan, tasks: this.store.snapshot() }) : null,
+      run: this.runSnapshot(),
+      ...(plannerTurnId ? { plannerTurnId } : {}),
+      ...(plannerCompaction ? { plannerCompaction } : {}),
+    };
+  }
+
+  private personRefused(): Extract<ChildMessageOutcome, { ok: false }> | null {
+    if (!this.subplanner?.listening()) return CHILD_ENDED;
+    const refused = this.nodeRefusal() ?? this.budget?.turnRefusal() ?? (this.plan || this.opening ? null : 'This child plan has not started its conversation yet.');
+    return refused ? { ok: false, code: 'refused', message: refused } : null;
+  }
+
+  /**
+   * A person's message to this child (ADR-0055 D20): a turn of its subplanner
+   * as any other, its actor and mandate unchanged, so no budget, grant or
+   * effect moves here. Skills are not resolved, which would be a person
+   * loading them past the allowlist. It goes no higher: what the plan above
+   * hears of it is what the subplanner chooses to pass up.
+   */
+  private hearPerson(text: string): ChildMessageOutcome {
+    const refused = this.personRefused();
+    if (refused) return refused;
+    // Beside the message, not in it: their words stay as they wrote them in the transcript.
+    const input: PlanTurnInput = { source: 'user', text, aside: PERSON_SPOKE };
+    const taken = this.turns.turnRunning;
+    this.subplanner?.spoken(async () => {
+      try {
+        await (this.behindOpening(input) ?? this.turns.follow(input));
+      } catch (err) {
+        const told = personUnanswered(err);
+        if (told) this.notice('warn', told);
+      }
+    });
+    return { ok: true, status: !taken && this.turns.turnRunning ? 'woken' : 'queued' };
   }
 
   /**
@@ -1976,6 +2064,7 @@ export class Session {
     const here = this.budget?.path ?? ROOT_NODE;
     return new Subtree({
       here,
+      tasks: () => this.store.planTasks,
       nodes: () => tree.below(here),
       plan: ({ sessionId }) => loadChildSession({ baseDir, rootSessionId, sessionId })?.plan.tasks,
       logs: ({ sessionId }) => {
