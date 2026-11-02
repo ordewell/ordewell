@@ -1653,6 +1653,7 @@ export class ExecutionCommands {
       command: command.command,
       actor: actor.kind,
       ...(actor.kind === 'supervisor' ? { level: actor.level } : {}),
+      ...(actor.kind === 'subplanner' && actor.person ? { person: true } : {}),
       ...(located ? { task: { id: located.task.id, ref: located.ref, title: located.task.title } } : {}),
       outcome,
       ...(detail ? { detail } : {}),
@@ -1877,7 +1878,7 @@ const WHO: Record<ExecutionActor['kind'], string> = {
 
 /** The timeline's line for one call: who asked, what, and how it ended. */
 function describeExecution(record: ExecutionRecord, command: ExecutionCommand, paused = false): string {
-  const who = WHO[record.actor];
+  const who = record.person ? 'A person' : WHO[record.actor];
   // A refusal for a task the plan does not have names it as the caller did.
   const label = record.task ? `task ${record.task.ref} "${record.task.title}"` : 'task' in command ? `"${command.task}"` : '';
   const continued = command.command === 'retry_task' && command.from === 'session' ? (paused ? 'resume' : 'continue') : null;

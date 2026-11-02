@@ -63,7 +63,9 @@ export type DaemonErrorCode =
   | 'child_not_found'
   /** The child plan's attempt has ended: it reads, and Continue on its task is what speaks to it. */
   | 'child_view_only'
-  /** The child plan is open, but its mandate or the tree's budget refuses a turn now; the message says which. */
+  /** That child plan holds no such task: a task's id, exactly. Nothing falls back to the root (ADR-0055 D20). */
+  | 'child_task_not_found'
+  /** The child plan is open, but its mandate, its grants, the tree's budget or the task's state refuses this now; the message says which. */
   | 'child_refused';
 
 /** The body of every non-2xx answer a route gives. */
@@ -312,6 +314,21 @@ export type ChildPlanResponse = ChildPlanView & { position: StreamStamp };
 /** `POST /api/sessions/:id/children/:childId/message`: `woken` opened a turn, `queued` goes with the next one the slots allow. */
 export interface ChildMessageResponse {
   status: Extract<ChildMessageOutcome, { ok: true }>['status'];
+}
+
+/**
+ * `POST /api/sessions/:id/children/:childId/tasks/:taskId/message`, body
+ * `{ message }`, and `.../checkpoint/approve|reject`, body `{ question, reason? }`:
+ * what the child's runner was told. `question` is the words the person read
+ * (`ChildPlanEntry.checkpoints` names the tasks, `tasks[].checkpoint` of the view
+ * holds them), so an answer can never reach a later question. `id` is the message
+ * delivered, which a watching surface sees again on the child's socket; absent
+ * for an answer, and for a message that resumed a paused task rather than reach
+ * a running one.
+ */
+export interface ChildTaskControlResponse {
+  message: string;
+  id?: string;
 }
 
 export type SessionListResponse = SessionMeta[];
