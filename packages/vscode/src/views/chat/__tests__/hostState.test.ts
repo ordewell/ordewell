@@ -184,6 +184,30 @@ describe('reduceHost runView', () => {
     const different = reduceHost(answered, msg({ type: 'runView', view: runWith([{ ...checkpointTask, checkpoint: 'another review' }]) }));
     expect(different.checkpoint?.summary).toBe('another review');
   });
+
+  describe('checkpointRefused', () => {
+    const asked = () => reduceHost(INITIAL_HOST_STATE, msg({ type: 'runView', view: runWith([checkpointTask]) }));
+
+    it('gives an answered question back as it was asked, and lets a run view carry it again', () => {
+      const before = asked();
+      const answered = reduceHost(before, { type: 'checkpointAnswered' });
+      const refused = reduceHost(answered, msg({ type: 'checkpointRefused', taskId: checkpointTask.id }));
+      expect(refused.checkpoint).toEqual(before.checkpoint);
+      expect(refused.answeredCheckpoint).toBeNull();
+      expect(reduceHost(refused, msg({ type: 'runView', view: runWith([checkpointTask]) })).checkpoint?.pausedAt).toBe(before.checkpoint?.pausedAt);
+    });
+
+    it('changes nothing for a task whose answer was not the one given', () => {
+      const answered = reduceHost(asked(), { type: 'checkpointAnswered' });
+      expect(reduceHost(answered, msg({ type: 'checkpointRefused', taskId: 'other' }))).toBe(answered);
+    });
+
+    it('changes nothing once the run has dropped the question', () => {
+      const answered = reduceHost(asked(), { type: 'checkpointAnswered' });
+      const gone = reduceHost(answered, msg({ type: 'runView', view: EMPTY_RUN }));
+      expect(reduceHost(gone, msg({ type: 'checkpointRefused', taskId: checkpointTask.id }))).toBe(gone);
+    });
+  });
 });
 
 describe('reduceHost runView isolation', () => {

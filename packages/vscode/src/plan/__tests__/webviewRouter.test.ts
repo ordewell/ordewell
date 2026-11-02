@@ -292,6 +292,23 @@ describe('webview messages reach the session through one entry point each', () =
       ]);
     });
 
+    it('tells the webview when the seam refuses a checkpoint answer, so the question is its to show again', async () => {
+      vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: false, outcome: 'refused', message: 'The budget is spent.' });
+
+      await h.route({ type: 'answerCheckpoint', taskId: 't1', approved: true, reason: 'Round half up.' });
+
+      expect(showWarningMessage).toHaveBeenCalledWith('The budget is spent.');
+      expect(h.posts).toContainEqual({ type: 'checkpointRefused', taskId: 't1' });
+    });
+
+    it('does not tell the webview of a refusal when the answer was taken', async () => {
+      vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: true, message: 'done' });
+
+      await h.route({ type: 'answerCheckpoint', taskId: 't1', approved: true });
+
+      expect(h.posts.filter((m) => m.type === 'checkpointRefused')).toEqual([]);
+    });
+
     it('approves a delegated task\'s question with words and a raise, as the TUI and the daemon do', async () => {
       const execute = vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: true, message: 'done' });
 

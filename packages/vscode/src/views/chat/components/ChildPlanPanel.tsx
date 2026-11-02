@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import type { ChildPlanEntry, ChildPlanView, RunTask, SurfaceTask } from '@ordewell/core';
 import { patchedBlocks, type PatchedView } from '../../../shared/conversationPatch';
 import type { WebviewToHost } from '../../../shared/protocol';
-import type { ChildAnswers, ChildComposer } from '../childDrafts';
+import type { ChildAnswers, ChildComposer, Undelivered, UndeliveredPart, UndeliveredWords } from '../childDrafts';
 import { ConversationBlocks } from './ChatMessage';
 import CheckpointPanel, { type CheckpointDraft } from './CheckpointPanel';
 
@@ -40,6 +40,39 @@ export function ChildQuestions({ tree, current, onOpen }: { tree: readonly Child
   return <div className="child-questions" role="region" aria-label="Questions in subplanners">
     {waiting.map((entry) => <button type="button" key={entry.sessionId} onClick={() => onOpen(entry.sessionId)}>A question waits in {entry.title}</button>)}
   </div>;
+}
+
+const LABELS: Record<UndeliveredPart, Record<UndeliveredWords['field'], string>> = {
+  refused: { words: 'Your answer:', reason: 'Your rejection reason:' },
+  unsent: { words: 'Your answer, not sent:', reason: 'Your rejection reason, not sent:' },
+};
+
+/**
+ * What a person wrote to questions that have no form left to return to. Two
+ * lists, because the words that went to the host and were refused are not the
+ * words that were only typed, and a person must be able to trust which is which.
+ */
+export function UndeliveredAnswers({ items, onDismiss, named = false }: { items: readonly Undelivered[]; onDismiss: (item: Undelivered, part: UndeliveredPart) => void; named?: boolean }) {
+  const part = (kind: UndeliveredPart, heading: string) => {
+    const shown = items.filter((item) => item[kind] !== undefined);
+    if (shown.length === 0) return null;
+    return <section aria-label={heading}>
+      <h3>{heading}</h3>
+      {shown.map((item) => {
+        const refused = kind === 'refused' ? item.refused : undefined;
+        const words = refused?.words ?? item.unsent ?? [];
+        return <div className="child-undelivered" key={JSON.stringify([item.childId, item.taskId, item.question])}>
+          {named && <p>{item.title}</p>}
+          <p>Question:</p>
+          <blockquote>{item.question}</blockquote>
+          {words.map(({ field, text }) => <React.Fragment key={field}><p>{LABELS[kind][field]}</p><blockquote>{text}</blockquote></React.Fragment>)}
+          {refused && <p>{refused.error}</p>}
+          <button type="button" onClick={() => onDismiss(item, kind)}>Dismiss</button>
+        </div>;
+      })}
+    </section>;
+  };
+  return <>{part('refused', 'Answers not delivered')}{part('unsent', 'Words not sent')}</>;
 }
 
 /** Whose news it is: a panel shows only its own, and an empty id is nobody's in particular. */
@@ -131,17 +164,7 @@ export default function ChildPlanPanel({ view, tree, conversation, notice, compo
     <ConversationBlocks blocks={patchedBlocks(conversation)} onShowPlan={() => tasks.current?.focus()} />
     <h3 ref={tasks} tabIndex={-1}>Tasks</h3>
     {view.plan?.tasks.map(drawTask)}
-    {undelivered.length > 0 && <section aria-label="Answers not delivered">
-      <h3>Answers not delivered</h3>
-      {undelivered.map(({ taskId, question, draft, error }) => <div className="child-undelivered" key={JSON.stringify([taskId, question])}>
-        <p>Question:</p>
-        <blockquote>{question}</blockquote>
-        {draft.words.trim() && <><p>Your answer:</p><blockquote>{draft.words}</blockquote></>}
-        {draft.reason.trim() && <><p>Your rejection reason:</p><blockquote>{draft.reason}</blockquote></>}
-        <p>{error}</p>
-        <button type="button" onClick={() => answers.dismiss(taskId, question)}>Dismiss</button>
-      </div>)}
-    </section>}
+    <UndeliveredAnswers items={undelivered} onDismiss={(item, part) => answers.dismiss(item.taskId, item.question, part)} />
     {child.state === 'ended' ? <p>View only</p> : child.refused ? <p>{child.refused}</p> : <form onSubmit={(event) => {
       event.preventDefault();
       composer.send();

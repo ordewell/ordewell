@@ -82,13 +82,35 @@ export interface AnswerDraft {
 
 export const EMPTY_ANSWER_DRAFT: AnswerDraft = { words: '', reason: '', rejecting: false };
 
-/** An answer the host refused, still the person's to read, edit and send again. */
+/** The two texts a form holds: an approval's words and a rejection's reason. */
+type Field = 'words' | 'reason';
+
+/** One question's words as the list shows them. */
+export interface UndeliveredWords {
+  field: Field;
+  text: string;
+}
+
+/**
+ * What the form of a question that has no form to return to still holds: the
+ * words that were sent and refused, and the words only typed. They are told
+ * apart because a person reading "your rejection reason" must be able to trust
+ * that it went to the host.
+ */
 export interface Undelivered {
+  childId: string;
+  /** For a list that names whose it is. */
+  title: string;
   taskId: string;
   question: string;
-  draft: AnswerDraft;
-  error: string;
+  /** Sent, as the form now has them, with the host's refusal. */
+  refused?: { words: UndeliveredWords[]; error: string };
+  /** Typed into the form and never sent. */
+  unsent?: UndeliveredWords[];
 }
+
+/** Which of the two lists a person lets go of. */
+export type UndeliveredPart = 'refused' | 'unsent';
 
 /** One child's checkpoints, as its panel draws and drives them. */
 export interface ChildAnswers {
@@ -98,9 +120,17 @@ export interface ChildAnswers {
   draft: (taskId: string, question: string) => AnswerDraft;
   edit: (taskId: string, question: string, draft: AnswerDraft) => void;
   give: (taskId: string, given: { question: string; answer: 'approve' | 'reject'; words?: string }) => void;
-  /** The refused answers whose question is not one the panel still offers a form for. */
+  /** What is left of the questions the panel does not still offer a form for. */
   undelivered: (offered: (taskId: string, question: string) => boolean) => Undelivered[];
-  dismiss: (taskId: string, question: string) => void;
+  dismiss: (taskId: string, question: string, part: UndeliveredPart) => void;
+}
+
+/** The answers kept for every child, for a place that is not one child's panel. */
+export interface KeptAnswers {
+  of: (child: ChildPlanEntry) => ChildAnswers;
+  /** Every refused answer of every child, whatever has become of its question; the words only typed are left out. */
+  refused: () => Undelivered[];
+  dismiss: (item: Undelivered, part: UndeliveredPart) => void;
 }
 
 /**
@@ -114,20 +144,47 @@ interface KeptAnswer {
   /** For the failure to name. */
   title: string;
   draft: AnswerDraft;
+  /** The fields that went to the host with an answer, and not only into the form. */
+  sent: Readonly<Partial<Record<Field, true>>>;
   /** Typed only; out with the host until its result; or refused by it. */
   state: 'draft' | 'out' | 'refused';
   error?: string;
 }
 
 const answerKey = (childId: string, taskId: string, question: string): string => JSON.stringify([childId, taskId, question]);
+const FIELDS: readonly Field[] = ['words', 'reason'];
+
+/** The fields of a kept answer that hold text, among those asked for. */
+function worded(kept: KeptAnswer, among: (field: Field) => boolean): UndeliveredWords[] {
+  return FIELDS.filter(among).map((field) => ({ field, text: kept.draft[field] })).filter(({ text }) => text.trim() !== '');
+}
+
+function listed(kept: KeptAnswer): Undelivered | undefined {
+  const { childId, title, taskId, question } = kept;
+  const refused = kept.state === 'refused' ? worded(kept, (field) => kept.sent[field] === true) : [];
+  // An answer still out is not the list's yet: its result decides.
+  const unsent = kept.state === 'out' ? [] : worded(kept, (field) => kept.sent[field] !== true);
+  if (refused.length === 0 && unsent.length === 0) return undefined;
+  return { childId, title, taskId, question, ...(refused.length > 0 ? { refused: { words: refused, error: kept.error ?? '' } } : {}), ...(unsent.length > 0 ? { unsent } : {}) };
+}
+
+/** What stays of a kept answer when a person lets go of one of its two lists, if anything does. */
+function letGo(kept: KeptAnswer, part: UndeliveredPart): KeptAnswer | undefined {
+  const goes = (field: Field) => (kept.sent[field] === true) === (part === 'refused');
+  const draft = { ...kept.draft, ...Object.fromEntries(FIELDS.filter(goes).map((field) => [field, ''])) };
+  const sent = part === 'refused' ? {} : kept.sent;
+  if (draft.words.trim() === '' && draft.reason.trim() === '') return undefined;
+  return { ...kept, draft, sent, state: part === 'refused' ? 'draft' : kept.state, error: part === 'refused' ? undefined : kept.error };
+}
 
 /**
  * A person's answers, kept above the panels for the reason their messages are:
  * a refusal can come back to a panel that has gone, and to a question that has
  * gone with it. A refused answer leaves only when the person lets it go or it
- * is sent again and lands; what is typed into its form is kept as they type.
+ * is sent again and lands; what is typed into its form is kept as they type,
+ * and told apart from what was sent.
  */
-export function useChildAnswers(post: (message: WebviewToHost) => void, notify: (notice: ChildNotice) => void): (child: ChildPlanEntry) => ChildAnswers {
+export function useChildAnswers(post: (message: WebviewToHost) => void, notify: (notice: ChildNotice) => void): KeptAnswers {
   const [answers, setAnswers] = useState<Readonly<Record<string, KeptAnswer>>>({});
   const latest = useRef(answers);
   latest.current = answers;
@@ -151,24 +208,42 @@ export function useChildAnswers(post: (message: WebviewToHost) => void, notify: 
     return () => window.removeEventListener('message', handler);
   }, [notify]);
 
-  return ({ sessionId: childId, title }) => ({
-    out: (taskId) => Object.values(answers).some((kept) => kept.state === 'out' && kept.childId === childId && kept.taskId === taskId),
-    draft: (taskId, question) => answers[answerKey(childId, taskId, question)]?.draft ?? EMPTY_ANSWER_DRAFT,
-    edit: (taskId, question, draft) => setAnswers((current) => {
-      const key = answerKey(childId, taskId, question);
-      return { ...current, [key]: { ...(current[key] ?? { childId, taskId, question, state: 'draft' as const }), title, draft } };
-    }),
-    give: (taskId, { question, answer, words }) => {
-      const key = answerKey(childId, taskId, question);
-      setAnswers((current) => {
-        const kept = current[key];
-        return { ...current, [key]: { childId, taskId, question, draft: EMPTY_ANSWER_DRAFT, ...kept, title, state: 'out' as const, error: undefined } };
-      });
-      post({ type: 'answerChildCheckpoint', childId, taskId, question, answer, ...(words ? { reason: words } : {}) });
-    },
-    undelivered: (offered) => Object.values(answers)
-      .filter((kept) => kept.childId === childId && kept.state === 'refused' && (kept.draft.words.trim() || kept.draft.reason.trim()) && !offered(kept.taskId, kept.question))
-      .map(({ taskId, question, draft, error }) => ({ taskId, question, draft, error: error ?? '' })),
-    dismiss: (taskId, question) => setAnswers(({ [answerKey(childId, taskId, question)]: _gone, ...others }) => others),
+  const discard = (childId: string, taskId: string, question: string, part: UndeliveredPart) => setAnswers((current) => {
+    const key = answerKey(childId, taskId, question);
+    const { [key]: kept, ...others } = current;
+    const left = kept && letGo(kept, part);
+    return left ? { ...others, [key]: left } : others;
   });
+
+  return {
+    refused: () => Object.values(answers).flatMap((kept) => {
+      const item = listed(kept);
+      return item?.refused ? [{ ...item, unsent: undefined }] : [];
+    }),
+    dismiss: (item, part) => discard(item.childId, item.taskId, item.question, part),
+    of: ({ sessionId: childId, title }) => ({
+      out: (taskId) => Object.values(answers).some((kept) => kept.state === 'out' && kept.childId === childId && kept.taskId === taskId),
+      draft: (taskId, question) => answers[answerKey(childId, taskId, question)]?.draft ?? EMPTY_ANSWER_DRAFT,
+      edit: (taskId, question, draft) => setAnswers((current) => {
+        const key = answerKey(childId, taskId, question);
+        return { ...current, [key]: { ...(current[key] ?? { childId, taskId, question, sent: {}, state: 'draft' as const }), title, draft } };
+      }),
+      give: (taskId, { question, answer, words }) => {
+        const key = answerKey(childId, taskId, question);
+        setAnswers((current) => {
+          const kept = current[key];
+          const field: Field = answer === 'approve' ? 'words' : 'reason';
+          // A wordless approval sent no words, so none are its to show.
+          const sent = words ? { ...kept?.sent, [field]: true as const } : (kept?.sent ?? {});
+          return { ...current, [key]: { childId, taskId, question, draft: EMPTY_ANSWER_DRAFT, ...kept, title, sent, state: 'out' as const, error: undefined } };
+        });
+        post({ type: 'answerChildCheckpoint', childId, taskId, question, answer, ...(words ? { reason: words } : {}) });
+      },
+      undelivered: (offered) => Object.values(answers)
+        .filter((kept) => kept.childId === childId && !offered(kept.taskId, kept.question))
+        .map(listed)
+        .filter((item): item is Undelivered => item !== undefined),
+      dismiss: (taskId, question, part) => discard(childId, taskId, question, part),
+    }),
+  };
 }

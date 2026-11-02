@@ -258,6 +258,8 @@ export type HostToWebview =
    * same message.
    */
   | { type: 'runView'; view: RunView }
+  /** The seam refused a checkpoint answer, so the question still waits: the card comes back with its words. */
+  | { type: 'checkpointRefused'; taskId: string }
   /**
    * What the scheduler is doing after an Execute settled: the authoritative
    * word that ends the webview's own "Starting…" and starts the run's real

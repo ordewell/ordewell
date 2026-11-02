@@ -21,6 +21,9 @@ export interface ModelOption {
   pricing?: string;
 }
 
+/** A question waiting on the person, as the card draws it. */
+export interface OpenCheckpoint { taskId: string; taskTitle: string; summary: string; pausedAt: number; delegated: boolean }
+
 /** Everything the host feeds the webview, plus the two gates that decide which of its messages to drop. */
 export interface HostState {
   /** The planner conversation, held by the host and patched in here (#53). */
@@ -76,14 +79,14 @@ export interface HostState {
   modelDiscoveryErrors: Record<string, string>;
   skills: { name: string; description: string; appliesTo?: 'planner' | 'task' }[];
   taskSkills: { name: string; description: string }[];
-  checkpoint: { taskId: string; taskTitle: string; summary: string; pausedAt: number; delegated: boolean } | null;
+  checkpoint: OpenCheckpoint | null;
   /**
    * The checkpoint the user answered, by task id and question. A run view that
    * still carries the question — the status update clearing the task has not
    * arrived, or another task's update landed first — must not re-open the
    * panel; only a different question does.
    */
-  answeredCheckpoint: { taskId: string; summary: string } | null;
+  answeredCheckpoint: OpenCheckpoint | null;
   taskOutput: TaskOutputMap;
   /**
    * The run as the host folded every session event (#S8c): each task's plan
@@ -318,10 +321,14 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
       return {
         ...state,
         checkpoint: null,
-        answeredCheckpoint: state.checkpoint
-          ? { taskId: state.checkpoint.taskId, summary: state.checkpoint.summary }
-          : state.answeredCheckpoint,
+        answeredCheckpoint: state.checkpoint ?? state.answeredCheckpoint,
       };
+
+    // The seam refused the answer, so the question still waits: it is the
+    // person's again, as it was asked.
+    case 'checkpointRefused':
+      if (state.answeredCheckpoint?.taskId !== action.taskId) return state;
+      return { ...state, checkpoint: state.answeredCheckpoint, answeredCheckpoint: null };
 
     case 'patchDockHeight':
       return { ...state, dockHeight: action.height };
