@@ -14,6 +14,7 @@ import { VsCodeConfig } from '../adapters/VsCodeConfig';
 import { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
 import { SecretStore, type ApiProvider } from '../adapters/SecretStore';
 import { configureModelAllowlist } from './configureModelAllowlist';
+import { registerContainers, type ContainersDeps } from './containers';
 import { toggleRunner } from './enabledRunners';
 import { executeUserCommand, forceStartPastGate, handleNewSession, markTaskByHand, type PlanManagerDeps } from '../plan/PlanManager';
 
@@ -27,6 +28,7 @@ export interface CommandDeps {
   /** The login probe a signed-out compaction asks again before the session gate judges. */
   runnerInstallation?: PlanManagerDeps['runnerInstallation'];
   settingsService: SettingsService;
+  dockerCli?: ContainersDeps['dockerCli'];
   secretStore: SecretStore;
   getCurrentPlan: () => LegacyPlanState;
   setCurrentPlan: (plan: LegacyPlanState) => void;
@@ -140,6 +142,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
   context.subscriptions.push(
     vscode.commands.registerCommand('ordewell.focusChat', () => vscode.commands.executeCommand('ordewellChatView.focus')),
   );
+  registerContainers(context, deps);
   context.subscriptions.push(
     vscode.commands.registerCommand('ordewell.configureApiKey', async () => {
       await deps.runApiKeyWizard();

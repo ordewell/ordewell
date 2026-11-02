@@ -297,6 +297,7 @@ function createFakeQuickPick(): FakeQuickPick {
 export const window = {
   createQuickPick: vi.fn(createFakeQuickPick) as never,
   showQuickPick: vi.fn() as never,
+  showInputBox: vi.fn() as never,
   withProgress: vi.fn() as never,
   showWarningMessage: vi.fn() as never,
   showInformationMessage: vi.fn() as never,

@@ -172,11 +172,11 @@ script of the workspace root runs on a copy of what that root has committed, and
 nothing of it comes back. What a lease cannot be it refuses: nothing runs on the host
 in a container's place. Its parts: a **mirror**, one bare repository per repo in a
 volume of the engine, read-only to an attempt; a **task volume**, which keeps the
-task's clone and the runner's home across attempts; a **relay**, the container's idle
-entry, which carries connections to this host over its stdio and ends the container
-when its host goes; an **egress sidecar**, a lease's one way out; a **model gateway**,
-which holds its API key; and a **push gate**, the only way work comes back, which
-takes one ref of one attempt as a bundle.
+task's clone, its package caches and the runner's home across attempts; a **relay**,
+the container's idle entry, which carries connections to this host over its stdio and
+ends the container when its host goes; an **egress sidecar**, a lease's one way out; a
+**model gateway**, which holds its API key; and a **push gate**, the only way work comes
+back, which takes one ref of one attempt as a bundle.
 *Avoid:* "sandbox" (a *Sealed run*'s word: that holds a read-only process on this
 host, and this moves a writing one off it), "push" for anything but the gate.
 
@@ -197,8 +197,9 @@ is where a key goes instead of the runner.
 what hands a *Container lease* API keys and cloud-provider credentials, from this
 host's environment: an API key to its *Model gateway*, and what a cloud provider signs
 with to the runner by name. It never holds a Claude subscription's token. A person
-chooses a lease's login, `broker` or `own-sign-in`, the person's own sign-in inside a
-container in a volume Ordewell never reads, and it has no default.
+chooses a lease's login, `broker` or `own-sign-in`, the person's own sign-in made inside
+a container, in a volume no task mounts and this host never reads, of which each task
+gets its own copy, and it has no default.
 *Avoid:* "login" for an API key held here, except as the setting names it.
 
 **Slot pool** (`services/SlotPool.ts`, ADR-0055 D18) — the Parallel limit across a

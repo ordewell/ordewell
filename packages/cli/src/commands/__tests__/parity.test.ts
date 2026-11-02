@@ -32,6 +32,8 @@ const CLI_ONLY = [
   'auto', 'supervisor', 'automerge', 'trailer', 'autorun', 'delegation', 'parallel',
   // The headless form of `/planner`'s model and effort steps.
   'model', 'planner-effort',
+  // A checkout's own setup, for the daemon's Docker; a task's container is not a thing to manage from a run.
+  'containers',
 ];
 
 describe('CLI ↔ TUI command parity', () => {

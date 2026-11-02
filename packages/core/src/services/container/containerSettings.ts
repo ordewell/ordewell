@@ -40,7 +40,7 @@ const DEFAULT_CACHES: readonly CacheName[] = ['npm'];
 
 const UNITS: Record<string, number> = { b: 1, k: 1024, m: 1024 ** 2, g: 1024 ** 3 };
 
-/** The `containers` setting, read: set in the file only, and no surface offers it. */
+/** The `containers` setting, read. A checkout's surfaces set it (`changeContainers`); the settings file holds the rest. */
 export interface ContainerSettings {
   /** The image the user built: Ordewell publishes none (ADR-0059 L5). */
   image: string;
@@ -74,8 +74,12 @@ export function helperArgs(settings: ContainerSettings, volumes: readonly string
 
 function bytesOf(memory: string): number | null {
   const match = /^(\d+)([bkmg])$/i.exec(memory);
-  return match ? Number(match[1]) * UNITS[match[2].toLowerCase()] : null;
+  const bytes = match ? Number(match[1]) * UNITS[match[2].toLowerCase()] : 0;
+  return bytes > 0 ? bytes : null;
 }
+
+/** It sits in a `docker run`, after the options, where a leading dash would be one more of them. */
+export const isImage = (image: unknown): image is string => typeof image === 'string' && /^[a-z0-9][\w.:/@-]*$/i.test(image);
 
 /**
  * A setting it cannot use refuses every container, where the rest of the
@@ -85,7 +89,7 @@ function bytesOf(memory: string): number | null {
 export function parseContainerSettings(raw: unknown): ContainerSettings | { refused: string } {
   if (typeof raw !== 'object' || raw === null) return { refused: 'the containers setting must be an object' };
   const { image, memory = DEFAULT_MEMORY, login, caches = DEFAULT_CACHES, allow, required = DEFAULT_REQUIRED } = raw as Record<string, unknown>;
-  if (typeof image !== 'string' || image === '') return { refused: 'containers.image must name the image you built' };
+  if (!isImage(image)) return { refused: 'containers.image must name the image you built' };
   const memoryBytes = typeof memory === 'string' ? bytesOf(memory) : null;
   if (typeof memory !== 'string' || memoryBytes === null) return { refused: 'containers.memory must be a size such as "4g"' };
   if (!Array.isArray(caches) || !caches.every(isCache)) return { refused: `containers.caches may name ${Object.keys(CACHE_VARIABLES).join(', ')}` };
@@ -93,5 +97,5 @@ export function parseContainerSettings(raw: unknown): ContainerSettings | { refu
   if (!Array.isArray(required) || !required.every(isGuarantee)) return { refused: `containers.required may name ${GUARANTEES.join(', ')}` };
   const chosen = parseLogin(login);
   if ('refused' in chosen) return chosen;
-  return { image, memory, memoryBytes, login: chosen, caches, allow: (allow as readonly string[] | undefined) ?? caches.flatMap((cache) => REGISTRIES[cache]), required };
+  return { image, memory, memoryBytes, login: chosen, caches, allow: (allow as readonly string[] | undefined)?.map((host) => host.toLowerCase()) ?? caches.flatMap((cache) => REGISTRIES[cache]), required };
 }

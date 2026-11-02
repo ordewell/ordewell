@@ -23,7 +23,7 @@ export interface DockerCall {
 
 /**
  * The Docker API through the docker CLI (ADR-0059 L5): one code path for any
- * engine that speaks it, which keeps whatever context the user chose.
+ * local engine that speaks it. `inspectEngine` is what holds it to a local one.
  */
 export interface DockerCli {
   call(args: readonly string[], opts?: DockerCall): Promise<DockerResult>;
@@ -32,6 +32,7 @@ export interface DockerCli {
 }
 
 const CALL_TIMEOUT_MS = 120_000;
+const KILLED = 137;
 
 export class SpawnedDockerCli implements DockerCli {
   constructor(private readonly resolvePath: () => Promise<string> = augmentedPath) {}
@@ -74,7 +75,8 @@ export class SpawnedDockerCli implements DockerCli {
         stderr += err.message;
         finish(-1);
       });
-      child.once('close', (code) => finish(code ?? -1));
+      // A signal is how a timeout ends it, and that CLI did start: the shell's own number for it, not -1.
+      child.once('close', (code) => finish(code ?? KILLED));
     });
   }
 

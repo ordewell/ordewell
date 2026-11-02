@@ -268,6 +268,17 @@ describe('SettingsService', () => {
   describe('the containers setting (ADR-0059 L5)', () => {
     afterEach(() => vi.unstubAllEnvs());
 
+    it('changes from what the file holds, and comes off it whole when the change answers nothing', () => {
+      vi.stubEnv('ORDEWELL_CONTAINERS', '1');
+      fs.writeFileSync(tempFile, JSON.stringify({ containers: { image: 'chosen' }, enabledRunners: ['codex'] }));
+
+      service.updateContainers((saved) => ({ ...(saved as object), login: { kind: 'own-sign-in' } }));
+      expect(JSON.parse(fs.readFileSync(tempFile, 'utf8'))).toEqual({ containers: { image: 'chosen', login: { kind: 'own-sign-in' } }, enabledRunners: ['codex'] });
+
+      service.updateContainers(() => undefined);
+      expect(JSON.parse(fs.readFileSync(tempFile, 'utf8'))).toEqual({ enabledRunners: ['codex'] });
+    });
+
     it('is read, as written whatever it holds, where ORDEWELL_CONTAINERS=1 is set in a checkout: one it cannot use must reach what refuses it', () => {
       vi.stubEnv('ORDEWELL_CONTAINERS', '1');
       fs.writeFileSync(tempFile, JSON.stringify({ containers: 'docker' }));

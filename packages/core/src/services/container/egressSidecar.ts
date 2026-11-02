@@ -161,7 +161,10 @@ export class SidecarEgress implements EgressPath {
       'run', '-i', '--rm', '--name', sidecar, ...labels, ...limits, '--network', network,
       '-e', `ORDEWELL_EGRESS=${JSON.stringify({ port: EGRESS_PORT, allow })}`,
       image, 'node', '-e', EGRESS_ENTRY,
-    ]);
+    ]).catch(async (err: unknown) => {
+      await this.cli.call(['network', 'rm', network]);
+      throw err;
+    });
     const gateway = gated ? new ModelGateway(gated) : null;
     let closing: Promise<void> | null = null;
     const close = () => closing ??= (async () => {

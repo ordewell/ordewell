@@ -4,7 +4,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { connect, createServer, type AddressInfo, type Server } from 'net';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { EGRESS_ENTRY } from '../egressSidecar';
+import type { DockerCall, DockerCli, DockerResult } from '../dockerCli';
+import { EGRESS_ENTRY, SidecarEgress } from '../egressSidecar';
 
 /*
  * The sidecar as itself, on this host's node. A preload stands in for the
@@ -199,5 +200,22 @@ describe('the egress sidecar (ADR-0059 L7)', () => {
     child.stdin?.end();
 
     await vi.waitFor(() => expect(child.exitCode).toBe(0));
+  });
+});
+
+describe('a route that could not be opened', () => {
+  it('takes down the network it made when the sidecar never starts, so a failed probe leaves nothing', async () => {
+    const calls: string[] = [];
+    const cli: DockerCli = {
+      call: async (args: readonly string[], _opts?: DockerCall): Promise<DockerResult> => {
+        calls.push(args.join(' '));
+        return { code: 0, stdout: '', stderr: '' };
+      },
+      entry: async () => { throw new Error('docker would not start'); },
+    };
+
+    await expect(new SidecarEgress(cli).open({ name: 'ordewell-probe-x', labels: [], limits: [], image: 'img', allow: [], gated: null })).rejects.toThrow('docker would not start');
+
+    expect(calls).toEqual(['network create --internal ordewell-probe-x-net', 'network rm ordewell-probe-x-net']);
   });
 });
