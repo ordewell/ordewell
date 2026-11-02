@@ -125,7 +125,8 @@ describe('a refused answer in a child plan', () => {
     post({ type: 'childView', view: asking('Which rounding?') });
     expect(screen.getByLabelText('Your answer')).toHaveValue('Floor, to cents.');
     post({ type: 'childView', view: asking('Which currency?') });
-    expect(within(notDelivered()).getByText('Floor, to cents.')).toBeTruthy();
+    expect(within(notDelivered()).getByText('Floor.')).toBeTruthy();
+    expect(within(screen.getByRole('region', { name: 'Words not sent' })).getByText('Floor, to cents.')).toBeTruthy();
   });
 
   it('keeps an edit of a recovered rejection reason through navigation', () => {
@@ -140,7 +141,8 @@ describe('a refused answer in a child plan', () => {
     post({ type: 'childView', view: asking('Which rounding?') });
     expect(screen.getByPlaceholderText(/Why are you rejecting/)).toHaveValue('Use floor, always.');
     post({ type: 'childView', view: asking(null) });
-    expect(within(notDelivered()).getByText('Use floor, always.')).toBeTruthy();
+    expect(within(notDelivered()).getByText('Use floor.')).toBeTruthy();
+    expect(within(screen.getByRole('region', { name: 'Words not sent' })).getByText('Use floor, always.')).toBeTruthy();
   });
 
   it('is sent again from the recovered form with the edit', () => {

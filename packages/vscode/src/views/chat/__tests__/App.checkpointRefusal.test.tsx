@@ -18,6 +18,7 @@ function asked() {
   send(view as never);
 }
 const card = () => document.querySelector('.checkpoint-panel');
+const refusal = (over: Record<string, string> = {}) => ({ type: 'checkpointRefused', taskId: 'd1', question: task.checkpoint, error: 'The budget is spent.', ...over });
 const approve = () => fireEvent.click(document.querySelector('.checkpoint-approve-btn')!);
 
 describe('a refused answer to the root checkpoint', () => {
@@ -28,7 +29,7 @@ describe('a refused answer to the root checkpoint', () => {
     approve();
     expect(card()).toBeNull();
 
-    send({ type: 'checkpointRefused', taskId: 'd1' } as never);
+    send(refusal() as never);
 
     expect(card()).not.toBeNull();
     expect(screen.getByLabelText('Your answer')).toHaveValue('Half up.');
@@ -42,7 +43,7 @@ describe('a refused answer to the root checkpoint', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send Rejection' }));
     expect(card()).toBeNull();
 
-    send({ type: 'checkpointRefused', taskId: 'd1' } as never);
+    send(refusal() as never);
 
     expect(screen.getByPlaceholderText(/Why are you rejecting/)).toHaveValue('Wrong rounding.');
   });
@@ -58,10 +59,10 @@ describe('a refused answer to the root checkpoint', () => {
   it('does not bring back a question that has gone, or one that was not the refused task', () => {
     asked();
     approve();
-    send({ type: 'checkpointRefused', taskId: 'another' } as never);
+    send(refusal({ taskId: 'another' }) as never);
     expect(card()).toBeNull();
     send({ type: 'runView', view: { tasks: [], runMerge: null, handoff: null, mergeResult: null } } as never);
-    send({ type: 'checkpointRefused', taskId: 'd1' } as never);
+    send(refusal() as never);
     expect(card()).toBeNull();
   });
 

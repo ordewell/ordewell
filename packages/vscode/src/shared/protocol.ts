@@ -140,7 +140,7 @@ export type WebviewToHost =
   | { type: 'removeTask'; taskId: string }
   | { type: 'addTask'; draft: TaskDraft }
   /** The user's answer to a task paused at a checkpoint; a rejection resumes the agent with the reason. A delegated task's approval may carry words and a raise of its budget (ADR-0056 M5, M8). */
-  | { type: 'answerCheckpoint'; taskId: string; approved: boolean; reason?: string; raiseTokens?: number }
+  | { type: 'answerCheckpoint'; taskId: string; /** The question answered, which a refusal names back. */ question: string; approved: boolean; reason?: string; raiseTokens?: number }
   /** A user message to a structured task (ADR-0018): queued behind its turn, or delivered at once if it waits for input. */
   | { type: 'sendTaskMessage'; taskId: string; text: string }
   /** Take back a message still queued behind a structured task's turn. */
@@ -259,7 +259,7 @@ export type HostToWebview =
    */
   | { type: 'runView'; view: RunView }
   /** The seam refused a checkpoint answer, so the question still waits: the card comes back with its words. */
-  | { type: 'checkpointRefused'; taskId: string }
+  | { type: 'checkpointRefused'; taskId: string; question: string; error: string }
   /**
    * What the scheduler is doing after an Execute settled: the authoritative
    * word that ends the webview's own "Starting…" and starts the run's real
