@@ -206,10 +206,15 @@ function refusals({ deliveries }: KeptAnswer): readonly Delivery[] {
 /** What the standing refusals sent, field by field: a later answer's words replace an earlier's. */
 const refusedWords = (kept: KeptAnswer): Delivery['sent'] => Object.assign({}, ...refusals(kept).map((delivery) => delivery.sent));
 
-/** The words a form holds that are not what went to the host. */
+/**
+ * The words a form holds that are not what went to the host. Only what is out or
+ * listed as refused counts: an older refusal a later answer has replaced is shown
+ * nowhere, so words equal to it are the person's own, typed again.
+ */
 const typedAfter = (kept: KeptAnswer, field: Field): boolean => {
   const text = typed(kept.draft, field);
-  return text !== '' && !kept.deliveries.some((delivery) => delivery.sent[field] === text);
+  const shown = refusedWords(kept)[field];
+  return text !== '' && shown !== text && !kept.deliveries.some((delivery) => isOut(delivery) && delivery.sent[field] === text);
 };
 
 function listed(kept: KeptAnswer): Undelivered | undefined {
