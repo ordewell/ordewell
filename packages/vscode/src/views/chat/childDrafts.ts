@@ -70,31 +70,62 @@ export function useChildDrafts(post: (message: WebviewToHost) => void, notify: (
   };
 }
 
-/** A person's answer to one question, as its form takes it back. */
-export interface GivenAnswer {
+/** What a person has typed into one question's form, whether or not it was ever sent. */
+export interface AnswerDraft {
+  /** An approval's words, for a delegated task. */
+  words: string;
+  /** A rejection's reason. */
+  reason: string;
+  /** Whether the rejection form is the one open. */
+  rejecting: boolean;
+}
+
+export const EMPTY_ANSWER_DRAFT: AnswerDraft = { words: '', reason: '', rejecting: false };
+
+/** An answer the host refused, still the person's to read, edit and send again. */
+export interface Undelivered {
+  taskId: string;
   question: string;
-  answer: 'approve' | 'reject';
-  words?: string;
+  draft: AnswerDraft;
+  error: string;
 }
 
 /** One child's checkpoints, as its panel draws and drives them. */
 export interface ChildAnswers {
   /** Whether an answer on this task is out with the host. */
   out: (taskId: string) => boolean;
-  /** What this very question was last answered with, until that lands. */
-  given: (taskId: string, question: string) => GivenAnswer | undefined;
-  give: (taskId: string, given: GivenAnswer) => void;
+  /** What is typed to this very question, however many times the panel has come and gone. */
+  draft: (taskId: string, question: string) => AnswerDraft;
+  edit: (taskId: string, question: string, draft: AnswerDraft) => void;
+  give: (taskId: string, given: { question: string; answer: 'approve' | 'reject'; words?: string }) => void;
+  /** The refused answers whose question is not one the panel still offers a form for. */
+  undelivered: (offered: (taskId: string, question: string) => boolean) => Undelivered[];
+  dismiss: (taskId: string, question: string) => void;
 }
 
-/** Out with the host until its result, with the title a failure will name. */
-type KeptAnswer = GivenAnswer & { title: string; out: boolean };
+/**
+ * Keyed by the question as well as the task: an answer belongs to the question
+ * it was given to, so a later question cannot overwrite or inherit it.
+ */
+interface KeptAnswer {
+  childId: string;
+  taskId: string;
+  question: string;
+  /** For the failure to name. */
+  title: string;
+  draft: AnswerDraft;
+  /** Typed only; out with the host until its result; or refused by it. */
+  state: 'draft' | 'out' | 'refused';
+  error?: string;
+}
 
-const answerKey = (childId: string, taskId: string): string => JSON.stringify([childId, taskId]);
+const answerKey = (childId: string, taskId: string, question: string): string => JSON.stringify([childId, taskId, question]);
 
 /**
  * A person's answers, kept above the panels for the reason their messages are:
- * a refusal can come back to a panel that has gone. An answer leaves only when
- * it lands, so the form that comes back finds its words.
+ * a refusal can come back to a panel that has gone, and to a question that has
+ * gone with it. A refused answer leaves only when the person lets it go or it
+ * is sent again and lands; what is typed into its form is kept as they type.
  */
 export function useChildAnswers(post: (message: WebviewToHost) => void, notify: (notice: ChildNotice) => void): (child: ChildPlanEntry) => ChildAnswers {
   const [answers, setAnswers] = useState<Readonly<Record<string, KeptAnswer>>>({});
@@ -105,10 +136,14 @@ export function useChildAnswers(post: (message: WebviewToHost) => void, notify: 
     const handler = (event: MessageEvent<HostToWebview>) => {
       const msg = event.data;
       if (msg.type !== 'childControlResult') return;
-      const key = answerKey(msg.childId, msg.taskId);
+      // A result names no question, but a task has one answer out at a time.
+      const key = Object.keys(latest.current).find((k) => {
+        const kept = latest.current[k];
+        return kept.state === 'out' && kept.childId === msg.childId && kept.taskId === msg.taskId;
+      });
+      if (!key) return;
       const kept = latest.current[key];
-      if (!kept) return;
-      setAnswers(({ [key]: _settled, ...others }) => (msg.error ? { ...others, [key]: { ...kept, out: false } } : others));
+      setAnswers(({ [key]: _settled, ...others }) => (msg.error ? { ...others, [key]: { ...kept, state: 'refused', error: msg.error } } : others));
       // As for a message: the view of wherever the person went may still be on its way.
       if (msg.error) notify({ childId: '', message: `Not answered in ${kept.title}: ${msg.error}` });
     };
@@ -117,15 +152,23 @@ export function useChildAnswers(post: (message: WebviewToHost) => void, notify: 
   }, [notify]);
 
   return ({ sessionId: childId, title }) => ({
-    out: (taskId) => answers[answerKey(childId, taskId)]?.out === true,
-    given: (taskId, question) => {
-      const kept = answers[answerKey(childId, taskId)];
-      return kept?.question === question ? kept : undefined;
-    },
-    give: (taskId, given) => {
-      setAnswers((current) => ({ ...current, [answerKey(childId, taskId)]: { ...given, title, out: true } }));
-      const { question, answer, words } = given;
+    out: (taskId) => Object.values(answers).some((kept) => kept.state === 'out' && kept.childId === childId && kept.taskId === taskId),
+    draft: (taskId, question) => answers[answerKey(childId, taskId, question)]?.draft ?? EMPTY_ANSWER_DRAFT,
+    edit: (taskId, question, draft) => setAnswers((current) => {
+      const key = answerKey(childId, taskId, question);
+      return { ...current, [key]: { ...(current[key] ?? { childId, taskId, question, state: 'draft' as const }), title, draft } };
+    }),
+    give: (taskId, { question, answer, words }) => {
+      const key = answerKey(childId, taskId, question);
+      setAnswers((current) => {
+        const kept = current[key];
+        return { ...current, [key]: { childId, taskId, question, draft: EMPTY_ANSWER_DRAFT, ...kept, title, state: 'out' as const, error: undefined } };
+      });
       post({ type: 'answerChildCheckpoint', childId, taskId, question, answer, ...(words ? { reason: words } : {}) });
     },
+    undelivered: (offered) => Object.values(answers)
+      .filter((kept) => kept.childId === childId && kept.state === 'refused' && (kept.draft.words.trim() || kept.draft.reason.trim()) && !offered(kept.taskId, kept.question))
+      .map(({ taskId, question, draft, error }) => ({ taskId, question, draft, error: error ?? '' })),
+    dismiss: (taskId, question) => setAnswers(({ [answerKey(childId, taskId, question)]: _gone, ...others }) => others),
   });
 }

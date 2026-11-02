@@ -2,9 +2,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import type { ChildPlanEntry, ChildPlanView, RunTask, SurfaceTask } from '@ordewell/core';
 import { patchedBlocks, type PatchedView } from '../../../shared/conversationPatch';
 import type { WebviewToHost } from '../../../shared/protocol';
-import type { ChildAnswers, ChildComposer, GivenAnswer } from '../childDrafts';
+import type { ChildAnswers, ChildComposer } from '../childDrafts';
 import { ConversationBlocks } from './ChatMessage';
-import CheckpointPanel from './CheckpointPanel';
+import CheckpointPanel, { type CheckpointDraft } from './CheckpointPanel';
 
 function findRun(tasks: readonly RunTask[], id: string): RunTask | undefined {
   for (const task of tasks) {
@@ -13,6 +13,20 @@ function findRun(tasks: readonly RunTask[], id: string): RunTask | undefined {
     if (found) return found;
   }
   return undefined;
+}
+
+/** The questions this plan draws a form for, as task id and question: a refused answer to any other has no form to return to. */
+function offeredQuestions(plan: ChildPlanView['plan'], run: readonly RunTask[]): Set<string> {
+  const offered = new Set<string>();
+  const walk = (tasks: readonly SurfaceTask[]) => {
+    for (const task of tasks) {
+      const live = findRun(run, task.id);
+      if (live?.awaitingReason === 'checkpoint' && live.checkpoint) offered.add(JSON.stringify([task.id, live.checkpoint]));
+      walk(task.subtasks);
+    }
+  };
+  walk(plan?.tasks ?? []);
+  return offered;
 }
 
 /**
@@ -38,7 +52,8 @@ interface AnswerableProps {
   question: string;
   delegated: boolean;
   answering: boolean;
-  given?: GivenAnswer;
+  draft: CheckpointDraft;
+  onDraft: (draft: CheckpointDraft) => void;
   onAnswer: (answer: 'approve' | 'reject', words?: string) => void;
 }
 
@@ -47,10 +62,10 @@ interface AnswerableProps {
  * the person's words where they left them. A raise is the parent's to give
  * (ADR-0056 M8), so the panel offers none here.
  */
-function AnswerableQuestion({ title, question, delegated, answering, given, onAnswer }: AnswerableProps) {
+function AnswerableQuestion({ title, question, delegated, answering, draft, onDraft, onAnswer }: AnswerableProps) {
   const [pausedAt] = useState(() => Date.now());
   return <fieldset className="child-question" disabled={answering} aria-label={`Question on ${title}`}>
-    <CheckpointPanel taskTitle={title} summary={question} pausedAt={pausedAt} delegated={delegated} raisable={false} given={given}
+    <CheckpointPanel taskTitle={title} summary={question} pausedAt={pausedAt} delegated={delegated} raisable={false} draft={draft} onDraft={onDraft}
       onApprove={(words) => onAnswer('approve', words)} onReject={(reason) => onAnswer('reject', reason)} />
   </fieldset>;
 }
@@ -82,6 +97,10 @@ export default function ChildPlanPanel({ view, tree, conversation, notice, compo
 
   useEffect(() => { heading.current?.focus(); }, []);
 
+  // An ended child offers no form, so what was refused to it has none to return to.
+  const offered = answerable ? offeredQuestions(view.plan, view.run.tasks) : new Set<string>();
+  const undelivered = answers.undelivered((taskId, question) => offered.has(JSON.stringify([taskId, question])));
+
   const drawTask = (task: SurfaceTask): React.ReactNode => {
     const live = findRun(view.run.tasks, task.id);
     const question = live?.awaitingReason === 'checkpoint' ? live.checkpoint : undefined;
@@ -90,7 +109,7 @@ export default function ChildPlanPanel({ view, tree, conversation, notice, compo
     return <div className="child-task" key={task.id}>
       <span>{task.title} · {live?.status ?? task.status}</span>
       {question && (answerable
-        ? <AnswerableQuestion key={question} title={task.title} question={question} delegated={task.type === 'delegated'} answering={answers.out(task.id)} given={answers.given(task.id, question)} onAnswer={(answer, words) => answers.give(task.id, { question, answer, words })} />
+        ? <AnswerableQuestion key={question} title={task.title} question={question} delegated={task.type === 'delegated'} answering={answers.out(task.id)} draft={answers.draft(task.id, question)} onDraft={(draft) => answers.edit(task.id, question, draft)} onAnswer={(answer, words) => answers.give(task.id, { question, answer, words })} />
         : <p>{question}</p>)}
       {(task.attempted || live?.attempted) && <button type="button" onClick={() => post({ type: 'openChildTaskLog', childId, taskId: task.id })}>Open chat</button>}
       {task.type === 'delegated' && descendants.map((entry) =>
@@ -112,6 +131,17 @@ export default function ChildPlanPanel({ view, tree, conversation, notice, compo
     <ConversationBlocks blocks={patchedBlocks(conversation)} onShowPlan={() => tasks.current?.focus()} />
     <h3 ref={tasks} tabIndex={-1}>Tasks</h3>
     {view.plan?.tasks.map(drawTask)}
+    {undelivered.length > 0 && <section aria-label="Answers not delivered">
+      <h3>Answers not delivered</h3>
+      {undelivered.map(({ taskId, question, draft, error }) => <div className="child-undelivered" key={JSON.stringify([taskId, question])}>
+        <p>Question:</p>
+        <blockquote>{question}</blockquote>
+        {draft.words.trim() && <><p>Your answer:</p><blockquote>{draft.words}</blockquote></>}
+        {draft.reason.trim() && <><p>Your rejection reason:</p><blockquote>{draft.reason}</blockquote></>}
+        <p>{error}</p>
+        <button type="button" onClick={() => answers.dismiss(taskId, question)}>Dismiss</button>
+      </div>)}
+    </section>}
     {child.state === 'ended' ? <p>View only</p> : child.refused ? <p>{child.refused}</p> : <form onSubmit={(event) => {
       event.preventDefault();
       composer.send();
