@@ -33,6 +33,23 @@ describe('the credential broker (ADR-0059 L7)', () => {
     expect(broker.issue(Object.keys(cloud))).toEqual({ gated: null, handed: cloud });
   });
 
+  it.each([
+    ['ANTHROPIC_AUTH_TOKEN', 'a-gateway-of-their-own'],
+    ['CLAUDE_CODE_USE_BEDROCK', '1'],
+    ['CLAUDE_CODE_USE_VERTEX', '1'],
+    ['CLAUDE_CODE_USE_FOUNDRY', '1'],
+  ])('refuses %s beside an API key: Claude Code would use it over the key, so the gateway would carry nothing', (variable, value) => {
+    const broker = new CredentialBroker({ ANTHROPIC_API_KEY: key, [variable]: value });
+
+    expect(() => broker.issue(['ANTHROPIC_API_KEY', variable])).toThrow(new RegExp(`${variable} outranks ANTHROPIC_API_KEY`));
+  });
+
+  it('hands over the same variable without an API key: nothing is gated, and the lease reports what its runner can read', () => {
+    const broker = new CredentialBroker({ ANTHROPIC_AUTH_TOKEN: 'a-gateway-of-their-own' });
+
+    expect(broker.issue(['ANTHROPIC_AUTH_TOKEN'])).toEqual({ gated: null, handed: { ANTHROPIC_AUTH_TOKEN: 'a-gateway-of-their-own' } });
+  });
+
   it('refuses a variable it does not hold, so a lease never starts without its login', () => {
     expect(() => new CredentialBroker({}).issue(['ANTHROPIC_API_KEY'])).toThrow(/ANTHROPIC_API_KEY is not set/);
   });

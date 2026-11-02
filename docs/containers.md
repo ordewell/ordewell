@@ -66,7 +66,12 @@ docker build -t ordewell-task - < packages/core/docker/task.Dockerfile
 ```
 
 An image of your own needs `git`, `node`, a user with uid 1000, and the folders
-`/task`, `/mirror` and `/login` owned by that user.
+`/task`, `/mirror` and `/login` owned by that user. For `own-sign-in` it also needs a
+Claude Code that has `claude auth status`, which is how Ordewell asks whether a
+sign-in is held, and `sh`, `cat`, `cp` and `cksum`.
+
+An image keeps the Claude Code it was built with, and Docker reuses that step of the
+build. For a newer one, add `--no-cache`.
 
 ## Choose a login
 
@@ -91,27 +96,56 @@ nothing anywhere else. To send that traffic somewhere other than Anthropic's API
 its client, so a runner can read them, and `cred.unreadable` is reported unproven. Put
 that provider's hosts in `allow`.
 
+Name one login. `ANTHROPIC_API_KEY` beside `ANTHROPIC_AUTH_TOKEN`,
+`CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` or `CLAUDE_CODE_USE_FOUNDRY` is
+refused: Claude Code ranks those over the key, so a task would not run on the login
+you meant.
+
 Ordewell never carries a Claude subscription's token, and refuses one that reaches it
 as a variable. To use your subscription, sign in yourself, inside a container:
 
 ```bash
 docker run --rm -it --init --pids-limit 8192 --memory 2g \
   -v ordewell-login-claude-code:/login \
-  -e CLAUDE_CONFIG_DIR=/login/claude ordewell-task claude
+  -e CLAUDE_CONFIG_DIR=/login/claude ordewell-task claude auth login
 ```
 
+It needs `-it`: without it, the command prints nothing and waits. It cannot open a
+browser from a container, so open the address it prints on your machine, sign in there,
+and paste the code you are given at its prompt. Starting and leaving it stores no
+sign-in, and `ordewell containers` says so.
+
+A Claude Console sign-in with no API key is kept outside that folder, so it goes with
+the container. For Console usage, use an API key with `broker`.
+
 Then set `"login": { "kind": "own-sign-in" }`. The sign-in stays in that volume, which
-no task mounts and Ordewell never reads on your machine. A task gets a copy of its own,
-made in the engine as it starts, so what it writes there reaches neither the sign-in you
-made nor another task. That covers writing, and no more:
+no task mounts and Ordewell never reads on your machine. Its model traffic and token
+refreshes go straight to Anthropic through the sidecar, not through a gateway. A task
+gets a copy of its own, made in the engine as it first starts, so what it writes there
+reaches neither the sign-in you made nor another task. That covers writing, and no more:
 
 - **A runner can read its copy**, and send it to any host a task can reach. Its traffic
   goes straight to Anthropic, so `api.anthropic.com`, `claude.ai` and
   `platform.claude.com` are opened for it, and `cred.unreadable` is reported unproven.
 - **A copy stays in the task's volume** until its session is cleaned up, and signing out
   of the original does not reach it.
-- **A token a task refreshes stays in that copy.** If refreshing replaces the token, the
-  one you made can go stale, and you sign in again. This has not been measured.
+- **A check shows a sign-in is held, not that it still works.** `ordewell containers`
+  and a task's start ask Claude Code, which answers from the files alone.
+- **Every copy is one login.** A token a task refreshes stays in that task's copy, and
+  nothing brings it back: that would be a way for one task to write what the next signs
+  in with. So where refreshing replaces the token, the first task to refresh leaves the
+  sign-in you made, and every other copy of it, dead. Tasks that run for long, or side
+  by side, are steadier on an API key.
+
+That last one was measured with Claude Code 2.1.316 against a stand-in for Anthropic
+whose refresh tokens work once. People report that Anthropic's behave this way, and
+Anthropic does not document it. Under the stand-in, the first task carried on, the next
+failed with `OAuth session expired and could not be refreshed`, and Claude Code cleared
+that task's copy. No real account took part, so how often it happens is not known.
+
+When a sign-in has died, run the command above again. A task keeps the copy it has
+until there is a new sign-in, which reaches it at its next start or Continue, with its
+conversation kept.
 
 ## The other settings
 
@@ -224,6 +258,9 @@ Clean up, Discard and deleting a session take away what that session left in the
 engine: its containers, networks and task volumes, and its pins in the repository's
 mirror. Once no session of the project holds a pin, the mirror goes too, with any cache
 volume an earlier build left. Your own sign-in volume is never touched.
+
+A mirror that stays busy through a clean-up is reported and left in place, and no later
+clean-up takes it: remove it yourself with `docker volume rm` once nothing uses it.
 
 Without the `containers` setting Ordewell does not ask Docker for anything, so if you
 remove the setting first, clear what is left yourself. List it with:

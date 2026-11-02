@@ -359,9 +359,9 @@ export class DockerExecutionBackend implements ExecutionBackend {
    * A task's own copy of a person's sign-in, in its own volume. The kept one is
    * never where a runner runs: one task could write it, and every later task of
    * every session loads what it wrote. A helper with no network and no agent reads
-   * it, read-only. Over what the volume holds, so a Continue keeps its sessions; a
-   * link an earlier attempt planted leads nowhere the helper may write but this
-   * same volume.
+   * it, read-only. A Continue keeps the copy it has, refreshed token and sessions
+   * alike, until a new sign-in comes over it; a link an earlier attempt planted leads
+   * nowhere the helper may write but this same volume.
    */
   private async handSignIn(settings: ContainerSettings, volume: string, labels: readonly string[]): Promise<void> {
     const copied = await this.cli.call([...helperArgs(settings, [`${volume}:${TASK_ROOT}`, `${LOGIN_VOLUME}:/login:ro`], {}, labels), 'sh', '-c', COPY_SIGN_IN]);

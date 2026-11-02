@@ -1,6 +1,7 @@
-import { parseContainerSettings, type ContainerSettings } from './containerSettings';
+import { helperArgs, parseContainerSettings, type ContainerSettings } from './containerSettings';
 import type { CredentialBroker } from './credentialBroker';
 import type { DockerCli, DockerResult } from './dockerCli';
+import { ASK_SIGN_IN } from './taskWorkspace';
 
 /** Why a container cannot be had yet, and what a person does about it. */
 export interface ContainerProblem {
@@ -141,16 +142,30 @@ function readSetting(raw: unknown): { problems: ContainerProblem[]; settings?: C
   return { problems: [], settings };
 }
 
-async function loginProblems(settings: ContainerSettings, cli: DockerCli, broker: CredentialBroker): Promise<ContainerProblem[]> {
-  if (settings.login.kind === 'own-sign-in') {
-    const kept = await cli.call(['volume', 'inspect', LOGIN_VOLUME], { timeoutMs: ASK_MS });
-    return kept.code === 0 ? [] : [problem('sign-in-missing', 'The containers setting names your own sign-in, and none has been made.', SIGN_IN_REMEDY)];
-  }
+const NO_SIGN_IN = problem('sign-in-missing', 'The containers setting names your own sign-in, and none has been made.', SIGN_IN_REMEDY);
+
+/**
+ * The volume first: a `docker run` naming it would make it. An image that cannot
+ * answer is not a missing sign-in, which `claude auth status` reports as exit 1,
+ * and a sign-in repeated for it would change nothing.
+ */
+async function signInProblems(settings: ContainerSettings, cli: DockerCli, imageThere: boolean): Promise<ContainerProblem[]> {
+  const kept = await cli.call(['volume', 'inspect', LOGIN_VOLUME], { timeoutMs: ASK_MS });
+  if (kept.code !== 0) return [NO_SIGN_IN];
+  if (!imageThere) return [];
+  const asked = await cli.call([...helperArgs(settings, [`${LOGIN_VOLUME}:/login:ro`]), 'sh', '-c', ASK_SIGN_IN], { timeoutMs: ASK_MS });
+  if (asked.code === 0) return [];
+  if (asked.code === 1) return [NO_SIGN_IN];
+  return [problem('sign-in-unasked', `The image ${settings.image} could not say whether your sign-in is there: ${asked.stderr.trim() || `\`claude auth status\` ended with ${asked.code}`}.`, 'Build the image with a current Claude Code, as docs/containers.md shows.')];
+}
+
+async function loginProblems(settings: ContainerSettings, cli: DockerCli, broker: CredentialBroker, imageThere: boolean): Promise<ContainerProblem[]> {
+  if (settings.login.kind === 'own-sign-in') return signInProblems(settings, cli, imageThere);
   try {
     broker.issue(settings.login.variables);
     return [];
   } catch (err) {
-    return [problem('login-unavailable', err instanceof Error ? err.message : String(err), 'Set it in the environment Ordewell starts from, or use the "own-sign-in" login.')];
+    return [problem('login-unavailable', err instanceof Error ? err.message : String(err), 'Correct what the login names and set it in the environment Ordewell starts from, or use the "own-sign-in" login.')];
   }
 }
 
@@ -159,8 +174,9 @@ async function loginProblems(settings: ContainerSettings, cli: DockerCli, broker
  * only a start can know stays with the lease: its repositories' hooks, its
  * runner, and the guarantees a container proves (ADR-0059 L3). A surface and a
  * lease both ask this, so what one reports is what the other refuses. A script
- * is asked nothing of the login it never gets. Nothing here reads a sign-in, or
- * pulls: an image is what a person built.
+ * is asked nothing of the login it never gets. Nothing here reads a sign-in: the
+ * harness says whether it holds one, in a helper (`ASK_SIGN_IN`). Nothing here
+ * pulls either: an image is what a person built.
  */
 export async function inspectReadiness(raw: unknown, { cli, platform, broker, agent = true, setupCommand }: ReadinessDeps): Promise<Readiness> {
   const { problems: engineProblems, engine } = await inspectEngine({ cli, ...(platform ? { platform } : {}) });
@@ -173,7 +189,7 @@ export async function inspectReadiness(raw: unknown, { cli, platform, broker, ag
   }
   const image = await cli.call(['image', 'inspect', '--format', '{{.Id}}', settings.image], { timeoutMs: ASK_MS });
   if (image.code !== 0) problems.push(problem('image-missing', `The image ${settings.image} is not there.`, 'Ordewell publishes no image: build it as docs/containers.md shows.'));
-  if (agent) problems.push(...await loginProblems(settings, cli, broker));
+  if (agent) problems.push(...await loginProblems(settings, cli, broker, image.code === 0));
   return { problems, engine, ...(problems.length === 0 ? { settings } : {}) };
 }
 

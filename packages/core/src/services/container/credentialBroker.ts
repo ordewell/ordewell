@@ -11,6 +11,9 @@ export const GATED_KEY = 'ANTHROPIC_API_KEY';
 export const BASE_URL = 'ANTHROPIC_BASE_URL';
 const MODEL_API = 'https://api.anthropic.com';
 
+/** What Claude Code uses over an API key, by its documented precedence: beside one, a bearer the gateway drops or a cloud that never sees the gateway. */
+const OUTRANKS_KEY: readonly string[] = ['ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'];
+
 /** Where a person's own sign-in talks to Anthropic, and which a broker's lease never needs: its model traffic takes the gateway. */
 export const SIGN_IN_HOSTS: readonly string[] = ['api.anthropic.com', 'claude.ai', 'platform.claude.com'];
 
@@ -65,6 +68,8 @@ export class CredentialBroker {
     const held = Object.fromEntries(variables.map((variable) => [variable, this.hold(variable)]));
     const { [GATED_KEY]: key, ...rest } = held;
     if (key === undefined) return { gated: null, handed: held };
+    const outranking = OUTRANKS_KEY.find((variable) => variable in rest);
+    if (outranking) throw new Error(`${outranking} outranks ${GATED_KEY} in Claude Code, so the two do not make one login: name one or the other.`);
     const { [BASE_URL]: url, ...handed } = rest;
     return { gated: { key, upstream: upstreamOf(url) }, handed };
   }

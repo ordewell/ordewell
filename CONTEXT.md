@@ -204,7 +204,7 @@ host's environment: an API key to its *Model gateway*, and what a cloud provider
 with to the runner by name. It never holds a Claude subscription's token. A person
 chooses a lease's login, `broker` or `own-sign-in`, the person's own sign-in made inside
 a container, in a volume no task mounts and this host never reads, of which each task
-gets its own copy, and it has no default.
+gets its own copy, replaced only by a new sign-in, and it has no default.
 *Avoid:* "login" for an API key held here, except as the setting names it.
 
 **Slot pool** (`services/SlotPool.ts`, ADR-0055 D18) — the Parallel limit across a

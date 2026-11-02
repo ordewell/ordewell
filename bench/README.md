@@ -97,6 +97,11 @@ still runs a single goal the old way.
   (`packages/vscode/src/test-integration/`) use the same fake via `PATH`.
 - `pipeline.test.mjs` — runs the driver under `node:test`. Needs core built
   first (`npm run build:core`).
+- `fake-provider/` — a stand-in for Anthropic's token endpoint and Messages API,
+  for the real Claude Code binary: TLS under a test CA, reached only through a
+  CONNECT proxy of its own, with refresh tokens that work once. It involves no
+  account and no real token. `dockerLease.e2e.test.ts` runs it in a container
+  when `ORDEWELL_E2E_HARNESS_IMAGE` names an image with Claude Code in it.
 
 ## Scale benchmark (`bench/scale/`)
 

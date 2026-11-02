@@ -17,6 +17,8 @@ export const WORK_ROOT = `${TASK_ROOT}/work`;
 export const HOME_DIR = `${TASK_ROOT}/home`;
 /** A task's own copy of a person's sign-in, the only one a runner ever sees. */
 export const SIGN_IN_COPY = `${TASK_ROOT}/login/claude`;
+/** Which sign-in that copy came from, as a checksum. The task can write it, and only for itself: it holds the copy. */
+const SIGN_IN_MARK = `${TASK_ROOT}/login/handed`;
 
 /** Where a repo of the workspace is, in a container. */
 export const repoDir = (repo: Pick<LeaseRepo, 'path'>): string => (repo.path === SELF_REPO ? WORK_ROOT : posix.join(WORK_ROOT, repo.path));
@@ -57,19 +59,39 @@ export async function pushToMirror(invoker: GitInvoker, repo: LeaseRepo, helper:
 }
 
 /**
+ * Asks the harness whether what `/login` keeps is a login, which files there do
+ * not say: an abandoned sign-in leaves some. It answers from those files with no
+ * network, so it proves a login is held and never that one still works. Its
+ * answer, which can name the account, stays in the helper, and it runs from a
+ * home of its own, so nothing a task wrote reaches it as settings.
+ */
+export const ASK_SIGN_IN = 'cd /tmp && HOME=/tmp CLAUDE_CONFIG_DIR=/login/claude claude auth status >/dev/null 2>&1';
+
+/**
+ * Run in a helper with the kept sign-in read-only at `/login`. A task's copy is
+ * replaced only by a new sign-in: a refresh writes to the copy alone and can leave
+ * what is kept dead, so a Continue that copied again would hand back a token that
+ * no longer works (measured with the real binary 2026-11-02, ADR-0059 L7). The mark
+ * is the task's to write, so only a plain file is read: a pipe there would hold the
+ * helper, and the attempt's start with it.
+ */
+export const COPY_SIGN_IN = String.raw`set -eu
+(${ASK_SIGN_IN}) || { echo 'the sign-in volume holds no sign-in' >&2; exit 3; }
+kept=$(cat /login/claude/.credentials.json /login/claude/.claude.json 2>/dev/null | cksum)
+[ ! -f ${SIGN_IN_MARK} ] || [ -L ${SIGN_IN_MARK} ] || [ "$(cat ${SIGN_IN_MARK})" != "$kept" ] || exit 0
+mkdir -p ${SIGN_IN_COPY}
+cp -a /login/claude/. ${SIGN_IN_COPY}/
+chmod -R go-rwx ${SIGN_IN_COPY}
+rm -rf ${SIGN_IN_MARK}
+printf %s "$kept" > ${SIGN_IN_MARK}
+`;
+
+/**
  * Run in the attempt's container, before its runner. The clone shares the
  * mirror's objects, and a clone a later attempt finds is put back on what the
  * host holds: the host is what a Continue or a repair restored. Ignored files
  * stay, so what an earlier attempt installed is still there.
  */
-/** Run with the kept sign-in read-only at `/login`. A sign-in that is not there yet is a refusal here, not an empty login later. */
-export const COPY_SIGN_IN = String.raw`set -eu
-[ -n "$(ls -A /login/claude 2>/dev/null)" ] || { echo 'the sign-in volume holds no sign-in' >&2; exit 3; }
-mkdir -p ${SIGN_IN_COPY}
-cp -a /login/claude/. ${SIGN_IN_COPY}/
-chmod -R go-rwx ${SIGN_IN_COPY}
-`;
-
 export const SEED_SCRIPT = String.raw`set -eu
 mkdir -p "$ORDEWELL_REPO_DIR" "$HOME"
 cd "$ORDEWELL_REPO_DIR"
