@@ -126,6 +126,37 @@ describe('what a task still asks of its parent (ADR-0056 M5, M10)', () => {
     expect(ledger.stillAsks(ROOT_NODE, 't', 400)).toBe(350);
     expect(ledger.stillAsks(ROOT_NODE, 't', 40)).toBe(0);
   });
+
+  it('reads every opening of the parent, whose Continue is a new node for the same session, and reads it again from the log (ADR-0055 D17)', async () => {
+    const store = new FakeEventStore();
+    const ledger = await open(1000, store);
+    const carve = (on: TreeLedger, parent: NodePath, level: number, tokens: number, sessionId: string, taskId: string): NodeBudget => {
+      const carved = on.carve(parent, delegating(1000), { level, tokens }, { sessionId, taskId });
+      if (!carved.ok) throw new Error(JSON.stringify(carved.refusal));
+      return carved.budget;
+    };
+    const first = carve(ledger, ROOT_NODE, 0, 800, 'subplanner', 'sub');
+    const below = carve(ledger, first.path, 1, 400, 'grandchild', 't');
+    below.spent(used(100), { taskId: 'w', attempt: 1 });
+    ledger.raise(below.path, 50);
+    ledger.close(first.path);
+
+    const second = carve(ledger, ROOT_NODE, 0, 700, 'subplanner', 'sub');
+    expect(second.path).not.toBe(first.path);
+    expect(ledger.spentOn(second.path, 't')).toBe(100);
+    expect(ledger.raisedOn(second.path, 't')).toBe(50);
+    expect(ledger.stillAsks(second.path, 't', 400)).toBe(350);
+
+    const held = carve(ledger, second.path, 1, 350, 'grandchild-again', 't');
+    expect(ledger.stillAsks(second.path, 't', 400)).toBe(0);
+    held.spent(used(30), { taskId: 'w', attempt: 2 });
+    ledger.close(held.path);
+
+    await ledger.flushed();
+    const reopened = await open(1000, store);
+    expect(reopened.spentOn(second.path, 't')).toBe(130);
+    expect(reopened.stillAsks(second.path, 't', 400)).toBe(320);
+  });
 });
 
 describe('a claim (ADR-0056 M5)', () => {

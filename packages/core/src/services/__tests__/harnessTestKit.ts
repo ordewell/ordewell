@@ -72,6 +72,8 @@ export interface FakeSpawnOptions {
   probe?: (args: string[]) => { code: number; output?: string };
   /** Every spawned agent says `output` on stderr and exits with `code` at once, before it answers anything, as a CLI that refuses to start does. */
   exitOnSpawn?: { code: number; output: string };
+  /** What a spawned agent does with the argv it was given before it answers anything, as a CLI refusing a `--resume` does. */
+  beforeAnswering?: (proc: FakeAgentProcess, args: string[]) => void;
 }
 
 function makeProcess(): FakeAgentProcess {
@@ -178,6 +180,7 @@ function spawner(onWrite: (written: string, proc: FakeAgentProcess, args: string
       const { code, output } = options.exitOnSpawn;
       queueMicrotask(() => { proc.emitStderr(output); proc.exit(code); });
     }
+    proc.once('__written', () => options.beforeAnswering?.(proc, argv));
     proc.on('__written', (chunk: string) => onWrite(chunk, proc, argv));
     return proc as unknown as ChildProcess;
   };

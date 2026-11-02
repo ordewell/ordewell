@@ -38,6 +38,11 @@ export function continuability(task: Task): Continuability {
   return { ok: true, sessionId: task.runnerSessionId };
 }
 
+/** What a child reopened from above is told: a question a restart lost is still its own to ask (ADR-0055 D17). */
+export function reopenMessage(task: Task, message: string): string {
+  return task.parkedQuestion ? `${message}\n\nA restart lost the question its subplanner asked, unanswered: "${task.parkedQuestion}"` : message;
+}
+
 export function canContinue(task: Task): boolean {
   return continuability(task).ok;
 }
